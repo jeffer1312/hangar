@@ -185,7 +185,7 @@ def test_status_sig_usa_o_par_rotulado_ctx():
     # Sem o rotulo o sig so aceitava >=2 pares -> sessao Kimi/Pi tinha ctx=None e a lista do SSE
     # nao re-emitia quando so o contexto mudava de balde.
     sl = "🤖 K3 (high✦) │ 📁 hangar [main] │ 💬 ctx 500k/1M │ ⚡5h:3% │ 📅7d:33%"
-    assert _status_sig(sl) == ("K3", 10, "3", "33")  # 500k/1M = 50% -> balde 10 (20 baldes de 5%)
+    assert _status_sig(sl) == ("K3", 10, "3", "33", "high✦")  # 500k/1M = 50% -> balde 10 (20 baldes de 5%)
 
 
 def test_status_sig_linha_do_claude_intacta():

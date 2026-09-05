@@ -278,3 +278,54 @@ describe('criarConfigServidor — identidade composta (round 4)', () => {
     expect(store.rascunhoDe('x')).toBe('');
   });
 });
+
+// Item 2 da revisão: salvar a chave da ElevenLabs numa tela nova só faz o chip "Ouvir" voltar se o
+// Salvar recarregar `segredos` — sem isso só um F5 pintava a pill de novo. `segredos.carregar()`
+// chama o MESMO `getConfig` mockado aqui, então a prova é a contagem de chamadas dele.
+describe('criarConfigServidor — recarrega segredos após salvar (item 2)', () => {
+  it('save no alvo GLOBAL (sem servidor) recarrega segredos', async () => {
+    const store = criarConfigServidor(() => null);
+    apiMock.getConfig.mockResolvedValue(payload({}) as never);
+    await store.carregar();
+    const antes = apiMock.getConfig.mock.calls.length;
+    store.setRascunho('elevenlabs_api_key', 'nova-chave');
+    apiMock.patchConfig.mockResolvedValueOnce(payload({}) as never);
+    await store.salvar();
+    await Promise.resolve(); await Promise.resolve();
+    expect(apiMock.getConfig.mock.calls.length).toBeGreaterThan(antes);
+  });
+
+  it('save num servidor que NÃO é o ativo não recarrega segredos', async () => {
+    let alvo: Server | null = A;
+    const store = criarConfigServidor(() => alvo);
+    apiMock.getConfigForServer.mockResolvedValue(payload({ chaveA: { valor: 'a' } }) as never);
+    await store.carregar();
+    store.setRascunho('x', 1);
+    apiMock.patchConfigForServer.mockResolvedValueOnce(payload({ chaveA: { valor: 'a' } }) as never);
+    const antes = apiMock.getConfig.mock.calls.length;   // getActiveId() é null aqui: A não é o ativo
+    await store.salvar();
+    await Promise.resolve(); await Promise.resolve();
+    expect(apiMock.getConfig.mock.calls.length).toBe(antes);
+  });
+
+  it('save no servidor que É o ativo recarrega segredos', async () => {
+    localStorage.setItem('cp_servers', JSON.stringify([A]));
+    localStorage.setItem('cp_active', A.id);
+    try {
+      let alvo: Server | null = A;
+      const store = criarConfigServidor(() => alvo);
+      apiMock.getConfigForServer.mockResolvedValue(payload({ chaveA: { valor: 'a' } }) as never);
+      await store.carregar();
+      store.setRascunho('elevenlabs_api_key', 'nova-chave');
+      apiMock.patchConfigForServer.mockResolvedValueOnce(payload({ chaveA: { valor: 'a' } }) as never);
+      apiMock.getConfig.mockResolvedValueOnce(payload({ elevenlabs_api_key: { definido: true } }) as never);
+      const antes = apiMock.getConfig.mock.calls.length;
+      await store.salvar();
+      await Promise.resolve(); await Promise.resolve();
+      expect(apiMock.getConfig.mock.calls.length).toBeGreaterThan(antes);
+    } finally {
+      localStorage.removeItem('cp_servers');
+      localStorage.removeItem('cp_active');
+    }
+  });
+});

@@ -28,24 +28,16 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   getPushSettings: vi.fn(async () => ({ muted: [] })),
   setSessionMute: vi.fn(), getBranches: vi.fn(), openEditor: vi.fn(),
   setThenLink: vi.fn(), clearThenLink: vi.fn(),
-  loopBadge: () => null,
-  LOOP_TONE_COLOR: {},
-  rotuloEstado: () => '',
-  stateColors: {},
-  countAwaiting: () => 0,
-  groupSelectedByServer: () => [],
-  initials: (n: string) => n.slice(0, 2),
-  projectKey: () => '',
-  projectLabel: () => '',
-  effectiveGroupBy: () => 'server',
-  fmtWhen: () => '',
-  sortSessions: (s: unknown[]) => s,
-  latestAssistantEvent: () => null,
+  rotuloEstado: () => '', stateColors: {}, countAwaiting: () => 0,
+  groupSelectedByServer: () => [], initials: (n: string) => n.slice(0, 2),
+  railLabel: (n: string) => [n.slice(0, 8), ''],
+  projectKey: () => '', projectLabel: () => '', effectiveGroupBy: () => 'server',
+  fmtWhen: () => '', sortSessions: (s: unknown[]) => s, latestAssistantEvent: () => null,
   clusterByPair: (s: unknown[]) => s.map((x) => ({ session: x })),
-  untrackedReason: () => '',
-  providerName: () => 'claude',
-  providerTag: () => null,
-  planBadge: () => null,
+  untrackedReason: () => '', providerName: () => 'claude', providerTag: () => null,
+  cwdParts: (c: string | undefined) => ({ prefix: '', base: c ?? '' }),
+ loopBadge: () => null, LOOP_TONE_COLOR: {},
+ planBadge: () => null,
 }));
 vi.mock('../lib/auth', () => ({
   getActiveId: vi.fn(() => 'srv-a'),
@@ -68,7 +60,6 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
     byServer: [], rows: [], servers: [], loading: false,
   },
 }));
-
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));

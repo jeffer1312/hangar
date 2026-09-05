@@ -19,9 +19,9 @@ set -uo pipefail
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 PONTE_PI="$HOME/.pi/agent/skills-bridge"
 
-# O conjunto que a skill orchestrating-idea-to-push usa de ponta a ponta.
+# O conjunto que a skill orquestrar usa de ponta a ponta.
 PADRAO=(
-  orchestrating-idea-to-push
+  orquestrar
   writing-plans
   executing-plans
   subagent-driven-development

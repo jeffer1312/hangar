@@ -91,7 +91,7 @@ ou em `backend/.env`):
 | `CP_AUTH_TOKEN` | `change-me` | senha que protege TODA rota. Gere um forte. |
 | `CP_LAN_BIND_IP` | `127.0.0.1` | `auto` = detecta o IP da LAN (pro celular alcançar). IP fixo também vale. |
 | `CP_PORT` | `8765` | porta do backend |
-| `CP_FRONT_PORT` | `5173` | porta onde o PWA é servido (entra no QR) |
+| `CP_FRONT_PORT` | — | porta onde o PWA é servido (entra no QR). Vazio = o próprio backend, que serve o `frontend/dist` na raiz. Só quem mantém um `vite preview` separado grava `5173` aqui. |
 | `CP_PUBLIC_URL` | — | sobrescreve a URL base do QR (ex: hostname Tailscale) |
 | `CP_TERM_ORIGINS` | — | origens EXTRAS aceitas pelo WebSocket do terminal (csv). Precisa quando o PWA é servido de um host que não é este backend, nem a `CP_PUBLIC_URL`, nem um peer — é o caso do app carregado da VPS falando com a máquina de casa. Sem isso o terminal abre e cai em "desconectado". |
 | `CP_SCAN_ROOTS` | — | pastas que o seletor "Nova sessão" pode listar (csv) |
@@ -110,7 +110,7 @@ npm run dev -- --host      # serve em http://<ip>:5173
 
 ### Opção A — LAN (mesma Wi-Fi)
 1. `CP_LAN_BIND_IP=auto` no backend.
-2. Escaneie o **QR** do terminal (ou abra `http://<ip-da-lan>:5173`).
+2. Escaneie o **QR** do terminal (ou abra `http://<ip-da-lan>:8765`).
 3. URL + token preenchem sozinhos → conectado.
 
 ### Opção B — Tailscale (de qualquer lugar, com HTTPS)
@@ -134,7 +134,7 @@ e entre com Google/GitHub/Microsoft/e-mail. Cria seu **tailnet** (sua rede priva
 
 **4. Expor o PWA** (rode no PC, na pasta do projeto):
 ```bash
-tailscale serve --bg 5173      # publica o vite (5173) em https://<maquina>.<tailnet>.ts.net
+tailscale serve --bg 8765      # publica o backend (tela + API) em https://<maquina>.<tailnet>.ts.net
 tailscale serve status         # mostra a URL exata
 ```
 **5. No celular** (com Tailscale ligado) abra `https://<maquina>.<tailnet>.ts.net` → cadeado

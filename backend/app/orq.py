@@ -1,6 +1,6 @@
 """Leitura e agregação dos eventos de orquestração (eventos.jsonl por execução).
 
-Contrato do arquivo: skills/orchestrating-idea-to-push/references/arbitro.md. Robustez no
+Contrato do arquivo: skills/orquestrar/references/arbitro.md. Robustez no
 molde do planprog: o arquivo é escrito por agente — linha inválida, campo com tipo errado ou
 tipo desconhecido são ignorados (com log quando o diretório inteiro fica sem linha válida),
 nunca derrubam a listagem.
@@ -48,7 +48,9 @@ class ExecucaoResumo:
 
 
 def raiz_padrao() -> Path:
-    return Path.home() / ".claude" / "orq-retros"
+    """O cofre, não o config dir de uma conta: um trabalho põe papéis em contas diferentes, e
+    executor Pi/Kimi/Codex não tem `~/.claude` nenhum. Sem migração do que ficou no lugar antigo."""
+    return Path.home() / ".hangar" / "orq"
 
 
 def _int_ou_none(v) -> int | None:

@@ -4,6 +4,7 @@ import logging
 import re
 import sys
 import time
+import traceback
 from pathlib import Path
 from app import diag
 from app.adapters import get_adapter
@@ -66,7 +67,32 @@ def preview_is_committed(preview: str, committed: str) -> bool:
 
 # Linhas que o proprio TUI acrescenta a QUALQUER AskUserQuestion. Nunca vem no payload do hook, entao
 # nao podem contar como "opcao a mais" na checagem de frescor abaixo.
-_TUI_EXTRAS = frozenset({"Type something.", "Chat about this"})
+# Linhas que o TUI acrescenta a TODA pergunta e que nunca estao no payload do hook. Guardadas SEM
+# pontuacao final e comparadas assim (ver `_sem_ponto`): o mesmo item aparece "Type something." na
+# escolha unica e "Type something" na multipla — medido 28/08/2026 —, e a versao sem ponto passava
+# batido, virava "opcao no pane fora do sidecar" e derrubava o stepper nativo de TODA multipla
+# escolha. Guardar as duas formas na lista resolveria hoje e quebraria no proximo ponto que sumir.
+_TUI_EXTRAS = frozenset({"Type something", "Chat about this"})
+
+# Caixinha que o TUI desenha antes do rotulo numa pergunta de MULTIPLA ESCOLHA: "[ ] Alfa",
+# "[x] Alfa". Ela e desenho, nao rotulo — o payload do hook traz so "Alfa".
+# Medido 28/08/2026: sem tirar isto, `first_opts <= pane_opts` NUNCA casava numa multiSelect (o
+# pane trazia `["[ ] Alfa", "[ ] Bravo", …]` contra `{"Alfa", "Bravo", …}` do sidecar) e o stepper
+# nativo simplesmente nao abria — toda multipla escolha caia no OptionButtons cru. As linhas
+# extras do TUI vinham com caixinha tambem (`[ ] Type something.`), entao nem o _TUI_EXTRAS as
+# removia. So a COMPARACAO tira a caixinha: a lista que vai pro OptionButtons continua com ela,
+# porque ali a caixinha e o unico jeito de ver o que ja esta marcado.
+_CAIXA_MULTI = re.compile(r"^\[.?\]\s*")
+
+
+def _sem_caixa(rotulo: str) -> str:
+    return _CAIXA_MULTI.sub("", rotulo)
+
+
+def _normaliza_extra(rotulo: str) -> str:
+    """Tira a caixinha e o ponto final, que e o que separa as linhas do TUI de uma opcao de verdade.
+    So serve pra COMPARAR com `_TUI_EXTRAS`: o rotulo que vai pra tela nao passa por aqui."""
+    return _sem_caixa(rotulo).rstrip(".")
 
 
 def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
@@ -106,11 +132,17 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     # preview a comparacao e por CONTAGEM IGUAL, entao mante-las ali reprovava 100% das perguntas com
     # preview — exatamente o caminho que existe pra nao perder o preview. Bug anterior a este trecho:
     # o teste do ramo de preview usava um pane fabricado sem as extras e nunca o exercitou.
-    pane_opts = set(obj.get("options") or []) - _TUI_EXTRAS
+    pane_opts = {_sem_caixa(o) for o in (obj.get("options") or [])
+                 if _normaliza_extra(o) not in _TUI_EXTRAS}
     if not first_opts or not pane_opts:
         return None
     if not has_preview:
         if not first_opts <= pane_opts:
+            # Este return era o UNICO dos tres sem log, e era justamente por onde a multipla
+            # escolha saia — a degradacao mais comum era tambem a mais calada. Mesmo motivo dos
+            # logs irmaos abaixo: sem isto o unico sintoma e "a tela ficou mais pobre".
+            _log.info("askq: rotulo do sidecar fora do menu, degrada p/ OptionButtons "
+                      "sidecar=%s pane=%s", sorted(first_opts), sorted(pane_opts))
             return None
         # Subset sozinho nao basta. Um sidecar STALE cujos rotulos por acaso APARECEM num menu maior
         # (ex: {Sim, Nao} contra um menu [Cancelar, Sim, Nao]) passava — e como answer_questions
@@ -161,22 +193,45 @@ _log = logging.getLogger("hangar.sse")
 # lock de asyncio aqui arriscaria bind em event loop errado nos testes.
 _LIST_TTL = 1.0
 _list_snap: dict = {"t": 0.0, "infos": None}
+_list_lock = asyncio.Lock()
+
+
+# "Abrir o navegador embutido" vindo do AGENTE (POST /api/sessions/<nome>/nav, via CLI
+# hangar-preview open). One-shot por sessão, em MEMÓRIA: o stream SSE da sessão só existe com o
+# Chat dela montado; se o agente manda com a sessão fora da tela, o pendente espera aqui e sai
+# quando o usuário abrir a sessão. Backend reiniciou = perde (o agente re-tenta).
+_NAV_PENDENTES: dict[str, list[str]] = {}
+
+
+def nav_pendente(name: str, url: str) -> None:
+    # Só a ÚLTIMA url por sessão: é o que a UI abre, e o agente empurrando N urls com a sessão fora
+    # da tela não infla a memória pra sempre.
+    _NAV_PENDENTES[name] = [url]
 
 
 async def _cached_list():
     now = time.monotonic()
     if _list_snap["infos"] is not None and now - _list_snap["t"] < _LIST_TTL:
         return _list_snap["infos"]
-    infos = await asyncio.to_thread(_registry.list)
-    _list_snap["infos"] = infos
-    _list_snap["t"] = time.monotonic()
-    return infos
+    # Single-flight, pelo mesmo motivo do api._guardar_snap: o `await` cede o loop, entao os loops
+    # de todas as conexoes SSE erram o cache juntos e disparam um `registry.list()` cada. Com o
+    # lock, um varre e os outros aproveitam.
+    async with _list_lock:
+        if _list_snap["infos"] is not None and time.monotonic() - _list_snap["t"] < _LIST_TTL:
+            return _list_snap["infos"]
+        infos = await asyncio.to_thread(_registry.list)
+        _list_snap["infos"] = infos
+        _list_snap["t"] = time.monotonic()
+        return infos
 
 
 # Reducao ESTAVEL da statusline pro dedup da lista: modelo, contexto em baldes de 5%, ⚡5h% e 📅7d%.
 # Relogio (⏱) e custo ficam DE FORA — mudam a cada captura e re-emitiriam a lista inteira a toa.
 # Espelha o parse do front (frontend/src/lib/statusline.ts), so o subset que o sig precisa.
 _ST_MODEL = re.compile(r"🤖\s*([^(│]+)")
+# O esforco mora no parentese DEPOIS do modelo (`(high✦)`); sem ele no sig, trocar so o esforco
+# nao re-emitia a lista e o painel ficava com o valor velho.
+_ST_EFFORT = re.compile(r"🤖[^(│]*\(([^)│]*)\)")
 _ST_5H = re.compile(r"⚡[^│]*?(\d+)\s*%")
 _ST_7D = re.compile(r"📅[^│]*?(\d+)\s*%")
 _ST_PAIR = re.compile(r"([\d.,]+)\s*([kKmM])?\s*/\s*([\d.,]+)\s*([kKmM])?")
@@ -211,6 +266,7 @@ def _status_sig(s):
         ctx,
         m.group(1) if (m := _ST_5H.search(s)) else None,
         m.group(1) if (m := _ST_7D.search(s)) else None,
+        m.group(1).strip() if (m := _ST_EFFORT.search(s)) else None,
     )
 
 
@@ -220,7 +276,9 @@ def _list_sig(infos) -> str:
     # Re-emite so em mudanca de membership/state/cwd/tracked/jsonl/question/stalled/limited/
     # limit_reset/then_target/status_line-reduzida/presenca-de-label/loop/engine. Sem o engine aqui,
     # resumir um pane cujo motor sumiu do engines.json (kimi -> None) nao reemite a lista e o chip
-    # ⚙ kimi fica preso, calado.
+    # ⚙ kimi fica preso, calado. A `conta` entra pela MESMA razao: numa sessao Pi ela e a
+    # credencial do modelo ESCOLHIDO (trocar de kimi-coding pro Codex muda a conta sem mexer em
+    # mais nada), e sem isto a pilula de cota fica desenhando a cota da conta anterior.
     # Sem o plan_name aqui, trocar do plano A pro B com o mesmo 9/17 nao re-emite e o chip fica
     # preso no plano errado — mesmo bug do engine. plan_hidden pela MESMA razao: escolher "nenhum"
     # zera todos os outros campos de plano, mas a lista precisa re-emitir pro painel continuar
@@ -234,13 +292,23 @@ def _list_sig(infos) -> str:
           i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
           bool(getattr(i, "label", None)),
           getattr(i, "loop_status", None), getattr(i, "loop_iter", None),
-          getattr(i, "engine", None),
+          getattr(i, "engine", None), getattr(i, "conta", None),
           getattr(i, "plan_name", None), getattr(i, "plan_done", None),
           getattr(i, "plan_total", None),
           getattr(i, "plan_task", None), getattr(i, "plan_task_total", None),
           getattr(i, "plan_complete", None),
           tuple(map(tuple, getattr(i, "plan_tasks", None) or [])),
-          getattr(i, "plan_hidden", None))
+          getattr(i, "plan_hidden", None),
+          # `problema` entra pelo mesmo motivo do engine: ele aparece e some sem mexer em mais
+          # nada (o hook e aprovado na TUI e a sessao passa a ter marcador), e sem isto o aviso na
+          # tela ficaria preso ate outra coisa qualquer mudar a assinatura.
+          getattr(i, "problema", None),
+          # Uma sessao Pi/omp/kimi nasce classificada como `claude` e so vira o provider dela
+          # quando a extensao publica o bilhete do pane. Sem o provider aqui, essa virada so
+          # re-emite a lista se o `jsonl` mudar junto — e a lista fica com o glifo errado (e sem
+          # os chips de provider, que so aparecem quando ela mistura harnesses) ate outra coisa
+          # qualquer mudar a assinatura.
+          getattr(i, "provider", None))
          for i in infos],
         ensure_ascii=False,
     )
@@ -301,8 +369,13 @@ class _ListRefresher:
                     # AskUserQuestion — um erro de serialização ali ecoaria conversa dentro de um
                     # arquivo que promete não guardar nenhuma. A mensagem inteira vai no log local
                     # (o `_log.warning` acima, com traceback), que não é o arquivo que se envia.
+                    # Tipo + `arquivo:linha` da moldura mais interna: zero conteúdo, e responde
+                    # ONDE — só o tipo deixava 290 `RuntimeError` num diário sem pista nenhuma.
+                    _tipo, _exc, _tb = sys.exc_info()
+                    quadro = traceback.extract_tb(_tb)[-1] if _tb else None
+                    onde = f" @ {Path(quadro.filename).name}:{quadro.lineno}" if quadro else ""
                     diag.registrar("lista.refresher_falhou", "erro",
-                                   detalhe=type(sys.exc_info()[1]).__name__)
+                                   detalhe=f"{type(_exc).__name__}{onde}")
                     async with self._cond:
                         self.errored = True
                         self.version += 1
@@ -407,7 +480,9 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
 
     broker = _broker_de(provider)
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
-    start_ts = _transcript_start_ts(jsonl)
+    # `or 0.0`: aqui start_ts so PODA bolha de sessao anterior. Transcript ilegivel -> nao corta
+    # nada, que e o fallback seguro deste lado (o perigoso e no reconcile, ver _transcript_start_ts).
+    start_ts = _transcript_start_ts(jsonl) or 0.0
     queue: asyncio.Queue = asyncio.Queue()
     # Slot coalescido do preview: NUNCA entra na FIFO compartilhada (firehose atrasaria o assistant_msg
     # autoritativo — head-of-line). Mantemos so o ULTIMO texto + um unico marcador pendente na fila;
@@ -441,6 +516,17 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         while True:
             await asyncio.sleep(10)
             await queue.put(("ping", "{}"))
+
+    async def nav_pump():
+        # Drena os "abrir navegador" pendentes DESTA sessao (agente via POST /nav). Poll de 1s
+        # basta: e evento raro e humano, nao canal quente.
+        while True:
+            await asyncio.sleep(1.0)
+            urls = _NAV_PENDENTES.pop(name, [])
+            # put_nowait, NÃO await put: sem suspensão entre o pop e a entrega, um cancel no meio
+            # não perde o evento calado.
+            for url in urls:
+                queue.put_nowait(("nav", json.dumps({"url": url})))
 
     def _enqueue_preview(text: str, md: bool = False, full: bool = False):
         # Atualiza o slot e enfileira UM marcador 'preview' por vez (drop-old). Sem await entre as
@@ -487,7 +573,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         try:
             acc = StatsAccumulator.for_provider(current_provider, path)
             if acc is None:
-                return                       # provider sem fold (codex, por ora) -> sem faixa
+                return                       # provider sem fold -> sem faixa
             last = None
             while True:
                 snap = await asyncio.to_thread(acc.collect)
@@ -566,6 +652,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             await queue.put(("__error__", exc))
 
     ask_q_emitted = False          # impede reemissao enquanto o mesmo prompt permanece na tela
+    ultimo_estado = None           # ultimo `state` emitido; None ate o primeiro tick
+    _fantasma_logado = {"v": False}
     prev_deliverable = False     # init False -> 1o estado entregavel pos-(re)connect tambem dispara 1
                                  # drain (recovery de restart/reconexao com pendencia)
     drain_tasks: set = set()     # drains fire-and-forget; NAO entram em `tasks` (nao cancelar no disconnect)
@@ -588,6 +676,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         asyncio.create_task(pump("message", pqueue.follow(min_ts=start_ts))),
         state_task,
         asyncio.create_task(ping_loop()),
+        asyncio.create_task(nav_pump()),
         preview_task,
         asyncio.create_task(jsonl_watcher()),
     ]
@@ -640,6 +729,14 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             if event == "__reset__":
                 # Troca de transcript (ex: /clear). Re-binda o tailer no jsonl novo, zera o estado de
                 # suppress/preview, e manda 'reset' pro front recarregar o history do zero.
+                #
+                # LOGA como o __reprovider__ ao lado: este `reset` APAGA a conversa da tela e manda
+                # recarregar, então quando alguém relata "o chat ficou vazio" a primeira pergunta é
+                # se houve reset — e sem esta linha ela não tinha resposta, porque era o único dos
+                # dois caminhos que não deixava rastro nenhum (26/08/2026).
+                _log.info("sse: transcript trocou name=%s %s -> %s", name,
+                          Path(current_jsonl).name if current_jsonl else None,
+                          Path(data).name if data else None)
                 tasks.remove(tail_task)
                 tail_task.cancel()
                 tasks.remove(stats_task)
@@ -661,6 +758,15 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 # Le o ULTIMO texto do slot na hora do envio (frames antigos ja foram sobrescritos).
                 # SEM id: pra reconexao do EventSource nao replayar preview velho via Last-Event-ID.
                 preview_slot["pending"] = False
+                _sent["preview"] += 1
+                if preview_slot["text"] and ultimo_estado not in (None, "working"):
+                    # Assinatura da bolha fantasma: texto em voo numa sessao que nao esta
+                    # trabalhando. Um por stream basta pra apontar a fonte (md/full) e o trecho.
+                    if not _fantasma_logado["v"]:
+                        _fantasma_logado["v"] = True
+                        _log.info("sse: previa com texto em sessao %s name=%s md=%s full=%s "
+                                  "trecho=%r", ultimo_estado, name, preview_slot["md"],
+                                  preview_slot["full"], preview_slot["text"][:80])
                 yield {"event": "preview",
                        "data": PreviewEvent(session=name, text=preview_slot["text"],
                                             md=bool(preview_slot["md"]),
@@ -671,6 +777,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 # Quando awaiting_input + overlay (rodape de abas = AskUserQuestion estruturado),
                 # emite ask_question UMA VEZ por prompt; reseta ao sair do estado.
                 parsed_state = json.loads(data)
+                ultimo_estado = parsed_state.get("state")
                 # Diagnostico do "medição indisponível": loga o statusline CRU quando o segmento 💬
                 # nao tem os 2 pares. Uma vez por statusline DISTINTO (nao a cada tick) pra nao virar
                 # firehose — um StateEvent sai a cada 0.75s.

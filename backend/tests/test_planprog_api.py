@@ -57,3 +57,64 @@ def test_plan_devolve_detalhe_e_markdown(api_client, tmp_path):
     # markdown cru viaja na resposta: o GET /file so serve path citado no transcript (api.py:2196),
     # e um plano descoberto por glob nunca aparece la.
     assert "### Task 1" in j["markdown"]
+    # stem e idx: as duas chaves que o cliente devolve pra marcar step e arquivar. O `name`, com a
+    # data cortada, nao reabre o arquivo.
+    assert j["stem"] == "2026-07-29-plano"
+    assert [s["idx"] for s in j["tasks"][0]["steps"]] == [0, 1]
+
+
+def _repo(tmp_path):
+    d = tmp_path / "docs" / "superpowers" / "plans"
+    d.mkdir(parents=True)
+    (tmp_path / ".git").mkdir()
+    (d / "2026-07-29-plano.md").write_text(PLAN, encoding="utf-8")
+    return d
+
+
+def test_plan_step_marca_e_devolve_o_progresso_novo(api_client, tmp_path):
+    d = _repo(tmp_path)
+    with patch("app.api.registry.list", return_value=[SessionInfo(name="s", cwd=str(tmp_path))]):
+        r = api_client.post("/api/sessions/s/plan-step", headers=_H,
+                            json={"stem": "2026-07-29-plano", "idx": 1, "done": True})
+    assert r.status_code == 200
+    assert r.json() == {"done": 2, "total": 2, "complete": True}
+    assert "- [x] **Step 2:" in (d / "2026-07-29-plano.md").read_text(encoding="utf-8")
+
+
+def test_plan_step_fora_da_faixa_e_409_com_texto(api_client, tmp_path):
+    _repo(tmp_path)
+    with patch("app.api.registry.list", return_value=[SessionInfo(name="s", cwd=str(tmp_path))]):
+        r = api_client.post("/api/sessions/s/plan-step", headers=_H,
+                            json={"stem": "2026-07-29-plano", "idx": 99, "done": True})
+    # 409 e nao 500: e "o plano nao serve", nao bug do servidor — e a UI precisa mostrar o motivo.
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_marcar_step"
+
+
+def test_plan_step_recusa_stem_com_traversal(api_client, tmp_path):
+    _repo(tmp_path)
+    (tmp_path / "fora.md").write_text(PLAN, encoding="utf-8")
+    with patch("app.api.registry.list", return_value=[SessionInfo(name="s", cwd=str(tmp_path))]):
+        r = api_client.post("/api/sessions/s/plan-step", headers=_H,
+                            json={"stem": "../../../fora", "idx": 0, "done": False})
+    assert r.status_code == 409
+    assert "- [x] **Step 1:" in (tmp_path / "fora.md").read_text(encoding="utf-8")
+
+
+def test_plan_archive_move_pra_feitos(api_client, tmp_path):
+    d = _repo(tmp_path)
+    with patch("app.api.registry.list", return_value=[SessionInfo(name="s", cwd=str(tmp_path))]):
+        r = api_client.post("/api/sessions/s/plan-archive", headers=_H,
+                            json={"stem": "2026-07-29-plano"})
+    assert r.status_code == 200
+    assert r.json()["moved"] == ["2026-07-29-plano.md"]
+    assert (d / "feitos" / "2026-07-29-plano.md").is_file()
+    assert not (d / "2026-07-29-plano.md").exists()
+
+
+def test_plan_archive_plano_inexistente_e_409(api_client, tmp_path):
+    _repo(tmp_path)
+    with patch("app.api.registry.list", return_value=[SessionInfo(name="s", cwd=str(tmp_path))]):
+        r = api_client.post("/api/sessions/s/plan-archive", headers=_H, json={"stem": "nada"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_arquivar_plano"

@@ -1,6 +1,14 @@
 [
   {
     "_justificativas": {
+      "não reescreva a tabela": "orqRecado.ts MARCAS — trecho do recado que o BACKEND gera (api._recado_arbitro), casado por `includes` pra o cartão só existir enquanto resumir o texto certo. É dado do servidor, não texto de tela; traduzir faria o cartão nunca casar. Vale para 'Sucessão do árbitro' (MARCA_SUCESSAO), 'PARADA (idle)' e 'TRABALHANDO' — as duas últimas não caem na heurística por serem maiúsculas.",
+      "Sucessão do árbitro": "orqRecado.ts MARCA_SUCESSAO — ver a justificativa de 'não reescreva a tabela': marcador casado contra o texto do backend, não interface.",
+      "[hangar: passagem de bastão]": "bastaoRecado.ts PREFIXO_BASTAO — prefixo que o BACKEND escreve no kick-off (bastao._KICKOFF_PREFIXO); é o que identifica a mensagem. Traduzir faria o cartão nunca casar.",
+      "Leia o plano": "bastaoRecado.ts MARCAS — trecho do kick-off gerado pelo backend (bastao.kickoff), casado por `includes` pra o cartão só existir enquanto resumir o texto certo. Mesma razão de 'não reescreva a tabela'. Vale para 'continua VIVA', que não cai na heurística por ser maiúscula.",
+      "NÃO move esses vínculos": "bastaoRecado.ts MARCAS — ver 'Leia o plano': marcador casado contra o texto do backend, não interface.",
+      "visor: falhou ao abrir": "visor.ts — mensagem de console.error (os tres chamadores disparam com `void`, entao sem isto a falha vira rejeicao nao tratada), nao texto de tela",
+      "ditado: nao deu pra restaurar a barra guardada": "Composer.svelte — mensagem de console.warn (chave de localStorage corrompida), nao texto de tela: quem le e quem abre o devtools pra diagnosticar",
+      "árbitro": "OrquestracaoSheet.svelte PAPEIS_CANONICOS — nomes de papel da skill orquestrar, gravados como DADO na tabela do regras-<gid>.md (o árbitro lê o nome cru); traduzir mudaria o contrato. Vale para 'revisão final' e 'par de research'",
       "Workflow": "activity.ts:171 — case de protocolo (tipo de evento do transcript do agente), nao e texto exibido; o rotulo do badge usa m.atividade_workflow()",
       "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow",
       "* Regras, na ordem em que importam:": "typewriter.svelte.ts — linhas de COMENTARIO (docblock) que a heuristica leu como string; nenhuma e texto exibido. Vale para as 7 entradas '* ...' e '/** ... */' deste arquivo",
@@ -13,6 +21,8 @@
       "System": "core/theme.ts:97 — nome de família de fonte passado ao CSS/RN, não é texto exibido",
       "Deseja continuar?": "mobile/src/features/sessions/SessionList.tsx:41 — pergunta sintética em __DEV__ para garantir 3 estados na prova visual, não é texto de produção",
       "Down": "mobile/src/features/terminal/TerminalMirror.tsx — nome de tecla NavKey para sendKey, não é texto exibido; o rótulo acessível usa m.term_seta_baixo()",
+      "openai.com": "ProvedorIcone.svelte — mesmo caso dos domínios acima: host comparado contra a base_url pra escolher a marca.",
+      "chatgpt.com": "ProvedorIcone.svelte — mesmo caso dos domínios acima: host comparado contra a base_url pra escolher a marca.",
       "de primeira": "types.ts — trecho de COMENTÁRIO do campo `rodadas` do OrqTask (`0 = desconhecido, nunca \"de primeira\"`), lido pela heurística como string exibida; o rótulo da tela é m.orq_de_primeira().",
       "orq: falhou o detalhe da execução viva": "Orq.svelte — mensagem de console.error (diagnóstico pro desenvolvedor, nunca desenhada na tela); o usuário vê a faixa ausente, não este texto.",
       "Android": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
@@ -26,9 +36,17 @@
       "Chrome": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
       "Safari": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
       "tela.ver": "lib/diag.ts — VERBO de evento do diario de uso (o mesmo alfabeto de 'opcao.tocar', 'api.falhou'), chave de dado num arquivo JSONL. Nunca exibido.",
-      "sse.abrir": "screens/Chat.svelte — VERBO de evento do diario de uso (mesmo alfabeto de 'tela.ver', 'opcao.tocar'), chave de dado num arquivo JSONL. Nunca exibido."
+      "sse.abrir": "screens/Chat.svelte — VERBO de evento do diario de uso (mesmo alfabeto de 'tela.ver', 'opcao.tocar'), chave de dado num arquivo JSONL. Nunca exibido.",
+      "[hl] pedaco do realce nao carregou": "highlightLazy.ts — mensagem de console.warn de quando o pedaco do Shiki nao baixa (rede caiu, ou deploy trocou o hash). Nao e texto de tela: o usuario ve o codigo sem cor, e quem le isto e quem abre o devtools. Mesmo caso de 'visor: falhou ao abrir'.",
+      "[hl] realce do diff falhou": "EditDiff.svelte — mensagem de console.warn irma da de cima, no diff. Nao e texto de tela pelo mesmo motivo.",
+      "pedaco do app segue faltando depois de recarregar — deploy incompleto?": "main.ts — console.error do segundo `vite:preloadError` na mesma aba (o primeiro recarrega). Nao e texto de tela: quem le e quem abre o devtools pra entender por que a pagina nao se resolveu sozinha."
     }
   },
+  "não reescreva a tabela",
+  "Sucessão do árbitro",
+  "[hangar: passagem de bastão]",
+  "Leia o plano",
+  "NÃO move esses vínculos",
   "de primeira",
   "orq: falhou o detalhe da execução viva",
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
@@ -116,6 +134,8 @@
   "/** Rascunho sujo: usuário editou um campo e ainda não salvou/carregou. */",
   "/** Só pros testes: o store é singleton com cache, então sem zerar um caso herda o `carregado` do",
   "/** Valor exato, com centavos — tabela, tooltip, qualquer lugar que some ou compare. */",
+  "ditado: nao deu pra restaurar a barra guardada",
+  "visor: falhou ao abrir",
   ": ancestral com transform/filter/backdrop-filter cria containing block",
   ": nao ha como resolver isso olhando so onde a selecao",
   "Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador",
@@ -213,6 +233,8 @@
   "groq.com",
   "System",
   "Deseja continuar?",
+  "openai.com",
+  "chatgpt.com",
   "Android",
   "Windows",
   "Linux",
@@ -224,5 +246,12 @@
   "Chrome",
   "Safari",
   "tela.ver",
-  "sse.abrir"
+  "sse.abrir",
+  "árbitro",
+  "revisão final",
+  "par de research",
+  "[hl] pedaco do realce nao carregou",
+  "[hl] realce do diff falhou",
+  "pedaco do app segue faltando depois de recarregar — deploy incompleto?",
+  "Files"
 ]

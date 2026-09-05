@@ -44,6 +44,10 @@ kimi() {
         esac
     done
 
+    # Daqui pra baixo abre TUI: refaz a ponte de skills agora, pra skill instalada no Claude valer
+    # já nesta abertura (antes dependia de reiniciar o backend). Silencioso e fail-soft.
+    command -v hangar-skills-sync >/dev/null 2>&1 && hangar-skills-sync
+
     # TMUX herdado pode estar MORTO (mesmo caso do wrapper claude/pi: kitty single-instance cujo
     # mestre nasceu dentro de um pane que já fechou). Valida o pane; stale -> limpa e segue pro
     # caminho "fora do tmux" (cria sessão nova).

@@ -1,20 +1,27 @@
 <script lang="ts">
-  import { chavesUnicas, type ChatEvent, type StateEvent, type AskQuestionPayload, type AnswerItem } from '@hangar/core';
+  import { chavesUnicas } from '@hangar/core';
   import { tick } from 'svelte';
   import * as m from '../paraglide/messages';
+  import type { ChatEvent, StateEvent, AskQuestionPayload, AnswerItem } from '@hangar/core';
   import UserBubble from './UserBubble.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import ToolCard from './ToolCard.svelte';
   import ToolGroup from './ToolGroup.svelte';
+  import ThinkingBlock from './ThinkingBlock.svelte';
   import TaskRows from './TaskRows.svelte';
   import { foldTasks } from '@hangar/core';
   import { taskRows } from '../lib/taskRows.svelte';
+  import { entraNoPensamento } from '../lib/pensamentoTools.svelte';
   import OptionButtons from './OptionButtons.svelte';
   import AskQuestionCard from './AskQuestionCard.svelte';
   import Spinner from './Spinner.svelte';
   import ImageBubble from './ImageBubble.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import { parseImageMessage, parseFilePaths, parsePeerMessage } from '@hangar/core';
+  import { lerRecadoOrq } from '../lib/orqRecado';
+  import OrqPainelCard from './OrqPainelCard.svelte';
+  import BastaoCard from './BastaoCard.svelte';
+  import { lerRecadoBastao } from '../lib/bastaoRecado';
   import { transcriptImageUrl, uploadUrl } from '@hangar/core';
   import { windowStartFor, nextWindowEnd, precisaPreencher, mostrarIrPraoFim } from '../lib/window';
 
@@ -28,6 +35,8 @@
     previewMd?: boolean;   // o texto da previa e markdown cru -> a bolha renderiza
     previewFull?: boolean; // a previa e incremental (so cresce no fim) -> bolha sem o teto de 10 linhas
     onSelectOption: (i: number) => void;
+    /** Múltipla escolha: envia o que já foi marcado. Ausente = sem botão de enviar. */
+    onSubmitSelected?: () => void;
     onCancel: () => void;
     // AskUserQuestion inline (desktop): quando askOpen, renderiza o card no fim da lista.
     askOpen?: boolean;
@@ -45,12 +54,14 @@
     onForward?: (text: string) => void;
     // Tap no chip "de: X" de recado peer -> abre o chat da sessao remetente. Ausente = chip estatico.
     onOpenSession?: (name: string) => void;
+    // Botao do cartao de orquestracao -> abre o modal de papeis. Ausente (Archive) = cartao sem acao.
+    onOpenOrq?: () => void;
   }
 
   let {
-    events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, onSelectOption, onCancel,
+    events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, onSelectOption, onSubmitSelected, onCancel,
     askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds,
-    onForward, onOpenSession
+    onForward, onOpenSession, onOpenOrq
   }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
@@ -204,7 +215,13 @@
     | { type: 'event'; id: string; ev: ChatEvent }
     | { type: 'tool'; id: string; ev: ChatEvent }
     | { type: 'group'; id: string; tools: ChatEvent[] }
+    | { type: 'pensamento'; id: string; eventos: ChatEvent[] }
     | { type: 'tasks'; id: string };
+
+  // Chamada feita NO MEIO do raciocínio pode ficar escondida dentro do bloco recolhido, em vez de
+  // card solto: no app do Claude a busca só aparece quando você abre o pensamento, porque foi ali
+  // que ela aconteceu. QUANTO entra é escolha da pessoa (Aparência → O que entra no pensamento) —
+  // ver lib/pensamentoTools, que também guarda o porquê de o padrão ser só a busca.
 
   // Lista de tarefas do agente, dobrada do fluxo INTEIRO (não só da janela visível): o TaskCreate
   // que nomeou a tarefa pode ter rolado pra fora da janela enquanto o TaskUpdate que a concluiu
@@ -222,6 +239,13 @@
       else for (const t of run) items.push({ type: 'tool', id: t.id, ev: t });
       run = [];
     };
+    // Pensamentos consecutivos (e as buscas entre eles) viram UM bloco recolhido. Qualquer outra
+    // ferramenta fecha o bloco: ela é trabalho visível, e o pensamento seguinte abre outro bloco.
+    let pens: ChatEvent[] = [];
+    const flushPens = () => {
+      if (pens.length) items.push({ type: 'pensamento', id: `p-${pens[0].id}`, eventos: pens });
+      pens = [];
+    };
     for (const ev of visibleEvents) {
       // Com a chave ligada, a chamada de tarefa sai da lista como LINHA e a cápsula ocupa o lugar
       // dela — senão a mesma tarefa apareceria duas vezes (a linha crua e a cápsula). Desligada,
@@ -231,6 +255,15 @@
       // presa no rodapé ela se descolava do ponto de uso e ainda escorregava pra baixo a cada
       // mensagem nova. Cada nova chamada tira a cápsula do lugar anterior e a repõe aqui — só a
       // posição MAIS RECENTE vale, porque o conteúdo dela é o estado atual da lista inteira.
+      if (ev.kind === 'thinking') { flush(); pens.push(ev); continue; }
+      // Busca só é engolida quando há um pensamento ABERTO antes dela — busca solta (o usuário
+      // pediu "pesquisa X", sem raciocínio no meio) continua card normal, senão sumiria numa
+      // linha que não explica nada.
+      if (pens.length && ev.kind === 'tool_use' && entraNoPensamento(ev.tool_name)) {
+        pens.push(ev);
+        continue;
+      }
+      flushPens();
       if (taskRows.ativo && ev.kind === 'tool_use' && EH_TASK(ev.tool_name)) {
         flush();
         const antiga = items.findIndex((x) => x.type === 'tasks');
@@ -243,6 +276,7 @@
       items.push({ type: 'event', id: ev.id, ev });
     }
     flush();
+    flushPens();
     // Rede de seguranca do {#each} keyed: no Svelte 5 chave repetida e THROW, e ele derruba a arvore
     // toda — a conversa abre vazia e a tela trava, com navbar e composer ainda desenhados por cima.
     // Aconteceu de verdade: duas entradas de fila consumidas no MESMO milissegundo com o MESMO texto
@@ -305,6 +339,8 @@
         <TaskRows tasks={tarefas} />
       {:else if item.type === 'group'}
         <ToolGroup tools={item.tools} {toolResults} {sessionName} animate={!histIds.has(item.tools[0].id)} />
+      {:else if item.type === 'pensamento'}
+        <ThinkingBlock eventos={item.eventos} />
       {:else}
         {@const ev = item.ev}
         {#if ev.kind === 'user_msg' && (ev.text || ev.image_count)}
@@ -316,6 +352,11 @@
         {@const imgFotos = img && img.filenames.length ? img : null}
         {@const peer = ev.text ? parsePeerMessage(ev.text) : null}
         {@const shownText = peer ? peer.text : ev.text ?? ''}
+        {@const orq = peer?.scope === 'panel' ? lerRecadoOrq(peer.text) : null}
+        <!-- O kick-off da passagem NÃO passa pelo parsePeerMessage: o prefixo dele é
+             `[hangar: passagem de bastão]`, e ler "passagem de bastão" como nome de remetente
+             desenharia um chip "de: passagem de bastão" que não é sessão nenhuma. -->
+        {@const bastao = ev.text ? lerRecadoBastao(ev.text) : null}
         {#if ev.image_count}
           <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). Quando a
                msg veio do APP (tem "📎 imagem: <path>"), a legenda entra LIMPA e as fotos enviadas
@@ -334,6 +375,11 @@
           <div class="queued-row" class:dim={working && !ev.desistiu}>
             {#if imgFotos}
               <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
+            {:else if bastao}
+              <!-- O kick-off da passagem chega SEMPRE por aqui: quem o entrega é a fila durável, e
+                   não o terminal. Sem este ramo o cartão só existiria no caso que nunca acontece. -->
+              <BastaoCard recado={bastao} cru={ev.text ?? ''} ts={ev.ts} {sessionName}
+                          onAbrirOrigem={onOpenSession ? () => onOpenSession(bastao.origem) : null} />
             {:else}
               <UserBubble text={shownText} ts={ev.ts} from={peer?.from} scope={peer?.scope}
                           onForward={onForward ? () => onForward(shownText) : null}
@@ -345,6 +391,15 @@
           </div>
         {:else if imgFotos}
           <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
+        {:else if bastao}
+          <!-- Passagem de bastão: cartão com os dois passos e os dois avisos do kick-off. O recado
+               inteiro continua no bloco fechado do cartão. -->
+          <BastaoCard recado={bastao} cru={ev.text ?? ''} ts={ev.ts} {sessionName}
+                      onAbrirOrigem={onOpenSession ? () => onOpenSession(bastao.origem) : null} />
+        {:else if orq}
+          <!-- Recado do modal de orquestração: cartão em vez de doze linhas de prosa. O texto cru
+               continua no bloco fechado do cartão — o parse é leitura, não substituição. -->
+          <OrqPainelCard recado={orq} cru={shownText} ts={ev.ts} onAbrirPainel={onOpenOrq ?? null} />
         {:else}
           <UserBubble text={shownText} ts={ev.ts} animate={!histIds.has(ev.id)} from={peer?.from} scope={peer?.scope}
                       onForward={onForward ? () => onForward(shownText) : null}
@@ -386,6 +441,7 @@
         question={stateEvent.question}
         options={stateEvent.options ?? []}
         onSelect={onSelectOption}
+        onSubmit={onSubmitSelected}
         onCancel={onCancel}
       />
     {/if}

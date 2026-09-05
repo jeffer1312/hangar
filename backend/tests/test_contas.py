@@ -137,9 +137,54 @@ def test_chaves_do_compartilhado_espelham_pra_conta(casa):
         '{"theme":"light","enabledPlugins":{"velho@x":true},"model":"opus"}', encoding="utf-8")
     contas.reconciliar("conta2")
     d = json.loads((p / "settings.json").read_text(encoding="utf-8"))
-    assert d["enabledPlugins"] == {"superpowers@oficial": True}
+    # enabledPlugins espelha POR PLUGIN: o do principal entra, o que só a conta ligou fica.
+    assert d["enabledPlugins"] == {"superpowers@oficial": True, "velho@x": True}
     assert d["theme"] == "dark"          # o principal manda: o /config da conta é desfeito
     assert d["model"] == "opus"          # chave que só a conta tem sobrevive
+
+
+def test_plugin_instalado_de_dentro_da_conta_sobrevive_ao_espelho(casa):
+    """`claude plugin install` numa sessão da conta liga o plugin só na cópia dela. Espelhar o
+    objeto inteiro desligava no prep seguinte — instalado no compartilhado, ligado em lugar
+    nenhum. O principal ainda manda no plugin que conhece: false dele vence true da conta."""
+    p = contas.criar("conta2")
+    (casa / ".claude" / "settings.json").write_text(
+        '{"enabledPlugins":{"ecc@x":true,"humanizer@x":false}}', encoding="utf-8")
+    (p / "settings.json").write_text(
+        '{"enabledPlugins":{"ecc@x":true,"humanizer@x":true,"novo@x":true}}', encoding="utf-8")
+    avisos = contas.reconciliar("conta2")
+    d = json.loads((p / "settings.json").read_text(encoding="utf-8"))
+    assert d["enabledPlugins"] == {"ecc@x": True, "humanizer@x": False, "novo@x": True}
+    assert [a for a in avisos if "enabledPlugins" in a], avisos   # desfez o humanizer: avisa
+    # Segunda passada: nada a espelhar (os "plugin X ligado sem instalação" são de outra checagem).
+    assert not [a for a in contas.reconciliar("conta2") if "enabledPlugins" in a]
+    # Plugin só ADICIONADO pelo principal não desfaz nada: sem aviso.
+    (casa / ".claude" / "settings.json").write_text(
+        '{"enabledPlugins":{"ecc@x":true,"humanizer@x":false,"outro@x":true}}', encoding="utf-8")
+    avisos = contas.reconciliar("conta2")
+    assert not [a for a in avisos if "enabledPlugins" in a], avisos
+    d = json.loads((p / "settings.json").read_text(encoding="utf-8"))
+    assert d["enabledPlugins"]["outro@x"] is True and d["enabledPlugins"]["novo@x"] is True
+
+
+def test_mcp_do_principal_chega_na_conta_antiga(casa):
+    """O `.claude.json` era copiado só na criação: MCP adicionado no principal depois nunca
+    chegava. Só `mcpServers` espelha — oauthAccount e o resto são da conta."""
+    p = contas.criar("conta2")
+    (casa / ".claude.json").write_text(json.dumps({
+        "oauthAccount": {"emailAddress": "um@exemplo.com"},
+        "mcpServers": {"tavily": {"url": "nova"}, "context7": {}}}), encoding="utf-8")
+    conta = json.loads((p / ".claude.json").read_text(encoding="utf-8"))
+    conta["mcpServers"] = {"tavily": {}, "so-da-conta": {}}
+    conta["projects"]["/tmp/x"]["allowedTools"] = ["Bash", "Edit"]
+    (p / ".claude.json").write_text(json.dumps(conta), encoding="utf-8")
+    avisos = contas.reconciliar("conta2")
+    d = json.loads((p / ".claude.json").read_text(encoding="utf-8"))
+    assert d["mcpServers"] == {"tavily": {"url": "nova"}, "context7": {}, "so-da-conta": {}}
+    assert "oauthAccount" not in d
+    assert d["projects"]["/tmp/x"]["allowedTools"] == ["Bash", "Edit"]   # estado da conta fica
+    assert [a for a in avisos if "tavily" in a], avisos
+    assert not contas.reconciliar("conta2")
 
 
 def test_espelho_avisa_quando_desfaz_chave_da_conta(casa):
@@ -184,6 +229,25 @@ def test_reconciliar_pega_pasta_que_apareceu_depois(casa):
     (casa / ".claude" / "plugins").mkdir()
     contas.reconciliar("conta2")
     assert (casa / ".claude-conta2" / "plugins").is_symlink()
+
+
+def test_reconciliar_deixa_runtime_da_conta_local_e_calado(casa):
+    """`telemetry`/`.last-update-result.json` o CLI regrava por conta (tmp+rename troca o atalho
+    por arquivo real). Ligados, cada reconciliação avisava a "deriva" de novo — era o toast."""
+    contas.criar("conta2")
+    (casa / ".claude" / "telemetry").mkdir()
+    (casa / ".claude" / ".last-update-result.json").write_text("{}")
+    conta = casa / ".claude-conta2"
+    # Atalho deixado por versão anterior é desfeito; a conta ganha o runtime dela.
+    (conta / "telemetry").symlink_to(casa / ".claude" / "telemetry")
+    assert contas.reconciliar("conta2") == []
+    assert not (conta / "telemetry").exists() and not (conta / "telemetry").is_symlink()
+    (conta / "telemetry").mkdir()
+    (conta / ".last-update-result.json").write_text('{"local": 1}')
+    assert contas.reconciliar("conta2") == []
+    assert (conta / "telemetry").is_dir() and not (conta / "telemetry").is_symlink()
+    assert (conta / ".last-update-result.json").read_text() == '{"local": 1}'
+    assert not (conta / ".drift").exists()
 
 
 def test_reconciliar_e_idempotente(casa):
@@ -570,3 +634,31 @@ def test_apelidos_nao_viram_atalho_nem_sobem_de_copia_velha(casa):
     (p / ".hangar-apelidos.json").write_text('{"claude:/x": "velho"}', encoding="utf-8")
     contas.reconciliar("conta2")
     assert json.loads(apelidos.read_text(encoding="utf-8")) == {"claude:/x": "Nome Bom"}
+
+
+def test_plugin_ligado_sem_instalacao_gera_aviso(casa):
+    """`enabledPlugins` (cópia da conta) e `installed_plugins.json` (compartilhado) desalinham
+    calados: o clobber de 2026-08-19 apagou a instalação e o true ficou; a limpeza de cache do
+    CLI apaga a pasta de plugin que saiu do registro. A sessão abre sem o plugin e nada avisa."""
+    p = contas.criar("conta2")
+    pasta = casa / ".claude" / "plugins" / "cache" / "oficial" / "ecc" / "1.0"
+    pasta.mkdir(parents=True)
+    (casa / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps({
+        "version": 2,
+        "plugins": {
+            "ecc@oficial": [{"scope": "user", "installPath": str(pasta)}],
+            "sumiu@oficial": [{"scope": "user", "installPath": str(pasta.parent / "nada")}],
+        }}), encoding="utf-8")
+    (casa / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {
+        "ecc@oficial": True, "sumiu@oficial": True,
+        "superpowers@oficial": True, "desligado@oficial": False}}), encoding="utf-8")
+    avisos = contas.reconciliar("conta2")
+    assert [a for a in avisos if "superpowers@oficial" in a and "não consta" in a], avisos
+    assert [a for a in avisos if "sumiu@oficial" in a and "pasta sumiu" in a], avisos
+    assert not [a for a in avisos if "ecc@oficial" in a or "desligado" in a], avisos
+
+
+def test_sem_registro_de_plugins_e_sem_plugin_ligado_nao_avisa(casa):
+    """Máquina nova: nem installed_plugins.json nem enabledPlugins. Silêncio, não erro."""
+    contas.criar("conta2")
+    assert not [a for a in contas.reconciliar("conta2") if a.startswith("plugin")]

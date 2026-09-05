@@ -347,6 +347,57 @@ def ensure_guard_hooks_installed() -> list[str]:
     return touched
 
 
+PAIR_HOOK = str((Path(__file__).parent.parent / "hooks" / "pair_hook.py").resolve())
+# startup|resume|clear|compact: todo caminho em que o contexto nasce/renasce sem o prompt do --pair.
+_PAIR_MATCHER = "startup|resume|clear|compact"
+
+
+def _pair_command() -> str:
+    from app.pair import _pair_dir
+    return f'"{sys.executable}" "{PAIR_HOOK}" "{_pair_dir()}"{_FALHA_NAO_BLOQUEIA}'
+
+
+def ensure_pair_hook_installed() -> list[str]:
+    """Instala (idempotente) o reinjetor do protocolo de grupo no SessionStart, em cada config dir.
+    Fail-soft por arquivo, como os demais. Retorna os dirs onde gravou (so pra log)."""
+    try:
+        dirs = {Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()}
+        command = _pair_command()
+    except Exception:
+        return []
+    touched: list[str] = []
+    for d in dirs:
+        try:
+            if d.is_dir() and _ensure_event_hook(d / "settings.json", "SessionStart", command,
+                                                 matcher=_PAIR_MATCHER, por_nome=True):
+                touched.append(str(d))
+        except Exception:
+            continue
+    return touched
+
+
+NAV_HOOK = str((Path(__file__).parent.parent / "hooks" / "nav_hook.py").resolve())
+_NAV_COMMAND = f'"{sys.executable}" "{NAV_HOOK}"{_FALHA_NAO_BLOQUEIA}'
+
+
+def ensure_nav_hook_installed() -> list[str]:
+    """Instala (idempotente) o aviso de navegador embutido no UserPromptSubmit, em cada config dir.
+    A cada prompt, e nao so na abertura: o navegador abre e fecha no meio da sessao."""
+    try:
+        dirs = {Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()}
+    except Exception:
+        return []
+    touched: list[str] = []
+    for d in dirs:
+        try:
+            if d.is_dir() and _ensure_event_hook(d / "settings.json", "UserPromptSubmit", _NAV_COMMAND,
+                                                 por_nome=True):
+                touched.append(str(d))
+        except Exception:
+            continue
+    return touched
+
+
 def ensure_askq_hook_installed() -> list[str]:
     """Instala (idempotente) o hook PreToolUse de captura do AskUserQuestion no settings.json
     de cada config dir do Claude. Fail-soft por arquivo: um settings.json problematico nunca

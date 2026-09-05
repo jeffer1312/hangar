@@ -274,17 +274,14 @@ def test_falha_na_reconciliacao_devolve_erro_e_nao_cria_sessao(casa, monkeypatch
 
 
 def test_codex_com_config_dir_nao_reconcilia(casa, monkeypatch):
-    """Provider codex não consome config dir (o create_codex nem recebe ele): a reconciliação —
-    efeito no disco — não pode rodar num pedido que vai criar uma sessão codex."""
+    """Provider codex não consome config dir (ele tem conta própria, do CLI do Codex): a
+    reconciliação — efeito no disco — não pode rodar num pedido que vai criar uma sessão codex."""
     contas.criar("conta2")
     reconciliou = []
     monkeypatch.setattr(contas._Ciclo, "reconciliar",
                         lambda self, projeto=None: reconciliou.append(1) or [])
-
-    async def create_codex_fake(*a, **k):
-        return SessionInfo(name="s1", provider="codex")
-
-    monkeypatch.setattr(api_mod.registry, "create_codex", create_codex_fake)
+    monkeypatch.setattr(api_mod.registry, "create",
+                        lambda *a, **k: SessionInfo(name="s1", provider="codex"))
     r = TestClient(app).post("/api/sessions", json={
         "name": "s1", "cwd": str(casa), "config_dir": str(casa / ".claude-conta2"),
         "provider": "codex"}, headers=AUTH)

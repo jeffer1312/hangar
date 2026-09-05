@@ -2,7 +2,7 @@
 // A Sidebar monta uma árvore pesada; os componentes de trabalho (sheets, menus, git, loop) viram
 // stubs. Cobertura do fluxo de adicionar servidor (que vivia aqui desde a round 5) migrou pra
 // ServidoresSettings na Task 4b/4c — ela mora em ServidoresSettings.test.ts.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, unmount, tick, createRawSnippet } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import * as auth from '../lib/auth';
@@ -30,12 +30,15 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   isAbortError: vi.fn(() => false),
   errorDetail: vi.fn(async () => ''),
   createSession: vi.fn(), deleteSession: vi.fn(),
+  // Contrato real do renameSession: devolve { ok, name } (o doRename lê r.name).
   renameSession: vi.fn(async (_old: string, nv: string) => ({ ok: true, name: nv })),
   gitAction: vi.fn(), checkoutBranch: vi.fn(), resumeSession: vi.fn(),
   broadcast: vi.fn(), getHistoryTailForServer: vi.fn(async () => []),
+  // Imports do SessionContextMenu REAL (não stubado): o onMount chama getPushSettings.
   getPushSettings: vi.fn(async () => ({ muted: [] })),
   setSessionMute: vi.fn(), openEditor: vi.fn(),
   setThenLink: vi.fn(), clearThenLink: vi.fn(),
+  // Git REAL montado nos testes de filesInContext (abaixo): o store faz refresh no load.
   getBranches: vi.fn(async () => ({ branches: [], current: null, remotes: [], dirty: false })),
   getChangedFiles: vi.fn(async () => ({ files: [], sequencer: null })),
   getGitLog: vi.fn(async () => ({ commits: [], truncated: false })),
@@ -46,24 +49,21 @@ vi.mock('@hangar/core', async (importOriginal) => ({
     path: 'a.txt', diff: '', truncated: false,
     escopo_pedido: 'branch', escopo_usado: 'branch', base: null, motivo: null,
   })),
-  loopBadge: () => null,
-  LOOP_TONE_COLOR: {},
+  // Rótulo REAL de estado (agora funcao): o trilho original anuncia estado no aria-label/title.
   rotuloEstado: (s: string) => ({ working: 'em execução', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' })[s] ?? '',
-  stateColors: {},
-  countAwaiting: () => 0,
-  groupSelectedByServer: () => [],
-  initials: (n: string) => n.slice(0, 2),
-  projectKey: () => '',
-  projectLabel: () => '',
-  effectiveGroupBy: () => 'server',
-  fmtWhen: () => '',
-  sortSessions: (s: unknown[]) => s,
-  latestAssistantEvent: () => null,
+  stateColors: {}, countAwaiting: () => 0,
+  groupSelectedByServer: () => [], initials: (n: string) => n.slice(0, 2),
+  railLabel: (n: string) => [n.slice(0, 8), ''],
+  projectKey: () => '', projectLabel: () => '', effectiveGroupBy: () => 'server',
+  fmtWhen: () => '', sortSessions: (s: unknown[]) => s, latestAssistantEvent: () => null,
+  // Mesmo shape do real: itens do cluster são {session} (ou {kind:'header',...}); o template lê
+  // item.session — sessão crua no lugar certo quebraria na chave do each.
   clusterByPair: (s: unknown[]) => s.map((x) => ({ session: x })),
-  untrackedReason: () => '',
-  providerName: () => 'claude',
+  untrackedReason: () => '', providerName: () => 'claude',
   providerTag: () => null,
-  planBadge: () => null,
+  cwdParts: (c: string | undefined) => ({ prefix: '', base: c ?? '' }),
+ loopBadge: () => null, LOOP_TONE_COLOR: {},
+ planBadge: () => null,
 }));
 vi.mock('../lib/auth', () => ({
   getActiveId: vi.fn(() => null),
@@ -79,12 +79,15 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
     loading: false,
   },
 }));
-
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));
 
-vi.mock('./CreateSessionSheet.svelte', stubDe);
+// Dublê que PUBLICA as props, não o stub cego: é o que deixa afirmar em que modo a folha abriu
+// (normal x bastão). Renderiza uma única div, como o stub — os casos que contam markup não mudam.
+vi.mock('./CreateSessionSheet.svelte', async () => ({
+  default: (await import('./CreateSessionSheet.spy.svelte')).default,
+}));
 // SessionContextMenu NÃO é stubado: o teste clica no botão Renomear REAL do menu (mesmo caminho
 // que as abas usam — bridge -> openMenu -> Rename). Stub de raw snippet não repassava o clique
 // pro listener do setup no happy-dom (o nó é substituído no flush do Svelte).
@@ -112,7 +115,13 @@ import { sidebarBridge } from '../lib/sidebarBridge';
 import { navMode } from '../lib/navMode.svelte';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
 import * as api from '@hangar/core';
+import * as m from '../paraglide/messages';
 import type { AggSession } from '@hangar/core';
+
+// O body-scroll-lock do bits-ui agenda um cleanup de 24ms ao desmontar um dialog/sheet; sem
+// esperar, o timer dispara DEPOIS do teardown do happy-dom ("document is not defined" — erro
+// não tratado que faz a suite inteira sair com exit 1 mesmo com todos os testes verdes).
+afterEach(() => new Promise((r) => setTimeout(r, 30)));
 
 beforeEach(() => {
   overwriteGetLocale(() => 'pt');   // textos dos menus e dialogs sao mensagens agora
@@ -338,8 +347,8 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     expect(aside).not.toBeNull();
     expect(aside?.classList.contains('collapsed')).toBe(true);
     expect(aside?.classList.contains('rail')).toBe(false);
-    // Iniciais com anel de estado — nada da reconstrução da Task 5
-    expect(aside?.querySelector('.initials')).not.toBeNull();
+    // Nome em duas linhas mono (railLabel) — nada da reconstrução da Task 5
+    expect(aside?.querySelector('.rail-lbl')).not.toBeNull();
     expect(aside?.querySelector('.rail-iniciais')).toBeNull();
     expect(aside?.querySelector('.rail-state-dot')).toBeNull();
     // Rodapé sem o toggle do painel de contexto: ele vive só na barra superior (SessionTabs)
@@ -455,7 +464,10 @@ describe('Sidebar — trilho original no modo rail', () => {
     const t = montar();
     await tick();
     expect(document.querySelector('.sess-main')!.getAttribute('aria-label')).toBe('hangar · Servidor A · em execução');
-    expect(document.querySelector('.initials')!.classList.contains('busy')).toBe(true);
+    // O estado saiu do anel das iniciais e virou marca própria no canto: trabalhando é a marca
+    // animada, o resto é o ponto.
+    expect(document.querySelector('.estado-marca')).not.toBeNull();
+    expect(document.querySelector('.estado-ponto')).toBeNull();
     unmount(t.comp);
   });
 
@@ -466,7 +478,10 @@ describe('Sidebar — trilho original no modo rail', () => {
     const t = montar();
     await tick();
     expect(document.querySelector('.sess-main')!.getAttribute('aria-label')).toBe('hangar · Servidor A · pode estar travada');
-    expect(document.querySelector('.initials')!.classList.contains('stalled')).toBe(true);
+    const ponto = document.querySelector<HTMLElement>('.estado-ponto')!;
+    expect(ponto).not.toBeNull();
+    expect(ponto.getAttribute('style')).toContain('--warning');
+    expect(document.querySelector('.estado-marca')).toBeNull();
     unmount(t.comp);
   });
 
@@ -715,6 +730,67 @@ describe('Sidebar — filesInContext (Task 14/15): o Git do menu e a sessão hos
     await tick();
     await abrirGitDaSessao();
     expect(temArquivos()).toBe(true);
+    unmount(t.comp);
+  });
+});
+
+describe('Sidebar — passagem de bastão: em que MODO a folha de criar abre', () => {
+  // O defeito que isto trava: `bastaoAlvo` sobrevive à sessão em que foi escrito. Sem o
+  // `abrirCriar()` zerando, o "+ Nova" clicado depois de uma passagem abriria a folha ainda em
+  // modo bastão — criando, com o dossiê de outra sessão, algo que a pessoa pediu do zero.
+  function comUmaSessao() {
+    storeState.servers.length = 0;
+    storeState.servers.push({ id: 'srv-a', label: 'Servidor A', baseUrl: 'http://a', token: 'x' });
+    storeState.byServer.length = 0;
+    storeState.byServer.push({
+      server: { id: 'srv-a', label: 'Servidor A' },
+      sessions: [{ name: 'sess-1', serverId: 'srv-a', state: 'idle', cwd: '/tmp/proj' }],
+      error: null, loaded: true,
+    });
+  }
+  const modo = () => document.querySelector('[data-testid="create-sheet"]')?.getAttribute('data-bastao');
+
+  async function abrirMenuEPassarBastao() {
+    sidebarBridge.openSessionMenu(
+      new MouseEvent('contextmenu', { clientX: 5, clientY: 5 }),
+      { name: 'sess-1', serverId: 'srv-a', cwd: '/tmp/proj' } as unknown as AggSession,
+      'srv-a',
+    );
+    await tick();
+    const item = [...document.querySelectorAll<HTMLButtonElement>('.ctx-menu button')]
+      // `includes` e não igualdade: o item carrega o chevron "›" (abre outra superfície), igual
+      // aos de Git e Loop — o texto do botão é rótulo + chevron.
+      .find((b) => b.textContent?.includes(m.bastao_menu()));
+    expect(item, 'item "continuar em outra conta" no menu "⋯"').not.toBeUndefined();
+    item!.click();
+    await tick();
+  }
+
+  it('o item do menu abre em modo bastão; o "+ Nova" seguinte volta ao normal', async () => {
+    comUmaSessao();
+    const t = montar();
+    await tick();
+    expect(modo()).toBe('');                       // nasce em modo normal
+
+    await abrirMenuEPassarBastao();
+    expect(modo()).toBe('sess-1');                 // a folha recebeu a origem
+
+    // "+ Nova" do rodapé: o MESMO caminho que a pessoa usa depois de passar o bastão.
+    document.querySelector<HTMLButtonElement>('.cta-new')!.click();
+    await tick();
+    expect(modo()).toBe('');
+    unmount(t.comp);
+  });
+
+  it('o "+ Nova" da barra de abas (bridge) também zera o modo', async () => {
+    comUmaSessao();
+    const t = montar();
+    await tick();
+    await abrirMenuEPassarBastao();
+    expect(modo()).toBe('sess-1');
+    sidebarBridge.openCreate();                    // caminho das abas, com a sidebar recolhida
+    await tick();
+    expect(modo()).toBe('');
     unmount(t.comp);
   });
 });

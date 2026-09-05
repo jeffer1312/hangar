@@ -3,6 +3,7 @@
 import * as m from '../paraglide/messages';
   import { SvelteMap } from 'svelte/reactivity';
   import BoardCard from '../components/BoardCard.svelte';
+  import GroupGlyph from '../components/icons/GroupGlyph.svelte';
   import RateStrip from '../components/RateStrip.svelte';
   import StateChip from '../components/StateChip.svelte';
   import type { BoardRow, PendingMsg } from './Board.svelte';
@@ -405,7 +406,7 @@ import * as m from '../paraglide/messages';
          dentro do retângulo parecia membro. -->
     {#each groupFrames as f (f.gid)}
       <div class="cv-group-tag" style="left: {f.x}px; top: {f.y}px; color: {f.color};">
-        <span class="cv-group-label" title={f.label}>🤝 {f.label} · {f.n}</span>
+        <span class="cv-group-label" title={f.label}><GroupGlyph size={13} /> {f.label} · {f.n}</span>
         <!-- Âncora = um membro que JÁ TEM box — o primeiro de visibleRows podia estar sem posição
              (placeNew roda pós-render) e o reunir virava no-op mudo; grupo desfeito entre render e
              clique também não pode estourar. -->
@@ -425,7 +426,7 @@ import * as m from '../paraglide/messages';
       <div class="cv-gcard" style="left: {g.x}px; top: {g.y}px; width: {g.w}px; color: {g.color};">
         <button class="cv-gcard-head" onclick={() => toggleCollapse(g.gid)}
                 title={m.board_expandir_grupo()}>
-          ▸ 🤝 {g.label ?? g.members.map((m) => m.name).join(' · ')}
+          ▸ <GroupGlyph size={13} /> {g.label ?? g.members.map((m) => m.name).join(' · ')}
         </button>
         {#each g.members as membro (rowKey(membro))}
           <button class="cv-gcard-row" onclick={() => onOpenSession(membro.name, membro.serverId)}

@@ -5,6 +5,7 @@
   import { vaultPush } from './lib/vaultPush.svelte';
   import { ttsPlayer } from './lib/ttsPlayer.svelte';
   import { ttsSelection } from './lib/ttsSelection.svelte';
+  import { segredos } from './lib/segredos.svelte';
   import { encodeCompareIds, type CompareId } from '@hangar/core';
   import { peekStep, initialPeek } from '@hangar/core';
   import { parseHash, type Route } from './lib/route';
@@ -162,6 +163,21 @@
   let versaoServidores = $state(0);
   $effect(() => onServersChanged(() => versaoServidores++));
 
+  // Quais segredos (chave da ElevenLabs etc) o servidor ativo tem — pro chip "Ouvir" saber se some.
+  // `getActiveId()` não é reativo (mesma ressalva de `ultimoServidorConsultado` no DesktopShell);
+  // `route` é o que muda a cada troca de rota, e por ela já ter passado pelo `selectServer` síncrono
+  // em `applyRouteServer`, o id lido aqui já é o do servidor novo. Guarda por id pra não recarregar
+  // à toa ao trocar de sessão dentro do MESMO servidor.
+  let ultimoServidorSegredos: string | null = null;
+  $effect(() => {
+    void route;
+    const id = getActiveId();
+    if (id === ultimoServidorSegredos) return;
+    ultimoServidorSegredos = id;
+    segredos.esquecer();
+    if (id) segredos.carregar();
+  });
+
   // SEMPRE `listServers().find`. NUNCA o caminho de activeServer(): auth.ts:151-155 faz `?? list[0]`,
   // entao um id desconhecido devolveria O PRIMEIRO SERVIDOR DA LISTA, silenciosamente.
   const alvoConfig = $derived.by(() => {
@@ -207,10 +223,10 @@
 
   // Trocar o ALVO do painel (?srv=) sem sair da tela: o seletor do grupo "Servidor" (e o
   // "Editar" da tela Servidores) reabrem a tela ATUAL com o servidor novo resolvido
-  // (abrirConfig conta como nova parada). Antes isto sempre caía em 'servidores' — trocar o
+  // (abrirConfig conta como nova parada). Antes isto sempre caía em 'maquinas' — trocar o
   // alvo da aba Contas te arrancava dela (pedido recorrente do usuário, 19/08/2026).
   function pickConfigServer(id: string) {
-    abrirConfig(cfg?.tela ?? 'servidores', id);
+    abrirConfig(cfg?.tela ?? 'maquinas', id);
   }
 
   // ‹ (botaoEsquerdo de sub-tela no SettingsModal) e "subir um nivel", nao "voltar no tempo": os dois
@@ -500,7 +516,9 @@
        do Chat o audio morreria em toda troca, e o proprio elemento perderia o destravamento do
        gesto do iOS. -->
   <TtsBar />
-  <TtsSelectionPill />
+  {#if segredos.podeLer()}
+    <TtsSelectionPill />
+  {/if}
   <CodeOverlay />
 
   {#if cfg && telaEfetiva && route.name !== 'login' && route.name !== 'loading'}

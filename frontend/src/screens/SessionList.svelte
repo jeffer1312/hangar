@@ -7,26 +7,24 @@
 <script lang="ts">
   import { onMount } from 'svelte';
 import * as m from '../paraglide/messages';
-import { intlLocale } from '../lib/locale';
   import HangarMark from '../components/icons/HangarMark.svelte';
+  import GroupGlyph from '../components/icons/GroupGlyph.svelte';
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
-  import QrScanner from '../components/QrScanner.svelte';
   import BottomSheet from '../components/BottomSheet.svelte';
-  import ModalDialog from '../components/ModalDialog.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import Git from '../components/Git.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
-  import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '@hangar/core';
-  import { focusFirstInvalid } from '../lib/focusCycle';
-  import { listServers, getActiveId, selectServer, removeServer, addServerWithRollback, renameServer, updateServer, serverColor, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
-  import type { AggSession, ResumeCandidate, Provider } from '@hangar/core';
+  import { createSession } from '@hangar/core';
+  import { listServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
+  import type { AggSession, Provider } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
-  import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '@hangar/core';
+  import { createSessionListModel } from '../lib/sessionListModel.svelte';
+  import { countAwaiting, fmtWhen, initials, clusterByPair } from '@hangar/core';
   import { updateBadge } from '../lib/badge';
 
   interface Props {
@@ -35,6 +33,14 @@ import { intlLocale } from '../lib/locale';
     onLogout: () => void;
   }
   let { onNavigateToChat, onCompare, onLogout }: Props = $props();
+
+  // Toda a lógica da lista (grupos, filtro, seleção/broadcast, ações) mora no modelo compartilhado
+  // com a Sidebar; aqui fica só o chrome do celular (drawer, feed, scroll, Loop) e os embrulhos.
+  const model = createSessionListModel({
+    variant: 'mobile',
+    onOpen: (n) => onNavigateToChat(n),
+    onCompare: (ids) => onCompare(ids),
+  });
 
   // Visão agregada içada pro store único (era a cópia local slots/recompute/connect): 1 SSE por
   // servidor, refcount compartilhado com Sidebar/Board. As listas vêm do store como $derived.
@@ -53,7 +59,6 @@ import { intlLocale } from '../lib/locale';
   // Mesma forma do flash() da Sidebar, pra as duas views falharem igual.
   let actionMsg = $state('');
   let actionTimer: ReturnType<typeof setTimeout> | undefined;
-  const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
   function showActionMsg(msg: string) {
     actionMsg = msg;
     clearTimeout(actionTimer);
@@ -62,7 +67,6 @@ import { intlLocale } from '../lib/locale';
   let showCreateSheet = $state(false);
   let drawerOpen = $state(false);    // menu lateral (hamburger): navegação + conta
   let searchOpen = $state(false);    // Buscar conversas (switcher em modo so-busca)
-  let filterText = $state('');
   // Fallback de foco das confirmações: o hamburger é o controle que SEMPRE sobra acessível, mesmo
   // quando o gatilho (linha do AccountMenu no drawer) já fechou/ficou inerte.
   let hamEl = $state<HTMLElement | null>(null);
@@ -70,15 +74,14 @@ import { intlLocale } from '../lib/locale';
   // Lista de servidores (gerenciada no menu de conta: adicionar/remover). Sem "ativo" fixo — a lista é
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar. Vem do store (derived).
   const servers = $derived(sessionsStore.servers);
-  let scanning = $state(false);
 
   // 1 SSE por servidor via store, refcount pareado EXATAMENTE 1x (retain no mount, release no cleanup).
   onMount(() => {
-    sessionsStore.retain();
+    const off = model.mount();
     return () => {
       // Captura a posição na SAÍDA (cinto-e-suspensório do onscroll; cleanup roda antes do DOM
       // sair). Saindo no MEIO da fase de restore, o scrollTop está parcial — mantém o alvo original.
-      sessionsStore.release();
+      off();
     };
   });
 
@@ -116,39 +119,6 @@ import { intlLocale } from '../lib/locale';
 
   // Toggle do modo seleção/broadcast (feature #9), agora no botão do header (antes vivia no menu "…").
 
-  // Adicionar servidor manual (no PC: digitar URL+token em vez de escanear QR).
-  let showAddServer = $state(false);
-  let addUrl = $state('');
-  let addToken = $state('');
-  let addError = $state('');
-  let addBusy = $state(false);
-  // Erro de VALIDAÇÃO marca os campos (aria-invalid) e foca o primeiro; erro de REDE (probe) é
-  // visível mas não marca campo indevidamente.
-  let addValidacao = $state(false);
-  let addFormEl = $state<HTMLFormElement | null>(null);
-
-  // Foca o primeiro campo inválido DEPOIS do render: o aria-invalid só existe no DOM após o flush,
-  // e focusFirstInvalid o procura no DOM — chamar no mesmo handler síncrono não acharia nada.
-  $effect(() => { if (addValidacao) focusFirstInvalid(addFormEl); });
-
-  // Aguardando primeiro, depois alfabetico por nome (sortSessions compartilhado com a Sidebar — as
-  // duas listas ja divergiram na ordenacao no passado). Estavel: so pula quando o ESTADO muda. Antes
-  // ordenava por urgencia+atividade, e a atividade muda a todo poll -> a lista dancava.
-  const visibleSessions = $derived.by(() => {
-    const sorted = sortSessions(sessions);
-    const q = filterText.trim().toLowerCase();
-    if (!q) return sorted;
-    return sorted.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.cwd ?? '').toLowerCase().includes(q) ||
-        s.serverLabel.toLowerCase().includes(q),
-    );
-  });
-
-  // Filtro so aparece quando a lista fica longa.
-  const showFilter = $derived(sessions.length > 6);
-
   // Restaura o scroll salvo (ver <script module>) em FASES, não de uma vez: no remount o release()
   // anterior zerou o store, e as sessões voltam em ONDAS (1 SSE por servidor). Restaurar no primeiro
   // render não-vazio clampava o scrollTop na altura da primeira onda -> "voltou pro topo". Reaplica
@@ -164,7 +134,7 @@ import { intlLocale } from '../lib/locale';
   let lastApplied = -1;
   let leaving = false;
   $effect(() => {
-    void visibleSessions;
+    void model.flatRows;
     const el = listEl;
     if (restoreTarget <= 0 || !el) return;
     // Anchoring nativo desligado DURANTE a fase: onda inserindo conteúdo acima da viewport faz o
@@ -192,147 +162,18 @@ import { intlLocale } from '../lib/locale';
     if (restoreTarget <= 0) savedScroll = el.scrollTop;
   }
 
-  // Quantas sessões precisam de você (aguardando) — alimenta o badge do ícone do app.
-  const awaitingCount = $derived(countAwaiting(sessions));
-
   // Badge do ícone do app (feature #13): reflete o agregado de TODOS os servidores, sempre que a
   // lista mudar (novo snapshot SSE, servidor removido, etc). Zero aguardando -> limpa o badge.
-  $effect(() => { updateBadge(awaitingCount); });
+  $effect(() => { updateBadge(model.awaitingTotal); });
 
-  // Toggle "Servidor | Projeto" (feature #3): alterna a CHAVE de agrupamento, persistido — igual
-  // ao padrao de cp_collapsed_servers/cp_sidebar_w. "Servidor" = comportamento de sempre.
-  const GROUP_BY_KEY = 'cp_group_by';
-  type GroupBy = 'server' | 'project';
-  function loadGroupBy(): GroupBy {
-    return localStorage.getItem(GROUP_BY_KEY) === 'project' ? 'project' : 'server';
-  }
-  let groupBy = $state<GroupBy>(loadGroupBy());
-  function setGroupBy(mode: GroupBy) {
-    groupBy = mode;
-    try { localStorage.setItem(GROUP_BY_KEY, mode); } catch { /* quota/priv mode: ignora */ }
-  }
+  // Gate dos dois ramos do template (agrupado x lista plana): o modelo já traduz a preferência
+  // gravada no modo efetivo do celular.
+  const showGrouped = $derived(model.groupMode !== 'none');
 
-  // Agrupamento: por SERVIDOR (so multi-servidor, comportamento de sempre) ou por PROJETO (cwd da
-  // sessao — feature #3, uma sessao qualquer servidor). Cada grupo = header colapsavel + contagem +
-  // badge de aguardando. Ordem alfabetica (deterministica, nao pula). Reaproveita visibleSessions
-  // (ja ordenado + filtrado).
-  const grouped = $derived.by(() => {
-    if (groupBy === 'project') {
-      const byKey = new Map<string, AggSession[]>();
-      for (const s of visibleSessions) {
-        const key = projectKey(s.cwd);
-        const arr = byKey.get(key);
-        if (arr) arr.push(s);
-        else byKey.set(key, [s]);
-      }
-      return [...byKey.entries()]
-        .map(([key, list]) => ({ id: key, label: projectLabel(list[0]?.cwd), color: null as string | null, sessions: list }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-    }
-    const byId = new Map<string, AggSession[]>();
-    for (const s of visibleSessions) {
-      const arr = byId.get(s.serverId);
-      if (arr) arr.push(s);
-      else byId.set(s.serverId, [s]);
-    }
-    return servers
-      .map((srv) => ({ id: srv.id, label: srv.label, color: serverColor(srv.id) as string | null, sessions: byId.get(srv.id) ?? [] }))
-      .filter((g) => g.sessions.length > 0)
-      .sort((a, b) => a.label.localeCompare(b.label)); // grupos fixos em ordem alfabetica (nao pulam)
-  });
-
-  // Mostra a UI agrupada quando ha mais de 1 servidor OU quando o modo e "projeto" (o ponto da
-  // feature e ver "todas as sessoes do repo X" mesmo com 1 so servidor).
-  const showGrouped = $derived(multiServer || groupBy === 'project');
-
-  // ── Broadcast (feature #9): selecionar N sessoes e mandar 1 prompt pra todas ──────────────────
-  // Selecao = chaves "<serverId>:<name>" (mesma composta usada nas keys #each abaixo). Cross-server:
-  // groupSelectedByServer particiona por servidor-dono -> 1 chamada a broadcast() por servidor
-  // (selectServer/restore, igual ao resto do app — ver withServer do Sidebar).
-  let selectMode = $state(false);
-  let selected = $state<Set<string>>(new Set());
-  let broadcastText = $state('');
-  let broadcastBusy = $state(false);
-  let broadcastMsg = $state('');
-
+  // Entrar/sair do modo seleção fecha o drawer — só o celular tem drawer, então o embrulho fica aqui.
   function toggleSelectMode() {
-    selectMode = !selectMode;
-    selected = new Set();
-    broadcastText = '';
-    broadcastMsg = '';
+    model.toggleSelectMode();
     drawerOpen = false;
-  }
-  function toggleSelected(key: string) {
-    const next = new Set(selected);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    selected = next;
-  }
-  // "enviar p/ todas" no header do grupo: entra em modo selecao ja com o grupo inteiro marcado
-  // (so as sessoes rastreaveis — "sem id" nao aceita input). Continua editavel (dá pra desmarcar).
-  function selectGroupForBroadcast(g: { sessions: AggSession[] }) {
-    selectMode = true;
-    selected = new Set(
-      g.sessions.filter((s) => s.tracked !== false).map((s) => `${s.serverId}:${s.name}`),
-    );
-  }
-  // Slash-command manda por sessao (correcao de rota, nao broadcast) — desabilita o envio aqui em vez
-  // de replicar "/comando" pra N sessoes de uma vez (ambiguo/perigoso, ex: /clear em todas sem querer).
-  const broadcastIsSlash = $derived(broadcastText.trim().startsWith('/'));
-  const broadcastDisabled = $derived(broadcastBusy || selected.size === 0 || !broadcastText.trim() || broadcastIsSlash);
-
-  // "Comparar" (feature #11): reusa a MESMA seleção multipla do broadcast pra abrir a grade lado a
-  // lado. Precisa de 2+ (comparar 1 sessão não tem propósito).
-  const compareDisabled = $derived(selected.size < 2);
-  function openCompare() {
-    const ids = sessions
-      .filter((s) => selected.has(`${s.serverId}:${s.name}`))
-      .map((s) => ({ serverId: s.serverId, name: s.name }));
-    onCompare(ids);
-  }
-
-  async function sendBroadcast() {
-    const text = broadcastText.trim();
-    if (broadcastDisabled) return;
-    broadcastBusy = true;
-    broadcastMsg = '';
-    const groups = groupSelectedByServer(sessions, selected);
-    const prevActive = getActiveId();
-    const failed: string[] = [];
-    for (const [serverId, names] of groups) {
-      selectServer(serverId);
-      try {
-        const results = await broadcast(names, text);
-        for (const [n, r] of Object.entries(results)) if (!r.ok) failed.push(n);
-      } catch {
-        failed.push(...names); // servidor offline/erro de rede -> conta todo o lote dele como falho
-      }
-    }
-    if (prevActive) selectServer(prevActive);
-    broadcastBusy = false;
-    if (failed.length) {
-      broadcastMsg = m.lista_broadcast_falha({ nomes: failed.join(', ') });
-    } else {
-      broadcastText = '';
-      selected = new Set();
-      selectMode = false;
-    }
-  }
-
-  // Estado colapsado por servidor, persistido (sobrevive ao reload que add/scan de servidor dispara).
-  const COLLAPSE_KEY = 'cp_collapsed_servers';
-  function loadCollapsed(): Set<string> {
-    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '[]')); } catch { return new Set(); }
-  }
-  let collapsed = $state<Set<string>>(loadCollapsed());
-  function toggleGroup(id: string) {
-    const next = new Set(collapsed);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    collapsed = next;
-    // Persiste só servidor/projeto; colapso de CLUSTER de pareamento ('pair:<gid>') é efêmero (gid
-    // regenera a cada pareamento -> salvar acumularia lixo morto). Ver mesmo filtro na Sidebar.
-    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:')))); } catch { /* quota/priv mode: ignora */ }
   }
 
   // O sheet de criar já posicionou o servidor-alvo como ativo (selectServer), então createSession
@@ -346,69 +187,40 @@ import { intlLocale } from '../lib/locale';
   // Abrir/apagar precisam mirar o servidor DA sessão: selectServer(serverId) antes, pois api.ts lê
   // o ativo a cada chamada (sem reload). Assim chat/SSE/delete vão pro backend certo.
   function openSession(s: AggSession) {
-    // Sem id confiavel: chat bloqueado (evita transcript errado). EXCECAO kimi: "sem id" e o normal
-    // pre-1o-prompt e o /input nao depende de jsonl — bloquear aqui impedia a sessao de nascer.
+    // Sem id confiável não abre (exceção kimi) — o modelo bloqueia igual; repetir aqui é pra não
+    // salvar o scroll nem congelar o save de uma saída que não vai acontecer.
     if (s.tracked === false && s.provider !== 'kimi') return;
     // Captura a posição AGORA (DOM intacto) e congela o save — ver comentário do restore.
     if (restoreTarget <= 0) savedScroll = listEl?.scrollTop ?? savedScroll;
     leaving = true;
     // Navegação abortada (nome inválido etc.) deixaria o save congelado pra sempre — destrava.
     setTimeout(() => (leaving = false), 1000);
-    selectServer(s.serverId);
-    onNavigateToChat(s.name);
+    model.open(s);
   }
 
   // Excluir sessao pede confirmacao (com o nome + estado) — a superficie de toque no mobile e imprecisa,
   // e um toque acidental matava o tmux vivo na hora. O delete real so acontece no doDelete (paridade com
   // o desktop, que ja confirmava).
-  let confirmDel = $state<AggSession | null>(null);
   function handleDelete(s: AggSession) {
-    confirmDel = s;
+    model.requestDelete(s.name, s.serverId, s.state);
   }
+  // A falha do delete aparece como mensagem de AÇÃO (não toast, não substitui a lista) — só o
+  // celular faz assim, por isso o embrulho.
   async function doDelete() {
-    if (!confirmDel) return;
-    const s = confirmDel;
-    confirmDel = null;
-    selectServer(s.serverId);
-    // Exclusão otimista via store: some na hora. Falhou -> desmarca, a linha REAPARECE e agora TAMBÉM
-    // diz por quê: até o backend passar a conferir se a sessão morreu de verdade, o kill nunca falhava
-    // e este catch era código morto. Agora o DELETE responde 500 quando a sessão sobrevive (é o caso do
-    // psmux no Windows), e só o rollback visual deixava o usuário achando que o toque não pegou. O
-    // desktop já mostrava a mensagem (Sidebar, flash()); faltava paridade aqui.
-    sessionsStore.markDeleting(s.serverId, s.name);
-    try {
-      await deleteSession(s.name);
-    } catch (e) {
-      sessionsStore.unmarkDeleting(s.serverId, s.name);
-      showActionMsg(m.lista_flash_excluir({ nome: s.name, erro: errMsg(e) }));
-    }
-    // No sucesso o SSE re-emite a lista sem a sessão e a faxina do store limpa a marca.
+    const alvo = model.confirmDel;
+    const r = await model.doDelete();
+    if (r.erro !== '' && alvo) showActionMsg(m.lista_flash_excluir({ nome: alvo.name, erro: r.erro }));
   }
 
   // Renomear sessao (toque longo no card): renomeia o pane tmux no servidor dela. O stream SSE re-emite
-  // a sessao com o nome novo -> nao mexemos na lista aqui (igual ao Sidebar do desktop).
-  async function handleRename(s: AggSession, newName: string) {
-    selectServer(s.serverId);
-    try {
-      await renameSession(s.name, newName);
-    } catch {
-      /* falha -> o proximo poll do stream corrige o nome exibido */
-    }
+  // a sessao com o nome novo -> nao mexemos na lista aqui. Falha fica ignorada: o proximo poll corrige.
+  function handleRename(s: AggSession, newName: string) {
+    void model.rename(newName, s.name, s.serverId);
   }
 
   // Gerenciador git (GitSheet) aberto pelo botao git do card, no repo da sessao, SEM abrir o chat.
-  // A GitSheet mira o server ATIVO (api.ts) -> aponto pro dono da sessao enquanto aberta e restauro
-  // no fechar (mesmo padrao do Sidebar do desktop: menuGit/closeGitSheet).
-  let gitSheet = $state<{ name: string } | null>(null);
-  let gitSheetPrevServer: string | null = null;
   function handleGit(s: AggSession) {
-    gitSheetPrevServer = getActiveId();
-    selectServer(s.serverId);
-    gitSheet = { name: s.name };
-  }
-  function closeGitSheet() {
-    gitSheet = null;
-    if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
+    model.openGit(s.name, s.serverId);
   }
 
   // Loop runner (LoopSheet) aberto pelo botao 🔁 do card, mesma mecânica do gitSheet acima.
@@ -428,32 +240,9 @@ import { intlLocale } from '../lib/locale';
   // seguro (sessão sozinha no cwd) resolve direto; caso ambíguo (outras sessões no mesmo cwd) o backend
   // devolve candidatos e abrimos o sheet pra confirmar qual conversa retomar. O SSE de sessions atualiza
   // o card sozinho (vira tracked) — não mexemos na lista aqui.
-  let resumeSheet = $state<{ session: AggSession; candidates: ResumeCandidate[] } | null>(null);
-  let resumeBusy = $state('');   // nome da sessão em processamento (desabilita o botão/itens)
-  let resumeError = $state('');
-
-  async function handleResume(s: AggSession, sessionId?: string) {
-    resumeError = '';
-    resumeBusy = s.name;
-    selectServer(s.serverId);
-    try {
-      const r = await resumeSession(s.name, sessionId);
-      if (r && 'ambiguous' in r && r.ambiguous) {
-        resumeSheet = { session: s, candidates: r.candidates };
-      } else {
-        resumeSheet = null;   // religada (caso seguro ou escolha confirmada)
-      }
-    } catch (e) {
-      resumeError = e instanceof Error ? e.message : m.sessao_falha_retomar();
-    } finally {
-      resumeBusy = '';
-    }
-  }
-
-  // Formata a data da última atividade do candidato (epoch s) de forma curta e local.
-  function fmtWhen(mtime?: number | null): string {
-    if (!mtime) return '';
-    return new Date(mtime * 1000).toLocaleString(intlLocale(), { dateStyle: 'short', timeStyle: 'short' });
+  // O erro fica só dentro da folha (model.resumeError) — no celular não há toast.
+  function handleResume(s: AggSession, sessionId?: string) {
+    void model.resume(s.name, s.serverId, sessionId);
   }
 
   function handleLogout() {
@@ -504,76 +293,6 @@ import { intlLocale } from '../lib/locale';
     if (listServers().length === 0) { handleLogout(); return; }
   }
 
-  // Abre o sheet de adicionar servidor manual (URL + token), limpando o estado anterior.
-  function openAddServer() {
-    addUrl = '';
-    addToken = '';
-    addError = '';
-    drawerOpen = false;
-    showAddServer = true;
-  }
-
-  // Adiciona um servidor digitado à mão. Validação ESTRITA ANTES de tocar storage (o form tem URL
-  // e token em campos separados; monta o texto de pareamento e passa pelo MESMO validarPareamento
-  // do QR/manual). Depois valida com getSessions (api.ts lê o ativo) e faz rollback em falha —
-  // igual ao Login — pra um servidor ruim não sujar a lista nem trocar o server bom.
-  async function submitAddServer(e: SubmitEvent) {
-    e.preventDefault();
-    addBusy = true;
-    addError = '';
-    const cru = `${addUrl.trim()}${addUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(addToken.trim())}`;
-    const pareamento = validarPareamento(cru);
-    if (!pareamento) {
-      addValidacao = true;
-      addError = m.url_invalida();
-      addBusy = false;
-      return;
-    }
-    addValidacao = false;
-    // Add TRANSACIONAL: o helper valida, adiciona, roda o probe (getSessions) e reverte SÓ a
-    // entrada tocada em falha (rollback escopado) — servidor existente volta com o token antigo
-    // se nada mudou, novo não permanece; mutações concorrentes vencem. O form segue aberto pra
-    // retry, e o erro tardio reabre o modal (round 2).
-    try {
-      const r = await addServerWithRollback(pareamento.base, pareamento.token, () => getSessions());
-      if (!r.succeeded) { addValidacao = true; addError = m.url_invalida(); addBusy = false; return; }
-      showAddServer = false;
-      window.location.reload();
-    } catch (err) {
-      addValidacao = false;   // erro de REDE: visível, não marca campo
-      // Erro TARDIO não some: o usuário pode ter fechado o modal enquanto a transação rodava —
-      // reabre com a mensagem visível (mesmo caminho do QR e do desktop, round 2).
-      showAddServer = true;
-      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
-    } finally {
-      addBusy = false;
-    }
-  }
-
-  // Adiciona um servidor pelo QR (parecido com o Login): MESMO validarPareamento estrito do
-  // manual; QR inválido NÃO fecha silencioso — erro visível com retry. Add transacional: probe
-  // rejeitado não recarrega — volta pro diálogo com o erro (rollback já foi feito no helper).
-  async function handleScanServer(text: string) {
-    const cru = text.trim();
-    const parsed = validarPareamento(cru);
-    if (!parsed) {
-      scanning = false;
-      showAddServer = true;
-      addValidacao = true;
-      addError = m.lista_qr_invalido();
-      return;
-    }
-    addValidacao = false;
-    scanning = false;
-    try {
-      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
-      window.location.reload();
-    } catch (err) {
-      showAddServer = true;
-      addValidacao = false;
-      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
-    }
-  }
 </script>
 
 <div class="session-list-screen">
@@ -587,10 +306,10 @@ import { intlLocale } from '../lib/locale';
     <span class="sl-brand"><HangarMark size={18} arcs={2} /> Hangar</span>
     <button
       class="sl-icon-btn"
-      class:active={selectMode}
+      class:active={model.selectMode}
       onclick={toggleSelectMode}
-      aria-label={selectMode ? m.lista_cancelar_selecao() : m.sessao_selecionar()}
-      title={selectMode ? m.lista_cancelar_selecao() : m.lista_selecionar_broadcast()}
+      aria-label={model.selectMode ? m.lista_cancelar_selecao() : m.sessao_selecionar()}
+      title={model.selectMode ? m.lista_cancelar_selecao() : m.lista_selecionar_broadcast()}
     >
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
@@ -600,7 +319,7 @@ import { intlLocale } from '../lib/locale';
 
   <div
     class="list-content"
-    class:select-mode={selectMode}
+    class:select-mode={model.selectMode}
     bind:this={listEl}
     onscroll={onListScroll}
   >
@@ -623,8 +342,8 @@ import { intlLocale } from '../lib/locale';
                via effectiveGroupBy) — com 1 servidor "por servidor" seria 1 grupo so, entao o toggle vira
                ruido e some. -->
           <div class="group-toggle" role="radiogroup" aria-label={m.lista_agrupar()}>
-            <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>{m.lista_agrupar_servidor()}</button>
-            <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>{m.lista_agrupar_projeto()}</button>
+            <button type="button" class:active={model.groupBy === 'server'} role="radio" aria-checked={model.groupBy === 'server'} onclick={() => model.setGroupBy('server')}>{m.lista_agrupar_servidor()}</button>
+            <button type="button" class:active={model.groupBy === 'project'} role="radio" aria-checked={model.groupBy === 'project'} onclick={() => model.setGroupBy('project')}>{m.lista_agrupar_projeto()}</button>
           </div>
         {/if}
         {#if serverErrors.length > 0}
@@ -652,11 +371,11 @@ import { intlLocale } from '../lib/locale';
         <p class="empty-sub">{m.lista_toque_criar()}</p>
       </div>
     {:else}
-      {#if showFilter}
+      {#if model.showFilter}
         <input
           type="text"
           class="filter-input"
-          bind:value={filterText}
+          bind:value={model.filterText}
           placeholder={m.lista_filtrar()}
           autocomplete="off"
           autocorrect="off"
@@ -665,21 +384,21 @@ import { intlLocale } from '../lib/locale';
           aria-label={m.lista_filtrar()}
         />
       {/if}
-      {#if visibleSessions.length === 0}
+      {#if model.flatRows.length === 0}
         <p class="filter-empty">{m.lista_vazia_filtro()}</p>
       {:else}
         {#if showGrouped}
-          {#each grouped as g (g.id)}
+          {#each model.groups as g (g.id)}
             {@const awaiting = countAwaiting(g.sessions)}
             <div class="group">
               <div class="group-head-row">
                 <button
                   class="group-head"
-                  onclick={() => toggleGroup(g.id)}
-                  aria-expanded={!collapsed.has(g.id)}
+                  onclick={() => model.toggleGroup(g.id)}
+                  aria-expanded={!model.collapsed.has(g.id)}
                   aria-label={`${g.label}: ${g.sessions.length} ${g.sessions.length === 1 ? m.sessao_singular() : m.lista_sessoes_plural()}`}
                 >
-                  <span class="group-chevron" class:collapsed={collapsed.has(g.id)} aria-hidden="true">▾</span>
+                  <span class="group-chevron" class:collapsed={model.collapsed.has(g.id)} aria-hidden="true">▾</span>
                   {#if g.color}<span class="group-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
                   <span class="group-label">{g.label}</span>
                   <span class="group-count">{g.sessions.length}</span>
@@ -690,22 +409,22 @@ import { intlLocale } from '../lib/locale';
                 <!-- "enviar p/ todas" (feature #9): entra em modo seleção com o grupo inteiro marcado. -->
                 <button
                   class="group-broadcast"
-                  onclick={() => selectGroupForBroadcast(g)}
+                  onclick={() => model.selectGroupForBroadcast(g)}
                   aria-label={`${m.lista_enviar_msg_todas()} ${g.label}`}
                   title={m.lista_enviar_todas()}
                 >➤</button>
               </div>
-              {#if !collapsed.has(g.id)}
+              {#if !model.collapsed.has(g.id)}
                 {#each clusterByPair(g.sessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
                   {#if item.kind === 'header'}
                     <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo. -->
-                    <button class="pair-head" onclick={() => toggleGroup(`pair:${item.gid}`)}
-                            aria-expanded={!collapsed.has(`pair:${item.gid}`)}>
-                      <span class="pair-chev" class:collapsed={collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
-                      <span class="pair-label">🤝&nbsp;{item.label}</span>
+                    <button class="pair-head" onclick={() => model.toggleGroup(`pair:${item.gid}`)}
+                            aria-expanded={!model.collapsed.has(`pair:${item.gid}`)}>
+                      <span class="pair-chev" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
+                      <span class="pair-label"><GroupGlyph size={13} />&nbsp;{item.label}</span>
                       <span class="pair-count">{item.count}</span>
                     </button>
-                  {:else if !item.gid || !collapsed.has(`pair:${item.gid}`)}
+                  {:else if !item.gid || !model.collapsed.has(`pair:${item.gid}`)}
                     {@const session = item.session}
                     <div class="pair-wrap" class:pair-member={!!item.gid}>
                       <SessionCard
@@ -717,9 +436,9 @@ import { intlLocale } from '../lib/locale';
                         onRename={(nv) => handleRename(session, nv)}
                         onGit={() => handleGit(session)}
                         onLoop={() => handleLoop(session)}
-                        {selectMode}
-                        selected={selected.has(`${session.serverId}:${session.name}`)}
-                        onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
+                        selectMode={model.selectMode}
+                        selected={model.selected.has(`${session.serverId}:${session.name}`)}
+                        onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
                       />
                     </div>
                   {/if}
@@ -733,15 +452,15 @@ import { intlLocale } from '../lib/locale';
                "Agrupar por" so aparece com 2+ servidores — entao quem usa um servidor so perdia o
                agrupamento de pareamento inteiro, que e justamente a feature de quem pareia sessoes
                no mesmo repo. Sobrava so o chip dentro do card. -->
-          {#each clusterByPair(visibleSessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
+          {#each clusterByPair(model.flatRows) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
             {#if item.kind === 'header'}
-              <button class="pair-head" onclick={() => toggleGroup(`pair:${item.gid}`)}
-                      aria-expanded={!collapsed.has(`pair:${item.gid}`)}>
-                <span class="pair-chev" class:collapsed={collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
-                <span class="pair-label">🤝&nbsp;{item.label}</span>
+              <button class="pair-head" onclick={() => model.toggleGroup(`pair:${item.gid}`)}
+                      aria-expanded={!model.collapsed.has(`pair:${item.gid}`)}>
+                <span class="pair-chev" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
+                <span class="pair-label"><GroupGlyph size={13} />&nbsp;{item.label}</span>
                 <span class="pair-count">{item.count}</span>
               </button>
-            {:else if !item.gid || !collapsed.has(`pair:${item.gid}`)}
+            {:else if !item.gid || !model.collapsed.has(`pair:${item.gid}`)}
               {@const session = item.session}
               <div class="pair-wrap" class:pair-member={!!item.gid}>
             <SessionCard
@@ -753,9 +472,9 @@ import { intlLocale } from '../lib/locale';
               onRename={(nv) => handleRename(session, nv)}
               onGit={() => handleGit(session)}
               onLoop={() => handleLoop(session)}
-              {selectMode}
-              selected={selected.has(`${session.serverId}:${session.name}`)}
-              onToggleSelect={() => toggleSelected(`${session.serverId}:${session.name}`)}
+              selectMode={model.selectMode}
+              selected={model.selected.has(`${session.serverId}:${session.name}`)}
+              onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
             />
               </div>
             {/if}
@@ -765,31 +484,31 @@ import { intlLocale } from '../lib/locale';
     {/if}
   </div>
 
-  {#if selectMode}
+  {#if model.selectMode}
     <!-- Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI (isso
          fica no Composer normal, por sessão). Slash-command desabilita o envio (rota por sessão). -->
     <div class="broadcast-bar">
       <div class="broadcast-row">
         <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label={m.lista_cancelar_selecao()}>×</button>
-        <span class="broadcast-count">{selected.size === 1 ? m.lista_selecionada_1() : m.lista_selecionadas({ n: selected.size })}</span>
-        <button class="broadcast-compare" onclick={openCompare} disabled={compareDisabled} aria-label={m.lista_comparar_selecionadas()} title={m.lista_comparar()}>{m.lista_comparar()}</button>
+        <span class="broadcast-count">{model.selected.size === 1 ? m.lista_selecionada_1() : m.lista_selecionadas({ n: model.selected.size })}</span>
+        <button class="broadcast-compare" onclick={model.openCompare} disabled={model.compareDisabled} aria-label={m.lista_comparar_selecionadas()} title={m.lista_comparar()}>{m.lista_comparar()}</button>
       </div>
-      {#if broadcastMsg}<p class="broadcast-msg">{broadcastMsg}</p>{/if}
+      {#if model.broadcastMsg}<p class="broadcast-msg">{model.broadcastMsg}</p>{/if}
       <div class="broadcast-input-row">
         <input
           type="text"
           class="broadcast-input"
-          bind:value={broadcastText}
+          bind:value={model.broadcastText}
           placeholder={m.lista_msg_selecionadas()}
-          disabled={broadcastBusy}
-          onkeydown={(e) => { if (e.key === 'Enter' && !broadcastDisabled) sendBroadcast(); }}
+          disabled={model.broadcastBusy}
+          onkeydown={(e) => { if (e.key === 'Enter' && !model.broadcastDisabled) model.sendBroadcast(); }}
           aria-label={m.lista_broadcast_msg()}
         />
-        <button class="broadcast-send" onclick={sendBroadcast} disabled={broadcastDisabled} aria-label={m.lista_enviar()}>
-          {broadcastBusy ? '…' : '➤'}
+        <button class="broadcast-send" onclick={model.sendBroadcast} disabled={model.broadcastDisabled} aria-label={m.lista_enviar()}>
+          {model.broadcastBusy ? '…' : '➤'}
         </button>
       </div>
-      {#if broadcastIsSlash}
+      {#if model.broadcastIsSlash}
         <p class="broadcast-hint">{m.lista_broadcast_aviso()}</p>
       {/if}
     </div>
@@ -862,7 +581,6 @@ import { intlLocale } from '../lib/locale';
         {onRenameServer}
         {onUpdateServerToken}
         onRemoveServer={dropServer}
-        onAddServer={openAddServer}
         onReconnect={reconnectStreams}
         onLogout={() => (confirmLogout = true)}
       />
@@ -889,22 +607,22 @@ import { intlLocale } from '../lib/locale';
   />
 
   <!-- Caso ambíguo do resume: várias sessões no mesmo cwd -> o usuário confirma QUAL conversa retomar. -->
-  <BottomSheet open={resumeSheet !== null} onClose={() => (resumeSheet = null)} ariaLabel={m.sessao_retomar()}>
-    {#if resumeSheet}
-      {@const sheet = resumeSheet}
+  <BottomSheet open={model.resumeCandidates !== null} onClose={() => (model.resumeCandidates = null)} ariaLabel={m.sessao_retomar()}>
+    {#if model.resumeCandidates}
+      {@const sheet = model.resumeCandidates}
       <div class="resume-sheet">
         <h2 class="resume-title">{m.sessao_retomar_qual()}</h2>
         <p class="resume-sub">
-          {m.sessao_multiplas_pasta()} <strong>{sheet.session.name}</strong>.
+          {m.sessao_multiplas_pasta()} <strong>{sheet.name}</strong>.
         </p>
-        {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
+        {#if model.resumeError}<p class="resume-err">{model.resumeError}</p>{/if}
         <ul class="resume-list">
           {#each sheet.candidates as c (c.session_id)}
             <li>
               <button
                 class="resume-item"
-                disabled={c.in_use || resumeBusy === sheet.session.name}
-                onclick={() => handleResume(sheet.session, c.session_id)}
+                disabled={c.in_use || model.resumeBusy === sheet.name}
+                onclick={() => model.resume(sheet.name, sheet.serverId, c.session_id)}
               >
                 <span class="resume-item-preview">{c.preview || m.sessao_sem_previa()}</span>
                 <span class="resume-item-meta">
@@ -918,72 +636,19 @@ import { intlLocale } from '../lib/locale';
     {/if}
   </BottomSheet>
 
-  {#if showAddServer}
-    <ModalDialog open={showAddServer} ariaLabel={m.sessao_adicionar_servidor()} onClose={() => (showAddServer = false)} className="add-server-dialog">
-      <div class="add-sheet">
-        <h2 class="add-title">{m.sessao_adicionar_servidor()}</h2>
-        <form onsubmit={submitAddServer} class="add-form" bind:this={addFormEl}>
-          <div class="field">
-            <label class="field-label" for="add-url">{m.sessao_url_servidor()}</label>
-            <input
-              id="add-url"
-              type="url"
-              class="field-input"
-              bind:value={addUrl}
-              placeholder="https://meu-pc.ts.net"
-              autocomplete="url"
-              autocorrect="off"
-              autocapitalize="off"
-              spellcheck={false}
-              inputmode="url"
-              aria-invalid={addValidacao || undefined}
-              aria-describedby={addValidacao ? 'sl-add-err' : undefined}
-            />
-          </div>
-          <div class="field">
-            <label class="field-label" for="add-token">{m.sessao_token()}</label>
-            <input
-              id="add-token"
-              type="password"
-              class="field-input"
-              bind:value={addToken}
-              placeholder="••••••••••••••••"
-              autocomplete="current-password"
-              aria-invalid={addValidacao || undefined}
-              aria-describedby={addValidacao ? 'sl-add-err' : undefined}
-            />
-          </div>
-          {#if addError}
-            <p id="sl-add-err" class="error-msg" role="alert">{addError}</p>
-          {/if}
-          <button type="submit" class="add-primary" disabled={addBusy || !addUrl.trim() || !addToken.trim()}>
-            {addBusy ? m.login_conectando() : m.config_servidores_adicionar()}
-          </button>
-          <button type="button" class="add-secondary" onclick={() => { showAddServer = false; scanning = true; }}>
-            {m.sessao_escanear_qr()}
-          </button>
-        </form>
-      </div>
-    </ModalDialog>
-  {/if}
-
-  {#if scanning}
-    <QrScanner onScan={handleScanServer} onClose={() => (scanning = false)} />
-  {/if}
-
   <ConfirmSheet
-    open={confirmDel !== null}
+    open={model.confirmDel !== null}
     title={m.sessao_excluir()}
-    message={confirmDel
-      ? confirmDel.state === 'working'
-        ? m.lista_excluir_executando({ n: confirmDel.name })
-        : confirmDel.name
+    message={model.confirmDel
+      ? model.confirmDel.state === 'working'
+        ? m.lista_excluir_executando({ n: model.confirmDel.name })
+        : model.confirmDel.name
       : null}
     confirmLabel={m.sessao_excluir_curto()}
     danger
     fallbackFocus={hamEl}
     onConfirm={doDelete}
-    onClose={() => (confirmDel = null)}
+    onClose={() => (model.confirmDel = null)}
   />
 
   <ConfirmSheet
@@ -1013,8 +678,8 @@ import { intlLocale } from '../lib/locale';
   />
 
   <!-- Gerenciador git aberto pelo botao git do card (repo da sessao, sem abrir o chat). -->
-  {#if gitSheet}
-    <Git open={true} sessionName={gitSheet.name} desktop={false} filesInContext={false} onClose={closeGitSheet} />
+  {#if model.gitSheet}
+    <Git open={true} sessionName={model.gitSheet.name} desktop={false} filesInContext={false} onClose={model.closeGit} />
   {/if}
 
   <!-- Loop runner aberto pelo botao 🔁 do card (repo da sessao, sem abrir o chat). -->
@@ -1039,7 +704,7 @@ import { intlLocale } from '../lib/locale';
   }
   .pair-chev { flex-shrink: 0; font-size: 10px; transition: transform 160ms var(--ease-out); }
   .pair-chev.collapsed { transform: rotate(-90deg); }
-  .pair-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .pair-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; display: inline-flex; align-items: center; }
   .pair-count {
     flex-shrink: 0; font-size: var(--text-xs); color: var(--accent);
     background: var(--accent-dim); border-radius: var(--radius-full); padding: 1px 8px;
@@ -1463,52 +1128,7 @@ import { intlLocale } from '../lib/locale';
     animation: spin 0.8s linear infinite;
   }
 
-  /* Sheet de adicionar servidor manual */
-  :global(.add-server-dialog) { width: min(400px, 100%); }
-  .add-sheet {
-    width: 100%;
-    max-width: 400px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-lg);
-    padding: var(--space-5);
-  }
-  .add-title {
-    font-size: var(--text-base);
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: var(--space-4);
-  }
-  .add-form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-  }
-  .field { display: flex; flex-direction: column; gap: var(--space-2); }
-  .field-label { font-size: var(--text-sm); color: var(--text-secondary); font-weight: 500; }
-  .field-input {
-    height: 48px;
-    background: var(--bg-base);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    color: var(--text-primary);
-    font-family: var(--font-ui);
-    font-size: 16px;
-    padding: 0 var(--space-4);
-    outline: none;
-    transition: border-color 180ms ease-out;
-  }
-  .field-input::placeholder { color: var(--text-muted); }
-  .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
-  .error-msg {
-    font-size: var(--text-sm);
-    color: var(--error);
-    background: rgba(255, 69, 58, 0.08);
-    border: 1px solid rgba(255, 69, 58, 0.2);
-    border-radius: var(--radius-sm);
-    padding: var(--space-3);
-  }
-  /* Aviso de falha de ação acima da lista: mesmas cores do .error-msg (uma linguagem só de erro),
+  /* Aviso de falha de ação acima da lista: mesmas cores de erro do app (uma linguagem só),
      margem lateral pra não colar nas bordas do celular.
      sticky e não estático: o elemento vive DENTRO do container que rola, então rolado pra baixo ele
      apareceria fora da tela e a falha passaria batido — o toast do desktop é fixed e sempre aparece.
@@ -1526,32 +1146,6 @@ import { intlLocale } from '../lib/locale';
     border-radius: var(--radius-sm);
     padding: var(--space-2) var(--space-3);
   }
-  .add-primary {
-    height: 52px;
-    background: var(--accent);
-    border-radius: var(--radius-md);
-    color: #fff;
-    font-size: var(--text-base);
-    font-weight: 600;
-    width: 100%;
-    transition: background 180ms ease-out;
-  }
-  .add-primary:active:not(:disabled) { background: var(--accent-press); }
-  /* Disabled inerte (bg neutro + texto muted), nao indigo cheio a 50% que parece meio-clicavel. */
-  .add-primary:disabled { background: var(--bg-hover); color: var(--text-muted); cursor: default; }
-  .add-secondary {
-    height: 48px;
-    background: transparent;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    color: var(--text-secondary);
-    font-size: var(--text-base);
-    font-weight: 500;
-    width: 100%;
-    transition: background 180ms ease-out;
-  }
-  .add-secondary:active { background: var(--bg-hover); }
-
   /* Sheet de resume (caso ambíguo): lista de transcripts candidatos pra escolher. */
   .resume-sheet {
     padding: var(--space-4) var(--space-4) var(--space-6);

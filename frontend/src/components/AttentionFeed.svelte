@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
   import OptionButtons from './OptionButtons.svelte';
-  import { selectOption } from '@hangar/core';
+  import { selectOption, submitSelected } from '@hangar/core';
   import { getActiveId, selectServer } from '../lib/auth';
   import { attentionFeed } from '@hangar/core';
   import type { AggSession } from '@hangar/core';
@@ -31,6 +31,9 @@
   // Some sozinho em 8s, igual ao irmao do desktop (WorkspaceAttentionStrip): e AVISO, não estado —
   // sem o timer ele ficava na tela até o usuário tocar em outra sessão.
   let erroTimer: ReturnType<typeof setTimeout> | undefined;
+  // Toque duplo (comum no celular) disparava duas chamadas pra mesma sessão: no envio, o 2º Enter
+  // chegaria com o picker já fechado. Mesma trava do `selBusy` do Chat, por sessão.
+  let ocupada = $state<string | null>(null);
 
   function toggle(s: AggSession) {
     if (s.options?.length) {
@@ -43,9 +46,17 @@
     }
   }
 
+  /** Múltipla escolha: o toque MARCA e o picker segue aberto, então fechá-lo aqui tiraria da tela
+   *  a lista que a pessoa ainda está preenchendo. Quem fecha é o envio (ou o Cancelar). */
+  // Mesma regra do OptionButtons (espaço opcional depois do colchete). Divergir fazia o painel
+  // fechar no primeiro toque numa lista que o outro componente desenhava como múltipla.
+  const ehMultipla = (s: AggSession) => (s.options ?? []).some((o) => /^\[.?\]\s*/.test(o));
+
   async function pick(s: AggSession, option: number) {
     const k = keyOf(s);
-    expandedKey = null;
+    if (ocupada === k) return;
+    ocupada = k;
+    if (!ehMultipla(s)) expandedKey = null;
     clearTimeout(erroTimer);
     erro = null;
     const prev = getActiveId(); // salva antes de mirar o server dono (api.ts lê o ativo a cada chamada)
@@ -59,7 +70,29 @@
       erro = { key: k, msg: e instanceof Error ? e.message : m.comum_falha_envio_opcao() };
       erroTimer = setTimeout(() => (erro = null), 8000);  // aviso, não estado: some sozinho
     } finally {
+      ocupada = null;
       if (prev && prev !== s.serverId) selectServer(prev); // restaura pra o chat aberto ficar no server dele
+    }
+  }
+
+  /** Envia o que já está marcado na múltipla escolha. Mesmo vaivém de servidor do `pick`. */
+  async function enviarMarcadas(s: AggSession) {
+    const k = keyOf(s);
+    if (ocupada === k) return;
+    ocupada = k;
+    clearTimeout(erroTimer);
+    erro = null;
+    const prev = getActiveId();
+    selectServer(s.serverId);
+    try {
+      await submitSelected(s.name);
+      expandedKey = null;
+    } catch (e) {
+      erro = { key: k, msg: e instanceof Error ? e.message : m.comum_falha_envio_opcao() };
+      erroTimer = setTimeout(() => (erro = null), 8000);
+    } finally {
+      ocupada = null;
+      if (prev && prev !== s.serverId) selectServer(prev);
     }
   }
 </script>
@@ -96,6 +129,7 @@
             question={s.question ?? ''}
             options={s.options}
             onSelect={(i) => pick(s, i)}
+            onSubmit={() => enviarMarcadas(s)}
             onCancel={() => (expandedKey = null)}
           />
         {/if}

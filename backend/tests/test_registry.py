@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 import pytest
 from unittest.mock import patch
-from app import registry
+from app import pair, registry
 from app.registry import (
     SessionRegistry,
     sanitize_cwd,
@@ -25,6 +25,18 @@ def _clear_jsonl_cache():
     SessionRegistry._fd_locked.clear()
     SessionRegistry._status_cache.clear()
     SessionRegistry._label_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _pair_dir_isolado(tmp_path, monkeypatch):
+    # list() varre pareamento (Task 8) e le pair.settings.projects_dir SEMPRE — mesmo quando o
+    # teste isola o SessionRegistry com projects_dir=tmp_path proprio. Sem isto a suite varria o
+    # .hangar-pair REAL de quem roda (achado do review de Task 8).
+    monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", {})
+    # sem isto, um sweep que ache um ausente de verdade dispara uma thread real (_drain_session)
+    # que chama registry.list() de novo, fora da janela desta fixture (achado do review de Task 8).
+    monkeypatch.setattr(registry, "apos_saida_por_morte", None)
 
 
 def test_sanitize_cwd_matches_claude_scheme():
@@ -488,6 +500,24 @@ def test_create_pins_fresh_jsonl_not_existing_mtime(tmp_path):
     assert SessionRegistry._jsonl_cache["cc"] == info.jsonl
     # o comando passado ao tmux carrega o --session-id do uuid novo
     assert "--session-id" in ns.call_args[0][2]
+
+
+def test_create_limpa_pareamento_de_sessao_morta_fora_do_kill(tmp_path, monkeypatch):
+    # Sessao que morre FORA do kill() (pane fechado na mao, maquina reiniciada) deixa o sidecar do
+    # grupo no disco — ele e keyed pelo NOME. Sem a limpeza no create(), a sessao nova de mesmo nome
+    # nascia dentro de um grupo que ja nao existe (badge preso, contrato de outro trabalho).
+    from app import pair
+    monkeypatch.setattr(pair.settings, "projects_dir", str(tmp_path / "projects"))
+    pair.join("cc", "outra", "tarefa")
+    assert pair.PairLink("cc").get() is not None
+    (tmp_path / "-home-u-p").mkdir()
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True):
+        reg.create("cc", "/home/u/p")
+    assert pair.PairLink("cc").get() is None
+    # grupo de 1 nao existe: o companheiro tambem sai, senao ficaria apontando pra um fantasma
+    assert pair.PairLink("outra").get() is None
 
 
 def test_create_rejects_duplicate_name(tmp_path):

@@ -3,7 +3,7 @@
 Tudo contra um CLAUDE_CONFIG_DIR falso — nenhum caso aqui pode escrever no ~/.claude de verdade.
 """
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -193,3 +193,63 @@ def test_resumo_sem_pasta_nenhuma():
     linhas = diag.ler_tudo().splitlines()
     assert len(linhas) == 1
     assert json.loads(linhas[0])["evento"] == "diag.formato"
+
+
+def test_horario_da_tela_vence_o_do_envio():
+    # A tela agrupa o lote por até 4s antes de mandar. Sem isto, dois eventos separados por
+    # segundos ficavam com o MESMO horário — o da chegada — e a ordem sumia do arquivo.
+    do_evento = (datetime.now().astimezone() - timedelta(seconds=3)).isoformat(timespec="milliseconds")
+    diag.anotar_da_tela([{"evento": "sse.abrir", "ts": do_evento}])
+    assert datetime.fromisoformat(_linhas()[0]["ts"]) == datetime.fromisoformat(do_evento)
+
+
+def test_horario_em_utc_vira_o_fuso_do_servidor():
+    # O front manda `toISOString()`, que é UTC com "Z"; o arquivo é todo no fuso local.
+    agora = datetime.now().astimezone().replace(microsecond=0)
+    diag.anotar_da_tela([{"evento": "sse.abrir",
+                          "ts": agora.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")}])
+    gravado = _linhas()[0]["ts"]
+    assert datetime.fromisoformat(gravado) == agora
+    assert gravado == agora.isoformat(timespec="milliseconds")   # já no fuso de cá, não em Z
+
+
+@pytest.mark.parametrize("ruim", ["ontem as 3", "2026-13-45T99:99", "1787749451"])
+def test_horario_impossivel_cai_no_do_envio(ruim):
+    diag.anotar_da_tela([{"evento": "sse.abrir", "ts": ruim}])
+    # Nem perde a linha nem fica sem horário: sobra o do envio, que é o comportamento de antes.
+    assert datetime.fromisoformat(_linhas()[0]["ts"]).date() == date.today()
+
+
+def test_horario_no_futuro_nao_passa_na_frente_das_linhas_do_backend():
+    # Aparelho adiantado, ainda dentro do dia (o teste do dia não pega). Evento no futuro não
+    # existe: quando a linha chega, ele já aconteceu. Deixar passar poria a linha da tela à frente
+    # das do backend, que sempre levam a hora da chegada — e é a ordem entre as duas fontes que se
+    # lê quando se investiga uma corrida.
+    adiantado = (datetime.now().astimezone() + timedelta(hours=5)).isoformat(timespec="milliseconds")
+    diag.anotar_da_tela([{"evento": "sse.abrir", "ts": adiantado}])
+    assert datetime.fromisoformat(_linhas()[0]["ts"]) <= datetime.now().astimezone()
+
+
+def test_atraso_da_fila_em_segundo_plano_continua_valendo():
+    # O oposto do caso acima: a aba em segundo plano segura a fila e despeja muito depois. Esse
+    # horário antigo é o verdadeiro — recusá-lo devolveria o defeito que o campo veio corrigir.
+    agora = datetime.now().astimezone()
+    # A virada do dia é o teto: 40min antes das 00:20 cairia no dia anterior e a recusa seria a
+    # outra regra, não esta.
+    atraso = min(timedelta(minutes=40), agora - agora.replace(hour=0, minute=0, second=0, microsecond=0))
+    atrasado = (agora - atraso).isoformat(timespec="milliseconds")
+    diag.anotar_da_tela([{"evento": "sse.abrir", "ts": atrasado}])
+    assert datetime.fromisoformat(_linhas()[0]["ts"]) == datetime.fromisoformat(atrasado)
+
+
+def test_relogio_do_aparelho_em_outro_dia_nao_datila_linha_fora_do_arquivo():
+    # O arquivo é UM POR DIA. Um aparelho com a data errada gravaria, dentro do arquivo de hoje,
+    # linha datada de outro dia — aí o horário do envio é o menos errado dos dois.
+    outro = (datetime.now().astimezone() - timedelta(days=2)).isoformat(timespec="milliseconds")
+    diag.anotar_da_tela([{"evento": "sse.abrir", "ts": outro}])
+    assert datetime.fromisoformat(_linhas()[0]["ts"]).date() == date.today()
+
+
+def test_evento_do_proprio_backend_continua_com_o_horario_da_chegada():
+    diag.registrar("tmux.mudo", nivel="erro")
+    assert datetime.fromisoformat(_linhas()[0]["ts"]).date() == date.today()

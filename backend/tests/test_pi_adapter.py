@@ -77,3 +77,4 @@ def test_transcript_path_delegates_to_sessions(monkeypatch, tmp_path):
     f = d / "2026-01-01T00-00-00-000Z_zzz.jsonl"
     f.write_text("")
     assert PiAdapter().transcript_path("/w", "zzz") == str(f)
+    assert s.transcript_path("/w", "zzz", "pi") == str(f)

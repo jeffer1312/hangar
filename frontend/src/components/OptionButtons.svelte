@@ -6,8 +6,22 @@
     options: string[];
     onSelect: (index: number) => void;
     onCancel: () => void;
+    /** Envia as opções já marcadas (só múltipla escolha). Ausente = sem botão de enviar. */
+    onSubmit?: () => void;
   }
-  let { question, options, onSelect, onCancel }: Props = $props();
+  let { question, options, onSelect, onCancel, onSubmit }: Props = $props();
+
+  // MÚLTIPLA ESCOLHA: o TUI desenha a caixinha antes do rótulo ("[ ] Alfa", "[✔] Alfa"), e é só
+  // por ela que dá pra saber — o pane não diz de outro jeito. Aqui marcar e enviar são ações
+  // DIFERENTES: cada toque alterna uma opção e o picker continua aberto; quem envia é o botão.
+  // Sem isso dava pra marcar e não dava pra enviar, e a única saída era Cancelar (relatado com
+  // print, 28/08/2026).
+  const CAIXA = /^\[(.?)\]\s*/;
+  const multipla = $derived(options.some((o) => CAIXA.test(o)));
+  const marcadas = $derived(options.filter((o) => /^\[[^\s\]]\]/.test(o)).length);
+  /** Rótulo sem a caixinha — ela vira o estado visual do botão, não texto. */
+  function semCaixa(o: string): string { return o.replace(CAIXA, ''); }
+  function marcada(o: string): boolean { return /^\[[^\s\]]\]/.test(o); }
 
   const kinds = $derived(options.map(kindOf));
   const isPermission = $derived(isPermissionFn(options));
@@ -30,14 +44,33 @@
         class:option-btn--deny={isPermission && kinds[i] === 'deny'}
         style="animation-delay: {i * 40}ms"
         onclick={() => onSelect(i + 1)}
+        aria-pressed={multipla ? marcada(opt) : undefined}
       >
         <span class="opt-num">{i + 1}.</span>
-        <span class="opt-text">{opt}</span>
+        {#if multipla}
+          <!-- Decorativo: quem anuncia marcado/desmarcado e o aria-pressed do botao. -->
+          <span class="opt-caixa" class:opt-caixa--on={marcada(opt)} aria-hidden="true">
+            {marcada(opt) ? '✔' : ''}
+          </span>
+        {/if}
+        <span class="opt-text">{multipla ? semCaixa(opt) : opt}</span>
       </button>
     {/each}
+    {#if multipla && onSubmit}
+      <!-- Marcar não envia. Sem este botão a única saída era Cancelar. -->
+      <button
+        class="option-btn option-btn--enviar"
+        style="animation-delay: {options.length * 40}ms"
+        onclick={onSubmit}
+        disabled={marcadas === 0}
+      >
+        <span class="opt-num">➤</span>
+        <span class="opt-text">{m.opcoes_enviar_marcadas({ n: marcadas })}</span>
+      </button>
+    {/if}
     <button
       class="option-btn option-btn--cancel"
-      style="animation-delay: {options.length * 40}ms"
+      style="animation-delay: {(options.length + 1) * 40}ms"
       onclick={onCancel}
     >
       <span class="opt-num">✕</span>
@@ -123,6 +156,34 @@
   .option-btn--cancel {
     border-color: var(--error);
     color: var(--error);
+  }
+
+  /* Enviar as marcadas: é a ação POSITIVA da múltipla escolha, então tem o peso do acento —
+     Cancelar continua sendo a saída, não o caminho. Sem marcação nenhuma ele desabilita: enviar
+     zero opção é o mesmo que cancelar, e oferecer duas portas pro mesmo lugar confunde. */
+  .option-btn--enviar {
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .option-btn--enviar:disabled {
+    opacity: 0.45;
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+  /* Caixinha: o estado vira desenho, e o rótulo fica só com o texto. */
+  .opt-caixa {
+    flex-shrink: 0;
+    width: 18px; height: 18px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 11px; line-height: 1;
+  }
+  .opt-caixa--on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg-base);
   }
 
   .opt-num {

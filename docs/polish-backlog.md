@@ -677,6 +677,15 @@ all survive (`lib/sessions.ts`, `lib/sessionsStore.svelte.ts`, `ConfirmDialog.sv
 the duplicated view, not the parts already factored out. Worth its own session with the repo at
 rest.
 
+**Lote A DONE (2026-09-02).** A lógica saiu para `lib/sessionListModel.svelte.ts` (variante por
+view, tabela `RULES` com as 6 divergências reais); `Sidebar` 1825 linhas, `SessionList` 1205
+linhas, modelo 336 + testes 363. Template/CSS ficaram por view de propósito (17 de 18 telas em
+0 px, uma em 0,345 sub-pixel (também presente antes×antes) — portão de `compare -metric AE` em 18
+telas, antes/depois em par). O que ainda é duplicado é o ESQUELETO da lista
+(`{#each}` de grupos → clusters → linha), ~120 linhas: é o **Lote B** da spec local (não versionada)
+`docs/superpowers/specs/2026-09-02-unificar-lista-de-sessoes-design.md`, que só vale com o mesmo
+portão de pixel e uma decisão separada.
+
 Not worth touching: the kebab (30 lines), the hover preview (already a component), and
 resize/collapse (5 states, cohesive with the sidebar chrome).
 

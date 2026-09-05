@@ -11,6 +11,10 @@
 # Emergência: `git push --no-verify` pula. Saída deliberada, não bug.
 set -uo pipefail
 
+# O git entrega os refs uma vez só pelo stdin; guardado numa variável pra o laço não perdê-los se
+# algum filho ler daí.
+ENTRADA="$(cat)"
+
 PADROES=(
     "chave OpenAI::sk-[A-Za-z0-9_-]{20,}"
     "token GitHub::gh[pousr]_[A-Za-z0-9]{20,}"
@@ -72,7 +76,7 @@ while read -r _localref localsha _remoteref remotesha; do
             printf '%s\n' "$casadas" | head -5 | sed 's/^+/    /' | cut -c1-140
         fi
     done
-done
+done <<< "$ENTRADA"
 
 if (( achou )); then
     cat >&2 <<'FIM'
@@ -86,4 +90,9 @@ if (( achou )); then
 FIM
     exit 1
 fi
+
+# O portão do CI NÃO roda aqui: a suíte inteira (svelte-check + vitest + build) numa máquina que já
+# está com várias sessões trabalhando derruba o resto e ainda falha por estouro de tempo, em teste
+# que passa sozinho. Quem julga isso é o ci.yml, no runner do GitHub. `scripts/ci-gates.sh` continua
+# existindo pra rodar à mão quando a máquina estiver livre.
 exit 0

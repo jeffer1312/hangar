@@ -6,8 +6,9 @@
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
-           modelOptions, getArchivePorCwd, resumeArchivedConversation, getArchiveHistory,
+           getArchivePorCwd, resumeArchivedConversation, getArchiveHistory, getBastao, passarBastao,
            type ModelOption, type Motor, type ArchiveEntry } from '@hangar/core';
+  import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
   import { basename, providerName, relativeTime } from '@hangar/core';
   import { renderMarkdown } from '../lib/markdown';
   import type { ChatEvent } from '@hangar/core';
@@ -25,13 +26,18 @@
                engine?: string | null, model?: string | null, effort?: string | null,
                permissionMode?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
+    /** Passagem de bastão: a MESMA folha, aberta pra criar a sessão que CONTINUA `bastao.name`.
+     *  Não-nulo = modo bastão — servidor travado no da origem, cwd/nome pré-preenchidos, e o
+     *  botão chama `POST /api/sessions/{origem}/bastao` (que grava o dossiê e enfileira o
+     *  kick-off) em vez do create normal. */
+    bastao?: { name: string; cwd: string; serverId: string } | null;
   }
-  let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
+  let { open, servers, onClose, onCreate, onOpenSession, bastao = null }: Props = $props();
 
-  // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir), Pi ou
-  // Kimi (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor fora do
-  // Claude com 400, entao os dois pickers abaixo seguem Claude-only).
-  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
+  // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir), Pi,
+  // Kimi ou OMP (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor
+  // fora do Claude com 400, entao os pickers abaixo seguem Claude-only).
+  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi', 'omp'];
   let provider = $state<Provider>('claude');
   let providers = $state<Record<string, { disponivel: boolean; motivo: string | null }>>({});
   let providersCarregando = $state(true);
@@ -60,13 +66,35 @@
   let loading = $state(false);
   let error = $state('');
 
+  // A MESMA regra do backend (`app/names.py:sanitize_session_name`): NFKD, descarta o acento,
+  // troca o resto por `-` e apara as pontas. O NFKD vem ANTES do filtro pelo motivo escrito lá —
+  // sem ele a letra acentuada vira `-` e o aparo do fim a come junto ("Área" -> "rea").
+  // Sanitizar aqui não é cosmético: é o nome que a checagem de colisão compara. Comparar o cru
+  // (`api.v2b`) contra uma lista de nomes já sanitizados deixa passar uma colisão com o
+  // `api-v2b` que existe — e o erro só apareceria lá no create.
+  function sanitizar(nome: string): string {
+    return nome.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+  }
+
   // Nome unico p/ tmux: sanitiza (igual ao backend) e, se ja existir, sufixa -2/-3...
   function uniqueName(base: string, taken: Set<string>): string {
-    const clean = base.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'sessao';
+    const clean = sanitizar(base) || 'sessao';
     if (!taken.has(clean)) return clean;
     let i = 2;
     while (taken.has(`${clean}-${i}`)) i++;
     return `${clean}-${i}`;
+  }
+
+  // Nome do sucessor: pm18368-t24 -> pm18368-t24b, e a proxima letra livre se aquela ja existir.
+  // Sufixo de LETRA e nao `-2` de proposito: `-2` e o desempate de nome do fluxo normal (duas
+  // sessoes na mesma pasta), e ler `foo-2` como "quem continua foo" seria adivinhacao.
+  function nomeSucessor(origem: string, taken: Set<string>): string {
+    const base = sanitizar(origem);
+    if (!base) return uniqueName('sessao', taken);
+    for (const c of 'bcdefghijklmnopqrstuvwxyz') {
+      if (!taken.has(base + c)) return base + c;
+    }
+    return uniqueName(`${base}b`, taken);
   }
 
   // Config dirs do Claude (ex: ~/.claude, ~/.claude-work). Picker so aparece quando ha mais de um.
@@ -93,6 +121,18 @@
     claude: ['low', 'medium', 'high', 'xhigh', 'max'],
     pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   };
+  // OMP é o fork do Pi — mesmos níveis de esforço.
+  NIVEIS.omp = NIVEIS.pi;
+
+  // O Codex é o terceiro caso: os níveis dele são POR MODELO e vêm do provedor (`model/list` —
+  // medido em 30/08/2026, `gpt-5.6-sol` aceita `ultra` e `gpt-5.5` não aceita nem `max`). Sem
+  // modelo escolhido, lista vazia — e aí o campo nem aparece: o padrão do Codex é o do config.toml
+  // dele, e inventar uma lista ofereceria nível que aquele modelo pode não aceitar.
+  const niveisDe = (id: string) =>
+    provider === 'codex'
+      ? (modelos.find((mod) => mod.id === id)?.efforts ?? [])
+      : (NIVEIS[provider] ?? []);
+  const niveis = $derived(niveisDe(modelo));
 
   // Modos de permissão do Claude Code (--permission-mode), mesma lista do backend (model_args.py).
   const MODOS_PERMISSAO = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
@@ -108,13 +148,6 @@
   // mais LENTA venceria — o usuário escolheria um modelo que não existe no que acabou de selecionar.
   let modSeq = 0;
 
-  // Catálogo do Pi traz ids que se REPETEM entre providers (medido: k3 existe na kimi-coding E na
-  // kimi-jefferson; gpt-5.6-luna na openai-codex E na opencode-go). O valor da opção tem que ser
-  // provider/id: sem o provider, a chave do each do Select colide e o each_key_duplicate derruba a
-  // lista inteira — e o `pi --model k3` cru seria ambíguo e recusado pelo CLI (o model-resolver do
-  // Pi rejeita bare id que casa em mais de um provider). Nos outros formatos (motor, cache do
-  // Claude, aliases reduzidos) não há provider e o id já é único — o valor é o id puro, como hoje.
-  const valorModelo = (m: ModelOption) => (m.provider ? `${m.provider}/${m.id}` : m.id);
 
   let erroProviders = $state('');
   let provSeq = 0;
@@ -143,19 +176,18 @@
   async function carregarModelos() {
     const seq = ++modSeq;
     modelos = []; erroModelos = ''; listaReduzida = false; modelo = ''; esforco = '';
-    // Só os três providers com escolha de modelo. `provider !== 'codex'` NÃO serve como guarda:
-    // a tela tem quatro botões e foi assim que o Kimi ficou de fora na primeira versão.
-    if (provider !== 'claude' && provider !== 'pi' && provider !== 'kimi') return;
+    if (!temEscolhaDeModelo(provider)) return;
     try {
-      const r = await modelOptions(provider, engine, selectedConfig);
+      const r = await carregarModelosDaConta({ provider, engine, configDir: selectedConfig }, chaveMemoria());
       if (seq !== modSeq) return;
       modelos = r.models;
       listaReduzida = r.reduced;
-      const lembrado = localStorage.getItem(chaveMemoria());
-      // Casar contra a lista: modelo tirado do provedor ou motor removido não pode virar flag às
-      // cegas — a sessão subiria e falharia no primeiro turno.
-      if (lembrado && modelos.some((mod) => valorModelo(mod) === lembrado)) modelo = lembrado;
-      esforco = localStorage.getItem(chaveMemoria() + ':effort') ?? '';
+      if (r.lembrado) modelo = r.lembrado;
+      // O esforço lembrado só vale se couber no modelo que ficou. O `lembrado` já é conferido
+      // contra a lista (modelosPorConta), mas o nível não era: com o modelo fora do catálogo o
+      // campo de esforço nem aparece (`niveis.length > 0`) e o valor antigo ia pro create assim
+      // mesmo — a sessão nascia com um `-c model_reasoning_effort=` que ninguém escolheu nem viu.
+      esforco = niveisDe(modelo).includes(r.esforcoLembrado) ? r.esforcoLembrado : '';
     } catch (e) {
       if (seq !== modSeq) return;
       erroModelos = e instanceof Error ? e.message : m.criar_modelos_erro();
@@ -377,6 +409,57 @@
   // (lib/pastaNativa.svelte), que "Pastas mapeadas" tambem usa: era daqui que ele saiu.
   const nativo = criarSeletorNativo();
 
+  // ── Modo bastão ────────────────────────────────────────────────────────────
+  // Título/servidor/ação mudam; o resto do formulário (provider, conta, motor, modelo, esforço,
+  // permissão) é o mesmo — é a mesma criação, com um dossiê junto.
+  const titulo = $derived(bastao ? m.bastao_titulo() : m.sessao_nova());
+  // Derivados da ORIGEM, nunca de `targetServer`: o rótulo é o que a frase "o dossiê está no disco
+  // de X" afirma, e `targetServer` é só o que está selecionado. Se a origem sumisse da lista, a
+  // seleção cairia noutra máquina e a frase nomearia, com toda a confiança, a máquina errada.
+  const servidorDaOrigem = $derived(bastao ? servers.find((s) => s.id === bastao.serverId) ?? null : null);
+  const rotuloServidor = $derived(servidorDaOrigem?.label ?? '');
+  // Servidor da origem fora da lista (removido, ou a folha aberta com um id que não existe mais):
+  // NÃO dá pra passar o bastão — o dossiê é arquivo no disco dele. A folha diz isso e o botão
+  // trava; deixar seguir criaria uma sessão sem dossiê nenhum, calada.
+  const bastaoSemServidor = $derived(bastao !== null && servidorDaOrigem === null);
+
+  // Prévia do dossiê: recolhida, e só busca quando alguém abre (o GET monta o texto lendo git +
+  // transcript, não é de graça). É AMOSTRA: entre esta leitura e o POST a origem continua
+  // trabalhando, então quem vale é o texto que o POST devolve.
+  let previaBastaoAberta = $state(false);
+  let previaBastaoTexto = $state('');
+  // Sinal de "já busquei", separado do texto: um dossiê VAZIO é resposta, e usar o texto como
+  // cache faria cada abrir/fechar disparar o GET de novo justo no caso em que ele não traz nada.
+  let previaBastaoCarregada = $state(false);
+  let previaBastaoCarregando = $state(false);
+  let previaBastaoErro = $state(false);
+  let bastaoSeq = 0;
+  function alternarPreviaBastao() {
+    previaBastaoAberta = !previaBastaoAberta;
+    const b = bastao;
+    if (!previaBastaoAberta || !b || previaBastaoCarregada || previaBastaoCarregando) return;
+    const seq = ++bastaoSeq;
+    previaBastaoCarregando = true;
+    previaBastaoErro = false;
+    getBastao(b.name)
+      .then((t) => { if (seq === bastaoSeq) { previaBastaoTexto = t; previaBastaoCarregada = true; } })
+      .catch((e) => {
+        // Falha aqui NÃO pode virar caixa vazia: "não consegui ler" e "o dossiê está vazio" são
+        // coisas diferentes, e a segunda faria a pessoa desistir da passagem por engano.
+        console.error('baton dossier preview failed', e);
+        if (seq === bastaoSeq) previaBastaoErro = true;
+      })
+      .finally(() => { if (seq === bastaoSeq) previaBastaoCarregando = false; });
+  }
+
+  // Pré-preenche a folha com a origem: mesma pasta (o trabalho continua na mesma árvore) e nome
+  // derivado. Quem nomeia é o `handlePick` — ele já sabe do modo bastão e já tem a lista de nomes
+  // ocupados. Sem cwd conhecido a folha cai no passo da pasta, e o nome sai quando ela for escolhida.
+  function prefillBastao(b: { name: string; cwd: string }) {
+    if (b.cwd) void handlePick(b.cwd);
+    else name = nomeSucessor(b.name, takenNames);
+  }
+
   // Zera tudo a cada abertura. Fixa o servidor-alvo (ativo atual ou o 1º) e o seleciona, pra o
   // scanner do passo 1 já varrer o backend certo.
   // IMPORTANTE: o reset depende SO de `open`. O corpo le `servers`/getActiveId DENTRO de untrack
@@ -418,13 +501,31 @@
       avisoConta = '';
       contaCriadaPath = null;
       contaErro = false;
+      // Prévia do bastão da abertura anterior não vale pra esta: o `bastaoSeq++` invalida a leitura
+      // em voo, senão ela aterrissaria mostrando o dossiê de OUTRA sessão.
+      bastaoSeq++;
+      previaBastaoAberta = false;
+      previaBastaoTexto = '';
+      previaBastaoCarregada = false;
+      previaBastaoCarregando = false;
+      previaBastaoErro = false;
       const cur = getActiveId();
-      const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
+      // Só é modo bastão se o servidor da origem AINDA existe. Sumiu, a folha abre mostrando a
+      // recusa (`bastaoSemServidor`) e o alvo cai no de sempre — mas o botão fica travado, então
+      // ninguém cria uma sessão sem dossiê achando que passou o bastão.
+      const b = bastao && servers.some((s) => s.id === bastao.serverId) ? bastao : null;
+      // Modo bastão: o servidor é o da ORIGEM, não o ativo. O dossiê é um arquivo no disco daquela
+      // máquina — criar no servidor B daria uma sessão apontando pra um caminho que não existe lá.
+      const target = b && servers.some((s) => s.id === b.serverId)
+        ? b.serverId
+        : (servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '');
       if (target) pickTarget(target);      // pickTarget ja carrega configs, motores e providers do alvo
       else {
         loadConfigs();
         carregarProviders();
       }
+      // Depois do pickTarget: `getSessions()` mira o servidor ATIVO, e é o da origem que interessa.
+      if (b) prefillBastao(b);
     });
   });
 
@@ -438,11 +539,13 @@
       const sessions = await getSessions();
       takenNames = new Set(sessions.map((s) => s.name));
       hasSameFolder = sessions.some((s) => s.cwd === p);
-      name = uniqueName(basename(p), takenNames);
+      // Modo bastão: o nome vem da ORIGEM, não da pasta. Derivar do basename aqui apagava o nome do
+      // sucessor toda vez que a pasta era (re)escolhida — inclusive no pré-preenchimento.
+      name = bastao ? nomeSucessor(bastao.name, takenNames) : uniqueName(basename(p), takenNames);
     } catch {
       takenNames = new Set();
       hasSameFolder = false;
-      name = basename(p);
+      name = bastao ? nomeSucessor(bastao.name, takenNames) : basename(p);
     } finally {
       checking = false;
     }
@@ -476,7 +579,10 @@
     // A escolha e da pasta/conta ANTERIOR; carrega-la adiante retomaria outra conversa.
     conversaEscolhida = '';
     querRetomar = false;
-    if (!cwd || prov === 'codex') {
+    // Modo bastão fica de fora: `--resume` reabre um transcript ANTIGO, e passar o bastão é o
+    // oposto — sessão nova que recebe o dossiê. Oferecer as duas coisas na mesma tela seria
+    // perguntar duas coisas ao mesmo tempo.
+    if (!cwd || prov === 'codex' || bastao) {
       retomaveis = [];
       return;
     }
@@ -565,6 +671,9 @@
 
   async function create() {
     if (!picked || !name.trim()) return;
+    // Guarda de verdade, não só o `disabled` do botão: o precedente aqui é a sonda de provider
+    // (C5), cujo teste dispara um clique sintético justamente pra provar que o atributo não basta.
+    if (bastaoSemServidor) return;
     if (providersCarregando) return;
     if (providers[provider] && !providers[provider].disponivel) return;
     loading = true;
@@ -580,6 +689,23 @@
       else localStorage.removeItem(chaveMemoria());
       if (esforco) localStorage.setItem(chaveMemoria() + ':effort', esforco);
       else localStorage.removeItem(chaveMemoria() + ':effort');
+      if (bastao) {
+        // Rota PRÓPRIA, não o POST /api/sessions: é ela que monta o dossiê, grava no disco e
+        // enfileira o kick-off. Criar pela rota normal daria uma sessão sem nada disso.
+        const r = await passarBastao(bastao.name, {
+          name: name.trim(),
+          cwd: picked,
+          config_dir: provider === 'claude' ? selectedConfig : null,
+          provider,
+          engine: provider === 'claude' ? (engine || null) : null,
+          model: modelo || null,
+          effort: esforco || null,
+          permission_mode: provider === 'claude' ? (permissao || null) : null,
+        });
+        onClose();
+        onOpenSession(r.name);
+        return;
+      }
       await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
                      provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null,
                      provider === 'claude' ? (permissao || null) : null);
@@ -595,7 +721,18 @@
 
 <!-- Snippets FORA do BottomSheet: declarados como filhos diretos de um componente eles viram
      PROPS dele (regra do Svelte 5) — aqui são só blocos reusados pelos dois layouts. -->
-{#snippet chipsServidor()}
+{#snippet cabecalhoBastao()}
+    {#if bastaoSemServidor}
+      <!-- No CABEÇALHO, e não junto do botão: sem pasta escolhida o formulário (e o botão) nem
+           existe, e a folha ficaria idêntica a um "criar sessão" comum, sem dizer que o bastão
+           não pode ser passado daqui. -->
+      <p class="error-msg" role="alert">{m.bastao_servidor_sumiu()}</p>
+    {:else if bastao}
+      <p class="bastao-origem">{m.bastao_origem({ n: bastao.name })}</p>
+    {/if}
+  {/snippet}
+
+  {#snippet chipsServidor()}
     {#if servers.length > 1}
       <div class="server-select">
         <span class="server-select-label">{m.lista_agrupar_servidor()}</span>
@@ -607,13 +744,20 @@
               class:on={targetServer === s.id}
               style="--chip: {serverColor(s.id)};"
               onclick={() => pickTarget(s.id)}
-              disabled={contaOcupada}
+              disabled={contaOcupada || (bastao !== null && s.id !== bastao.serverId)}
             >
               <span class="chip-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
               {s.label}
             </button>
           {/each}
         </div>
+        {#if bastao && !bastaoSemServidor}
+          <!-- Travado, e a tela DIZ por quê: o dossiê é arquivo local, então cross-server não é
+               uma opção que a v1 recusa por preguiça — não há transporte pra ele. O rótulo vem do
+               servidor da ORIGEM; com ele fora da lista a frase não é impressa (a recusa aparece
+               junto do botão), porque nomear a máquina errada é pior que não nomear nenhuma. -->
+          <p class="hint hint-travado">{m.bastao_servidor_travado({ s: rotuloServidor })}</p>
+        {/if}
       </div>
     {/if}
   {/snippet}
@@ -840,22 +984,34 @@
            colunas, num estreito (celular, ou só um dos três visível) volta a empilhar sem media
            query, que aqui seria errada: quem aperta é a largura do PAINEL, não a da janela. -->
       <div class="trio">
-      {#if !conversaAlvo && (provider === 'claude' || provider === 'pi' || provider === 'kimi')}
+      {#if !conversaAlvo && temEscolhaDeModelo(provider)}
         <div class="field">
           <label class="field-label" for="model-pick">{m.composer_modelo()}</label>
           <Select id="model-pick" class="field-input" ariaLabel={m.composer_modelo()} value={modelo}
             opcoes={[{ value: '', label: m.criar_padrao() },
-                     ...modelos.map((mod) => ({
+                     // `default` do picker do Claude é o mesmo que o campo vazio (sem --model):
+                     // as duas linhas juntas viravam "Padrão" e "Default" uma em cima da outra.
+                     ...modelos.filter((mod) => mod.id !== 'default').map((mod) => ({
                        value: valorModelo(mod),
                        label: mod.name ?? mod.id,
                        // Quatro formatos do campo `models` (Task 4): pi traz provider/context/
                        // images, motor traz context_length/vision, cache do Claude traz name, e os
                        // aliases reduzidos não trazem nada. Campos ausentes simplesmente somem do
                        // hint (.filter(Boolean)) — nenhum formato pode quebrar a linha.
-                       hint: [mod.provider,
+                       // O id (a chave) abre o hint quando o label é o NOME: com nome repetido na
+                       // lista (duas contas com o mesmo modelo) o hint é o único lugar que os
+                       // distingue. Quando label já é o id, mostrá-lo de novo seria redundância.
+                       hint: [(mod.name && mod.name !== mod.id) ? mod.id : null,
+                              mod.provider,
                               mod.context ?? (mod.context_length ? `${Math.round(mod.context_length / 1000)}K` : null),
                               (mod.vision ?? mod.images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
-            onchange={(v) => (modelo = v)} />
+            onchange={(v) => {
+              // Trocar de modelo pode tirar o nível escolhido do mapa (só o Codex: os níveis dele
+              // são por modelo). Deixar ficar faria a sessão nascer pedindo um nível que aquele
+              // modelo não lista, e o combo mostraria um valor fora das próprias opções.
+              modelo = v;
+              if (esforco && !niveisDe(v).includes(esforco)) esforco = '';
+            }} />
           {#if listaReduzida}
             <p class="model-hint" role="status" aria-live="polite" aria-atomic="true">{m.criar_lista_reduzida()}</p>
           {/if}
@@ -865,15 +1021,15 @@
         </div>
       {/if}
 
-      {#if !conversaAlvo && (provider === 'claude' || provider === 'pi')}
+      {#if !conversaAlvo && niveis.length > 0}
         <!-- Esforço fica FORA do if de cima de propósito: o Kimi tem modelo mas NÃO tem nível
-             (o CLI não tem flag; mora no [thinking] do config.toml, global) — um NIVEIS['kimi']
-             undefined derrubaria a folha inteira no .map. -->
+             (o CLI não tem flag; mora no [thinking] do config.toml, global), e o Codex só tem
+             níveis depois de o modelo estar escolhido (eles vêm dele). Quem decide é `niveis`. -->
         <div class="field">
-          <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()}</label>
-          <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
+          <label class="field-label" for="effort-pick">{(provider === 'pi' || provider === 'omp') ? m.criar_raciocinio() : m.composer_esforco()}</label>
+          <Select id="effort-pick" class="field-input" ariaLabel={(provider === 'pi' || provider === 'omp') ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
             opcoes={[{ value: '', label: m.criar_padrao() },
-                     ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]} 
+                     ...niveis.map((n) => ({ value: n, label: n }))]}
             onchange={(v) => (esforco = v)} />
         </div>
       {/if}
@@ -889,6 +1045,33 @@
       {/if}
       </div>
 
+      {#if bastao}
+        {@const bt = bastao}
+        <!-- Prévia RECOLHIDA e rotulada como amostra. Aberta por padrão ela empurraria o formulário
+             pra fora da tela, e o texto que ela mostra não é o que vai ser mandado: entre a leitura
+             e o POST a origem continua trabalhando. -->
+        <div class="advanced bastao-previa">
+          <button class="advanced-toggle sozinho" onclick={alternarPreviaBastao}
+            aria-expanded={previaBastaoAberta}>
+            <span>{m.bastao_previa()}</span>
+            <span class="chevron" class:chevron--open={previaBastaoAberta} aria-hidden="true">›</span>
+          </button>
+          {#if previaBastaoAberta}
+            <p class="hint">{m.bastao_previa_aviso({ n: bt.name })}</p>
+            <div class="previa">
+              {#if previaBastaoCarregando}
+                <p class="previa-vazia">{m.comum_carregando()}</p>
+              {:else if previaBastaoErro}
+                <p class="previa-erro" role="alert">{m.bastao_previa_erro()}</p>
+              {:else}
+                <!-- Markdown RENDERIZADO: o dossiê é .md, e `##` cru numa caixa de leitura é bug. -->
+                <div class="previa-doc">{@html renderMarkdown(previaBastaoTexto)}</div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       <div class="form-acao">
         {#if error}
           <p class="error-msg" role="alert">{error}</p>
@@ -902,8 +1085,8 @@
             {retomando ? m.criar_criando() : m.criar_retomar_acao()}
           </button>
         {:else}
-          <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || (providers[provider] && !providers[provider].disponivel)}>
-            {loading ? m.criar_criando() : m.sessao_nova()}
+          <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || bastaoSemServidor || (providers[provider] && !providers[provider].disponivel)}>
+            {loading ? m.criar_criando() : (bastao ? m.bastao_acao() : m.sessao_nova())}
           </button>
         {/if}
         {#if !isDesktop}
@@ -914,13 +1097,14 @@
     {/if}
 {/snippet}
 
-<BottomSheet {open} {onClose} ariaLabel={m.sessao_nova()} wide={isDesktop} centered={isDesktop} split={isDesktop}>
+<BottomSheet {open} {onClose} ariaLabel={titulo} wide={isDesktop} centered={isDesktop} split={isDesktop}>
   {#if isDesktop}
     <!-- Dois painéis (referência: fluxo "New Project" da Vercel): escolher a pasta à esquerda,
          configurar a sessão à direita. Escolher já preenche o formulário — sem troca de passo. -->
     <div class="cs-split">
       <aside class="cs-pane cs-esq">
-        <h2 class="sheet-title">{m.sessao_nova()}</h2>
+        <h2 class="sheet-title">{titulo}</h2>
+        {@render cabecalhoBastao()}
         {@render chipsServidor()}
         {@render escolha()}
       </aside>
@@ -937,7 +1121,8 @@
       </section>
     </div>
   {:else}
-    <h2 class="sheet-title">{m.sessao_nova()}</h2>
+    <h2 class="sheet-title">{titulo}</h2>
+    {@render cabecalhoBastao()}
     {@render chipsServidor()}
     {#if !picked}
       {@render escolha()}
@@ -989,41 +1174,18 @@
     border-color: var(--chip);
     color: var(--text-primary);
   }
+  /* Sem isto o chip travado (modo bastão) fica IDÊNTICO ao clicável e só não responde ao toque —
+     a trava funcionava sem se anunciar. Mesmos valores do .conta-add:disabled deste arquivo. */
+  .server-chip:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
   .chip-dot {
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   }
 
-  /* Provider em tiles com a marca (ProviderGlyph) — mesma seleção por borda dos chips de
-     servidor, mas retangular: o ícone precisa de canto, não de pílula. */
-  .provider-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-    gap: var(--space-2);
-  }
-  .provider-tile {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    height: 44px;
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border-default);
-    background: var(--surface-raised, var(--bg-surface));
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    font-weight: 500;
-    transition: border-color 160ms ease-out, color 160ms ease-out, background 160ms ease-out;
-  }
-  .provider-tile.on {
-    border-color: var(--accent);
-    background: var(--accent-dim);
-    color: var(--text-primary);
-  }
-  .provider-tile:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
+  /* .provider-grid / .provider-tile / .field / .field-label / .field-input: globais em app.css
+     (compartilhados com a tela de orquestração). */
 
   /* ── Escape hatch: digitar caminho ─────────────────────────────────────── */
   .advanced {
@@ -1164,19 +1326,6 @@
   }
 
   /* ── Campos / botoes ───────────────────────────────────────────────────── */
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    margin-bottom: var(--space-4);
-  }
-
-  .field-label {
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-    font-weight: 500;
-  }
-
   .retomar-check {
     display: flex;
     align-items: center;
@@ -1224,6 +1373,29 @@
   .previa-vazia { color: var(--text-muted); margin: 0; }
   .previa-erro { color: var(--danger); margin: 0; }
 
+  /* ── Passagem de bastão ────────────────────────────────────────────────── */
+  .bastao-origem {
+    margin: 0 0 var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  /* O aviso do servidor travado cola no bloco de chips (a .hint tem margem de baixo pro caso solto). */
+  .hint-travado { margin: var(--space-2) 0 0; }
+  .bastao-previa { margin-bottom: var(--space-4); }
+  /* O dossiê é markdown de verdade (títulos, listas, blocos de código): a caixa segue a mesma
+     .previa das conversas, mas o conteúdo aqui é UM documento, não uma sequência de falas. */
+  .previa-doc { color: var(--text-secondary); overflow-wrap: anywhere; }
+  .previa-doc :global(h1),
+  .previa-doc :global(h2),
+  .previa-doc :global(h3) {
+    margin: var(--space-3) 0 var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .previa-doc :global(*:first-child) { margin-top: 0; }
+  .previa-doc :global(p), .previa-doc :global(ul), .previa-doc :global(ol) { margin: 0 0 var(--space-2); }
+  .previa-doc :global(pre) { overflow-x: auto; }
+
   .trio {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -1233,18 +1405,6 @@
   .trio > .field { margin-bottom: var(--space-4); }
   .trio:empty { display: none; }
 
-  .field-input {
-    height: 44px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    color: var(--text-primary);
-    font-family: var(--font-ui);
-    font-size: 16px;
-    padding: 0 var(--space-3);
-    outline: none;
-    transition: border-color 180ms var(--ease-out);
-  }
   /* O combo de config é o <button> dentro do Select.svelte: CSS escopado não o alcança (o atributo
      de escopo só cai nos elementos deste template), então a regra acima nunca casava e ele saía com
      o visual padrão do componente — mono e 40px, quebrando o alinhamento com os campos irmãos. */
@@ -1254,14 +1414,6 @@
     border-radius: var(--radius-md);
     font-family: var(--font-ui);
   }
-  .field-input::placeholder {
-    color: var(--text-muted);
-  }
-  .field-input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-dim);
-  }
-
   /* Linha do seletor de conta + botão de cadastrar. O combo estica (flex: 1) e o botão fica
      fixo à direita; o aviso do /login vai embaixo. */
   .conta-row { display: flex; gap: 8px; align-items: center; }

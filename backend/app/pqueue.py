@@ -1,5 +1,7 @@
 import asyncio
+import difflib
 import json
+import logging
 import os
 import re
 import threading
@@ -15,6 +17,8 @@ from app import atomico
 from app.config import settings
 from app.models import ChatEvent, dumps_safe, scrub_surrogates
 from app.transcript import parse_obj
+
+_log = logging.getLogger("hangar.pqueue")
 
 # Limite de entradas mantidas no sidecar (poda no append pra nao crescer sem fim).
 _MAX_ENTRIES = 1000
@@ -108,6 +112,43 @@ def _casam(linhas: set[str], disponiveis: set[str],
     return consumidas
 
 
+# Folga que a marca `pre_transcript` compra sobre o corte por idade. 15 min cobre com sobra o
+# intervalo real entre enfileirar o kick-off e a sessão nova gravar a 1a linha do transcript
+# (segundos), e é o que impede a isenção de virar ETERNA: a chave fica no disco pra sempre (o
+# prune_before é justamente quem não a apaga), então uma isenção sem prazo faria um kick-off nunca
+# entregue — sessão morta antes de a TUI aceitar texto — ressuscitar numa VIDA POSTERIOR da sessão
+# de mesmo nome, que é a dívida da sessão anterior que o corte existe pra matar. Passada a folga
+# ela é lixo como qualquer outra entrada velha: some no prune_before e o cheap-check do drain esfria.
+_JANELA_BASTAO = 15 * 60.0
+
+
+def _da_sessao_atual(entry: dict, min_ts: float, ts: float | None = None) -> bool:
+    """A entrada pertence à sessão de AGORA (ou está dentro da folga do bastão)?
+
+    O corte normal é `ts >= min_ts`: entrada carimbada antes do início do transcript é de uma vida
+    anterior (pré-`/clear`, ou o `pi -c` que reusa transcript velho) e não pode ser entregue nem
+    reaparecer como bolha.
+
+    `ts` explícito: o `merged_history` já resolve o relógio da entrada com carry-forward (entrada
+    sem `ts` herda o da linha anterior) e passa esse valor pra cá, senão a MESMA entrada teria duas
+    idades dentro da mesma função — ordenada pelo relógio herdado e cortada por 0.0.
+
+    `pre_transcript` é a exceção, e ela existe pra UM caso: a passagem de bastão enfileira o
+    kick-off ANTES de a sessão nova existir — logo, antes da primeira linha do `.jsonl` e antes do
+    nascimento do tmux. Sem esta marca as duas redes de segurança da fila comem a entrada em
+    silêncio (o `prune_before` do drain a APAGA como vida anterior; o `reconcile_delivered` a
+    carimba `confirmed` como "sessão anterior"), e o resultado é o pior possível: dossiê gravado,
+    sessão nascida, sucessor sem receber nada e nenhum erro em lugar nenhum.
+
+    A marca isenta só do corte por IDADE, e só por `_JANELA_BASTAO` — a entrada segue passando pelo
+    reconcile normal, então kick-off engolido pela TUI ainda é reentregue e ainda desiste no teto
+    de tentativas.
+    """
+    folga = _JANELA_BASTAO if entry.get("pre_transcript") else 0.0
+    quando = float(entry.get("ts") or 0.0) if ts is None else ts
+    return quando >= min_ts - folga
+
+
 def _entry_event(entry: dict) -> ChatEvent:
     # user_msg sintetico com id prefixado ("queued-") pro front distinguir de evento real do
     # transcript. ts fica None de proposito: o ts so serve pra ORDENAR no historico, nao pra
@@ -149,19 +190,28 @@ def _ts_of_line(line: str) -> float:
     return _ts_of_obj(obj)
 
 
-def _transcript_start_ts(jsonl: str) -> float:
+def _transcript_start_ts(jsonl: str) -> float | None:
     # ts (epoch) da 1a linha COM timestamp do transcript = inicio da sessao atual. Toda entrada da
     # fila mais antiga que isto pertence a uma sessao anterior (ex: pre-/clear, que cria transcript
     # novo com novo session-id) e nao deve reaparecer como bubble. Le so ate achar o 1o ts (early
     # return) pra nao varrer transcript gigante. 0.0 se nao houver ts -> sem poda (fallback seguro).
+    #
+    # None = NAO DEU PRA LER, e e diferente de 0.0 pelo mesmo motivo que separa `None` de set()
+    # em committed_user_lines: 0.0 desliga a poda, e sem poda uma entrada de sessao ANTERIOR deixa
+    # de ser dispensada por idade e cai no caminho normal do reconcile — se o texto dela nao casar
+    # com o transcript de AGORA (e nao vai, e de outra sessao), ela e re-enfileirada e REDIGITADA.
+    # Ou seja: o mesmo defeito que a funcao irma acabou de perder, entrando pela porta do lado.
+    # Quem so PODA (sse, drain, merged_history) aceita 0.0 no lugar de None e escreve isso no
+    # proprio call site — ali "nao sei" pode virar "nao corta" sem estrago.
     try:
         with open(jsonl, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 ts = _ts_of_line(line)
                 if ts > 0:
                     return ts
-    except OSError:
-        pass
+    except OSError as e:
+        _log.warning("nao deu pra ler o inicio do transcript %s: %s", jsonl, e)
+        return None
     return 0.0
 
 
@@ -205,8 +255,16 @@ def _chaves_de_commit(text: str) -> set[str]:
     return out
 
 
-def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
+def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str] | None:
     """Textos que ATERRISSARAM no transcript (inteiros + por linha), pra confirmar entregas.
+
+    None = NAO DEU PRA LER o transcript. Nunca um set vazio nesse caso, e a diferenca e o bug:
+    quem chama isto usa o resultado como oraculo de "chegou na sessao?", e um set vazio responde
+    "NADA chegou" — o `reconcile_delivered` entao re-enfileira TODA entrega pendente e o `drain`
+    REDIGITA a mensagem do usuario dentro da conversa. Ate 26/08/2026 o `except OSError` aqui
+    devolvia o set parcial montado ate o erro, ou seja: falha de leitura autorizava redigitacao.
+    No Windows isso nao e hipotetico — ler o .jsonl que o Claude Code esta escrevendo pode voltar
+    WinError 32 (arquivo em uso). Oraculo que falhou nao decide nada; ver `_confirm_and_drain`.
     Fontes CRUAS, sem o filtro de meta do parser: (a) entradas `user` — mensagem entregue MID-TURN
     e injetada depois vem embrulhada em meta que o parse_obj descartaria; (b) `queue-operation`
     enqueue — a fila INTERNA do Claude Code registra o texto NO MOMENTO da digitacao, antes de
@@ -242,8 +300,16 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
     # Import local pelo mesmo motivo do merged_history: app.adapters importa app.pqueue no boot.
     pi_parse = None
     kimi_parse = None
-    if provider == "pi":
+    codex_parse = None
+    if provider in ("pi", "omp"):
         from app.adapters.pi.transcript import parse_obj as pi_parse
+    elif provider == "codex":
+        # Codex: o texto do usuario vive em `response_item`/`message` com role "user", e o parser
+        # ainda tira o contexto que o CLI injeta com esse mesmo role (environment_context,
+        # AGENTS.md). Sem este ramo o oraculo devolve set() vazio -> "nada chegou" -> o reconcile
+        # re-enfileira e o drain REDIGITA a mensagem do usuario, o incidente ja visto no Pi e no
+        # Kimi, aqui com o agravante de o texto ja ter sido entregue pelo `turn/start`.
+        from app.adapters.codex.rollout import parse_rollout_obj as codex_parse
     elif provider == "kimi":
         # Kimi: sem o parser proprio, NENHUMA linha do wire casa o shape do Claude (o role mora em
         # `context.append_message`) -> oraculo vazio -> reconcile lia TODA entrega como engolida e
@@ -257,7 +323,7 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                parse = pi_parse or kimi_parse
+                parse = pi_parse or kimi_parse or codex_parse
                 if parse is not None:
                     for ev in parse(obj):
                         if ev.kind == "user_msg" and ev.text:
@@ -283,9 +349,26 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
                     for b in content:
                         if isinstance(b, dict) and b.get("type") == "text":
                             add(str(b.get("text", "")))
-    except OSError:
-        pass
+    except OSError as e:
+        # LOGA e devolve None: `pass` com o set meio montado era pior que nao ler nada — virava
+        # "estas 40 chegaram e as suas nao", e a que faltava era redigitada.
+        _log.warning("nao deu pra ler o transcript %s pra confirmar entregas: %s", jsonl, e)
+        return None
     return out
+
+
+def linha_mais_parecida(texto: str, committed: set[str]) -> str | None:
+    """A linha do transcript mais parecida com `texto`, ou None se nenhuma passa de 60%.
+
+    So roda no caminho de FALHA (o log do requeue). Existe porque `REQUEUE name=X n=1` nao diz
+    NADA sobre o porque: o oraculo e comparacao de string, entao o que resolve o proximo caso e o
+    diff — um espaco a mais, uma barra invertida comida pelo multiplexador, um prefixo que o
+    harness prependou. Sem isso a proxima ocorrencia custa a mesma leitura de codigo desta.
+    """
+    if not texto or not committed:
+        return None
+    perto = difflib.get_close_matches(texto, list(committed), n=1, cutoff=0.6)
+    return perto[0] if perto else None
 
 
 class PromptQueue:
@@ -305,7 +388,8 @@ class PromptQueue:
         tmp.write_text("".join(dumps_safe(r) + "\n" for r in rows), encoding="utf-8")
         atomico.substituir(tmp, self.path)
 
-    def append(self, text: str, delivered: bool = False, ts: float | None = None) -> dict:
+    def append(self, text: str, delivered: bool = False, ts: float | None = None,
+               pre_transcript: bool = False) -> dict:
         # delivered=False por padrao = enfileirada mas NAO digitada na TUI (o /input passa True quando
         # o send_prompt realmente digitou). So entradas False sao drenadas -> sem isto um upgrade
         # re-enviaria toda entrada legada (= double-send em massa).
@@ -317,8 +401,13 @@ class PromptQueue:
         # scrub AQUI tambem (nao so no _write_atomic): a entrada devolvida ao caller tem que ser a
         # MESMA que foi pro disco, senao o reconcile/dedup compararia o texto cru contra o transcript
         # (que ja recebeu o U+FFFD) e nunca casaria.
+        # pre_transcript: entrada carimbada ANTES de a sessão existir (passagem de bastão) — isenta
+        # do corte por idade em toda a fila. Ver _da_sessao_atual; só grava a chave quando é True
+        # pra não engordar toda entrada normal com um campo que nunca será lido.
         entry = {"id": uuid.uuid4().hex, "text": scrub_surrogates(text),
                  "ts": time.time() if ts is None else ts, "delivered": delivered}
+        if pre_transcript:
+            entry["pre_transcript"] = True
         # ponytail: lock global serializa o read-modify-write; 2 POSTs /input concorrentes (handlers
         # sync no threadpool) senao liam as mesmas rows e um sobrescrevia o outro (entrada perdida).
         # upgrade: lock per-path se o throughput de uma sessao virar gargalo.
@@ -339,7 +428,7 @@ class PromptQueue:
             rows = self.load()
             claimed = []
             for r in rows:
-                if r.get("delivered") is False and float(r.get("ts") or 0.0) >= min_ts:
+                if r.get("delivered") is False and _da_sessao_atual(r, min_ts):
                     r["delivered"] = True
                     claimed.append(dict(r))
                     if limit is not None and len(claimed) >= limit:
@@ -416,7 +505,7 @@ class PromptQueue:
             return 0
         with _append_lock:
             rows = self.load()
-            kept = [r for r in rows if float(r.get("ts") or 0.0) >= min_ts]
+            kept = [r for r in rows if _da_sessao_atual(r, min_ts)]
             if len(kept) != len(rows):
                 self._write_atomic(kept)
             return len(rows) - len(kept)
@@ -474,7 +563,7 @@ class PromptQueue:
                     # `ts < min_ts` NAO resgata: entrada de uma sessao ANTERIOR (pre-/clear) seria
                     # comparada contra o transcript de AGORA, e um texto curto e repetido ("Sim",
                     # "1") casaria por coincidencia — dando por entregue o que nunca chegou.
-                    if ts < min_ts:
+                    if not _da_sessao_atual(r, min_ts):
                         continue
                     linhas_r = _linhas_da_entrada(r)
                     casou = _casam(linhas_r, disponiveis, reservadas, dono)
@@ -484,7 +573,7 @@ class PromptQueue:
                         r.pop("desistiu", None)
                         changed = True
                     continue
-                if ts < min_ts:
+                if not _da_sessao_atual(r, min_ts):
                     r["confirmed"] = True   # sessao anterior: fora do escopo (e silencia o check)
                     changed = True
                     continue
@@ -575,7 +664,7 @@ class PromptQueue:
                 if eid in seen and seen[eid] == desistiu:
                     continue
                 seen[eid] = desistiu
-                if min_ts and float(entry.get("ts") or 0.0) < min_ts:
+                if min_ts and not _da_sessao_atual(entry, min_ts):
                     continue
                 evs.append(_entry_event(entry))
             return evs
@@ -639,7 +728,7 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
     _pi_stream = None
     if provider == "codex":
         from app.adapters.codex.rollout import parse_rollout_obj as _parse
-    elif provider == "pi":
+    elif provider in ("pi", "omp"):
         # Stream (com memoria de uma linha) e nao parse_obj solto: e o que tira o contexto de hook
         # colado no inicio da mensagem do usuario. Uma instancia por _parse_from — a janela do
         # tail-read cresce e re-parseia, e um estado carregado da tentativa anterior soltaria
@@ -667,7 +756,7 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
         # Tail: o inicio da sessao esta FORA da janela -> _transcript_start_ts le do comeco do
         # arquivo ate o 1o ts (early return; sem cap de linhas — header longo sem timestamp
         # inflaria o start_ts e podaria fila valida).
-        start_ts = _transcript_start_ts(jsonl) if offset else 0.0
+        start_ts = (_transcript_start_ts(jsonl) or 0.0) if offset else 0.0
         try:
             fh = open(jsonl, encoding="utf-8", errors="replace")
         except OSError:
@@ -747,7 +836,10 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
             continue
         # Poda: entrada anterior ao inicio da sessao atual e de uma sessao antiga (ex: pre-/clear, que
         # cria transcript novo). Sem isto, nunca casaria com o transcript novo e viraria fantasma.
-        if start_ts and ts < start_ts:
+        # `ts` (com carry-forward) e não o campo cru: entrada legada/editada à mão, sem `ts`, é
+        # ordenada aqui pelo relógio da linha anterior — cortá-la por 0.0 a fazia sumir do
+        # histórico em silêncio, que é o oposto do que a fila durável existe pra garantir.
+        if start_ts and not _da_sessao_atual(entry, start_ts, ts):
             continue
         items.append((ts, 10**9, _entry_event(entry)))
 

@@ -376,3 +376,138 @@ def test_list_plans_traz_os_tres_inclusive_os_que_a_eleicao_descarta(tmp_path):
 def test_list_plans_sem_pasta_de_planos(tmp_path):
     (tmp_path / ".git").mkdir()
     assert planprog.list_plans(str(tmp_path)) is None
+
+
+def test_pin_apontando_pra_plano_que_sumiu_e_sem_pin(tmp_path):
+    # O defeito real de 27/08/2026: o .md foi apagado/movido e o pin sobreviveu, entao o seletor
+    # exibia o stem morto como ROTULO do painel enquanto a barra mostrava outro plano.
+    root = _tres_planos(tmp_path)
+    planprog.write_pin(root, "2026-07-01-pendente")
+    os.remove(os.path.join(root, "2026-07-01-pendente.md"))
+    planprog._reset_caches()
+    assert planprog.read_pin(root) is None
+    assert planprog.list_plans(str(tmp_path))["pinned"] is None
+
+
+def test_pin_nenhum_sobrevive_a_conferencia_de_arquivo(tmp_path):
+    # O sentinela nao tem .md por definicao — a guarda nova nao pode descarta-lo, senao "esconder
+    # o plano" deixaria de valer no proximo poll.
+    root = _tres_planos(tmp_path)
+    planprog.write_pin(root, planprog.PIN_NONE)
+    assert planprog.read_pin(root) == planprog.PIN_NONE
+    assert plan_progress(str(tmp_path)) is None
+
+
+def test_marcar_step_fecha_o_plano_e_so_muda_o_checkbox(tmp_path):
+    p = _write(tmp_path, "2026-07-29-plano-de-teste.md", PLAN_A)
+    antes = p.read_text(encoding="utf-8")
+    r = plan_progress(str(tmp_path))
+    pendentes = [s.idx for t in r.tasks for s in t.steps if not s.done]
+    for i in pendentes:
+        planprog.marcar_step(str(p), i, True)
+    depois = p.read_text(encoding="utf-8")
+    assert plan_progress(str(tmp_path)).complete is True
+    # Um caractere por step marcado: o resto do arquivo sai byte a byte igual.
+    assert sum(1 for a, b in zip(antes, depois) if a != b) == len(pendentes)
+    assert len(antes) == len(depois)
+    # O bloco cercado tem "- [x] **Step 1: nao conta**" — o indice nao pode ter escorregado pra la.
+    assert "```python\n### Task 9: fantasma\n- [x] **Step 1: nao conta**" in depois
+
+
+def test_marcar_step_desmarca_tambem(tmp_path):
+    p = _write(tmp_path, "2026-07-29-plano-de-teste.md", PLAN_A)
+    planprog.marcar_step(str(p), 0, False)
+    assert plan_progress(str(tmp_path)).tasks[0].steps[0].done is False
+
+
+def test_marcar_step_fora_da_faixa_recusa(tmp_path):
+    p = _write(tmp_path, "2026-07-29-plano-de-teste.md", PLAN_A)
+    with pytest.raises(planprog.PlanWriteError):
+        planprog.marcar_step(str(p), 99, True)
+
+
+def test_arquivar_move_md_e_html_e_tira_o_plano_da_eleicao(tmp_path):
+    root = _tres_planos(tmp_path)
+    Path(root, "2026-07-01-pendente.html").write_text("<b>x</b>", encoding="utf-8")
+    planprog.write_pin(root, "2026-07-01-pendente")
+
+    movidos = planprog.arquivar(root, "2026-07-01-pendente")
+
+    assert set(movidos) == {"2026-07-01-pendente.md", "2026-07-01-pendente.html"}
+    feitos = Path(root, planprog.FEITOS_REL)
+    assert (feitos / "2026-07-01-pendente.md").is_file()
+    # O .html irmao vai junto: deixa-lo pra tras e o lixo que isto veio limpar.
+    assert (feitos / "2026-07-01-pendente.html").is_file()
+    assert not Path(root, "2026-07-01-pendente.md").exists()
+    # Some da eleicao, do seletor e do pin — nao vira pin morto.
+    assert plan_progress(str(tmp_path)).name != "pendente"
+    assert planprog.read_pin(root) is None
+    assert "pendente" not in {p["name"] for p in planprog.list_plans(str(tmp_path))["plans"]}
+
+
+def test_arquivar_nunca_sobrescreve_o_que_ja_esta_em_feitos(tmp_path):
+    root = _tres_planos(tmp_path)
+    feitos = Path(root, planprog.FEITOS_REL)
+    feitos.mkdir()
+    (feitos / "2026-07-01-pendente.md").write_text("o de la", encoding="utf-8")
+    with pytest.raises(planprog.PlanWriteError):
+        planprog.arquivar(root, "2026-07-01-pendente")
+    assert (feitos / "2026-07-01-pendente.md").read_text(encoding="utf-8") == "o de la"
+
+
+def test_arquivar_e_tudo_ou_nada_quando_so_o_html_colide(tmp_path):
+    # O caso que o teste de colisao anterior nao pegava: um `.html` orfao ja em feitos/ (sobra de
+    # um arquivamento antigo) era notado DEPOIS de o `.md` ja ter saido — o plano sumia da pasta
+    # ativa enquanto a tela dizia "nao deu pra arquivar".
+    root = _tres_planos(tmp_path)
+    Path(root, "2026-07-01-pendente.html").write_text("novo", encoding="utf-8")
+    feitos = Path(root, planprog.FEITOS_REL)
+    feitos.mkdir()
+    (feitos / "2026-07-01-pendente.html").write_text("o de la", encoding="utf-8")
+
+    with pytest.raises(planprog.PlanWriteError):
+        planprog.arquivar(root, "2026-07-01-pendente")
+
+    # Nada se mexeu: o .md continua onde estava e o .html de la continua intacto.
+    assert Path(root, "2026-07-01-pendente.md").is_file()
+    assert Path(root, "2026-07-01-pendente.html").read_text(encoding="utf-8") == "novo"
+    assert (feitos / "2026-07-01-pendente.html").read_text(encoding="utf-8") == "o de la"
+    assert plan_progress(str(tmp_path)).name == "pendente"
+
+
+def test_marcacoes_concorrentes_nao_se_desfazem(tmp_path):
+    # Celular e desktop abertos na MESMA sessao: as duas chamadas liam o mesmo texto antes de
+    # qualquer uma gravar, e a segunda regravava o arquivo inteiro por cima — a marcacao da
+    # primeira sumia sem erro nenhum. O sleep dentro da escrita forca a sobreposicao.
+    import threading
+    p = _write(tmp_path, "2026-07-29-plano-de-teste.md", PLAN_A)
+    pendentes = [s.idx for t in plan_progress(str(tmp_path)).tasks for s in t.steps if not s.done]
+    assert len(pendentes) >= 2
+
+    real = planprog.atomico.substituir
+
+    def devagar(origem, destino):
+        time.sleep(0.05)
+        real(origem, destino)
+
+    planprog.atomico.substituir = devagar
+    try:
+        ts = [threading.Thread(target=planprog.marcar_step, args=(str(p), i, True))
+              for i in pendentes[:2]]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+    finally:
+        planprog.atomico.substituir = real
+
+    planprog._reset_caches()
+    marcados = {s.idx for t in plan_progress(str(tmp_path)).tasks for s in t.steps if s.done}
+    assert set(pendentes[:2]) <= marcados
+
+
+@pytest.mark.parametrize("veneno", ["../fora", "a/b", "..", ""])
+def test_escrita_recusa_stem_com_separador(tmp_path, veneno):
+    root = _tres_planos(tmp_path)
+    with pytest.raises(planprog.PlanWriteError):
+        planprog.caminho_do_plano(root, veneno)

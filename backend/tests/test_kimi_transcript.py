@@ -41,10 +41,19 @@ def test_text_part_becomes_assistant_msg():
     assert ev[0].id == "u1"
 
 
-def test_think_part_is_dropped():
-    # Rascunho interno, igual ao thinking do Claude/Pi: nunca vira bolha.
+def test_think_part_vira_thinking():
+    # Rascunho interno NAO e resposta: sai com kind proprio (o front mostra recolhido), nunca como
+    # assistant_msg. O campo e `think`, nao `text` (medido no wire real).
     obj = _loop({"type": "content.part", "uuid": "u2",
                  "part": {"type": "think", "think": "hmm"}})
+    ev = kt.parse_obj(obj)
+    assert len(ev) == 1
+    assert ev[0].kind == "thinking"
+    assert ev[0].text == "hmm"
+
+
+def test_think_vazio_nao_vira_evento():
+    obj = _loop({"type": "content.part", "uuid": "u2b", "part": {"type": "think", "think": "  "}})
     assert kt.parse_obj(obj) == []
 
 

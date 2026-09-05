@@ -18,7 +18,7 @@ vi.mock('@hangar/core', async (importOriginal) => ({
 }));
 const api = vi.mocked(apiLib);
 
-const SEM_ATIVIDADE = { tasks: [], agents: [], inProgress: 0, runningAgents: 0 };
+const SEM_ATIVIDADE = { tasks: [], agents: [], shells: [], inProgress: 0, runningAgents: 0, runningShells: 0 };
 
 function montar() {
   const el = document.createElement('div');

@@ -115,3 +115,58 @@ describe('cliente de peers', () => {
     expect(getActiveId()).not.toBeNull();
   });
 });
+
+const DONO: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+const REMOTO: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' };
+
+function resposta(corpo: unknown, status = 200) {
+  return Promise.resolve(new Response(JSON.stringify(corpo), { status, headers: { 'Content-Type': 'application/json' } }));
+}
+
+describe('removerPeerDoisLados', () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => { fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
+
+  it('remove daqui, descobre o próprio identificador e remove de lá', async () => {
+    const { removerPeerDoisLados } = await import('./peers');
+    fetchMock
+      .mockImplementationOnce(() => resposta([]))                          // DELETE /api/peers/b em DONO
+      .mockImplementationOnce(() => resposta({ identificador: 'a' }))       // GET identificador em DONO
+      .mockImplementationOnce(() => resposta([]));                         // DELETE /api/peers/a em REMOTO
+    await expect(removerPeerDoisLados(DONO, 'b', REMOTO)).resolves.toBe(true);
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls[0]).toBe('http://a/api/peers/b');
+    expect(urls[2]).toBe('http://b/api/peers/a');
+  });
+
+  it('lá já não estava (404) conta como desfeito', async () => {
+    const { removerPeerDoisLados } = await import('./peers');
+    fetchMock
+      .mockImplementationOnce(() => resposta([]))
+      .mockImplementationOnce(() => resposta({ identificador: 'a' }))
+      .mockImplementationOnce(() => resposta({ erro: 'peers_desconhecido' }, 404));
+    await expect(removerPeerDoisLados(DONO, 'b', REMOTO)).resolves.toBe(true);
+  });
+
+  it('falha do lado de lá não relança: o daqui já foi removido', async () => {
+    const { removerPeerDoisLados } = await import('./peers');
+    fetchMock
+      .mockImplementationOnce(() => resposta([]))
+      .mockImplementationOnce(() => resposta({ identificador: 'a' }))
+      .mockImplementationOnce(() => resposta({ erro: 'x' }, 500));
+    await expect(removerPeerDoisLados(DONO, 'b', REMOTO)).resolves.toBe(false);
+  });
+
+  it('sem token da outra máquina remove só daqui', async () => {
+    const { removerPeerDoisLados } = await import('./peers');
+    fetchMock.mockImplementationOnce(() => resposta([]));
+    await expect(removerPeerDoisLados(DONO, 'b', null)).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('falha daqui relança', async () => {
+    const { removerPeerDoisLados } = await import('./peers');
+    fetchMock.mockImplementationOnce(() => resposta({ erro: 'peers_desconhecido' }, 404));
+    await expect(removerPeerDoisLados(DONO, 'b', REMOTO)).rejects.toBeInstanceOf(Error);
+  });
+});

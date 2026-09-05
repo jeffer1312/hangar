@@ -22,7 +22,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app import agentes_sync, apelidos, contas, cotas, engines, opencode_cota
+from app import agentes_sync, apelidos, contas, cotas, engines, oauth_codex, opencode_cota
 from app.auth import require_auth
 from app import engine_probe
 from app.config import list_config_dirs
@@ -44,6 +44,10 @@ class CotaResumo(BaseModel):
     ts: float | None = None
     idade_s: float | None = None
     motivo: str | None = None
+    # Rótulo que a FONTE deu à credencial. Serve às linhas que só a cota conhece (o provider do
+    # Kimi, o OAuth do Codex): sem ele o nome sai do id, e `codex:/home/u/.codex` viraria um
+    # caminho cru na tela onde a fonte já dizia "Codex".
+    label: str | None = None
 
 
 class Credencial(BaseModel):
@@ -89,7 +93,7 @@ def _cota_por_id(forcar: bool = False) -> dict[str, CotaResumo]:
     # posicional escorregaria pra ele em silêncio (achado da revisão).
     for c in cotas.listar_cotas(forcar=forcar):
         fora[c.id] = CotaResumo(estado=c.estado, janelas=c.janelas, ts=c.ts,
-                                idade_s=c.idade_s, motivo=c.motivo)
+                                idade_s=c.idade_s, motivo=c.motivo, label=c.label)
     return fora
 
 
@@ -133,18 +137,21 @@ def listar(forcar: bool = False) -> list[Credencial]:
             aceita_cookie=aceita, cookie_definido=aceita and cid in cookies,
         ))
 
-    # A cota conhece credenciais que o cadastro não conhece — hoje o provider do Kimi, lido do
-    # config.toml dele. Some-las aqui em vez de escondê-las: a tela é "todas as credenciais desta
-    # máquina", e uma que aparece na faixa do rodapé mas não na tela seria justo a confusão que
-    # este módulo veio desfazer.
+    # A cota conhece credenciais que o cadastro não conhece — o provider do Kimi, lido do
+    # config.toml dele, e o OAuth do Codex, que mora no `auth.json` dele. Some-las aqui em vez de
+    # escondê-las: a tela é "todas as credenciais desta máquina", e uma que aparece na faixa do
+    # rodapé mas não na tela seria justo a confusão que este módulo veio desfazer.
+    # O uso declarado sai do prefixo do id, que é quem sabe de qual CLI aquela credencial é.
+    usos_por_prefixo = {"kimi:": "kimi_cli", "codex:": "codex_cli"}
     ja = {c.id for c in saida}
     for cid, resumo in cota.items():
-        if cid in ja or not cid.startswith("kimi:"):
+        uso = next((u for p, u in usos_por_prefixo.items() if cid.startswith(p)), None)
+        if cid in ja or uso is None:
             continue
-        natural = cid.split(":", 1)[1]
+        natural = resumo.label or cid.split(":", 1)[1]
         saida.append(Credencial(
             id=cid, tipo="chave", nome=nomes.get(cid) or natural, nome_natural=natural,
-            apelido=nomes.get(cid), usos=["kimi_cli"], cota=resumo,
+            apelido=nomes.get(cid), usos=[uso], cota=resumo,
         ))
     return saida
 
@@ -234,3 +241,30 @@ def sincronizar_nos_agentes(body: SyncBody) -> dict:
     alvos = tuple(a for a in body.alvos if a in agentes_sync.ALVOS) or agentes_sync.ALVOS
     return {"id": body.id, "modelos": len(modelos),
             "resultado": agentes_sync.sincronizar(nome, base_url, api_key, modelos, alvos)}
+
+
+# ---------------------------------------------------------------- login OAuth do ChatGPT (Codex)
+# O app faz o fluxo de código de dispositivo e espalha o resultado pro Codex, Pi e omp
+# (app/oauth_codex.py). O poll é do front: `GET /codex/login` a cada 2s até `concluido`.
+
+@credenciais_router.get("/codex", dependencies=[Depends(require_auth)])
+def codex_estado() -> dict:
+    return oauth_codex.estado()
+
+
+@credenciais_router.post("/codex/login", dependencies=[Depends(require_auth)])
+def codex_login_iniciar() -> dict:
+    try:
+        return oauth_codex.iniciar()
+    except RuntimeError as e:
+        raise HTTPException(409, detail=erro("erro_codex_login", str(e), motivo=str(e)))
+
+
+@credenciais_router.get("/codex/login", dependencies=[Depends(require_auth)])
+def codex_login_passo() -> dict:
+    return oauth_codex.passo()
+
+
+@credenciais_router.delete("/codex/login", dependencies=[Depends(require_auth)])
+def codex_login_cancelar() -> dict:
+    return oauth_codex.cancelar()

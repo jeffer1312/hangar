@@ -1,13 +1,28 @@
+<script module lang="ts">
+  // Aba escolhida POR SESSÃO. `ctxPanel.aba` é uma só pro app inteiro — sem esta memória, passar
+  // por uma sessão sem navegador zerava a aba (o guard logo abaixo) e a sessão de origem voltava
+  // em Contexto, com o navegador vivo e escondido atrás dela.
+  //
+  // Mora no módulo, e não na instância, porque este painel NÃO remonta na troca de sessão: só o
+  // `navChave` muda. Foi o que derrubou a primeira tentativa, feita com onMount/onDestroy — ela
+  // nunca reexecutava, e a aba continuava se perdendo.
+  const ABA_POR_SESSAO = new Map<string, 'contexto' | 'arquivos' | 'navegador'>();
+</script>
+
 <script lang="ts">
   import { ctxPanel, alternarCtxPanel, arrastarLargura, salvarLargura } from '../lib/ctxPanel.svelte';
+  import { navegadorPanel, arrastarNav, salvarNav } from '../lib/navegadorPanel.svelte';
+  import { workspaceSessionKey } from '../lib/workspaceCommands';
+  import NavegadorPane from './NavegadorPane.svelte';
 import * as m from '../paraglide/messages';
+import GroupGlyph from './icons/GroupGlyph.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
   import RateChips from './RateChips.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import PlanRing from './PlanRing.svelte';
   import FilesPanel from './files/FilesPanel.svelte';
   import StateChip from './StateChip.svelte';
-  import type { State, SessionInfo, PlanDetail } from '@hangar/core';
+  import type { Provider, State, SessionInfo, PlanDetail, ChatEvent } from '@hangar/core';
   import type { StatusFields } from '@hangar/core';
   import { ctxWindow, providerName } from '@hangar/core';
   import { planBadge } from '@hangar/core';
@@ -18,7 +33,7 @@ import * as m from '../paraglide/messages';
     status?: StatusFields | null;
     pairPeers?: string[] | null;
     serverLabel?: string;
-    provider?: 'claude' | 'codex' | 'pi' | 'kimi';
+    provider?: Provider;
     // Identidade do servidor (B2 do parecer): o FilesPanel chaveia o store por
     // serverId::sessionName; o Chat passa o MESMO getActiveId que ele usa, nunca calculado
     // diferente por caller.
@@ -38,6 +53,9 @@ import * as m from '../paraglide/messages';
     // opcionais: sem handler, sem botao (mesma regra da NavBar).
     onOpenTerminal?: () => void;
     terminalAlert?: boolean;
+    // Navegador embutido: o botão na fileira de ações ATIVA a aba (criando o navegador da sessão
+    // se não tem). A aba Navegador na tab bar só EXISTE quando a sessão tem navegador aberto.
+    onOpenNavegador?: () => void;
     onOpenRun?: () => void;
     runRunning?: boolean;
     onOpenAttachments?: () => void;
@@ -63,6 +81,8 @@ import * as m from '../paraglide/messages';
     // Grupo pareado -> PairSheet (conversa do par, contrato compartilhado, split). A secao dizia
     // "2 sessoes pareadas" e parava ali; a tela do par ja existia, so nao tinha porta aqui.
     onOpenPair?: () => void;
+    // Grupo -> modal Orquestração (quem roda cada papel, contas liberadas).
+    onOpenOrq?: () => void;
     // Repositorio -> modal de git do cwd. Mesmo caso: dado sem porta.
     onOpenGit?: () => void;
     // Abre a sessao do MEMBRO num modal (PairChatModal). So com UM par: com 2+ nao da pra escolher
@@ -70,25 +90,62 @@ import * as m from '../paraglide/messages';
     // `undefined` quando o Chat esta `nested` (dentro de um modal) — a guarda que evita modal
     // dentro de modal, e com ela SSE empilhado.
     onOpenPeerChat?: (peer: string) => void;
+    // Pra visão "Citados" da aba Arquivos (vêm do Chat).
+    events?: ChatEvent[] | null;
+    histGap?: string;
+    cwd?: string | null;
   }
 
   let {
     state, stateDetail = null, status = null, pairPeers = null,
+    events = null, histGap = '', cwd = null,
     serverLabel = '', provider = 'claude', sessionName = '', serverId = '',
     onOpenTerminal = undefined, terminalAlert = false,
+    onOpenNavegador = undefined,
     onOpenRun = undefined, runRunning = false,
     onOpenAttachments = undefined,
     onOpenActivity = undefined, activityBadge = 0, activityRunning = false,
     onExpandUsage = undefined, limited = false, limitReset = null,
     working = false,
     loopLabel = null, loopColor = undefined, onLoopTap = undefined,
-    onProviderTap = undefined, onOpenPair = undefined, onOpenGit = undefined,
+    onProviderTap = undefined, onOpenPair = undefined, onOpenOrq = undefined, onOpenGit = undefined,
     onOpenPeerChat = undefined,
     session = null, planDetail = null, planLoading = false, planError = false,
     toggleExterno = false,
   }: Props = $props();
 
-  const hasActions = $derived(onOpenTerminal || onOpenRun || onOpenAttachments || onOpenActivity);
+  const hasActions = $derived(onOpenTerminal || onOpenNavegador || onOpenRun || onOpenAttachments || onOpenActivity);
+  const navChave = $derived(workspaceSessionKey({ serverId, name: sessionName }));
+  // A aba Navegador só existe na tab bar quando a sessão TEM navegador aberto (quem cria é o
+  // botão da fileira ou o agente via hangar-preview open).
+  const temNav = $derived(navChave in navegadorPanel.abertos);
+  // Qual sessão este painel já viu. Por INSTÂNCIA, não no módulo: hoje só existe um painel montado
+  // por vez (no split os Chat extras não recebem showContextPanel, e o overlay é ramo `:else if`),
+  // mas com a marca no módulo dois painéis vivos brigariam — um deles nunca casaria a chave e
+  // ficaria forçando a própria aba por cima da do irmão. O Map continua no módulo de propósito: ele
+  // é a memória por sessão, e é ela que precisa sobreviver a uma remontagem.
+  let chaveVista: string | null = null;
+  // Mesma sessão: a aba de agora é a escolha dela, guarda. Sessão nova: devolve a aba em que ela
+  // estava. Lê as duas coisas no topo de propósito — o efeito precisa acordar tanto na troca de
+  // sessão quanto no clique de aba, e ler só dentro de um ramo perderia uma das duas.
+  $effect(() => {
+    const chave = navChave;
+    const aba = ctxPanel.aba;
+    if (chave === chaveVista) {
+      ABA_POR_SESSAO.set(chave, aba);
+      return;
+    }
+    chaveVista = chave;
+    const lembrada = ABA_POR_SESSAO.get(chave) ?? 'contexto';
+    if (lembrada !== aba) ctxPanel.aba = lembrada;   // reentra uma vez e cai no ramo de cima
+  });
+  // A aba é global (ctxPanel, por desenho) mas o navegador é POR SESSÃO: sessão sem navegador com
+  // a aba ativa volta pra Contexto — senão a coluna fica em branco (os três painéis têm guard, e
+  // header/fileira somem pelo mesmo motivo). Medido no app dele: troca de sessão com a aba ativa
+  // deixava a coluna vazia.
+  $effect(() => {
+    if (ctxPanel.aba === 'navegador' && !temNav) ctxPanel.aba = 'contexto';
+  });
   // Atalho da secao Grupo: com UM par, tocar abre a sessao dele direto no modal. Com 2+ membros a
   // secao continua abrindo a PairSheet — la existe o botao por membro, e escolher por quem clicou
   // seria adivinhacao.
@@ -128,12 +185,17 @@ import * as m from '../paraglide/messages';
     e.preventDefault();
   }
   function resizeMove(e: PointerEvent) {
-    if (ctxPanel.resizing) arrastarLargura(e.clientX);
+    if (!ctxPanel.resizing) return;
+    // Com a aba Navegador ativa a divisória mexe na largura DELE (store próprio, teto próprio) —
+    // a coluna engrossa pro browser; nas outras abas, a do contexto como sempre.
+    if (ctxPanel.aba === 'navegador') arrastarNav(e.clientX);
+    else arrastarLargura(e.clientX);
   }
   function resizeEnd() {
     if (!ctxPanel.resizing) return;
     ctxPanel.resizing = false;
-    salvarLargura();
+    if (ctxPanel.aba === 'navegador') salvarNav();
+    else salvarLargura();
   }
   // O flag vive no store (singleton de modulo) e sobrevive à desmontagem. Se a alca sair do DOM
   // no meio do arrasto — recolher, cruzar os 820px, trocar de sessao — o pointerup nao tem
@@ -177,7 +239,11 @@ import * as m from '../paraglide/messages';
          texto vertical e um anel, enquanto o valor do painel é o plano, as ações e as métricas —
          coisas que precisam de largura. Estado e progresso continuam à vista na barra da esquerda. -->
   {:else}
-  {#if working}<div class="ctx-sweep" aria-hidden="true"></div>{/if}
+  <!-- Na aba Navegador a varredura de "sessão trabalhando" some: em cima de uma página web ela
+       lê como "a página está carregando" — e o carregamento de verdade tem barra própria lá. -->
+  {#if working && ctxPanel.aba !== 'navegador'}<div class="ctx-sweep" aria-hidden="true"></div>{/if}
+  <!-- Com a aba Navegador ativa o header some: o browser ganha a altura (pedido dele). -->
+  {#if ctxPanel.aba !== 'navegador'}
   <header>
     <div class="ctx-heading">
       <!-- Sem kicker: "Contexto da sessão" repetia o que o painel inteiro e (e ja esta no
@@ -192,28 +258,18 @@ import * as m from '../paraglide/messages';
       {/if}
     </div>
   </header>
+  {/if}
 
   <!-- Barra de abas do painel (Contexto | Arquivos), no desenho do mock aprovado. A aba ativa
        vive no ctxPanel (modulo): o App remonta este painel por {#key} a cada troca de sessao,
        e um $state local devolveria o usuario pra Contexto com Arquivos aberta. Recolhido, o
        painel some e a barra some junto — sem porta fantasma. -->
-  <div class="abas" role="tablist" aria-label={m.ctx_painel_titulo()}>
-    <button type="button" id="aba-ctx-contexto" class="aba" class:sel={ctxPanel.aba === 'contexto'}
-            role="tab" aria-selected={ctxPanel.aba === 'contexto'} aria-controls="painel-ctx-contexto"
-            onclick={() => (ctxPanel.aba = 'contexto')}>
-      {m.ctx_aba_contexto()}
-    </button>
-    <button type="button" id="aba-ctx-arquivos" class="aba" class:sel={ctxPanel.aba === 'arquivos'}
-            role="tab" aria-selected={ctxPanel.aba === 'arquivos'} aria-controls="painel-ctx-arquivos"
-            onclick={() => (ctxPanel.aba = 'arquivos')}>
-      {m.arq_aba()}
-    </button>
-  </div>
-
-  {#if ctxPanel.aba === 'contexto'}
-  <div id="painel-ctx-contexto" role="tabpanel" aria-labelledby="aba-ctx-contexto" class="ctx-tab">
-  {#if hasActions}
-    <div class="ctx-actions">
+  <!-- Acoes da sessao (Terminal, Rodar, Anexos, Atividade) ficam ACIMA das abas: valem pra
+       sessao inteira, nao pra aba Contexto — e ninguem devia trocar de aba pra achar o Terminal.
+       Com a aba Navegador ativa a fileira SOME: quem ta ali ta mexendo no browser, e o browser
+       ganha a altura. O Navegador nao e mais acao — e a aba ao lado. -->
+  {#if hasActions && ctxPanel.aba !== 'navegador'}
+    <div class="ctx-actions" role="toolbar" aria-label={m.ctx_painel_titulo()}>
       {#if onOpenTerminal}
         <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -222,6 +278,16 @@ import * as m from '../paraglide/messages';
             <line x1="12.5" y1="15" x2="17" y2="15"/>
           </svg>
           <span>{m.ctx_terminal()}</span>
+        </button>
+      {/if}
+      {#if onOpenNavegador}
+        <button class="ctx-action" onclick={onOpenNavegador} aria-label={m.ctx_navegador()}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M3 12h18"/>
+            <path d="M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9s1.4-6.4 3.9-9z"/>
+          </svg>
+          <span>{m.ctx_navegador()}</span>
         </button>
       {/if}
       {#if onOpenRun}
@@ -261,10 +327,70 @@ import * as m from '../paraglide/messages';
     </div>
   {/if}
 
+  <div class="abas" role="tablist" aria-label={m.ctx_painel_titulo()}>
+    <button type="button" id="aba-ctx-contexto" class="aba" class:sel={ctxPanel.aba === 'contexto'}
+            role="tab" aria-selected={ctxPanel.aba === 'contexto'} aria-controls="painel-ctx-contexto"
+            onclick={() => (ctxPanel.aba = 'contexto')}>
+      {m.ctx_aba_contexto()}
+    </button>
+    <button type="button" id="aba-ctx-arquivos" class="aba" class:sel={ctxPanel.aba === 'arquivos'}
+            role="tab" aria-selected={ctxPanel.aba === 'arquivos'} aria-controls="painel-ctx-arquivos"
+            onclick={() => (ctxPanel.aba = 'arquivos')}>
+      {m.arq_aba()}
+    </button>
+    {#if temNav}
+    <button type="button" id="aba-ctx-navegador" class="aba" class:sel={ctxPanel.aba === 'navegador'}
+            role="tab" aria-selected={ctxPanel.aba === 'navegador'} aria-controls="painel-ctx-navegador"
+            onclick={() => (ctxPanel.aba = 'navegador')}>
+      {m.ctx_navegador()}
+    </button>
+    {/if}
+  </div>
+
+  {#if ctxPanel.aba === 'navegador' && temNav}
+  <!-- O navegador é uma ABA da coluna: trocar pra Contexto/Arquivos esconde o view (desmonta o
+       painel -> nav-hide; o agente segue usando via CDP), nunca fecha. O × dele é quem fecha. -->
+  <div id="painel-ctx-navegador" role="tabpanel" aria-labelledby="aba-ctx-navegador" class="ctx-tab ctx-tab-nav">
+    <NavegadorPane navKey={navChave} />
+  </div>
+  {/if}
+
+  {#if ctxPanel.aba === 'contexto'}
+  <div id="painel-ctx-contexto" role="tabpanel" aria-labelledby="aba-ctx-contexto" class="ctx-tab">
+
   <!-- A secao "Estado" saiu: repetia o chip do header a 60px de distancia, mesma palavra e mesma
        cor. O detalhe e o chip do loop subiram pro header, que ja era o lugar do estado. -->
 
   <div class="ctx-scroll">
+  <!-- SAUDE: Contexto + Limites num bloco so (eram duas secoes irmaos com a mesma cara).
+       Vem primeiro: responde "esta tudo bem?" antes de qualquer detalhe. -->
+  <section class="sec-metric">
+    <span class="section-label">{m.ctx_saude()}</span>
+    {#if status?.ctxPct != null}
+      <div class="metric-row">
+        <span>
+          {m.ctx_contexto()} · {#if status.ctxUsed != null && status.ctxTotal}{m.ctx_usado_de_total({ usado: ctxWindow(status.ctxUsed), total: ctxWindow(status.ctxTotal) })}{:else}{status.ctxTotal ? `${ctxWindow(status.ctxTotal)} ${m.ctx_tokens()}` : m.ctx_janela()}{/if}
+        </span>
+        <strong>{Math.round(status.ctxPct)}%</strong>
+      </div>
+      <div class="progress tone-{ctxTone}" aria-label={m.ctx_pct_usado({ n: Math.round(status.ctxPct) })}>
+        <span style:width={`${status.ctxPct}%`}></span>
+      </div>
+      {#if status.turnIn != null || status.turnOut != null}
+        <p class="turn-tokens">
+          {m.ctx_ultimo_turno()} {ctxWindow(status.turnIn ?? 0)} {m.ctx_entrada()} · {status.turnOut != null ? tokenShort(status.turnOut) : '—'} {m.ctx_saida()}
+        </p>
+      {/if}
+    {:else}
+      <p>{m.ctx_medicao_indisponivel()}</p>
+    {/if}
+    {#if hasRate}
+      <div class="saude-limites">
+        <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant="bars" />
+      </div>
+    {/if}
+  </section>
+
   {#if session?.plan_name || session?.plan_hidden}
     <!-- Só quando ha plano ativo nesta sessao (Task 5b) — sem gate a secao apareceria vazia pra
          toda sessao sem superpowers rodando. plan_hidden entra junto: com "nenhum plano" escolhido
@@ -281,48 +407,36 @@ import * as m from '../paraglide/messages';
     </section>
   {/if}
 
-  <section class="sec-metric">
-    <span class="section-label">{m.ctx_contexto()}</span>
-    {#if status?.ctxPct != null}
-      <!-- Mesma forma das barras de Limites: qualificador a esquerda, leitura a direita. Antes o
-           Contexto punha o numero a esquerda e os Limites a direita — dois medidores irmaos com a
-           coluna de leitura em lados opostos. -->
-      <div class="metric-row">
-        <span>
-          {#if status.ctxUsed != null && status.ctxTotal}{m.ctx_usado_de_total({ usado: ctxWindow(status.ctxUsed), total: ctxWindow(status.ctxTotal) })}{:else}{status.ctxTotal ? `${ctxWindow(status.ctxTotal)} ${m.ctx_tokens()}` : m.ctx_janela()}{/if}
+  {#if status?.repo}
+  <section class="sec-break">
+    <span class="section-label">{m.ctx_repositorio()}</span>
+    {#if onOpenGit}
+      <button type="button" class="sec-open" onclick={onOpenGit} aria-label={m.ctx_abrir_git({ n: status.repo })}>
+        <span class="sec-open-body">
+          <strong class="mono">{status.repo} · {status.branch ?? m.ctx_sem_branch()}</strong>
+          {#if status.dirty}<p class="mono">{m.ctx_alteracoes_locais()}</p>{/if}
         </span>
-        <strong>{Math.round(status.ctxPct)}%</strong>
-      </div>
-      <div class="progress tone-{ctxTone}" aria-label={m.ctx_pct_usado({ n: Math.round(status.ctxPct) })}>
-        <span style:width={`${status.ctxPct}%`}></span>
-      </div>
-      {#if status.turnIn != null || status.turnOut != null}
-        <!-- Tokens do ULTIMO turno: o dado ja vinha na statusline crua (💬 271k/590) e so a barra
-             de percentual chegava aqui. E o que responde "por que o contexto pulou". -->
-        <p class="turn-tokens">
-          {m.ctx_ultimo_turno()} {ctxWindow(status.turnIn ?? 0)} {m.ctx_entrada()} · {status.turnOut != null ? tokenShort(status.turnOut) : '—'} {m.ctx_saida()}
-        </p>
-      {/if}
+        <span class="sec-open-arrow" aria-hidden="true">›</span>
+      </button>
     {:else}
-      <p>{m.ctx_medicao_indisponivel()}</p>
+      <strong class="mono">{status.repo} · {status.branch ?? m.ctx_sem_branch()}</strong>
+      {#if status.dirty}<p class="mono">{m.ctx_alteracoes_locais()}</p>{/if}
     {/if}
   </section>
-
-  {#if hasRate}
-    <section class="sec-metric">
-      <span class="section-label">{m.ctx_limites()}</span>
-      <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant="bars" />
-    </section>
   {/if}
 
+  <!-- EQUIPE: Grupo + Orquestração fundidos. Sem par e sem porta de orquestração a seção nem
+       existe — era um bloco morto pra quem raramente pareia. A linha de orquestração fica sempre
+       que há onOpenOrq: é a única porta pro time padrão sem grupo. -->
+  {#if pairPeers?.length || onOpenPair || onOpenOrq}
   <section class="sec-break">
-    <span class="section-label">{m.ctx_grupo()}</span>
+    <span class="section-label">{m.ctx_equipe()}</span>
     {#if pairPeers?.length}
       {#if openGroup}
         <button type="button" class="sec-open" onclick={openGroup}
                 aria-label={soloPeer && onOpenPeerChat ? m.ctx_abrir_sessao_modal({ n: soloPeer }) : m.ctx_abrir_par({ n: pairPeers.join(', ') })}>
           <span class="sec-open-body">
-            <strong>🤝 {pairPeers.join(' · ')}</strong>
+            <strong><GroupGlyph size={13} /> {pairPeers.join(' · ')}</strong>
             <p>{soloPeer && onOpenPeerChat ? m.ctx_abrir_conversa_dele() : `${pairPeers.length + 1} ${m.ctx_sessoes_pareadas()}`}</p>
           </span>
           <span class="sec-open-arrow" aria-hidden="true">›</span>
@@ -335,60 +449,46 @@ import * as m from '../paraglide/messages';
           </button>
         {/if}
       {:else}
-        <strong>🤝 {pairPeers.join(' · ')}</strong>
+        <strong><GroupGlyph size={13} /> {pairPeers.join(' · ')}</strong>
         <p>{pairPeers.length + 1} {m.ctx_sessoes_pareadas()}</p>
       {/if}
     {:else if onOpenPair}
-      <!-- Sem par, a secao era so a frase "sessao independente" — e justamente aqui que se pensa em
-           parear. Mesmo alvo clicavel das outras secoes, abrindo a PairSheet no modo "Parear com
-           sessao". -->
       <button type="button" class="sec-open" onclick={onOpenPair} aria-label={m.ctx_parear_outra()}>
         <span class="sec-open-body">
-          <strong>{m.ctx_sessao_independente()}</strong>
-          <p>{m.ctx_parear_outra()}</p>
+          <strong>{m.ctx_parear_outra()}</strong>
         </span>
         <span class="sec-open-arrow" aria-hidden="true">›</span>
       </button>
-    {:else}
-      <p>{m.ctx_sessao_independente()}</p>
     {/if}
-  </section>
-
-  {#if status?.repo}
-  <section class="sec-break">
-    <span class="section-label">{m.ctx_repositorio()}</span>
-    {#if onOpenGit}
-      <button type="button" class="sec-open" onclick={onOpenGit} aria-label={m.ctx_abrir_git({ n: status.repo })}>
+    {#if onOpenOrq}
+      <button type="button" class="sec-open" onclick={onOpenOrq} aria-label={m.ctx_orquestracao()}>
         <span class="sec-open-body">
-          <strong class="mono">{status.repo}</strong>
-          <p class="mono">{status.branch ?? m.ctx_sem_branch()}{status.dirty ? ` · ${m.ctx_alteracoes_locais()}` : ''}</p>
+          <strong>{m.ctx_orquestracao_titulo()}</strong>
+          <p>{m.ctx_orquestracao_desc()}</p>
         </span>
         <span class="sec-open-arrow" aria-hidden="true">›</span>
       </button>
-    {:else}
-      <strong class="mono">{status.repo}</strong>
-      <p class="mono">{status.branch ?? m.ctx_sem_branch()}{status.dirty ? ` · ${m.ctx_alteracoes_locais()}` : ''}</p>
     {/if}
   </section>
   {/if}
 
+  <!-- EXECUÇÃO sem modelo/esforço: isso já está nas pills do composer (onde se troca). Aqui fica
+       o que não está em mais nenhum lugar — provider e máquina. -->
   <section class="sec-break">
     <span class="section-label">{m.ctx_execucao()}</span>
     {#if onProviderTap}
       <button type="button" class="provider-tap" onclick={onProviderTap} aria-label={m.ctx_limites_provider()}>
-        {providerName(provider)}
+        {providerName(provider)}{serverLabel ? ` · ${serverLabel}` : ''}
       </button>
     {:else}
-      <strong>{providerName(provider)}</strong>
+      <strong>{providerName(provider)}{serverLabel ? ` · ${serverLabel}` : ''}</strong>
     {/if}
-    {#if status?.model}<p>{status.model}{status.effort ? ` · ${status.effort}` : ''}</p>{/if}
-    {#if serverLabel}<p>{serverLabel}</p>{/if}
   </section>
   </div>
   </div>
-  {:else}
+  {:else if ctxPanel.aba === 'arquivos'}
   <div id="painel-ctx-arquivos" role="tabpanel" aria-labelledby="aba-ctx-arquivos" class="ctx-tab">
-    <FilesPanel sessionName={sessionName} {serverId} desktop={true} />
+    <FilesPanel sessionName={sessionName} {serverId} desktop={true} {events} {histGap} {cwd} />
   </div>
   {/if}
   {/if}
@@ -487,6 +587,10 @@ import * as m from '../paraglide/messages';
     display: flex;
     flex-direction: column;
   }
+  /* A aba Navegador deixa 8px à esquerda: o handle de redimensionar da coluna (absolute, left:0,
+     6px) precisa ficar FORA do view nativo, senão o view cobre a divisória e o clique morre —
+     era o "depois que abre uma página não dá pra redimensionar". */
+  .ctx-tab-nav { margin-left: 8px; }
   .ctx-scroll {
     flex: 1;
     min-height: 0;
@@ -555,47 +659,49 @@ import * as m from '../paraglide/messages';
 
   /* Faixa de acoes (ex-botoes da NavBar): icones sozinhos pediam memorizacao. Em 264px o par
      icone+rotulo cabe em duas colunas sem virar grade de cards. */
+  /* Barra de acoes: uma linha so, um bloco por acao (icone em cima, rotulo curto embaixo), dentro
+     de uma unica superficie — le como toolbar do painel, nao como quatro cards. Quantas couberem
+     (o Atividade so existe as vezes): auto-fit divide a linha por igual. */
   .ctx-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-2);
-    padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid var(--border-subtle);
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    gap: 2px;
+    margin: 0 var(--space-4) var(--space-3);
+    padding: 2px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
   }
-  /* Numero IMPAR de acoes (o botao Atividade so existe as vezes): o ultimo ficava pendurado numa
-     coluna com um buraco do lado. Ele passa a ocupar a linha inteira, entao a faixa fecha em bloco
-     em vez de terminar num degrau. */
-  .ctx-action:last-child:nth-child(odd) { grid-column: 1 / -1; }
 
   .ctx-action {
     position: relative;
     min-width: 0;
-    min-height: 44px;
-    display: inline-flex;
+    min-height: 50px;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
-    gap: var(--space-2);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-inset);
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 2px 5px;
+    border: 0;
+    border-radius: calc(var(--radius-md) - 3px);
+    background: transparent;
     color: var(--text-secondary);
-    font-size: var(--text-xs);
+    font-size: 10.5px;
     font-weight: 600;
-    transition: background 180ms var(--ease-out), border-color 180ms var(--ease-out), color 180ms var(--ease-out);
+    letter-spacing: 0.01em;
+    transition: background 160ms var(--ease-out), color 160ms var(--ease-out);
   }
-  .ctx-action:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-default);
-    color: var(--text-primary);
-  }
+  .ctx-action:hover { background: var(--surface-raised); color: var(--text-primary); }
   .ctx-action:active { background: var(--bg-hover); }
-  .ctx-action svg { flex-shrink: 0; }
+  .ctx-action:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .ctx-action svg { flex-shrink: 0; width: 18px; height: 18px; }
   .ctx-action span:not(.activity-badge) {
-    min-width: 0;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1;
   }
 
   .terminal-btn { color: var(--text-secondary); }
@@ -695,6 +801,9 @@ import * as m from '../paraglide/messages';
   }
 
   .sec-metric + .sec-metric { padding-top: var(--space-3); }
+  /* Limites dentro da seção Saúde: respiro entre a barra de contexto e as de cota, sem régua
+     (continuam sendo o mesmo assunto). */
+  .saude-limites { margin-top: var(--space-3); }
   .sec-break {
     padding-top: var(--space-4);
     border-top: 1px solid var(--border-subtle);

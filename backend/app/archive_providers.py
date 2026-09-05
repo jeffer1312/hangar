@@ -1,11 +1,13 @@
-"""Onde Pi, Kimi e Codex guardam conversa MORTA -- o equivalente ao projects/ do Claude, que e o
-unico que o app.archive conhecia.
+"""Onde Pi, omp, Kimi e Codex guardam conversa MORTA -- o equivalente ao projects/ do Claude, que e
+o unico que o app.archive conhecia.
 
 Cada um guarda de um jeito, e nenhum guarda como o Claude:
 
-- **Pi**: `~/.pi/agent/sessions/<slug-do-cwd>/<ts>_<uuid>.jsonl`. O slug NAO e reversivel pro cwd
+- **Pi** (e o fork **omp**, mesmo formato, raiz propria via `pi_sessions.sessions_root`):
+  `~/.pi/agent/sessions/<slug-do-cwd>/<ts>_<uuid>.jsonl`. O slug NAO e reversivel pro cwd
   (barra vira traco), entao o cwd sai de dentro do arquivo, na 1a linha (`{"type":"session",...}`).
-  Subagente escreve em `<stem>/<taskId>/run-N/session.jsonl` e nao e conversa -- fica de fora.
+  Subagente escreve em `<stem>/<taskId>/run-N/session.jsonl` (Pi) ou `<stem>/<Nome>.jsonl` (omp)
+  e nao e conversa -- fica de fora do glob raso.
 - **Kimi**: `~/.kimi-code/sessions/<wd_...>/<session_id>/agents/main/wire.jsonl`, e existe um
   `session_index.jsonl` no home que ja mapeia sessionId -> sessionDir + workDir. E a unica fonte
   aqui que da o cwd SEM abrir transcript nenhum.
@@ -27,9 +29,13 @@ from app.models import ChatEvent
 
 _log = logging.getLogger("hangar.archive_providers")
 
-PROVIDERS = ("pi", "kimi", "codex")
+PROVIDERS = ("pi", "omp", "kimi", "codex")
 
-_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# Publico: e o id que identifica uma conversa nestes providers, e quem retoma uma do Arquivo tem
+# que validar pelo MESMO criterio (api.resume_archived, registry.create). Duas definicoes de "id
+# valido" faziam um id de 36 caracteres fora do formato passar numa e cair na outra, trocando a
+# mensagem que explica o problema por um "caminho invalido" generico.
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _KIMI_SID_RE = re.compile(r"^session_[0-9a-fA-F-]{36}$")
 
 
@@ -70,9 +76,9 @@ def _cwd_do_cabecalho(p: Path, campo: Callable[[dict], Optional[str]], max_linha
 
 
 # ── Pi ────────────────────────────────────────────────────────────────────────
-def _pi_conversas() -> list[Conversa]:
+def _pi_conversas(provider: str = "pi") -> list[Conversa]:
     from app.adapters.pi import sessions as pi_sessions
-    raiz = pi_sessions.sessions_root()
+    raiz = pi_sessions.sessions_root(provider)
     out: list[Conversa] = []
     try:
         pastas = [d for d in raiz.iterdir() if d.is_dir()]
@@ -83,19 +89,19 @@ def _pi_conversas() -> list[Conversa]:
         # `<stem>/<taskId>/run-N/session.jsonl` dos subagentes, que nao e conversa.
         for f in pasta.glob("*.jsonl"):
             sid = f.stem.split("_", 1)[-1]
-            if not _UUID_RE.match(sid):
+            if not UUID_RE.match(sid):
                 continue
             cwd = _cwd_do_cabecalho(f, lambda o: o.get("cwd") if o.get("type") == "session" else None)
-            out.append(Conversa("pi", cwd, sid, f, _mtime(f)))
+            out.append(Conversa(provider, cwd, sid, f, _mtime(f)))
     return out
 
 
-def _pi_jsonl(session_id: str) -> Optional[Path]:
+def _pi_jsonl(session_id: str, provider: str = "pi") -> Optional[Path]:
     from app.adapters.pi import sessions as pi_sessions
-    if not _UUID_RE.match(session_id):
+    if not UUID_RE.match(session_id):
         raise ValueError("session_id invalido")
     try:
-        achados = sorted(pi_sessions.sessions_root().glob(f"*/*_{session_id}.jsonl"),
+        achados = sorted(pi_sessions.sessions_root(provider).glob(f"*/*_{session_id}.jsonl"),
                          key=_mtime, reverse=True)
     except OSError:
         return None
@@ -161,14 +167,14 @@ def _codex_conversas() -> list[Conversa]:
         return []
     for f in arquivos:
         sid = f.stem[-36:]
-        if not _UUID_RE.match(sid):
+        if not UUID_RE.match(sid):
             continue
         out.append(Conversa("codex", _cwd_do_cabecalho(f, _codex_cwd), sid, f, _mtime(f)))
     return out
 
 
 def _codex_jsonl(session_id: str) -> Optional[Path]:
-    if not _UUID_RE.match(session_id):
+    if not UUID_RE.match(session_id):
         raise ValueError("session_id invalido")
     try:
         achados = sorted(_codex_raiz().glob(f"*/*/*/rollout-*-{session_id}.jsonl"),
@@ -179,8 +185,10 @@ def _codex_jsonl(session_id: str) -> Optional[Path]:
 
 
 # ── Fachada ───────────────────────────────────────────────────────────────────
-_LISTAR = {"pi": _pi_conversas, "kimi": _kimi_conversas, "codex": _codex_conversas}
-_RESOLVER = {"pi": _pi_jsonl, "kimi": _kimi_jsonl, "codex": _codex_jsonl}
+_LISTAR = {"pi": _pi_conversas, "omp": lambda: _pi_conversas("omp"),
+           "kimi": _kimi_conversas, "codex": _codex_conversas}
+_RESOLVER = {"pi": _pi_jsonl, "omp": lambda sid: _pi_jsonl(sid, "omp"),
+             "kimi": _kimi_jsonl, "codex": _codex_jsonl}
 
 
 def conversas() -> list[Conversa]:
@@ -208,7 +216,7 @@ def jsonl_de(provider: str, session_id: str) -> Path:
 
 
 def parse_obj(provider: str, obj: dict) -> list[ChatEvent]:
-    if provider == "pi":
+    if provider in ("pi", "omp"):
         from app.adapters.pi import transcript as pi_transcript
         return pi_transcript.parse_obj(obj)
     if provider == "kimi":

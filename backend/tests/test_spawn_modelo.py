@@ -18,13 +18,29 @@ def test_pi_spawn_com_escolha_usa_thinking():
         "pi", "--session-id", "sid", "--model", "kimi-coding/k3", "--thinking", "high"]
 
 
-def test_codex_spawn_continua_recusando_com_a_assinatura_nova():
-    """Sem os kwargs novos isso daria TypeError de argumento inesperado; com eles, a recusa de
-    hoje é preservada. O teste prova as duas coisas de uma vez."""
-    with pytest.raises(NotImplementedError):
-        get_adapter("codex").spawn_command("/tmp", "sid", None, None, None)
-    with pytest.raises(NotImplementedError):
-        get_adapter("codex").spawn_command("/tmp", "sid", None, None, "plan")
+def test_codex_spawn_devolve_o_lancador():
+    """O Codex nasce como os outros: um comando no pane, o lançador."""
+    assert get_adapter("codex").spawn_command("/tmp", "sid", None, None, None) == [
+        "hangar-codex-tui", "--cwd", "/tmp"]
+    assert get_adapter("codex").spawn_command(
+        "/tmp", "sid", initial_prompt="revise") == [
+            "hangar-codex-tui", "--cwd", "/tmp", "--prompt", "revise"]
+
+
+def test_codex_spawn_leva_a_escolha_pro_lancador():
+    """A escolha vai pro lançador, não vira flag do `codex` aqui: o esforço não é flag do binário
+    (é `-c model_reasoning_effort=`) e quem sabe traduzir isso é o lançador. permission_mode segue
+    sendo do Claude e é ignorado."""
+    assert get_adapter("codex").spawn_command(
+        "/tmp", "sid", "gpt-5.6-luna", "high", "plan") == [
+            "hangar-codex-tui", "--cwd", "/tmp", "--model", "gpt-5.6-luna", "--effort", "high"]
+
+
+def test_codex_spawn_com_id_hostil_nao_chega_no_comando():
+    with pytest.raises(ValueError):
+        get_adapter("codex").spawn_command("/tmp", "sid", model="gpt-5 $(id)", effort=None)
+    with pytest.raises(ValueError):
+        get_adapter("codex").spawn_command("/tmp", "sid", model="gpt-5", effort="high; rm -rf /")
 
 
 def test_id_hostil_nao_chega_no_comando():

@@ -9,7 +9,9 @@ grupo (não muda quando membro entra/sai) — nomeia o arquivo de CONTRATO compa
 legado {"peer": "x"} (1:1) é lido como {"peers": ["x"]}. O efeito de comportamento (as sessões se
 falarem via hangar-send) vem do PROMPT que a API injeta; o sidecar persiste o vínculo pro badge/unpair."""
 import json
+import shutil
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -27,6 +29,16 @@ _LOCK = threading.Lock()
 class PairMixError(ValueError):
     """Tentativa de misturar pareamento cross-server (1:1) com grupo local — proibido (ver
     join_group). O caller (api.py) traduz pra HTTP 400."""
+
+
+class TaskConflito(ValueError):
+    """O grupo já tem tarefa e o join trouxe outra sem pedir a troca. Cada --pair de um árbitro
+    sobrescrevia a tarefa de TODOS os membros calado (a skill orquestrar avisava contra isso na
+    doc, que é sinal de que a API devia proteger). O caller traduz pra HTTP 409."""
+
+    def __init__(self, existente: str):
+        super().__init__(f"o grupo já tem tarefa: {existente!r}")
+        self.existente = existente
 
 
 def _pair_dir() -> Path:
@@ -112,16 +124,17 @@ def restore(snap: dict[str, dict | None]) -> None:
         _restore_locked(snap)
 
 
-def join_group(name: str, others: list[str], task: str = "") -> tuple[list[str], dict[str, dict | None]]:
+def join_group(name: str, others: list[str], task: str = "", substituir_task: bool = False) -> tuple[list[str], dict[str, dict | None]]:
     """Une os grupos de `name` e de CADA sessão em `others` num só (N sessões soltas = grupo novo)
     e devolve (membros finais, snapshot pré-join pra rollback). snapshot+join na MESMA seção
     crítica: em seções separadas, um join concorrente na janela entre elas entrava no grupo sem
     entrar no snapshot — e o restore() de um rollback nunca o reverteria (grupo fantasma parcial).
 
-    task informada substitui a anterior; vazia herda a primeira existente. gid: mantém o primeiro
-    grupo existente (estável pro arquivo de contrato); contratos dos grupos absorvidos são
-    ANEXADOS ao sobrevivente (nenhum combinado se perde órfão no disco). Escrita parcial (ex:
-    disco cheio no 4º de 5 sidecars) restaura o snapshot e propaga — nunca grupo assimétrico."""
+    task só entra em grupo sem tarefa; diferente da existente exige `substituir_task`, senão
+    `TaskConflito`; vazia herda. gid: mantém o primeiro grupo existente (estável pro arquivo de
+    contrato); contratos dos grupos absorvidos são ANEXADOS ao sobrevivente (nenhum combinado se
+    perde órfão no disco). Escrita parcial (ex: disco cheio no 4º de 5 sidecars) restaura o
+    snapshot e propaga — nunca grupo assimétrico."""
     with _LOCK:
         all_names = list(dict.fromkeys([name, *others]))
         infos = [_members_of(n) for n in all_names]
@@ -139,7 +152,11 @@ def join_group(name: str, others: list[str], task: str = "") -> tuple[list[str],
                 "pareamento cross-server é 1:1 (uma sessão local + um peer remoto); uma sessão já "
                 "pareada cross-server não entra em grupo local nem pareia com outro remoto")
         snap = {m: PairLink(m).get() for m in members}
-        final_task = task.strip() or next((t for _, t, _ in infos if t), "")
+        existente = next((t for _, t, _ in infos if t), "")
+        pedida = task.strip()
+        if pedida and existente and pedida != existente and not substituir_task:
+            raise TaskConflito(existente)   # antes de qualquer mutação
+        final_task = pedida if (pedida and (not existente or substituir_task)) else existente
         gids = list(dict.fromkeys([g for _, _, g in infos if g]))
         gid = gids[0] if gids else uuid.uuid4().hex[:8]
         for loser in gids[1:]:
@@ -160,24 +177,48 @@ def join_with_snapshot(a: str, b: str, task: str = "") -> tuple[list[str], dict[
 def _merge_contract(loser_gid: str, survivor_gid: str) -> None:
     """Anexa o contrato do grupo absorvido ao do sobrevivente (best-effort; merge de grupos não
     pode falhar por causa de arquivo de contrato)."""
-    try:
-        loser = _pair_dir() / f"grupo-{loser_gid}.md"
-        content = loser.read_text(encoding="utf-8").strip()
-        if not content:
-            return
-        survivor = _pair_dir() / f"grupo-{survivor_gid}.md"
-        old = survivor.read_text(encoding="utf-8") if survivor.exists() else ""
-        survivor.write_text(
-            old + f"\n\n## Contrato herdado do grupo {loser_gid} (merge)\n\n" + content + "\n",
-            encoding="utf-8")
-        loser.unlink(missing_ok=True)
-    except OSError:
-        pass
+    # `regras-` (o que o time lê) segue o `grupo-` (o registro do árbitro): sem isto o merge
+    # deixava o regras-<loser> órfão, o mesmo furo que o leave() já fechava só pro grupo-.
+    for prefixo in ("grupo", "regras"):
+        try:
+            loser = _pair_dir() / f"{prefixo}-{loser_gid}.md"
+            content = loser.read_text(encoding="utf-8").strip()
+            if not content:
+                continue
+            survivor = _pair_dir() / f"{prefixo}-{survivor_gid}.md"
+            old = survivor.read_text(encoding="utf-8") if survivor.exists() else ""
+            survivor.write_text(
+                old + f"\n\n## Contrato herdado do grupo {loser_gid} (merge)\n\n" + content + "\n",
+                encoding="utf-8")
+            loser.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def join(a: str, b: str, task: str = "") -> list[str]:
     """Atalho de join_with_snapshot pra quem não precisa do snapshot (testes/uso simples)."""
     return join_with_snapshot(a, b, task)[0]
+
+
+def _arquivo_dir() -> Path:
+    # O cofre (~/.hangar), não o config dir de uma conta — mesma razão do orq.raiz_padrao().
+    return Path.home() / ".hangar" / "pair-arquivo"
+
+
+def _arquivar_contratos(gid: str) -> None:
+    """Último membro saiu: o contrato vai pro arquivo em vez de sumir — dois kills seguidos apagavam
+    as decisões de um trabalho inteiro. Best-effort: falha aqui não desfaz um leave que já valeu."""
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    for prefixo in ("grupo", "regras"):
+        src = _pair_dir() / f"{prefixo}-{gid}.md"
+        try:
+            if not src.is_file():
+                continue
+            dst = _arquivo_dir()
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst / f"{prefixo}-{gid}-{ts}.md"))
+        except OSError:
+            pass
 
 
 def leave(name: str) -> list[str]:
@@ -186,8 +227,8 @@ def leave(name: str) -> list[str]:
     2º companheiro) restaura o estado anterior e propaga — sem isto sobrava companheiro-fantasma
     apontando pra quem já saiu.
 
-    Grupo dissolvido de vez (ninguém mais dentro) leva junto o arquivo de CONTRATO — senão o
-    grupo-<gid>.md fica órfão no disco pra sempre, sem nenhum sidecar apontando pra ele."""
+    Grupo dissolvido de vez (ninguém mais dentro) arquiva o contrato em `~/.hangar/pair-arquivo/`
+    (sem sidecar apontando pra ele, no lugar original seria órfão; apagar perdia decisões)."""
     with _LOCK:
         link = PairLink(name).get()
         if not link:
@@ -207,13 +248,10 @@ def leave(name: str) -> list[str]:
         except OSError:
             _restore_locked(snap)
             raise
-        # Fora do try: apagar contrato é faxina, best-effort — falha aqui não pode desfazer um
+        # Fora do try: arquivar contrato é faxina, best-effort — falha aqui não pode desfazer um
         # unpair que já deu certo (restore ressuscitaria o par).
         if len(peers) == 1 and link.get("gid"):
-            try:
-                (_pair_dir() / f"grupo-{link['gid']}.md").unlink(missing_ok=True)
-            except OSError:
-                pass
+            _arquivar_contratos(link["gid"])
         return peers
 
 
@@ -231,6 +269,20 @@ def rename_pair(old: str, new: str) -> None:
             if st:
                 PairLink(p).set([new if x == old else x for x in st["peers"]],
                                 st.get("task", ""), st.get("gid", ""))
+
+
+def referenciados_locais() -> set[str]:
+    """Nomes LOCAIS que têm sidecar ou aparecem como peer em algum — os candidatos a fantasma
+    quando a sessão morre fora do app. O dono entra porque num par cross-server ele é o único
+    local (o peer é 'srv::x', que não se vê daqui e fica de fora)."""
+    with _LOCK:
+        out: set[str] = set()
+        for f in _pair_dir().glob("*.json"):
+            st = PairLink(f.stem).get()
+            if st:
+                out.add(f.stem)
+                out.update(p for p in st["peers"] if "::" not in p)
+        return out
 
 
 def contract_path_for(name: str) -> Path | None:

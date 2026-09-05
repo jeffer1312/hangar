@@ -15,6 +15,9 @@ const store = new Map<string, string>();
 (globalThis as any).window = { location: (globalThis as any).location };
 
 const { TermSocket, termUrlForServer, sessionExistsOnServer, RESIZE_DEBOUNCE_MS } = await import('./term');
+// term.ts só importa TIPO de auth.ts, então auth (e as 2400 mensagens do paraglide do front) carregaria
+// a frio dentro do primeiro teste e estouraria os 5s. Carrega aqui, na coleta.
+await import('./auth');
 
 class FakeWS {
   static ultimo: FakeWS;

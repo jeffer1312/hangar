@@ -16,9 +16,11 @@ from app.models import ChatEvent, scrub_surrogates
 
 _log = logging.getLogger("hangar.pi_transcript")
 
-# Blocos que nao viram bolha de chat. `thinking` fica de fora igual no Claude: e rascunho interno,
-# nao resposta.
-_DROPPED_BLOCK_TYPES = {"thinking"}
+# Blocos que nao viram bolha de chat. Vazio desde 29/08/2026: o `thinking`, que ficava de fora por
+# ser rascunho interno, hoje vira ChatEvent(kind="thinking") — o front o mostra RECOLHIDO, numa
+# linha so, entao ele nao disputa espaco com a resposta. No Pi o texto e o raciocinio CRU (nao o
+# resumo que a API da Anthropic devolve), e por isso pode ser longo.
+_DROPPED_BLOCK_TYPES: set[str] = set()
 
 # O Pi grava o texto JA COLORIDO no JSONL: toda resposta final termina com
 # "\x1b[38;2;136;136;136m✻ Turn took 2s\x1b[0m", e alguns resultados de tool tambem vem com cor.
@@ -97,6 +99,11 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             if t == "text" and (b.get("text") or "").strip():
                 out.append(ChatEvent(kind="assistant_msg", id=_sub_id(node_id, k),
                                      text=_clean(b["text"]), cache_read=cache_read, ts=ts))
+            elif t == "thinking" and isinstance(b.get("thinking"), str) and b["thinking"].strip():
+                # isinstance: campo de outro tipo faria `.strip()` levantar AttributeError, que o
+                # parse_line nao captura — e derrubaria o tail da sessao inteira.
+                out.append(ChatEvent(kind="thinking", id=_sub_id(node_id, k),
+                                     text=_clean(b["thinking"]), ts=ts))
             elif t == "toolCall":
                 args = b.get("arguments")
                 out.append(ChatEvent(kind="tool_use", id=_sub_id(node_id, k),
@@ -126,13 +133,18 @@ def parse_line(line: str) -> list[ChatEvent]:
 # O Pi nao tem hook de Claude pra capturar o AskUserQuestion (askq_capture.py), mas NAO PRECISA:
 # o toolCall cai no jsonl com os arguments COMPLETOS (texto, header, opcoes com descricao) no
 # instante da pergunta, e o toolResult so chega depois da resposta. Pendente = toolCall 'question'
-# sem toolResult com o mesmo toolCallId DEPOIS dele.
+# sem toolResult com o mesmo toolCallId DEPOIS dele. O omp, fork do Pi, escreve igual — so muda o
+# nome da tool (`ask`) e o shape dos arguments (ver o parametro `tool`).
 
 _PENDQ_TAIL_BYTES = 512 * 1024
 
 
-def read_pending_question(jsonl: str) -> dict | None:
-    """Os `arguments` do ultimo toolCall 'question' ainda sem resposta, ou None.
+def read_pending_question(jsonl: str, tool: str = "question") -> dict | None:
+    """Os `arguments` do ultimo toolCall `tool` ainda sem resposta, ou None.
+
+    `tool='ask'` e o omp: a ferramenta leva uma LISTA de perguntas e o resultado vem normalizado
+    pro shape do `question` do Pi (a PRIMEIRA pergunta), pro card do app e o drive do picker serem
+    os mesmos nos dois.
 
     Le so a CAUDA do jsonl: a pergunta pendente e sempre recente (o Pi inteiro para esperando ela,
     entao nada alem de 512KB a separa do fim). Malformado/ausente -> None, nunca levanta: quem
@@ -152,7 +164,7 @@ def read_pending_question(jsonl: str) -> dict | None:
     answered: set[str] = set()
     for line in lines:
         line = line.strip()
-        if not line or '"question"' not in line:
+        if not line or f'"{tool}"' not in line:
             continue
         try:
             obj = json.loads(line)
@@ -161,7 +173,7 @@ def read_pending_question(jsonl: str) -> dict | None:
         msg = obj.get("message") if isinstance(obj, dict) else None
         if not isinstance(msg, dict):
             continue
-        if msg.get("role") == "toolResult" and msg.get("toolName") == "question":
+        if msg.get("role") == "toolResult" and msg.get("toolName") == tool:
             cid = msg.get("toolCallId")
             if cid:
                 answered.add(cid)
@@ -172,12 +184,22 @@ def read_pending_question(jsonl: str) -> dict | None:
         if not isinstance(content, list):
             continue
         for b in content:
-            if (isinstance(b, dict) and b.get("type") == "toolCall" and b.get("name") == "question"
+            if (isinstance(b, dict) and b.get("type") == "toolCall" and b.get("name") == tool
                     and isinstance(b.get("arguments"), dict) and b.get("id")):
                 last_q = (b["id"], b["arguments"])
     if last_q is None or last_q[0] in answered:
         return None
-    return last_q[1]
+    args = last_q[1]
+    if tool == "ask":
+        # omp: lista de perguntas, e o picker mostra UMA por vez (a primeira). Shape inesperado ->
+        # None, nunca um card sem pergunta ou sem opcao.
+        qs = args.get("questions") if isinstance(args.get("questions"), list) else []
+        q0 = next((q for q in qs if isinstance(q, dict) and q.get("question")), None)
+        if q0 is None:
+            return None
+        return {"question": str(q0["question"]), "header": str(q0.get("header") or ""),
+                "options": [o for o in (q0.get("options") or []) if isinstance(o, dict) and o.get("label")]}
+    return args
 
 
 # Contexto que um hook do Claude injetou no turno, via a extensao claude-hooks-adapter.ts (ela roda

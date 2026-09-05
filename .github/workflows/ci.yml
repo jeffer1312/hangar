@@ -21,8 +21,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.14"
-      # alguns testes tocam o binario do tmux (mockado na maioria, mas presente por garantia)
-      - run: sudo apt-get update && sudo apt-get install -y tmux
+      # alguns testes tocam o binario do tmux (mockado na maioria, mas presente por garantia).
+      # ripgrep NAO e opcional: a busca entre sessoes (app/search.py) chama `rg` de verdade, e sem
+      # ele os testes de busca voltavam ZERO acerto — falha que so aparecia aqui, porque a maquina
+      # de quem desenvolve tem o rg como requisito do instalador.
+      - run: sudo apt-get update && sudo apt-get install -y tmux ripgrep
       - run: uv sync
       - run: uv run pytest -q
 
@@ -46,3 +49,44 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
+      # O build ja acontecia aqui e ia pro lixo. Guardado, ele vira o dist que o instalador baixa
+      # em vez de compilar na maquina de quem instala — que e o passo mais lento e o mais fragil
+      # (dois bugs de `--silent` em agosto/2026 morreram exatamente ai).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: frontend/dist
+          retention-days: 1
+
+  # Publica o dist numa release FIXA (`dist-latest`), reescrita a cada push na main. Job separado
+  # do `frontend` de proposito: os jobs de teste sao `contents: read` e devem continuar sendo — so
+  # este escreve. Nao roda em pull_request (nao ha o que publicar de um fork, e o token la e read).
+  publica-dist:
+    needs: frontend
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      # Dois arquivos, e o `.sha` existe pra o instalador NAO baixar 5MB a toa: ele le o sha
+      # (200 bytes), compara com o proprio HEAD e so entao baixa o tar. Dist de outro commit
+      # serve tela velha contra API nova, e esse defeito e mudo.
+      - run: |
+          tar -czf frontend-dist.tar.gz -C dist .
+          echo "${{ github.sha }}" > frontend-dist.sha
+      # `--clobber` porque a release e reescrita; `create ... || true` porque ela so nao existe na
+      # primeira vez. tar.gz e nao zip: o Windows 10+ ja traz `tar.exe`, entao os dois instaladores
+      # extraem com o MESMO comando.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view dist-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create dist-latest --repo "$GITHUB_REPOSITORY" \
+                 --title 'frontend compilado (topo da main)' \
+                 --notes 'Reescrita a cada push na main. O instalador baixa daqui em vez de compilar na maquina.'
+          gh release upload dist-latest frontend-dist.tar.gz frontend-dist.sha \
+            --repo "$GITHUB_REPOSITORY" --clobber

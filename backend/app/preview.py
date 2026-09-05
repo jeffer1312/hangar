@@ -10,7 +10,7 @@ from app.state import _RULE_RE, _is_boundary, _live_spinner
 # _dirs: MESMO cache de diretorios de config que a statusline usa, e pelo mesmo motivo (roda por
 # sessao, a cada poll). Reusado em vez de copiado — sao os mesmos diretorios e a mesma chave (o stem
 # do .jsonl); duas copias so dariam a chance de uma envelhecer.
-from app.statusline import _dirs as _config_dirs
+from app.statusline import dirs_de_config as _config_dirs
 
 _log = logging.getLogger("hangar.preview")
 
@@ -28,6 +28,10 @@ def _norm(s: str) -> str:
     # do .jsonl (markdown CRU): tira marcadores de markdown (crase * _ ~ # >) e colapsa espaço. Sem
     # tirar os marcadores, uma msg com formatação ("**Confirma**" vs "Confirma") não casava e o preview
     # já-commitado vazava como bolha duplicada. Usado pra suprimir preview já no transcript.
+    # Marcador de lista no INÍCIO da linha entra na mesma regra: a TUI pinta `- item` como
+    # `• item`, e sem tirar os dois o último bloco commitado voltava como bolha fantasma toda vez
+    # que o app abria a sessão. Só no início da linha pra hífen de prosa continuar contando.
+    s = re.sub(r"(?m)^\s*[-•◦▪]\s+", "", s)
     return re.sub(r"\s+", " ", re.sub(r"[`*_~#>]", "", s)).strip()
 # Bloco ● que e TOOL-CALL/STATUS, nao prosa: "● Bash(...)", "● Reading 4 files…", "● Running 1 shell
 # command…", "● Ran 1 shell command". Pular esses mantem o preview na ULTIMA PROSA -> a lista nao fica
@@ -98,6 +102,8 @@ _KIMI_SPINNER_RE = re.compile(r"^\s*[⠀-⣿\U0001f311-\U0001f318]")
 _KIMI_TODO_HEAD_RE = re.compile(r"^\s*Todo\s*$")
 
 _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,),
+                      # omp: fork do Pi, mesma moldura de composer.
+                      "omp": (_PI_BOX_RE,),
                       # Kimi desenha o composer com a MESMA caixa arredondada do Pi (medido num
                       # pane real, 0.34.0) -> a ancora de corte e a mesma. Mas a caixa e o rodape
                       # MAIS BAIXO: entre ela e a resposta ainda cabem o eco do prompt e a dica, e
@@ -314,7 +320,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
                 and not _painel_de_subagente(lines, i, corpo)
                 and not (provider == "kimi" and _KIMI_USED_RE.match(corpo))
                 and not (provider == "kimi" and _kimi_linha_de_todo(lines, i))
-                and not (provider == "pi" and _pi_bloco_de_tool(lines, i, corpo))):
+                and not (provider in ("pi", "omp") and _pi_bloco_de_tool(lines, i, corpo))):
             start = i
     if start < 0:
         return ""
@@ -385,11 +391,19 @@ def read_sidecar(stem: Optional[str]) -> Optional[str]:
         if not isinstance(text, str):
             continue
         if isinstance(ts, (int, float)) and time.time() - ts > _PREVIEW_MAX_AGE:
-            # Este e o descarte que importa operacionalmente: "a extensao morreu no meio do turno".
-            # Sem o log, quem for entender por que a previa ficou parada ate cair no pane nao tem o
-            # que procurar — os outros dois descartes desta funcao ja logam.
-            _log.debug("preview: sidecar velho descartado path=%s idade=%.0fs", f, time.time() - ts)
-            continue
+            if text:
+                # Este e o descarte que importa operacionalmente: "a extensao morreu no meio do
+                # turno". Sem o log, quem for entender por que a previa ficou parada ate cair no
+                # pane nao tem o que procurar — os outros dois descartes desta funcao ja logam.
+                _log.debug("preview: sidecar velho descartado path=%s idade=%.0fs",
+                           f, time.time() - ts)
+                continue
+            # "" NAO envelhece: e a resposta "nada em voo" do fim do turno, e descarta-la mandava o
+            # broker raspar o pane de uma sessao PARADA — o ultimo bloco commitado voltava como
+            # bolha fantasma ao reabrir o app. Preco aceito: extensao que morreu logo APOS o Stop
+            # deixa a sessao sem previa (nem pane) ate voltar a publicar; dai o log.
+            _log.debug("preview: sidecar vazio e velho, honrado mesmo assim path=%s idade=%.0fs",
+                       f, time.time() - ts)
         return text
     return None
 

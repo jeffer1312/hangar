@@ -19,6 +19,9 @@
   import CodexLimitsSheet from '../components/CodexLimitsSheet.svelte';
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
+  import OrquestracaoSheet from '../components/OrquestracaoSheet.svelte';
+  import { prefetchOrq } from '../lib/queries';
+  import { aoAquecer, segurarAquecimento, soltarAquecimento } from '../lib/aquecimento';
   // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
   // dentro. Só o render é recursivo — o modal só existe com `peerChat` preenchido, e ele nunca
   // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
@@ -27,19 +30,17 @@
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
-  import {
-    loopBadge, LOOP_TONE_COLOR, appendTail, hasSeam, prependOlder, especificidade, donoDaLinha,
-    type ChatEvent, type StateEvent, type StatsEvent, type State, type SessionInfo, type AskQuestionPayload, type AnswerItem, type Provider, type PlanDetail, type EventSourceLike,
-    pendingAskFromEvents, askPayloadFromToolUse
-  } from '@hangar/core';
+  import { navegadorPanel, marcarNavAberto, atualizarNavUrl } from '../lib/navegadorPanel.svelte';
+  import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
   import {
     getHistory,
     sendInput,
     steerSession,
     broadcast,
     selectOption,
+    submitSelected,
     interrupt,
-    openEventStream,
+    openEventStream, type EventSourceLike,
     getSessions,
     createSession,
     getWorkflows,
@@ -50,18 +51,24 @@
     isTimeoutError,
     getPlan,
     getConfig,
+    uploadUrl,
   } from '@hangar/core';
   import { formataErro } from '@hangar/core';
+  import { appendTail, hasSeam, prependOlder } from '@hangar/core';
+  import { especificidade, donoDaLinha } from '@hangar/core';
   import { parseStatusLine } from '@hangar/core';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '@hangar/core';
+  import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
+  import { workspaceSessionKey } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '@hangar/core';
   import * as diag from '../lib/diag';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
   import { ouvirTexto } from '../lib/ouvir';
   import { textoFalavelComCodigo } from '../lib/speakable';
+  import { segredos } from '../lib/segredos.svelte';
 
   interface Props {
     sessionName: string;
@@ -109,6 +116,20 @@
     publishWorkspaceActions = false, onWorkspaceActionsChange, nested = false,
     splitTab = false, onCloseSplit,
   }: Props = $props();
+
+  // Sessão abrindo: os aquecimentos de cache (aqui e no Composer) esperam a conversa pintar antes
+  // de tocar no backend. AQUI no corpo do script, e não num $effect: o corpo do pai roda antes de
+  // o Composer existir, e um $effect rodaria DEPOIS dos efeitos dele — tarde demais pra segurar.
+  // Solto no `finally` do loadHistory; ver lib/aquecimento pros números que motivaram isto.
+  // O nome fica preso numa const: é a MESMA chave que o `finally` do loadHistory precisa usar pra
+  // soltar. Um portão por sessão porque o app monta vários Chat ao mesmo tempo (split, chat do par).
+  // svelte-ignore state_referenced_locally
+  // Capturar o valor inicial é o certo AQUI, não um descuido: `sessionName` não muda dentro de uma
+  // instância — TODO `<Chat>` do app vive dentro de um `{#key}` pela sessão (App.svelte:483,
+  // DesktopShell.svelte:481/505, PairChatModal.svelte:23), justamente porque SSE e histórico ficam
+  // amarrados a ela. E o `finally` do loadHistory PRECISA soltar exatamente a mesma chave.
+  const sessaoDoPortao = sessionName;
+  segurarAquecimento(sessaoDoPortao);
 
   let events = $state<ChatEvent[]>([]);
 
@@ -281,7 +302,8 @@
     else localStorage.removeItem(draftKey);
   });
   // Preview AO VIVO do bloco de assistente em voo (lido do pane via SSE 'preview'). Texto-completo,
-  // full-replace; some quando o assistant_msg canonico (do .jsonl) cobre o texto, ou ao sair de working.
+  // full-replace; some quando o assistant_msg canonico (do .jsonl) cobre o texto — sair de working
+  // so agenda o drop (carencia abaixo), nunca apaga na hora.
   let previewText = $state('');
   // Texto da previa e markdown CRU (veio do agente: sidecar do Pi, deltas do Codex) e nao texto ja
   // pintado pela TUI. Decide se a bolha RENDERIZA -- ver AssistantBubble.
@@ -289,6 +311,20 @@
   // Previa INCREMENTAL (so cresce no fim): sidecar/deltas, ou a costura do pane do Kimi
   // (_costurar no backend). Libera a bolha sem o teto de 10 linhas do texto raspado.
   let previewFull = $state(false);
+  // Carencia entre o fim do turno e a bolha real: o Stop (hook) chega ANTES do tail do .jsonl
+  // entregar o assistant_msg, entao apagar a previa na hora abria um buraco de ~1-2s no meio da
+  // leitura e a bolha voltava re-animando. Sair de working AGENDA o drop; quem apaga de verdade
+  // e o swap atomico do assistant_msg. O timer so vence se o bloco nunca vier (turno so de
+  // ferramentas / interrompido) — a previa orfa nao pode ficar congelada pra sempre.
+  let previewDropTimer: ReturnType<typeof setTimeout> | undefined;
+  function dropPreviewSoon() {
+    if (previewDropTimer !== undefined || !previewText) return;
+    previewDropTimer = setTimeout(() => { previewDropTimer = undefined; previewText = ''; }, 5000);
+  }
+  function cancelPreviewDrop() {
+    clearTimeout(previewDropTimer);
+    previewDropTimer = undefined;
+  }
   let dockEl: HTMLElement | undefined = $state();
   // Altura real do dock (composer) -> vira padding da lista pra ultima msg sempre limpar o glass.
   let dockH = $state(150);
@@ -305,7 +341,11 @@
   let gitOpen = $state(false);
   let runOpen = $state(false);
   let runRunning = $state(false);
-  onMount(() => { getRunners(sessionName).then((r) => (runRunning = !!r.running)).catch(() => {}); });
+  // Só acende o indicador do botão Rodar — nada na tela depende dele pra abrir. Espera a conversa.
+  onMount(() => {
+    void aoAquecer(sessionName).then(() =>
+      getRunners(sessionName).then((r) => (runRunning = !!r.running)).catch(() => {}));
+  });
   let previewOpen = $state(false);
   let activityOpen = $state(false);
   // Menu "⋯" do celular: Rodar/Atividade saíram da NavBar pra sobrar largura pro nome da sessão.
@@ -411,6 +451,16 @@
   let forwardText = $state<string | null>(null);
   // Pareamento ("trabalhando juntas"): sheet + par atual derivado da lista já carregada.
   let pairOpen = $state(false);
+  let orqOpen = $state(false);
+  // Aquece o painel de Orquestração ao ENTRAR na sessão: o GET da política lê o disco e já foi
+  // medido em ~3s frio, então buscá-lo no toque do botão é o que fazia o painel abrir em spinner.
+  // Mesmo padrão do prefetch de modelos no Composer.
+  // DEPOIS do histórico (ver lib/aquecimento): disparado junto, esse mesmo GET de 3s era o maior
+  // ladrão da abertura — a conversa esperava a política que ninguém tinha pedido ainda.
+  $effect(() => {
+    const sn = sessionName;
+    void aoAquecer(sn).then(() => prefetchOrq(sn));
+  });
   // Membro do grupo aberto no modal (null = fechado). É string, não lista, de propósito: um modal
   // por vez mantém o teto em 2 SSE (este chat + o do par) e o navegador corta em ~6 por host.
   let peerChat = $state<string | null>(null);
@@ -440,6 +490,15 @@
 
   function startNew() {
     switcherOpen = false;
+    bastaoAlvo = null;
+    createOpen = true;
+  }
+
+  // Passagem de bastão pelo "⋯" do celular (a lista mobile não tem menu por sessão). Mesma folha de
+  // criar, aberta pra CONTINUAR esta conversa; o cwd sai da linha da sessão na lista agregada.
+  let bastaoAlvo = $state<{ name: string; cwd: string; serverId: string } | null>(null);
+  function passarBastaoDaqui() {
+    bastaoAlvo = { name: sessionName, cwd: planSession?.cwd ?? '', serverId: getActiveId() ?? '' };
     createOpen = true;
   }
 
@@ -451,7 +510,21 @@
   }
 
   // ── Atalhos de teclado (so desktop) ────────────────────────────────────────
-  let composerRef = $state<{ focus: () => void } | undefined>();
+  let composerRef = $state<{ focus: () => void; ditarArquivo: (f: File) => void } | undefined>();
+
+  // Anexo de audio de volta pro ditado: busca o arquivo que ja esta no servidor e entrega ao
+  // Composer, que transcreve de novo e abre a barra de versoes. O download acontece AQUI porque a
+  // sheet nao conhece o Composer, e o Composer so sabe lidar com File.
+  async function usarAnexoNoDitado(f: UploadFile) {
+    try {
+      const res = await fetch(uploadUrl(sessionName, f.filename));
+      if (!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      composerRef?.ditarArquivo(new File([blob], f.filename, { type: blob.type }));
+    } catch (e) {
+      error = `${m.anexos_erro_listar()} ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
 
   // Lista pra navegar sessao com Ctrl/Cmd+setas (desktop) e pra pilula "N aguardando" (mobile,
   // feature #4). Carregada no mount nos dois; no mobile reconsulta a cada 5s pra o contador da
@@ -537,7 +610,7 @@
     // evento) e dois ouvirTexto() disparavam juntos. O primeiro Chat montado vence; e
     // deterministico, embora no split o atalho sempre aja no painel principal.
     if (mod && e.shiftKey && e.code === 'Space') {
-      if (e.repeat) return;
+      if (e.repeat || !segredos.podeLer()) return;   // sem chave/comando de voz: atalho nem existe
       e.preventDefault();
       e.stopImmediatePropagation();
       ouvirUltimaRespostaVisivel();
@@ -596,6 +669,8 @@
   // "claude" e o caso comum e some do header; os demais ganham badge (providerBadge abaixo) e o
   // "codex" alem disso esconde controles Claude-only.
   const sessionProvider = $derived(allSessions.find((s) => s.name === sessionName)?.provider);
+  // Motor da sessão (null = conta Anthropic) — o Composer usa no placeholder ("Mensagem para …").
+  const sessionEngine = $derived(allSessions.find((s) => s.name === sessionName)?.engine ?? null);
   const isCodex = $derived(sessionProvider === 'codex');
   const sessionTracked = $derived(allSessions.find((s) => s.name === sessionName)?.tracked);
   // Kimi "sem id" e o estado NORMAL pre-1o-prompt: o Kimi so cria a sessao (id + wire.jsonl) no
@@ -656,23 +731,75 @@
   // abre o sheet/card nativo; o /answer do backend ramifica por provider e dirige o picker do Pi.
   // Pendente = tool_use 'question' sem tool_result com o mesmo id. (2026-08-04)
   // Kimi: mesmo desenho, mas o parser emite tool_name 'AskUserQuestion' com tool_input JA no shape
-  // do Claude ({questions: [{question, header, options, multiSelect}]}) — o mapeamento abaixo
+  // do Claude ({questions: [{question, header, options, multi_select}]}) — o mapeamento abaixo
   // ramifica por provider. (2026-08-11)
-  const pendingPiQuestion = $derived.by(() => pendingAskFromEvents(events, sessionProvider));
+  const pendingPiQuestion = $derived.by(() => {
+    const toolName = sessionProvider === 'pi' ? 'question'
+      : sessionProvider === 'omp' ? 'ask'
+      : sessionProvider === 'kimi' ? 'AskUserQuestion' : null;
+    if (!toolName) return null;
+    // Varredura UNICA: coleciona os resultados e lembra o ultimo tool_use question; pendente =
+    // esse ultimo sem resultado. O(n) por evento novo, loop simples (o fold caro que o projeto
+    // baniu era o deriveActivity; aqui e so Set+ultimo — se pesar, medir antes de otimizar).
+    const answered = new Set<string>();
+    let last: ChatEvent | null = null;
+    for (const ev of events) {
+      if (ev.kind === 'tool_result' && ev.tool_use_id) answered.add(ev.tool_use_id);
+      else if (ev.kind === 'tool_use' && ev.tool_name === toolName && ev.tool_use_id) last = ev;
+    }
+    return last && !answered.has(last.tool_use_id ?? '') ? last : null;
+  });
 
   $effect(() => {
     const q = pendingPiQuestion;
     if (!q) {
+      // A resposta aterrissou no transcript (pelo app ou pelo terminal) -> fecha o sheet se foi
+      // uma pergunta do Pi/Kimi que o abriu.
       if (askPiId) { askPiId = null; askOpen = false; }
       return;
     }
     if (askOpen || askPiDismissed === q.id) return;
-    const payload = askPayloadFromToolUse(q, sessionProvider as Provider);
-    if (!payload) {
-      console.warn(sessionProvider === 'kimi' ? m.chat_kimi_payload() : m.chat_pi_payload(), q.tool_input);
-      return;
+    const args = (q.tool_input ?? {}) as Record<string, unknown>;
+    const mapOpts = (opts: unknown) => (Array.isArray(opts) ? opts : []).map((o) => ({
+      label: String((o as Record<string, unknown> | null)?.label ?? ''),
+      description: String((o as Record<string, unknown> | null)?.description ?? ''),
+    })).filter((o) => o.label);
+    if (sessionProvider === 'kimi' || sessionProvider === 'omp') {
+      // Shape do Claude: lista de perguntas pronta, so falta snake_case -> camelCase. O `ask` do omp
+      // tem a mesma lista, mas so a PRIMEIRA pergunta entra: o picker dele mostra uma por vez e o
+      // /answer do backend dirige apenas answers[0] — mostrar as outras prometeria o que nao chega.
+      const lista = Array.isArray(args.questions) ? args.questions : [];
+      const qs = (sessionProvider === 'omp' ? lista.slice(0, 1) : lista).map((item) => {
+        const it = item as Record<string, unknown> | null;
+        return {
+          header: String(it?.header ?? ''),
+          question: String(it?.question ?? ''),
+          multiSelect: it?.multi_select === true,
+          options: mapOpts(it?.options),
+        };
+      }).filter((item) => item.question && item.options.length);
+      if (!qs.length) {
+        console.warn(m.chat_kimi_payload(), args);
+        return;
+      }
+      askPayload = { questions: qs };
+    } else {
+      const options = mapOpts(args.options);
+      if (!options.length || !args.question) {
+        // Shape inesperado (o Pi mudou o tool?) — sem o warn o sheet simplesmente parava de abrir um
+        // dia, calado. O OptionButtons cru segue como saida.
+        console.warn(m.chat_pi_payload(), args);
+        return;
+      }
+      askPayload = {
+        questions: [{
+          header: String(args.header ?? ''),
+          question: String(args.question),
+          multiSelect: args.multiSelect === true,
+          options,
+        }],
+      };
     }
-    askPayload = payload;
     askPiId = q.id;
     askOpen = true;
   });
@@ -705,6 +832,20 @@
   // Chip de loop no header: dentro do chat não havia NENHUM sinal de loop ativo (só a lista tinha
   // badge). Os campos vêm do sessionsStore (singleton refcounted — zero SSE novo); tap abre o sheet.
   let loopSheetOpen = $state(false);
+  // Navegador embutido: UM POR SESSÃO. O estado mora no store navegadorPanel.abertos (chave
+  // serverId::nome) porque o App remonta este Chat por key a cada troca de sessão — com $state
+  // local, voltar pra uma sessão que tinha navegador aberto o perderia. O view nativo fica VIVO
+  // escondido enquanto isso (o agente segue dirigindo via CDP).
+  const navKey = $derived(workspaceSessionKey({ serverId: getActiveId() ?? '', name: sessionName }));
+  // O navegador é uma ABA do painel de contexto (DesktopSessionContext) — "abrir" é ir pra aba
+  // (abrindo o painel se recolhido); voltar pra Contexto esconde o view sem fechar, e quem fecha
+  // de verdade é o × do painel. A sidebar colapsa com a aba ativa (efeito no ctxPanel).
+  function alternarNavegador() {
+    if (ctxPanel.aba === 'navegador' && !ctxPanel.recolhido) { ctxPanel.aba = 'contexto'; return; }
+    marcarNavAberto(navKey);   // a sessão ganha navegador — e a aba nasce na tab bar
+    ctxPanel.recolhido = false;
+    ctxPanel.aba = 'navegador';
+  }
   // Campos de loop vêm do SSE DA PRÓPRIA SESSÃO (stateEvent), não do sessionsStore: reter o
   // store aqui abria 1 stream de lista POR SERVIDOR no celular (com offline = retry eterno) e
   // derrubava a conexão do pocket — regressão real vista no iPhone, revertida.
@@ -742,6 +883,11 @@
         keywords: ['terminal', 'espelho', 'tui', 'pane'],
         group: m.lista_ferramentas(),
       },
+      navegador: {
+        detail: m.chat_acao_navegador_detalhe(),
+        keywords: ['navegador', 'browser', 'localhost', 'site'],
+        group: m.lista_ferramentas(),
+      },
     };
     return {
       id,
@@ -761,6 +907,7 @@
       action('pair', m.chat_parear_sessao(), () => (pairOpen = true)),
       action('run', m.chat_executar_workflow(), () => (runOpen = true)),
       action('terminal', m.ctx_terminal(), abrirTerminalReal),
+      action('navegador', m.ctx_navegador(), alternarNavegador),
     ]);
     // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
     return () => publish([]);
@@ -784,7 +931,9 @@
   // INTEIRO a cada mensagem (O(n) por evento em sessão longa).
   const actFolder = createActivityFolder();
   let activity = $state(actFolder.snapshot());
-  const activityBadge = $derived(activity.inProgress + activity.runningAgents);
+  // O shell de fundo conta junto: pro app "o que está rodando aqui" é uma coisa só. O terminal já
+  // mostrava ("5 shells still running") e o app não mostrava nada.
+  const activityBadge = $derived(activity.inProgress + activity.runningAgents + activity.runningShells);
 
   // Subagentes que existem NO DISCO (`<session-dir>/subagents/agent-*.jsonl`), contados pelo
   // backend. Sem isto o painel só abria quando o transcript trazia a ferramenta `Agent` — e o uso
@@ -793,7 +942,8 @@
   // disco, e o botão de Atividade nunca aparecia — com os dados prontos numa rota que já existia.
   let subagentesNoDisco = $state(0);
   const hasActivity = $derived(
-    activity.tasks.length > 0 || activity.agents.length > 0 || subagentesNoDisco > 0,
+    activity.tasks.length > 0 || activity.agents.length > 0 || activity.runningShells > 0
+    || subagentesNoDisco > 0,
   );
 
   // Quando perguntar: enquanto TRABALHA (é quando nasce subagente) e uma vez ao parar, pra pegar o
@@ -807,7 +957,10 @@
         if (vivo) subagentesNoDisco = lista.length;
       } catch { /* offline / sessão sem transcript -> mantém o que tinha */ }
     }
-    void contar();
+    // A 1ª contagem espera a conversa pintar (ver lib/aquecimento): ela só acende o ponto do botão
+    // de Atividade. Depois que o histórico chega a espera já está resolvida e o ciclo de 5s corre
+    // no ritmo de sempre.
+    void aoAquecer(sessionName).then(() => { if (vivo) void contar(); });
     const id = trabalhando ? setInterval(contar, 5000) : undefined;
     return () => { vivo = false; if (id !== undefined) clearInterval(id); };
   });
@@ -948,6 +1101,10 @@
       error = msg;
     } finally {
       if (g === histGen) loading = false;
+      // Conversa na tela (ou desistimos dela): o trabalho especulativo pode correr. Vale também no
+      // ramo de ERRO — histórico que falhou não é motivo pra a pílula de modelo ficar sem catálogo.
+      // Sem o `if`: uma carga abortada é sempre sucedida por outra, que solta na vez dela.
+      if (g === histGen) soltarAquecimento(sessaoDoPortao);
     }
   }
 
@@ -1003,6 +1160,9 @@
   const SSE_RETRY_MIN = 3000;
   const SSE_RETRY_MAX = 30000;
   let sseRetryDelay = SSE_RETRY_MIN;
+  // Servidor recusou o stream de vez (readyState CLOSED no onerror). Mostra a faixa com
+  // "tentar de novo" em vez de reconectar em laço.
+  let sseRecusado = $state(false);
   // Componente vivo? connectSSE pos-destroy criava EventSource FANTASMA (watchdog proprio,
   // reconectando pra sempre, nada nunca fecha) — 1 leak por ciclo background->foreground->navegar.
   let alive = false;
@@ -1015,6 +1175,7 @@
     if (kimiPreNascimento) return;
     clearTimeout(reconnectTimer);
     if (es) { es.close(); es = null; }
+    sseRecusado = false;
 
     es = openEventStream(sessionName, lastEventId);
     // Ciclo de vida da conexão no diário de uso. É o que faltava nos relatos de "a conversa parou"
@@ -1026,6 +1187,12 @@
 
     es.addEventListener('message', (e) => {
       noteAlive();
+      // Chegou conversa: o aviso de "não carregou o histórico" não pode continuar na frente dela.
+      // A tela de erro SUBSTITUI a lista inteira ({:else if error}), então um erro aceso por uma
+      // carga que falhou ficava preso mesmo depois de o SSE se recuperar sozinho e voltar a
+      // entregar mensagens — o mesmo sintoma que este trabalho veio consertar, entrando por outra
+      // porta. Quem apagava o aviso era só o toque em "tentar de novo".
+      if (error) error = '';
       // Guarda a posição de retomada. Só o transcript carrega id ("<stem>:<offset>"); state/preview/
       // ping vêm sem, de propósito — o último id visto tem que ser sempre o do transcript, senão a
       // retomada apontaria pro lugar errado e pularia mensagens.
@@ -1095,6 +1262,7 @@
             // bolha re-animando e scroll pulando — o usuario perdia o ponto da leitura.)
             if (previewText) {
               swapIds.add(ev.id);
+              cancelPreviewDrop();
               previewText = '';
             }
           }
@@ -1108,9 +1276,17 @@
         stateEvent = JSON.parse(e.data) as StateEvent;
         // Turno acabou sem bloco de assistente (só ferramentas, ou interrompido): ninguém mais viria
         // apagar a prévia, porque o "" deixou de apagá-la enquanto working (ver o handler de
-        // preview). Sair de `working` é o outro dono — sem isto a última frase em voo ficaria
-        // congelada na tela depois do fim.
-        if (stateEvent?.state !== 'working' && previewText) previewText = '';
+        // preview). Sair de `working` é o outro dono — mas via CARÊNCIA (dropPreviewSoon), nunca
+        // na hora: o assistant_msg do .jsonl chega DEPOIS deste evento, e zerar aqui era o pisca
+        // (prévia some -> buraco -> bolha volta re-animando).
+        if (stateEvent?.state === 'working') cancelPreviewDrop();
+        else if (previewText) dropPreviewSoon();
+        // Pergunta respondida em OUTRO aparelho (ou direto no terminal): o pane sai do
+        // `awaiting_input` e ninguem mais fechava o stepper AQUI — ele ficava na tela pedindo
+        // resposta de algo ja respondido. Pergunta de Pi/Kimi tem dono proprio (o $effect do
+        // `pendingPiQuestion`, que fecha pelo tool_result) e o estado do pane dela nao segue essa
+        // regra -> so o caso do Claude, que abre pelo evento SSE.
+        if (askOpen && !askPiId && stateEvent?.state !== 'awaiting_input') askOpen = false;
       } catch (err) {
         // Mesmo motivo do handler de `preview` logo abaixo: engolir aqui congela a prévia na tela
         // (este handler virou o OUTRO dono dela) e ainda deixa o `stateEvent` preso no valor
@@ -1130,6 +1306,24 @@
     // Stepper nativo AskUserQuestion: abre o sheet com as perguntas recebidas via SSE
     es.addEventListener('ask_question', (e) => {
       try { askPayload = JSON.parse(e.data); askOpen = true; } catch {}
+    });
+
+    // O agente abriu/empurrou o navegador embutido desta sessão (POST /api/sessions/<nome>/nav,
+    // via `hangar-preview open`). Marca no store SEMPRE (sem guard de desktop: se ele chegar com o
+    // usuário no celular e for descartado, o navegador nunca abre — marcado, abre quando a sessão
+    // estiver num desktop). O NavegadorPane monta pelo navOpen derivado e abre com a url salva.
+    es.addEventListener('nav', (e) => {
+      try {
+        const { url } = JSON.parse(e.data) as { url?: string };
+        marcarNavAberto(navKey);
+        if (url) atualizarNavUrl(navKey, url);
+        // o agente abriu -> a aba Navegador já aparece aberta (e o painel, se estava recolhido)
+        ctxPanel.recolhido = false;
+        ctxPanel.aba = 'navegador';
+      } catch (err) {
+        // Mesmo motivo dos handlers ao lado: engolir calado esconderia um evento 'nav' malformado.
+        if (import.meta.env.DEV) console.debug('nav: evento ilegivel', err);
+      }
     });
 
     // Preview ao vivo (best-effort) do bloco de assistente em voo. Full-replace; tambem e prova de
@@ -1157,7 +1351,13 @@
         // Não vira bolha fantasma porque quem apaga a prévia de verdade são os DOIS donos que já
         // existem: o `assistant_msg` real (swap atômico, ~30 linhas acima) e a saída de `working`
         // (logo abaixo, no handler de state). O "" só perdeu o papel de terceiro dono.
-        if (!t && stateEvent?.state === 'working') return;
+        if (!t) {
+          // "" do Stop com o estado já idle: mesma carência do handler de state — o bloco real
+          // ainda está a caminho pelo tail do .jsonl.
+          if (stateEvent?.state !== 'working') dropPreviewSoon();
+          return;
+        }
+        cancelPreviewDrop();
         previewText = t;
         previewMd = !!ev.md;
         previewFull = !!ev.full;
@@ -1172,10 +1372,15 @@
     // bolhas antigas (ids diferentes) -> zera tudo e recarrega o history do jsonl novo (vem limpo).
     es.addEventListener('reset', () => {
       noteAlive();
+      // No diário também, não só no journal do servidor: o journal só existe no Linux, e este
+      // evento é o único que APAGA a conversa da tela — sem ele registrado, "ficou vazio" e "nunca
+      // carregou" são indistinguíveis no arquivo que a pessoa manda.
+      diag.registrar({ evento: 'chat.reset', tela: 'chat', sessao: sessionName });
       lastEventId = null;   // transcript trocado (/clear): id do arquivo antigo não vale mais
       events = [];
       idIndex.clear();
       reseedDerived();          // zera activity/asstCount junto (loadHistory re-semeia com o novo)
+      cancelPreviewDrop();
       previewText = '';
       stateEvent = null;
       statsEvent = null;      // transcript novo -> a faixa zera junto (o backend recomeça o fold)
@@ -1196,6 +1401,10 @@
       diag.registrar({ evento: 'sse.caiu', nivel: 'erro', tela: 'chat', sessao: sessionName,
                        codigo: String(estadoSSE), ms: sseRetryDelay, detalhe: motivo });
       if (currentState === 'dead' || !alive) return;
+      // CLOSED = recusa definitiva (404/401): insistir a cada 30s não muda a resposta — medido
+      // 2h14 de laço, duas madrugadas seguidas, numa sessão que o servidor dizia não existir.
+      // Para, e deixa a pessoa tentar de novo (ou o onVisible, quando a aba voltar).
+      if (estadoSSE === 2) { sseRecusado = true; return; }
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connectSSE, sseRetryDelay);
       sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_RETRY_MAX);
@@ -1229,7 +1438,17 @@
       // Sem sobreposicao a appendTail re-ancorou na cauda (background longo demais): o historico
       // antigo saiu da lista e volta em segundo plano, como na abertura.
       if (events[0]?.id !== head) loadOlderInBackground(g);
-    } catch { /* offline momentaneo: o connectSSE/onerror cuida do re-sync */ }
+    } catch (err) {
+      // Com bolha na tela, seguir calado está certo: é um blip, e o SSE re-sincroniza.
+      // Com a lista VAZIA, não: o `connectSSE` abaixo retoma pelo `lastEventId`, e quando um
+      // `reset` acabou de zerar a lista esse id também foi zerado — não há de onde retomar e
+      // ninguém mais recarrega. O resultado era a tela sem uma bolha, sem aviso e sem o botão de
+      // tentar de novo, até sair da sessão e voltar (relatado em 26/08/2026).
+      if (!isAbortError(err) && g === histGen && alive && events.length === 0) {
+        error = isTimeoutError(err) ? m.chat_historico_sem_resposta()
+          : err instanceof Error ? err.message : m.chat_erro_carregar_historico();
+      }
+    }
     if (g !== histGen || !alive) return;
     connectSSE();
   }
@@ -1252,6 +1471,7 @@
     es?.close();
     clearTimeout(watchdog);
     clearTimeout(reconnectTimer);
+    cancelPreviewDrop();
     document.removeEventListener('visibilitychange', onVisible);
   });
 
@@ -1491,7 +1711,9 @@
   // Tira crase E marcadores de markdown (* _ ~ # >): o preview vem do pane JÁ RENDERIZADO (sem
   // markdown), o .jsonl tem o markdown cru -> sem tirar, "**Confirma**" != "Confirma" e o preview
   // duplicado de uma msg com formatação NÃO casava com a commitada (ficava como bolha fantasma).
-  const _norm = (s: string) => s.replace(/[`*_~#>]/g, '').replace(/\s+/g, ' ').trim();
+  // Marcador de lista no início da linha sai junto: a TUI pinta `- item` como `• item` (mesma
+  // regra do _norm do backend, em app/preview.py).
+  const _norm = (s: string) => s.replace(/^\s*[-•◦▪]\s+/gm, '').replace(/[`*_~#>]/g, '').replace(/\s+/g, ' ').trim();
   // Contador INCREMENTAL de assistant_msg (mantido no handler do SSE + reseedDerived): o effect
   // abaixo rodava um loop no `events` inteiro A CADA frame de preview (~150ms em streaming) só pra
   // detectar um commit novo — O(n) por frame em sessão longa.
@@ -1511,13 +1733,17 @@
     const committed = asstCount > _asstSeen;
     _asstSeen = asstCount;
     if (!pv) return;
-    // (a) bloco novo commitou OU (b) saiu de working -> dropa.
+    // (a) bloco novo commitou -> dropa na hora (o texto já está na tela como bolha).
+    if (committed) { cancelPreviewDrop(); previewText = ''; return; }
+    // (b) saiu de working -> CARÊNCIA, não drop imediato (o assistant_msg ainda vem pelo tail;
+    // zerar aqui era um dos três donos do pisca de fim de turno). Segue pro (c): se o texto já é
+    // bolha, o drop imediato de lá resolve a duplicata sem esperar o timer.
     // `stateEvent &&` porque "ainda não chegou estado nenhum" NÃO é "saiu de working": currentState
     // nasce 'idle' por default, e na abertura da conversa o preview chega ANTES do primeiro evento
     // `state` (o broker publica o texto do pane na inscrição; o state vem no tick seguinte). Sem o
     // guard, abrir a conversa no meio de um turno longo apagava a prévia na hora — e como o broker
     // só reemite em MUDANÇA do pane, um bloco parado (um painel de tarefas, p.ex.) não voltava mais.
-    if (committed || (stateEvent && currentState !== 'working')) { previewText = ''; return; }
+    if (stateEvent && currentState !== 'working') dropPreviewSoon();
     // (c) residual coberto por QUALQUER das últimas msgs commitadas (não só a última): entre turnos o
     // pane ainda mostra o bloco anterior como "● tail" e o broker reemite -> dropa se já é bolha.
     const p = _norm(pv);
@@ -1527,7 +1753,7 @@
         const e = events[i];
         if (e.kind === 'assistant_msg' && e.text) {
           seen++;
-          if (_norm(e.text).includes(p)) { previewText = ''; return; }
+          if (_norm(e.text).includes(p)) { cancelPreviewDrop(); previewText = ''; return; }
         }
       }
     }
@@ -1554,7 +1780,8 @@
 
   function mostrarAviso(err: unknown) {
     clearTimeout(avisoErrTimer);
-    avisoErr = err instanceof Error ? err.message : m.chat_nao_deu_enviar_resposta();
+    avisoErr = typeof err === 'string' ? err
+      : err instanceof Error ? err.message : m.chat_nao_deu_enviar_resposta();
     avisoErrTimer = setTimeout(() => (avisoErr = ''), 8000);
   }
 
@@ -1571,6 +1798,23 @@
       await selectOption(sessionName, option);
     } catch (err) {
       console.error('selectOption error:', err);
+      mostrarAviso(err);
+    } finally {
+      selBusy = false;
+    }
+  }
+
+  // Múltipla escolha: enviar o que já foi marcado. Toque em opção só ALTERNA ali (ver
+  // terminal_input.submeter_multipla) — sem isto dava pra marcar e não dava pra enviar.
+  async function handleSubmitSelected() {
+    if (selBusy) return;
+    selBusy = true;
+    clearTimeout(avisoErrTimer);
+    avisoErr = '';
+    try {
+      await submitSelected(sessionName);
+    } catch (err) {
+      console.error('submitSelected error:', err);
       mostrarAviso(err);
     } finally {
       selBusy = false;
@@ -1596,12 +1840,16 @@
   // 409 (mismatch de verificação, ou painel de terminal aberto) ou erro inesperado.
   async function handleAnswer(answers: AnswerItem[]) {
     try {
-      await answerQuestions(sessionName, answers);
+      const r = await answerQuestions(sessionName, answers);
       // Pergunta do Pi respondida com sucesso: o tool_result ainda demora ~1s pra aterrissar no
       // transcript — sem marcar a dispensa aqui, o sheet REABRIA nessa janela (pergunta ainda
       // pendente + askOpen false).
       if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
+      // Plano B do backend: a resposta FOI entregue, mas como texto, e o Escape que fechou o
+      // seletor vira "interrompido pelo usuário" em vermelho no transcript. Sem esta linha o
+      // vermelho ficava sem legenda e parecia que a resposta tinha se perdido.
+      if (r?.fallback) mostrarAviso(m.askq_enviada_como_texto());
     } catch (err) {
       if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
@@ -1625,7 +1873,7 @@
   class:desktop
   class:split-pane={splitTab}
   class:with-context={desktop && showContextPanel}
-  style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : ctxPanel.largura}px`}
+  style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : ctxPanel.aba === 'navegador' ? navegadorPanel.largura : ctxPanel.largura}px`}
   bind:this={screenEl}
   style:--nav-h={navH + topInset + 'px'}
 >
@@ -1646,7 +1894,7 @@
   {/if}
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {/if}
   </div>
 
@@ -1667,7 +1915,9 @@
       provider={sessionProvider}
       serverId={getActiveId() ?? ''}
       {sessionName}
+      {events} {histGap} cwd={planSession?.cwd ?? null}
       onOpenTerminal={abrirTerminalReal}
+      onOpenNavegador={alternarNavegador}
       terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}
       {runRunning}
@@ -1684,6 +1934,7 @@
       onLoopTap={() => (loopSheetOpen = true)}
       onProviderTap={isCodex ? () => (limitsOpen = true) : undefined}
       onOpenPair={() => (pairOpen = true)}
+      onOpenOrq={() => (orqOpen = true)}
       onOpenPeerChat={nested ? undefined : (peer) => (peerChat = peer)}
       onOpenGit={() => (gitOpen = true)}
       session={planSession}
@@ -1772,6 +2023,7 @@
       previewMd={previewMd}
       previewFull={previewFull}
       onSelectOption={handleSelect}
+      onSubmitSelected={handleSubmitSelected}
       onCancel={handleInterrupt}
       askOpen={isWide && askOpen}
       askPayload={askPayload}
@@ -1780,6 +2032,7 @@
       onAskClose={closeAsk}
       onForward={(t) => (forwardText = t)}
       onOpenSession={onNavigateToChat}
+      onOpenOrq={() => (orqOpen = true)}
     />
   {/if}
 
@@ -1834,6 +2087,12 @@
         <button class="back-btn" onclick={onBack}>{'← '}{m.comum_voltar()}</button>
       </div>
     {:else}
+      {#if sseRecusado}
+        <div class="sse-recusado" role="status">
+          <span>{m.chat_sse_recusado()}</span>
+          <button type="button" class="sse-retry" onclick={connectSSE}>{m.chat_sse_tentar()}</button>
+        </div>
+      {/if}
       <!-- Composer SEMPRE visivel (exceto sessao morta). Antes ele sumia em awaiting_input e,
            se as opcoes nao fossem parseadas, o usuario ficava sem input E sem botoes = preso.
            Os OptionButtons continuam aparecendo na lista; o composer fica como saida garantida. -->
@@ -1853,11 +2112,15 @@
         onOpenGit={() => (gitOpen = true)}
         onOpenPreview={() => (previewOpen = true)}
         provider={sessionProvider}
+        engine={sessionEngine}
         {pairPeers}
         {pairedState}
         onOpenPair={() => (pairOpen = true)}
+        onOpenOrq={() => (orqOpen = true)}
         {sendToPair}
         onToggleSendToPair={() => (sendToPair = !sendToPair)}
+        shellsRodando={activity.runningShells}
+        onOpenActivity={() => (activityOpen = true)}
       />
     {/if}
   </div>
@@ -1878,6 +2141,7 @@
     onClose={() => (createOpen = false)}
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
+    bastao={bastaoAlvo}
   />
 
   <ForwardSheet
@@ -1885,6 +2149,13 @@
     text={forwardText ?? ''}
     fromSession={sessionName}
     onClose={() => (forwardText = null)}
+  />
+
+  <OrquestracaoSheet
+    open={orqOpen}
+    {sessionName}
+    sessoes={allSessions}
+    onClose={() => (orqOpen = false)}
   />
 
   <PairSheet
@@ -1908,19 +2179,22 @@
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
-  <Git open={gitOpen} {sessionName} {desktop} {filesInContext} onClose={() => (gitOpen = false)} />
+  <Git open={gitOpen} {sessionName} {desktop} {filesInContext} onClose={() => (gitOpen = false)}
+       {events} {histGap} cwd={planSession?.cwd ?? null} />
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
              onRun={() => (runOpen = true)} {runRunning}
              onActivity={(hasActivity || !!planName) ? () => (activityOpen = true) : undefined}
              onAttachments={() => (anexosOpen = true)}
+             onBastao={passarBastaoDaqui}
              {activityRunning} {activityBadge} />
-  <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)} />
+  <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)}
+                    onUsarNoDitado={usarAnexoNoDitado} />
 
   <CodexLimitsSheet open={limitsOpen} {sessionName} onClose={() => (limitsOpen = false)} />
 
-  <PreviewSheet open={previewOpen} onClose={() => (previewOpen = false)} />
+  <PreviewSheet open={previewOpen} {sessionName} onClose={() => (previewOpen = false)} />
 
   <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)}
     showPlan={!desktop} session={planSession} {planDetail} {planLoading} {planError} />
@@ -2219,6 +2493,7 @@
     .chat-screen.with-context .bottom-dock :global(.composer-card) { max-width: min(calc(min(1440px, 100%) * var(--cp-width-scale, 1)), 100%); }
   }
 
+
   /* Aviso flutuante "interação só pela TUI": acima do dock (bottom = altura do dock + gap, via JS).
      Pulsa pra chamar atenção; centralizado. z acima do dock. */
   .tui-pill {
@@ -2360,6 +2635,25 @@
     font-size: var(--text-sm);
     color: var(--text-muted);
     text-align: center;
+  }
+
+  .sse-recusado {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .sse-retry {
+    background: var(--surface-raised);
+    color: var(--text);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 2px var(--space-3);
+    font-size: var(--text-sm);
+    cursor: pointer;
   }
 
   .back-btn {

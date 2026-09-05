@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import { type CommandInfo, type State, type StatsEvent } from '@hangar/core';
+  import type { CommandInfo } from '@hangar/core';
   import { stateColors, abbrevNum } from '@hangar/core';
   // Cache de comandos por sessao: sobrevive a remontagens do Composer (ex: voltar de
   // awaiting_input) pra buscar a lista so uma vez por sessao.
@@ -17,8 +17,12 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte';
   import * as m from '../paraglide/messages';
-  import { novoEstadoVad, passoVad, podeEnviarSozinho, type EstadoVad, type MotivoFim } from '@hangar/core';
+  import GroupGlyph from './icons/GroupGlyph.svelte';
+  import { novoEstadoVad, passoVad } from '@hangar/core';
+  import type { EstadoVad } from '@hangar/core';
   import { lerMaosLivres } from '../lib/maosLivres';
+  import { podeEnviarSozinho } from '@hangar/core';
+  import type { MotivoFim } from '@hangar/core';
   import IconSend from './icons/IconSend.svelte';
   import IconInterrupt from './icons/IconInterrupt.svelte';
   import IconAttach from './icons/IconAttach.svelte';
@@ -31,7 +35,8 @@
   import ClaudeEffortPopover from './ClaudeEffortPopover.svelte';
   import ClaudePermissionPopover from './ClaudePermissionPopover.svelte';
   import Popover from './Popover.svelte';
-  import CodexModelSheet from './CodexModelSheet.svelte';
+  import CodexModelPopover from './CodexModelPopover.svelte';
+  import CodexEffortPopover from './CodexEffortPopover.svelte';
   import PiModelPopover from './PiModelPopover.svelte';
   import KimiModelPopover from './KimiModelPopover.svelte';
   import KimiEffortPopover from './KimiEffortPopover.svelte';
@@ -42,7 +47,9 @@
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
   import { estilosDitado, type EstiloDitado } from '@hangar/core';
-  import { getCommands, setModelEffort, uploadFile, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '@hangar/core';
+  import { getCommands, setModelEffort, uploadFile, uploadUrl, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '@hangar/core';
+  import { aoAquecer } from '../lib/aquecimento';
+  import type { Provider, State, StatsEvent } from '@hangar/core';
   import type { StatusFields } from '@hangar/core';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
 
@@ -65,23 +72,35 @@
     pairPeers?: string[] | null;
     pairedState?: string | null;  // estado vivo do par ÚNICO (working/idle/...) -> bolinha no chip
     onOpenPair?: () => void;
+    // Chip ao lado do 🤝: modal Orquestração (só com grupo — sem grupo a porta é Configurações).
+    onOpenOrq?: () => void;
     // Toggle "mandar pro grupo" (só aparece pareada): ligado = prompt vai pra esta sessão E pros membros.
     sendToPair?: boolean;
     onToggleSendToPair?: () => void;
     inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
-    // Faixa de estatísticas da sessão (evento SSE `stats`). null = sem faixa (ex: Codex).
+    // Faixa de estatísticas da sessão (evento SSE `stats`). null = sem faixa.
     stats?: StatsEvent | null;
     // Provider da sessao (Chat.svelte, via allSessions). undefined/"claude" = comportamento de
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
     // o Codex nao tem nem um nem outro); "kimi" nao tem sheet de modelo neste MVP (pill so leitura).
-    provider?: 'claude' | 'codex' | 'pi' | 'kimi';
+    provider?: Provider;
+    // Motor da sessao (SessionInfo.engine). Numa sessao de motor quem responde nao e o Claude,
+    // entao o placeholder usa o modelo real (pill/statusline) em vez de "Claude".
+    engine?: string | null;
+    // Shells de fundo rodando nesta sessão (lib/activity). 0 = chip nem aparece. O terminal já
+    // dizia "N shells still running" e o app não dizia nada; o chip é o atalho, o detalhe (qual
+    // comando, há quanto tempo) fica no painel de Atividade, que o toque abre.
+    shellsRodando?: number;
+    onOpenActivity?: () => void;
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
-    onOpenPreview, pairPeers = null, pairedState = null, onOpenPair,
+    onOpenPreview, pairPeers = null, pairedState = null, onOpenPair, onOpenOrq = undefined,
     sendToPair = false, onToggleSendToPair,
+    shellsRodando = 0, onOpenActivity,
     inputText = $bindable(''),
     provider = 'claude',
+    engine = null,
     filaCount = 0,
     stats = null,
   }: Props = $props();
@@ -128,7 +147,8 @@
   });
 
   const isCodex = $derived(provider === 'codex');
-  const isPi = $derived(provider === 'pi');
+  // OMP é o fork do Pi (mesma TUI, mesmo popover de modelo/esforço) — trata igual aqui.
+  const isPi = $derived(provider === 'pi' || provider === 'omp');
   const isKimi = $derived(provider === 'kimi');
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
@@ -155,20 +175,34 @@
       commands = cached;
       return;
     }
-    getCommands(sn)
-      .then((c) => {
-        commandCache.set(sn, c);
-        commands = c;
-      })
-      .catch(() => {
-        // endpoint indisponivel -> segue com lista vazia, sem quebrar a UI
-      });
+    // Depois do historico (ver lib/aquecimento): a lista so importa quando a pessoa digita "/", e
+    // este GET varre o tmux inteiro — disputando com a conversa, era um dos maiores ladroes da
+    // abertura. O cache em memoria acima segue respondendo na hora numa sessao ja visitada.
+    void aoAquecer(sn).then(() => {
+      if (sn !== sessionName) return;   // trocou de sessao na espera: esta busca nao serve mais
+      getCommands(sn)
+        .then((c) => {
+          commandCache.set(sn, c);
+          if (sn === sessionName) commands = c;
+        })
+        .catch(() => {
+          // endpoint indisponivel -> segue com lista vazia, sem quebrar a UI
+        });
+    });
   });
 
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
   // Exposto pro pai (atalho de teclado desktop "/" foca o campo).
   export function focus() { textareaEl?.focus(); }
+
+  // Exposto pro pai: um audio que JA esta nos anexos da sessao volta pro ditado (transcreve de novo
+  // e abre a barra de versoes). `autoEnvio: false` porque aqui nao houve gravacao — o motivo do fim
+  // guardado seria o da ultima vez que a pessoa falou, e mandar sozinho por causa dele seria enviar
+  // um texto que ela nem pediu.
+  export function ditarArquivo(file: File) {
+    void transcribeIntoComposer(file, { ditado: true, autoEnvio: false });
+  }
 
   // ── Anexos: lista de arquivos + preview local + estado de upload ────────────
   // isImage -> preview; resto -> chip de arquivo. Audio NAO vira anexo: e transcrito e cai no textarea.
@@ -207,19 +241,60 @@
   // de novo, mesmo com o audio ja gravado e o texto cru ja na mao.
   //
   // - `url`: objectURL do proprio File que foi gravado (o backend tambem salva em
-  //   .hangar-uploads, mas o blob ja esta na aba -> player sem round-trip).
+  //   .hangar-uploads, mas o blob ja esta na aba -> player sem round-trip). Numa barra RESTAURADA
+  //   o blob nao existe mais e a url e a do upload no servidor (ver restaurarDitado).
+  // - `arquivo`: nome do audio em .hangar-uploads. E o que deixa a barra sobreviver a sair da
+  //   conversa e voltar: o objectURL morre com a aba, o arquivo do servidor nao.
   // - `before`: o que havia no campo antes deste ditado, pra toda troca remontar a MESMA
   //   concatenacao trocando so a parte ditada.
   // - `cache`: estilo -> texto ja obtido. Reclicar num estilo por onde ja passou e instantaneo e de
   //   graca; sem isso, comparar duas versoes custaria uma chamada de LLM por ida e volta.
   type DitadoAtivo = {
     url: string;
+    arquivo?: string;
     before: string;
     raw: string;
     atual: VersaoDitado;
     cache: Partial<Record<VersaoDitado, string>>;
   };
-  let ditado = $state<DitadoAtivo | null>(null);
+  // Persistida por sessao no localStorage, pelo MESMO motivo do rascunho do campo (Chat.svelte):
+  // trocar de sessao remonta o Composer e o iOS mata o PWA em background — e a barra sumia junto,
+  // levando o audio e as versoes ja pagas. Guarda so texto + nome do arquivo; o audio fica onde ja
+  // estava (.hangar-uploads no servidor), entao a chave e pequena e o player continua tocando.
+  // svelte-ignore state_referenced_locally
+  const ditadoKey = `cp-ditado:${sessionName}`;
+  function restaurarDitado(): DitadoAtivo | null {
+    try {
+      const cru = localStorage.getItem(ditadoKey);
+      if (!cru) return null;
+      const d = JSON.parse(cru) as Partial<DitadoAtivo>;
+      // `arquivo` e `raw` sao o minimo pra barra fazer o que promete (tocar e trocar de versao):
+      // sem um deles a barra restaurada seria um player quebrado ou botoes que nao respondem.
+      if (!d?.arquivo || typeof d.raw !== 'string') return null;
+      return {
+        url: uploadUrl(sessionName, d.arquivo),
+        arquivo: d.arquivo,
+        before: typeof d.before === 'string' ? d.before : '',
+        raw: d.raw,
+        atual: ehVersao(d.atual) ? d.atual : 'cru',
+        cache: d.cache ?? {},
+      };
+    } catch (e) {
+      // Chave corrompida (versao antiga do formato, escrita interrompida): a barra some, e o LOG
+      // e o unico jeito de saber por que — sem ele o ditado guardado sumia sem rastro.
+      console.warn('ditado: nao deu pra restaurar a barra guardada', e);
+      return null;
+    }
+  }
+  let ditado = $state<DitadoAtivo | null>(restaurarDitado());
+  $effect(() => {
+    if (ditado?.arquivo) {
+      const { arquivo, before, raw, atual, cache } = ditado;
+      localStorage.setItem(ditadoKey, JSON.stringify({ arquivo, before, raw, atual, cache }));
+    } else {
+      localStorage.removeItem(ditadoKey);
+    }
+  });
   let relimpando = $state<VersaoDitado | null>(null);   // versao com troca em voo (spinner no botao)
   let mediaRecorder: MediaRecorder | undefined;
   let recChunks: Blob[] = [];
@@ -377,6 +452,54 @@
     return () => document.removeEventListener('keydown', aoAtalhoMic);
   });
 
+  // Atalho de permissão (só desktop, só Claude): Alt+Shift+P passa pro PRÓXIMO modo do ciclo
+  // vivo — a mesma lista que a pílula mostra (4 ou 5 modos lidos da sessão), nunca a lista
+  // canônica: modo só-de-criação não entra no ciclo. Mesmos guards do atalho do mic.
+  function aoAtalhoPermissao(e: KeyboardEvent) {
+    if (e.repeat || !e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey || e.code !== 'KeyP') return;
+    if (!isClaude || !window.matchMedia('(min-width: 820px)').matches) return;
+    if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    void ciclarPermissao();
+  }
+
+  async function ciclarPermissao() {
+    if (permCarregando || !permSondavel) return;
+    // Mesmo token de sequência e mesma amarra de sessão do poll (permSeq / sn): a resposta de
+    // uma sessão que saiu da tela não pode escrever o ciclo da que entrou, nem o atalho aplicar
+    // na sessão atual um modo calculado pelo ciclo da anterior.
+    const sn = sessionName;
+    const seq = ++permSeq;
+    let modos = permModes;
+    if (modos.length === 0) {
+      permCarregando = true;
+      try {
+        const res = await getPermissionModes(sn);
+        if (seq !== permSeq || sn !== sessionName) return;
+        permCurrent = res.current;
+        permModes = res.modes;
+        permSondavel = res.sondavel;
+        modos = res.modes;
+      } catch (e) {
+        if (seq === permSeq && sn === sessionName) permError = e instanceof Error ? e.message : String(e);
+        return;
+      } finally {
+        if (seq === permSeq) permCarregando = false;
+      }
+    }
+    if (modos.length === 0) return;
+    const i = permCurrent ? modos.indexOf(permCurrent) : -1;
+    const alvo = modos[(i + 1) % modos.length];
+    if (alvo === permCurrent) return;
+    try { await handlePermApply(alvo); } catch { /* erro já está em permError */ }
+  }
+
+  $effect(() => {
+    document.addEventListener('keydown', aoAtalhoPermissao);
+    return () => document.removeEventListener('keydown', aoAtalhoPermissao);
+  });
+
   // ── Pills de modelo e de esforco: cada uma abre seu popover (aplica via endpoint dedicado) ──
   // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
   // reconcilia o modelo quando confirma. Esforco e write-only (sem read-back confiavel)
@@ -389,6 +512,10 @@
   let claudeEffortPillEl = $state<HTMLElement | null>(null);
   let chosenModel = $state<string | null>(null);   // rotulo otimista: 'Opus' | 'Sonnet' | ...
   let chosenEffort = $state<string | null>(null);   // low | medium | high | xhigh | max | ultracode
+  // O Composer é UMA instância reaproveitada entre sessões: sem este reset, a escolha otimista da
+  // sessão anterior fica presa (a reconciliação só solta quando a statusline NOVA contém o texto
+  // antigo, o que pode nunca acontecer) e vazava pro pill e pro placeholder da sessão errada.
+  $effect(() => { void sessionName; chosenModel = null; chosenEffort = null; });
   // A caixa do Claude fecha ANTES do backend responder (pra nao tapar o picker no terminal), entao
   // a falha que chega depois nao tem onde aparecer la dentro: sai aqui, na linha de erro do envio.
   let modelError = $state<string | null>(null);
@@ -399,8 +526,13 @@
   // statusline -- mais preciso (o backend guarda o valor exato escolhido). O anel de contexto
   // (Task D) ja vem da statusline, igual ao Claude, ja que o CodexAdapter agora acumula
   // tokenUsage/rateLimits e emite o status_line no mesmo formato. Seedado ao montar/trocar de
-  // sessao; o sheet atualiza via onApplied apos um POST /model com sucesso.
-  let codexSheetOpen = $state(false);
+  // sessao; os popovers atualizam via onApplied apos um POST /model com sucesso.
+  // Pill DUPLA como as outras tres (ticket 12): modelo e esforco em metades proprias, cada uma
+  // com seu popover ancorado. Antes era uma folha so, com o esforco escondido atras da lista.
+  let codexPopOpen = $state(false);
+  let codexPillEl = $state<HTMLElement | null>(null);
+  let codexEffortOpen = $state(false);
+  let codexEffortPillEl = $state<HTMLElement | null>(null);
   let codexModel = $state<string | null>(null);
   let codexEffort = $state<string | null>(null);
 
@@ -419,6 +551,10 @@
 
   function handleCodexModelApplied(model: string, effort: string | null) {
     codexModel = model;
+    codexEffort = effort;
+  }
+
+  function handleCodexEffortApplied(effort: string) {
     codexEffort = effort;
   }
 
@@ -505,37 +641,56 @@
   // Aquece o catálogo do seletor desta sessão ANTES do toque na pill (cache de 60s na api.ts):
   // o popover abre com a lista pronta em vez de "Carregando…". O catch é silencioso de propósito:
   // falha de verdade aparece no GET que o popover refaz ao abrir, com o erro na caixa.
+  // Espera a conversa pintar (ver lib/aquecimento): "antes do toque na pill" nao quer dizer "antes
+  // da conversa" — o toque vem sempre depois dela, e no Claude este GET chega a DIRIGIR o terminal.
   $effect(() => {
     const sn = sessionName;
-    if (isKimi) void getKimiModels(sn).catch(() => {});
-    else if (isPi) void getPiModels(sn).catch(() => {});
-    else if (isCodex) void getCodexModels(sn).catch(() => {});
-    else void getModelOptions(sn).catch(() => {});
+    const kimi = isKimi, pi = isPi, codex = isCodex;
+    void aoAquecer(sn).then(() => {
+      if (sn !== sessionName) return;
+      if (kimi) void getKimiModels(sn).catch(() => {});
+      else if (pi) void getPiModels(sn).catch(() => {});
+      else if (codex) void getCodexModels(sn).catch(() => {});
+      else void getModelOptions(sn).catch(() => {});
+    });
   });
   $effect(() => { if (permPopOpen) permError = null; });
   // Token de sequência: o poll de fundo e a sonda da pílula correm juntos, e sem isto a resposta
   // atrasada de um pisava no resultado do outro — inclusive zerando `permModes` (o poll pede sem
   // sondar, e volta `[]` enquanto o servidor não tem cache) com o popover já aberto na lista.
   let permSeq = 0;
+  // Sessão (nome|provider) pra qual o backend já disse "modo de permissão só vale para Claude".
+  // `isClaude` é "não é codex/pi/kimi", e uma sessão Pi/Kimi recém-criada chega como `claude` nos
+  // primeiros ~15s — o poll refazia o 409 a cada mudança de estado (medido: 558 numa semana). A
+  // recusa é final até o provider mudar; a chave inclui o provider justamente por isso.
+  let permSoClaudeEm = $state('');
   $effect(() => {
-    if (!isClaude) return;
+    if (!isClaude || permSoClaudeEm === `${sessionName}|${provider}`) return;
     void sessionState;
     const sn = sessionName;
+    const chave = `${sn}|${provider}`;
     const seq = ++permSeq;
     // só lê o atual (zero teclas); ciclo só ao abrir a pílula (bloqueador 1)
-    getPermissionModes(sn, false)
-      .then((res) => {
-        if (seq !== permSeq || sn !== sessionName) return;
-        permCurrent = res.current;
-        // lista vazia do poll não apaga o ciclo que a sonda já trouxe
-        if (res.modes.length > 0 || permModes.length === 0) permModes = res.modes;
-        permSondavel = res.sondavel;
-      })
-      .catch(() => {
-        if (seq !== permSeq || sn !== sessionName) return;
-        permCurrent = null;
-        permModes = [];
-      });
+    // Atrás do histórico na PRIMEIRA rodada (ver lib/aquecimento); depois que ele pinta, a espera
+    // já está resolvida e os polls seguintes seguem no ritmo de sempre. O `permSeq` continua sendo
+    // tomado ANTES da espera: é ele que faz a rodada nova invalidar a que ficou esperando.
+    void aoAquecer(sn).then(() => {
+      if (seq !== permSeq) return;
+      getPermissionModes(sn, false)
+        .then((res) => {
+          if (seq !== permSeq || sn !== sessionName) return;
+          permCurrent = res.current;
+          // lista vazia do poll não apaga o ciclo que a sonda já trouxe
+          if (res.modes.length > 0 || permModes.length === 0) permModes = res.modes;
+          permSondavel = res.sondavel;
+        })
+        .catch((e: unknown) => {
+          if (seq !== permSeq || sn !== sessionName) return;
+          permCurrent = null;
+          permModes = [];
+          if ((e as { code?: string })?.code === 'erro_permissao_so_claude') permSoClaudeEm = chave;
+        });
+    });
   });
   async function abrirPermissao() {
     permPopOpen = true;
@@ -589,6 +744,12 @@
 
   const pillModel = $derived(chosenModel ?? status?.model ?? null);
   const pillEffort = $derived(chosenEffort ?? status?.effort ?? null);
+  // Quem responde nesta sessao, pro placeholder. Sessao de motor e Claude Code por fora mas outro
+  // modelo por dentro — "Claude" ali era mentira; usa o modelo real (pill/statusline), caindo no
+  // nome do motor enquanto a statusline nao chegou.
+  const nomePlaceholder = $derived(
+    isCodex ? 'Codex' : isKimi ? 'Kimi' : isPi ? (provider === 'omp' ? 'OMP' : 'Pi')
+      : engine ? (pillModel ?? engine) : 'Claude');
   // Haiku nao usa esforco de raciocinio (o picker responde "Effort not supported").
   const semEsforcoClaude = $derived((pillModel ?? '').toLowerCase().includes('haiku'));
   // Reconciliacao do modelo: quando o statusline confirma a escolha (substring match),
@@ -671,9 +832,23 @@
   // ── Textarea: auto-grow ate 120px ──────────────────────────────────────────
   function autoGrow() {
     if (!textareaEl) return;
+    // Teto proporcional a tela: 120px fixos sao ~6 linhas, e um briefing tem 20 — no desktop
+    // sobrava tela vazia enquanto o texto rolava dentro de uma fresta. `visualViewport` porque com
+    // o teclado aberto o innerHeight do iOS nao encolhe, e 40% de uma tela que o teclado cobriu
+    // esconderia o proprio campo.
+    const teto = Math.max(120, Math.round((window.visualViewport?.height ?? window.innerHeight) * 0.4));
     textareaEl.style.height = 'auto';
-    textareaEl.style.height = Math.min(textareaEl.scrollHeight, 120) + 'px';
+    textareaEl.style.height = Math.min(textareaEl.scrollHeight, teto) + 'px';
   }
+
+  // A altura acompanha o VALOR, nao so a digitacao: texto que entra por codigo (troca de versao do
+  // ditado, rascunho restaurado no mount, interrupt devolvendo a msg pendente) tambem tem que
+  // caber. Antes cada caminho tinha que lembrar de chamar autoGrow, e o briefing caia num campo de
+  // uma linha ate a pessoa digitar um espaco.
+  $effect(() => {
+    inputText;
+    autoGrow();
+  });
 
   function handleInput() {
     sendError = '';
@@ -736,7 +911,7 @@
   // So o File — o Blob vive na memoria da aba e nao paga nada; sai da tela no proximo sucesso.
   let audioFalhou = $state<{ file: File; ditado: boolean; avisoTeto: boolean } | null>(null);
 
-  async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean; avisoTeto?: boolean }) {
+  async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean; avisoTeto?: boolean; autoEnvio?: boolean }) {
     // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
     // (ex: multi-selecao no picker) cai aqui e avisa em vez de correr concorrente e pisar no estado
     // compartilhado (transcribing/recError/inputText) — que sairia fora de ordem.
@@ -745,7 +920,7 @@
     recError = '';
     audioFalhou = null;
     try {
-      const { text, raw, aviso, estilo_aplicado } = await transcribeFile(sessionName, file, {
+      const { path, text, raw, aviso, estilo_aplicado } = await transcribeFile(sessionName, file, {
         limpar: !!opts?.ditado,
         // O estilo vai JUNTO, e nao e lido da config no servidor: e este rotulo que a pessoa leu na
         // pill antes de falar. Ver queryTranscribe em lib/api.ts.
@@ -773,7 +948,7 @@
         // `cru` cai pro proprio `t` quando o backend nao mandou raw: aconteceu quando a limpeza
         // desistiu (aviso) ou o texto era curto demais pra limpar, e nos dois casos o que esta no
         // campo JA e o cru — que e o que o botao "Cru" tem que devolver.
-        abrirDitado({ file, before, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
+        abrirDitado({ file, path, before, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
       } else {
         fecharDitado();
       }
@@ -783,7 +958,7 @@
       else if (opts?.avisoTeto) {
         recError = m.composer_silencio();
       }
-      if (opts?.ditado) {
+      if (opts?.ditado && opts.autoEnvio !== false) {
         if (podeEnviarSozinho({ motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: before.length > 0 })) {
           iniciarContagem();
         } else {
@@ -827,17 +1002,20 @@
   // Fecha a barra do ditado e devolve o objectURL. Sem o revoke o blob do audio fica preso na
   // memoria da aba ate ela ser recarregada — e um ditado longo tem alguns MB.
   function fecharDitado() {
-    if (ditado) URL.revokeObjectURL(ditado.url);
+    // Barra restaurada aponta pro arquivo do servidor, nao pra um blob: revogar ali e no-op, mas
+    // o `if` diz qual das duas urls e nossa pra devolver.
+    if (ditado?.url.startsWith('blob:')) URL.revokeObjectURL(ditado.url);
     ditado = null;
     relimpando = null;
   }
 
   // Abre a barra pro ditado que acabou de cair no campo. Um por vez: o anterior ja saiu do campo.
-  function abrirDitado(d: { file: File; before: string; cru: string; texto: string; aplicado?: string }) {
+  function abrirDitado(d: { file: File; path?: string; before: string; cru: string; texto: string; aplicado?: string }) {
     fecharDitado();
     const atual: VersaoDitado = ehVersao(d.aplicado) ? d.aplicado : 'cru';
     ditado = {
       url: URL.createObjectURL(d.file),
+      arquivo: d.path?.split('/').pop(),
       before: d.before,
       raw: d.cru,
       atual,
@@ -1218,6 +1396,30 @@
     if (files && files.length) addFiles(files);
   }
 
+  // Arrastar arquivo pro card = mesmo fluxo do clipe. Só reage a arrasto que traz ARQUIVO: texto
+  // selecionado arrastado de outra janela continua caindo na textarea como sempre.
+  let arrastando = $state(false);
+  const temArquivo = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
+  function onDragOver(e: DragEvent) {
+    if (!temArquivo(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'copy';
+    arrastando = true;
+  }
+  function onDragLeave(e: DragEvent) {
+    // `dragleave` dispara ao passar pra um FILHO do card; só apaga quando saiu do card mesmo.
+    const alvo = e.relatedTarget;
+    if (alvo instanceof Node && (e.currentTarget as HTMLElement).contains(alvo)) return;
+    arrastando = false;
+  }
+  function onDrop(e: DragEvent) {
+    if (!temArquivo(e)) return;
+    e.preventDefault();
+    arrastando = false;
+    const files = e.dataTransfer?.files;
+    if (files && files.length) addFiles(files);
+  }
+
   // Colar imagem(ns) (desktop garante; iOS Safari e instavel). Pega todos os itens de imagem
   // do clipboard e joga no mesmo fluxo do anexo.
   function onPaste(e: ClipboardEvent) {
@@ -1351,7 +1553,11 @@
   />
   <!-- O card precisa delegar foco para a textarea em areas vazias, mas contem varios botoes:
        nao pode virar button/role=button sem aninhar controles interativos. -->
-  <div class="composer-card" role="button" tabindex="-1" onclick={focusInput} onkeydown={focusInput}>
+  <div class="composer-card" class:arrastando role="button" tabindex="-1" onclick={focusInput} onkeydown={focusInput}
+       ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
+    {#if arrastando}
+      <div class="solte-anexo" aria-hidden="true">{m.composer_soltar_anexo()}</div>
+    {/if}
     <div class="composer-top">
       <div class="top-left">
         {#if !isCodex}
@@ -1368,7 +1574,7 @@
           <button class="repo-chip pair-chip" class:pair-chip--on={!!pairPeers?.length}
                   title={pairPeers?.length ? m.composer_grupo_voce({ n: pairPeers.join(', ') }) : m.composer_parear_outra()}
                   onclick={onOpenPair} aria-label={m.composer_pareamento_sessoes()}>
-            <span class="repo-glyph" aria-hidden="true">🤝</span>
+            <span class="repo-glyph" aria-hidden="true"><GroupGlyph size={13} /></span>
             {#if pairLabel}
               <span class="repo-name">{pairLabel}</span>
               {#if pairedState}
@@ -1378,6 +1584,11 @@
               {/if}
             {/if}
           </button>
+          {#if onOpenOrq}
+            <button class="repo-chip" title={m.orqcfg_titulo()} onclick={onOpenOrq} aria-label={m.orqcfg_titulo()}>
+              <span class="repo-glyph" aria-hidden="true">🎛</span>
+            </button>
+          {/if}
           {#if pairPeers?.length && onToggleSendToPair}
             <!-- "Mandar pro grupo": prompt vai pra esta sessão E pros membros (broadcast). Aceso = ativo. -->
             <button class="repo-chip both-chip" class:both-chip--on={sendToPair}
@@ -1400,6 +1611,19 @@
             <span class="repo-name">{m.composer_fila_contagem({ n: filaCount })}</span>
             <span class="repo-sep" aria-hidden="true">·</span>
             <span class="fila-acao">{m.composer_fila_acao()}</span>
+          </button>
+        {/if}
+        {#if shellsRodando > 0 && onOpenActivity}
+          <!-- Shells de FUNDO: comando que continua rodando depois que a ferramenta respondeu. O
+               terminal mostra "N shells still running" no rodapé e o app não mostrava nada — dava
+               pra sair da sessão sem saber que um build ainda estava de pé. O toque abre a
+               Atividade, onde está qual comando é e há quanto tempo. -->
+          <button class="repo-chip shell-chip" onclick={onOpenActivity}
+                  title={m.composer_shells_titulo({ n: shellsRodando })}
+                  aria-label={m.composer_shells_titulo({ n: shellsRodando })}>
+            <span class="repo-glyph" aria-hidden="true">&gt;_</span>
+            <span class="repo-name">{m.composer_shells_contagem({ n: shellsRodando })}</span>
+            <span class="shell-dot" aria-hidden="true"></span>
           </button>
         {/if}
         {#if status?.repo}
@@ -1456,7 +1680,7 @@
       bind:this={textareaEl}
       bind:value={inputText}
       class="composer-textarea"
-      placeholder={isCodex ? m.composer_mensagem_para({ nome: 'Codex' }) : isKimi ? m.composer_mensagem_para({ nome: 'Kimi' }) : m.composer_mensagem_para({ nome: 'Claude' })}
+      placeholder={m.composer_mensagem_para({ nome: nomePlaceholder })}
       rows={1}
       oninput={handleInput}
       onkeydown={handleKeydown}
@@ -1516,6 +1740,11 @@
             >{relimpando === v.valor ? m.composer_ditado_trocando() : v.rotulo}</button>
           {/each}
         </div>
+        <!-- Fechar a barra. Virou obrigatorio quando ela passou a sobreviver a trocar de sessao e a
+             recarregar o app: antes ela morria sozinha, agora fica ate o envio — e quem desistiu do
+             ditado nao tinha como tirar o player da frente. Nao mexe no texto que ja esta no campo. -->
+        <button type="button" class="ditado-fechar" onclick={fecharDitado}
+                aria-label={m.composer_ditado_fechar()}>✕</button>
       </div>
     {/if}
     {#if recError}
@@ -1652,22 +1881,56 @@
                 </span>
               </button>
             {/if}
-            <!-- Permissão NÃO é mais pill da fileira: em telas de celular a palavra do modo
-                 ("bypassPermissions") estourava a linha e derrubava os controles. Ela virou uma
-                 linha dentro do seletor de modelo (ClaudeModelPopover), que é onde se mexe nela. -->
+            <!-- Permissão: linha dentro do seletor de modelo (ClaudeModelPopover) em qualquer tela,
+                 e pill própria SÓ no desktop (.pill-perm some no celular via media query): ali a
+                 palavra do modo ("bypassPermissions") estourava a linha e derrubava os controles.
+                 Alt+Shift+P passa pro próximo modo do ciclo. -->
+            {#if permCurrent}
+              <button
+                class="model-pill pill-perm"
+                onclick={() => void abrirPermissao()}
+                aria-haspopup="dialog"
+                aria-expanded={permPopOpen}
+                aria-label={m.composer_permissao()}
+                title={m.permissao_atalho()}
+              >
+                <span class="pill-label">
+                  <span class="pill-model">{permCurrent}</span>
+                </span>
+              </button>
+            {/if}
           </span>
         {:else}
-          <button
-            class="model-pill"
-            onclick={() => (codexSheetOpen = true)}
-            aria-label={m.composer_modelo_codex()}
-          >
-            <span class="pill-label">
-              <span class="pill-model">{codexModel ?? m.composer_modelo()}</span>
-              {#if codexEffort}<span class="pill-effort">· {codexEffort}</span>{/if}
-            </span>
-            <ContextRing pct={status?.ctxPct ?? null} />
-          </button>
+          <!-- Codex: pill-duo como os outros três. O esforço tem metade própria em vez de virar
+               um sufixo "· high" dentro da pill de modelo — os níveis dele são POR MODELO, e
+               escolher um pede a lista daquele modelo, não um rótulo. -->
+          <span class="pill-duo">
+            <button
+              class="model-pill"
+              bind:this={codexPillEl}
+              onclick={() => (codexPopOpen = true)}
+              aria-haspopup="dialog"
+              aria-expanded={codexPopOpen}
+              aria-label={m.composer_modelo_codex()}
+            >
+              <span class="pill-label">
+                <span class="pill-model">{codexModel ?? m.composer_modelo()}</span>
+              </span>
+              <ContextRing pct={status?.ctxPct ?? null} />
+            </button>
+            <button
+              class="model-pill"
+              bind:this={codexEffortPillEl}
+              onclick={() => (codexEffortOpen = true)}
+              aria-haspopup="dialog"
+              aria-expanded={codexEffortOpen}
+              aria-label={m.composer_esforco_raciocinio()}
+            >
+              <span class="pill-label">
+                <span class="pill-model">{codexEffort ?? m.composer_esforco()}</span>
+              </span>
+            </button>
+          </span>
         {/if}
         <button class="attach-btn" onclick={() => fileInput?.click()} aria-label={m.composer_anexar_arquivo()}>
           <IconAttach size={20} />
@@ -1796,17 +2059,27 @@
     onClose={() => (permPopOpen = false)}
   />
 
-  <CodexModelSheet
-    open={codexSheetOpen}
+  <CodexModelPopover
+    open={codexPopOpen}
+    anchor={codexPillEl}
     {sessionName}
     onApplied={handleCodexModelApplied}
-    onClose={() => (codexSheetOpen = false)}
+    onClose={() => (codexPopOpen = false)}
+  />
+
+  <CodexEffortPopover
+    open={codexEffortOpen}
+    anchor={codexEffortPillEl}
+    {sessionName}
+    onApplied={handleCodexEffortApplied}
+    onClose={() => (codexEffortOpen = false)}
   />
 
   <PiModelPopover
     open={piPopOpen}
     anchor={piPillEl}
     {sessionName}
+    provider={provider === 'omp' ? 'omp' : 'pi'}
     onApplied={handlePiModelApplied}
     onClose={() => (piPopOpen = false)}
   />
@@ -1950,6 +2223,18 @@
   .composer-card:focus-within {
     border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   }
+  .composer-card.arrastando { border-color: var(--accent); border-style: dashed; }
+  /* Véu por cima do card inteiro enquanto o arquivo está no ar. pointer-events: none pra o
+     dragleave/drop continuarem chegando no card, não no véu. */
+  .solte-anexo {
+    position: absolute; inset: 0; z-index: 2;
+    display: grid; place-items: center;
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    font-size: var(--text-sm); font-weight: 600;
+    pointer-events: none;
+  }
 
   /* Camada de vidro: leaf bare (sem conteúdo, sem descendente posicionado), bounded à caixa do dock. */
   .composer-card::before {
@@ -1981,7 +2266,9 @@
   .composer-textarea {
     width: 100%;
     min-height: 24px;
-    max-height: 120px;
+    /* Teto REAL vem do autoGrow (proporcional a viewport); aqui fica so a rede pra quando o script
+       ainda nao rodou. 120px sao ~6 linhas — um briefing tem 20 e ficava preso. */
+    max-height: 40vh;
     background: transparent;
     border: none;
     color: var(--text-primary);
@@ -2064,6 +2351,7 @@
     /* Anexo e pill de estilo saem da fileira (estão no "+"); o mic fica. */
     .control-left > .attach-btn:not(.mic-btn):not(.plus-btn) { display: none; }
     .control-left > .model-pill { display: none; }
+    .pill-perm { display: none; }
     .pill-duo {
       display: inline-flex;
       align-items: center;
@@ -2114,11 +2402,6 @@
     max-width: 130px;
     color: var(--text-primary);
     font-weight: 600;
-  }
-
-  .pill-effort {
-    flex-shrink: 0;
-    color: var(--text-muted);
   }
 
   /* Botao [ / ]: abre o CommandSheet. Chip compacto na faixa do topo, igual ao cost-chip.
@@ -2288,6 +2571,16 @@
   .fila-chip .fila-acao { color: var(--accent); text-decoration: underline; }
   .fila-chip:active { background: var(--accent-dim); }
 
+  /* Shell de fundo: o mesmo chip dos outros, com o ponto do estado "em execução" — a MESMA cor que
+     `stateColors.working` (lib/format) usa na lista, que é o que a pessoa já lê como "rodando". */
+  .shell-chip .repo-name { font-weight: 600; }
+  .shell-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    background: var(--accent);
+    animation: shell-pulso 1.8s var(--ease-out, ease-out) infinite;
+  }
+  @keyframes shell-pulso { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
   /* ── Anexo de imagem ────────────────────────────────────────────────────── */
   .file-input { display: none; }
 
@@ -2451,6 +2744,17 @@
   }
 
   .ditado-versao:disabled { opacity: 0.55; }
+
+  /* ✕ no fim da barra: some pra direita (margin-left auto) pra nao disputar espaco com as versoes. */
+  .ditado-fechar {
+    margin-left: auto;
+    padding: 2px var(--space-2);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    line-height: 1;
+  }
+  .ditado-fechar:hover { color: var(--text-primary); }
 
   /* Botao de acao discreta no rec-hint/erro (tentar transcrever de novo): texto sem fundo proprio
      (superficie e a do composer, ver regra de transparencia do CLAUDE.md). */

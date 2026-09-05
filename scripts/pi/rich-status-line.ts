@@ -13,7 +13,7 @@
  * - Session duration
  * - Clock
  *
- * Configure via ~/.pi/agent/rich-status-line.json:
+ * Configure via <agent-dir>/rich-status-line.json (~/.pi/agent on Pi, ~/.omp/agent on omp):
  * {
  *   "projectName": "my-web-app",
  *   "ticket": "TICKET-123",
@@ -31,7 +31,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 // ── hangar: publica a linha INTEIRA num sidecar ────────────────────────────────────────
@@ -73,9 +73,61 @@ interface StatusLineConfig {
 	tmuxPeers?: string[];
 }
 
-const CONFIG_PATH = join(homedir(), ".pi/agent/rich-status-line.json");
-const PI_AUTH_PATH = join(homedir(), ".pi/agent/auth.json");
-const PI_MODELS_PATH = join(homedir(), ".pi/agent/models.json");
+// Este arquivo é UM só, symlinkado nas extensões do Pi e do omp — quem decide de quem são
+// config/auth/models é o binário que carregou a extensão. No omp (binário Bun) o `execPath` termina
+// em /omp; no Pi, em /node. Ler o diretório do outro agente mostraria a quota da conta errada, que
+// é pior que não mostrar chip nenhum (mesma regra do `kimiTokenFor`).
+const EH_OMP = /(^|[\\/])omp(\.exe)?$/.test(process.execPath);
+const AGENT_DIR =
+	process.env.PI_CODING_AGENT_DIR || join(homedir(), EH_OMP ? ".omp/agent" : ".pi/agent");
+const CONFIG_PATH = join(AGENT_DIR, "rich-status-line.json");
+const PI_AUTH_PATH = join(AGENT_DIR, "auth.json");
+const PI_MODELS_PATH = join(AGENT_DIR, "models.json");
+
+// As credenciais no formato do auth.json do Pi (`{ provider: { type, access|key, ... } }`). No omp
+// não existe auth.json — o cofre é a tabela `auth_credentials` do agent.db (SQLite), com o `type`
+// numa coluna e o resto em `data`. Sem esta leitura o chip de cota (⚡5h/📅7d) nunca aparecia no omp.
+function lerAuth(): Record<string, any> {
+	try {
+		return JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+	} catch {}
+	if (!EH_OMP) return {};
+	try {
+		const { Database } = require("bun:sqlite");
+		const db = new Database(join(AGENT_DIR, "agent.db"), { readonly: true });
+		try {
+			const linhas = db
+				.query("select provider, credential_type, data from auth_credentials where disabled_cause is null")
+				.all() as { provider: string; credential_type: string; data: string }[];
+			const auth: Record<string, any> = {};
+			for (const l of linhas) auth[l.provider] = { type: l.credential_type, ...JSON.parse(l.data) };
+			return auth;
+		} finally {
+			db.close();
+		}
+	} catch {
+		return {};
+	}
+}
+
+// Tema identidade pra montar a linha fora do render: toda chamada de tema neste arquivo é
+// `theme.fg(cor, texto)`, e o sidecar quer o texto puro (o `cpPublishStatus` tira ANSI de qualquer
+// jeito).
+const TEMA_PURO = { fg: (_c: string, s: string) => s };
+
+// Subagente não é a sessão do pane, e agora que a publicação saiu do render ele TAMBÉM dispara os
+// eventos: no omp roda no MESMO processo, com o arquivo em <stem>/<Nome>.jsonl (um diretório com
+// nome de transcript só existe pra isso); no Pi é outro processo, marcado por PI_SUBAGENT_DEPTH.
+// Sem este gate um subagente rebindaria o timer de cota pra si e o sidecar da sessão viva parava de
+// andar. Sessão sem arquivo (`--no-session`) NÃO é subagente: ela segue com rodapé como antes.
+const EM_SUBAGENTE = Number(process.env.PI_SUBAGENT_DEPTH ?? "0") > 0;
+const STEM_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[0-9a-fA-F-]{36}$/;
+
+function ehSubagente(ctx: any): boolean {
+	if (EM_SUBAGENTE) return true;
+	const file = ctx?.sessionManager?.getSessionFile?.() ?? "";
+	return !!file && STEM_RE.test(basename(dirname(file)));
+}
 
 function loadConfig(): StatusLineConfig {
 	if (!existsSync(CONFIG_PATH)) return {};
@@ -116,7 +168,7 @@ function codexUsageSummary(): string {
 		return codexUsageCache.text;
 	}
 	try {
-		const auth = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+		const auth = lerAuth();
 		const token = auth?.["openai-codex"]?.access;
 		if (!token) return "";
 		const body = execFileSync(
@@ -231,7 +283,7 @@ function kimiTokenFor(providerName: string | undefined): string {
 	} catch {}
 	if (providerName === "kimi-coding") {
 		try {
-			const auth = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+			const auth = lerAuth();
 			return auth?.["kimi-coding"]?.access ?? auth?.["kimi-coding"]?.key ?? "";
 		} catch {}
 	}
@@ -428,7 +480,7 @@ function clineUsageSummary(): string {
 	}
 
 	try {
-		const auth = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+		const auth = lerAuth();
 		const token =
 			auth?.clinepass?.access ??
 			auth?.clinepass?.key ??
@@ -509,17 +561,22 @@ function clineUsageSummary(): string {
 export default function (pi: ExtensionAPI) {
 	let enabled = true;
 	let sessionStartTime = Date.now();
+	let timerCota: ReturnType<typeof setInterval> | null = null;
+	let tuiAtual: any = null;   // o `tui` do último attachFooter, pra pedir render se o rodapé assumiu
 	const config = loadConfig();
 
-	function renderFooter(
-		ctx: any,
-		footerData: any,
-		theme: any,
-		width: number,
-	): string[] {
+	// A linha INTEIRA, sem corte por largura. Separada do render porque o app precisa dela mesmo
+	// quando ninguém desenha rodapé: no omp o `setFooter` nunca assume (ele mantém o rodapé nativo),
+	// então publicar de dentro do render deixava a sessão sem statusline nenhuma no app.
+	// `footerData` não entra: a branch vem do `gitInfo(ctx.cwd)`, e o único uso dele é o
+	// `onBranchChange` do `attachFooter`.
+	function montarLinha(ctx: any, theme: any): string {
 		// Model + thinking level
 		const model = ctx.model;
-		const thinking = ctx.thinkingLevel ?? "off";
+		// No omp o `ctx.thinkingLevel` nunca e populado — quem sabe o nivel e o proprio agente
+		// (`getThinkingLevel`, o mesmo que faz o /cp-think funcionar). Sem isto a linha dizia "(off)"
+		// sempre, e o orquestrar marcava o papel como divergente do contrato pra sempre.
+		const thinking = pi.getThinkingLevel?.() ?? ctx.thinkingLevel ?? "off";
 		const modelStr = model ? `${model.id ?? model.name} (${thinking})` : "no-model";
 		const modelPart = theme.fg("accent", "🤖 " + modelStr);
 
@@ -644,42 +701,64 @@ export default function (pi: ExtensionAPI) {
 			timePart,
 			clockPart,
 		].filter(Boolean);
-		const full = parts.join(" " + theme.fg("border", "│") + " ");
+		return parts.join(" " + theme.fg("border", "│") + " ");
+	}
+
+	function renderFooter(ctx: any, theme: any, width: number): string[] {
+		const full = montarLinha(ctx, theme);
 		cpPublishStatus(ctx, full);      // versão inteira pro app, ANTES do corte por largura
-		const line = truncateToWidth(full, width);
-		return [line];
+		return [truncateToWidth(full, width)];
+	}
+
+	// Publica sem depender do render. Não olha o `enabled`: esconder o rodapé do TUI é escolha de
+	// quem está no teclado, e não pode apagar o medidor do app.
+	function publicarAgora(ctx: any): void {
+		if (ehSubagente(ctx)) return;
+		try {
+			cpPublishStatus(ctx, montarLinha(ctx, TEMA_PURO));
+		} catch {
+			// Sidecar é conveniência: nenhum evento do agente pode quebrar por causa dele.
+		}
 	}
 
 	function attachFooter(ctx: any) {
 		ctx.ui.setFooter((tui: any, theme: any, footerData: any) => {
+			tuiAtual = tui;   // o timer de cota (fora daqui) pede render por este
 			const unsubBranch = footerData.onBranchChange(() => tui.requestRender());
-
-			const interval = setInterval(() => {
-				// A busca de quota NÃO depende do render acontecer: o próprio timer dispara o refresh
-				// em background; o render seguinte (quando quer que seja) já mostra dado fresco.
-				const kimiToken = kimiTokenFor(ctx.model?.provider);
-				if (kimiToken) kimiUsageRefresh(kimiToken);
-				const commandcodeToken = commandcodeTokenFor(ctx.model?.provider);
-				if (commandcodeToken) commandcodeUsageRefresh(commandcodeToken);
-				tui.requestRender();
-			}, 30_000);
 
 			return {
 				dispose: () => {
 					unsubBranch();
-					clearInterval(interval);
 				},
 				invalidate() {},
 				render(width: number): string[] {
 					if (!enabled) return [];
-					return renderFooter(ctx, footerData, theme, width);
+					return renderFooter(ctx, theme, width);
 				},
 			};
 		});
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		if (ehSubagente(ctx)) return;   // sessão do subagente não é a do pane: não rouba o timer
 		sessionStartTime = Date.now();
+		// Timer ÚNICO por processo, e aqui e não no rodapé: no omp o `setFooter` não assume, e no Pi
+		// o `attachFooter` roda 3× por sessão — eram 3 intervals por sessão, os 2 antigos vivos até
+		// alguém dispor o rodapé. `session_start` dispara de novo em /new, /fork e /resume no mesmo
+		// processo, daí o clear antes.
+		if (timerCota) clearInterval(timerCota);
+		timerCota = setInterval(() => {
+			// A busca de quota NÃO depende do render acontecer: o próprio timer dispara o refresh
+			// em background; o render seguinte (quando quer que seja) já mostra dado fresco.
+			const kimiToken = kimiTokenFor(ctx.model?.provider);
+			if (kimiToken) kimiUsageRefresh(kimiToken);
+			const commandcodeToken = commandcodeTokenFor(ctx.model?.provider);
+			if (commandcodeToken) commandcodeUsageRefresh(commandcodeToken);
+			publicarAgora(ctx);
+			tuiAtual?.requestRender?.();
+		}, 30_000);
+		timerCota.unref?.();   // timer pendente não pode segurar o processo vivo na saída
+		publicarAgora(ctx);
 		if (enabled && ctx.mode === "tui") {
 			// Some UI packages, especially sticky/Claude-style footer renderers, bind
 			// their footer during reload/startup after other extensions. Re-attach a
@@ -688,6 +767,19 @@ export default function (pi: ExtensionAPI) {
 			attachFooter(ctx);
 			setTimeout(() => enabled && attachFooter(ctx), 50);
 			setTimeout(() => enabled && attachFooter(ctx), 250);
+		}
+	});
+
+	// Fim de turno é quando os números mudam de verdade (tokens, custo, contexto). O `cpPublishStatus`
+	// ignora linha repetida, então o render do Pi não escreve duas vezes por causa disto.
+	pi.on("agent_end", async (_e: any, ctx: any) => publicarAgora(ctx));
+	pi.on("turn_end", async (_e: any, ctx: any) => publicarAgora(ctx));
+
+	pi.on("session_shutdown", async (_e: any, ctx: any) => {
+		if (ehSubagente(ctx)) return;   // o fim do subagente não pode parar o timer da sessão do pane
+		if (timerCota) {
+			clearInterval(timerCota);
+			timerCota = null;
 		}
 	});
 

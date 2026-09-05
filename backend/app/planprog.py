@@ -12,13 +12,21 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from app import atomico
+
 _log = logging.getLogger("hangar.planprog")
 
 PLANS_REL = os.path.join("docs", "superpowers", "plans")
+
+# Onde o plano encerrado vai parar. Subpasta da propria pasta de planos: o _discover so olha os .md
+# do primeiro nivel (`e.is_file()`), entao mover pra ca ja o tira da eleicao, do seletor e da barra
+# sem apagar nada. Era convencao manual do usuario (56 arquivos aqui) — virou botao.
+FEITOS_REL = "feitos"
 
 # Quantos niveis subir a partir do cwd da pane procurando a raiz do repo. `#{pane_current_path}`
 # segue o `cd` do usuario, entao um `cd frontend/src` nao pode fazer o plano sumir da UI. A subida
@@ -50,6 +58,10 @@ class StepProgress:
     title: str
     done: bool
     manual: bool
+    # Posicao 0-based na ordem do DOCUMENTO (nao dentro da Task). E a chave que o cliente devolve
+    # pra marcar/desmarcar: titulo repete entre Tasks e o par (task, step) exigiria refazer o
+    # recorte de Task no caminho de escrita.
+    idx: int
 
 
 @dataclass(frozen=True)
@@ -118,12 +130,23 @@ def is_safe_stem(v: str) -> bool:
 
 
 def read_pin(root: str) -> str | None:
-    """Stem do plano fixado nesta raiz, ou None. NUNCA levanta — pin ilegivel = sem pin."""
+    """Stem do plano fixado nesta raiz, ou None. NUNCA levanta — pin ilegivel = sem pin.
+
+    Pin apontando pra .md que nao existe mais tambem e sem pin. Sem esta conferencia o arquivo
+    sobrevive ao plano (apagado, renomeado, movido pra `feitos/`) e o painel passa a MENTIR: o
+    `plan_progress` ja caia na eleicao automatica, mas o `list_plans` devolvia o stem morto e o
+    seletor o exibia como rotulo — titulo de um plano, barra e Tasks de outro. Medido em
+    27/08/2026 neste repo: o rotulo era o nome de um plano de 04/08 que nao existe mais em
+    `plans/`, e a barra embaixo dele contava os steps do `painel-orquestracao`."""
     try:
         v = Path(_pin_path(root)).read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         return None
-    return v if is_safe_stem(v) else None
+    if not is_safe_stem(v):
+        return None
+    if v == PIN_NONE:
+        return v      # sentinela: nao tem arquivo pra conferir
+    return v if os.path.isfile(os.path.join(root, v + ".md")) else None
 
 
 def write_pin(root: str, stem: str | None) -> None:
@@ -143,6 +166,134 @@ def write_pin(root: str, stem: str | None) -> None:
 
 class PlanPinError(Exception):
     pass
+
+
+class PlanWriteError(Exception):
+    """Falha ao ESCREVER no plano (marcar step, arquivar). Separada da PlanPinError porque aqui o
+    arquivo do usuario esta em jogo — quem trata devolve 409/500, nunca engole."""
+
+
+def caminho_do_plano(root: str, stem: str) -> str:
+    """Path do .md de `stem` dentro de `root`. Levanta PlanWriteError pra stem com separador — a
+    unica coisa que impede um nome vindo do cliente de virar caminho pra fora da pasta."""
+    if not is_safe_stem(stem):
+        raise PlanWriteError(f"nome de plano invalido: {stem}")
+    return os.path.join(root, stem + ".md")
+
+
+# Serializa o ciclo ler-alterar-gravar do `marcar_step`. Duas marcacoes quase simultaneas — o app
+# roda no celular E no desktop ao mesmo tempo, na mesma sessao — liam o MESMO `raw` antes de
+# qualquer uma gravar, e a segunda regravava o arquivo inteiro por cima, desfazendo a primeira em
+# silencio (a checagem de `raw[pos]` so olha o byte do proprio idx, entao ela nao pega isso).
+# ponytail: um lock global pro backend inteiro. A secao critica e ler um .md e trocar um caractere;
+# se um dia isto virar gargalo, o passo seguinte e um lock por caminho.
+_lock_escrita = threading.Lock()
+
+
+def marcar_step(path: str, idx: int, done: bool) -> None:
+    """Marca (ou desmarca) o step de indice `idx` — 0-based, na ordem do documento — do plano.
+
+    Existe porque quem marca o `- [x]` e o agente, e quando ele esquece o plano trava: fica em
+    14/16 pra sempre, nunca fecha, nunca sai do painel. Aqui a pessoa fecha na mao.
+
+    Escreve UM caractere: o resto do arquivo sai byte a byte igual. Nada de reserializar markdown —
+    o plano e do usuario e esta versionado, um reformat viraria diff que ninguem pediu.
+    """
+    with _lock_escrita:
+        try:
+            raw = Path(path).read_bytes().decode("utf-8")
+        except OSError as e:
+            raise PlanWriteError(str(e))
+        except UnicodeDecodeError:
+            # Os outros caminhos leem com errors="replace" porque so exibem. Aqui a leitura volta
+            # pro disco: gravar o U+FFFD apagaria o byte original do arquivo do usuario.
+            raise PlanWriteError("o plano nao esta em UTF-8")
+
+        # Mesma neutralizacao de bloco cercado do parse, PRESERVANDO offsets — e o que deixa casar
+        # no texto limpo e escrever no original. Sem ela, um step de exemplo dentro de ``` entraria
+        # na contagem e o indice apontaria pro checkbox errado.
+        limpo = _FENCE_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), raw)
+        ms = list(_STEP_RE.finditer(limpo))
+        if idx < 0 or idx >= len(ms):
+            raise PlanWriteError(f"step {idx} nao existe (o plano tem {len(ms)})")
+        pos = ms[idx].start(1)
+        if raw[pos] not in " xX":
+            # So acontece se o arquivo mudou entre a leitura que gerou a tela e este clique. Recusa
+            # explicita: escrever no offset errado corromperia o texto do plano.
+            raise PlanWriteError("o plano mudou no disco — recarregue antes de marcar")
+
+        novo = raw[:pos] + ("x" if done else " ") + raw[pos + 1:]
+        # pid no nome separa PROCESSOS; duas marcacoes do mesmo backend cairiam no mesmo temporario
+        # (medido: a segunda achava o arquivo ja renomeado e levantava FileNotFoundError). Quem
+        # separa as duas e o `_lock_escrita` acima — o pid e a rede pro caso de outro processo.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            Path(tmp).write_text(novo, encoding="utf-8")
+            atomico.substituir(tmp, path)
+        except OSError as e:
+            Path(tmp).unlink(missing_ok=True)
+            raise PlanWriteError(str(e))
+    # _file_cache e chaveado por mtime_ns, entao a proxima leitura ja reparseia sozinha.
+
+
+def arquivar(root: str, stem: str) -> list[str]:
+    """Move `<stem>.md` (e o `.html` irmao, quando existe) pra `<root>/feitos/`. Devolve o que moveu.
+
+    Mover, nao apagar: o plano e o registro do que foi feito e esta versionado. E move o .html
+    junto porque o par nasce junto — deixar o irmao orfao na pasta e exatamente o lixo que isto
+    veio limpar.
+    """
+    origem_md = caminho_do_plano(root, stem)
+    if not os.path.isfile(origem_md):
+        raise PlanWriteError(f"plano nao encontrado: {stem}")
+
+    # Antes de mover: depois, o read_pin ja nao reconhece o stem (o .md sumiu) e o pin morto ficaria
+    # no disco pra sempre.
+    pin_era_este = read_pin(root) == stem
+
+    destino = os.path.join(root, FEITOS_REL)
+    movidos: list[str] = []
+    try:
+        os.makedirs(destino, exist_ok=True)
+        a_mover = [stem + ext for ext in (".md", ".html")
+                   if os.path.isfile(os.path.join(root, stem + ext))]
+        # TUDO ou NADA: a colisao dos DOIS destinos e conferida ANTES de mover qualquer um. Dentro
+        # do laco, um `.html` orfao ja em `feitos/` (sobra de um arquivamento anterior) so era
+        # notado depois do `.md` ja ter saido — o plano sumia da pasta ativa e a tela ainda dizia
+        # "nao deu pra arquivar", que e o contrario do que tinha acontecido.
+        for nome in a_mover:
+            if os.path.exists(os.path.join(destino, nome)):
+                # NUNCA sobrescreve: o de la e um plano encerrado de verdade, com o mesmo nome.
+                raise PlanWriteError(f"ja existe {nome} em {FEITOS_REL}/")
+        for nome in a_mover:
+            try:
+                atomico.substituir(os.path.join(root, nome), os.path.join(destino, nome))
+            except OSError as e:
+                # Sobrou o caso improvavel (disco cheio, permissao) DEPOIS do primeiro ter movido.
+                # A mensagem diz o que ja saiu: sem isso a pessoa le "nao deu pra arquivar", tenta
+                # de novo e recebe "plano nao encontrado", sem nunca saber que metade se mexeu.
+                if movidos:
+                    raise PlanWriteError(f"moveu {', '.join(movidos)} e falhou em {nome}: {e}")
+                raise PlanWriteError(str(e))
+            movidos.append(nome)
+    except OSError as e:
+        raise PlanWriteError(str(e))
+    finally:
+        # Fora do try de sucesso: num arquivamento parcial o `.md` JA saiu, e um cache apontando
+        # pro caminho velho faria a proxima leitura descrever um estado que nao existe mais.
+        _file_cache.pop(origem_md, None)
+        _file_cache.pop(origem_md + "\x00pin", None)
+        _discovery_cache.pop(root, None)
+        _sticky.pop(root, None)
+
+    if pin_era_este:
+        try:
+            write_pin(root, None)
+        except PlanPinError:
+            # O pin morto agora e inofensivo (read_pin o descarta), entao nao vale falhar o
+            # arquivamento que ja aconteceu — mas nao some calado.
+            _log.warning("plano arquivado, mas nao deu pra soltar o pin root=%s", root, exc_info=True)
+    return movidos
 
 
 def _reset_caches() -> None:
@@ -187,10 +338,11 @@ def parse_plan(path: str, require_started: bool = True) -> PlanProgress | None:
     # as fronteiras de Task sao calculadas por posicao, entao remover texto quebraria o recorte.
     raw = _FENCE_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), raw)
 
-    steps = [(m.start(), m.group(1) != " ", m.group(2).strip()) for m in _STEP_RE.finditer(raw)]
+    steps = [(m.start(), m.group(1) != " ", m.group(2).strip(), i)
+             for i, m in enumerate(_STEP_RE.finditer(raw))]
     if not steps:
         return None
-    done = sum(1 for _, ok, _ in steps if ok)
+    done = sum(1 for _, ok, _, _ in steps if ok)
     if done == 0 and require_started:
         return None   # escrito mas nunca comecado: nao acende barra SOZINHO (pin passa por cima)
 
@@ -210,10 +362,10 @@ def parse_plan(path: str, require_started: bool = True) -> PlanProgress | None:
         mine = [s for s in steps if pos <= s[0] < end]
         tasks.append(TaskProgress(
             title=title,
-            done=sum(1 for _, ok, _ in mine if ok),
+            done=sum(1 for _, ok, _, _ in mine if ok),
             total=len(mine),
-            steps=tuple(StepProgress(title=t, done=ok, manual=bool(_MANUAL_RE.search(t)))
-                        for _, ok, t in mine),
+            steps=tuple(StepProgress(title=t, done=ok, manual=bool(_MANUAL_RE.search(t)), idx=i)
+                        for _, ok, t, i in mine),
         ))
 
     # ORDINAL, nao o N do heading: existe "### Task 0" nos planos (pi-adapter), e "Task 0/6" no chip

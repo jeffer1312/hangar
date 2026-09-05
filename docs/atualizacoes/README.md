@@ -14,7 +14,7 @@ pede nada a quem está usando. Quem lê o formato é `backend/app/atualizacoes.p
 id: 2026-08-25-exemplo
 titulo: Uma frase dizendo o que muda
 comando: ./install.sh --update
-prova: test -x ~/.local/bin/hangar-send
+prova: ~/.local/bin/hangar-send
 destrutivo: false
 ---
 
@@ -26,8 +26,8 @@ mudou para ela — não sobre o que o comando faz.
 |---|---|
 | `id` | Chave no registro do que já rodou. Começa com a data para a ordem sair certa. Nunca mude o id de um passo já publicado — a máquina que já o rodou o reconheceria como novo. |
 | `titulo` | Obrigatório. Sem ele o arquivo é ignorado (com aviso no log). |
-| `comando` | O que rodar. Passa pelo shell, então `&&` e pipe funcionam. O diretório de trabalho é a raiz do repo. |
-| `prova` | Como saber que deu certo. Exit code 0 = passou. **Sem prova, "sucesso" quer dizer só "o comando não deu erro"** — e foi assim que um `-Update` chegou a dizer ok com o processo antigo ainda no ar. |
+| `comando` | O que rodar. Passa pelo shell da máquina, então `&&` e pipe funcionam — mas o shell é `cmd.exe` no Windows: `test`, `true` e amigos **não existem lá**. O diretório de trabalho é a raiz do repo. |
+| `prova` | Os caminhos que precisam existir depois. Separados por espaço (logo, caminho **com** espaço não cabe aqui); relativos à raiz do repo, ou absolutos, ou com `~`. Não é comando — é checagem de arquivo, que vale nos dois sistemas. **Sem prova, "sucesso" quer dizer só "o comando não deu erro"** — e foi assim que um `-Update` chegou a dizer ok com o processo antigo ainda no ar. |
 | `destrutivo` | `true` quando o passo apaga ou sobrescreve algo. Passo destrutivo roda pelo botão, mas não roda sozinho na subida do backend. |
 
 ## Duas regras

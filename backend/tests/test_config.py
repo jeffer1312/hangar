@@ -1,5 +1,13 @@
 from pathlib import Path
 from app.config import _default_projects_dir, detect_lan_ip, pairing_url_api, resolve_bind_ip, pairing_url, Settings
+from app.config import (
+    _default_projects_dir,
+    detect_lan_ip,
+    pairing_url,
+    porta_do_front,
+    resolve_bind_ip,
+    Settings,
+)
 
 
 def test_default_projects_dir_honors_claude_config_dir(monkeypatch):
@@ -45,3 +53,24 @@ def test_pairing_url_api_usa_porta_do_backend():
 def test_pairing_url_api_com_public_url_leva_api_na_query():
     s = Settings(lan_bind_ip="10.0.0.5", port=8765, auth_token="t", public_url="https://casa.ts.net/")
     assert pairing_url_api(s) == "https://casa.ts.net/?token=t&api=http://10.0.0.5:8765"
+def test_porta_do_front_cai_no_backend_quando_nao_ha_servico_de_front():
+    # Sem serviço de front instalado (o padrão desde que o backend passou a servir o dist), o QR
+    # e o painel de alcance têm de apontar pra porta do BACKEND. Com 5173 cravado como default,
+    # os dois mandavam a pessoa pra uma porta onde ninguém escuta.
+    # front_port=0 explícito: hermético contra um backend/.env local com CP_FRONT_PORT=5173
+    # (quem mantém o preview tem isso gravado, e o teste passava só no CI, que não tem .env).
+    assert porta_do_front(Settings(port=8765, front_port=0)) == 8765
+    assert porta_do_front(Settings(port=9000, front_port=0)) == 9000
+    assert porta_do_front(Settings(port=8765, front_port=5173)) == 5173
+
+
+def test_front_port_vazio_nao_derruba_o_backend():
+    # `CP_FRONT_PORT=` no .env levantava ValidationError, e como `settings = Settings()` roda no
+    # import do módulo, o backend inteiro não subia — sem tela e sem mensagem que explicasse.
+    assert porta_do_front(Settings(front_port="", port=8765)) == 8765  # type: ignore[arg-type]
+    assert porta_do_front(Settings(front_port="  ", port=8765)) == 8765  # type: ignore[arg-type]
+
+
+def test_pairing_url_usa_a_porta_do_backend_sem_front_port():
+    s = Settings(lan_bind_ip="192.168.1.50", auth_token="tok", public_url="", port=8765, front_port=0)
+    assert pairing_url(s) == "http://192.168.1.50:8765/?token=tok"

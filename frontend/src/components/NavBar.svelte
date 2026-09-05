@@ -27,6 +27,10 @@
     // quando ha um overlay aberto que SO da pra interagir pela TUI.
     onOpenTerminal?: () => void;
     terminalAlert?: boolean;
+    // Navegador embutido (WebContentsView no shell, iframe fora dele): abre/fecha o painel
+    // lateral. So o desktop passa — no celular o localhost do projeto nao e alcancavel, e pra
+    // isso ja existe o PreviewSheet (tunel).
+    onOpenNavegador?: () => void;
     // Play do runner detectado (npm/etc): abre o RunSheet. runRunning "respira" o botao (verde)
     // quando ha um processo rodando (sinal de que ha algo pra observar/parar).
     onOpenRun?: () => void;
@@ -57,7 +61,7 @@
     loopColor?: string;
     onLoopTap?: () => void;
   }
-  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, state, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
+  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenNavegador, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, state, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
 
   // Sinal do "⋯": no celular Rodar/Atividade moram dentro do menu, entao o estado deles precisa
   // aparecer no botao — senao voce so descobre que algo esta rodando abrindo o menu.
@@ -151,6 +155,15 @@
             <rect x="2.5" y="4" width="19" height="16" rx="2"/>
             <path d="M6.5 9l3 3-3 3"/>
             <line x1="12.5" y1="15" x2="17" y2="15"/>
+          </svg>
+        </button>
+      {/if}
+      {#if onOpenNavegador}
+        <button class="nav-btn navegador-btn" onclick={onOpenNavegador} aria-label={m.ctx_navegador()}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M3 12h18"/>
+            <path d="M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9s1.4-6.4 3.9-9z"/>
           </svg>
         </button>
       {/if}

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
-ChatKind = Literal["user_msg", "assistant_msg", "tool_use", "tool_result"]
+ChatKind = Literal["user_msg", "assistant_msg", "tool_use", "tool_result", "thinking"]
 State = Literal["working", "idle", "awaiting_input", "dead"]
 
 # Surrogate SOLTO (sem par) num str vindo de json.loads. O json aceita "\ud83d" sozinho e o Python
@@ -42,17 +42,29 @@ def dumps_safe(obj: Any) -> str:
     return json.dumps(scrub_surrogates(obj), ensure_ascii=False)
 
 
+# rollout-<data>T<hora>-<uuid do Codex>. Ancorado no fim pra um arquivo que so PARECE rollout
+# (sem o id) continuar caindo no stem, como sempre foi.
+_ROLLOUT_ID_RE = re.compile(
+    r"^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$")
+
+
 def session_key(jsonl_path: str) -> str:
     """Chave de ESTADO/sidecar de um transcript (marcador .hangar-state, id de SSE).
 
     No Claude/Pi e o stem do arquivo (== session-id). No Kimi o transcript se chama wire.jsonl em
     TODA sessao (sessions/<wd>/<session_id>/agents/main/wire.jsonl), entao o stem seria "wire" pra
-    todo mundo — a chave e o nome do sessionDir, que e o session_id que o hook grava. Qualquer
+    todo mundo — a chave e o nome do sessionDir, que e o session_id que o hook grava. No Codex o
+    rollout se chama rollout-<data>T<hora>-<id>.jsonl, e o <id> do fim e o mesmo `session_id` que o
+    hook entrega no stdin (conferido contra o `session_meta` da primeira linha dos rollouts reais):
+    o stem inteiro nunca casaria com o marcador, e a sessao ficaria eternamente ociosa. Qualquer
     outro layout cai no stem (comportamento de sempre).
     """
     p = Path(jsonl_path)
     if p.name == "wire.jsonl" and p.parent.parent.name == "agents":
         return p.parent.parent.parent.name
+    m = _ROLLOUT_ID_RE.match(p.stem)
+    if m:
+        return m.group(1)
     return p.stem
 
 
@@ -77,6 +89,9 @@ class SessionInfo(BaseModel):
     # False = chute newest-by-mtime (claude manual sem --session-id) -> UI marca "sem id" e desliga chat.
     tracked: bool = True
     branch: Optional[str] = None   # branch git atual do cwd (lida de .git/HEAD) — mostra na lista
+    # True quando o cwd e uma worktree ligada (`.git` arquivo apontando pro repo principal) — a mesma
+    # branch em worktrees diferentes tem arquivos diferentes, entao a lista marca qual e qual.
+    worktree: bool = False
     # Estado de git do cwd, decorado em list_with_state (git_summary, cacheado). dirty = arquivos
     # não-commitados; ahead = commits não-pushados (None sem upstream real); behind idem. Non-repo
     # -> tudo None (sem badge no painel).
@@ -88,6 +103,10 @@ class SessionInfo(BaseModel):
     # repo sem commits -> None (sem badge).
     git_added: Optional[int] = None
     git_removed: Optional[int] = None
+    # Só na resposta do POST /api/sessions: avisos da reconciliação da conta (plugin ligado sem
+    # instalação, /model desfeito pelo principal). Antes iam só pro log do backend e quem abria
+    # sessão pelo app nunca via.
+    avisos: list[str] = []
     # Estado vivo detalhado, pra a linha da lista ser acionável sem abrir a sessão (feature #1):
     label: Optional[str] = None          # working: texto do spinner ("Elucidating…")
     question: Optional[str] = None       # awaiting_input: a pergunta
@@ -96,6 +115,11 @@ class SessionInfo(BaseModel):
     # loop infinito de ferramenta / subprocesso esperando stdin nunca vira awaiting/finished/dead sozinho.
     # Derivado em list_with_state(); so tinta a linha, o watchdog (stall_watch.py) e quem pinga 1x.
     stalled: bool = False
+    # Problema DESTA sessão que o app tem que mostrar em vez de esconder: CÓDIGO, nunca texto — a
+    # tradução é do front (regra de i18n do CLAUDE.md). Hoje só "codex_hooks_nao_aprovados": sessão
+    # Codex com turno andando no rollout e marcador de estado nenhum. Sem isto ela apareceria
+    # eternamente "ociosa" enquanto trabalha, que é o único modo de falha do estado por hook.
+    problema: Optional[str] = None
     # Feature #8 (rate-limit radar): banner de limite de uso detectado no pane (best-effort, ver
     # app.state.rate_limit_reset). limit_reset = horario cru ("3pm"/"15:30") pro chip "limitado · HH:MM".
     # Derivado em list_with_state(); o push (1x, dedupe) e o auto-resume opt-in moram no stall_watch.py.

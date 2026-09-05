@@ -3,6 +3,7 @@
   import { pushSupported } from '../lib/push';
   import { getActiveId } from '../lib/auth';
   import { abrirConfig } from '../lib/configNav';
+  import { prefetchContas } from '../lib/queries';
   import ServerManager from './ServerManager.svelte';
   import PushQuiet from './PushQuiet.svelte';
   import type { Server } from '../lib/auth';
@@ -34,7 +35,9 @@
     // Devolve false quando o servidor nao existe mais, pra UI poder dizer isso em vez de fingir.
     onUpdateServerToken: (id: string, token: string) => boolean;
     onRemoveServer: (id: string) => void;
-    onAddServer: () => void;
+    // Só o popover (não-embedded) mostra o ServerManager com "Adicionar servidor"; o drawer do
+    // celular não tem o gesto (gestão em Configurações → Servidores), então o pai embedded não passa.
+    onAddServer?: () => void;
     onReconnect: () => void;
     onLogout: () => void;
   }
@@ -68,7 +71,7 @@
 
   // Ações que disparam UI/fluxo do pai fecham o menu antes (o pai abre seu sheet/confirm/reload).
   // O modal vive FORA do menu (o menu fecha ao abrir): renderizado no fim do componente, sobrevive.
-  function addServer() { onClose(); onAddServer(); }
+  function addServer() { onClose(); onAddServer?.(); }
   function reconnect() { onClose(); onReconnect(); }
   function logout() { onClose(); onLogout(); }
   function switchServer(id: string) {
@@ -83,27 +86,37 @@
 {#snippet menuBody()}
     <!-- menuitem só no POPOVER (que tem role="menu"); o drawer embedded (mobile) é div comum sem
          ancestral de menu — menuitem lá seria papel inválido, mesmo problema do Settings (round 7). -->
-    <ServerManager
-      {servers}
-      {activeId}
-      menuitem={!embedded}
-      onSwitchActive={onSwitchServer ? (id) => { onClose(); onSwitchServer(id); } : undefined}
-      onRename={onRenameServer}
-      onUpdateToken={onUpdateServerToken}
-      onRemove={onRemoveServer}
-      onAdd={addServer}
-    />
-    {#if pushSupported()}
+    <!-- A lista de servidores NÃO vai pro drawer do mobile: lá nenhuma linha faz nada (sem
+         onSwitchActive nem alvo de config) e 10 linhas inertes empurravam o Configurações pra
+         fora da tela. A gestão mora em Configurações → Servidores. No popover do desktop ela
+         fica: ali a linha TROCA o servidor ativo. Push/horas silenciosas e Reconectar seguem a
+         mesma régua: no drawer eram um formulário dentro de um menu de navegação, e os dois já
+         vivem em Configurações (Notificações / Servidores). -->
+    {#if !embedded}
+      <ServerManager
+        {servers}
+        {activeId}
+        menuitem
+        onSwitchActive={onSwitchServer ? (id) => { onClose(); onSwitchServer(id); } : undefined}
+        onRename={onRenameServer}
+        onUpdateToken={onUpdateServerToken}
+        onRemove={onRemoveServer}
+        onAdd={addServer}
+      />
+    {/if}
+    {#if !embedded && pushSupported()}
       <div class="am-sep"></div>
-      <!-- PushQuiet com o alvo certo por view: desktop popover e GLOBAL (o enablePush assina em
-           todos); drawer mobile mira o servidor resolvido, ou 'unavailable' quando sumiu — nunca
-           cai nas funções globais, que leriam a janela de outra máquina como se fosse desta. O
-           `open` so decide o LOAD (o componente fica montado sempre — fechar/reabrir o menu nao
-           pode perder busy/resultado/Janela carregada). -->
-      <PushQuiet {open} menuitem={!embedded} target={embedded ? (activeServer ? { mode: 'server', server: activeServer } : { mode: 'unavailable' }) : { mode: 'global' }} />
+      <!-- PushQuiet só no popover (desktop), e GLOBAL (o enablePush assina em todos). O `open`
+           só decide o LOAD (o componente fica montado sempre — fechar/reabrir o menu não pode
+           perder busy/resultado/Janela carregada). -->
+      <PushQuiet {open} menuitem target={{ mode: 'global' }} />
     {/if}
 
-    <div class="am-sep"></div>
+    <!-- Sep antes de Configurações: só no popover, onde algo veio antes — no drawer o
+         Configurações é a primeira linha do corpo. -->
+    {#if !embedded}
+      <div class="am-sep"></div>
+    {/if}
     <!-- Porta única de configuração: Aparência (do aparelho) + config do servidor + Motores, cada
          uma numa sub-tela do mesmo modal. Fica aqui junto do resto de conta/servidor, que é onde o
          usuário já procura ajuste. -->
@@ -118,6 +131,7 @@
     <!-- Os três itens próprios seguem a MESMA regra dos componentes extraídos (round 7): menuitem
          só no POPOVER (que tem role="menu"); o drawer embedded é div comum — papel inválido lá. -->
     <button class="am-item" role={embedded ? undefined : 'menuitem'}
+            onmouseenter={() => prefetchContas(null)}
             onclick={() => {
               const alvo = embedded ? (activeServer?.id ?? null) : getActiveId();
               onClose?.();
@@ -127,11 +141,13 @@
       {m.config_modal_titulo()}
     </button>
 
-    <div class="am-sep"></div>
-    <button class="am-item" role={embedded ? undefined : 'menuitem'} onclick={reconnect}>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-      {m.config_servidores_reconectar()}
-    </button>
+    {#if !embedded}
+      <div class="am-sep"></div>
+      <button class="am-item" role="menuitem" onclick={reconnect}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+        {m.config_servidores_reconectar()}
+      </button>
+    {/if}
 
     <div class="am-sep"></div>
     <button class="am-item am-danger" role={embedded ? undefined : 'menuitem'} onclick={logout}>
@@ -187,7 +203,12 @@
     max-width: min(320px, calc(100vw - var(--space-6)));
     max-height: min(70vh, 560px);
     overflow-y: auto;
-    background: var(--surface-raised);
+    /* Fundo SÓLIDO, mesma regra do Popover e do menu de contexto: menu flutuante cobre conteúdo
+       que rola por baixo, e o slider Solidez (pensado pra chip sobre papel de parede) deixava a
+       lista de trás legível através dos itens. */
+    background: var(--bg-elevated);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);

@@ -10,11 +10,13 @@ import * as m from '../paraglide/messages';
   import { planBadge } from '@hangar/core';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
+  import { prefetchContas } from '../lib/queries';
   import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
   import { navMode } from '../lib/navMode.svelte';
   import { getActiveId, serverColor } from '../lib/auth';
   import HangarMark from './icons/HangarMark.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
+  import HangarWorking from './icons/HangarWorking.svelte';
   import QuotaPill from './QuotaPill.svelte';
   import type { AggSession } from '@hangar/core';
 
@@ -53,8 +55,9 @@ import * as m from '../paraglide/messages';
   const corDoServidor = $derived(servidorAtivo ? serverColor(servidorAtivo.id) : 'var(--text-muted)');
 
   // Conta da sessão ABERTA (id do /api/cotas), pra pílula de cota mostrar o uso DELA em vez do
-  // pior-geral — pedido do usuário. Sem sessão aberta (ou sessão kimi/pi sem motor): null, e a
-  // pílula cai no smart.
+  // pior-geral — pedido do usuário. Sem sessão aberta: null, e a pílula cai no smart. A sessão Pi
+  // passou a ter conta em 28/08/2026 (a credencial do modelo escolhido NELA, casada pela chave no
+  // backend); só fica sem quando o provedor dela não é nenhuma credencial conhecida.
   const contaAtiva = $derived(
     model.tabs.find((t) => tabKeyOf(t.session) === currentKey)?.session.conta ?? null,
   );
@@ -169,7 +172,14 @@ import * as m from '../paraglide/messages';
           sidebarBridge.openSessionMenu(e, tab.session, tab.session.serverId);
         }}
         title={`${tab.session.name} · ${stateName}${plano}`}>
-        <span class="tab-dot" style:background={stateColors[tab.session.state]} aria-hidden="true"></span>
+        <!-- Trabalhando é a MESMA marca animada da lista, não um ponto de outra cor: entre um ponto
+             azul e um verde, os dois parados, não dá pra ver quem está ocupada. Os demais estados
+             seguem no ponto. -->
+        {#if tab.session.state === 'working'}
+          <span class="tab-marca" style:color={stateColors[tab.session.state]} aria-hidden="true"><HangarWorking size={14} /></span>
+        {:else}
+          <span class="tab-dot" style:background={stateColors[tab.session.state]} aria-hidden="true"></span>
+        {/if}
         <!-- Marca colorida do provider em TODA aba (referência: tab bar do super.engineering, onde
              cada agente carrega seu ícone). Diferente do prov-chip da lista, aqui o Claude também
              ganha glifo — pedido do usuário: na aba o ícone é o reconhecimento, não há texto. -->
@@ -209,12 +219,12 @@ import * as m from '../paraglide/messages';
   <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label={m.tabs_mais_opcoes()} title={m.tabs_buscar_arquivo_custos()}>⋯</button>
   <!-- Pílula de cota (o medidor do super.engineering): entre o ⋯ e a engrenagem, no espaço morto
        da barra. Mostra a conta da sessão ativa (ou a pior, sem sessão); o clique abre o detalhe. -->
-  <QuotaPill serverKey={currentKey ?? ''} {contaAtiva} {onIrParaContas} />
+  <QuotaPill serverKey={servidorAtivo?.id ?? ''} {contaAtiva} {onIrParaContas} />
   <!-- O ponto colorido veio junto com a engrenagem quando ela saiu do rodapé do trilho: ele não é
        enfeite, é a única coisa na tela que diz EM QUAL SERVIDOR você está, na mesma cor que agrupa
        as sessões por servidor. Tirar a engrenagem de lá sem trazer o ponto perderia essa metade da
        informação sem ninguém notar. -->
-  <button class="tab-action tab-config" onclick={onOpenConfig}
+  <button class="tab-action tab-config" onclick={onOpenConfig} onmouseenter={() => prefetchContas(null)}
     aria-label={m.tabs_config_servidor({ n: servidorAtivo?.label ?? m.tabs_servidor() })}
     title={m.tabs_config_servidor({ n: servidorAtivo?.label ?? m.tabs_servidor() })}>
     ⚙
@@ -331,6 +341,9 @@ import * as m from '../paraglide/messages';
   }
   .tab.active:hover { background: var(--accent-dim); }
   .tab-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; }
+  /* Ocupa a mesma largura do ponto que ela substitui, senão a aba pula de tamanho a cada troca de
+     estado e a fila inteira reflui. */
+  .tab-marca { flex-shrink: 0; display: inline-flex; align-items: center; margin: -3px; }
   .tab-name {
     min-width: 0;
     overflow: hidden;

@@ -21,9 +21,15 @@ import { fixtureByServer } from './sessionTabs.test-store.svelte';
 vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
   stateColors: {}, rotuloEstado: () => '', sortSessions: (s: unknown[]) => s,
-  planBadge: vi.fn(),
+ planBadge: vi.fn(),
 }));
 import { planBadge } from '@hangar/core';
+// A QuotaPill lê as cotas ao montar; sem isto cada teste deixava um fetch REAL escapar pro
+// `localhost:3000` do happy-dom (19 ECONNREFUSED/AbortError por suíte, um por teste).
+vi.mock('../lib/contaEstado', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../lib/contaEstado')>();
+  return { ...real, listarCotas: vi.fn().mockResolvedValue([]) };
+});
 
 function montar(over: { ctxDisponivel?: boolean } = {}) {
   const el = document.createElement('div');

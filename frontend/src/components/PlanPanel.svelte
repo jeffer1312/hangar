@@ -5,7 +5,7 @@
   import Select from './Select.svelte';
   import * as m from '../paraglide/messages';
   import { renderMarkdown } from '../lib/markdown';
-  import { getPlans, setPlanPin, type PlanListItem } from '@hangar/core';
+  import { getPlans, setPlanPin, setPlanStep, archivePlan, type PlanListItem } from '@hangar/core';
   import { planBadge } from '@hangar/core';
   import type { PlanDetail, SessionInfo } from '@hangar/core';
 
@@ -76,6 +76,78 @@
       if (minha === vez) pinned = r.pinned;
     } catch (e) { if (minha === vez) pickerErr = erro(e); }
   }
+
+  // Marcar step na mão. O `- [x]` é do agente; quando ele esquece, o plano fica preso na etapa
+  // errada pra sempre — e era o motivo nº 1 de o painel não dizer onde o trabalho está.
+  // `escrevendo` guarda o idx em voo: sem ele um duplo-clique manda dois POST e o segundo desfaz
+  // o primeiro. Erro fica na tela (o clique sumir sem explicação é o defeito que isto evita).
+  let escrevendo = $state<number | null>(null);
+  let acaoErr = $state('');
+
+  async function alternarStep(s: { idx: number; done: boolean }) {
+    if (!detail || escrevendo !== null) return;
+    const alvo = !s.done;
+    // O plano que estava na tela quando o clique saiu. No desktop o painel NÃO remonta ao trocar
+    // de sessão, e `detail` é uma prop reativa: sem prender a referência aqui, a resposta atrasada
+    // de A voltava e escrevia no plano de B — o `idx` é 0-based por documento, então casa por
+    // acidente e a contagem de B ficava errada calada (ou estourava, se B ainda não tem plano).
+    const meu = detail;
+    const nome = session.name;
+    escrevendo = s.idx;
+    acaoErr = '';
+    try {
+      const r = await setPlanStep(nome, meu.stem, s.idx, alvo);
+      if (detail !== meu) return;   // trocou de sessão/plano com o POST em voo: não mexe no alheio
+      // Aplica na hora em vez de esperar o poll de 5s da lista (é ele que muda `plan_done` e
+      // refaz o detalhe no Chat.svelte). `detail` vem de um `$state` do Chat, então a mutação
+      // reflete na barra e nas contagens; o poll seguinte confirma com o que está no disco.
+      s.done = alvo;
+      const t = meu.tasks.find((t) => t.steps.some((x) => x.idx === s.idx));
+      if (t) t.done += alvo ? 1 : -1;
+      if (r.done !== null) meu.done = r.done;
+      meu.complete = r.complete;
+    } catch (e) { if (detail === meu) acaoErr = erro(e); }
+    finally { escrevendo = null; }
+  }
+
+  // Arquivar = mover o .md (e o .html irmão) pra `feitos/`. Confirmação em dois toques em vez de
+  // modal: é mexer em arquivo do repo do usuário, mas é reversível (git + a pasta feitos/), e um
+  // diálogo pra isso seria desproporcional. O estado se desarma sozinho ao trocar de plano.
+  let confirmando = $state(false);
+  let arquivando = $state(false);
+  // Trocou o plano da tela: desarma a confirmação e solta os steps. Sem soltar o `escrevendo`, um
+  // POST ainda em voo da sessão anterior deixava TODOS os passos da nova desabilitados.
+  $effect(() => { void detail?.stem; confirmando = false; escrevendo = null; });
+
+  async function arquivar() {
+    if (!detail) return;
+    if (!confirmando) { confirmando = true; return; }
+    const nome = session.name;
+    const stem = detail.stem;
+    arquivando = true;
+    acaoErr = '';
+    try {
+      await archivePlan(nome, stem);
+      confirmando = false;
+    } catch (e) {
+      acaoErr = erro(e);
+      return;
+    } finally { arquivando = false; }
+
+    // Recarregar a lista é um try SEPARADO, e com a mesma guarda de `vez` do resto do arquivo. O
+    // plano JÁ foi movido aqui: uma falha de rede nesta linha caindo no `catch` de cima diria
+    // "não deu pra arquivar" sobre um arquivamento que deu certo — o contrário do que aconteceu.
+    const minha = ++vez;
+    try {
+      const r = await getPlans(nome);
+      if (minha !== vez) return;   // resposta atrasada: já tem requisição mais nova no ar
+      plans = r.plans;
+      pinned = r.pinned;
+    } catch (e) {
+      // No slot de erro do SELETOR, não no da ação: o que ficou desatualizado é a lista.
+      if (minha === vez) pickerErr = erro(e);
+    }
+  }
 </script>
 
 <div class="plan">
@@ -145,8 +217,14 @@
             <ul>
               {#each t.steps as s}
                 <li class:done={s.done}>
-                  <span class="mark">{s.done ? '✓' : '○'}</span>
-                  <span class="ttl">{s.title}</span>
+                  <!-- Clicável: o step é o único lugar do app que escreve no .md do plano. -->
+                  <button class="step-btn" disabled={escrevendo !== null}
+                    onclick={() => alternarStep(s)}
+                    aria-pressed={s.done}
+                    title={s.done ? m.plano_desmarcar_step() : m.plano_marcar_step()}>
+                    <span class="mark">{s.done ? '✓' : '○'}</span>
+                    <span class="ttl">{s.title}</span>
+                  </button>
                   {#if s.manual}<span class="manual" title={m.plano_conferencia_humana()}>🙋</span>{/if}
                 </li>
               {/each}
@@ -158,6 +236,21 @@
   {:else if error}
     <p class="muted">{m.plano_falha_leitura()}</p>
   {/if}
+
+  <!-- Encerrar o plano. Fora do gate das Tasks: fechar a lista não pode esconder a única saída de
+       um plano terminado — é exatamente o "plano finalizado que fica parado ali". -->
+  {#if detail}
+    <div class="fim">
+      {#if detail.complete}<span class="ok">{m.plano_completo()}</span>{/if}
+      <button class="arq" class:confirma={confirmando} disabled={arquivando} onclick={arquivar}>
+        {confirmando ? m.plano_arquivar_confirmar() : m.plano_arquivar()}
+      </button>
+      {#if confirmando}
+        <button class="arq" onclick={() => (confirmando = false)}>{m.plano_arquivar_cancelar()}</button>
+      {/if}
+    </div>
+  {/if}
+  {#if acaoErr}<p class="muted err">{acaoErr}</p>{/if}
 
   <!-- Fora do gate das Tasks: fechar a lista nao pode desarmar o `›` do cabecalho, que e outro
        controle. Markdown NUNCA aparece cru (regra do CLAUDE.md). -->
@@ -254,6 +347,49 @@
   .steps li.done .mark { color: var(--success); text-decoration: none; }
   .steps .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .manual { flex-shrink: 0; }
+
+  /* Sem superfície própria (regra da transparência): o material é do painel. O realce de hover é
+     tinta por cima da linha, então aí `--bg-hover` cru é o certo. */
+  /* `min-height/width: 0` desfaz o alvo de toque global de 44px (app.css): numa lista de 16 steps
+     ele triplicaria a altura do painel. A área clicável continua grande porque o botão ocupa a
+     LINHA inteira — o que se perde é altura, não largura. */
+  .step-btn {
+    display: flex;
+    flex: 1;
+    align-items: baseline;
+    gap: var(--space-1);
+    min-width: 0;
+    min-height: 0;
+    margin: -2px -4px;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .step-btn:disabled { cursor: progress; opacity: 0.6; }
+  @media (hover: hover) { .step-btn:hover:not(:disabled) { background: var(--bg-hover); } }
+
+  .fim { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+  .ok { color: var(--success); font-size: var(--text-xs); font-weight: 600; }
+  .arq {
+    min-height: 0;
+    min-width: 0;
+    padding: 2px var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+  .arq.confirma { border-color: var(--error); color: var(--error); }
+  .arq:disabled { cursor: progress; opacity: 0.6; }
+  @media (hover: hover) { .arq:hover:not(:disabled) { border-color: var(--border-default); color: var(--text-secondary); } }
 
   .md {
     margin-top: var(--space-2);

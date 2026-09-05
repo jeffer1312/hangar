@@ -21,7 +21,7 @@ import time
 
 _log = logging.getLogger("hangar")
 
-_BIN = {"claude": "claude", "codex": "codex", "pi": "pi", "kimi": "kimi"}
+_BIN = {"claude": "claude", "codex": "codex", "pi": "pi", "omp": "omp", "kimi": "kimi"}
 
 # Seam para testes — monkeypatch para forjar o PATH do login (mesma técnica de procinfo.py).
 # Quando não-None, _obter_path() devolve este valor (se for callable, chama).
@@ -81,7 +81,7 @@ def _obter_path() -> str:
 
 
 # Serializa a sondagem: cada chamada roda em `to_thread`, e duas com o cache vencido ao mesmo
-# tempo disparavam a varredura inteira (4 binários × PATH, subprocess com timeout de 2s) em
+# tempo disparavam a varredura inteira (todos os binários × PATH, subprocess com timeout de 2s) em
 # paralelo. Com o lock, a segunda espera e sai pelo cache que a primeira acabou de encher.
 _sonda_lock = threading.Lock()
 

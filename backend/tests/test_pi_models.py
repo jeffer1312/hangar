@@ -47,6 +47,20 @@ def test_read_catalog_missing_file_is_none(tmp_path):
     assert pm.read_catalog("/x/nunca-existiu.jsonl", tmp_path) is None
 
 
+def test_provider_atual_le_o_current(tmp_path):
+    # Quem gasta cota numa sessao Pi e a credencial do modelo em uso, e ela sai daqui.
+    pm._atual_cache.clear()
+    jsonl = _write_sidecar(tmp_path, SIDECAR)
+    assert pm.provider_atual(jsonl, tmp_path) == SIDECAR["current"]["provider"]
+    assert pm.provider_atual("/x/nunca-existiu.jsonl", tmp_path) is None
+
+
+def test_provider_atual_sem_modelo_e_none(tmp_path):
+    pm._atual_cache.clear()
+    jsonl = _write_sidecar(tmp_path, {**SIDECAR, "current": None})
+    assert pm.provider_atual(jsonl, tmp_path) is None
+
+
 # ── read-back: o pedido PEGOU? ───────────────────────────────────────────────
 _AFTER = {"current": {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM"},
           "thinking": "high", "levels": ["off", "low", "medium", "high"], "models": [], "ts": 2.0}

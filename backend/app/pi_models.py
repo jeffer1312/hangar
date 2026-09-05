@@ -60,6 +60,30 @@ def read_catalog(jsonl: str, config_dir: Path | None = None) -> dict | None:
     return data
 
 
+# Cache por mtime: a registry pede isto por sessao Pi a cada varredura da lista, e o sidecar tem
+# ~50KB (o catalogo inteiro). O mtime so muda quando o usuario troca de modelo, que e exatamente
+# quando a resposta muda (`publishModels` roda no `model_select` da extensao).
+_atual_cache: dict[str, tuple[float, str | None]] = {}
+
+
+def provider_atual(jsonl: str, config_dir: Path | None = None) -> str | None:
+    """Provider do modelo EM USO nesta sessao Pi ('kimi-coding'), ou None sem sidecar/modelo."""
+    p = sidecar_path(jsonl, config_dir)
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
+        return None
+    em_cache = _atual_cache.get(str(p))
+    if em_cache is not None and em_cache[0] == mt:
+        return em_cache[1]
+    dados = read_catalog(jsonl, config_dir)
+    atual = dados.get("current") if isinstance(dados, dict) else None
+    prov = atual.get("provider") if isinstance(atual, dict) else None
+    prov = prov if isinstance(prov, str) and prov else None
+    _atual_cache[str(p)] = (mt, prov)
+    return prov
+
+
 def _clean(value: str, field: str) -> str:
     """Token que vai VIRAR TECLA na TUI: sem espaco (o comando separa os argumentos por espaco) e
     sem caractere de controle. Validado ANTES de qualquer send-keys."""

@@ -1,8 +1,9 @@
 import logging
 import os
 import socket
+import time
 from pathlib import Path
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app import contas
@@ -38,12 +39,33 @@ def _is_config_dir(p: Path) -> bool:
     return (p / ".credentials.json").is_file() and (p / "projects").is_dir()
 
 
+# Chave = caminho do config dir; cresce so com a quantidade de ~/.claude*, entao nao precisa poda.
+_MTIME_TTL = 60.0
+_mtime_cache: dict[str, tuple[float, float]] = {}
+
+
 def _projects_mtime(p: Path) -> float:
-    # Varre recursivamente pra pegar o arquivo mais recente (nao so o dir imediato)
+    # Varre recursivamente pra pegar o arquivo mais recente (nao so o dir imediato). CARO: medido em
+    # 28/08/2026 nesta maquina, 9.370 arquivos e ~55ms por chamada — e `list_config_dirs` esta em
+    # caminho quente (cotas._fontes por requisicao, statusline e previa por leitura de sidecar),
+    # onde apareceu como ~10% do CPU do backend num perfil de py-spy. O valor so ORDENA a lista de
+    # contas por recencia, entao um minuto de atraso na ordem nao se ve; a varredura por chamada, sim.
+    agora = time.monotonic()
+    chave = str(p)
+    hit = _mtime_cache.get(chave)
+    if hit is not None and agora - hit[0] < _MTIME_TTL:
+        return hit[1]
     try:
-        return max((f.stat().st_mtime for f in (p / "projects").rglob("*") if f.is_file()), default=0.0)
+        valor = max((f.stat().st_mtime for f in (p / "projects").rglob("*") if f.is_file()), default=0.0)
     except OSError:
+        # Falha NAO entra no cache. Cachear o 0.0 congelaria por 60s um engasgo de 200ms de disco
+        # (rede lenta, arquivo sendo reescrito), e como o valor so serve pra ORDENAR, a conta que a
+        # pessoa acabou de usar afundaria pro fim da lista sem nenhuma pista do porque. Sem gravar,
+        # a proxima chamada tenta de novo — que era o comportamento antes do cache.
+        logging.getLogger("hangar.config").warning("_projects_mtime falhou em %s", p, exc_info=True)
         return 0.0
+    _mtime_cache[chave] = (agora, valor)
+    return valor
 
 
 def list_config_dirs() -> list[ConfigDirInfo]:
@@ -139,7 +161,23 @@ class Settings(BaseSettings):
     # resolve_scan_roots). Mantida como str pra aceitar o formato "a,b" direto do env.
     scan_roots: str = _DEFAULT_SCAN_ROOTS
     reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
-    front_port: int = 5173   # where the PWA is served (vite dev / Caddy) — used for QR pairing
+    # CP_FRONT_PORT: onde o PWA é servido — entra no QR e no painel de alcance. VAZIO (0) = o
+    # próprio backend, que monta o `frontend/dist` na raiz (api.py, `_UIStatic`); é a topologia
+    # padrão desde que o serviço separado de front deixou de ser instalado. Só quem mantém o
+    # `vite preview` (instalação antiga, ou reverse proxy apontado pra lá) grava 5173 aqui — e os
+    # instaladores gravam por ele. Cravar 5173 como default fazia o QR apontar pra uma porta que
+    # ninguém escuta assim que o serviço do front saiu de cena.
+    front_port: int = 0
+
+    @field_validator("front_port", mode="before")
+    @classmethod
+    def _front_port_vazio_e_ausencia(cls, v: object) -> object:
+        # `CP_FRONT_PORT=` (chave presente, valor vazio) é a forma natural de alguém "desligar" isso
+        # editando o .env à mão — e o pydantic levanta ValidationError num `int`, o que derruba o
+        # backend INTEIRO no import (`settings = Settings()` é module-level). Ausência e vazio têm de
+        # significar a mesma coisa: use a porta do backend.
+        return 0 if isinstance(v, str) and not v.strip() else v
+
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL
     # CP_TERM_ORIGINS: origens EXTRAS que o WebSocket do terminal aceita, separadas por virgula
     # (ex: "https://pocket.exemplo.com"). Existe porque o front pode ser servido de UMA maquina e
@@ -204,8 +242,8 @@ class Settings(BaseSettings):
     # do .env, com prefixo) OU GROQ_API_KEY (convencao do Groq/OpenAI SDK, ex: no Environment do systemd).
     # Vazio = transcricao desligada (o endpoint /transcribe responde 503). Ver docs/USAGE.md.
     groq_api_key: str = Field("", validation_alias=AliasChoices("CP_GROQ_API_KEY", "GROQ_API_KEY"))
-    # Dias que um anexo fica em <cwd>/.hangar-uploads/. A pasta nunca era limpa e cresce pra
-    # sempre dentro do projeto (video sobe ate 100 MiB por arquivo). 0 = nunca apagar.
+    # Dias que um anexo fica em ~/.hangar/uploads/<projeto>/<sessao>/. Sem limpeza a pasta cresce
+    # pra sempre (video sobe ate 100 MiB por arquivo). 0 = nunca apagar.
     # Anexo apagado que ainda aparece numa conversa antiga vira o chip "não carregou" — visível,
     # não some calado.
     upload_retention_days: int = Field(30, validation_alias=AliasChoices("CP_UPLOAD_RETENTION_DAYS",))
@@ -271,6 +309,11 @@ def resolve_bind_ip(s: "Settings") -> str:
     return detect_lan_ip() if s.lan_bind_ip == "auto" else s.lan_bind_ip
 
 
+def porta_do_front(s: "Settings") -> int:
+    """Onde a interface responde: o serviço separado, quando existe, senão o próprio backend."""
+    return s.front_port or s.port
+
+
 def pairing_url(s: "Settings") -> str:
     """The URL a phone should open (QR target): the PWA front + the auth token.
 
@@ -282,7 +325,7 @@ def pairing_url(s: "Settings") -> str:
         base = s.public_url.rstrip("/")
     else:
         host = detect_lan_ip() if s.lan_bind_ip in _LOOPBACK else s.lan_bind_ip
-        base = f"http://{host}:{s.front_port}"
+        base = f"http://{host}:{porta_do_front(s)}"
     return f"{base}/?token={s.auth_token}"
 
 

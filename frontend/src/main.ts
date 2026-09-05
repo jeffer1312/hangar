@@ -22,6 +22,36 @@ configureApi({
     new EventSource(url, { withCredentials }) as unknown as import('@hangar/core').EventSourceLike,
 });
 
+// Pedaco que nao existe mais no servidor -> recarrega. A aba aberta ANTES de um deploy guarda um
+// index.html que aponta pra hashes trocados; quando ela enfim pede um pedaco sob demanda (o realce
+// de sintaxe, o visor de midia, o terminal), a resposta e 404 e a promise do import rejeita. Sem
+// isto o toque simplesmente nao faz nada, e o unico rastro e um erro no console que ninguem abre.
+// Enquanto o app era UM arquivo so, este caso nao existia: ou tudo carregava, ou nada carregava.
+// O `skipWaiting`/`cleanupOutdatedCaches` do service worker nao cobre isto — ele serve a proxima
+// carga, nao a aba que ja esta na tela.
+// UMA vez por aba, e nao a cada evento: se o pedaco continuar faltando depois de recarregar, o
+// problema nao e aba velha — e deploy incompleto —, e recarregar de novo vira a pagina piscando
+// contra o servidor sem nada na tela dizendo por que. A flag NAO e limpa depois: o preco de nao
+// recarregar de novo e ficar sem a cor do codigo ate a pessoa recarregar na mao, o que e degradado,
+// nao quebrado.
+const _CHAVE_RELOAD = 'cp_preload_reload';
+window.addEventListener('vite:preloadError', (e) => {
+  let jaTentou = false;
+  try {
+    jaTentou = sessionStorage.getItem(_CHAVE_RELOAD) !== null;
+    if (!jaTentou) sessionStorage.setItem(_CHAVE_RELOAD, '1');
+  } catch {
+    // Aba anonima / storage bloqueado: sem memoria pra travar o laco, entao nem recarrega.
+    console.error('pedaco do app nao carregou e nao da pra marcar a tentativa; recarregue a pagina', e);
+    return;
+  }
+  if (jaTentou) {
+    console.error('pedaco do app segue faltando depois de recarregar — deploy incompleto?', e);
+    return;
+  }
+  location.reload();
+});
+
 // Resolve o tema (escolha do usuario ou prefers-color-scheme) ANTES de montar -> sem flash do default.
 applyTheme();
 // Fundo escolhido (chapado por padrao): antes de montar, pelo mesmo motivo do tema.

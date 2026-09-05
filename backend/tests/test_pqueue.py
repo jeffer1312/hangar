@@ -427,30 +427,6 @@ def test_timestamp_sem_fuso_e_lido_como_utc():
     assert ev_de("nao-e-data").ts is None
 
 
-def test_prune_old_apaga_so_o_que_passou_do_prazo(tmp_path):
-    """Limpeza por idade: anexo velho sai, recente fica, e days<=0 desliga a varredura."""
-    import time as _t
-    from app.uploads import prune_old, UPLOAD_SUBDIR
-
-    base = tmp_path / UPLOAD_SUBDIR
-    base.mkdir()
-    velho, novo = base / "velho.png", base / "novo.png"
-    velho.write_bytes(b"x")
-    novo.write_bytes(b"x")
-    antigo = _t.time() - 40 * 86400
-    os.utime(velho, (antigo, antigo))
-
-    assert prune_old(str(tmp_path), 0) == 0        # desligado -> não toca em nada
-    assert velho.exists()
-
-    assert prune_old(str(tmp_path), 30) == 1
-    assert not velho.exists()
-    assert novo.exists()                            # dentro do prazo, fica
-
-    # Pasta inexistente não é erro (sessão que nunca recebeu anexo).
-    assert prune_old(str(tmp_path / "nada"), 30) == 0
-
-
 def test_is_video_cobre_as_extensoes_servidas_pelo_app():
     from app.video import is_video
 
@@ -560,6 +536,18 @@ def test_committed_user_lines_kimi_provider(tmp_path):
     assert not any("system-reminder" in l for l in lines)
 
 
+def test_committed_user_lines_pi_e_omp_provider(tmp_path):
+    # omp e o fork do Pi e usa o MESMO parser (app/adapters/pi/transcript.py) — sem cobertura direta
+    # aqui, um shape novo do parser quebraria os dois calado.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "message", "id": "m1", "message": {
+        "role": "user", "timestamp": 1, "content": [{"type": "text", "text": "oi"}]}}) + "\n",
+        encoding="utf-8")
+    assert pqueue.committed_user_lines(str(j), provider="omp") == {"oi"}
+    assert pqueue.committed_user_lines(str(j), provider="pi") == {"oi"}
+
+
 def test_transcript_start_ts_kimi_envelope_time(tmp_path):
     # O ts do Kimi mora no envelope `time` (ms) — sem isto o start_ts era 0.0 e a poda de fila
     # pre-/clear nao funcionava pro provider.
@@ -649,6 +637,86 @@ def test_confirm_ainda_redigita_com_estado_conhecido_ocioso(tmp_path, monkeypatc
     chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
     assert chamou and chamou[0][0] == "ressuscitada"
     assert row["delivered"] is False and row["attempts"] == 1
+
+
+# 26/08/2026, relatado de uma maquina Windows: a mesma mensagem entrou 3x na conversa (18:27,
+# 18:33, 18:37 — uma por fim de turno) e terminou com a tarja "nao chegou na sessao". Sao os 2
+# requeues do reconcile + a desistencia. O oraculo de "chegou?" e `committed_user_lines`, e ele
+# engolia OSError devolvendo o set montado ATE o erro: leitura que falha respondia "nada chegou",
+# e isso autoriza redigitar. No Windows ler o .jsonl que o Claude Code esta escrevendo pode voltar
+# WinError 32. Regra: oraculo que nao conseguiu ler nao decide nada.
+
+def test_committed_user_lines_none_quando_nao_da_pra_ler(tmp_path):
+    import json
+    # Diretorio no lugar do arquivo: IsADirectoryError no Linux, PermissionError no Windows — os
+    # dois sao OSError, que e a familia que o antigo `except` engolia.
+    assert pqueue.committed_user_lines(str(tmp_path)) is None
+    # E o contraste, pra "None" nao virar o retorno de tudo: arquivo legivel devolve set.
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "oi"}}) + "\n",
+                 encoding="utf-8")
+    assert pqueue.committed_user_lines(str(j)) == {"oi"}
+
+
+def test_transcript_start_ts_none_quando_nao_da_pra_ler(tmp_path):
+    # Irma da de cima, e o motivo de ela existir e o MESMO: 0.0 aqui significa "sem corte por
+    # idade", e sem esse corte uma entrada de sessao ANTERIOR deixa de ser dispensada e cai no
+    # caminho que redigita. "Nao consegui ler" nao pode se passar por "nao ha timestamp".
+    assert pqueue._transcript_start_ts(str(tmp_path)) is None
+    vazio = tmp_path / "sem-ts.jsonl"
+    vazio.write_text("{}\n", encoding="utf-8")
+    assert pqueue._transcript_start_ts(str(vazio)) == 0.0   # legivel e sem ts continua 0.0
+
+
+def test_confirm_nao_decide_com_inicio_de_transcript_ilegivel(tmp_path, monkeypatch, caplog):
+    # Mesmo cenario do requeue legitimo, mas com a SEGUNDA leitura do transcript falhando. Sem o
+    # guard, min_ts=0.0 desliga a poda por idade e o reconcile decide com meia informacao.
+    import logging
+    import time as _t
+    import app.api as api
+    monkeypatch.setattr(api, "_transcript_start_ts", lambda *a, **k: None)
+    with caplog.at_level(logging.WARNING, logger="hangar"):
+        chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
+    assert chamou == []
+    assert row["delivered"] is True and not row.get("attempts")
+    assert "desistiu" not in row and "confirmed" not in row
+    assert "confirmacao adiada" in caplog.text
+
+
+def test_confirm_nao_decide_com_transcript_ilegivel(tmp_path, monkeypatch, caplog):
+    # MESMO cenario do teste de cima (estado provadamente ocioso + texto ausente), que redigita de
+    # proposito — o que muda e so o oraculo nao ter conseguido ler. Aqui nao se toca na fila: a
+    # entrada segue entregue-nao-confirmada e visivel como bolha, e o proximo fim de turno reolha.
+    import logging
+    import time as _t
+    import app.api as api
+    monkeypatch.setattr(api, "committed_user_lines", lambda *a, **k: None)
+    with caplog.at_level(logging.WARNING, logger="hangar"):
+        chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
+    assert chamou == []                        # nada de re-drenar -> nada de segunda digitacao
+    assert row["delivered"] is True
+    assert not row.get("attempts")
+    assert "desistiu" not in row and "confirmed" not in row
+    # Tirar o guard NAO pode passar neste teste por acidente: sem ele o None desce ate o
+    # reconcile, estoura TypeError e o `except Exception` de _confirm_and_drain engole — a fila
+    # fica intacta pelo motivo ERRADO e as tres asserts acima continuariam verdes. O que separa os
+    # dois e QUAL linha foi registrada.
+    assert "confirmacao adiada" in caplog.text
+    assert "confirmacao de entrega falhou" not in caplog.text
+
+
+def test_linha_mais_parecida_aponta_o_quase_igual():
+    # O log do REQUEUE precisa mostrar CONTRA O QUE a comparacao falhou. Caso desenhado a partir do
+    # relato: o texto tem uma barra invertida a mais que a linha gravada no transcript.
+    texto = r"pode gerar os scripts e colar no servidor (\\servidor\SQL\banco.sql)"
+    committed = {r"pode gerar os scripts e colar no servidor (\servidor\SQL\banco.sql)",
+                 "outra coisa completamente diferente"}
+    assert pqueue.linha_mais_parecida(texto, committed) == \
+        r"pode gerar os scripts e colar no servidor (\servidor\SQL\banco.sql)"
+    # Sem nada parecido, None — melhor calar do que apontar uma linha aleatoria como "a candidata".
+    assert pqueue.linha_mais_parecida(texto, {"nada a ver"}) is None
+    assert pqueue.linha_mais_parecida("", committed) is None
 
 
 def test_confirm_adia_enquanto_trabalha(tmp_path, monkeypatch):
@@ -981,6 +1049,74 @@ def test_reconcile_prefixo_nao_rouba_linha_do_mais_especifico(tmp_path):
     got = {r["id"]: r for r in q.load()}
     assert got["X"]["desistiu"] is True and "confirmed" not in got["X"]  # perdida, honesta
     assert got["Y"]["confirmed"] is True and "desistiu" not in got["Y"]  # chegou, sem marca
+
+
+def test_kickoff_de_bastao_nao_e_carimbado_como_sessao_anterior():
+    # A outra rede de segurança que comia o kick-off: `ts < min_ts` marcava `confirmed` ("sessão
+    # anterior: fora do escopo"), e confirmada nunca mais é reentregue nem aparece no histórico.
+    # Com `pre_transcript` a entrada segue o caminho NORMAL — não achou no transcript, re-enfileira
+    # pro drain (ou seja, a marca isenta do corte por idade, não do reconcile).
+    q = PromptQueue("s")
+    q.append("kick-off do bastão", delivered=True, ts=100.0, pre_transcript=True)
+    q.reconcile_delivered(committed=set(), min_ts=500.0, now=200.0)
+    r = PromptQueue("s").load()[0]
+    assert "confirmed" not in r
+    assert r["delivered"] is False and r["attempts"] == 1
+
+
+def test_kickoff_de_bastao_aparece_no_historico_do_transcript_novo(tmp_path):
+    # merged_history poda entrada anterior ao início da sessão (fantasma de pré-/clear). O kick-off
+    # é anterior de propósito — sem a isenção a bolha dele nunca apareceria no chat da sessão nova.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "primeira linha"}}) + "\n",
+                 encoding="utf-8")
+    inicio = pqueue._transcript_start_ts(str(j))
+    q = PromptQueue("s")
+    q.append("velha de outra vida", delivered=False, ts=inicio - 3600)
+    # 30s antes do transcript nascer = o intervalo REAL entre enfileirar o kick-off e a sessão
+    # gravar a 1a linha.
+    q.append("kick-off do bastão", delivered=False, ts=inicio - 30, pre_transcript=True)
+    textos = [e.text for e in pqueue.merged_history("s", str(j))]
+    assert "kick-off do bastão" in textos
+    assert "velha de outra vida" not in textos
+
+
+def test_entrada_sem_ts_herda_o_relogio_anterior_e_nao_some_do_historico(tmp_path):
+    # Carry-forward, como o docstring de merged_history promete: `append` sempre carimba `ts`,
+    # então isto é sidecar legado (ou editado à mão). Cortar por 0.0 dava DUAS idades à mesma
+    # entrada dentro da mesma função — ordenada pelo relógio herdado e descartada pelo zero — e ela
+    # sumia do histórico calada, que é o oposto do que a fila durável existe pra garantir.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "primeira linha"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.append("sem relogio", delivered=False, ts=0.0)
+    assert q.load()[0]["ts"] == 0.0             # o zero é o que o `or` do append deixa passar
+    assert "sem relogio" in [e.text for e in pqueue.merged_history("s", str(j))]
+
+
+def test_prune_before_nao_apaga_o_kickoff_de_bastao():
+    q = PromptQueue("s")
+    q.append("velha", delivered=False, ts=1000.0)
+    q.append("kick-off", delivered=False, ts=1000.0 + 30, pre_transcript=True)
+    assert q.prune_before(1000.0 + 60) == 1
+    assert [e["text"] for e in PromptQueue("s").load()] == ["kick-off"]
+
+
+def test_kickoff_de_bastao_expira_e_nao_ressuscita_numa_vida_posterior():
+    # A isenção do bastão tem PRAZO. Sem ele, um kick-off nunca entregue (sessão morta antes de a
+    # TUI aceitar texto) sobreviveria a todo corte futuro e seria digitado na PRÓXIMA sessão de
+    # mesmo nome — a dívida da vida anterior que o corte por idade existe pra matar. E o
+    # cheap-check do drain ficaria quente naquele arquivo pra sempre.
+    q = PromptQueue("s")
+    velho = 1000.0
+    q.append("kick-off de uma vida anterior", delivered=False, ts=velho, pre_transcript=True)
+    assert q.prune_before(velho + pqueue._JANELA_BASTAO + 1) == 1
+    assert PromptQueue("s").load() == []
 
 
 def test_confirm_delivered_carimba_so_as_entregues_nao_confirmadas():

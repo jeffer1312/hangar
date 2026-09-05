@@ -10,7 +10,10 @@ Fontes, todas verificadas contra a API real em 18/08/2026:
 
  - Claude: GET https://api.anthropic.com/api/oauth/usage com o `accessToken` de
    `<conta>/.credentials.json`. Devolve `five_hour`/`seven_day` com `utilization` (percentual) e
-   `resets_at` (ISO). NÃO é chamada de inferência — não consome cota nenhuma.
+   `resets_at` (ISO). NÃO é chamada de inferência — não consome cota nenhuma. O limite semanal
+   POR MODELO (o do Fable) não está nesses dois: vem só em `limits[]`, como `kind =
+   "weekly_scoped"` com `scope.model.display_name` e `percent` (medido 04/09/2026: 5h 26%,
+   7d 64%, Fable 79% — a janela que mais aperta era a que a faixa não mostrava).
  - Kimi: GET <base_url>/usages com a `api_key` de cada provider `type = "kimi"` do
    `~/.kimi-code/config.toml`. A janela curta vem em `limits[]` (`window.duration == 300`
    minutos) e a longa em `usage`. Os dois trazem `limit`/`remaining` como STRING, e o usado é
@@ -42,10 +45,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import apelidos, contas, engines, opencode_cota, renova_token
+from app import apelidos, codex_appserver, contas, engines, opencode_cota, renova_token
 from app.adapters.kimi import sessions as kimi_sessions
 from app.auth import require_auth
 from app.config import list_config_dirs
@@ -65,7 +68,7 @@ _URL_CLAUDE = "https://api.anthropic.com/api/oauth/usage"
 _BETA_CLAUDE = "oauth-2025-04-20"
 
 Estado = Literal["lida", "sem_credencial", "expirada", "indisponivel"]
-Provedor = Literal["claude", "kimi", "opencode", "commandcode"]
+Provedor = Literal["claude", "kimi", "opencode", "commandcode", "codex"]
 
 
 class JanelaCota(BaseModel):
@@ -237,7 +240,26 @@ def _ler_claude(dir_conta: Path, ativa: bool = False, renovou_agora: bool = Fals
                            _janela_claude(j.get("seven_day"), "7d")) if w is not None]
     if not janelas:
         return "indisponivel", [], "formato-desconhecido"
+    janelas += _janelas_por_modelo(j.get("limits"))
     return "lida", janelas, None
+
+
+def _janelas_por_modelo(limits: object) -> list[JanelaCota]:
+    """As janelas `weekly_scoped` de `limits[]`, rotuladas pelo nome do modelo ("Fable")."""
+    if not isinstance(limits, list):
+        return []
+    out = []
+    for lim in limits:
+        if not isinstance(lim, dict) or lim.get("kind") != "weekly_scoped":
+            continue
+        modelo = (lim.get("scope") or {}).get("model") if isinstance(lim.get("scope"), dict) else None
+        nome = modelo.get("display_name") if isinstance(modelo, dict) else None
+        pct = lim.get("percent")
+        if not isinstance(nome, str) or not nome or not isinstance(pct, (int, float)) \
+                or isinstance(pct, bool):
+            continue
+        out.append(JanelaCota(rotulo=nome, pct=float(pct), reset_ts=_iso_ts(lim.get("resets_at"))))
+    return out
 
 
 # ------------------------------------------------------------------------------------ Kimi
@@ -362,6 +384,97 @@ def _ler_commandcode(api_key: str) -> _Leitura:
     return "lida", janelas, None
 
 
+# Presença da credencial do Codex, cacheada pelo mtime do `auth.json` (ver _tem_credencial_codex).
+_cred_codex_cache: tuple[tuple[float, ...], bool] | None = None
+
+
+def _auth_codex() -> Path:
+    """O `auth.json` do Codex. A pasta sai do `codex_appserver.home()` — `CODEX_HOME` é respeitado
+    pelo mesmo motivo do lançador: quem move a pasta move a credencial junto."""
+    return codex_appserver.home() / "auth.json"
+
+
+def _tem_credencial_codex() -> bool:
+    """Par OAuth presente no disco. Sem isto não há o que perguntar — e perguntar custa um processo
+    de ~1,2s, então a checagem vem antes.
+
+    Cache pelo mtime do arquivo, mesma razão do `_mapa_pi`: `id_conta_codex` roda POR SESSÃO Codex
+    a cada varredura da lista, e ler+parsear um JSON de 4KB nesse laço é o tipo de custo que o tick
+    do SSE não pode pagar (o `_mtimes` sobra um `stat`).
+    """
+    global _cred_codex_cache
+    chave = _mtimes(_auth_codex())
+    if _cred_codex_cache and _cred_codex_cache[0] == chave:
+        return _cred_codex_cache[1]
+    try:
+        auth = json.loads(_auth_codex().read_text(encoding="utf-8"))
+        tokens = auth.get("tokens")
+        tem = isinstance(tokens, dict) and bool(tokens.get("access_token"))
+    except (OSError, ValueError):
+        tem = False
+    _cred_codex_cache = (chave, tem)
+    return tem
+
+
+def id_conta_codex() -> str | None:
+    """O id desta credencial no `/api/cotas`, ou None quando não há credencial.
+
+    Uma função só porque o id vive em DOIS lugares: a fonte, aqui, e o campo `conta` da sessão
+    Codex (`registry.list`). Ids diferentes fariam a pílula do topo procurar uma linha que a faixa
+    desenha com outro nome, e cair no pior-geral sem ninguém entender — o mesmo cuidado que o
+    comentário do `chave:<motor>` já registra.
+    """
+    return f"codex:{_auth_codex().parent}" if _tem_credencial_codex() else None
+
+
+def _janela_codex(o: object) -> JanelaCota | None:
+    """O percentual já vem PRONTO (`usedPercent`), e a janela se identifica pela duração em minutos
+    — o mesmo `_rotulo_janela` do Kimi. `resetsAt` é epoch em SEGUNDOS, ao contrário do
+    CommandCode: dividir por 1000 aqui poria o reset em 1970."""
+    if not isinstance(o, dict):
+        return None
+    pct = _num(o.get("usedPercent"))
+    if pct is None:
+        return None
+    reset = _num(o.get("resetsAt"))
+    return JanelaCota(rotulo=_rotulo_janela(o.get("windowDurationMins")),
+                      pct=max(0.0, min(100.0, pct)), reset_ts=reset or None)
+
+
+def _ler_codex() -> _Leitura:
+    """Cota da conta do Codex, pelo `account/rateLimits/read` de um app-server efêmero.
+
+    Não é HTTP como as outras porque a credencial é um par OAuth do ChatGPT e o endpoint que a
+    traduz em cota não é público — quem sabe fazer essa conta é o próprio binário. Medido em
+    30/08/2026 (codex-cli 0.151.0): o método responde sem thread aberta, sem pane e sem sessão
+    viva, em 1,2s. É por credencial, que é exatamente o que este painel pede.
+
+    Nada aqui levanta, mesma regra do `_get_json`: um provedor que não responde não pode derrubar a
+    lista das outras contas.
+    """
+    # A fonte só nasce com credencial (ver `_fontes`), então isto cobre a corrida: um logout entre
+    # a montagem da fonte e a leitura pagaria o processo à toa e voltaria "falhou" no lugar de
+    # "não há credencial".
+    if not _tem_credencial_codex():
+        return "sem_credencial", [], None
+    try:
+        # Mesmo teto das fontes HTTP: `_atualizar` espera TODAS as leituras juntas, então uma fonte
+        # com teto maior que as outras vira o tempo de resposta do `/api/cotas` inteiro.
+        r = codex_appserver.perguntar("account/rateLimits/read", timeout=_HTTP_TIMEOUT)
+    except codex_appserver.CodexAusente:
+        return "indisponivel", [], "codex-ausente"
+    except (RuntimeError, OSError) as e:
+        _log.debug("cota: codex nao respondeu: %r", e)
+        return "indisponivel", [], "sem-resposta"
+    limites = r.get("rateLimits")
+    limites = limites if isinstance(limites, dict) else {}
+    janelas = [j for j in (_janela_codex(limites.get("primary")),
+                           _janela_codex(limites.get("secondary"))) if j is not None]
+    if not janelas:
+        return "indisponivel", [], "formato-desconhecido"
+    return "lida", janelas, None
+
+
 def _ler_opencode(cfg: dict[str, str]) -> _Leitura:
     """Adapta o leitor do painel do OpenCode ao formato de leitura deste módulo."""
     estado, janelas, motivo = opencode_cota.ler(cfg["workspace_id"], cfg["auth_cookie"])
@@ -421,6 +534,74 @@ def provider_padrao_kimi() -> str | None:
     return prov
 
 
+# Provider do Pi -> conta desta lista, casado pela CHAVE e não pelo nome: o Pi chama de
+# "kimi-coding" a MESMA credencial que o Kimi Code chama de "apikey" (verificado: a chave é byte a
+# byte a mesma), e cota é da credencial, não do rótulo que cada CLI deu pra ela. Casar por nome
+# exigiria uma tabela de sinônimos que envelhece a cada provedor novo.
+# Provider sem chave conhecida aqui (OAuth do Codex, provedor que só o Pi tem) devolve None e a
+# pílula cai no pior-geral — o comportamento de antes, nunca um id que não casa com nada.
+_PI_AGENT = Path.home() / ".pi" / "agent"
+_mapa_pi_cache: tuple[tuple[float, ...], dict[str, str]] | None = None
+
+
+def _mtimes(*caminhos: Path) -> tuple[float, ...]:
+    out = []
+    for p in caminhos:
+        try:
+            out.append(p.stat().st_mtime)
+        except OSError:
+            out.append(0.0)
+    return tuple(out)
+
+
+def _chaves_do_pi() -> dict[str, str]:
+    """provider do Pi -> api key. Dois arquivos: `auth.json` (o que o `/login` do Pi grava) e os
+    provedores manuais de `models.json`, que trazem a chave no próprio bloco."""
+    out: dict[str, str] = {}
+    try:
+        auth = json.loads((_PI_AGENT / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        auth = {}
+    for nome, d in (auth if isinstance(auth, dict) else {}).items():
+        k = d.get("key") if isinstance(d, dict) else None
+        if isinstance(k, str) and k:
+            out[str(nome)] = k
+    try:
+        mods = json.loads((_PI_AGENT / "models.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        mods = {}
+    provs = mods.get("providers") if isinstance(mods, dict) else None
+    for nome, d in (provs if isinstance(provs, dict) else {}).items():
+        k = d.get("apiKey") if isinstance(d, dict) else None
+        if isinstance(k, str) and k:
+            out.setdefault(str(nome), k)
+    return out
+
+
+def _mapa_pi() -> dict[str, str]:
+    """provider do Pi -> id de conta. Cache pelos mtimes dos quatro arquivos porque isto roda por
+    sessão Pi a cada varredura da lista (mesma razão do cache do `provider_padrao_kimi`)."""
+    global _mapa_pi_cache
+    chave = _mtimes(_PI_AGENT / "auth.json", _PI_AGENT / "models.json",
+                    kimi_sessions.kimi_home() / "config.toml", engines.caminho())
+    if _mapa_pi_cache and _mapa_pi_cache[0] == chave:
+        return _mapa_pi_cache[1]
+    por_chave: dict[str, str] = {}
+    for nome, key, _base in _providers_kimi():
+        por_chave.setdefault(key, f"kimi:{nome}")
+    for nome, dados in engines.listar().items():
+        key = dados.get("api_key")
+        if isinstance(key, str) and key:
+            por_chave.setdefault(key, f"chave:{nome}")
+    mapa = {prov: por_chave[key] for prov, key in _chaves_do_pi().items() if key in por_chave}
+    _mapa_pi_cache = (chave, mapa)
+    return mapa
+
+
+def conta_de_provider_pi(provider: str | None) -> str | None:
+    return _mapa_pi().get(provider) if provider else None
+
+
 # ------------------------------------------------------------------------- fontes e cache
 
 _cache: dict[str, tuple[float, CotaConta]] = {}
@@ -436,6 +617,11 @@ def _fontes() -> list[_Fonte]:
         if contas.e_conta(p) or c.active:
             out.append(_Fonte(f"claude:{c.path}", c.label, "claude",
                               lambda p=p, at=bool(c.active): _ler_claude(p, at), bool(c.active)))
+    # Codex: UMA credencial por máquina (o `auth.json` do CODEX_HOME), e ela só vira linha quando
+    # existe — quem não usa Codex não ganha uma linha vazia nem paga o processo que a leitura custa.
+    cid_codex = id_conta_codex()
+    if cid_codex:
+        out.append(_Fonte(cid_codex, "Codex", "codex", _ler_codex))
     for nome, key, base in _providers_kimi():
         # CommandCode plugado como provider do Kimi Code: o `<base>/usages` dele é 403 — a rota
         # de cota é a do CommandCode, escolhida pela base_url, igual ao ramo das chaves abaixo.
@@ -540,3 +726,43 @@ def listar_cotas(forcar: bool = False) -> list[CotaConta]:
                 "label": nomes.get(c.id) or c.label,
                 "idade_s": (agora - c.ts) if c.ts is not None else None}))
     return saida
+
+
+class SugestaoConta(BaseModel):
+    id: str
+    label: str
+    path: str
+    ativa: bool
+    # Percentual que sobra na janela mais cheia da conta — a que aperta primeiro.
+    folga: float
+
+
+def sugerir_claude(contas_lidas: list[CotaConta]) -> SugestaoConta | None:
+    """A conta Claude com mais folga. Empate fica com a conta padrão (sessão nasce nela sem flag).
+
+    Só conta com leitura vale: expirada ou indisponível não tem número, e chutar seria mandar
+    uma sessão nascer numa conta que talvez peça login.
+    """
+    melhor: tuple[float, bool, CotaConta] | None = None
+    for c in contas_lidas:
+        if c.provedor != "claude" or c.estado != "lida" or not c.janelas:
+            continue
+        folga = 100.0 - max(j.pct for j in c.janelas)
+        chave = (folga, c.ativa)
+        if melhor is None or chave > (melhor[0], melhor[1]):
+            melhor = (folga, c.ativa, c)
+    if melhor is None:
+        return None
+    folga, _, c = melhor
+    return SugestaoConta(id=c.id, label=c.label, path=c.id.removeprefix("claude:"),
+                         ativa=c.ativa, folga=folga)
+
+
+@cotas_router.get("/sugestao", dependencies=[Depends(require_auth)],
+                  response_model=SugestaoConta)
+def sugerir_conta() -> SugestaoConta:
+    """Conta Claude com mais folga pra uma sessão nova (`hangar-send --new … --conta auto`)."""
+    s = sugerir_claude(listar_cotas())
+    if s is None:
+        raise HTTPException(404, detail="sem-conta-legivel")
+    return s

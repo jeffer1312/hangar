@@ -20,6 +20,7 @@ import * as m from '../paraglide/messages';
   import AtualizarSheet from './AtualizarSheet.svelte';
   import { getActiveId, selectServer } from '../lib/auth';
   import { navMode } from '../lib/navMode.svelte';
+  import { sidebarPin } from '../lib/sidebarPin.svelte';
   import type { AggSession } from '@hangar/core';
   import {
     aggregateWorkspaceActions,
@@ -300,6 +301,16 @@ import * as m from '../paraglide/messages';
     if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
       commandOpen = true;
+      return;
+    }
+    // Ctrl+B recolhe/expande a sidebar (mesmo atalho do VS Code). NUNCA com o foco no terminal
+    // embutido: Ctrl+B é o prefixo do tmux, e roubá-lo ali mataria todo atalho do tmux do usuário.
+    // Com o quadro/canvas segurando o recolhido, o toggle é clique morto (mesma regra do botão).
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B') && !e.shiftKey && !e.altKey) {
+      if ((e.target as HTMLElement | null)?.closest?.('.tp, .xterm')) return;
+      if (sidebarPin.forcedOverride === true) return;
+      e.preventDefault();
+      sidebarPin.toggleUser();
     }
   }
 
@@ -573,7 +584,7 @@ import * as m from '../paraglide/messages';
        recolhida e quem abre é o "Mostrar na barra" do popover (lib/quotaBarra). -->
   {#if quotaBarra.aberta}
     <QuotaStrip
-      serverKey={currentKey ?? ''}
+      serverKey={currentKey?.split('::')[0] || getActiveId() || ''}
       onIrParaContas={() => abrirConfig('contas', getActiveId())}
     />
   {/if}

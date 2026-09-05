@@ -16,8 +16,10 @@
   import * as m from '../../paraglide/messages';
   import { engineModelos, engineModelosForServer, putEngine, putEngineForServer,
            criarConta, type ModeloProvedor } from '@hangar/core';
-  import { sincronizarNosAgentes, type ResultadoSync } from '../../lib/credenciais';
+  import { sincronizarNosAgentes, codexLoginIniciar, codexLoginPasso, codexLoginCancelar,
+           type ResultadoSync, type PassoCodex } from '../../lib/credenciais';
   import type { Server } from '../../lib/auth';
+  import { onDestroy } from 'svelte';
 
   interface Props {
     apiTarget: Server | null;
@@ -34,9 +36,12 @@
   // `{base}/v1/models` pra descobrir os modelos, e o Claude Code monta `{base}/v1/...`). Colar a
   // URL como o provedor documenta ("…/coding/v1") virava `/v1/v1/models` — 404 e zero modelo. O
   // backend também tira o `/v1` sozinho agora, então o campo aceita as duas formas.
-  type Item = { id: string; nome: string; desc: string; url: string; login?: boolean };
+  // `login: 'codex'` = conta do ChatGPT por código de dispositivo, que o servidor espalha pro
+  // Codex, Pi e omp (o mesmo OAuth nos três) — nem URL nem chave nem nome.
+  type Item = { id: string; nome: string; desc: string; url: string; login?: 'claude' | 'codex' };
   const CATALOGO: Item[] = [
-    { id: 'claude', nome: m.novacred_claude_nome(), desc: m.novacred_claude_desc(), url: '', login: true },
+    { id: 'claude', nome: m.novacred_claude_nome(), desc: m.novacred_claude_desc(), url: '', login: 'claude' },
+    { id: 'codex', nome: m.novacred_codex_nome(), desc: m.novacred_codex_desc(), url: '', login: 'codex' },
     { id: 'opencode', nome: 'OpenCode Zen', desc: m.novacred_opencode_desc(), url: 'https://opencode.ai/zen' },
     { id: 'kimi', nome: 'Kimi Code', desc: m.novacred_kimi_desc(), url: 'https://api.kimi.com/coding' },
     { id: 'anthropic', nome: 'Anthropic', desc: m.novacred_anthropic_desc(), url: 'https://api.anthropic.com' },
@@ -65,6 +70,56 @@
   let erroModelos = $state('');
   let modeloEscolhido = $state('');
 
+  // Login do Codex: o servidor pede o código e faz o poll; aqui só o passo e o intervalo de leitura.
+  let codex = $state<PassoCodex>({ etapa: 'idle' });
+  let codexPoll: ReturnType<typeof setInterval> | null = null;
+  // Geração da tentativa: cancelar/fechar com o iniciar ainda em voo invalida a resposta que
+  // chega depois — senão ela rearmava o poll num componente já desmontado.
+  let codexGer = 0;
+
+  function pararCodex() {
+    if (codexPoll) { clearInterval(codexPoll); codexPoll = null; }
+  }
+
+  async function iniciarCodex() {
+    const alvo = apiTarget;
+    const g = ++codexGer;
+    erro = '';
+    codex = { etapa: 'idle' };
+    let passo: PassoCodex;
+    try {
+      passo = await codexLoginIniciar(alvo);
+    } catch (e) {
+      if (g === codexGer) erro = e instanceof Error && e.message ? e.message : String(e);
+      return;
+    }
+    if (g !== codexGer) {
+      // Cancelado enquanto o servidor criava a tentativa: ela existe lá e precisa morrer.
+      codexLoginCancelar(alvo).catch(() => {});
+      return;
+    }
+    codex = passo;
+    codexPoll = setInterval(async () => {
+      try {
+        const p = await codexLoginPasso(alvo);
+        if (g !== codexGer) return;
+        codex = p;
+      } catch { /* erro de rede no poll: a próxima leitura tenta de novo */ }
+      if (codex.etapa !== 'aguardando') {
+        pararCodex();
+        if (codex.etapa === 'concluido') onCriada();
+      }
+    }, 2000);
+  }
+
+  function cancelarCodex() {
+    pararCodex();
+    if (codex.etapa === 'aguardando') codexLoginCancelar(apiTarget).catch(() => {});
+    codexGer++;
+    codex = { etapa: 'idle' };
+  }
+  onDestroy(cancelarCodex);
+
   function abrir(item: Item) {
     escolhido = item;
     nome = item.login ? '' : item.nome;
@@ -75,9 +130,11 @@
     erro = '';
     erroModelos = '';
     sync = null;
+    if (item.login === 'codex') iniciarCodex();
   }
 
   function voltar() {
+    cancelarCodex();
     escolhido = null;
     erro = '';
   }
@@ -189,7 +246,7 @@
         <button type="button" class="nc-voltar" onclick={voltar} aria-label={m.comum_voltar()}>←</button>
       {/if}
       {#if escolhido}
-        <ProvedorIcone tipo={escolhido.login ? 'claude' : 'chave'} baseUrl={escolhido.url}
+        <ProvedorIcone tipo={escolhido.login === 'claude' ? 'claude' : 'chave'} baseUrl={escolhido.url}
           iniciais={escolhido.nome.slice(0, 2).toUpperCase()} size={26} />
       {/if}
       <h2 class="nc-titulo">{escolhido ? escolhido.nome : m.contas_nova_escolha()}</h2>
@@ -199,7 +256,7 @@
       <div class="nc-lista">
         {#each CATALOGO as item (item.id)}
           <div class="nc-item">
-            <ProvedorIcone tipo={item.login ? 'claude' : 'chave'} baseUrl={item.url}
+            <ProvedorIcone tipo={item.login === 'claude' ? 'claude' : 'chave'} baseUrl={item.url}
               iniciais={item.nome.slice(0, 2).toUpperCase()} size={30} />
             <span class="nc-item-txt">
               <span class="nc-item-nome">{item.nome}</span>
@@ -209,6 +266,41 @@
               >+ {m.novacred_conectar()}</button>
           </div>
         {/each}
+      </div>
+    {:else if escolhido.login === 'codex'}
+      <p class="nc-leg">{escolhido.desc}</p>
+      {#if codex.etapa === 'aguardando' || codex.etapa === 'concluido'}
+        <div class="nc-modelos">
+          <p class="nc-sync-linha"><b>1</b>{m.novacred_codex_passo1()}</p>
+          <a class="nc-codex-link" href={codex.url} target="_blank" rel="noopener noreferrer">{codex.url}</a>
+          <p class="nc-sync-linha"><b>2</b>{m.novacred_codex_passo2()}</p>
+          <p class="nc-codex-codigo">{codex.user_code}</p>
+          <p class="nc-sync-linha" class:pulado={codex.etapa !== 'concluido'}>
+            <b>3</b>{codex.etapa === 'concluido' ? m.novacred_codex_concluido() : m.novacred_codex_aguardando()}
+          </p>
+        </div>
+      {/if}
+      {#if codex.etapa === 'concluido' && codex.resultado}
+        <div class="nc-modelos">
+          <span class="nc-modelos-tit">{m.novacred_sync_titulo()}</span>
+          {#each Object.entries(codex.resultado) as [alvo, r] (alvo)}
+            <p class="nc-sync-linha" class:pulado={!r.ok && r.motivo === 'nao-instalado'}
+               class:falhou={!r.ok && r.motivo !== 'nao-instalado'}>
+              <b>{alvo}</b>
+              {r.ok ? (r.motivo === 'ja-logado' ? m.novacred_codex_ja_logado() : m.novacred_sync_ok())
+                    : (r.motivo === 'nao-instalado' ? m.novacred_sync_nao_instalado() : r.motivo)}
+            </p>
+          {/each}
+        </div>
+      {/if}
+      {#if codex.etapa === 'falhou'}<p class="nc-erro" role="alert">{codex.erro}</p>
+      {:else if erro}<p class="nc-erro" role="alert">{erro}</p>{/if}
+      <div class="nc-rodape">
+        {#if codex.etapa === 'falhou' || (codex.etapa === 'idle' && erro)}
+          <button type="button" class="nc-btn primario" onclick={iniciarCodex}>{m.novacred_codex_tentar()}</button>
+        {/if}
+        <button type="button" class="nc-btn" onclick={() => { cancelarCodex(); onFechar(); }}
+          >{codex.etapa === 'concluido' ? m.sessao_fechar() : m.comum_cancelar()}</button>
       </div>
     {:else}
       <p class="nc-leg">{escolhido.desc}</p>
@@ -347,6 +439,11 @@
      resto do formulário. Com a mesma cor pros dois, uma recusa real ("já existe um provedor com
      esse nome fora do nosso bloco") ficava tão discreta quanto "o Codex não existe nesta máquina". */
   .nc-sync-linha.pulado { color: var(--text-muted); }
+  .nc-codex-link { display: block; margin: 2px 0 var(--space-2) 18px; font-size: var(--text-xs);
+                   color: var(--accent); word-break: break-all; }
+  .nc-codex-codigo { margin: 2px 0 var(--space-2) 18px; font-family: var(--font-mono);
+                     font-size: var(--text-lg); letter-spacing: 0.15em; color: var(--text-primary);
+                     user-select: all; }
   .nc-sync-linha.falhou { color: var(--error); }
   .nc-rodape { display: flex; gap: var(--space-2); }
   .nc-btn {

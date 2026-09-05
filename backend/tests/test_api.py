@@ -5,7 +5,9 @@ from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 from app.auth import require_auth
 from app.config import settings
-from app import tmux
+from app import pair, tmux
+from app import registry as registry_mod
+from app.registry import SessionRegistry
 import app.api as api_mod
 
 
@@ -15,6 +17,16 @@ def _models_cache_isolado(models_cache_em_tmp):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _pair_dir_isolado(tmp_path, monkeypatch):
+    # registry.list() varre pareamento (Task 8) a cada chamada, inclusive dentro de rotas exercitadas
+    # via TestClient — sem isto a suite varria o .hangar-pair REAL de quem roda (achado do review).
+    monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", {})
+    # api.py registra este gancho no import (dispara thread real de _drain_session, que chama
+    # registry.list() de novo) — sem neutraliza-lo aqui, um sweep achando ausente de verdade nesta
+    # suite dispararia essa thread fora da janela isolada (achado do review de Task 8).
+    monkeypatch.setattr(registry_mod, "apos_saida_por_morte", None)
 
 
 @pytest.fixture
@@ -872,29 +884,32 @@ def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
                                model=None, effort=None, context_window=None)
 
 
-def test_create_codex_provider_routes_to_create_codex(api_client):
-    from unittest.mock import AsyncMock
-    fake = AsyncMock(return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex"))
-    with patch("app.api.registry.create_codex", fake), \
-         patch("app.api.registry.create") as claude_create:
+def test_create_codex_provider_routes_to_create_normal(api_client):
+    # Desde o lancador unico o Codex nao tem mais caminho de criacao proprio: ele passa pelo MESMO
+    # registry.create dos outros, com o provider chegando la (senao o pane subiria claude).
+    with patch("app.api.registry.create",
+               return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex", jsonl=None)) as cr:
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "cx", "cwd": "/tmp", "provider": "codex"})
     assert r.status_code == 200
     assert r.json()["provider"] == "codex"
-    fake.assert_awaited_once_with("cx", "/tmp", None)
-    claude_create.assert_not_called()   # nao passa pelo caminho tmux/Claude
+    # jsonl vazio como no Pi/Kimi: o rollout so existe depois que a TUI abre a thread.
+    assert r.json()["jsonl"] is None
+    cr.assert_called_once_with("cx", "/tmp", None, provider="codex", engine=None,
+                               model=None, effort=None, context_window=None)
 
 
 def test_create_codex_forwards_wrapper_initial_prompt(api_client):
-    from unittest.mock import AsyncMock
-    fake = AsyncMock(return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex"))
-    with patch("app.api.registry.create_codex", fake):
+    # O prompt inicial vai no COMANDO do pane (a TUI e quem abre a thread), entao ele precisa
+    # atravessar ate o create.
+    with patch("app.api.registry.create",
+               return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex")) as cr:
         r = api_client.post("/api/sessions", headers=_h(), json={
             "name": "cx", "cwd": "/tmp", "provider": "codex",
             "initial_prompt": "revise este projeto",
         })
     assert r.status_code == 200
-    fake.assert_awaited_once_with("cx", "/tmp", "revise este projeto")
+    assert cr.call_args.kwargs["initial_prompt"] == "revise este projeto"
 
 
 def test_create_pi_provider_routes_to_claude_create_with_provider(api_client):
@@ -920,9 +935,30 @@ def test_create_pi_with_engine_is_refused(api_client):
     cr.assert_not_called()
 
 
+def test_create_omp_provider_routes_to_claude_create_with_provider(api_client):
+    # omp e o fork do Pi: MESMO registry.create, so o provider muda o comando do pane.
+    with patch("app.api.registry.create",
+              return_value=SessionInfo(name="o", cwd="/tmp", provider="omp", jsonl=None)) as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "o", "cwd": "/tmp", "provider": "omp"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "omp"
+    assert r.json()["jsonl"] is None
+    cr.assert_called_once_with("o", "/tmp", None, provider="omp", engine=None,
+                               model=None, effort=None, context_window=None)
+
+
+def test_create_omp_with_engine_is_refused(api_client):
+    # Motor so faz sentido no Claude: o env do hangar-engine e Anthropic-only.
+    with patch("app.api.registry.create") as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "o", "cwd": "/tmp", "provider": "omp", "engine": "x"})
+    assert r.status_code == 400
+    cr.assert_not_called()
+
+
 def test_create_rejects_unknown_provider(api_client):
-    with patch("app.api.registry.create") as cr, \
-         patch("app.api.registry.create_codex") as cc:
+    with patch("app.api.registry.create") as cr:
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "x", "cwd": "/tmp", "provider": "gemini"})
     assert r.status_code == 400
@@ -930,7 +966,6 @@ def test_create_rejects_unknown_provider(api_client):
     # (que orienta so claude/pi) — a criacao aceita codex/kimi e o texto tem que ser generico.
     assert r.json()["detail"]["code"] == "erro_provider_sessao_invalido"
     cr.assert_not_called()
-    cc.assert_not_called()
 
 
 def test_rename_falha_usa_a_mesma_chave_da_sidebar(api_client):
@@ -944,9 +979,8 @@ def test_rename_falha_usa_a_mesma_chave_da_sidebar(api_client):
 
 
 def test_create_codex_conflict_maps_to_409(api_client):
-    from unittest.mock import AsyncMock
-    fake = AsyncMock(side_effect=ValueError("ja existe uma sessao com esse nome"))
-    with patch("app.api.registry.create_codex", fake):
+    fake = MagicMock(side_effect=ValueError("ja existe uma sessao com esse nome"))
+    with patch("app.api.registry.create", fake):
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "cx", "cwd": "/tmp", "provider": "codex"})
     assert r.status_code == 409
@@ -1423,6 +1457,65 @@ def test_resume_archived_route_404_when_transcript_missing(api_client):
     assert r.status_code == 404
 
 
+# --- Retomar conversa CODEX do Arquivo (ticket 08) ---
+# A rota recusava com 409. O id da conversa e o uuid do fim do nome do rollout, e e ele que o
+# `codex resume` recebe — o mesmo id que o Arquivo ja usa pra listar e abrir a conversa.
+
+def test_resume_archived_codex_cria_sessao_ligada_a_conversa(api_client):
+    with patch("app.api.archive_cwd", return_value="/home/u/my-proj"), \
+         patch.object(tmux, "has_session", return_value=False), \
+         patch("app.api.codex_sessions.exists", return_value=False), \
+         patch("app.api.registry.create",
+               return_value=SessionInfo(name="my-proj", cwd="/home/u/my-proj",
+                                        provider="codex")) as create:
+        r = api_client.post(f"/api/archive/codex/{_SID}/resume", headers=_h(),
+                            json={"provider": "codex"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "codex"
+    create.assert_called_once_with("my-proj", "/home/u/my-proj", config_dir=None, provider="codex",
+                                   resume_session_id=_SID, engine=None)
+
+
+def test_resume_archived_codex_desvia_de_nome_de_sessao_codex_viva(api_client):
+    """A sessao Codex viva nao esta no tmux com aquele nome — esta no sidecar. Olhando so o tmux, o
+    conflito estourava la dentro do create, com a mensagem de outro assunto."""
+    with patch("app.api.archive_cwd", return_value="/home/u/my-proj"), \
+         patch.object(tmux, "has_session", return_value=False), \
+         patch("app.api.codex_sessions.exists", side_effect=[True, False]), \
+         patch("app.api.registry.create",
+               return_value=SessionInfo(name="my-proj-2", cwd="/home/u/my-proj")) as create:
+        r = api_client.post(f"/api/archive/codex/{_SID}/resume", headers=_h(),
+                            json={"provider": "codex"})
+    assert r.status_code == 200
+    assert create.call_args[0][0] == "my-proj-2"
+
+
+def test_resume_archived_codex_recusa_nome_de_rollout_sem_id(api_client):
+    """Nome fora do padrao nao tem id pra retomar, e "caminho invalido" mandaria procurar defeito no
+    lugar errado."""
+    r = api_client.post("/api/archive/codex/rollout-sem-uuid/resume", headers=_h(),
+                        json={"provider": "codex"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_rollout_sem_id"
+
+
+def test_resume_archived_codex_id_com_36_chars_fora_do_formato_tambem_e_recusado(api_client):
+    """Uma definição mais frouxa de "id válido" aqui do que a que o Arquivo usa deixava um id de 36
+    caracteres passar por esta guarda e falhar mais adiante como "caminho inválido" — a mensagem que
+    explica o problema não aparecia justo no caso em que ela é útil."""
+    r = api_client.post(f"/api/archive/codex/{'-' * 36}/resume", headers=_h(),
+                        json={"provider": "codex"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_rollout_sem_id"
+
+
+def test_resume_archived_codex_404_em_conversa_inexistente(api_client):
+    with patch("app.api.archive_cwd", side_effect=FileNotFoundError()):
+        r = api_client.post(f"/api/archive/codex/{_SID}/resume", headers=_h(),
+                            json={"provider": "codex"})
+    assert r.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # /answer: fallback por texto quando o drive da TUI falha (DriveError)
 # ---------------------------------------------------------------------------
@@ -1457,7 +1550,8 @@ def test_answer_drive_error_falls_back_to_text(api_client):
          patch("app.api.registry.list", return_value=[info]), \
          patch.object(api_mod, "read_pending_askq", return_value=None), \
          patch.object(api_mod.terminal, "interrupt") as intr, \
-         patch.object(api_mod, "_send_one", return_value={"ok": True, "error": None}) as send, \
+         patch.object(api_mod, "_send_one",
+                      return_value={"ok": True, "error": None, "delivered": True}) as send, \
          patch.object(api_mod, "clear_pending_askq") as clear:
         r = api_client.post("/api/sessions/s1/answer", headers=_h(),
                             json={"answers": [{"kind": "option", "indices": [1], "labels": ["Sim"]}]})
@@ -1465,6 +1559,48 @@ def test_answer_drive_error_falls_back_to_text(api_client):
     intr.assert_called_once_with("s1")
     assert "Sim" in send.call_args[0][1]
     clear.assert_called_once()
+
+
+def test_answer_sem_texto_de_fallback_nao_apaga_a_pergunta(api_client):
+    # Drive falhou e a resposta nao vira texto (kind `chat`, rotulos vazios): nao ha o que entregar.
+    # Ate 01/09/2026 este ramo mandava o Escape, marcava fallback e LIMPAVA o sidecar — a pergunta
+    # sumia da lista como respondida sem uma tecla ter saido. Pi e Kimi ja barravam; o Claude nao.
+    info = SessionInfo(name="s1", cwd="/x", jsonl="/x/u.jsonl")
+    with patch.object(ti_mod, "answer_questions", side_effect=ti_mod.DriveError("picker preso")), \
+         patch("app.api.registry.list", return_value=[info]), \
+         patch.object(api_mod, "read_pending_askq", return_value=None), \
+         patch.object(api_mod, "_askq_fallback_text", return_value=""), \
+         patch.object(api_mod.terminal, "interrupt") as intr, \
+         patch.object(api_mod, "_send_one") as send, \
+         patch.object(api_mod, "clear_pending_askq") as clear:
+        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
+                            json={"answers": [{"kind": "chat"}]})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_drive_sem_fallback"
+    send.assert_not_called()
+    intr.assert_not_called()      # picker segue aberto pra quem for responder no terminal
+    clear.assert_not_called()
+
+
+def test_answer_fallback_que_so_enfileirou_nao_diz_que_respondeu(api_client):
+    # Drive falhou E o texto do plano B ficou na FILA (delivered=False: o gate recusou digitar com o
+    # picker aberto). Ate 01/09/2026 isto devolvia 200 — o app pintava a bolha como enviada e a
+    # pessoa esperava por uma resposta que nunca sairia da fila, ja que quem segurava a fila era a
+    # propria pergunta. Agora e 409, e o sidecar NAO e limpo: a pergunta continua aberta, e apaga-lo
+    # devolveria a sessao pra `idle` na lista.
+    info = SessionInfo(name="s1", cwd="/x", jsonl="/x/u.jsonl")
+    with patch.object(ti_mod, "answer_questions", side_effect=ti_mod.DriveError("picker preso")), \
+         patch("app.api.registry.list", return_value=[info]), \
+         patch.object(api_mod, "read_pending_askq", return_value=None), \
+         patch.object(api_mod.terminal, "interrupt"), \
+         patch.object(api_mod, "_send_one",
+                      return_value={"ok": True, "error": None, "delivered": False}), \
+         patch.object(api_mod, "clear_pending_askq") as clear:
+        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
+                            json={"answers": [{"kind": "option", "indices": [1], "labels": ["Sim"]}]})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_resposta_nao_entregue"
+    clear.assert_not_called()
 
 
 def test_answer_validation_error_still_409(api_client):
@@ -1844,6 +1980,18 @@ def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
     assert r.json()["detail"]["code"] == "erro_catalogo_pi_indisponivel"
 
 
+def test_omp_models_missing_sidecar_is_409_com_codigo_proprio(api_client):
+    # Codigo SEPARADO do erro_catalogo_pi_indisponivel: o front traduz por `code`, entao reusar o
+    # do Pi mostraria "reinicie a sessao" numa sessao omp, onde o /reload nao recarrega a extensao.
+    info_omp = SessionInfo(name="oo", cwd="/p", jsonl="/p/ts_uuid.jsonl", provider="omp")
+    with patch("app.api._cached_info", AsyncMock(return_value=info_omp)), \
+         patch("app.api.pi_models.read_catalog", return_value=None), \
+         patch("app.api._session_config_dir", return_value=None):
+        r = api_client.get("/api/sessions/oo/pi/models", headers=_h())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_catalogo_omp_indisponivel"
+
+
 def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
     # `xhigh` FORA dos levels do modelo novo: e o caso real do clamp (o Pi aterrissa em high).
     after = {**_PI_CAT, "current": {"provider": "clinepass", "id": "cline-pass/glm-5.2"},
@@ -2153,6 +2301,18 @@ def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
         r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
     assert r.status_code == 409
     assert "trabalhando" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("provider,codigo", [("omp", "erro_omp_ausente"), ("pi", "erro_pi_ausente")])
+def test_model_options_binario_ausente_tem_codigo_por_provider(api_client_limpo, monkeypatch,
+                                                               provider, codigo):
+    # O front traduz por `code`: um codigo so pros dois mandava a sessao omp instalar o Pi.
+    from app import pi_catalog
+    pi_catalog._cache.clear()
+    monkeypatch.setattr(pi_catalog.shutil, "which", lambda _b: None)
+    r = api_client_limpo.get(f"/api/model-options?provider={provider}", headers=_h())
+    assert r.status_code == 502
+    assert r.json()["detail"]["code"] == codigo
 
 
 def test_engine_model_set_restaura_o_default_global(api_client_limpo):
@@ -2473,7 +2633,7 @@ def test_pair_warning_parcial_carrega_avisos_estruturados(api_client):
         return None
     with patch("app.api.registry.list",
               return_value=[SessionInfo(name="me", cwd="/p"), SessionInfo(name="voce", cwd="/p")]), \
-         patch("app.api.pair.join_group", return_value=(["me", "voce"], "snap")), \
+         patch("app.api.pair.join_group", return_value=(["me", "voce"], {"me": None, "voce": None})), \
          patch("app.api.PairLink.get", return_value={"peers": ["voce"], "task": "", "gid": "g1"}), \
          patch("app.api._deliver", side_effect=fake_deliver):
         r = api_client.post("/api/sessions/me/pair", headers=_h(),
@@ -2492,13 +2652,92 @@ def test_pair_warning_none_quando_todos_avisados(api_client):
     # B1: sem falha -> warning None (array vazio nunca chega ao formatador do front).
     with patch("app.api.registry.list",
               return_value=[SessionInfo(name="me", cwd="/p"), SessionInfo(name="voce", cwd="/p")]), \
-         patch("app.api.pair.join_group", return_value=(["me", "voce"], "snap")), \
+         patch("app.api.pair.join_group", return_value=(["me", "voce"], {"me": None, "voce": None})), \
          patch("app.api.PairLink.get", return_value={"peers": ["voce"], "task": "", "gid": "g1"}), \
          patch("app.api._deliver", return_value=None):
         r = api_client.post("/api/sessions/me/pair", headers=_h(),
                             json={"peers": ["voce"], "task": "t"})
     assert r.status_code == 200
     assert r.json()["warning"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: protocolo completo só pro recém-chegado
+# ---------------------------------------------------------------------------
+
+def test_pair_protocolo_completo_so_pro_novato(api_client):
+    # 'd' entra num grupo (a,b): d recebe o protocolo; a e b recebem UMA linha "d entrou".
+    entregues = {}
+    async def fake_deliver(name, text):
+        entregues[name] = text
+        return None
+    snap = {"a": {"peers": ["b"], "task": "t", "gid": "g1"},
+            "b": {"peers": ["a"], "task": "t", "gid": "g1"},
+            "d": None}
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name=n, cwd="/p") for n in ("a", "b", "d")]), \
+         patch("app.api.pair.join_group", return_value=(["a", "b", "d"], snap)), \
+         patch("app.api.PairLink.get", return_value={"peers": ["a", "b"], "task": "t", "gid": "g1"}), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.post("/api/sessions/d/pair", headers=_h(), json={"peers": ["a"], "task": ""})
+    assert r.status_code == 200
+    assert entregues["d"].startswith("[de: hangar] GRUPO DE TRABALHO ATIVO")
+    assert entregues["a"].startswith("[de: hangar] 'd' entrou no seu grupo")
+    assert entregues["b"].startswith("[de: hangar] 'd' entrou no seu grupo")
+    assert "Membros agora: 'a', 'b', 'd'" in entregues["a"]
+
+
+def test_pair_repetido_sem_mudanca_nao_avisa_ninguem(api_client):
+    entregues = []
+    async def fake_deliver(name, text):
+        entregues.append(name)
+        return None
+    snap = {"a": {"peers": ["b"], "task": "t", "gid": "g1"},
+            "b": {"peers": ["a"], "task": "t", "gid": "g1"}}
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name=n, cwd="/p") for n in ("a", "b")]), \
+         patch("app.api.pair.join_group", return_value=(["a", "b"], snap)), \
+         patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "t", "gid": "g1"}), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.post("/api/sessions/a/pair", headers=_h(), json={"peers": ["b"], "task": ""})
+    assert r.status_code == 200
+    assert entregues == []
+    assert r.json()["warning"] is None
+
+
+def test_pair_merge_de_dois_grupos_avisa_entrada_dos_dois_lados(api_client):
+    entregues = {}
+    async def fake_deliver(name, text):
+        entregues[name] = text
+        return None
+    snap = {"a": {"peers": ["b"], "task": "t", "gid": "g1"},
+            "b": {"peers": ["a"], "task": "t", "gid": "g1"},
+            "c": {"peers": ["d"], "task": "", "gid": "g2"},
+            "d": {"peers": ["c"], "task": "", "gid": "g2"}}
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name=n, cwd="/p") for n in "abcd"]), \
+         patch("app.api.pair.join_group", return_value=(["a", "b", "c", "d"], snap)), \
+         patch("app.api.PairLink.get", return_value={"peers": ["b", "c", "d"], "task": "t", "gid": "g1"}), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.post("/api/sessions/a/pair", headers=_h(), json={"peers": ["c"], "task": ""})
+    assert r.status_code == 200
+    assert "'c', 'd' entrou" in entregues["a"] and "'c', 'd' entrou" in entregues["b"]
+    assert "'a', 'b' entrou" in entregues["c"] and "'a', 'b' entrou" in entregues["d"]
+
+
+# ---------------------------------------------------------------------------
+# Task 3: tarefa do grupo protegida contra sobrescrita
+# ---------------------------------------------------------------------------
+
+def test_pair_409_quando_tarefa_diferente_sem_replace(api_client):
+    from app import pair as pair_mod
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name="me", cwd="/p"), SessionInfo(name="voce", cwd="/p")]), \
+         patch("app.api.pair.join_group", side_effect=pair_mod.TaskConflito("PM-1")):
+        r = api_client.post("/api/sessions/me/pair", headers=_h(), json={"peers": ["voce"], "task": "PM-2"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_pareamento_tarefa_existente"
+    assert r.json()["detail"]["params"]["existente"] == "PM-1"
 
 
 def test_group_message_warning_carrega_avisos(api_client):
@@ -2521,6 +2760,126 @@ def test_group_message_warning_carrega_avisos(api_client):
         {"sessao": "c", "erro": {"code": "erro_envio_falhou", "params": {"erro": "rede"},
                                  "msg": "falha ao enviar: rede"}},
     ]
+
+
+# ---------------------------------------------------------------------------
+# Task 5: guardas do --group (prefixo e limite por gid)
+# ---------------------------------------------------------------------------
+
+def test_group_message_recusa_reencaminhar_grupo_ou_de(api_client):
+    with patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "", "gid": "g1"}), \
+         patch("app.api.terminal.send_prompt") as sp:
+        for txt in ("[grupo: b] terminei", "  [de: b] ok"):
+            r = api_client.post("/api/sessions/a/group-message", json={"text": txt}, headers=_h())
+            assert r.status_code == 400
+            assert r.json()["detail"]["code"] == "erro_group_message_resposta"
+    sp.assert_not_called()
+
+
+def test_group_message_429_acima_de_5_por_minuto_no_mesmo_gid(api_client, monkeypatch):
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod, "_group_envios", {})
+    with patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "", "gid": "g9"}), \
+         patch("app.api.terminal.send_prompt", return_value="sent"), \
+         patch("app.pqueue.PromptQueue.append"):
+        codes = [api_client.post("/api/sessions/a/group-message", json={"text": f"m{i}"}, headers=_h()).status_code
+                 for i in range(6)]
+    assert codes == [200] * 5 + [429]
+
+
+def test_group_estourou_esquece_fora_da_janela(monkeypatch):
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod, "_group_envios", {})
+    for i in range(5):
+        assert api_mod._group_estourou("g", 1000.0 + i) is False
+    assert api_mod._group_estourou("g", 1005.0) is True
+    assert api_mod._group_estourou("g", 1000.0 + api_mod._GROUP_JANELA_S + 6) is False
+
+
+# ---------------------------------------------------------------------------
+# Task 6: --group respeita o caminho nativo
+# ---------------------------------------------------------------------------
+
+def test_group_message_pula_peers_com_socket_quando_remetente_e_nativo(api_client):
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.registry.inbox_socket_of", side_effect=lambda n: "/run/b.sock" if n == "b" else None), \
+         patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append"):
+        r = api_client.post("/api/sessions/a/group-message",
+                            json={"text": "terminei", "remetente_nativo": True}, headers=_h())
+    assert r.status_code == 200
+    assert r.json()["pulados"] == ["b"]
+    assert [c.args[0] for c in sp.call_args_list] == ["c"]
+
+
+def test_group_message_forcar_tmux_entrega_a_todos(api_client):
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.registry.inbox_socket_of", return_value="/run/x.sock"), \
+         patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append"):
+        r = api_client.post("/api/sessions/a/group-message",
+                            json={"text": "terminei", "remetente_nativo": True, "forcar_tmux": True}, headers=_h())
+    assert r.json()["pulados"] == []
+    assert sorted(c.args[0] for c in sp.call_args_list) == ["b", "c"]
+
+
+def test_group_message_remetente_sem_socket_nao_pula_ninguem(api_client):
+    with patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "", "gid": "g1"}), \
+         patch("app.registry.inbox_socket_of", return_value="/run/b.sock") as iso, \
+         patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append"):
+        r = api_client.post("/api/sessions/a/group-message", json={"text": "oi"}, headers=_h())
+    assert r.json()["pulados"] == []
+    iso.assert_not_called()
+    sp.assert_called_once()
+
+
+def test_kill_avisa_companheiros_que_ficaram(api_client):
+    entregues = {}
+    async def fake_deliver(name, text):
+        entregues[name] = text
+        return None
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.api.registry.kill") as kill, \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.delete("/api/sessions/a", headers=_h())
+    assert r.status_code == 200 and r.json() == {"ok": True, "warning": None}
+    kill.assert_called_once_with("a")
+    assert entregues["b"] == "[de: hangar] 'a' encerrou a sessão e saiu do grupo de trabalho. O grupo continua entre você e 'c'."
+    assert entregues["c"].endswith("O grupo continua entre você e 'b'.")
+    assert "a" not in entregues
+
+
+def test_kill_sem_grupo_nao_avisa(api_client):
+    with patch("app.api.PairLink.get", return_value=None), \
+         patch("app.api.registry.kill"), \
+         patch("app.api._deliver") as dl:
+        r = api_client.delete("/api/sessions/a", headers=_h())
+    assert r.status_code == 200
+    dl.assert_not_called()
+
+
+def test_kill_que_falha_nao_avisa_ninguem(api_client):
+    from app.registry import KillFailed
+    with patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "", "gid": "g1"}), \
+         patch("app.api.registry.kill", side_effect=KillFailed("a")), \
+         patch("app.api._deliver") as dl:
+        r = api_client.delete("/api/sessions/a", headers=_h())
+    assert r.status_code == 500
+    dl.assert_not_called()
+
+
+def test_kill_com_par_remoto_chama_unpair_remote(api_client, monkeypatch):
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod.settings, "server_id", "srv-a")
+    with patch("app.api.PairLink.get", return_value={"peers": ["srv-b::x"], "task": "", "gid": "g1"}), \
+         patch("app.api.registry.kill"), \
+         patch("app.api.peers.call") as call, \
+         patch("app.api._deliver") as dl:
+        r = api_client.delete("/api/sessions/a", headers=_h())
+    assert r.status_code == 200
+    call.assert_called_once_with("srv-b", "POST", "/api/sessions/x/unpair-remote", {"peer": "srv-a::a"})
+    dl.assert_not_called()
 
 
 def test_unpair_warning_estruturado_sem_server_id(api_client, monkeypatch):

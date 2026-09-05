@@ -35,6 +35,10 @@ function kimi
         end
     end
 
+    # Daqui pra baixo abre TUI: refaz a ponte de skills agora, pra skill instalada no Claude valer
+    # já nesta abertura (antes dependia de reiniciar o backend). Silencioso e fail-soft.
+    command -q hangar-skills-sync; and hangar-skills-sync
+
     # TMUX herdado pode estar MORTO (mesmo caso dos outros wrappers). Valida o pane; stale -> limpa.
     if set -q TMUX
         if not set -q TMUX_PANE; or not tmux list-panes -t "$TMUX_PANE" >/dev/null 2>&1

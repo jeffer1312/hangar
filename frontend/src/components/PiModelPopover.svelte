@@ -13,10 +13,12 @@
     open: boolean;
     anchor: HTMLElement | null;
     sessionName: string;
+    // OMP é o fork do Pi — mesmo popover, catálogo próprio (o `pi`/`omp --list-models` de cada um).
+    provider?: 'pi' | 'omp';
     onApplied: (model: string, effort: string | null) => void;
     onClose: () => void;
   }
-  let { open, anchor, sessionName, onApplied, onClose }: Props = $props();
+  let { open, anchor, sessionName, provider = 'pi', onApplied, onClose }: Props = $props();
 
   const MAX_ROWS = 40;   // teto de linhas desenhadas: 390 botoes travariam o celular
 
@@ -39,7 +41,7 @@
     try {
       // allSettled, NAO all: o sidecar e leitura de arquivo local e quase nao falha; o catalogo e
       // subprocess Node. Com Promise.all, a falha do catalogo derrubaria a lista inteira.
-      const [est, cat] = await Promise.allSettled([getPiModels(sessionName), modelOptions('pi')]);
+      const [est, cat] = await Promise.allSettled([getPiModels(sessionName), modelOptions(provider)]);
       if (minha !== carga) return;
       if (est.status === 'rejected') throw est.reason;
       // O SIDECAR e o conjunto; o catalogo so enriquece. Quem valida o apply e o check_known contra

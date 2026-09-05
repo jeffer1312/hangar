@@ -35,12 +35,50 @@ for arg in "$@"; do
   esac
 done
 
-say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
+say() {
+  # Título numerado ("3/8 ...") ganha a barra de progresso; os demais seguem só em negrito.
+  local t="$*"
+  if [[ $t =~ ^([0-9]+)/8\  ]]; then
+    local n=${BASH_REMATCH[1]}
+    printf '\n  \033[1;36m[%s%s] %s\033[0m\n' \
+      "$(printf '%*s' "$n" '' | tr ' ' '#')" "$(printf '%*s' "$((8-n))" '' | tr ' ' '-')" "$t"
+  else
+    printf '\n\033[1m%s\033[0m\n' "$t"
+  fi
+}
 ok()   { printf '  \033[32mok\033[0m  %s\n' "$*"; }
 nota() { printf '      \033[2m%s\033[0m\n' "$*"; }
 falta(){ printf '  \033[33m--\033[0m  %s\n' "$*"; }
 erro() { printf '  \033[31mX\033[0m   %s\n' "$*"; }
 fail() { erro "$*"; exit 1; }
+
+# Duas gravidades, e a diferença é o que acontece com os passos seguintes:
+#  - ESSENCIAL falhou -> para na hora (fail): backend, token e frontend sustentam todos os
+#    passos seguintes, e seguir adiante só enterrava a causa;
+#  - EXTRA que a pessoa PEDIU falhou -> anota_problema: o app funciona sem ele, mas a falha
+#    entra na lista do fim, que diz "terminou com pendências" em vez de "Pronto". Falha que só
+#    imprime amarelo e some foi como instalações inteiras saíram com o Tailscale sem publicar
+#    e ninguém soube na hora.
+PROBLEMAS=()
+anota_problema() { erro "$1"; PROBLEMAS+=("$1"); }
+
+gira() { # gira <rótulo> <comando...>: spinner enquanto roda; sem TTY (ou --update), saída direta
+  local rotulo=$1; shift
+  if [ "$TEM_TTY" = 0 ] || [ "$UPDATE" = 1 ]; then "$@"; return $?; fi
+  local tmp; tmp=$(mktemp)
+  "$@" >"$tmp" 2>&1 &
+  local pid=$! quadros='-\|/' i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r  %s %s ' "${quadros:$i:1}" "$rotulo"
+    i=$(( (i+1) % 4 ))
+    sleep 0.2
+  done
+  local rc=0; wait "$pid" || rc=$?
+  printf '\r\033[K'
+  if [ "$rc" != 0 ]; then cat "$tmp"; fi   # falhou: devolve a saída que o spinner escondeu
+  rm -f "$tmp"
+  return "$rc"
+}
 
 # Toda pergunta lê do TERMINAL, nunca do stdin do script. Sob `curl … | bash` (e sob o
 # bootstrap.sh) o stdin é o cano do curl: um `read` normal recebia EOF na hora, devolvia string
@@ -78,6 +116,15 @@ detecta_pkg() {
   done
 }
 PKG=$(detecta_pkg)
+
+if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
+  echo
+  echo "  +--------------------------------------------------+"
+  echo "  |  hangar — instalacao                             |"
+  echo "  |  cada etapa prova o que fez antes da proxima;    |"
+  echo "  |  se algo falhar, eu paro ali e digo o conserto   |"
+  echo "  +--------------------------------------------------+"
+fi
 
 # Instala o que cai no $HOME sem root. Separado de propósito do tier que precisa de sudo:
 # um instalador que pede senha sem avisar é como se perde a confiança de quem está rodando.
@@ -149,7 +196,7 @@ fi
 
 # ── 2/8 Backend ──────────────────────────────────────────────────────────────
 say "2/8 Backend"
-(cd backend && uv sync --quiet)
+(cd backend && uv sync --quiet) || fail "uv sync falhou — o backend ficou sem as dependências"
 ok "dependências instaladas"
 nota "psutil NÃO entra aqui: no Linux existe /proc e ele é mais rápido (ver app/procinfo.py)"
 
@@ -190,9 +237,38 @@ else
   printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
   ok "CP_AUTH_TOKEN gravado em backend/.env"
 fi
+# Prova = o que o backend exige: valor presente e diferente do literal 'change-me'. O piso de
+# 8 caracteres é da PERGUNTA interativa, não da prova — um .env antigo com token curto é válido
+# pro backend e não pode derrubar uma reinstalação boa.
+grep -q '^CP_AUTH_TOKEN=.\+' backend/.env 2>/dev/null \
+  && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' backend/.env \
+  || fail "o token não foi gravado em backend/.env — sem ele o celular não entra"
 nota "É esse token que você digita no celular na primeira conexão."
 
 # ── 4/8 Frontend ─────────────────────────────────────────────────────────────
+# O CI compila o front a cada push na main e publica o resultado na release `dist-latest`. Baixar
+# de lá evita o passo mais lento e mais frágil da instalação (o `npm ci` + build local).
+DIST_URL=https://github.com/jeffer1312/hangar/releases/download/dist-latest
+baixar_dist() { # 0 = frontend/dist agora tem o build DESTE commit
+  command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 || return 1
+  local sha_local sha_remoto tmp
+  sha_local=$(git rev-parse HEAD 2>/dev/null) || return 1
+  # Árvore suja no front = quem está editando quer o SEU código na tela, não o do CI.
+  [ -z "$(git status --porcelain -- frontend 2>/dev/null)" ] || return 1
+  # O .sha primeiro, que são 200 bytes: dist de OUTRO commit serve tela velha contra API nova, e
+  # esse defeito é mudo. Não bateu (CI ainda compilando, push agorinha) → cai no build local.
+  sha_remoto=$(curl -fsSL --max-time 15 "$DIST_URL/frontend-dist.sha" 2>/dev/null) || return 1
+  [ "$sha_remoto" = "$sha_local" ] || return 1
+  tmp=$(mktemp -d "frontend/.dist-baixado.XXXXXX") || return 1
+  # Extrai ao LADO do dist e só então troca: um download interrompido no meio não pode deixar a
+  # máquina sem front nenhum — o build local depois nem roda, porque este caminho já disse "ok".
+  if curl -fsSL --max-time 180 "$DIST_URL/frontend-dist.tar.gz" 2>/dev/null | tar -xzf - -C "$tmp" \
+     && [ -f "$tmp/index.html" ]; then
+    rm -rf frontend/dist && mv "$tmp" frontend/dist && return 0
+  fi
+  rm -rf "$tmp"
+  return 1
+}
 say "4/8 Frontend"
 if [ "$FRONTEND" = 0 ]; then
   ok "pulado (--no-frontend)"
@@ -209,13 +285,19 @@ DIST=frontend/dist/index.html
 if [ -f "$DIST" ] && [ -z "$(find frontend/src package-lock.json frontend/index.html \
                               frontend/vite.config.* -newer "$DIST" -print -quit 2>/dev/null)" ]; then
   ok "frontend já buildado e atualizado (nada mudou desde o último build)"
+elif baixar_dist; then
+  ok "dist baixado do CI (não precisou compilar aqui)"
 else
   # Sem --silent no --update (o modo que o BOTÃO Atualizar usa): a caixinha da tela mostra esta
   # saída ao vivo, e com --silent o npm não imprime nada — a tela fica idêntica a uma travada
   # durante o minuto do `npm ci`. No modo interativo o --silent fica, pra não poluir o terminal.
   QUIETO=--silent; [ "$UPDATE" = 1 ] && QUIETO=
-  (cd frontend && npm ci $QUIETO && npm run build $QUIETO)
-  ok "buildado em frontend/dist/"
+  # A flag vai ANTES do nome do script: no npm 11 `npm run build --silent` não é mais consumida
+  # pelo npm, ela é repassada ao script e chega no `vite build`, que morre com CACError.
+  build_front() { (cd frontend && npm ci $QUIETO && npm run $QUIETO build); }
+  gira "npm ci + build do frontend" build_front \
+    && [ -f "$DIST" ] && ok "buildado em frontend/dist/" \
+    || fail "o build do frontend falhou — corrige o erro acima e re-roda (ele continua de onde parou)"
 fi
 fi
 
@@ -234,7 +316,8 @@ if [ -d shell ] && [ -f shell/package.json ]; then
   if [ ! -f "$MARCA_SHELL" ] || [ shell/package-lock.json -nt "$MARCA_SHELL" ]; then
     say "Janela nativa (Electron)"
     QUIETO_SHELL=--silent; [ "$UPDATE" = 1 ] && QUIETO_SHELL=
-    if (cd shell && npm ci $QUIETO_SHELL); then
+    build_shell() { (cd shell && npm ci $QUIETO_SHELL); }
+    if gira "npm ci da janela nativa" build_shell; then
       ok "dependências da janela instaladas"
     else
       # Não derruba a atualização: o app funciona no navegador sem a janela nativa.
@@ -246,6 +329,25 @@ if [ -d shell ] && [ -f shell/package.json ]; then
     fi
   else
     ok "janela nativa já com as dependências em dia"
+  fi
+  # Registro no lançador: o `.desktop` do repo com o marcador trocado pelo caminho real. Sem isto
+  # o app só abre por `npm start` e ninguém descobre que a janela existe. Reescrito sempre — o
+  # caminho do checkout pode ter mudado, e o arquivo é nosso.
+  ELECTRON_BIN=shell/node_modules/electron/dist/electron
+  if [ -x "$ELECTRON_BIN" ]; then
+    APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    mkdir -p "$APPS_DIR"
+    sed "s|__SHELL_DIR__|$PWD/shell|g" shell/hangar.desktop > "$APPS_DIR/hangar.desktop"
+    if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$APPS_DIR" 2>/dev/null || true; fi
+    ok "Hangar registrado no lançador ($APPS_DIR/hangar.desktop)"
+    # Abre a janela ao fim de uma instalação interativa com sessão gráfica. Não no --update (o
+    # app já está aberto, é ele que chamou) nem sem TTY (provisionamento). Se já há um Hangar no
+    # ar, o Electron entrega a chamada pra instância viva em vez de abrir outra.
+    if [ "$TEM_TTY" = 1 ] && [ "$UPDATE" = 0 ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then
+      ABRIR_SHELL=1
+    fi
+  else
+    falta "binário do Electron não encontrado em $ELECTRON_BIN — o lançador não foi registrado"
   fi
 fi
 
@@ -261,11 +363,11 @@ say "5/8 Wrappers do claude e do codex"
 # que um `git pull` sozinho não atualiza. Eles são idempotentes, então re-rodar é barato; o que
 # não pode voltar é perguntar S/n pro que já está de pé.
 if [ -e "$HOME/.local/bin/hangar-engine" ]; then
-  ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados" || erro "wrappers do claude/codex falharam ao atualizar"
+  ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados" || anota_problema "wrappers do claude/codex falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$WRAPPER" = 1 ] && ask "Instalar (recomendado)?"; then
-  ./scripts/install-claude-wrapper.sh
+  ./scripts/install-claude-wrapper.sh || anota_problema "wrappers do claude/codex não instalaram"
 else
   nota "pulado — sessão aberta no terminal não vai aparecer no app"
   nota "depois: ./scripts/install-claude-wrapper.sh"
@@ -292,14 +394,23 @@ porta_liberada() { # 0 = já tem regra pra esta porta
   return 1
 }
 if command -v ufw >/dev/null || command -v firewall-cmd >/dev/null; then
-  if [ "$FRONTEND" = 0 ]; then PORTAS=(8765); else PORTAS=(8765 5173); fi
-  if porta_liberada "${PORTAS[0]}" && { [ ${#PORTAS[@]} = 1 ] || porta_liberada 5173; }; then
-    ok "portas 8765 e 5173 já liberadas no firewall"
+  # A 5173 só entra quando ESTA máquina tem serviço de front (instalação antiga que ficou no
+  # `vite preview`). Sem ele quem serve a interface é o backend, na 8765, e abrir uma porta que
+  # ninguém escuta é furo aberto de graça. Mesma pergunta que o services-setup.sh faz depois.
+  PORTAS=(8765)
+  [ "$FRONTEND" = 1 ] && [ -f "$HOME/.config/systemd/user/hangar-frontend.service" ] && PORTAS+=(5173)
+  LISTA="${PORTAS[*]}"
+  FALTA=0
+  for p in "${PORTAS[@]}"; do porta_liberada "$p" || FALTA=1; done
+  if [ "$FALTA" = 0 ]; then
+    ok "porta(s) $LISTA já liberada(s) no firewall"
   else
     nota "Liberar precisa de senha de administrador. Por fora seria:"
-    nota "    sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173"
-    if ask "Liberar as portas 8765 e 5173 agora (vai pedir a senha)?"; then
-      sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173 && ok "portas liberadas" || erro "liberar portas no firewall falhou"
+    for p in "${PORTAS[@]}"; do nota "    sudo ./scripts/lan-setup.sh $p"; done
+    if ask "Liberar a(s) porta(s) $LISTA agora (vai pedir a senha)?"; then
+      OK_FW=1
+      for p in "${PORTAS[@]}"; do sudo ./scripts/lan-setup.sh "$p" || OK_FW=0; done
+      [ "$OK_FW" = 1 ] && ok "portas liberadas" || anota_problema "liberar portas no firewall falhou"
     fi
   fi
 else
@@ -322,7 +433,11 @@ else
   nota "Prefere fazer por fora? Rode isto e depois chame o install.sh de novo:"
   nota "    curl -fsSL https://tailscale.com/install.sh | sh"
   if ask "Instalar agora (vai pedir a senha)?"; then
-    curl -fsSL https://tailscale.com/install.sh | sh && ok "Tailscale instalado" || erro "instalação do Tailscale falhou"
+    if curl -fsSL https://tailscale.com/install.sh | sh && command -v tailscale >/dev/null; then
+      ok "Tailscale instalado"
+    else
+      anota_problema "instalação do Tailscale falhou"
+    fi
     nota "Falta logar: rode 'sudo tailscale up' e instale o Tailscale também no celular."
   else
     nota "pulado — o app segue funcionando na LAN (mesmo Wi-Fi)"
@@ -340,14 +455,24 @@ elif systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1 &&
   # O caminho do node e o WorkingDirectory ficam CRAVADOS dentro da unit — git pull não os
   # muda. O próprio services-setup.sh só reinicia o que mudou de verdade, então re-rodar aqui
   # não derruba a conexão SSE do celular à toa.
-  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null
-  else ./scripts/services-setup.sh >/dev/null; fi
-  ok "serviços atualizados ($(systemctl --user is-active hangar-backend.service 2>/dev/null))"
+  # O rc do setup e o is-active cobrem furos diferentes: o rc pega "setup falhou com o serviço
+  # velho ainda de pé" (pareceria ok), e o is-active pega "setup saiu 0 mas o serviço não subiu".
+  SETUP_RC=0
+  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null || SETUP_RC=$?
+  else ./scripts/services-setup.sh >/dev/null || SETUP_RC=$?; fi
+  [ "$SETUP_RC" != 0 ] && anota_problema "services-setup.sh falhou (exit $SETUP_RC)"
+  [ "$(systemctl --user is-active hangar-backend.service 2>/dev/null)" = active ] \
+    && ok "serviços atualizados (active)" \
+    || anota_problema "serviços atualizados mas o hangar-backend não está active"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then
-  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only
-  else ./scripts/services-setup.sh; fi
+  SETUP_RC=0
+  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only || SETUP_RC=$?
+  else ./scripts/services-setup.sh || SETUP_RC=$?; fi
+  [ "$SETUP_RC" != 0 ] && anota_problema "services-setup.sh falhou (exit $SETUP_RC)"
+  [ "$(systemctl --user is-active hangar-backend.service 2>/dev/null)" = active ] \
+    || anota_problema "serviços instalados mas o hangar-backend não está active"
   nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
 else
   nota "pulado — rodando na mão, fechar o terminal derruba o backend"
@@ -356,14 +481,21 @@ fi
 if [ -e "$HOME/.local/bin/hangar-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
-  ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || erro "hangar-send + skills falharam ao atualizar"
+  ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || anota_problema "hangar-send + skills falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam entre si e se pareiam)?"; then
-  ./scripts/install-hangar-send.sh
+  ./scripts/install-hangar-send.sh || anota_problema "hangar-send + skills não instalaram"
 else
   nota "pulado — depois: ./scripts/install-hangar-send.sh"
 fi
+
+# Ponte de skills pro Pi e pro Kimi. Roda SEMPRE (inclusive no --update): quem cria sessão nesses
+# dois agentes é este app, e uma sessão nascida assim não enxerga as skills do Claude sem a ponte.
+# Sai 0 e não faz nada quando nenhum dos dois está instalado.
+./scripts/install-skills-bridge.sh >/dev/null 2>&1 \
+  && ok "ponte de skills (Pi/Kimi) atualizada" \
+  || nota "ponte de skills pulada — depois: ./scripts/install-skills-bridge.sh"
 
 # Sessões sobrevivendo a reboot: TPM + resurrect + continuum + um timer systemd que salva.
 # Fica DEPOIS dos serviços de propósito — é o único passo aqui que clona repositório de
@@ -375,7 +507,7 @@ elif [ "$UPDATE" = 1 ]; then
 else
   nota "Opcional: fazer as sessões voltarem depois de um reboot/OOM, com a conversa junto."
   nota "Clona 3 plugins de tmux de terceiros (tpm, resurrect, continuum) no teu ~/.tmux."
-  ask "Instalar a persistência de sessões?" && ./scripts/tmux-persist-setup.sh
+  ask "Instalar a persistência de sessões?" && { ./scripts/tmux-persist-setup.sh || anota_problema "persistência de sessões não instalou"; }
 fi
 
 # Painel flutuante + tray. Só Hyprland com Quickshell (testado no rice end-4/dots-hyprland).
@@ -394,7 +526,7 @@ elif [ -e "$HOME/.local/bin/hangar-panel-open" ]; then
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
-  ./scripts/install-hangar-panel.sh
+  ./scripts/install-hangar-panel.sh || anota_problema "painel do desktop não instalou"
 fi
 
 # ── Passos de atualização: marcar como já feitos ─────────────────────────────
@@ -468,7 +600,52 @@ else
   fail "o tmux não criou uma sessão de teste — o app não vai abrir sessão"
 fi
 
-say "Pronto"
+# ── Portão final: extra que a pessoa pediu e falhou NÃO passa em branco ────────────────────
+if [ ${#PROBLEMAS[@]} -gt 0 ]; then
+  say "Terminou com pendências"
+  for p in "${PROBLEMAS[@]}"; do falta "$p"; done
+  echo "  O que já estava no ar continua no ar — e é por isso que isto precisa ser dito alto:"
+  echo "  a tela pode seguir funcionando e a instalação PARECER boa. Resolve a lista e re-roda;"
+  echo "  o instalador é idempotente e continua de onde parou."
+  if [ "$UPDATE" = 1 ]; then
+    # Sai 0 (derrubar a atualização inteira por um extra opcional seria pior), mas a tela do
+    # Atualizar só enxerga o ##HANGAR-AVISO## — sem a marca, o app mostraria "Atualizado" com
+    # extra quebrado. E NÃO cai no "Pronto": a última palavra não pode ser sucesso.
+    echo "##HANGAR-AVISO## terminou com pendencias: ${PROBLEMAS[*]}"
+  else
+    exit 1
+  fi
+else
+  say "Pronto"
+fi
+PORTA_FIM=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+PORTA_FIM=${PORTA_FIM:-8765}
+if [ "${ABRIR_SHELL:-0}" = 1 ]; then
+  # O passo 7/8 acabou de reiniciar o backend; abrir antes da porta voltar mostra a tela de
+  # "não consegui carregar a interface" (medido: serviço active às :53, janela aberta no mesmo
+  # segundo, porta ainda fechada). Espera até 20s; sem serviço a porta nunca abre e aí a janela
+  # mesmo mostra o que falta.
+  for _ in $(seq 1 40); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$PORTA_FIM") 2>/dev/null && break
+    sleep 0.5
+  done
+  # Destacado do instalador (setsid + sem stdio): fechar o terminal não leva a janela junto.
+  (cd shell && setsid ./node_modules/electron/dist/electron main.cjs </dev/null >/dev/null 2>&1 &)
+  ok "janela do Hangar aberta"
+fi
+URL_FIM=$(grep '^CP_PUBLIC_URL=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+# O valor do token só aparece com terminal: sem TTY isto roda em provisionamento e o stdout
+# vira log — mesma regra do passo 3/8.
+TOKEN_FIM="(está em backend/.env)"
+[ "$TEM_TTY" = 1 ] && TOKEN_FIM=$(grep '^CP_AUTH_TOKEN=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+echo
+echo "  +---------------------------------------------------------------"
+echo "   RESUMO"
+echo "   token   : $TOKEN_FIM"
+echo "   local   : http://127.0.0.1:$PORTA_FIM"
+if [ -n "$URL_FIM" ]; then echo "   celular : $URL_FIM"
+else echo "   celular : não publicado no Tailscale"; fi
+echo "  +---------------------------------------------------------------"
 cat <<EOF
   Rodar na mão (se você pulou os serviços):
       cd backend  && CP_LAN_BIND_IP=auto uv run python -m app.main

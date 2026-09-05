@@ -20,6 +20,23 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
 - `terminal_input.py` + `tmux.py` — input via `tmux send-keys` (prompt / option select via `(n-1)×Down`+`Enter` / `Esc`).
 - `adapters/codex/` — one loopback WebSocket app-server per Codex session; the backend consumes
   structured JSON-RPC events while a `codex --remote` TUI for the same thread runs inside tmux.
+  **O app-server é do PANE, não do backend** (`scripts/hangar-codex-tui`, o lançador único que o
+  backend e o terminal chamam igual): ele escolhe a porta, sobe o servidor em segundo plano, roda a
+  TUI em primeiro plano — nunca `exec`, que é o que o deixaria sem quem matar o servidor na saída —
+  e grava `endpoint`+`app_pid` no sidecar junto de thread/rollout/cwd. O backend só se **liga**
+  nele (`AppServerClient.connect`), conferindo o pid antes: porta de loopback é reciclada, e
+  conectar só pelo endereço pode cair num processo alheio. Pid morto é sessão morta, não sessão a
+  reconectar. Por isso criar sessão Codex passou a ser o caminho normal de criação (`registry.create`
+  com `provider="codex"`, transcript vazio como Pi/Kimi) — não há mais `create_codex`. Duas armadilhas
+  que sobram: o `codex` está no `_EXEC_PROVIDER` porque entre o pane nascer e o sidecar existir o pane
+  cairia no default `claude` e seria casado com o transcript do Claude do mesmo diretório; e nessa
+  janela `info.jsonl` é `None`, então tudo que deriva chave do transcript (`session_key`) tem que
+  desviar — `session_key(None)` levanta `TypeError` e derrubaria a lista inteira, de todas as sessões.
+  E uma terceira, medida em 04/09/2026: **a TUI só sobe depois de a porta do app-server aceitar
+  conexão** (`_esperar_porta`). O `codex --remote` conecta UMA vez e, recusado, sai com 1 — o pane
+  morre, o tmux imprime `[exited]` e o `hangar-codex` apaga a sessão em menos de 1s. Só aparece com a
+  máquina carregada (load ~5 com suítes rodando): aí o servidor perde a corrida pro bind e a TUI
+  chega antes. Com a máquina folgada nunca reproduzia, em nenhum terminal.
 - `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
   same tmux-native shape as Pi: TUI in the pane, chat from
   `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in
@@ -58,7 +75,8 @@ bubbles, sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts
 ## Dev commands
 
 Requirements: `tmux`, `claude` (Claude Code), a current `codex` CLI with `--remote`,
-Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
+Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+. Optional, one per provider you use:
+`pi`, `omp` (oh-my-pi), `kimi`.
 Frontend uses **npm** (has `package-lock.json`).
 
 ```bash
@@ -105,7 +123,7 @@ do protocolo que as sessões leem vive no heredoc de `scripts/install-hangar-sen
 Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
 `orquestrar` — esta sessão vira líder de um grupo multi-repo (cria/pareia sessões via
 hangar-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
-`orchestrating-idea-to-push` — conduz UM trabalho da ideia ao push: research, spec/plano com
+`orquestrar` — conduz UM trabalho da ideia ao push: research, spec/plano com
 o usuário, e daí em diante autônomo — um executor, um revisor independente de outra família
 por commit, portão entre as Tasks, e uma sessão fresca revisando a branch no fim. O revisor
 entrega **correção fechada** (causa reproduzida, arquivo/símbolo, inventário de callers,
@@ -162,6 +180,14 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 
 ## Conventions & gotchas (read before touching UI / backend lifecycle)
 
+- **Comentário explica o PORQUÊ, e é curto. A história medida mora AQUI, não no código.** Este
+  arquivo é longo de propósito: é o lugar onde decisão medida, com data e número, sobrevive e é
+  relida. O código não é. Lá vale a regra, não a arqueologia dela: se o comentário repete o que o
+  nome da função já diz, sai; se a explicação ficou maior que o trecho que ela explica, o excedente
+  vira linha de commit ou entrada nesta seção. **Medição, versão de CLI e data envelhecem** — num
+  comentário elas viram afirmação falsa que ninguém revisa, enquanto aqui e na mensagem de commit
+  estão datadas por construção. Isso não é licença pra código mudo: o porquê não-óbvio continua
+  obrigatório, em uma ou duas linhas.
 - **O nome antigo (`claude-pocket`) só existe em ponte de compatibilidade** (rename de 25/08/2026).
   O código conhece **um** nome: as pastas de dados são `<config>/.hangar-*`, o cofre do sync é
   `~/.hangar/`, os comandos são `hangar-send`/`hangar-engine`/`hangar-codex`/`hangar-conta` e
@@ -178,9 +204,17 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     primeiro (`migracao_sidecars.caminho_de_leitura`), porque no Windows link de ARQUIVO exige
     privilégio — para pasta há junção (`mklink /J`), para arquivo não há equivalente. **Escrita
     sempre no nome novo.**
-  - `<cwd>/.hangar-uploads/` é a única pasta que mora no projeto, fora do alcance da migração da
-    subida: `uploads._base()` a migra na primeira leitura daquele cwd, senão todo anexo antigo
-    citado por caminho absoluto no histórico viraria 404.
+  - Anexo e diário de orquestração **saíram do projeto e do config dir da conta** (31/08/2026) e
+    moram no cofre: `~/.hangar/uploads/<projeto>/<sessão>/` (`uploads._base()`) e `~/.hangar/orq/`
+    (`orq.raiz_padrao()`). Os dois estavam no lugar errado pelo mesmo motivo — um lugar que
+    pertence a *outra coisa*. O anexo nascia dentro do repositório trabalhado, e o `.gitignore` que
+    o esconde é o DESTE projeto: em qualquer outro repositório ele aparecia como
+    untracked (32 pastas dessas na máquina, uma no próprio `~`). O diário morava em
+    `~/.claude/orq-retros`, que é o config dir de UMA conta, enquanto o contrato de um trabalho põe
+    papéis em contas diferentes de propósito — e um executor Pi/Kimi/Codex não tem `~/.claude`.
+    **Nada foi migrado**, por decisão do usuário: o que ficou no lugar antigo continua no disco,
+    vira 404 no histórico do celular e some do painel de orquestração. A trava do endpoint `/file`
+    não muda nada disso — ela exige que o caminho apareça no transcript, e aceita absoluto.
   - **Marcador de bloco gerenciado** (rc do shell, `~/.tmux.conf`, `keybinds.lua`, o bloco
     "Sessões-irmãs" do `~/.claude/CLAUDE.md`) virou `hangar`, e cada installer **arranca o bloco do
     marcador antigo antes** de escrever o novo — sem isso o arquivo do usuário fica com os dois, um
@@ -205,6 +239,16 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     files, so template/CSS changes to the list must be made and verified in BOTH. See
     [`docs/polish-backlog.md`](docs/polish-backlog.md#structural-debt-in-the-session-list-2026-07-16) —
     unifying the two list views is the remaining "bigger fish", deliberately not done yet.
+  - **A LÓGICA da lista também mora num lugar só** — `lib/sessionListModel.svelte.ts`
+    (`createSessionListModel({ variant })`): agrupar/colapsar/filtrar, seleção+broadcast+comparar,
+    abrir/excluir/renomear/retomar/Git. `Sidebar` e `SessionList` instanciam o modelo com a
+    sua variante e só mantêm o chrome próprio (rail/pin/kebab/hover/menu no desktop; drawer/feed/
+    scroll no celular). O que diverge entre as views está na tabela `RULES` no topo do arquivo, uma
+    regra por linha (como a preferência gravada é lida, modo efetivo de agrupamento, ordem dos
+    grupos por servidor, rótulo que o filtro casa, ordem no Comparar, restaurar o servidor ativo
+    depois da ação) — convergir é trocar um valor ali, de propósito. Lógica nova da lista entra no modelo, com teste nas DUAS variantes;
+    template e CSS continuam por view, e o aviso de "mudar e verificar nas DUAS" vale para eles.
+    Loop segue no `SessionList` — só o celular abre pela lista; dar Loop ao desktop seria feature.
 
 - **i18n: todo texto de interface vem de `m.<chave>()`** (Paraglide, `frontend/src/paraglide/` gerado;
   `pt.json` + `en.json` em `frontend/messages/`). A trava em `src/lib/i18nGuard.test.ts` falha o teste
@@ -259,12 +303,14 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   janela — num monitor de 1440px o dock tem 530px e uma media query de 560px nunca dispara ali.
   **Config e opção num modal único — implementado (2026-08-16).** A direção acordada de juntar as
   configs num só modal (antes marcada "ainda não implementada") existe: `SettingsModal.svelte` abre
-  todas as telas num `BottomSheet` de navegação por seções (Aplicativo · Servidor) com onze linhas —
-  Geral, Aparência, Ditado, Sobre, Acesso, Contas, Servidores, Notificações, Anexos, Avançado,
-  Motores. Quem for adicionar aba: registra no `LINHAS` do `SettingsModal.svelte` e no
+  todas as telas num `BottomSheet` de navegação por seções (Aplicativo · Servidor) com as linhas de
+  `LINHAS` — hoje Geral, Aparência, Diário, Sobre (aplicativo) e Máquinas, Contas, Harnesses, Voz,
+  Notificações, Anexos, Avançado, Motores, Orquestração (servidor). Quem for adicionar aba: registra no `LINHAS` do `SettingsModal.svelte` e no
   `lib/configRoute.ts` (`TelaConfig`/`TELAS_DE_SERVIDOR`), com chave de idioma nos dois
   `messages/*.json` no mesmo commit. O `lib/gitTabs.ts` + `GitTabs.svelte` continuam sendo o
   precedente de navegação por abas DENTRO de uma tela (incluindo nível por aba no celular).
+  Servidores e Acesso viraram **Máquinas** (2026-09-04); as rotas antigas seguem por
+  `RENOMEADAS`.
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.
 - **Queue/pending dedup.** Messages sent while Claude is `working` echo as `pending` / `queued-` bubbles and
@@ -296,6 +342,29 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 
 - **CSS animations.** Shared tokens/keyframes live in `app.css` (`--ease-out`, `--spring`, …); a global
   `prefers-reduced-motion` rule neutralizes loops, so new keyframes don't each need their own guard.
+- **Ponte de skills (`app/skill_bridge.py`): o omp descobre sozinho as skills dos outros CLIs
+  (providers `claude`/`claude-plugins`/`agents`); pi, kimi e codex não — leem só as pastas da
+  própria config.** Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
+  cache VERSIONADO dos plugins (`plugins/cache/ecc/ecc/2.2.0/skills/...`): bump de versão =
+  dezenas de links pendurados, calados (03/09/2026: 3 fazendas manuais, 99/119/157 links, todas
+  com podres). A ponte varre as fontes (`~/.claude/skills`, `skills/` do repo, cache — só a
+  versão MAIS NOVA de cada plugin —, marketplaces, `~/.agents/skills`), dedup por nome na ordem
+  de precedência, e materializa symlinks nas pontes: pi → `~/.pi/agent/skills-bridge`, kimi →
+  `~/.kimi-code/skills-bridge`, codex → `~/.codex/skills`. Harness novo = uma linha em `TARGETS`;
+  o omp fica fora de propósito (descobre nativo). Regras duras: stdlib-only (o installer chama
+  com o python3 do sistema, regra do `engines.py`); **só mexe em symlink cujo alvo está numa
+  fonte conhecida** — arquivo real (o `.system` do codex) ou link à mão pra fora das fontes
+  nunca é tocado; config alheia (settings.json do pi, config.toml do kimi) é só CONFERIDA, com
+  aviso quando a ponte não está na lista — nunca editada. Roda na subida do backend e no
+  `install-claude-wrapper.sh` (precedente `migracao_sidecars`: atualizar é `git pull` + restart,
+  installer não é garantido). Standalone: `python3 backend/app/skill_bridge.py [--dry-run]`.
+  **Ela é a ÚNICA dona das pastas de ponte** (04/09/2026): o `scripts/install-skills-bridge.sh`
+  — que o hook `SessionStart` do Claude chama, e que o `claude-hooks-adapter` roda também dentro
+  do Pi — tinha uma poda própria, só de plugins, e apagava a cada largada do Pi os 67 links de
+  skills pessoais/marketplace que a ponte criava (o Pi abria listando cada uma como "skill path
+  does not exist", e o backend as recriava no restart seguinte: 67 criados, todo dia). Hoje esse
+  script cuida de persona, `hooks.json` do Codex e pacotes do Pi, e chama a ponte no fim.
+
 - **Loop runner** (`app/loop.py` + `components/LoopSheet.svelte`): loop autônomo por sessão —
   goal → sessão trabalha → idle dispara tick (`_on_hook_transition`, dentro do `_work`, só com
   `sent == 0`) → roda `check_cmd` (exit 0 = `done`) ou procura `LOOP_DONE` (→ `done_claimed`,
@@ -354,6 +423,20 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   digitar agora?" usa **duas capturas**, não uma: um pane parado não distingue spinner vivo de
   marcador de turno concluído (está na docstring do `state.classify`), e uma captura só recusava,
   com "está trabalhando", uma sessão que tinha acabado de terminar.
+- **As extensões de FUNCIONAMENTO da experiência Claude no Pi moram aqui** (`scripts/pi/`,
+  04/09/2026): `claude-bridge.ts` (agents/commands/skills do `~/.claude` como recursos do Pi),
+  `claude-todo.ts` (painel de tarefas), `claude-hooks-adapter.ts` (hooks do `settings.json` nos
+  eventos do Pi), `git-checkpoint.ts` (`/rewind`) e `fullscreen-tui.ts` (alternate screen no OMP)
+  vieram do repo `pi-claude-bridge`, que ficou só com aparência (caixa da mensagem, título do
+  terminal e temas). Motivo: sem elas uma sessão Pi criada pelo app não enxerga skills/agents nem
+  roda hooks, e quem instala o Hangar não deveria precisar de um segundo repo pra isso. O
+  `install-claude-wrapper.sh` symlinka as sete (`link_agent_extensions`) em
+  `~/.pi/agent/extensions/` e `~/.omp/agent/extensions/`. No Pi com fullscreen nativo, a extensão
+  não assume o alternate screen para evitar dupla posse; no OMP, ela liga na primeira instalação.
+  regras herdadas do adapter: a allowlist embutida libera só `~/.claude/hooks/` — hook que mora
+  noutro lugar entra por `~/.pi/agent/claude-hooks-adapter.json`, e `allowPatterns` ali
+  **substitui** a lista, não soma; e os hooks só-Claude do próprio app (`state_hook`, `askq_capture`,
+  `preview_hook`, `subagent_hook`) ficam no `skipPatterns` porque o Pi tem extensão própria pra isso.
 - **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/hangar-state.ts` + `components/PiModelPopover.svelte` + `components/PiEffortPopover.svelte`):
   the third mechanism, next to Claude's TUI picker and Codex's app-server, and it does **not** scrape
   the pane. Measured on pi 0.82.1: `/model` is a fuzzy-**search** list of ~300 entries (footer
@@ -369,6 +452,72 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
+- **`omp` (oh-my-pi) é um FORK do Pi, e é por isso que ele engana** (`adapters/omp/` — `OmpAdapter`
+  é subclasse do `PiAdapter`; wrappers `scripts/shell/omp.*`). Mesmo JSONL, mesma API de extensão,
+  as MESMAS `scripts/pi/*.ts` — o que muda é pequeno e cada item já custou um bug calado. Medido em
+  02-03/09/2026, omp 18.1.4 (embute `pi-coding-agent` 0.84.4):
+  - **Binário ELF nativo com argv0 `omp`**, não um fork do processo `pi`. Sem a entrada própria em
+    `_EXEC_PROVIDER` o pane cai no default `claude` e é casado com o transcript do **Claude** do
+    mesmo cwd — a regressão que o Pi já pagou.
+  - **Raiz `~/.omp/agent`**, pela env `PI_CODING_AGENT_DIR` — que é variável do `pi-coding-agent` e
+    move os DOIS agentes, então ela nunca é lida como "a pasta do omp" sem se lembrar disso (o Pi
+    usa `PI_CODING_AGENT_SESSION_DIR` + `~/.pi/agent`). As extensões vão em
+    `~/.omp/agent/extensions/`, que não existe até alguém criar.
+  - **Não existe `--session-id`** (`Error: unknown flag`) — o id é do omp (uuidv7). Quem escolhe a
+    sessão é o CAMINHO: `--session <arquivo>` (não documentado) cria o transcript exatamente ali.
+    Por isso app e wrapper montam `<raiz>/<slug do cwd>/<ts>_<uuid>.jsonl` e exportam
+    `CP_PI_SESSION=<uuid>` junto: com o bilhete da extensão como ÚNICO vínculo, um bilhete recusado
+    deixa a sessão sem transcript até o próximo `agent_start` — que só chega se alguém conseguir
+    mandar prompt, o que o app não consegue numa sessão untracked. Resume é `-r <caminho>` (o id
+    interno do omp não é o do nome do arquivo).
+    **E o diretório do `--session` não é honrado (omp 18.1.6, medido 04/09/2026):** o transcript
+    principal nasce em `sessions/-/<nome>.jsonl` (o `-` é o slug de um cwd vazio) e só os
+    subagentes vão pra pasta pedida — enquanto o `getSessionFile()` que a extensão publica no
+    bilhete continua devolvendo o caminho pedido, que não existe. A sessão aparecia vazia no app
+    com a TUI cheia. `pi_sessions.localizar_na_raiz` procura o mesmo NOME de arquivo em qualquer
+    pasta da raiz (`registry.pi_session_file` e `transcript_path`, só pro omp); o Pi honra o
+    diretório e continua restrito à pasta do cwd.
+  - **Eventos com outro nome:** `agent_end` e `model_changed`, não `agent_settled` nem
+    `model_select`. Sem tratá-los, o estado ficava preso em `working`. E a troca de modelo pelo app
+    dava falso "o Pi recusou a troca" por um motivo mais fundo, achado na revisão final: o
+    `setModel` devolve `true` e o rodapé troca, mas **`ctx.model` continua o modelo velho** e o omp
+    não emite evento de modelo nenhum (`model_changed` também não dispara aí; `pi.getModel` não
+    existe). Publicar `ctx.model` depois do `setModel` republicava o modelo VELHO com `ts` novo, e
+    o backend lê "ts novo com modelo velho" como recusa. Daí o `override` de `publishModels`
+    (`scripts/pi/hangar-state.ts`): quem sabe o modelo certo é quem acabou de pedi-lo. Troca feita
+    no teclado do omp não tem evento, então o `agent_start` republica quando `ctx.model.id` difere
+    do último publicado.
+  - **Subagente roda no MESMO processo**, sem `PI_SUBAGENT_DEPTH`, emite `session_start` com o ctx
+    dele e grava em `<stem>/<NomeDoAgente>.jsonl` (o Pi: `<stem>/<taskId>/run-N/session.jsonl`).
+    Sem o portão, a extensão do subagente reescrevia o bilhete do pane e o histórico da sessão
+    virava a conversa do subagente.
+  - **`/reload` NÃO recarrega extensão editada nem descobre arquivo novo** (medido 2×): editou a
+    extensão, reabra a sessão. Mesmo aviso do Pi, só que ali o `/reload` resolve.
+  - **A ferramenta de perguntar chama `ask`** (no Pi é `question`), com shape multi-pergunta e um
+    cartão de resumo acima do picker, mais as linhas de descrição de cada opção — quem conta linha
+    de tela pra escolher opção precisa contar essas também.
+  - **Catálogo de modelos é `omp models --json`** — não há `--list-models`.
+  - **Sem chip de cota:** `~/.omp/agent` não tem `auth.json` nem `models.json` (é SQLite:
+    `agent.db`, `models.db`), e `cotas._chaves_do_pi` lê exatamente esses dois arquivos, do `~/.pi`.
+  - **No Windows a sessão omp depende SÓ do bilhete da extensão.** `_com_env` (`adapters/omp/
+    adapter.py`) prefixa `env CP_PI_SESSION=<uuid>` porque o tmux não repassa o ambiente de quem
+    chama — e `env` não existe lá, então o ramo `os.name == "nt"` devolve o comando cru. Bilhete
+    recusado = sessão sem transcript. O conserto existe e não foi feito por falta de medição
+    naquela máquina: `tmux new-session -e` funciona no psmux (é o que `tmux._e_config_dir` já usa),
+    então dá pra mandar a variável pelo `-e` em vez do prefixo.
+  - **Subagente do omp não aparece no painel de Atividade.** `subagents.py` é Pi-puro por duas
+    travas independentes: `_pi_agents_dir` exige que o transcript esteja sob `sessions_root("pi")`
+    (o do omp está sob `~/.omp/agent`), e o leitor espera o layout `<stem>/<taskId>/run-<n>/
+    session.jsonl` — o omp grava `<stem>/<Nome>.jsonl`, sem `run-N`, então `_pi_run_dir` devolveria
+    `None` mesmo com a raiz certa. Lista vazia, não erro.
+  - **Executor omp no orquestrar usa o inventário do Pi.** `orq_politica.inventario` chama
+    `pi_catalog.listar()` sem argumento (= `pi`), coerente com "mesmo inventário, sem linha
+    própria" da política. Consequência a saber: `omp models --json` pode listar menos modelos que
+    `pi --list-models`, e a tela do orquestrar oferece a lista do Pi.
+  - **`rich-status-line.ts` honra `PI_CODING_AGENT_DIR` também numa sessão Pi.** A raiz sai de
+    `process.env.PI_CODING_AGENT_DIR || ~/.{omp,pi}/agent`, e é dela que saem `auth.json` e
+    `models.json` (o chip de cota). Quem exporta a variável no shell por causa do omp muda de onde
+    o **Pi** lê os dois.
 - **Before typing into the Pi's composer, ASK — the screen cannot tell a notice from a draft**
   (`terminal_input._composer_ocupado_pi` + `pi_inbox.perguntar` + `responderPergunta` in
   `scripts/pi/hangar-state.ts`). Pi prints extension notices (`console.error`) **inside the composer
@@ -485,6 +634,46 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     medido no muse-spark, um ditado com autocorreção longa cai pra 62% de cobertura e o estilo
     `limpar` (piso 0,80) devolve o cru com aviso — o modelo apagou a versão corrigida, que é a
     regra funcionando, mas o piso de `limpar` não foi calibrado nele.
+- **Login do ChatGPT (Codex) é UM login pra três CLIs, e quem faz é o app** (`app/oauth_codex.py` +
+  a linha "Conta do ChatGPT (Codex)" do `NovaCredencialSheet` + `app/harness_saude.py`, 04/09/2026).
+  Codex CLI, Pi e omp usam o MESMO OAuth — `client_id app_EMoamEEZ73f0CkXaXp7hrann`, mesmo
+  `auth.openai.com/oauth/token`, mesmo fluxo de código de dispositivo — e cada um guarda o resultado
+  no formato dele: `~/.codex/auth.json` (`tokens.{id_token,access_token,refresh_token,account_id}`),
+  `~/.pi/agent/auth.json` (`openai-codex: {type:"oauth", access, refresh, expires em ms, accountId}`)
+  e a tabela `auth_credentials` do `~/.omp/agent/agent.db` (`provider`, `credential_type='oauth'`,
+  `data` = a credencial do Pi sem o `type`, `identity_key` = accountId; conferido com
+  `omp token openai-codex` devolvendo JWT). O app roda o fluxo de dispositivo sozinho (stdlib), guarda
+  em `~/.hangar/auth/openai-codex.json` (0600) e escreve nos três — **só onde não há login**; login
+  existente é da pessoa. Três medições que decidem o desenho:
+  - **Rotação do refresh não invalida a cópia.** Renovando pelo refresh do Codex por fora, a resposta
+    trouxe refresh NOVO, o antigo continuou renovando e o Codex seguiu autenticando com o store
+    intocado (o 400 seguinte foi de modelo, não de auth). Por isso cada CLI renova sozinho, sem
+    renovador central; o custo de um dia isso mudar é a linha "Login" do painel ficar vermelha.
+  - **A Cloudflare do `auth.openai.com` devolve 530 (`cf_route_error`) pro User-Agent padrão do
+    urllib.** Qualquer outro UA passa; `_http` manda `hangar/1.0`.
+  - **`earliest_refresh_at` na resposta do token**: o servidor diz quando o próximo refresh é aceito
+    (~9 dias, com o access valendo 10). Não é erro, é o ritmo dele.
+  O `codex login` (0.153.1) não tem `--device-auth` visível no `--help`; o app não depende dele.
+- **Painel de saúde dos harnesses** (`app/harness_saude.py` + `harness_api.py` +
+  `components/settings/HarnessSettings.svelte`, aba "Harnesses" em Configurações → Servidor): uma
+  linha por CLI com o que o app instalou nele (hooks do Claude, contas, login do ChatGPT, extensões
+  do Pi/omp, ponte de skills, statusline do Kimi) e um botão por item que **reusa o instalador que já
+  existe** (`hook_installer.ensure_*`, `skill_bridge.rebuild`, `contas.reconciliar`,
+  `oauth_codex.propagar`, o symlink das `scripts/pi/*.ts`). A checagem é só leitura; o texto vai como
+  `codigo`+`params` e o front traduz (`harness_<codigo>`). O item **Credenciais** cruza o store de
+  cada CLI (auth.json+models.json do Pi, `auth_credentials` do omp, `providers` do Kimi,
+  `model_providers`+login do Codex) com o que o app conhece (engines.json + cofre OAuth), no nome
+  que AQUELE harness usa (`provedor_embutido_do_pi` pra Pi/omp, o nome do motor pros outros);
+  "Sincronizar" reusa o `agentes_sync` e, no omp, grava a chave no mesmo SQLite do login. O Codex
+  continua guardando só o nome da variável, e o resultado diz qual exportar. `instalado` é "binário no PATH OU pasta de
+  config existe" porque o backend roda como serviço com PATH curto — só o binário dava "Kimi não
+  instalado" com o `~/.kimi-code` cheio.
+- **Runtime por conta não vira atalho** (`contas._RUNTIME_DA_CONTA`, 04/09/2026): `telemetry/`,
+  `feedback/`, `image-cache/`, `.last-update-result.json` (o Claude Code regrava por config dir com
+  tmp+rename, que troca o symlink por arquivo real) e `.hangar-models.json` (cache do picker, por
+  config dir). Ligados, cada `--prep` achava a "deriva" de novo, gavetava e disparava o toast
+  "CONTA" — a gaveta desta máquina chegou a `telemetry.3`. A reconciliação desfaz o atalho antigo
+  desses nomes, senão a conta seguia gravando o runtime dela dentro do `~/.claude`.
 - **Statusline por sidecar, não pelo pane** (`app/statusline.py` + `scripts/omniroute-statusline.js`
   + `scripts/pi/rich-status-line.ts` + `~/.kimi-code/statusline.js`): a linha que o app mostra
   (modelo, contexto, ⚡5h/📅7d, custo)
@@ -774,6 +963,27 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   before PATH) and cmd builtins skipped. Not-found → a `ProjectError` naming the command and warning
   about the orphan; found and failed → silence, with rc and the stderr tail in the log. The stderr
   never reaches the screen: it comes in the console's OEM codepage, not the locale's.
+- **Quem serve a interface é o BACKEND, e o `frontend/dist` chega pronto do CI.** Duas mudanças de
+  25-29/08/2026 que andam juntas, e as duas têm o mesmo antônimo: uma máquina de quem usa não
+  compila nem serve nada além do necessário.
+  - O backend monta o `frontend/dist` na raiz (`api.py`, `_UIStatic`), então o `vite preview` num
+    serviço à parte era um SEGUNDO servidor para o mesmo arquivo. Instalação nova não registra mais
+    esse serviço — no Linux o `services-setup.sh` já decidia assim; o `install.ps1` passou a seguir.
+    Quem **já** tem o serviço fica com ele: trocar a porta muda a ORIGEM, e origem nova é
+    `localStorage` vazio (`cp_servers` com os tokens, tema, layout do canvas). Ninguém perde
+    configuração por causa de um `git pull`. O que decide é a existência da unit/tarefa, nunca uma
+    pergunta nova.
+  - `CP_FRONT_PORT` deixou de ter `5173` cravado como default (`config.porta_do_front`): vazio = a
+    porta do próprio backend. Com o serviço do front fora, o QR e o painel de alcance apontavam para
+    uma porta onde ninguém escuta — foi o `Rede local … não respondeu` do painel. Quem mantém o
+    preview tem o `5173` **gravado** pelos instaladores, e é isso que preserva a origem dele.
+    O firewall também segue essa decisão: a 5173 só é liberada quando há serviço de front.
+  - O `ci.yml` publica `frontend-dist.tar.gz` + `frontend-dist.sha` na release fixa `dist-latest` a
+    cada push na main, e os instaladores baixam de lá **só** quando o `.sha` bate com o `HEAD` e o
+    `frontend/` não está editado. Não bateu (CI ainda compilando), sem rede, ou tar quebrado → build
+    local, como sempre foi. `tar.gz` e não zip porque o Windows 10+ traz `tar.exe` — um comando só
+    nos dois instaladores. O `npm ci` **continua** para quem mantém o preview, que precisa do
+    `node_modules`.
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
   `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
@@ -816,6 +1026,56 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     25/08/2026: lock e processo morreram no minuto do "instância anterior derrubada"). A proteção
     por linhagem já existia e não bastou; hoje há exclusão explícita de quem tem `app.atualizar` na
     linha de comando. No Linux quem cobre isso é o escopo transiente do systemd, que lá não existe.
+
+- **Instalador com portão de prova por etapa** (`install.sh` / `install.ps1`, 02/09/2026). Duas
+  gravidades: **essencial falhou → para na hora** com causa e conserto (`fail` / `Pare`): deps,
+  backend (`uv sync`), token (releitura do `.env`), frontend (rc + `dist/index.html` existe).
+  **Extra opcional que a pessoa pediu falhou → entra na lista** (`PROBLEMAS` / `$pendencias`) e o
+  fim diz "terminou com pendências"/"NAO terminou", nunca "Pronto". Motivo: instalações saíram
+  "Pronto" com o `tailscale serve` quebrado (HTTPS não habilitado no tailnet) porque a falha só
+  imprimia amarelo no meio da tela — o `serve` agora tem **prova** (relê o `serve status` e exige
+  a raiz do `:443` na porta do backend; `Get-Proxy443`, reusada da detecção). Parar no meio por um
+  extra trancaria a instalação de quem nem consegue habilitar HTTPS no tailnet, então o extra vai
+  pro portão do fim, não pro stop. No `--update`/`-Update` os extras seguem moles
+  (`##HANGAR-AVISO##`): falhar ali derrubaria a atualização inteira do app por causa de um extra.
+  Cara nova: banner, barra `[###-----] N/8` nos títulos numerados (dentro de `say`/`Titulo`, sem
+  mexer nas chamadas), spinner nos comandos longos do sh (`gira` — sem TTY ou `--update`, passa
+  direto com saída ao vivo), caixa RESUMO no fim (token só com TTY, mesma regra do passo 3/8).
+
+- **Grupo: o protocolo é do HOOK, a saída é de UMA esteira, e o anti-loop é do backend**
+  (`app/pair_texto.py` + `hooks/pair_hook.py` + `api._avisar_saida` + `registry._varrer_pares_mortos`,
+  02/09/2026). Decisões que fecham furos medidos na análise daquele dia:
+  - **Protocolo reinjetado no `SessionStart`** (`startup|resume|clear|compact`) a partir do sidecar
+    `.hangar-pair/<nome>.json`. O prompt do `--pair` sumia no `/clear` e na compactação; o badge
+    ficava e o modelo esquecia os pares. O `pair_dir` vai por argv porque é o do BACKEND — sessão em
+    `--conta` tem `CLAUDE_CONFIG_DIR` próprio, e o sidecar não mora lá. Por isso os textos moram em
+    `pair_texto.py`, stdlib-only (mesma regra do `engines.py`).
+  - **Protocolo completo só pro recém-chegado** (`snap[m] is None`); veterano recebe "fulano entrou";
+    peers e tarefa iguais = nada. Adicionar o 5º membro disparava 5 prompts de 1,5KB, 4 redundantes.
+  - **Tarefa diferente da existente é 409** sem `--substituir-tarefa` — cada `--pair` de um árbitro
+    sobrescrevia a de todos, calado.
+  - **Toda saída avisa quem ficou pela mesma esteira**: unpair, kill (não avisava ninguém — os pares
+    mandavam recado pra nome morto ou pra sessão nova que o reusasse) e morte fora do app. Remoto vai
+    por `/unpair-remote` no unpair e no kill; na varredura só loga (rede dentro do `list()` não).
+  - **Varredura de morto fora do app roda no fim de `list()`, e três coisas a seguram:** contador
+    DE CLASSE (há 4 instâncias de `SessionRegistry` — api, sse×2, prune — e todas chamam `list()`);
+    ausência confirmada por **tempo** (`_PAIR_AUSENCIA_MIN_S`), não por número de polls, porque
+    `kill()` e `rename()` chamam `list()` numa janela em que o nome está ausente de propósito; e lista
+    vazia = tmux fora = não varre, senão dissolvia todo grupo da máquina. Aviso pela fila durável
+    (nunca send-keys ali) + drain por callback (`apos_saida_por_morte`), porque a fila só drena em
+    transição de hook e o peer já ocioso nunca receberia. O dict de classe (`_pair_ausencias`) é
+    limpo com `pop(n, None)`, nunca `del` — as 4 instâncias varrem concorrentemente e outra thread
+    pode já ter tirado a mesma chave.
+  - **`--group` recusa `[grupo:`/`[de:` reencaminhado e limita 5/min por gid** (429) — só no que
+    passa pelo backend: peer com `inbox_socket_of` é devolvido em `pulados` e vai por `SendMessage`
+    (o script sai 3 listando quem falta); o socket do Claude Code está fora do alcance do backend.
+    `--group --tmux` força o antigo.
+  - Contrato do grupo dissolvido vai pra `~/.hangar/pair-arquivo/`, não pro `unlink`.
+  - **Teste que chega em `SessionRegistry.list()` ou num `pair.leave()` de último membro isola
+    `pair.settings.projects_dir`, zera `SessionRegistry._pair_ausencias`, anula
+    `registry.apos_saida_por_morte` e faz patch de `pair._arquivo_dir`** — sem as quatro, 2 vezes
+    neste plano uma suíte verde mexeu de verdade no `~/.claude/.hangar-pair`/`~/.hangar/pair-arquivo`
+    do desenvolvedor.
 
 - **Plan progress** (`app/planprog.py` + `registry._decorate_plan` + `PlanBar`/`PlanPanel.svelte`):
   the source of truth is the plan's own `.md` under `docs/superpowers/plans/` — no separate state
@@ -965,7 +1225,7 @@ and [`docs/tmux.conf.example`](docs/tmux.conf.example).
 
 Markdown versionado, não GitHub Issues: spec em `docs/superpowers/specs/`, tickets como Tasks de um
 plano em `docs/superpowers/plans/` — que é de onde `backend/app/planprog.py` lê a barra de progresso
-e de onde `skills/orchestrating-idea-to-push` recorta a Task do executor. O formato de `### Task N:`
+e de onde `skills/orquestrar` recorta a Task do executor. O formato de `### Task N:`
 e `- [ ] **Step N: …**` é casado por regex e não é livre. Ver
 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
 

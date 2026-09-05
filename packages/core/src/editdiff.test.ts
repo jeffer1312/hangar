@@ -170,4 +170,116 @@ describe('extractEdits', () => {
     expect(extractFilePath({})).toBe('');
     expect(extractFilePath(null)).toBe('');
   });
+
+  it('pega o primeiro caminho quando o patch toca vários arquivos', () => {
+    // `String(['/a','/b'])` daria "/a,/b", que não é caminho nenhum — e daqui sai a linguagem do
+    // realce.
+    expect(extractFilePath({ file_path: ['/a.ts', '/b.ts'] })).toBe('/a.ts');
+    expect(extractFilePath({ file_path: [] })).toBe('');
+  });
+});
+
+// A edição de arquivo do Codex (`apply_patch`) chega como TEXTO de patch, não como campos. O
+// patch abaixo é copiado de um rollout real desta máquina (fixture do ticket 06).
+describe('extractEdits com apply_patch', () => {
+  const PATCH = [
+    '*** Begin Patch',
+    '*** Update File: /home/u/proj/tests/test_x.py',
+    '@@',
+    ' from app.registry import SessionRegistry',
+    ' from app.adapters.codex import sessions as codex_sessions',
+    '+from app.adapters.codex import adapter as codex_adapter',
+    ' from app.adapters.codex.adapter import CodexAdapter',
+    '*** End Patch',
+  ].join('\n');
+
+  it('reconstrói os dois lados a partir do patch', () => {
+    const edits = extractEdits('apply_patch', { code: PATCH });
+    expect(edits).toHaveLength(1);
+    // Lado velho: contexto. Lado novo: contexto + a linha que entrou, na posição dela.
+    expect(edits![0].oldText.split('\n')).toEqual([
+      'from app.registry import SessionRegistry',
+      'from app.adapters.codex import sessions as codex_sessions',
+      'from app.adapters.codex.adapter import CodexAdapter',
+    ]);
+    expect(edits![0].newText).toContain('from app.adapters.codex import adapter as codex_adapter');
+    // E o diff resultante é o que o cartão desenha: uma adição, nenhuma remoção.
+    const d = computeEditDiff(edits![0].oldText, edits![0].newText);
+    expect([d.add, d.del]).toEqual([1, 0]);
+  });
+
+  it('separa um bloco por arquivo', () => {
+    const dois = [
+      '*** Begin Patch',
+      '*** Update File: /a.py',
+      '@@',
+      '-um',
+      '+dois',
+      '*** Update File: /b.py',
+      '@@',
+      '-tres',
+      '+quatro',
+      '*** End Patch',
+    ].join('\n');
+    // Um bloco só juntaria o fim de um arquivo com o começo do outro, e o diff inventaria uma
+    // mudança que ninguém fez.
+    expect(extractEdits('apply_patch', { code: dois })).toEqual([
+      { oldText: 'um', newText: 'dois' },
+      { oldText: 'tres', newText: 'quatro' },
+    ]);
+  });
+
+  it('linha de conteúdo que começa com *** não fecha o bloco', () => {
+    // Um divisor de markdown sendo editado começa igual a um marcador. Fechando ali, o resto do
+    // diff sumia do cartão sem aviso.
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: /doc.md',
+      '@@',
+      ' titulo',
+      '+*** divisor ***',
+      '+depois',
+      '*** End Patch',
+    ].join('\n');
+    const edits = extractEdits('apply_patch', { code: patch })!;
+    expect(edits).toHaveLength(1);
+    expect(edits[0].newText).toBe('titulo\n*** divisor ***\ndepois');
+  });
+
+  it('o renomear não vira linha do arquivo', () => {
+    // `*** Move to:` vem DENTRO de um bloco `Update File:` (é o rename do formato do Codex). Caindo
+    // no ramo de contexto, ele aparecia nos dois lados do diff como se fosse texto do arquivo.
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: /velho.ts',
+      '*** Move to: /novo.ts',
+      '@@',
+      '-antes',
+      '+depois',
+      '*** End Patch',
+    ].join('\n');
+    expect(extractEdits('apply_patch', { code: patch })).toEqual([
+      { oldText: 'antes', newText: 'depois' },
+    ]);
+  });
+
+  it('a nota "No newline at end of file" não vira linha do arquivo', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: /a.txt',
+      '@@',
+      '-antes',
+      '\\ No newline at end of file',
+      '+depois',
+      '*** End Patch',
+    ].join('\n');
+    expect(extractEdits('apply_patch', { code: patch })).toEqual([
+      { oldText: 'antes', newText: 'depois' },
+    ]);
+  });
+
+  it('sem patch reconhecível volta null e o cartão cai no texto cru', () => {
+    expect(extractEdits('apply_patch', { code: 'nada disso' })).toBeNull();
+    expect(extractEdits('apply_patch', {})).toBeNull();
+  });
 });

@@ -14,11 +14,11 @@
     onRename: () => void;
     onDelete: () => void;
     onGit: () => void;
-    onLoop: () => void;
+    onBastao: () => void;
     onPickBranch: (branch: string, dirty: boolean) => void;
     onFlash: (msg: string) => void;
   }
-  let { x, y, name, serverId, cwd, thenTarget, chainCandidates, onClose, onRename, onDelete, onGit, onLoop, onPickBranch, onFlash }: Props = $props();
+  let { x, y, name, serverId, cwd, thenTarget, chainCandidates, onClose, onRename, onDelete, onGit, onBastao, onPickBranch, onFlash }: Props = $props();
 
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -170,11 +170,6 @@
           <button {...props}>{m.ctx_git_pull()}</button>
         {/snippet}
       </DropdownMenu.Item>
-      <DropdownMenu.Item onSelect={onLoop}>
-        {#snippet child({ props })}
-          <button {...props}>{m.sessao_loop_runner()}<span class="ctx-more">›</span></button>
-        {/snippet}
-      </DropdownMenu.Item>
 
       <!-- Trocar branch como Sub -->
       <DropdownMenu.Sub bind:open={branchOpen}>
@@ -262,6 +257,16 @@
     </DropdownMenu.Sub>
 
     <DropdownMenu.Separator class="ctx-sep" />
+    <!-- Passagem de bastão: abre a folha de criar sessão pré-preenchida pra CONTINUAR esta. Aqui,
+         e não no swipe do celular, porque no celular a lista não tem menu por sessão — lá a
+         entrada é o "⋯" do chat aberto (MoreSheet). -->
+    <DropdownMenu.Item onSelect={onBastao}>
+      {#snippet child({ props })}
+        <button {...props}>{m.bastao_menu()}<span class="ctx-more">›</span></button>
+      {/snippet}
+    </DropdownMenu.Item>
+
+    <DropdownMenu.Separator class="ctx-sep" />
     <DropdownMenu.Item onSelect={onDelete}>
       {#snippet child({ props })}
         <button {...props} class="danger">{m.sessao_excluir_curto()}</button>
@@ -275,7 +280,15 @@
   :global(.ctx-menu) {
     min-width: 168px; padding: 4px;
     display: flex; flex-direction: column;
-    background: var(--surface-raised); border: 1px solid var(--border-default);
+    /* Fundo SÓLIDO, mesmo motivo do Popover (ver o comentário lá): o slider Solidez foi pensado
+       pro papel de parede, mas este menu flutua sobre a LISTA DE SESSÕES — com a Solidez baixa
+       dava pra ler nome e caminho das sessões através de "Renomear" e "Copiar cwd". Chip
+       translúcido é bonito; texto sobre texto não se lê. O token não serve aqui porque ele é
+       resolvido no :root, então o caminho é não usar o token neste componente. */
+    background: var(--bg-elevated);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--border-default);
     border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0,0,0,0.4); z-index: 41;
   }
   :global(.ctx-menu) button {

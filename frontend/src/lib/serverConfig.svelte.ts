@@ -6,7 +6,8 @@ import * as m from '../paraglide/messages';
 import {
   getConfig, getConfigForServer, patchConfig, patchConfigForServer, type CampoConfig,
 } from '@hangar/core';
-import { serverIdentidade, type Server } from './auth';
+import { getActiveId, serverIdentidade, type Server } from './auth';
+import { segredos } from './segredos.svelte';
 
 export type ValorCampo = string | number | boolean;
 
@@ -89,6 +90,12 @@ export function criarConfigServidor(alvo: () => Server | null, identidade?: () =
         if (Object.is(rascunho[k], enviado[k])) delete rascunho[k];
       }
       salvo = true;
+      // Salvar chave/comando de voz aqui e o chip "Ouvir" (segredos.svelte) so ver o valor velho
+      // ate um F5 era exatamente o laco que a tela Voz existia pra fechar. So recarrega quando o
+      // alvo salvo E o servidor ATIVO: `segredos` sempre reflete ELE (getConfig(), sem alvo
+      // explicito) — recarregar num save de OUTRO servidor (`?srv=` fora do ativo) pintaria por
+      // cima do que o app ja sabia com o dado errado.
+      if (!s || s.id === getActiveId()) void segredos.carregar();
       // Timer do "salvo": o callback só age se esta operacao ainda e a dona — um save posterior
       // limpa o timer anterior, e um timer velho nunca derruba o salvo do novo.
       timerSalvo = setTimeout(() => { if (mine === geracao) salvo = false; }, 2500);

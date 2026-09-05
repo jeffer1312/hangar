@@ -15,12 +15,17 @@
   import { filesStores } from '../../lib/filesStore.svelte';
   import { getActiveId } from '../../lib/auth';
   import type { FilesStore } from '../../lib/filesStore.svelte';
+  import type { ChatEvent } from '@hangar/core';
   import type { GitCommit } from '@hangar/core';
   import type { GitStore } from '../../lib/gitStore.svelte';
   import { tick } from 'svelte';
 
-  interface Props { git: GitStore; desktop: boolean; filesInContext: boolean; onClose: () => void }
-  let { git, desktop, filesInContext, onClose }: Props = $props();
+  interface Props {
+    git: GitStore; desktop: boolean; filesInContext: boolean; onClose: () => void;
+    // Só quando o modal é aberto pelo Chat: eventos pra visão "Citados" da aba Arquivos.
+    events?: ChatEvent[] | null; histGap?: string; cwd?: string | null;
+  }
+  let { git, desktop, filesInContext, onClose, events = null, histGap = '', cwd = null }: Props = $props();
 
   let nav = $state<GitNav>(initialNav());
   let repoMenu = $state(false);
@@ -217,6 +222,7 @@
             sessionName={git.sessionName}
             serverId={getActiveId() ?? ''}
             desktop={false}
+            {events} {histGap} {cwd}
           />
         {/if}
       {:else if nav.tab === 'history'}

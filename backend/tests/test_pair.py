@@ -124,15 +124,28 @@ def test_merge_appends_loser_contract(tmp_path):
     assert not pc.exists()
 
 
-def test_contract_dies_with_the_group_but_survives_membro_solto(tmp_path):
+def test_contrato_e_arquivado_quando_o_grupo_dissolve_e_sobrevive_a_membro_solto(tmp_path, monkeypatch):
     pair.join("a", "b")
     pair.join("a", "c")
     contrato = pair.contract_path_for("a")
     contrato.write_text("contrato ABC", encoding="utf-8")
     pair.leave("a")               # grupo continua (b + c) -> contrato fica
     assert contrato.exists()
-    pair.leave("b")               # último a sair dissolve -> contrato some (nada mais aponta pra ele)
+    monkeypatch.setattr(pair, "_arquivo_dir", lambda: tmp_path / "arq")
+    gid = pair.PairLink("b").get()["gid"]
+    pair.leave("b")                                   # último sai
     assert not contrato.exists()
+    arquivados = list((tmp_path / "arq").glob("grupo-*-*.md"))
+    assert len(arquivados) == 1 and arquivados[0].name.startswith(f"grupo-{gid}-")
+    assert arquivados[0].read_text(encoding="utf-8") == "contrato ABC"
+
+
+def test_arquivar_contratos_leva_grupo_e_regras_e_ignora_ausentes(tmp_path, monkeypatch):
+    monkeypatch.setattr(pair, "_arquivo_dir", lambda: tmp_path / "arq")
+    (pair._pair_dir() / "regras-g7.md").write_text("papéis", encoding="utf-8")
+    pair._arquivar_contratos("g7")               # só regras- existe; grupo- ausente não quebra
+    assert not (pair._pair_dir() / "regras-g7.md").exists()
+    assert [p.name.startswith("regras-g7-") for p in (tmp_path / "arq").iterdir()] == [True]
 
 
 def test_contract_path_stable_and_none_without_group(tmp_path):
@@ -191,3 +204,31 @@ def test_set_com_surrogate_solto_na_task_grava_e_le_de_volta():
     # `task` é rótulo digitado pelo usuário: meio emoji ali estourava no write_text do sidecar.
     PairLink("a").set(["b"], task="TICKET-0000 \ud83d", gid="g1")
     assert PairLink("a").get()["task"] == "TICKET-0000 �"
+
+
+def test_join_recusa_tarefa_diferente_sem_flag():
+    pair.join("a", "b", "PM-1")
+    with pytest.raises(pair.TaskConflito) as ex:
+        pair.join_group("c", ["a"], "PM-2")
+    assert ex.value.existente == "PM-1"
+    assert pair.PairLink("c").get() is None   # nada mutado
+
+
+def test_join_com_flag_substitui_tarefa_de_todos():
+    pair.join("a", "b", "PM-1")
+    pair.join_group("c", ["a"], "PM-2", substituir_task=True)
+    assert {pair.PairLink(n).get()["task"] for n in "abc"} == {"PM-2"}
+
+
+def test_join_tarefa_igual_ou_vazia_nao_conflita():
+    pair.join("a", "b", "PM-1")
+    pair.join_group("c", ["a"], "PM-1")
+    pair.join_group("d", ["a"], "")
+    assert pair.PairLink("d").get()["task"] == "PM-1"
+
+
+def test_referenciados_locais_inclui_donos_e_peers_locais():
+    pair.join("a", "b")
+    pair.join("c", "srv::x")
+    # 'c' é dona de sidecar cross-server: morrendo fora do app, é ela que vira fantasma.
+    assert pair.referenciados_locais() == {"a", "b", "c"}

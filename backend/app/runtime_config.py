@@ -72,6 +72,13 @@ EDITAVEIS: dict[str, type] = {
 # conferir QUAL chave está lá sem poder copiá-la de volta.
 SEGREDOS = {"groq_api_key", "elevenlabs_api_key", "llm_api_key", "llm_briefing_api_key"}
 
+# Campo que a tela edita mas que NÃO mora neste arquivo: a verdade é o `settings.json` do Claude
+# Code, porque quem o lê é o `claude` na largada da sessão. Guardar uma cópia aqui daria dois
+# valores divergindo assim que alguém editasse aquele arquivo à mão. Ver app/pensamento.py.
+EXTERNOS: dict[str, type] = {
+    "mostrar_pensamento": bool,   # settings.json["showThinkingSummaries"]
+}
+
 _ARQUIVO = "runtime-config.json"
 
 # Serializa o read-modify-write: dois PATCH ao mesmo tempo liam o mesmo estado e o ultimo a
@@ -197,7 +204,15 @@ def aplicar(mudancas: dict[str, Any]) -> dict[str, Any]:
 
 def _aplicar_travado(mudancas: dict[str, Any]) -> dict[str, Any]:
     atual = _carregar()
+    # Campo EXTERNO grava em OUTRO arquivo (o settings.json do Claude), então ele fica pro fim: o
+    # front manda o rascunho INTEIRO num POST só, e um campo inválido no meio levantava ValueError
+    # DEPOIS de a chave já ter sido escrita lá. A tela mostrava o erro e mantinha o rascunho — ou
+    # seja, a pessoa achava que não tinha ligado o resumo, e tinha.
+    externos = {}
     for campo, valor in mudancas.items():
+        if campo in EXTERNOS:
+            externos[campo] = valor
+            continue
         if campo not in EDITAVEIS:
             continue
         # Segredo devolvido MASCARADO tem que ser reconhecido e ignorado. A checagem antiga era
@@ -209,6 +224,17 @@ def _aplicar_travado(mudancas: dict[str, Any]) -> dict[str, Any]:
             if valor.strip() in {mascarar(efetivo or ""), ""} and efetivo:
                 continue
         atual[campo] = _coagir(campo, valor)
+    # Tipo errado num campo externo também tem que barrar ANTES de qualquer escrita — validar aqui
+    # e gravar depois deixa os dois arquivos combinando com o que a tela diz.
+    for campo, valor in externos.items():
+        if not isinstance(valor, EXTERNOS[campo]):
+            raise ValueError(f"{campo}: esperado true/false")
+    # Escreve o EXTERNO primeiro. Não há como comitar dois arquivos junto, então a ordem escolhe
+    # qual falha deixa a máquina inteira. A falha realista aqui é o settings.json ilegível — e
+    # nessa ordem ela para tudo antes de gravar qualquer coisa. A ordem contrária gravaria o
+    # runtime-config e só então descobriria o problema, com a tela dizendo que nada foi salvo.
+    for campo, valor in externos.items():
+        _gravar_externo(campo, valor)
     destino = _caminho()
     destino.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(destino.parent), suffix=".tmp")
@@ -228,6 +254,21 @@ def _aplicar_travado(mudancas: dict[str, Any]) -> dict[str, Any]:
     return atual
 
 
+def _gravar_externo(campo: str, valor: Any) -> None:
+    """Campo de EXTERNOS: valida como os outros e delega a quem é dono do arquivo.
+
+    Erro de escrita SOBE (vira 400 na tela) em vez de virar log: o interruptor tem que dizer que
+    não pegou, senão a pessoa acha que ligou o resumo e a próxima sessão nasce sem ele.
+    """
+    if not isinstance(valor, bool):
+        raise ValueError(f"{campo}: esperado true/false")
+    from app import pensamento
+    try:
+        pensamento.gravar(valor)
+    except (OSError, RuntimeError) as e:
+        raise ValueError(f"{campo}: {e}") from e
+
+
 def estado() -> dict[str, Any]:
     """O que a tela mostra: valor efetivo de cada campo editável (segredo já mascarado) e se ele
     está vindo de um override ou do env."""
@@ -240,4 +281,12 @@ def estado() -> dict[str, Any]:
             "definido": bool(valor) if campo in SEGREDOS else valor is not None,
             "origem": "app" if campo in overrides else "env",
         }
+    from app import pensamento
+    out["mostrar_pensamento"] = {
+        "valor": pensamento.ler(),
+        "definido": True,
+        # "app" = a chave está escrita no settings.json (a tela marca a linha como editada); sem
+        # ela o Claude Code trata como desligado, que é o "padrão" desta máquina.
+        "origem": "app" if pensamento.definido() else "env",
+    }
     return out

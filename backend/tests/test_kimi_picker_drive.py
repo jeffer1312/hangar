@@ -280,7 +280,10 @@ def test_confirmacao_atrasada_nao_entrega_duas_vezes(monkeypatch, tmp_path):
     monkeypatch.setattr(api.terminal_input, "answer_question_kimi", lambda *a: None)
     monkeypatch.setattr(api, "_espera_resposta_kimi", lambda *a, **k: False)
     enviados, escapes = [], []
-    monkeypatch.setattr(api, "_send_one", lambda n, t: enviados.append(t) or {"ok": True})
+    # `delivered` faz parte do contrato de _send_one (api.py) — sem ele o fallback e recusado com
+    # 409, que e justamente o caso do teste vizinho de "so enfileirou".
+    monkeypatch.setattr(api, "_send_one",
+                        lambda n, t: enviados.append(t) or {"ok": True, "delivered": True})
     monkeypatch.setattr(api.terminal, "interrupt", lambda n: escapes.append(n))
 
     body = api.AnswerBody(answers=[api.AnswerItem(kind="option", indices=[0], labels=["A"])])
@@ -297,6 +300,15 @@ def test_confirmacao_atrasada_nao_entrega_duas_vezes(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "_espera_picker_fechar", lambda n: True)
     assert api.answer("k", body) == {"ok": True, "fallback": True}
     assert len(enviados) == 1 and escapes == ["k"]
+
+    # Mesmo fallback, mas o texto so ENTROU NA FILA (o gate recusou digitar com o picker aberto):
+    # nao pode voltar ok — a bolha apareceria enviada e a fila nao drena enquanto a pergunta segura
+    # a sessao. Vale pros tres provedores; aqui e o ramo do Kimi.
+    monkeypatch.setattr(api, "_send_one",
+                        lambda n, t: enviados.append(t) or {"ok": True, "delivered": False})
+    with pytest.raises(HTTPException) as e:
+        api.answer("k", body)
+    assert e.value.status_code == 409 and e.value.detail["code"] == "erro_resposta_nao_entregue"
 
 
 def test_steer_sem_marcador_nao_tecla(teclado, monkeypatch):

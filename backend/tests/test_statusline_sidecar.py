@@ -12,7 +12,7 @@ def _publica(tmp_path, stem, line, ts=None):
 
 
 def _dirs(monkeypatch, tmp_path):
-    monkeypatch.setattr(statusline, "_dirs", lambda: [tmp_path])
+    monkeypatch.setattr(statusline, "dirs_de_config", lambda: [tmp_path])
 
 
 def test_reads_the_full_line_published_by_the_session(monkeypatch, tmp_path):

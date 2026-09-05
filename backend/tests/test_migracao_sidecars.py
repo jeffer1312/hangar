@@ -86,14 +86,6 @@ def test_migrar_leva_a_pasta_de_dados_do_servidor(tmp_path, monkeypatch):
     assert (tmp_path / ".hangar" / "sync-vault.json").read_text(encoding="utf-8") == '{"v": 1}'
 
 
-def test_upload_migra_pasta_do_projeto_na_primeira_leitura(tmp_path):
-    """A pasta de anexos mora no cwd do PROJETO, fora do alcance da migração da subida."""
-    from app.uploads import resolve_upload
-
-    antigo = tmp_path / ".claude-pocket-uploads"
-    antigo.mkdir()
-    (antigo / "1234-abcdef.png").write_bytes(b"png")
-
-    # Uma mensagem antiga cita o caminho velho; o anexo tem que continuar servível.
-    assert resolve_upload(str(tmp_path), "1234-abcdef.png").endswith("1234-abcdef.png")
-    assert (tmp_path / ".hangar-uploads" / "1234-abcdef.png").exists()
+# A migração da pasta de anexos do projeto saiu em 31/08/2026: os anexos passaram a nascer no
+# cofre (`~/.hangar/uploads/`), e o que ficou no cwd não é migrado nem servido — decisão do
+# usuário. A cobertura de uploads vive em tests/test_uploads.py.

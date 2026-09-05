@@ -1,4 +1,6 @@
 import os
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +52,17 @@ def _instalar_home_do_windows() -> None:
 
 if os.name == "nt":
     _instalar_home_do_windows()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sem_git_dir_no_ambiente_de_teste():
+    # git_ops._run passa os.environ inteiro pro subprocess: dentro de um hook (pre-push, p.ex.) o
+    # processo herda GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE do git que roda o hook, e qualquer teste
+    # que faz `git init`/`commit` num tmp_path (test_git_ops._repo) escreve no `.git` REAL por trás
+    # do cwd em vez do repo isolado — foi o que corrompeu o `.git` desta sessão. Session-scoped
+    # porque a suíte inteira roda no mesmo processo; monkeypatch é function-scoped e não cobre isto.
+    for k in [k for k in os.environ if k.startswith("GIT_")]:
+        os.environ.pop(k, None)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -109,6 +122,30 @@ def _reset_agentpane_cache():
     agentpane.invalidate()
 
 
+_DIARIO_DE_TESTE = Path(tempfile.mkdtemp(prefix="hangar-diag-")) / ".hangar-diag"
+# O CLAUDE_CONFIG_DIR que a suíte HERDOU é o da conta de quem roda (sessão em `--conta` tem um):
+# esse é o real, e vale tanto quanto `~/.claude`. Só um valor DIFERENTE, posto por um teste, isola.
+_CONFIG_DIR_HERDADO = os.environ.get("CLAUDE_CONFIG_DIR")
+
+
+@pytest.fixture(autouse=True)
+def _diario_isolado():
+    # `diag._base()` lê CLAUDE_CONFIG_DIR/~/.claude e a suíte escrevia no diário REAL da máquina:
+    # 361 `pergunta.fallback_texto` da sessão `s1` (test_api.py) numa semana de uso exportada,
+    # indistinguíveis de picker preso de verdade. Sem `monkeypatch`/`tmp_path` na assinatura —
+    # ver a armadilha de ordem de fixtures documentada em `_instalar_home_do_windows`.
+    from app import diag
+    original = diag._base
+    # `test_diag.py` isola pelo próprio CLAUDE_CONFIG_DIR (um por teste): só o fallback `~/.claude`
+    # é trocado, senão aquela suíte inteira passaria a compartilhar um diário só.
+    def _base_de_teste() -> Path:
+        v = os.environ.get("CLAUDE_CONFIG_DIR")
+        return Path(v) / ".hangar-diag" if v and v != _CONFIG_DIR_HERDADO else _DIARIO_DE_TESTE
+    diag._base = _base_de_teste
+    yield
+    diag._base = original
+
+
 @pytest.fixture(autouse=True)
 def _reset_sem_agente_avisadas():
     # _SEM_AGENTE_AVISADAS (Task 5.5) e set de CLASSE (SessionRegistry) com dedup de log por nome
@@ -128,11 +165,19 @@ def _reset_list_snapshot():
     # manager) -> sem este reset, o snapshot preenchido num teste vazaria pro seguinte dentro do
     # TTL de 1s (fakes de um teste respondendo no outro).
     from app import api
-    api._list_snap["infos"] = None
-    api._list_snap["t"] = 0.0
+    api._list_snap["snap"] = None
     yield
-    api._list_snap["infos"] = None
-    api._list_snap["t"] = 0.0
+    api._list_snap["snap"] = None
+
+
+@pytest.fixture(autouse=True)
+def _reset_pair_ausencias():
+    # Backstop: com o dict vazio no início do teste, nenhuma varredura dentro de UM teste chega
+    # aos 5s — nenhum teste alcança o .hangar-pair real por esquecer o fixture por arquivo.
+    from app.registry import SessionRegistry
+    SessionRegistry._pair_ausencias.clear()
+    yield
+    SessionRegistry._pair_ausencias.clear()
 
 
 # Recortes REAIS do material_colors.scss, medidos em 05/08/2026 trocando o papel de parede: um azul

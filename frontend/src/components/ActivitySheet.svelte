@@ -4,6 +4,7 @@
   import ModalDialog from './ModalDialog.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import { renderMarkdown } from '../lib/markdown';
+  import { formatarIntervalo } from '../lib/contaEstado';
   import MessageList from './MessageList.svelte';
   import { onDestroy, tick } from 'svelte';
   import type { Activity, TaskStatus } from '@hangar/core';
@@ -99,6 +100,17 @@
   }
 
   const runningAgents = $derived(activity.agents.filter((a) => a.kind === 'agent' && a.running));
+  const shellsVivos = $derived(activity.shells.filter((s) => s.running));
+  // Relógio do "há N min" dos shells. 20s de passo porque a menor unidade que a frase mostra é o
+  // minuto (formatarIntervalo), e ele só corre com a folha ABERTA — um timer vivo com a folha
+  // fechada seria trabalho pra ninguém ver.
+  let agora = $state(Date.now() / 1000);
+  $effect(() => {
+    if (!open) return;
+    agora = Date.now() / 1000;
+    const id = setInterval(() => { agora = Date.now() / 1000; }, 20_000);
+    return () => clearInterval(id);
+  });
 
 
   // ── Subagente ao vivo ─────────────────────────────────────────────────────
@@ -206,12 +218,14 @@
         subDetail = d;
         subFails = 0;
         subError = '';
-      } catch {
+      } catch (e) {
         if (g !== geracaoSub) return;
         // Uma falha isolada e normal (o arquivo some quando o agente termina) -> mantem o ultimo
         // estado. Tres seguidas nao sao "sumiu": e erro de verdade, e a tela precisa parar de
-        // fingir que esta ao vivo.
-        if (++subFails >= 3) {
+        // fingir que esta ao vivo. 404 e definitivo na PRIMEIRA: a sessao morreu por baixo do
+        // painel, e insistir a cada 2,5s so enche o diario (medido: 406 num dia).
+        const definitivo = (e as { status?: number })?.status === 404;
+        if (definitivo || ++subFails >= 3) {
           stopSubPoll();
           subError = m.atividade_erro_vivo();
         }
@@ -449,6 +463,34 @@
               </div>
             {/if}
 
+            {#if shellsVivos.length > 0}
+              <!-- Shells de FUNDO: comando que segue rodando depois que a ferramenta respondeu. O
+                   terminal já dizia "N shells still running"; aqui está QUAL comando é.
+                   Só os que RODAM, mesmo critério do `runningAgents` acima: numa sessão longa os
+                   concluídos são dezenas (medido: 3 vivos contra 13 terminados) e viram parede — e
+                   a saída de cada um já voltou pro chat quando ele terminou. Sem clique pelo mesmo
+                   motivo: não há tela nenhuma pra abrir. -->
+              <div class="section">
+                <span class="section-label">
+                  {m.atividade_shells()}
+                  <span class="shell-vivos">{m.atividade_shells_rodando({ n: shellsVivos.length })}</span>
+                </span>
+                {#each shellsVivos as s (s.id)}
+                  <!-- `title` com o comando CRU: o rótulo tira o encanamento pra caber na linha, e
+                       quem precisar do texto exato tem onde ver sem a lista virar parede. -->
+                  <div class="shell-row" title={s.command}>
+                    <span class="ring-spin" aria-hidden="true"></span>
+                    <span class="agent-body">
+                      <span class="shell-cmd">{s.rotulo}</span>
+                      <span class="agent-now">
+                        {#if s.description}{s.description}{#if s.ts} · {/if}{/if}{#if s.ts}{m.atividade_shell_ha({ t: formatarIntervalo(agora - s.ts) })}{/if}
+                      </span>
+                    </span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+
             {#if activity.tasks.length > 0}
               <div class="section">
                 <span class="section-label">{m.atividade_tarefas()}</span>
@@ -462,7 +504,7 @@
             {/if}
 
             {#if subError}<p class="activity-error">⚠ {subError}</p>{/if}
-            {#if workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0 && orfaos.length === 0}
+            {#if workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0 && orfaos.length === 0 && shellsVivos.length === 0}
               <p class="activity-empty">{m.atividade_vazio()}</p>
             {/if}
           </div>
@@ -481,7 +523,15 @@
                 <div class="ag-meta"><span>{m.atividade_sub_ilegivel()}</span></div>
               {:else}
                 <div class="ag-meta">
-                  <span class="rodando">◐ {m.atividade_rodando()}</span>
+                  <!-- `finished` vem do próprio transcript do filho (Kimi e Pi sabem dizer). Antes
+                       isto era um "◐ Rodando" fixo no HTML, então um subagente que terminou há
+                       horas abria dizendo que ainda estava trabalhando — e a linha da lista, uma
+                       tela acima, já mostrava "concluído" pelo mesmo dado. -->
+                  {#if subDetail.finished}
+                    <span class="ok">✓ {m.atividade_sub_concluido()}</span>
+                  {:else}
+                    <span class="rodando">◐ {m.atividade_rodando()}</span>
+                  {/if}
                   <span>{m.atividade_chamadas({ n: subDetail.toolCalls })}</span>
                   {#if subDetail.agentType}<span>{subDetail.agentType}</span>{/if}
                   {#if subDetail.recent.length}
@@ -799,6 +849,19 @@
     font-family: var(--font-mono); font-size: 10px; white-space: nowrap;
   }
   .agent-tag.muted { color: var(--text-muted); }
+  /* Shell de fundo: mesma linha do agente, com o comando em monoespaçada — é comando, não frase. */
+  .shell-row { display: flex; align-items: flex-start; gap: var(--space-2); }
+  .shell-row .ring-spin { margin-top: 3px; flex-shrink: 0; }
+  /* DUAS linhas, não uma com reticências: no celular o `title` não existe (não há hover), então
+     cortar em uma linha esconderia o comando sem nenhuma outra forma de lê-lo — e o comando é a
+     única coisa que essa linha tem pra dizer. Duas linhas cobrem a maioria; o que passar disso
+     ainda corta, e aí o `title` atende quem está no desktop. */
+  .shell-cmd {
+    font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-primary);
+    min-width: 0; overflow: hidden; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  }
+  .shell-vivos { margin-left: var(--space-1); color: var(--accent); }
   .agent-row.openable { width: 100%; padding: var(--space-1) var(--space-2); margin-inline: calc(var(--space-2) * -1); border-radius: var(--radius-md); text-align: left; cursor: pointer; }
   .agent-row.openable:hover { background: var(--bg-hover); }
   .agent-now { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }

@@ -3,17 +3,21 @@
   import SettingsRow from './SettingsRow.svelte';
   import GeneralSettings from './GeneralSettings.svelte';
   import AppearanceSettings from './AppearanceSettings.svelte';
-  import DictationSettings from './DictationSettings.svelte';
+  import VozSettings from './VozSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
   import DiarioSettings from './DiarioSettings.svelte';
-  import ServidoresSettings from './ServidoresSettings.svelte';
-  import AcessoSettings from './AcessoSettings.svelte';
+  import MaquinasSettings from './MaquinasSettings.svelte';
   import ContasSettings from './ContasSettings.svelte';
+  import HarnessSettings from './HarnessSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
+  import ConfigIcone from './ConfigIcone.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
+  import { fly, fade } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
+  import OrquestracaoContas from '../OrquestracaoContas.svelte';
   import * as m from '../../paraglide/messages';
   import { listServers, onServersChanged, type Server } from '../../lib/auth';
 
@@ -43,7 +47,7 @@
   // Seletor de servidor do grupo "Servidor" (pedido repetido do usuário, 19/08/2026): o rótulo
   // "Servidor · X" dizia o alvo mas não trocava — trocar exigia ir à tela Servidores e voltar.
   // listServers() lê localStorage e não é reativo; o contador sobe pelo mesmo onServersChanged
-  // que o App e o ServidoresSettings usam.
+  // que o App e o MaquinasSettings usam.
   let versaoServidores = $state(0);
   $effect(() => onServersChanged(() => versaoServidores++));
   const servidores = $derived.by(() => {
@@ -61,75 +65,81 @@
   const mostrarSeletor = $derived(servidores.length > 1 && !!onPickServer && !!resolvedServer);
   function trocarServidor(id: string) { onPickServer?.(id); }
 
-  // Na tela Servidores o store fica EM SILENCIO (zero GET /api/config) e a operacao pendente é
+  // Na tela Máquinas o store fica EM SILENCIO (zero GET /api/config) e a operacao pendente é
   // INVALIDADA sem nova chamada: quem manda la sao os controllers proprios (ServerManager/
   // PushQuiet). O store SÓ carrega quando (a) a IDENTIDADE mudou (troca real de alvo: outro
   // servidor, ou o mesmo id com base/token/label diferentes — limpa o estado do alvo anterior) ou
-  // (b) se voltou de Servidores pro alvo corrente — trocar de tela no MESMO alvo preserva o
+  // (b) se voltou de Máquinas pro alvo corrente — trocar de tela no MESMO alvo preserva o
   // rascunho único (decisão do usuário; o store decide pelo ultimoDono, não pela tela).
   let identidadeAnterior = $state<string | undefined>(undefined);
-  // null no primeiro run: `veioDeServidores` exige telaAnterior === 'servidores', então o boot
+  // null no primeiro run: `veioDeMaquinas` exige telaAnterior === 'maquinas', então o boot
   // cai no ramo `mudouAlvo` (carrega) — comportamento idêntico, sem capturar `tela` no $state.
   let telaAnterior = $state<TelaConfig | null>(null);
   $effect(() => {
     const id = identidade;
     const mudouAlvo = id !== identidadeAnterior;
-    const veioDeServidores = telaAnterior === 'servidores' && tela !== 'servidores';
+    const veioDeMaquinas = telaAnterior === 'maquinas' && tela !== 'maquinas';
     identidadeAnterior = id;
     telaAnterior = tela;
-    if (tela === 'servidores') { store.invalidar(); return; }
+    if (tela === 'maquinas') { store.invalidar(); return; }
     if (mudouAlvo) store.carregar();
-    else if (veioDeServidores) store.carregar();
+    else if (veioDeMaquinas) store.carregar();
   });
 
   const TITULO: Record<TelaConfig, string> = {
     root: m.config_modal_titulo(),
     geral: m.config_geral_titulo(),
     aparencia: m.config_modal_aparencia(),
-    ditado: m.config_modal_ditado(),
+    voz: m.voz_titulo(),
     sobre: m.config_modal_sobre(),
     diario: m.config_diag_titulo(),
-    servidores: m.config_modal_servidores(),
-    acesso: m.acesso_titulo(),
+    maquinas: m.maquinas_titulo(),
     contas: m.contas_titulo(),
     notificacoes: m.config_modal_notificacoes(),
-    anexos: m.config_modal_anexos(),
+    anexos: m.config_modal_anexos_curto(),
     avancado: m.config_modal_avancado(),
     motores: m.config_modal_motores(),
+    orquestracao: m.config_modal_orquestracao(),
+    harnesses: m.harness_titulo(),
   };
 
   // Valores de rotulo vindo de funcao (m.*) dependem do locale: o `as const` nao pode mais
   // existir (valor de funcao nao e literal), mas o `satisfies` fica — e ele que checa a forma.
   const LINHAS = [
-    { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: '🌐',
-      descricao: m.config_geral_descricao(), servidor: false },
-    { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: '🎨',
-      descricao: m.config_modal_desc_aparencia(), servidor: false },
-    { id: 'ditado', secao: 'app', rotulo: m.config_modal_ditado(), icone: '🎤',
-      descricao: m.config_modal_desc_ditado(), servidor: false },
-    { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: '🧾',
-      descricao: m.config_diag_linha_desc(), servidor: false },
-    { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'ℹ️',
-      descricao: m.config_modal_desc_sobre(), servidor: false },
-    { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: '📶',
-      descricao: m.acesso_descricao(), servidor: true },
-    { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: '👤',
-      descricao: m.contas_descricao(), servidor: true },
-    { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: '🖥️',
-      descricao: m.config_modal_desc_servidores(), servidor: false },
-    { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: '🔔',
-      descricao: m.config_modal_desc_notificacoes(), servidor: true },
-    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos(), icone: '📎',
-      descricao: m.config_modal_desc_anexos(), servidor: true },
-    { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: '🛠️',
-      descricao: m.config_modal_desc_avancado(), servidor: true },
-    { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: '🔌',
-      descricao: m.config_modal_desc_motores(), servidor: true },
-  ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; descricao: string; servidor: boolean }[];
+    { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: 'globo', servidor: false },
+    { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: 'pincel', servidor: false },
+    { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: 'recibo', servidor: false },
+    { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
+    { id: 'maquinas', secao: 'servidor', rotulo: m.maquinas_titulo(), icone: 'tela', servidor: false },
+    { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: 'pessoa', servidor: true },
+    { id: 'harnesses', secao: 'servidor', rotulo: m.harness_titulo(), icone: 'pulso', servidor: true },
+    { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
+    { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
+    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos_curto(), icone: 'clipe', servidor: true },
+    { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: 'chave', servidor: true },
+    { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: 'plug', servidor: true },
+    { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: 'sliders', servidor: true },
+  ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; servidor: boolean }[];
   const SECOES = ['app', 'servidor'] as const;
 
+  // Troca de tela do modal: fly curto na direção da navegação (180ms ease-out, uso ocasional).
+  // Entrar numa sub-tela vem da direita; voltar pra raiz vem da esquerda. Com reduced-motion
+  // vira só fade (opacidade não é movimento — regra de acessibilidade da Emil). Com LISTENER,
+  // não snapshot: quem alterna a preferência do SO com o modal aberto não fica com fly vivo.
+  let semMovimento = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const on = () => (semMovimento = mq.matches); on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
+  function animarTela(node: HTMLElement, { x }: { x: number }) {
+    if (semMovimento) return fade(node, { duration: 120 });
+    return fly(node, { x, duration: 180, easing: cubicOut });
+  }
+
   let tituloEl = $state<HTMLElement | null>(null);
-  // Fallback de foco das confirmações da tela Servidores: o botão FECHAR do modal é o controle que
+  // Fallback de foco das confirmações da tela Máquinas: o botão FECHAR do modal é o controle que
   // sempre sobra acessível. Desktop e mobile têm botões diferentes — ambos fazem bind no MESMO ref.
   let fecharEl = $state<HTMLElement | null>(null);
 
@@ -275,13 +285,15 @@
                     aria-current={telaAtual === l.id ? 'page' : undefined}
                     disabled={l.servidor && semServidor}
                     onclick={() => onIrPara(l.id)}>
-              <span class="st-nav-icone" aria-hidden="true">{l.icone}</span>{l.rotulo}
+              <span class="st-nav-icone" aria-hidden="true"><ConfigIcone nome={l.icone} size={16} /></span>{l.rotulo}
             </button>
           {/each}
         {/each}
       </aside>
       <section class="st-conteudo">
-        {@render corpo()}
+        <!-- #key por tela: a troca remonta o conteúdo, e o wrapper novo entra voando (a saída do
+             antigo é instantânea de propósito — transição de saída aqui brigaria com a nova). -->
+        {#key telaAtual}<div in:animarTela={{ x: 18 }}>{@render corpo()}</div>{/key}
       </section>
     </div>
   {:else}
@@ -305,7 +317,7 @@
         </p>
       {/if}
     </header>
-    {@render corpo()}
+    {#key telaAtual}<div in:animarTela={{ x: telaAtual === 'root' ? -18 : 18 }}>{@render corpo()}</div>{/key}
   {/if}
 </BottomSheet>
 {/if}
@@ -323,7 +335,7 @@
       {/if}
       <div class="st-cartao">
         {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
-          <SettingsRow icone={l.icone} rotulo={l.rotulo} descricao={l.descricao}
+          <SettingsRow icone={l.icone} rotulo={l.rotulo}
             desabilitada={l.servidor && semServidor}
             motivo={m.config_modal_escolha_servidor()}
             onPick={() => onIrPara(l.id)} />
@@ -334,26 +346,26 @@
     <GeneralSettings />
   {:else if telaAtual === 'aparencia'}
     <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
-  {:else if telaAtual === 'ditado'}
-    <DictationSettings />
   {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
+  {:else if telaAtual === 'orquestracao'}
+    <OrquestracaoContas desktop={isDesktop} />
   {:else if telaAtual === 'diario'}
     <DiarioSettings />
   {:else if telaAtual === 'sobre'}
     <SobreSettings />
-  {:else if telaAtual === 'servidores'}
-    <ServidoresSettings resolvedServer={resolvedServer} apiTarget={alvo}
+  {:else if telaAtual === 'maquinas'}
+    <MaquinasSettings resolvedServer={resolvedServer} apiTarget={alvo}
       fallbackFocus={fecharEl}
       onPickTarget={onPickServer ?? (() => {})} onLogout={onLogout ?? (() => {})} />
-  {:else if telaAtual === 'acesso'}
-    <!-- O alvo por PROP (não pela rota lida dentro da tela): com o seletor do grupo a troca
-         não remonta a tela, e a prop reativa é o que remede os endereços (achado da revisão). -->
-    <AcessoSettings alvo={resolvedServer} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
+  {:else if telaAtual === 'harnesses'}
+    <HarnessSettings apiTarget={alvo} />
+  {:else if telaAtual === 'voz'}
+    <VozSettings {store} />
   {:else}
-    <ServerSettings {store} secao={telaAtual} />
+    <ServerSettings {store} secao={telaAtual} apiTarget={alvo} />
   {/if}
 {/snippet}
 
@@ -394,6 +406,23 @@
     overflow: hidden;
   }
   .st-cartao > :global(button + button) { border-top: 1px solid var(--border-subtle); }
+
+  /* Raiz no celular: linhas entrando em cascata ao abrir o modal (30ms entre elas, entrada só,
+     nunca loop — a regra global de reduced-motion do app.css já cobre o resto). */
+  @media (prefers-reduced-motion: no-preference) {
+    .st-cartao > :global(button) { animation: st-row-in 240ms var(--ease-out) both; }
+    .st-cartao > :global(button:nth-child(2)) { animation-delay: 30ms; }
+    .st-cartao > :global(button:nth-child(3)) { animation-delay: 60ms; }
+    .st-cartao > :global(button:nth-child(4)) { animation-delay: 90ms; }
+    .st-cartao > :global(button:nth-child(5)) { animation-delay: 120ms; }
+    .st-cartao > :global(button:nth-child(6)) { animation-delay: 150ms; }
+    .st-cartao > :global(button:nth-child(7)) { animation-delay: 180ms; }
+    .st-cartao > :global(button:nth-child(8)) { animation-delay: 210ms; }
+  }
+  @keyframes st-row-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
 
   /* ── Ao vivo: caixinha flutuante no canto direito ───────────────────────────────────────────
      Nao e um dialogo modal: sem backdrop, sem trap de foco, e o app atras continua clicavel. E o
@@ -476,10 +505,13 @@
        app.css) — medido no navegador, não os 32px do CSS. */
     padding-top: calc(var(--space-3) + 44px + var(--space-2));
   }
+  /* O halo (box-shadow da cor do painel) existe porque o conteúdo ROLA por baixo do ✕: sem ele,
+     texto e slider passavam encostados no botão e a leitura embolava. */
   .st-fechar {
     position: absolute; top: var(--space-3); right: var(--space-3); z-index: 1;
     width: 32px; height: 32px; border-radius: var(--radius-full);
-    border: 1px solid var(--border-subtle); background: var(--surface-raised);
+    border: 1px solid var(--border-subtle); background: var(--glass-modal);
+    box-shadow: 0 0 0 8px var(--glass-modal);
     color: var(--text-secondary); font-size: var(--text-base); line-height: 1; cursor: pointer;
   }
   .st-nav-item {
@@ -491,5 +523,6 @@
   @media (hover: hover) { .st-nav-item:not(:disabled):hover { background: var(--bg-hover); } }
   .st-nav-item.sel { background: var(--bg-elevated); }   /* realce de estado: --bg-* cru e o certo */
   .st-nav-item:disabled { color: var(--text-muted); cursor: default; }
-  .st-nav-icone { flex-shrink: 0; width: 1.4em; text-align: center; }
+  .st-nav-icone { flex-shrink: 0; width: 1.4em; display: grid; place-items: center;
+                  color: var(--text-secondary); }
 </style>

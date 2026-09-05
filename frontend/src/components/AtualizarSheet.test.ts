@@ -77,6 +77,74 @@ describe('em dia', () => {
     expect(txt).toContain('v1-velho');
     expect(txt).toContain(m.atualizar_precisa_reiniciar());
   });
+
+  it('divergiu no systemd: oferece o botão e ele chama o reinício', async () => {
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+             pre_voo: { pode: true, faltando: [], topologia: 'systemd' } }),
+    );
+    const rei = vi.spyOn(api, 'reiniciarServidor').mockResolvedValue({ ok: true, pid: 1 });
+    montar();
+    await tick();
+    await tick();
+    const bt = [...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.includes(m.atualizar_reiniciar_botao()));
+    expect(bt).toBeTruthy();
+    bt!.click();
+    await tick();
+    expect(rei).toHaveBeenCalled();
+  });
+
+  it('desmontar no meio da espera do restart não recarrega a tela de quem saiu', async () => {
+    // O laço da espera é solto (não é um $effect), então a destruição do DesktopShell o deixava
+    // rodando: ao ver as versões baterem ele chamava location.reload() em quem já tinha navegado.
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+        base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+               pre_voo: { pode: true, faltando: [], topologia: 'systemd' } }),
+      );
+      vi.spyOn(api, 'reiniciarServidor').mockResolvedValue({ ok: true, pid: 1 });
+      montar();
+      await vi.advanceTimersByTimeAsync(0);
+      [...document.querySelectorAll('button')]
+        .find((b) => b.textContent?.includes(m.atualizar_reiniciar_botao()))!.click();
+      await vi.advanceTimersByTimeAsync(2100);
+      const antes = spy.mock.calls.length;
+
+      unmount(comp!);
+      comp = null;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(spy.mock.calls.length).toBe(antes);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reinício que falhou aparece na tela, não só no servidor', async () => {
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+             estado: { reinicio_erro: 'RuntimeError: nao consegui reiniciar o servidor' } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    const txt = document.body.textContent ?? '';
+    expect(txt).toContain(m.atualizar_reinicio_falhou());
+    expect(txt).toContain('nao consegui reiniciar o servidor');
+  });
+
+  it('fora do systemd não oferece botão nenhum — quem reinicia ali é o instalador', async () => {
+    // Sem isto o botão apareceria no Windows e só serviria pra devolver 409 na cara de quem clicou.
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+             pre_voo: { pode: true, faltando: [], topologia: 'windows' } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    expect(document.body.textContent ?? '').not.toContain(m.atualizar_reiniciar_botao());
+  });
 });
 
 describe('versão nova', () => {
@@ -93,6 +161,22 @@ describe('versão nova', () => {
     expect(txt).toContain(m.atualizar_disponivel_titulo());
     expect(txt).toContain('mudança 0');
     expect(txt).toContain(m.atualizar_botao());
+  });
+
+  it('numa branch de trabalho não oferece o botão, e diz qual é a branch', async () => {
+    // Medido em 25/08/2026: atualizar com o checkout na `mobile-expo` levou a branch junto no
+    // `reset --hard origin/main`. O backend passou a recusar; a tela não pode nem oferecer.
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ atualizacao_disponivel: true, mudancas: [{ sha: 'a1', titulo: 'algo novo' }],
+             pre_voo: { pode: true, faltando: [], branch: 'mobile-expo',
+                        branch_de_trabalho: true } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    const txt = document.body.textContent ?? '';
+    expect(txt).toContain(m.atualizar_branch_bloqueia({ branch: 'mobile-expo' }));
+    expect(txt).not.toContain(m.atualizar_botao());
   });
 
   it('corta em 5 e resume o resto', async () => {
@@ -327,6 +411,62 @@ describe('ciclo de vida', () => {
 });
 
 describe('deu erro', () => {
+  it('pull que tocou shell/ avisa pra reabrir o app — só dentro da janela nativa', async () => {
+    const uaOriginal = navigator.userAgent;
+    const comUa = (ua: string) => Object.defineProperty(navigator, 'userAgent', {
+      value: ua, configurable: true, writable: true,
+    });
+    try {
+      vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+        base({ estado: { fase: 'pronto', ok: true, shell_mudou: true } }),
+      );
+      comUa('Mozilla/5.0 Chrome/150.0 Electron/43.3.0 Safari/537.36');
+      montar();
+      await tick();
+      await tick();
+      expect(document.body.textContent ?? '').toContain(m.atualizar_shell_mudou());
+
+      if (comp) unmount(comp);
+      comp = null;
+      alvo.remove();
+      comUa('Mozilla/5.0 (iPhone) Safari');
+      montar();
+      await tick();
+      await tick();
+      expect(document.body.textContent ?? '').not.toContain(m.atualizar_shell_mudou());
+    } finally {
+      comUa(uaOriginal);
+    }
+  });
+
+  it('com shell_mudou a caixa NÃO recarrega sozinha ao terminar — a pessoa precisa ler o aviso', async () => {
+    const uaOriginal = navigator.userAgent;
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 Chrome/150.0 Electron/43.3.0', configurable: true, writable: true,
+    });
+    const reload = vi.fn();
+    const locationOriginal = window.location;
+    Object.defineProperty(window, 'location', {
+      value: { ...locationOriginal, reload }, configurable: true, writable: true,
+    });
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(api, 'getAtualizacao');
+      spy.mockResolvedValueOnce(base({ estado: { fase: 'rodando', passo: 1, total: 5, texto: 'x' } }));
+      spy.mockResolvedValue(base({ estado: { fase: 'pronto', ok: true, shell_mudou: true } }));
+      montar();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2500);   // um tique do acompanhamento vê o "pronto"
+      expect(document.body.textContent ?? '').toContain(m.atualizar_shell_mudou());
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      Object.defineProperty(window, 'location', { value: locationOriginal, configurable: true, writable: true });
+      Object.defineProperty(navigator, 'userAgent', { value: uaOriginal, configurable: true, writable: true });
+    }
+  });
+
   it('mostra o erro, o estado da máquina e a branch de resgate', async () => {
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
       base({

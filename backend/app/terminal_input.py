@@ -4,14 +4,17 @@ import re
 import threading
 import time
 
+from pathlib import Path
+
 from app import agentpane
 from app import kimi_models
+from app.askquestion import pergunta_aberta
 from app import model_picker as mp
 from app import pi_inbox
 from app import tmux
 from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
-from app.state import _live_spinner, classify, is_overlay
+from app.state import _live_spinner, classify, is_overlay, omp_box, aprovacao_kimi_no_pane
 from app.tmux import send_keys
 
 _log = logging.getLogger("hangar.terminal_input")
@@ -197,6 +200,8 @@ def _pane_tail(pane: str, lines: int = _READY_TAIL_LINES) -> str:
 # 0.1–0.25s, o primeiro caractere de moldura aparece em 4.2s / 4.5s, junto com o composer.
 # ponytail: o conjunto de glifos é calibration knob, igual ao _LOGIN_RE do state.py.
 _READY_MARKERS_BY_PROVIDER = {"pi": ("─", "━", "═", "╰", "│"),
+                              # omp: fork do Pi, mesma TUI/composer.
+                              "omp": ("─", "━", "═", "╰", "│"),
                               # Kimi: composer = mesma caixa arredondada do Pi (╭─╮ ╰─╯ com "> "
                               # dentro) — medido num pane real do Kimi 0.34.0. O conjunto do Pi vale
                               # inteiro: qualquer moldura em tela prova que a TUI ja aceita tecla.
@@ -205,7 +210,7 @@ _READY_MARKERS_BY_PROVIDER = {"pi": ("─", "━", "═", "╰", "│"),
 # Timeout por provider. O Pi ficou mais curto de propósito: o boot medido até o composer é ~4.3s,
 # então 8s é ~2× de folga, e no estouro a gente ENVIA mesmo assim — ou seja, a espera só compra
 # segurança durante o boot e todo o resto é latência pura no dia em que o marcador desandar de novo.
-_TIMEOUTS_BY_PROVIDER = {"pi": 8.0, "kimi": 8.0}
+_TIMEOUTS_BY_PROVIDER = {"pi": 8.0, "omp": 8.0, "kimi": 8.0}
 _DEFAULT_TIMEOUT = 12.0
 
 # Um aviso por (sessão, provider): marcador que para de casar não pode ser silencioso — foi assim
@@ -312,6 +317,24 @@ def _sem_espaco(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
+def _sem_borda(s: str) -> str:
+    """`_sem_espaco` + as BORDAS VERTICAIS da caixa do composer.
+
+    O composer do Kimi e uma caixa (╭─╮ │ │ ╰─╯), entao cada linha do wrap chega ladeada por `│`. So
+    tirar espaco deixava `…naotinhasido││reinstalado`, a cauda procurada nunca casava e TODO envio
+    que quebrava linha virava "envio incompleto" com o texto parado no composer (medido 27/08/2026
+    na sessao pm-nova). Sai dos DOIS lados da comparacao, entao texto do usuario com `│` continua
+    casando consigo mesmo.
+
+    Separada de `_sem_espaco` de proposito, e nao um remendo nela: quem le rascunho
+    (`_composer_ocupado_pi`) pergunta "sobrou ALGUMA COISA na caixa?", e ali apagar `│` faria uma
+    tabela colada pelo usuario virar caixa vazia — o app digitaria por cima do rascunho dele, que e
+    exatamente o que aquele guarda existe pra impedir. Aqui a pergunta e outra: "este trecho MEU
+    esta ai?", e a borda so atrapalha.
+    """
+    return re.sub(r"[\s│┃║]+", "", s)
+
+
 # Numeros dos placeholders de paste numa regiao do pane. A IDENTIDADE importa: aceitar qualquer
 # placeholder fazia um paste ALHEIO (rascunho do usuario) contar como a nossa entrega — o Enter
 # submetia o texto do usuario como se fosse o prompt do agente (achado CRITICO da review de 31/07).
@@ -386,8 +409,8 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
     # usuario estiver digitando ao vivo no composer, e o preco de um falso positivo e o remetente
     # reenviar em cima do residuo (ou pior, o Enter submeter rascunho alheio). Sem NENHUM trecho longo
     # o bastante, degrada pro comportamento de hoje.
-    cauda_curta = len(_sem_espaco(cauda)) < _RESIDUO_MIN
-    inicio_curto = len(_sem_espaco(inicio)) < _RESIDUO_MIN
+    cauda_curta = len(_sem_borda(cauda)) < _RESIDUO_MIN
+    inicio_curto = len(_sem_borda(inicio)) < _RESIDUO_MIN
     if cauda_curta and inicio_curto:
         return None      # nem cauda nem comeco provam algo — nao e "nao esta"
     # Regiao do composer = entre as DUAS ULTIMAS reguas (ver _composer_regiao; as travas contra
@@ -408,10 +431,10 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
     # Compara SEM espaco em branco: o wrap de exibicao quebra a linha no meio da cauda/comeco (recado
     # longo de um paragrafo so passa de 200 colunas e quebra), e ai um `trecho in composer` cru falhava
     # justamente na classe de mensagem que motivou o conserto.
-    composer_sem_espaco = _sem_espaco(composer)
-    if not cauda_curta and _sem_espaco(cauda) in composer_sem_espaco:
+    composer_sem_borda = _sem_borda(composer)
+    if not cauda_curta and _sem_borda(cauda) in composer_sem_borda:
         return True
-    if not inicio_curto and _sem_espaco(inicio) in composer_sem_espaco:
+    if not inicio_curto and _sem_borda(inicio) in composer_sem_borda:
         return True
     return False
 
@@ -592,6 +615,9 @@ def deliverable(name: str) -> bool:
 # Enter de A submetia os dois CONCATENADOS. setdefault e atomico no CPython (pior caso: Lock orfao).
 _send_locks: dict[str, threading.Lock] = {}
 
+# Providers cuja entrega NAO passa pelo teclado do pane — ver o guard no topo do `drain`.
+_SEM_TECLA = frozenset({"codex"})
+
 
 def _send_lock(name: str) -> threading.Lock:
     return _send_locks.setdefault(name, threading.Lock())
@@ -601,16 +627,33 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     """Entrega ao tty as entradas pendentes (delivered=False) quando o pane volta a aceitar texto.
     Retorna quantas entregou. claim-1-envia-1: um crash entre o claim e o envio deixa NO MAXIMO 1
     entrada 'stranded', nao o lote, e recheca o overlay (via send_prompt) a cada iteracao."""
+    # Provider sem entrega por TECLA sai aqui, ANTES de qualquer coisa que toque o pane. No Codex a
+    # fila e entregue pelo adapter (`turn/start` no app-server): a TUI ja recebeu o texto por outro
+    # caminho, entao digitar seria a mensagem do usuario entrando duas vezes na conversa — o mesmo
+    # incidente ja registrado no Pi e no Kimi, aqui com o agravante de a entrega original ter sido
+    # bem-sucedida. A entrada fica pendente de proposito: quem a entrega e `CodexAdapter.drain`.
+    if provider in _SEM_TECLA:
+        _log.debug("drain name=%s: provider %s nao entrega por tecla (fila fica pro adapter)",
+                   name, provider)
+        return 0
     q = PromptQueue(name)
     # ECC: cheap-check SEM subprocess primeiro — a maioria das reconexoes nao tem pendencia; sem isto,
     # todo (re)connect dispararia um capture-pane atoa (pressao no threadpool em rajada de mobile).
     if not any(e.get("delivered") is False for e in q.load()):
         return 0
+    # Pergunta aberta que o pane nao mostra (o menu rolou pra fora — ver askquestion.pergunta_aberta):
+    # o gate do send_prompt le o pane e deixaria passar, e as teclas do recado navegariam o picker.
+    # Fica na fila; o drain volta quando a pergunta for respondida.
+    if pergunta_aberta(Path(jsonl).stem) is not None:
+        _log.debug("drain name=%s: pergunta pendente fora da tela, fila segura", name)
+        return 0
     # Poda por DUAS idades, vale a mais nova: (a) inicio do transcript (pre-/clear cria transcript
     # novo); (b) nascimento do tmux atual — sem ele, um resume (`pi -c`) reusa transcript VELHO e
     # entradas enfileiradas pra vida anterior da sessao (mesmo nome de pasta) eram entregues na
     # sessao nova. Regra do dono: sessao morreu devendo, a divida nao passa pra proxima.
-    start_ts = max(_transcript_start_ts(jsonl), tmux.session_created(name))
+    # `or 0.0`: transcript ilegivel nao pode virar TypeError no max(). E aqui a perda e pequena —
+    # o corte cai pro nascimento do tmux, que e a outra metade da regra e continua valendo.
+    start_ts = max(_transcript_start_ts(jsonl) or 0.0, tmux.session_created(name))
     # Orfas de sessao anterior: nunca mais casam nem drenam — remove (senao o cheap-check acima
     # fica quente pra sempre e o lixo acumula ate o cap). A poda some com a bubble do chat, entao
     # ela nao pode ser muda: loga quantas cairam e o corte usado.
@@ -734,6 +777,76 @@ def _cursor_row(screen: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+# Linha de opcao do picker, marcada ou nao: "❯ 1. Alfa", "  2. Bravo", "  1. [✔] Alfa".
+_LINHA_OPCAO = re.compile(r"^\s*❯?\s*(\d+)\.\s", re.M)
+# Caixinha da MULTIPLA escolha. Medido na TUI (claude 2.1.246, 28/08/2026): numa multiSelect cada
+# linha vem "1. [ ] Alfa" / "1. [✔] Alfa". Numa escolha unica nao ha caixinha nenhuma.
+_CAIXA_OPCAO = re.compile(r"^\s*❯?\s*\d+\.\s*\[.?\]\s", re.M)
+
+
+def _e_multipla_escolha(screen: str) -> bool:
+    return bool(_CAIXA_OPCAO.search(screen))
+
+
+def _marca_da_opcao(screen: str, option: int) -> str | None:
+    """O que esta dentro do `[ ]` da opcao `option` — None se a linha nao esta na tela."""
+    m = re.search(rf"^\s*❯?\s*{option}\.\s*\[(.?)\]", screen, re.M)
+    return m.group(1) if m else None
+
+
+# Qualquer caractere de moldura (bloco "Box Drawing" do Unicode). A faixa inteira de proposito: o
+# painel de preview medido em 29/08/2026 usa `┌│└`, mas canto arredondado, linha dupla e traco
+# grosso sao o mesmo desenho com outros caracteres — listar so os tres vistos deixaria o corte
+# calado justo na variante que ninguem mediu.
+_MOLDURA = re.compile(r"[─-╿]")
+_LINHA_COM_NUMERO = re.compile(r"\s*❯?\s*(\d+)\.\s*(.*)")
+
+
+def _rotulos_de_opcao(screen: str) -> list[str]:
+    """Numero + rotulo de cada linha de opcao, sem o cursor e sem o painel de preview a direita.
+
+    Responde UMA pergunta: depois do digito, a tela ainda mostra a MESMA pergunta (o digito so
+    moveu o cursor) ou ja e outra? O corte na moldura e obrigatorio: no layout de preview o painel
+    da direita muda junto com o cursor, entao comparar a linha inteira diria "mudou" toda vez."""
+    fora = []
+    for linha in screen.splitlines():
+        m = _LINHA_COM_NUMERO.match(linha)
+        if m:
+            fora.append(f"{m.group(1)}. {_MOLDURA.split(m.group(2))[0].strip()}")
+    return fora
+
+
+def _tem_painel_de_preview(screen: str) -> bool:
+    """A pergunta na tela desenha o painel de preview ao lado das opcoes?
+
+    E a condicao MEDIDA (29/08/2026, claude 2.1.246) que decide se a tecla do numero envia ou so
+    move o cursor — e por isso e ela, e nao um palpite sobre "a pergunta continua na tela", que
+    libera o Enter extra. Errar pro lado de nao achar moldura devolve o comportamento de antes
+    (fallback por texto); errar pro outro lado mandaria um Enter na pergunta SEGUINTE."""
+    for linha in screen.splitlines():
+        m = _LINHA_COM_NUMERO.match(linha)
+        if m and _MOLDURA.search(m.group(2)):
+            return True
+    return False
+
+
+def _tem_lista_numerada(screen: str) -> bool:
+    return bool(_LINHA_OPCAO.search(screen))
+
+
+def _picker_do_claude(screen: str) -> bool:
+    """A tela mostra um picker VIVO do Claude Code, do tipo que aceita a tecla do numero?
+
+    Duas provas juntas, e as duas importam:
+      - o cursor `❯ N.` — assinatura do picker do Claude. O do Pi usa `> N.` ascii e e outra TUI,
+        onde o digito nao foi medido; sem esta parte ele entraria no caminho novo de carona.
+      - o rodape de navegacao — prova que o picker esta VIVO. So o `❯ N.` nao basta: ele fica no
+        scrollback depois de a pergunta ser respondida, e digitar um numero ali escreveria no
+        composer em vez de escolher (foi o que aconteceu num teste manual, em 28/08/2026).
+    """
+    return _cursor_row(screen) is not None and ("Esc to cancel" in screen or "to navigate" in screen)
+
+
 def _review_matches(screen: str, answers: list[dict]) -> bool:
     # Cada pergunta no review vira uma linha "→ <labels por ', '>". Compara por TOKEN exato (nao
     # substring) pra um label curto nao casar dentro de outra palavra.
@@ -768,6 +881,11 @@ def _validate(answers: list[dict]) -> None:
         elif kind == "option":
             if not a.get("indices"):
                 raise ValueError("indices required for option kind")
+            # Faixa: no caminho da tecla do numero um indice negativo virava a tecla "0" ou o
+            # argumento "-3", que o tmux le como flag. `range(negativo)` do caminho antigo so nao
+            # mandava nada; o novo digita.
+            if any(not isinstance(i, int) or i < 0 for i in a["indices"]):
+                raise ValueError("indices must be >= 0")
         else:
             raise ValueError(f"unknown answer kind: {kind!r}")
 
@@ -787,6 +905,47 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 
     for a in answers:
         kind = a.get("kind")
+        # Caminho CURTO das duas ramificacoes de opcao: a TECLA DO NUMERO. Medido na TUI em
+        # 28/08/2026, com o picker vivo: na escolha unica o digito MARCA E SUBMETE (o TUI ja
+        # auto-avanca, igual ao Enter), e na multipla ele ALTERNA a opcao. Nao le cursor nenhum,
+        # entao nao tem como cair no "nav drift" que manda tudo pro fallback por texto.
+        # Ate 9 porque a partir dai a TUI precisaria de duas teclas e o primeiro digito ja
+        # escolheria outra opcao. Fora disso, segue a navegacao de sempre, logo abaixo.
+        # UMA captura serve aos dois caminhos: a decisao aqui e a 1a leitura do guard logo abaixo.
+        # Capturar duas vezes gastaria um poll a toa e, pior, faria o guard ler uma tela mais NOVA
+        # que a que ele acha que esta corrigindo.
+        tela0 = _capture(name) if kind == "option" else ""
+        if kind == "option" and all(i + 1 <= 9 for i in a["indices"]) and _picker_do_claude(tela0):
+            for idx in sorted(a["indices"]):
+                key(str(idx + 1))
+            if a.get("multi"):
+                key("Right")   # multipla: marcar nao envia; Right abre a aba de envio
+                continue
+            # Na escolha unica o digito NEM SEMPRE submete — medido em 29/08/2026 (claude 2.1.246),
+            # e depende do desenho da pergunta: SEM preview ele marca e envia numa tecla so; COM
+            # preview (opcoes a esquerda, painel a direita) ele so MOVE o cursor e o picker fica
+            # aberto. Sem este Enter, toda pergunta com preview caia no fallback por texto.
+            # Quem libera o Enter e a MOLDURA do preview na tela de antes — a condicao medida —, e
+            # nao um "a pergunta continua ai?" deduzido depois. Deduzir nao serve: sem preview o
+            # digito ja submeteu e o TUI abriu a proxima aba com o cursor de volta na linha 1; se as
+            # duas perguntas tiverem os mesmos rotulos (Sim/Nao e afins), a tela nova e indistinguivel
+            # da velha e o Enter responderia a pergunta SEGUINTE com a opcao errada, calado (achado
+            # das duas revisoes de 29/08/2026).
+            if not _tem_painel_de_preview(tela0):
+                continue
+            # DUAS leituras, com espera entre elas: uma so nao distingue "o picker esta parado
+            # esperando o Enter" de "o redesenho ainda nao chegou". Com a maquina carregada (varias
+            # sessoes no mesmo tmux) o quadro velho continua na tela bem depois do _SETTLE.
+            def parado_na_mesma() -> bool:
+                tela = _capture(name)
+                return (_picker_do_claude(tela) and _cursor_row(tela) == a["indices"][0] + 1
+                        and _rotulos_de_opcao(tela) == _rotulos_de_opcao(tela0))
+            if parado_na_mesma():
+                time.sleep(_OPEN_SETTLE)
+                if parado_na_mesma():
+                    key("Enter")
+            continue
+
         if kind == "option" and not a.get("multi"):
             # single-select: desce ate o indice e Enter (TUI auto-avanca pro proximo tab)
             for _ in range(a["indices"][0]):
@@ -798,6 +957,9 @@ def answer_questions(name: str, answers: list[dict]) -> None:
             # logo esperado = indice+1. Linha ilegivel -> segue como hoje (guard so age se leu).
             # Nao convergiu -> DriveError SEM Escape (caller faz Escape + fallback por texto).
             expected = a["indices"][0] + 1
+            # Captura FRESCA: entre o `tela0` la de cima e este ponto passou o laco de Down. Reusar
+            # aquela leitura fazia o guard comparar a tela de ANTES da navegacao, achar um drift que
+            # nao existe e mandar a correcao em dobro (achado da revisao).
             row = _cursor_row(_capture(name))
             for _ in range(3):
                 if row is None or row == expected:
@@ -836,7 +998,27 @@ def answer_questions(name: str, answers: list[dict]) -> None:
     #  - UNICA pergunta -> NAO ha review; o Enter da selecao ja submeteu. Sucesso, sem Escape (mandar
     #    Escape aqui interrompia o Claude que ja recebeu a resposta -> bug do "aceitou mas deu ruim").
     #  - Picker ainda aberto sem review (algo travou) -> Escape e erro, nunca submete as cegas.
+    # Picker ainda na tela nao e veredito na PRIMEIRA leitura: com o tmux carregado o redesenho
+    # atrasa, e a tela de Review (ou o fim do picker) chega depois do _SETTLE. Uma leitura so
+    # mandava pro fallback por texto uma resposta que a TUI tinha aceitado — foi o que aconteceu na
+    # noite de 28/08/2026, com o diario registrando `mux.indisponivel` e "envio incompleto" nos
+    # mesmos minutos. Reler custa dois capture-pane no caminho que ja ia falhar.
     screen = _capture(name)
+    for _ in range(3):
+        if screen.strip():
+            if "Submit answers" in screen:
+                if _review_matches(screen, answers):
+                    break      # review pronto e conferido
+            elif "Esc to cancel" not in screen:
+                break          # picker fechou: a selecao ja submeteu
+        time.sleep(_OPEN_SETTLE)
+        screen = _capture(name)
+    if not screen.strip():
+        # Tela vazia e o MESMO valor para "pane em branco" e para "o capture-pane falhou" (tmux.py
+        # loga e devolve ""). Ler isso como "o picker sumiu, entao submeteu" era declarar entrega
+        # sem prova nenhuma — justo quando o multiplexador esta engasgado, que e quando isto
+        # acontece. Mesma decisao que o driver do Pi ja toma no lugar equivalente.
+        raise DriveError("tela ilegivel no passo final — nao da pra confirmar a submissao")
     if "Submit answers" in screen:
         if not _review_matches(screen, answers):
             raise DriveError("review mismatch — nao submetido")
@@ -846,30 +1028,56 @@ def answer_questions(name: str, answers: list[dict]) -> None:
     # senao: pergunta unica ja submeteu na selecao; nada a confirmar.
 
 
-# ── Picker do Pi (tool `question`) ───────────────────────────────────────────
+# ── Picker do Pi (tool `question`) e do omp (tool `ask`) ─────────────────────
 # Cursor do picker do Pi: "> 3. label" (ascii, nao o ❯ do Claude). Nao misturar no _CURSOR_ROW
 # do Claude: aquele faz search no pane INTEIRO e um "> N." citado em prosa viraria falso cursor;
 # aqui o match so vale junto com o is_overlay (rodape de navegacao no FUNDO do pane), que e o que
 # separa o picker vivo da citacao no scrollback.
 _PI_CURSOR_ROW = re.compile(r"^\s*>\s*(\d+)\.", re.M)
+# Picker do omp (tool `ask`): as opcoes NAO sao numeradas — cada uma leva o circulo U+F10C e a
+# selecionada ganha o chevron U+F054 na frente (glifos de nerd font, por codigo porque a area de uso
+# privado nao desenha em fonte comum). Sem numero na tela, a linha alvo so sai contando as opcoes.
+_OMP_SEL = chr(0xF054)
+_OMP_OPT = chr(0xF10C)
+_OMP_OPTION_ROW = re.compile(rf"^\s*│\s*(?:{_OMP_SEL}\s+)?{_OMP_OPT}\s")
+_OMP_CURSOR_ROW = re.compile(rf"^\s*│\s*{_OMP_SEL}\s+{_OMP_OPT}\s")
 
 
-def _pi_cursor_row(screen: str) -> int | None:
+def _pi_cursor_row(screen: str, provider: str = "pi") -> int | None:
+    if provider == "omp":
+        # Posicao (1-based) da linha marcada entre as linhas de opcao do picker. So dentro do ULTIMO
+        # box (omp_box) — o cartao-resumo do toolCall fica na tela com as mesmas marcas e somava
+        # opcao a mais. Sem marcador visivel -> None, igual ao Pi: o drive nao navega as cegas.
+        linhas = screen.splitlines()
+        faixa = omp_box(linhas)
+        if faixa is None:
+            return None
+        pos = 0
+        for ln in linhas[faixa[0]:faixa[1]]:
+            if _OMP_OPTION_ROW.match(ln):
+                pos += 1
+                if _OMP_CURSOR_ROW.match(ln):
+                    return pos
+        return None
     rows = _PI_CURSOR_ROW.findall(screen)
     return int(rows[-1]) if rows else None   # mais ao fundo = o picker vivo
 
 
-def answer_question_pi(name: str, answer: dict, question: dict) -> None:
+def answer_question_pi(name: str, answer: dict, question: dict, provider: str = "pi") -> None:
     """Dirige o picker da tool `question` do Pi: Down/Up em malha fechada (mesmo padrao do
     answer_questions do Claude) + Enter. kind=text: navega ate o "Type something." (sempre a
     ultima linha), Enter, digita, Enter. Input invalido -> ValueError (409); drive falhou ->
-    DriveError SEM submeter e SEM Escape (o caller faz Escape + fallback por texto, igual Claude)."""
+    DriveError SEM submeter e SEM Escape (o caller faz Escape + fallback por texto, igual Claude).
+
+    provider='omp' e o mesmo drive no picker da tool `ask`: so muda como a linha do cursor e lida
+    (ver _pi_cursor_row). A linha de texto livre e a ultima nos dois ("Type something." no Pi,
+    "Other (type your own)" no omp), entao o alvo do kind=text nao muda."""
     options = question.get("options") if isinstance(question.get("options"), list) else []
     kind = answer.get("kind")
     if kind == "option":
         indices = answer.get("indices") or []
         if len(indices) > 1:
-            raise ValueError("multi-seleção do Pi ainda não é dirigida pelo app — responda no terminal")
+            raise ValueError(f"multi-seleção do {provider} ainda não é dirigida pelo app — responda no terminal")
         if not indices:
             raise ValueError("sem opcao escolhida")
         # labels alimentam o fallback por texto se o drive falhar — sem eles o fallback entregaria
@@ -888,11 +1096,11 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
             raise ValueError("texto com caractere de controle")
         target = len(options) + 1        # "Type something." e sempre a ultima linha do picker
     else:
-        raise ValueError(f"kind nao suportado no picker do Pi: {kind!r}")
+        raise ValueError(f"kind nao suportado no picker do {provider}: {kind!r}")
 
     screen = _capture(name)
-    if not is_overlay(screen) or _pi_cursor_row(screen) is None:
-        raise DriveError("picker do Pi nao esta aberto no pane")
+    if not is_overlay(screen) or _pi_cursor_row(screen, provider) is None:
+        raise DriveError(f"picker do {provider} nao esta aberto no pane")
 
     def key(k: str) -> None:
         send_keys(name, k)
@@ -902,15 +1110,15 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
     # ILEGIVEL no meio (capture falho devolve ""), NAO se submete as cegas — DriveError e o
     # fallback por texto assume (um Enter cego podia cair na opcao errada; o Pi nao tem Review).
     for _ in range(3):
-        row = _pi_cursor_row(_capture(name))
+        row = _pi_cursor_row(_capture(name), provider)
         if row is None:
-            raise DriveError("cursor do picker do Pi ficou ilegivel no meio do drive; nao submetido")
+            raise DriveError(f"cursor do picker do {provider} ficou ilegivel no meio do drive; nao submetido")
         if row == target:
             break
         for _ in range(abs(target - row)):
             key("Down" if target > row else "Up")
     else:
-        raise DriveError(f"nav drift no picker do Pi — nao convergiu pra linha {target}; nao submetido")
+        raise DriveError(f"nav drift no picker do {provider} — nao convergiu pra linha {target}; nao submetido")
     key("Enter")
     if kind == "text":
         time.sleep(_SETTLE)
@@ -924,8 +1132,8 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
         after = _capture(name)
     if not after.strip():
         raise DriveError("capture vazio apos o Enter — nao da pra confirmar a submissao")
-    if is_overlay(after) and _pi_cursor_row(after) is not None:
-        raise DriveError("picker do Pi ainda aberto apos o Enter — nada foi submetido")
+    if is_overlay(after) and _pi_cursor_row(after, provider) is not None:
+        raise DriveError(f"picker do {provider} ainda aberto apos o Enter — nada foi submetido")
 
 
 # Rodape do picker do Kimi. Ele muda conforme o MODO e e o que distingue os tres desenhos medidos
@@ -972,6 +1180,60 @@ def picker_kimi_aberto(name: str) -> bool:
     """O picker do Kimi ainda esta na tela? Usado como PROVA de que nada foi submetido quando a
     confirmacao pelo transcript estoura o prazo."""
     return _kimi_picker_aberto(_capture(name))
+
+
+# Painel de APROVACAO do Kimi: o desenho na TELA. Mora no state.py junto dos outros regexes de pane
+# (`_aprovacao_kimi_no_pane`), porque quem decide o ESTADO tambem precisa dele — o wire sozinho nao
+# distingue "painel aberto agora" de "pedido que ficou sem resposta numa execucao anterior".
+_KIMI_APROV_FEEDBACK_RE = re.compile(r"Type feedback")
+
+
+def aprovacao_kimi_aberta(name: str) -> bool:
+    """O painel de aprovacao do Kimi ainda esta na tela? PROVA de que a tecla nao pegou."""
+    return aprovacao_kimi_no_pane(_capture(name))
+
+
+def feedback_kimi_aberto(name: str) -> bool:
+    """O painel de aprovacao abriu o campo de texto (escolha `Revise` / `Reject with feedback`)?
+
+    E a confirmacao de entrega DESSAS escolhas: elas nao geram `interaction.resolved` na hora — o
+    painel troca o rodape e fica esperando a justificativa, que a pessoa escreve pelo composer."""
+    return bool(_KIMI_APROV_FEEDBACK_RE.search(_capture(name)))
+
+
+def select_kimi(name: str, option: int, jsonl: str, req_id: str) -> None:
+    """Escolhe a opcao `option` (1-based) do painel de APROVACAO do Kimi pela TECLA NUMERICA.
+
+    Nao conta linha e nao manda (n-1)xDown como o `select` generico, por dois motivos medidos: o
+    cursor do Kimi e `▶`, que o `_cursor_row` nao le (entao la o drive cairia no caminho ABERTO, as
+    cegas), e o painel trata numero como escolha direta — `handleInput` faz `Number(printable)-1` e
+    chama `selectAndSubmit`, sem passar pelo cursor. Menos tecla, nenhum drift.
+
+    Painel fora da tela -> DriveError SEM digitar: numero solto no composer viraria texto na
+    conversa. Quem confirma a entrega e o caller (`interaction.resolved` no wire, ou o campo de
+    texto abrindo quando a escolha pede justificativa).
+
+    `req_id` e o pedido que a pessoa VIU quando escolheu, reconferido no wire no ultimo instante
+    antes da tecla. Sem ele o guard so sabia que ha ALGUM painel na tela: se o pedido de agora for
+    respondido no terminal e outro abrir no mesmo piscar, a tecla acertaria o painel novo — com os
+    rotulos do antigo. Aprovar um plano que a pessoa nao leu e o pior desfecho possivel aqui, e a
+    releitura fecha a janela ate o ultimo microssegundo. Import local: `app.adapters` importa o
+    KimiAdapter, que importa este modulo."""
+    if option < 1:
+        raise ValueError("option must be >= 1")
+    if option > 9:
+        # O painel le UM caractere ("1".."9" — `buildNumericHint` para no 9). Digitar "10" mandaria
+        # o "1", que ja escolhe e fecha o painel, e o "0" cairia no composer como texto.
+        raise ValueError("o painel de aprovacao do Kimi so aceita as opcoes 1..9")
+    if not aprovacao_kimi_no_pane(_capture(name)):
+        raise DriveError("painel de aprovacao do Kimi nao esta aberto no pane")
+    from app.adapters.kimi.transcript import read_pending_interaction
+    agora = read_pending_interaction(jsonl)
+    if agora is None or agora["id"] != req_id:
+        raise DriveError(
+            f"o pedido pendente mudou entre a leitura e a tecla ({req_id} -> "
+            f"{agora['id'] if agora else 'nenhum'}); nao digitado")
+    send_keys(name, str(option), literal=True)   # literal: "1" e caractere, nao nome de tecla
 
 
 def answer_question_kimi(name: str, answers: list[dict], questions: list[dict]) -> None:
@@ -1247,7 +1509,7 @@ class TerminalInput:
             # `linha_de` (nome primeiro, pane depois) e nao o pane cru: no psmux TODA sessao Pi se
             # declara `%1`, entao procurar por pane entregava a mensagem na conversa da OUTRA
             # sessao — medido 22/08/2026, com `delivered: true` na resposta. Ver pi_inbox.
-            chave = provider == "pi" and pi_inbox.linha_de(name, pane_id)
+            chave = provider in ("pi", "omp") and pi_inbox.linha_de(name, pane_id)
             if chave:
                 r = pi_inbox.INBOX.entregar_sync(chave, text, msg_id)
                 if r != "sem-linha":
@@ -1282,7 +1544,7 @@ class TerminalInput:
             # raspar a tela — ver _composer_ocupado_pi. Este caminho so e alcancado quando a linha
             # NAO entregou (o bloco acima retorna antes), entao aqui ele quase sempre e o plano B
             # mesmo; passar o pane custa nada e cobre o caso de a linha ter voltado no meio.
-            if provider == "pi" and _composer_ocupado_pi(name, pane_id):
+            if provider in ("pi", "omp") and _composer_ocupado_pi(name, pane_id):
                 _avisa_deferred(name, "composer do pi ja tem texto", _OCUPADO_WARNED,
                                 _OCUPADO_DEFER_COUNT, _diag_composer(_capture(name), text, name, None))
                 return "deferred"
@@ -1479,7 +1741,48 @@ class TerminalInput:
             except Exception:
                 return ""  # pane ilegivel -> _cursor_row None -> caminho aberto, como antes
 
-        row = _cursor_row(tela())
+        antes = tela()
+
+        # Caminho CURTO: a tecla do numero. Medido na TUI em 28/08/2026, com o picker vivo:
+        #   - escolha unica  -> o digito MARCA E SUBMETE, numa tecla so (nem Enter precisa);
+        #   - multipla       -> o digito ALTERNA a opcao e o picker segue aberto (quem envia e o
+        #                       `submeter_multipla`, que anda ate a aba Submit).
+        # Ele nao le cursor nenhum, e por isso nao tem como cair nas duas falhas ja registradas no
+        # diario do app: "cursor parou na linha None" (o regex nao achou o ❯ na tela) e "parou na
+        # linha 5, esperava 7" (o ❯ que ele achou nao era o do picker vivo).
+        # So vale ate 9 porque a partir dai a TUI precisaria de duas teclas e o primeiro digito ja
+        # escolheria outra opcao — 10+ segue pelo caminho de sempre.
+        if 1 <= option <= 9 and _picker_do_claude(antes):
+            multipla = _e_multipla_escolha(antes)
+            send_keys(name, str(option))
+            time.sleep(_NAV_GAP)
+            depois = tela()
+            if not depois:
+                time.sleep(_NAV_GAP)
+                depois = tela()   # uma releitura antes de decidir; captura falha tambem devolve ""
+            if not depois:
+                # "" e o MESMO valor para "o picker fechou" e para "o capture-pane falhou" (tmux.py
+                # loga e devolve vazio). Tratar como sucesso era declarar envio sem prova nenhuma.
+                raise DriveError(f"tela ilegivel depois da tecla {option} — envio NAO confirmado")
+            # Numa multipla o picker CONTINUA aberto de proposito (marcar nao e enviar). Numa
+            # unica, o sumico da lista e a prova de que a tecla foi aceita e submeteu.
+            if multipla:
+                # A marca nao mudou = a tecla foi engolida. Nao levanta: quem manda na tela e o
+                # pane, e o app ja mostra a caixinha como ela esta — um erro aqui faria a pessoa
+                # tocar de novo e DESMARCAR o que ela tinha acabado de marcar.
+                m_antes, m_depois = _marca_da_opcao(antes, option), _marca_da_opcao(depois, option)
+                if m_antes is not None and m_antes == m_depois:
+                    _log.info("select: a opcao %d de '%s' nao mudou de marca apos o digito", option, name)
+                return
+            if not _picker_do_claude(depois):
+                return
+            # A tecla nao pegou (TUI que nao aceita digito, redraw no meio). Cai no caminho de
+            # sempre em vez de desistir — ele ainda pode convergir, e desistir aqui seria trocar
+            # um mecanismo que funciona por um que acabou de falhar.
+            _log.info("select: digito nao fechou o picker em '%s', caindo na navegacao", name)
+            antes = depois   # a tela ja foi relida ali; nao gasta outra captura
+
+        row = _cursor_row(antes)
         if row is None:
             for _ in range(option - 1):
                 send_keys(name, "Down")
@@ -1500,6 +1803,30 @@ class TerminalInput:
                 row = _cursor_row(tela())
             if row != option:
                 raise DriveError(f"cursor parou na linha {row}, esperava {option} — opcao NAO enviada")
+        send_keys(name, "Enter")
+
+    def submeter_multipla(self, name: str) -> None:
+        """Envia as opcoes ja MARCADAS de um picker de multipla escolha.
+
+        Numa multiSelect marcar e enviar sao coisas diferentes, e isso nao era atendido: pelo
+        celular dava pra marcar e nao dava pra enviar — so restava Cancelar (relatado com print,
+        28/08/2026). Na TUI o caminho e a barra de abas do topo (`←  ☒ Opcoes  ✔ Submit  →`): a
+        seta pra direita abre a aba Submit, que tem uma opcao so ("1. Submit answers"), e o Enter
+        confirma. Medido nessa ordem, com o picker vivo.
+
+        O Enter SOZINHO nao serve: na multipla ele ALTERNA a opcao sob o cursor (medido — desmarcou
+        a que estava marcada), entao mandar Enter aqui desmarcaria uma escolha antes de enviar.
+        """
+        antes = _capture(name)
+        if not _e_multipla_escolha(antes):
+            raise DriveError("nao ha picker de multipla escolha na tela — nada enviado")
+        send_keys(name, "Right")
+        time.sleep(_NAV_GAP)
+        # Prova de que o Right chegou: o texto da aba. "Tem lista numerada" NAO servia — a propria
+        # lista de opcoes e numerada, entao ela casava consigo mesma e o guard passava com o Right
+        # engolido, deixando o Enter ALTERNAR uma opcao em vez de enviar (achado da revisao).
+        if "Submit answers" not in _capture(name):
+            raise DriveError("a aba de envio nao apareceu — nada enviado")
         send_keys(name, "Enter")
 
     def interrupt(self, name: str, clear: bool = False) -> None:

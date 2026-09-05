@@ -1,0 +1,344 @@
+// frontend/src/lib/sessionListModel.svelte.ts
+// Lógica da lista de sessões compartilhada pelas duas views (Sidebar desktop, SessionList
+// celular). Só lógica: template e CSS continuam em cada view. Formato do sessionsStore — fábrica
+// com getters, sem destructuring (perderia a reatividade).
+import { broadcast, deleteSession, renameSession, resumeSession } from '@hangar/core';
+import { getActiveId, selectServer, serverColor } from './auth';
+import { formataErro } from '@hangar/core';
+import { sessionsStore } from './sessionsStore.svelte';
+import {
+  countAwaiting, effectiveGroupBy, groupSelectedByServer, projectKey, projectLabel, providerName,
+  sortSessions, type GroupBy,
+} from '@hangar/core';
+import type { AggSession, ResumeCandidate, State } from '@hangar/core';
+import * as m from '../paraglide/messages';
+
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+export type ListVariant = 'desktop' | 'mobile';
+
+export interface Group {
+  id: string;
+  label: string;
+  color: string | null;
+  error: string | null;
+  sessions: AggSession[];
+}
+
+export interface SessionListModelOptions {
+  variant: ListVariant;
+  onOpen: (name: string) => void;
+  onCompare: (ids: { serverId: string; name: string }[]) => void;
+  // Só o desktop tem sessão aberta ao lado da lista: renomeá-la troca a rota.
+  currentSession?: () => string | null;
+}
+
+interface Rules {
+  readGroupBy: (stored: GroupBy) => GroupBy;
+  groupMode: (pref: GroupBy, serverCount: number) => GroupBy;
+  serverGroups: 'store-order' | 'alpha-non-empty';
+  filterLabel: (s: AggSession, g: Group) => string;
+  compareOrder: 'groups' | 'rows';
+  restoreServerAfterAction: boolean;
+}
+
+// Onde as duas views divergem, uma regra por linha. Convergir é trocar um valor aqui, de
+// propósito — nunca por acidente numa refatoração.
+const RULES: Record<ListVariant, Rules> = {
+  desktop: {
+    readGroupBy: (v) => v,
+    groupMode: effectiveGroupBy,
+    serverGroups: 'store-order',
+    filterLabel: (_s, g) => g.label,
+    compareOrder: 'groups',
+    restoreServerAfterAction: true,
+  },
+  mobile: {
+    // O toggle do celular só conhece Servidor|Projeto: 'none' gravado pelo desktop lê como
+    // 'server' (é o que marca o botão certo).
+    readGroupBy: (v) => (v === 'project' ? 'project' : 'server'),
+    groupMode: (pref, n) => (pref === 'project' ? 'project' : n > 1 ? 'server' : 'none'),
+    serverGroups: 'alpha-non-empty',
+    filterLabel: (s) => s.serverLabel,
+    compareOrder: 'rows',
+    restoreServerAfterAction: false,
+  },
+};
+
+const GROUP_BY_KEY = 'cp_group_by';
+const COLLAPSE_KEY = 'cp_collapsed_servers';
+const FILTER_FROM = 6;
+
+function loadGroupBy(): GroupBy {
+  const v = localStorage.getItem(GROUP_BY_KEY);
+  return v === 'project' || v === 'none' || v === 'server' ? v : 'server';
+}
+function loadCollapsed(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '[]')); } catch { return new Set(); }
+}
+// Chave de seleção "<serverId>:<name>" — a mesma string que os templates montam à mão; fica
+// interna pra não colidir com o `{@const selKey}` da linha do desktop.
+const selectionKey = (s: { serverId: string; name: string }) => `${s.serverId}:${s.name}`;
+
+export function createSessionListModel(opts: SessionListModelOptions) {
+  const rules = RULES[opts.variant];
+
+  let groupBy = $state<GroupBy>(rules.readGroupBy(loadGroupBy()));
+  let collapsed = $state<Set<string>>(loadCollapsed());
+  let filterText = $state('');
+
+  const rows = $derived(sessionsStore.rows);
+  const servers = $derived(sessionsStore.servers);
+  const groupMode = $derived(rules.groupMode(groupBy, servers.length));
+
+  const allGroups = $derived.by<Group[]>(() => {
+    if (servers.length === 0) return [];
+    if (groupMode === 'none') {
+      return [{ id: '*', label: '', color: null, error: null, sessions: sortSessions([...rows]) }];
+    }
+    if (groupMode === 'project') {
+      const byKey = new Map<string, AggSession[]>();
+      for (const s of rows) {
+        const k = projectKey(s.cwd);
+        const arr = byKey.get(k);
+        if (arr) arr.push(s); else byKey.set(k, [s]);
+      }
+      return [...byKey.entries()]
+        .map(([id, list]) => ({ id, label: projectLabel(list[0]?.cwd), color: null, error: null, sessions: sortSessions(list) }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+    }
+    // "offline" só quando NÃO há lista: com lista stale o grupo mostra as sessões, não o aviso.
+    const byServer: Group[] = sessionsStore.byServer.map((b) => ({
+      id: b.server.id,
+      label: b.server.label,
+      color: serverColor(b.server.id),
+      error: b.loaded ? null : b.error,
+      sessions: sortSessions(b.sessions),
+    }));
+    if (rules.serverGroups === 'store-order') return byServer;
+    return byServer.filter((g) => g.sessions.length > 0).sort((a, b) => a.label.localeCompare(b.label));
+  });
+
+  const groups = $derived.by<Group[]>(() => {
+    const q = filterText.trim().toLowerCase();
+    if (!q) return allGroups;
+    return allGroups
+      .map((g) => ({
+        ...g,
+        sessions: g.sessions.filter(
+          (s) =>
+            s.name.toLowerCase().includes(q) ||
+            (s.cwd ?? '').toLowerCase().includes(q) ||
+            rules.filterLabel(s, g).toLowerCase().includes(q),
+        ),
+      }))
+      .filter((g) => g.sessions.length > 0);
+  });
+  const flatRows = $derived(groups.flatMap((g) => g.sessions));
+  // Contagens e broadcast saem dos GRUPOS (pré-filtro), como o desktop já fazia: no store real
+  // é o mesmo conjunto das rows, mas o Sidebar.test só preenche byServer.
+  // No celular isso também significa visitar os servidores na ordem dos grupos (alfabética), não
+  // na ordem crua das rows — mesmo conjunto, mensagem de falha pode listar os nomes fora de ordem.
+  const allSessions = $derived(allGroups.flatMap((g) => g.sessions));
+  const showFilter = $derived(allSessions.length > FILTER_FROM);
+  const filterEmpty = $derived(filterText.trim() !== '' && groups.length === 0);
+  const showProviderTags = $derived(new Set(rows.map((s) => providerName(s.provider))).size > 1);
+  const awaitingTotal = $derived(countAwaiting(allSessions));
+
+  function setGroupBy(mode: GroupBy) {
+    groupBy = mode;
+    try { localStorage.setItem(GROUP_BY_KEY, mode); } catch { /* storage cheio/off */ }
+  }
+  function toggleGroup(id: string) {
+    const next = new Set(collapsed);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    collapsed = next;
+    // O colapso de cluster de pareamento ('pair:<gid>') é efêmero: o gid renasce a cada
+    // pareamento, e gravá-lo acumularia lixo pra sempre.
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:')))); } catch { /* idem */ }
+  }
+
+  // ── Seleção múltipla: broadcast (1 prompt pra N sessões) e comparar (grade lado a lado) ──
+  let selectMode = $state(false);
+  let selected = $state<Set<string>>(new Set());
+  let broadcastText = $state('');
+  let broadcastBusy = $state(false);
+  let broadcastMsg = $state('');
+  // Slash-command é roteado por sessão: replicar "/clear" pra N sessões de uma vez seria perigoso.
+  const broadcastIsSlash = $derived(broadcastText.trim().startsWith('/'));
+  const broadcastDisabled = $derived(broadcastBusy || selected.size === 0 || !broadcastText.trim() || broadcastIsSlash);
+  const compareDisabled = $derived(selected.size < 2);
+
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    selected = new Set();
+    broadcastText = '';
+    broadcastMsg = '';
+  }
+  function openSelectMode() { if (!selectMode) toggleSelectMode(); }
+  function toggleSelected(key: string) {
+    const next = new Set(selected);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    selected = next;
+  }
+  function selectGroupForBroadcast(g: Group) {
+    selectMode = true;
+    selected = new Set(g.sessions.filter((s) => s.tracked !== false).map(selectionKey));
+  }
+  function openCompare() {
+    const order = rules.compareOrder === 'groups' ? allSessions : rows;
+    opts.onCompare(order.filter((s) => selected.has(selectionKey(s))).map((s) => ({ serverId: s.serverId, name: s.name })));
+  }
+  async function sendBroadcast() {
+    const text = broadcastText.trim();
+    if (broadcastDisabled) return;
+    broadcastBusy = true;
+    broadcastMsg = '';
+    const byServer = groupSelectedByServer(allSessions, selected);
+    const prev = getActiveId();
+    const failed: string[] = [];
+    for (const [serverId, names] of byServer) {
+      selectServer(serverId);
+      try {
+        const results = await broadcast(names, text);
+        for (const [n, r] of Object.entries(results)) if (!r.ok) failed.push(n);
+      } catch {
+        failed.push(...names);   // servidor offline/erro de rede: o lote inteiro dele falhou
+      }
+    }
+    if (prev) selectServer(prev);
+    broadcastBusy = false;
+    if (failed.length) {
+      broadcastMsg = m.lista_broadcast_falha({ nomes: failed.join(', ') });
+    } else {
+      broadcastText = '';
+      selected = new Set();
+      selectMode = false;
+    }
+  }
+
+  // ── Ações sobre uma sessão ──
+  // Restaurar o servidor ativo depois da ação é regra por view (C1 no desktop: o chat aberto tem
+  // que continuar no servidor dele; o celular nunca restaurou).
+  function restore(prev: string | null, serverId: string) {
+    if (rules.restoreServerAfterAction && prev && prev !== serverId) selectServer(prev);
+  }
+
+  // Sem id confiável não abre. Exceção Kimi: "sem id" é o normal antes do 1º prompt, e o /input
+  // não depende de jsonl — bloquear impedia a sessão de nascer.
+  function open(s: { name: string; serverId: string; tracked?: boolean; provider?: AggSession['provider'] }): boolean {
+    if (s.tracked === false && s.provider !== 'kimi') return false;
+    selectServer(s.serverId);   // o Chat usa o servidor ativo
+    opts.onOpen(s.name);
+    return true;
+  }
+
+  let confirmDel = $state<{ name: string; serverId: string; state: State | null } | null>(null);
+  function requestDelete(name: string, serverId: string, state: State | null = null) {
+    confirmDel = { name, serverId, state };
+  }
+  async function doDelete(): Promise<{ ok: boolean; erro: string }> {
+    if (!confirmDel) return { ok: false, erro: '' };
+    const { name, serverId } = confirmDel;
+    confirmDel = null;
+    const prev = getActiveId();
+    selectServer(serverId);
+    // Otimista: some na hora; falhou, desmarca (reaparece) e a view mostra o erro.
+    sessionsStore.markDeleting(serverId, name);
+    let result = { ok: true, erro: '' };
+    try {
+      const res = await deleteSession(name);
+      // Sessão morreu, mas um companheiro do grupo não foi avisado: a view mostra o motivo em vez
+      // de fechar mudo (mesmo tratamento do PairSheet com res.warning).
+      if (res.warning) result = { ok: true, erro: formataErro(res.warning) ?? String(res.warning) };
+    }
+    catch (e) { sessionsStore.unmarkDeleting(serverId, name); result = { ok: false, erro: errMsg(e) }; }
+    restore(prev, serverId);
+    return result;
+  }
+
+  async function rename(nv: string, old: string, serverId: string): Promise<{ ok: boolean; name: string; erro: string }> {
+    const prev = getActiveId();
+    selectServer(serverId);
+    try {
+      const r = await renameSession(old, nv);
+      if (old === opts.currentSession?.()) opts.onOpen(r.name);
+      return { ok: true, name: r.name, erro: '' };
+    } catch (e) {
+      return { ok: false, name: old, erro: e instanceof Error ? e.message : m.sessao_falha_renomear() };
+    } finally {
+      restore(prev, serverId);   // o SSE re-emite a sessão renomeada
+    }
+  }
+
+  let resumeCandidates = $state<{ name: string; serverId: string; candidates: ResumeCandidate[] } | null>(null);
+  let resumeBusy = $state('');
+  let resumeError = $state('');
+  async function resume(name: string, serverId: string, sessionId?: string): Promise<{ ok: boolean; ambiguous: boolean; erro: string }> {
+    resumeError = '';
+    resumeBusy = name;
+    const prev = getActiveId();
+    selectServer(serverId);
+    try {
+      const r = await resumeSession(name, sessionId);
+      if (r && 'ambiguous' in r && r.ambiguous) {
+        resumeCandidates = { name, serverId, candidates: r.candidates };
+        return { ok: true, ambiguous: true, erro: '' };
+      }
+      resumeCandidates = null;   // religada; o SSE atualiza a linha
+      return { ok: true, ambiguous: false, erro: '' };
+    } catch (err) {
+      resumeError = err instanceof Error ? err.message : m.sessao_falha_retomar();
+      return { ok: false, ambiguous: false, erro: resumeError };
+    } finally {
+      resumeBusy = '';
+      restore(prev, serverId);
+    }
+  }
+
+  // Git/Loop miram o servidor ATIVO (api.ts): aponta pro dono enquanto a folha está aberta e
+  // restaura no fechar — nas duas views, sem regra.
+  let gitSheet = $state<{ name: string } | null>(null);
+  let gitPrev: string | null = null;
+  function openGit(name: string, serverId: string) { gitPrev = getActiveId(); selectServer(serverId); gitSheet = { name }; }
+  function closeGit() { gitSheet = null; if (gitPrev) { selectServer(gitPrev); gitPrev = null; } }
+
+  return {
+    mount() { sessionsStore.retain(); return () => sessionsStore.release(); },
+    get rows() { return rows; },
+    get servers() { return servers; },
+    get groupBy() { return groupBy; },
+    get groupMode() { return groupMode; },
+    get collapsed() { return collapsed; },
+    get filterText() { return filterText; },
+    set filterText(v: string) { filterText = v; },
+    get showFilter() { return showFilter; },
+    get filterEmpty() { return filterEmpty; },
+    get allGroups() { return allGroups; },
+    get allSessions() { return allSessions; },
+    get groups() { return groups; },
+    get flatRows() { return flatRows; },
+    get showProviderTags() { return showProviderTags; },
+    get awaitingTotal() { return awaitingTotal; },
+    setGroupBy,
+    toggleGroup,
+    get selectMode() { return selectMode; },
+    get selected() { return selected; },
+    get broadcastText() { return broadcastText; },
+    set broadcastText(v: string) { broadcastText = v; },
+    get broadcastBusy() { return broadcastBusy; },
+    get broadcastMsg() { return broadcastMsg; },
+    get broadcastIsSlash() { return broadcastIsSlash; },
+    get broadcastDisabled() { return broadcastDisabled; },
+    get compareDisabled() { return compareDisabled; },
+    toggleSelectMode, openSelectMode, toggleSelected, selectGroupForBroadcast, openCompare, sendBroadcast,
+    open, requestDelete, doDelete, rename, resume, openGit, closeGit,
+    get confirmDel() { return confirmDel; },
+    set confirmDel(v: { name: string; serverId: string; state: State | null } | null) { confirmDel = v; },
+    get resumeCandidates() { return resumeCandidates; },
+    set resumeCandidates(v: { name: string; serverId: string; candidates: ResumeCandidate[] } | null) { resumeCandidates = v; },
+    get resumeBusy() { return resumeBusy; },
+    get resumeError() { return resumeError; },
+    get gitSheet() { return gitSheet; },
+  };
+}

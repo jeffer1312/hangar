@@ -4,11 +4,11 @@
   import NavBar from '../components/NavBar.svelte';
   import Select from '../components/Select.svelte';
   import { listServers, onServersChanged, type Server } from '../lib/auth';
-  import { fetchCostsForServer } from '@hangar/core';
+  import { clienteQuery, custos } from '../lib/queries';
   import {
     mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
     custoSemCacheDe, equivalenteDe, isFree,
-    type ServerResult, type MergedReport, type ComboLocal, type DimBucket,
+    type ServerResult, type MergedReport,
   } from '@hangar/core';
   import { agruparPor, aplicar, filtrar, somar, type Filtro } from '../lib/cubo';
   import {
@@ -16,6 +16,7 @@
   } from '../lib/comparar';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
   import { projectLabel } from '@hangar/core';
+  import type { ComboLocal, DimBucket } from '@hangar/core';
 
   interface Props { onBack: () => void; }
   let { onBack }: Props = $props();
@@ -146,12 +147,16 @@
 
   // Só o PERÍODO vai ao servidor — é o único corte que o backend aplica (`?period=`).
   let geracao = 0;
-  async function load(p: Periodo, alvo: Server[]) {
+  async function load(p: Periodo, alvo: Server[], forcar = false) {
     const meu = ++geracao;
     loading = true;
+    // "Tentar de novo" tem de furar o cache: quem clica ali está dizendo que o que está na tela
+    // não serve. Sem isto o botão devolveria o mesmo dado cacheado e pareceria não fazer nada.
+    if (forcar) await clienteQuery.invalidateQueries({ queryKey: ['custos'] });
     const results: ServerResult[] = await Promise.all(
       alvo.map(async (s) => {
-        try { return { report: await fetchCostsForServer(s, p), label: s.label, id: s.id }; }
+        // Pelo cache: trocar de período e voltar não repete a leitura (a mais cara do app).
+        try { return { report: await clienteQuery.fetchQuery(custos(s, p)), label: s.label, id: s.id }; }
         // `label` também no erro: o aviso de parcial precisa dizer o NOME da máquina.
         catch { return { report: null, label: s.label, id: s.id }; }
       }),
@@ -765,7 +770,7 @@
           : m.custos_fora_periodo({ n: merged.mismatched.length })}
         ({merged.mismatched.join(', ')}).
       {/if}
-      <button class="retry" onclick={() => load(period, servidoresAtivos)}>{m.config_server_tentar_de_novo()}</button>
+      <button class="retry" onclick={() => load(period, servidoresAtivos, true)}>{m.config_server_tentar_de_novo()}</button>
     </p>
   {/if}
 

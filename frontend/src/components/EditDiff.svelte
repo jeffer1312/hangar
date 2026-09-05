@@ -5,7 +5,7 @@
   // Estreito (celular) -> unificado de uma coluna, o mesmo dado em outra ordem.
   import * as m from '../paraglide/messages';
   import { computeEditDiff, type EditDiff, type SplitRow } from '@hangar/core';
-  import { highlightCodeLines, type DiffToken } from '../lib/highlight';
+  import { highlightCodeLines, type DiffToken } from '../lib/highlightLazy';
   import { toolLook } from '../lib/toolLook.svelte';
   import { rolagemSoAoClicar } from '../lib/rolagemSoAoClicar';
 
@@ -45,16 +45,24 @@
     }));
     rendered = base;
     (async () => {
-      for (let i = 0; i < ds.length; i++) {
-        const rows = ds[i].rows;
-        const [lt, rt] = await Promise.all([
-          highlightCodeLines(rows.map((r) => r.left?.text ?? ''), path),
-          highlightCodeLines(rows.map((r) => r.right?.text ?? ''), path),
-        ]);
-        if (!vivo) return;
-        if (lt || rt) {
-          rendered = rendered.map((r, j) => j !== i ? r : { ...r, left: lt ?? r.left, right: rt ?? r.right });
+      try {
+        for (let i = 0; i < ds.length; i++) {
+          const rows = ds[i].rows;
+          const [lt, rt] = await Promise.all([
+            highlightCodeLines(rows.map((r) => r.left?.text ?? ''), path),
+            highlightCodeLines(rows.map((r) => r.right?.text ?? ''), path),
+          ]);
+          if (!vivo) return;
+          if (lt || rt) {
+            rendered = rendered.map((r, j) => j !== i ? r : { ...r, left: lt ?? r.left, right: rt ?? r.right });
+          }
         }
+      } catch (err) {
+        // O ReadView e o FileViewer ja tratavam isto; aqui faltava. A premissa que o comentario do
+        // ReadView registra — "highlightCodeLines nao rejeita hoje" — deixou de valer quando a
+        // funcao passou a carregar o modulo sob demanda: agora a rejeicao pode vir do PEDACO que
+        // nao baixou, nao de dentro dela. Sem cor e aceitavel; rejeicao muda, nao.
+        console.warn('[hl] realce do diff falhou', err);
       }
     })();
     return () => { vivo = false; };

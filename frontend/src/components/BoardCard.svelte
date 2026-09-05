@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from 'svelte';
 import * as m from '../paraglide/messages';
+import GroupGlyph from './icons/GroupGlyph.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import {
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
@@ -374,6 +375,10 @@ import * as m from '../paraglide/messages';
   const planChip = $derived(planBadge(session));
   // Provider do card — só as não-Claude ganham chip (ver providerTag em lib/format).
   const provTag = $derived(providerTag(session.provider));
+  // Código -> texto, igual ao SessionCard: código desconhecido some em vez de virar id cru na tela.
+  const problema = $derived(
+    session.problema === 'codex_hooks_nao_aprovados' ? m.problema_codex_hooks() : null,
+  );
 </script>
 
 <article class="bcard" class:attention={session.state === 'awaiting_input'} class:fill>
@@ -394,6 +399,12 @@ import * as m from '../paraglide/messages';
          por-sessão do Chat; ver CLAUDE.md). -->
     {#if fill}
       <StateChip state={session.state} />
+    {/if}
+    <!-- Problema desta sessão: no board e no canvas ela está numa COLUNA por estado, então uma
+         sessão Codex trabalhando sem hook aprovado ficaria calada na coluna errada. O aviso vem
+         junto do nome, onde o olho já está. -->
+    {#if problema}
+      <span class="bc-problema" title={problema} aria-label={problema}>⚠</span>
     {/if}
     <span class="bc-time">{relativeTime(session.last_activity)}</span>
     <span class="bc-open" title={m.board_abrir_chat()}>⤢</span>
@@ -435,12 +446,12 @@ import * as m from '../paraglide/messages';
                   style="background: color-mix(in srgb, {pc} 16%, transparent); color: {pc};"
                   onclick={(e) => { e.stopPropagation(); onGatherPair?.(); }}
                   title={m.board_pareada_com_clicar({ n: session.pair_peers.join(', ') })}>
-            🤝 {session.pair_peers.join(', ')}
+            <GroupGlyph size={12} /> {session.pair_peers.join(', ')}
           </button>
         {:else}
           <span class="bc-chip"
                 style="background: color-mix(in srgb, {pc} 16%, transparent); color: {pc};"
-                title={m.board_pareada_com({ n: session.pair_peers.join(', ') })}>🤝 {session.pair_peers.join(', ')}</span>
+                title={m.board_pareada_com({ n: session.pair_peers.join(', ') })}><GroupGlyph size={12} /> {session.pair_peers.join(', ')}</span>
         {/if}
       {/if}
       {#if meta?.costUsd != null}<span title={m.board_custo_sessao()}>💵 ${meta.costUsd.toFixed(2)}</span>{/if}
@@ -475,7 +486,7 @@ import * as m from '../paraglide/messages';
                  (chip 📟/📣 + tinta accent), versão compacta — sem isto o card mostrava o
                  prefixo cru como se fosse msg tua. -->
             <div class="bc-user bc-peer" class:bc-peer-group={peer.scope === 'group'}>
-              <span class="bc-peer-chip">{peer.scope === 'group' ? m.board_peer_grupo({ n: peer.from }) : m.board_peer_de({ n: peer.from })}</span>
+              <span class="bc-peer-chip">{peer.scope === 'group' ? m.board_peer_grupo({ n: peer.from }) : peer.scope === 'panel' ? m.board_peer_painel({ n: peer.from }) : m.board_peer_de({ n: peer.from })}</span>
               <!-- Em <p> próprio (padrão do UserBubble): {peer.text} solto como irmão do span
                    herdava o whitespace do template como espaço inicial (pre-wrap o exibe). -->
               <p class="bc-peer-text">{peer.text}</p>
@@ -668,6 +679,7 @@ import * as m from '../paraglide/messages';
     min-height: 0; min-width: 0; line-height: inherit;
   }
   .bc-chip-btn:hover { filter: brightness(1.2); }
+  .bc-problema { color: var(--warning); flex-shrink: 0; cursor: help; }
   .bc-time { margin-left: auto; }
   .bc-open { color: var(--text-muted); flex-shrink: 0; }
   /* Fade SÓ no topo (o rodapé é a msg mais recente — o que você não quer apagar). Dois masks:

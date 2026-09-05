@@ -8,24 +8,24 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from app import atomico, tmux
 from app import agentpane
 from app.config import settings
 from app import runtime_config
 from app.names import sanitize_session_name
-from app.git_ops import git_summary, git_diffstat, branch_of
+from app.git_ops import git_summary, git_diffstat, head_info
 from app.models import SessionInfo, session_key
-from app.pqueue import PromptQueue
+from app.pqueue import PromptQueue, _sanitize
 from app.chain import ThenLink
+from app import pair, pair_texto
 from app.pair import PairLink, rename_pair, leave as pair_leave
 from app.adapters.codex import sessions as codex_sessions
-from app.adapters.codex import adapter as codex_adapter
-from app.adapters.codex.appserver import AppServerClient
-from app.askquestion import clear_pending_askq
+from app.askquestion import clear_pending_askq, pergunta_aberta
 from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
-                       status_line as _pane_status)
+                       aprovacao_kimi, codex_turno_aberto, status_line as _pane_status)
 from app.statusline import read as _sidecar_status
+from app.adapters.codex.adapter import status_line_do_rollout as _codex_status_line
 from app.hook_state import hook_state
 from app.planprog import plan_progress, plano_escondido
 # As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
@@ -101,8 +101,11 @@ _pretrust_lock = threading.Lock()
 
 
 def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
-    """Marca `hasTrustDialogAccepted=True` pra `cwd` no .claude.json (o do config_dir, senão o
-    ~/.claude.json) — pré-aprova o "trust this folder?" que o Claude Code mostra no 1º acesso a uma
+    """Marca `hasTrustDialogAccepted=True` pra `cwd` no .claude.json que a sessão nova vai LER —
+    quem responde qual é o arquivo é `tmux.claude_json_de`, o mesmo lugar que decide se o pane
+    recebe `CLAUDE_CONFIG_DIR` (duas cópias da regra é como o pre-trust escrevia no arquivo errado
+    e a sessão nascia presa no "trust this folder?" mesmo assim).
+    Pré-aprova o dialog que o Claude Code mostra no 1º acesso a uma
     pasta nova. Read-modify-write atômico (tmp+replace) sob _pretrust_lock: dois create()
     concorrentes (rodam em threads via to_thread) fariam read-modify-write no MESMO arquivo e
     last-write-wins perderia uma entrada — mesmo padrão do _append_lock (pqueue) / _LOCK (pair).
@@ -115,7 +118,7 @@ def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
     colisão rara e aceita; fechar exigiria flock que o CLI teria de respeitar (não verificável)."""
     with _pretrust_lock:
         try:
-            cfg = Path(config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json"
+            cfg = tmux.claude_json_de(config_dir)
             data = json.loads(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
             projects = data.setdefault("projects", {})
             entry = projects.setdefault(cwd, {})
@@ -241,7 +244,15 @@ def _kimi_corrige_ocioso(info, marker):
 # sessões antigas (0.36.x) reescrevem o argv0 como `kimi`; a 0.37.2 reescreve como `kimi-code` —
 # sem a segunda entrada, a sessão recém-criada virava "claude" na re-descoberta e herdava até o
 # transcript do Claude do mesmo cwd (medido no e2e de 19/08/2026).
-_EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi"}
+# O `codex` entra por causa da JANELA entre o pane nascer e o sidecar existir: a TUI e o app-server
+# sobem juntos pelo lancador, e ate a thread abrir nao ha sidecar nenhum. Sem esta linha o pane cai
+# no default "claude" e e casado com o transcript do CLAUDE do mesmo diretorio — a mesma regressao
+# que ja custou caro no Pi.
+# O `omp` entra por SI: o binario do oh-my-pi e um ELF nativo com argv0 `omp`, nao um fork do
+# processo `pi` -- sem esta entrada o pane cai no default "claude" e e casado com o transcript do
+# Claude do mesmo cwd, a mesma regressao do Pi acima.
+_EXEC_PROVIDER = {"pi": "pi", "omp": "omp", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi",
+                  "codex": "codex"}
 
 # Windows: o argv0 vem com extensao (`claude.exe`), que nao casa em _EXEC_PROVIDER; e um CLI
 # instalado por `npm -g` nao aparece com o nome dele nenhuma vez — o processo e o
@@ -280,6 +291,28 @@ def _exigir_cp_engine() -> None:
         "Windows, install.ps1.")
 
 
+def _exigir_lancador_codex() -> None:
+    """Mesma guarda do `_exigir_cp_engine`, pro lancador do Codex — e pelo mesmo motivo exato.
+
+    `hangar-codex-tui` e o COMANDO do pane de toda sessao Codex. Faltando no PATH, o pane morre no
+    ato e o `tmux new-session` devolve 0: o app diria "sessao criada" e a sessao sumiria sem rastro.
+    """
+    from app.adapters.codex.lancador import EXECUTAVEL
+    if not shutil.which(EXECUTAVEL):
+        raise ValueError(
+            f"{EXECUTAVEL} nao esta no PATH deste servidor — sem ele a sessao Codex nasce e morre "
+            "na hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; "
+            "no Windows, install.ps1.")
+    # O `codex` tambem: o lancador so o chama DEPOIS que o pane ja nasceu, entao a falta dele nao
+    # cai aqui — cai num `FileNotFoundError` dentro do pane, que morre no ato com o `new-session`
+    # ja tendo devolvido 0. Mesmo desfecho da linha acima (sucesso reportado, sessao inexistente),
+    # e por isso a mesma guarda: alto e antes de criar nada.
+    if not shutil.which("codex"):
+        raise ValueError(
+            "codex nao esta no PATH deste servidor — o lancador sobe o app-server com ele, e sem "
+            "isso a sessao Codex nasce e morre na hora, sem erro. Instale o CLI do Codex.")
+
+
 def _provider_do_argv(argv: list[str]) -> Optional[str]:
     """Provider a partir do argv JA separado, ou None. Nao recebe string: ver procinfo._argv."""
     if not argv:
@@ -310,7 +343,8 @@ def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> st
     Default "claude" preserva o comportamento anterior a esta funcao existir: pane nao reconhecido
     segue tratado como Claude, em vez de sumir da lista.
     """
-    if pid is None:
+    if not pid:
+        # pid 0 (System Idle no Windows) e pai dele mesmo no mapa do psutil e tem a arvore da maquina inteira embaixo — visitar ele custa um _cmdline por processo da maquina, a cada poll
         return "claude"
     for p in _descendant_pids(pid, children):
         cmd = _cmdline(p)
@@ -439,12 +473,12 @@ def _pi_sid_of(pid: int) -> Optional[str]:
     return None
 
 
-def _pi_transcript_of_id(cwd: str, sid: str) -> Optional[str]:
+def _pi_transcript_of_id(cwd: str, sid: str, provider: str = "pi") -> Optional[str]:
     # Indireção pro adapter (Task 1), que sabe o slug e o glob <timestamp>_<uuid>.jsonl. Import local
     # pelo mesmo motivo do get_adapter em create(): evita qualquer ciclo se um adapter futuro vier a
     # importar daqui.
     from app.adapters import get_adapter
-    return get_adapter("pi").transcript_path(cwd, sid) or None
+    return get_adapter(provider).transcript_path(cwd, sid) or None
 
 
 def _pi_is_subagent(path: str) -> bool:
@@ -493,7 +527,7 @@ def _chave_do_bilhete(pane_id: str, pid: Optional[int]) -> str:
 
 
 def pi_session_file(pane_id: str, pid: Optional[int] = None,
-                    cwd: str = "") -> Optional[str]:
+                    cwd: str = "", provider: str = "pi") -> Optional[str]:
     """Transcript de um pane Pi: bilhete da extensao primeiro, env do wrapper depois.
 
     Nenhum dos dois presente -> None, e a sessao entra na lista SEM transcript. Chutar o arquivo
@@ -554,10 +588,15 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
         # forte: compara o bilhete com o nascimento DESTE processo. Mesmo contrato do Claude, cujo
         # create() tambem fixa um caminho que so passa a existir depois.
         if f:
+            # omp: o bilhete devolve o caminho do `--session`, mas o transcript principal nasce
+            # em `sessions/-/<nome>` (ver pi_sessions.localizar_na_raiz). Mesmo nome, outra pasta.
+            if provider == "omp" and not os.path.exists(f):
+                from app.adapters.pi.sessions import localizar_na_raiz   # import local, como os irmaos acima
+                f = localizar_na_raiz(os.path.basename(f), provider) or f
             return f
     except (OSError, ValueError):
         pass
-    return _pi_transcript_of_id(cwd, sid) if sid else None
+    return _pi_transcript_of_id(cwd, sid, provider) if sid else None
 
 
 _KIMI_TICKET_WARNED: set[tuple[str, str]] = set()
@@ -621,6 +660,10 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
 _STATUS_TTL = 20.0
 _STATUS_BUDGET = 2
 
+# Gancho que o api.py registra: drena a fila do peer avisado (PromptQueue só drena em transição
+# de hook; peer já ocioso nunca receberia o aviso). Módulo, não instância — há 4 registries.
+apos_saida_por_morte: Optional[Callable[[str], None]] = None
+
 
 class KillFailed(Exception):
     """A sessao continuou de pe depois do kill. Existe pra a rota DELETE reportar em vez de responder
@@ -638,6 +681,10 @@ class SessionRegistry:
     # spawna claude por turno) -> sem isto a resolucao oscilava pro mtime e o watcher do SSE limpava o
     # chat. Atualizado quando um sinal confiavel reaparece (ex: /clear -> session-id novo).
     _jsonl_cache: dict[str, str] = {}
+    # DE CLASSE, como os outros caches: api, sse (2) e prune têm instâncias próprias e todas
+    # chamam list(); contador por instância fecharia "2 polls" em milissegundos.
+    _pair_ausencias: dict[str, float] = {}
+    _PAIR_AUSENCIA_MIN_S = 5.0
     # nomes cujo cache veio do fd ABERTO (verdade do FS, nao chute). Mantido entre polls sem fd p/ nao
     # oscilar pro --session-id da cmdline (resume: o id da cmdline nunca vira arquivo). De classe.
     _fd_locked: set[str] = set()
@@ -684,6 +731,9 @@ class SessionRegistry:
         for p in pids:
             cmd = _cmdline(p)
             if not ("daemon" in cmd or "--bg-" in cmd or "--agent" in cmd):
+                continue
+            # Mesmo filtro do passo 1 do _resolve_tracked_impl, pelo mesmo motivo.
+            if _provider_do_argv(cmd.split()) is None:
                 continue
             cdir = _config_dir_of(p)
             j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)
@@ -756,6 +806,14 @@ class SessionRegistry:
             for p in pids:
                 cmd = _cmdline(p)
                 if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
+                    continue
+                # So um CLI de agente abre transcript. O resto da arvore (servidores MCP, node, git,
+                # shells) nunca casa, e varrer o /proc/<pid>/fd deles e o passo mais caro da
+                # listagem: medido nesta maquina, 85% dos readlinks eram de nao-agentes e o
+                # resultado era None. `cmd.split()` e nao `_argv` (ao contrario do provider_of_pane,
+                # que evita o split por causa do espaco no caminho do node no Windows): daqui pra
+                # baixo so roda no Linux, porque fora dele o _open_jsonl ja devolve None sempre.
+                if _provider_do_argv(cmd.split()) is None:
                     continue
                 cdir = _config_dir_of(p)
                 j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)
@@ -915,11 +973,6 @@ class SessionRegistry:
         return infos
 
     @staticmethod
-    def _branch_of(cwd: Optional[str]) -> Optional[str]:
-        """Delega pro helper publico git_ops.branch_of (mantido pra nao quebrar chamadores)."""
-        return branch_of(cwd)
-
-    @staticmethod
     def _agent_pane(panes: list[dict], children: dict[int, list[int]]) -> dict:
         """Escolhe, entre os panes de UMA sessao, o que roda o agente (Task 5.5).
 
@@ -960,6 +1013,13 @@ class SessionRegistry:
         # state (sai 'idle' default): este caminho so resolve transcript; quem quer state usa
         # list_with_state(). Usado por varios endpoints que so precisam do jsonl por nome.
         children = _proc_children_map()
+        # A conta do Codex é UMA por máquina (o `auth.json` do CODEX_HOME) e agora tem fonte no
+        # painel de cotas — sem carimbá-la nas sessões Codex, a pílula do topo continuaria caindo no
+        # pior-geral numa sessão cuja cota o app já sabe ler. `None` quando não há credencial no
+        # disco. Resolvida UMA vez aqui porque serve aos dois lugares que montam sessão Codex (o
+        # pane sem sidecar, logo abaixo, e o laço dos sidecars no fim) e isto roda a cada varredura.
+        from app import cotas
+        conta_codex = cotas.id_conta_codex()
         out = []
         sids: dict[str, Optional[str]] = {}
         for panes in tmux.list_panes_all().values():
@@ -995,8 +1055,8 @@ class SessionRegistry:
             # cairia no fallback newest-by-mtime, que pegaria o transcript do CLAUDE do mesmo cwd (a
             # regressao mais cara desta task). Resolve pelo bilhete da extensao / env do wrapper.
             prov = provider_of_pane(p["pid"], children)
-            if prov == "pi":
-                jsonl = pi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
+            if prov in ("pi", "omp"):
+                jsonl = pi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"], prov)
                 # tracked segue o TRANSCRITO, nao o provider. O bilhete/env sao deterministicos
                 # (nunca um chute como o newest-by-mtime do Claude), mas quando NENHUM dos dois
                 # resolve um arquivo nao ha vinculo nenhum: /events e /history exigem info.jsonl e
@@ -1013,20 +1073,26 @@ class SessionRegistry:
                 # toda sessao recem-criada fica untracked ate o 1o turno.
                 jsonl = kimi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
                 tracked = jsonl is not None
+            elif prov == "codex":
+                # Chegar aqui significa pane de Codex SEM sidecar (o filtro acima ja tirou os que
+                # tem): a TUI subiu e ainda nao abriu a thread. Nao ha transcript a resolver — o
+                # rollout so nasce com a thread —, e cair no resolve_tracked pescaria o jsonl do
+                # Claude do mesmo cwd. Some sozinho: o lancador grava o sidecar e a proxima
+                # varredura ja acha a sessao pelo caminho normal.
+                jsonl, tracked = None, False
             else:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
+            br, wt = head_info(p["cwd"])
             info = SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
-                               branch=self._branch_of(p["cwd"]),
+                               branch=br, worktree=wt,
                                then_target=link.get("target") if link else None,
                                pair_peers=pair.get("peers") if pair else None,
                                pair_gid=pair.get("gid") if pair else None,
                                pair_task=pair.get("task") if pair else None)
-            if prov == "pi":
-                info.provider = "pi"
-            elif prov == "kimi":
-                info.provider = "kimi"
+            if prov in ("pi", "omp", "kimi", "codex"):
+                info.provider = prov
             # Motor da sessão, do mesmo pid que já resolve o config_dir. É uma leitura de
             # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
             # não é de graça, mas é local e sem rede. Feature em tick do SSE tem que ser barata.
@@ -1046,7 +1112,20 @@ class SessionRegistry:
                 from app import cotas
                 padrao = cotas.provider_padrao_kimi()
                 info.conta = f"kimi:{padrao}" if padrao else None
-            elif prov != "pi":
+            elif prov in ("pi", "omp"):
+                # Sessão Pi/omp gasta a credencial do modelo escolhido NELA (o `current.provider` do
+                # sidecar do catálogo), que pode ser a mesma chave Kimi/motor que já é uma conta
+                # desta lista. Provider sem chave conhecida (OAuth do Codex, provedor só do Pi)
+                # segue None, e a pílula cai no pior-geral como antes.
+                from app import cotas, pi_models
+                cfg_pi = _config_dir_of(p["pid"]) if p.get("pid") else None
+                atual = pi_models.provider_atual(jsonl, cfg_pi) if jsonl else None
+                info.conta = cotas.conta_de_provider_pi(atual)
+            elif prov == "codex":
+                # Codex tem conta propria (o OAuth do proprio CLI), que nao e nenhuma das chaves do
+                # /api/cotas — cair no `else` abaixo carimbaria uma conta Claude que ela nao gasta.
+                info.conta = conta_codex
+            else:
                 cdir = (_config_dir_of(p["pid"]) if p.get("pid") else None) or (Path.home() / ".claude")
                 info.conta = f"claude:{Path(cdir).resolve()}"
             out.append(info)
@@ -1056,15 +1135,20 @@ class SessionRegistry:
         # Sessoes Codex: a TUI vive no tmux, mas a identidade vem dos sidecars duraveis (sobrevivem
         # a restart; o historico esta no rollout). O client vivo e reaberto sob demanda.
         for meta in codex_sessions.list_all():
+            br, wt = head_info(meta.get("cwd"))
             out.append(SessionInfo(
                 name=meta["name"], cwd=meta.get("cwd"), jsonl=meta.get("rollout_path"),
-                provider="codex", tracked=True,
-                branch=self._branch_of(meta.get("cwd")),
+                provider="codex", tracked=True, conta=conta_codex,
+                branch=br, worktree=wt,
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
                 pair_task=(PairLink(meta["name"]).get() or {}).get("task"),
             ))
+        try:
+            self._varrer_pares_mortos({i.name for i in out})
+        except Exception as e:
+            _log.warning("varredura de pares falhou (lista segue): %r", e)
         return out
 
     async def list_with_state(self, infos: Optional[list[SessionInfo]] = None) -> list[SessionInfo]:
@@ -1093,16 +1177,73 @@ class SessionRegistry:
         # sessoes e conexoes, nao so pra dona do arquivo grande.
         kimis = [i for i in infos if getattr(i, "provider", "claude") == "kimi"]
         corrigidos: dict[str, object] = {}
+        # Aprovacao pendente do Kimi (plano/comando/arquivo): sai do WIRE, nao do pane — ver
+        # state.aprovacao_kimi. Aqui isso e o que faz o card mostrar "aguardando" com os botoes: no
+        # painel aberto o turno segue ABERTO no wire, entao `corrige_ocioso_kimi` promove a sessao
+        # pra "working" e ela some da coluna de quem espera resposta. Vai na MESMA thread da
+        # correcao — as duas leem o rabo do mesmo arquivo.
+        aprovacoes: dict[str, tuple[str, list[str]]] = {}
         if kimis:
             brutos = {i.name: hook_state.get_state(_sid(i.jsonl)) for i in kimis}
-            corrigidos = await asyncio.to_thread(
-                lambda: {i.name: _kimi_corrige_ocioso(i, brutos[i.name]) for i in kimis})
+
+            def _kimi_sweep():
+                corr, aprov = {}, {}
+                for i in kimis:
+                    corr[i.name] = _kimi_corrige_ocioso(i, brutos[i.name])
+                    # O pane responde a outra metade da pergunta ("o painel esta na tela AGORA?"),
+                    # sem a qual uma sessao RETOMADA sobre um wire com pedido orfao nasceria com
+                    # botoes de um painel inexistente (ver state.aprovacao_kimi). O callable so e
+                    # chamado DEPOIS de o wire dizer que ha pedido pendente, que e raro — este
+                    # caminho nao acrescenta captura nenhuma ao poll normal. (O sweep de statusline,
+                    # mais abaixo, captura por conta propria; e outro orcamento, com TTL.)
+                    # Pane ilegivel -> sem prova de tela, sem botao.
+                    try:
+                        a = aprovacao_kimi(i.jsonl, lambda nome=i.name: tmux.capture_pane(nome))
+                    except Exception:
+                        a = None
+                        _log.debug("capture_pane falhou lendo aprovacao de %s", i.name,
+                                   exc_info=True)
+                    if a is not None:
+                        aprov[i.name] = a
+                return corr, aprov
+
+            corrigidos, aprovacoes = await asyncio.to_thread(_kimi_sweep)
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         for info in infos:
-            # Sessoes Codex nao vivem no tmux -> nunca raspar o pane (capture_pane erraria numa
-            # sessao inexistente). O estado vivo (working/idle) chega em runtime pelo adapter via SSE;
-            # aqui fica o default idle + last_activity do rollout.
+            # Codex: le o marcador como os outros, mas NUNCA raspa o pane. A TUI dele nao tem regua
+            # nem caixa de composer, entao `classify` devolveria as duas ultimas linhas verbatim —
+            # viraria uma segunda statusline, pior que a que o adapter ja monta. Sem marcador nao
+            # ha fallback nenhum: fica o default idle (ou o aviso de hooks, logo abaixo).
             if getattr(info, "provider", "claude") == "codex":
+                info.last_activity = _jsonl_mtime(info.jsonl)
+                if not info.jsonl:
+                    # Janela entre o pane nascer e o lancador gravar o sidecar: nao ha rollout, e
+                    # tanto a chave do marcador quanto a leitura do turno EXIGEM um caminho
+                    # (session_key(None) levanta TypeError). Sem esta saida, uma sessao Codex
+                    # recem-criada derrubaria a lista INTEIRA — todas as sessoes de todo mundo.
+                    continue
+                marker = hook_state.get_state(_sid(info.jsonl))
+                if marker and marker[0] != "awaiting_input":
+                    # awaiting_input nao existe no Codex (o evento equivalente nao existe la); se
+                    # aparecer, e marcador de outra coisa e nao vale mais que o default.
+                    info.state = marker[0]
+                    if marker[0] != "working":
+                        self._label_cache.pop(info.name, None)
+                elif await asyncio.to_thread(codex_turno_aberto, info.jsonl):
+                    # Turno andando no rollout e marcador nenhum = o hook nao esta rodando, e a
+                    # unica causa conhecida e hook nao aprovado na TUI do Codex. Dizer isso e o que
+                    # torna visivel o unico modo de falha deste desenho — calado, a sessao ficaria
+                    # eternamente "ociosa" enquanto trabalha.
+                    info.problema = "codex_hooks_nao_aprovados"
+                continue
+            aprov = aprovacoes.get(info.name)
+            if aprov is not None:
+                # Wire manda: o painel de aprovacao esta na tela AGORA. Nao entra no `pending` (nao
+                # ha o que raspar — os rotulos nao estao no pane em formato que este modulo leia) e
+                # nao mexe no hook_state: o marcador volta a valer sozinho quando a aprovacao for
+                # resolvida, sem promover/rebaixar nada.
+                info.state = "awaiting_input"
+                info.question, info.options = aprov
                 info.last_activity = _jsonl_mtime(info.jsonl)
                 continue
             marker = (corrigidos[info.name] if info.name in corrigidos
@@ -1167,6 +1308,30 @@ class SessionRegistry:
                 # Statusline + label de graca: o frame ja foi capturado pra classificar.
                 self._status_cache[info.name] = (time.monotonic(), _pane_status(frame))
                 self._label_cache[info.name] = c[1]
+        # Pergunta que o pane nao mostra (o menu rolou pra fora — ver askquestion.pergunta_aberta).
+        # FORA dos dois ramos acima de proposito: com marcador de hook a sessao nem raspa o pane, e
+        # era justamente ali que a pergunta sumia. So pras que ficaram SEM menu — com menu visivel
+        # quem manda e o pane. Em thread e em lote, como as capturas: le disco, e isto e awaitado
+        # direto no event loop (mesma regra do git status em _decorate_git).
+        sem_menu = [i for i in infos
+                    if i.state != "awaiting_input" and not getattr(i, "options", None) and i.jsonl]
+        if sem_menu:
+            # return_exceptions: sidecar e conveniencia e nao pode derrubar a lista INTEIRA de
+            # sessoes — mesma regra do git status em _decorate_git (incidente de 2026-07-23).
+            pends = await asyncio.gather(
+                *[asyncio.to_thread(pergunta_aberta, _sid(i.jsonl)) for i in sem_menu],
+                return_exceptions=True)
+            for info, q in zip(sem_menu, pends):
+                if isinstance(q, Exception):   # nao BaseException: CancelledError nao vira warning
+                    _log.warning("askq: leitura da pergunta pendente falhou sessao=%s",
+                                 info.name, exc_info=q)
+                    continue
+                if q is None:
+                    continue
+                info.state = "awaiting_input"
+                info.label = None
+                info.question = q.questions[0].question
+                info.options = [o.label for o in q.questions[0].options]
         # Statusline pros cards (modelo/contexto/⚡5h/📅7d): cache com TTL — capturar o pane de TODAS
         # por tick seria a tempestade de forks que o fast-path de marcador evita. No maximo
         # _STATUS_BUDGET capturas por chamada, das entradas mais VELHAS do cache; quem foi raspada
@@ -1207,8 +1372,29 @@ class SessionRegistry:
                 # Label NAO segue o preserve do status_line: statusline velha ainda e verdadeira
                 # (modelo/custo mudam devagar); spinner velho vira fantasma — melhor sem barrinha.
                 self._label_cache.pop(info.name, None)
+        # Codex: a linha sai do PROPRIO rollout (modelo, contexto e cota estao la), com o mesmo
+        # cache e o mesmo TTL do sweep de pane — o card nao tem SSE aberto, e raspar a TUI esta
+        # proibido. SEM o `_STATUS_BUDGET` de proposito: aquele teto existe pra limitar FORKS de
+        # `capture-pane`, e aqui e leitura do fim de um arquivo no threadpool.
+        # O ticket pedia isto "pelo sidecar de status". Nao ha sidecar: quem escreveria seria este
+        # mesmo processo, lendo este mesmo arquivo — o sidecar existe pra que QUEM RENDERIZA
+        # publique o que so ele sabe (ver app/statusline.py), e aqui o backend sabe tudo. Gravar
+        # um arquivo pra ler de volta seria so um passo a mais entre a mesma fonte e o mesmo card.
+        codexes = [i for i in infos
+                   if getattr(i, "provider", "claude") == "codex" and i.jsonl
+                   and now_m - self._status_cache.get(i.name, (0.0, None))[0] > _STATUS_TTL]
+        if codexes:
+            linhas = await asyncio.gather(*[
+                asyncio.to_thread(_codex_status_line, i.jsonl) for i in codexes])
+            for info, linha in zip(codexes, linhas):
+                # Linha nova ou a ULTIMA BOA: preservar segue a regra do sweep de pane — apagar
+                # piscaria o badge do card e forcaria re-emissao da lista a toa.
+                anterior = self._status_cache.get(info.name, (0.0, None))[1]
+                self._status_cache[info.name] = (time.monotonic(), linha or anterior)
         for info in infos:
-            if getattr(info, "provider", "claude") != "codex":
+            if getattr(info, "provider", "claude") == "codex":
+                info.status_line = self._status_cache.get(info.name, (0.0, None))[1]
+            else:
                 # Sidecar antes do pane: a captura traz a linha ja CORTADA na largura da janela
                 # (quem renderiza trunca antes de imprimir, ver app/statusline.py). Ler o arquivo e
                 # muito mais barato que a captura — nao entra no budget de forks acima.
@@ -1260,7 +1446,8 @@ class SessionRegistry:
                resume_session_id: str | None = None, provider: str = "claude",
                engine: str | None = None, model: str | None = None,
                effort: str | None = None, context_window: int | None = None,
-               permission_mode: str | None = None) -> SessionInfo:
+               permission_mode: str | None = None,
+               initial_prompt: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
@@ -1272,24 +1459,41 @@ class SessionRegistry:
             from app import engines
             if engine not in engines.listar():
                 raise ValueError(f"motor '{engine}' nao existe")
-        # Codex nao e tmux: o caminho async (spawn do app-server, thread/start) roda no loop
-        # principal via create_codex(); o create() sync spawnaria o AppServerClient num loop
-        # descartavel (asyncio.run) que morre ao retornar -> orfanaria o subprocess/reader task.
-        # Por isso o create() sync e Claude-only e recusa Codex alto (Task 6 fia o endpoint async).
-        if provider == "codex":
-            raise ValueError("sessoes Codex sao criadas via create_codex (async)")
         # Pi anda no MESMO caminho tmux do Claude, mas duas coisas daqui pra baixo sao Claude puro e
         # recusam alto em vez de "quase funcionar":
         #  - motor: o `hangar-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
         #    a sessao subiria na conta do proprio pi PARECENDO estar no motor pedido.
         # Resume do Pi passou a existir (branch `elif provider == "pi"` la embaixo, com
         # `pi --session-id <id>`); a recusa que morava aqui tornava aquele branch INALCANCAVEL.
-        if provider == "pi" and engine:
+        if provider in ("pi", "omp") and engine:
             raise ValueError("motor so vale para provider claude")
         # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (hangar-engine so exporta
         # ANTHROPIC_*). Resume existe: `kimi --session <id>` (diferente do Pi, que nao tinha flag).
         if provider == "kimi" and engine:
             raise ValueError("motor so vale para provider claude")
+        # Codex idem: o `hangar-engine --exec` so exporta ANTHROPIC_*/CLAUDE_CODE_*, que o codex
+        # ignora — a sessao subiria na conta do proprio Codex PARECENDO estar no motor pedido.
+        if provider == "codex":
+            if engine:
+                raise ValueError("motor so vale para provider claude")
+            _exigir_lancador_codex()
+        # Skill instalada no Claude vale JA nesta sessao. pi, kimi e codex leem so as pastas deles;
+        # quem materializa as skills do Claude la e a ponte, e ela era refeita apenas na subida do
+        # backend — instalar uma skill exigia reiniciar o servico. Claude e omp ficam de fora
+        # porque os dois descobrem as fontes sozinhos. Fail-soft: criar sessao nunca depende disto.
+        if provider in ("pi", "kimi", "codex"):
+            try:
+                from app import skill_bridge
+                # Silencioso no caso comum (nada mudou) e falante quando MEXEU: sem a segunda
+                # metade, "a ponte rodou e achou pouco" e "a ponte nem rodou" voltam a ser o mesmo
+                # silencio no diario — que foi a duvida que sobrou quando 67 skills sumiram.
+                stats = skill_bridge.rebuild(log=lambda _m: None)
+                mexeu = {n: s for n, s in stats.items()
+                         if any(s.get(k) for k in ("criados", "trocados", "removidos", "erro"))}
+                if mexeu:
+                    _log.info("ponte de skills antes de criar %s: %s", name, mexeu)
+            except Exception:                          # noqa: BLE001
+                _log.warning("ponte de skills falhou antes de criar %s", name, exc_info=True)
         # Unicidade contra tmux (Claude) E sidecars Codex: sem o segundo check, um nome de sessao
         # Codex reusado aqui geraria DOIS SessionInfo com o mesmo name no list() (front keyed por
         # nome) e o kill(name) cairia no branch Codex (checado 1o) -> fecharia o client Codex sem
@@ -1299,8 +1503,8 @@ class SessionRegistry:
         # resume_session_id (retomar conversa MORTA do Arquivo): reusa o uuid existente e sobe com
         # `--resume` em vez de `--session-id` -> o claude CONTINUA aquele jsonl (nao comeca um novo).
         # Mesmo uuid ja validado no endpoint, mas revalida aqui tambem (vai direto pro comando do shell).
-        # ponytail: resume so cobre o path do Claude por ora (--resume nao existe no Codex — a Task 5
-        # do plano de Codex resolve o resume dele por fora deste branch).
+        # Os quatro providers retomam por aqui, cada um com o comando DELE: `claude --resume`,
+        # `pi --session-id`, `kimi --session`, e o lancador com `codex resume`.
         if resume_session_id is not None:
             if provider == "kimi":
                 # Sid do Kimi e `session_<uuid>` (nao uuid puro) e o resume e `--session`, nao
@@ -1313,6 +1517,27 @@ class SessionRegistry:
                 # join_cmd e byte por byte o f-string de antes (no POSIX ele E o shlex.join).
                 cmd = tmux.join_cmd(["kimi", "--session", sid]
                                  + model_args.args_de(provider, model, effort))
+            elif provider == "codex":
+                # O id da conversa Codex e o uuid do fim do nome do rollout (o mesmo que o Arquivo
+                # lista). Vai pro lancador, que abre a TUI com `codex resume <id>` — o historico ja
+                # esta no rollout, entao a sessao nova nasce com a conversa inteira.
+                # O MESMO criterio que a rota do Arquivo usa (uma definicao só de id de conversa).
+                from app.archive_providers import UUID_RE
+                if not UUID_RE.match(resume_session_id):
+                    raise ValueError("session_id invalido")
+                sid = resume_session_id
+                from app.adapters.codex.lancador import comando_do_lancador
+                cmd = tmux.join_cmd(comando_do_lancador(cwd, thread_id=sid))
+            elif provider == "omp":
+                # Retoma por CAMINHO: o id interno do omp nao e o do nome do arquivo, e spawn e
+                # resume sao verbos diferentes — reusar o spawn abriria conversa nova.
+                try:
+                    uuid.UUID(resume_session_id)
+                except (ValueError, AttributeError, TypeError):
+                    raise ValueError("session_id invalido")
+                sid = resume_session_id
+                from app.adapters import get_adapter
+                cmd = tmux.join_cmd(get_adapter("omp").resume_command(cwd, sid, model, effort))
             elif provider == "pi":
                 # `pi --session-id <id>` RETOMA quando o id ja existe ("creating it if missing", no
                 # --help do 0.82.1) -> o comando do resume e o mesmo do spawn, so com o id antigo.
@@ -1340,7 +1565,12 @@ class SessionRegistry:
             # spawn_command vem do Adapter do provider (import local: get_adapter->ClaudeAdapter nao
             # importa registry, mas evita qualquer ciclo se um adapter futuro vier a importar daqui).
             from app.adapters import get_adapter
-            cmd = tmux.join_cmd(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
+            # initial_prompt so vai pro Codex: e a TUI dele que abre a thread, entao o 1o prompt tem
+            # que estar no comando do pane. Os outros providers recebem prompt inicial por /input,
+            # e aceitar o argumento neles seria escolha que some calada.
+            extra = {"initial_prompt": initial_prompt} if provider == "codex" else {}
+            cmd = tmux.join_cmd(get_adapter(provider).spawn_command(
+                cwd, sid, model, effort, permission_mode, **extra))
         if engine:
             # `hangar-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
@@ -1367,7 +1597,10 @@ class SessionRegistry:
         # Quem liga o pane ao transcript e o bilhete que a extensao escreve (ver pi_session_file).
         # Kimi idem (sessions/<wd>/session_<uuid>/agents/main/wire.jsonl, sessao so no 1o prompt);
         # quem liga e o bilhete do hook (ver kimi_session_file).
-        jsonl = None if provider in ("pi", "kimi") else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
+        # Codex pelo mesmo motivo: o rollout so existe depois que a TUI abre a thread, e o caminho
+        # dele nao se deriva de cwd+id (vem do thread/start). Devolver um path do layout do Claude
+        # aqui envenenaria o _jsonl_cache, que e de CLASSE e compartilhado com o SSE.
+        jsonl = None if provider in ("pi", "omp", "kimi", "codex") else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
         # Pré-confia a pasta no .claude.json: sem isto, uma sessão criada pelo app numa pasta NOVA
         # nasce presa no "trust this folder?" do Claude Code (invisível/ininteragível pelo chat até
         # aceitar na TUI). Só é o 1º acesso à pasta — depois o próprio Claude Code grava. Best-effort.
@@ -1375,10 +1608,15 @@ class SessionRegistry:
         # lista de pastas confiadas do Claude com pasta que ele talvez nunca abra.
         # Kimi tem trust PROPRIO (medido: pasta nova trava no "Trust this folder?" do boot) ->
         # pré-confia no formato dele (~/.kimi-code/workspace-trust), nao no do Claude.
+        # Codex tem trust PROPRIO tambem (medido: pasta nova trava no "Do you trust the contents of
+        # this directory?" da TUI, e ali a sessao nem abre a thread -> nasce sem sidecar, invisivel
+        # no app que a criou) -> pre-confia no formato dele, nao no do Claude.
         if provider == "kimi":
             from app.adapters.kimi import sessions as kimi_sessions
             kimi_sessions.pretrust_cwd(cwd)
-        elif provider != "pi":
+        elif provider == "codex":
+            codex_sessions.pretrust_cwd(cwd)
+        elif provider not in ("pi", "omp"):
             _pretrust_cwd(cwd, config_dir)
         if not tmux.new_session(name, cwd, cmd, config_dir):
             raise ValueError("falha ao criar sessao no tmux")
@@ -1390,84 +1628,16 @@ class SessionRegistry:
         # Mesmo motivo, pro vinculo 'then' (feature #12): nome reusado nao deve herdar um encadeamento
         # de uma sessao antiga e ja morta.
         ThenLink(name).clear()
+        # E pro PAREAMENTO, pelo mesmo motivo: o kill() ja tira a sessao do grupo, mas quem morre
+        # FORA dele (pane fechado na mao, maquina reiniciada) deixa o sidecar keyed pelo nome no
+        # disco — e a sessao nova de mesmo nome nascia dentro de um grupo que nao existe mais.
+        self._clear_pair(name)
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
         # Pi (jsonl=None) nao entra no cache — nao ha path a fixar, e a resolucao dele nem passa por aqui.
         if jsonl is not None:
             self._jsonl_cache[name] = jsonl
         return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider, engine=engine)
-
-    async def create_codex(self, name: str, cwd: str,
-                           initial_prompt: str | None = None) -> SessionInfo:
-        # Caminho Codex: spawna um app-server WebSocket local, abre um thread e cria uma TUI
-        # `codex --remote` no tmux ligada ao mesmo servidor. O backend conserva o controle JSON-RPC.
-        name = sanitize_session_name(name)
-        if not name:
-            raise ValueError("nome invalido")
-        # Unicidade contra sessoes tmux (Claude) E sidecars Codex existentes.
-        if tmux.has_session(name) or codex_sessions.exists(name):
-            raise ValueError("ja existe uma sessao com esse nome")
-        client = AppServerClient()
-        try:
-            endpoint = await client.start_shared()
-            await client.request("initialize", {
-                "clientInfo": codex_adapter._CLIENT_INFO, "capabilities": None})
-            codex_adapter.ensure_tmux_tui(
-                name, cwd, None, endpoint, initial_prompt=initial_prompt,
-            )
-
-            # A TUI cria a thread e publica sua identidade a todos os clientes do app-server.
-            # Isso tambem garante que o rollout ja exista, permitindo `codex resume` no restart.
-            async def _tui_thread() -> dict:
-                async for notification in client.notifications():
-                    if notification.get("method") != "thread/started":
-                        continue
-                    thread = (notification.get("params") or {}).get("thread") or {}
-                    if thread.get("cwd") == cwd:
-                        return thread
-                raise ConnectionError("app-server encerrou antes de a TUI criar a thread")
-
-            thread = await asyncio.wait_for(_tui_thread(), timeout=20)
-        except Exception:
-            # Falha no handshake: nao deixa o subprocess orfao.
-            await client.close()
-            if tmux.has_session(name):
-                tmux.kill_session(name)
-            raise
-        thread_id = thread.get("id")
-        rollout_path = thread.get("path")
-        if not thread_id or not rollout_path:
-            await client.close()
-            tmux.kill_session(name)
-            raise ValueError("thread/start nao devolveu id/path")
-        # save() (mkdir+write_text -> pode dar OSError: disco cheio/permissao) e attach() rodam com o
-        # app-server JA spawnado -> qualquer falha aqui tem que fechar o client, senao vira orfao. Se
-        # save deu certo mas attach falhou, remove o sidecar recem-escrito (estado consistente: nao
-        # fica sidecar apontando pra um client fechado).
-        try:
-            # Sidecar duravel: sobrevive ao restart do backend (identidade + ponteiro pro rollout).
-            codex_sessions.save(name, thread_id, rollout_path, cwd)
-            # Client vivo (efemero) anexado no adapter; limpa fila/then herdados de nome reusado.
-            # A sessao nova ainda nao tem escolha explicita de modelo; o catalogo/picker e os
-            # eventos dos turnos populam o display depois.
-            from app.adapters import get_adapter
-            adapter = get_adapter("codex")
-            adapter.attach(name, client, thread_id, watch_tmux=True)
-            # ASSINA a thread que a TUI criou. Sem isto o backend so recebe eventos globais do
-            # app-server -- nada de turn/*, item/* ou tokenUsage -- e a sessao fica "viva mas
-            # surda": estado congelado, sem preview/statusline e com a fila do celular presa (o
-            # drain-on-complete mora no turn/completed). Em background porque thread/resume so
-            # e aceito depois que o 1o turno grava o rollout; ver _subscribe_when_ready.
-            adapter.start_subscription(name, cwd)
-        except Exception:
-            await client.close()
-            codex_sessions.delete(name)  # idempotente; remove sidecar orfao se save ja tinha passado
-            if tmux.has_session(name):
-                tmux.kill_session(name)
-            raise
-        PromptQueue(name).clear()
-        ThenLink(name).clear()
-        return SessionInfo(name=name, cwd=cwd, jsonl=rollout_path, provider="codex")
 
     def rename(self, old: str, new: str) -> None:
         if codex_sessions.exists(old):
@@ -1544,9 +1714,13 @@ class SessionRegistry:
         if codex_sessions.exists(name):
             # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
             from app.adapters import get_adapter
-            get_adapter("codex").close_sync(name)
+            # O tmux PRIMEIRO. Invertido, `close_sync` matava o app-server e so entao o kill era
+            # tentado: falhando ele (o caso que esta funcao existe pra pegar), a excecao dizia "nao
+            # consegui encerrar" com a TUI ja sem servidor — sinal trocado, e a sessao que sobrou na
+            # tela nao fala mais com ninguem. Agora falha antes de qualquer estrago.
             if not tmux.kill_session(name):
                 raise KillFailed(name)
+            get_adapter("codex").close_sync(name)
             self._kill_hidden_shell(name)
             codex_sessions.delete(name)
             self._forget(name)
@@ -1577,11 +1751,54 @@ class SessionRegistry:
     def _clear_pair(name: str) -> None:
         # Sessão morta SAI do grupo (leave: sob lock, atualiza os demais membros): sem isto os
         # companheiros apontariam pra um fantasma (badge preso). Best-effort, nunca bloqueia o
-        # kill — mas LOGA: engolir calado deixava o badge-fantasma indiagnosticável.
+        # kill nem a criação — mas LOGA: engolir calado deixava o badge-fantasma indiagnosticável.
         try:
             pair_leave(name)
         except Exception as e:
-            _log.warning("kill(%s): falha ao sair do grupo de pareamento: %r", name, e)
+            # Sem "kill(...)" no texto: o create() também chama isto (nome reusado de sessão morta
+            # fora do kill), e a falha aparecia no log como se fosse de um encerramento.
+            _log.warning("_clear_pair(%s): falha ao sair do grupo de pareamento: %r", name, e)
+
+    def _varrer_pares_mortos(self, vivos: set[str], agora: float | None = None) -> None:
+        """Membro de grupo cuja sessão morreu FORA do app (Ctrl-C, crash, reboot): ninguém chamou
+        leave, o sidecar apontava pra um fantasma pra sempre. Morto = ausente da lista viva numa
+        varredura anterior E há pelo menos _PAIR_AUSENCIA_MIN_S — kill() e rename() chamam list()
+        numa janela em que o nome está ausente de propósito, e só o tempo separa isso de morte.
+        O aviso vai pela fila durável, nunca send-keys: isto roda dentro do list(), no tick do SSE."""
+        if not vivos:
+            return   # tmux fora = lista vazia; varrer aqui dissolveria todos os grupos
+        agora = time.monotonic() if agora is None else agora
+        # referenciados_locais() devolve stem SANITIZADO (_sanitize do pqueue); vivos é nome CRU do
+        # tmux — sem subtrair a versão sanitizada de vivos, sessão com espaço/acento no nome nunca
+        # sai de candidatos e a varredura dissolve um grupo vivo (achado do review final).
+        candidatos = pair.referenciados_locais() - vivos - {_sanitize(v) for v in vivos}
+        cls = type(self)
+        for n in [x for x in dict(cls._pair_ausencias) if x not in candidatos]:
+            cls._pair_ausencias.pop(n, None)  # varredura concorrente (2 registries) pode já ter tirado
+        for n in candidatos:
+            primeira = cls._pair_ausencias.setdefault(n, agora)
+            if agora - primeira < cls._PAIR_AUSENCIA_MIN_S:
+                continue
+            cls._pair_ausencias.pop(n, None)  # idem: 2 threads podem passar o portão de tempo juntas
+            try:
+                ex = pair_leave(n)
+            except Exception as e:
+                _log.warning("varredura de pares: '%s' morto fora do app, leave falhou: %r", n, e)
+                continue
+            _log.info("varredura de pares: '%s' morreu fora do app; saiu do grupo (%s)", n, ex)
+            resto = [p for p in ex if "::" not in p]
+            if len(resto) != len(ex):
+                _log.warning("varredura de pares: '%s' tinha par remoto; sidecar de lá fica órfão", n)
+            for p in resto:
+                try:
+                    PromptQueue(p).append(
+                        pair_texto.texto_saida(n, "encerrou fora do app e saiu do grupo de trabalho",
+                                               [x for x in resto if x != p]),
+                        delivered=False)
+                    if apos_saida_por_morte:
+                        apos_saida_por_morte(p)
+                except Exception as e:
+                    _log.warning("varredura de pares: aviso a '%s' não enfileirado: %r", p, e)
 
     # ── Resume de sessao "sem id" ────────────────────────────────────────────────
     # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da
@@ -1620,7 +1837,7 @@ class SessionRegistry:
         if prov != "claude":
             raise ValueError(
                 f"retomar so vale pra sessao Claude (esta e {prov}); "
-                "feche o pane e abra de novo pelo wrapper `pi`")
+                f"feche o pane e abra de novo pelo wrapper `{prov}`")
 
     def resume_candidates(self, name: str) -> tuple[str, bool, list[dict]]:
         # (cwd, ambiguo, candidatos). ambiguo = ha OUTRA sessao tmux no mesmo cwd -> o "mais recente por

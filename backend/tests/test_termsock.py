@@ -12,12 +12,24 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocket
 
-from app import termsock
+from app import pair, termsock
+from app import registry as registry_mod
+from app.registry import SessionRegistry
 
 from tmux_teste import matar_servidor, matar_sessao, novo_socket
 from app.config import settings
 
 SESS = "cp-test-termsock"
+
+
+@pytest.fixture(autouse=True)
+def _pair_dir_isolado(tmp_path, monkeypatch):
+    # registry.list() varre pareamento (Task 8) a cada chamada; este arquivo chama SessionRegistry().list()
+    # direto (sem isolar projects_dir) — sem isto varria o .hangar-pair REAL (achado do review).
+    monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", {})
+    monkeypatch.setattr(registry_mod, "apos_saida_por_morte", None)
+
 
 # Diretorio de trabalho dos shells escondidos deste arquivo. Era "/tmp" cru: no Windows esse caminho
 # nao existe, o `new-session -c /tmp` cai no cwd do processo e o `#{session_path}` volta
@@ -245,8 +257,10 @@ def test_desmonte_repoe_o_tamanho_da_janela(sessao):
     assert _tam(sessao).startswith("200x50")
     with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
         assert len(ws.receive_bytes()) > 0
-        time.sleep(1.0)
-        assert _tam(sessao).startswith("80x24")
+        # `_tam_bate` e nao `startswith("80x24")`: onde a barra de status esta LIGADA (o default do
+        # tmux, e o que o runner do CI usa — esta maquina a desliga no ~/.tmux.conf) a janela fica
+        # 80x23, e o teste acusava um resize que funcionou. O helper ja existe justamente pra isso.
+        _esperar(lambda: _tam_bate(sessao, 80, 24))
         ws.close()
         # Fechar e conferir AINDA DENTRO do `with`: o `__exit__` do WebSocketTestSession do
         # Starlette so ENFILEIRA o disconnect (nao espera o handler processar) e cancela a
@@ -258,7 +272,9 @@ def test_desmonte_repoe_o_tamanho_da_janela(sessao):
         # As DUAS metades: tamanho reposto E window-size de volta em latest. Sem a segunda, um
         # attach nativo posterior abriria recortado e ninguem saberia por que (medicao no spec,
         # linha 5).
-        _esperar(lambda: _tam(sessao) == "200x50 latest")
+        # Mesma tolerancia de uma linha do `_tam_bate`, pelo mesmo motivo (barra de status), sem
+        # abrir mao do `latest`: e a metade do caso que prova o `window-size` de volta.
+        _esperar(lambda: _tam_bate(sessao, 200, 50) and _tam(sessao).endswith(" latest"))
         assert termsock.clientes_ativos() == set()
         assert _clientes(sessao) == ""
 

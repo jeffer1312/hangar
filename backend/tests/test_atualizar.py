@@ -185,6 +185,31 @@ def test_dependencia_faltando_nao_toca_no_repo(repo, monkeypatch):
     assert final["ok"] is False and "npm" in final["erro"]
 
 
+def test_branch_de_trabalho_recusa_sem_tocar_no_repo(repo, monkeypatch):
+    """Medido em 25/08/2026: com o checkout numa branch de trabalho, o `reset --hard origin/main`
+    levou A BRANCH junto — ela passou a apontar pra um commit da main e o disco ficou misturado.
+
+    Recusa antes de qualquer coisa, inclusive antes do resguardo: aqui nada aconteceu ainda, e a
+    saída é uma frase — não uma branch de resgate pra alguém desfazer depois.
+    """
+    _git(repo, "checkout", "-b", "mobile-expo")
+    tocou = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: tocou.append("puxar"))
+    monkeypatch.setattr(atualizar, "resguardar", lambda pre: tocou.append("resguardar"))
+
+    final = atualizar.executar()
+    assert tocou == []
+    assert final["ok"] is False and "mobile-expo" in final["erro"]
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "mobile-expo"
+
+
+def test_main_e_master_seguem_atualizando(repo):
+    """A recusa é sobre branch de TRABALHO. Quem clona com `master` não pode ficar sem atualizar."""
+    assert atualizar.checar()["branch_de_trabalho"] is False
+    _git(repo, "checkout", "-b", "master")
+    assert atualizar.checar()["branch_de_trabalho"] is False
+
+
 def test_backend_que_nao_sobe_volta_pro_commit_anterior(repo, monkeypatch):
     antes = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
@@ -202,6 +227,29 @@ def test_backend_que_nao_sobe_volta_pro_commit_anterior(repo, monkeypatch):
     final = atualizar.executar()
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == antes
     assert final["ok"] is False and "nao respondeu" in final["erro"]
+
+
+@pytest.mark.parametrize("arquivo, esperado", [
+    ("shell/main.cjs", True),
+    ("shell/preview_ctl.test.cjs", False),
+    ("backend/x.py", False),
+])
+def test_shell_mudou_so_quando_o_pull_toca_a_janela(repo, monkeypatch, arquivo, esperado):
+    def _puxar_avanca(pre):
+        alvo = repo / arquivo
+        alvo.parent.mkdir(parents=True, exist_ok=True)
+        alvo.write_text("novo\n", encoding="utf-8")
+        _git(repo, "add", arquivo)
+        _git(repo, "commit", "-m", "versao nova")
+
+    monkeypatch.setattr(atualizar, "_puxar", _puxar_avanca)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    final = atualizar.executar()
+    assert final["ok"] is True
+    assert final["shell_mudou"] is esperado
 
 
 def test_pronto_marca_ok(repo, monkeypatch):
@@ -267,8 +315,28 @@ def test_hangar_send_ausente_nao_derruba_a_atualizacao(repo, monkeypatch):
     """Aviso é cortesia: máquina sem `hangar-send` não pode ficar sem atualizar por causa dele."""
     def _sem_binario(*a, **kw):
         raise OSError("hangar-send: not found")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST")     # sem isto o aviso nem é tentado — ver abaixo
     monkeypatch.setattr(atualizar, "_rodar", _sem_binario)
     atualizar._avisar_sessoes()   # não levanta
+
+
+def test_a_suite_nunca_manda_recado_pras_sessoes_vivas(repo, monkeypatch):
+    """Medido em 30/08/2026: três testes do fluxo inteiro chamavam `_avisar_sessoes` sem substituí-la
+    e o `hangar-send` saía de verdade — três avisos falsos de restart por `pytest -q`, na tela de
+    quem estava trabalhando. A trava é da função, não de cada teste."""
+    chamadas = []
+
+    def _espia(args, **kw):
+        chamadas.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(atualizar, "_rodar", _espia)
+    atualizar._avisar_sessoes()
+    assert chamadas == []
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST")     # fora do pytest o aviso sai como sempre
+    atualizar._avisar_sessoes()
+    assert chamadas and chamadas[0][:2] == ["hangar-send", "--group"]
 
 
 def test_falhou_mede_se_o_servidor_esta_no_ar(repo, monkeypatch):
@@ -666,11 +734,66 @@ def test_lancamento_usa_escopo_systemd(repo, monkeypatch):
     assert "app.atualizar" in args_vistos
 
 
+def test_reiniciar_agora_lanca_destacado_e_no_escopo(repo, monkeypatch):
+    """Mesmo cuidado do lançamento da atualização: o `systemctl restart` mata o cgroup do backend,
+    então quem dá o comando tem de estar FORA dele — senão morre no meio do próprio comando."""
+    args_vistos: list[str] = []
+    capturado: dict = {}
+    class P:
+        pid = 3
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
+    monkeypatch.setattr(atualizar.tmux, "_scope_prefix",
+                        lambda: ["systemd-run", "--user", "--scope", "-q", "--"])
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda a, **kw: (args_vistos.extend(a), capturado.update(kw), P())[2])
+    r = atualizar.reiniciar_agora()
+    assert r == {"ok": True, "pid": 3}
+    assert args_vistos[:3] == ["systemd-run", "--user", "--scope"]
+    assert args_vistos[-1] == "--reiniciar"
+    assert capturado.get("start_new_session") is True
+
+
+def test_reinicio_que_falha_deixa_rastro_no_estado(repo, monkeypatch):
+    """O processo do reinício é destacado e tem o stderr no /dev/null: exceção aqui não vai pra log
+    nenhum. Sem gravar no estado, um `systemctl` que falha some por completo e a tela fica esperando
+    um servidor que nunca cai."""
+    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
+    monkeypatch.setattr(atualizar, "_reiniciar",
+                        lambda topo: (_ for _ in ()).throw(RuntimeError("systemctl explodiu")))
+    atualizar.executar_reinicio()
+    assert "systemctl explodiu" in atualizar.estado()["reinicio_erro"]
+
+
+def test_reiniciar_agora_limpa_a_falha_anterior(repo, monkeypatch):
+    """Falha de ontem não pode ficar na tela depois de um reinício novo."""
+    class P:
+        pid = 5
+    atualizar._escrever(reinicio_erro="RuntimeError: da vez passada")
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
+    monkeypatch.setattr(atualizar.tmux, "_scope_prefix", lambda: [])
+    monkeypatch.setattr(atualizar.subprocess, "Popen", lambda a, **kw: P())
+    atualizar.reiniciar_agora()
+    assert atualizar.estado()["reinicio_erro"] is None
+
+
+def test_reiniciar_agora_recusa_fora_do_systemd(repo, monkeypatch):
+    """Windows e instalação na mão: quem derruba e sobe o servidor é o instalador. Recusa nomeando
+    a topologia — e NÃO lança processo nenhum, que é o que um `kill` inventado aqui faria."""
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "windows")
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("nao devia lancar")))
+    assert atualizar.reiniciar_agora() == {"ok": False, "erro": "topologia", "topologia": "windows"}
+
+
 def test_lancamento_escolhe_o_modo_do_sistema(repo, monkeypatch):
     """POSIX sai do grupo de processos com `setsid`; Windows usa DETACHED_PROCESS."""
     capturado: dict = {}
     class P:
-        pid = 1
+        # Pid que NAO existe: o lock fica com o pid do filho, e o segundo `iniciar()` deste teste só
+        # passa se o dono anterior estiver morto. `1` (init) parecia servir e nao serve — ele e vivo
+        # e de outro dono, e `pid_vivo` responde a verdade sobre ele desde 26/08/2026.
+        pid = 2 ** 22
     monkeypatch.setattr(atualizar.subprocess, "Popen",
                         lambda *a, **kw: (capturado.update(kw), P())[1])
 

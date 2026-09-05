@@ -698,7 +698,10 @@ async def test_ensure_running_resume_restores_model_effort_from_sidecar():
                          model="gpt-5-codex", effort="high")
     adapter = CodexAdapter()
     client = _FakeClient([])
-    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client):
+    # has_session False: este resume RECRIA a TUI, e recriar so e permitido quando nao ha pane —
+    # com pane vivo, a resposta certa e nao mexer (ver test_pane_vivo_sem_controle_nunca_e_substituido).
+    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client), \
+         patch.object(codex_adapter.tmux, "has_session", return_value=False):
         await adapter.ensure_running("sess")
     assert adapter._sessions["sess"]["model"] == "gpt-5-codex"
     assert adapter._sessions["sess"]["effort"] == "high"
@@ -763,7 +766,8 @@ async def test_ensure_running_resume_captures_default_without_overwriting_choice
             return {}
 
     client = _ResumeClient([])
-    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client):
+    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client), \
+         patch.object(codex_adapter.tmux, "has_session", return_value=False):
         await adapter.ensure_running("sess")
     sess = adapter._sessions["sess"]
     assert sess["model"] == "gpt-5-codex"       # escolha preservada
@@ -812,7 +816,7 @@ def test_ensure_tmux_tui_creates_thread_with_matching_permissions():
     command = new_session.call_args.args[2]
     assert command == (
         "codex --remote ws://127.0.0.1:45123 --no-alt-screen -C /tmp/proj "
-        "--sandbox workspace-write --ask-for-approval never"
+        "--sandbox danger-full-access --ask-for-approval never"
     )
 
 
@@ -874,7 +878,7 @@ async def test_subscription_retries_until_rollout_exists():
     assert client.left == 0                      # retentou ate o rollout existir
     assert ("thread/resume", {
         "threadId": "thread-1", "cwd": "/tmp/proj",
-        "sandbox": codex_adapter._SANDBOX, "approvalPolicy": codex_adapter._APPROVAL,
+        "sandbox": codex_adapter.SANDBOX, "approvalPolicy": codex_adapter.APPROVAL,
     }) in client.requests
 
 
@@ -905,7 +909,8 @@ async def test_ensure_running_marks_subscribed_without_retry_task():
     codex_sessions.save("sess", "thread-1", "/rollout.jsonl", "/tmp/proj")
     adapter = CodexAdapter()
     client = _FakeClient([])
-    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client):
+    with patch("app.adapters.codex.adapter.AppServerClient", lambda *a, **k: client), \
+         patch.object(codex_adapter.tmux, "has_session", return_value=False):
         await adapter.ensure_running("sess")
     assert adapter._sessions["sess"]["subscribed"] is True
     assert "sess" not in adapter._subscribers

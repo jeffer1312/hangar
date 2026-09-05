@@ -1,0 +1,21 @@
+#!/bin/sh
+# hangar — materializa as skills do Claude nas pastas do pi/kimi/codex, agora.
+#
+# Existe pra ser chamado na LARGADA de cada harness (os wrappers de shell, o lancador do Codex e a
+# criacao de sessao pelo app): sem isso a ponte so era refeita na subida do backend, entao instalar
+# uma skill no Claude exigia reiniciar o servico antes de o pi/codex enxergarem ela.
+#
+# Silencioso e fail-soft de proposito: e uma conveniencia no caminho de abrir um agente, nunca um
+# motivo pra o agente nao abrir. Sai 0 sempre.
+#
+# ~/.local/bin/hangar-skills-sync e symlink pra ca; `realpath` resolve o link pra achar o repo.
+set -u
+
+alvo=$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")
+ponte=$(dirname "$alvo")/../backend/app/skill_bridge.py
+
+# stdout no lixo (o --quiet ja nao fala), mas o stderr vai pra um arquivo: engolir os dois deixava
+# este o unico caminho da ponte sem rastro NENHUM — python3 fora do PATH ou a ponte quebrando
+# sumiam sem deixar nada, e a pessoa so notava dias depois que uma skill nova nao aparecia no pi.
+[ -f "$ponte" ] && python3 "$ponte" --quiet >/dev/null 2>>"${TMPDIR:-/tmp}/hangar-skills-sync.err"
+exit 0

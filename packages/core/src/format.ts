@@ -32,7 +32,7 @@ import * as m from './paraglide/messages';
 // (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda
 // sessão Pi aparecia rotulada como "Claude". Um lugar só -> um provider novo não volta a mentir.
 // Ausente/desconhecido -> "Claude", que é o default do backend (SessionInfo.provider).
-const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi' };
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi', omp: 'OMP' };
 
 export function providerName(p: SessionInfo['provider'] | null | undefined): string {
   return PROVIDER_NAMES[p ?? 'claude'] ?? 'Claude';
@@ -54,6 +54,7 @@ export function providerTag(p: SessionInfo['provider'] | null | undefined): stri
 // arquivo então), definitivo se a extensão de estado não carregou naquele pane.
 export function untrackedReason(p: SessionInfo['provider'] | null | undefined): string {
   if (p === 'pi') return m.formato_sem_transcript_pi();
+  if (p === 'omp') return m.formato_sem_transcript_omp();
   if (p === 'kimi') return m.formato_sem_transcript_kimi();
   return m.formato_sem_transcript_claude();
 }
@@ -182,9 +183,26 @@ export function initials(name: string): string {
 }
 
 // Último segmento não vazio de um caminho absoluto (basename do projeto).
+// A contrabarra só separa quando o caminho é do Windows (`C:\...` ou `\\servidor\...`): no Linux
+// ela é caractere VÁLIDO num nome de arquivo, e quebrar por ela ali cortaria o nome no meio. Sem
+// essa distinção, um cwd do Windows não tinha separador nenhum e voltava inteiro — a sessão nascia
+// chamada `C--Sistemas-DotNet-PssBackend`, que é o caminho todo depois do sanitizador do nome.
+const EH_WINDOWS = /^([A-Za-z]:[\\/]|\\\\)/;
+
 export function basename(path: string): string {
-  const parts = path.split('/').filter(Boolean);
+  const parts = path.split(EH_WINDOWS.test(path) ? /[\\/]/ : '/').filter(Boolean);
   return parts.length ? parts[parts.length - 1] : path;
+}
+
+// cwd -> prefixo truncável + basename que nunca encolhe: o que identifica a sessão na lista é a
+// ÚLTIMA pasta, e a ellipsis padrão corta justamente o fim. Mora aqui, e não copiado no card e na
+// sidebar, porque a regra da contrabarra é a mesma do basename() — num cwd do Windows as duas
+// cópias liam `lastIndexOf('/')` como -1 e mostravam o caminho INTEIRO como nome da pasta.
+export function cwdParts(cwd: string | undefined): { prefix: string; base: string } {
+  const win = EH_WINDOWS.test(cwd ?? '');
+  const p = (cwd ?? '').replace(win ? /[\\/]+$/ : /\/+$/, '');
+  const i = win ? Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) : p.lastIndexOf('/');
+  return i < 0 ? { prefix: '', base: p } : { prefix: p.slice(0, i + 1), base: p.slice(i + 1) };
 }
 
 // Chave de agrupamento por PROJETO (toggle Servidor|Projeto da lista de sessões, feature #3): o cwd
@@ -222,7 +240,29 @@ export function effectiveGroupBy(pref: GroupBy, serverCount: number): GroupBy {
 export interface PairFields { name: string; pair_gid?: string | null; pair_peers?: string[] | null; pair_task?: string | null; }
 export type PairRow<T> =
   | { kind: 'header'; gid: string; label: string; count: number }
-  | { kind: 'session'; session: T; gid: string | null };
+  | { kind: 'session'; session: T; gid: string | null; label?: string; ultimo?: boolean };
+
+// Rótulo do trilho recolhido: o NOME em duas linhas de até 8 caracteres (corte seco), em vez de
+// sigla — sigla é código e ninguém memoriza código. Linha 1 = primeiro pedaço; linha 2 = o que
+// distingue (o resto). Dentro de um grupo, o pedaço que o rótulo do grupo já carrega sai
+// (`api-1234` no grupo `ABC-1234` vira só `api`). Toda linha ocupa o mesmo bloco, então a 2ª
+// pode ficar vazia sem mudar a altura — é o que iguala `hangar` e `storefront-web`.
+export const RAIL_MAX = 8;
+export function railLabel(name: string, grupo?: string | null): [string, string] {
+  // Classe unicode, não ASCII: com `[^a-zA-Z0-9]` o acento virava separador e `análise-app`
+  // saía como `an` / `lise-app` — nome errado na tela, sem aviso.
+  let parts = name.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (!parts.length) return [name.slice(0, RAIL_MAX) || '?', ''];
+  if (grupo) {
+    // Só a CHAVE do grupo (a primeira palavra: `ABC-1234`), não a tarefa inteira — ela cita os
+    // nomes dos membros, e casar contra ela apagava o nome todo (`api-1234` ficava sem sobra).
+    const chave = grupo.trim().split(/\s/)[0];
+    const doGrupo = new Set(chave.split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((t) => t.toLowerCase()));
+    const sobra = parts.filter((p) => !doGrupo.has(p.toLowerCase()));
+    if (sobra.length) parts = sobra;   // nome INTEIRO igual ao grupo: fica como está
+  }
+  return [parts[0].slice(0, RAIL_MAX), parts.slice(1).join('-').slice(0, RAIL_MAX)];
+}
 
 export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[] {
   // Pré-agrupa por gid numa passada (O(n)) — evita o filter-dentro-do-loop O(n²), já que roda
@@ -245,19 +285,37 @@ export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[]
     const task = members.map((m) => m.pair_task).find((t) => t && t.trim());
     const label = task ? task.trim() : members.map((m) => m.name).join(', ');
     out.push({ kind: 'header', gid, label, count: members.length });
-    for (const m of members) out.push({ kind: 'session', session: m, gid });
+    members.forEach((m, i) => out.push({ kind: 'session', session: m, gid, label, ultimo: i === members.length - 1 }));
   }
   return out;
 }
 
 // Recado de OUTRA sessão Claude (hangar-send): "[de: <sessao>] texto" (1:1) ou "[grupo: <sessao>] texto"
-// (aviso pro grupo). Devolve remetente + texto sem o prefixo + scope; null = msg normal do usuário.
-// Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do Chat compara o cru).
-const _PEER_RE = /^\[(de|grupo):\s*([^\]]+)\]\s*/;
-export function parsePeerMessage(text: string): { from: string; text: string; scope: 'peer' | 'group' } | null {
+// (aviso pro grupo) ou "[painel: <tela>] texto" (recado AUTOMÁTICO do app — ex.: o modal de
+// orquestração avisando o árbitro). Devolve remetente + texto sem o prefixo + scope; null = msg
+// normal do usuário. Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do
+// Chat compara o cru).
+const _PEER_RE = /^\[(de|grupo|painel):\s*([^\]]+)\]\s*/;
+export type PeerScope = 'peer' | 'group' | 'panel';
+const _SCOPES: Record<string, PeerScope> = { de: 'peer', grupo: 'group', painel: 'panel' };
+export function parsePeerMessage(text: string): { from: string; text: string; scope: PeerScope } | null {
   const m = _PEER_RE.exec(text);
   if (!m) return null;
-  return { from: m[2].trim(), text: text.slice(m[0].length), scope: m[1] === 'grupo' ? 'group' : 'peer' };
+  return { from: m[2].trim(), text: text.slice(m[0].length), scope: _SCOPES[m[1]] };
+}
+
+// Canal do recado: uma sessão que manda aviso de máquina abre o texto com "[vigia] ...", "[ALERTA]
+// ..." e afins — convenção de quem escreve a skill, não formato do servidor. Vira etiqueta ao lado
+// do remetente e sai do corpo, pra a primeira linha do recado ser a frase e não o rótulo. Só uma
+// palavra (letras/dígitos/-/_, até 16): "[de: x]" já saiu antes, e "[isso é um aparte]" no meio de
+// uma frase não vira etiqueta porque não abre o texto. E `]` seguido de `(` é LINK markdown
+// (`[log](https://…)`): virava etiqueta "log" com a URL crua sobrando no corpo, o rótulo do link
+// perdido.
+const _CANAL_RE = /^\[([\p{L}\d_-]{1,16})\](?!\()\s*/u;
+export function parseCanal(text: string): { canal: string; text: string } | null {
+  const m = _CANAL_RE.exec(text);
+  if (!m) return null;
+  return { canal: m[1], text: text.slice(m[0].length) };
 }
 
 // Anexos de arquivo por CAMINHO citado na conversa (sua ou minha msg). v1 = só "preview-worthy"
@@ -518,6 +576,10 @@ const MULTI_KEYS: Record<string, string> = {
   urls: 'urls',
   paths: 'arquivos',
   file_paths: 'arquivos',
+  // No singular também: um patch do Codex toca N arquivos e o backend os entrega em `file_path`,
+  // que é a chave que o resto do app já lê. Sem esta linha o cartão dizia "(+2 itens)" onde
+  // Read/Edit dizem "(+2 arquivos)".
+  file_path: 'arquivos',
 };
 // Ordem de preferência do fallback genérico: a chave saliente vem primeiro, não a 1ª do objeto
 // (a ordem do JSON do transcript não é contrato).
@@ -562,6 +624,29 @@ export function summarizeToolInput(
   }
   if (name === 'Write' || name === 'Edit') return summarizeText(one('file_path') || one('path'), TOOL_MAX);
   if (name === 'Bash') return summarizeText(one('command'), TOOL_MAX);
+  // O Bash do Codex. O comando não vem pronto: o backend o extrai do código JavaScript da chamada
+  // e só o entrega quando conseguiu — sem extração sobra o código, que é o que foi executado de
+  // verdade. Nunca uma linha vazia. Os três nomes porque o Codex embrulha tudo num `exec` e o
+  // backend desembrulha para a ferramenta de dentro (`exec_command`, `write_stdin`, …); `exec`
+  // continua chegando quando a chamada interna não é reconhecida.
+  if (name === 'exec' || name === 'exec_command' || name === 'write_stdin') {
+    // `cmd` é o nome do campo quando a chamada NÃO vem embrulhada em código (aí ela chega com os
+    // argumentos em JSON). Não achando nenhum dos três, o caso se cala e deixa o genérico lá
+    // embaixo escolher — retornar aqui é que produzia linha em branco numa chamada que tinha o
+    // campo com outro nome. (Entrada sem nenhum campo legível não tem resumo mesmo, e aí o vazio
+    // é a resposta honesta: o cartão ainda mostra a saída da ferramenta.)
+    const alvo = one('command') || one('cmd') || one('code');
+    if (alvo) return summarizeText(alvo, TOOL_MAX);
+  }
+  // Plano do Codex: a linha diz em que passo ele está, que é o que se quer saber de relance — a
+  // lista inteira aparece no painel de tarefas (lib/activity.ts). Sem isto o cartão mostrava o
+  // código JavaScript da chamada, igual para todas as revisões do plano.
+  if (name === 'update_plan') {
+    const plano = Array.isArray(input['plan']) ? (input['plan'] as Record<string, unknown>[]) : [];
+    const passo = plano.find((p) => p?.status === 'in_progress') ?? plano[0];
+    const texto = typeof passo?.step === 'string' ? passo.step : one('code');
+    if (texto) return summarizeText(texto, TOOL_MAX);
+  }
   if (name === 'Grep' || name === 'Glob') {
     // O argumento saliente e o PADRAO, nunca o diretorio (o pacote faz `"pattern" in path`); sem
     // este ramo o fallback preferiria `path` e a linha esconderia o que foi procurado.
@@ -575,8 +660,46 @@ export function summarizeToolInput(
       ? summarizeText(one('query'), TOOL_MAX)
       : summarizeValues(strList(input['queries']), MULTI_KEYS.queries);
   }
+  if (name === 'AskUserQuestion') {
+    // `questions` e uma lista de OBJETOS, e o fallback generico la embaixo faria String() nela:
+    // o card saia literalmente "AskUserQuestion [object Object]". A linha util e a pergunta (a
+    // primeira, quando ha varias abas) — as opcoes o usuario ve no stepper, que abre por cima.
+    const qs: unknown[] = Array.isArray(input['questions']) ? input['questions'] : [];
+    const primeira = qs[0];
+    // `typeof === 'string'`, nao `String(...)`: se `question` vier como objeto (outro agente, outra
+    // versao), o String() reproduz o MESMO "[object Object]" um nivel mais fundo. Aqui forma
+    // inesperada vira linha vazia, que e o cartao sem resumo — nunca lixo na tela.
+    const texto = primeira && typeof primeira === 'object'
+      ? (primeira as Record<string, unknown>)['question'] : undefined;
+    return typeof texto === 'string' && texto ? summarizeText(texto, TOOL_MAX) : '';
+  }
   if (name === 'WebFetch') {
     return one('url') ? summarizeText(one('url'), TOOL_MAX) : summarizeValues(strList(input['urls']), MULTI_KEYS.urls);
+  }
+  if (name === 'ToolSearch') {
+    // O argumento cru é `select:WebSearch,WebFetch` ou uma busca por palavra — nos dois casos o
+    // fallback genérico mostrava o prefixo `select:` colado nos nomes, que não diz nada a quem lê.
+    // A linha útil é QUAIS ferramentas foram carregadas.
+    // `typeof === 'string'`, não `one()`: aquele faz `String(v)`, então um `query` que venha como
+    // objeto (outro provedor, outra versão) sairia "[object Object]" no chip — a mesma armadilha
+    // que o ramo do AskUserQuestion guarda logo acima. Forma inesperada vira linha vazia.
+    const cru = input['query'];
+    if (typeof cru !== 'string') return '';
+    // `trim` antes do prefixo: `"select: WebSearch,WebFetch"` (com espaço) falharia o startsWith e
+    // cairia no ramo de texto livre, mostrando o `select:` cru — justamente o que este ramo existe
+    // pra tirar da tela.
+    const q = cru.trim();
+    if (q.startsWith('select:')) {
+      // Junta os nomes enquanto CABEM: com dois ou três, "WebSearch, WebFetch" diz tudo, e o
+      // "(+1 itens)" do summarizeValues esconderia justamente o segundo nome. Passando da linha,
+      // porém, o corte cru perde o último nome no meio e não conta quantos ficaram de fora —
+      // então aí vale a forma dos vizinhos (WebSearch/WebFetch), que ao menos diz o número.
+      const nomes = q.slice('select:'.length).split(',').map((s) => s.trim()).filter(Boolean);
+      if (!nomes.length) return '';
+      const junto = nomes.join(', ');
+      return junto.length <= TOOL_MAX ? junto : summarizeValues(nomes, 'ferramentas');
+    }
+    return summarizeText(q, TOOL_MAX);
   }
 
   const keys = Object.keys(input);

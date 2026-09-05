@@ -17,6 +17,7 @@ import { mensagemDeErro } from '@hangar/core';
 import * as credLib from '../../lib/credenciais';
 import type { Credencial } from '../../lib/credenciais';
 import type { Server } from '../../lib/auth';
+import { clienteQuery } from '../../lib/queries';
 
 vi.mock('../../lib/credenciais', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/credenciais')>();
@@ -88,13 +89,16 @@ function montar(contas: Credencial[], alvo: Server | null = ALVO) {
   return { el, comp: comp as never };
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
+// O cache das queries é um singleton de módulo e sobrevive à desmontagem — de propósito, é o que
+// faz reabrir a tela ser instantâneo. Num teste isso vaza: sem limpar, o caso seguinte monta e
+// recebe a lista do ANTERIOR em vez de chamar o mock dele.
+beforeEach(() => { vi.clearAllMocks(); clienteQuery.clear(); });
 
 describe('ContasSettings — a lista', () => {
   it('mostra conta com em uso e e-mail (a frase do plano ficou de fora por decisão do árbitro — Task de ajuste serial quando o Lote A mergear)', async () => {
     const t = montar([LOGADA]);
     await tick(); await tick();
-    const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
+    const linha = t.el.querySelector<HTMLElement>('.ct-card')!;
     expect(linha.querySelector('.ct-nome')!.textContent).toBe('jefferson');
     expect(linha.querySelector('.ct-emuso')!.textContent).toBe(m.contas_em_uso());
     expect(linha.querySelector('.ct-sub')!.textContent).toContain('pessoa@exemplo.com');
@@ -108,7 +112,7 @@ describe('ContasSettings — a lista', () => {
   it('conta deslogada CONTINUA na lista, com Entrar (inerte) e estado de leitura explícito', async () => {
     const t = montar([LOGADA, DESLOGADA]);
     await tick(); await tick();
-    const linhas = t.el.querySelectorAll<HTMLElement>('.ct-linha');
+    const linhas = t.el.querySelectorAll<HTMLElement>('.ct-card');
     expect(linhas.length).toBe(2);
     const fora = linhas[1];
     expect(fora.textContent).toContain('testes');
@@ -130,7 +134,7 @@ describe('ContasSettings — a lista', () => {
     });
     const t = montar([API_KEY]);
     await tick(); await tick();
-    const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
+    const linha = t.el.querySelector<HTMLElement>('.ct-card')!;
     expect(linha.textContent).not.toContain(m.contas_nao_conectada());
     expect(linha.querySelector('.ct-acao.primaria')).toBeNull();
     unmount(t.comp);
@@ -145,7 +149,7 @@ describe('ContasSettings — a lista', () => {
     });
     const t = montar([INDISP]);
     await tick(); await tick();
-    const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
+    const linha = t.el.querySelector<HTMLElement>('.ct-card')!;
     expect(linha.textContent).not.toContain(m.contas_nao_conectada());
     expect(linha.querySelector('.ct-acao.primaria')).toBeNull();
     unmount(t.comp);
@@ -167,7 +171,7 @@ describe('ContasSettings — a lista', () => {
     const t = montar([claude({ ativa: true,
       cota: { estado: 'expirada', janelas: [], motivo: 'sessao-viva' } })]);
     await tick(); await tick();
-    const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
+    const linha = t.el.querySelector<HTMLElement>('.ct-card')!;
     expect(linha.textContent).toContain(m.cota_sessao_viva());
     expect(linha.textContent).not.toContain(m.cota_conta_parada());
     unmount(t.comp);
@@ -177,7 +181,7 @@ describe('ContasSettings — a lista', () => {
     const t = montar([claude({ ativa: false,
       cota: { estado: 'expirada', janelas: [], motivo: 'renovacao-falhou' } })]);
     await tick(); await tick();
-    expect(t.el.querySelector<HTMLElement>('.ct-linha')!.textContent)
+    expect(t.el.querySelector<HTMLElement>('.ct-card')!.textContent)
       .toContain(m.cota_conta_parada());
     unmount(t.comp);
   });
@@ -557,6 +561,10 @@ describe('ContasSettings — botão de atualizar do cabeçalho', () => {
   // Referência Cloudscape: refresh no cabeçalho, lista VISÍVEL durante a busca, erro mantém os
   // dados velhos e vira aviso. O `forcar=true` é o que diferencia o botão do carregar inicial:
   // pede a leitura de cota de AGORA, não o cache de 5 min do servidor.
+  // `.ct-refresh` hoje casa DOIS botões (o primeiro é o de densidade) — o de atualizar se
+  // distingue pelo aria-label.
+  const refresh = (el: HTMLElement) =>
+    el.querySelector<HTMLButtonElement>(`button[aria-label="${m.contas_atualizar()}"]`)!;
   it('o clique pede a leitura forçada (forcar=true) e mostra o "atualizado há"', async () => {
     const t = montar([LOGADA]);
     await tick(); await tick();
@@ -566,7 +574,7 @@ describe('ContasSettings — botão de atualizar do cabeçalho', () => {
     expect(t.el.querySelector('.ct-atualizado')!.textContent)
       .toBe(m.contas_atualizado_ha({ n: '1 min' }));
 
-    t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.click();
+    refresh(t.el).click();
     await tick(); await tick();
     expect(credMock.listarCredenciais).toHaveBeenLastCalledWith(ALVO, true);
     unmount(t.comp);
@@ -579,16 +587,16 @@ describe('ContasSettings — botão de atualizar do cabeçalho', () => {
     credMock.listarCredenciais.mockReturnValueOnce(
       new Promise<Credencial[]>((res) => { solta = res; }));
 
-    t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.click();
+    refresh(t.el).click();
     await tick();
     // Com a busca EM VOO, a linha da conta continua na tela e não há texto de carregando.
-    expect(t.el.querySelector('.ct-linha')).not.toBeNull();
+    expect(t.el.querySelector('.ct-card')).not.toBeNull();
     expect(t.el.textContent).not.toContain(m.comum_carregando());
-    expect(t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.disabled).toBe(true);
+    expect(refresh(t.el).disabled).toBe(true);
 
     solta([LOGADA]);
     await tick(); await tick();
-    expect(t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.disabled).toBe(false);
+    expect(refresh(t.el).disabled).toBe(false);
     unmount(t.comp);
   });
 
@@ -597,9 +605,9 @@ describe('ContasSettings — botão de atualizar do cabeçalho', () => {
     await tick(); await tick();
     credMock.listarCredenciais.mockRejectedValueOnce(new Error('sem rota'));
 
-    t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.click();
+    refresh(t.el).click();
     await tick(); await tick();
-    expect(t.el.querySelector('.ct-linha')).not.toBeNull();
+    expect(t.el.querySelector('.ct-card')).not.toBeNull();
     expect(t.el.querySelector<HTMLElement>('.ct-aviso.erro')!.textContent).toContain('sem rota');
     unmount(t.comp);
   });

@@ -71,6 +71,19 @@ def test_drain_sends_pending_and_marks_delivered(tmp_queue, monkeypatch):
     assert all(e["delivered"] for e in PromptQueue("cc").load())
 
 
+def test_drain_recusa_o_codex_antes_de_tocar_o_pane(tmp_queue, monkeypatch):
+    # No Codex a entrega e a do adapter (`turn/start` no app-server), NUNCA tecla no pane: a TUI
+    # de la ja recebeu o texto por outro caminho, e digitar de novo poe a mensagem do usuario duas
+    # vezes na conversa. Este caminho recusa o provider em vez de tentar.
+    PromptQueue("cx").append("um", delivered=False)
+    monkeypatch.setattr(
+        terminal_input.TerminalInput, "send_prompt",
+        lambda self, name, text, provider="claude", pane_id=None, msg_id=None: pytest.fail(
+            "o drain de terminal digitou no pane de uma sessao Codex"))
+    assert terminal_input.drain("cx", "/no/such.jsonl", "codex") == 0
+    assert PromptQueue("cx").load()[0]["delivered"] is False   # segue pendente pro adapter entregar
+
+
 def test_drain_noop_and_reverts_when_overlay(tmp_queue, monkeypatch):
     PromptQueue("cc").append("um", delivered=False)
     monkeypatch.setattr(
@@ -328,6 +341,30 @@ def test_drain_poda_entradas_de_vida_anterior_da_sessao(tmp_queue, tmp_path, mon
                         lambda self, name, text, provider="claude", pane_id=None: sent.append(text) or "sent")
     assert terminal_input.drain("cc", str(j)) == 0 and sent == []
     assert PromptQueue("cc").load() == []  # PODADA de verdade (nao marcada entregue, nao pendente)
+
+
+def test_drain_entrega_kickoff_carimbado_antes_do_transcript(tmp_queue, tmp_path, monkeypatch):
+    # PASSAGEM DE BASTAO: o kick-off e enfileirado ANTES de a sessao existir — antes da 1a linha do
+    # .jsonl e antes do nascimento do tmux. E o unico caso em que a entrada e legitimamente mais
+    # VELHA que o transcript, e sem a marca `pre_transcript` as duas redes de seguranca da fila a
+    # comem CALADAS: o prune_before daqui a apaga como "vida anterior" e o claim nem a ve. Efeito
+    # medido em codigo: dossie gravado, sessao nascida, sucessor sem receber nada e nenhum erro.
+    from datetime import datetime, timezone
+    PromptQueue("cc").append("continue o trabalho da sessao anterior", delivered=False,
+                             pre_transcript=True)
+    # Transcript e tmux nascem DEPOIS do append — o intervalo real da passagem de bastao (segundos).
+    depois = time.time() + 30
+    j = tmp_path / "t.jsonl"
+    j.write_text('{"timestamp":"%s"}\n' % datetime.fromtimestamp(depois, timezone.utc).isoformat(),
+                 encoding="utf-8")
+    monkeypatch.setattr(terminal_input.tmux, "session_created", lambda name: depois)
+    sent = []
+    monkeypatch.setattr(
+        terminal_input.TerminalInput, "send_prompt",
+        lambda self, name, text, provider="claude", pane_id=None, msg_id=None: sent.append(text) or "sent")
+    assert terminal_input.drain("cc", str(j)) == 1
+    assert sent == ["continue o trabalho da sessao anterior"]
+    assert PromptQueue("cc").load()[0]["delivered"] is True
 
 
 def test_drain_entrega_entrada_mais_nova_que_o_tmux(tmp_queue, tmp_path, monkeypatch):
@@ -1202,3 +1239,169 @@ def test_windows_composer_ilegivel_nao_cola(monkeypatch):
         assert TerminalInput().send_prompt("cc", "linha 1\nlinha 2") == "partial"
     assert not pvc.called and not pt.called
     assert call("cc", "Enter") not in sk.call_args_list
+
+
+# ── tecla do numero: o caminho curto do picker vivo do Claude ──────────────────────────────────
+# Medido na TUI (claude 2.1.246, 28/08/2026) com o picker aberto: na escolha unica o digito MARCA E
+# SUBMETE; na multipla ele ALTERNA e o picker segue aberto. Nao le cursor, entao nao cai nas duas
+# falhas ja registradas no diario do app ("cursor parou na linha None" e "parou na linha 5,
+# esperava 7"). O rodape faz parte da assinatura: sem ele, o `❯ N.` pode ser scrollback de uma
+# pergunta ja respondida, e digitar ali escreveria no composer.
+_RODAPE = "Enter to select · ↑/↓ to navigate · Esc to cancel"
+
+
+def _picker_vivo(cursor: int = 1, n: int = 5, caixa: bool = False) -> str:
+    marca = "[ ] " if caixa else ""
+    linhas = [f"{'❯' if i == cursor else ' '} {i}. {marca}opcao {i}" for i in range(1, n + 1)]
+    return "\n".join([*linhas, _RODAPE])
+
+
+def test_select_usa_o_digito_no_picker_vivo(sem_espera, monkeypatch):
+    telas = iter([_picker_vivo(1), "❯ \n⏵⏵ bypass permissions on"])  # 2a: picker fechou = submeteu
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 4)
+    assert sk.call_args_list == [call("cc", "4")]   # uma tecla, sem Down e sem Enter
+
+
+def test_select_multipla_marca_e_nao_envia(sem_espera, monkeypatch):
+    # Marcar nao e enviar: o picker CONTINUA aberto de proposito, e quem envia e o submeter_multipla.
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker_vivo(1, caixa=True))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "2")]
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_select_tela_ilegivel_depois_do_digito_nao_vira_sucesso(sem_espera, monkeypatch):
+    # "" e o mesmo valor para "o picker fechou" e para "o capture-pane falhou" — tratar como
+    # sucesso declarava envio sem prova. Duas leituras vazias seguidas -> DriveError (achado da
+    # revisao). O caminho da navegacao nao serve aqui: sem tela, o Enter iria as cegas.
+    telas = iter([_picker_vivo(1), "", ""])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "2")]   # a tecla saiu, mas nada de Enter as cegas
+
+
+def test_select_tela_volta_na_releitura(sem_espera, monkeypatch):
+    # Vazio TRANSITORIO: a releitura pega a tela boa e o envio segue confirmado, sem erro na cara.
+    telas = iter([_picker_vivo(1), "", "❯ \n⏵⏵ bypass permissions on"])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "2")]
+
+
+def test_select_digito_que_nao_pega_cai_na_navegacao(sem_espera, monkeypatch):
+    # A tecla nao fechou o picker (TUI que nao aceita digito, redraw no meio): desistir aqui seria
+    # trocar um mecanismo que funciona por um que acabou de falhar.
+    telas = iter([_picker_vivo(1), _picker_vivo(1), _picker_vivo(3)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 3)
+    assert sk.call_args_list[0] == call("cc", "3")          # tentou o digito
+    assert call("cc", "Enter") in sk.call_args_list          # e caiu na navegacao
+
+
+def test_select_sem_rodape_nao_arrisca_o_digito(sem_espera, monkeypatch):
+    # `❯ N.` sozinho pode ser scrollback de pergunta ja respondida — digitar ali vira texto no
+    # composer. Sem o rodape de navegacao, segue pelo caminho de sempre.
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker(2))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert call("cc", "2") not in sk.call_args_list
+    assert call("cc", "Enter") in sk.call_args_list
+
+
+def test_select_opcao_10_nao_usa_digito(sem_espera, monkeypatch):
+    # A partir de 10 seriam duas teclas, e o primeiro digito ja escolheria OUTRA opcao.
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker_vivo(10, n=12))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 10)
+    assert call("cc", "1") not in sk.call_args_list
+
+
+def test_submeter_multipla_anda_ate_a_aba_de_envio(sem_espera, monkeypatch):
+    # Right abre a aba Submit (uma opcao so) e o Enter confirma. O Enter SOZINHO nao serve: na
+    # multipla ele ALTERNA a opcao sob o cursor — medido, desmarcou a que estava marcada.
+    telas = iter([_picker_vivo(1, caixa=True), "❯ 1. Submit answers\n" + _RODAPE])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().submeter_multipla("cc")
+    assert sk.call_args_list == [call("cc", "Right"), call("cc", "Enter")]
+
+
+def test_submeter_multipla_sem_picker_nao_manda_nada(sem_espera, monkeypatch):
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: "❯ \n⏵⏵ bypass permissions on")
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().submeter_multipla("cc")
+    assert sk.call_args_list == []
+
+
+def test_submeter_multipla_com_o_right_engolido_nao_manda_enter(sem_espera, monkeypatch):
+    # O Right foi engolido e a LISTA DE OPCOES continua na tela. Ela e numerada, entao "tem lista
+    # numerada" casava com ela mesma e o guard passava — e o Enter, em vez de enviar, DESMARCAVA a
+    # opcao sob o cursor. Achado da revisao; a prova agora e o texto da aba.
+    telas = iter([_picker_vivo(1, caixa=True), _picker_vivo(1, caixa=True)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().submeter_multipla("cc")
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_submeter_multipla_sem_aba_de_envio_nao_manda_enter(sem_espera, monkeypatch):
+    # O Right nao chegou: mandar Enter aqui ALTERNARIA uma opcao em vez de enviar.
+    telas = iter([_picker_vivo(1, caixa=True), "tela sem lista nenhuma"])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().submeter_multipla("cc")
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+# ── Cursor do picker do omp (tool `ask`): opcoes SEM numero ─────────────────────────────────────
+# Glifos de nerd font medidos no omp 18.1.4, por codigo pro arquivo ficar legivel: chevron da linha
+# selecionada e circulo que marca toda opcao.
+_OMP_SEL = chr(0xF054)
+_OMP_OPT = chr(0xF10C)
+
+
+def _omp_picker(marcada: int) -> str:
+    linhas = []
+    for i, rotulo in enumerate(["Azul", "Verde", "Other (type your own)"], start=1):
+        linhas.append(f"│ {_OMP_SEL} {_OMP_OPT} {rotulo}" if i == marcada
+                      else f"│   {_OMP_OPT} {rotulo}")
+    return ("╭─ Ask " + "─" * 45 + "\n│ Qual cor você prefere?\n" + "├" + "─" * 51 + "\n"
+            + "\n".join(linhas) + "\n│ Enter select · n note · ↑/↓ move · Esc cancel\n")
+
+
+def test_omp_cursor_row_e_a_posicao_entre_as_linhas_de_opcao():
+    assert terminal_input._pi_cursor_row(_omp_picker(1), "omp") == 1
+    assert terminal_input._pi_cursor_row(_omp_picker(2), "omp") == 2
+    assert terminal_input._pi_cursor_row(_omp_picker(3), "omp") == 3
+
+
+def test_omp_cursor_row_na_tela_viva_ignora_o_cartao_resumo():
+    # Captura REAL: o cartao-resumo do toolCall fica na tela com as MESMAS marcas de opcao. Contando
+    # o pane inteiro dava 4 (resumo Azul/Verde + picker Azul/Verde) e o drive respondia a opcao
+    # errada — ao vivo isso virou DriveError + fallback por texto ("Ask tool was cancelled").
+    from pathlib import Path
+    pane = (Path(__file__).parent / "fixtures" / "pane_omp_ask_picker.txt").read_text(encoding="utf-8")
+    assert terminal_input._pi_cursor_row(pane, "omp") == 2
+
+
+def test_omp_cursor_row_sem_marcador_e_none():
+    sem_marca = _omp_picker(0)
+    assert _OMP_SEL not in sem_marca
+    assert terminal_input._pi_cursor_row(sem_marca, "omp") is None
+
+
+def test_cursor_row_nao_mistura_os_dois_pickers():
+    pi = "> 1. Azul\n  2. Verde\n  3. Type something.\n"
+    assert terminal_input._pi_cursor_row(pi, "omp") is None
+    assert terminal_input._pi_cursor_row(pi) == 1
+    assert terminal_input._pi_cursor_row(_omp_picker(2)) is None

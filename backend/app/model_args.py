@@ -46,13 +46,21 @@ EFFORT_PI = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 # choices: "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"
 MODOS_PERMISSAO_CLAUDE = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
 
-# Quem aceita ESCOLHA DE MODELO no arranque: os três têm --model (o do Kimi aceita o alias
+# Nível de esforço do Codex: NÃO há lista fechada. Os níveis são POR MODELO e vêm do provedor
+# (`model/list` — ver app/codex_models.py): medido em 30/08/2026, `gpt-5.6-sol` aceita `ultra`,
+# `gpt-5.6-luna` não, e `gpt-5.5` não aceita nem `max`. Uma tupla aqui esconderia metade do
+# catálogo de quem usa. O que sobra pra validar é a FORMA, e ela importa porque o valor vira uma
+# sobrescrita de config no comando do pane (`-c model_reasoning_effort="<nível>"`).
+NIVEL_OK = re.compile(r"^[a-z]{2,32}\Z")
+
+# Quem aceita ESCOLHA DE MODELO no arranque: todos têm `--model`/`-m` (o do Kimi aceita o alias
 # `provider/id` do config.toml, medido no --help do Kimi Code 0.37.2). Esforço é separado: o Kimi
 # NÃO tem flag de esforço no CLI (mora no [thinking] do config.toml), então não entra nos mapas
 # abaixo — pedir esforço pra ele é recusado com mensagem própria, não com "provider inválido".
-_ACEITA_MODELO = ("claude", "pi", "kimi")
-_FLAG_ESFORCO = {"claude": "--effort", "pi": "--thinking"}
-_NIVEIS = {"claude": EFFORT_CLAUDE, "pi": EFFORT_PI}
+# omp: fork do Pi, mesma flag `--thinking` e mesmos níveis (EFFORT_PI).
+_ACEITA_MODELO = ("claude", "pi", "omp", "kimi", "codex")
+_FLAG_ESFORCO = {"claude": "--effort", "pi": "--thinking", "omp": "--thinking"}
+_NIVEIS = {"claude": EFFORT_CLAUDE, "pi": EFFORT_PI, "omp": EFFORT_PI}
 
 
 def validar(provider: str, model: str | None, effort: str | None, permission_mode: str | None = None) -> tuple[str | None, str | None]:
@@ -69,9 +77,13 @@ def validar(provider: str, model: str | None, effort: str | None, permission_mod
     if model is not None and (not ID_OK.match(model) or _e_flag(model)):
         raise ValueError("model: use letras, números e . _ : / - ~ [ ] (até 128 caracteres, sem começar com -)")
     if effort is not None:
-        if provider not in _FLAG_ESFORCO:
+        if provider == "codex":
+            if not NIVEL_OK.match(effort):
+                raise ValueError("effort: use letras minúsculas (2 a 32) — os níveis do Codex "
+                                 "variam por modelo e vêm do provedor")
+        elif provider not in _FLAG_ESFORCO:
             raise ValueError(f"provider {provider!r} não aceita escolha de esforço aqui")
-        if effort not in _NIVEIS[provider]:
+        elif effort not in _NIVEIS[provider]:
             raise ValueError(f"effort: use um de {', '.join(_NIVEIS[provider])}")
     if permission_mode is not None and permission_mode not in MODOS_PERMISSAO_CLAUDE:
         raise ValueError(f"permission_mode: use um de {', '.join(MODOS_PERMISSAO_CLAUDE)}")
@@ -82,6 +94,12 @@ def args_de(provider: str, model: str | None, effort: str | None, permission_mod
     """Argumentos prontos pro spawn_command. Revalida — barato, e fecha o caminho de quem chamar
     sem passar por validar()."""
     model, effort = validar(provider, model, effort, permission_mode)
+    # O Codex aceita escolha e ela não vira flag AQUI: quem monta o comando dele é o lançador
+    # (`hangar-codex-tui --model/--effort`), porque o esforço não é flag do binário e sim
+    # `-c model_reasoning_effort=`. Responder por ele devolveria `--model`, a flag de OUTRO binário,
+    # calada dentro do comando do pane — daí a recusa em vez do silêncio.
+    if provider == "codex" and (model or effort):
+        raise ValueError("a escolha de modelo do Codex é montada pelo lançador dele, não aqui")
     out: list[str] = []
     if model:
         out += ["--model", model]

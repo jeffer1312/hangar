@@ -6,9 +6,10 @@
   import { copyText } from '../lib/clipboard';
   import { textoFalavelComCodigo } from '../lib/speakable';
   import { abrirComTexto } from '../lib/ttsSelection.svelte';
+  import { segredos } from '../lib/segredos.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import IconSpeaker from './icons/IconSpeaker.svelte';
-  import { highlightCodeBlocks } from '../lib/highlight';
+  import { highlightCodeBlocks } from '../lib/highlightLazy';
   import { enhanceTables } from '../lib/tableChartMount';
   import { tableChartPref } from '../lib/tableChartPref.svelte';
   import { Typewriter } from '../lib/typewriter.svelte';
@@ -207,8 +208,11 @@
         <button class="msg-fwd" onclick={onForward} aria-label={m.forward_para_outra()} title={m.forward_para_outra()}></button>
       {/if}
       <!-- Nunca na bolha de preview: aquele texto e full-replace a cada ~150ms (MessageList:274),
-           e o audio sairia de um bloco de DOM que ja nao existe mais. -->
-      <button class="msg-tts" onclick={ouvirMensagem} aria-label={m.bubble_ouvir()} title={`${m.bubble_ouvir()}${dicaAtalho}`}><IconSpeaker size={15} /></button>
+           e o audio sairia de um bloco de DOM que ja nao existe mais. Some sem chave/comando de
+           voz — mesmo criterio de segredos.podeLer() do chip do composer e do atalho do Chat. -->
+      {#if segredos.podeLer()}
+        <button class="msg-tts" onclick={ouvirMensagem} aria-label={m.bubble_ouvir()} title={`${m.bubble_ouvir()}${dicaAtalho}`}><IconSpeaker size={15} /></button>
+      {/if}
     </div>
   {/if}
 </div>

@@ -354,3 +354,15 @@ describe('AcessoSettings — troca de alvo com a tela montada (seletor do grupo)
     unmount(comp as never);
   });
 });
+
+describe('AcessoSettings — IP de escuta', () => {
+  it('diz em que IP o servidor escuta, mesmo sem alerta de loopback', async () => {
+    const { el, comp } = montar();
+    // 3 ticks (mesmo precedente do teste R4 abaixo): a condição espera !carregando, e carregando
+    // só cai no .finally() da cadeia — um salto de microtask a mais que os testes que checam
+    // apenas o que o .then() grava (listaMedida/enderecos).
+    await tick(); await tick(); await tick();
+    expect(el.textContent).toContain(m.acesso_escuta_em({ ip: '192.168.0.42' }));
+    unmount(comp);
+  });
+});

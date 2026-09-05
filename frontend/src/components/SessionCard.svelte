@@ -1,12 +1,16 @@
 <script lang="ts">
-  import { loopBadge, LOOP_TONE_COLOR, type SessionInfo } from '@hangar/core';
+  import { onDestroy } from 'svelte';
+  import type { SessionInfo } from '@hangar/core';
 import * as m from '../paraglide/messages';
-  import { rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '@hangar/core';
+  import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '@hangar/core';
+  import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
   import { planBadge } from '@hangar/core';
   import PlanBar from './PlanBar.svelte';
   import StateChip from './StateChip.svelte';
+  import BottomSheet from './BottomSheet.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
+  import GroupGlyph from './icons/GroupGlyph.svelte';
 
   interface Props {
     session: SessionInfo;
@@ -31,18 +35,12 @@ import * as m from '../paraglide/messages';
 
   const title = $derived(session.name);
 
-  // O que identifica a sessao e a ULTIMA pasta do cwd (nome do projeto). Ellipsis padrao corta o
-  // fim e some justo com ela; entao split em prefixo (truncavel) + basename (nunca encolhe).
-  const cwdParts = $derived.by(() => {
-    const p = (session.cwd ?? '').replace(/\/+$/, '');
-    const i = p.lastIndexOf('/');
-    return i < 0 ? { prefix: '', base: p } : { prefix: p.slice(0, i + 1), base: p.slice(i + 1) };
-  });
+  const cwdPartes = $derived(cwdParts(session.cwd));
 
   // Celular e estreito: o cwd so entra quando ACRESCENTA algo. Quando o basename ja e o nome da
   // sessao ("hangar" + "/home/jeff…/hangar"), a linha inteira e redundante e so
   // roubava largura do nome/branch.
-  const showCwd = $derived(!!session.cwd && cwdParts.base.toLowerCase() !== session.name.toLowerCase());
+  const showCwd = $derived(!!session.cwd && cwdPartes.base.toLowerCase() !== session.name.toLowerCase());
 
   // Chip de estado so quando o estado PEDE atencao. "pronto" repetido em toda linha e ruido: o
   // ponto colorido do lead ja diz que esta parada.
@@ -63,6 +61,11 @@ import * as m from '../paraglide/messages';
   // Travada (feature #7): "working" ha muito tempo sem avancar (watchdog do backend). Tinge o chip
   // de estado com um anel âmbar sutil — nao grita, so avisa.
   const stalled = $derived(session.stalled === true);
+  // Código -> texto: o backend manda só o código (regra de i18n). Código desconhecido some em vez
+  // de virar um id cru na tela.
+  const problema = $derived(
+    session.problema === 'codex_hooks_nao_aprovados' ? m.problema_codex_hooks() : null,
+  );
 
   // Rate-limit radar (feature #8): banner de limite de uso detectado no pane (best-effort). Chip
   // proprio "⏳ HH:MM" ao lado do state-chip — calmo, so avisa quando volta.
@@ -81,7 +84,7 @@ import * as m from '../paraglide/messages';
   // dominante. Git e Loop moraram na row-right ate aqui: 2 botoes de 40px + chip + chevron comiam
   // quase metade da largura e o cwd/nome viviam truncados no iPhone. Sao acoes raras -> swipe.
   const ACTION_W = 64;
-  const OPEN = $derived(session.cwd ? -3 * ACTION_W : -ACTION_W);
+  const OPEN = $derived(session.cwd ? -2 * ACTION_W : -ACTION_W);
   let offset = $state(0);
   let startX = 0, startY = 0, startOffset = 0;
   let dragging = $state(false);
@@ -94,28 +97,42 @@ import * as m from '../paraglide/messages';
   let capturedTarget: HTMLElement | null = null;
   let capturedPointerId: number | null = null;
 
-  // ── Renomear por TOQUE LONGO (500ms parado, sem swipe) -> edita o nome inline (espelha o Sidebar) ──
+  // ── TOQUE LONGO (500ms parado, sem swipe) -> menu de ações da sessão. Renomear direto era
+  // invisível: quem segurava esperando opções caía num campo de edição sem pedir. O swipe segue
+  // existindo como atalho pras mesmas ações.
   let editing = $state(false);
   let editValue = $state('');
   let longPressed = $state(false);
+  let menuOpen = $state(false);
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
   function startPress() {
     longPressed = false;
     clearTimeout(pressTimer);
     pressTimer = undefined;
-    if (untracked) return;                       // sessao sem id confiavel nao renomeia
     pressTimer = setTimeout(() => {
       pressTimer = undefined;
       if (!dragging || axis !== null) return;
       longPressed = true;
+      menuOpen = true;
+    }, 500);
+  }
+  function menuPick(fn: () => void) {
+    menuOpen = false;
+    fn();
+  }
+  function startRename() {
+    // Depois do restoreFocus do BottomSheet: no mesmo flush, a devolução de foco do sheet
+    // roubava o autofocus do campo e o blur salvava/fechava a edição antes de ela aparecer.
+    setTimeout(() => {
       editValue = session.name;
       editing = true;
-    }, 500);
+    }, 0);
   }
   function cancelPress() {
     clearTimeout(pressTimer);
     pressTimer = undefined;
   }
+  onDestroy(cancelPress);
   function saveRename() {
     const nv = editValue.trim();
     editing = false;
@@ -169,12 +186,15 @@ import * as m from '../paraglide/messages';
     dragging = false;
     axis = null;
     suppressClick = false;
+    // pointercancel não gera click, então o reset de onRowClick nunca roda — a flag presa
+    // engolia o toque seguinte no card, calada.
+    longPressed = false;
   }
 
   // Tap na linha: toque longo (renomeou) nao navega; se aberto ou acabou de arrastar, fecha o swipe.
   function onRowClick() {
     if (selectMode) { if (!untracked) onToggleSelect?.(); return; }  // sem id -> nao entra no broadcast
-    if (longPressed) { longPressed = false; return; }   // foi toque longo (renomear) -> nao abre o chat
+    if (longPressed) { longPressed = false; return; }   // foi toque longo (menu) -> nao abre o chat
     if (suppressClick || offset !== 0) { offset = 0; return; }
     if (abreChat) onClick();
   }
@@ -197,15 +217,6 @@ import * as m from '../paraglide/messages';
           <path d="M18 9a9 9 0 0 1-9 9"/>
         </svg>
         <span>{m.sessao_git()}</span>
-      </button>
-      <button class="act loop" onclick={() => { offset = 0; onLoop?.(); }} aria-label={m.sessao_aria_loop({ n: session.name })}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="m17 2 4 4-4 4"/>
-          <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
-          <path d="m7 22-4-4 4-4"/>
-          <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
-        </svg>
-        <span>{m.sessao_loop_runner()}</span>
       </button>
     {/if}
     <button class="act del" onclick={onDelete} aria-label={m.sessao_aria_excluir_sessao({ n: session.name })}>
@@ -287,11 +298,16 @@ import * as m from '../paraglide/messages';
            muda, entao vem primeiro e nunca some; o cwd fecha a linha e trunca primeiro. O tempo
            relativo ("51 min atrás") vem por último, colado à direita — informação de contexto, não
            de identidade. -->
-      {#if serverBadge || session.branch || showCwd || agoLabel}
+      {#if serverBadge || session.branch || session.worktree || showCwd || agoLabel}
         <span class="meta-line">
           {#if serverBadge}
             <span class="srv" style="color: {serverBadge.color};">{serverBadge.label}</span>
             {#if session.branch || showCwd}<span class="meta-sep">·</span>{/if}
+          {/if}
+          <!-- ⧉ = worktree ligada. IRMÃO da branch, não filho: worktree com HEAD destacado não tem
+               branch nenhuma e ainda assim precisa se distinguir do checkout principal. -->
+          {#if session.worktree}
+            <span class="wt" title={m.sessao_worktree()}>worktree</span>
           {/if}
           {#if session.branch}
             <span class="branch" title={m.sessao_branch_git_atual()}>⎇ {session.branch}</span>
@@ -303,7 +319,7 @@ import * as m from '../paraglide/messages';
             <span class="diff-stats" aria-hidden="true">{#if session.git_added}<span class="diff-add">+{session.git_added}</span>{/if}{#if session.git_removed}<span class="diff-del">−{session.git_removed}</span>{/if}</span>
           {/if}
           {#if showCwd}
-            <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span></span>
+            <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdPartes.prefix}</span><span class="cwd-base">{cwdPartes.base}</span></span>
           {/if}
           {#if agoLabel}
             {#if serverBadge || session.branch || showCwd}<span class="meta-sep" aria-hidden="true">·</span>{/if}
@@ -320,7 +336,7 @@ import * as m from '../paraglide/messages';
                provider ausente = Claude (o campo só viaja quando não é Claude). -->
           <span class="prov-chip" class:prov-chip--so-icone={!provTag} title={`${m.sessao_grupo()} ${provTag ?? 'Claude'}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span><ProviderGlyph provider={session.provider} size={12} />{#if provTag}{provTag}{/if}</span>
           {#if session.pair_peers?.length}
-            <span class="paired-chip" title={m.sessao_grupo_com({ n: session.pair_peers.join(', ') })}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
+            <span class="paired-chip" title={m.sessao_grupo_com({ n: session.pair_peers.join(', ') })}><GroupGlyph size={12} />&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
           {/if}
           {#if limited}
             <span
@@ -346,9 +362,9 @@ import * as m from '../paraglide/messages';
         </span>
       <PlanBar {session} />
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
-           `claude --resume`): numa sessao Pi/Kimi o botao so poderia errar, entao mostramos a razao
-           no lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
-      {#if untracked && (session.provider === 'pi' || session.provider === 'kimi')}
+           `claude --resume`): numa sessao Pi/Kimi/OMP o botao so poderia errar, entao mostramos a
+           razao no lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
+      {#if untracked && (session.provider === 'pi' || session.provider === 'kimi' || session.provider === 'omp')}
         <span class="untracked-hint">{untrackedReason(session.provider)}</span>
       {:else if untracked}
         <button
@@ -362,7 +378,13 @@ import * as m from '../paraglide/messages';
     <div class="row-right">
       <!-- Chip so quando o estado pede atencao (idle = ponto colorido no lead, sem pilula "pronto"
            repetida em toda linha). -->
-      {#if showStateChip}
+      {#if problema}
+        <!-- Problema desta sessão (hoje: sessão Codex trabalhando sem hook aprovado, que sem isto
+             apareceria "pronta" para sempre). Mesma família visual do travada: âmbar, calmo. -->
+        <span class="state-chip stalled" title={problema}>
+          <StateChip state={session.state} title={problema} />
+        </span>
+      {:else if showStateChip}
         <!-- O envelope .state-chip existe pelo anel de travada e pela regra de papel de parede do
              app.css que ja mirava essa classe; a pilula em si e o StateChip. -->
         <span class="state-chip" class:stalled>
@@ -389,20 +411,6 @@ import * as m from '../paraglide/messages';
             <circle cx="18" cy="6" r="3"/>
             <circle cx="6" cy="18" r="3"/>
             <path d="M18 9a9 9 0 0 1-9 9"/>
-          </svg>
-        </button>
-        <button
-          class="kbd-only"
-          inert={offset === OPEN}
-          onpointerdown={(e) => e.stopPropagation()}
-          onclick={(e) => { e.stopPropagation(); onLoop?.(); }}
-          aria-label={m.sessao_aria_loop({ n: session.name })}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="m17 2 4 4-4 4"/>
-            <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
-            <path d="m7 22-4-4 4-4"/>
-            <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
           </svg>
         </button>
       {/if}
@@ -432,6 +440,58 @@ import * as m from '../paraglide/messages';
   </div>
 </div>
 
+<!-- Menu de ações por toque longo: as mesmas ações do swipe (+ renomear), agora descobríveis.
+     Fechar cai na mesma confirmação do onDelete de sempre. -->
+<BottomSheet open={menuOpen} onClose={() => (menuOpen = false)} ariaLabel={m.sessao_aria_acoes({ n: session.name })}>
+  <div class="card-menu">
+    <h2 class="card-menu-title">{session.name}</h2>
+    {#if !untracked}
+      <button class="card-menu-item" onclick={() => menuPick(startRename)}>
+        <span class="card-menu-ico" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+          </svg>
+        </span>
+        <span class="card-menu-label">{m.ctx_renomear()}</span>
+      </button>
+    {/if}
+    {#if session.cwd}
+      <button class="card-menu-item" onclick={() => menuPick(() => onGit?.())}>
+        <span class="card-menu-ico" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="6" y1="3" x2="6" y2="15"/>
+            <circle cx="18" cy="6" r="3"/>
+            <circle cx="6" cy="18" r="3"/>
+            <path d="M18 9a9 9 0 0 1-9 9"/>
+          </svg>
+        </span>
+        <span class="card-menu-label">{m.sessao_git()}</span>
+      </button>
+      <button class="card-menu-item" onclick={() => menuPick(() => onLoop?.())}>
+        <span class="card-menu-ico" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m17 2 4 4-4 4"/>
+            <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
+            <path d="m7 22-4-4 4-4"/>
+            <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+          </svg>
+        </span>
+        <span class="card-menu-label">{m.sessao_loop_runner()}</span>
+      </button>
+    {/if}
+    <button class="card-menu-item danger" onclick={() => menuPick(onDelete)}>
+      <span class="card-menu-ico" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          <path d="M10 11v6M14 11v6"/>
+        </svg>
+      </span>
+      <span class="card-menu-label">{m.sessao_excluir_curto()}</span>
+    </button>
+  </div>
+</BottomSheet>
+
 <style>
   /* Wrapper do swipe: esconde o "Excluir" que fica atras da linha. */
   .swipe-wrap {
@@ -440,7 +500,7 @@ import * as m from '../paraglide/messages';
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  /* Trilha de acoes revelada pelo swipe: Git | Loop | Excluir. */
+  /* Trilha de acoes revelada pelo swipe: Git | Excluir. Loop runner fica só no menu ⋯ do card. */
   .swipe-actions {
     position: absolute;
     right: 0;
@@ -448,7 +508,7 @@ import * as m from '../paraglide/messages';
     bottom: 0;
     display: flex;
   }
-  /* opacity, nao display:none: o layout da trilha (3 botoes de 64px) precisa continuar medido pro
+  /* opacity, nao display:none: o layout da trilha (2 botoes de 64px) precisa continuar medido pro
      OPEN bater com a largura real. */
   .swipe-actions.oculta { opacity: 0; }
   .swipe-actions .act {
@@ -465,7 +525,6 @@ import * as m from '../paraglide/messages';
     border-radius: 0;
   }
   .swipe-actions .git { background: var(--bg-elevated); color: var(--text-secondary); }
-  .swipe-actions .loop { background: var(--accent-dim); color: var(--accent); }
   .swipe-actions .del { background: var(--error); color: #fff; }
 
   .session-row {
@@ -480,6 +539,10 @@ import * as m from '../paraglide/messages';
     background: var(--bg-base);
     cursor: pointer;
     touch-action: pan-y;
+    /* O toque longo aqui abre o menu de acoes; no iOS ele tambem inicia selecao de texto, e o
+       realce azul + as alcas ficam por cima da folha. */
+    -webkit-touch-callout: none;
+    user-select: none;
     transition: transform 200ms var(--ease-out), background 160ms ease-out;
   }
   /* Enquanto arrasta, sem transicao no transform (segue o dedo). */
@@ -598,6 +661,7 @@ import * as m from '../paraglide/messages';
   .name-edit {
     flex: 1;
     min-width: 0;
+    user-select: text;   /* o none da .session-row impediria selecionar no campo de renomear */
     height: 32px;
     background: var(--bg-base);
     border: 1px solid var(--accent);
@@ -681,6 +745,18 @@ import * as m from '../paraglide/messages';
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Marcador de worktree: chip com a palavra inteira, nunca trunca (quem cede a largura é o cwd).
+     Era um glifo ⧉ e não dava pra ver — dizer o nome custa 8 caracteres. */
+  .wt {
+    flex-shrink: 0;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
   }
   /* "+128 −24" do working tree: mono como a branch ao lado, nas cores semânticas de sempre
      (verde/vermelho do diff, não accent — é dado de código, não identidade). Não trunca: são 2
@@ -821,4 +897,49 @@ import * as m from '../paraglide/messages';
     border-radius: var(--radius-sm);
   }
   .chev:active { color: var(--text-secondary); background: var(--bg-hover); }
+
+  /* Menu do toque longo: mesma família visual do MoreSheet (item de 56px, ícone em caixa). */
+  .card-menu {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-4) var(--space-5);
+  }
+  .card-menu-title {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .card-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 52px;
+    padding: var(--space-2);
+    background: transparent;
+    border-radius: var(--radius-md);
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .card-menu-item:active { background: var(--bg-hover); }
+  .card-menu-ico {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+  .card-menu-label { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
+  .card-menu-item.danger .card-menu-ico { color: var(--error); background: rgba(255,69,58,0.12); }
+  .card-menu-item.danger .card-menu-label { color: var(--error); }
 </style>

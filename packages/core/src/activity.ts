@@ -28,13 +28,52 @@ export interface AgentRun {
   prompt?: string;
 }
 
+// Shell de fundo (`Bash` com `run_in_background: true`). Fecha pelo MESMO caminho do agente em
+// background — a `<task-notification>` que o backend já converte em `tool_result` sintético
+// `task:<id>` —, porque no harness os dois são a mesma coisa: um trabalho que continua depois que
+// a ferramenta respondeu. O terminal mostra isso como "5 shells still running"; o app não mostrava.
+// Limite conhecido, e é o mesmo que já vale pros agentes e pras tarefas: um `/clear` troca o
+// transcript e zera esta lista, mas NÃO mata o processo — um build de fundo continua de pé e o
+// contador some. Corrigir isso pediria estado fora do transcript (o app inteiro deriva daqui), e
+// manter linhas de um transcript descartado traria de volta shells que já terminaram.
+export interface ShellRun {
+  id: string;        // tool_use_id
+  command: string;   // o comando CRU (vai no title, pra quem quiser o texto inteiro)
+  rotulo: string;    // o mesmo comando sem o encanamento — é o que a lista mostra
+  description?: string;
+  ts?: number;       // quando começou (epoch s), pro rótulo de tempo decorrido na folha
+  running: boolean;  // sem a notificação de fim = ainda rodando
+}
+
+// Encanamento de shell que não diz NADA sobre o que o comando faz, e ocupa a linha inteira numa
+// lista estreita: o `cd <caminho> &&` da frente, as redireções, e o `| tail -N` do fim.
+// Medido nesta sessão: dos 18 shells de fundo, ZERO tinham o campo `description` preenchido — então
+// o comando é a única fonte de rótulo que existe, e limpá-lo é o que dá pra fazer.
+// É PODA, não interpretação: nada aqui tenta adivinhar o que o comando significa, e o texto cru
+// continua inteiro no `command` (que a linha usa como `title`).
+const _RUIDO: RegExp[] = [
+  /^\s*cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*&&\s*/,          // "cd /caminho && " da frente
+  /\s*\d?>\s*(?:&\d|\/dev\/null)/g,                      // >/dev/null, 2>&1, 2>/dev/null
+  /\s*\|\s*(?:tail|head)\s+-\w+\s*\d*\s*$/,              // | tail -4 no fim
+];
+
+export function rotuloDeComando(cmd: string): string {
+  let s = cmd;
+  for (const re of _RUIDO) s = s.replace(re, ' ');
+  s = s.replace(/\s+/g, ' ').trim();
+  // Poda que comeu tudo (o comando era só redireção) -> devolve o cru: rótulo vazio seria pior.
+  return s || cmd.trim();
+}
+
 export interface Activity {
   tasks: TaskItem[]; // não-deletadas, em ordem
   agents: AgentRun[]; // rodando primeiro
+  shells: ShellRun[]; // rodando primeiro
   total: number;
   done: number;
   inProgress: number;
   runningAgents: number;
+  runningShells: number;
 }
 
 function normStatus(s: unknown): TaskStatus {
@@ -69,6 +108,13 @@ export function createActivityFolder(): ActivityFolder {
   // Sem tratar isso, todo agent background aparecia como terminado (painel dizia "Nada rolando"
   // com agents ativos). Mapa: agentId (= task-id da notificação) -> tool_use_id do launch.
   let bgAgent = new Map<string, string>();
+  // Shells de fundo, e o conjunto dos tool_use que AINDA esperam o "Command running in background
+  // with ID". O conjunto não é zelo: o texto do lançamento é procurado no resultado, e a saída de
+  // um `grep`/`cat` qualquer pode conter essa frase (este próprio projeto tem ela em comentário).
+  // Sem saber que AQUELE tool_use era um Bash de fundo, um resultado assim viraria um lançamento
+  // que nenhuma notificação fecha, e a ferramenta ficaria "rodando" pra sempre.
+  let shells: Omit<ShellRun, 'running'>[] = [];
+  let bgPendente = new Set<string>();
   // agentId cujo FIM chegou ANTES de o launch ser mapeado (ex: a troca de transcript no /clear reordena
   // o fold, ou o launch cai num transcript e o fim no outro). Sem isto o par nao fechava e o agente
   // ficava "rodando" pra sempre. Guardado aqui e resolvido quando o launch aparecer -> pareamento
@@ -98,6 +144,16 @@ export function createActivityFolder(): ActivityFolder {
           if (completedIds.delete(match[1])) resulted.add(e.tool_use_id);
         }
         return; // launch imediato: so marca resulted se o fim ja veio; senao segue rodando
+      }
+      if (bgPendente.delete(e.tool_use_id)) {
+        const bg = r.match(/Command running in background with ID:\s*([A-Za-z0-9_-]+)/);
+        if (bg) {
+          bgAgent.set(bg[1], e.tool_use_id);
+          if (completedIds.delete(bg[1])) resulted.add(e.tool_use_id);
+          return;   // foi pro fundo: quem fecha e a <task-notification>
+        }
+        // Pediu fundo e NAO foi (recusa do harness, erro de validacao): o resultado ja e o final
+        // dele. Cair no `resulted` abaixo e o certo — senao ficaria "rodando" pra sempre.
       }
       resulted.add(e.tool_use_id);
       return;
@@ -131,6 +187,23 @@ export function createActivityFolder(): ActivityFolder {
         }
         break;
       }
+      // O plano do Codex. Mesma natureza do TodoWrite — a lista INTEIRA a cada chamada, a última
+      // vence —, só com outros nomes de campo: `plan[].step` no lugar de `todos[].content`, e o
+      // mesmo trio de status. Sem este caso ele chegava como ferramenta anônima e o painel de
+      // tarefas ficava vazio numa sessão que tinha plano.
+      case 'update_plan': {
+        const plano = input.plan;
+        if (Array.isArray(plano)) {
+          todoWrite = plano
+            .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object' && typeof (t as Record<string, unknown>).step === 'string')
+            .map((t, i) => ({
+              id: String(i),
+              title: String(t.step),
+              status: normStatus(t.status),
+            }));
+        }
+        break;
+      }
       case 'TaskCreate': {
         createSeq += 1;
         const id = String(createSeq); // TaskUpdate.taskId é o id sequencial "1","2",...
@@ -141,6 +214,21 @@ export function createActivityFolder(): ActivityFolder {
           status: 'pending',
         });
         order.push(id);
+        break;
+      }
+      case 'Bash': {
+        // So o de FUNDO entra: o Bash comum bloqueia e ja acabou quando o resultado chega.
+        if (e.tool_use_id && input.run_in_background === true) {
+          bgPendente.add(e.tool_use_id);
+          const cmd = String(input.command ?? '');
+          shells.push({
+            id: e.tool_use_id,
+            command: cmd,
+            rotulo: rotuloDeComando(cmd),
+            description: typeof input.description === 'string' ? input.description : undefined,
+            ts: typeof e.ts === 'number' ? e.ts : undefined,
+          });
+        }
         break;
       }
       case 'TaskUpdate': {
@@ -200,6 +288,8 @@ export function createActivityFolder(): ActivityFolder {
     agents = [];
     bgAgent = new Map();
     completedIds = new Set();
+    shells = [];
+    bgPendente = new Set();
     for (const e of events) push(e);
   }
 
@@ -216,10 +306,16 @@ export function createActivityFolder(): ActivityFolder {
       running: a.kind === 'agent' && !resulted.has(a.id),
     }));
     runs.sort((a, b) => Number(b.running) - Number(a.running));
+    // Shell de fundo: enquanto o tool_use nao tiver a notificacao de fim, esta rodando. Mesmo
+    // criterio do Agent em background, e pelo mesmo caminho (`resulted`).
+    const shellRuns: ShellRun[] = shells.map((s) => ({ ...s, running: !resulted.has(s.id) }));
+    shellRuns.sort((a, b) => Number(b.running) - Number(a.running));
     const done = tasks.filter((t) => t.status === 'completed').length;
     const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
     const runningAgents = runs.filter((a) => a.running).length;
-    return { tasks, agents: runs, total: tasks.length, done, inProgress, runningAgents };
+    const runningShells = shellRuns.filter((s) => s.running).length;
+    return { tasks, agents: runs, shells: shellRuns, total: tasks.length, done, inProgress,
+             runningAgents, runningShells };
   }
 
   return { push, reset, snapshot };

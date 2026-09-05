@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,7 +42,9 @@ def _tool_target(name: str, inp) -> str:
         v = inp.get(k)
         if isinstance(v, str):
             return v
-    if name == "Bash":
+    # Sem case-fold, o Pi (que chama a tool de `bash`, minúsculo) caía no `for` seguinte e não
+    # achava chave nenhuma: o alvo vinha VAZIO justamente na tool mais usada dele.
+    if name.lower() == "bash":
         v = inp.get("command")
         return v if isinstance(v, str) else ""
     for k in ("pattern", "query", "url", "prompt", "description"):
@@ -244,6 +247,181 @@ def _read_agent_kimi(d: Path, tail: int) -> dict | None:
     }
 
 
+# ── Pi ───────────────────────────────────────────────────────────────────────
+# Terceiro layout, e o mais parecido com o do Claude: cada subagente da sessao mora DENTRO da pasta
+# que leva o nome do transcript do pai —
+#   <transcript-sem-.jsonl>/<taskId>/run-<n>/session.jsonl
+# Por ficar sob o proprio transcript, ele ja e por-sessao: nao precisa de cwd, nem de varrer o pai
+# atras de id, nem corre risco de misturar subagente de outra conversa. E o arquivo nasce junto com
+# o subagente e cresce enquanto ele trabalha, que e o caso que importa — enquanto ele roda, o
+# transcript do pai NAO tem nada dele (o `toolResult` da tool `subagent` so aparece no fim).
+#
+# O formato de dentro e o MESMO do transcript de sessao do Pi (`type: "message"` + `message`),
+# entao `adapters/pi/transcript` vale aqui sem adaptador nenhum.
+#
+# A pasta `<cwd>/.pi/subagents/artifacts/<taskId>_<agente>_<n>_*` (input.md, output.md, meta.json)
+# e a MESMA execucao vista de outro angulo — o `taskId` daqui e o prefixo de la —, mas nao serve de
+# fonte: e por CWD, entao junta meses de subagente de conversas que ninguem tem mais aberta
+# (40 MB medidos numa dessas), e no meio de um run so tem o transcript, que ja e este arquivo.
+_RUN_RE = re.compile(r"^run-(\d+)$")
+# `session_info.name` = "subagent-<agente>-<uuid do run>-<n>" (medido no Pi 0.82.1). E a UNICA
+# fonte do tipo do agente que existe DENTRO do filho; o resto so o pai sabe, e o pai fica mudo ate
+# o run fechar.
+_NOME_SUB_RE = re.compile(r"^subagent-(.+?)-[0-9a-f]{8}-[0-9a-f-]+-\d+$")
+# `stopReason` que encerra o subagente. Levantado sobre os 305 transcripts de filho desta maquina
+# (27/08/2026): `toolUse` aparece 4660 vezes e e "vou chamar mais uma ferramenta"; `stop` (297),
+# `error` (12) e `length` (2) sao fim de linha — mal ou bem, aquele run nao continua.
+_ACABOU = ("stop", "error", "length")
+
+
+def _pi_agents_dir(jsonl: str) -> Path | None:
+    """A pasta de subagentes quando `jsonl` e um transcript do Pi; None em qualquer outro layout."""
+    from app.adapters.pi.sessions import sessions_root
+    p = Path(jsonl)
+    if p.suffix != ".jsonl":
+        return None
+    try:
+        if not p.is_relative_to(sessions_root("pi")):
+            return None
+    except (OSError, ValueError):
+        return None
+    d = p.with_suffix("")
+    return d if d.is_dir() else None
+
+
+def _pi_run_dir(task: Path) -> Path | None:
+    """O `run-<n>` mais alto de uma task, ou None.
+
+    So o ultimo: `run-1`/`run-2` sao RETENTATIVAS da mesma task (59 delas nesta maquina), e listar
+    todas encheria o painel com a versao abandonada ao lado da que vale."""
+    melhor: tuple[int, Path] | None = None
+    try:
+        filhos = list(task.iterdir())
+    except OSError:
+        return None
+    for d in filhos:
+        m = _RUN_RE.match(d.name)
+        if m and (d / "session.jsonl").is_file() and (melhor is None or int(m.group(1)) > melhor[0]):
+            melhor = (int(m.group(1)), d)
+    return melhor[1] if melhor else None
+
+
+def _read_agent_pi(task: Path, tail: int) -> dict | None:
+    """Uma passada num subagente do Pi, no MESMO dicionario do formato do Claude."""
+    run = _pi_run_dir(task)
+    if run is None:
+        return None
+    f = run / "session.jsonl"
+    try:
+        linhas = f.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        _log.warning("subagents: não consegui ler %s: %s", f, e)
+        return None
+
+    tools: dict[str, int] = {}
+    calls: list[dict] = []
+    last_text = ""
+    started = ""
+    updated = ""
+    prompt: str | None = None
+    tipo_agente: str | None = None
+    # (papel, stopReason) da ULTIMA mensagem — e o que diz se o subagente acabou. Ver `_ACABOU`.
+    fim: tuple[str | None, str | None] = (None, None)
+
+    for line in linhas:
+        try:
+            r = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        quando = r.get("timestamp")
+        if isinstance(quando, str):
+            if not started:
+                started = quando
+            updated = quando
+        if r.get("type") == "session_info" and tipo_agente is None:
+            m = _NOME_SUB_RE.match(r.get("name") or "")
+            if m:
+                tipo_agente = m.group(1)
+            continue
+        if r.get("type") != "message":
+            continue
+        msg = r.get("message") or {}
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        papel = msg.get("role")
+        fim = (papel, msg.get("stopReason"))
+        if papel == "user" and prompt is None:
+            t = _text_of(content)
+            if t:
+                prompt = t
+        elif papel == "assistant":
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "toolCall":
+                    n = b.get("name") or "?"
+                    tools[n] = tools.get(n, 0) + 1
+                    calls.append({"name": n, "target": _tool_target(n, b.get("arguments"))[:200]})
+                elif b.get("type") == "text":
+                    t = (b.get("text") or "").strip()
+                    if t:
+                        last_text = t
+
+    return {
+        "agentId": task.name,
+        "agentType": tipo_agente,
+        "prompt": prompt,
+        "startedAt": started,
+        "updatedAt": updated,
+        "mtime": _mtime(f),
+        "toolCalls": sum(tools.values()),
+        "tools": [{"name": n, "count": c} for n, c in sorted(tools.items(), key=lambda kv: -kv[1])],
+        "recent": calls[-tail:],
+        "lastText": last_text[:2000],
+        # Como no Kimi, o dado esta na mao — e sem ele TODO subagente do Pi ficava "rodando" pra
+        # sempre (visto na tela em 27/08/2026): pro Claude quem fecha o cartao e o `tool_result` no
+        # transcript do pai, e o pai do Pi nunca cita o `taskId` que da nome a este subagente.
+        "finished": fim[0] == "assistant" and fim[1] in _ACABOU,
+    }
+
+
+def _get_subagent_pi(agents: Path, agent_id: str, tail: int, events: int) -> dict | None:
+    # `agent_id` vem da URL: so o nome de UMA pasta filha, nunca um caminho. Mesma guarda do Kimi
+    # e pelo mesmo motivo — quem decide e o caminho RESOLVIDO, nao uma lista de caracteres
+    # proibidos (no Windows "D:x" nao tem separador e ainda assim joga a base fora).
+    d = agents / agent_id
+    if os.path.dirname(os.path.realpath(d)) != os.path.realpath(agents):
+        return None
+    run = _pi_run_dir(d)
+    if run is None:
+        return None
+    a = _read_agent_pi(d, tail) or _ilegivel(agent_id, _mtime(run / "session.jsonl"))
+    if a.get("ilegivel"):
+        return a
+    if events:
+        ev = _events_pi(run / "session.jsonl", events)
+        if ev is not None:
+            a["events"] = ev
+    return a
+
+
+def _events_pi(f: Path, limit: int) -> list[dict] | None:
+    """O mesmo que `_events`, com o parser do Pi — o filho tem o formato de transcript do Pi, nao
+    o jsonl do Claude."""
+    from app.adapters.pi.transcript import parse_line as parse_pi
+
+    out: list[dict] = []
+    try:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            for ev in parse_pi(line):
+                out.append(ev if isinstance(ev, dict) else ev.__dict__)
+    except OSError as e:
+        _log.warning("subagents: não consegui ler os eventos de %s: %s", f, e)
+        return None
+    return out[-limit:]
+
+
 def _mtime(f: Path) -> float:
     try:
         return f.stat().st_mtime
@@ -270,6 +448,21 @@ def _ilegivel(agent_id: str, mtime: float) -> dict:
 def list_subagents(jsonl: str, tail: int = 12) -> list[dict]:
     """Todos os subagentes desta sessão, do mais recém-escrito pro mais antigo."""
     out: list[dict] = []
+    pi = _pi_agents_dir(jsonl)
+    if pi is not None:
+        # Mesmo cuidado do Kimi: a pasta pode sumir DEPOIS do is_dir e no meio da iteracao, e o
+        # OSError subiria cru ate a rota, que nao tem except.
+        try:
+            tasks = sorted(p for p in pi.iterdir() if p.is_dir())
+        except OSError:
+            return []
+        for t in tasks:
+            run = _pi_run_dir(t)
+            if run is None:
+                continue      # pasta de task sem run nenhum: nao e subagente, e sobra de layout
+            out.append(_read_agent_pi(t, tail) or _ilegivel(t.name, _mtime(run / "session.jsonl")))
+        out.sort(key=lambda a: a["mtime"], reverse=True)
+        return out
     kimi = _kimi_agents_dir(jsonl)
     if kimi is not None:
         # `iterdir` numa pasta que sumiu levanta FileNotFoundError, e o endpoint nao tem except: a
@@ -299,6 +492,9 @@ def list_subagents(jsonl: str, tail: int = 12) -> list[dict]:
 
 
 def get_subagent(jsonl: str, agent_id: str, tail: int = 40, events: int = 0) -> dict | None:
+    pi = _pi_agents_dir(jsonl)
+    if pi is not None:
+        return _get_subagent_pi(pi, agent_id, tail, events)
     kimi = _kimi_agents_dir(jsonl)
     if kimi is not None:
         return _get_subagent_kimi(kimi, agent_id, tail, events)

@@ -46,6 +46,27 @@ def test_nao_suprime_trecho_curto():
     assert not preview_is_committed("ok", _norm(PROSE))
 
 
+def test_suprime_lista_pintada_com_bullet_pela_tui():
+    # A TUI (medido no Kimi) desenha `- item` como `• item` e hard-wrapa: ao abrir a sessão, o pane
+    # mostra o último bloco já commitado e a comparação falhava no primeiro marcador de lista.
+    commitado = ("Sim, tem — e está em dois lugares:\n\n"
+                 "- `docs/polish-backlog.md:669` — o item pendente em si, na seção de dívida\n"
+                 "- `CLAUDE.md:221-235` — o aviso operacional que aponta pra lá")
+    pane = ("Sim, tem — e está em dois lugares:\n\n"
+            "   • docs/polish-backlog.md:669 — o item pendente em si, na seção de\n"
+            "     dívida\n"
+            "   • CLAUDE.md:221-235 — o aviso operacional que aponta pra lá")
+    assert preview_is_committed(pane, _norm(commitado))
+
+
+def test_hifen_de_prosa_continua_distinguindo_texto():
+    # Só o marcador no início da linha sai: um bloco novo que difere do commitado por um hífen
+    # dentro da palavra não pode ser engolido como "já commitado".
+    commitado = "O envio por e-mail falhou porque o servidor recusou a conexão hoje."
+    novo = "O envio por email falhou porque o servidor recusou a conexão hoje."
+    assert not preview_is_committed(novo, _norm(commitado))
+
+
 # --- Pi: o chrome que fecha o bloco em voo e a CAIXA do composer, nao a regua do Claude ---------
 # pane_pi_working.txt e um `tmux capture-pane -p` REAL, tirado DURANTE um turno (Pi 0.82.1 +
 # kimi-for-coding): o `● Tem sim, algumas formas:` esta a meio caminho de ser escrito. Sem a parada
@@ -133,6 +154,12 @@ def test_preview_pi_pula_bloco_de_tool_sem_parenteses():
     # linha de resultado (`└`) logo abaixo. Sem isto o comando virava a previa e o bloco em voo
     # trocava de altura a cada ferramenta (a conversa pulava no celular).
     out = extract_assistant_text(PANE_PI_TOOL_DEPOIS_DA_PROSA, "pi")
+    assert out == "Fechei o wire e subi o commit; o back valida na sequência."
+
+
+def test_preview_omp_pula_bloco_de_tool_sem_parenteses():
+    # omp e fork do Pi, mesma TUI -- o mesmo pane, com provider="omp", tem que dar o mesmo resultado.
+    out = extract_assistant_text(PANE_PI_TOOL_DEPOIS_DA_PROSA, "omp")
     assert out == "Fechei o wire e subi o commit; o back valida na sequência."
 
 
@@ -390,6 +417,10 @@ def test_sidecar_ausente_ou_velho_cai_no_pane(tmp_path, monkeypatch):
     assert read_sidecar(_sidecar(tmp_path, monkeypatch,
                                  {"text": "antigo", "ts": _t.time() - 10_000})) is None
     assert read_sidecar(None) is None                                           # sessao sem stem
+    # "" velho NAO envelhece: e a resposta "nada em voo" do fim do turno. Descarta-lo mandava o
+    # broker raspar o pane parado e o ultimo bloco commitado virava bolha fantasma ao reabrir o app.
+    assert read_sidecar(_sidecar(tmp_path, monkeypatch,
+                                 {"text": "", "ts": _t.time() - 10_000})) == ""
 
 
 def test_sidecar_de_tipo_errado_nao_derruba_nada(tmp_path, monkeypatch):

@@ -21,17 +21,33 @@ def _scrub(text: str) -> str:
     return re.sub(r"(://)[^/@\s]+@", r"\1***@", text)
 
 
-def branch_of(cwd: str | None) -> str | None:
-    """Branch atual do repo em cwd, lida direto de .git/HEAD (sem subprocess -> barato pra rodar
-    por sessao na listagem). 'ref: refs/heads/<b>' -> <b>; detached/nao-repo/worktree -> None."""
+def head_info(cwd: str | None) -> tuple[str | None, bool]:
+    """(branch, worktree?) do repo em cwd, sem subprocess (roda por sessao na listagem).
+
+    Checkout normal: `.git` e PASTA, HEAD la dentro. Worktree ligada (`git worktree add`): `.git` e
+    ARQUIVO com `gitdir: <repo>/.git/worktrees/<nome>`, e o HEAD daquela worktree mora nessa pasta —
+    sem seguir o ponteiro, toda sessao em worktree ficava sem chip de branch, calada."""
     if not cwd:
-        return None
+        return None, False
+    dot = Path(cwd, ".git")
+    worktree = False
     try:
-        head = Path(cwd, ".git", "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+        if dot.is_file():
+            ponteiro = dot.read_text(encoding="utf-8", errors="replace").strip()
+            if not ponteiro.startswith("gitdir: "):
+                return None, False
+            worktree = True
+            dot = Path(ponteiro[len("gitdir: "):])
+        head = (dot / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
-        return None
+        return None, worktree
     prefix = "ref: refs/heads/"
-    return (head[len(prefix):] or None) if head.startswith(prefix) else None
+    branch = (head[len(prefix):] or None) if head.startswith(prefix) else None
+    return branch, worktree
+
+
+def branch_of(cwd: str | None) -> str | None:
+    return head_info(cwd)[0]
 
 
 class GitError(Exception):
@@ -315,6 +331,25 @@ def git_log(cwd: str, n: int = 50, grep: str | None = None) -> list[dict]:
             "subject": subject,
             "body": body,
         })
+    return out
+
+
+def git_log_since(cwd: str, desde: float, n: int = 14) -> list[dict]:
+    """Commits da branch atual com committer date >= `desde` (epoch), mais velhos primeiro.
+    Repo sem commit, fora de repo, git ausente ou timeout -> []. Só leitura; nunca levanta."""
+    try:
+        p = _run(cwd, "log", f"--since=@{int(desde)}", "-n", str(n), "--reverse",
+                 "--pretty=format:%h\x1f%s")
+    except GitError:
+        return []
+    if p.returncode != 0:
+        return []
+    out = []
+    for rec in p.stdout.splitlines():
+        if "\x1f" not in rec:
+            continue
+        short, subject = rec.split("\x1f", 1)
+        out.append({"short": short, "subject": subject.strip()})
     return out
 
 

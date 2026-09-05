@@ -115,7 +115,7 @@ export default defineConfig({
     // Leave the Login "URL do servidor" empty in dev so requests stay relative.
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8765',
+        target: process.env.HANGAR_BACKEND || 'http://127.0.0.1:8765',
         changeOrigin: true,
         // `ws: true` NAO e detalhe: sem ele o proxy repassa HTTP e SSE e ENGOLE o upgrade de
         // WebSocket — o painel do terminal (unico WS do navegador) abre vazio, com o cursor
@@ -146,7 +146,7 @@ export default defineConfig({
       // `ws: true` pelo mesmo motivo do server acima: o terminal e WebSocket, e o preview e o que
       // serve o BUILD atras do tailscale serve — sem isto, terminal em branco pra todo mundo que
       // nao esta em localhost:8765.
-      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true, ws: true },
+      '/api': { target: process.env.HANGAR_BACKEND || 'http://127.0.0.1:8765', changeOrigin: true, ws: true },
     },
     // .omniwise.com.br: a VPS (srv1633222) serve o BUILD via preview atrás do traefik do Coolify
     // (Host pocket.omniwise.com.br chega intacto no vite; sem isto o preview responde 403).
@@ -168,12 +168,17 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       strategies: 'injectManifest',
+      // srcDir + filename bastam: o plugin resolve `<root>/src/sw.ts` e `<root>/dist/sw.js`
+      // ABSOLUTOS a partir daí (options.ts, resolveSwPaths). Não repita esses dois caminhos em
+      // `injectManifest` — eles sobrescrevem os do plugin, e ali um caminho RELATIVO é resolvido
+      // contra o diretório de onde o build foi chamado, não contra a raiz do front. É o `swDest`
+      // que o workbox usa como ORIGEM da leitura (vite-plugin-pwa/dist/vite-build.js: `swSrc:
+      // options.injectManifest.swDest`), então com o caminho errado ele lê outro arquivo — ou um
+      // resto de build antigo, já sem o marcador — e o build morre com "Unable to find a place to
+      // inject the manifest ... swSrc and swDest are configured to the same file" (27/08/2026,
+      // numa máquina com o mesmo commit e as mesmas versões em que aqui buildava limpo).
       srcDir: 'src',
       filename: 'sw.ts',
-      injectManifest: {
-        swSrc: 'src/sw.ts',
-        swDest: 'dist/sw.js',
-      },
       manifest: {
         name: 'Hangar',
         short_name: 'Hangar',

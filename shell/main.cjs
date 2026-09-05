@@ -1,7 +1,78 @@
 // Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
-const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, screen, session, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { ler, gravar } = require('./settings.cjs');
+const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar } = require('./navegador.cjs');
+const { criarControlador } = require('./preview_ctl.cjs');
+const { commitDoCheckout } = require('./versao.cjs');
+const { importarCookiesDoChrome, PAGINA_ATIVAR } = require('./cookies_chrome.cjs');
+const { credenciaisPara } = require('./senhas_chrome.cjs');
+
+// Preenche usuário/senha no view a partir das senhas salvas do Chrome. A decifração roda no MAIN
+// (não no renderer): a senha em claro só existe aqui e no campo da página, some depois, nunca vai
+// a disco nem a outra máquina. Escolhe a 1ª credencial do domínio; a página pode ter mais de um
+// campo de senha (login + trocar-senha) — preenche o primeiro VISÍVEL e o texto/email antes dele.
+async function preencherLogin(wc, host) {
+  let creds;
+  try { creds = credenciaisPara(host); } catch (e) { console.warn('[senha] leitura falhou:', e.message); return; }
+  if (!creds.length) return;
+  const { usuario, senha } = creds[0];
+  // SPA desenha o formulário depois do dom-ready: três tentativas, e para na primeira que achou.
+  for (const espera of [0, 1500, 4000]) {
+    await new Promise((r) => setTimeout(r, espera));
+    if (wc.isDestroyed()) return;
+    if (await injetarLogin(wc, usuario, senha)) return;
+  }
+}
+
+function injetarLogin(wc, usuario, senha) {
+  // O valor entra como JSON literal (nunca concatenado na string do script) — senha com aspas,
+  // barra ou template não pode virar código.
+  const arg = JSON.stringify({ usuario, senha });
+  return wc.executeJavaScript(`(() => {
+    const { usuario, senha } = ${arg};
+    const vis = (el) => el && el.offsetParent !== null && !el.disabled && !el.readOnly;
+    // Atravessa shadow DOM aberto: tela de login em web component (authentik, Lit) não tem
+    // input nenhum no document — o querySelectorAll de cima devolvia vazio e nada preenchia.
+    const inputs = [];
+    const anda = (raiz) => {
+      for (const el of raiz.querySelectorAll('*')) {
+        if (el.tagName === 'INPUT') inputs.push(el);
+        if (el.shadowRoot) anda(el.shadowRoot);
+      }
+    };
+    anda(document);
+    const pw = inputs.find((el) => el.type === 'password' && vis(el));
+    if (!pw) return false;
+    const set = (el, v) => {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);   // React ouve o setter nativo
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    set(pw, senha);
+    if (usuario) {
+      // Campo de usuário: o de texto/email/tel mais próximo ANTES do de senha no fluxo do DOM.
+      const ate = inputs.slice(0, inputs.indexOf(pw));
+      const user = ate.reverse().find((el) => vis(el) && /^(text|email|tel|)$/i.test(el.type));
+      if (user) set(user, usuario);
+    }
+    return true;
+  })()`, true).catch(() => false);
+}
+
+// Lido UMA vez, na subida: é o código que este processo de fato carregou, e é isso que a tela de
+// atualização compara com o commit atualizado pra saber se "feche e abra o Hangar" ainda vale.
+const SHELL_COMMIT = commitDoCheckout(path.join(__dirname, '..'));
+const { subirServidor } = require('./preview_srv.cjs');
+
+// O navegador embutido (WebContentsView, handlers hangar:nav-*) é dirigível por CDP na 9223 — o
+// agent-browser conecta nela como conecta no Chrome do usuário (9222), sem backend no meio. A
+// porta expõe TODOS os webContents, inclusive o cockpit (com o token no localStorage), a qualquer
+// processo local — mesmo risco do Chrome com remote-debugging, assumido de propósito.
+app.commandLine.appendSwitch('remote-debugging-port', '9223');
 
 // MEDIDO 05/08/2026 (Hyprland/Wayland, Electron 43.3.0): o switch `enable-transparent-visuals`
 // do spike NAO e necessario — a janela continua transparente sem ele. Linha removida.
@@ -117,7 +188,15 @@ async function criarJanela() {
     backgroundColor: fundo.transparente ? '#00000000' : '#1a181d',
     ...fundo.extra,
     // O preload expõe SÓ window.hangar.pickFolder (seletor nativo de pasta) — ver preload.cjs.
-    webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.cjs') },
+    webPreferences: {
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+      // O commit que ESTE main.cjs carregou vai por argv, não lido pelo preload: o preload roda
+      // de novo a cada reload da página e leria o .git JÁ atualizado com o main ainda velho —
+      // escondendo o "feche e abra" exatamente quando ele vale. Main velho não manda o flag, e o
+      // preload novo devolve null (= avisa), que é o certo.
+      additionalArguments: [`--hangar-shell-commit=${SHELL_COMMIT ?? ''}`],
+    },
   });
   win.removeMenu();
 
@@ -151,6 +230,20 @@ async function criarJanela() {
   // (backend fora, usuário fechou em vez de responder), gravar essa URL faria a próxima abertura
   // tentar carregar a própria tela de erro. Nesse caso mantém a URL que já estava salva.
   win.on('close', () => {
+    // Janela morrendo leva TODOS os views de navegador dela — sem isto o Map guardaria
+    // referência de webContents mortos.
+    const views = navegadores.get(win);
+    if (views) {
+      navegadores.delete(win);
+      for (const [chave, v] of views) {
+        soltarControlador(chave, v);
+        try { v.webContents.close(); } catch { /* já morreu */ }
+      }
+      // ...e os sidecars das chaves dela, senão o CLI lista "MORTO" acumulando lixo a cada quit.
+      for (const chave of views.keys()) {
+        try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch { /* sem sidecar */ }
+      }
+    }
     const u = win.webContents.getURL();
     // Na tela de recuperacao (data:) nao ha endereco de cockpit pra salvar — usa o ULTIMO que
     // carregou de verdade (urlBoa), nao o `cfg.url` do boot, que fica pra tras assim que o
@@ -165,6 +258,15 @@ async function criarJanela() {
     if (u.startsWith('data:')) return;
     urlBoa = u;
     gravar(dir, { url: u, janela: win.getBounds() });
+  });
+  // Reload/navegação da página (Ctrl+R) derruba o DOM sem rodar o desmonte do NavegadorPane,
+  // então o view nativo ficava pintado no lugar antigo, por cima do chat, até alguém abrir a aba
+  // Navegador de novo. Esconde todos os views da janela na hora; quem reexibe é o painel ao montar.
+  win.webContents.on('did-start-navigation', (_e, _u, _inPlace, isMainFrame) => {
+    if (!isMainFrame) return;
+    for (const v of navegadores.get(win)?.values() ?? []) {
+      try { v.setBounds({ x: 0, y: 0, width: 0, height: 0 }); } catch { /* view já morto */ }
+    }
   });
   // Carga que falha (backend caiu no meio, URL errada) traz a tela de volta. Mas só se for a
   // página principal: o app mantém SSE e faz XHR de sessão o tempo todo, e um recurso solto que
@@ -261,9 +363,326 @@ function abrirJanela(origem) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Navegador embutido. UM WebContentsView POR SESSÃO (chave serverId::nome), pendurado no
+// contentView da janela — navegação top-level, então X-Frame-Options não se aplica (diferente de
+// iframe). Trocar de sessão ESCONDE o view (nav-hide), não fecha: o agente segue dirigindo ele
+// via CDP em background (backgroundThrottling: false abaixo é por isso). Fechar de verdade é só
+// pelo × do painel (nav-close). A POSIÇÃO é medida pelo front (div âncora no NavegadorPane) e
+// chega por IPC: o view não é DOM, flutua POR CIMA da página — o front esconde com bounds zero
+// quando um overlay DOM abre, e o layout do Chat reserva a faixa pra nada cobrir texto/composer.
+const navegadores = new Map();   // BrowserWindow -> Map<chave, WebContentsView>
+
+// chave da sessão -> { ctl, view }. Vive fora do `navegadores` porque a vida é a mesma do VIEW,
+// não a da janela, e é por ele que o servidor local acha o alvo de um comando. Guarda o `view`
+// junto do controlador (não só o controlador) porque é a identidade que `soltarControlador`
+// confere antes de apagar — ver comentário ali.
+const controladores = new Map();
+
+function viewsDa(win) {
+  let m = navegadores.get(win);
+  if (!m) { m = new Map(); navegadores.set(win, m); }
+  return m;
+}
+
+// Fecha o controlador de uma chave e desanexa o depurador do view — trio repetido em três
+// pontos (× do painel, queda da janela, webContents morto por fora): um lugar só. Sem isto num
+// dos três, o Map fica com controlador órfão apontando pra webContents morto: o servidor local
+// acha ele (não devolve null) e um comando vira 500 de CDP em vez do 404 "sem navegador aberto".
+// A CONFERÊNCIA DE IDENTIDADE (entrada.view === view) é o que impede uma janela A de apagar o
+// controlador da janela B: com duas janelas do app abrindo a MESMA sessão, a segunda sobrescreve
+// a entrada da primeira no Map global `controladores` (chave é só a sessão, não a janela); sem
+// checar de quem é a entrada ATUAL antes de soltar, fechar a janela A apagava o controlador vivo
+// da B — o painel dela ficava aberto respondendo 404 pra todo comando. Mesma guarda que já
+// existia no ouvinte `destroyed` (linha abaixo), agora na função compartilhada — vale pros três
+// chamadores, não só pra esse.
+function soltarControlador(chave, view) {
+  const entrada = controladores.get(chave);
+  if (entrada && entrada.view === view) { entrada.ctl.fechar(); controladores.delete(chave); }
+  try { view.webContents.debugger.detach(); } catch { /* já solto */ }
+}
+
+function fecharNavegador(win, chave) {
+  const m = navegadores.get(win);
+  const view = m && m.get(chave);
+  if (!view) return;
+  m.delete(chave);
+  if (m.size === 0) navegadores.delete(win);
+  soltarControlador(chave, view);
+  try { win.contentView.removeChildView(view); } catch { /* janela já destruída */ }
+  try { view.webContents.close(); } catch { /* idem */ }
+  try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch { /* sem sidecar */ }
+}
+
+// Sidecar por sessão em ~/.hangar/nav/<chave>.json — é o que o `hangar-preview` lê pra achar o
+// target CDP DESTA sessão sem adivinhar por URL (duas sessões no mesmo localhost:3000 teriam a
+// mesma). O targetId é descoberto por diff do /json/list antes/depois do view nascer: opens são
+// raros e seriais, então o alvo novo é o view. Gravação é async e tmp+rename (o CLI pode estar
+// lendo). Sem targetId (CDP fora do ar?), grava só chave+url e o CLI casa por URL.
+const NAV_SIDECARS = path.join(os.homedir(), '.hangar', 'nav');
+
+// Varre a pasta na largada. O sidecar não sobrevive ao processo — o view morre junto com a janela
+// —, mas ele só era apagado no × e no close da janela: app derrubado por sinal ou por crash
+// deixava o arquivo pra trás, e um navegador MORTO de um servidor passava a disputar o nome com um
+// vivo de outro, obrigando o `hangar-preview` a exigir a chave completa. A trava de instância única
+// (logo abaixo) garante um dono só, então tudo que está aqui na subida é de execução encerrada.
+function limparSidecaresNav() {
+  let restos = [];
+  try {
+    restos = fs.readdirSync(NAV_SIDECARS);
+  } catch { return; }                 // pasta ainda não existe: nada a limpar
+  for (const nome of restos) {
+    if (!nome.endsWith('.json') && !nome.endsWith('.tmp')) continue;
+    if (nome === '_srv.json') continue;   // é do processo VIVO, não resto de execução morta
+    try { fs.rmSync(path.join(NAV_SIDECARS, nome), { force: true }); } catch { /* já sumiu */ }
+  }
+}
+
+// PERGUNTA AO PRÓPRIO VIEW quem ele é. A versão anterior descobria o id por diferença da lista
+// global de alvos do CDP (foto antes de criar, foto depois, o que apareceu é ele) — e a lista é do
+// processo inteiro, não desta janela: dois `nav-open` ao mesmo tempo (duas janelas do app, ou dois
+// cliques seguidos) e a foto "antes" de um já continha o alvo criado pelo outro, então cada um
+// podia levar o targetId da sessão errada. Um agente dirigindo o navegador da sessão vizinha é o
+// pior desfecho possível aqui, e nenhuma quantidade de tentativas conserta um diff sobre estado
+// compartilhado. Anexar o depurador ao webContents pergunta direto, sem lista e sem corrida.
+// Solta na hora: enquanto anexado, o alvo não aceita outro cliente CDP (é o `hangar-preview`).
+async function targetIdDe(view) {
+  const dbg = view.webContents.debugger;
+  // Task 6 passou a anexar o mesmo depurador PERMANENTEMENTE (controlador do preview) antes de
+  // chamar isto via `gravarSidecarNav`: sem esta checagem, o `attach` daqui falhava com "already
+  // attached" e o `detach` do finally derrubava a sessão permanente que ainda nem tinha sido usada.
+  const jaAnexado = dbg.isAttached();
+  try {
+    if (!jaAnexado) dbg.attach('1.3');
+    const info = await dbg.sendCommand('Target.getTargetInfo');
+    return info?.targetInfo?.targetId ?? null;
+  } catch (err) {
+    console.error('[nav] targetId indisponivel:', err?.message || err);
+    return null;   // o CLI cai no casamento por URL, como já fazia
+  } finally {
+    if (!jaAnexado) { try { dbg.detach(); } catch { /* já solto */ } }
+  }
+}
+
+async function gravarSidecarNav(chave, urlInicial, view) {
+  const targetId = await targetIdDe(view);
+  try {
+    fs.mkdirSync(NAV_SIDECARS, { recursive: true });
+    const arq = path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`);
+    // O tmp leva o pid: duas janelas do app são o MESMO processo, mas o nome fixo ainda deixaria
+    // duas gravações da mesma chave se sobreporem no rename.
+    const tmp = path.join(NAV_SIDECARS, `.${nomeSidecar(chave)}.${process.pid}.tmp`);
+    // A url gravada é a PEDIDA, não a que o alvo mostra: no instante da criação ele ainda está em
+    // about:blank, que não é endereço de nada. Ela é só o plano B de quem não tem targetId.
+    fs.writeFileSync(tmp, JSON.stringify({ chave, url: urlInicial, targetId, ts: Date.now() }));
+    fs.renameSync(tmp, arq);
+  } catch (err) {
+    console.error('[nav] sidecar nao gravado:', err?.message || err);
+  }
+}
+
+function viewDe(ev, chave) {
+  return navegadores.get(BrowserWindow.fromWebContents(ev.sender))?.get(chave);
+}
+
+ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
+  const win = BrowserWindow.fromWebContents(ev.sender);
+  if (!win || !chave) return { ok: false };
+  const views = viewsDa(win);
+  let view = views.get(chave);
+  // O webContents pode ter morrido por fora (fechado via CDP Target.closeTarget, crash do
+  // renderer): sem esta checagem o view volta invisível e nunca mais pinta — a área fica preta.
+  // Medido: um Target.closeTarget externo pode deixar `view.webContents` undefined (não só
+  // isDestroyed()===true) — sem o `!view.webContents` o acesso a `.isDestroyed()` lança e derruba
+  // o handler do IPC inteiro, antes de soltar o controlador.
+  if (view && (!view.webContents || view.webContents.isDestroyed())) {
+    views.delete(chave);
+    soltarControlador(chave, view);
+    try { win.contentView.removeChildView(view); } catch { /* já saiu */ }
+    view = undefined;
+  }
+  if (!view) {
+    // View novo SÓ nasce com URL; o reexibir (troca de sessão, reload do front) chama open sem
+    // url e recebe ok:false se o shell já não tiver o view — aí o front repete com a url salva.
+    const destino = urlNavegavel(url);
+    if (!destino) return { ok: false };
+    // persist: cookies/localStorage no disco. COMPARTILHADA entre sessões de propósito — o uso é
+    // cada sessão com suas URLs, não isolamento de conta; se um dia precisar, vira por-sessão.
+    view = new WebContentsView({
+      webPreferences: { partition: 'persist:nav', backgroundThrottling: false },
+    });
+    view.webContents.setUserAgent(uaDeChrome(view.webContents.getUserAgent()));
+    // target=_blank vai pro navegador do sistema, mesmo padrão do cockpit.
+    view.webContents.setWindowOpenHandler(({ url: alvo }) => {
+      if (/^https?:/i.test(alvo)) shell.openExternal(alvo);
+      return { action: 'deny' };
+    });
+    win.contentView.addChildView(view);
+    views.set(chave, view);
+    // Estado de navegação pro painel (barra de carregamento, ✕/↻, voltar/avançar, endereço que
+    // acompanha os cliques). O view não tem DOM no cockpit — sem isto a página carrega em silêncio.
+    const wc = view.webContents;
+    const publicar = () => {
+      if (win.isDestroyed() || wc.isDestroyed()) return;
+      win.webContents.send('hangar:nav-estado', {
+        chave, url: wc.getURL(), carregando: wc.isLoading(),
+        voltar: wc.navigationHistory.canGoBack(), avancar: wc.navigationHistory.canGoForward(),
+      });
+    };
+    for (const ev of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page']) wc.on(ev, publicar);
+    // Preenchimento de login com as senhas salvas do Chrome do usuário, ao terminar de carregar
+    // uma página cujo domínio tem senha salva. Uma vez por URL (o `dom-ready` repete em SPA).
+    let ultimoPreenchido = '';
+    wc.on('dom-ready', () => {
+      if (win.isDestroyed() || wc.isDestroyed()) return;
+      let host = '';
+      try { host = new URL(wc.getURL()).hostname; } catch { return; }
+      const url = wc.getURL();
+      if (!host || url === ultimoPreenchido) return;
+      ultimoPreenchido = url;
+      preencherLogin(wc, host);
+    });
+    // O depurador fica ANEXADO enquanto o view viver: é o que dá tema, console e rede contínuos.
+    // O `targetIdDe` que já existia anexa e solta na hora, e por isso não servia pra guardar estado.
+    // `isAttached` antes: reabrir o painel da mesma sessão passa por aqui de novo, e o Electron
+    // lança quando já há depurador anexado — sem a guarda, a sessão ficava sem controlador.
+    try {
+      const dbg = view.webContents.debugger;
+      if (!dbg.isAttached()) dbg.attach('1.3');
+      // Network e Accessibility ficam de fora de propósito: o controlador os liga no primeiro
+      // verbo que precisa (são os dois que custam CPU o tempo todo, mesmo sem ninguém dirigir).
+      for (const dominio of ['Runtime.enable', 'Log.enable', 'DOM.enable']) {
+        dbg.sendCommand(dominio).catch(() => {});
+      }
+      controladores.set(chave, { ctl: criarControlador({
+        dbg,
+        capturarPagina: () => view.webContents.capturePage(),
+        aoNavegar: (cb) => view.webContents.on('did-navigate', cb),
+      }), view });
+      // Alvo morrendo por fora (Target.closeTarget via CDP, crash do renderer) não passa pelo ×
+      // do painel nem pelo close da janela — sem isto o controlador ficava órfão no Map até o
+      // usuário reabrir o painel, e um comando nesse meio-tempo virava 500 de CDP em vez do 404
+      // de sessão sem navegador. `once`: o próprio evento já indica que não há mais o que soltar.
+      // A checagem de identidade é o que impede um `destroyed` ATRASADO (fechar o painel dispara
+      // `view.webContents.close()`, que é assíncrono, e o usuário pode reabrir a MESMA chave antes
+      // dele terminar) de apagar o controlador do view NOVO — quem morre só limpa o que é dele.
+      view.webContents.once('destroyed', () => {
+        if (views.get(chave) === view) soltarControlador(chave, view);
+      });
+    } catch (err) {
+      // Falha aqui custa os verbos novos, não o navegador: o painel abre e o usuário navega na mão.
+      console.error('[nav] depurador nao anexou:', err && err.message);
+    }
+    view.webContents.loadURL(destino).catch((err) => console.error('[nav] loadURL falhou:', err?.message || err));
+    gravarSidecarNav(chave, destino, view);   // async, não bloqueia o IPC
+  } else {
+    // Reexibir NUNCA recarrega: a URL atual do view pode ter mudado por navegação interna (o
+    // agente clicou em links) e o front só manda `url` quando o usuário digita uma nova.
+    const destino = url ? urlNavegavel(url) : null;
+    if (destino && view.webContents.getURL() !== destino) view.webContents.loadURL(destino);
+  }
+  view.setVisible(true);
+  view.setBounds(normalizaBounds(bounds));
+  return { ok: true };
+});
+
+ipcMain.on('hangar:nav-hide', (ev, { chave } = {}) => {
+  const view = viewDe(ev, chave);
+  if (view) view.setVisible(false);
+});
+
+ipcMain.on('hangar:nav-bounds', (ev, { chave, bounds } = {}) => {
+  const view = viewDe(ev, chave);
+  if (view) view.setBounds(normalizaBounds(bounds));
+});
+
+// Cookies do Chrome real -> partição do navegador embutido. Nunca rejeita: o front lê `erro`.
+// Porta: argumento > `chromeCdpPort` das configurações > 9222.
+// Porta SEMPRE inteiro: no Windows o spawn roda com `shell: true` e o valor vai numa linha de
+// comando — um settings.json adulterado ou um caller de IPC com "9226 & calc" executaria isso.
+const portaValida = (v) => (Number.isInteger(+v) && +v > 0 && +v < 65536 ? +v : null);
+const PORTA_CHROME = () => portaValida(ler(app.getPath('userData')).chromeCdpPort) || null;
+
+// Abre `chrome://inspect/#remote-debugging` no Chrome do usuário (na instância que já está
+// aberta, ou abrindo uma). O Chrome 136+ não aceita `--remote-debugging-port` no perfil padrão;
+// o que liga a depuração é o toggle dessa página, que grava o `DevToolsActivePort` que o
+// `cookies_chrome.cjs` lê. NÃO se lança o Chrome direto deste processo: o filho herdava o socket
+// do CDP do próprio shell (a 9223) e o segurava depois de o shell fechar — por isso o `sh` que
+// fecha todo descritor acima de 2 antes do exec.
+ipcMain.handle('hangar:chrome-ativar', async () => {
+  const { spawn } = require('child_process');
+  const url = PAGINA_ATIVAR;
+  // O Chrome em execução recusa `chrome://` vindo da linha de comando (abre uma "Nova guia" em
+  // branco, medido no Chrome 150). Então o endereço vai pra área de transferência e a instrução
+  // manda colar na barra — a aba nova que o Chrome abre já deixa a janela dele na frente.
+  clipboard.writeText(url);
+  const candidatos = process.platform === 'win32'
+    ? [['cmd', ['/c', 'start', '', 'chrome', url]]]
+    : process.platform === 'darwin'
+      ? [['open', ['-a', 'Google Chrome', url]]]
+      : ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser', 'brave'].map((bin) =>
+        ['sh', ['-c', 'for fd in $(seq 3 1023); do eval "exec $fd>&-"; done 2>/dev/null; exec "$0" "$@"', bin, url]]);
+  for (const [cmd, args] of candidatos) {
+    const ch = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    // ENOENT chega pelo evento `error`, não por exceção. O `sh` sempre nasce; o binário
+    // inexistente aparece como saída 127 logo em seguida.
+    const ok = await new Promise((res) => {
+      ch.once('error', () => res(false));
+      ch.once('exit', (code) => res(code !== 127));
+      setTimeout(() => res(true), 1500);   // ainda rodando = abriu
+    });
+    if (ok) { ch.unref(); return { ok: true }; }
+  }
+  return { ok: false, motivo: 'sem_binario' };
+});
+
+ipcMain.handle('hangar:nav-import-cookies', async (ev, { chave, host, porta, recarregar = true } = {}) => {
+  if (!host) return { ok: false, gravados: 0, falhos: 0, erro: 'sem_host' };
+  const p = portaValida(porta) || PORTA_CHROME();
+  let cookies;
+  try {
+    cookies = await importarCookiesDoChrome({ porta: p, dominio: host });
+  } catch (e) {
+    return { ok: false, gravados: 0, falhos: 0, erro: e.code || 'cdp', detalhe: e.message };
+  }
+  const ses = session.fromPartition('persist:nav');
+  let gravados = 0, falhos = 0;
+  for (const c of cookies) {
+    try { await ses.cookies.set(c); gravados++; } catch { falhos++; }
+  }
+  // Reload só quando pedido: a importação automática roda em cima de uma navegação que pode ser
+  // do agente (hangar-preview) no meio de um formulário — recarregar ali jogaria o estado fora.
+  const view = viewDe(ev, chave);
+  if (view && gravados && recarregar) view.webContents.reload();
+  return { ok: true, gravados, falhos };
+});
+
+ipcMain.on('hangar:nav-reload', (ev, { chave } = {}) => {
+  const view = viewDe(ev, chave);
+  if (view) view.webContents.reload();
+});
+ipcMain.on('hangar:nav-stop', (ev, { chave } = {}) => { viewDe(ev, chave)?.webContents.stop(); });
+ipcMain.on('hangar:nav-back', (ev, { chave } = {}) => {
+  const wc = viewDe(ev, chave)?.webContents;
+  if (wc?.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
+});
+ipcMain.on('hangar:nav-forward', (ev, { chave } = {}) => {
+  const wc = viewDe(ev, chave)?.webContents;
+  if (wc?.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
+});
+
+ipcMain.on('hangar:nav-close', (ev, { chave } = {}) => fecharNavegador(BrowserWindow.fromWebContents(ev.sender), chave));
+
 // Seletor nativo de pasta (window.hangar.pickFolder, via preload.cjs). Registrado UMA vez, fora
 // do criarJanela — handler duplicado por janela é erro do ipcMain. O diálogo ancora na janela que
 // pediu, senão ele nasce solto e pode cair atrás do app.
+// Reabrir o app depois de uma atualização que tocou shell/: `relaunch` agenda uma instância nova
+// com os mesmos argumentos e `exit` derruba esta — é o único jeito de carregar o main.cjs novo.
+ipcMain.handle('hangar:relaunch', () => {
+  app.relaunch();
+  app.exit(0);
+});
+
 ipcMain.handle('hangar:pick-folder', async (ev) => {
   const win = BrowserWindow.fromWebContents(ev.sender);
   const r = await (win ? dialog.showOpenDialog(win, { properties: ['openDirectory'] })
@@ -275,7 +694,25 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => abrirJanela('segunda janela'));
-  app.whenReady().then(() => abrirJanela('arranque'));
+  app.whenReady().then(() => {
+    limparSidecaresNav();
+    subirServidor({
+      controladorDe: (chave) => controladores.get(chave)?.ctl || null,
+      escrever: (dados) => {
+        fs.mkdirSync(NAV_SIDECARS, { recursive: true });
+        fs.writeFileSync(path.join(NAV_SIDECARS, '_srv.json'), JSON.stringify(dados), { mode: 0o600 });
+      },
+    }).catch((err) => console.error('[nav] servidor do preview nao subiu:', err && err.message));
+    abrirJanela('arranque');
+  });
 }
 
 app.on('window-all-closed', () => app.quit());
+
+// `limparSidecaresNav` pula `_srv.json` de propósito (é do processo VIVO) — ninguém mais o
+// apagava na saída. Sem isto, o CLI encontrava o arquivo de uma execução morta e falava com
+// qualquer processo que tivesse reciclado aquela porta de loopback, imprimindo a resposta dele
+// como se fosse do navegador. `will-quit` roda mesmo em `app.quit()` disparado por sinal.
+app.on('will-quit', () => {
+  try { fs.rmSync(path.join(NAV_SIDECARS, '_srv.json'), { force: true }); } catch { /* ja sumiu */ }
+});

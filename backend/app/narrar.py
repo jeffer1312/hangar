@@ -617,12 +617,24 @@ _TRAVAS_POR_ESTILO = {
     #   defeito (fecho antigo, 3 execucoes) . cobertura 0,514 0,562 0,568 | tamanho 0,384 0,392 0,409
     #   bom (fecho novo, 7 execucoes) ....... cobertura 0,719 0,829 0,842 0,870 0,884 0,884 0,897
     #                                         tamanho   0,686 0,795 0,851 0,911 0,926 0,935 0,940
-    # Os valores sao o meio de cada intervalo vazio: 0,65 fica 0,07 abaixo do pior briefing bom e
-    # 0,08 acima do melhor defeito; 0,55 fica 0,13 abaixo e 0,14 acima. Calibrado sobre UM ditado
-    # (o unico caso real do defeito), entao quem tiver outro que falhe recalibra com os dois.
-    # Errar pra cima e o lado barato: briefing bom recusado devolve o cru COM aviso e a pessoa
-    # repete; briefing resumido aceito e o ditado dela sumindo em silencio, que e este bug.
-    "briefing": _Travas(inflacao_max=1.4, encolhe_min=0.55, cobertura_min=0.65,
+    #
+    # RECALIBRADOS em 26/08/2026 com o SEGUNDO ditado real (aquele comentario ja avisava: "calibrado
+    # sobre UM ditado, quem tiver outro que falhe recalibra com os dois"). O caso: audio de 2:25,
+    # 1706 chars, briefing INTEGRO — nenhum assunto de fora — recusado 2x seguidas; medido no mesmo
+    # texto, 2 execucoes: cobertura 0,577 e 0,588 | tamanho 0,561 e 0,591. Duas conclusoes:
+    #   1. COBERTURA NAO SEPARA MAIS as duas populacoes: o briefing bom (0,577) cai DENTRO do
+    #      intervalo do defeito (0,514-0,568). Nao e ruido do medidor, e o servico: este ditado
+    #      soletra caminho ("pss barra logs barra prom web" -> `pss/logs/promweb`), e cada "barra"
+    #      dita vira uma barra escrita — conteudo que some por acerto. Cobertura volta a ser rede
+    #      GROSSA (0,45, o valor de antes), pra pegar o modelo que respondeu outra coisa; quem pega
+    #      o resumo e o tamanho.
+    #   2. TAMANHO separa limpo: defeito no maximo 0,409, briefing bom no minimo 0,561. O piso vai
+    #      pro meio do vao (0,48), e nao mais pra beira dele — em 0,55 o briefing bom passava por
+    #      0,011, ou seja, uma execucao um pouco mais enxuta era recusada de novo (e foi: o aviso
+    #      "resumiu em vez de organizar" que o usuario viu).
+    # Errar pra cima continua sendo o lado caro dos dois: briefing bom recusado devolve o cru COM
+    # aviso e a pessoa dita de novo — e ela clica no botao achando que ele esta quebrado.
+    "briefing": _Travas(inflacao_max=1.4, encolhe_min=0.48, cobertura_min=0.45,
                         cobra_invencao=False, timeout=120),
 }
 

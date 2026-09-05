@@ -6,19 +6,27 @@
 #                                  RECUSA (código 3) quando o caminho NATIVO do Claude Code alcança
 #                                  os dois lados — ver "Caminho nativo" abaixo. --tmux força este.
 #   hangar-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
-#   hangar-send --pair <sessao> [tarefa...]  pareia ESTA sessão com outra (registra no app:
-#                                        badge 🤝 na UI + protocolo injetado nos dois lados)
+#   hangar-send --pair <sessao> [tarefa...] [--substituir-tarefa]  pareia ESTA sessão com outra
+#                                        (registra no app: badge 🤝 na UI + protocolo injetado nos
+#                                        dois lados). tarefa diferente da que o grupo já tem é
+#                                        recusada (409) sem o flag; --substituir-tarefa vale em
+#                                        QUALQUER posição entre os tokens de tarefa
 #   hangar-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
-#   hangar-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei", "contrato
-#                                  atualizado"). Chega como [grupo: X]. UNIDIRECIONAL — nunca
-#                                  responda um [grupo:] com --group (evita loop); responda 1:1.
+#   hangar-send --group [--tmux] <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei",
+#                                  "contrato atualizado"). Chega como [grupo: X]. UNIDIRECIONAL —
+#                                  nunca responda um [grupo:] com --group (evita loop); responda 1:1.
+#                                  Peer com caminho nativo NÃO recebe pelo tmux: o script sai com
+#                                  código 3 listando a quem mandar por SendMessage, com o texto
+#                                  exato. --tmux força o caminho antigo.
 #   hangar-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
 #                                  truecolor, visível no app). cwd default = home.
-#                                  --provider <claude|codex|pi|kimi> escolhe o AGENTE da sessão
+#                                  --provider <claude|codex|pi|omp|kimi> escolhe o AGENTE da sessão
 #                                  nova (default claude). Ex: --provider kimi abre o Kimi Code.
 #                                  --engine <motor> nasce num motor de ~/.claude/engines.json
 #                                  (outro modelo, conta do provedor — ver "Par noutro modelo").
 #                                  --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo).
+#                                  --conta auto deixa a cota escolher: a conta Claude com mais
+#                                  folga na janela que mais aperta (5h, 7d ou a do modelo).
 #                                  --model <id> a sessão já ABRE nesse modelo (opus, sonnet,
 #                                  haiku, claude-opus-5…) — vale pra claude, pi e kimi.
 #                                  --effort <low|medium|high|xhigh|max> já abre nesse esforço
@@ -33,6 +41,8 @@
 # `hangar-conta --new <nome>` cria uma (o /login é interativo, feito na primeira sessão dela).
 # `hangar-send --new <nome> <cwd> --conta 200-01` abre a sessão já logada naquela conta — o consumo vai
 # pra assinatura DELA, não pra conta padrão. Sem o flag, nasce na conta padrão (~/.claude).
+# `--conta auto` pergunta ao backend (GET /api/cotas/sugestao) qual conta tem mais folga e nasce
+# nela; sem nenhuma conta com leitura de cota o script para com erro, nunca cai calado na padrão.
 #
 # Remetente é detectado pelo nome da sessão tmux atual e prefixado como "[de: X]",
 # pra sessão destino saber a origem e pra onde responder.
@@ -195,10 +205,17 @@ me() {
 }
 
 if [[ "$1" == "--pair" ]]; then
-    peer="${2:?uso: hangar-send --pair <sessao|servidor::sessao> [tarefa...]}"; shift 2
+    peer="${2:?uso: hangar-send --pair <sessao|servidor::sessao> [tarefa...] [--substituir-tarefa]}"; shift 2
+    substituir=false
+    tarefa=""
+    # --substituir-tarefa em QUALQUER posição entre os tokens restantes, não só logo após o peer —
+    # senão "hangar-send --pair X 'PM-2' --substituir-tarefa" dobrava a flag pro texto da tarefa.
+    for arg in "$@"; do
+        if [[ "$arg" == "--substituir-tarefa" ]]; then substituir=true; else tarefa="$tarefa${tarefa:+ }$arg"; fi
+    done
     # peer local (nome cru) OU remoto (servidor::sessao) — o backend local resolve o remoto via
     # peers.json + CP_SERVER_ID e registra o vínculo dos dois lados (/pair-remote). Cross-server é 1:1.
-    body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2]}))' "$peer" "$*")
+    body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2], "replace_task": sys.argv[3] == "true"}))' "$peer" "$tarefa" "$substituir")
     api POST "/api/sessions/$(me)/pair" "$body" >/dev/null
     echo "pareado: $(me) <-> $peer (registrado no app; os dois lados recebem o protocolo)"
     exit 0
@@ -206,7 +223,7 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]}"
+    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]}"
     shift
     if [[ "$name" == *::* ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
@@ -217,7 +234,7 @@ if [[ "$1" == "--new" ]]; then
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]" >&2
+        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
@@ -246,7 +263,7 @@ if [[ "$1" == "--new" ]]; then
                 conta="${2:?uso: --conta <nome>}"; shift 2 ;;
             --provider)
                 [[ -n "$provider" ]] && { echo "erro: --provider informado duas vezes" >&2; exit 2; }
-                provider="${2:?uso: --provider <claude|codex|pi|kimi>}"; shift 2 ;;
+                provider="${2:?uso: --provider <claude|codex|pi|omp|kimi>}"; shift 2 ;;
             --model)
                 [[ -n "$model" ]] && { echo "erro: --model informado duas vezes" >&2; exit 2; }
                 model="${2:?uso: --model <id>}"; shift 2 ;;
@@ -266,7 +283,19 @@ if [[ "$1" == "--new" ]]; then
     cwd="${cwd:-$HOME}"
     # Conta inexistente para AQUI, antes do POST: o backend recusaria com 400, mas o erro do
     # hangar-conta já diz o nome errado e o `hangar-conta --list` mostra os certos.
-    if [[ -n "$conta" ]]; then
+    # --conta auto: o backend escolhe a conta Claude com mais folga na janela que mais aperta
+    # (5h, 7d ou a semanal por modelo). Sem conta com leitura de cota ele responde 404 — e aqui
+    # isso PARA, em vez de cair calado na conta padrão que talvez seja justo a esgotada.
+    if [[ "$conta" == "auto" ]]; then
+        sugestao=$(api GET /api/cotas/sugestao) || {
+            echo "erro: nenhuma conta com leitura de cota — escolha uma: hangar-conta --list" >&2
+            exit 2
+        }
+        IFS=$'\t' read -r config_dir conta < <(python3 -c 'import json,sys
+s = json.load(sys.stdin); print(s["path"] + "\t" + s["label"])' <<<"$sugestao")
+        echo "conta escolhida pela cota: $conta" >&2
+    fi
+    if [[ -n "$conta" && "$config_dir" == "" ]]; then
         config_dir=$("$(dirname "$(realpath "$0")")/hangar-conta" --prep "$conta") || {
             echo "erro: conta '$conta' indisponível — veja as configuradas com: hangar-conta --list" >&2
             exit 2
@@ -306,10 +335,32 @@ fi
 
 if [[ "$1" == "--group" ]]; then
     shift
-    [[ $# -ge 1 ]] || { echo "uso: hangar-send --group <mensagem...>" >&2; exit 2; }
-    body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$*")
-    resp=$(api POST "/api/sessions/$(me)/group-message" "$body")
-    python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("aviso enviado ao grupo:", ", ".join(d["peers"])); w=d.get("warning"); print("  ⚠", w) if w else None' "$resp"
+    forcar_tmux=false
+    if [[ "${1:-}" == "--tmux" ]]; then forcar_tmux=true; shift; fi
+    [[ $# -ge 1 ]] || { echo "uso: hangar-send --group [--tmux] <mensagem...>" >&2; exit 2; }
+    eu=$(me)
+    nativo=false; [[ -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}" ]] && nativo=true
+    body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "remetente_nativo": sys.argv[2] == "true", "forcar_tmux": sys.argv[3] == "true"}))' "$*" "$nativo" "$forcar_tmux")
+    resp=$(api POST "/api/sessions/$eu/group-message" "$body")
+    # Resumo no stdout (pulados NÃO entram aqui — quem chegou pelo tmux) e a lista de pulados,
+    # separada, pro código 3 abaixo — dois python3 em vez de /dev/tty (ruling do controlador).
+    python3 -c 'import json,sys
+d = json.loads(sys.argv[1])
+pul = d.get("pulados", [])
+entregues = [p for p in d["peers"] if p not in pul]
+if entregues: print("aviso enviado ao grupo:", ", ".join(entregues))
+w = d.get("warning")
+if w: print("  ⚠", w.get("msg", w))' "$resp"
+    pulados=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(",".join(d.get("pulados", [])))' "$resp")
+    if [[ -n "$pulados" ]]; then
+        # stderr + código 3, como o 1:1: o modelo PRECISA ver que ainda não entregou a esses.
+        cat >&2 <<EOF
+pendente: $pulados têm o caminho nativo — mande a CADA um, via SendMessage, exatamente este texto:
+[grupo: $eu] $*
+(ou repita com --group --tmux pra digitar no terminal deles)
+EOF
+        exit 3
+    fi
     exit 0
 fi
 

@@ -1,0 +1,230 @@
+#!/usr/bin/env node
+// hangar-preview — dirige o navegador embutido DA SUA SESSÃO no shell Electron do hangar.
+//
+//   hangar-preview open <url>             abre o navegador desta sessão com a url (o painel monta
+//                                          sozinho na tela do usuário; se a sessão estiver fora da
+//                                          tela, abre quando ele abrir ela)
+//   hangar-preview list                    navegadores vivos (chave, url, vivo/morto)
+//   hangar-preview snapshot                árvore de acessibilidade compacta, com refs @eN
+//   hangar-preview click @eN               clica no elemento da ref
+//   hangar-preview fill @eN <texto>        limpa o campo da ref e digita o texto
+//   hangar-preview type <texto>            digita no elemento com foco
+//   hangar-preview press <tecla>           uma tecla (Enter, Tab, Escape, ...)
+//   hangar-preview hover @eN               passa o mouse sobre a ref
+//   hangar-preview wait <@eN|--url texto|--text texto|--idle|Nms>   espera algo acontecer
+//   hangar-preview eval '<js>'             roda JS na página e imprime o resultado
+//   hangar-preview tema <claro|escuro|sistema>
+//   hangar-preview console [--limpar]      log do console da página
+//   hangar-preview network                 últimas respostas de rede
+//   hangar-preview text                    texto visível da página (innerText)
+//   hangar-preview url                     URL atual do navegador desta sessão
+//   hangar-preview shot [arquivo.png]      screenshot (default /tmp/hangar-preview-<sessao>.png)
+//   hangar-preview batch                   lê várias linhas do stdin, uma por comando (ver skill)
+//
+// A sessão é resolvida pelo nome da sessão tmux atual (dentro do tmux); fora dele, ou pra operar
+// o navegador de OUTRA sessão, use --sessao <nome>.
+//
+// Como funciona: o shell mantém um controlador por navegador (fila, refs, tema, buffers de
+// console/rede) dentro do processo Electron, e publica porta+token efêmeros num sidecar que só o
+// dono lê (~/.hangar/nav/_srv.json). Este CLI é cliente HTTP desse servidor local (POST /cmd) —
+// não fala CDP direto: dois clientes CDP no mesmo alvo o Electron recusa quando o DevTools daquele
+// webContents está aberto. `open` e `list` continuam fora do servidor: `open` passa pelo backend
+// (quem monta o painel na tela) e `list` só lê os sidecares de sessão — os dois têm que funcionar
+// mesmo com o shell fora do ar.
+import { execSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import fmt from '../shell/preview_fmt.cjs';
+
+const CDP = 'http://127.0.0.1:9223';
+const DIR = join(homedir(), '.hangar', 'nav');
+const VERBOS_SERVIDOR = new Set([
+  'snapshot', 'click', 'fill', 'type', 'press', 'hover', 'wait', 'eval',
+  'tema', 'console', 'network', 'text', 'url', 'shot',
+]);
+
+function erro(msg, codigo = 1) {
+  console.error(`hangar-preview: ${msg}`);
+  process.exit(codigo);
+}
+
+// --- argumentos ---
+const args = process.argv.slice(2);
+const flags = {};
+const pos = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--sessao') flags.sessao = args[++i];
+  else pos.push(args[i]);
+}
+const cmd = pos[0];
+if (!cmd || cmd === 'help' || cmd === '--help') {
+  console.log(`uso: hangar-preview <verbo> [args] [--sessao <nome>]
+
+  open <url>              abre o navegador desta sessão com a url
+  list                    navegadores vivos (chave, url, vivo/morto)
+  snapshot                árvore de acessibilidade compacta, com refs @eN
+  click @eN               clica no elemento da ref
+  fill @eN <texto>        limpa o campo da ref e digita o texto
+  type <texto>            digita no elemento com foco
+  press <tecla>           uma tecla (Enter, Tab, Escape, ...)
+  hover @eN               passa o mouse sobre a ref
+  wait <alvo>             @eN | --url <trecho> | --text <trecho> | --idle | <ms>
+  eval '<js>'             roda JS na página (expressão ou declarações) e imprime o resultado
+  tema <claro|escuro|sistema>
+  console [--limpar]      log do console da página
+  network                 últimas respostas de rede
+  text                    texto visível da página (innerText), sem árvore
+  url                     URL atual
+  shot [arquivo.png]      screenshot (default /tmp/hangar-preview-<sessao>.png)
+  batch                   lê várias linhas do stdin, uma por comando
+
+Referência completa: skill hangar-preview.`);
+  process.exit(0);
+}
+
+// --- resolve a sessão (chave serverId::nome) ---
+function nomeSessao() {
+  if (flags.sessao) return flags.sessao;
+  if (process.env.TMUX) {
+    try {
+      return execSync('tmux display-message -p "#S"').toString().trim();
+    } catch { /* tmux indisponível */ }
+  }
+  return null;
+}
+
+function lerSidecars() {
+  if (!existsSync(DIR)) return [];
+  return readdirSync(DIR)
+    // _srv.json é o sidecar do PROCESSO (porta+token do servidor local), não de um navegador.
+    .filter((a) => a.endsWith('.json') && !a.startsWith('.') && a !== '_srv.json')
+    .map((a) => {
+      try { return JSON.parse(readFileSync(join(DIR, a), 'utf8')); } catch { return null; }
+    })
+    .filter(Boolean);
+}
+
+function sidecarDa(nome) {
+  const todos = lerSidecars();
+  if (!todos.length) erro('nenhum navegador aberto em nenhuma sessão (abra o seu com: hangar-preview open <url>)');
+  if (!nome) erro('fora do tmux não dá pra saber a sessão — use --sessao <nome>. Vivos:\n' + todos.map((s) => `  ${s.chave}  ${s.url}`).join('\n'));
+  const achados = todos.filter((s) => s.chave === nome || s.chave.endsWith(`::${nome}`));
+  if (achados.length === 1) return achados[0];
+  if (!achados.length) erro(`a sessão "${nome}" não tem navegador aberto. Vivos:\n` + todos.map((s) => `  ${s.chave}  ${s.url}`).join('\n'));
+  erro(`"${nome}" existe em mais de um servidor — use a chave completa:\n` + achados.map((s) => `  ${s.chave}`).join('\n'));
+}
+
+// --- CDP mínimo, só pro liveness check do `list` ---
+async function targets() {
+  try {
+    return await (await fetch(`${CDP}/json/list`)).json();
+  } catch {
+    erro('o shell do hangar não está no ar (9223 não responde). O navegador embutido vive no app desktop.');
+  }
+}
+
+// --- cliente do servidor local (Task 5) ---
+const MSG_SHELL_FORA = 'o shell do hangar nao esta no ar (ou e uma versao antiga): abra o app e tente de novo';
+
+// A porta de loopback do sidecar pode ter sido RECICLADA por outro processo depois que o app
+// fechou (o _srv.json não é apagado na saída — só no will-quit do main.cjs, e sinal/crash ainda
+// deixa o arquivo pra trás). Sem conferir o pid, o CLI falaria com quem estiver ali agora e
+// imprimiria a resposta dele como se fosse do navegador. "pid morto é sessão morta, não sessão a
+// reconectar."
+function pidVivo(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (err) { return err && err.code === 'EPERM'; }
+}
+
+function srv() {
+  let dados;
+  try {
+    dados = JSON.parse(readFileSync(join(DIR, '_srv.json'), 'utf8'));
+  } catch {
+    erro(MSG_SHELL_FORA);
+  }
+  if (!pidVivo(dados.pid)) erro(MSG_SHELL_FORA);
+  return dados;
+}
+
+async function comando(chave, verbo, cmdArgs) {
+  const { porta, token } = srv();
+  const r = await fetch(`http://127.0.0.1:${porta}/cmd`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chave, verbo, args: cmdArgs }),
+  });
+  const texto = await r.text();
+  console.log(texto);
+  // O servidor local responde SEMPRE 200 (é o texto que carrega erro: ...) — r.ok não basta.
+  return r.ok && !texto.startsWith('erro:') ? 0 : 1;
+}
+
+// --- comandos ---
+if (cmd === 'open') {
+  // Pede ao BACKEND pra entregar o evento 'nav' no SSE da sessão — o painel monta sozinho na tela
+  // (quem posiciona o view é o painel; não existe view invisível). Token do backend/.env ao lado
+  // do script, mesmo padrão do hangar-send.
+  const url = pos[1];
+  if (!url) erro('open precisa de uma url: hangar-preview open localhost:3000');
+  const nome = nomeSessao();
+  if (!nome) erro('fora do tmux não dá pra saber a sessão — use --sessao <nome>');
+  const repo = join(dirname(realpathSync(process.argv[1])), '..');
+  let token = '';
+  try {
+    token = readFileSync(join(repo, 'backend', '.env'), 'utf8').match(/^CP_AUTH_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
+  } catch { /* sem .env */ }
+  if (!token) erro('não achei CP_AUTH_TOKEN no backend/.env do repo');
+  const res = await fetch(`http://127.0.0.1:${process.env.PORT || 8765}/api/sessions/${encodeURIComponent(nome)}/nav`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ url }),
+  });
+  if (res.status === 404) erro(`a sessão "${nome}" não existe no backend`);
+  if (!res.ok) erro(`o backend recusou: ${res.status} ${await res.text()}`);
+  console.log(`navegador de "${nome}" abrindo com ${url} (se a sessão estiver fora da tela, abre quando o usuário abrir ela)`);
+  process.exit(0);
+}
+
+if (cmd === 'list') {
+  const vivos = await targets();
+  const linhas = lerSidecars().map((s) => {
+    const vivo = vivos.some((t) => (s.targetId && t.id === s.targetId) || t.url === s.url);
+    return `${s.chave}  ${s.url}  ${vivo ? 'vivo' : 'MORTO (reabra pelo painel)'}`;
+  });
+  console.log(linhas.length ? linhas.join('\n') : 'nenhum navegador registrado');
+  process.exit(0);
+}
+
+if (VERBOS_SERVIDOR.has(cmd)) {
+  if (cmd === 'eval' && !pos[1]) erro('eval precisa de um trecho JS: hangar-preview eval \'document.title\'');
+  const chave = sidecarDa(nomeSessao()).chave;
+  const cmdArgs = pos.slice(1);
+  // Sempre absoluto, resolvido contra o cwd do CLI (é o cwd que o agente conhece) — um caminho
+  // relativo mandado cru pro shell grava no cwd de onde o ELECTRON subiu, não no do agente, e a
+  // resposta citava um caminho que não existia onde o agente (e o app do celular) foram procurar.
+  if (cmd === 'shot') {
+    cmdArgs[0] = resolve(cmdArgs[0] || `/tmp/hangar-preview-${(nomeSessao() || 'nav').replace(/\W+/g, '-')}.png`);
+  }
+  process.exit(await comando(chave, cmd, cmdArgs));
+}
+
+if (cmd === 'batch') {
+  const chave = sidecarDa(nomeSessao()).chave;
+  const linhas = readFileSync(0, 'utf8'); // stdin inteiro
+  const comandos = fmt.parseLote(linhas);
+  // Para na PRIMEIRA linha que falhar: seguir depois de um `click` que não achou o alvo faz o
+  // próximo `type` (ex.: senha) digitar no que estiver com foco, que não é o campo pretendido.
+  for (let i = 0; i < comandos.length; i++) {
+    const { verbo, args: a } = comandos[i];
+    const codigo = await comando(chave, verbo, a);
+    if (codigo !== 0) {
+      console.error(`hangar-preview: batch parou na linha ${i + 1} (${verbo})`);
+      process.exit(codigo);
+    }
+  }
+  process.exit(0);
+}
+
+erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|console|network|text|url|shot|batch)`);

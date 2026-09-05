@@ -22,12 +22,13 @@ export interface LoopState {
 
 // Qual Adapter dirige a sessao (app.adapters.get_adapter no backend). "claude" e o default;
 // "codex" identifica as criadas via registry.create_codex; "pi" as detectadas pelo processo do
-// pane (registry.provider_of_pane); "kimi" idem ao pi (pane tmux, transcript tardio). O front usa
+// pane (registry.provider_of_pane); "kimi" idem ao pi (pane tmux, transcript tardio); "omp" e o
+// oh-my-pi, fork do pi — mesmo transcript, mas a pergunta ao usuario vem da tool `ask`. O front usa
 // isto pra esconder controles Claude-only (picker de /model, slash-commands) e pra rotular a
 // sessao (lib/format.providerName).
 // Tipo nomeado porque a mesma uniao viaja pela cadeia de criacao (CreateSessionSheet -> handleCreate
 // das duas views -> api.createSession): quando o Pi entrou, as copias literais ficaram pra tras.
-export type Provider = 'claude' | 'codex' | 'pi' | 'kimi';
+export type Provider = 'claude' | 'codex' | 'pi' | 'kimi' | 'omp';
 
 export interface SessionInfo {
   name: string;
@@ -40,6 +41,8 @@ export interface SessionInfo {
   // marca "sem id" e bloqueia o chat (evita mostrar/trocar a conversa errada).
   tracked?: boolean;
   branch?: string | null;   // branch git atual do cwd (mostrada na lista de sessões)
+  /** cwd é uma worktree ligada (`.git` arquivo) — marcador ⧉ ao lado da branch nas duas listas. */
+  worktree?: boolean;
   // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;
   // untracked não conta). null = cwd sem repo ou repo sem commit nenhum -> sem badge.
   git_added?: number | null;
@@ -51,6 +54,13 @@ export interface SessionInfo {
   // True quando "working" ha mais de CP_STALL_SECONDS sem avancar (feature #7: watchdog de travada) —
   // so tinge a linha; o backend (stall_watch.py) e quem decide o push.
   stalled?: boolean;
+  // Problema DESTA sessão que o app mostra em vez de esconder. Vem como CÓDIGO do backend e é
+  // traduzido aqui (regra de i18n). Hoje só 'codex_hooks_nao_aprovados': sessão Codex com turno
+  // andando no rollout e nenhum marcador de estado — sem isto ela apareceria ociosa trabalhando.
+  problema?: string | null;
+  // Só na resposta do POST /api/sessions: avisos da reconciliação da conta (plugin ligado sem
+  // instalação, /model desfeito pelo principal). Texto já pronto do backend; a Sidebar mostra em flash.
+  avisos?: string[];
   // Feature #8 (rate-limit radar): banner de limite de uso detectado no pane (best-effort). limit_reset
   // = horario cru do reset ("3pm"/"15:30"), pro chip "limitado · HH:MM".
   limited?: boolean;
@@ -89,10 +99,13 @@ export interface SessionInfo {
 
 // Detalhe do plano (GET /api/sessions/{name}/plan, Task 5): granularidade de Task/Step que o
 // SessionInfo.plan_* não carrega (aquele é o resumo pra chip/barra na lista). 404 = sem plano ativo.
-export interface PlanStep { title: string; done: boolean; manual: boolean }
+// `idx` é a posição 0-based do step na ordem do DOCUMENTO (não dentro da Task): é a chave que o
+// POST /plan-step devolve pro backend, porque título repete entre Tasks.
+export interface PlanStep { title: string; done: boolean; manual: boolean; idx: number }
 export interface PlanTask { title: string; done: number; total: number; steps: PlanStep[] }
 export interface PlanDetail {
   name: string; path: string;
+  stem: string;              // nome do arquivo sem .md — reabre o plano pra marcar/arquivar
   task: number; task_total: number;
   done: number; total: number; complete: boolean;
   tasks: PlanTask[];
@@ -118,7 +131,9 @@ export interface ResumeCandidate {
 export type ResumeResult = SessionInfo | { ambiguous: true; candidates: ResumeCandidate[] };
 
 export interface ChatEvent {
-  kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result';
+  // `thinking` = resumo do raciocínio. Só chega quando a sessão foi aberta com o resumo ligado
+  // (settings.json["showThinkingSummaries"]); no Pi e no Kimi o texto é o raciocínio cru.
+  kind: 'user_msg' | 'assistant_msg' | 'tool_use' | 'tool_result' | 'thinking';
   id: string;
   text?: string | null;
   tool_name?: string | null;
@@ -500,8 +515,8 @@ export interface PiModelsResponse {
   levels: string[];
 }
 
-// Um anexo já enviado pra sessão (GET /api/sessions/{name}/uploads) — a galeria lista o diretório
-// <cwd>/.hangar-uploads. expires_in_days vem do backend (só ele conhece o prazo de retenção);
+// Um anexo já enviado pra sessão (GET /api/sessions/{name}/uploads) — a galeria lista a pasta
+// daquela sessão no cofre. expires_in_days vem do backend (só ele conhece o prazo de retenção);
 // null = retenção desligada e PODE ser <= 0: o prune só roda no próximo upload, então um anexo
 // vencido continua aparecendo até lá.
 export interface UploadFile {
@@ -642,6 +657,8 @@ export interface AtualizacaoEstado {
   /** O servidor respondeu depois disso. Separado de `voltou`: reverter e não subir é um terceiro caso. */
   no_ar?: boolean;
   reiniciar_manual?: boolean;
+  /** O último reinício pedido pela tela falhou. Escrito pelo processo destacado, único canal dele. */
+  reinicio_erro?: string | null;
   /** Arquivos de `docs/atualizacoes/` que o app ignorou por estarem malformados. */
   passos_invalidos?: string[];
   /** Comandos e saída, pra tela poder mostrar o que está rodando agora. */
@@ -650,6 +667,8 @@ export interface AtualizacaoEstado {
   etapa_inicio?: string;
   /** Terminou bem, mas algo ficou pra trás (ex: dependências da janela nativa). */
   avisos?: string[];
+  /** O pull tocou `shell/`: a janela nativa só pega o código novo ao fechar e abrir o app. */
+  shell_mudou?: boolean;
   commit_de?: string;
   commit_para?: string;
   ts?: string;
@@ -664,6 +683,8 @@ export interface AtualizacaoPreVoo {
   behind?: number;
   divergiu?: boolean;
   topologia?: 'systemd' | 'windows' | 'manual';
+  /** Checkout fora de main/master: atualizar arrastaria a branch de trabalho, então o backend recusa. */
+  branch_de_trabalho?: boolean;
 }
 
 export interface Atualizacao {

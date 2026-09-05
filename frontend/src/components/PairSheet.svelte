@@ -7,6 +7,7 @@
   import { getActiveId } from '../lib/auth';
   import type { SessionInfo, State } from '@hangar/core';
   import * as m from '../paraglide/messages';
+  import GroupGlyph from './icons/GroupGlyph.svelte';
 
   interface Props {
     open: boolean;
@@ -180,7 +181,7 @@
     {#if peers.length}
       <!-- Tudo que ROLA fica aqui; o rodape com "Sair do grupo" fica preso embaixo. -->
       <div class="pair-scroll">
-      <h2 class="title">{m.par_grupo_titulo({ n: peers.length + 1 })}</h2>
+      <h2 class="title"><GroupGlyph size={18} /> {m.par_grupo_titulo({ n: peers.length + 1 })}</h2>
       <p class="hint">
         {m.par_membros_hint()}
       </p>
@@ -243,7 +244,7 @@
                   {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
                 </span>
                 {#if s.pair_peers?.length}
-                  <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}>🤝 {s.pair_peers.length}</span>
+                  <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}><GroupGlyph size={12} /> {s.pair_peers.length}</span>
                 {/if}
               </button>
             {/each}
@@ -316,7 +317,7 @@
                 {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
               </span>
               {#if s.pair_peers?.length}
-                <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}>🤝 {s.pair_peers.length}</span>
+                <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}><GroupGlyph size={12} /> {s.pair_peers.length}</span>
               {/if}
             </button>
           {/each}
@@ -340,7 +341,7 @@
 <style>
   .pair { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
 
-  .title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
+  .title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: var(--space-2); }
 
   .hint { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; }
 

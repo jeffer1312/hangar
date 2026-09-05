@@ -41,6 +41,10 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   getArchivePorCwd: vi.fn(async () => []),
   getArchiveHistory: vi.fn(async () => []),
   resumeArchivedConversation: vi.fn(),
+  // Passagem de bastão. O GET só é chamado quando alguém abre a prévia (recolhida por padrão);
+  // o POST é a ação, e os testes abaixo afirmam que ele NÃO acontece quando a folha recusa.
+  getBastao: vi.fn(async () => '# dossiê'),
+  passarBastao: vi.fn(),
 }));
 vi.mock('./FolderScanner.svelte', () => ({
   default: createRawSnippet(() => ({ render: () => '<div />' })),
@@ -625,6 +629,174 @@ describe('CreateSessionSheet — retomar conversa da pasta', () => {
     const rotulos = [...document.querySelectorAll('.sel-item')].map((b) => b.textContent ?? '');
     expect(rotulos.some((t) => t.includes('esta da pra retomar'))).toBe(true);
     expect(rotulos.some((t) => t.includes('esta esta aberta'))).toBe(false);
+    unmount(comp);
+  });
+});
+
+describe('CreateSessionSheet — modo bastão', () => {
+  const SERVIDORES = [
+    { id: 'srv-a', label: 'Servidor A', baseUrl: 'http://a', token: 'x' },
+    { id: 'srv-b', label: 'Servidor B', baseUrl: 'http://b', token: 'y' },
+  ];
+
+  function montarBastao(props: { servidores?: unknown[]; bastao: unknown }) {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(Harness, {
+      target: el,
+      props: { onCreate, onOpenSession: vi.fn(), ...props } as never,
+    });
+    return { el, comp };
+  }
+
+  const campoNome = () => (document.querySelector('#session-name') as HTMLInputElement | null)?.value;
+
+  it('abre no servidor da ORIGEM, não no ativo, e trava os outros chips', async () => {
+    // Sem servidor ativo em localStorage o fallback do sheet é `servers[0]` = Servidor A. O modo
+    // bastão tem que vencer isso: o dossiê é arquivo no disco do B, e criar no A daria uma sessão
+    // apontando pra um caminho que não existe lá.
+    const { comp } = montarBastao({
+      servidores: SERVIDORES,
+      bastao: { name: 'sess-1', cwd: '/tmp/x', serverId: 'srv-b' },
+    });
+    await flush();
+    const chips = [...document.querySelectorAll<HTMLButtonElement>('.server-chip')];
+    expect(chips.find((c) => c.classList.contains('on'))?.textContent?.trim()).toBe('Servidor B');
+    expect(chips.find((c) => c.textContent?.includes('Servidor A'))!.disabled).toBe(true);
+    expect(chips.find((c) => c.textContent?.includes('Servidor B'))!.disabled).toBe(false);
+    // A frase nomeia a máquina, então tem que ser a da ORIGEM — não a que estiver selecionada.
+    expect(document.querySelector('.hint-travado')?.textContent).toContain('Servidor B');
+    unmount(comp);
+  });
+
+  it('servidor da origem fora da lista: recusa em vez de nomear a máquina errada', async () => {
+    const { comp } = montarBastao({
+      servidores: SERVIDORES,
+      bastao: { name: 'sess-1', cwd: '/tmp/x', serverId: 'srv-que-sumiu' },
+    });
+    await flush();
+    // Nada de "o dossiê está no disco de Servidor A" — a frase travada some, e a recusa aparece
+    // já no cabeçalho (sem pasta escolhida o formulário nem existe).
+    expect(document.querySelector('.hint-travado')).toBeNull();
+    expect(document.body.textContent).toContain(m.bastao_servidor_sumiu());
+    // E com a pasta escolhida o botão continua travado — `disabled` E guarda no clique.
+    await escolherPasta();
+    const botao = [...document.querySelectorAll<HTMLButtonElement>('.primary-btn')].at(-1)!;
+    expect(botao.disabled).toBe(true);
+    botao.click();
+    await flush();
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(api.passarBastao).not.toHaveBeenCalled();
+    unmount(comp);
+  });
+
+  it('nome do sucessor: próxima letra livre a partir da origem', async () => {
+    vi.mocked(api.getSessions).mockResolvedValueOnce(
+      [{ name: 'pm18368-t24' }, { name: 'pm18368-t24b' }] as never,
+    );
+    const { comp } = montarBastao({
+      servidores: SERVIDORES,
+      bastao: { name: 'pm18368-t24', cwd: '/tmp/x', serverId: 'srv-a' },
+    });
+    await flush();
+    expect(campoNome()).toBe('pm18368-t24c');
+    unmount(comp);
+  });
+
+  it('nome do sucessor sanitiza como o backend antes de comparar e de mostrar', async () => {
+    // `api.v2` vira `api-v2` no backend (sanitize_session_name). Sem sanitizar aqui, a tela
+    // mostraria `api.v2b` e a checagem de colisão compararia contra um nome que não existe —
+    // o choque com o `api-v2b` real só apareceria no create.
+    vi.mocked(api.getSessions).mockResolvedValueOnce([{ name: 'api-v2b' }] as never);
+    const { comp } = montarBastao({
+      servidores: SERVIDORES,
+      bastao: { name: 'api.v2', cwd: '/tmp/x', serverId: 'srv-a' },
+    });
+    await flush();
+    expect(campoNome()).toBe('api-v2c');
+    unmount(comp);
+  });
+});
+
+describe('CreateSessionSheet — modelo e esforço do Codex', () => {
+  // O catálogo do Codex vem do `model/list` (backend: app/codex_models.py) e os níveis são POR
+  // MODELO — medido em 30/08/2026, codex-cli 0.151.0: `gpt-5.6-sol` aceita `ultra`, `gpt-5.5` não,
+  // e `gpt-5.5` também não aceita `max`. Uma lista fechada na tela esconderia metade do catálogo.
+  const CODEX = {
+    kind: 'codex', reduced: false,
+    models: [
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], default_effort: 'low' },
+      { id: 'gpt-5.5', name: 'GPT-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], default_effort: 'medium' },
+    ],
+  };
+
+  async function abrirNoCodex() {
+    vi.mocked(api.modelOptions).mockImplementation(async (p) =>
+      p === 'codex' ? (CODEX as never)
+                    : ({ kind: 'claude', reduced: true, models: [{ id: 'opus' }] } as never));
+    const montado = montar();
+    await flush();
+    await escolherPasta();
+    [...(document.querySelectorAll('.provider-tile') as unknown as HTMLElement[])]
+      .find((b) => b.textContent!.trim().endsWith('Codex'))!.click();
+    await flush();
+    return montado;
+  }
+
+  it('oferece a lista do catálogo do Codex', async () => {
+    const { comp } = await abrirNoCodex();
+    expect(vi.mocked(api.modelOptions).mock.calls.at(-1)![0]).toBe('codex');
+    (document.querySelector('#model-pick') as HTMLElement).click();
+    await tick();
+    const itens = [...document.querySelectorAll('.sel-item')].map((b) => b.textContent);
+    expect(itens.some((t) => t?.includes('GPT-5.6-Sol'))).toBe(true);
+    unmount(comp);
+  });
+
+  it('os níveis de esforço saem do modelo escolhido, não de uma lista fixa', async () => {
+    const { comp } = await abrirNoCodex();
+    // Sem modelo escolhido não há níveis conhecidos: o padrão do Codex é o do config.toml dele, e
+    // inventar uma lista aqui ofereceria nível que aquele modelo pode não aceitar.
+    expect(document.querySelector('#effort-pick')).toBeNull();
+
+    const niveisAbertos = async () => {
+      (document.querySelector('#effort-pick') as HTMLElement).click();
+      await tick();
+      return [...document.querySelectorAll('.sel-item')].map((b) => b.textContent!.trim());
+    };
+    await escolherNoCombo('#model-pick', 'GPT-5.6-Sol');
+    expect(await niveisAbertos()).toContain('ultra');
+    (document.body.querySelector('.sel-fora') as HTMLElement)?.click();
+    await tick();
+
+    await escolherNoCombo('#model-pick', 'GPT-5.5');
+    const niveis = await niveisAbertos();
+    expect(niveis).toContain('xhigh');
+    expect(niveis).not.toContain('ultra');
+    expect(niveis).not.toContain('max');
+    unmount(comp);
+  });
+
+  it('trocar pra um modelo sem aquele nível limpa o esforço escolhido', async () => {
+    // Senão a sessão nasceria pedindo `ultra` num modelo que não o lista, e o combo mostraria um
+    // valor que não está mais entre as opções.
+    const { comp } = await abrirNoCodex();
+    await escolherNoCombo('#model-pick', 'GPT-5.6-Sol');
+    await escolherNoCombo('#effort-pick', 'ultra');
+    expect(document.querySelector('#effort-pick')!.textContent).toContain('ultra');
+    await escolherNoCombo('#model-pick', 'GPT-5.5');
+    expect(document.querySelector('#effort-pick')!.textContent).toContain(m.criar_padrao());
+    unmount(comp);
+  });
+
+  it('a escolha chega ao create', async () => {
+    const { comp } = await abrirNoCodex();
+    await escolherNoCombo('#model-pick', 'GPT-5.6-Sol');
+    await escolherNoCombo('#effort-pick', 'xhigh');
+    (document.querySelector('.primary-btn') as HTMLElement).click();
+    await flush();
+    // (nome, cwd, configDir, provider, engine, model, effort, permissao)
+    expect(onCreate).toHaveBeenCalledWith('x', '/tmp/x', null, 'codex', null, 'gpt-5.6-sol', 'xhigh', null);
     unmount(comp);
   });
 });

@@ -7,6 +7,8 @@ vem de `list_config_dirs` fake, o login de `_auth_status` fake e o limite de `_l
 O login remoto (Task 7) é testado contra `login_conta` fake: a janela escondida do tmux e a
 CLI do claude nunca são chamadas de verdade aqui.
 """
+import shutil
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -276,6 +278,8 @@ def test_cancelar_401_sem_credencial(cli):
     r = cli.post("/api/conta-estado/testes/login/cancelar")
     assert r.status_code == 401
 
+@pytest.mark.skipif(shutil.which("claude") is None,
+                    reason="a régua deste caso é a CLI REAL; sem ela (CI) não há o que medir")
 def test_auth_status_real_conta_virgem_e_ok_deslogada(monkeypatch, tmp_path):
     # B1 — a régua "fonte REAL": a CLI existe nesta máquina e responde JSON válido com
     # rc=1 numa conta virgem (deslogada de verdade). `_auth_status` NÃO pode jogar isso

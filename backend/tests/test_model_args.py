@@ -62,15 +62,44 @@ def test_sem_escolha_nao_produz_argumento_nenhum():
 
 
 def test_provider_fora_de_escopo_passa_quando_ninguem_pediu_modelo():
-    """Criar sessão Codex é caminho vivo (api.py:912). Estourar aqui faria TODO POST com
-    provider='codex' devolver 400 sem ninguém ter pedido modelo."""
-    assert ma.validar("codex", None, None) == (None, None)
-    assert ma.args_de("codex", None, None) == []
+    """Criar sessão Kimi com esforço é o caso: estourar sem ninguém ter pedido nada faria TODO
+    POST daquele provider devolver 400."""
+    assert ma.validar("kimi", None, None) == (None, None)
+    assert ma.args_de("kimi", None, None) == []
 
 
-def test_provider_fora_de_escopo_estoura_se_alguem_pedir_modelo():
+def test_provider_fora_de_escopo_estoura_se_alguem_pedir_esforco():
     with pytest.raises(ValueError):
-        ma.validar("codex", "gpt-5", None)
+        ma.validar("kimi", None, "high")
+
+
+def test_codex_aceita_modelo_e_esforco():
+    assert ma.validar("codex", "gpt-5.6-luna", "xhigh") == ("gpt-5.6-luna", "xhigh")
+
+
+def test_codex_nao_tem_lista_fechada_de_nivel():
+    """Os níveis do Codex são POR MODELO e vêm do provedor (`model/list`): `ultra` existe no
+    gpt-5.6-sol e não no gpt-5.5, e `max` não existe no gpt-5.5 — medido em 30/08/2026, codex-cli
+    0.151.0. Uma tupla aqui esconderia metade do catálogo do usuário."""
+    assert ma.validar("codex", "gpt-5.6-sol", "ultra")[1] == "ultra"
+
+
+@pytest.mark.parametrize("torto", ["", "a", "x" * 33, "high high", "high;id", "--high", "High\n"])
+def test_codex_recusa_nivel_com_forma_torta(torto):
+    """Sem lista fechada, o que resta é a forma: o valor vira `-c model_reasoning_effort="..."`
+    dentro do comando do pane."""
+    with pytest.raises(ValueError):
+        ma.validar("codex", "gpt-5.6-sol", torto)
+
+
+def test_codex_nao_produz_flag_de_outro_binario():
+    """A escolha do Codex viaja no lançador (`hangar-codex-tui --model/--effort`), que a traduz pra
+    `-m` e pra sobrescrita de config. Deixar `args_de` devolver `--model` aqui seria a flag de OUTRO
+    binário entrando calada no comando do pane."""
+    with pytest.raises(ValueError):
+        ma.args_de("codex", "gpt-5.6-luna", None)
+    # Sem escolha nenhuma continua sendo o caminho vivo de sempre.
+    assert ma.args_de("codex", None, None) == []
 
 
 def test_so_o_esforco_tambem_vale():

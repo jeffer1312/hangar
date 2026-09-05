@@ -462,6 +462,30 @@ def session_created(name: str) -> float:
         return 0.0
 
 
+def cwd_de(name: str) -> str | None:
+    """Diretorio de uma sessao de UM pane so, num fork so. None = "pergunte pro registry".
+
+    Existe pra quem quer SO o cwd de uma sessao nao pagar a varredura inteira (tmux de todas as
+    sessoes + /proc + git por sessao): medido em 28/08/2026, 0,005s contra 0,239s.
+
+    So responde com UM pane, e isso e o cuidado principal aqui: com 2+ panes quem escolhe o cwd no
+    registry e o `_agent_pane`, que procura o pane do AGENTE — e nao o pane ativo. "Ativo" no tmux
+    e por JANELA, nao por sessao, entao numa sessao com o agente numa janela e um shell na outra em
+    primeiro plano, "o ativo" e o SHELL: responder por ele daria o cwd errado com cara de certo (a
+    rota /commands listaria as skills do projeto errado). Nesse caso devolvemos None e o chamador
+    cai na varredura, que decide como sempre decidiu. Um pane e o caso esmagadoramente comum.
+
+    O `:` no alvo NAO e cosmetico: sem ele, um nome NUMERICO sem sessao correspondente e lido como
+    indice de JANELA e responde pelos panes da sessao ANEXADA, com rc=0 — a mesma pegadinha ja
+    documentada no `list_panes_of` (que usa exatamente este comando) e no `_pane_target`.
+    """
+    cp = _run(["tmux", "list-panes", "-s", "-t", f"={name}:", "-F", "#{pane_current_path}"])
+    if cp.returncode != 0:
+        return None
+    linhas = [l for l in cp.stdout.splitlines() if l.strip()]
+    return linhas[0] if len(linhas) == 1 else None
+
+
 def _config_dir_padrao() -> str:
     """O ~/.claude — que no Claude Code NAO e a mesma coisa que exportar CLAUDE_CONFIG_DIR=~/.claude.
 
@@ -528,6 +552,28 @@ def _e_config_dir(cfg: str) -> list[str]:
     return []
 
 
+def config_dir_de(config_dir: str | None) -> str:
+    """O config dir que uma sessao nascida com este `config_dir` vai usar (a mesma cadeia do
+    `new_session`, num lugar so)."""
+    return config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or _config_dir_padrao()
+
+
+def claude_json_de(config_dir: str | None) -> Path:
+    """O `.claude.json` que o pane criado com este `config_dir` vai LER de verdade.
+
+    Nao e derivavel do config dir sozinho: com `CLAUDE_CONFIG_DIR` ausente o CLI le o da HOME, e
+    com ela setada le o de DENTRO do config dir — dois arquivos diferentes (ver
+    `_config_dir_padrao`). Quem decide se a variavel chega ao pane e o `_e_config_dir`, entao a
+    resposta vem dele, nunca de uma segunda copia da regra. Sem isso o pre-trust da pasta escrevia
+    no `~/.claude.json` enquanto o pane lia `~/.claude/.claude.json`, e a sessao nova nascia presa
+    no "trust this folder?".
+    """
+    cfg = config_dir_de(config_dir)
+    if not _e_config_dir(cfg):
+        return Path.home() / ".claude.json"
+    return Path(cfg) / ".claude.json"
+
+
 def new_session(name: str, cwd: str, command: str, config_dir: str | None = None) -> bool:
     # -e: cores corretas do Claude Code DENTRO do tmux (o claude e spawnado via `exec`, virando o
     # processo do pane sem shell intermediario). COLORTERM=24-bit + CLAUDE_CODE_TMUX_TRUECOLOR curto-circuita o downgrade pra 256
@@ -547,7 +593,7 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # QUANDO esse valor vira `-e` e decisao do `_e_config_dir`: no psmux o pane herda o ambiente do
     # chamador, entao la o `-e` com o valor PADRAO nao defende de vazamento nenhum e ainda joga a
     # sessao no `.claude.json` errado (a tela de boas-vindas). O valor calculado aqui nao muda.
-    cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or _config_dir_padrao()
+    cfg = config_dir_de(config_dir)
     # CP_SESSION_NAME: identidade CARIMBADA no nascimento — "quem sou eu" pra tudo que roda dentro do
     # pane (o hangar-send usa pra assinar recado, parear e desparear). Antes o hangar-send perguntava
     # `tmux display-message -p '#S'`, que NAO e propriedade de quem chama: e a "sessao corrente",

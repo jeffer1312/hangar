@@ -9,11 +9,13 @@ from app.config import pairing_url_api, settings, resolve_bind_ip, pairing_url, 
 from app.hook_installer import (
     ensure_askq_hook_installed,
     ensure_guard_hooks_installed,
+    ensure_nav_hook_installed,
+    ensure_pair_hook_installed,
     ensure_preview_hook_installed,
     ensure_subagent_hook_installed,
     ensure_state_hooks_installed,
 )
-from app import migracao_sidecars
+from app import migracao_sidecars, orq_politica
 from app.hook_state import hook_state
 from app.pi_inbox import escrever_endpoint
 
@@ -129,12 +131,23 @@ def main():
     # que lê ou escreve sidecar: os hooks, o endpoint do Pi e o hook_state logo abaixo já são
     # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
     migracao_sidecars.migrar(_state_dirs)
+    orq_politica.migrar()
+    # Ponte de skills (pi/kimi/codex) — rebuilda as fazendas de symlinks a partir das fontes do
+    # Claude. Aqui e no installer: bump de versão de plugin muda o caminho do cache e link velho
+    # fica pendurado; fail-soft como os hooks, um erro aqui não pode impedir o backend de subir.
+    try:
+        from app import skill_bridge
+        skill_bridge.rebuild(log=lambda m: print(f"[hangar] {m}"))
+    except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
+        print(f"[hangar] AVISO: ponte de skills falhou ({e}); o app segue subindo")
     _passos_pendentes_da_versao()
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()
     ensure_preview_hook_installed()
     ensure_subagent_hook_installed()
+    ensure_pair_hook_installed()
+    ensure_nav_hook_installed()
     ensure_guard_hooks_installed()
     # Idem pro hook do Kimi (config.toml do ~/.kimi-code) — ver app/kimi_hook_installer.py.
     from app.kimi_hook_installer import ensure_kimi_hooks_installed

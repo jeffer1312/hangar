@@ -16,7 +16,7 @@
    */
   import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
-  import { getAtualizacao, iniciarAtualizacao } from '@hangar/core';
+  import { getAtualizacao, iniciarAtualizacao, reiniciarServidor } from '@hangar/core';
   import * as diag from '../lib/diag';
   import { renderMarkdown } from '../lib/markdown';
   import type { Atualizacao } from '@hangar/core';
@@ -112,7 +112,7 @@
         // Com pendência, NÃO recarrega sozinho: o reload some com a caixa, e com ela o único lugar
         // onde o aviso aparece — a pessoa nunca saberia que a janela nativa ficou quebrada. Aqui
         // ela lê e fecha quando quiser.
-        if (estado.ok === true && !faltaReiniciar && !avisos.length) concluir();
+        if (estado.ok === true && !faltaReiniciar && !avisos.length && !shellMudou) concluir();
       } catch (e) {
         // REGISTRA, não engole. O `catch {}` vazio que estava aqui escondia exatamente a classe de
         // erro que esta instrumentação existe pra pegar — e não protegia nada: no navegador, uma
@@ -228,8 +228,28 @@
   const invalidos = $derived(estado.passos_invalidos ?? []);
   /** O instalador terminou bem, mas deixou algo pra trás (ex: dependências da janela nativa). */
   const avisos = $derived(estado.avisos ?? []);
+  // Só dentro da janela nativa: o restart do backend não alcança o `main.cjs` que o Electron já
+  // carregou, e no navegador/celular não há shell nenhum pra reabrir. `Electron/` e não a marca
+  // `hangar-shell`: aquela só entra no user agent quando a janela é transparente (background.ts).
+  // O `shell_mudou` fica gravado no estado até a PRÓXIMA atualização sobrescrevê-lo, então o aviso
+  // reaparecia com o app já reaberto. O shell novo diz o commit que carregou: igual ao atualizado,
+  // o aviso não vale mais. Shell antigo (sem o campo) segue avisando — ele de fato não reabriu.
+  const ponte = (window as { hangar?: { shellCommit?: string | null; relaunch?: () => Promise<void> } }).hangar;
+  const shellJaNovo = $derived(!!ponte?.shellCommit && ponte.shellCommit === estado.commit_para);
+  const shellMudou = $derived(estado.shell_mudou === true && navigator.userAgent.includes('Electron/') && !shellJaNovo);
+  // A página recarrega ao fim da atualização e o preload NOVO expõe `relaunch` mesmo com o main
+  // ainda velho, sem o handler: o invoke rejeita. Falhou = o botão some e a tela diz que é à mão.
+  let reabrirFalhou = $state(false);
+  const podeReabrir = $derived(typeof ponte?.relaunch === 'function' && !reabrirFalhou);
+  function reabrir() {
+    void ponte?.relaunch?.().catch((e: unknown) => {
+      reabrirFalhou = true;
+      diag.registrar({ evento: 'atualizar.reabrir_falhou', nivel: 'aviso', tela: 'config',
+                       detalhe: e instanceof Error ? e.message : String(e) });
+    });
+  }
   const terminouComAvisos = $derived(estado.fase === 'pronto' && estado.ok === true
-                                     && avisos.length > 0);
+                                     && (avisos.length > 0 || shellMudou));
   const decorrido = $derived.by(() => {
     if (!rodando || !estado.etapa_inicio) return '';
     const s = Math.max(0, Math.round((agoraMs - new Date(estado.etapa_inicio).getTime()) / 1000));
@@ -262,6 +282,59 @@
         ? m.atualizar_falhou_voltou_fora()
         : m.atualizar_falhou_voltou(),
   );
+  /**
+   * Dá pra reiniciar daqui? Só quando o disco está à frente do processo E a máquina roda por
+   * systemd — nas outras topologias quem derruba e sobe o servidor é o instalador, e o backend
+   * recusa (409). Sem o botão, a única saída era descobrir o comando do serviço por conta.
+   */
+  const podeReiniciar = $derived(versoesDivergem && dados?.pre_voo?.topologia === 'systemd');
+  /** Checkout numa branch que não é a main: o backend recusa atualizar, e a tela não oferece. */
+  const branchDeTrabalho = $derived(!!dados?.pre_voo?.branch_de_trabalho);
+  let reiniciando = $state(false);
+
+  const _TETO_VOLTAR_MS = 90_000;
+
+  /**
+   * O componente ainda existe? A espera do restart é um laço solto (não um `$effect`), e o
+   * `DesktopShell` que monta esta folha SAI da árvore quando alguém navega pra Custos/Arquivo.
+   * Sem esta bandeira o laço continuava rodando depois da destruição e chamava `location.reload()`
+   * na tela em que a pessoa já estava — o mesmo defeito que a limpeza do `agendar()` resolveu logo
+   * abaixo, por outra porta. `$effect` sem leitura reativa: roda uma vez, limpa na destruição.
+   */
+  let vivo = true;
+  $effect(() => () => { vivo = false; });
+
+  async function reiniciar() {
+    reiniciando = true;
+    erroDeRede = '';
+    try {
+      await reiniciarServidor();
+      // O servidor cai agora, então falha de rede aqui é ESPERADA (mesmo desenho do polling da
+      // atualização). Espera ele voltar JÁ no código do disco — só aí a página recarrega; recarregar
+      // antes serviria o bundle antigo e a tela diria de novo que as versões divergem.
+      const limite = Date.now() + _TETO_VOLTAR_MS;
+      while (Date.now() < limite) {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (!vivo) return;
+        try {
+          const d = await getAtualizacao();
+          if (!vivo) return;
+          if (d.versoes.backend === d.versoes.repo) {
+            concluir();
+            return;
+          }
+        } catch {
+          // fora do ar no meio do restart: é o caminho normal
+        }
+      }
+      erroDeRede = m.atualizar_reinicio_demorou();
+    } catch (e) {
+      erroDeRede = e instanceof Error ? e.message : String(e);
+    } finally {
+      reiniciando = false;
+    }
+  }
+
   const resumo_mudancas = $derived(
     mudancas.length === 1
       ? m.atualizar_disponivel_sub_uma()
@@ -307,10 +380,17 @@
       <h2 class="titulo">{m.atualizar_em_dia_titulo()}</h2>
       <p class="sub">{m.atualizar_com_avisos()}</p>
       <ul class="avisos">
+        {#if shellMudou}<li>{m.atualizar_shell_mudou()}</li>{/if}
+        {#if reabrirFalhou}<li>{m.atualizar_reabrir_falhou()}</li>{/if}
         {#each avisos as aviso (aviso)}<li>{aviso}</li>{/each}
       </ul>
       <div class="acoes">
-        <button class="bt primario" onclick={onClose}>{m.atualizar_fechar()}</button>
+        {#if shellMudou && podeReabrir}
+          <button class="bt primario" onclick={reabrir}>{m.atualizar_reabrir_agora()}</button>
+          <button class="bt" onclick={onClose}>{m.atualizar_fechar()}</button>
+        {:else}
+          <button class="bt primario" onclick={onClose}>{m.atualizar_fechar()}</button>
+        {/if}
       </div>
 
     {:else if faltaReiniciar}
@@ -366,12 +446,20 @@
       {#if trabalhando > 0}
         <p class="aviso">{aviso_sessoes}</p>
       {/if}
+      {#if branchDeTrabalho}
+        <!-- A atualização alinha o disco com origin/main, e numa branch de trabalho isso arrasta a
+             branch junto. Sem o botão aqui, porque a única saída é trocar de branch — e escolher
+             isso por quem está trabalhando não é papel do botão de atualizar. -->
+        <p class="aviso">{m.atualizar_branch_bloqueia({ branch: dados?.pre_voo?.branch ?? '?' })}</p>
+      {/if}
       {#if erroDeRede}<p class="erro-linha">{erroDeRede}</p>{/if}
       <div class="acoes">
         <button class="bt secundario" onclick={onClose}>{m.atualizar_agora_nao()}</button>
-        <button class="bt primario" onclick={atualizar} disabled={enviando}>
-          {m.atualizar_botao()}
-        </button>
+        {#if !branchDeTrabalho}
+          <button class="bt primario" onclick={atualizar} disabled={enviando}>
+            {m.atualizar_botao()}
+          </button>
+        {/if}
       </div>
 
     {:else}
@@ -389,6 +477,12 @@
           <span class="val">{dados?.versoes.backend ?? '—'}</span>
         </div>
         <p class="aviso">{m.atualizar_precisa_reiniciar()}</p>
+        {#if estado.reinicio_erro}
+          <!-- O processo que reinicia é destacado e tem o stderr no /dev/null: sem esta linha, um
+               reinício que falhou não aparece em lugar nenhum e a tela só saberia dizer que o
+               servidor não voltou. -->
+          <p class="erro-linha">{m.atualizar_reinicio_falhou()} {estado.reinicio_erro}</p>
+        {/if}
       {/if}
       {#if invalidos.length}
         <!-- O aviso não pode viver só no log: quem lê os arquivos de passo é o processo destacado,
@@ -401,6 +495,11 @@
         <button class="bt secundario" onclick={() => carregar(false, true)} disabled={carregando}>
           {m.atualizar_procurar()}
         </button>
+        {#if podeReiniciar}
+          <button class="bt primario" onclick={reiniciar} disabled={reiniciando}>
+            {reiniciando ? m.atualizar_reiniciando() : m.atualizar_reiniciar_botao()}
+          </button>
+        {/if}
       </div>
     {/if}
   </div>

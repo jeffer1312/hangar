@@ -2,7 +2,7 @@
   import * as m from '../../paraglide/messages';
   import { mensagemDeErro } from '@hangar/core';
   import type { PathDiff, FileContent } from '@hangar/core';
-  import { highlightDiff, highlightCodeLines, type DiffRow, type DiffToken } from '../../lib/highlight';
+  import { highlightDiff, highlightCodeLines, type DiffRow, type DiffToken } from '../../lib/highlightLazy';
   import { dec } from '../../lib/fmt';
   import DiffView from '../git/DiffView.svelte';
   import CodeEditor from './CodeEditor.svelte';
@@ -323,8 +323,10 @@
       {/if}
       <!-- Leitura: o MESMO editor, com o diff por dentro (unifiedMergeView). É o que troca o
            `diff --git`/`@@` cru por arquivo inteiro, numeração real e trechos iguais dobrados. -->
+      <!-- Base IGUAL ao texto (arquivo sem mudança no escopo) não vira diff: o merge view dobrava
+           o arquivo inteiro em "327 linhas sem mudança" e a tela ficava vazia (medido 26/08). -->
       <CodeEditor texto={doArquivo.text} path={path} editavel={false}
-                  original={verArquivo ? null : baseDoDiff} />
+                  original={verArquivo || baseDoDiff === doArquivo.text ? null : baseDoDiff} />
     {:else if temDiff && diffDoArquivo}
       {@const d = diffDoArquivo}
       {#if d.truncated}

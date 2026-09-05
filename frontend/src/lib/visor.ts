@@ -1,0 +1,291 @@
+// Import de TIPO so: o modulo (22KB no mapa do bundle, mais o CSS) so viaja quando alguem abre uma
+// midia de fato — ver `obterInstancia`. Estatico, ele ia pro chunk de entrada por causa do
+// `FileAttachment`, que esta no caminho critico do chat.
+import type BiggerPictureCtor from 'bigger-picture/vanilla';
+import * as m from '../paraglide/messages';
+
+// Visor de midia do app inteiro: chat, anexo de arquivo e folha de Anexos abrem POR AQUI.
+//
+// Por que uma biblioteca, e nao o terceiro visor caseiro: zoom (roda/clique/pinca), passar entre as
+// midias, arrastar pra fechar, teclado e foco preso sao trabalho que a bigger-picture ja faz em
+// 8,4 KB gzip, MIT, sem dependencia. Ela e escrita em Svelte e distribuida COMPILADA — por isso o
+// import e de `bigger-picture/vanilla` e nao do pacote raiz: a condicao `svelte` do package.json
+// aponta pro fonte em Svelte 3/4, que o vite-plugin-svelte tentaria compilar com o compilador da 5.
+//
+// O que ela NAO tem e fica nosso: nome do arquivo, tamanho/prazo e os botoes de baixar e de acao
+// (ex.: "usar no ditado"). Isso vira uma faixa montada no `onOpen` e atualizada no `onUpdate` — a
+// lib nao expoe slot, mas expoe o container.
+
+export type MidiaVisor = {
+  url: string;
+  nome: string;
+  tipo: 'image' | 'video' | 'audio';
+  /** Linha discreta ao lado do nome (tamanho, idade, prazo). Opcional. */
+  meta?: string;
+  /** Miniatura ja carregada, pra abrir sem esperar o original. */
+  thumb?: string;
+  /** No de origem: a animacao de abrir/fechar sai dele. */
+  element?: HTMLElement;
+};
+
+export type AcaoVisor = {
+  rotulo: string;
+  /** Recebe a midia que estava aberta. Fecha o visor antes de rodar. */
+  acao: (midia: MidiaVisor) => void;
+};
+
+// Guarda a PROMESSA, nao a instancia: `obterInstancia` tem um `await` (o import do pedaco) entre
+// "ja existe?" e a atribuicao, entao dois toques rapidos em miniaturas diferentes — o mesmo cenario
+// que o `escapaVivo` abaixo ja documenta — leriam os dois `null` e montariam DOIS visores no body,
+// com o segundo roubando o Esc e o arrasto do primeiro. Memoizar a promessa faz o segundo toque
+// esperar o mesmo carregamento em vez de comecar outro.
+let instanciaPromise: Promise<ReturnType<typeof BiggerPictureCtor>> | null = null;
+// Listener de Escape da abertura VIVA. É de módulo, e não da chamada, porque `abrirVisor` é
+// assíncrona (mede as mídias antes de abrir): dois toques rápidos em miniaturas diferentes chegam
+// a `bp.open` duas vezes, e só o `onClosed` da segunda rodaria — o `escapa` da primeira ficava
+// pendurado na window pra sempre, fechando visor alheio.
+let escapaVivo: ((e: KeyboardEvent) => void) | null = null;
+
+function trocarEscapa(novo: ((e: KeyboardEvent) => void) | null) {
+  if (escapaVivo) window.removeEventListener('keydown', escapaVivo, true);
+  escapaVivo = novo;
+  if (novo) window.addEventListener('keydown', novo, true);
+}
+
+// Arrastar pra BAIXO fecha. A lib fecha no arrastar pra CIMA (`y < -90` no pointermove dela), e
+// ninguém tenta isso: o gesto que o WhatsApp, a Fotos do iPhone e a Galeria do Android ensinaram é
+// puxar pra baixo. Quem abria uma foto no celular ficava preso — o ✕ dela nasce em `top: 0`, atrás
+// da barra de status (ver app.css).
+//
+// Só ESCUTA, nunca chama preventDefault: o pointermove da lib segue fazendo o dele (arrastar entre
+// mídias, inércia, zoom) e nós apenas somamos uma saída. Zoom fora de propósito — com a imagem
+// ampliada, arrastar pra baixo é PANORAMICAR, e fechar ali seria roubar o gesto (a lib marca isso
+// com a classe `bp-zoomed` no próprio wrap).
+const _ARRASTO_FECHA = 90;   // mesmo limiar da lib pro gesto pra cima, pra os dois pesarem igual
+
+// De MÓDULO, e não da chamada, pela MESMA razão do `escapaVivo` acima: `abrirVisor` é assíncrona,
+// dois toques rápidos chegam a `bp.open` duas vezes e só o `onClosed` da segunda roda. Com a
+// variável local, o `onOpen` de uma chamada registrava os listeners e o `onClosed` da OUTRA
+// tentava soltá-los — os primeiros ficavam pendurados no wrap reusado, e aí cada toque a mais
+// deixava o arrasto mais sensível (dois listeners = fecha na metade do caminho).
+let soltarArrastoVivo: (() => void) | null = null;
+
+function trocarArrasto(novo: (() => void) | null) {
+  soltarArrastoVivo?.();
+  soltarArrastoVivo = novo;
+}
+
+export function ligarArrastoPraBaixo(wrap: HTMLElement, fechar: () => void): () => void {
+  let y0: number | null = null;
+  // Fecha só ao SOLTAR, não no meio do arrasto: fechar no pointermove desmonta o visor com o
+  // gesto em curso, e o pointerup da própria biblioteca chega sem o estado do arrasto dela
+  // (`n.x` undefined — 6 no diário de uma semana, no toque, em dois navegadores).
+  let fecharAoSoltar = false;
+  const desce = (e: PointerEvent) => {
+    if (y0 === null || wrap.classList.contains('bp-zoomed')) return;
+    if (e.clientY - y0 > _ARRASTO_FECHA) { y0 = null; fecharAoSoltar = true; }
+  };
+  const comeca = (e: PointerEvent) => {
+    fecharAoSoltar = false;
+    y0 = wrap.classList.contains('bp-zoomed') ? null : e.clientY;
+  };
+  const acaba = () => {
+    y0 = null;
+    if (fecharAoSoltar) { fecharAoSoltar = false; fechar(); }
+  };
+  wrap.addEventListener('pointerdown', comeca);
+  wrap.addEventListener('pointermove', desce);
+  wrap.addEventListener('pointerup', acaba);
+  wrap.addEventListener('pointercancel', acaba);
+  return () => {
+    wrap.removeEventListener('pointerdown', comeca);
+    wrap.removeEventListener('pointermove', desce);
+    wrap.removeEventListener('pointerup', acaba);
+    wrap.removeEventListener('pointercancel', acaba);
+  };
+}
+
+// Exportada pro TESTE, e so por isso: a corrida que ela fecha nao da pra provar por fora, atraves do
+// `abrirVisor` — la a medicao das midias gasta ticks demais e as duas chamadas nunca chegam juntas
+// ao ponto que importa (medido em 28/08/2026; um teste escrito assim passava ate com o bug).
+export function obterInstancia() {
+  if (!instanciaPromise) {
+    instanciaPromise = (async () => {
+      // Carrega a lib e o CSS dela AQUI, no primeiro toque numa midia. O `abrirVisor` ja e
+      // assincrono (mede as midias antes de abrir), entao esperar o pedaco nao muda quem chama.
+      const { default: BiggerPicture } = await import('bigger-picture/vanilla');
+      await import('bigger-picture/css');
+      // O alvo tem que ser o proprio <body>: a lib mede o container por `target.offsetWidth` e, so
+      // pro body, usa `window.innerHeight` como altura. Num <div> criado a mao a altura e ZERO, e o
+      // fator de escala vira 0 — o visor abre com a midia em `width: 0px; height: 0px`, sem erro
+      // nenhum na tela (medido em 26/08/2026, foi assim que este arquivo nasceu errado).
+      return BiggerPicture({ target: document.body });
+    })();
+    // Falha do pedaco (rede caiu, ou deploy trocou o hash com a aba aberta) NAO fica memoizada:
+    // sem isto, o primeiro toque que falha condena todos os proximos ao mesmo erro, sem nova
+    // tentativa. O `catch` aqui so limpa o memo — a rejeicao segue pra quem chamou.
+    instanciaPromise.catch(() => { instanciaPromise = null; });
+  }
+  return instanciaPromise;
+}
+
+/**
+ * Tamanho natural da midia, lido da MINIATURA que ja esta na tela. A lib precisa dele: sem width e
+ * height o item nasce com `width: 0px; height: 0px` e o visor abre VAZIO — sem erro nenhum, o que
+ * custou meia hora de "por que a imagem nao aparece".
+ */
+function medir(el?: HTMLElement) {
+  const img = el?.querySelector('img') as HTMLImageElement | null;
+  if (img?.naturalWidth) return { width: img.naturalWidth, height: img.naturalHeight };
+  const video = el?.querySelector('video') as HTMLVideoElement | null;
+  if (video?.videoWidth) return { width: video.videoWidth, height: video.videoHeight };
+  return null;
+}
+
+/** Mede carregando de fato — plano B de quando a miniatura ainda nao tem tamanho. Cai no cache do
+ *  browser (mesma url da miniatura), entao na pratica resolve na hora. */
+function medirCarregando(url: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    // Erro ou midia sem dimensao (video/audio, que nao carregam como <img>): um retangulo razoavel
+    // e melhor que zero — mas quem NAO carregar de verdade aparece dito na faixa, pelo onError da
+    // lib; sem isso um anexo expirado abria como retangulo cinza e ninguem sabia por que.
+    img.onerror = () => resolve({ width: 1600, height: 1200 });
+    img.src = url;
+  });
+}
+
+function paraItem(midia: MidiaVisor, tamanho: { width: number; height: number }, idx: number) {
+  const base = {
+    thumb: midia.thumb,
+    alt: midia.nome,
+    element: midia.element,
+    // `idx` (e nao o nome) e o que liga o item de volta pra nossa lista no onUpdate: duas fotos com
+    // o MESMO nome de arquivo na mesma mensagem existem, e por nome a faixa ficava presa na
+    // primeira ao navegar.
+    idx,
+    nome: midia.nome,
+    meta: midia.meta,
+    ...tamanho,
+  };
+  if (midia.tipo === 'image') return { ...base, img: midia.url };
+  // Video e audio usam o player nativo da lib; `type` fica de fora de proposito — o servidor manda
+  // o Content-Type certo e adivinhar aqui pelo nome erraria justamente no .webm de ditado.
+  return { ...base, sources: [{ src: midia.url }] };
+}
+
+/**
+ * Abre o visor na midia `inicio` da lista. A lista inteira vai junto: e ela que da o "12 / 34" e as
+ * setas — passar so a url clicada era o que os tres visores de hoje faziam, e por isso nenhum deles
+ * navegava.
+ */
+export async function abrirVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoVisor) {
+  try {
+    await montarVisor(midias, inicio, acao);
+  } catch (e) {
+    // Os três chamadores disparam com `void` (é um onclick). Sem isto, uma falha aqui vira rejeição
+    // não tratada e o toque na miniatura simplesmente não faz nada, sem rastro nenhum.
+    console.error('visor: falhou ao abrir', e);
+  }
+}
+
+async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoVisor) {
+  if (!midias.length) return;
+  const tamanhos = await Promise.all(
+    midias.map(async (x) => medir(x.element) ?? (await medirCarregando(x.url))),
+  );
+  const bp = await obterInstancia();
+  let faixa: HTMLElement | null = null;
+  let atual = inicio;
+  let soltarArrasto: (() => void) | null = null;
+
+  const escapa = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    e.stopImmediatePropagation();
+    bp.close();
+  };
+
+  const pintar = (indice: number) => {
+    atual = indice;
+    const midia = midias[indice];
+    if (!faixa || !midia) return;
+    const nome = faixa.querySelector('.visor-nome');
+    const meta = faixa.querySelector('.visor-meta');
+    const baixar = faixa.querySelector<HTMLAnchorElement>('.visor-baixar');
+    if (nome) nome.textContent = midia.nome;
+    if (meta) meta.textContent = midia.meta ?? '';
+    if (baixar) { baixar.href = midia.url; baixar.download = midia.nome; }
+  };
+
+  // A lib nao diz o indice no onUpdate, so o item — e o item e o objeto que devolvemos em paraItem,
+  // que carrega o `idx` de propria lavra pra este caminho de volta.
+  const indiceDe = (item: { idx?: number }) => (typeof item?.idx === 'number' ? item.idx : -1);
+
+  bp.open({
+    items: midias.map((x, i) => paraItem(x, tamanhos[i], i)),
+    position: inicio,
+    onOpen(container) {
+      // Esc fecha o VISOR, nao a folha atras dele. Precisa ser na CAPTURA: o BottomSheet tambem
+      // escuta Escape na window e chama stopImmediatePropagation, e como ele monta antes, o Esc
+      // fechava a folha e a foto ficava por cima — o mesmo bug que o AttachmentsSheet ja tinha
+      // resolvido assim antes de o visor virar compartilhado.
+      trocarEscapa(escapa);
+      // Nós criados um a um, sem innerHTML: o rótulo da ação vem de fora (i18n hoje, quem sabe o
+      // nome de um arquivo amanhã) e montar HTML por string é o caminho curto pra injetar marcação
+      // sem querer.
+      faixa = document.createElement('div');
+      faixa.className = 'visor-faixa';
+      const nome = document.createElement('span');
+      nome.className = 'visor-nome';
+      const meta = document.createElement('span');
+      meta.className = 'visor-meta';
+      const acoes = document.createElement('span');
+      acoes.className = 'visor-acoes';
+      const baixar = document.createElement('a');
+      baixar.className = 'visor-btn visor-baixar';
+      baixar.title = m.visor_baixar();
+      baixar.textContent = '⤓';
+      acoes.append(baixar);
+      if (acao) {
+        const botao = document.createElement('button');
+        botao.className = 'visor-btn visor-acao';
+        botao.textContent = acao.rotulo;
+        botao.addEventListener('click', () => {
+          const escolhida = midias[atual];
+          bp.close();
+          if (escolhida) acao.acao(escolhida);
+        });
+        acoes.append(botao);
+      }
+      faixa.append(nome, meta, acoes);
+      container.appendChild(faixa);
+      // O wrap é quem recebe o gesto (o container pode ser um filho dele) e é onde a lib põe a
+      // classe `bp-zoomed`, que o arrasto precisa consultar.
+      const wrap = (container.closest?.('.bp-wrap') as HTMLElement | null) ?? container;
+      soltarArrasto = ligarArrastoPraBaixo(wrap, () => bp.close());
+      trocarArrasto(soltarArrasto);
+      pintar(inicio);
+    },
+    onUpdate(_container, item) {
+      const i = indiceDe(item as { idx?: number });
+      if (i >= 0) pintar(i);
+    },
+    onError() {
+      // A midia nao carregou (anexo expirado, servidor fora). Sem isto o visor abre um retangulo
+      // vazio e o erro nao existe em lugar nenhum.
+      const meta = faixa?.querySelector('.visor-meta');
+      if (meta) meta.textContent = m.visor_nao_carregou();
+    },
+    onClosed() {
+      // Só solta se ainda for o NOSSO: uma abertura mais nova já trocou o listener, e removê-lo
+      // aqui deixaria o visor vivo sem Escape.
+      if (escapaVivo === escapa) trocarEscapa(null);
+      // Só solta se ainda for o NOSSO, igual ao Escape logo acima: uma abertura mais nova já
+      // trocou os listeners, e soltá-los aqui deixaria o visor vivo sem o gesto.
+      if (soltarArrastoVivo === soltarArrasto) trocarArrasto(null);
+      soltarArrasto = null;
+      faixa = null;
+    },
+  });
+}

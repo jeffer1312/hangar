@@ -11,8 +11,11 @@ close_sync). ensure_running e o resume LAZY: pos-restart do backend o processo a
 o sidecar duravel (app.adapters.codex.sessions) guarda thread_id/rollout_path/cwd -> ensure_running
 reabre o AppServerClient e retoma pelo thread/resume sob demanda."""
 import asyncio
+import json
 import logging
+import os
 import shlex
+import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +23,11 @@ from typing import AsyncIterator, Callable, Optional
 
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex.appserver import AppServerClient
+from app.adapters.codex.lancador import (APPROVAL, CLIENT_INFO, SANDBOX,
+                                          comando_do_lancador)
+from app.hook_state import hook_state
+from app.models import session_key
+from app.procinfo import pid_vivo
 from app.adapters.codex.preview import CodexPreviewSource
 from app.adapters.codex.rollout import parse_rollout_line
 from app import tmux
@@ -29,11 +37,27 @@ from app.transcript import ChatEvent, TranscriptTailer
 
 _log = logging.getLogger("hangar.codex.adapter")
 
-# clientInfo do handshake initialize (ver docs/codex-app-server-contract.md).
-_CLIENT_INFO = {"name": "hangar", "title": None, "version": "0.1.0"}
-# Codex pode EDITAR arquivos no cwd da sessao -> workspace-write (nao read-only do spike).
-_SANDBOX = "workspace-write"
-_APPROVAL = "never"
+
+
+def matar_app_server(name: str) -> None:
+    """Mata o app-server DAQUELA sessao pelo pid do sidecar. Best-effort, idempotente.
+
+    Desde o lancador unico o servidor nao e mais filho do backend: `client.terminate()` nao tem
+    processo pra matar (ver AppServerClient.tem_processo_proprio) e virava um no-op silencioso.
+    Normalmente quem o derruba e o proprio lancador ao ver a TUI sair; isto cobre o caso em que ele
+    nao chegou la (SIGKILL no pane), que e como app-server orfao ja ficou escutando em loopback.
+    """
+    meta = codex_sessions.load(name) or {}
+    pid = meta.get("app_pid")
+    if not isinstance(pid, int) or not pid_vivo(pid):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        # warning, nao debug: o pid esta VIVO (checado acima) e nao morreu. E exatamente o
+        # app-server orfao escutando em loopback que esta funcao existe pra evitar, e em `debug`
+        # ninguem ve.
+        _log.warning("codex: nao deu pra matar o app-server pid=%s name=%s: %s", pid, name, exc)
 
 
 def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
@@ -61,7 +85,7 @@ def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
         # o thread/started emitido por esta TUI e passa a controlar a mesma thread.
         argv = [
             "codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
-            "--sandbox", _SANDBOX, "--ask-for-approval", _APPROVAL,
+            "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL,
         ]
         if initial_prompt:
             argv.append(initial_prompt)
@@ -233,6 +257,61 @@ def format_status_line(
     return " │ ".join(parts)
 
 
+# Quanto do FIM do rollout basta pra achar o ultimo `token_count` e o ultimo `turn_context`. Um
+# turno grande (varias ferramentas) cabe folgado; nao achando, a linha sai incompleta em vez de
+# custar a leitura do arquivo inteiro a cada poll da lista.
+_STATUS_TAIL = 512 << 10
+
+
+def status_line_do_rollout(path: str, now: Optional[float] = None) -> Optional[str]:
+    """A statusline do CARD, montada do proprio rollout. None quando nao ha nada util.
+
+    O card e a lista, sem SSE aberto — e a TUI do Codex nao pode ser raspada (sem regua nem caixa
+    de composer, a captura devolveria as duas ultimas linhas verbatim, uma segunda statusline).
+    Entao a linha sai do mesmo arquivo que o chat ja le. Os campos do rollout sao snake_case; o
+    `format_status_line` fala o camelCase do app-server, e a traducao mora aqui."""
+    tc = ctx = None
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _STATUS_TAIL))
+            linhas = fh.read().split(b"\n")
+    except OSError:
+        return None
+    for ln in reversed(linhas):
+        if not ln.strip():
+            continue
+        try:
+            obj = json.loads(ln)
+        except (ValueError, AttributeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        payload = obj.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if tc is None and payload.get("type") == "token_count":
+            tc = payload
+        elif ctx is None and obj.get("type") == "turn_context":
+            ctx = payload
+        if tc is not None and ctx is not None:
+            break
+
+    info = (tc or {}).get("info") or {}
+    total = info.get("last_token_usage") or {}
+    usage = {"last": {"inputTokens": total.get("input_tokens"),
+                      "outputTokens": total.get("output_tokens")},
+             "modelContextWindow": info.get("model_context_window")} if total else None
+    limites = (tc or {}).get("rate_limits") or {}
+    janelas = {k: {"windowDurationMins": (limites.get(k) or {}).get("window_minutes"),
+                   "usedPercent": (limites.get(k) or {}).get("used_percent"),
+                   "resetsAt": (limites.get(k) or {}).get("resets_at")}
+               for k in ("primary", "secondary") if limites.get(k)}
+    modo = ((ctx or {}).get("collaboration_mode") or {}).get("settings") or {}
+    return format_status_line((ctx or {}).get("model"), modo.get("reasoning_effort"),
+                              usage, janelas or None, now)
+
+
 class CodexAdapter:
     provider = "codex"
     # Backoff inicial/teto do retry de assinatura (_subscribe_when_ready). Atributo de classe pra
@@ -288,6 +367,9 @@ class CodexAdapter:
             sub = self._subscribers.pop(name, None)
             if sub is not None:
                 sub.cancel()
+            # Antes do delete: o pid do app-server mora no sidecar. Normalmente o lancador ja o
+            # derrubou ao ver a TUI sair; isto cobre o pane morto de SIGKILL.
+            matar_app_server(name)
             term = getattr(sess["client"], "terminate", None)
             if callable(term):
                 term()
@@ -344,8 +426,8 @@ class CodexAdapter:
                 result = await sess["client"].request("thread/resume", {
                     "threadId": sess["thread_id"],
                     "cwd": cwd,
-                    "sandbox": _SANDBOX,
-                    "approvalPolicy": _APPROVAL,
+                    "sandbox": SANDBOX,
+                    "approvalPolicy": APPROVAL,
                 })
             except asyncio.CancelledError:
                 raise
@@ -401,14 +483,55 @@ class CodexAdapter:
         if watch_tmux:
             self._start_tmux_watcher(name)
 
+    async def _conectar(self, name: str, meta: dict) -> Optional[AppServerClient]:
+        """Liga o backend ao app-server que o LANCADOR subiu (o caminho normal desde o ticket 03).
+
+        O servidor mora no pane, nao aqui: nada e spawnado e a TUI nao e recriada. O pid vem antes
+        do endereco de proposito — porta de loopback e reciclada, entao conectar so pelo endpoint
+        pode cair num processo alheio que tomou a porta. Pid morto (ou handshake sem resposta) e
+        sessao MORTA: devolver None deixa quem chamou tratar como sessao que acabou, em vez de
+        ressuscitar uma TUI que nao existe mais.
+
+        A assinatura vai pelo retry de sempre (start_subscription) e nao por um thread/resume aqui:
+        a sessao pode estar no turno ZERO, quando o rollout ainda nao existe e o resume e recusado.
+        """
+        if not pid_vivo(meta["app_pid"]):
+            _log.info("codex: app-server morto (pid=%s) name=%s — sessao encerrada",
+                      meta.get("app_pid"), name)
+            return None
+        client = AppServerClient()
+        try:
+            await client.connect(meta["endpoint"])
+            await client.request("initialize", {"clientInfo": CLIENT_INFO, "capabilities": None})
+        # Estreito de proposito: sao as falhas de CONVERSA com o servidor, as unicas que significam
+        # "sessao morta". Um `except Exception` aqui transformaria erro de programacao (um nome
+        # errado, um shape mudado) em "sessao morta" no log — a falha viraria um card sumindo, sem
+        # ninguem nunca ver o traceback.
+        except (ConnectionError, OSError, TimeoutError, RuntimeError) as exc:
+            await client.close()
+            _log.warning("codex: handshake falhou em %s name=%s: %s", meta["endpoint"], name, exc)
+            return None
+        except Exception:
+            await client.close()
+            raise
+        self.attach(name, client, meta["thread_id"], model=meta.get("model"),
+                    effort=meta.get("effort"), watch_tmux=True)
+        self.start_subscription(name, meta.get("cwd") or ".")
+        _log.info("codex: conectado ao app-server do pane endpoint=%s name=%s",
+                  meta["endpoint"], name)
+        return client
+
     async def ensure_running(self, name: str) -> Optional[AppServerClient]:
-        """Garante um AppServerClient VIVO pra sessao Codex `name` (resume LAZY):
+        """Garante um AppServerClient VIVO pra sessao Codex `name` (ligacao LAZY):
         - ja ha client vivo no dict -> retorna ele (caso quente).
         - senao, le o sidecar duravel; sem sidecar -> None (sessao Codex desconhecida).
-        - com sidecar (pos-restart): reabre o app-server, initialize, e RETOMA o thread existente
-          via `thread/resume` passando o threadId gravado (metodo confirmado no schema da 0.141.0;
-          docstring do ThreadResumeParams: 'Prefer using thread_id whenever possible'). O historico
-          nao se perde: ja esta no rollout JSONL; o resume so reconecta o processo vivo.
+        - sidecar com endpoint/app_pid (lancador unico) -> _conectar: o servidor e do pane, o
+          backend so se liga nele e sobreviver ao restart do backend deixa de ser problema dele.
+        - sidecar SEM endpoint (sessao nascida no desenho antigo, em que o app-server era filho do
+          backend) -> reabre o app-server, initialize, RETOMA o thread via `thread/resume` e recria
+          a TUI, mas SO quando nao ha pane. Sem este ramo, uma sessao viva ficaria inalcancavel so
+          por ter nascido antes da atualizacao; com ele sem a guarda de pane, o primeiro acesso pelo
+          app matava o pane em que a pessoa estava trabalhando.
 
         Lock por-nome (IMPORTANT 1): sem ele, 2 chamadores concorrentes pro mesmo nome sem client
         vivo spawnavam 2 AppServerClient e o 2o attach() sobrescrevia o 1o no dict, vazando o
@@ -426,15 +549,27 @@ class CodexAdapter:
             meta = codex_sessions.load(name)
             if meta is None:
                 return None
+            if meta.get("endpoint") and meta.get("app_pid"):
+                return await self._conectar(name, meta)
+            # Daqui pra baixo o app-server e SPAWNADO e a TUI e RECRIADA — o pane atual morre. Isso
+            # so pode acontecer quando nao ha pane nenhum: com pane vivo, recriar destroi a tela de
+            # quem esta trabalhando ali, e era esse o efeito de reiniciar o backend. Sessao que ficou
+            # sem controle vivo e sessao MORTA pra quem abriu o chat (o _state_stream emite `dead`,
+            # que tem tela propria) e segue ociosa na lista — a lista nao tem coluna de morto, entao
+            # some-la faria o card desaparecer enquanto a pessoa usa a TUI.
+            if await asyncio.to_thread(tmux.has_session, name):
+                _log.info("codex: sessao %s sem controle vivo, mas o pane existe — nao recriado",
+                          name)
+                return None
             client = AppServerClient()
             try:
                 endpoint = await client.start_shared()
-                await client.request("initialize", {"clientInfo": _CLIENT_INFO, "capabilities": None})
+                await client.request("initialize", {"clientInfo": CLIENT_INFO, "capabilities": None})
                 result = await client.request("thread/resume", {
                     "threadId": meta["thread_id"],
                     "cwd": meta.get("cwd"),
-                    "sandbox": _SANDBOX,
-                    "approvalPolicy": _APPROVAL,
+                    "sandbox": SANDBOX,
+                    "approvalPolicy": APPROVAL,
                 })
             except Exception:
                 # resume falhou (app-server morreu, thread perdido, etc.): nao deixa o subprocess orfao.
@@ -466,8 +601,12 @@ class CodexAdapter:
 
     def close_sync(self, name: str) -> None:
         """Encerramento SINCRONO do client vivo (chamado pelo registry.kill, que e sync). Manda
-        SIGTERM best-effort no subprocess e esquece a sessao da memoria; o read loop (loop
-        principal) ve o EOF e roda seu finally. NAO apaga o sidecar duravel -- isso e o kill()."""
+        SIGTERM best-effort no app-server e esquece a sessao da memoria; o read loop (loop
+        principal) ve o EOF e roda seu finally. NAO apaga o sidecar duravel -- isso e o kill().
+
+        O SIGTERM vai pelo PID do sidecar: desde o lancador unico o servidor nao e filho do backend,
+        entao `client.terminate()` sozinho seria um no-op e o servidor sobreviveria ao encerrar."""
+        matar_app_server(name)
         sess = self._sessions.pop(name, None)
         watcher = self._tmux_watchers.pop(name, None)
         if watcher is not None:
@@ -678,6 +817,16 @@ class CodexAdapter:
             return False
         return True
 
+    def _marcador_diz_ocioso(self, name: str) -> bool:
+        """O marcador de estado desta sessao diz que nao ha turno aberto? Ausente = nao sabe (False:
+        so o que se prova destrava)."""
+        meta = codex_sessions.load(name) or {}
+        rollout = meta.get("rollout_path")
+        if not rollout:
+            return False
+        m = hook_state.get_state(session_key(rollout))
+        return bool(m and m[0] == "idle")
+
     async def deliverable(self, name: str) -> bool:
         # Predicado BARATO (nao spawna): so olha o in_progress cacheado. Sessao nao anexada = nada
         # em andamento -> True (send_prompt e quem chama ensure_running e realmente entrega).
@@ -685,6 +834,16 @@ class CodexAdapter:
         if sess is None:
             return True
         if not sess["in_progress"]:
+            return True
+        # O marcador do hook e uma fonte INDEPENDENTE do nosso estado em memoria, e quem o escreve e
+        # o proprio Codex. Turno fechado la = nao ha turno aqui, ponto. Sem isto, um `turn/completed`
+        # perdido (app-server retomado no meio, SSE caido) deixava a sessao ASSINADA "ocupada" pra
+        # sempre: todo envio virava fila e a fila nunca drenava — medido em 30/08/2026, com a lista
+        # mostrando a sessao ociosa e o /input respondendo "sessao ocupada" no mesmo instante. O
+        # escape por tempo logo abaixo nao cobria isso: ele so vale pra sessao nao assinada.
+        # So DESTRAVA: marcador "working" nao e usado pra segurar nada (quem segura e o in_progress).
+        if self._marcador_diz_ocioso(name):
+            sess["in_progress"] = False
             return True
         # Quem LIMPA in_progress e o turn/completed -- e ele so chega pra quem assinou a thread.
         # Numa sessao que nunca assinou, in_progress ficaria True pra sempre: deliverable() eterno
@@ -824,13 +983,19 @@ class CodexAdapter:
 
     def spawn_command(self, cwd: str, session_id: str,
                       model: str | None = None, effort: str | None = None,
-                      permission_mode: str | None = None) -> list[str]:
-        # Assinatura aceita model/effort so pra conformar com o Protocol — o caminho Codex e morto
-        # (registry.create recusa provider codex antes da montagem) e a recusa e o comportamento.
-        # Sessao Codex NAO nasce de um comando tmux -- nasce de thread/start no app-server
-        # (registry.create_codex). registry.create ramifica por provider ANTES de chamar isto no
-        # caminho Codex, entao chegar aqui e uso incorreto -> falha alto (Protocol honesto).
-        raise NotImplementedError("Codex nao usa spawn_command; use registry.create_codex")
+                      permission_mode: str | None = None,
+                      initial_prompt: str | None = None) -> list[str]:
+        # Sessao Codex nasce como as outras: um comando no pane. O comando e o lancador, que sobe o
+        # app-server e a TUI juntos (ver comando_do_lancador).
+        # session_id nao entra: a identidade da conversa e o threadId, que so existe depois que a
+        # TUI chama thread/start — quem grava isso no sidecar e o lancador.
+        # model/effort NAO viram flag aqui (nem passam por model_args.args_de): o esforco do Codex
+        # nao e flag do binario, e a traducao dos dois e do lancador. permission_mode e do Claude.
+        # `validar` continua sendo a barreira — o comando vira UMA string executada por `$SHELL -c`
+        # (tmux.py), e sem esta chamada o Codex seria o unico provider cujo id nao passa por ela.
+        from app import model_args
+        model, effort = model_args.validar("codex", model, effort)
+        return comando_do_lancador(cwd, initial_prompt, model=model, effort=effort)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:
         # O rollout path vem do thread/start (result.thread.path), gravado no sidecar -- nao ha como

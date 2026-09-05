@@ -3,11 +3,11 @@ import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   pedeMarcacao,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn, relativeTime,
-  clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
+  clusterByPair, railLabel, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
   untrackedReason,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
   rotuloEstado,
-  splitTodoBlock, parseImageMessage,
+  splitTodoBlock, parseImageMessage, parseCanal, basename,
 } from './format';
 import type { ChatEvent, State } from './types';
 import { overwriteGetLocale } from './paraglide/runtime';
@@ -273,6 +273,23 @@ describe('effectiveGroupBy', () => {
   });
 });
 
+describe('basename', () => {
+  it('pega o último segmento de um caminho unix', () => {
+    expect(basename('/home/user/repo')).toBe('repo');
+    expect(basename('/home/user/repo/')).toBe('repo');
+  });
+  it('pega o último segmento de um caminho do WINDOWS', () => {
+    // Sem isto o cwd voltava INTEIRO — a sessão criada pelo app nascia chamada
+    // `C--Sistemas-DotNet-PssBackend` (o caminho todo, depois do sanitizador do nome).
+    expect(basename('C:\\Sistemas\\DotNet\\PssBackend')).toBe('PssBackend');
+    expect(basename('C:\\Sistemas\\DotNet\\PssBackend\\')).toBe('PssBackend');
+    expect(basename('\\\\servidor\\share\\projeto')).toBe('projeto');
+  });
+  it('não quebra por contrabarra num caminho unix — lá ela é nome de arquivo válido', () => {
+    expect(basename('/home/user/pasta\\estranha')).toBe('pasta\\estranha');
+  });
+});
+
 describe('projectLabel', () => {
   it('is the basename for a trailing-slash path', () => {
     expect(projectLabel('/home/user/repo/')).toBe('repo');
@@ -414,6 +431,40 @@ describe('clusterByPair', () => {
   it('label cai nos nomes quando não há task', () => {
     const rows = clusterByPair([S('front', 'g1'), S('back', 'g1')]);
     expect((rows[0] as any).label).toBe('front, back');
+  });
+
+  it('membro carrega o rótulo do cluster e o último é marcado (a pílula do trilho fecha nele)', () => {
+    const rows = clusterByPair([S('a', 'g1', 'ABC-1'), S('b', 'g1')]);
+    expect(rows[1]).toMatchObject({ label: 'ABC-1', ultimo: false });
+    expect(rows[2]).toMatchObject({ label: 'ABC-1', ultimo: true });
+  });
+});
+
+describe('railLabel', () => {
+  it('primeiro pedaço em cima, o resto embaixo', () => {
+    expect(railLabel('hangar-nav')).toEqual(['hangar', 'nav']);
+    expect(railLabel('hangar')).toEqual(['hangar', '']);
+    expect(railLabel('abc1234-design')).toEqual(['abc1234', 'design']);
+  });
+  it('corta seco em 8 nas duas linhas', () => {
+    expect(railLabel('storefront-web')).toEqual(['storefro', 'web']);
+    expect(railLabel('mailerdaemon-front-antigo')).toEqual(['mailerda', 'front-an']);
+  });
+  it('dentro do grupo, o pedaço que a CHAVE do grupo já diz sai (a tarefa cita os membros e não conta)', () => {
+    expect(railLabel('api-1234', 'ABC-1234 — Evolução do editor')).toEqual(['api', '']);
+    expect(railLabel('storefront-web', 'ABC-1234')).toEqual(['storefro', 'web']);
+    expect(railLabel('api-1234', 'ABC-1234 — api-1234 faz o C#, storefront-web faz o front')).toEqual(['api', '']);
+  });
+  it('nome igual ao grupo inteiro não some', () => {
+    expect(railLabel('abc-1234', 'ABC-1234')).toEqual(['abc', '1234']);
+  });
+  it('nome só de símbolos cai no nome cru; vazio nunca fica em branco', () => {
+    expect(railLabel('---')).toEqual(['---', '']);
+    expect(railLabel('')).toEqual(['?', '']);
+  });
+  it('acento é letra, não separador', () => {
+    expect(railLabel('análise-app')).toEqual(['análise', 'app']);
+    expect(railLabel('café')).toEqual(['café', '']);
   });
 });
 
@@ -631,14 +682,77 @@ describe('summarizeToolInput', () => {
     expect(summarizeToolInput('Read', { file_path: '/tmp/x.ts' })).toBe('/tmp/x.ts');
     expect(summarizeToolInput('Write', { path: '/tmp/y.ts' })).toBe('/tmp/y.ts');
     expect(summarizeToolInput('Bash', { command: 'npm test' })).toBe('npm test');
+    // `exec` é o Bash do Codex. O comando sai do código pelo backend; sem ele, sobra o código —
+    // que é o que foi executado, e é melhor que uma linha em branco.
+    expect(summarizeToolInput('exec', { command: 'echo oi', code: 'const r = await tools…' }))
+      .toBe('echo oi');
+    expect(summarizeToolInput('exec', { code: 'const r = await tools.write_stdin({…});' }))
+      .toBe('const r = await tools.write_stdin({…});');
+    // Plano do Codex: a linha diz em que passo ele está. Sem isto todas as revisões do plano
+    // mostravam o mesmo código JavaScript.
+    expect(summarizeToolInput('update_plan', { plan: [
+      { step: 'Criar notas.md', status: 'completed' },
+      { step: 'Editar notas.md', status: 'in_progress' },
+    ] })).toBe('Editar notas.md');
+    // Nenhum em andamento (plano recém-aberto ou já fechado) -> o primeiro passo.
+    expect(summarizeToolInput('update_plan', { plan: [{ step: 'Só um', status: 'pending' }] }))
+      .toBe('Só um');
+    // Plano ilegível não deixa a linha vazia: sobra o código, como no exec.
+    expect(summarizeToolInput('update_plan', { code: 'await tools.update_plan({…})' }))
+      .toBe('await tools.update_plan({…})');
+    // Chamada NÃO embrulhada em código: os argumentos chegam em JSON, e o comando está em `cmd`.
+    // Sem este caso o ramo do exec devolvia linha VAZIA, que é o que ele existe pra evitar.
+    expect(summarizeToolInput('exec_command', { cmd: 'rg -n foo', workdir: '/tmp' }))
+      .toBe('rg -n foo');
+    // Nem `command`, nem `cmd`, nem `code`: o ramo se cala e o genérico acha o campo saliente.
+    expect(summarizeToolInput('write_stdin', { session_id: 84850, chars: '' }))
+      .toBe('84850');
+    // Patch multi-arquivo conta "arquivos", como Read/Edit — não "itens".
+    expect(summarizeToolInput('apply_patch', { file_path: ['/a.ts', '/b.ts', '/c.ts'] }))
+      .toContain('arquivos');
     expect(summarizeToolInput('WebSearch', { query: 'svelte 5 runes' })).toBe('svelte 5 runes');
     expect(summarizeToolInput('WebFetch', { url: 'https://x.dev' })).toBe('https://x.dev');
+  });
+
+  it('ToolSearch mostra as ferramentas carregadas, nao o "select:" cru', () => {
+    // A linha util e QUAIS ferramentas entraram; o prefixo `select:` colado nos nomes (o que o
+    // fallback generico produzia) nao diz nada a quem le o chat.
+    expect(summarizeToolInput('ToolSearch', { query: 'select:WebSearch,WebFetch' }))
+      .toBe('WebSearch, WebFetch');
+    // Busca por palavra: passa reto, como qualquer texto.
+    expect(summarizeToolInput('ToolSearch', { query: 'notebook jupyter' })).toBe('notebook jupyter');
+    // Lista longa: nao pode cortar o ultimo nome no meio SEM dizer quantos ficaram de fora — aqui
+    // vale a forma dos vizinhos (WebSearch/WebFetch com varias queries).
+    const muitos = summarizeToolInput('ToolSearch', {
+      query: 'select:WebSearch,WebFetch,Read,Write,Edit,Bash,Grep,Glob,Task,NotebookEdit',
+    });
+    expect(muitos).toContain('ferramentas');
+    // Vazio de verdade continua vazio (o cartao fica sem resumo, nunca com lixo).
+    expect(summarizeToolInput('ToolSearch', { query: 'select:,,' })).toBe('');
+    // Espaco depois dos dois-pontos NAO pode devolver o `select:` cru pra tela.
+    expect(summarizeToolInput('ToolSearch', { query: ' select: WebSearch, WebFetch' }))
+      .toBe('WebSearch, WebFetch');
+    // `query` de outro tipo (outro provedor, outra versao) vira linha VAZIA, nunca "[object Object]".
+    expect(summarizeToolInput('ToolSearch', { query: { select: ['WebSearch'] } })).toBe('');
   });
 
   it('Read anexa o recorte lido entre parenteses', () => {
     expect(summarizeToolInput('Read', { file_path: '/a.ts', limit: 500 })).toBe('/a.ts (limit=500)');
     expect(summarizeToolInput('Read', { file_path: '/a.ts', offset: 10, limit: 20 })).toBe('/a.ts (offset=10, limit=20)');
     expect(summarizeToolInput('Read', { file_path: '/a.ts', offset: 0 })).toBe('/a.ts');   // 0 nao e recorte
+  });
+
+  it('AskUserQuestion mostra a pergunta, nunca [object Object]', () => {
+    // `questions` e lista de OBJETOS: no fallback generico o card saia "AskUserQuestion
+    // [object Object]" (visto numa sessao Kimi). As opcoes ficam com o stepper, que abre por cima.
+    const input = { questions: [{ question: 'O README deve ter 1 ou 2 linhas?', header: 'README',
+                                  options: [{ label: '1 linha' }, { label: '2 linhas' }] }] };
+    expect(summarizeToolInput('AskUserQuestion', input)).toBe('O README deve ter 1 ou 2 linhas?');
+    expect(summarizeToolInput('AskUserQuestion', { questions: [] })).toBe('');
+    // Forma inesperada vira linha vazia, nunca o mesmo "[object Object]" um nivel mais fundo.
+    expect(summarizeToolInput('AskUserQuestion', { questions: [{ question: { t: 'x' } }] })).toBe('');
+    expect(summarizeToolInput('AskUserQuestion', { questions: ['cru'] })).toBe('');
+    expect(summarizeToolInput('AskUserQuestion', { questions: 'nao e lista' })).toBe('');
   });
 
   it('Grep/Glob mostram o padrao entre aspas (nao o diretorio), com o onde depois', () => {
@@ -852,5 +966,20 @@ describe('formatacao segue o idioma', () => {
       overwriteGetLocale(() => 'en');
       expect(rotuloEstado(st)).not.toBe('');
     }
+  });
+});
+
+describe('parseCanal', () => {
+  it('tira o rótulo do começo e devolve o corpo sem ele', () => {
+    expect(parseCanal('[vigia] ARMADA sobre: x')).toEqual({ canal: 'vigia', text: 'ARMADA sobre: x' });
+  });
+
+  it('link markdown no começo NÃO é canal (o rótulo do link se perderia)', () => {
+    expect(parseCanal('[log](https://ex.com/a) caiu de novo')).toBeNull();
+  });
+
+  it('colchete no meio da frase e rótulo longo demais não viram etiqueta', () => {
+    expect(parseCanal('olha isso [um aparte] aqui')).toBeNull();
+    expect(parseCanal('[rotulo-comprido-demais-pra-etiqueta] x')).toBeNull();
   });
 });

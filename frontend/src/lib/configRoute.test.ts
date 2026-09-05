@@ -20,13 +20,20 @@ describe('parseConfig', () => {
     expect(comConfig('#/chat/x', 'sobre')).toBe('#/chat/x?config=sobre');
     expect(TELAS_DE_SERVIDOR).not.toContain('sobre');
   });
-  it('parseia Servidores sem exigir alvo e preserva srv quando informado', () => {
-    expect(parseConfig('#/?config=servidores')).toEqual({ tela: 'servidores', srv: null });
-    expect(parseConfig('#/?config=servidores&srv=vps')).toEqual({ tela: 'servidores', srv: 'vps' });
-    expect(TELAS_DE_SERVIDOR).not.toContain('servidores');
+  it('parseia Máquinas sem exigir alvo e preserva srv quando informado', () => {
+    expect(parseConfig('#/?config=maquinas')).toEqual({ tela: 'maquinas', srv: null });
+    expect(parseConfig('#/?config=maquinas&srv=vps')).toEqual({ tela: 'maquinas', srv: 'vps' });
+    expect(TELAS_DE_SERVIDOR).not.toContain('maquinas');
+  });
+  it('rotas antigas de Servidores e Acesso abrem Máquinas', () => {
+    expect(parseConfig('#/?config=servidores&srv=vps')).toEqual({ tela: 'maquinas', srv: 'vps' });
+    expect(parseConfig('#/?config=acesso')).toEqual({ tela: 'maquinas', srv: null });
   });
   it('config vazio e tratado como painel fechado', () => {
     expect(parseConfig('#/?config=')).toBeNull();
+  });
+  it('rota antiga do ditado abre a tela de Voz', () => {
+    expect(parseConfig('#/?config=ditado')).toEqual({ tela: 'voz', srv: null });
   });
 });
 
@@ -49,6 +56,6 @@ describe('comConfig', () => {
     expect(parseConfig(h)).toEqual({ tela: 'notificacoes', srv: 'srv-1' });
   });
   it('as telas de servidor sao as que exigem alvo', () => {
-    expect(TELAS_DE_SERVIDOR).toEqual(['acesso', 'contas', 'notificacoes', 'anexos', 'avancado', 'motores']);
+    expect(TELAS_DE_SERVIDOR).toEqual(['contas', 'notificacoes', 'anexos', 'avancado', 'motores', 'orquestracao', 'voz', 'harnesses']);
   });
 });

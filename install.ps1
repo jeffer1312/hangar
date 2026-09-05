@@ -25,11 +25,32 @@ $ErrorActionPreference = 'Stop'
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pendencias = @()
 
-function Titulo($m) { Write-Host "`n$m" -ForegroundColor Cyan }
+function Titulo($m) {
+    # Título numerado ("3/8 ...", "5d/8 ...") ganha a barra de progresso; os demais seguem sem.
+    if ($m -match '^(\d+)[a-z]?/8\s') {
+        $barra = ('#' * [int]$Matches[1]).PadRight(8, '-')
+        Write-Host ("`n  [{0}] {1}" -f $barra, $m) -ForegroundColor Cyan
+    } else {
+        Write-Host "`n$m" -ForegroundColor Cyan
+    }
+}
 function Ok($m)     { Write-Host "  ok  $m" -ForegroundColor Green }
 function Nota($m)   { Write-Host "      $m" -ForegroundColor DarkGray }
 function Falta($m)  { Write-Host "  --  $m" -ForegroundColor Yellow }
 function Erro($m)   { Write-Host "  X   $m" -ForegroundColor Red }
+
+function Pare($mensagem, $dicas) {
+    # Parada de passo ESSENCIAL: os passos seguintes dependem deste, e seguir adiante só
+    # enterrava a causa. Extra opcional que falhou NÃO passa por aqui — vai pro `$pendencias`
+    # e o portão do fim diz "NAO terminou".
+    Erro $mensagem
+    foreach ($d in $dicas) { Nota $d }
+    Nota 'instalacao interrompida neste passo. Re-rodar continua de onde parou.'
+    # Sem a pausa, a janela aberta por duplo clique FECHA e ninguém lê o motivo — o mesmo
+    # cuidado do Read-Host do fim.
+    if ($script:Interativo -and -not $Update) { Read-Host '  Enter pra fechar' | Out-Null }
+    exit 1
+}
 
 # Da pra PERGUNTAR alguma coisa nesta execucao? Medido em 21/08/2026 nesta VM: com o stdin vindo
 # de um pipe — que e o caso de `irm ... | iex` chamado por outro processo, e de qualquer execucao
@@ -276,6 +297,15 @@ if (-not (Tem 'winget')) {
     exit 1
 }
 
+if (-not $Update) {
+    Write-Host ''
+    Write-Host '  +--------------------------------------------------+'
+    Write-Host '  |  hangar - instalacao                             |'
+    Write-Host '  |  cada etapa prova o que fez antes da proxima;    |'
+    Write-Host '  |  se algo falhar, eu paro ali e digo o conserto   |'
+    Write-Host '  +--------------------------------------------------+'
+}
+
 # -- 1/8 Dependencias obrigatorias -------------------------------------------
 Titulo '1/8 Dependencias'
 Instale 'psmux (multiplexador)' 'psmux'  'marlocarlo.psmux'     'sem ele nao existe sessao' | Out-Null
@@ -331,7 +361,8 @@ if ($pendencias.Count -gt 0) { Erro "faltam: $($pendencias -join ', ')"; exit 1 
 # -- 2/8 Backend -------------------------------------------------------------
 Titulo '2/8 Backend'
 Push-Location "$raiz\backend"
-uv sync --quiet
+$rcSync = Nativo uv sync --quiet
+if ($rcSync -ne 0) { Pop-Location; Pare 'uv sync falhou - o backend ficou sem as dependencias' @('rodar na mao:  cd backend ; uv sync') }
 Ok 'dependencias instaladas'
 Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
 Pop-Location
@@ -390,6 +421,15 @@ function Set-EnvKey {
     [System.IO.File]::WriteAllText($envFile, (($novo -join "`r`n") + "`r`n"),
                                    (New-Object System.Text.UTF8Encoding $false))
 }
+function Remove-EnvKey {
+    param([Parameter(Mandatory)][string]$Chave)
+    if (-not (Test-Path $envFile)) { return }
+    $linhas = @(Get-Content -Path $envFile -Encoding UTF8)   # UTF8 na leitura pelo motivo do Set-EnvKey
+    $novo = @($linhas | Where-Object { $_ -notmatch "^\s*$([regex]::Escape($Chave))=" })
+    if ($novo.Count -eq $linhas.Count) { return }            # nada a fazer: nao reescreve o arquivo a toa
+    [System.IO.File]::WriteAllText($envFile, (($novo -join "`r`n") + "`r`n"),
+                                   (New-Object System.Text.UTF8Encoding $false))
+}
 $temToken = (Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^CP_AUTH_TOKEN=' -Quiet)
 function Token-Aleatorio {
     # RNGCryptoServiceProvider, nao RandomNumberGenerator::Fill: o segundo e .NET Core e nao
@@ -444,6 +484,8 @@ if ($temToken) {
     Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor $token
     Ok 'CP_AUTH_TOKEN gravado em backend\.env'
 }
+# Prova, não ausência de erro: o passo inteiro vale zero se o token não estiver de fato no arquivo.
+if (-not (Token-Do-Env)) { Pare 'o token nao foi gravado em backend\.env - sem ele o celular nao entra' @() }
 Nota 'E esse token que voce digita no celular na primeira conexao.'
 
 # -- 4/8 Frontend ------------------------------------------------------------
@@ -456,6 +498,14 @@ Titulo '4/8 Frontend'
 $dist = "$raiz\frontend\dist\index.html"
 $modulos = "$raiz\frontend\node_modules"
 $marcaArq = "$raiz\frontend\dist\.cp-build-stamp"
+
+# MESMA regra do services-setup.sh do Linux: instalacao NOVA nao registra servico de frontend — o
+# backend ja serve o `frontend\dist` na raiz (api.py, `_UIStatic`), entao a tarefa era um SEGUNDO
+# servidor pro mesmo arquivo. Quem JA tem a tarefa registrada continua com ela: trocar a porta muda
+# a ORIGEM, e origem nova = localStorage vazio (cp_servers com os tokens, tema, layout do canvas).
+# Ninguem perde configuracao por causa de um `git pull`. Decidido AQUI, e nao no passo 7, porque o
+# firewall (passo 6) e o `npm ci` do passo 4 dependem da resposta.
+$temTarefaFront = [bool](Get-ScheduledTask -TaskName 'hangar-frontend' -ErrorAction SilentlyContinue)
 
 $marca = $null
 # Test-Path .git ANTES de chamar o git: sem repositorio, o `rev-parse` escreve "fatal: not a git
@@ -656,6 +706,72 @@ function Pare-Servico {
     return $mortos
 }
 
+# O CI compila o front a cada push na main e publica na release `dist-latest`. Baixar de la evita o
+# passo mais lento e mais fragil da instalacao. Funcao no nivel do MODULO pelo motivo ja registrado
+# acima: o PowerShell nao tem hoisting.
+$distUrl = 'https://github.com/jeffer1312/hangar/releases/download/dist-latest'
+function Baixar-Dist {
+    # TUDO em variavel, e Out-Null no que nao interessa: em PowerShell qualquer saida solta dentro
+    # da funcao ENTRA no valor de retorno, e um `$true` no fim viraria um array que o `if` le como
+    # verdadeiro sempre — inclusive no caminho de falha.
+    if (-not (Tem 'tar')) { return $false }        # tar.exe existe no Windows 10+; sem ele, build local
+    if (-not $commit) { return $false }            # sem git nao da pra saber de que commit e o dist
+    if ($sujo) { return $false }                   # front editado a mao: a pessoa quer o codigo DELA na tela
+    $tmp = Join-Path "$raiz\frontend" (".dist-baixado." + [IO.Path]::GetRandomFileName())
+    try {
+        # TLS 1.2 explicito: o 5.1 ainda negocia TLS 1.0 por padrao em algumas maquinas e o GitHub
+        # recusa. E ProgressPreference='SilentlyContinue' porque a barra do Invoke-WebRequest no 5.1
+        # custa mais que o proprio download (medido em outras bases: chega a 10x).
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $progAnt = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        # O .sha primeiro, que sao 200 bytes: dist de OUTRO commit serve tela velha contra API nova,
+        # e esse defeito e mudo. Nao bateu (CI ainda compilando) -> build local, como sempre foi.
+        $shaRemoto = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 15 -Uri "$distUrl/frontend-dist.sha").Content
+        if ($shaRemoto.Trim() -ne $commit.Trim()) { return $false }
+        $tar = "$tmp.tar.gz"
+        Invoke-WebRequest -UseBasicParsing -TimeoutSec 180 -Uri "$distUrl/frontend-dist.tar.gz" -OutFile $tar | Out-Null
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        & tar -xzf $tar -C $tmp
+        if ($LASTEXITCODE -ne 0) { return $false }
+        if (-not (Test-Path (Join-Path $tmp 'index.html'))) { return $false }
+        # Extrai ao LADO e so entao troca: download interrompido no meio nao pode deixar a maquina
+        # sem front nenhum, ja que este caminho, ao voltar $true, faz o build local nem rodar.
+        if (Test-Path $dist) { Remove-Item -Recurse -Force (Split-Path -Parent $dist) -ErrorAction SilentlyContinue }
+        Move-Item $tmp "$raiz\frontend\dist"
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $progAnt) { $ProgressPreference = $progAnt }
+        Remove-Item -Recurse -Force $tmp, "$tmp.tar.gz" -ErrorAction SilentlyContinue
+    }
+}
+
+if ($precisa -and (Baixar-Dist)) {
+    Ok 'dist baixado do CI (nao precisou compilar aqui)'
+    # As DEPENDENCIAS continuam necessarias mesmo com o dist pronto: a tarefa hangar-frontend roda
+    # `npm run preview`, que e o vite servindo o dist — sem node_modules ela nao sobe. Pular o
+    # `npm ci` aqui deixaria a instalacao com front compilado e servico morto.
+    if (-not (Test-Path $modulos)) {
+        $eapAnt2 = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        Push-Location "$raiz\frontend"
+        try { npm ci @quieto; $rcDeps = $LASTEXITCODE } finally { Pop-Location; $ErrorActionPreference = $eapAnt2 }
+        if ($rcDeps -ne 0) {
+            Erro "npm ci falhou (exit $rcDeps) - o servico do frontend nao vai subir"
+            Nota 'rodar na mao:  cd frontend ; npm ci'
+            $script:pendencias += 'frontend'
+        } else {
+            Ok 'dependencias do frontend instaladas'
+        }
+    }
+    # Mesma marca do build local: ela e o que faz a proxima rodada pular o passo, e o dist e
+    # comprovadamente deste commit.
+    if ($marca) { Escrever-Texto $marcaArq $marca }
+    $precisa = $false
+}
+
 if ($precisa) {
     # Exit code de CADA etapa, e nao roda-e-assume: o comentario abaixo prometia que a marca so era
     # gravada depois do build dar certo, mas nada CONFERIA o resultado - `npm ci` e `npm run build`
@@ -702,11 +818,20 @@ if ($precisa) {
         # `npm ci` a tela ficava sem barra andando e sem log novo — identica a uma travada, que foi
         # exatamente a leitura de quem estava olhando (25/08/2026). No modo interativo o --silent
         # continua, que e onde ele foi posto pra nao poluir o terminal de quem instala.
-        $quieto = if ($Update) { @() } else { @('--silent') }
+        # Atribuicao DIRETA, nunca `$x = if (...) { @('--silent') }`: o valor sai do bloco pelo
+        # pipeline, que desembrulha o array de um elemento, e $quieto virava a STRING '--silent'.
+        # Splat de string enumera CARACTERE (`-` `-` `s` `i` `l` `e` `n` `t`) — medido na VM
+        # Windows: o npm recebia `-` como nome de script (`Missing script: "-"`), o `npm ci` saia
+        # ruidoso, e antes disso as sobras caiam no `vite build` (`Unused args: 'l','e','n','t'`).
+        $quieto = @()
+        if (-not $Update) { $quieto = @('--silent') }
         npm ci @quieto
         $rcCi = $LASTEXITCODE
         if ($rcCi -eq 0) {
-            npm run build @quieto
+            # A flag vai ANTES do nome do script: no npm 11 `npm run build --silent` nao e mais
+            # consumida pelo npm, ela e repassada ao script e chega no `vite build`, que morre com
+            # CACError (medido na VM Windows, node 24.15 / npm 11).
+            npm run @quieto build
             $rcBuild = $LASTEXITCODE
         } else {
             $rcBuild = -1
@@ -765,7 +890,9 @@ if (Test-Path "$shellDir\package.json") {
         $ErrorActionPreference = 'Continue'
         Push-Location $shellDir
         try {
-            $quietoShell = if ($Update) { @() } else { @('--silent') }
+            # Mesmo motivo do $quieto acima: o `if` desembrulha o array e o splat vira caractere.
+            $quietoShell = @()
+            if (-not $Update) { $quietoShell = @('--silent') }
             npm ci @quietoShell
             $rcShell = $LASTEXITCODE
         } finally {
@@ -786,6 +913,28 @@ if (Test-Path "$shellDir\package.json") {
         }
     } else {
         Ok 'janela nativa ja com as dependencias em dia'
+    }
+    # Atalho no Menu Iniciar: sem ele o app so abre por `npm start` e ninguem descobre que a
+    # janela existe. Reescrito sempre (o caminho do checkout pode mudar). O icone vem do proprio
+    # electron.exe: o .lnk nao aceita PNG, e o build\icon.png so serve ao empacotador.
+    $electronExe = "$shellDir\node_modules\electron\dist\electron.exe"
+    if (Test-Path $electronExe) {
+        $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Hangar.lnk'
+        try {
+            $ws = New-Object -ComObject WScript.Shell
+            $atalho = $ws.CreateShortcut($lnk)
+            $atalho.TargetPath = $electronExe
+            $atalho.Arguments = 'main.cjs'
+            $atalho.WorkingDirectory = $shellDir
+            $atalho.IconLocation = "$electronExe,0"
+            $atalho.Description = 'Hangar'
+            $atalho.Save()
+        } catch { }
+        # Prova, nao anuncio: o Save() do COM falha calado com caminho estranho.
+        if (Test-Path $lnk) { Ok "Hangar no Menu Iniciar ($lnk)" }
+        else { Falta 'nao consegui criar o atalho Hangar.lnk no Menu Iniciar (abra com: cd shell ; npm start)' }
+    } else {
+        Falta "electron.exe nao encontrado em $electronExe - atalho do Menu Iniciar nao criado"
     }
 }
 
@@ -1016,6 +1165,25 @@ $portaBack = Porta-Do-Env 'CP_PORT' 8765
 # Em FUNCAO, nao inline: o passo 6 chama de novo depois de instalar/logar o Tailscale, pra que
 # quem instalou por aqui nao termine com o QR em 127.0.0.1 e precise lembrar de re-rodar tudo.
 # Le $portaBack/$envFile do escopo do script e grava $script:cpPublicUrl - mesmo contrato de antes.
+function Get-Proxy443 {
+    # O proxy que a raiz do :443 aponta, ou $null. FILTRA por :443 de propósito: o `Web` do serve
+    # status e um mapa "host:porta" -> Handlers, e esta maquina pode ter OUTRO slot publicado — o
+    # preview de projeto usa o 10000 (backend/app/tunnel.py:11). Varrer todos e guardar o ultimo
+    # `/` faria o proxy do 10000 passar por "ja publica o backend", e o 443 nunca ser configurado.
+    # O mesmo filtro existe em tunnel.py:71-73, e e por isso que ele existe la.
+    try {
+        $sv = (& tailscale serve status --json 2>$null | Out-String | ConvertFrom-Json)
+        if ($sv -and $sv.Web) {
+            foreach ($p in $sv.Web.PSObject.Properties) {
+                if ($p.Name -notmatch ':443$') { continue }
+                foreach ($h in $p.Value.Handlers.PSObject.Properties) {
+                    if ($h.Name -eq '/') { return $h.Value.Proxy }
+                }
+            }
+        }
+    } catch { }
+    return $null
+}
 function Publica-Tailscale {
     if (-not (Tem 'tailscale')) {
         Nota 'tailscale nao instalado - pulando (o acesso de fora fica por sua conta)'
@@ -1040,23 +1208,7 @@ function Publica-Tailscale {
             if (-not $dns) {
                 Nota 'tailscale sem nome de no (nao logado?) - rode `tailscale up` e re-rode este instalador'
             } else {
-                # FILTRA por :443. O `Web` do serve status e um mapa "host:porta" -> Handlers, e esta
-                # maquina pode ter OUTRO slot publicado — o preview de projeto usa o 10000
-                # (backend/app/tunnel.py:11). Varrer todos e guardar o ultimo `/` faria o proxy do 10000
-                # passar por "ja publica o backend", e o 443 nunca ser configurado. O mesmo filtro existe
-                # em tunnel.py:71-73, e e por isso que ele existe la.
-                $proxy443 = $null
-                try {
-                    $sv = (& tailscale serve status --json 2>$null | Out-String | ConvertFrom-Json)
-                    if ($sv -and $sv.Web) {
-                        foreach ($p in $sv.Web.PSObject.Properties) {
-                            if ($p.Name -notmatch ':443$') { continue }
-                            foreach ($h in $p.Value.Handlers.PSObject.Properties) {
-                                if ($h.Name -eq '/') { $proxy443 = $h.Value.Proxy }
-                            }
-                        }
-                    }
-                } catch { }
+                $proxy443 = Get-Proxy443
                 # Compara PORTA, nao string: o tailscale normaliza o alvo, entao "localhost:8765" e
                 # "http://127.0.0.1:8765" descrevem a mesma coisa e uma comparacao literal diria que
                 # precisa reconfigurar a cada rodada. Mesmo criterio do tunnel._port_from_proxy.
@@ -1071,15 +1223,48 @@ function Publica-Tailscale {
                     Falta "tailscale ja publica '$proxy443' na raiz - NAO vou sobrescrever; ajuste na mao se quiser o backend ali"
                 } else {
                     $saida = (& tailscale serve --bg --https=443 "localhost:$portaBack" 2>&1 | Out-String)
-                    if ($LASTEXITCODE -eq 0) {
-                        Ok "tailscale publicando o backend (localhost:$portaBack)"
-                        $script:cpPublicUrl = "https://$dns"
+                    $falha = $null
+                    if ($LASTEXITCODE -ne 0) {
+                        $falha = $saida.Trim()
                     } else {
+                        # EVIDENCIA POSITIVA, como no build do front: exit 0 e necessario mas nao
+                        # basta. A prova e o status relido mostrando a raiz do :443 na nossa porta.
+                        $proxyProva = Get-Proxy443
+                        $portaProva = $null
+                        if ($proxyProva -match ':(\d+)/?$') { $portaProva = [int]$Matches[1] }
+                        if ($portaProva -eq $portaBack) {
+                            Ok "tailscale publicando o backend (localhost:$portaBack)"
+                            $script:cpPublicUrl = "https://$dns"
+                        } elseif ($null -eq $proxyProva) {
+                            # Get-Proxy443 engole excecao (catch vazio): nulo aqui pode ser leitura
+                            # transitoria, nao serve errado — a mensagem nao pode afirmar o que
+                            # nao foi medido, senao um serve BOM vira "falha" por causa do parse.
+                            $falha = 'o serve aceitou o comando, mas nao consegui reler o status pra provar; confira com: tailscale serve status'
+                        } else {
+                            $falha = "o serve aceitou o comando, mas o status mostra a raiz do :443 em '$proxyProva', nao na porta $portaBack"
+                        }
+                    }
+                    if ($falha) {
                         # A saida diz a causa real (permissao, HTTPS nao habilitado no tailnet); sem ela
                         # sobraria chutar numa lista de tres. Se for permissao, o caminho e o mesmo que o
                         # bloco de firewall ja ensina: abrir um PowerShell como Administrador.
-                        Falta "tailscale serve falhou: $($saida.Trim())"
-                        Nota 'Se falou em permissao/acesso negado: abra um PowerShell como Administrador e rode este instalador de novo.'
+                        Falta "tailscale serve falhou: $falha"
+                        if ($falha -match '(?i)https') {
+                            Nota 'HTTPS nao esta habilitado no tailnet: entre em https://login.tailscale.com/admin/dns,'
+                            Nota 'ligue o MagicDNS, habilite o HTTPS e rode este instalador de novo.'
+                        } else {
+                            Nota 'Se falou em permissao/acesso negado: abra um PowerShell como Administrador e rode este instalador de novo.'
+                        }
+                        # A falha ENTRA no $pendencias, e o portao do fim responde "NAO terminou":
+                        # instalacoes inteiras sairam "Pronto" com o serve quebrado porque isto so
+                        # imprimia amarelo no meio da tela. No -Update nao: falhar ali derrubaria a
+                        # atualizacao do app por causa de um extra; a marca ##HANGAR-AVISO## leva o
+                        # aviso pra tela do Atualizar.
+                        if ($Update) {
+                            Write-Host '##HANGAR-AVISO## o backend nao foi publicado no Tailscale (serve falhou)'
+                        } else {
+                            $script:pendencias += 'tailscale serve'
+                        }
                     }
                 }
                 if ($script:cpPublicUrl) {
@@ -1119,14 +1304,18 @@ Nota 'claude como VOCE, entao um host exposto e execucao remota na sua maquina.'
 # Firewall: precisa de admin. Sem admin nao adianta tentar - a regra falha e o usuario fica
 # achando que liberou. Ja liberado -> nem pergunta: re-rodar o instalador depois de um git pull
 # deve pegar so o que falta, nao repetir pergunta do que ja esta de pe.
-$regras = @(8765, 5173) | ForEach-Object {
+# A 5173 so entra quando ha servico de front nesta maquina: sem ele, quem serve a interface e o
+# backend na 8765, e abrir porta que ninguem escuta e furo aberto de graca.
+$portasFw = if ($temTarefaFront) { @(8765, 5173) } else { @(8765) }
+$listaFw = $portasFw -join ' e '
+$regras = @($portasFw | ForEach-Object {
     Get-NetFirewallRule -DisplayName "hangar $_" -ErrorAction SilentlyContinue
-}
-if ($regras.Count -eq 2) {
-    Ok 'portas 8765 e 5173 ja liberadas no firewall'
-} elseif (Pergunte '  Liberar as portas 8765 e 5173 no firewall pra rede LOCAL?') {
+})
+if ($regras.Count -eq $portasFw.Count) {
+    Ok "porta(s) $listaFw ja liberada(s) no firewall"
+} elseif (Pergunte "  Liberar a(s) porta(s) $listaFw no firewall pra rede LOCAL?") {
     if (EhAdmin) {
-        foreach ($p in 8765, 5173) {
+        foreach ($p in $portasFw) {
             $nome = "hangar $p"
             Get-NetFirewallRule -DisplayName $nome -ErrorAction SilentlyContinue |
                 Remove-NetFirewallRule -ErrorAction SilentlyContinue
@@ -1138,8 +1327,9 @@ if ($regras.Count -eq 2) {
         Ok 'portas liberadas (perfil Private apenas)'
     } else {
         Falta 'sem privilegio de administrador - abra um PowerShell como admin e rode:'
-        Nota 'New-NetFirewallRule -DisplayName "hangar 8765" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -Profile Private'
-        Nota 'New-NetFirewallRule -DisplayName "hangar 5173" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5173 -Profile Private'
+        foreach ($p in $portasFw) {
+            Nota "New-NetFirewallRule -DisplayName `"hangar $p`" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $p -Profile Private"
+        }
     }
 }
 
@@ -1282,6 +1472,12 @@ $portaBack  = Porta-Do-Env 'CP_PORT' 8765
 # A fonte da verdade e o vite.config.ts; se ele mudar, muda aqui junto.
 $portaFront = 5173
 
+# CP_FRONT_PORT aponta o QR e o painel de alcance pra quem SERVE a interface. Com a tarefa do front
+# de pe e o 5173; sem ela, a linha tem de sair, senao os dois mandam a pessoa pra uma porta onde
+# ninguem escuta (sem a chave, o backend usa a propria porta — config.porta_do_front).
+if ($temTarefaFront) { Set-EnvKey -Chave 'CP_FRONT_PORT' -Valor "$portaFront" }
+else { Remove-EnvKey -Chave 'CP_FRONT_PORT' }
+
 $tarefas = @(
     # Padrao ANCORADO no caminho deste checkout. 'app\.main' cru casava com QUALQUER processo cuja
     # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
@@ -1292,16 +1488,15 @@ $tarefas = @(
     # o casamento e substring pura da linha de comando, e QUALQUER processo que so MENCIONE este
     # caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
     @{ Nome = 'hangar-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
-       Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend"); ExeProc = 'uv|python' },
-    # `run preview`, NAO `run dev`: o passo 2 acabou de gerar o frontend\dist e subir o dev
-    # server aqui serviria desenvolvimento numa instalacao de producao - a mesma incoerencia que
-    # o services-setup.sh do Linux ja corrigiu. O bloco `preview` do vite.config.ts usa a MESMA
-    # porta 5173 com o mesmo proxy /api, entao a origem nao muda e ninguem perde localStorage
-    # (cp_servers, tema, layout). Pra mexer no layout com recarga ao vivo: pare a tarefa e rode
-    # `npm run dev` na mao.
-    @{ Nome = 'hangar-frontend'; Exe = 'npm'; Args = 'run preview';            Dir = "$raiz\frontend"
-       Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend"); ExeProc = 'node|npm|vite' }
+       Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend"); ExeProc = 'uv|python' }
 )
+if ($temTarefaFront) {
+    # `run preview`, NAO `run dev`: o dist ja esta pronto e subir o dev server aqui serviria
+    # desenvolvimento numa instalacao de producao. Pra mexer no layout com recarga ao vivo: pare a
+    # tarefa e rode `npm run dev` na mao.
+    $tarefas += @{ Nome = 'hangar-frontend'; Exe = 'npm'; Args = 'run preview'; Dir = "$raiz\frontend"
+                   Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend"); ExeProc = 'node|npm|vite' }
+}
 
 # Derruba a instancia VELHA antes de subir a nova.
 #
@@ -1321,6 +1516,14 @@ $tarefas = @(
 # -Force sobrescreve.
 $jaAgendado = Get-ScheduledTask -TaskName $tarefas[0].Nome -ErrorAction SilentlyContinue
 $registrou = $jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu logon?')
+# As duas nascem FORA do try de proposito. `$subiu` e lido la embaixo (install.ps1:1842) pra
+# decidir a pendencia 'backend no ar'; enquanto ele morava dentro do try, uma excecao no registro
+# deixava a variavel INDEFINIDA -> $false -> pendencia inventada com a porta 8765 aberta e o
+# backend respondendo. `$iniciou` diz se alguma tarefa chegou a ser (re)iniciada: sem isso, esperar
+# 40s pela porta depois de um estouro que nem chegou no Start-ScheduledTask so mede o processo
+# ORFAO que ficou de pe, e reportar "ok" ali seria pior que a pendencia falsa.
+$subiu = $false
+$iniciou = $false
 if ($registrou) {
     try {
         foreach ($t in $tarefas) {
@@ -1358,8 +1561,35 @@ if ($registrou) {
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
-            Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
-                -Settings $cfg -Force | Out-Null
+            # Register em try PROPRIO, e o unico ponto deste passo que precisa de permissao de
+            # ESCRITA. O XML em C:\Windows\System32\Tasks\<nome> pertence a quem registrou: um
+            # install.ps1 rodado ELEVADO deixa as tres tarefas com dono BUILTIN\Administradores, e
+            # o usuario fica so com Read+Synchronize. O botao Atualizar do app roda NAO elevado,
+            # entao o `-Force` volta Acesso negado. Medido em 26/08/2026: essa unica excecao pulava
+            # o Pare-Servico, o Start-ScheduledTask e a checagem de porta DE UMA VEZ - o backend
+            # seguia no ar com 4 commits e ~8h de atraso (o pior estado que o CLAUDE.md descreve:
+            # codigo novo no disco, processo velho no ar) enquanto a tela dizia so "nao deu pra
+            # registrar as tarefas".
+            # Tarefa que JA existe nao precisa de registro pra ser reiniciada: parar e iniciar sao
+            # permitidos sem elevacao (medido na hangar-vigia: Start-ScheduledTask OK, LastRunTime
+            # avancou). Entao o registro vira RESSALVA e o restart continua. Se a tarefa NAO existe
+            # nao ha o que reaproveitar - rethrow, que e o caso que o catch de fora ja cobria.
+            $reaproveitou = $false
+            try {
+                Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
+                    -Settings $cfg -Force | Out-Null
+            } catch {
+                if (-not (Get-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue)) { throw }
+                $reaproveitou = $true
+                Falta "sem permissao pra re-registrar $($t.Nome) - reaproveitando a tarefa existente ($_)"
+                # A ressalva importa: a tarefa guarda o caminho do .vbs e o diretorio DENTRO dela,
+                # entao a que sobrou aponta pro estado de quando foi registrada. Se o repo mudou de
+                # lugar (ou o uv), reaproveitar sobe o caminho ANTIGO - e isso nao da pra consertar
+                # sem elevacao.
+                Nota "  ela ainda aponta pro caminho de quando foi registrada; se o repo mudou de lugar, so um re-registro conserta"
+                Nota "  numa janela ELEVADA:  Unregister-ScheduledTask -TaskName $($t.Nome) -Confirm:`$false"
+                Nota '  e depois rode este instalador de novo SEM elevacao (ele recria a tarefa com o seu usuario como dono)'
+            }
             # Registrar NAO inicia: o gatilho e "no logon", entao sem isto nada sobe ate o
             # proximo login e a pessoa abre o navegador numa porta morta logo apos instalar.
             # O equivalente no Linux (`systemctl --user enable --now`) liga na hora - o `--now`
@@ -1367,38 +1597,85 @@ if ($registrou) {
             $mortos = Pare-Servico -Nome $t.Nome -Porta $t.Porta -Padrao $t.Padrao -Exe $t.ExeProc
             if ($mortos -gt 0) { Nota "  instancia anterior derrubada ($mortos processo(s)) antes de subir" }
             Start-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue
-            Ok "tarefa $($t.Nome) registrada e iniciada"
+            $iniciou = $true
+            if ($reaproveitou) { Ok "tarefa $($t.Nome) reaproveitada e reiniciada" } else { Ok "tarefa $($t.Nome) registrada e iniciada" }
         }
-        # Iniciar nao e subir: a tarefa ja morreu na largada por bug de codificacao, e o instalador
+    } catch {
+        Falta "nao deu pra registrar as tarefas: $_"
+        Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
+    }
+
+    # Iniciar nao e subir: a tarefa ja morreu na largada por bug de codificacao, e o instalador
     # dizia "iniciada" e seguia. Confere a porta antes de afirmar qualquer coisa.
     # -State Listen e $portaBack, nao 8765 cravado. Sem o -State Listen um socket em TIME_WAIT do
     # processo que o Pare-Servico acabou de matar ja contava como "subiu", e o instalador declarava
     # sucesso apontando pro cadaver - o bug original (instancia velha) de volta, agora com uma
     # mensagem verde na frente afirmando o contrario.
-    $subiu = $false
-    # 40s, nao 15s: o boot medido nesta maquina e ~15s (comentario da vigia, mais abaixo), e o
-    # caminho feliz sai no primeiro acerto - o teto so paga quando o boot for mais lento (disco,
-    # antivirus, primeira sincronizacao do uv). Achado IMPORTANTE da revisao final: com 15s, um
-    # boot de 16s virava alarme falso, entrava em $pendencias e derrubava o instalador inteiro
-    # (exit 1, bloco vermelho do hook dizendo "A ATUALIZACAO NAO RODOU") quando o backend so
-    # estava alguns segundos atrasado.
-    foreach ($i in 1..40) {
-        if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
-        Start-Sleep -Seconds 1
-    }
-    if ($subiu) {
-        Ok "backend respondendo em 127.0.0.1:$portaBack"
+    #
+    # FORA do try acima: enquanto estava dentro, qualquer excecao no registro pulava esta checagem
+    # inteira e `$subiu` ficava indefinido - o gate de install.ps1:1842 lia $false e somava a
+    # pendencia 'backend no ar' com a porta ABERTA. Um "Acesso negado" no registro matava o restart
+    # e a verificacao juntos, e a atualizacao falhava em silencio justamente no que importa.
+    if ($iniciou) {
+        # 40s, nao 15s: o boot medido nesta maquina e ~15s (comentario da vigia, mais abaixo), e o
+        # caminho feliz sai no primeiro acerto - o teto so paga quando o boot for mais lento (disco,
+        # antivirus, primeira sincronizacao do uv). Achado IMPORTANTE da revisao final: com 15s, um
+        # boot de 16s virava alarme falso, entrava em $pendencias e derrubava o instalador inteiro
+        # (exit 1, bloco vermelho do hook dizendo "A ATUALIZACAO NAO RODOU") quando o backend so
+        # estava alguns segundos atrasado.
+        foreach ($i in 1..40) {
+            if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
+            Start-Sleep -Seconds 1
+        }
+        # Passados os 40s, "nao subiu" e "esta demorando" nao sao a mesma coisa, e o instalador
+        # tratava as duas como falha: na PRIMEIRA subida o backend aplica os passos de atualizacao
+        # e sincroniza o uv ANTES de abrir a porta, e ai o teto estoura com tudo indo bem (medido
+        # em 29/08/2026: a mensagem saiu com o uvicorn subindo logo depois, `Uvicorn running on
+        # http://0.0.0.0:8765` no log). Como isso vira pendencia, o instalador terminava em erro
+        # por causa de alguns segundos de atraso — o mesmo estrago que ja tinha levado o teto de
+        # 15s pra 40s.
+        # Quem diz se ainda esta subindo e o LOG, nunca o estado da tarefa: as tres tarefas ficam
+        # em `Ready` mesmo com o servidor vivo (o .vbs nao espera), entao ali nao ha resposta.
+        # Enquanto o arquivo crescer, espera; parou de crescer por $ociosoMax segundos, desiste
+        # — um backend morto nao paga o teto inteiro.
+        if (-not $subiu) {
+            $logBack = Join-Path $env:LOCALAPPDATA 'hangar\hangar-backend.log'
+            $ociosoMax = 30
+            $extraMax = 180
+            $tamAnt = if (Test-Path $logBack) { (Get-Item $logBack).Length } else { -1 }
+            $ocioso = 0
+            $avisou = $false
+            foreach ($i in 1..$extraMax) {
+                if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
+                $tam = if (Test-Path $logBack) { (Get-Item $logBack).Length } else { -1 }
+                if ($tam -gt $tamAnt) {
+                    if (-not $avisou) { Nota 'o backend ainda esta subindo (primeira subida faz uv sync e passos de atualizacao)'; $avisou = $true }
+                    $tamAnt = $tam
+                    $ocioso = 0
+                } else {
+                    $ocioso++
+                    if ($ocioso -ge $ociosoMax) { break }
+                }
+                Start-Sleep -Seconds 1
+            }
+            $esperou = 40 + $i
+        }
+        if ($subiu) {
+            Ok "backend respondendo em 127.0.0.1:$portaBack"
+        } else {
+            Falta "o backend NAO subiu em ${esperou}s (o log parou de crescer) - o app nao vai conectar"
+            Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\hangar-backend.log`" -Tail 30"
+        }
     } else {
-        Falta 'o backend NAO subiu em 40s - o app nao vai conectar'
-        Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\hangar-backend.log`" -Tail 30"
+        # Nao chegou nem a iniciar (o catch acima disparou antes do Start-ScheduledTask). Nao se
+        # olha a porta aqui de proposito: o que estivesse escutando seria o processo ORFAO da
+        # instalacao anterior, e chamar isso de "backend respondendo" e a mentira que este passo
+        # inteiro existe pra nao contar. Fica sem $subiu -> a pendencia la embaixo e VERDADEIRA.
+        Falta 'nenhuma tarefa chegou a ser iniciada - o que estiver na porta e a instancia ANTIGA'
     }
     Nota 'Log (inclui o QR de pareamento):'
     Nota "  $env:LOCALAPPDATA\hangar\hangar-backend.log"
     Nota 'Remover depois: Unregister-ScheduledTask -TaskName hangar-backend'
-    } catch {
-        Falta "nao deu pra registrar as tarefas: $_"
-        Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
-    }
 
     # Vigia registrada em try/catch PROPRIO, separado do de cima: achado IMPORTANTE da revisao
     # final. Antes, os dois viviam sob o MESMO try, e uma falha AQUI (na vigia) saia com a mensagem
@@ -1444,8 +1721,9 @@ if ($registrou) {
     # identifica o processo dele e o caminho do checkout. Mesmo `.Replace("'","''")` do de cima,
     # pelo mesmo motivo — o caminho entra CRU dentro de um literal de aspas simples, e um perfil
     # com apostrofo (C:\Users\O'Brien\...) fecharia a aspa cedo e quebraria a vigia inteira.
-    $vigiaPadraoFront = $tarefas[1].Padrao.Replace("'", "''")
-    $vigiaExeFront = $tarefas[1].ExeProc       # 'node|npm|vite'
+    # Guarda de $temTarefaFront: sem tarefa do front, $tarefas[1] e $null e ler .Padrao/.ExeProc dele quebra em "expressao de valor nulo" — instalacao nova nao registra mais a tarefa do front, entao $tarefas[1] nao existe.
+    $vigiaPadraoFront = if ($temTarefaFront) { $tarefas[1].Padrao.Replace("'", "''") } else { '' }
+    $vigiaExeFront = if ($temTarefaFront) { $tarefas[1].ExeProc } else { '' }        # 'node|npm|vite'
     $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.log").Replace("'", "''")   # mesmo lugar dos outros .log
     # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_`/`$candidatos`/etc
     # sobrevivem literais sem precisar de crase nenhuma - o script so vira real quando o
@@ -1481,9 +1759,14 @@ if ($registrou) {
         Start-ScheduledTask -TaskName $tarefa
     }
     Reergue __PORTA__ '(__APPMAIN__|__CAMINHO__)' '__EXE__' 'hangar-backend'
-    Reergue __PORTAFRONT__ '__CAMINHOFRONT__' '__EXEFRONT__' 'hangar-frontend'
+__LINHAFRONT__
 } *>&1 | Out-File -FilePath '__LOG__' -Append -Encoding utf8
 '@
+    # A linha do front so entra quando a tarefa existe: `Start-ScheduledTask` de tarefa inexistente
+    # levanta, e como a vigia roda a cada 5 min, isso encheria o log dela de erro pra sempre —
+    # justamente no arquivo que se olha quando algo NAO subiu.
+    $vigiaLinhaFront = if ($temTarefaFront) { "    Reergue __PORTAFRONT__ '__CAMINHOFRONT__' '__EXEFRONT__' 'hangar-frontend'" } else { '' }
+    $vigiaTemplate = $vigiaTemplate.Replace('__LINHAFRONT__', $vigiaLinhaFront)
     # Numa linha so, sem quebra: um `.Replace(...)` iniciando a linha seguinte arrisca ser lido
     # como dot-sourcing pelo parser (mesmo com crase antes), e nenhuma das duas formas de quebra
     # de linha do resto do arquivo (crase, ou deixar parentese/vírgula aberto) cobre encadeamento
@@ -1922,6 +2205,9 @@ if ($pendencias.Count -gt 0) {
 
   Resolva o que esta na lista e rode de novo:  .\install.ps1 -Update
 "@
+    # A mesma pausa do fim feliz: sem ela, a janela aberta por duplo clique fecha no exit e
+    # ninguem le o que faltou.
+    if ($script:Interativo -and -not $Update) { Read-Host '  Enter pra fechar' | Out-Null }
     exit 1
 }
 Titulo 'Pronto'
@@ -1930,17 +2216,24 @@ Titulo 'Pronto'
 # afirmando algo que nao aconteceu.
 $linhaQr = ''
 if ($qrMostrado) { $linhaQr = "`n  O QR acima ja leva o token: ler com a camera do celular abre o app JA conectado." }
-Write-Host @"
-  Abra a interface em http://127.0.0.1:$portaBack - o proprio backend serve o build que este
-  instalador gerou, entao ali tem tela e API no mesmo endereco.
+# A frase do 5173 so vale pra quem MANTEVE a tarefa do front; numa instalacao nova ela nao existe
+# mais, e prometer um endereco que ninguem escuta e o mesmo defeito do QR apontando pra porta morta.
+$linha5173 = ''
+if ($temTarefaFront) {
+    $linha5173 = @"
+
   O http://localhost:5173 tambem sobe: e o 'vite preview' servindo o MESMO build (a tarefa
   agendada roda preview, nao dev - sem recarga ao vivo). Ele escuta SO em 127.0.0.1
   (vite.config.ts) - do celular se chega pelo Tailscale, nao pelo IP da LAN direto.
-  Pra mexer no layout com recarga ao vivo: pare a tarefa hangar-frontend e rode 'npm run dev'.
+"@
+}
+Write-Host @"
+  Abra a interface em http://127.0.0.1:$portaBack - o proprio backend serve o build, entao ali
+  tem tela e API no mesmo endereco.$linha5173
+  Pra mexer no layout com recarga ao vivo: 'npm run dev' na pasta frontend (porta 5173).
 
   Rodar na mao (se voce pulou o passo 7):
       cd backend  ; `$env:CP_LAN_BIND_IP='0.0.0.0' ; uv run python -m app.main
-      cd frontend ; npm run dev
 $linhaQr
   Guarde: quem tiver essa URL entra sem senha. Ela fica no historico do navegador desta
   maquina, e num navegador logado em conta o historico sincroniza pra nuvem do fornecedor.

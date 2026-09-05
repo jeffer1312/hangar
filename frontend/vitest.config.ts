@@ -11,6 +11,10 @@ export default defineConfig({
   },
   test: {
     environment: 'node', // pure-function + WebCrypto units; no DOM needed
+    // Teste que formata data (cota.test.ts) fixa o instante em -03:00 e espera a hora de
+    // Brasília. Quem formata é o Intl, na timezone da máquina: o runner do GitHub roda em UTC
+    // e 18h vira 21h. Fixar aqui deixa o resultado igual em qualquer máquina.
+    env: { TZ: 'America/Sao_Paulo' },
     // `.test.svelte.ts` entra junto porque runes (`$state`) só compilam em arquivo com o sufixo
     // `.svelte.ts` — e testar componente que reage a MUDANÇA de prop (abrir/fechar) precisa de uma
     // prop reativa de verdade, não de um objeto solto.

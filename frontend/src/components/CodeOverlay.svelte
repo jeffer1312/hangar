@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
   import { codeOverlay } from '../lib/codeActions.svelte';
-  import { highlightCodeBlocks } from '../lib/highlight';
+  import { highlightCodeBlocks } from '../lib/highlightLazy';
 
   // Overlay fullscreen de um bloco de codigo (botao ⤢ do header do code-block). O codigo chega CRU
   // e e highlightado aqui de novo (highlightCodeBlocks e idempotente), entao o overlay nao depende

@@ -63,7 +63,7 @@ export function fileAuthHeader(): Record<string, string> {
   return authHeaders();
 }
 
-// URL de uma imagem ENVIADA do phone (upload), servida por <cwd>/.hangar-uploads/<basename>.
+// URL de uma imagem ENVIADA do phone (upload), servida do cofre (~/.hangar/uploads/<projeto>/<sessão>/).
 // `?token` igual as de cima: <img> nao manda header Authorization e cross-origin nao leva cookie.
 export function uploadUrl(name: string, filename: string): string {
   const t = apiEnv().getToken() ?? '';
@@ -99,20 +99,31 @@ function authHeaders(): Record<string, string> {
 // cru na tela seria pior que mostrar a lingua errada. Endpoint ainda nao migrado manda string,
 // e o caminho antigo continua inteiro.
 export async function errorDetail(res: Response): Promise<string> {
+  return (await lerErro(res)).msg;
+}
+
+// Mensagem traduzida + o CÓDIGO cru do backend (`erro_*`). O código é o que deixa quem chama
+// decidir por identidade e não por texto — a mensagem muda com o idioma.
+async function lerErro(res: Response): Promise<{ msg: string; code?: string }> {
   const text = await res.text().catch(() => '');
   try {
     const j = JSON.parse(text);
-    if (j && typeof j.detail === 'string') return j.detail;
+    if (j && typeof j.detail === 'string') return { msg: j.detail };
     if (j?.detail && typeof j.detail.code === 'string') {
       const traduzida = mensagemDeErro(j.detail.code, j.detail.params ?? {});
-      return traduzida ?? j.detail.msg ?? j.detail.code;
+      return { msg: traduzida ?? j.detail.msg ?? j.detail.code, code: j.detail.code };
     }
   } catch { /* corpo nao-JSON: cai no texto cru abaixo */ }
   // text e statusText podem os DOIS vir vazios (502 de infra sem corpo JSON, servidor HTTP/2 que
   // nao popula statusText) — sem este ultimo fallback, quem le `.message` (TtsBar, ServerSettings)
   // trata string vazia como "sem erro" e desenha a UI de sucesso por cima de uma falha real.
-  return text || res.statusText || `falha ${res.status} sem detalhe do servidor`;
+  return { msg: text || res.statusText || `falha ${res.status} sem detalhe do servidor` };
 }
+
+// Rotas GET que estão falhando por rede AGORA. O diário ganha uma linha na primeira falha e uma
+// no retorno, não uma por poll: 4 abas × poll de 4s deram 455 linhas iguais numa tarde em que o
+// backend só estava lento (máquina saturada), e afogaram o resto do dia.
+const _semRede = new Set<string>();
 
 // Trata a resposta compartilhada por apiFetch e uploadFile. Self-heal de token invalido/rotacionado:
 // isAuthenticated() so checa se EXISTE token, nao se vale. Num 401 COM token salvo, limpamos a
@@ -127,7 +138,10 @@ async function ensureOk(res: Response): Promise<void> {
   // (acima do limite de aviso, pede confirmacao) de qualquer outra falha so pela mensagem. A
   // MENSAGEM fica limpa (sem o "409: " na frente) — quem precisa do numero le `.status`, nao
   // texto que o usuario acaba vendo cru (ex: window.confirm da confirmacao de custo do TTS).
-  if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
+  if (!res.ok) {
+    const { msg, code } = await lerErro(res);
+    throw Object.assign(new Error(msg), { status: res.status, code });
+  }
 }
 
 // Segmentos cujo VALOR seguinte não pode ir pro diário como está.
@@ -167,9 +181,30 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (e) {
     // Rede caiu / servidor fora: nunca chegou a haver status. Distinguir isto de um 500 é metade
     // do diagnóstico de "sumiu do nada".
-    registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req,
-                    detalhe: `${init?.method ?? 'GET'} ${rotaGenerica(path)}` });
+    //
+    // CANCELAMENTO não entra: o Chat aborta o /history em voo a cada troca de sessão e a cada
+    // remontagem da tela, e o `fetch` lança igual. Registrado como erro, cada navegação virava uma
+    // "queda de rede" no diário — em 26/08/2026 as duas únicas do dia eram exatamente isso, e a
+    // queda de verdade, se tivesse havido, estaria indistinguível no meio. `TimeoutError` (o teto
+    // de tempo) segue entrando: aquilo é falha, não navegação — a mesma linha que `isAbortError`
+    // já traça pro resto do app. Quem for abortar por um motivo NOVO (um teto de tempo escrito à
+    // mão, por exemplo, em vez do `AbortSignal.timeout`) precisa saber disto: por este caminho a
+    // falha some do diário sem deixar rastro.
+    if (!isAbortError(e)) {
+      const rota = `${(init?.method ?? 'GET').toUpperCase()} ${rotaGenerica(path)}`;
+      const poll = rota.startsWith('GET ');
+      if (!poll || !_semRede.has(rota)) {
+        registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req, detalhe: rota });
+      }
+      if (poll) _semRede.add(rota);
+    }
     throw e;
+  }
+  {
+    const rota = `${(init?.method ?? 'GET').toUpperCase()} ${rotaGenerica(path)}`;
+    if (_semRede.delete(rota)) {
+      registrarDiag({ evento: 'api.voltou', nivel: 'ok', ms: Date.now() - t0, req, detalhe: rota });
+    }
   }
   // O que entra no diário, e por quê:
   //  - toda AÇÃO (POST/PUT/PATCH/DELETE), dando certo ou não. É o uso: enviar mensagem, responder
@@ -273,10 +308,15 @@ export async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> 
 // Devolve `Partial<CostReport>` porque é isto que chega DO FIO: um servidor da malha em versão
 // antiga responde sem os campos novos, e prometer o objeto completo aqui é como o front
 // quebrava em runtime com o `check` verde.
+// O teto NÃO é os 4s dos outros fan-outs: medido em 27/08/2026, o próprio servidor local, saudável,
+// leva 12,6s neste endpoint com o cache do backend frio (0,28s quente) — ou seja, a PRIMEIRA carga
+// de custos estourava sempre, e a máquina aparecia na tela como "não respondeu". Servidor offline
+// não paga este tempo: conexão recusada volta em milissegundos. Quem espera são os lentos de
+// verdade, e é exatamente por eles que este número existe.
 export async function fetchCostsForServer(s: Server, period: string): Promise<Partial<CostReport>> {
   const res = await fetch(`${s.baseUrl}/api/costs?period=${encodeURIComponent(period)}`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
-    signal: AbortSignal.timeout(4000),
+    signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<Partial<CostReport>>;
@@ -441,6 +481,60 @@ export function createSession(
   });
 }
 
+// ── Passagem de bastão ──────────────────────────────────────────────────────
+// O dossiê de continuidade que o backend monta lendo o transcript/git/plano da sessão. Volta como
+// `text/markdown` cru, e não JSON — por isso NÃO passa pelo apiFetch, que sempre faz `res.json()`.
+// Só leitura: o GET não cria nem grava nada, então serve de AMOSTRA (a origem segue trabalhando).
+export async function getBastao(name: string): Promise<string> {
+  const res = await fetch(`${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/bastao`, {
+    headers: authHeaders(),
+  });
+  await ensureOk(res);
+  return res.text();
+}
+
+// O dossiê que ESTA sessão recebeu, lido do disco — não um novo montado agora (é o que separa esta
+// rota do `getBastao` acima). Mesma resposta em markdown cru, mesmo motivo pra não passar pelo
+// apiFetch.
+export async function getBastaoDossie(name: string): Promise<string> {
+  const res = await fetch(`${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/bastao/dossie`, {
+    headers: authHeaders(),
+  });
+  await ensureOk(res);
+  return res.text();
+}
+
+// Resposta INTEIRA da rota, não só o que a tela lê hoje (`name`, pra navegar). Declarar meia
+// resposta é o convite pro próximo `as any` quando alguém precisar do `dossie` — e os quatro
+// campos são o contrato do endpoint, não campos inventados por precaução.
+export interface BastaoResult {
+  name: string;      // nome da sessão criada (já sanitizado pelo backend)
+  dossie: string;    // caminho do .md gravado no disco DAQUELA máquina
+  texto: string;     // o dossiê que foi realmente gravado (o da prévia era outro, mais velho)
+  kickoff: string;   // as linhas que entraram na fila durável da sessão nova
+}
+
+// Cria a sessão sucessora COM o dossiê: o backend monta → grava → cria → enfileira o kick-off.
+// Não é o POST /api/sessions normal; mandar aquele deixaria a sessão nova sem dossiê nenhum.
+export function passarBastao(
+  name: string,
+  body: {
+    name: string;
+    cwd?: string | null;
+    config_dir?: string | null;
+    provider?: Provider;
+    engine?: string | null;
+    model?: string | null;
+    effort?: string | null;
+    permission_mode?: string | null;
+  },
+): Promise<BastaoResult> {
+  return apiFetch<BastaoResult>(`/api/sessions/${encodeURIComponent(name)}/bastao`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
 // Modelo oferecido na tela de ABERTURA (GET /api/model-options). O backend devolve QUATRO formatos
 // do campo `models` conforme o ramo (pi, motor, cache do Claude, aliases reduzidos) — os campos são
 // todos opcionais porque nenhum formato tem todos; quem renderiza usa `m.name ?? m.id` e só mostra
@@ -453,6 +547,51 @@ export interface ModelOption {
   context?: string;
   vision?: boolean | null;
   images?: boolean;
+  // Níveis de esforço DAQUELE modelo (Codex e Kimi): variam por modelo e vêm do provedor, então a
+  // tela não pode ter lista fechada — ver app/codex_models.py e app/kimi_models.py.
+  efforts?: string[];
+  default_effort?: string | null;
+}
+
+// Orquestração: política de contas da máquina e papéis do grupo (tipos em ./orquestracao.ts).
+export async function getOrqPolitica(): Promise<import('./orquestracao').OrqPolitica> {
+  return apiFetch('/api/orquestracao/politica');
+}
+export async function putOrqConta(
+  conta: string,
+  body: { provider: string; apelido?: string; modelos?: string[]; trocar?: boolean; ligada?: boolean; mtime: number },
+): Promise<{ ok: boolean; mtime: number }> {
+  return apiFetch(`/api/orquestracao/politica/${encodeURIComponent(conta)}`, { method: 'PUT', body: JSON.stringify(body) });
+}
+export async function getOrqGrupo(name: string): Promise<import('./orquestracao').OrqGrupo> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq`);
+}
+// Vários papéis numa escrita só e um recado só pro árbitro.
+export async function postOrqPapeis(
+  name: string,
+  // `avisar: false` grava sem acordar o árbitro — é o "salvar e continuar montando o time".
+  body: { papeis: { papel: string; sessao?: string; provider: string; conta: string; modelo?: string; esforco?: string }[]; mtime: number; avisar?: boolean },
+): Promise<import('./orquestracao').RespostaPapel> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/papeis`, { method: 'POST', body: JSON.stringify(body) });
+}
+
+/**
+ * Põe a PRÓPRIA sessão pra tocar a orquestração como árbitra (quem planejou vira árbitro — é o que
+ * a skill manda). 409 com motivo legível quando falta grupo, papéis ou plano.
+ */
+export async function comecarOrq(name: string): Promise<{ ok: boolean; entregue: boolean; plano: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/comecar`, { method: 'POST', body: JSON.stringify({}) });
+}
+
+/**
+ * Tira UMA linha da tabela de papéis: o papel inteiro (sem `vez`) ou uma conta do rodízio dele.
+ * Não avisa o árbitro — quem mexe na fila mexe em várias linhas seguidas, e o aviso sai no fim.
+ */
+export async function removerPapel(
+  name: string,
+  body: { papel: string; vez: string; mtime: number },
+): Promise<{ papeis: import('./orquestracao').Papel[]; mtime: number }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/papel`, { method: 'DELETE', body: JSON.stringify(body) });
 }
 
 // Lista de modelos da tela de nova sessão, onde ainda não existe sessão viva. O front manda
@@ -538,8 +677,8 @@ export function setQuietHoursForServer(s: Server, start: string | null, end: str
   return apiFetchForServer(s, '/api/push/quiet-hours', { method: 'POST', body: JSON.stringify({ start, end }) });
 }
 
-export async function deleteSession(name: string): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}`, {
+export async function deleteSession(name: string): Promise<{ ok: boolean; warning: unknown | null }> {
+  return apiFetch<{ ok: boolean; warning: unknown | null }>(`/api/sessions/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
 }
@@ -903,6 +1042,24 @@ export function iniciarAtualizacao(): Promise<{ ok: boolean; pid: number }> {
   return apiFetch('/api/atualizacao/iniciar', { method: 'POST' });
 }
 
+/** Reinicia o servidor sem atualizar nada (disco já à frente do processo). 409 fora do systemd. */
+export function reiniciarServidor(): Promise<{ ok: boolean; pid: number }> {
+  return apiFetch('/api/atualizacao/reiniciar', { method: 'POST' });
+}
+
+/**
+ * Resumo do pensamento em português, curto. Chamado quando a pessoa ABRE o bloco — nunca no
+ * carregamento da conversa, porque a maioria dos pensamentos ninguém abre.
+ *
+ * O backend NUNCA falha aqui: sem provedor ou com o provedor fora do ar ele devolve o texto
+ * original. Quem chama trata rejeição de rede só voltando ao que já estava na tela.
+ */
+export function pensamentoEmPt(textos: string[]): Promise<{ textos: string[] }> {
+  return apiFetch('/api/pensamento/pt', {
+    method: 'POST', body: JSON.stringify({ textos }), signal: AbortSignal.timeout(30000),
+  });
+}
+
 export function getConfigForServer(s: Server): Promise<ConfigServidor> {
   return apiFetchForServer(s, '/api/config');
 }
@@ -959,6 +1116,22 @@ export function getPlans(name: string): Promise<{ plans: PlanListItem[]; pinned:
 // stem = null solta o pin e devolve o painel pra eleição automática.
 export function setPlanPin(name: string, stem: string | null): Promise<{ pinned: string | null }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/plan-pin`, {
+    method: 'POST', body: JSON.stringify({ stem }),
+  });
+}
+
+// Marca/desmarca um step no .md do plano. Quem marca no fluxo normal é o agente — isto é pro caso
+// dele esquecer, que é justamente o que deixa o plano preso em 14/16 pra sempre.
+export function setPlanStep(name: string, stem: string, idx: number, done: boolean):
+    Promise<{ done: number | null; total: number | null; complete: boolean }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/plan-step`, {
+    method: 'POST', body: JSON.stringify({ stem, idx, done }),
+  });
+}
+
+// Encerra o plano: move o .md (e o .html irmão) pra docs/superpowers/plans/feitos/.
+export function archivePlan(name: string, stem: string): Promise<{ moved: string[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/plan-archive`, {
     method: 'POST', body: JSON.stringify({ stem }),
   });
 }
@@ -1134,6 +1307,14 @@ export async function selectOption(name: string, option: number): Promise<void> 
   });
 }
 
+/** Múltipla escolha: envia o que já está marcado. Marcar (selectOption) e enviar são ações
+ *  diferentes ali — ver terminal_input.submeter_multipla. */
+export async function submitSelected(name: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/select/submit`, {
+    method: 'POST',
+  });
+}
+
 // ── Git pela sessao (cwd da sessao tmux): listar/trocar branch + status/pull ──
 export interface BranchInfo {
   current: string | null;
@@ -1193,6 +1374,11 @@ export function listFiles(name: string, path?: string, soModificados = true): Pr
 export function readFile(name: string, path: string): Promise<FileContent> {
   const q = new URLSearchParams({ path });
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/files/read?${q}`);
+}
+
+// Visão "citados": quais caminhos citados existem (relativo resolvido) e quais não.
+export function resolverCitados(name: string, caminhos: string[]): Promise<{ ok: Record<string, { relativo: string | null; real: string }>; faltam: string[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/files/resolver`, { method: 'POST', body: JSON.stringify({ caminhos }) });
 }
 
 export function searchFiles(name: string, q: string, mode: 'names' | 'contents'): Promise<SearchResult> {
@@ -1313,8 +1499,12 @@ export function gitPush(name: string): Promise<{ ok: boolean; output: string }> 
 }
 
 // Envia respostas do stepper AskUserQuestion para o backend.
-export function answerQuestions(name: string, answers: AnswerItem[]): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/answer`, {
+// `fallback` = o backend não conseguiu dirigir o seletor da TUI, mandou Escape e entregou a
+// resposta como TEXTO. É sucesso (a resposta chegou), mas o Escape aparece no transcript como
+// "user declined"/"Request interrupted" — em vermelho. Sem propagar este campo, quem respondeu vê
+// só o vermelho e conclui que perdeu a resposta; era o que acontecia até 27/08/2026.
+export function answerQuestions(name: string, answers: AnswerItem[]): Promise<{ ok: boolean; fallback?: boolean }> {
+  return apiFetch<{ ok: boolean; fallback?: boolean }>(`/api/sessions/${encodeURIComponent(name)}/answer`, {
     method: 'POST', body: JSON.stringify({ answers }),
   });
 }
@@ -1412,14 +1602,16 @@ export interface ModelOptionsResponse {
 // popover abrir em "Carregando…" a CADA toque. TTL 60s + dedupe de em-voo (dois consumidores
 // dividem UM GET) + invalidação nos set*. O prefetch ao trocar de sessão (Composer) aquece a
 // chave antes do primeiro toque — a abertura fica instantânea.
-const _catCache = new Map<string, { at: number; data: unknown }>();
+const _catCache = new Map<string, { at: number; data: unknown; recusa?: boolean }>();
 const _catEmVoo = new Map<string, Promise<unknown>>();
 const _catEpoca = new Map<string, number>();   // por sessão: o set* incrementa -> GET em voo não grava dado pré-troca
 const _CAT_TTL = 60_000;
 
 function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
   const hit = _catCache.get(key);
-  if (hit && Date.now() - hit.at < _CAT_TTL) return Promise.resolve(hit.data as T);
+  if (hit && Date.now() - hit.at < _CAT_TTL) {
+    return hit.recusa ? Promise.reject(hit.data) : Promise.resolve(hit.data as T);
+  }
   const emVoo = _catEmVoo.get(key);
   if (emVoo) return emVoo as Promise<T>;
   const sessao = key.slice(key.indexOf('|') + 1);
@@ -1434,6 +1626,15 @@ function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
         }
       }
       return data;
+    })
+    .catch((e: unknown) => {
+      // "Esta rota só existe pra Claude" é resposta FINAL pra esta sessão, não falha transitória:
+      // cacheia a recusa pelo mesmo TTL. Sem isto cada montagem do Composer numa sessão Pi/Kimi
+      // repetia o GET e o 400 (medido: 516 numa semana).
+      if ((e as { code?: string })?.code === 'erro_rota_so_claude') {
+        _catCache.set(key, { at: Date.now(), data: e, recusa: true });
+      }
+      throw e;
     })
     .finally(() => { _catEmVoo.delete(key); });
   _catEmVoo.set(key, p);
@@ -1640,6 +1841,11 @@ export function startPreview(port: number): Promise<{ url: string; port: number 
 
 export function stopPreview(): Promise<PreviewState> {
   return apiFetch('/api/preview', { method: 'DELETE' });
+}
+
+/** URL aberta no navegador embutido da sessão (app desktop). `null` = a sessão não tem navegador. */
+export function getNavegadorDaSessao(name: string): Promise<{ url: string | null }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/navegador`);
 }
 
 export function getRunners(name: string): Promise<RunnersResponse> {

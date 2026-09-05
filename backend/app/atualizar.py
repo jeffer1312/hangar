@@ -40,7 +40,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from app import atomico, tmux
+from app import atomico, procinfo, tmux
 
 _log = logging.getLogger("hangar.atualizar")
 
@@ -390,6 +390,13 @@ def checar() -> dict:
         "pode": not faltando,
         "faltando": faltando,
         "branch": branch,
+        # A atualização alinha o checkout com `origin/main` — inclusive por `reset --hard`, quando o
+        # fast-forward é recusado. Numa branch de trabalho isso ARRASTA a branch: medido em
+        # 25/08/2026 na máquina do desktop, a `mobile-expo` local passou a apontar pra um commit da
+        # main e o disco ficou misturado (arquivos da main em alguns caminhos, sobras da outra
+        # branch noutros). Nada se perdeu — o `resguardar` fez o trabalho dele —, mas atualizar o
+        # app não pode decidir sobre a branch de ninguém, então aqui ele recusa.
+        "branch_de_trabalho": branch not in ("main", "master"),
         "sujo": len(sujo_rastreado),
         "ahead": ahead,
         "behind": behind,
@@ -468,6 +475,20 @@ def _puxar(pre: dict) -> None:
         raise RuntimeError(f"nao consegui alinhar com o codigo novo: {_cauda(r)}")
 
 
+def _shell_mudou(de: str, para: str) -> bool:
+    """A janela nativa (Electron) roda o `main.cjs` que estava no disco quando abriu: o restart do
+    backend não a alcança, e só fechar e abrir o app traz o shell novo. A tela precisa dizer isso."""
+    if not de or not para or de == para:
+        return False
+    p = _git("diff", "--name-only", f"{de}..{para}", "--", "shell/", timeout=30)
+    if p.returncode != 0:
+        # Na dúvida, avisa: um "feche e abra" a mais custa um clique; um a menos deixa o shell
+        # velho no ar sem ninguém saber.
+        _log.warning("nao consegui saber se shell/ mudou (%s..%s): %s", de[:8], para[:8], _cauda(p))
+        return True
+    return any(linha and not linha.endswith(".test.cjs") for linha in p.stdout.splitlines())
+
+
 def _reaplicar(topologia: str) -> None:
     """O que o `git pull` não atualiza: units, deps, build. Já existe, por sistema."""
     if _E_WINDOWS:
@@ -497,6 +518,14 @@ def _avisar_sessoes() -> None:
     Fail-soft de ponta a ponta: máquina sem `hangar-send` instalado não pode ter a atualização
     barrada por causa de um aviso.
     """
+    # Sob pytest o aviso NÃO sai. `_rodar` chama o `hangar-send` de VERDADE, e um teste do fluxo
+    # inteiro que esqueça de substituir esta função manda recado às sessões vivas de quem está
+    # rodando a suíte: medido em 30/08/2026, três avisos falsos de restart por execução do
+    # `pytest -q`, vindos de três testes, e o usuário os viu na tela. A trava mora aqui, e não em
+    # cada teste, porque teste novo nasce com o mesmo furo aberto.
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        _log.debug("sob pytest: aviso de restart suprimido")
+        return
     aviso = ("[hangar] o backend vai reiniciar agora por causa de uma atualização. "
              "Sua sessão continua viva; o app reconecta sozinho.")
     try:
@@ -579,10 +608,17 @@ def _executar(porta: int) -> dict:
     # no terminalzinho, mesmo tendo sido registrada.
     _escrever(fase="rodando", ok=None, erro=None, resgate=None,
               commit_de="", commit_para=None, pid=os.getpid(),
-              reiniciar_manual=False, log=[])
+              reiniciar_manual=False, shell_mudou=False, log=[])
     pre = checar()
     de = pre.get("commit", "")
     _escrever(commit_de=de)
+
+    # A recusa da branch vem ANTES de tudo, e principalmente antes do `resguardar`: aqui nada
+    # aconteceu ainda, e a saída é uma frase, não um resgate pra alguém desfazer depois.
+    if pre.get("branch_de_trabalho"):
+        return _falhou(
+            f"este checkout esta na branch '{pre.get('branch')}', e a atualizacao alinha o disco "
+            "com origin/main — troque para a main antes de atualizar", porta=porta)
 
     if not pre.get("pode"):
         falta = ", ".join(pre.get("faltando") or []) or pre.get("erro", "desconhecido")
@@ -597,7 +633,7 @@ def _executar(porta: int) -> dict:
         _etapa("codigo")
         _puxar(pre)
         para = _git("rev-parse", "HEAD", timeout=30).stdout.strip()
-        _escrever(commit_para=para)
+        _escrever(commit_para=para, shell_mudou=_shell_mudou(de, para))
 
         _etapa("passos")
         _aplicar_passos()
@@ -711,13 +747,12 @@ def _aplicar_passos() -> None:
 # ─── Lançar destacado ──────────────────────────────────────────────────────────────────────────
 
 def _vivo(pid) -> bool:
+    # `procinfo` e a unica camada que sabe em que sistema estamos: no Windows perguntar com
+    # `os.kill(pid, 0)` MATA o processo (ver procinfo.pid_vivo) — e aqui o processo e a propria
+    # atualizacao em curso.
     if not isinstance(pid, int) or pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-    except (OSError, ProcessLookupError):
-        return False
-    return True
+    return procinfo.pid_vivo(pid)
 
 
 def _tomar_a_vez() -> bool:
@@ -824,6 +859,54 @@ def iniciar(porta: int = 8765) -> dict:
     return {"ok": True, "pid": proc.pid}
 
 
+def reiniciar_agora() -> dict:
+    """Reinicia o servidor SEM atualizar nada. Devolve na hora; o restart roda destacado.
+
+    Existe pro caso em que o disco já está à frente do processo — um `git pull` feito à mão, ou uma
+    atualização que terminou sem reiniciar. Até aqui a tela só sabia dizer "entra no próximo
+    reinício" e a pessoa tinha de descobrir sozinha qual era o comando.
+
+    Destacado pelo mesmo motivo do `iniciar` (e com o mesmo escopo transiente): o
+    `systemctl --user restart` mata o cgroup da unit, e quem deu o comando de dentro dele morre
+    antes de o comando terminar.
+
+    Só `systemd` — nas outras topologias quem sabe derrubar e subir o servidor é o instalador, e
+    inventar um `kill` no processo de alguém seria pior que recusar.
+    """
+    topologia = _topologia()
+    if topologia != "systemd":
+        return {"ok": False, "erro": "topologia", "topologia": topologia}
+    # Limpa a falha do reinício ANTERIOR: sem isso a tela mostraria pra sempre o erro de uma
+    # tentativa que já passou, inclusive depois de um reinício que deu certo.
+    _escrever(reinicio_erro=None)
+    proc = subprocess.Popen(
+        tmux._scope_prefix() + [sys.executable, "-m", "app.atualizar", "--reiniciar"],
+        cwd=str(REPO / "backend"),
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "pid": proc.pid}
+
+
+def executar_reinicio() -> None:
+    """O reinício em si, já dentro do processo destacado.
+
+    O `except` NÃO é zelo: o `stderr` deste processo vai pro `/dev/null` (o `Popen` de
+    `reiniciar_agora` não pode escrever no log do serviço que está prestes a reiniciar), então uma
+    exceção aqui não deixaria rastro em lugar NENHUM — nem log, nem estado — e a tela ficaria
+    esperando um servidor que nunca cai, sem saber por quê. O estado é o único canal que sobrevive
+    a este processo, e é dele que a tela lê.
+    """
+    try:
+        _avisar_sessoes()
+        _reiniciar(_topologia())
+    except Exception as e:                           # noqa: BLE001 — ver docstring
+        _escrever(reinicio_erro=f"{type(e).__name__}: {e}")
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    executar(int(sys.argv[1]) if len(sys.argv) > 1 else 8765)
+    if len(sys.argv) > 1 and sys.argv[1] == "--reiniciar":
+        executar_reinicio()
+    else:
+        executar(int(sys.argv[1]) if len(sys.argv) > 1 else 8765)

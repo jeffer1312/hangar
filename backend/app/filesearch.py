@@ -48,6 +48,76 @@ def search(cwd: str, q: str, mode: str) -> dict:
     return {"hits": hits[:MAX_HITS], "truncated": len(hits) > MAX_HITS, "mode": mode}
 
 
+MAX_RESOLVER = 500
+
+
+def _arquivos_do_repo(cwd: str) -> list[str]:
+    """Todos os caminhos do repo (rastreados + não ignorados), uma chamada só. Fora de repo: []."""
+    if not _e_repo(cwd):
+        return []
+    p = _git(cwd, "-c", "core.quotePath=false",
+             "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    if p.returncode != 0:
+        return []
+    vistos: set[str] = set()
+    out = []
+    for c in p.stdout.split("\0"):
+        if c and c not in vistos:
+            vistos.add(c)
+            out.append(c)
+    return out
+
+
+def resolver(cwd: str, caminhos: list[str]) -> dict:
+    """Quais caminhos citados na conversa EXISTEM, e onde — pra visão "citados" só listar o que
+    abre. Relativo que não existe no cwd (`tests/x.py` de um `cd backend &&`) é procurado pelo
+    sufixo mais longo na lista do repo; absoluto (ou `~`) só é conferido — de propósito sem o
+    portão de raiz do `fs.py`: o caminho veio do transcript da própria sessão e a resposta é só
+    "existe/não existe" (app de um usuário, autenticado). Devolve
+    {"ok": {cru: {"relativo": str|None, "real": str}}, "faltam": [cru]}."""
+    ok: dict[str, dict] = {}
+    faltam: list[str] = []
+    raiz = os.path.realpath(cwd)
+    lista: list[str] | None = None
+    for cru in caminhos[:MAX_RESOLVER]:
+        if not cru or "\x00" in cru:
+            faltam.append(cru)
+            continue
+        p = os.path.expanduser(cru)
+        if os.path.isabs(p):
+            if os.path.lexists(p):
+                real = os.path.realpath(p)
+                rel = os.path.relpath(real, raiz) if real == raiz or real.startswith(raiz + os.sep) else None
+                # `real` é a chave pra juntar o MESMO arquivo citado por dois caminhos (symlink,
+                # `~` vs `/home/...`) num item só na tela.
+                ok[cru] = {"relativo": rel, "real": real}
+            else:
+                faltam.append(cru)
+            continue
+        # Barra invertida vira `/` ANTES do teste de `..`: `\..\x` escapava do split por `/`.
+        rel = p.replace("\\", "/")
+        rel = rel[2:] if rel.startswith("./") else rel
+        if ".." not in rel.split("/") and os.path.lexists(os.path.join(cwd, rel)):
+            ok[cru] = {"relativo": rel, "real": os.path.realpath(os.path.join(cwd, rel))}
+            continue
+        if lista is None:
+            lista = _arquivos_do_repo(cwd)
+        partes = [x for x in rel.split("/") if x and x != "."]
+        achado = None
+        # sufixo mais longo primeiro: `app/x.py` antes de `x.py`, pra homônimo em outra pasta não vencer
+        for n in range(len(partes), 0, -1):
+            suf = "/".join(partes[-n:])
+            cands = [c for c in lista if c == suf or c.endswith("/" + suf)]
+            if cands:
+                achado = cands[0]
+                break
+        if achado and os.path.lexists(os.path.join(cwd, achado)):
+            ok[cru] = {"relativo": achado, "real": os.path.realpath(os.path.join(cwd, achado))}
+        else:
+            faltam.append(cru)
+    return {"ok": ok, "faltam": faltam}
+
+
 def _por_nome(cwd: str, q: str) -> list[dict]:
     p = _git(cwd, "-c", "core.quotePath=false",
              "ls-files", "-z", "--cached", "--others", "--exclude-standard")

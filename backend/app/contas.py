@@ -78,8 +78,14 @@ DRIFT_TETO = 3
 # CÓPIA real deixada de eras antigas numa conta fazia _resolver_colisao "subir" o arquivo velho
 # por cima do compartilhado, apagando os apelidos (aconteceu 19/08 08:52, mesma janela do
 # incidente do settings.json).
+# Runtime POR CONTA, que o próprio CLI (`telemetry`, `feedback`, `image-cache`,
+# `.last-update-result.json`) ou o backend (`.hangar-models.json`, cache do picker por config dir)
+# regravam com tmp+rename — o que troca o atalho por arquivo real. Ligados, cada reconciliação
+# achava a "deriva" de novo, gavetava e avisava; a gaveta desta máquina chegou a `telemetry.3`.
+_RUNTIME_DA_CONTA = {"telemetry", "feedback", "image-cache", ".last-update-result.json",
+                     ".hangar-models.json"}
 _NAO_LIGAR = {MARCADOR, ".drift", ".claude.json", ".credentials.json", "projects", "settings.json",
-              ".hangar-apelidos.json"}
+              ".hangar-apelidos.json"} | _RUNTIME_DA_CONTA
 
 
 def compartilhado() -> Path:
@@ -342,6 +348,13 @@ def _espelhar_do_principal(alvo: Path, destino: Path) -> str | None:
     compartilhado não apaga nada, porque ausência é justamente o sintoma daquele acidente e
     espelhá-la desligaria os plugins das contas de novo.
 
+    `enabledPlugins` é a exceção à chave inteira: espelha POR PLUGIN. O `claude plugin install`
+    feito de dentro de uma conta grava no registro compartilhado (`installed_plugins.json`) e liga
+    o plugin só na cópia daquela conta; substituir o objeto inteiro pelo do principal desligava
+    o plugin na conta no prep seguinte, e ele ficava instalado e ligado em lugar nenhum, calado.
+    O principal continua mandando no plugin que ele conhece (true ou false); o que só a conta
+    ligou fica.
+
     Devolve aviso quando o espelho DESFAZ algo — chave que a conta tinha com outro valor (o
     `/model` dela, tipicamente). Sem isso o modelo da conta mudava sozinho na abertura e não
     sobrava rastro nenhum de por quê. Chave só ADICIONADA não vira aviso: não desfaz nada.
@@ -358,10 +371,24 @@ def _espelhar_do_principal(alvo: Path, destino: Path) -> str | None:
         raise ContaError(500, f"não consegui espelhar o settings.json pra conta: {e}") from e
     if not isinstance(de, dict) or not isinstance(para, dict):
         raise ContaError(500, "settings.json não é um objeto JSON — não dá pra espelhar pra conta")
-    if all(para.get(k) == v for k, v in de.items()):
+    novo = dict(para)
+    for k, v in de.items():
+        if k == "enabledPlugins" and isinstance(v, dict) and isinstance(novo.get(k), dict):
+            novo[k] = {**novo[k], **v}
+        else:
+            novo[k] = v
+    if novo == para:
         return None
-    desfeitas = sorted(k for k, v in de.items() if k in para and para[k] != v)
-    para.update(de)
+    def _desfez(k: str) -> bool:
+        if k not in para or para[k] == novo[k]:
+            return False
+        if k == "enabledPlugins" and isinstance(para[k], dict) and isinstance(de[k], dict):
+            # Plugin só adicionado pelo principal não desfaz nada; só conta o que mudou de valor.
+            return any(n in para[k] and para[k][n] != v for n, v in de[k].items())
+        return True
+
+    desfeitas = sorted(k for k in de if _desfez(k))
+    para = novo
     # tmp+rename com pid+uuid, como o _ligar: um CLI vivo da conta lendo o arquivo no meio da
     # escrita receberia JSON truncado.
     tmp = destino.with_name(f"{destino.name}.hangar-novo.{os.getpid()}.{uuid.uuid4().hex[:8]}")
@@ -371,6 +398,91 @@ def _espelhar_do_principal(alvo: Path, destino: Path) -> str | None:
         return ("settings.json: o principal sobrescreveu "
                 + ", ".join(desfeitas) + " na cópia desta conta")
     return None
+
+
+def _espelhar_claude_json(dir_conta: Path) -> str | None:
+    """Espelha os `mcpServers` do `~/.claude.json` pra cópia da conta, a cada reconciliação.
+
+    O `_semear_claude_json` copia o arquivo só na criação: MCP de escopo usuário adicionado no
+    principal depois disso nunca chegava numa conta antiga. Mesma regra do settings.json —
+    o principal manda no servidor que ele tem, o que só a conta tem fica, e ausência no principal
+    não apaga nada. Só essa chave: o resto do arquivo é estado do CLI daquela conta (oauthAccount,
+    projetos, permissões por diretório) e não pode vir do principal.
+    """
+    origem = Path.home() / ".claude.json"
+    destino = dir_conta / ".claude.json"
+    try:
+        de = json.loads(origem.read_text(encoding="utf-8"))
+        para = json.loads(destino.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        raise ContaError(500, f"não consegui espelhar o ~/.claude.json pra conta: {e}") from e
+    if not isinstance(de, dict) or not isinstance(para, dict):
+        raise ContaError(500, "~/.claude.json não é um objeto JSON — não dá pra espelhar pra conta")
+    mcp_de = de.get("mcpServers")
+    if not isinstance(mcp_de, dict) or not mcp_de:
+        return None
+    mcp_para = para.get("mcpServers") if isinstance(para.get("mcpServers"), dict) else {}
+    novo = {**mcp_para, **mcp_de}
+    if novo == mcp_para:
+        return None
+    desfeitos = sorted(k for k, v in mcp_de.items() if k in mcp_para and mcp_para[k] != v)
+    para["mcpServers"] = novo
+    tmp = destino.with_name(f"{destino.name}.hangar-novo.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+    tmp.write_text(json.dumps(para, indent=2), encoding="utf-8")
+    atomico.substituir(tmp, destino)
+    if desfeitos:
+        return (".claude.json: o principal sobrescreveu os MCP "
+                + ", ".join(desfeitos) + " na cópia desta conta")
+    return None
+
+
+def _conferir_plugins(dir_conta: Path) -> list[str]:
+    """Plugin ligado no settings.json mas sem instalação no compartilhado: avisa, não conserta.
+
+    `enabledPlugins` (settings.json, cópia por conta) e `installed_plugins.json` (plugins/,
+    compartilhado) são dois registros que o CLI mantém separados, e eles desalinham em silêncio:
+    o clobber de 2026-08-19 apagou a instalação e o `enabledPlugins` continuou dizendo true; a
+    limpeza de cache do CLI (`.last_inuse_sweep`) apaga a pasta de um plugin que saiu do registro.
+    Nos dois casos a sessão abre sem o plugin e nada avisa — a skill "some" e a sessão improvisa
+    lendo o que achar no disco. Só avisa porque instalar é do CLI (`claude plugin install`), e
+    fazer isso daqui escreveria no compartilhado a partir de uma conta.
+    """
+    try:
+        ligados = json.loads((dir_conta / "settings.json").read_text(encoding="utf-8")).get(
+            "enabledPlugins") or {}
+    except FileNotFoundError:
+        return []   # máquina nova: o principal não tinha settings.json pra semear
+    except (OSError, ValueError) as e:
+        # Cópia recém-semeada de um principal corrompido passa direto pelo copyfile sem parse;
+        # engolir aqui deixaria a conta abrir com settings quebrado e sem sinal nenhum.
+        raise ContaError(500, f"não consegui ler o settings.json da conta: {e}") from e
+    if not isinstance(ligados, dict):
+        return []
+    registro = compartilhado() / "plugins" / "installed_plugins.json"
+    try:
+        instalados = json.loads(registro.read_text(encoding="utf-8")).get("plugins") or {}
+    except FileNotFoundError:
+        instalados = {}
+    except (OSError, ValueError) as e:
+        return [f"plugins: não consegui ler {registro}: {e}"]
+    avisos: list[str] = []
+    for nome, ligado in sorted(ligados.items()):
+        if not ligado:
+            continue
+        entradas = instalados.get(nome) or []
+        if not entradas:
+            avisos.append(f"plugin {nome} está ligado no settings.json mas não consta em "
+                          f"installed_plugins.json — reinstalar: claude plugin install {nome}")
+            continue
+        sem_pasta = [e.get("installPath") for e in entradas
+                     if not e.get("installPath") or not Path(e["installPath"]).is_dir()]
+        if sem_pasta:
+            avisos.append(f"plugin {nome} consta instalado mas a pasta sumiu "
+                          f"({', '.join(map(str, sem_pasta))}) — reinstalar: "
+                          f"claude plugin install {nome}")
+    return avisos
 
 
 def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
@@ -384,9 +496,13 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
         raise ContaError(400, "projeto inválido")
     avisos: list[str] = []
     for alvo in sorted(compartilhado().iterdir()):
-        if alvo.name in _NAO_LIGAR:
-            continue
         destino = dir_conta / alvo.name
+        if alvo.name in _NAO_LIGAR:
+            # Atalho de runtime deixado por versão anterior: desfaz, senão a conta segue
+            # escrevendo o runtime dela dentro do compartilhado.
+            if alvo.name in _RUNTIME_DA_CONTA and destino.is_symlink() and _aponta_para(destino, alvo):
+                destino.unlink()
+            continue
         if destino.is_symlink() and _aponta_para(destino, alvo):
             continue
         if destino.is_symlink() or destino.exists():
@@ -395,6 +511,10 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
                 avisos.append(aviso)
         _ligar(destino, alvo)
     aviso = _semear_settings(dir_conta)
+    if aviso:
+        avisos.append(aviso)
+    avisos.extend(_conferir_plugins(dir_conta))
+    aviso = _espelhar_claude_json(dir_conta)
     if aviso:
         avisos.append(aviso)
     for p in dir_conta.iterdir():

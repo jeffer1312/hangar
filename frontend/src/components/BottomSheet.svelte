@@ -386,21 +386,20 @@
     pointer-events: none;
     background: var(--glass-bg-solid);
   }
-  /* Chromium (data-liquid): translucido de verdade, com blur.
-     O backdrop-filter fica no ELEMENTO, nao no ::before: o painel anima com `transform`
-     (slide-in-right, fill `both`), e um elemento transformado vira o backdrop ROOT dos proprios
-     filhos — o pseudo passava a "borrar" o interior vazio do painel, ou seja, nada. Resultado: o
-     painel ficava translucido SEM blur e o conteudo de tras aparecia cru (foi o que apareceu no
-     "Uso & limites"). No elemento, o backdrop e o que esta atras dele de verdade. */
-  :global(html[data-liquid]) .sheet::before {
-    background: var(--glass-panel);
+  /* Chromium (data-liquid): o vidro vai no ELEMENTO, não no ::before — inset:0 dentro do scroller
+     cobre só um quadro de conteúdo e rola junto, e panel-no-::before + transparente-no-elemento
+     dava DOIS fundos com fronteira que se movia com a rolagem (medido: folha de 812px, conteúdo
+     de 2620px). Panel no elemento cobre a folha inteira, uniforme, e segue o slider Transparência.
+     (Só folha/modal: o ::before do DOCK segue com tinta — ele não rola, não tem o problema.) */
+  :global(html[data-liquid]) .sheet:not(.naomodal)::before {
+    background: transparent;
   }
   /* Modal centrado (config, motores) e o split dele no mobile: sobem pro --glass-modal, que fica
      FORA do veu do slider Transparencia. O painel de acompanhamento (dock, bottom sheet) segue no
      --glass-panel — a transparencia e a identidade dele; num modal de decisao ela vazava e o
      conteudo atras disputava com o formulario. O blur do liquid continua — e ele que da o vidro. */
   :global(html[data-liquid]) .sheet:is(.centered, .split)::before {
-    background: var(--glass-modal);
+    background: transparent;
   }
   /* O filtro que o comentario acima manda por no ELEMENTO nao estava em lugar nenhum: o unico
      backdrop-filter do arquivo vive no `.backdrop` (o scrim), e o dock lateral desliga esse scrim
@@ -408,11 +407,16 @@
      alpha: no tema claro, branco a ~0.70 sobre texto ESCURO deixa a conversa legivel atraves do
      painel. Com o filtro aqui o que esta atras vira borrao, que e o que o modal centrado ja tinha
      de graca pelo scrim. */
-  :global(html[data-liquid]) .sheet {
+  :global(html[data-liquid]) .sheet:not(.naomodal) {
     backdrop-filter: blur(20px) saturate(170%);
-    /* No liquid quem pinta e o ::before (--glass-panel) + a refracao: fundo solido no elemento
-       taparia os dois. So o WebKit precisa do fundo aqui. */
-    background: transparent;
+    /* Fundo AQUI como no WebKit: o ::before perdeu a tinta (regra acima), entao quem pinta a folha
+       inteira e o elemento — uniforme, sem fronteira movel. O backdrop-filter segue no elemento
+       (nele o backdrop e o que esta atras de verdade). O DOCK (naomodal) fica de fora: ele nao
+       rola, o ::before dele ja pinta --glass-panel, e as duas camadas somariam (slider inerte). */
+    background: var(--glass-panel);
+  }
+  :global(html[data-liquid]) .sheet:is(.centered, .split):not(.naomodal) {
+    background: var(--glass-modal);
   }
 
   /* O painel leva .focus() programatico ao abrir (a11y: anuncia o dialog e prende o Tab dentro).

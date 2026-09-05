@@ -32,8 +32,10 @@ docs/superpowers/**/*.html
 .superpowers/
 
 .hangar-uploads/
-# nome antigo: pastas de anexo de antes do rename (migradas na primeira leitura, mas o link fica)
-.claude-pocket-uploads/
+# nome antigo: pastas de anexo de antes do rename (migradas na primeira leitura, mas o link fica).
+# Sem barra: com ela o padrão só casa pasta, e o que sobra no disco é um LINK — que aparecia no
+# git status pra sempre.
+.claude-pocket-uploads
 
 # Video analysis scratch (video-analyzer skill)
 *.mp4

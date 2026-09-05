@@ -135,6 +135,10 @@ Install the wrapper once so sessions receive stable ids and appear reliably in t
 ./scripts/install-claude-wrapper.sh
 ```
 
+On Linux/macOS, the wrapper installer also links the shared fullscreen TUI extension into Pi and
+Oh My Pi and enables it on first install. Use `/fullscreen-off` in either agent to opt out; the
+installer preserves that choice. To zoom an individual tmux pane, use `Ctrl-b z`.
+
 Start the backend on loopback:
 
 ```bash
@@ -196,7 +200,7 @@ This is a LAN/VPN-only tool and should be treated like a remote shell:
 | `CP_AUTH_TOKEN` | `change-me` | Bearer token for API routes; use a strong value. |
 | `CP_LAN_BIND_IP` | `127.0.0.1` | Bind address. Use a trusted LAN/VPN address for phone access. |
 | `CP_PORT` | `8765` | Backend port. |
-| `CP_FRONT_PORT` | `5173` | Frontend URL/QR pairing port; configure the frontend server separately when changing its dev port. |
+| `CP_FRONT_PORT` | — | Where the PWA is served (used for the QR/pairing URL). Empty = this backend, which serves `frontend/dist` at the root. Set `5173` only if you keep a separate `vite preview` service. |
 | `CP_PUBLIC_URL` | — | LAN/VPN base URL used for pairing links, if needed. |
 | `CP_TERM_ORIGINS` | — | Extra `Origin`s accepted by the terminal WebSocket, comma-separated (e.g. `https://pocket.example.com`). Needed when the PWA is served from a host that is neither this backend, `CP_PUBLIC_URL`, nor a peer. |
 
@@ -208,6 +212,8 @@ Install `hangar-send` to list sessions, send durable prompts, or pair sessions i
 ./scripts/install-hangar-send.sh
 hangar-send --list
 hangar-send --pair <session-name> "coordinate the demo task"
+hangar-send --pair <session-name> --substituir-tarefa "new task"
+hangar-send --group [--tmux] "milestone for the whole group"
 ```
 
 Pairing is local to the machine. The app shows the shared contract and conversation, while each session remains independently controlled.

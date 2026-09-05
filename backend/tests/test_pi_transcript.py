@@ -25,10 +25,20 @@ def test_assistant_text_becomes_assistant_msg_with_cache_read():
     assert ev[0].cache_read == 8704
 
 
-def test_thinking_block_is_dropped():
-    # Igual ao Claude: raciocinio nao vira bolha de chat. Sem isto o app mostraria o rascunho
-    # interno do modelo como se fosse resposta.
+def test_thinking_block_vira_evento_proprio():
+    # Raciocinio NAO e resposta: sai com kind proprio, que o front mostra recolhido. Emitir como
+    # assistant_msg poria o rascunho interno no lugar da resposta.
     ev = pt.parse_obj(_msg("assistant", [{"type": "thinking", "thinking": "hmm",
+                                          "thinkingSignature": "s"}]))
+    assert len(ev) == 1
+    assert ev[0].kind == "thinking"
+    assert ev[0].text == "hmm"
+
+
+def test_thinking_vazio_nao_vira_evento():
+    # Bloco sem texto (so assinatura) e o caso do Claude com o resumo desligado: uma linha que nao
+    # abre nada.
+    ev = pt.parse_obj(_msg("assistant", [{"type": "thinking", "thinking": "   ",
                                           "thinkingSignature": "s"}]))
     assert ev == []
 
@@ -107,7 +117,7 @@ def test_parses_the_format_guard_fixture_without_raising():
     for line in fx.read_text(encoding="utf-8").splitlines():
         events.extend(pt.parse_line(line))
     kinds = {e.kind for e in events}
-    assert kinds <= {"user_msg", "assistant_msg", "tool_use", "tool_result"}
+    assert kinds <= {"user_msg", "assistant_msg", "tool_use", "tool_result", "thinking"}
     assert "tool_use" in kinds and "tool_result" in kinds and "user_msg" in kinds
     # todo tool_result aponta pra um tool_use presente no mesmo arquivo
     tool_use_ids = {e.tool_use_id for e in events if e.kind == "tool_use"}
@@ -379,3 +389,49 @@ def test_other_tool_calls_are_not_questions(tmp_path):
 
 def test_missing_file_returns_none():
     assert pt.read_pending_question("/nao/existe/este/arquivo.jsonl") is None
+
+
+# ── read_pending_question no `ask` do omp ───────────────────────────────────────────────────────
+# Linhas REAIS medidas no omp 18.1.4 (o `|` dentro do toolCallId e do proprio omp, nao um typo).
+
+_ASK_ID = "call_00_ET_tj4L5r5vNIuESrsPU1o21751|2368867e-7c63-4953-96e5-77dbaf3a0b6b"
+_ASK_CALL = {"type": "message", "id": "07c3b414", "message": {"role": "assistant", "content": [
+    {"type": "toolCall", "id": _ASK_ID, "name": "ask",
+     "arguments": {"i": "Perguntando preferência de cor", "questions": [
+         {"id": "cor", "question": "Qual cor você prefere?",
+          "options": [{"label": "Azul"}, {"label": "Verde"}]}]},
+     "intent": "Perguntando preferência de cor"}]}}
+_ASK_RESULT = {"type": "message", "id": "9d95722f", "parentId": "07c3b414",
+               "timestamp": "2026-09-03T18:08:56.312Z",
+               "message": {"role": "toolResult", "toolCallId": _ASK_ID, "toolName": "ask",
+                           "content": [{"type": "text", "text": "User selected: Verde"}],
+                           "details": {"question": "Qual cor você prefere?",
+                                       "options": ["Azul", "Verde"], "multi": False,
+                                       "selectedOptions": ["Verde"]},
+                           "isError": False, "timestamp": 1788458936299}}
+
+
+def test_pending_ask_do_omp_normaliza_pro_shape_do_question(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text(json.dumps(_ASK_CALL, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert pt.read_pending_question(str(f), tool="ask") == {
+        "question": "Qual cor você prefere?", "header": "",
+        "options": [{"label": "Azul"}, {"label": "Verde"}]}
+    # A tool do Pi (`question`) nao conta o `ask`, mesmo com a chave "question" dentro dos arguments.
+    assert pt.read_pending_question(str(f)) is None
+
+
+def test_ask_respondido_do_omp_nao_esta_pendente(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text(json.dumps(_ASK_CALL, ensure_ascii=False) + "\n"
+                 + json.dumps(_ASK_RESULT, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert pt.read_pending_question(str(f), tool="ask") is None
+
+
+def test_ask_sem_pergunta_utilizavel_e_none(tmp_path):
+    # Shape inesperado (lista vazia) nao pode virar um card sem opcao nenhuma no app.
+    f = tmp_path / "s.jsonl"
+    call = json.loads(json.dumps(_ASK_CALL))
+    call["message"]["content"][0]["arguments"]["questions"] = []
+    f.write_text(json.dumps(call, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert pt.read_pending_question(str(f), tool="ask") is None

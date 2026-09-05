@@ -8,6 +8,7 @@
   // PROVEDOR com a credencial de cada conta e guarda a leitura por 5 min. A sessão que está
   // rodando AGORA não depende deste ciclo: a statusline dela desenha o número dentro do chat.
   import { onMount } from 'svelte';
+  import { prefetchContas } from '../lib/queries';
   import * as m from '../paraglide/messages';
   import { formatarIntervalo, type CotaConta } from '../lib/contaEstado';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
@@ -77,7 +78,7 @@
       {/each}
     </div>
     <span class="quota-fim">
-      <button type="button" class="quota-link" onclick={onIrParaContas}>{m.contas_titulo()}</button>
+      <button type="button" class="quota-link" onclick={onIrParaContas} onmouseenter={() => prefetchContas(null)}>{m.contas_titulo()}</button>
     </span>
   </div>
 {/if}

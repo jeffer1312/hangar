@@ -94,3 +94,24 @@ export function checkPeer(alvo: Server | null, url: string, id: string): Promise
     tempo_ms?: number | null;
   }>(alvo, `/api/peers/check?url=${encodeURIComponent(url)}&id=${encodeURIComponent(id)}`);
 }
+
+// Desmarcar "servidores se falam" desfaz o registro nas DUAS pontas quando o navegador tem o
+// token da outra máquina (é o mesmo par de gravações que registrarPeerDoisLados faz, ao
+// contrário). Devolve só o lado de lá: o daqui já aconteceu ou relançou. 404 de lá é "já não
+// estava" — o que a pessoa queria.
+export async function removerPeerDoisLados(
+  dono: Server | null,
+  id: string,
+  remoto: Server | null,
+): Promise<boolean | null> {
+  await removerPeer(dono, id);
+  if (!remoto) return null;
+  try {
+    const { identificador } = await getIdentificador(dono);
+    if (!identificador) return false;
+    await removerPeer(remoto, identificador);
+    return true;
+  } catch (e) {
+    return (e instanceof Error && (e as any).status === 404);
+  }
+}

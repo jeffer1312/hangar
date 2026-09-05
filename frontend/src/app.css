@@ -112,7 +112,7 @@
      mesmo veu (regra em html[data-bg="image"] la embaixo). Ideal continua sendo `transparent`, como
      a textarea do Composer: quem carrega o material e o container. Estes dois sao pra quando a
      superficie precisa existir mesmo — campo de texto, chip, bloco de saida. */
-  --surface-raised:  var(--bg-elevated);   /* chip, botao pequeno, menu flutuante */
+  --surface-raised:  var(--bg-elevated);   /* chip, botao pequeno */
   --surface-inset:   var(--bg-base);       /* campo de texto, area de entrada */
   --surface-card:    var(--bg-surface);    /* card, caixa de leitura (board, plano, contrato) */
 
@@ -665,6 +665,13 @@ button:active:not(:disabled) {
   to   { opacity: 1; transform: scale(1); }
 }
 
+/* Esqueleto de carregamento (barra que "brilha" da esquerda pra direita). Quem usa pinta o
+   gradiente com background-size: 200% e esta animação. */
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
 /* Entra subindo alguns pixels — cápsulas de tarefa e linhas de rastro entram escalonadas com isto. */
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(6px); }
@@ -835,5 +842,143 @@ html:is([data-bg='image'], [data-bg='desktop']) .code-block pre { background: no
   /* `not coarse` e nao `fine`: ambiente que nao declara ponteiro nenhum (navegador automatizado,
      algum embed) responde `false` pras DUAS, e com `fine` a trava simplesmente nunca ligava la.
      O requisito e "nao atrapalhar tela de toque" — entao a excecao e o toque, nao a regra. */
-  .rolagem-travada { overflow: hidden !important; }
+  /* `overscroll-behavior: auto` junto do hidden: com `contain` (que o bloco usa quando destravado)
+     o Chromium PARA a cadeia da roda no bloco mesmo sem ele poder rolar — nada se movia, nem o
+     diff nem a conversa, e era isso que parecia travamento. */
+  .rolagem-travada { overflow: hidden !important; overscroll-behavior: auto !important; }
 }
+
+/* ── Formulário de sessão (CreateSessionSheet, OrquestracaoSheet) ─────────
+   Provider em tiles com a marca (ProviderGlyph) — mesma seleção por borda dos chips de
+   servidor, mas retangular: o ícone precisa de canto, não de pílula. Campo de texto sobre
+   `--surface-inset`, que acompanha o slider de transparência. */
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: var(--space-2);
+}
+.provider-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 44px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--surface-raised, var(--bg-surface));
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: border-color 160ms ease-out, color 160ms ease-out, background 160ms ease-out;
+}
+.provider-tile.on {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+.provider-tile:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.field-label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.field-input {
+  height: 44px;
+  background: var(--surface-inset, var(--bg-surface));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  padding: 0 var(--space-3);
+  outline: none;
+  transition: border-color 180ms var(--ease-out);
+}
+.field-input::placeholder { color: var(--text-muted); }
+.field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+/* O visor abre POR CIMA de tudo — inclusive da folha de Anexos, que é de onde ele costuma ser
+   aberto. O padrão da lib é 999, abaixo do ModalDialog (1100); sem isto a folha ficava metade
+   visível ao lado da foto. */
+/* `body >` pra ganhar da folha do CSS da lib, que é importada depois desta (mesma especificidade
+   perderia por ordem). */
+body > .bp-wrap { z-index: 1200; }
+
+/* O ✕ da lib nasce em `top: 0`, e no iPhone os ~54px de cima são a barra de status: o botão ficava
+   ATRÁS do relógio e da bateria, sem como tocar — a foto abria e não fechava (relatado 28/08/2026,
+   com print). A lib não expõe opção pra isso; o `env()` desce o botão e o contador junto.
+   `body >` pela mesma razão do z-index acima: o CSS dela é importado depois deste. */
+body > .bp-wrap .bp-x { top: env(safe-area-inset-top); }
+/* O contador não tem `top` (é `position: absolute` com `margin: 16px`), então quem o desce é a
+   margem — pôr `top` aqui o tiraria do canto em vez de empurrá-lo. */
+body > .bp-wrap .bp-count { margin-top: calc(16px + env(safe-area-inset-top)); }
+
+/* ── Faixa do visor de mídia ───────────────────────────────────────────────
+   Mora aqui, e não num .svelte, porque é DOM criado à mão dentro do container da bigger-picture
+   (lib/visor.ts): estilo com escopo de componente não alcançaria. A lib desenha o resto — contador,
+   fechar, legenda, setas. */
+.visor-faixa {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* Esquerda: o contador da lib (.bp-count, 100px + 16 de margem) mora ali. Direita: o ✕.
+     O topo desce com a barra de status do aparelho — sem isso o nome do arquivo saía por cima do
+     relógio no iPhone, pelo mesmo motivo do ✕ (ver .bp-x acima). */
+  padding: calc(10px + env(safe-area-inset-top)) 56px 10px 132px;
+  color: #fff;
+  background: linear-gradient(rgba(0, 0, 0, 0.6), transparent);
+  pointer-events: none;           /* o fundo continua fechando ao toque; só os botões pegam clique */
+}
+.visor-nome {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.visor-meta {
+  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.62);
+  white-space: nowrap;
+}
+.visor-acoes {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+  pointer-events: auto;
+}
+.visor-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  cursor: pointer;
+}
+.visor-btn:hover { background: rgba(255, 255, 255, 0.2); }
+.visor-baixar { font-size: var(--text-base); }

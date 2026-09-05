@@ -83,14 +83,23 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 
   // /api/model-options e POST /api/sessions — catalogo do Pi falhou ou provider fora de escopo
   erro_pi_list_models: (p) => m.erro_pi_list_models({ erro: String(p.erro) }),
+  // omp e o fork do Pi mas tem catalogo e binario proprios — codigo separado do erro_pi_list_models
+  // pra sessao omp nao mostrar a instrucao/comando do Pi (ver erro_catalogo_omp_indisponivel).
+  erro_omp_list_models: (p) => m.erro_omp_list_models({ erro: String(p.erro) }),
   // Sem `{erro}` de proposito: o texto do backend aqui e a instrucao ("instale o Pi / ajuste o
   // PATH"), nao um errno pra repassar — o que a pessoa precisa ler ja esta na frase traduzida.
   erro_pi_ausente: () => m.erro_pi_ausente(),
+  // Binario proprio, instalacao propria: o omp e um executavel nativo, nao o pacote npm do Pi.
+  erro_omp_ausente: () => m.erro_omp_ausente(),
+  // Mesmo par pro Codex, e pelo mesmo motivo: "nao achei o codex" e outra conversa que "o
+  // model/list falhou". O `{erro}` so viaja no segundo, onde a mensagem do provedor e a pista.
+  erro_codex_model_list: (p) => m.erro_codex_model_list({ erro: String(p.erro) }),
+  erro_codex_ausente: () => m.erro_codex_ausente(),
   erro_provider_invalido: () => m.erro_provider_invalido(),
   // POST /api/ditado/relimpar — so aparece se o cliente mandar um estilo fora da lista (os botoes
   // da barra do ditado saem de estilosDitado, entao na pratica e defesa de contrato).
   erro_estilo_invalido: () => m.erro_estilo_invalido(),
-  // POST /api/sessions aceita claude/codex/pi/kimi — o texto generico nao pode orientar so
+  // POST /api/sessions aceita claude/codex/pi/kimi/omp — o texto generico nao pode orientar so
   // claude/pi (contrato do erro_provider_invalido, que so vale pro /api/model-options)
   erro_provider_sessao_invalido: () => m.erro_provider_sessao_invalido(),
 
@@ -141,6 +150,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_sessao_recado_nao_enfileirado: () => m.erro_sessao_recado_nao_enfileirado(),
   erro_sessao_opcao_nao_enviada: () => m.erro_sessao_opcao_nao_enviada(),
   erro_opcao_nao_convergiu: (p) => m.erro_opcao_nao_convergiu({ detalhe: String(p.detalhe) }),
+  erro_opcao_fora_da_lista: () => m.erro_opcao_fora_da_lista(),
   erro_mux_indisponivel: (p) => m.erro_mux_indisponivel({ detalhe: String(p.detalhe) }),
   erro_workflow_inexistente: () => m.erro_workflow_inexistente(),
   erro_agente_inexistente: () => m.erro_agente_inexistente(),
@@ -168,6 +178,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_pareamento_aviso_unpair: (p) => m.erro_pareamento_aviso_unpair({ sessao: fmtParam(p.sessao), erro: fmtParam(p.erro) }),
   erro_pareamento_grupo_falha: (p) => m.erro_pareamento_grupo_falha({ avisos: fmtParam(p.avisos) }),
   erro_pareamento_saida_falhou: (p) => m.erro_pareamento_saida_falhou({ avisos: fmtParam(p.avisos) }),
+  erro_pareamento_tarefa_existente: (p) => m.erro_pareamento_tarefa_existente({ existente: fmtParam(p.existente) }),
 
   // Envio: falhas fixas dos helpers _send_one/_send_one_codex, agora envelopadas
   erro_envio_incompleto_limpo: () => m.erro_envio_incompleto_limpo(),
@@ -177,8 +188,20 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_envio_falhou_desconhecida: () => m.erro_envio_falhou_desconhecida(),
   erro_envio_falhou: (p) => m.erro_envio_falhou({ erro: fmtParam(p.erro) }),
   erro_group_message_slash: () => m.erro_group_message_slash(),
+  erro_group_message_resposta: () => m.erro_group_message_resposta(),
+  erro_group_message_tempestade: (p) => m.erro_group_message_tempestade({ max: fmtParam(p.max), janela: fmtParam(p.janela) }),
   erro_sessao_sem_grupo: () => m.erro_sessao_sem_grupo(),
   erro_sessao_nao_pareada: () => m.erro_sessao_nao_pareada(),
+
+  // Orquestração (política de contas + papéis do grupo)
+  erro_orq_conta_desconhecida: () => m.erro_orq_conta_desconhecida(),
+  erro_orq_modelo_desconhecido: (p) => m.erro_orq_modelo_desconhecido({ modelos: fmtParam(p.modelos) }),
+  erro_orq_celula_invalida: () => m.erro_orq_celula_invalida(),
+  erro_orq_arquivo_mudou: () => m.erro_orq_arquivo_mudou(),
+  erro_orq_conta_nao_liberada: () => m.erro_orq_conta_nao_liberada(),
+  erro_orq_modelo_nao_liberado: () => m.erro_orq_modelo_nao_liberado(),
+  erro_orq_conta_travada: () => m.erro_orq_conta_travada(),
+  erro_orq_esforco_invalido: () => m.erro_orq_esforco_invalido(),
 
   // Estado errado: terminal aberto, sessao trabalhando, loop ativo
   erro_terminal_aberto: () => m.erro_terminal_aberto(),
@@ -196,7 +219,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 
   // Entrada invalida: nome, caminho, modelo, motor
   erro_config_dir_invalido: () => m.erro_config_dir_invalido(),
-  erro_resume_codex: () => m.erro_resume_codex(),
+  erro_rollout_sem_id: () => m.erro_rollout_sem_id(),
   erro_motor_sem_claude: () => m.erro_motor_sem_claude(),
   erro_conta_reconciliacao_falhou: (p) => m.erro_conta_reconciliacao_falhou({ nome_conta: String(p.nome_conta), erro: String(p.erro) }),
   erro_cwd_indisponivel: () => m.erro_cwd_indisponivel(),
@@ -206,6 +229,8 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_nome_plano_invalido: (p) => m.erro_nome_plano_invalido({ nome: String(p.nome) }),
   erro_plano_nao_encontrado: (p) => m.erro_plano_nao_encontrado({ nome: String(p.nome) }),
   erro_gravar_pin: (p) => m.erro_gravar_pin({ erro: String(p.erro) }),
+  erro_marcar_step: (p) => m.erro_marcar_step({ erro: String(p.erro) }),
+  erro_arquivar_plano: (p) => m.erro_arquivar_plano({ erro: String(p.erro) }),
   erro_editor_falhou: (p) => m.erro_editor_falhou({ binario: String(p.binario), erro: String(p.erro) }),
   erro_arquivo_nao_citado: () => m.erro_arquivo_nao_citado(),
   erro_caminho_fora_cwd: () => m.erro_caminho_fora_cwd(),
@@ -262,8 +287,23 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_sem_resposta: () => m.erro_sem_resposta(),
   erro_drive_sem_fallback: (p) => m.erro_drive_sem_fallback({ erro: String(p.erro) }),
   erro_drive_fallback_falhou: (p) => m.erro_drive_fallback_falhou({ erro: fmtParam(p.erro) }),
+  erro_resposta_nao_entregue: () => m.erro_resposta_nao_entregue(),
   erro_catalogo_pi_indisponivel: () => m.erro_catalogo_pi_indisponivel(),
+  // Mesmo motivo do erro_omp_list_models: codigo proprio pra sessao omp mostrar "feche e reabra"
+  // em vez da instrucao do Pi ("reinicie a sessao").
+  erro_catalogo_omp_indisponivel: () => m.erro_catalogo_omp_indisponivel(),
   erro_pi_recusou_troca: (p) => m.erro_pi_recusou_troca({ provider: String(p.provider), id: String(p.id), thinking: String(p.thinking) }),
+  erro_reinicio_indisponivel: () => m.erro_reinicio_indisponivel(),
+  erro_atualizacao_branch: () => m.erro_atualizacao_branch(),
+
+  // Passagem de bastao (POST /api/sessions/{name}/bastao). O `erro_bastao_fila` e o que mais
+  // importa traduzir: e o unico em que a sessao JA nasceu e o conserto e humano — a frase tem
+  // que carregar o nome dela e o caminho do dossie, senao quem le acha que nada aconteceu.
+  erro_bastao_para_si_mesma: () => m.erro_bastao_para_si_mesma(),
+  erro_bastao_sem_cwd: () => m.erro_bastao_sem_cwd(),
+  erro_bastao_sem_dossie: () => m.erro_bastao_sem_dossie(),
+  erro_bastao_gravar: (p) => m.erro_bastao_gravar({ motivo: String(p.motivo ?? '') }),
+  erro_bastao_fila: (p) => m.erro_bastao_fila({ nome: String(p.nome), dossie: String(p.dossie) }),
 };
 
 export function mensagemDeErro(code: string, params: Parametros = {}): string | undefined {

@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Lancador UNICO da sessao Codex: um comando que sobe o app-server e a TUI no mesmo pane.
+
+O backend e o terminal chamam exatamente isto. Antes o app-server era filho do processo do
+BACKEND (registry.create_codex spawnava o subprocess e segurava o client), o que deixava duas
+marcas: o servidor sobrevivia ao pane (ja houve app-server orfao escutando em loopback nesta
+maquina) e a criacao de sessao Codex nao passava pelo caminho normal dos outros agentes.
+
+O servidor nasce em segundo plano e a TUI roda em PRIMEIRO plano -- nunca `exec`. E a unica forma
+de o servidor morrer junto com o pane: quem o mata e o `finally` daqui, e o `exec` apagaria este
+processo antes de ele chegar la.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parent.parent
+# Quanto esperamos a TUI abrir a thread. Estourar NAO e fatal: o pane segue sendo um Codex
+# utilizavel; o que se perde e o vinculo com o app ate a proxima abertura.
+_ESPERA_THREAD = 60.0
+# Quanto do stderr do app-server sai na tela quando ele morre na largada. E a cauda, porque a
+# ultima linha e que costuma dizer o motivo.
+_ERRO_MAX = 2000
+
+
+def _com_websockets() -> None:
+    """Garante a lib de WebSocket, re-exec no python do backend quando o do sistema nao a tem.
+
+    O comando do pane e montado tanto pelo backend quanto pelo wrapper de shell, e nenhum dos dois
+    sabe qual python vai atender o shebang. Falhar aqui deixaria um pane que morre no ato.
+    """
+    try:
+        import websockets  # noqa: F401
+        return
+    except ImportError:
+        pass
+    venv = _REPO / "backend" / ".venv" / "bin" / "python"
+    if os.environ.get("_HANGAR_CODEX_REEXEC") or not venv.exists():
+        raise SystemExit(
+            "hangar-codex-tui: falta o pacote `websockets` e o venv do backend nao esta em "
+            f"{venv} — rode o instalador do hangar"
+        )
+    os.environ["_HANGAR_CODEX_REEXEC"] = "1"
+    os.execv(str(venv), [str(venv), os.path.abspath(__file__), *sys.argv[1:]])
+
+
+def _rollout_de(thread_id: str) -> str:
+    """O arquivo da conversa, pelo id. "" quando nao existe.
+
+    O id e o final do nome do arquivo — mesmo layout que o Arquivo do app lê pra listar as
+    conversas (`app/archive_providers.py`, `_codex_jsonl`). Mais de um arquivo com o mesmo id nao
+    acontece na pratica; havendo, o mais recente e o que o `codex resume` abre.
+    """
+    raiz = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")) / "sessions"
+    achados = sorted(raiz.glob(f"*/*/*/rollout-*-{thread_id}.jsonl"),
+                     key=lambda p: p.stat().st_mtime, reverse=True)
+    return str(achados[0]) if achados else ""
+
+
+def _porta_livre() -> str:
+    # Reserva e solta uma porta loopback. Ha uma janela minima ate o app-server dar bind; quem
+    # perde a corrida ve o servidor sair, e a espera abaixo falha em vez de deixar uma TUI apontando
+    # pro servidor errado.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        porta = sock.getsockname()[1]
+    return f"ws://127.0.0.1:{porta}"
+
+
+def _avisar_servidor_morto(endpoint: str, servidor, erros) -> None:
+    """O stderr DELE e a unica pista de por que nao abriu a porta."""
+    erros.seek(0)
+    cauda = erros.read()[-_ERRO_MAX:].decode(errors="replace").strip()
+    print(f"hangar-codex-tui: o app-server saiu com codigo {servidor.returncode} antes de "
+          f"abrir {endpoint}" + (f":\n{cauda}" if cauda else ""), file=sys.stderr)
+
+
+def _esperar_porta(endpoint: str, servidor, erros, teto: float) -> bool:
+    """Bloqueia ate o app-server aceitar conexao. A TUI nao tenta de novo: se sobe antes do bind,
+    leva `Connection refused`, sai com 1, o pane morre e a sessao some — e isso acontece justo
+    quando a maquina esta carregada, que e quando o servidor demora."""
+    host, porta = endpoint.rsplit("/", 1)[1].rsplit(":", 1)
+    limite = time.monotonic() + teto
+    while time.monotonic() < limite:
+        if servidor.poll() is not None:
+            _avisar_servidor_morto(endpoint, servidor, erros)
+            return False
+        try:
+            with socket.create_connection((host, int(porta)), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    print(f"hangar-codex-tui: app-server nao respondeu em {endpoint}", file=sys.stderr)
+    return False
+
+
+def _espera_thread(endpoint: str, cwd: str, servidor, erros, salvar) -> None:
+    """Escuta o app-server ate a TUI abrir a thread e grava o sidecar. Roda numa thread propria.
+
+    A TUI e quem chama thread/start: uma thread aberta por outro cliente e ainda sem turno nao tem
+    rollout no disco, e `codex resume` a rejeita. Aqui so olhamos.
+    """
+    from websockets.sync.client import connect
+    from app.adapters.codex.lancador import CLIENT_INFO
+
+    limite = time.monotonic() + _ESPERA_THREAD
+    ws = None
+    while ws is None and time.monotonic() < limite:
+        if servidor.poll() is not None:
+            return   # quem avisa e o `_esperar_porta` da thread principal, uma vez so
+        try:
+            ws = connect(endpoint, open_timeout=1, max_size=None)
+        except Exception:
+            time.sleep(0.1)
+    if ws is None:
+        print(f"hangar-codex-tui: app-server nao respondeu em {endpoint}", file=sys.stderr)
+        return
+    from websockets.exceptions import ConnectionClosed
+    with ws:
+        try:
+            ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                "params": {"clientInfo": CLIENT_INFO, "capabilities": None}}))
+            for cru in ws:
+                try:
+                    msg = json.loads(cru)
+                except ValueError:
+                    continue
+                if not isinstance(msg, dict) or msg.get("method") != "thread/started":
+                    continue
+                thread = (msg.get("params") or {}).get("thread") or {}
+                if thread.get("cwd") != cwd:
+                    continue
+                if thread.get("id") and thread.get("path"):
+                    salvar(thread["id"], thread["path"])
+                return
+        except ConnectionClosed:
+            # Servidor foi embora (a TUI saiu e o `finally` o matou): nao ha o que salvar, e um
+            # traceback aqui so suja o pane por cima do erro de verdade.
+            return
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="hangar-codex-tui")
+    # O nome vem do env por padrao: `tmux new-session` ja carimba CP_SESSION_NAME no pane, entao o
+    # backend nao precisa repetir a identidade no comando.
+    ap.add_argument("--name", default=os.environ.get("CP_SESSION_NAME"))
+    ap.add_argument("--cwd", default=None)
+    ap.add_argument("--prompt", default=None)
+    ap.add_argument("--resume", default=None,
+                    help="retoma a conversa deste id em vez de abrir uma nova")
+    ap.add_argument("--model", default=None, help="modelo do Codex (vira `-m` na TUI)")
+    ap.add_argument("--effort", default=None,
+                    help="nivel de raciocinio; vira sobrescrita de config, nao flag")
+    args = ap.parse_args()
+    if not args.name:
+        print("hangar-codex-tui: --name (ou CP_SESSION_NAME) e obrigatorio", file=sys.stderr)
+        return 2
+    cwd = os.path.abspath(args.cwd or os.getcwd())
+
+    _com_websockets()
+    sys.path.insert(0, str(_REPO / "backend"))
+    from app.adapters.codex import sessions as codex_sessions
+    from app.adapters.codex.lancador import APPROVAL, SANDBOX
+
+    # Skill instalada no Claude vale JA nesta abertura: o codex le so a pasta dele, e a ponte que
+    # a materializa la era refeita apenas na subida do backend. Fail-soft — isto e conveniencia no
+    # caminho de abrir o agente, nunca motivo pra ele nao abrir.
+    try:
+        from app import skill_bridge
+        # Calado quando nada mudou: este stderr e o pane que a pessoa esta olhando, e uma linha
+        # por harness a cada abertura de Codex seria ruido. Quando a ponte MEXEU, ela fala — sem
+        # isso nao ha como saber depois se ela rodou.
+        stats = skill_bridge.rebuild(log=lambda _m: None)
+        mexeu = {n: s for n, s in stats.items()
+                 if any(s.get(k) for k in ("criados", "trocados", "removidos", "erro"))}
+        if mexeu:
+            print(f"hangar-codex-tui: ponte de skills atualizada: {mexeu}", file=sys.stderr)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"hangar-codex-tui: ponte de skills falhou ({exc}); a sessao abre assim mesmo",
+              file=sys.stderr)
+
+    endpoint = _porta_livre()
+    # stdout no lixo (no modo WebSocket o protocolo nao passa por ele), mas o stderr vai pra um
+    # arquivo temporario: PIPE sem consumidor encheria numa sessao longa, e DEVNULL jogaria fora
+    # justamente a mensagem que explica uma largada que falhou.
+    erros = tempfile.TemporaryFile()
+    servidor = subprocess.Popen(
+        ["codex", "app-server", "--listen", endpoint],
+        stdout=subprocess.DEVNULL, stderr=erros,
+    )
+
+    def salvar(thread_id: str, rollout: str) -> None:
+        # A escolha do usuario vai pro sidecar, nao so pro comando da TUI: quem responde a pill do
+        # app e `CodexAdapter.current_model`, que le daqui. Sem isto a sessao NASCIA no modelo certo
+        # (o `-m` da TUI) e a pill mostrava vazio — o ramo `_conectar` do sidecar com endpoint so
+        # conecta, entao o `default_model` da thread nunca chega a ser lido.
+        codex_sessions.save(args.name, thread_id, rollout, cwd,
+                            model=args.model, effort=args.effort,
+                            endpoint=endpoint, app_pid=servidor.pid)
+
+    escuta = None
+    if args.resume:
+        # Retomando, a identidade JA e conhecida e nao ha `thread/started` pra esperar — medido:
+        # numa conversa retomada o evento nao vem, e ficar esperando por ele deixava a sessao sem
+        # sidecar, ou seja, invisivel no app que mandou retomar.
+        rollout = _rollout_de(args.resume)
+        if not rollout:
+            print(f"hangar-codex-tui: nao achei o rollout da conversa {args.resume}",
+                  file=sys.stderr)
+        else:
+            salvar(args.resume, rollout)
+    else:
+        escuta = threading.Thread(target=_espera_thread,
+                                  args=(endpoint, cwd, servidor, erros, salvar), daemon=True)
+        escuta.start()
+
+    # SIGTERM/SIGHUP viram SystemExit pra que o `finally` rode: `tmux kill-session` derruba o pane
+    # por sinal, e sem isto o app-server ficaria escutando sem dono.
+    for sinal in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sinal, lambda *_: sys.exit(143))
+
+    # A escolha de modelo do usuario, traduzida pro que o binario entende. Sao DUAS gramaticas
+    # diferentes e e por isso que a traducao mora aqui, e nao no model_args como a dos outros
+    # agentes: o modelo tem flag (`-m`), o esforco NAO tem — ele e uma chave de configuracao
+    # (`model_reasoning_effort`, confirmada com `codex exec --strict-config`, que recusa chave
+    # inventada). O valor vai entre aspas porque o `-c` parseia como TOML.
+    # Medido em 30/08/2026 (codex-cli 0.151.0): nivel fora do suporte do modelo NAO mata o
+    # arranque — o binario DESCARTA o nivel e segue com o dele. Por isso quem recusa a escolha
+    # errada e o backend, cruzando modelo x nivel no catalogo (`codex_models.checar_escolha`).
+    # As flags valem nos DOIS ramos, resume incluido: hoje ninguem passa modelo num resume, mas
+    # montar so num deles faria um `--model` com `--resume` ser aceito e ignorado calado.
+    flags_da_escolha = []
+    if args.model:
+        flags_da_escolha += ["-m", args.model]
+    if args.effort:
+        flags_da_escolha += ["-c", f'model_reasoning_effort="{args.effort}"']
+
+    if args.resume:
+        # Sandbox e politica de aprovacao valem AQUI TAMBEM (`codex resume --help` lista as duas):
+        # sem elas a conversa retomada roda no padrao do Codex e pode parar num pedido de aprovacao
+        # que ninguem vai responder — a TUI trava e o app fica olhando uma sessao muda.
+        # `-C` fica de fora porque o pane ja nasce no cwd certo (`tmux new-session -c`) e a conversa
+        # carrega o dela; o id vai no fim, onde o subcomando o espera.
+        argv = ["codex", "resume", "--remote", endpoint, "--no-alt-screen",
+                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL,
+                *flags_da_escolha, args.resume]
+    else:
+        argv = ["codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
+                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL, *flags_da_escolha]
+    if args.prompt:
+        argv.append(args.prompt)
+    try:
+        if not _esperar_porta(endpoint, servidor, erros, _ESPERA_THREAD):
+            return 1
+        return subprocess.run(argv).returncode
+    finally:
+        servidor.terminate()
+        try:
+            servidor.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            servidor.kill()
+        # A thread de escuta SAI sozinha com o servidor morto (ela testa `servidor.poll()`), mas
+        # ainda precisa de um instante — e ela le o `erros` e chama `salvar()`. Sem esperar, ou ela
+        # lia um arquivo ja fechado, ou gravava um sidecar apontando pro servidor que acabou de
+        # morrer: sessao fantasma que nada limpa depois.
+        if escuta is not None:
+            escuta.join(timeout=5)
+        erros.close()
+        # So apaga o sidecar que e NOSSO: uma sessao recriada com o mesmo nome ja teria reescrito o
+        # arquivo, e apagar o dela deixaria a sessao viva invisivel pro app.
+        meta = codex_sessions.load(args.name)
+        if meta and meta.get("app_pid") == servidor.pid:
+            codex_sessions.delete(args.name)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

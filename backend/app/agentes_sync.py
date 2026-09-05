@@ -28,6 +28,7 @@ escrita seria vazamento causado por nós.
 import json
 import logging
 import os
+import re
 import shutil
 import tomllib
 from pathlib import Path
@@ -147,6 +148,27 @@ def _sentinelas(nome: str) -> tuple[str, str]:
             f"# <<< hangar: fim do provedor {nome}")
 
 
+_TABELA_RE = re.compile(r"^\s*\[\[?([^\]]+)\]\]?\s*$")
+
+
+def _cauda_alheia(miolo: str, tabelas: dict[str, list[str]]) -> str:
+    """O que dentro do nosso bloco NÃO foi escrito por nós, da primeira tabela estranha em diante.
+
+    "Nossa" é a tabela cujo nome está em `tabelas` (`[model_providers.x]`, `[models.y]`); qualquer
+    outra é de terceiro. A partir dela, tudo é preservado — inclusive as chaves soltas embaixo,
+    que pertencem a ela."""
+    nossas = {f"{secao}.{chave}" for secao, chaves in tabelas.items() for chave in chaves}
+    nossas |= set(tabelas)
+    linhas = miolo.splitlines(keepends=True)
+    for k, linha in enumerate(linhas):
+        m = _TABELA_RE.match(linha)
+        # Sem aspas: nós escrevemos `[model_providers."meu-nome"]` (o TOML exige aspas num nome com
+        # hífen), e o que comparamos é o nome cru.
+        if m and m.group(1).replace('"', "").strip() not in nossas:
+            return "".join(linhas[k:])
+    return ""
+
+
 def _gravar_bloco_toml(
     cfg: Path, nome: str, bloco: str, tabelas: dict[str, list[str]],
 ) -> tuple[bool, str]:
@@ -172,9 +194,22 @@ def _gravar_bloco_toml(
         if j < 0:
             # Alguém apagou metade do bloco; adivinhar onde ele acabava é como corromper o arquivo.
             return False, "bloco-incompleto"
+        miolo = raw[i:j]
         j = raw.find("\n", j)
         j = len(raw) if j < 0 else j + 1
         resto, antes, depois = raw[:i] + raw[j:], raw[:i], raw[j:]
+        # O que OUTRO programa apendou no fim do arquivo cai DENTRO do nosso bloco quando o
+        # marcador de fim é a última linha — e substituir o bloco apagaria isso, calado. Medido em
+        # 30/08/2026 no `~/.codex/config.toml`: o Codex grava a confiança de cada hook aprovado
+        # como `[hooks.state."<arquivo>:<evento>:<i>:<j>"]` no fim do arquivo, e as 18 tabelas
+        # estavam todas dentro do nosso bloco. Perdê-las é a criação de sessão Codex voltando a
+        # falhar sem nada ligando uma coisa à outra. Salva pra DEPOIS do bloco, onde o próximo
+        # append já cai fora.
+        alheio = _cauda_alheia(miolo, tabelas)
+        if alheio:
+            _log.info("%s: %d linha(s) de terceiro estavam dentro do bloco '%s' — movidas pra fora",
+                      cfg, alheio.count("\n"), nome)
+            depois = alheio + depois
     else:
         resto, antes, depois = raw, raw, ""
     if resto.strip():
@@ -443,10 +478,19 @@ def gravar_codex(
         var = nome_da_variavel(nome)
         ini, fim = _sentinelas(nome)
         # Sem tabela de modelos: no Codex o modelo é escolhido na hora (`model` + `model_provider`),
-        # não cadastrado. `wire_api = "chat"` casa com o dialeto que o probe usa (/v1/models OpenAI).
+        # não cadastrado.
+        #
+        # `wire_api = "responses"` e não `"chat"`: o CLI 0.146.1 RECUSA o valor antigo e o erro não
+        # fica contido no provedor — ele acontece ao CARREGAR a config, então derruba todo comando
+        # do `codex` na máquina (`login status`, `features list`, a sessão). Medido em 29/08/2026:
+        # "`wire_api = \"chat\"` is no longer supported" em config.toml:97, com o bloco escrito por
+        # esta função. Um valor que este código escreve não pode ter o poder de brickar o CLI de
+        # quem só cadastrou uma credencial. Ressalva honesta: se o provedor só falar
+        # /chat/completions, ele deixa de servir ao Codex nesta versão — mas aí a falha é na
+        # chamada daquele provedor, não na abertura do agente inteiro.
         bloco = "\n".join([ini, f"[model_providers.{_ts(nome)}]", f"name = {_ts(nome)}",
                            f"base_url = {_ts(base_openai(base_url))}", f"env_key = {_ts(var)}",
-                           'wire_api = "chat"', fim, ""])
+                           'wire_api = "responses"', fim, ""])
         ok, motivo = _gravar_bloco_toml(d / "config.toml", nome, bloco,
                                         {"model_providers": [nome]})
         return (True, f"{motivo} (exporte {var})") if ok else (ok, motivo)
