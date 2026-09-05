@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, RefreshControl, SectionList, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { MenuView } from '@react-native-menu/menu';
+import type { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useRouter } from 'expo-router';
 import {
   agruparSessoes,
@@ -15,7 +16,7 @@ import {
 } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
-import { useAparencia } from '../../stores/aparencia';
+import { useAparencia, ehGroupBy } from '../../stores/aparencia';
 import { Glass } from '../../ui/Glass';
 import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
@@ -31,6 +32,10 @@ const ROTULO_AGRUPAR: Record<GroupBy, () => string> = {
   project: m.lista_agrupar_projeto,
 };
 
+// Erro LANÇADO pelo apiFetch — já vem com mensagem pronta. O `formataErro` é pro envelope do
+// corpo da resposta (o `warning` do excluir), e aplicado a um Error devolve o código cru.
+const mensagemDe = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
 export function SessionList() {
   const { theme } = useUnistyles();
   const router = useRouter();
@@ -43,6 +48,14 @@ export function SessionList() {
   const [refreshing, setRefreshing] = useState(false);
   // guarda a sessão inteira, não o nome: dois servidores podem ter sessões de mesmo nome
   const [renomeando, setRenomeando] = useState<AggSession | null>(null);
+  // uma folha de ações só, da linha que foi pressionada — não uma por linha
+  const [menuDe, setMenuDe] = useState<AggSession | null>(null);
+  // uma linha aberta por vez: a anterior fecha quando outra abre, e ao rolar
+  const aberta = useRef<SwipeableMethods | null>(null);
+  const trocarAberta = useCallback((nova: SwipeableMethods | null) => {
+    if (aberta.current && aberta.current !== nova) aberta.current.close();
+    aberta.current = nova;
+  }, []);
 
   // 1 stream por servidor via refcount compartilhado
   useEffect(() => {
@@ -73,8 +86,13 @@ export function SessionList() {
           onPress: () =>
             comServidor(s, () => {
               deleteSession(s.name)
-                .then(() => toast.ok(s.name))
-                .catch((e: unknown) => toast.erro(formataErro(e) ?? (e instanceof Error ? e.message : String(e))));
+                .then((r) => {
+                  // A sessão morreu, mas um companheiro do grupo pode não ter sido avisado: o
+                  // motivo aparece em vez de a linha sumir calada (mesmo tratamento do desktop).
+                  if (r.warning) toast.erro(formataErro(r.warning) ?? String(r.warning));
+                  else toast.ok(s.name);
+                })
+                .catch((e: unknown) => toast.erro(mensagemDe(e)));
             }),
         },
       ]),
@@ -87,9 +105,10 @@ export function SessionList() {
       setRenomeando(null);
       if (!s) return;
       comServidor(s, () => {
+        // o backend sanitiza o nome — mostra o que ficou, não o que foi digitado
         renameSession(s.name, novo)
-          .then(() => toast.ok(novo))
-          .catch((e: unknown) => toast.erro(formataErro(e) ?? (e instanceof Error ? e.message : String(e))));
+          .then((r) => toast.ok(r.name))
+          .catch((e: unknown) => toast.erro(mensagemDe(e)));
       });
     },
     [comServidor, renomeando],
@@ -104,7 +123,7 @@ export function SessionList() {
             if ('ambiguous' in r) toast.erro(m.sessao_retomar_qual());
             else toast.ok(s.name);
           })
-          .catch((e: unknown) => toast.erro(formataErro(e) ?? (e instanceof Error ? e.message : String(e))));
+          .catch((e: unknown) => toast.erro(mensagemDe(e)));
       }),
     [comServidor],
   );
@@ -148,7 +167,9 @@ export function SessionList() {
           ) : null}
         </View>
         <MenuView
-          onPressAction={({ nativeEvent }) => useAparencia.getState().setAgrupar(nativeEvent.event as GroupBy)}
+          onPressAction={({ nativeEvent }) => {
+            if (ehGroupBy(nativeEvent.event)) useAparencia.getState().setAgrupar(nativeEvent.event);
+          }}
           actions={(['server', 'project', 'none'] as GroupBy[]).map((g) => ({
             id: g,
             title: ROTULO_AGRUPAR[g](),
@@ -205,23 +226,18 @@ export function SessionList() {
           )
         }
         renderItem={({ item }) => (
-          <SessionMenu
-            temCwd={!!item.cwd}
-            onRenomear={() => setRenomeando(item)}
+          <SessionRow
+            session={item}
+            mostrarServidor={mostrarServidor}
+            onPress={() => abrir(item)}
             onGit={() => abrirGit(item)}
-            onLoop={() => abrirLoop(item)}
             onExcluir={() => excluir(item)}
-          >
-            <SessionRow
-              session={item}
-              mostrarServidor={mostrarServidor}
-              onPress={() => abrir(item)}
-              onGit={() => abrirGit(item)}
-              onExcluir={() => excluir(item)}
-              onResume={() => retomar(item)}
-            />
-          </SessionMenu>
+            onMenu={() => setMenuDe(item)}
+            onResume={() => retomar(item)}
+            aoAbrir={trocarAberta}
+          />
         )}
+        onScrollBeginDrag={() => trocarAberta(null)}
         ItemSeparatorComponent={() => <View style={[styles.sep, { backgroundColor: theme.tokens.border.subtle }]} />}
         ListEmptyComponent={
           <View style={styles.empty}>
@@ -231,6 +247,14 @@ export function SessionList() {
         }
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      />
+      <SessionMenu
+        sessao={menuDe}
+        onFechar={() => setMenuDe(null)}
+        onRenomear={setRenomeando}
+        onGit={abrirGit}
+        onLoop={abrirLoop}
+        onExcluir={excluir}
       />
       <RenameSheet nome={renomeando?.name ?? null} onConfirmar={renomear} onFechar={() => setRenomeando(null)} />
     </>

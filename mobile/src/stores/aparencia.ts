@@ -22,9 +22,13 @@ function lerPensamento(): PensamentoTools {
   return v && PENSAMENTO_TOOLS.includes(v) ? v : 'busca';
 }
 
+export function ehGroupBy(v: unknown): v is GroupBy {
+  return AGRUPAR.includes(v as GroupBy);
+}
+
 function lerAgrupar(): GroupBy {
-  const v = prefs.getString(K_AGRUPAR) as GroupBy | undefined;
-  return v && AGRUPAR.includes(v) ? v : 'server';
+  const v = prefs.getString(K_AGRUPAR);
+  return ehGroupBy(v) ? v : 'server';
 }
 
 // Unistyles: `adaptiveThemes` segue o SO; fixar tema exige desligar o adaptativo antes de setTheme.
