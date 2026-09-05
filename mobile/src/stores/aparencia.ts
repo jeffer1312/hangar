@@ -1,14 +1,23 @@
 import { create } from 'zustand';
 import { UnistylesRuntime } from 'react-native-unistyles';
+import { PENSAMENTO_TOOLS, type PensamentoTools } from '@hangar/core';
 import { prefs } from './prefs';
 
 export type Tema = 'system' | 'light' | 'dark';
 const TEMAS: Tema[] = ['system', 'light', 'dark'];
 const K = 'aparencia.tema';
+const K_PENSAMENTO = 'aparencia.pensamentoTools';
 
 function ler(): Tema {
   const v = prefs.getString(K) as Tema | undefined;
   return v && TEMAS.includes(v) ? v : 'system';
+}
+
+// Valor desconhecido cai no padrão em vez de virar um quarto modo: escrito por versão futura,
+// um `if` que não casa com nenhum ramo deixaria a conversa sem bloco de pensamento nenhum.
+function lerPensamento(): PensamentoTools {
+  const v = prefs.getString(K_PENSAMENTO) as PensamentoTools | undefined;
+  return v && PENSAMENTO_TOOLS.includes(v) ? v : 'busca';
 }
 
 // Unistyles: `adaptiveThemes` segue o SO; fixar tema exige desligar o adaptativo antes de setTheme.
@@ -17,10 +26,19 @@ function aplicar(t: Tema) {
   else { UnistylesRuntime.setAdaptiveThemes(false); UnistylesRuntime.setTheme(t); }
 }
 
-export const useAparencia = create<{ tema: Tema; setTema: (t: Tema) => void }>((set) => ({
+interface Aparencia {
+  tema: Tema;
+  setTema: (t: Tema) => void;
+  pensamentoTools: PensamentoTools;
+  setPensamentoTools: (v: PensamentoTools) => void;
+}
+
+export const useAparencia = create<Aparencia>((set) => ({
   tema: ler(),
   // aplicar primeiro: se o Unistyles falhar, nada persiste — senão o cold start seguinte repete a falha.
   setTema: (t) => { aplicar(t); prefs.set(K, t); set({ tema: t }); },
+  pensamentoTools: lerPensamento(),
+  setPensamentoTools: (v) => { prefs.set(K_PENSAMENTO, v); set({ pensamentoTools: v }); },
 }));
 
 export function aplicarTemaSalvo() { aplicar(useAparencia.getState().tema); }

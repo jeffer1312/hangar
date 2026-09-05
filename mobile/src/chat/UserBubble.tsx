@@ -2,10 +2,11 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { parseImageMessage, uploadUrlNative, fileAuthHeader } from '@hangar/core';
+import { BubbleActions } from './BubbleActions';
 
 // Bolha do usuário: alinhada à direita, cor bubbleUser do tema (espelho do app.css).
 // Se parseImageMessage(text) não nulo → legenda + miniaturas (uploadUrl/fileUrl).
-export function UserBubble({ text, sessionName }: { text: string; sessionName?: string }) {
+export function UserBubble({ text, sessionName, ts }: { text: string; sessionName?: string; ts?: number | null }) {
   const { theme } = useUnistyles();
   const parsed = parseImageMessage(text);
   const hasImages = !!parsed && !!sessionName;
@@ -23,6 +24,7 @@ export function UserBubble({ text, sessionName }: { text: string; sessionName?: 
           <Text style={[styles.txt, { color: theme.tokens.text.primary }]} selectable>
             {display}
           </Text>
+          <BubbleActions text={display} ts={ts} ouvir={false} />
         </View>
       );
     }
@@ -41,6 +43,7 @@ export function UserBubble({ text, sessionName }: { text: string; sessionName?: 
           })}
         </View>
         {/* Se a legenda estava vazia e o texto original era só marcador, já mostramos thumbs */}
+        <BubbleActions text={caption || text} ts={ts} ouvir={false} />
       </View>
     );
   }
@@ -50,6 +53,7 @@ export function UserBubble({ text, sessionName }: { text: string; sessionName?: 
       <Text style={[styles.txt, { color: theme.tokens.text.primary }]} selectable>
         {text}
       </Text>
+      <BubbleActions text={text} ts={ts} ouvir={false} />
     </View>
   );
 }

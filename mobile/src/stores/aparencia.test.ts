@@ -9,6 +9,10 @@ vi.mock('react-native-mmkv', () => ({
   }),
 }));
 
+// O `resetModules` faz cada `import('./aparencia')` reexecutar o grafo inteiro, e o store puxa o
+// @hangar/core — a primeira transformação dele passa dos 5s padrão do vitest.
+vi.setConfig({ testTimeout: 30_000 });
+
 describe('aparencia', () => {
   beforeEach(() => { mem.clear(); vi.resetModules(); });
 
@@ -25,5 +29,19 @@ describe('aparencia', () => {
     vi.resetModules();
     const { useAparencia: deNovo } = await import('./aparencia');
     expect(deNovo.getState().tema).toBe('system');
+  });
+
+  it('pensamentoTools padrão busca e persiste', async () => {
+    const { useAparencia } = await import('./aparencia');
+    expect(useAparencia.getState().pensamentoTools).toBe('busca');
+    useAparencia.getState().setPensamentoTools('tudo');
+    expect(mem.get('aparencia.pensamentoTools')).toBe('tudo');
+    vi.resetModules();
+    const { useAparencia: deNovo } = await import('./aparencia');
+    expect(deNovo.getState().pensamentoTools).toBe('tudo');
+    mem.set('aparencia.pensamentoTools', 'roxo');
+    vi.resetModules();
+    const { useAparencia: comLixo } = await import('./aparencia');
+    expect(comLixo.getState().pensamentoTools).toBe('busca');
   });
 });

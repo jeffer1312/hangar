@@ -9,7 +9,9 @@ import { ToolCard } from './tools/ToolCard';
 import { ToolGroup } from './tools/ToolGroup';
 import { ToolDetailSheet, type ToolDetailHandle } from './tools/ToolDetailSheet';
 import { StatusLine } from './StatusLine';
-import { agruparConversa, type ChatEvent, type ItemConversa } from '@hangar/core';
+import { ThinkingBlock } from './ThinkingBlock';
+import { agruparConversa, entraNoPensamento, type ChatEvent, type ItemConversa } from '@hangar/core';
+import { useAparencia } from '../stores/aparencia';
 import type { PendingMsg } from './pending';
 import * as m from '../paraglide/messages';
 
@@ -31,6 +33,7 @@ interface Props {
   pending?: PendingMsg[];
   optionsSlot?: ReactNode;
   sessionName?: string;
+  serverId?: string;
 }
 
 // Bolha sem texto não vira item nenhum. O tool_result é descartado pelo agruparConversa (entra no
@@ -51,39 +54,52 @@ export function MessageList({
   pending = [],
   optionsSlot,
   sessionName,
+  serverId,
 }: Props) {
   const detail = useRef<ToolDetailHandle>(null);
+  const pref = useAparencia((s) => s.pensamentoTools);
   const results = useMemo(() => {
     const mapa = new Map<string, ChatEvent>();
     for (const e of events) if (e.kind === 'tool_result' && e.tool_use_id) mapa.set(e.tool_use_id, e);
     return mapa;
   }, [events]);
   const resultDe = (t: ChatEvent) => results.get(t.tool_use_id ?? '') ?? null;
-  // O bloco de pensamento é da Task 2b: até lá `thinking` vira item `pensamento` e não desenha nada.
-  const data = useMemo(() => agruparConversa(events.filter(visivel), { entraNoPensamento: () => false }), [events]);
+  const data = useMemo(
+    () => agruparConversa(events.filter(visivel), { entraNoPensamento: (n) => entraNoPensamento(pref, n) }),
+    [events, pref],
+  );
 
   const renderItem = ({ item }: { item: ItemConversa }) => {
-    if (item.type === 'group') {
-      return <ToolGroup tools={item.tools} resultOf={resultDe} onAbrir={(u) => detail.current?.abrir(u)} />;
-    }
-    if (item.type === 'tool') {
-      return <ToolCard use={item.ev} result={resultDe(item.ev)} onPress={() => detail.current?.abrir(item.ev)} />;
-    }
-    if (item.type !== 'event') return null;
-    const ev = item.ev;
-    if (ev.kind === 'user_msg') {
-      // fila durável (queued-*) aparece translúcida igual ao eco local até o real chegar
-      if (ev.id.startsWith('queued-')) {
-        return (
-          <View style={styles.pending}>
-            <UserBubble text={ev.text ?? ''} sessionName={sessionName} />
-          </View>
-        );
+    switch (item.type) {
+      case 'group':
+        return <ToolGroup tools={item.tools} resultOf={resultDe} onAbrir={(u) => detail.current?.abrir(u)} />;
+      case 'tool':
+        return <ToolCard use={item.ev} result={resultDe(item.ev)} onPress={() => detail.current?.abrir(item.ev)} />;
+      case 'pensamento':
+        return <ThinkingBlock eventos={item.eventos} />;
+      case 'event': {
+        const ev = item.ev;
+        if (ev.kind === 'user_msg') {
+          // fila durável (queued-*) aparece translúcida igual ao eco local até o real chegar
+          if (ev.id.startsWith('queued-')) {
+            return (
+              <View style={styles.pending}>
+                <UserBubble text={ev.text ?? ''} sessionName={sessionName} ts={ev.ts} />
+              </View>
+            );
+          }
+          return <UserBubble text={ev.text ?? ''} sessionName={sessionName} ts={ev.ts} />;
+        }
+        if (ev.kind === 'assistant_msg') {
+          return <AssistantBubble text={ev.text ?? ''} sessionName={sessionName} serverId={serverId} ts={ev.ts} />;
+        }
+        return null;
       }
-      return <UserBubble text={ev.text ?? ''} sessionName={sessionName} />;
+      default: {
+        const nunca: never = item;
+        return nunca;
+      }
     }
-    if (ev.kind === 'assistant_msg') return <AssistantBubble text={ev.text ?? ''} sessionName={sessionName} />;
-    return null;
   };
 
   return (

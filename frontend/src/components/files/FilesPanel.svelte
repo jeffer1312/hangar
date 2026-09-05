@@ -14,7 +14,7 @@
   import CitadosView from './CitadosView.svelte';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { fileUrl, resolverCitados, searchFiles } from '@hangar/core';
-  import { acumularCitados, estadoVazio, type Citado } from '../../lib/arquivosCitados';
+  import { acumularCitados, estadoVazio, type Citado } from '@hangar/core';
   import type { ChatEvent } from '@hangar/core';
 
   interface Props {

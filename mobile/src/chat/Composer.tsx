@@ -19,6 +19,7 @@ import { EstiloPill } from '../features/ditado/EstiloPill';
 import { useDitado } from '../features/ditado/useDitado';
 import { useDitadoEstiloStore } from '../features/ditado/ditadoEstiloStore';
 import { PillMenu } from '../features/pills/PillMenu';
+import { CommandSheet } from './CommandSheet';
 
 interface Props {
   serverId: string;
@@ -75,6 +76,8 @@ export function Composer({ serverId, name, draft }: Props) {
   const [failed, setFailed] = useState<{ file: File; motivo: MotivoFim } | null>(null);
   const [autoN, setAutoN] = useState<number | null>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  // null = lista de comandos fechada; string = o que veio depois da `/`.
+  const [cmdFiltro, setCmdFiltro] = useState<string | null>(null);
   const [pendingAttach, setPendingAttach] = useState<PendingAttach | null>(null);
   // Só é definido quando o app MOVE o cursor (ditado, undo, draft); o onSelectionChange devolve o
   // controle ao campo logo em seguida — preso, ele impediria a pessoa de mexer no cursor.
@@ -101,9 +104,13 @@ export function Composer({ serverId, name, draft }: Props) {
     autoAlvoRef.current = 0;
   }, []);
 
+  // Atalho `/`: enquanto a linha é só o nome do comando (sem espaço), a lista fica aberta e
+  // filtrada. O espaço já é argumento — aí a lista sai da frente.
   const handleChangeText = useCallback(
     (v: string) => {
       setText(v);
+      const cmd = v.startsWith('/') && !v.includes(' ') ? v.slice(1) : null;
+      setCmdFiltro(cmd);
       if (undo) limparUndo();
       if (autoN !== null) cancelarAuto();
     },
@@ -128,6 +135,7 @@ export function Composer({ serverId, name, draft }: Props) {
     if (sending || uploading) return;
     limparUndo();
     cancelarAuto();
+    setCmdFiltro(null);
     setSending(true);
     setError('');
     // upload do anexo pendente antes de enviar
@@ -593,6 +601,19 @@ export function Composer({ serverId, name, draft }: Props) {
         {state === 'working' && filaCount === 0 && !gravando && !transcribing ? (
           <Text style={[styles.hint, { color: theme.tokens.text.muted }]}>{m.composer_sessao_trabalhando()}</Text>
         ) : null}
+
+        <CommandSheet
+          open={cmdFiltro !== null}
+          onClose={() => setCmdFiltro(null)}
+          name={name}
+          filtro={cmdFiltro ?? ''}
+          onEscolher={(display) => {
+            const novo = `${display} `;
+            setCmdFiltro(null);
+            setText(novo);
+            setSelection({ start: novo.length, end: novo.length });
+          }}
+        />
 
         <PillMenu
           open={attachMenuOpen}

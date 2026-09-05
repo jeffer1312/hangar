@@ -5,9 +5,12 @@ import type { UnistylesThemes } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
 import type { MarkdownStyle } from 'react-native-enriched-markdown';
-import { fileUrlNative, fileAuthHeader, lerTabelaMarkdown, parseFilePaths } from '@hangar/core';
+import { useRouter } from 'expo-router';
+import { fileUrlNative, fileAuthHeader, lerTabelaMarkdown, parseCodePaths, parseFilePaths } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { TableChart } from './TableChart';
+import { ArquivoChip } from './ArquivoChip';
+import { BubbleActions } from './BubbleActions';
 import { getTableChartPref, setTableChartPref } from './tableChartPref';
 
 // Tema completo do unistyles (tokens + base) — UnistylesTheme não é exportado na raiz.
@@ -65,11 +68,26 @@ export function mkMarkdownStyle(t: TemaApp): MarkdownStyle {
   };
 }
 
-export function AssistantBubble({ text, sessionName }: { text: string; sessionName?: string }) {
+export function AssistantBubble({
+  text,
+  sessionName,
+  serverId,
+  ts,
+}: {
+  text: string;
+  sessionName?: string;
+  serverId?: string;
+  ts?: number | null;
+}) {
   const { theme } = useUnistyles();
+  const router = useRouter();
   const md = useMemo(() => mkMarkdownStyle(theme), [theme]);
   const refs = useMemo(() => parseFilePaths(text), [text]);
   const hasRefs = refs.length > 0 && !!sessionName;
+  // Arquivo de CÓDIGO citado na prosa (o parseFilePaths acima só pega mídia/pdf/html, que viram
+  // miniatura). Só vira chip quando dá pra abrir na aba Arquivos.
+  const codigos = useMemo(() => parseCodePaths(text), [text]);
+  const hasCodigos = codigos.length > 0 && !!sessionName && !!serverId;
   const tabelas = useMemo(() => lerTabelaMarkdown(text), [text]);
   const [pref, setPref] = useState(() => getTableChartPref());
   const [colIndices, setColIndices] = useState<number[]>(() => tabelas.map(() => 0));
@@ -134,6 +152,18 @@ export function AssistantBubble({ text, sessionName }: { text: string; sessionNa
           })}
         </View>
       ) : null}
+      {hasCodigos ? (
+        <View style={styles.atts}>
+          {codigos.map((p) => (
+            <ArquivoChip
+              key={p}
+              caminho={p}
+              onPress={() => router.push(`/s/${serverId}/${sessionName}/files?path=${encodeURIComponent(p)}` as never)}
+            />
+          ))}
+        </View>
+      ) : null}
+      <BubbleActions text={text} ts={ts} />
     </View>
   );
 }

@@ -32,6 +32,7 @@ export function MoreSheet({ open, onClose, serverId, name }: Props) {
     { icon: 'Terminal', label: m.term_titulo(), sub: m.ctx_terminal(), route: 'terminal' },
     { icon: 'Paperclip', label: m.ctx_anexos(), sub: m.more_fotos_videos_arquivos(), route: 'attachments' },
     { icon: 'Gauge', label: m.codex_limites_titulo(), sub: m.ctx_limites(), route: 'codex-limits' },
+    { icon: 'Flag', label: m.bastao_dossie_titulo(), sub: m.bastao_dossie_sub(), route: 'bastao' },
   ];
 
   const go = (route: string) => {

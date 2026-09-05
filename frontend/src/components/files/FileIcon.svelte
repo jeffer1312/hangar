@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { svgIcone } from '../../lib/fileIcons';
+  import { svgIcone } from '@hangar/core';
   interface Props { nome: string; isDir?: boolean; aberta?: boolean; }
   let { nome, isDir = false, aberta = false }: Props = $props();
   // {@html} só de string GERADA no build (fileIcons.generated.ts, filtrada contra script/on*=),

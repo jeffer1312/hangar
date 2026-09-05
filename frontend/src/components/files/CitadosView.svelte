@@ -4,7 +4,7 @@
   // só filtro local, desenho e clique.
   import * as m from '../../paraglide/messages';
   import { intlLocale } from '../../lib/locale';
-  import type { Citado, Origem } from '../../lib/arquivosCitados';
+  import type { Citado, Origem } from '@hangar/core';
   import FileIcon from './FileIcon.svelte';
 
   interface Props {

@@ -15,7 +15,9 @@ import { Composer } from '../../../../src/chat/Composer';
 import { TuiPill } from '../../../../src/chat/TuiPill';
 import { MoreSheet } from '../../../../src/chat/MoreSheet';
 import { OptionButtons } from '../../../../src/chat/OptionButtons';
-import { pendingAskFromEvents, askPayloadFromToolUse, getSessions, selectOption, interrupt } from '@hangar/core';
+import { StatsStrip } from '../../../../src/chat/StatsStrip';
+import { SessionPickerSheet } from '../../../../src/chat/SessionPickerSheet';
+import { pendingAskFromEvents, askPayloadFromToolUse, getSessions, parseStatusLine, selectOption, interrupt } from '@hangar/core';
 import type { Provider } from '@hangar/core';
 import * as m from '../../../../src/paraglide/messages';
 
@@ -30,6 +32,7 @@ export default function ChatScreen() {
   const chat = chatStore(serverId, name);
   const [servidorSumiu, setServidorSumiu] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const existe = useServers((s) => s.servers.some((x) => x.id === serverId));
   const ready = useServers((s) => s.ready);
   const retido = useRef(false); // só quem reteve solta; zera nos dois caminhos
@@ -66,6 +69,7 @@ export default function ChatScreen() {
   const previewMd = chat.use((s) => s.previewMd);
   const previewFull = chat.use((s) => s.previewFull);
   const statusLine = chat.use((s) => s.statusLine);
+  const stats = chat.use((s) => s.stats);
   const loading = chat.use((s) => s.loading);
   const error = chat.use((s) => s.error);
   const olderFailed = chat.use((s) => s.olderFailed);
@@ -164,6 +168,9 @@ export default function ChatScreen() {
           else router.replace('/');
         }}
         onMore={() => setMoreOpen(true)}
+        onTitlePress={() => setPickerOpen(true)}
+        onTerminal={() => router.push(`/s/${serverId}/${name}/terminal` as never)}
+        contextPct={parseStatusLine(statusLine)?.ctxPct ?? null}
         chipPlan={planSession ? <PlanChip session={planSession} onPress={() => router.push(`/s/${serverId}/${name}/activity` as never)} /> : null}
         chipLoop={
           stateEvent?.loop_status ? (
@@ -177,6 +184,7 @@ export default function ChatScreen() {
         }
       />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} />
+      <SessionPickerSheet open={pickerOpen} onClose={() => setPickerOpen(false)} atual={name} />
       {/* Lista e Composer dentro do mesmo KAV: ambos sobem com o teclado e a lista termina acima do composer */}
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         <View style={styles.inner}>
@@ -215,9 +223,11 @@ export default function ChatScreen() {
               pending={pending}
               optionsSlot={optionsSlot}
               sessionName={name}
+              serverId={serverId}
             />
           )}
         </View>
+        {!servidorSumiu ? <StatsStrip stats={stats} /> : null}
         {!servidorSumiu ? <TuiPill serverId={serverId} name={name} overlay={!!stateEvent?.overlay} login={!!stateEvent?.login} /> : null}
         {!servidorSumiu ? <Composer serverId={serverId} name={name} draft={draft} /> : null}
       </KeyboardAvoidingView>

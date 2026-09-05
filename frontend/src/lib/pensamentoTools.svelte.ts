@@ -11,13 +11,15 @@
 // pesquisa e péssimo pra acompanhar trabalho. `busca` é o meio termo e o padrão.
 //
 // Mesmo padrão do taskRows/toolLook: chave no localStorage + $state, reage na hora, sem reload.
+// A REGRA (o que entra no bloco) mora no core; aqui fica só a preferência do navegador.
+import { entraNoPensamento as entraNoPensamentoCore, PENSAMENTO_TOOLS } from '@hangar/core';
+import type { PensamentoTools } from '@hangar/core';
+
 const KEY = 'cp_pensamento_tools';
 
-/** `nada` = só o texto do pensamento entra no bloco; `busca` = + WebSearch/WebFetch/ToolSearch;
- *  `tudo` = + toda ferramenta que rodou entre dois pensamentos. */
-export type PensamentoTools = 'nada' | 'busca' | 'tudo';
+export type { PensamentoTools };
 
-const VALIDOS: PensamentoTools[] = ['nada', 'busca', 'tudo'];
+const VALIDOS = PENSAMENTO_TOOLS;
 
 function carregar(): PensamentoTools {
   try {
@@ -44,27 +46,9 @@ export const pensamentoTools = {
   },
 };
 
-const BUSCA = new Set(['WebSearch', 'WebFetch']);
-// O ToolSearch é o carregador das outras ferramentas ("select:WebSearch,WebFetch"). Ele entra
-// junto da busca porque, caindo entre o pensamento e a busca, fecharia o bloco no meio — e aí as
-// primeiras buscas do turno ficavam de fora enquanto as seguintes entravam.
-const CARREGADOR = 'ToolSearch';
-
-// TaskCreate/TaskUpdate NUNCA entram, nem no modo "tudo": com a lista de tarefas ligada, essas
-// duas chamadas são TROCADAS pela cápsula viva de tarefas no MessageList — e a troca acontece
-// depois desta checagem. Engolidas aqui, a cápsula sumia da tela inteira e o que restava era uma
-// linha crua "TaskCreate" dentro do bloco, sem checklist e sem progresso.
-const TAREFA = new Set(['TaskCreate', 'TaskUpdate']);
-
 /** Esta chamada entra no bloco do pensamento, no modo atual? */
 export function entraNoPensamento(nome?: string | null): boolean {
-  if (pref === 'nada') return false;
-  if (nome && TAREFA.has(nome)) return false;
-  if (pref === 'tudo') return true;
-  return !!nome && (BUSCA.has(nome) || nome === CARREGADOR);
+  return entraNoPensamentoCore(pref, nome);
 }
 
-/** É busca? (o rótulo do bloco conta busca quando só há busca lá dentro) */
-export function ehBusca(nome?: string | null): boolean {
-  return !!nome && (BUSCA.has(nome) || nome === CARREGADOR);
-}
+export { ehBusca } from '@hangar/core';

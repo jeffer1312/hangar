@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { acumularCitados, estadoVazio, parseCodePaths } from './arquivosCitados';
-import type { ChatEvent } from '@hangar/core';
+import type { ChatEvent } from './types';
 
 const CWD = '/home/jefferson/Projetos/hangar';
 const ev = (kind: ChatEvent['kind'], extra: Partial<ChatEvent>, ts: number): ChatEvent =>

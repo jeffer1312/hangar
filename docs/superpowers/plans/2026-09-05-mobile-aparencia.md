@@ -800,7 +800,7 @@ git commit -m "feat(mobile): ferramentas com card curto, grupo de 3+ e sheet de 
 - Produces (mobile): `useAparencia.pensamentoTools` + `setPensamentoTools`; `useChatStore.stats: StatsEvent | null`; `ChatHeader` ganha props `onTitlePress`, `onTerminal`, `contextPct?: number | null`.
 - Consumes: `ItemConversa` (2a), `Sheet`/`Icon`/`Chip` (1), `sintetizarTts`, `ttsAudioUrl`, `getBastaoDossie`, `getCommands`, `parseStatusLine` do core.
 
-- [ ] **Step 1: Teste da regra de pensamento (core)**
+- [x] **Step 1: Teste da regra de pensamento (core)**
 
 `packages/core/src/pensamento.test.ts`:
 
@@ -825,9 +825,9 @@ describe('pensamento', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** — `npx vitest run src/pensamento.test.ts --root packages/core` → FAIL.
+- [x] **Step 2: Rodar e ver falhar** — `npx vitest run src/pensamento.test.ts --root packages/core` → FAIL.
 
-- [ ] **Step 3: Implementar `packages/core/src/pensamento.ts`** (porte de `frontend/src/lib/pensamentoTools.svelte.ts` sem o `localStorage`, e do `resumo` do `ThinkingBlock.svelte`):
+- [x] **Step 3: Implementar `packages/core/src/pensamento.ts`** (porte de `frontend/src/lib/pensamentoTools.svelte.ts` sem o `localStorage`, e do `resumo` do `ThinkingBlock.svelte`):
 
 ```ts
 export type PensamentoTools = 'nada' | 'busca' | 'tudo';
@@ -857,7 +857,7 @@ export function resumoPensamento(texto: string): string {
 
 `index.ts`: `export * from './pensamento';`. Em `frontend/src/lib/pensamentoTools.svelte.ts`: apagar `BUSCA`/`CARREGADOR`/`TAREFA` e as duas funções locais; reexportar `export { ehBusca } from '@hangar/core'` e `export function entraNoPensamento(nome?) { return entraNoPensamentoCore(pref, nome); }` (import `entraNoPensamento as entraNoPensamentoCore`). Em `ThinkingBlock.svelte`, `resumo` usa `resumoPensamento`.
 
-- [ ] **Step 4: Mover `arquivosCitados` e `fileIcons` pro core**
+- [x] **Step 4: Mover `arquivosCitados` e `fileIcons` pro core**
 
 ```bash
 git mv frontend/src/lib/arquivosCitados.ts packages/core/src/arquivosCitados.ts
@@ -869,11 +869,11 @@ git mv frontend/src/lib/fileIcons.test.ts packages/core/src/fileIcons.test.ts
 
 Nos arquivos movidos: `import type { ChatEvent } from '@hangar/core'` → `from './types'`. `index.ts`: `export * from './arquivosCitados'; export * from './fileIcons';`. Na PWA, `grep -rln "lib/arquivosCitados\|lib/fileIcons" frontend/src` e trocar cada import por `@hangar/core` (o `fileIcons.lista.json` e `scripts/geraFileIcons.mjs` ficam no frontend; o script passa a escrever em `../packages/core/src/fileIcons.generated.ts` — ajustar o caminho de saída dentro dele). Rodar `npx vitest run src/pensamento.test.ts src/arquivosCitados.test.ts src/fileIcons.test.ts --root packages/core` → PASS; `npm run check -w frontend` → 0 erros.
 
-- [ ] **Step 5: Preferência `pensamentoTools` no store de aparência**
+- [x] **Step 5: Preferência `pensamentoTools` no store de aparência**
 
 Em `mobile/src/stores/aparencia.ts` acrescentar `pensamentoTools: PensamentoTools` (chave MMKV `aparencia.pensamentoTools`, padrão `'busca'`, valor desconhecido cai no padrão) e `setPensamentoTools`. Teste em `aparencia.test.ts`: `it('pensamentoTools padrão busca e persiste', …)` no mesmo padrão dos de tema.
 
-- [ ] **Step 6: `ThinkingBlock`**
+- [x] **Step 6: `ThinkingBlock`**
 
 `mobile/src/chat/ThinkingBlock.tsx`:
 
@@ -926,7 +926,7 @@ const styles = StyleSheet.create((theme) => ({
 
 `MessageList.tsx`: `agruparConversa(events, { entraNoPensamento: (n) => entraNoPensamento(pref, n) })` com `const pref = useAparencia((s) => s.pensamentoTools)`; item `pensamento` → `<ThinkingBlock eventos={item.eventos} />`.
 
-- [ ] **Step 7: Ações por bolha**
+- [x] **Step 7: Ações por bolha**
 
 `mobile/src/chat/BubbleActions.tsx`:
 
@@ -975,7 +975,7 @@ const styles = StyleSheet.create(() => ({
 
 `AssistantBubble` e `UserBubble` ganham prop `ts?: number | null` e renderizam `<BubbleActions text={text} ts={ts} ouvir={/*assistant*/ true|false} />` abaixo do conteúdo; `MessageList` passa `ts={item.ev.ts}`. Chaves `bolha_copiar` ("Copiar"/"Copy"), `bolha_compartilhar` ("Compartilhar"/"Share"), `bolha_ouvir` ("Ouvir"/"Listen"), `bolha_copiado` ("Copiado"/"Copied") nos dois json.
 
-- [ ] **Step 8: Arquivo citado com ícone**
+- [x] **Step 8: Arquivo citado com ícone**
 
 `mobile/src/chat/ArquivoChip.tsx`:
 
@@ -1003,7 +1003,7 @@ const styles = StyleSheet.create((theme) => ({
 
 Em `AssistantBubble.tsx`, depois do markdown: `parseCodePaths(text).map((p) => <ArquivoChip key={p} caminho={p} onPress={() => router.push(`/s/${serverId}/${name}/files?path=${encodeURIComponent(p)}` as never)} />)` numa `View` com `flexWrap: 'wrap'` (a rota `files` já existe; se ela não lê `path` da query, acrescentar `useLocalSearchParams<{ path?: string }>()` em `app/s/[server]/[name]/files.tsx` e abrir o arquivo quando vier). `AssistantBubble` precisa receber `serverId` (já recebe `sessionName`; acrescentar `serverId`).
 
-- [ ] **Step 9: Evento `stats` no SSE, store e `StatsStrip`**
+- [x] **Step 9: Evento `stats` no SSE, store e `StatsStrip`**
 
 `mobile/src/net/sse.ts:70-71`: acrescentar `type === 'stats'` à lista `isData`. `mobile/src/stores/chat.ts`: campo `stats: StatsEvent | null` (inicial `null`), listener `es.addEventListener('stats', (e) => set({ stats: JSON.parse(e.data) as StatsEvent }))` junto dos outros, e zerar em `reset`.
 
@@ -1056,26 +1056,26 @@ const styles = StyleSheet.create(() => ({ strip: { paddingHorizontal: 12, paddin
 
 O teste roda com o mock do paraglide? Não há mock: o `paraglide/messages` compilado devolve pt-BR (locale do teste). Se `m.stats_turnos_1()` vier em inglês no CI, fixar o locale no teste com `overwriteGetLocale(() => 'pt')` de `../paraglide/runtime`. Montar `<StatsStrip stats={useChatStore((s) => s.stats)} />` acima do `Composer` em `app/s/[server]/[name]/index.tsx`.
 
-- [ ] **Step 10: `ChatHeader` com anel de contexto, título tocável e terminal**
+- [x] **Step 10: `ChatHeader` com anel de contexto, título tocável e terminal**
 
 `ChatHeader.tsx` ganha `onTitlePress: () => void`, `onTerminal: () => void`, `contextPct?: number | null`. O título vira `Pressable` (`accessibilityLabel={m.chat_trocar_sessao()}`) com `<Icon name="ChevronDown" size={14} />` ao lado; antes do "⋯" entra `<Pressable onPress={onTerminal} style={styles.more}><Icon name="Terminal" size={20} /></Pressable>`; à esquerda da pill de estado, `<ContextRing pct={contextPct} />` (a prop é `pct?: number | null`, `mobile/src/chat/ContextRing.tsx:12`). `contextPct` vem de `parseStatusLine(statusLine)?.ctxPct` (`packages/core/src/statusline.ts:15`).
 
 `mobile/src/chat/SessionPickerSheet.tsx`: `Sheet sizes={['medium','large']}` listando `useSessions((s) => s.rows)` ordenadas por `sortSessions`, cada linha `StateDot` + nome + servidor; toque → `router.replace(`/s/${serverId}/${name}`)`. Em `index.tsx`: `onTitlePress` abre essa sheet, `onTerminal` faz `router.push(`/s/${serverId}/${name}/terminal`)`. Chave `chat_trocar_sessao` ("Trocar de sessão"/"Switch session").
 
-- [ ] **Step 11: `BastaoSheet` e `CommandSheet`**
+- [x] **Step 11: `BastaoSheet` e `CommandSheet`**
 
 `mobile/src/chat/BastaoSheet.tsx`: `Sheet sizes={['large']}`; ao abrir chama `getBastaoDossie(name)`; estado `carregando | erro | texto`; texto renderizado com `EnrichedMarkdownText` e o `mkMarkdownStyle` que `AssistantBubble` exporta; 404 vira `m.bastao_vazio()` ("Esta sessão não recebeu bastão"/"This session received no handoff"); outro erro mostra a mensagem em vermelho e botão "Tentar de novo". Entra como item `{ icon: 'Baton'?? → 'Flag', label: m.bastao_titulo() }` na `MoreSheet` (rota nova `bastao` em `app/s/[server]/[name]/bastao.tsx` registrada no `_layout.tsx` como `formSheet`, igual às irmãs). Chave `bastao_titulo` ("Passagem de bastão"/"Handoff").
 
 `mobile/src/chat/CommandSheet.tsx`: `Sheet sizes={['medium']}`; lista de `getCommands(name)` filtrada pelo texto depois do `/`; toque insere `display + ' '` no composer. Em `Composer.tsx`, `handleChangeText`: se o texto começa com `/` e não tem espaço, abre a sheet e passa o filtro; ao escolher, `setText`. Chave `comandos_titulo` ("Comandos"/"Commands").
 
-- [ ] **Step 12: Typecheck, testes, prova visual**
+- [x] **Step 12: Typecheck, testes, prova visual**
 
 Run: `npm run check -w @hangar/core && npm run typecheck -w mobile && npm run check -w frontend`; `npm run test -w @hangar/core && npm run test -w mobile && npm run test -w frontend`.
 Expected: 0 erros, tudo verde (core ganha pensamento 3, arquivosCitados e fileIcons movidos; mobile ganha StatsStrip 1 e aparencia +1).
 
 Emulador em `hangar-2`: bloco "pensou · N buscas" fechado com resumo, abre ao toque; hora e ações sob as bolhas; anel de contexto no header; título abre o seletor; rodapé de stats visível; `/` no composer abre a lista de comandos; MoreSheet → Bastão abre a sheet (com o dossiê ou o aviso de vazio). Prints `t2b-chat.png`, `t2b-pensamento.png`, `t2b-comandos.png`. Comparação cega com a PWA na mesma sessão (até 2 rodadas).
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 git add packages/core/src frontend/src/lib/pensamentoTools.svelte.ts frontend/src/components/ThinkingBlock.svelte frontend/src frontend/scripts/geraFileIcons.mjs mobile/src mobile/app messages/pt.json messages/en.json

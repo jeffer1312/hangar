@@ -11,7 +11,7 @@ import {
   donoDaLinha,
   sendInput,
 } from '@hangar/core';
-import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload } from '@hangar/core';
+import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { reconcilePending, type PendingMsg } from '../chat/pending';
 
@@ -44,6 +44,8 @@ export interface ChatState {
   askPiId: string | null;
   askPiDismissed: string | null;
   statusLine: string | null;
+  // Faixa de estatísticas do último turno (evento SSE `stats`).
+  stats: StatsEvent | null;
   loading: boolean;
   error: string;
   // Carga do histórico antigo falhou ('failed' = rede/backend, tocar tenta de novo) ou veio
@@ -85,6 +87,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     askPiId: null,
     askPiDismissed: null,
     statusLine: null,
+    stats: null,
     loading: true,
     error: '',
     olderFailed: '',
@@ -309,6 +312,14 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       }
     });
 
+    es.addEventListener('stats', (e) => {
+      try {
+        useChatStore.setState({ stats: JSON.parse(e.data as string) as StatsEvent });
+      } catch {
+        // faixa ilegível: mantém a última boa
+      }
+    });
+
     // Stepper nativo (Claude): o hook askq_capture.py publica a pergunta e o SSE a entrega.
     es.addEventListener('ask_question', (e) => {
       try {
@@ -328,6 +339,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       useChatStore.setState({
         stateEvent: null,
         statusLine: null,
+        stats: null,
         preview: '',
         previewMd: false,
         previewFull: false,
@@ -395,6 +407,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         askPiId: null,
         askPiDismissed: null,
         statusLine: null,
+        stats: null,
         loading: true,
         error: '',
         olderFailed: '',

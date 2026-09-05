@@ -1,7 +1,7 @@
 // Arquivos CITADOS na conversa, pra visão "Citados" da aba Arquivos. Separado do
 // `parseFilePaths` de `format.ts` de propósito: aquele alimenta o chat (só mídia/html/pdf viram
 // preview) e não pode ganhar extensão de código sem mudar o que a bolha desenha.
-import type { ChatEvent } from '@hangar/core';
+import type { ChatEvent } from './types';
 
 // Lista FECHADA: regex aberta ("qualquer extensão") casa `repo.git` em URL e some com `config.py`
 // solto em prosa — os dois lados errados.
