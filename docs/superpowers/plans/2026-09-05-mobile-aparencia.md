@@ -1513,11 +1513,11 @@ git commit -m "feat(mobile): material — papel de parede (flat/textura/aurora/i
 - Consumes: `useAparencia` (tema, idioma, fundo, imagemUri, panelAlpha, surfaceAlpha, acento, pensamentoTools, agrupar), `useServers` (servers, active, add, remove, select), `getConfig()` do core (versão do servidor, se o `ConfigServidor` tiver o campo; senão só o `baseUrl`), `Constants.expoConfig?.version` de `expo-constants`.
 - Produces: `Linha({ titulo, descricao?, children | onPress, icon? })`, `Segmentado({ opcoes: {v,label}[], valor, onChange })`, `Slider({ valor, min, max, onChange })` (sobre `@react-native-community/slider`).
 
-- [ ] **Step 1: Átomos de configuração**
+- [x] **Step 1: Átomos de configuração**
 
 `Linha.tsx`: linha com ícone opcional (`Icon`), título, descrição pequena, e à direita `children` ou chevron quando `onPress`. `Segmentado.tsx`: `View` com `Pressable` por opção, a selecionada com `backgroundColor: theme.tokens.accent.dim` e texto em `accent.base`. `Slider.tsx`: `import Slider from '@react-native-community/slider'` com `minimumTrackTintColor={theme.tokens.accent.base}` e `onSlidingComplete` → `onChange` (não a cada pixel: `updateTheme` a cada movimento é caro; o valor visual intermediário fica só no slider).
 
-- [ ] **Step 2: Rotas**
+- [x] **Step 2: Rotas**
 
 `app/config/_layout.tsx`: `<Stack screenOptions={{ headerShown: true, headerTransparent: true, headerBlurEffect: 'regular' }} />` com títulos vindos de `m.*`. `app/_layout.tsx`: `<Stack.Screen name="config" options={{ presentation: 'formSheet', sheetAllowedDetents: [0.92], sheetGrabberVisible: true, headerShown: false }} />`.
 
@@ -1533,14 +1533,14 @@ git commit -m "feat(mobile): material — papel de parede (flat/textura/aurora/i
 
 `app/index.tsx`: a engrenagem da Task 3 ganha `onPress={() => router.push('/config')}`.
 
-- [ ] **Step 3: Typecheck, testes, prova visual**
+- [x] **Step 3: Typecheck, testes, prova visual**
 
 Run: `npm run typecheck -w mobile && npm run test -w mobile`.
 Expected: 0 erros; tudo verde.
 
 Emulador: engrenagem → `/config`; cada tela abre; trocar tema pra claro muda a lista sem reabrir; slider de transparência muda o header ao soltar; escolher aurora muda o fundo; idioma pt/en com aviso de recarga; Máquinas lista o servidor local e testa conexão; Sobre mostra a versão. Prints `t5-config.png`, `t5-aparencia.png`, `t5-maquinas.png`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add mobile/app/config mobile/app/_layout.tsx mobile/app/index.tsx mobile/src/features/config mobile/src/stores/aparencia.ts mobile/src/stores/aparencia.test.ts mobile/src/net/configureCore.ts messages/pt.json messages/en.json

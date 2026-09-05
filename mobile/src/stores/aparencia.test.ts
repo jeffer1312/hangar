@@ -43,6 +43,20 @@ describe('aparencia', () => {
     expect(deNovo.getState().tema).toBe('system');
   });
 
+  it('idioma padrão system, persiste e valor desconhecido cai em system', async () => {
+    const { useAparencia } = await import('./aparencia');
+    expect(useAparencia.getState().idioma).toBe('system');
+    useAparencia.getState().setIdioma('en');
+    expect(mem.get('aparencia.idioma')).toBe('en');
+    vi.resetModules();
+    const { useAparencia: deNovo } = await import('./aparencia');
+    expect(deNovo.getState().idioma).toBe('en');
+    mem.set('aparencia.idioma', 'roxo');
+    vi.resetModules();
+    const { useAparencia: comLixo } = await import('./aparencia');
+    expect(comLixo.getState().idioma).toBe('system');
+  });
+
   it('pensamentoTools padrão busca e persiste', async () => {
     const { useAparencia } = await import('./aparencia');
     expect(useAparencia.getState().pensamentoTools).toBe('busca');

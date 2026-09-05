@@ -7,10 +7,13 @@ import { aplicarMaterial } from '../theme/aplicarMaterial';
 
 export type Tema = 'system' | 'light' | 'dark';
 export type Fundo = 'flat' | 'texture' | 'aurora' | 'image';
+export type Idioma = 'system' | 'pt' | 'en';
 const TEMAS: Tema[] = ['system', 'light', 'dark'];
 const FUNDOS: Fundo[] = ['flat', 'texture', 'aurora', 'image'];
+const IDIOMAS: Idioma[] = ['system', 'pt', 'en'];
 const AGRUPAR: GroupBy[] = ['none', 'server', 'project'];
 const K = 'aparencia.tema';
+const K_IDIOMA = 'aparencia.idioma';
 const K_PENSAMENTO = 'aparencia.pensamentoTools';
 const K_AGRUPAR = 'lista.agrupar';
 const K_FUNDO = 'aparencia.fundo';
@@ -37,6 +40,11 @@ function ler(): Tema {
 function lerPensamento(): PensamentoTools {
   const v = prefs.getString(K_PENSAMENTO) as PensamentoTools | undefined;
   return v && PENSAMENTO_TOOLS.includes(v) ? v : 'busca';
+}
+
+function lerIdioma(): Idioma {
+  const v = prefs.getString(K_IDIOMA) as Idioma | undefined;
+  return v && IDIOMAS.includes(v) ? v : 'system';
 }
 
 export function ehGroupBy(v: unknown): v is GroupBy {
@@ -72,6 +80,9 @@ function lerAcento(): string | null {
 interface Aparencia {
   tema: Tema;
   setTema: (t: Tema) => void;
+  /** `system` segue o idioma do aparelho; pt/en é escolha manual e vence o sistema. */
+  idioma: Idioma;
+  setIdioma: (v: Idioma) => void;
   pensamentoTools: PensamentoTools;
   setPensamentoTools: (v: PensamentoTools) => void;
   agrupar: GroupBy;
@@ -128,6 +139,10 @@ export const useAparencia = create<Aparencia>((set, get) => {
     tema: ler(),
     // aplicar primeiro: se o Unistyles falhar, nada persiste — senão o cold start seguinte repete a falha.
     setTema: (t) => { aplicar(t); prefs.set(K, t); set({ tema: t }); },
+    idioma: lerIdioma(),
+    // Só grava: as mensagens do paraglide são funções compiladas na carga, então quem troca de
+    // idioma precisa recarregar o app — a tela avisa.
+    setIdioma: (v) => { prefs.set(K_IDIOMA, v); set({ idioma: v }); },
     pensamentoTools: lerPensamento(),
     setPensamentoTools: (v) => { prefs.set(K_PENSAMENTO, v); set({ pensamentoTools: v }); },
     agrupar: lerAgrupar(),

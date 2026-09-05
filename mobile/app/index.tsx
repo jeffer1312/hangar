@@ -26,10 +26,9 @@ export default function Index() {
           >
             <Icon name="Server" size={20} />
           </Pressable>
-          {/* Sem onPress até a tela /config existir — botão morto avisa que está desligado. */}
           <Pressable
-            disabled
-            style={[styles.icone, styles.desligado]}
+            onPress={() => router.push('/config' as never)}
+            style={styles.icone}
             accessibilityLabel={m.config_modal_titulo()}
             accessibilityRole="button"
             hitSlop={8}
@@ -72,7 +71,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   acoes: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   icone: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  desligado: { opacity: 0.4 },
   listWrap: { flex: 1 },
   fab: {
     width: 44,
