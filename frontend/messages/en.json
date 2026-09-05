@@ -1986,7 +1986,7 @@
   "peers_identificador": "Identifier",
   "peers_identificador_dica": "Lowercase letters, numbers, hyphen. E.g.: {exemplos}.",
   "peers_identificador_placeholder": "e.g.: casa",
-  "peers_identificador_definido": "Other machines call this one {nome}.",
+  "peers_identificador_definido": "Other machines call this one {nome} — it is the name a session over there uses to message a session here ({nome}::session).",
   "peers_secao_alcance": "Machines this server can reach",
   "peers_vazio": "None yet. Set the identifier above to register the first one.",
   "peers_legenda_alcance": "Register another machine so sessions here and there can message each other, and so this device lists both together. Registering links both ends at once.",

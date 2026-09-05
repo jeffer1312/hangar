@@ -1986,7 +1986,7 @@
   "peers_identificador": "Identificador",
   "peers_identificador_dica": "Letras minúsculas, números, hífen. Ex.: {exemplos}.",
   "peers_identificador_placeholder": "ex.: casa",
-  "peers_identificador_definido": "As outras máquinas chamam esta de {nome}.",
+  "peers_identificador_definido": "As outras máquinas chamam esta de {nome} — é o nome que uma sessão de lá usa para mandar recado a uma sessão daqui ({nome}::sessão).",
   "peers_secao_alcance": "Máquinas que este servidor alcança",
   "peers_vazio": "Nenhuma ainda. Defina o identificador acima para poder registrar a primeira.",
   "peers_legenda_alcance": "Registre outra máquina para as sessões daqui e de lá trocarem recados, e para este aparelho listar as duas juntas. Registrar liga as duas pontas de uma vez.",
