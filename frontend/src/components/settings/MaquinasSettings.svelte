@@ -231,7 +231,8 @@
   // medir a volta pelo endereço deste navegador daria `falhou` num par que funciona).
   async function checarLista(meu: number) {
     const meuId = identificador;
-    await Promise.all(peers.map(async (p) => {
+    // Peer desligado no servidor é máquina que a pessoa sabe estar fora: medir só pinta vermelho.
+    await Promise.all(peers.filter((p) => p.enabled !== false).map(async (p) => {
       const linha = linhas.find((l) => l.peer?.id === p.id);
       const idaP = checkPeer(apiTarget, p.base_url, p.id)
         .then((r) => ({ lado: 'ida', ...r }) as LadoState)
@@ -349,10 +350,23 @@
   }
 
   let removerPeerId = $state<string | null>(null);
-  async function removerPeerConfirmado() {
-    const id = removerPeerId;
-    removerPeerId = null;
-    if (!id) return;
+  function removerPeerConfirmado() { const id = removerPeerId; removerPeerId = null; if (id) void removerPeer(id); }
+
+  // ✕ da linha: tira a máquina dos DOIS lados de uma vez (peer do servidor e entrada deste
+  // navegador). Cada caixa desligada já fazia um lado; isto é os dois com uma confirmação.
+  let removerLinha = $state<LinhaMaquina | null>(null);
+  async function removerLinhaConfirmado() {
+    const linha = removerLinha;
+    removerLinha = null;
+    if (!linha) return;
+    if (linha.peer) await removerPeer(linha.peer.id);
+    if (linha.navegador && !linha.estaMaquina) {
+      removeServer(linha.navegador.id);
+      sessionsStore.refreshServers();
+    }
+  }
+
+  async function removerPeer(id: string) {
     const meu = geracao;
     peersErro = '';
     // O navegador conhece o peer que sai (mesmo motivo de removerPeerDoisLados existir): sem o
@@ -431,6 +445,7 @@
   onEditar={(l) => (emEdicao = l.navegador)}
   onCorrige={(u) => { if (u === null) fecharCorrige(); else corrigeUrl = u; }}
   onTestarDeNovo={testarDeNovo}
+  onRemover={(l) => (removerLinha = l)}
   onAdicionar={() => { addEndereco = ''; showAdd = true; }} />
 {#if peersErro}<p class="id-erro" role="status">{peersErro}</p>{/if}
 {#if removerLadoDeLaFalhou}<p class="ss-aviso" role="status">{m.maquinas_remover_peer_lado_de_la_falhou()}</p>{/if}
@@ -455,6 +470,18 @@
       { label: m.peers_remover(), kind: 'danger', onClick: removerPeerConfirmado },
     ]}>
     <p class="ss-dialog-copy">{linhaRem?.navegador ? m.maquinas_remover_peer_lados() : m.maquinas_remover_peer_so_aqui()}</p>
+  </ConfirmDialog>
+{/if}
+
+{#if removerLinha}
+  <ConfirmDialog title={m.config_servidores_remover({ nome: removerLinha.nome })} aria={m.config_servidores_remover_aria()}
+    {fallbackFocus}
+    onClose={() => (removerLinha = null)}
+    actions={[
+      { label: m.comum_cancelar(), onClick: () => (removerLinha = null) },
+      { label: m.lista_remover(), kind: 'danger', onClick: () => void removerLinhaConfirmado() },
+    ]}>
+    <p class="ss-dialog-copy">{m.maquinas_remover_linha()}</p>
   </ConfirmDialog>
 {/if}
 

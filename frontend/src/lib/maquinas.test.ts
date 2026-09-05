@@ -64,4 +64,21 @@ describe('unirMaquinas', () => {
     expect(linhas.find((l) => l.navegador === A)!.peer).toBe(pCasa);
     expect(linhas.find((l) => l.navegador === A2)!.peer).toBeNull();
   });
+
+  it('máquina desligada (sem identificador) casa pelo endereço, e não vira duas linhas', () => {
+    const F: Server = { id: 'srv-f', label: 'Fora', baseUrl: 'https://fora.ts.net/', token: 'tf' };
+    const pF: PeerView = { id: 'fora', base_url: 'https://fora.ts.net', token: 'tf••', enabled: false };
+    const linhas = unirMaquinas([F], { 'srv-f': null }, [pF, pC], null);
+    expect(linhas.length).toBe(2);
+    const f = linhas.find((l) => l.navegador === F)!;
+    expect(f.peer).toBe(pF);
+    expect(f.identificador).toBe('fora');
+    expect(f.chave).toBe('srv:srv-f');
+  });
+
+  it('sem identificador e sem endereço igual, segue como antes: linha sem peer', () => {
+    const linhas = unirMaquinas([B], { 'srv-b': null }, [pB], null);
+    expect(linhas.find((l) => l.navegador === B)!.peer).toBeNull();
+    expect(linhas.find((l) => l.peer === pB)!.navegador).toBeNull();
+  });
 });

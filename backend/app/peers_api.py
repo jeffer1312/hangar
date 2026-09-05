@@ -43,6 +43,8 @@ def _lista() -> list[dict]:
         }
         if cfg.get("web_url"):
             entrada["web_url"] = cfg["web_url"]
+        if isinstance(cfg.get("enabled"), bool):
+            entrada["enabled"] = cfg["enabled"]
         saida.append(entrada)
     return sorted(saida, key=lambda p: p["id"])
 

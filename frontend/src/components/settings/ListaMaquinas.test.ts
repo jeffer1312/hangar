@@ -14,7 +14,7 @@ const E: LinhaMaquina = { chave: 'srv:srv-e', nome: 'Mac', identificador: 'mac',
 function montar(linhas: LinhaMaquina[], over: Record<string, unknown> = {}) {
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const cbs = { onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onAdicionar: vi.fn() };
+  const cbs = { onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn(), onAdicionar: vi.fn() };
   const comp = mount(ListaMaquinas, { target: el, props: { linhas, estados: {}, meuIdentificador: 'casa', carregando: false, corrige: null, ...cbs, ...over } });
   const linha = (chave: string) => el.querySelector<HTMLElement>(`.mq-linha[data-chave="${chave}"]`)!;
   return { el, comp, cbs, linha };
@@ -144,5 +144,23 @@ describe('ListaMaquinas', () => {
     b.el.querySelector<HTMLButtonElement>('.mq-add')!.click();
     expect(b.cbs.onAdicionar).toHaveBeenCalled();
     unmount(b.comp);
+  });
+
+  it('✕ em toda linha menos "esta máquina", e devolve a linha inteira', () => {
+    const t = montar([A, B, C]);
+    expect(t.linha('srv:srv-a').querySelector('.mq-remover')).toBeNull();
+    t.linha('peer:vps').querySelector<HTMLButtonElement>('.mq-remover')!.click();
+    expect(t.cbs.onRemover).toHaveBeenCalledWith(C);
+    unmount(t.comp);
+  });
+
+  it('peer desligado no servidor: farol cinza e dica própria, mesmo com estado de falha', () => {
+    const G: LinhaMaquina = { ...C, chave: 'peer:mac', identificador: 'mac', peer: { id: 'mac', base_url: 'https://mac', token: '••', enabled: false } };
+    const t = montar([G], { estados: { mac: { ok: false, lados: [{ lado: 'ida', estado: 'falhou', motivo: 'timeout' }] } } });
+    const g = t.linha('peer:mac');
+    expect(g.querySelector('.mq-farol')!.classList.contains('neutro')).toBe(true);
+    expect(g.textContent).toContain(m.maquinas_peer_desligado());
+    expect(g.textContent).not.toContain(m.peers_estado_parcial());
+    unmount(t.comp);
   });
 });

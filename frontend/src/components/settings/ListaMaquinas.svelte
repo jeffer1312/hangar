@@ -18,10 +18,11 @@
     onEditar: (linha: LinhaMaquina) => void;
     onCorrige: (url: string | null) => void;
     onTestarDeNovo: (linha: LinhaMaquina) => void;
+    onRemover: (linha: LinhaMaquina) => void;
     onAdicionar: () => void;
   }
 
-  let { linhas, estados, meuIdentificador, carregando, corrige, onAcompanhar, onFalar, onEditar, onCorrige, onTestarDeNovo, onAdicionar }: Props = $props();
+  let { linhas, estados, meuIdentificador, carregando, corrige, onAcompanhar, onFalar, onEditar, onCorrige, onTestarDeNovo, onRemover, onAdicionar }: Props = $props();
 
   function estadoDe(linha: LinhaMaquina): EstadoPeer | undefined {
     return linha.identificador ? estados[linha.identificador] : undefined;
@@ -51,7 +52,8 @@
     {@const ida = ladoDe(st, 'ida')}
     {@const volta = ladoDe(st, 'volta')}
     {@const falhaReal = !!st && !st.ok && (ida?.estado === 'falhou' || ida?.estado === 'recusou' || ida?.estado === 'estranho' || volta?.estado === 'falhou' || volta?.estado === 'recusou' || volta?.estado === 'estranho')}
-    {@const farolEstado = farol(!!linha.peer, st, falhaReal)}
+    {@const desligada = linha.peer?.enabled === false}
+    {@const farolEstado = desligada ? 'neutro' : farol(!!linha.peer, st, falhaReal)}
     <li class="mq-linha" data-chave={linha.chave}>
       <span class="mq-farol" class:ok={farolEstado === 'ok'} class:nao={farolEstado === 'nao'} class:neutro={farolEstado === 'neutro'}>
         {farolEstado === 'test' ? '◌' : farolEstado === 'neutro' ? '·' : '●'}
@@ -59,7 +61,9 @@
       <span class="mq-txt">
         <span class="mq-nome">{linha.nome}</span>
         <span class="mq-url">{linha.navegador?.baseUrl ?? linha.peer?.base_url}</span>
-        {#if linha.navegador && !linha.identificador}
+        {#if desligada}
+          <span class="mq-hint">{m.maquinas_peer_desligado()}</span>
+        {:else if linha.navegador && !linha.identificador}
           <span class="mq-hint">{m.maquinas_sem_identificador()}</span>
         {:else if st?.testando}
           <span class="mq-hint">{m.peers_estado_testando()}</span>
@@ -103,6 +107,10 @@
       </span>
       {#if linha.navegador}
         <button class="mq-editar" aria-label={m.servidor_editar_aria({ nome: linha.nome })} onclick={() => onEditar(linha)}>✎</button>
+      {/if}
+      <!-- Esta máquina sai só pelo Sair: removê-la daqui é deslogar o aparelho. -->
+      {#if !linha.estaMaquina}
+        <button class="mq-editar mq-remover" aria-label={m.maquinas_remover_aria({ nome: linha.nome })} title={m.lista_remover()} onclick={() => onRemover(linha)}>✕</button>
       {/if}
       {#if corrige?.id === linha.identificador}
         <div class="corrige">
@@ -150,6 +158,7 @@
   .mq-tag { flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--accent); }
   .mq-editar { width: 32px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-sm); }
   .mq-editar:hover { color: var(--accent); background: var(--bg-hover); }
+  .mq-remover:hover { color: var(--error); }
   .mq-vazio { padding: var(--space-3); font-size: var(--text-xs); color: var(--text-muted); }
 
   .pr-lados { display: flex; gap: var(--space-2); flex-shrink: 0; margin-top: 2px; }

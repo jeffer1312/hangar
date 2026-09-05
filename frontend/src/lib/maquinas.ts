@@ -21,13 +21,20 @@ export function unirMaquinas(
   escolhidoId: string | null,
 ): LinhaMaquina[] {
   const porId = new Map(peers.map((p) => [p.id, p]));
+  const porHost = new Map(peers.map((p) => [hostDe(p.base_url), p]));
   const usados = new Set<string>();
   // Dois servidores do navegador (LAN + Tailscale da mesma máquina) podem ter o MESMO
   // identificador: o segundo a casar fica sem peer, senão duas linhas renderizam o mesmo `corrige`.
   const idsCasados = new Set<string>();
   const linhas: LinhaMaquina[] = servidores.map((s) => {
-    const identificador = ids[s.id] ?? null;
-    const peer = identificador && !idsCasados.has(identificador) ? porId.get(identificador) ?? null : null;
+    let identificador = ids[s.id] ?? null;
+    let peer = identificador && !idsCasados.has(identificador) ? porId.get(identificador) ?? null : null;
+    // Sem identificador a máquina está fora do ar (é ela quem o informa). Aí o endereço igual é a
+    // única pista, e sem ele a mesma máquina desligada virava duas linhas.
+    if (!identificador) {
+      const porUrl = porHost.get(hostDe(s.baseUrl));
+      if (porUrl && !usados.has(porUrl.id)) { peer = porUrl; identificador = porUrl.id; }
+    }
     if (peer) { usados.add(peer.id); idsCasados.add(identificador!); }
     return {
       chave: `srv:${s.id}`,
@@ -43,4 +50,8 @@ export function unirMaquinas(
     linhas.push({ chave: `peer:${p.id}`, nome: p.id, identificador: p.id, navegador: null, peer: p, estaMaquina: false });
   }
   return linhas.sort((a, b) => Number(b.estaMaquina) - Number(a.estaMaquina) || a.nome.localeCompare(b.nome));
+}
+
+function hostDe(url: string): string {
+  try { return new URL(url).host.toLowerCase(); } catch { return url.trim().toLowerCase(); }
 }
