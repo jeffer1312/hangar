@@ -238,9 +238,8 @@ fi
 # pane). rich-status-line.ts: desenha o rodape E publica a linha INTEIRA no sidecar que o app le —
 # o que sai no terminal ja vem cortado na largura da janela (ver "Statusline por sidecar" no
 # CLAUDE.md), entao sem ela a sessao em janela estreita fica sem contexto/cota no app.
-# fullscreen-tui.ts: troca o TUI para o alternate screen, mantendo o compositor preso na tela ao
-# rolar — equivalente ao fullscreen do Claude dentro de um terminal/tmux.
-# As MESMAS extensoes servem os dois: o omp e um fork do Pi, com a mesma API de extensao.
+# No OMP, tarefas e rolagem ficam com o núcleo. As outras extensões acrescentam capacidades
+# próprias do Hangar; não são substituídas só porque o harness descobre skills e comandos.
 link_agent_extensions() {  # $1 = binario, $2 = dir de extensoes
   local binario=$1 extensions_dir=$2 ext target source_ext current_target
   if ! command -v "$binario" >/dev/null 2>&1; then
@@ -258,12 +257,20 @@ link_agent_extensions() {  # $1 = binario, $2 = dir de extensoes
   # settings.json nos eventos do Pi), git-checkpoint (/rewind) e fullscreen-tui (alternate screen).
   for ext in hangar-state rich-status-line claude-bridge claude-todo claude-hooks-adapter git-checkpoint fullscreen-tui; do
     source_ext="$SCRIPT_DIR/pi/$ext.ts"
+    target="$extensions_dir/$ext.ts"
+    if [ "$binario" = omp ] && { [ "$ext" = claude-todo ] || [ "$ext" = fullscreen-tui ]; }; then
+      # Retira somente links deste checkout; arquivos e links personalizados são do usuário.
+      if [ -L "$target" ] && { [ "$target" -ef "$source_ext" ] || [ "$(readlink "$target")" = "$source_ext" ]; }; then
+        rm "$target"
+        echo "  removido $ext.ts do OMP — recurso nativo preservado"
+      fi
+      continue
+    fi
     # Fonte ausente = link pendurado que o Pi ignora calado; melhor dizer do que fingir "linked".
     if [ ! -f "$source_ext" ]; then
       echo "  ⚠ $source_ext nao existe — $ext pulada (checkout incompleto?)"
       continue
     fi
-    target="$extensions_dir/$ext.ts"
     if [ -L "$target" ]; then
       current_target=$(readlink "$target")
       if [ "$current_target" = "$source_ext" ]; then
@@ -313,13 +320,6 @@ OMP_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
 link_agent_extensions pi  "$PI_AGENT_DIR/extensions"
 link_agent_extensions omp "$OMP_AGENT_DIR/extensions"
 enable_fullscreen pi  "$PI_AGENT_DIR"
-# omp NAO: a conversa dele mora no scrollback do terminal por desenho (renderizador nunca consulta
-# a rolagem; issue can1357/oh-my-pi#10232). Em alternate screen ela some, e a roda vira seta =
-# historico no composer. Um `enabled: true` la e o que este instalador escrevia — desfaz.
-if [ -f "$OMP_AGENT_DIR/fullscreen-tui.json" ] && grep -q '"enabled": *true' "$OMP_AGENT_DIR/fullscreen-tui.json"; then
-  printf '{\n\t"enabled": false\n}\n' >"$OMP_AGENT_DIR/fullscreen-tui.json"
-  echo "  fullscreen-tui DESLIGADO no omp (a rolagem dele e a do terminal; ver CLAUDE.md)"
-fi
 
 # --- ponte de skills (pi/kimi/codex) -----------------------------------------------------------
 # O omp descobre as skills dos outros CLIs sozinho na largada; pi, kimi e codex nao — leem so as

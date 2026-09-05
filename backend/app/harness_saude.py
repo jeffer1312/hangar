@@ -33,6 +33,10 @@ _log = logging.getLogger("hangar.harness_saude")
 _REPO = Path(__file__).resolve().parents[2]
 _EXTENSOES_PI = ("hangar-state", "rich-status-line", "claude-bridge", "claude-todo",
                  "claude-hooks-adapter", "git-checkpoint", "fullscreen-tui")
+_EXTENSOES_POR_CLI = {
+    "pi": _EXTENSOES_PI,
+    "omp": tuple(nome for nome in _EXTENSOES_PI if nome not in ("claude-todo", "fullscreen-tui")),
+}
 _HOOKS_CLAUDE = ("state_hook.py", "askq_capture.py", "preview_hook.py", "subagent_hook.py",
                  "pair_hook.py", "nav_hook.py")
 
@@ -226,7 +230,7 @@ def _extensoes(cli: str) -> dict:
     # Link vivo pra outra fonte (o repo antigo das extensões, tipicamente): a extensão RODA, só não
     # é a daqui. Dizer "falta" pra isso contradiz a linha de fullscreen logo abaixo dizendo "ligado".
     outra_fonte = []
-    for nome in _EXTENSOES_PI:
+    for nome in _EXTENSOES_POR_CLI[cli]:
         p = ext / f"{nome}.ts"
         fonte = _REPO / "scripts" / "pi" / f"{nome}.ts"
         if p.is_symlink() and p.exists() and p.resolve() == fonte.resolve():
@@ -244,7 +248,7 @@ def _extensoes(cli: str) -> dict:
         return _item("extensoes", False, "extensoes_outra_fonte", f"extensoes:{cli}", **params)
     if faltam:
         return _item("extensoes", False, "faltam", f"extensoes:{cli}", lista=", ".join(faltam))
-    return _item("extensoes", True, "extensoes_ok", n=len(_EXTENSOES_PI))
+    return _item("extensoes", True, "extensoes_ok", n=len(_EXTENSOES_POR_CLI[cli]))
 
 
 def _abreviar_home(p: Path) -> str:
@@ -493,7 +497,16 @@ def _ligar_extensoes(cli: str) -> str:
     ext = _raiz_agente(cli) / "extensions"
     ext.mkdir(parents=True, exist_ok=True)
     feitos = []
+    esperadas = _EXTENSOES_POR_CLI[cli]
+    # Migra somente links nossos; configurações e extensões pessoais ficam intactas.
     for nome in _EXTENSOES_PI:
+        if nome in esperadas:
+            continue
+        p = ext / f"{nome}.ts"
+        fonte = _REPO / "scripts" / "pi" / f"{nome}.ts"
+        if p.is_symlink() and p.resolve() == fonte.resolve():
+            p.unlink()
+    for nome in esperadas:
         p = ext / f"{nome}.ts"
         fonte = _REPO / "scripts" / "pi" / f"{nome}.ts"
         if not fonte.is_file() or (p.exists() and not p.is_symlink()):

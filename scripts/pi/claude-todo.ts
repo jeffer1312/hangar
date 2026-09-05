@@ -346,6 +346,8 @@ const renderTodoListResult = (todoList: Todo[], expanded: boolean, theme: Theme)
 }
 
 export default function todoExtension(pi: ExtensionAPI) {
+  // No OMP, substituir a ferramenta nativa quebra o estado de tarefas usado pelo próprio núcleo.
+  if (/(^|[\\/])omp(\.exe)?$/.test(process.execPath)) return
   // In-memory state (reconstructed from session on load)
   let todos: Todo[] = []
   let nextId = 1

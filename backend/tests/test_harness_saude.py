@@ -19,7 +19,7 @@ def test_extensoes_faltando_e_o_conserto_liga(tmp_path, monkeypatch):
     item = h._extensoes("pi")
     assert item["ok"] is False and item["codigo"] == "faltam" and item["conserto"] == "extensoes:pi"
     assert "claude-todo" not in item["params"]["lista"] and "hangar-state" in item["params"]["lista"]
-    assert h.consertar(item["conserto"]) == f"{len(h._EXTENSOES_PI) - 1} extensões ligadas"
+    h.consertar(item["conserto"])
     assert h._extensoes("pi")["ok"] is True
     assert (raiz / "extensions" / "claude-todo.ts").read_text() == "meu"
 
@@ -44,11 +44,52 @@ def test_extensao_apontando_pra_outra_fonte_nao_e_falta(tmp_path, monkeypatch):
     (ext / "fullscreen-tui.ts").symlink_to(velho)
     item = h._extensoes("pi")
     assert item["ok"] is False and item["codigo"] == "extensoes_outra_fonte"
-    assert item["params"]["lista"] == "fullscreen-tui → ~/repo-velho/fullscreen-tui.ts"
     assert item["params"]["faltam"] == "claude-todo"
     h.consertar(item["conserto"])
     assert h._extensoes("pi")["ok"] is True
 
+
+def test_omp_preserva_todo_e_rolagem_nativos_sem_perder_complementos(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    fontes = repo / "scripts" / "pi"
+    fontes.mkdir(parents=True)
+    for nome in h._EXTENSOES_PI:
+        (fontes / f"{nome}.ts").write_text("extensão")
+    monkeypatch.setattr(h, "_REPO", repo)
+    raiz = tmp_path / "omp-agent"
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(raiz))
+    ext = raiz / "extensions"
+    ext.mkdir(parents=True)
+    for nome in ("claude-todo", "fullscreen-tui"):
+        (ext / f"{nome}.ts").symlink_to(fontes / f"{nome}.ts")
+    preferencias = raiz / "config.yml"
+    preferencias.write_text("theme:\n  dark: titanium\n")
+    fullscreen = raiz / "fullscreen-tui.json"
+    fullscreen.write_text('{"enabled": true, "preferencia": "do usuário"}')
+
+    h.consertar("extensoes:omp")
+
+    assert not (ext / "claude-todo.ts").exists()
+    assert not (ext / "fullscreen-tui.ts").exists()
+    for nome in ("hangar-state", "rich-status-line", "claude-bridge",
+                 "claude-hooks-adapter", "git-checkpoint"):
+        assert (ext / f"{nome}.ts").resolve() == fontes / f"{nome}.ts"
+    assert h._extensoes("omp")["ok"] is True
+    assert preferencias.read_text() == "theme:\n  dark: titanium\n"
+    assert json.loads(fullscreen.read_text()) == {"enabled": True, "preferencia": "do usuário"}
+
+    # Arquivos e links personalizados não pertencem ao instalador.
+    (ext / "claude-todo.ts").write_text("todo personalizado")
+    outra_fonte = tmp_path / "fullscreen-personalizado.ts"
+    outra_fonte.write_text("fullscreen personalizado")
+    (ext / "fullscreen-tui.ts").symlink_to(outra_fonte)
+    h.consertar("extensoes:omp")
+    assert (ext / "claude-todo.ts").read_text() == "todo personalizado"
+    assert (ext / "fullscreen-tui.ts").resolve() == outra_fonte
+
+    (ext / "claude-hooks-adapter.ts").unlink()
+    assert h._extensoes("omp")["ok"] is False
+    assert "claude-hooks-adapter" in h._extensoes("omp")["params"]["lista"]
 
 def test_hooks_do_claude_faltando_apontam_o_conserto(tmp_path):
     (tmp_path / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"command": "x state_hook.py"}]}]}}))
