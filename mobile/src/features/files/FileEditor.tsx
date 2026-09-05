@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { MultiTextInput } from '../../vendor/happy/components/MultiTextInput';
+import { MultilineInput } from '../../ui/MultilineInput';
 import * as m from '../../paraglide/messages';
 
 interface Props {
@@ -77,7 +77,8 @@ export function FileEditor({ path, initialText, onSalvar, onDescartar }: Props) 
         </Text>
       ) : null}
       <View style={styles.editor}>
-        <MultiTextInput value={texto} onChangeText={setTexto} placeholder="" />
+        {/* Editor ocupa a tela: sem teto de altura, quem rola é o próprio campo. */}
+        <MultilineInput value={texto} onChangeText={setTexto} mono maxHeight={100000} style={{ flex: 1 }} />
       </View>
     </View>
   );

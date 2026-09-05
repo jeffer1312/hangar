@@ -7,7 +7,15 @@ import { createRoot } from 'react-dom/client';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('../../vendor/happy/components/MultiTextInput', () => import('../../vendor/happy/components/__mocks__/MultiTextInput'));
+vi.mock('../../ui/MultilineInput', () => ({
+  MultilineInput: (props: { value: string; placeholder?: string; onChangeText: (v: string) => void }) =>
+    React.createElement('textarea', {
+      'data-testid': 'editor-input',
+      value: props.value,
+      onChange: (e: { target: { value: string } }) => props.onChangeText(e.target.value),
+      placeholder: props.placeholder,
+    }),
+}));
 vi.mock('../../paraglide/messages', () => ({
   arq_salvar: () => 'Salvar',
   arq_salvando: () => 'Salvando…',

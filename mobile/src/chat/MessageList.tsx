@@ -1,14 +1,15 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useRef, type ReactNode } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { LegendList } from '@legendapp/list/react-native';
-import { pairTools, toToolCall } from './toolAdapter';
 import { UserBubble } from './UserBubble';
 import { AssistantBubble } from './AssistantBubble';
 import { PreviewBubble } from './PreviewBubble';
-import { ToolBubble } from './ToolBubble';
+import { ToolCard } from './tools/ToolCard';
+import { ToolGroup } from './tools/ToolGroup';
+import { ToolDetailSheet, type ToolDetailHandle } from './tools/ToolDetailSheet';
 import { StatusLine } from './StatusLine';
-import type { ChatEvent } from '@hangar/core';
+import { agruparConversa, type ChatEvent, type ItemConversa } from '@hangar/core';
 import type { PendingMsg } from './pending';
 import * as m from '../paraglide/messages';
 
@@ -32,13 +33,11 @@ interface Props {
   sessionName?: string;
 }
 
-// O que vira bolha (espelho do MessageList.svelte): tool_result nunca direto — entra no
-// card do tool_use pareado; assistant_msg sem texto não renderiza nada.
+// Bolha sem texto não vira item nenhum. O tool_result é descartado pelo agruparConversa (entra no
+// card do tool_use pareado), então aqui sobra só o vazio.
 function visivel(ev: ChatEvent): boolean {
-  if (ev.kind === 'tool_result') return false;
-  if (ev.kind === 'user_msg') return !!ev.text;
-  if (ev.kind === 'assistant_msg') return !!ev.text;
-  return true; // tool_use
+  if (ev.kind === 'user_msg' || ev.kind === 'assistant_msg') return !!ev.text;
+  return true;
 }
 
 export function MessageList({
@@ -53,33 +52,46 @@ export function MessageList({
   optionsSlot,
   sessionName,
 }: Props) {
-  const data = useMemo(() => events.filter(visivel), [events]);
-  const tools = useMemo(() => pairTools(events), [events]);
+  const detail = useRef<ToolDetailHandle>(null);
+  const results = useMemo(() => {
+    const mapa = new Map<string, ChatEvent>();
+    for (const e of events) if (e.kind === 'tool_result' && e.tool_use_id) mapa.set(e.tool_use_id, e);
+    return mapa;
+  }, [events]);
+  const resultDe = (t: ChatEvent) => results.get(t.tool_use_id ?? '') ?? null;
+  // O bloco de pensamento é da Task 2b: até lá `thinking` vira item `pensamento` e não desenha nada.
+  const data = useMemo(() => agruparConversa(events.filter(visivel), { entraNoPensamento: () => false }), [events]);
 
-  const renderItem = ({ item }: { item: ChatEvent }) => {
-    if (item.kind === 'user_msg') {
+  const renderItem = ({ item }: { item: ItemConversa }) => {
+    if (item.type === 'group') {
+      return <ToolGroup tools={item.tools} resultOf={resultDe} onAbrir={(u, r) => detail.current?.abrir(u, r)} />;
+    }
+    if (item.type === 'tool') {
+      const r = resultDe(item.ev);
+      return <ToolCard use={item.ev} result={r} onPress={() => detail.current?.abrir(item.ev, r)} />;
+    }
+    if (item.type !== 'event') return null;
+    const ev = item.ev;
+    if (ev.kind === 'user_msg') {
       // fila durável (queued-*) aparece translúcida igual ao eco local até o real chegar
-      if (item.id.startsWith('queued-')) {
+      if (ev.id.startsWith('queued-')) {
         return (
           <View style={styles.pending}>
-            <UserBubble text={item.text ?? ''} sessionName={sessionName} />
+            <UserBubble text={ev.text ?? ''} sessionName={sessionName} />
           </View>
         );
       }
-      return <UserBubble text={item.text ?? ''} sessionName={sessionName} />;
+      return <UserBubble text={ev.text ?? ''} sessionName={sessionName} />;
     }
-    if (item.kind === 'assistant_msg') return <AssistantBubble text={item.text ?? ''} sessionName={sessionName} />;
-    if (item.kind === 'tool_use') {
-      const par = tools.get(item.tool_use_id ?? '');
-      return <ToolBubble tool={toToolCall(item, par?.result)} />;
-    }
+    if (ev.kind === 'assistant_msg') return <AssistantBubble text={ev.text ?? ''} sessionName={sessionName} />;
     return null;
   };
 
   return (
+    <>
     <LegendList
       data={data}
-      keyExtractor={(e) => e.id}
+      keyExtractor={(i) => i.id}
       renderItem={renderItem}
       recycleItems={false}
       estimatedItemSize={72}
@@ -115,6 +127,8 @@ export function MessageList({
       }
       accessibilityLabel={m.msg_aria_mensagens()}
     />
+    <ToolDetailSheet ref={detail} />
+    </>
   );
 }
 

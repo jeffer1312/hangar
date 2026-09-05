@@ -1,11 +1,9 @@
 import { StyleSheet } from 'react-native-unistyles';
 import { themeDark, themeLight, themeBase } from '@hangar/core';
-import { happyColors } from './mapHappy';
 
 const mk = (t: typeof themeDark) => ({
   tokens: t,
   base: themeBase,
-  colors: happyColors(t),
   panelAlpha: t.glass.panelAlpha,
   surfaceAlpha: 1,
 });

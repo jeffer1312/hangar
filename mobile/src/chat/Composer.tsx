@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View, type NativeSyntheticEvent, type TextInputKeyPressEventData } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -7,7 +7,7 @@ import { Image } from 'expo-image';
 import { broadcast, formataErro, uploadFile, transcribeFile, steerSession, podeEnviarSozinho } from '@hangar/core';
 import type { MotivoFim } from '@hangar/core';
 import { Glass } from '../ui/Glass';
-import { MultiTextInput, type MultiTextInputHandle } from '../vendor/happy/components/MultiTextInput';
+import { MultilineInput } from '../ui/MultilineInput';
 import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf } from '../stores/chat';
 import { useSessions } from '../stores/sessions';
@@ -76,7 +76,9 @@ export function Composer({ serverId, name, draft }: Props) {
   const [autoN, setAutoN] = useState<number | null>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [pendingAttach, setPendingAttach] = useState<PendingAttach | null>(null);
-  const inputRef = useRef<MultiTextInputHandle>(null);
+  // Só é definido quando o app MOVE o cursor (ditado, undo, draft); o onSelectionChange devolve o
+  // controle ao campo logo em seguida — preso, ele impediria a pessoa de mexer no cursor.
+  const [selection, setSelection] = useState<{ start: number; end: number } | undefined>();
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoAlvoRef = useRef<number>(0);
@@ -112,9 +114,7 @@ export function Composer({ serverId, name, draft }: Props) {
   useEffect(() => {
     if (draft !== undefined && draft !== text) {
       setText(draft);
-      requestAnimationFrame(() => {
-        inputRef.current?.setTextAndSelection(draft, { start: draft.length, end: draft.length });
-      });
+      setSelection({ start: draft.length, end: draft.length });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
@@ -250,9 +250,7 @@ export function Composer({ serverId, name, draft }: Props) {
         const before = textRef.current.trim();
         const next = before ? `${before} ${trimmed}` : trimmed;
         setText(next);
-        requestAnimationFrame(() => {
-          inputRef.current?.setTextAndSelection(next, { start: next.length, end: next.length });
-        });
+        setSelection({ start: next.length, end: next.length });
         if (raw && raw.trim() !== trimmed) {
           setUndo({ before, raw: raw.trim() });
           if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
@@ -314,9 +312,7 @@ export function Composer({ serverId, name, draft }: Props) {
     const restored = before ? `${before} ${raw}` : raw;
     setText(restored);
     limparUndo();
-    requestAnimationFrame(() => {
-      inputRef.current?.setTextAndSelection(restored, { start: restored.length, end: restored.length });
-    });
+    setSelection({ start: restored.length, end: restored.length });
   }, [undo, limparUndo]);
 
   const handleRetry = useCallback(() => {
@@ -337,12 +333,11 @@ export function Composer({ serverId, name, draft }: Props) {
   const showSteer = isKimi && state === 'working' && filaCount > 0;
 
   const handleKeyPress = useCallback(
-    (ev: { key: string; shiftKey: boolean }) => {
-      if (ev.key === 'Enter' && !ev.shiftKey && Platform.OS === 'web') {
-        void handleSend();
-        return true;
-      }
-      return false;
+    (ev: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+      // Enter envia só no web (no celular é quebra de linha). O shiftKey vem do evento do DOM que o
+      // react-native-web repassa em nativeEvent — o tipo do RN não o declara.
+      const nat = ev.nativeEvent as TextInputKeyPressEventData & { shiftKey?: boolean };
+      if (nat.key === 'Enter' && !nat.shiftKey && Platform.OS === 'web') void handleSend();
     },
     [handleSend],
   );
@@ -499,13 +494,14 @@ export function Composer({ serverId, name, draft }: Props) {
 
         <View style={styles.row}>
           <View style={styles.inputWrap}>
-            <MultiTextInput
-              ref={inputRef}
+            <MultilineInput
               value={text}
               onChangeText={handleChangeText}
               placeholder={m.composer_mensagem()}
               maxHeight={120}
               onKeyPress={handleKeyPress}
+              selection={selection}
+              onSelectionChange={() => setSelection(undefined)}
             />
           </View>
 

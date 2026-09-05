@@ -4,8 +4,6 @@ import path from 'node:path';
 export default defineConfig({
   resolve: {
     alias: {
-      '@/constants/Typography': path.resolve(__dirname, 'src/vendor/happy/constants/Typography.ts'),
-      '@': path.resolve(__dirname, 'src'),
       react: path.resolve(__dirname, '../node_modules/react'),
       'react-dom': path.resolve(__dirname, '../node_modules/react-dom'),
       'react-native': path.resolve(__dirname, 'src/__mocks__/react-native.ts'),

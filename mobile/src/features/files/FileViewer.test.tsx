@@ -31,7 +31,7 @@ vi.mock('react-native-webview', () => ({
     ),
   ),
 }));
-vi.mock('../../vendor/happy/components/diff/DiffView', () => ({ DiffView: () => null }));
+vi.mock('../../chat/tools/EditDiff', () => ({ EditDiff: () => null }));
 vi.mock('../../paraglide/messages', () => ({
   arquivo_carregar_erro: () => 'Erro ao carregar o arquivo',
   sessao_expirada: () => 'Sessão expirada',

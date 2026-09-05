@@ -5,7 +5,7 @@ import { WebView } from 'react-native-webview';
 import type { FileContent, PathDiff } from '@hangar/core';
 import { fileUrlNative, fileAuthHeader, mensagemDeErro } from '@hangar/core';
 import * as m from '../../paraglide/messages';
-import { DiffView } from '../../vendor/happy/components/diff/DiffView';
+import { EditDiff } from '../../chat/tools/EditDiff';
 
 interface Props {
   path: string;
@@ -191,8 +191,8 @@ export function FileViewer({ path, conteudo, diff, loading, erro, escopo, onEsco
       {/* conteúdo */}
       {temDiff && !verArquivo && diffDoArquivo ? (
         <ScrollView style={styles.scroll}>
-          <DiffView oldText={diffDoArquivo.original ?? ''} newText={doArquivo?.text ?? ''} showLineNumbers={true} />
-          {/* fallback: se DiffView não renderiza, mostra raw diff */}
+          <EditDiff oldText={diffDoArquivo.original ?? ''} newText={doArquivo?.text ?? ''} />
+          {/* fallback: sem o original (só o patch), mostra o diff cru */}
           {diffDoArquivo.original === null && diffDoArquivo.diff ? (
             <Text style={[styles.mono, { color: theme.tokens.text.secondary }]} selectable>
               {diffDoArquivo.diff}

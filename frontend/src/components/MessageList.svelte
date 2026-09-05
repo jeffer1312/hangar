@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { chavesUnicas } from '@hangar/core';
+  import { agruparConversa, type ItemConversa } from '@hangar/core';
   import { tick } from 'svelte';
   import * as m from '../paraglide/messages';
   import type { ChatEvent, StateEvent, AskQuestionPayload, AnswerItem } from '@hangar/core';
@@ -207,16 +207,10 @@
   );
 
   // Agrupa RUNS de tool_use consecutivos (sem texto no meio) num card recolhível — uma sessao de
-  // exploracao (dezenas de Read/Bash/grep) vira uma linha só em vez de encher a lista. Threshold: 1-2
-  // seguidos ficam inline (nao e clutter); >=3 colapsam. `event` = user/assistant normal; `tool` = tool
-  // solto; `group` = burst. Key do grupo = 1o tool id (estavel enquanto o run cresce na cauda).
-  const GROUP_MIN = 3;
-  type RenderItem =
-    | { type: 'event'; id: string; ev: ChatEvent }
-    | { type: 'tool'; id: string; ev: ChatEvent }
-    | { type: 'group'; id: string; tools: ChatEvent[] }
-    | { type: 'pensamento'; id: string; eventos: ChatEvent[] }
-    | { type: 'tasks'; id: string };
+  // exploracao (dezenas de Read/Bash/grep) vira uma linha só em vez de encher a lista. A regra
+  // (grupo de 3+, pensamento que engole a busca, chave única) mora no core, compartilhada com o app
+  // nativo; aqui sobra só a cápsula de tarefas, que é da PWA.
+  type RenderItem = ItemConversa | { type: 'tasks'; id: string };
 
   // Chamada feita NO MEIO do raciocínio pode ficar escondida dentro do bloco recolhido, em vez de
   // card solto: no app do Claude a busca só aparece quando você abre o pensamento, porque foi ali
@@ -232,58 +226,27 @@
   const EH_TASK = (n?: string | null) => n === 'TaskCreate' || n === 'TaskUpdate';
 
   const renderItems = $derived.by(() => {
-    const items: RenderItem[] = [];
-    let run: ChatEvent[] = [];
-    const flush = () => {
-      if (run.length >= GROUP_MIN) items.push({ type: 'group', id: `g-${run[0].id}`, tools: run });
-      else for (const t of run) items.push({ type: 'tool', id: t.id, ev: t });
-      run = [];
-    };
-    // Pensamentos consecutivos (e as buscas entre eles) viram UM bloco recolhido. Qualquer outra
-    // ferramenta fecha o bloco: ela é trabalho visível, e o pensamento seguinte abre outro bloco.
-    let pens: ChatEvent[] = [];
-    const flushPens = () => {
-      if (pens.length) items.push({ type: 'pensamento', id: `p-${pens[0].id}`, eventos: pens });
-      pens = [];
-    };
-    for (const ev of visibleEvents) {
-      // Com a chave ligada, a chamada de tarefa sai da lista como LINHA e a cápsula ocupa o lugar
-      // dela — senão a mesma tarefa apareceria duas vezes (a linha crua e a cápsula). Desligada,
-      // nada muda: elas seguem como tool_use normal.
-      //
-      // A cápsula fica ONDE a última chamada aconteceu, no meio da conversa, e não colada no fim:
-      // presa no rodapé ela se descolava do ponto de uso e ainda escorregava pra baixo a cada
-      // mensagem nova. Cada nova chamada tira a cápsula do lugar anterior e a repõe aqui — só a
-      // posição MAIS RECENTE vale, porque o conteúdo dela é o estado atual da lista inteira.
-      if (ev.kind === 'thinking') { flush(); pens.push(ev); continue; }
-      // Busca só é engolida quando há um pensamento ABERTO antes dela — busca solta (o usuário
-      // pediu "pesquisa X", sem raciocínio no meio) continua card normal, senão sumiria numa
-      // linha que não explica nada.
-      if (pens.length && ev.kind === 'tool_use' && entraNoPensamento(ev.tool_name)) {
-        pens.push(ev);
-        continue;
-      }
-      flushPens();
-      if (taskRows.ativo && ev.kind === 'tool_use' && EH_TASK(ev.tool_name)) {
-        flush();
-        const antiga = items.findIndex((x) => x.type === 'tasks');
-        if (antiga >= 0) items.splice(antiga, 1);
-        if (tarefas.length) items.push({ type: 'tasks', id: 'tasks-vivas' });
-        continue;
-      }
-      if (ev.kind === 'tool_use') { run.push(ev); continue; }
-      flush();
-      items.push({ type: 'event', id: ev.id, ev });
+    // Com a chave ligada, a chamada de tarefa sai da lista como LINHA e a cápsula ocupa o lugar
+    // dela — senão a mesma tarefa apareceria duas vezes (a linha crua e a cápsula). Desligada,
+    // nada muda: elas seguem como tool_use normal.
+    const ehTask = (ev: ChatEvent) => taskRows.ativo && ev.kind === 'tool_use' && EH_TASK(ev.tool_name);
+    // A cápsula fica ONDE a última chamada aconteceu, no meio da conversa, e não colada no fim:
+    // presa no rodapé ela se descolava do ponto de uso e ainda escorregava pra baixo a cada
+    // mensagem nova. Âncora = o evento NÃO-task imediatamente anterior à última chamada de tarefa;
+    // a cápsula entra logo depois do item que contém esse evento (ou no topo, se não houver).
+    let ancora: string | null = null;
+    for (let i = visibleEvents.length - 1; i >= 0; i--) {
+      if (!ehTask(visibleEvents[i])) continue;
+      for (let j = i - 1; j >= 0; j--) if (!ehTask(visibleEvents[j]) && visibleEvents[j].kind !== 'tool_result') { ancora = visibleEvents[j].id; break; }
+      break;
     }
-    flush();
-    flushPens();
-    // Rede de seguranca do {#each} keyed: no Svelte 5 chave repetida e THROW, e ele derruba a arvore
-    // toda — a conversa abre vazia e a tela trava, com navbar e composer ainda desenhados por cima.
-    // Aconteceu de verdade: duas entradas de fila consumidas no MESMO milissegundo com o MESMO texto
-    // sairam do backend com o mesmo `queued:<ts>:<md5>`. O id do backend precisa ser corrigido, mas a
-    // lista le um arquivo que outro processo escreve: ela tem que ser imune a qualquer transcript.
-    const chaves = chavesUnicas(items.map((i) => i.id));
-    return items.map((i, n) => (chaves[n] === i.id ? i : { ...i, id: chaves[n] }));
+    const base: RenderItem[] = agruparConversa(visibleEvents.filter((ev) => !ehTask(ev)), { entraNoPensamento });
+    if (taskRows.ativo && tarefas.length) {
+      const contem = (it: RenderItem) => it.type === 'event' || it.type === 'tool' ? it.id === ancora : it.type === 'group' ? it.tools.some((t) => t.id === ancora) : it.type === 'pensamento' ? it.eventos.some((e) => e.id === ancora) : false;
+      const pos = ancora ? base.findIndex(contem) : -1;
+      base.splice(pos + 1, 0, { type: 'tasks', id: 'tasks-vivas' });
+    }
+    return base;
   });
 
   // Claude trabalhando? -> msgs da fila durável (id "queued-") ficam atenuadas (= na fila).

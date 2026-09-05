@@ -344,7 +344,7 @@ git commit -m "feat(mobile): fundação visual — Icon (Lucide), Sheet (true-sh
 - Produces (mobile): `ToolCard({ use, result, onPress })`, `ToolGroup({ tools, resultOf })`, `ToolDetailSheet` (ref, `abrir(use, result)`), `EditDiff({ oldText, newText, modo?: 'unificado'|'lado' })`, `MultilineInput` (`forwardRef<TextInput>`, props do `TextInput` + `maxHeight?`), `toolIcon(nome): IconName`.
 - Consumes: `toolPhase`, `toolGroupLabel`, `toolGroupCounts`, `summarizeToolInput`, `computeEditDiff`, `extractEdits`, `extractFilePath` do core; `Icon`, `Sheet`, `Chip` da Task 1.
 
-- [ ] **Step 1: Teste da regra de agrupar (core)**
+- [x] **Step 1: Teste da regra de agrupar (core)**
 
 `packages/core/src/toolGroups.test.ts`:
 
@@ -392,12 +392,12 @@ describe('agruparConversa', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npx vitest run src/toolGroups.test.ts --root packages/core`
 Expected: FAIL — módulo não existe.
 
-- [ ] **Step 3: Implementar `packages/core/src/toolGroups.ts`**
+- [x] **Step 3: Implementar `packages/core/src/toolGroups.ts`**
 
 Porte de `frontend/src/components/MessageList.svelte:213-283` sem a parte de `tasks` (a cápsula de tarefas é da PWA; o mobile não a tem) e com `entraNoPensamento` injetado:
 
@@ -459,7 +459,7 @@ export function agruparConversa(eventos: ChatEvent[], opts: OpcoesAgrupar): Item
 
 Em `packages/core/src/index.ts`: `export * from './toolGroups';`.
 
-- [ ] **Step 4: Rodar e ver passar; ligar a PWA na regra do core**
+- [x] **Step 4: Rodar e ver passar; ligar a PWA na regra do core**
 
 Run: `npx vitest run src/toolGroups.test.ts --root packages/core` → PASS (5).
 
@@ -486,7 +486,7 @@ return base;
 
 Manter o tipo `RenderItem` como `ItemConversa | { type: 'tasks'; id: string }` e apagar `chavesUnicas` local se só o laço antigo a usava (o core já garante id único). Rodar `npm run check -w frontend` e `npx vitest run src/screens/Chat.test.ts src/components/MessageList.test.ts --root frontend` (o que existir).
 
-- [ ] **Step 5: Teste do ícone por ferramenta (mobile)**
+- [x] **Step 5: Teste do ícone por ferramenta (mobile)**
 
 `mobile/src/chat/tools/toolIcon.test.ts`:
 
@@ -527,7 +527,7 @@ export function toolIcon(nome?: string | null): IconName {
 
 Run: `cd mobile && npx vitest run src/chat/tools/toolIcon.test.ts` → PASS.
 
-- [ ] **Step 6: `ToolCard`**
+- [x] **Step 6: `ToolCard`**
 
 `mobile/src/chat/tools/ToolCard.tsx`:
 
@@ -574,7 +574,7 @@ const styles = StyleSheet.create((theme) => ({
 }));
 ```
 
-- [ ] **Step 7: `ToolGroup`**
+- [x] **Step 7: `ToolGroup`**
 
 `mobile/src/chat/tools/ToolGroup.tsx`:
 
@@ -618,7 +618,7 @@ const styles = StyleSheet.create((theme) => ({
 }));
 ```
 
-- [ ] **Step 8: `EditDiff` (RN) sobre o `computeEditDiff` do core**
+- [x] **Step 8: `EditDiff` (RN) sobre o `computeEditDiff` do core**
 
 O `EditDiff` do core (`packages/core/src/editdiff.ts:17-22`) tem `ops: OpLine[]` (unificado), `rows: SplitRow[]` (`left`/`right`: `{ num, text } | null`), `add`, `del`. Cores como no `EditDiff.svelte`: adição em `status.success` a 18% de alpha, remoção em `status.error` a 18%. `mobile/src/chat/tools/EditDiff.tsx`:
 
@@ -666,7 +666,7 @@ const styles = StyleSheet.create((theme) => ({
 
 Não há flag de truncamento no tipo: acima de `MYERS_MAX_PRODUCT` o core já devolve del+add em bloco.
 
-- [ ] **Step 9: `ToolDetailSheet`**
+- [x] **Step 9: `ToolDetailSheet`**
 
 `mobile/src/chat/tools/ToolDetailSheet.tsx`:
 
@@ -724,11 +724,11 @@ const styles = StyleSheet.create((theme) => ({
 
 Erro de carga não existe aqui: o resultado já está no evento. O que pode faltar é `result` (chamada viva) — e aí a sheet diz "1 rodando", não fica vazia.
 
-- [ ] **Step 10: `MessageList` usa `agruparConversa`, `ToolCard`, `ToolGroup`, `ToolDetailSheet`**
+- [x] **Step 10: `MessageList` usa `agruparConversa`, `ToolCard`, `ToolGroup`, `ToolDetailSheet`**
 
 Em `mobile/src/chat/MessageList.tsx`: remover `pairTools`/`toToolCall`/`ToolBubble`; construir `const results = useMemo(() => { const m = new Map<string, ChatEvent>(); for (const e of events) if (e.kind === 'tool_result' && e.tool_use_id) m.set(e.tool_use_id, e); return m; }, [events]);` e `const itens = useMemo(() => agruparConversa(events, { entraNoPensamento: () => false }), [events]);` (o pensamento entra na Task 2b; até lá `thinking` vira item `pensamento` renderizado como `null`). `data={itens}`, `keyExtractor={(i) => i.id}`; no `renderItem`: `event` → bolha (user/assistant como hoje), `tool` → `<ToolCard use={item.ev} result={results.get(item.ev.tool_use_id ?? '') ?? null} onPress={() => detail.current?.abrir(item.ev, results.get(...) ?? null)} />`, `group` → `<ToolGroup tools={item.tools} resultOf={(t) => results.get(t.tool_use_id ?? '') ?? null} onAbrir={(u, r) => detail.current?.abrir(u, r)} />`, `pensamento` → `null`. Montar `<ToolDetailSheet ref={detail} />` uma vez, fora da lista. `estimatedItemSize` fica.
 
-- [ ] **Step 11: `MultilineInput` próprio; `Composer`, `FileEditor`, `FileViewer` deixam o vendor**
+- [x] **Step 11: `MultilineInput` próprio; `Composer`, `FileEditor`, `FileViewer` deixam o vendor**
 
 `mobile/src/ui/MultilineInput.tsx`:
 
@@ -762,7 +762,7 @@ const styles = StyleSheet.create((theme) => ({
 `FileEditor.tsx:80`: `<MultilineInput value={texto} onChangeText={setTexto} mono maxHeight={100000} style={{ flex: 1 }} />`.
 `FileViewer.tsx:194`: `<EditDiff oldText={diffDoArquivo.original ?? ''} newText={doArquivo?.text ?? ''} />` (import de `../../chat/tools/EditDiff`); o fallback de diff cru abaixo continua.
 
-- [ ] **Step 12: Apagar o vendor e o que só existia por ele**
+- [x] **Step 12: Apagar o vendor e o que só existia por ele**
 
 ```bash
 git rm -r -q mobile/src/vendor/happy mobile/src/chat/ToolBubble.tsx mobile/src/chat/toolAdapter.ts mobile/src/chat/toolAdapter.test.ts mobile/src/theme/mapHappy.ts
@@ -770,14 +770,14 @@ git rm -r -q mobile/src/vendor/happy mobile/src/chat/ToolBubble.tsx mobile/src/c
 
 `mobile/src/theme/unistyles.ts`: remover `happyColors` e a chave `colors` do tema. `mobile/tsconfig.json`: remover `baseUrl` e todo o bloco `paths`. `mobile/vitest.config.ts`: remover os dois aliases `@/…` e `@`. `mobile/babel.config.js`: remover o plugin `module-resolver` inteiro (as 28 entradas `@/…` e `'@': './src/vendor/happy'` — é ele que resolve `@/` no Metro, não o tsconfig); se o plugin só servia ao vendor, `npm uninstall babel-plugin-module-resolver -w mobile`. `grep -rn "react-dom-client" mobile/src` — se só o vendor usava `mobile/src/types/react-dom-client.d.ts`, apagar também. `grep -rn "@expo/vector-icons\|vendor/happy\|'@/" mobile/src mobile/app mobile/babel.config.js mobile/metro.config.js mobile/vitest.config.ts mobile/tsconfig.json` deve voltar vazio; então `npm uninstall @expo/vector-icons -w mobile` (e `@pierre/diffs`, `diff` se `grep -rn "@pierre/diffs\|from 'diff'" mobile/src` voltar vazio).
 
-- [ ] **Step 13: Typecheck, testes, prova visual**
+- [x] **Step 13: Typecheck, testes, prova visual**
 
 Run: `npm run check -w @hangar/core && npm run typecheck -w mobile && npm run check -w frontend`, depois `npm run test -w @hangar/core && npm run test -w mobile` e `npm run test -w frontend`.
 Expected: 0 erros; core 426+5, mobile passa (menos os testes do toolAdapter apagados, mais o do toolIcon), frontend 1026.
 
 Emulador (Metro recarrega): abrir `hangar-2`. Comparar com a PWA na mesma sessão: bursts de Bash aparecem como "Ferramentas: N concluídos" fechados; tocar num card abre a sheet com o comando e a saída; um Edit mostra diff colorido. Sheet de arquivos: abrir um arquivo com diff (FileViewer) e o editor (FileEditor). Prints `t2a-chat.png`, `t2a-detalhe.png`, `t2a-arquivos.png`. Comparação cega: subagente fresco recebe `t2a-chat.png` e o print da PWA e diz qual é qual e o que difere em leiaute; até 2 rodadas de ajuste.
 
-- [ ] **Step 14: Commit**
+- [x] **Step 14: Commit**
 
 ```bash
 git add packages/core/src/toolGroups.ts packages/core/src/toolGroups.test.ts packages/core/src/index.ts frontend/src/components/MessageList.svelte mobile/src/chat/tools mobile/src/ui/MultilineInput.tsx mobile/src/chat/MessageList.tsx mobile/src/chat/Composer.tsx mobile/src/features/files/FileViewer.tsx mobile/src/features/files/FileEditor.tsx mobile/src/theme/unistyles.ts mobile/tsconfig.json mobile/vitest.config.ts mobile/package.json package-lock.json
