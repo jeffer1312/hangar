@@ -76,6 +76,7 @@ describe('ListaMaquinas', () => {
     expect(t.linha('srv:srv-b').textContent).toContain(m.peers_estado_parcial());
     expect(t.linha('srv:srv-b').querySelectorAll('.pr-lado').length).toBe(2);
     expect(t.linha('peer:vps').textContent).toContain(m.maquinas_volta_sem_medir());
+    expect(t.linha('peer:vps').textContent).toContain(m.maquinas_so_no_servidor());
     expect(t.linha('peer:vps').textContent).not.toContain(m.peers_estado_parcial());
     expect(t.linha('srv:srv-e').textContent).toContain(m.maquinas_volta_sem_registro());
     unmount(t.comp);

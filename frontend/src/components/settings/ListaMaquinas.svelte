@@ -29,9 +29,10 @@
   function ladoDe(st: EstadoPeer | undefined, lado: 'ida' | 'volta'): LadoState | undefined {
     return st?.lados.find((l) => l.lado === lado);
   }
-  function farol(st: EstadoPeer | undefined): 'ok' | 'nao' | 'test' {
+  function farol(st: EstadoPeer | undefined, falhaReal: boolean): 'ok' | 'nao' | 'test' {
     if (!st || st.testando) return 'test';
-    return st.ok ? 'ok' : 'nao';
+    if (st.ok) return 'ok';
+    return falhaReal ? 'nao' : 'test'; // nao_configurado (sem token/registro) não é falha, é cinza
   }
   function selo(l: LadoState | undefined): string {
     if (!l) return '·';
@@ -48,8 +49,8 @@
     {@const volta = ladoDe(st, 'volta')}
     {@const falhaReal = !!st && !st.ok && (ida?.estado === 'falhou' || ida?.estado === 'recusou' || ida?.estado === 'estranho' || volta?.estado === 'falhou' || volta?.estado === 'recusou' || volta?.estado === 'estranho')}
     <li class="mq-linha" data-chave={linha.chave}>
-      <span class="mq-farol" class:ok={farol(st) === 'ok'} class:nao={farol(st) === 'nao'}>
-        {farol(st) === 'ok' ? '●' : farol(st) === 'nao' ? '●' : '◌'}
+      <span class="mq-farol" class:ok={farol(st, falhaReal) === 'ok'} class:nao={farol(st, falhaReal) === 'nao'}>
+        {farol(st, falhaReal) === 'test' ? '◌' : '●'}
       </span>
       <span class="mq-txt">
         <span class="mq-nome">{linha.nome}</span>
@@ -70,7 +71,10 @@
           <span class="mq-hint">{m.maquinas_volta_sem_medir()}</span>
         {:else if volta?.estado === 'nao_configurado' && volta.motivo === 'registro'}
           <span class="mq-hint">{m.maquinas_volta_sem_registro()}</span>
-        {:else if !linha.navegador && linha.peer}
+        {/if}
+        <!-- Independente do estado acima: "só o servidor conhece" é sempre a instrução acionável
+             quando não há navegador, mesmo com um estado de teste já rodado (Fix round 1). -->
+        {#if !linha.navegador && linha.peer}
           <span class="mq-hint">{m.maquinas_so_no_servidor()}</span>
         {/if}
       </span>
