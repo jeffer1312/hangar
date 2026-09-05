@@ -9,6 +9,7 @@ from pathlib import Path
 from app import diag
 from app.adapters import get_adapter
 from app.adapters.codex.preview import CodexPreviewSource
+from app.difusor import Difusor
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent, session_key
@@ -201,6 +202,8 @@ _list_lock = asyncio.Lock()
 # Chat dela montado; se o agente manda com a sessão fora da tela, o pendente espera aqui e sai
 # quando o usuário abrir a sessão. Backend reiniciou = perde (o agente re-tenta).
 _NAV_PENDENTES: dict[str, list[str]] = {}
+# Monitores de estado compartilhados entre as conexoes de um mesmo chat (ver _monitor_de).
+_ESTADOS = Difusor()
 
 
 def nav_pendente(name: str, url: str) -> None:
@@ -459,8 +462,13 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     def _monitor_de(prov):
         adap = get_adapter(prov)
         kw = {"transcript_get": lambda: current_jsonl} if prov == "kimi" else {}
-        return adap.state_monitor(
-            name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None, **kw)
+        # Um monitor por (sessao, provider, transcript), compartilhado entre as conexoes abertas
+        # nesse chat (desktop + celular = um capture-pane, nao dois). O transcript entra na chave
+        # porque o monitor fecha sobre o sid VIVO da conexao que o criou: apos um /clear, quem
+        # continua nele e recriado com a chave nova (ver __reset__) em vez de herdar a closure de
+        # uma conexao que pode ja ter ido embora.
+        return _ESTADOS.ouvir((name, prov, current_jsonl), lambda: adap.state_monitor(
+            name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None, **kw))
 
     monitor_stream = _monitor_de(provider)
     pqueue = PromptQueue(name)
@@ -570,10 +578,10 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # Faixa de estatísticas (turnos/steps/tokens/tempos) — fold incremental do MESMO arquivo
         # do transcript, IO no threadpool. FEATURE, não núcleo: diferente dos outros pumps, erro
         # aqui NUNCA derruba o stream (regra do incidente 2026-07-23) — loga e a faixa some.
+        acc = StatsAccumulator.compartilhado(current_provider, path)
+        if acc is None:
+            return                           # provider sem fold -> sem faixa
         try:
-            acc = StatsAccumulator.for_provider(current_provider, path)
-            if acc is None:
-                return                       # provider sem fold -> sem faixa
             last = None
             while True:
                 snap = await asyncio.to_thread(acc.collect)
@@ -585,6 +593,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             raise                            # rebind do /clear cancela de propósito
         except Exception:
             _log.exception("sse: stats_pump falhou name=%s (faixa desligada)", name)
+        finally:
+            acc.soltar()
 
     async def jsonl_watcher():
         # Detecta /clear (e qualquer troca de transcript): o claude abre um .jsonl NOVO, mas o tailer foi
@@ -752,6 +762,11 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 tasks.append(tail_task)
                 stats_task = asyncio.create_task(stats_pump(data))
                 tasks.append(stats_task)
+                # O monitor e compartilhado por transcript: o deste chat agora e outro.
+                tasks.remove(state_task)
+                state_task.cancel()
+                state_task = asyncio.create_task(pump("state", _monitor_de(current_provider)))
+                tasks.append(state_task)
                 yield {"event": "reset", "data": "{}"}
                 continue
             if event == "preview":

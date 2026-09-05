@@ -52,6 +52,30 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
   com `;`; Claude Code aceita, o Codex recusa a reescrita ("PreToolUse hook returned
   updatedInput without permissionDecision:allow") e roda o original. Só o rtk é embrulhado —
   um pipe em volta de outro hook esconderia o rc=2 com que ele bloqueia.
+  **O provedor `command-code` que o `agentes_sync` grava no `config.toml` do Codex não serve ao
+  Codex** (medido 04/09/2026): o gateway só tem `/chat/completions` — `/responses` é 404 em
+  `/provider`, `/provider/v1`, `/v1` e na raiz — e o codex-cli 0.153.1 recusa `wire_api = "chat"`
+  ao carregar a config. O bloco fica lá como promessa vazia; testar Codex noutro modelo hoje só
+  com provedor que fale Responses API (a OpenCode fala, mas a conta estava sem saldo).
+- **Compartilhado por sessão, não por conexão** (`app/difusor.py`, `stats.Accumulator.
+  compartilhado`, `registry._atualizar_git`, 04/09/2026). Três coisas que cada SSE refazia
+  sozinho: o monitor de estado (desktop + celular = 2× `has-session` + `capture-pane` a cada
+  0,75s), o acumulador de estatísticas (relia o transcript inteiro por conexão — 109–204ms num
+  de 21 MiB, contra 0,08ms no acumulador já quente) e o git da listagem (`git status` + `diff`
+  em série por sessão ANTES de publicar o estado; um repositório lento segurava o card de todas).
+  O `Difusor` é genérico: uma fonte por chave, cada ouvinte recebe o último evento ao entrar
+  (o monitor só emite em mudança) e cópia dos seguintes; a fonte morre com o último ouvinte. A
+  chave do monitor leva o transcript, e o `__reset__` do `/clear` recria o `state_task`: o
+  monitor fecha sobre o sid da conexão que o criou, e sem isso quem ficasse herdaria a closure
+  de uma conexão já morta. O git agora sai da lista com o último número bom por cwd e atualiza
+  em segundo plano (single-flight por cwd; resultado `None` não apaga o anterior — erro nunca
+  vira "repositório limpo"). Custo: o primeiro poll depois de subir o backend sai sem badge de git.
+  **Medido e NÃO mexido: o re-render da prévia a cada 33ms.** No app desktop (Electron, esta
+  máquina), uma resposta de 9,8k chars em streaming = 797 atualizações da prévia, 2 long tasks
+  (51 e 61ms), quadro p95 de 33ms, 5 quadros acima de 50ms em 38s. Não justifica trocar o
+  parse inteiro por parse do último bloco (Markdown novo muda a leitura do anterior). No celular
+  não foi medido — a sonda é `PerformanceObserver('longtask')` + `requestAnimationFrame` na
+  página do chat, e teria que rodar no iPhone.
 - `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
   same tmux-native shape as Pi: TUI in the pane, chat from
   `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in

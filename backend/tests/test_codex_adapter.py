@@ -1034,6 +1034,26 @@ async def test_dois_sse_na_mesma_sessao_recebem_a_resposta_inteira():
     assert CodexPreviewSource.get("dois").text == "Faria em mudancas pequenas"
 
 
+async def test_previa_zera_a_cada_agent_message_do_mesmo_turno():
+    # Um turno do Codex pode ter mais de um agentMessage ("Vou conferir…" e depois a resposta).
+    # O buffer colava os dois, e como o preambulo ja tinha caido no rollout (bolha propria), a
+    # previa mostrava "Vou conferir.Resposta" ate o turno fechar.
+    adapter = CodexAdapter()
+    client = _FakeClient([
+        {"method": "turn/started", "params": {}},
+        {"method": "item/started", "params": {"item": {"type": "agentMessage", "text": ""}}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Vou conferir."}},
+        {"method": "item/completed", "params": {"item": {"type": "agentMessage",
+                                                          "text": "Vou conferir."}}},
+        {"method": "item/started", "params": {"item": {"type": "agentMessage", "text": ""}}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Resposta"}},
+    ])
+    adapter.attach("itens", client, "t")
+    async for _ in adapter.state_monitor("itens", lambda: "itens"):
+        pass
+    assert CodexPreviewSource.get("itens").text == "Resposta"
+
+
 async def test_state_monitor_abre_com_o_estado_e_a_statusline_ja_conhecidos():
     # Reabrir o chat (ou abrir num 2o aparelho) no meio de um turno: a tela nascia sem estado nem
     # status line ate a PROXIMA notification do app-server — contexto e limites sumiam mesmo

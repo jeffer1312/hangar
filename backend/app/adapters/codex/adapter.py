@@ -729,6 +729,13 @@ class CodexAdapter:
             elif mapped.preview_delta is not None:
                 buf += mapped.preview_delta
                 await preview.push(buf)
+            elif method in ("item/started", "item/completed") and \
+                    ((notif.get("params") or {}).get("item") or {}).get("type") == "agentMessage":
+                # Um turno pode ter varios agentMessage (preambulo "Vou conferir…" + resposta). O
+                # completado vira bolha propria pelo rollout; se ficasse no buffer, a previa
+                # mostrava "Vou conferir.Resposta" ate o turno fechar.
+                buf = ""
+                await preview.push("")
             elif method == "turn/completed":
                 # o texto final ja caiu no rollout -> vira ChatEvent autoritativo via
                 # transcript_stream; o sse.py tambem suprime via _already_committed. Limpa aqui pra

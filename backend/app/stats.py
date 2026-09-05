@@ -16,6 +16,7 @@ Campos do snapshot (todos opcionais — o front só desenha o que veio):
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 # Mesmo filtro de linha sintética do parser de chat: eco de /comando, <task-notification> de
@@ -344,12 +345,20 @@ class Accumulator:
     """Fold incremental sobre o arquivo da sessão. `collect()` é SÍNCRONO e faz IO —
     o chamador roda em asyncio.to_thread (regra do incidente do git status no tick)."""
 
+    # Um acumulador por (provider, caminho), com contagem de quem o segura. Cada SSE criava o seu
+    # e relia o transcript inteiro (109-204ms num de 21 MiB) a cada reconexao ou 2o aparelho;
+    # compartilhado, a 2a conexao entra no fold ja feito. Sai do dicionario quando o ultimo solta.
+    _compartilhados: dict[tuple[str, str], "Accumulator"] = {}
+    _trava_compartilhados = threading.Lock()
+
     def __init__(self, provider: str, path: str) -> None:
         self._path = Path(path)
         self._fold: _Fold = _FOLDS[provider]()
         self._provider = provider
         self._offset = 0
         self._resto = b""            # linha parcial no fim do arquivo (escrita em andamento)
+        self._trava = threading.Lock()   # collect() roda em thread, e ha uma por conexao
+        self._donos = 0
 
     @classmethod
     def for_provider(cls, provider: str, path: str) -> "Accumulator | None":
@@ -357,7 +366,30 @@ class Accumulator:
             return None
         return cls(provider, path)
 
+    @classmethod
+    def compartilhado(cls, provider: str, path: str) -> "Accumulator | None":
+        if provider not in _FOLDS or not path:
+            return None
+        chave = (provider, path)
+        with cls._trava_compartilhados:
+            acc = cls._compartilhados.get(chave)
+            if acc is None:
+                acc = cls._compartilhados[chave] = cls(provider, path)
+            acc._donos += 1
+            return acc
+
+    def soltar(self) -> None:
+        with self._trava_compartilhados:
+            self._donos -= 1
+            chave = (self._provider, str(self._path))
+            if self._donos <= 0 and self._compartilhados.get(chave) is self:
+                del self._compartilhados[chave]
+
     def collect(self) -> dict | None:
+        with self._trava:
+            return self._collect()
+
+    def _collect(self) -> dict | None:
         try:
             size = self._path.stat().st_size
         except FileNotFoundError:

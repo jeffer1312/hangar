@@ -57,6 +57,24 @@ _AWAITING_DEMOTE_GRACE_S = 10.0
 _MAX_PLAN_TASK_SEGMENTS = 9
 
 
+# Ultimo git bom por cwd: (summary, diffstat). Resultado None (repo sumiu, timeout) NAO apaga o
+# anterior — erro nunca vira "repositorio limpo" no card.
+_git_ultimo: dict[str, tuple[dict | None, dict | None]] = {}
+_git_em_voo: set[str] = set()
+
+
+async def _atualizar_git(cwd: str) -> None:
+    try:
+        summary, diffstat = await asyncio.to_thread(lambda: (git_summary(cwd), git_diffstat(cwd)))
+        antes = _git_ultimo.get(cwd, (None, None))
+        _git_ultimo[cwd] = (summary if summary is not None else antes[0],
+                            diffstat if diffstat is not None else antes[1])
+    except Exception:
+        _log.exception("git em segundo plano falhou cwd=%s (mantido o ultimo numero)", cwd)
+    finally:
+        _git_em_voo.discard(cwd)
+
+
 def _decorate_loop(info) -> None:
     """Decora loop_status/iter/max de UMA sessao a partir do sidecar (app.loop). Sem loop -> tudo None
     (sem badge). Module-level (nao closure) pra ser testavel isolado."""
@@ -1420,24 +1438,30 @@ class SessionRegistry:
         # de forks vai pro threadpool via asyncio.to_thread — rodar na corrotina congelaria o backend
         # inteiro no cache-miss. Gate em .git e except GitError moram no git_summary; cache de 3s
         # segura o custo vs o poll de 2s.
-        def _decorate_git() -> None:
+        # O git NAO segura a lista: ela sai com o ultimo numero conhecido por cwd e o git atualiza
+        # em segundo plano, um por repositorio (single-flight). Em serie, um repositorio lento
+        # atrasava o card de TODAS as sessoes — inclusive as que acabaram de mudar de estado.
+        for info in infos:
+            summary, diffstat = _git_ultimo.get(info.cwd, (None, None))
+            if summary is not None:
+                info.git_dirty = summary["dirty"]
+                info.git_ahead = summary["ahead"]
+                info.git_behind = summary["behind"]
+            if diffstat is not None:
+                info.git_added = diffstat["added"]
+                info.git_removed = diffstat["removed"]
+        for cwd in {i.cwd for i in infos if i.cwd}:
+            if cwd not in _git_em_voo:
+                _git_em_voo.add(cwd)
+                asyncio.create_task(_atualizar_git(cwd))
+
+        def _decorate_planos() -> None:
+            # Le markdown do disco: ler arquivo na corrotina e a mesma classe de erro que motivou
+            # o to_thread do git.
             for info in infos:
-                summary = git_summary(info.cwd)
-                if summary is not None:
-                    info.git_dirty = summary["dirty"]
-                    info.git_ahead = summary["ahead"]
-                    info.git_behind = summary["behind"]
-                # "+N -M" do card: mesmo gate/cache do summary (fork extra por cwd so no
-                # cache-miss, seguro pelo TTL de 3s contra o poll de 2s).
-                diffstat = git_diffstat(info.cwd)
-                if diffstat is not None:
-                    info.git_added = diffstat["added"]
-                    info.git_removed = diffstat["removed"]
-                # Plano vive AQUI dentro, no mesmo to_thread: le markdown do disco, e ler arquivo na
-                # corrotina e a mesma classe de erro que motivou o to_thread do git.
                 _decorate_plan(info)
 
-        await asyncio.to_thread(_decorate_git)
+        await asyncio.to_thread(_decorate_planos)
         for info in infos:
             _decorate_loop(info)
         return infos
