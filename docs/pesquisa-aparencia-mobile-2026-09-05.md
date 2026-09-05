@@ -131,7 +131,7 @@ Tem = existe no nativo · Parcial = existe sem parte do comportamento · Não = 
 | Papel de parede (imagem/textura/aurora) | `lib/background.ts` | Não |
 | Cor de acento configurável | `lib/corTema.ts` | Não |
 | Tema claro/escuro/sistema com persistência | `lib/theme.ts:7-41` | Parcial — `adaptiveThemes: true`, sem override |
-| Idioma segue o sistema | Paraglide `localStorage preferredLanguage baseLocale` | Não — compilado só com `baseLocale` (inglês fixo) |
+| Idioma segue o sistema | Paraglide `localStorage preferredLanguage baseLocale` | Tem — `net/configureCore.ts` (`expo-localization` → `overwriteGetLocale`); os prints em inglês eram o emulador em en-US |
 
 ### Configurações
 
@@ -160,8 +160,7 @@ Ordem sugerida, do que mais muda a percepção pro que menos:
    filtro; feed "precisa de você".
 3. **Material**: vidro só em navegação (header, tab/sheet), conteúdo com superfície própria;
    papel de parede + sliders de transparência/solidez espelhando o `background.ts`; cor de acento;
-   tema com override; idioma do sistema (`--strategy preferredLanguage baseLocale` no paraglide do
-   mobile e `expo-localization`).
+   tema com override (idioma do sistema já funciona).
 4. **Configurações**: hub com as telas que fazem sentido no celular (Geral, Aparência, Máquinas,
    Notificações, Voz, Sobre); o resto é desktop.
 5. **Componentes nativos**: `true-sheet` pros pickers, menu nativo pra ações de sessão, toast.
