@@ -1551,11 +1551,11 @@ git commit -m "feat(mobile): configurações — Geral, Aparência, Máquinas e 
 
 ## Fechamento
 
-- [ ] **Step 1: Suítes completas, uma vez**
+- [x] **Step 1: Suítes completas, uma vez**
 
 `npm run check` (raiz: core + frontend) e `npm run typecheck -w mobile`; `npm run test` (raiz) e `npm run test -w mobile`. Tudo verde.
 
-- [ ] **Step 2: Revisão da branch**
+- [x] **Step 2: Revisão da branch**
 
 Uma sessão fresca revisa `git diff 0b5aba38..HEAD` contra a spec: cada item "Não tem" do inventário (`docs/pesquisa-aparencia-mobile-2026-09-05.md`, seção 3) agora tem arquivo apontado, ou está declarado fora de escopo. Rodar `ecc:typescript-reviewer`, `ecc:react-reviewer` e `ecc:silent-failure-hunter` no diff antes do push (o hook exige).
 
