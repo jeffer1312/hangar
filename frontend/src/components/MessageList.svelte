@@ -234,14 +234,19 @@
     // presa no rodapé ela se descolava do ponto de uso e ainda escorregava pra baixo a cada
     // mensagem nova. Âncora = o evento NÃO-task imediatamente anterior à última chamada de tarefa;
     // a cápsula entra logo depois do item que contém esse evento (ou no topo, se não houver).
+    // `temTask` = a janela VISÍVEL contém alguma chamada de tarefa. As tarefas são dobradas do
+    // fluxo inteiro, então sem esse teste a cápsula aparecia mesmo em janela sem task nenhuma — e
+    // ali, sem âncora, ela ia parar ACIMA da mensagem mais antiga da tela.
     let ancora: string | null = null;
+    let temTask = false;
     for (let i = visibleEvents.length - 1; i >= 0; i--) {
       if (!ehTask(visibleEvents[i])) continue;
+      temTask = true;
       for (let j = i - 1; j >= 0; j--) if (!ehTask(visibleEvents[j]) && visibleEvents[j].kind !== 'tool_result') { ancora = visibleEvents[j].id; break; }
       break;
     }
     const base: RenderItem[] = agruparConversa(visibleEvents.filter((ev) => !ehTask(ev)), { entraNoPensamento });
-    if (taskRows.ativo && tarefas.length) {
+    if (taskRows.ativo && tarefas.length && temTask) {
       const contem = (it: RenderItem) => it.type === 'event' || it.type === 'tool' ? it.id === ancora : it.type === 'group' ? it.tools.some((t) => t.id === ancora) : it.type === 'pensamento' ? it.eventos.some((e) => e.id === ancora) : false;
       const pos = ancora ? base.findIndex(contem) : -1;
       base.splice(pos + 1, 0, { type: 'tasks', id: 'tasks-vivas' });

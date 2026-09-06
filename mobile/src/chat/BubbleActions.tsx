@@ -20,10 +20,17 @@ function pararTocando() {
   tocando = null;
 }
 
+/** Sair da conversa cala a voz: o tocador é do módulo, e sem isto ele seguiria tocando sem dono. */
+export function pararTts() {
+  pararTocando();
+}
+
 // O `addListener` vem do EventEmitter que o AudioPlayer herda, mas o expo-modules-core está
 // aninhado em expo/node_modules e o TS não resolve a classe base daqui — só a assinatura que
 // usamos, então, em vez do tipo inteiro.
-type ComListener = { addListener(evento: 'playbackStatusUpdate', fn: (s: { didJustFinish: boolean }) => void): unknown };
+type ComListener = {
+  addListener(evento: 'playbackStatusUpdate', fn: (s: { didJustFinish: boolean; error: string | null }) => void): unknown;
+};
 
 // Hora + copiar/compartilhar/ouvir. Compartilhar usa o Share do RN (texto puro, sem lib). Ouvir
 // chama o mesmo POST /api/tts da PWA e toca a URL devolvida.
@@ -57,8 +64,14 @@ export function BubbleActions({ text, ts, ouvir = true }: { text: string; ts?: n
       pararTocando();
       const p = createAudioPlayer(ttsAudioUrl(r.url));
       tocando = p;
+      // A URL pode responder 404, ou o áudio não decodificar: sem olhar o `error` do status, a
+      // pessoa toca "Ouvir" e não acontece som nenhum, sem aviso.
       (p as unknown as ComListener).addListener('playbackStatusUpdate', (s) => {
-        if (s.didJustFinish && tocando === p) pararTocando();
+        if (tocando !== p) return;
+        if (s.error) {
+          pararTocando();
+          toast.erro(s.error);
+        } else if (s.didJustFinish) pararTocando();
       });
       p.play();
     } catch (e) {

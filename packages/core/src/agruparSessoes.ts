@@ -12,7 +12,7 @@ export interface GrupoSessoes {
 // sortSessions e depois só reparte: assim a ordem dentro de cada grupo e a ordem dos próprios
 // grupos (nascem na posição do 1º membro) saem da mesma regra da lista lisa.
 export function agruparSessoes(rows: AggSession[], modo: GroupBy): GrupoSessoes[] {
-  const ordenadas = sortSessions(rows) as AggSession[];
+  const ordenadas = sortSessions(rows);
   if (modo === 'none') return [{ id: 'todas', label: '', color: null, sessions: ordenadas }];
   const por = new Map<string, GrupoSessoes>();
   for (const r of ordenadas) {

@@ -1,29 +1,28 @@
-import { forwardRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
-import { Sheet, type SheetRef } from '../../ui/Sheet';
+import { Sheet } from '../../ui/Sheet';
 import { Icon } from '../../ui/Icon';
 import { useServers } from '../../stores/servers';
 import * as m from '../../paraglide/messages';
 
 // Trocar a máquina ativa (é ela quem responde às ações da lista) e chegar no pareamento.
-export const ServerSheet = forwardRef<SheetRef>(function ServerSheet(_props, ref) {
+// Controlada por `open`, não por ref: é o `Sheet` que sabe reclamar quando present()/dismiss()
+// falham — pela ref, o toque que não abria nada sumia calado.
+export function ServerSheet({ open, onFechar }: { open: boolean; onFechar: () => void }) {
   const { theme } = useUnistyles();
   const router = useRouter();
   const servers = useServers((s) => s.servers);
   const activeId = useServers((s) => s.activeId);
 
-  const fechar = () => (ref && typeof ref === 'object' ? ref.current?.dismiss().catch(() => {}) : undefined);
-
   return (
-    <Sheet ref={ref} sizes={['auto']}>
+    <Sheet open={open} onDismiss={onFechar} sizes={['auto']}>
       <View style={styles.inner}>
         <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{m.maquinas_este_aparelho()}</Text>
         {servers.map((s) => (
           <Pressable
             key={s.id}
-            onPress={() => { useServers.getState().setActive(s.id); fechar(); }}
+            onPress={() => { useServers.getState().setActive(s.id); onFechar(); }}
             style={styles.item}
             accessibilityRole="button"
             accessibilityLabel={s.label}
@@ -36,7 +35,7 @@ export const ServerSheet = forwardRef<SheetRef>(function ServerSheet(_props, ref
           </Pressable>
         ))}
         <Pressable
-          onPress={() => { fechar(); router.push('/login' as never); }}
+          onPress={() => { onFechar(); router.push('/login' as never); }}
           style={styles.item}
           accessibilityRole="button"
           accessibilityLabel={m.sessao_adicionar_servidor()}
@@ -47,7 +46,7 @@ export const ServerSheet = forwardRef<SheetRef>(function ServerSheet(_props, ref
       </View>
     </Sheet>
   );
-});
+}
 
 const styles = StyleSheet.create((theme) => ({
   inner: { padding: theme.base.space[3], gap: theme.base.space[1] },

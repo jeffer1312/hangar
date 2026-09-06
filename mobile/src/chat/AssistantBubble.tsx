@@ -39,7 +39,7 @@ export function mkMarkdownStyle(t: TemaApp): MarkdownStyle {
     },
     codeBlock: {
       color: t.tokens.text.primary,
-      backgroundColor: t.tokens.bg.surface,
+      backgroundColor: superficie(t),
       borderColor: t.tokens.border.subtle,
       borderWidth: 1,
       borderRadius: t.base.radius.sm,
@@ -60,7 +60,7 @@ export function mkMarkdownStyle(t: TemaApp): MarkdownStyle {
     blockquote: { borderColor: t.tokens.border.default, backgroundColor: 'transparent', color: t.tokens.text.secondary },
     list: { bulletColor: t.tokens.text.muted, color: t.tokens.text.primary },
     table: {
-      headerBackgroundColor: t.tokens.bg.elevated,
+      headerBackgroundColor: superficie(t, 0.8),
       headerTextColor: t.tokens.text.primary,
       borderColor: t.tokens.border.subtle,
       borderWidth: 1,

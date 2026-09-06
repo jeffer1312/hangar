@@ -50,6 +50,17 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
         }),
     [],
   );
+  // Renomear/Git/Loop/Excluir só existiam no toque longo e no arrasto — dois gestos que o leitor
+  // de tela não alcança. Aqui elas viram ações do rotor/menu de acessibilidade da própria linha.
+  const acoesA11y = useMemo(
+    () => [
+      { name: 'rename', label: m.sessao_renomear() },
+      ...(s.cwd ? [{ name: 'git', label: 'Git' }] : []),
+      { name: 'loop', label: m.loop_titulo() },
+      { name: 'delete', label: m.sessao_excluir_curto() },
+    ],
+    [s.cwd],
+  );
   const untracked = s.tracked === false;
   const cwd = cwdParts(s.cwd);
   const showCwd = !!s.cwd && cwd.base.toLowerCase() !== s.name.toLowerCase();
@@ -99,6 +110,13 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
           // rótulo composto: um label explícito no pai faz o RN descartar o texto dos filhos, e o
           // estado e a pergunta sumiriam do leitor de tela.
           accessibilityLabel={`${s.name}, ${rotuloEstado(s.state)}${sub ? `, ${sub}` : ''}`}
+          accessibilityActions={acoesA11y}
+          onAccessibilityAction={({ nativeEvent }) => {
+            if (nativeEvent.actionName === 'rename') onRenomear();
+            else if (nativeEvent.actionName === 'git') onGit();
+            else if (nativeEvent.actionName === 'loop') onLoop();
+            else if (nativeEvent.actionName === 'delete') onExcluir();
+          }}
         >
           <View style={styles.lead}><StateDot state={s.state} /></View>
           <View style={styles.col}>

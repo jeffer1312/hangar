@@ -11,6 +11,7 @@ import { ChatHeader } from '../../../../src/chat/ChatHeader';
 import { LoopChip } from '../../../../src/chat/LoopChip';
 import { PlanChip } from '../../../../src/features/plan/PlanChip';
 import { MessageList } from '../../../../src/chat/MessageList';
+import { pararTts } from '../../../../src/chat/BubbleActions';
 import { Composer } from '../../../../src/chat/Composer';
 import { TuiPill } from '../../../../src/chat/TuiPill';
 import { MoreSheet } from '../../../../src/chat/MoreSheet';
@@ -111,6 +112,9 @@ export default function ChatScreen() {
   const provider: Provider | null = rowsProvider ?? fetchedProvider;
   // sessão para o chip do plano (sem retain, regra do cabeçalho)
   const planSession = useSessions((s) => s.rows.find((r) => r.serverId === serverId && r.name === name) ?? null);
+
+  // O "Ouvir" das bolhas toca num player de módulo; sair da conversa cala a voz.
+  useEffect(() => () => pararTts(), []);
 
   // abrir a folha quando o store pedir
   useEffect(() => {

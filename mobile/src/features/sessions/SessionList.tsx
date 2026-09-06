@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, RefreshControl, SectionList, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { MenuView } from '@react-native-menu/menu';
@@ -135,10 +135,14 @@ export function SessionList() {
 
   const modo = effectiveGroupBy(agrupar, servers.length);
   const busca = filtro.trim().toLowerCase();
-  const visiveis = busca
-    ? rows.filter((r) => r.name.toLowerCase().includes(busca) || (r.cwd ?? '').toLowerCase().includes(busca))
-    : rows;
-  const grupos = agruparSessoes(visiveis, modo);
+  // Filtrar + ordenar + agrupar a lista inteira a cada render é caro, e arrastar um slider de
+  // material re-renderiza todo mundo que lê o tema — inclusive esta tela.
+  const grupos = useMemo(() => {
+    const visiveis = busca
+      ? rows.filter((r) => r.name.toLowerCase().includes(busca) || (r.cwd ?? '').toLowerCase().includes(busca))
+      : rows;
+    return agruparSessoes(visiveis, modo);
+  }, [rows, busca, modo]);
   const mostrarServidor = modo !== 'server' && servers.length > 1;
 
   const cabecalho = (

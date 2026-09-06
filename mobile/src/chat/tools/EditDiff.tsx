@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { computeEditDiff, type SplitRow } from '@hangar/core';
@@ -22,7 +22,8 @@ function ladoDe(row: SplitRow, lado: 'left' | 'right'): 'ctx' | 'del' | 'add' | 
 export function EditDiff({ oldText, newText, modo = 'unificado' }: { oldText: string; newText: string; modo?: 'unificado' | 'lado' }) {
   const { theme } = useUnistyles();
   const [tudo, setTudo] = useState(false);
-  const d = computeEditDiff(oldText, newText);
+  // Myers sobre arquivo inteiro não pode rodar de novo a cada render do tema.
+  const d = useMemo(() => computeEditDiff(oldText, newText), [oldText, newText]);
   const bg = (op: 'ctx' | 'del' | 'add' | null) => op === 'add' ? theme.tokens.status.success + '2e' : op === 'del' ? theme.tokens.status.error + '2e' : 'transparent';
   const total = modo === 'lado' ? d.rows.length : d.ops.length;
   const corte = tudo ? total : Math.min(TETO, total);

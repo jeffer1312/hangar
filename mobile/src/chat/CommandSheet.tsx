@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { getCommands } from '@hangar/core';
@@ -24,10 +24,14 @@ export function CommandSheet({
   const { theme } = useUnistyles();
   const [todos, setTodos] = useState<CommandInfo[] | null>(null);
   const [erro, setErro] = useState('');
+  const [tentativa, setTentativa] = useState(0);
 
+  // A folha fica montada entre abrir e fechar, então sem o "tentar de novo" uma falha de rede
+  // passageira derrubava o picker de `/comandos` até sair da conversa.
   useEffect(() => {
     if (!open || todos) return;
     let vivo = true;
+    setErro('');
     getCommands(name)
       .then((c) => {
         if (vivo) setTodos(c);
@@ -38,7 +42,9 @@ export function CommandSheet({
     return () => {
       vivo = false;
     };
-  }, [open, name, todos]);
+  }, [open, name, todos, tentativa]);
+
+  const tentarDeNovo = useCallback(() => setTentativa((n) => n + 1), []);
 
   const q = filtro.toLowerCase();
   const lista = (todos ?? []).filter((c) => c.name.toLowerCase().includes(q) || c.display.toLowerCase().includes(q));
@@ -48,7 +54,12 @@ export function CommandSheet({
       <ScrollView contentContainerStyle={styles.inner}>
         <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{m.comandos_titulo()}</Text>
         {erro ? (
-          <Text style={[styles.muted, { color: theme.tokens.status.error }]}>{erro}</Text>
+          <View style={styles.centro}>
+            <Text style={[styles.muted, { color: theme.tokens.status.error }]}>{erro}</Text>
+            <Pressable onPress={tentarDeNovo} accessibilityRole="button" style={styles.retry}>
+              <Text style={[styles.retryTxt, { color: theme.tokens.accent.base }]}>{m.lista_tentar_novamente()}</Text>
+            </Pressable>
+          </View>
         ) : !todos ? (
           <ActivityIndicator color={theme.tokens.text.secondary} />
         ) : lista.length === 0 ? (
@@ -85,6 +96,9 @@ const styles = StyleSheet.create((theme) => ({
   inner: { gap: theme.base.space[1], padding: theme.base.space[3] },
   title: { fontSize: theme.base.text.base, fontWeight: '600', marginBottom: theme.base.space[2] },
   muted: { fontSize: theme.base.text.sm, textAlign: 'center', paddingVertical: theme.base.space[3] },
+  centro: { alignItems: 'center', gap: theme.base.space[1] },
+  retry: { minHeight: 44, justifyContent: 'center' },
+  retryTxt: { fontSize: theme.base.text.sm, fontWeight: '600' },
   item: {
     minHeight: 48,
     justifyContent: 'center',

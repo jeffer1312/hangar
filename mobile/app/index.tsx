@@ -1,24 +1,23 @@
-import { useRef } from 'react';
+import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { Screen } from '../src/ui/Screen';
 import { Icon } from '../src/ui/Icon';
-import type { SheetRef } from '../src/ui/Sheet';
 import { SessionList } from '../src/features/sessions/SessionList';
 import { ServerSheet } from '../src/features/sessions/ServerSheet';
 import * as m from '../src/paraglide/messages';
 
 export default function Index() {
   const router = useRouter();
-  const servidores = useRef<SheetRef>(null);
+  const [servidoresAberto, setServidoresAberto] = useState(false);
   return (
     <Screen>
       <View style={styles.header}>
         <Text style={styles.title}>{m.lista_titulo()}</Text>
         <View style={styles.acoes}>
           <Pressable
-            onPress={() => servidores.current?.present().catch(() => {})}
+            onPress={() => setServidoresAberto(true)}
             style={styles.icone}
             accessibilityLabel={m.maquinas_este_aparelho()}
             accessibilityRole="button"
@@ -49,7 +48,7 @@ export default function Index() {
       <View style={styles.listWrap}>
         <SessionList />
       </View>
-      <ServerSheet ref={servidores} />
+      <ServerSheet open={servidoresAberto} onFechar={() => setServidoresAberto(false)} />
     </Screen>
   );
 }
