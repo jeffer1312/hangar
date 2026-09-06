@@ -14,6 +14,8 @@
   "config_maquinas_testar": "Testar conexão",
   "config_maquinas_conexao_ok": "Conexão OK",
   "config_sobre_servidor": "Servidor ativo",
+  "aparencia_fundo_sem_permissao": "Libere o acesso às fotos nos ajustes do aparelho pra escolher um papel de parede.",
+  "aparencia_fundo_erro_galeria": "Não deu pra abrir a galeria.",
   "ctx_aba_contexto": "Contexto",
   "ctx_grupo": "Grupo",
   "tempo_agora": "agora",

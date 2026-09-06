@@ -45,10 +45,10 @@ export default function Geral() {
   return (
     <Pagina>
       <Linha titulo={m.config_idioma_rotulo()} descricao={m.config_idioma_nota_proxima()}>
-        <Segmentado opcoes={IDIOMAS} valor={idioma} onChange={trocarIdioma} />
+        <Segmentado opcoes={IDIOMAS} valor={idioma} onChange={trocarIdioma} rotulo={m.config_idioma_rotulo()} />
       </Linha>
       <Linha titulo={m.config_tema_curto()} descricao={m.config_aparencia_tema_desc()}>
-        <Segmentado opcoes={TEMAS} valor={tema} onChange={(v) => useAparencia.getState().setTema(v)} />
+        <Segmentado opcoes={TEMAS} valor={tema} onChange={(v) => useAparencia.getState().setTema(v)} rotulo={m.config_tema_curto()} />
       </Linha>
       <Linha
         titulo={m.config_aparencia_pensamento_tools()}
@@ -58,10 +58,11 @@ export default function Geral() {
           opcoes={PENSAMENTO}
           valor={pensamento}
           onChange={(v) => useAparencia.getState().setPensamentoTools(v)}
+          rotulo={m.config_aparencia_pensamento_tools()}
         />
       </Linha>
       <Linha titulo={m.lista_agrupar()}>
-        <Segmentado opcoes={AGRUPAR} valor={agrupar} onChange={(v) => useAparencia.getState().setAgrupar(v)} />
+        <Segmentado opcoes={AGRUPAR} valor={agrupar} onChange={(v) => useAparencia.getState().setAgrupar(v)} rotulo={m.lista_agrupar()} />
       </Linha>
     </Pagina>
   );

@@ -16,33 +16,43 @@ type Props = {
   direita?: ReactNode;
 };
 
+// O Pressable envolve só o bloco ícone+título, nunca a linha inteira: um Pressable com rótulo
+// próprio funde tudo que está dentro dele num nó só de acessibilidade, e o botão de `direita`
+// (Testar conexão) ou de `children` (Remover) some pro leitor de tela.
 export function Linha({ titulo, descricao, icon, onPress, onLongPress, children, direita }: Props) {
   const { theme } = useUnistyles();
-  const corpo = (
+  const conteudo = (
     <>
-      <View style={styles.cabeca}>
-        {icon ? <Icon name={icon} size={20} color={theme.tokens.accent.base} /> : null}
-        <View style={styles.textos}>
-          <Text style={styles.titulo}>{titulo}</Text>
-          {descricao ? <Text style={styles.descricao}>{descricao}</Text> : null}
-        </View>
-        {direita}
-        {onPress && !children ? <Icon name="ChevronRight" size={18} /> : null}
+      {icon ? <Icon name={icon} size={20} color={theme.tokens.accent.base} /> : null}
+      <View style={styles.textos}>
+        <Text style={styles.titulo}>{titulo}</Text>
+        {descricao ? <Text style={styles.descricao}>{descricao}</Text> : null}
       </View>
-      {children}
+      {/* Chevron só na linha que é PURA navegação: com controle ou botão próprio ele encostaria
+          na peça da direita, no meio da linha, e a seta viraria enfeite ambíguo. */}
+      {onPress && !children && !direita ? <Icon name="ChevronRight" size={18} /> : null}
     </>
   );
-  if (!onPress && !onLongPress) return <View style={styles.linha}>{corpo}</View>;
   return (
-    <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
-      accessibilityRole="button"
-      accessibilityLabel={titulo}
-      style={({ pressed }) => [styles.linha, pressed && styles.tocada]}
-    >
-      {corpo}
-    </Pressable>
+    <View style={styles.linha}>
+      <View style={styles.cabeca}>
+        {onPress || onLongPress ? (
+          <Pressable
+            onPress={onPress}
+            onLongPress={onLongPress}
+            accessibilityRole="button"
+            accessibilityLabel={titulo}
+            style={({ pressed }) => [styles.alvo, pressed && styles.tocada]}
+          >
+            {conteudo}
+          </Pressable>
+        ) : (
+          <View style={styles.alvo}>{conteudo}</View>
+        )}
+        {direita}
+      </View>
+      {children}
+    </View>
   );
 }
 
@@ -59,6 +69,14 @@ const styles = StyleSheet.create((theme) => ({
   // Realce de estado é tinta por cima da linha, não superfície: cor chapada aqui é de propósito.
   tocada: { backgroundColor: theme.tokens.bg.hover },
   cabeca: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3] },
+  alvo: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[3],
+    minHeight: 44,
+    borderRadius: theme.base.radius.md,
+  },
   textos: { flex: 1, gap: 2 },
   titulo: { fontSize: theme.base.text.base, color: theme.tokens.text.primary, fontWeight: '500' },
   descricao: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted },

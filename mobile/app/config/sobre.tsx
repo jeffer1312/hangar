@@ -21,6 +21,8 @@ export default function Sobre() {
 
   useEffect(() => {
     let vivo = true;
+    // Zera o aviso a cada tentativa: sem isto, uma falha deixava o texto de erro na tela pra sempre.
+    setFalhou(false);
     getConfig()
       .then((c) => {
         if (!vivo) return;

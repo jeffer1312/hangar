@@ -30,21 +30,33 @@ export default function Aparencia() {
     { v: 'image', label: m.config_fundo_imagem(), aria: m.config_fundo_usar_imagem() },
   ];
 
+  // Três desfechos diferentes, três avisos diferentes: sem a permissão a galeria nem abre e o
+  // resultado é indistinguível de um cancelamento — o toque parecia não fazer nada.
   const escolherImagem = async () => {
     try {
+      const permissao = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissao.granted) {
+        toast.erro(m.aparencia_fundo_sem_permissao());
+        return;
+      }
       const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
-      if (r.canceled || !r.assets[0]) return;
+      if (r.canceled) return;
+      if (!r.assets[0]) {
+        console.warn('Aparência: picker voltou sem cancelar e sem imagem');
+        toast.erro(m.aparencia_fundo_erro_galeria());
+        return;
+      }
+      // A falha da CÓPIA é avisada pelo próprio store, com a mensagem dela.
       await useAparencia.getState().setImagemUri(r.assets[0].uri);
     } catch {
-      // O store já avisa quando a CÓPIA falha; aqui é a galeria que não abriu.
-      toast.erro(m.aparencia_fundo_erro_copia());
+      toast.erro(m.aparencia_fundo_erro_galeria());
     }
   };
 
   return (
     <Pagina>
       <Linha titulo={m.config_fundo_curto()}>
-        <Segmentado opcoes={FUNDOS} valor={fundo} onChange={(v) => useAparencia.getState().setFundo(v)} />
+        <Segmentado opcoes={FUNDOS} valor={fundo} onChange={(v) => useAparencia.getState().setFundo(v)} rotulo={m.config_fundo_curto()} />
       </Linha>
 
       {fundo === 'image' ? (

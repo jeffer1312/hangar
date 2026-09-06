@@ -14,6 +14,8 @@
   "config_maquinas_testar": "Test connection",
   "config_maquinas_conexao_ok": "Connection OK",
   "config_sobre_servidor": "Active server",
+  "aparencia_fundo_sem_permissao": "Allow photo access in your device settings to pick a wallpaper.",
+  "aparencia_fundo_erro_galeria": "Could not open the photo gallery.",
   "ctx_aba_contexto": "Context",
   "ctx_grupo": "Group",
   "tempo_agora": "now",
