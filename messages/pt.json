@@ -1122,6 +1122,7 @@
   "maquinas_remover_aria": "Remover {nome} deste aparelho e do servidor",
   "maquinas_remover_linha": "Sai deste aparelho e do registro do servidor. As sessões deixam de trocar recados com ela; dá para adicionar de novo pelo endereço.",
   "maquinas_esta": "esta máquina",
+  "maquinas_este_aparelho": "Máquinas que este aparelho acompanha",
   "maquinas_sem_identificador": "Não responde ou não tem identificador — sem isso não há recados entre sessões com ela.",
   "maquinas_so_no_servidor": "Só o servidor conhece esta máquina. Para ativar neste aparelho, informe o token dela.",
   "maquinas_volta_sem_medir": "Daqui pra lá responde. A volta não dá para medir deste aparelho — ele não tem o token dela.",

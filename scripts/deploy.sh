@@ -44,7 +44,10 @@ if ! git merge --ff-only origin/main; then
 fi
 
 # --- Frontend: build isolado + swap ---
-cd "$REPO/frontend"
+# O `npm ci` roda na RAIZ: `frontend` é workspace e não tem lockfile proprio, e o `@hangar/core`
+# so existe como link criado por instalacao na raiz. O app nativo nao e workspace, entao isto nao
+# baixa React Native. O build continua sendo do frontend, por workspace.
+cd "$REPO"
 
 # node_modules em dia so quando o lock mudou (ci e lento; roda so quando precisa).
 if ! git -C "$REPO" diff --quiet "$LOCAL" HEAD -- package-lock.json 2>/dev/null; then
@@ -54,18 +57,19 @@ fi
 
 # Backup do dist atual ANTES do build. O vite esvazia o dist no inicio (emptyOutDir), entao um
 # build que falha no meio deixaria o dist parcial -> restauramos do backup nesse caso.
+# Caminhos com `frontend/` na frente: o cwd agora e a RAIZ, por causa do workspace.
 log "backup dist"
-rm -rf dist.bak
-[[ -d dist ]] && cp -a dist dist.bak
+rm -rf frontend/dist.bak
+[[ -d frontend/dist ]] && cp -a frontend/dist frontend/dist.bak
 
 log "build"
-if ! npm run build; then
+if ! npm run build -w frontend; then
   log "ERRO: build falhou -> restaurando dist anterior, sem restart."
-  rm -rf dist
-  [[ -d dist.bak ]] && mv dist.bak dist
+  rm -rf frontend/dist
+  [[ -d frontend/dist.bak ]] && mv frontend/dist.bak frontend/dist
   exit 1
 fi
-rm -rf dist.bak
+rm -rf frontend/dist.bak
 
 # --- Backend: deps so quando o lock mudou ---
 cd "$REPO/backend"

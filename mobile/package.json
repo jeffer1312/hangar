@@ -4,7 +4,7 @@
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/ui": "~57.0.16",
-    "@hangar/core": "*",
+    "@hangar/core": "file:../packages/core",
     "@legendapp/list": "^3.3.8",
     "@lodev09/react-native-true-sheet": "^3.11.12",
     "@react-native-community/slider": "5.2.0",
@@ -55,8 +55,10 @@
     "@inlang/paraglide-js": "^2.24.1",
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "react-dom": "19.2.3"
   },
+  "_comentario_react_dom": "react-dom só serve aos testes de componente e exige a MESMA versão do react, que aqui é fixada pelo Expo. Antes vinha hoisteado da raiz; sem workspace, tem que ser pinado à mão junto com o react.",
   "scripts": {
     "start": "expo start",
     "android": "npm run i18n:compile && expo run:android",

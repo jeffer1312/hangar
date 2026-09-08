@@ -63,9 +63,6 @@ jobs:
     # o padrao do repositorio, que pode ser write.
     permissions:
       contents: read
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -73,10 +70,13 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
+      # Roda na RAIZ: o lockfile é um só, e os workspaces são `packages/*` + `frontend`. O app
+      # nativo não é workspace de propósito — o build dele é no Expo, e nada de React Native pode
+      # entrar aqui nem na máquina de quem instala. `check` e `test` da raiz cobrem core e frontend.
       - run: npm ci
       - run: npm run check
       - run: npm test
-      - run: npm run build
+      - run: npm run build -w frontend
       # O build ja acontecia aqui e ia pro lixo. Guardado, ele vira o dist que o instalador baixa
       # em vez de compilar na maquina de quem instala — que e o passo mais lento e o mais fragil
       # (dois bugs de `--silent` em agosto/2026 morreram exatamente ai).

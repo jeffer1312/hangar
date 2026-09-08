@@ -756,11 +756,14 @@ if ($precisa -and (Baixar-Dist)) {
     if (-not (Test-Path $modulos)) {
         $eapAnt2 = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
-        Push-Location "$raiz\frontend"
+        # RAIZ, nao frontend: `frontend` e workspace e nao tem lockfile proprio, e o `@hangar/core`
+        # so existe como link criado por instalacao na raiz. O app nativo nao e workspace, entao
+        # isto nao baixa React Native — o build dele e no Expo.
+        Push-Location $raiz
         try { npm ci @quieto; $rcDeps = $LASTEXITCODE } finally { Pop-Location; $ErrorActionPreference = $eapAnt2 }
         if ($rcDeps -ne 0) {
             Erro "npm ci falhou (exit $rcDeps) - o servico do frontend nao vai subir"
-            Nota 'rodar na mao:  cd frontend ; npm ci'
+            Nota 'rodar na mao:  npm ci   (na raiz do repositorio)'
             $script:pendencias += 'frontend'
         } else {
             Ok 'dependencias do frontend instaladas'
@@ -811,7 +814,8 @@ if ($precisa) {
     $tBuild = Get-Date
     $eapAnterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    Push-Location "$raiz\frontend"
+    # RAIZ, nao frontend: workspace sem lockfile proprio e o core so linkado por instalacao na raiz.
+    Push-Location $raiz
     try {
         # Sem --silent no -Update: e o modo que o BOTAO Atualizar do app usa, e a caixinha da tela
         # mostra esta saida ao vivo. Com --silent o npm nao imprime NADA, entao durante o minuto de
@@ -831,7 +835,7 @@ if ($precisa) {
             # A flag vai ANTES do nome do script: no npm 11 `npm run build --silent` nao e mais
             # consumida pelo npm, ela e repassada ao script e chega no `vite build`, que morre com
             # CACError (medido na VM Windows, node 24.15 / npm 11).
-            npm run @quieto build
+            npm run @quieto build -w frontend
             $rcBuild = $LASTEXITCODE
         } else {
             $rcBuild = -1
@@ -845,7 +849,7 @@ if ($precisa) {
     $distNovo = (Test-Path $dist) -and ((Get-Item $dist).LastWriteTime -ge $tBuild)
     if ($rcCi -ne 0) {
         Erro "npm ci falhou (exit $rcCi) - frontend NAO buildado"
-        Nota 'rodar na mao:  cd frontend ; npm ci ; npm run build'
+        Nota 'rodar na mao (na raiz):  npm ci ; npm run build -w frontend'
         $script:pendencias += 'frontend'
     } elseif ($rcBuild -ne 0) {
         Erro "npm run build falhou (exit $rcBuild) - dist NAO atualizado"

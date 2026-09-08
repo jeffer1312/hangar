@@ -86,7 +86,7 @@ esac
 
 [[ -n "$UV_BIN" ]] || { echo "uv not found in PATH" >&2; exit 1; }
 [[ "$BACKEND_ONLY" == 1 ]] || [[ -x "$NODE_BIN/npm" ]] || { echo "npm nao encontrado em $NODE_BIN — instale Node 20+ (ou, se usa fnm, rode: fnm default <ver>)" >&2; exit 1; }
-[[ -d "$REPO/frontend/node_modules" ]] || log "WARNING: frontend/node_modules missing — run 'npm install' in frontend first"
+[[ -d "$REPO/node_modules" ]] || log "WARNING: node_modules missing — run 'npm install' at the repo root first (frontend is a workspace)"
 
 if [[ "$BACKEND_ONLY" == 0 && -z "$SERVE" ]]; then
   if [[ "$FRONT_JA_EXISTE" == 1 ]]; then

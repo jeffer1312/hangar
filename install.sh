@@ -294,7 +294,10 @@ else
   QUIETO=--silent; [ "$UPDATE" = 1 ] && QUIETO=
   # A flag vai ANTES do nome do script: no npm 11 `npm run build --silent` não é mais consumida
   # pelo npm, ela é repassada ao script e chega no `vite build`, que morre com CACError.
-  build_front() { (cd frontend && npm ci $QUIETO && npm run $QUIETO build); }
+  # `npm ci` na RAIZ: `frontend` é workspace e não tem lockfile próprio, e o `@hangar/core` só
+  # existe como link criado por instalação na raiz. O app nativo não é workspace, então isto não
+  # baixa React Native — o build dele é no Expo.
+  build_front() { npm ci $QUIETO && npm run $QUIETO build -w frontend; }
   gira "npm ci + build do frontend" build_front \
     && [ -f "$DIST" ] && ok "buildado em frontend/dist/" \
     || fail "o build do frontend falhou — corrige o erro acima e re-roda (ele continua de onde parou)"

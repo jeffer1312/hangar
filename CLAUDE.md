@@ -118,6 +118,17 @@ Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+. Optional, one per pr
 `pi`, `omp` (oh-my-pi), `kimi`.
 Frontend uses **npm** (has `package-lock.json`).
 
+**O app nativo (`mobile/`) NÃO é workspace da raiz, de propósito.** Os workspaces são `packages/*`
+e `frontend`, então um `npm ci` na raiz — o que o CI faz, o que o `deploy.sh` faz e o que quem
+instala o Hangar faz — nunca baixa o toolchain do React Native (mede-se: 542 pacotes a menos). O
+build do app é no Expo, não no GitHub. Consequências que valem saber antes de mexer:
+`npm ... -w mobile` não existe mais (rode dentro de `mobile/`); o app tem `package-lock.json`
+próprio; o `@hangar/core` entra por `file:../packages/core`, e por isso o `metro.config.js` declara
+`watchFolders`/`nodeModulesPaths` à mão (sem workspace, a detecção de monorepo do Expo não vale);
+e o `react-dom` dos testes fica pinado na mesma versão do `react`, que antes vinha hoisteada da raiz.
+Quem instala o frontend instala **na raiz** (`npm ci` + `npm run build -w frontend`): `frontend/`
+não tem lockfile próprio e o core só existe como link criado pela instalação de cima.
+
 ```bash
 # Backend — binds http://127.0.0.1:8765 (set CP_LAN_BIND_IP to a LAN IP for phone access)
 cd backend && CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_LAN_BIND_IP=127.0.0.1 uv run python -m app.main

@@ -1,10 +1,10 @@
 {
   "name": "hangar",
   "private": true,
+  "_comentario_workspaces": "O app nativo NÃO entra aqui de propósito: quem instala o Hangar (e o CI) roda `npm ci` na raiz e não pode baixar o toolchain do React Native/Expo por isso. O build do app é no Expo, não no GitHub. Pra mexer no app: `npm install` dentro de mobile/, que resolve o core por `file:../packages/core`.",
   "workspaces": [
     "packages/*",
-    "frontend",
-    "mobile"
+    "frontend"
   ],
   "scripts": {
     "test": "npm run test -w @hangar/core && npm run test -w frontend",
