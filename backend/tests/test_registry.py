@@ -1123,6 +1123,31 @@ def test_list_preenche_conta_da_sessao(tmp_path):
     assert out[0].conta == f"claude:{Path.home() / '.claude'}"
 
 
+def test_list_conta_vem_do_processo_do_agente_nao_do_pane(tmp_path):
+    """Sessão aberta à mão: o pane é o shell, e quem declara CLAUDE_CONFIG_DIR/CP_ENGINE é o
+    `claude` filho dele. Lendo o pid do pane, a conta caía no default e a sessão aparecia com o
+    badge da conta errada."""
+    reg = SessionRegistry(projects_dir=tmp_path)
+    pane = {"name": "cc", "pid": 111, "cwd": "/home/u/p", "pane_id": "%1", "active": True}
+    ambiente = {222: Path("/home/u/.claude-jefferson")}   # só o agente declara; o shell (111) não
+    with patch.object(registry.tmux, "list_panes_all", return_value={"cc": [pane]}), \
+         patch.object(reg, "resolve_tracked", return_value=("/x/s.jsonl", True)), \
+         patch.object(registry, "agente_do_pane", return_value=("claude", 222)), \
+         patch.object(registry, "_config_dir_of", side_effect=ambiente.get), \
+         patch.object(registry, "_engine_of", side_effect=lambda pid: "deepseek" if pid == 222 else None):
+        out = reg.list()
+    assert out[0].engine == "deepseek"
+    assert out[0].conta == "chave:deepseek"
+
+    with patch.object(registry.tmux, "list_panes_all", return_value={"cc": [pane]}), \
+         patch.object(reg, "resolve_tracked", return_value=("/x/s.jsonl", True)), \
+         patch.object(registry, "agente_do_pane", return_value=("claude", 222)), \
+         patch.object(registry, "_config_dir_of", side_effect=ambiente.get), \
+         patch.object(registry, "_engine_of", return_value=None):
+        out = reg.list()
+    assert out[0].conta == "claude:" + str(Path("/home/u/.claude-jefferson").resolve())
+
+
 def test_list_conta_em_pi_kimi(tmp_path):
     """Pi sem motor: conta=None (fallback smart da pílula). Kimi sem motor: a conta é o provider
     do default_model do config dele ("apikey/k3" -> "kimi:apikey"); sem provider, None."""
@@ -1130,7 +1155,7 @@ def test_list_conta_em_pi_kimi(tmp_path):
 
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "list_panes_all", return_value={"kk": [pane]}), \
-         patch.object(registry, "provider_of_pane", return_value="pi"), \
+         patch.object(registry, "agente_do_pane", return_value=("pi", 111)), \
          patch.object(registry, "pi_session_file", return_value="/x/s.jsonl"), \
          patch.object(registry, "_engine_of", return_value=None):
         out = reg.list()
@@ -1140,9 +1165,97 @@ def test_list_conta_em_pi_kimi(tmp_path):
     for padrao, esperado in (("apikey", "kimi:apikey"), (None, None)):
         reg = SessionRegistry(projects_dir=tmp_path)
         with patch.object(registry.tmux, "list_panes_all", return_value={"kk": [pane]}), \
-             patch.object(registry, "provider_of_pane", return_value="kimi"), \
+             patch.object(registry, "agente_do_pane", return_value=("kimi", 111)), \
              patch.object(registry, "kimi_session_file", return_value="/x/s.jsonl"), \
              patch.object(registry, "_engine_of", return_value=None), \
              patch.object(cotas, "provider_padrao_kimi", return_value=padrao):
             out = reg.list()
         assert out[0].provider == "kimi" and out[0].conta == esperado
+
+
+# --- Git fora do caminho que publica o estado ------------------------------------------------
+
+async def test_estado_publica_sem_esperar_o_git_e_reaproveita_o_ultimo(tmp_path, monkeypatch):
+    # `_decorate_git` rodava git status + diff em serie pra cada sessao ANTES de a lista sair: um
+    # repositorio lento segurava o card de todas as sessoes. Agora a lista sai com o ultimo git
+    # conhecido e o git atualiza em segundo plano, um por repositorio.
+    from app.models import SessionInfo
+    reg = SessionRegistry(projects_dir=tmp_path)
+    infos = [SessionInfo(name="s1", cwd=str(tmp_path), jsonl=None, tracked=True),
+             SessionInfo(name="s2", cwd=str(tmp_path), jsonl=None, tracked=True)]
+    monkeypatch.setattr(reg, "list", lambda: infos)
+    monkeypatch.setattr(registry.tmux, "capture_pane", lambda name, lines=200: "❯ \n")
+    registry._git_ultimo.clear()
+    chamadas = []
+
+    def git_lento(cwd):
+        chamadas.append(cwd)
+        time.sleep(0.6)
+        return {"dirty": 3, "ahead": 1, "behind": 0}
+
+    monkeypatch.setattr(registry, "git_summary", git_lento)
+    monkeypatch.setattr(registry, "git_diffstat", lambda cwd: {"added": 5, "removed": 2})
+    t0 = time.monotonic()
+    out = await reg.list_with_state()
+    out = await reg.list_with_state()          # 2a chamada com o git em voo: nao enfileira outro
+    assert time.monotonic() - t0 < 0.4, "o estado nao espera o git"
+    assert out[0].git_dirty is None            # numero ainda nao chegou: em segundo plano
+    await asyncio.sleep(0.9)
+    assert chamadas == [str(tmp_path)], "um git por repositorio em voo, nao por sessao nem por poll"
+    out = await reg.list_with_state()
+    assert out[0].git_dirty == 3 and out[0].git_ahead == 1 and out[0].git_added == 5
+    assert out[1].git_dirty == 3               # mesmo cwd, mesmo numero
+    # Git falhou (None): mantem o ultimo numero bom — erro nunca vira "repositorio limpo".
+    monkeypatch.setattr(registry, "git_summary", lambda cwd: None)
+    monkeypatch.setattr(registry, "git_diffstat", lambda cwd: None)
+    await reg.list_with_state()
+    await asyncio.sleep(0.05)
+    out = await reg.list_with_state()
+    assert out[0].git_dirty == 3 and out[0].git_added == 5
+
+
+def test_list_with_state_radar_de_limite_so_nas_travadas(tmp_path, monkeypatch):
+    # Sessao em limite fica `working` pelo marcador e nunca passava pela captura: limited ficava
+    # False na lista pra sempre. Agora a TRAVADA paga uma captura (cacheada) e ganha limit_reset; a
+    # working recente nao e raspada.
+    from pathlib import Path as _P
+    reg = SessionRegistry(projects_dir=tmp_path)
+    parada, fresca = tmp_path / "lim.jsonl", tmp_path / "viva.jsonl"
+    parada.write_text("{}\n"); fresca.write_text("{}\n")
+    old = time.time() - 999
+    os.utime(parada, (old, old))
+    mk = lambda n, j: type("I", (), {"name": n, "cwd": "/p", "jsonl": str(j), "state": "idle", "last_activity": None})()
+    monkeypatch.setattr(reg, "list", lambda: [mk("lim", parada), mk("viva", fresca)])
+    monkeypatch.setattr(hs_mod.hook_state, "get_state", lambda sid: ("working", old))
+    monkeypatch.setattr(registry.settings, "stall_seconds", 300)
+    banner = (_P(__file__).parent / "fixtures" / "pane_limite_uso.txt").read_text(encoding="utf-8")
+    capturas = []
+    monkeypatch.setattr(registry.tmux, "capture_pane", lambda name, lines=200: (capturas.append(name), banner)[1])
+    SessionRegistry._limit_cache.clear()
+    # Statusline ja quente: isola o radar (o sweep de statusline tambem captura, e alimenta o cache).
+    for n in ("lim", "viva"):
+        reg._status_cache[n] = (time.monotonic(), None)
+    out = {s.name: s for s in asyncio.run(reg.list_with_state())}
+    assert capturas == ["lim"]
+    assert out["lim"].limited is True and out["lim"].limit_reset == "9:10pm"
+    assert getattr(out["viva"], "limited", False) is False   # fake sem o default do SessionInfo
+    # 2o poll dentro do cache: nao captura de novo, mas o campo continua preenchido.
+    out = {s.name: s for s in asyncio.run(reg.list_with_state())}
+    assert capturas == ["lim"] and out["lim"].limit_reset == "9:10pm"
+
+
+def test_pretrust_grava_a_chave_que_o_claude_le(tmp_path, monkeypatch):
+    # No Windows o Claude Code indexa `projects` pelo caminho com barra NORMAL. Gravando com
+    # contrabarra, o pre-trust criava uma chave que ninguem le: a sessao nova nascia presa no
+    # "trust this folder?" e o Enter do envio seguinte caia em "No, exit", matando a sessao.
+    import json as _json
+    assert registry._chave_trust(r"C:\Users\p\proj", windows=True) == "C:/Users/p/proj"
+    assert registry._chave_trust("/home/j/proj", windows=False) == "/home/j/proj"
+
+    cfg = tmp_path / ".claude.json"
+    monkeypatch.setattr(registry.tmux, "claude_json_de", lambda _c: cfg)
+    monkeypatch.setattr(registry, "_chave_trust", lambda cwd: cwd.replace("\\", "/"))
+    registry._pretrust_cwd(r"C:\Users\p\proj", None)
+    projetos = _json.loads(cfg.read_text(encoding="utf-8"))["projects"]
+    assert projetos["C:/Users/p/proj"]["hasTrustDialogAccepted"] is True
+    assert r"C:\Users\p\proj" not in projetos

@@ -13,10 +13,34 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
 
 mkdir -p "$HOME/.local/bin"
-ln -sf "$REPO/scripts/hangar-send" "$HOME/.local/bin/hangar-send"
-echo "ok: ~/.local/bin/hangar-send -> $REPO/scripts/hangar-send"
-ln -sf "$REPO/scripts/hangar-preview" "$HOME/.local/bin/hangar-preview"
-echo "ok: ~/.local/bin/hangar-preview -> $REPO/scripts/hangar-preview"
+
+# No Git Bash o `ln -s` COPIA e devolve 0. Uma copia se localiza pelo PROPRIO caminho: o
+# hangar-send procura o `.env` em ~/.local/backend/ e o hangar-preview resolve o `import` de
+# ../shell/preview_fmt.cjs em ~/.local/shell/ — os dois quebram, e o `ok: -> ` de antes dizia que
+# tinha linkado. Por isso a checagem e `test -L` DEPOIS do ln, e nao o codigo de saida dele.
+# O corpo do shim e o mesmo que o install.ps1 escreve, pras duas fontes nao divergirem (o unico
+# byte que difere e a CAIXA da letra de unidade: o .ps1 gera /C/, o bash gera /c/ — equivalentes
+# aqui); o PATH na frente e o que impede o `python3` de cair no atalho da Microsoft Store.
+# No Linux o `ln` linka de verdade, `test -L` e verdadeiro e este ramo nunca roda.
+linkar_bin() {
+    origem=$1; destino=$2; corpo_exec=$3
+    ln -sf "$origem" "$destino"
+    if [ -L "$destino" ]; then
+        echo "ok: $destino -> $origem"
+        return
+    fi
+    {
+        echo "#!/bin/sh"
+        echo "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh)."
+        echo "PATH='$HOME/.local/bin':\$PATH; export PATH"
+        echo "exec $corpo_exec \"\$@\""
+    } > "$destino"
+    chmod +x "$destino"
+    echo "ok: $destino (copia -> shim; o ln do Git Bash nao linka, entao chama o script do repo)"
+}
+
+linkar_bin "$REPO/scripts/hangar-send"    "$HOME/.local/bin/hangar-send"    "'$REPO/scripts/hangar-send'"
+linkar_bin "$REPO/scripts/hangar-preview" "$HOME/.local/bin/hangar-preview" "node '$REPO/scripts/hangar-preview'"
 
 mkdir -p "$HOME/.claude/skills"
 for skill in "$REPO"/skills/*/; do

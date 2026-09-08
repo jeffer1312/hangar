@@ -1,0 +1,52 @@
+hangar-codex-tui: Hooks alterados: confira a aprovação dos hooks no Codex antes de usá-los.
+hangar-codex-tui: há itens aguardando sua confirmação de confiança no Codex
+
+  Hooks need review
+  29 hooks are new or changed.
+  Hooks can run outside the sandbox after you trust them.
+
+› 1. Review hooks
+  2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
+
+  Press enter to confirm or esc to go back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

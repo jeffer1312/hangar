@@ -802,7 +802,9 @@ def test_o_que_falta_mostra_loop_ativo_e_ignora_terminado(tmp_path):
     assert "Loop" not in _bloco(bastao.montar(str(FIX / "jsonl_samples.jsonl"), None, "claude", "s"), "O que falta")
 
 
-def test_sem_plano_citado_cai_no_plano_da_barra(tmp_path, monkeypatch):
+def test_sem_plano_citado_ignora_o_plano_da_barra(tmp_path, monkeypatch):
+    # O plano da barra é eleito pelo REPO: uma sessão que nunca o abriu não pode herdar o "próximo
+    # Step" dele no topo do dossiê (aconteceu com uma sessão de diagnóstico de CPU).
     from app import planprog
     from app.planprog import PlanProgress, TaskProgress, StepProgress
     prog = PlanProgress(name="x", path="/p/x.md", task_idx=1, task_total=1, done=1, total=2, complete=False,
@@ -811,7 +813,7 @@ def test_sem_plano_citado_cai_no_plano_da_barra(tmp_path, monkeypatch):
                                                    StepProgress("Step 2: b", False, False, 1))),))
     monkeypatch.setattr(planprog, "plan_progress", lambda cwd: prog)
     bloco = _bloco(bastao.montar(str(FIX / "jsonl_samples.jsonl"), str(tmp_path), "claude", "s"), "O que falta")
-    assert "a sessão não citou plano" in bloco and "Task 1: A: 1/2 — próximo: Step 2: b" in bloco
+    assert "Plano" not in bloco and "Step 2: b" not in bloco
 
 
 def test_plano_citado_e_lido_do_fim_do_arquivo(tmp_path):

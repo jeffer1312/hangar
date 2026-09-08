@@ -6,7 +6,8 @@ function overwriteGetLocale(fn: () => 'en' | 'pt') {
   configureLocale({ getLocale: fn });
 }
 import { configureApi } from './apiEnv';
-import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel, rotaGenerica } from './api';
+// `getHistoryDesde` veio da main junto com o histórico condicional (304 + ETag).
+import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel, rotaGenerica } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 let onUnauthorizedSpy: ReturnType<typeof vi.fn>;
@@ -176,6 +177,46 @@ describe('getHistory', () => {
     await getHistory('sessao', 0);
 
     expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/sessions/sessao/history?limit=0');
+  });
+});
+
+// No core o servidor vem do ambiente injetado (`configureApi` no beforeEach global), não do
+// localStorage que a versão da PWA montava à mão.
+describe('getHistoryDesde', () => {
+  it('sem validador guardado, pede a cauda e devolve o ETag pra guardar', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('[{"kind":"user_msg","id":"1"}]', { status: 200, headers: { ETag: '"v1"' } }),
+    );
+
+    const r = await getHistoryDesde('sessao', 400, null);
+
+    expect((fetchMock.mock.calls[0][1] as RequestInit).headers).not.toHaveProperty('If-None-Match');
+    expect(r).toEqual({ eventos: [{ kind: 'user_msg', id: '1' }], etag: '"v1"' });
+  });
+
+  it('validador igual -> 304 vira "igual", sem tentar ler corpo nenhum', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, { status: 304, headers: { ETag: '"v1"' } }),
+    );
+
+    expect(await getHistoryDesde('sessao', 400, '"v1"')).toBe('igual');
+    expect((fetchMock.mock.calls[0][1] as RequestInit).headers)
+      .toMatchObject({ 'If-None-Match': '"v1"' });
+  });
+
+  // Cross-origin (o PWA da VPS falando com o backend de casa) o navegador só entrega header que o
+  // servidor exponha. Sem o ETag legível o cache não tem o que perguntar depois — e isso não pode
+  // virar exceção: é só perder a economia, baixando tudo como antes.
+  it('resposta sem ETag legível ainda entrega os eventos, com validador nulo', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('[]', { status: 200 }));
+    expect(await getHistoryDesde('sessao', 400, '"v1"')).toEqual({ eventos: [], etag: null });
+  });
+
+  it('erro de verdade continua subindo (304 não é a única resposta sem json)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'sumiu' }), { status: 404 }),
+    );
+    await expect(getHistoryDesde('sessao', 400, '"v1"')).rejects.toThrow('sumiu');
   });
 });
 

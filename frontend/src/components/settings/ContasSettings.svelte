@@ -12,7 +12,7 @@
   // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
   // existe assim que a pessoa renomear a primeira.
   import { onDestroy, untrack } from 'svelte';
-import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, deleteEngineForServer, isAbortError, isTimeoutError } from '@hangar/core';
+import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
@@ -22,7 +22,8 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import { serverIdentidade, type Server } from '../../lib/auth';
   import { createQuery } from '@tanstack/svelte-query';
-  import { clienteQuery, credenciais } from '../../lib/queries';
+  import { clienteQuery, credenciais, motores as qMotoresDef } from '../../lib/queries';
+  import MotorForm from './MotorForm.svelte';
   import * as m from '../../paraglide/messages';
 
   // Contrato do apiTarget (o mesmo de ServidoresSettings): null = servidor ATIVO (API global com
@@ -42,16 +43,71 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   const carregando = $derived(qContas.isPending);
   const erro = $derived(qContas.error ? ((qContas.error as Error).message || String(qContas.error)) : '');
 
+  // O engines.json entra na mesma tela: é o que faz uma chave de API mostrar o modelo no card e
+  // abrir "Modelo e opções" ali mesmo, sem uma segunda tela. Só quem está no mapa tem motor —
+  // credencial de cota do Kimi CLI/Codex (id `kimi:`/`codex:`) não está, e com o arquivo
+  // corrompido o mapa vem vazio de propósito.
+  const qMotores = createQuery(() => qMotoresDef(apiTarget), () => clienteQuery);
+  const motoresMapa = $derived(qMotores.data?.motores ?? {});
+  const erroMotores = $derived(qMotores.error ? ((qMotores.error as Error).message || String(qMotores.error)) : '');
+  const nomeMotorDe = (c: Credencial) => (c.id.startsWith('chave:') ? c.id.slice('chave:'.length) : null);
+  const motorDe = (c: Credencial): Motor | undefined => {
+    const n = nomeMotorDe(c);
+    return n ? motoresMapa[n] : undefined;
+  };
+  // id da credencial com o bloco de motor aberto (um por vez, como o cookie e o renomear).
+  let motorAberto = $state<string | null>(null);
+
+  // Três seções, não uma lista de doze linhas: conta do Claude, modelo pro Claude Code (chave que
+  // ESTÁ no engines.json) e chave de outro agente. A cópia que o `agentes_sync` grava no
+  // config.toml do Kimi tem o mesmo nome do motor — daí o id `kimi:<nome>` que `cotas.py` monta —
+  // e não é uma credencial a mais: ela aparece como linha dentro do card do modelo.
+  const ehCopiaSync = (c: Credencial) => c.id.startsWith('kimi:') && c.id.slice('kimi:'.length) in motoresMapa;
+  const secaoClaude = $derived(contas.filter((c) => c.tipo === 'claude'));
+  const secaoModelos = $derived(contas.filter((c) => {
+    const n = nomeMotorDe(c);
+    return !!n && n in motoresMapa;
+  }));
+  const secaoOutros = $derived(contas.filter(
+    (c) => c.tipo !== 'claude' && !secaoModelos.includes(c) && !ehCopiaSync(c),
+  ));
+  const copiaKimiDe = (c: Credencial) => {
+    const n = nomeMotorDe(c);
+    return n ? contas.some((x) => x.id === `kimi:${n}`) : false;
+  };
+  // Provedor = o HOST do endereço, não a URL inteira: o caminho (/coding/v1) é ruído na linha e
+  // URL inválida não pode derrubar a tela.
+  const hostDe = (url: string | null | undefined) => {
+    try { return url ? new URL(url).host : ''; } catch { return ''; }
+  };
+  // Os três chips saem do motor. Janela e subagente têm texto próprio pro caso "não definido" —
+  // um campo vazio ali significa "o padrão do provedor" / "o mesmo do principal", não "nada".
+  const chipsDe = (mo: Motor) => [
+    mo.context_window ? m.contas_chip_janela({ n: `${Math.round(mo.context_window / 1000)}k` })
+                      : m.contas_chip_janela_padrao(),
+    mo.subagent_model ? m.contas_chip_subagente({ id: mo.subagent_model })
+                      : m.contas_chip_subagente_igual(),
+    // O default do backend é ligado: só `false` explícito desliga.
+    mo.adaptive_thinking !== false ? m.contas_chip_raciocinio_on() : m.contas_chip_raciocinio_off(),
+  ];
+  // `alvo` é a máquina que RESPONDEU o PUT (o MotorForm o captura antes do await): a resposta
+  // entra sob a chave dela, esteja ela na tela ou não — nunca sob a do alvo atual.
+  function motorSalvo(novos: Record<string, Motor>, alvo: Server | null) {
+    // O PUT devolve o mapa inteiro: escrever no cache poupa o GET e o card muda na hora. Não fecha
+    // o bloco — a sincronização nos outros agentes roda depois e o resultado dela mora lá.
+    clienteQuery.setQueryData(qMotoresDef(alvo).queryKey, (velho: EnginesResponse | undefined) => ({
+      motores: novos, arquivo_corrompido: false, arquivo_caminho: velho?.arquivo_caminho ?? '',
+    }));
+    // Rótulo e endereço podem ter mudado — e eles saem da lista de credenciais. Só ela: refazer
+    // os motores aqui jogaria fora o que o PUT acabou de devolver. E só se a máquina que
+    // respondeu ainda é a da tela: a lista do alvo novo já foi pedida pela troca.
+    if (serverIdentidade(alvo) === serverIdentidade(apiTarget)) void qContas.refetch();
+  }
+
   // Criar: um botão só ("+ Nova conta") e a escolha do TIPO acontece depois do clique — pedido
   // do usuário: "eu seleciono qual vou criar na hora". Dois botões lado a lado obrigavam a
   // decidir antes de saber que existiam duas coisas.
-  let novo = $state<null | 'escolha' | 'claude' | 'chave'>(null);
-  let nomeConta = $state('');
-  let criando = $state(false);
-  // Campos da conta por chave de API.
-  let chaveNome = $state('');
-  let chaveUrl = $state('');
-  let chaveSegredo = $state('');
+  let novo = $state<null | 'escolha'>(null);
   // Renomear: o apelido é do app, não do disco — renomear pasta mexeria em caminho que um CLI
   // vivo tem aberto, e renomear motor quebraria o `hangar-engine --exec <nome>` de sessão rodando.
   let renomeando = $state<string | null>(null);   // id da credencial em edição
@@ -99,6 +155,9 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   // resposta do servidor anterior não tem onde escrever na tela do novo.
   function carregar(_meu?: number) {
     void qContas.refetch();
+    // Também os motores: é ele quem roda depois de criar e de apagar uma chave, e o botão
+    // "Modelo e opções" tem de nascer junto com a credencial, não 60 s depois.
+    void qMotores.refetch();
   }
 
   // Ao contrário de carregar(), NÃO liga `carregando`: a lista fica na tela durante a busca
@@ -170,8 +229,9 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     confirmando = null; menuDe = null;
     renomeando = null; apelidoTexto = ''; salvandoApelido = false;
     cookieDe = null; cookieWs = ''; cookieValor = ''; salvandoCookie = false;
-    novo = null; nomeConta = ''; chaveNome = ''; chaveUrl = ''; chaveSegredo = '';
-    criando = false; apagando = false;
+    motorAberto = null;
+    novo = null;
+    apagando = false;
     // Refresh em voo pertence ao alvo que saiu: o finally de atualizar() só limpa o flag se a
     // geração for a mesma, então sem este reset o botão ficava desabilitado PRA SEMPRE no alvo
     // novo (achado da revisão). O carimbo "atualizado há" não precisa mais de reset: ele sai da
@@ -190,43 +250,6 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   // coluna inteira nasceria esmaecida em toda montagem da tela.
   const leituraFresca = (c: Credencial) =>
     c.cota?.estado === 'lida' && (c.cota.idade_s == null || c.cota.idade_s <= VELHA_APOS_S);
-
-  async function salvarChave() {
-    const nome = chaveNome.trim();
-    const url = chaveUrl.trim();
-    const segredo = chaveSegredo.trim();
-    if (!nome || !url || !segredo || criando) return;
-    const g = geracao;
-    criando = true;
-    aviso = '';
-    avisoErro = false;
-    try {
-      // Mesma rota que a tela de Motores sempre usou: o cadastro da chave é o engines.json.
-      // `model: ''` é deliberado — a chave pode existir só pra acompanhar o limite; escolher
-      // modelo é assunto de quem for RODAR o Claude Code nela, não de quem só a cadastra.
-      const dados = { label: nome, base_url: url, api_key: segredo, model: '' };
-      if (apiTarget) await putEngineForServer(apiTarget, chaveIdDe(nome), dados);
-      else await putEngine(chaveIdDe(nome), dados);
-      if (g !== geracao) return;
-      novo = null; chaveNome = ''; chaveUrl = ''; chaveSegredo = '';
-      await carregar(geracao);
-    } catch (e) {
-      if (g !== geracao) return;
-      aviso = e instanceof Error && e.message ? e.message : m.criar_conta_erro();
-      avisoErro = true;
-    } finally {
-      criando = false;
-    }
-  }
-
-  // O engines.json tem alfabeto próprio pro nome (minúsculas, números, '-' e '_'): o nome bonito
-  // vai pro `label` e o id sai daqui. Sem isto, "PMédico 01" seria recusado com 400 e o usuário
-  // levaria a culpa por ter digitado um nome com espaço.
-  function chaveIdDe(nome: string): string {
-    const base = nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
-    return base || `chave-${Date.now().toString(36)}`;
-  }
 
   async function salvarApelido(c: Credencial) {
     if (salvandoApelido) return;
@@ -265,32 +288,6 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
       avisoErro = true;
     } finally {
       salvandoCookie = false;
-    }
-  }
-
-  async function novaConta() {
-    const nome = nomeConta.trim();
-    if (!nome || criando) return;
-    // Geração desta operação: o aviso de "criada" pertence à máquina que recebeu o POST — se o
-    // ?srv= trocou no meio do voo, a resposta da máquina antiga não escreve na tela da nova
-    // (parecer da rodada 2, mesmo molde do iniciarEntrar).
-    const g = geracao;
-    criando = true;
-    aviso = '';
-    avisoErro = false;
-    try {
-      await criarConta(apiTarget, nome);
-      if (g !== geracao) return;
-      nomeConta = '';
-      novo = null;
-      aviso = m.criar_conta_deslogada();
-      await carregar(geracao);
-    } catch (e) {
-      if (g !== geracao) return;
-      aviso = e instanceof Error && e.message ? e.message : m.criar_conta_erro();
-      avisoErro = true;
-    } finally {
-      criando = false;
     }
   }
 
@@ -487,6 +484,14 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     {#if atualizadoEm != null}
       <span class="ct-atualizado" aria-live="polite">{m.contas_atualizado_ha({ n: idadeAtualizacao })}</span>
     {/if}
+    <!-- Criar é a ação primária da tela e vive no cabeçalho: no rodapé ela era o 13º item, depois
+         de todas as credenciais. Com o engines.json quebrado fica inerte — a folha abre POR CIMA
+         da lista e esconderia o aviso que explica por que criar agora apagaria os outros motores.
+         Pendente ou com erro fica inerte pelo mesmo motivo: sem a lista de nomes na mão o
+         formulário não tem como recusar um nome curto já ocupado, e o PUT substitui calado. -->
+    <button type="button" class="ct-add" onclick={() => (novo = 'escolha')}
+      aria-label={m.contas_add_aria()}
+      disabled={!!novo || qMotores.isPending || !!qMotores.error || !!qMotores.data?.arquivo_corrompido}>+ {m.contas_add()}</button>
     <button type="button" class="ct-refresh" onclick={alternarDensidade}
       aria-pressed={compacta}
       aria-label={compacta ? m.contas_ver_completa() : m.contas_ver_compacta()}
@@ -514,18 +519,46 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   </div>
   <p class="ct-legenda">{m.contas_legenda()}</p>
 
+  {#if qMotores.data?.arquivo_corrompido}
+    <!-- Não é "nenhum motor": o arquivo existe e não pôde ser lido — pode estar escondendo motores
+         reais atrás do erro. Sem este aviso, apagar e recriar uma chave apagaria os outros calado. -->
+    <p class="ct-aviso erro" role="alert">
+      {m.config_motores_nao_consegui_1()} <code>{qMotores.data.arquivo_caminho}</code>{m.config_motores_nao_consegui_2()}
+    </p>
+  {:else if erroMotores}
+    <p class="ct-aviso erro" role="alert">{m.config_motores_erro_carregar()}: {erroMotores}</p>
+  {/if}
+
   {#if carregando}
     <p class="ct-aviso">{m.comum_carregando()}</p>
   {:else if erro}
     <p class="ct-aviso erro" role="alert">{erro}</p>
-  {:else if !contas.length}
-    <p class="ct-aviso">{m.comum_nada_encontrado()}</p>
   {:else}
-    <!-- Cards separados (não uma caixa com divisórias): cada credencial é uma unidade que se
-         lê de uma vez — nome, e-mail, nome no disco e as barras de limite. `compacta` troca o
-         card por uma linha de escaneamento (sem sublinhas nem barras, só o %). -->
-    <div class="ct-lista" class:compacta>
-      {#each contas as conta (conta.id)}
+    <!-- As três seções aparecem SEMPRE depois da carga, mesmo vazias: uma seção que some deixa
+         a pessoa sem saber que aquele lugar existe (é onde a coisa nova vai aparecer). -->
+    {@render secao(m.contas_secao_claude(), m.contas_secao_claude_leg(), secaoClaude, m.comum_nada_encontrado())}
+    {@render secao(m.contas_secao_modelos(), m.contas_secao_modelos_leg(), secaoModelos, m.contas_secao_modelos_vazio())}
+    {@render secao(m.contas_secao_outros(), m.contas_secao_outros_leg(), secaoOutros, m.contas_secao_outros_vazio())}
+  {/if}
+
+  {#snippet secao(titulo: string, legenda: string, itens: Credencial[], vazio: string)}
+    <section class="ct-grupo">
+      <p class="st-secao">{titulo}</p>
+      <p class="ct-legenda">{legenda}</p>
+      {#if itens.length}
+        <!-- Cards separados (não uma caixa com divisórias): cada credencial é uma unidade que se
+             lê de uma vez — nome, e-mail, nome no disco e as barras de limite. `compacta` troca o
+             card por uma linha de escaneamento (sem sublinhas nem barras, só o %). -->
+        <div class="ct-lista" class:compacta>
+          {#each itens as conta (conta.id)}{@render cartao(conta)}{/each}
+        </div>
+      {:else}
+        <p class="ct-vazio">{vazio}</p>
+      {/if}
+    </section>
+  {/snippet}
+
+  {#snippet cartao(conta: Credencial)}
         <!-- Marcas de uso ("roda o Claude Code", "cota pelo painel") saem da linha do NOME e viram
              texto na linha do subtítulo. Pílula fica só para o TIPO da credencial e para "em uso":
              com quatro pílulas na mesma linha, o nome — que é o que distingue uma linha da outra —
@@ -544,6 +577,8 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
               const b = (conta.path ?? '').split('/').filter(Boolean).pop() ?? '';
               return b && b !== conta.nome ? b : '';
             })()}
+        {@const motor = motorDe(conta)}
+        {@const motorEmEdicao = motorAberto === conta.id}
         <div class="ct-card" class:fora={conta.login?.estado === 'ok' && !conta.login.loggedIn}>
           <div class="ct-top">
           <span class="ct-ico">
@@ -583,10 +618,28 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
                 {#if conta.ativa}<span class="ct-emuso">{m.contas_em_uso()}</span>{/if}
               {/if}
             </span>
-            {#if conta.tipo === 'chave'}
+            {#if conta.tipo === 'chave' && !motorEmEdicao}
               <!-- A chave NUNCA volta inteira do servidor (credenciais._mascarar): o que a tela
-                   mostra é o rabicho, o bastante pra saber QUAL chave é sem expor a chave. -->
+                   mostra é o rabicho, o bastante pra saber QUAL chave é sem expor a chave. Com o
+                   bloco aberto some daqui: endereço, chave e modelo já estão nos campos abaixo, e
+                   repeti-los seria o mesmo dado em dois lugares. -->
               <span class="ct-sub">{conta.base_url ?? ''}{conta.chave_mascarada ? ` · ${conta.chave_mascarada}` : ''}</span>
+              {#if motor}
+                <!-- Quem é o provedor: o host, não a URL de novo. É o que responde "de quem é
+                     esse modelo?" sem obrigar a ler o caminho da API. -->
+                {#if hostDe(motor.base_url)}<span class="ct-sub ct-provedor">{hostDe(motor.base_url)}</span>{/if}
+                <!-- Só o modelo: a janela do contexto mora no chip abaixo, e ter as duas era o
+                     mesmo número duas vezes na mesma caixa. -->
+                <span class="ct-sub ct-modelo">{motor.model}</span>
+                <span class="ct-chips">
+                  {#each chipsDe(motor) as chip (chip)}<span class="ct-chip">{chip}</span>{/each}
+                </span>
+                <!-- A cópia que o sync gravou no Kimi mora AQUI, não num card vazio ao lado: ela
+                     não é outra credencial, é este motor visto de dentro do outro agente. -->
+                {#if copiaKimiDe(conta)}
+                  <span class="ct-sub fraco">{m.contas_sync_kimi({ nome: nomeMotorDe(conta) ?? '' })}</span>
+                {/if}
+              {/if}
             {:else if conta.login?.estado === 'ok' && conta.login.loggedIn && conta.login.email}
               <span class="ct-sub">{conta.login.email}</span>
             {:else if conta.login?.estado === 'ok' && !conta.login.loggedIn}
@@ -602,7 +655,10 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
             {/if}
           </span>
 
-          {#if conta.tipo === 'chave'}<span class="ct-tag">{m.contas_tipo_chave()}</span>{/if}
+          <!-- A etiqueta só onde ela informa: na seção de outros agentes, onde uma chave de API
+               convive com o login do Codex. Dentro de "Modelos pro Claude Code" (o card COM motor)
+               toda linha é uma chave, e a etiqueta repetia o título da seção. -->
+          {#if conta.tipo === 'chave' && !motor}<span class="ct-tag">{m.contas_tipo_chave()}</span>{/if}
 
           <!-- Modo compacto: a cota vira rótulo+% na MESMA linha do nome, sem barra. -->
           {#if compacta && conta.cota && conta.cota.estado === 'lida' && conta.cota.janelas.length}
@@ -625,6 +681,17 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
                 aria-label={m.contas_entrar_titulo({ nome: conta.nome })}
                 disabled={!!loginDe || loginIniciando}
                 onclick={() => iniciarEntrar(conta)}>{m.contas_entrar()}</button>
+            {/if}
+
+            {#if motor}
+              <!-- Editar e Remover NOMEADOS: as duas ações do dia a dia de um modelo estavam
+                   escondidas atrás de um kebab e de um rótulo ("Modelo e opções") que não dizia
+                   qual delas ele abria. O kebab continua, com o cookie e o apagar. -->
+              <button type="button" class="ct-acao ct-modelo-btn" aria-expanded={motorEmEdicao}
+                onclick={() => (motorAberto = motorEmEdicao ? null : conta.id)}
+                >{motorEmEdicao ? m.sessao_fechar() : m.config_motores_editar()}</button>
+              <button type="button" class="ct-acao"
+                onclick={() => { menuDe = null; confirmando = conta.id; }}>{m.lista_remover()}</button>
             {/if}
 
             <button type="button" class="ct-kebab" aria-haspopup="true" aria-expanded={menuDe === conta.id}
@@ -715,11 +782,18 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
             </div>
           {/if}
 
+          {#if motor && motorEmEdicao}
+            {@const nomeMotor = nomeMotorDe(conta) ?? ''}
+            <MotorForm {apiTarget} nome={nomeMotor} {motor}
+              onSalvo={motorSalvo} onFechar={() => (motorAberto = null)} />
+          {/if}
+
           {#if confirmando === conta.id}
             <div class="ct-confirma">
               <span class="ct-confirma-txt">
                 {m.comum_apagar()} <strong>{conta.nome}</strong> {m.criar_apagar_fim()}
               </span>
+              {#if conta.tipo === 'chave'}<span class="ct-confirma-aviso">{m.config_motores_sessoes_abertas()}</span>{/if}
               <button type="button" class="ct-confirma-btn perigo" onclick={apagar}
                 disabled={apagando}>{apagando ? '…' : m.comum_apagar()}</button>
               <button type="button" class="ct-confirma-btn"
@@ -727,19 +801,10 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
             </div>
           {/if}
         </div>
-      {/each}
-    </div>
-
-    <div class="ct-rodape">
-      <!-- UM botão. A escolha do provedor e o formulário vivem no modal (NovaCredencialSheet):
-           inline, a pergunta e as opções viravam cinco controles competindo pela mesma linha. -->
-      <button type="button" class="ct-btn" onclick={() => (novo = 'escolha')}
-        disabled={!!novo}>{m.contas_nova()}</button>
-    </div>
-  {/if}
+  {/snippet}
 
   {#if novo}
-    <NovaCredencialSheet {apiTarget}
+    <NovaCredencialSheet {apiTarget} nomesExistentes={Object.keys(motoresMapa)}
       onFechar={() => (novo = null)}
       onCriada={() => { void carregar(geracao); }} />
   {/if}
@@ -787,7 +852,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
       </div>
     </div>
 
-    <div class="ct-rodape">
+    <div class="ct-rodape login">
       <button type="button" class="ct-btn" onclick={cancelarEntrar}
         disabled={loginParado}>{loginParado ? '…' : m.comum_cancelar()}</button>
       <button type="button" class="ct-btn primario" onclick={confirmarEntrar}
@@ -839,6 +904,31 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
 
   .ct-legenda { margin: 0 var(--space-2) var(--space-3); color: var(--text-muted);
                 font-size: var(--text-xs); line-height: 1.45; }
+  /* Uma seção por natureza de credencial. O respiro entre elas é o que separa "conta do Claude"
+     de "modelo" sem precisar de linha divisória. */
+  .ct-grupo { margin-top: var(--space-4); }
+  .ct-grupo .st-secao { margin: 0 var(--space-2) var(--space-1); }
+  /* Seção vazia não some — mas o vazio dela não é aviso: é o lugar reservado. */
+  .ct-vazio { margin: 0 var(--space-2); color: var(--text-muted); font-size: var(--text-xs);
+              line-height: 1.45; }
+  /* Botão de criar no cabeçalho: mesma altura dos redondos ao lado, para a linha não crescer. */
+  .ct-add { flex-shrink: 0; height: 28px; min-height: 0; padding: 0 var(--space-3);
+            border-radius: var(--radius-full); border: 1px solid var(--border-default);
+            background: var(--surface-raised); color: var(--text-primary);
+            font-size: var(--text-xs); font-family: inherit; cursor: pointer;
+            transition: transform 160ms ease-out; }
+  .ct-add:not(:disabled):active { transform: scale(0.97); }
+  .ct-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ct-add:disabled { opacity: .55; cursor: default; }
+  @media (hover: hover) and (pointer: fine) {
+    .ct-add:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  }
+  /* Os três parâmetros que definem como o motor roda: janela, subagente e raciocínio. Chip, e não
+     mais uma linha de texto, porque são três valores curtos que se leem juntos. */
+  .ct-chips { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-1); }
+  .ct-chip { padding: 1px 7px; border-radius: var(--radius-full);
+             background: var(--surface-raised); color: var(--text-muted);
+             font-size: var(--text-3xs); white-space: nowrap; }
   .ct-sep { height: 1px; background: var(--border-subtle); margin: var(--space-4) 0 var(--space-3); }
   .ct-aviso { margin: var(--space-2); color: var(--text-muted); font-size: var(--text-sm); }
   .ct-aviso.erro { color: var(--error); }
@@ -911,6 +1001,8 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   .ct-mini-idade { font-size: var(--text-3xs); color: var(--text-muted); }
   .ct-sub { flex-shrink: 0; color: var(--text-secondary); font-size: var(--text-xs); }
   .ct-sub.fraco { color: var(--text-muted); }
+  /* O modelo é um id de máquina (`kimi-k3`), como o caminho no disco: monoespaçado. */
+  .ct-modelo { font-family: var(--font-mono); }
   /* O que a credencial serve ("roda o Claude Code", "cota pelo painel"): texto, não pílula. */
   .ct-marcas { flex-shrink: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
   .ct-sub-l { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
@@ -933,6 +1025,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
              background: var(--surface-raised); color: var(--text-primary); font-size: var(--text-xs);
              font-family: inherit; cursor: pointer; }
   .ct-acao.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ct-modelo-btn { white-space: nowrap; }
   /* Kebab fantasma (19/08): a ação é rara e o círculo com borda/fundo disputava a linha com o
      nome da conta. Vira ícone solto como o lápis; o alvo de toque de 44px no estreito continua
      (container query abaixo). */
@@ -973,6 +1066,8 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
                      color: var(--text-primary); font-size: var(--text-xs); font-family: inherit;
                      cursor: pointer; }
   .ct-confirma-btn.perigo { color: var(--error); border-color: var(--border-default); }
+  /* Linha inteira própria (o `.ct-confirma` embrulha): o aviso é ressalva, não parte da pergunta. */
+  .ct-confirma-aviso { flex-basis: 100%; font-size: var(--text-2xs); color: var(--text-muted); }
 
   .ct-rodape { display: flex; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap;
                align-items: center; }
@@ -1039,6 +1134,14 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     /* O refresh do cabeçalho também é alvo de dedo no estreito. */
     .ct-refresh { width: 36px; height: 36px; }
     .ct-btn { height: 44px; }
+    /* Com "Modelo e opções" na linha, a chave de API passou a ter etiqueta + botão + kebab, todos
+       `flex-shrink: 0`, e no estreito não sobrava largura pro nome: como o `.ct-nome` tem
+       `overflow-wrap: anywhere`, o min-content dele é UM caractere e o flex encolhia até isso —
+       "Deepseek Claude" virava uma coluna vertical de letras. Mesma dupla que o modo compacto já
+       usa em `.compacta .ct-top` (o wrap) e `.compacta .ct-txt` (o piso de largura), e pelo mesmo
+       motivo: com piso, quem desce pra segunda linha é o que não coube, não o nome. */
+    .ct-top { flex-wrap: wrap; row-gap: var(--space-2); }
+    .ct-txt { min-width: 14ch; }
   }
 
   /* ------------------------------------------------------------- cards (31/08)

@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import { getLoopForServer, createLoopForServer, stopLoopForServer, resolveLoopForServer, refineLoopForServer } from '@hangar/core';
   import { listServers, getActiveId } from '../lib/auth';
@@ -178,7 +179,7 @@
   });
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.chat_loop()}>
+<BottomSheet {open} {onClose} ariaLabel={m.chat_loop()} wide={desktop.atual} centered={desktop.atual}>
   <div class="loop">
     <h2 class="loop-title">{m.chat_loop()}</h2>
 

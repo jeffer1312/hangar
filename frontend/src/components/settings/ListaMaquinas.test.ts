@@ -14,7 +14,7 @@ const E: LinhaMaquina = { chave: 'srv:srv-e', nome: 'Mac', identificador: 'mac',
 function montar(linhas: LinhaMaquina[], over: Record<string, unknown> = {}) {
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const cbs = { onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onAdicionar: vi.fn() };
+  const cbs = { onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn(), onAdicionar: vi.fn() };
   const comp = mount(ListaMaquinas, { target: el, props: { linhas, estados: {}, meuIdentificador: 'casa', carregando: false, corrige: null, ...cbs, ...over } });
   const linha = (chave: string) => el.querySelector<HTMLElement>(`.mq-linha[data-chave="${chave}"]`)!;
   return { el, comp, cbs, linha };
@@ -96,6 +96,45 @@ describe('ListaMaquinas', () => {
     unmount(t.comp);
   });
 
+  it('volta recusada por token (401) ganha dica própria, não a de parcial', () => {
+    const t = montar([B], { estados: {
+      notebook: { ok: false, lados: [{ lado: 'ida', estado: 'ok' }, { lado: 'volta', estado: 'recusou', motivo: 'credencial' }] },
+    } });
+    expect(t.linha('srv:srv-b').textContent).toContain(m.maquinas_volta_token_recusado());
+    expect(t.linha('srv:srv-b').textContent).not.toContain(m.peers_estado_parcial());
+    unmount(t.comp);
+  });
+
+  it('linha só do navegador (sem peer) mostra farol neutro, não "testando"', () => {
+    const t = montar([A]);
+    const farol = t.linha('srv:srv-a').querySelector('.mq-farol')!;
+    expect(farol.textContent?.trim()).toBe('·');
+    expect(farol.classList.contains('neutro')).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('farol mostra "testando" mesmo sem peer, e falha real mesmo sem peer', () => {
+    const semPeer: LinhaMaquina = { ...D, identificador: 'd' };
+    const t = montar([semPeer], { estados: { d: { lados: [], ok: false, testando: true } } });
+    const farolT = t.linha('srv:srv-d').querySelector('.mq-farol')!;
+    expect(farolT.textContent?.trim()).toBe('◌');
+    unmount(t.comp);
+    const t2 = montar([semPeer], { estados: { d: { ok: false, lados: [{ lado: 'ida', estado: 'falhou' }] } } });
+    const farolN = t2.linha('srv:srv-d').querySelector('.mq-farol')!;
+    expect(farolN.textContent?.trim()).toBe('●');
+    expect(farolN.classList.contains('nao')).toBe(true);
+    unmount(t2.comp);
+  });
+
+  it('motivo da falha vai no title da pílula', () => {
+    const t = montar([B], { estados: {
+      notebook: { ok: false, lados: [{ lado: 'ida', estado: 'ok' }, { lado: 'volta', estado: 'falhou', motivo: 'fetch failed' }] },
+    } });
+    const pilulas = t.linha('srv:srv-b').querySelectorAll<HTMLElement>('.pr-lado');
+    expect(pilulas[1].title).toBe('fetch failed');
+    unmount(t.comp);
+  });
+
   it('lista vazia: carregando não afirma "nenhuma"; sem carregar, diz e oferece adicionar', () => {
     const a = montar([], { carregando: true });
     expect(a.el.textContent).not.toContain(m.maquinas_vazio());
@@ -105,5 +144,23 @@ describe('ListaMaquinas', () => {
     b.el.querySelector<HTMLButtonElement>('.mq-add')!.click();
     expect(b.cbs.onAdicionar).toHaveBeenCalled();
     unmount(b.comp);
+  });
+
+  it('✕ em toda linha menos "esta máquina", e devolve a linha inteira', () => {
+    const t = montar([A, B, C]);
+    expect(t.linha('srv:srv-a').querySelector('.mq-remover')).toBeNull();
+    t.linha('peer:vps').querySelector<HTMLButtonElement>('.mq-remover')!.click();
+    expect(t.cbs.onRemover).toHaveBeenCalledWith(C);
+    unmount(t.comp);
+  });
+
+  it('peer desligado no servidor: farol cinza e dica própria, mesmo com estado de falha', () => {
+    const G: LinhaMaquina = { ...C, chave: 'peer:mac', identificador: 'mac', peer: { id: 'mac', base_url: 'https://mac', token: '••', enabled: false } };
+    const t = montar([G], { estados: { mac: { ok: false, lados: [{ lado: 'ida', estado: 'falhou', motivo: 'timeout' }] } } });
+    const g = t.linha('peer:mac');
+    expect(g.querySelector('.mq-farol')!.classList.contains('neutro')).toBe(true);
+    expect(g.textContent).toContain(m.maquinas_peer_desligado());
+    expect(g.textContent).not.toContain(m.peers_estado_parcial());
+    unmount(t.comp);
   });
 });

@@ -197,7 +197,10 @@ async def test_state_monitor_emits_working_then_idle():
     ])
     adapter.attach("sess", client, "t")
     events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
-    assert [e.state for e in events] == ["working", "idle"]
+    # events[0] e sempre o retrato do estado ao abrir (idle, sessao recem-ligada); daqui em diante
+    # cada teste olha o que as notifications produziram.
+    assert events[0].state == "idle"
+    assert [e.state for e in events[1:]] == ["working", "idle"]
 
 
 async def test_state_monitor_skips_preview_only_notifications():
@@ -210,7 +213,7 @@ async def test_state_monitor_skips_preview_only_notifications():
     ])
     adapter.attach("sess", client, "t")
     events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
-    assert [e.state for e in events] == ["idle"]
+    assert [e.state for e in events[1:]] == ["idle"]
 
 
 async def test_state_monitor_carries_status_line_without_changing_state():
@@ -224,10 +227,10 @@ async def test_state_monitor_carries_status_line_without_changing_state():
     ])
     adapter.attach("sess", client, "t")
     events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
-    assert [e.state for e in events] == ["working", "working"]  # segue o ultimo estado conhecido
+    assert [e.state for e in events[1:]] == ["working", "working"]  # segue o ultimo estado conhecido
     # sem model/effort escolhidos (attach sem eles) -> so a secao de contexto aparece.
     # contexto = input do ultimo turno (5000), nao o total acumulado.
-    assert events[1].status_line == "💬 5k/0 5k/10k"
+    assert events[2].status_line == "💬 5k/0 5k/10k"
 
 
 async def test_state_monitor_accumulates_token_usage_and_rate_limits_across_events():
@@ -266,7 +269,7 @@ async def test_state_monitor_accumulates_deltas_into_preview_source():
     ])
     adapter.attach("sess-preview", client, "t")
     events = [ev async for ev in adapter.state_monitor("sess-preview", lambda: "sess-preview")]
-    assert [e.state for e in events] == ["working", "idle"]  # StateEvents intactos (nao regrediu)
+    assert [e.state for e in events[1:]] == ["working", "idle"]  # StateEvents intactos (nao regrediu)
     # o preview foi empurrado a cada delta (visivel via subscribe: "o" depois "ok") e limpo no fim.
     assert CodexPreviewSource.get("sess-preview").text == ""  # turn/completed -> push("") limpa
 
@@ -279,7 +282,7 @@ async def test_state_monitor_pushes_incremental_deltas_before_clearing():
     ])
     adapter.attach("sess-preview2", client, "t")
     events = [ev async for ev in adapter.state_monitor("sess-preview2", lambda: "sess-preview2")]
-    assert [e.state for e in events] == ["working"]
+    assert [e.state for e in events[1:]] == ["working"]
     assert CodexPreviewSource.get("sess-preview2").text == "o"  # sem turn/completed, nao limpou
 
 
@@ -974,3 +977,131 @@ async def test_deliverable_nao_expira_turno_em_sessao_assinada():
     await adapter.send_prompt("sess", "oi")
     adapter._sessions["sess"]["in_progress_since"] -= adapter.UNSUBSCRIBED_TURN_TTL * 10
     assert await adapter.deliverable("sess") is False
+
+
+# --- Um consumidor de notifications por sessao (fan-out pros SSEs) ---------------------------
+
+class _QueueClient:
+    """Como o AppServerClient real: UMA fila; cada `notifications()` tira dela. Dois consumidores
+    dividem os itens — e o sentinela e reposto pra nenhum deles pendurar."""
+
+    closed = False
+
+    def __init__(self, notifs: list[dict]):
+        self._q: asyncio.Queue = asyncio.Queue()
+        for n in notifs:
+            self._q.put_nowait(n)
+        self._q.put_nowait(None)
+        self.aberturas = 0
+        self.requests: list[tuple[str, dict]] = []
+
+    async def notifications(self):
+        self.aberturas += 1
+        while True:
+            item = await self._q.get()
+            if item is None:
+                self._q.put_nowait(None)
+                return
+            yield item
+            await asyncio.sleep(0)   # da a vez ao outro consumidor, como no loop real
+
+    async def request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
+        self.requests.append((method, params))
+        return {}
+
+
+async def test_dois_sse_na_mesma_sessao_recebem_a_resposta_inteira():
+    # Desktop + celular no mesmo chat: cada SSE abre um state_monitor. Com um consumidor por SSE
+    # os deltas eram DIVIDIDOS entre eles (cada um ficava com metade da frase) e os dois empurravam
+    # buffers diferentes pro mesmo CodexPreviewSource — a previa mostrava "Faria em pequenas, o
+    # atual." em vez de "Faria em mudancas pequenas, preservando o comportamento atual.".
+    adapter = CodexAdapter()
+    client = _QueueClient([
+        {"method": "turn/started", "params": {"threadId": "t"}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Faria "}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "em "}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "mudancas "}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "pequenas"}},
+    ])
+    adapter.attach("dois", client, "t")
+
+    async def ver():
+        return [ev.state async for ev in adapter.state_monitor("dois", lambda: "dois")]
+
+    a, b = await asyncio.wait_for(asyncio.gather(ver(), ver()), timeout=5)
+    assert client.aberturas == 1, "a fila do app-server tem UM consumidor por sessao"
+    assert a[-1] == "working" and b[-1] == "working"
+    assert CodexPreviewSource.get("dois").text == "Faria em mudancas pequenas"
+
+
+async def test_ouvinte_que_chega_na_janela_do_cancel_ganha_bomba_nova():
+    # `Task.cancel()` so agenda; a task continua `not done()` ate a proxima volta do loop. Um
+    # ouvinte que entra nessa janela (celular reconectando) nao pode herdar a bomba que esta
+    # morrendo — ela nunca mais espalha nada, e ele ficaria mudo.
+    adapter = CodexAdapter()
+    client = _QueueClient([{"method": "turn/started", "params": {}}] * 6)
+    adapter.attach("janela", client, "t")
+    primeiro = adapter.state_monitor("janela", lambda: "janela")
+    await primeiro.__anext__()                 # retrato
+    await primeiro.__anext__()                 # 1o evento da bomba
+    await primeiro.aclose()                    # ultimo ouvinte sai -> cancel() agendado
+    vistos = []
+    async with asyncio.timeout(5):
+        async for ev in adapter.state_monitor("janela", lambda: "janela"):
+            vistos.append(ev.state)
+    assert client.aberturas == 2, "o 2o ouvinte precisa de uma bomba nova, nao da que morre"
+    assert len(vistos) >= 2                    # retrato + pelo menos um evento vivo
+
+
+async def test_excecao_na_bomba_chega_no_ouvinte_em_vez_de_pendurar():
+    # A bomba roda numa task propria: uma excecao la dentro nao sobe sozinha ate o pump do SSE.
+    # Sem repassar, cada ouvinte ficaria em `fila.get()` pra sempre, com a tela "conectada" e muda.
+    class _Quebra:
+        closed = False
+
+        async def notifications(self):
+            yield {"method": "turn/started", "params": {}}
+            raise RuntimeError("app-server mandou lixo")
+
+    adapter = CodexAdapter()
+    adapter.attach("quebra", _Quebra(), "t")
+    with pytest.raises(RuntimeError, match="lixo"):
+        async with asyncio.timeout(5):
+            async for _ in adapter.state_monitor("quebra", lambda: "quebra"):
+                pass
+
+
+async def test_previa_zera_a_cada_agent_message_do_mesmo_turno():
+    # Um turno do Codex pode ter mais de um agentMessage ("Vou conferir…" e depois a resposta).
+    # O buffer colava os dois, e como o preambulo ja tinha caido no rollout (bolha propria), a
+    # previa mostrava "Vou conferir.Resposta" ate o turno fechar.
+    adapter = CodexAdapter()
+    client = _FakeClient([
+        {"method": "turn/started", "params": {}},
+        {"method": "item/started", "params": {"item": {"type": "agentMessage", "text": ""}}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Vou conferir."}},
+        {"method": "item/completed", "params": {"item": {"type": "agentMessage",
+                                                          "text": "Vou conferir."}}},
+        {"method": "item/started", "params": {"item": {"type": "agentMessage", "text": ""}}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Resposta"}},
+    ])
+    adapter.attach("itens", client, "t")
+    async for _ in adapter.state_monitor("itens", lambda: "itens"):
+        pass
+    assert CodexPreviewSource.get("itens").text == "Resposta"
+
+
+async def test_state_monitor_abre_com_o_estado_e_a_statusline_ja_conhecidos():
+    # Reabrir o chat (ou abrir num 2o aparelho) no meio de um turno: a tela nascia sem estado nem
+    # status line ate a PROXIMA notification do app-server — contexto e limites sumiam mesmo
+    # existindo no backend. O primeiro evento e o retrato do que ja se sabe.
+    adapter = CodexAdapter()
+    adapter.attach("quente", _FakeClient([]), "t", model="gpt-6-astra", effort="high")
+    sess = adapter._sessions["quente"]
+    sess["state"] = "working"
+    sess["in_progress"] = True
+    sess["token_usage"] = {"last": {"inputTokens": 109_000}, "modelContextWindow": 828_000}
+    events = [ev async for ev in adapter.state_monitor("quente", lambda: "quente")]
+    assert events[0].state == "working"
+    assert "💬" in (events[0].status_line or "")
+    assert "gpt-6-astra" in events[0].status_line

@@ -201,7 +201,7 @@
   );
 
   // `targetServer` null significa "e o servidor ativo, use as funcoes globais" — o contrato que
-  // ServerSettings/EnginesSettings ja tem. Manter isso preserva o self-heal de 401 do caminho global
+  // ServerSettings ja tem. Manter isso preserva o self-heal de 401 do caminho global
   // (apiFetchForServer NAO faz self-heal de proposito, AccountMenu.svelte:94-96).
   const targetConfig = $derived.by(() => {
     versaoServidores;
@@ -380,15 +380,28 @@
     encKey = key;
     const { enc_blob, rev } = await getVault();
     vaultRev = rev;
-    // Reconcilia: junta o que o hub tem (remote) com o que ja existia so neste navegador. Sem isso,
-    // servers adicionados ANTES do login nunca subiam -- o login so BAIXAVA. setServers nao re-empurra.
+    // A uniao com a lista local so vale pra SEMEAR um hub vazio -- servers que existiam neste
+    // navegador antes do login nunca subiriam, porque o login so BAIXA. Com o hub ja populado ela
+    // e destrutiva ao contrario: nao ha como representar "apagado", entao qualquer aparelho que
+    // ainda tivesse a entrada a ressuscitava e o push seguinte a gravava de volta no hub -- apagar
+    // um servidor no celular nunca durava. Hub populado -> ele manda, e a exclusao vale em todos.
     const remote = enc_blob ? await decryptList(key, enc_blob) : [];
-    const merged = mergeServers(remote, listServers());
-    setServers(merged);
-    if (merged.length !== remote.length) {
-      // havia servers locais fora do hub -> semeia/atualiza o vault agora (1a subida)
-      const seed = await putVault(await encryptList(key, merged), vaultRev);
-      if ('rev' in seed) vaultRev = seed.rev;
+    if (enc_blob) {
+      // Quem só existia aqui vai embora agora. Na maioria das vezes é o objetivo (foi apagado
+      // noutro aparelho); mas se o push estava quebrado quando a pessoa adicionou, é perda — e daqui
+      // de dentro os dois casos são indistinguíveis. Avisa, em vez de sumir calado.
+      const norm = (u: string) => u.replace(/\/+$/, '');
+      const noHub = new Set(remote.map((s) => norm(s.baseUrl)));
+      const descartados = listServers().filter((s) => !noHub.has(norm(s.baseUrl))).length;
+      setServers(remote);
+      if (descartados > 0) vaultPush.descartou(descartados);
+    } else {
+      const merged = mergeServers(remote, listServers());
+      setServers(merged);
+      if (merged.length > 0) {
+        const seed = await putVault(await encryptList(key, merged), vaultRev);
+        if ('rev' in seed) vaultRev = seed.rev;
+      }
     }
     // Relogin sem reload chama establishSync de novo: solta o listener anterior pra nao acumular
     // dois pushes do mesmo vault (o slot unico mascarava isto sobrescrevendo).

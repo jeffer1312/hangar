@@ -64,7 +64,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 async function reqEm<T>(s: Server, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${s.baseUrl}${path}`, {
     ...init,
-    signal: AbortSignal.timeout(8000),
+    signal: comTeto(init?.signal ?? undefined, 8000),
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       Authorization: `Bearer ${s.token}`,
@@ -186,4 +186,70 @@ export function listarHarnesses(alvo: Server | null): Promise<Harness[]> {
 
 export function consertarHarness(alvo: Server | null, conserto: string): Promise<{ feito: string; harnesses: Harness[] }> {
   return em(alvo, `/api/harness/conserto/${encodeURIComponent(conserto)}`, { method: 'POST' });
+}
+
+// Código + parâmetros vêm do backend (`codex_msgs.CATALOGO`); o front traduz por `harness_codex_m_<codigo>`.
+// `texto` é o fallback em pt para código que este app ainda não conhece. String crua = backend antigo.
+export type MensagemCodex = { codigo: string | null; params: Record<string, string>; texto: string } | string;
+
+export interface IntegracaoCodex {
+  estado: 'ocioso' | 'executando' | 'ok' | 'parcial' | 'erro' | 'indisponivel';
+  etapa: MensagemCodex;
+  ultima_execucao: string | null;
+  proxima_atualizacao: string | null;
+  plugins: { id: string; versao: string; origem: string }[];
+  erros: MensagemCodex[];
+  avisos: MensagemCodex[];
+  confianca_pendente: boolean;
+  automatica: boolean;
+  skills?: { ponte: number; nativas: number };
+}
+
+// `AbortSignal.any` só existe do Safari 17.4 em diante; num iPhone mais velho lançava dentro do
+// `reqEm()` e derrubava toda chamada de credenciais/harness, não só a do Codex. Sem ele, os dois
+// sinais são amarrados à mão — o teto de tempo não pode sumir junto.
+export function comTeto(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  const teto = AbortSignal.timeout(ms);
+  if (!signal) return teto;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([signal, teto]);
+  const juncao = new AbortController();
+  for (const s of [signal, teto]) {
+    if (s.aborted) juncao.abort(s.reason);
+    else s.addEventListener('abort', () => juncao.abort(s.reason), { once: true });
+  }
+  return juncao.signal;
+}
+
+export function codexIntegracaoEstado(alvo: Server | null, signal?: AbortSignal): Promise<IntegracaoCodex> {
+  return em(alvo, '/api/harness/codex/integracao', { signal: comTeto(signal, 8000) });
+}
+
+export function codexIntegracaoReconciliar(alvo: Server | null, signal?: AbortSignal): Promise<IntegracaoCodex> {
+  return em(alvo, '/api/harness/codex/integracao', { method: 'POST', signal: comTeto(signal, 8000) });
+}
+
+// Instalar um CLI que falta (backend/app/harness_install.py). `comandos` diz o que dá pra instalar
+// por botão NESTA máquina — quem não está lá só tem o link de `manual`.
+export interface Instalacao {
+  fase: 'ocioso' | 'rodando' | 'pronto';
+  harness: string | null;
+  /** Chave da etapa; a frase é daqui (`harness_inst_etapa_<etapa>`). */
+  etapa: string | null;
+  passo: number;
+  total: number;
+  log: string[];
+  /** Etapa pulada com motivo legítimo (sem bash no Windows): não é falha, mas não pode ficar no log. */
+  avisos?: string[];
+  ok: boolean | null;
+  erro: string | null;
+  comandos: Record<string, string>;
+  manual: Record<string, string>;
+}
+
+export function instalacaoEstado(alvo: Server | null, signal?: AbortSignal): Promise<Instalacao> {
+  return em(alvo, '/api/harness/instalar', { signal: comTeto(signal, 8000) });
+}
+
+export function instalarHarness(alvo: Server | null, cli: string, signal?: AbortSignal): Promise<Instalacao> {
+  return em(alvo, `/api/harness/instalar/${encodeURIComponent(cli)}`, { method: 'POST', signal: comTeto(signal, 8000) });
 }

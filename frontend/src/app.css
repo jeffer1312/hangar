@@ -134,6 +134,9 @@
   --pill-dead-fg:     #ff453a;
   --pill-input-bg:    rgba(255,159,10,0.12);
   --pill-input-fg:    #ff9f0a;
+  /* Sessão parada no limite de uso, esperando a hora de voltar: nem trabalhando nem pronta. */
+  --pill-limite-bg:   rgba(201,140,255,0.14);
+  --pill-limite-fg:   #c98cff;
 
   /* Faixa reservada aos controles da janela (⋮ ×) quando o PWA roda em
      window-controls-overlay. Fora desse modo é zero — ver bloco abaixo. */
@@ -240,6 +243,8 @@
   --pill-dead-fg:     #c4291f;
   --pill-input-bg:    rgba(200,130,10,0.14);
   --pill-input-fg:    #7a5408;
+  --pill-limite-bg:   rgba(140,80,200,0.14);
+  --pill-limite-fg:   #5c2d91;
 }
 
 /* ── Custom Properties (estruturais, comuns aos temas) ───────────────────── */

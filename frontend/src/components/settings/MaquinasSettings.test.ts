@@ -43,11 +43,14 @@ vi.mock('@hangar/core', async (importOriginal) => ({
 }));
 vi.mock('../../lib/push', () => ({ enablePush: vi.fn(), pushSupported: () => true }));
 vi.mock('../../lib/peers', () => ({
-  getIdentificador: vi.fn(async () => ({ identificador: '' })),
+  // Distingue o próprio servidor (null ou srv-a) de outro — carregarIdsNavegador chama
+  // getIdentificador por Server real, não só pelo apiTarget da aba.
+  getIdentificador: vi.fn(async (alvo: Server | null) => ({ identificador: alvo && alvo.id !== 'srv-a' ? `id-${alvo.id}` : '' })),
   setIdentificador: vi.fn(async (v: string) => ({ identificador: v })),
   listarPeers: vi.fn(async () => []),
   gravarPeer: vi.fn(async (d: unknown) => [d]),
   removerPeer: vi.fn(async () => []),
+  removerPeerDoisLados: vi.fn(async () => true),
   checkPeer: vi.fn(async () => ({ estado: 'ok' })),
 }));
 vi.mock('../../lib/alcance', () => ({
@@ -68,8 +71,8 @@ function onLogoutDeferred() {
 
 let onLogoutCalls: ReturnType<typeof vi.fn<() => Promise<void>>>;
 
-function montar(over: { onLogout?: () => Promise<void> } = {}) {
-  authMock.listServers.mockReturnValue([SRV]);
+function montar(over: { onLogout?: () => Promise<void>; servers?: Server[] } = {}) {
+  authMock.listServers.mockReturnValue(over.servers ?? [SRV]);
   authMock.getActiveId.mockReturnValue(SRV.id);
   apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));   // fica pendente (irrelevante)
   onLogoutCalls = vi.fn<() => Promise<void>>(over.onLogout ?? onLogoutDeferred);
@@ -77,7 +80,7 @@ function montar(over: { onLogout?: () => Promise<void> } = {}) {
   document.body.appendChild(el);
   const comp = mount(MaquinasSettings, {
     target: el,
-    props: { resolvedServer: SRV, apiTarget: null, onPickTarget: vi.fn(), onLogout: onLogoutCalls },
+    props: { resolvedServer: SRV, apiTarget: null, onLogout: onLogoutCalls },
   });
   return { el, comp: comp as never };
 }
@@ -94,9 +97,10 @@ describe('MaquinasSettings — logout idempotente', () => {
     document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
     await tick();
     expect(onLogoutCalls).toHaveBeenCalledTimes(1);
-    // 2) Durante a Promise: remover (×) fica bloqueado — diálogo nem abre
-    const del = t.el.querySelector<HTMLButtonElement>('.sm-srv-del');
-    expect(del).not.toBeNull();   // podeRemoverUltimo: visível
+    // 2) Durante a Promise: desmarcar "Acompanhar" (a linha do próprio servidor) fica bloqueado —
+    // diálogo nem abre (mesmo guard de logoutInFlight que abrirRemocao já tinha).
+    const del = t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-a"] .mq-acompanhar');
+    expect(del).not.toBeNull();
     del!.click();
     await tick();
     expect(document.querySelector('.confirm-card')).toBeNull();   // guarda segurou
@@ -114,11 +118,11 @@ describe('MaquinasSettings — logout idempotente', () => {
     document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
     await tick();
     expect(onLogoutCalls).toHaveBeenCalledTimes(1);
-    // Durante a Promise: Sair principal disabled (clique é no-op) e remover nem abre diálogo
+    // Durante a Promise: Sair principal disabled (clique é no-op) e desmarcar Acompanhar nem abre diálogo
     const sairDeNovo = t.el.querySelector<HTMLButtonElement>('.ss-danger')!;
     expect(sairDeNovo.disabled).toBe(true);
     sairDeNovo.click();
-    t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!.click();
+    t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-a"] .mq-acompanhar')!.click();
     await tick();
     expect(document.querySelector('.confirm-card')).toBeNull();
     // Resolve: segue 1 chamada só
@@ -130,7 +134,7 @@ describe('MaquinasSettings — logout idempotente', () => {
 
   it('remoção revalida fingerprint: servidor mudou no sync → aviso, sem remover', async () => {
     const t = montar();
-    t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!.click();
+    t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-a"] .mq-acompanhar')!.click();
     await tick();
     // o sync alterou o servidor entre o diálogo e o clique (onServersChanged sobe a versão local)
     authMock.listServers.mockReturnValue([{ ...SRV, token: 'novo-token' }]);
@@ -169,8 +173,10 @@ describe('MaquinasSettings — logout idempotente', () => {
 
 describe('MaquinasSettings — remoção com fingerprint + revision (round 4)', () => {
   async function confirmarRemocao(t: { el: HTMLElement }) {
-    t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!.click();
+    t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-a"] .mq-acompanhar')!.click();
     await tick();
+    // servers.length === 1 aqui: o diálogo acrescenta o aviso de que é a única saída (Sair).
+    expect(document.querySelector('.confirm-card')!.textContent).toContain(m.config_servidores_voltar());
     document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
     await tick();
   }
@@ -186,7 +192,7 @@ describe('MaquinasSettings — remoção com fingerprint + revision (round 4)', 
 
   it('servidor ausente entre diálogo e clique: não remove, aviso role=status', async () => {
     const t = montar();
-    t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!.click();
+    t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-a"] .mq-acompanhar')!.click();
     await tick();
     authMock.listServers.mockReturnValue([]);   // apagado noutro aparelho ANTES do clique
     await tick();                                // revision inalterada (sem mudouCb)
@@ -211,10 +217,10 @@ describe('MaquinasSettings — remoção com fingerprint + revision (round 4)', 
     unmount(t.comp);
   });
 
-  it('cancelar a confirmação devolve o foco ao botão Remover (restauração segura)', async () => {
+  it('cancelar a confirmação devolve o foco à caixa Acompanhar (restauração segura)', async () => {
     const t = montar();
     authMock.getActiveId.mockReturnValue('outro-id');   // remover não é remover o ativo -> sem reload
-    const del = t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!;
+    const del = t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-a"] .mq-acompanhar')!;
     del.focus();   // happy-dom não move foco no click() — o gatilho precisa de focus explícito
     del.click();
     await tick(); await tick();
@@ -240,7 +246,7 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     await Promise.resolve(); await Promise.resolve(); await tick();
   }
 
-  it('estado 1 do mock: sem identificador, aviso visível e seção de alcance vazia, sem registrar', async () => {
+  it('estado 1 do mock: sem identificador, aviso visível e lista sem como registrar', async () => {
     peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
     peersMock.listarPeers.mockResolvedValue([]);
     const t = montar();
@@ -255,14 +261,14 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     expect(campo?.classList.contains('vazio')).toBe(true);
     expect(campo?.value).toBe('');
     expect(campo?.getAttribute('placeholder')).toContain('casa');
-    // alcance: só a legenda de vazio, sem cartão nem botão de registrar (mock estado 1)
-    expect(t.el.textContent).toContain(m.peers_vazio());
-    expect(t.el.querySelector('.pr-cartao')).toBeNull();
-    expect(t.el.querySelector('.pr-btn')).toBeNull();
+    // lista unificada: só a linha desta máquina (etiqueta, sem "servidores se falam" pra registrar)
+    expect(t.el.querySelectorAll('.mq-linha').length).toBe(1);
+    expect(t.el.querySelector('.mq-linha[data-chave="srv:srv-a"] .mq-falar')).toBeNull();
+    expect(t.el.querySelector('.pr-btn.primaria')).toBeNull();
     unmount(t.comp);
   });
 
-  it('estado 2 do mock: identificador definido, peer listado com endereço e Remover', async () => {
+  it('estado 2 do mock: identificador definido, peer listado com endereço e Acompanhar/Falar', async () => {
     peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
     peersMock.listarPeers.mockResolvedValue([
       { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: '••••reto' },
@@ -274,11 +280,11 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     const campo = t.el.querySelector<HTMLInputElement>('.id-campo');
     expect(campo?.classList.contains('vazio')).toBe(false);
     expect(campo?.value).toBe('casa');
-    expect(t.el.textContent).toContain(m.peers_legenda_alcance());
-    const nome = t.el.querySelector('.pr-nome');
-    expect(nome?.textContent).toBe('notebook');
-    expect(t.el.querySelector('.pr-url')?.textContent).toContain('192.168.0.77');
-    expect(t.el.querySelector('.pr-btn.primaria')?.textContent).toContain(m.peers_registrar());
+    // notebook não casa com nenhum servidor conhecido do navegador: linha só-do-servidor
+    const linha = t.el.querySelector<HTMLElement>('.mq-linha[data-chave="peer:notebook"]')!;
+    expect(linha).not.toBeNull();
+    expect(linha.querySelector('.mq-url')?.textContent).toContain('192.168.0.77');
+    expect(linha.querySelector<HTMLInputElement>('.mq-falar')!.checked).toBe(true);
     unmount(t.comp);
   });
 
@@ -306,78 +312,110 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     unmount(t.comp);
   });
 
-  it('registrar um peer: diálogo com id/endereço/token registra os dois lados e a lista atualiza', async () => {
-    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
-    peersMock.gravarPeer.mockImplementation(async () => [
-      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
-    ] as never);
-    peersMock.listarPeers.mockImplementation(async () => [
-      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
-    ] as never);
-    peersMock.checkPeer.mockImplementation(async () => ({ estado: 'ok' }) as never);
-    const t = montar();
+  it('marcar "servidores se falam" registra as duas pontas sem diálogo, e a lista atualiza', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockResolvedValueOnce([]).mockResolvedValue([{ id: 'nb', base_url: 'http://b', token: '••' }]);
+    // um teste anterior (ordem embaralhada) pode deixar gravarPeer pendurado num mockReturnValue —
+    // clearAllMocks só limpa chamadas, nunca a implementação (vitest não reseta mockImplementation).
+    peersMock.gravarPeer.mockImplementation(async (_alvo, dado) => [dado] as never);
+    peersMock.checkPeer.mockResolvedValue({ estado: 'ok' });
+    const { el, comp } = montar({ servers: [SRV, B] });
     await esperarCarga();
-    t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
-    await tick();
-    // rótulo curto no botão primário do diálogo: "Confirmar" cabe em uma linha (bloq 3)
-    expect(document.querySelector('.confirm-card .c-primary')?.textContent?.trim())
-      .toBe(m.comum_confirmar());
-    const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
-    inputs[0].value = 'notebook';
-    inputs[0].dispatchEvent(new Event('input'));
-    inputs[1].value = 'http://192.168.0.77:8765';
-    inputs[1].dispatchEvent(new Event('input'));
-    inputs[2].value = 'segredo';
-    inputs[2].dispatchEvent(new Event('input'));
-    await tick();
-    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
-    // o gesto encadeia gravação + checagens + listagem: espera o fluxo inteiro
+    const cb = el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!;
+    expect(cb.disabled).toBe(false);
+    cb.click();
     await esperarCarga();
-    // o gesto registra os DOIS lados: grava no dono e testa cada lado
-    expect(peersMock.gravarPeer).toHaveBeenCalledWith(null, {
-      id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo',
-    });
-    expect(peersMock.checkPeer).toHaveBeenCalled();
-    expect(document.querySelector('.confirm-card')).toBeNull();  // fechou no sucesso
-    expect(t.el.querySelector('.pr-nome')?.textContent).toBe('notebook');
-    unmount(t.comp);
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(null, { id: 'nb', base_url: 'http://b', token: 'tb' });
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://b' }), expect.objectContaining({ id: 'casa' }));
+    expect(el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!.checked).toBe(true);
+    unmount(comp);
   });
 
-  it('remover um peer pede confirmação e chama o backend com o id', async () => {
-    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
-    peersMock.listarPeers.mockResolvedValue([
-      { id: 'notebook', base_url: 'http://n:8765', token: '••••' },
-    ]);
-    const t = montar();
+  it('marcar "servidores se falam" duas vezes seguidas não dispara dois registros (trava de clique duplo)', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockResolvedValue([]);
+    peersMock.gravarPeer.mockReturnValue(new Promise(() => {}) as never);   // fica pendurado: gesto em voo
+    const { el, comp } = montar({ servers: [SRV, B] });
     await esperarCarga();
-    t.el.querySelector<HTMLButtonElement>('.pr-btn.min')!.click();
+    const cb = el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!;
+    cb.click();
+    cb.click();   // segundo clique com o primeiro ainda em voo
     await tick();
-    expect(document.querySelector('.confirm-card')).not.toBeNull();
-    document.querySelector<HTMLButtonElement>('.confirm-card .c-danger')!.click();
+    expect(peersMock.gravarPeer).toHaveBeenCalledTimes(1);
+    expect(el.querySelector('.mq-linha[data-chave="srv:srv-b"]')!.textContent).toContain(m.peers_estado_testando());
+    unmount(comp);
+  });
+
+  it('desmarcar "servidores se falam" pede confirmação e remove nas pontas que dá', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([{ id: 'vps', base_url: 'https://vps', token: '••' }]);
+    const { el, comp } = montar();
+    await tick(); await tick(); await tick();
+    el.querySelector<HTMLInputElement>('.mq-linha[data-chave="peer:vps"] .mq-falar')!.click();
     await tick();
-    expect(peersMock.removerPeer).toHaveBeenCalledWith(null, 'notebook');
-    unmount(t.comp);
+    expect(document.body.textContent).toContain(m.maquinas_remover_peer_so_aqui());
+    [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === m.peers_remover())!.click();
+    await tick(); await tick();
+    expect(peersMock.removerPeerDoisLados).toHaveBeenCalledWith(null, 'vps', null);
+    unmount(comp);
+  });
+
+  it('desmarcar "servidores se falam" numa máquina COM navegador avisa que os dois lados saem', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockResolvedValue([{ id: 'nb', base_url: 'http://b', token: '••' }]);
+    const { el, comp } = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!.click();
+    await tick();
+    expect(document.body.textContent).toContain(m.maquinas_remover_peer_lados());
+    [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === m.peers_remover())!.click();
+    await tick(); await tick();
+    expect(peersMock.removerPeerDoisLados).toHaveBeenCalledWith(null, 'nb', B);
+    unmount(comp);
+  });
+
+  it('remover peer com o lado de lá falhando mostra o aviso específico', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([{ id: 'vps', base_url: 'https://vps', token: '••' }]);
+    peersMock.removerPeerDoisLados.mockResolvedValueOnce(false);
+    const { el, comp } = montar();
+    await esperarCarga();
+    el.querySelector<HTMLInputElement>('.mq-linha[data-chave="peer:vps"] .mq-falar')!.click();
+    await tick();
+    [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === m.peers_remover())!.click();
+    await esperarCarga();
+    expect(el.textContent).toContain(m.maquinas_remover_peer_lado_de_la_falhou());
+    unmount(comp);
   });
 
   it('fala com o servidor ESCOLHIDO na aba, não com o ativo', async () => {
+    // listServers explícito (não residual de outro teste): carregarIdsNavegador busca o id de
+    // cada máquina do NAVEGADOR, e a asserção abaixo depende de SRV estar nessa lista.
+    authMock.listServers.mockReturnValue([SRV]);
     peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
     peersMock.listarPeers.mockResolvedValue([]);
     const outro = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(MaquinasSettings, { target: el, props: {
-      resolvedServer: outro, apiTarget: outro, onPickTarget: vi.fn(), onLogout: vi.fn() } });
+      resolvedServer: outro, apiTarget: outro, onLogout: vi.fn() } });
     await esperarCarga();
     expect(peersMock.getIdentificador).toHaveBeenCalledWith(outro);
     expect(peersMock.listarPeers).toHaveBeenCalledWith(outro);
+    expect(peersMock.getIdentificador).toHaveBeenCalledWith(SRV);
     unmount(comp as never);
   });
 
   it('servidor indisponível não carrega nada', async () => {
+    authMock.listServers.mockReturnValue([]);   // explícito: sem isso, ordem embaralhada pode
+    // deixar listServers() sem implementação nenhuma (undefined), e unirMaquinas quebra no .map.
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(MaquinasSettings, { target: el, props: {
-      resolvedServer: null, apiTarget: null, onPickTarget: vi.fn(), onLogout: vi.fn() } });
+      resolvedServer: null, apiTarget: null, onLogout: vi.fn() } });
     await esperarCarga();
     expect(peersMock.getIdentificador).not.toHaveBeenCalled();
     expect(peersMock.listarPeers).not.toHaveBeenCalled();
@@ -406,29 +444,28 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     ]);
     const t = montar();
     await esperarCarga();
-    expect(t.el.querySelector('.pr-nome')?.textContent).toBe('notebook');
-    expect(t.el.textContent).not.toContain(m.peers_vazio());
-    expect(t.el.querySelector('.pr-btn.primaria')).toBeNull();   // sem identificador, sem registrar
+    const linha = t.el.querySelector<HTMLElement>('.mq-linha[data-chave="peer:notebook"]')!;
+    expect(linha).not.toBeNull();
+    expect(t.el.textContent).not.toContain(m.maquinas_vazio());
+    expect(linha.querySelector<HTMLInputElement>('.mq-falar')!.disabled).toBe(true);   // sem identificador, sem falar
     unmount(t.comp);
   });
 
-  it('identificador definido e lista vazia: legenda explica o registro, não manda definir o id', async () => {
+  it('identificador definido e lista vazia: mostra "nenhuma máquina" (backend não vê nada, servers vazio)', async () => {
     peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
     peersMock.listarPeers.mockResolvedValue([]);
-    const t = montar();
+    const t = montar({ servers: [] });
     await esperarCarga();
-    expect(t.el.textContent).not.toContain(m.peers_vazio());
-    expect(t.el.textContent).toContain(m.peers_legenda_alcance());
-    expect(t.el.querySelector('.pr-btn.primaria')).not.toBeNull();
+    expect(t.el.textContent).toContain(m.maquinas_vazio());
     unmount(t.comp);
   });
 
   it('enquanto a listagem não volta, a tela não afirma que não há nenhum', async () => {
     peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
-    peersMock.listarPeers.mockReturnValueOnce(new Promise(() => {}));   // nunca resolve
-    const t = montar();
+    peersMock.listarPeers.mockReturnValue(new Promise(() => {}));   // nunca resolve
+    const t = montar({ servers: [] });
     await esperarCarga();
-    expect(t.el.textContent).not.toContain(m.peers_vazio());
+    expect(t.el.textContent).not.toContain(m.maquinas_vazio());
     expect(t.el.textContent).toContain(m.comum_carregando());
     unmount(t.comp);
   });
@@ -490,7 +527,7 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
       (alvo?.id === 'srv-b' ? peersB.p : peersA.p) as never);
 
     const props = criarProps({ resolvedServer: A as Server | null, apiTarget: A as Server | null,
-                               onPickTarget: vi.fn(), onLogout: vi.fn() });
+                               onLogout: vi.fn() });
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(MaquinasSettings, { target: el, props });
@@ -535,114 +572,58 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     unmount(t.comp);
   });
 
-  it('falha ao registrar um peer aparece com nome no dialogo', async () => {
-    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
-    peersMock.listarPeers.mockResolvedValue([]);
-    peersMock.gravarPeer.mockRejectedValueOnce(new Error('Failed to fetch'));
-    const t = montar();
+  it('falha ao registrar um peer aparece com nome', async () => {
+    // registrarPeerDoisLados nunca lança (cada chamada interna tem catch próprio) — o erro que
+    // chega na tela vem da RELISTAGEM depois do registro, não do próprio registro.
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
+    // explícito, não o default do topo — um teste anterior (ordem embaralhada) pode ter deixado
+    // gravarPeer pendurado num mockReturnValue, e clearAllMocks não desfaz isso.
+    peersMock.gravarPeer.mockImplementation(async (_alvo, dado) => [dado] as never);
+    peersMock.listarPeers.mockResolvedValueOnce([]);
+    peersMock.listarPeers.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const t = montar({ servers: [SRV, B] });
     await esperarCarga();
-    t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
-    await tick();
-    const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
-    inputs[0].value = 'notebook'; inputs[0].dispatchEvent(new Event('input'));
-    inputs[1].value = 'http://192.168.0.77:8765'; inputs[1].dispatchEvent(new Event('input'));
-    inputs[2].value = 'segredo'; inputs[2].dispatchEvent(new Event('input'));
-    await tick();
-    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
-    // espera o fluxo: o registrarPeerDoisLados devolve {ok:false} SEM lançar — a tela então
-    // re-listra e mostra o estado parcial (mock estado 3), e o bloco de correção abre.
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-    await tick(); await tick();
-    // o erro de gravação vira estado nomeado na tela (não some calado)
-    const texto = t.el.textContent ?? '';
-    expect(texto).not.toContain(m.peers_estado_ok());
+    t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!.click();
+    await esperarCarga();
+    expect(t.el.querySelector('.id-erro')?.textContent).toContain(m.falha_conexao());
     unmount(t.comp);
   });
 
-  it('o campo do identificador volta a aceitar edicao no alvo novo', async () => {
-    const A = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' } as Server;
-    const B = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
-    authMock.listServers.mockReturnValue([A, B]);
+  it('registrar volta a funcionar no alvo novo (a chamada anterior travada não bloqueia)', async () => {
+    const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' } as Server;
+    const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
+    const C: Server = { id: 'srv-c', label: 'C', baseUrl: 'http://c', token: 'tc' } as Server;
+    authMock.listServers.mockReturnValue([A, B, C]);
     authMock.getActiveId.mockReturnValue('srv-a');
     apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));
     apiMock.getPushSettingsForServer.mockReturnValue(new Promise(() => {}));
-    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
-    peersMock.listarPeers.mockResolvedValue([]);
-    peersMock.setIdentificador.mockReturnValue(new Promise(() => {}) as never);  // PUT que pendura (VPN)
-
-    const props = criarProps({ resolvedServer: A as Server | null, apiTarget: A as Server | null,
-                               onPickTarget: vi.fn(), onLogout: vi.fn() });
-    const el = document.createElement('div');
-    document.body.appendChild(el);
-    const comp = mount(MaquinasSettings, { target: el, props });
-    const passos = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await tick(); await tick(); };
-    await passos();
-
-    // grava o identificador em A; o PUT nunca responde
-    const campo = el.querySelector<HTMLInputElement>('.id-campo')!;
-    campo.value = 'casa'; campo.dispatchEvent(new Event('input')); await tick();
-    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    await passos();
-
-    // o usuario desiste e clica no servidor B
-    props.resolvedServer = B; props.apiTarget = B;
-    await passos();
-
-    const campoB = el.querySelector<HTMLInputElement>('.id-campo')!;
-    const readOnlyEmB = campoB.readOnly;   // medido ANTES da segunda tentativa
-
-    // tenta gravar no servidor B
-    campoB.value = 'trabalho'; campoB.dispatchEvent(new Event('input')); await tick();
-    campoB.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    await passos();
-
-    expect(readOnlyEmB).toBe(false);
-    expect(peersMock.setIdentificador.mock.calls.length).toBe(2);
-    unmount(comp as never);
-  });
-
-  it('o dialogo de registrar volta a funcionar no alvo novo', async () => {
-    const A = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' } as Server;
-    const B = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
-    authMock.listServers.mockReturnValue([A, B]);
-    authMock.getActiveId.mockReturnValue('srv-a');
-    apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));
-    apiMock.getPushSettingsForServer.mockReturnValue(new Promise(() => {}));
-    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({
+      identificador: alvo?.id === 'srv-c' ? 'c' : alvo?.id === 'srv-b' ? 'b' : 'casa',
+    }));
     peersMock.listarPeers.mockResolvedValue([]);
     peersMock.gravarPeer.mockReturnValue(new Promise(() => {}) as never);   // POST que pendura
 
     const props = criarProps({ resolvedServer: A as Server | null, apiTarget: A as Server | null,
-                               onPickTarget: vi.fn(), onLogout: vi.fn() });
+                               onLogout: vi.fn() });
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(MaquinasSettings, { target: el, props });
     const passos = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await tick(); await tick(); };
     await passos();
 
-    const abrirEPreencher = async () => {
-      el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
-      await tick();
-      const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
-      inputs[0].value = 'notebook'; inputs[0].dispatchEvent(new Event('input'));
-      inputs[1].value = 'http://x:8765'; inputs[1].dispatchEvent(new Event('input'));
-      inputs[2].value = 'seg'; inputs[2].dispatchEvent(new Event('input'));
-      await tick();
-    };
-    await abrirEPreencher();
-    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+    // marca "servidores se falam" na máquina B, com A como alvo: o POST fica pendurado
+    el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!.click();
     await passos();
 
-    props.resolvedServer = B; props.apiTarget = B;   // desiste e troca de servidor
+    props.resolvedServer = B; props.apiTarget = B;   // desiste e troca de alvo
+
     await passos();
 
-    await abrirEPreencher();
-    const confirmar = document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!;
-    const disabledAoReabrir = confirmar.disabled;   // medido ANTES do clique
-    confirmar.click();
+    // marca "servidores se falam" na máquina C, no alvo NOVO — não fica preso à chamada anterior
+    el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-c"] .mq-falar')!.click();
     await passos();
 
-    expect(disabledAoReabrir).toBe(false);
     expect(peersMock.gravarPeer.mock.calls.length).toBe(2);
     unmount(comp as never);
   });
@@ -650,51 +631,39 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
   // Rodada 3 (parecer do revisor): selos de lado derivados do ESTADO — o sucesso não pode
   // mostrar ✗ (o glifo não é mais texto chumbado); a montagem checa a ida da lista; e o bloco
   // de correção de endereço ganha vida (testa no endereço digitado).
-  async function gestoRegistrar(id: string, url: string, token: string, t: { el: HTMLElement }) {
-    t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
-    await tick();
-    const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
-    inputs[0].value = id; inputs[0].dispatchEvent(new Event('input'));
-    inputs[1].value = url; inputs[1].dispatchEvent(new Event('input'));
-    inputs[2].value = token; inputs[2].dispatchEvent(new Event('input'));
-    await tick();
-    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+  async function marcarFalar(chave: string, t: { el: HTMLElement }) {
+    t.el.querySelector<HTMLInputElement>(`.mq-linha[data-chave="${chave}"] .mq-falar`)!.click();
     await esperarCarga();
   }
 
-  it('B2 — sucesso com os dois lados ok não mostra ✗ em nenhum selo; falha mostra só na volta', async () => {
-    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+  it('B2 — sucesso com os dois lados ok não mostra ✗ em nenhum selo; falha real mostra só na volta', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'notebook' : 'casa' }));
     peersMock.listarPeers.mockResolvedValue([]);
     peersMock.gravarPeer.mockImplementation(async () => [
       { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
     ] as never);
-    peersMock.listarPeers.mockImplementation(async () => [
-      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
-    ] as never);
-    // sucesso: ida ok + volta ok
+    // sucesso: ida ok + volta ok — o hint só existe quando há falha real, então sucesso é ZERO .pr-lado
     peersMock.checkPeer.mockImplementation(async () => ({ estado: 'ok' }) as never);
-    const t = montar();
+    const t = montar({ servers: [SRV, B] });
     await esperarCarga();
-    await gestoRegistrar('notebook', 'http://192.168.0.77:8765', 'segredo', t);
-    const lados = [...t.el.querySelectorAll<HTMLElement>('.pr-lado')];
-    expect(lados).toHaveLength(2);
-    for (const l of lados) expect(l.textContent).not.toContain('✗');
-    expect(lados[0].textContent).toContain(m.peers_lado_ida());
-    expect(lados[1].textContent).toContain(m.peers_lado_volta());
+    await marcarFalar('srv:srv-b', t);
+    expect(t.el.querySelectorAll('.pr-lado')).toHaveLength(0);
     unmount(t.comp);
 
-    // falha: a volta recusou → ✗ só no selo da volta, ✓ no da ida. Montagem com lista VAZIA
-    // (nenhuma checagem pré-gesto consome os drives do check), e o gesto re-lista com o peer.
+    // falha real (não é recusa de token): ✗ só no selo da volta, ✓ no da ida. Montagem com lista
+    // VAZIA (nenhuma checagem pré-gesto consome os drives do check), e o gesto re-lista com o peer.
     peersMock.listarPeers.mockResolvedValueOnce([]);
     peersMock.listarPeers.mockImplementation(async () => [
       { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
     ] as never);
     peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });
-    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'recusou', motivo: 'credencial' });
-    const t2 = montar();
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'falhou' });
+    const t2 = montar({ servers: [SRV, B] });
     await esperarCarga();
-    await gestoRegistrar('notebook', 'http://192.168.0.77:8765', 'segredo', t2);
+    await marcarFalar('srv:srv-b', t2);
     const l2 = [...t2.el.querySelectorAll<HTMLElement>('.pr-lado')];
+    expect(l2).toHaveLength(2);
     expect(l2[0].textContent).toContain('✓');
     expect(l2[0].textContent).not.toContain('✗');
     expect(l2[1].textContent).toContain('✗');
@@ -702,30 +671,55 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     unmount(t2.comp);
   });
 
-  it('B3 — peers já na lista são checados na montagem: nada fica "Testando…" e checkPeer roda por peer', async () => {
-    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
-    peersMock.listarPeers.mockResolvedValue([
-      { id: 'notebook', base_url: 'http://n:8765', token: '••••' },
-      { id: 'nuvem', base_url: 'http://nv:8765', token: '••••' },
-    ]);
-    const t = montar();
+  it('B2b — volta recusada por token (credencial) ganha dica própria, sem pr-lados', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'notebook' : 'casa' }));
+    peersMock.gravarPeer.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
+    peersMock.listarPeers.mockResolvedValueOnce([]);
+    peersMock.listarPeers.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'recusou', motivo: 'credencial' });
+    const t = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    await marcarFalar('srv:srv-b', t);
+    expect(t.el.querySelectorAll('.pr-lado')).toHaveLength(0);
+    expect(t.el.textContent).toContain(m.maquinas_volta_token_recusado());
+    expect(t.el.textContent).not.toContain(m.peers_estado_parcial());
+    unmount(t.comp);
+  });
+
+  it('B3 — peers já na lista são checados na montagem: nada fica "Testando…" e checkPeer roda por peer, ida e volta', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nuvem' : 'casa' }));
+    peersMock.listarPeers.mockImplementation(async (alvo: Server | null) => {
+      if (alvo === B) return [{ id: 'casa', base_url: 'https://casa.ts.net', token: '••••' }];   // o que B guarda de nós
+      return [
+        { id: 'notebook', base_url: 'http://n:8765', token: '••••' },
+        { id: 'nuvem', base_url: 'http://nv:8765', token: '••••' },
+      ];
+    });
+    const t = montar({ servers: [SRV, B] });
     await esperarCarga();
     // uma checagem de IDA por peer, com id e endereço DELE
-    expect(peersMock.checkPeer).toHaveBeenCalledTimes(2);
     expect(peersMock.checkPeer).toHaveBeenCalledWith(null, 'http://n:8765', 'notebook');
     expect(peersMock.checkPeer).toHaveBeenCalledWith(null, 'http://nv:8765', 'nuvem');
-    // nenhuma linha presa em "Testando as duas pontas…" (agora mostram o estado real + '·' na volta)
+    // volta de 'nuvem' (casado com o navegador B): mede pelo endereço que B guardou pra nós,
+    // não pelo baseUrl do navegador (decisão 3 da spec: aqui é LAN, lá é Tailscale)
+    expect(peersMock.checkPeer).toHaveBeenCalledWith(B, 'https://casa.ts.net', 'casa');
+    expect(peersMock.checkPeer).toHaveBeenCalledTimes(3);
+    // nenhuma linha presa em "Testando as duas pontas…"
     expect(t.el.textContent).not.toContain(m.peers_estado_testando());
-    const linhas = [...t.el.querySelectorAll('.pr-linha')];
-    expect(linhas).toHaveLength(2);
-    for (const l of linhas) {
-      expect(l.querySelector('.pr-estado')?.textContent).not.toContain(m.peers_estado_testando());
-    }
+    expect(t.el.querySelectorAll('.mq-linha')).toHaveLength(3);   // SRV, srv-b/nuvem, peer:notebook
     unmount(t.comp);
   });
 
   it('B4 — "Testar de novo" do bloco de correção registra e testa no ENDEREÇO DIGITADO', async () => {
-    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'notebook' : 'casa' }));
     peersMock.gravarPeer.mockImplementation(async () => [
       { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
     ] as never);
@@ -735,20 +729,20 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     peersMock.listarPeers.mockImplementation(async () => [
       { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
     ] as never);
-    const t = montar();
+    const t = montar({ servers: [SRV, B] });
     await esperarCarga();
     // gesto com a volta recusando: o bloco de correção abre
     peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });
     peersMock.checkPeer.mockResolvedValueOnce({ estado: 'recusou', motivo: 'credencial' });
-    await gestoRegistrar('notebook', 'http://192.168.0.77:8765', 'segredo', t);
+    await marcarFalar('srv:srv-b', t);
     const campo = t.el.querySelector<HTMLInputElement>('.corrige-input');
     expect(campo).not.toBeNull();   // bloco aberto
     // o usuário digita o endereço CERTO e clica em "Testar de novo"
     campo!.value = 'http://novo:9999';
-    campo!.dispatchEvent(new Event('input'));
+    campo!.dispatchEvent(new Event('input', { bubbles: true }));
     await tick();
     t.el.querySelector<HTMLButtonElement>('.corrige .btn.primaria')!.click();
-    // o gesto de correção roda contra o NOVO endereço (hoje não rodava contra nada)
+    // o gesto de correção roda contra o NOVO endereço, com o token do NAVEGADOR (hoje não rodava contra nada)
     await esperarCarga();
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(
       null,
@@ -758,33 +752,144 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     expect(t.el.querySelector('.corrige')).toBeNull();
     unmount(t.comp);
   });
+
+  it('volta na montagem: sem registro de lá mostra o aviso específico', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockImplementation(async (alvo: Server | null) => {
+      if (alvo === B) return [];   // B ainda não registrou esta máquina de volta
+      return [{ id: 'nb', base_url: 'http://b', token: '••' }];
+    });
+    const t = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    const linha = t.el.querySelector<HTMLElement>('.mq-linha[data-chave="srv:srv-b"]')!;
+    expect(linha.textContent).toContain(m.maquinas_volta_sem_registro());
+    unmount(t.comp);
+  });
+
+  it('volta na montagem: volta falhou abre a correção com o endereço de lá', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockImplementation(async (alvo: Server | null) => {
+      if (alvo === B) return [{ id: 'casa', base_url: 'https://casa.ts.net', token: '••' }];
+      return [{ id: 'nb', base_url: 'http://b', token: '••' }];
+    });
+    peersMock.checkPeer.mockImplementation(async (alvo: Server | null) => (alvo === B ? { estado: 'falhou' } : { estado: 'ok' }));
+    const t = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    const campo = t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .corrige-input');
+    expect(campo).not.toBeNull();
+    expect(campo!.value).toBe('https://casa.ts.net');
+    unmount(t.comp);
+  });
+
+  it('ida rejeitando (falha de rede) não trava a linha em "Testando…" nem gera rejeição não tratada (Critical)', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockResolvedValue([{ id: 'nb', base_url: 'http://b', token: '••' }]);
+    peersMock.checkPeer.mockRejectedValueOnce(new Error('fetch failed'));
+    const t = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    expect(t.el.textContent).not.toContain(m.peers_estado_testando());
+    expect(t.el.textContent).toContain(m.peers_estado_parcial());
+    unmount(t.comp);
+  });
+
+  it('remover peer limpa estados[id] e fecha a correção; catch também zera removerLadoDeLaFalhou', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockImplementation(async (alvo: Server | null) => {
+      if (alvo === B) return [{ id: 'casa', base_url: 'https://casa.ts.net', token: '••' }];
+      return [{ id: 'nb', base_url: 'http://b', token: '••' }];
+    });
+    peersMock.checkPeer.mockImplementation(async (alvo: Server | null) => (alvo === B ? { estado: 'falhou' } : { estado: 'ok' }));
+    const t = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    // corrige abriu na montagem (volta falhou de verdade); estados['nb'] tem farol vermelho
+    expect(t.el.querySelector('.mq-linha[data-chave="srv:srv-b"] .corrige')).not.toBeNull();
+    peersMock.listarPeers.mockResolvedValue([]);   // depois de remover, o servidor não conhece mais o peer
+    t.el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!.click();
+    await tick();
+    [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === m.peers_remover())!.click();
+    await esperarCarga();
+    const linha = t.el.querySelector('.mq-linha[data-chave="srv:srv-b"]')!;
+    expect(linha.querySelector('.pr-lado')).toBeNull();
+    expect(linha.querySelector('.corrige')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('testarDeNovo não sobrescreve peers com o resultado atrasado de um alvo trocado (guard de geração)', async () => {
+    const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' } as Server;
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    const C: Server = { id: 'srv-c', label: 'C', baseUrl: 'http://c', token: 'tc' } as Server;
+    authMock.listServers.mockReturnValue([A, B, C]);
+    authMock.getActiveId.mockReturnValue('srv-a');
+    apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));
+    apiMock.getPushSettingsForServer.mockReturnValue(new Promise(() => {}));
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({
+      identificador: alvo?.id === 'srv-b' ? 'nb' : alvo?.id === 'srv-c' ? 'c' : 'casa',
+    }));
+    let chamadasC = 0;
+    let resolverStaleC!: (v: unknown) => void;
+    const staleC = new Promise((r) => { resolverStaleC = r; });
+    peersMock.listarPeers.mockImplementation(async (alvo: Server | null) => {
+      // props de criarProps são $state — o nested object chega como PROXY, não a referência
+      // literal; comparar por .id (não por ===) é o padrão já usado pelos testes vizinhos.
+      if (alvo?.id === 'srv-b') return [{ id: 'casa', base_url: 'https://casa.ts.net', token: '••' }];
+      if (alvo?.id === 'srv-c') { chamadasC++; return chamadasC === 1 ? [{ id: 'peer-fresco', base_url: 'http://c-peer', token: '***' }] : (staleC as never); }
+      return [{ id: 'nb', base_url: 'http://b', token: '••' }];
+    });
+    peersMock.checkPeer.mockImplementation(async (alvo: Server | null) => (alvo === B ? { estado: 'falhou' } : { estado: 'ok' }));
+
+    const props = criarProps({ resolvedServer: A as Server | null, apiTarget: A as Server | null, onLogout: vi.fn() });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(MaquinasSettings, { target: el, props });
+    const passos = async () => { for (let i = 0; i < 30; i++) { await Promise.resolve(); await tick(); } };
+    await passos();
+
+    // volta falhou na montagem: correção já aberta para o peer de B
+    expect(el.querySelector('.mq-linha[data-chave="srv:srv-b"] .corrige-input')).not.toBeNull();
+    let resolverGravar!: (v: unknown) => void;
+    peersMock.gravarPeer.mockImplementation(() => new Promise((r) => { resolverGravar = r; }) as never);
+    el.querySelector<HTMLButtonElement>('.mq-linha[data-chave="srv:srv-b"] .corrige .btn.primaria')!.click();
+    await passos();
+
+    props.resolvedServer = C; props.apiTarget = C;   // troca de alvo com o testarDeNovo em voo
+    await passos();   // carga fresca de C (1ª chamada de listarPeers(C))
+
+    resolverGravar([{ id: 'nb', base_url: 'http://b', token: 'tb' }]);   // libera o registro antigo, atrasado
+    resolverStaleC([{ id: 'peer-antigo', base_url: 'http://stale', token: '***' }]);
+    await passos();
+
+    expect(el.textContent).toContain('peer-fresco');
+    expect(el.textContent).not.toContain('peer-antigo');
+    unmount(comp as never);
+  });
 });
 
 describe('MaquinasSettings — ordem dos blocos', () => {
-  it('esta máquina vem antes das que ela alcança, e os servidores deste aparelho por último', async () => {
+  it('esta máquina vem antes da lista de máquinas', async () => {
     const { el, comp } = montar();
     await tick();
     const texto = el.textContent ?? '';
     const esta = texto.indexOf(m.peers_esta_maquina());
-    const alcance = texto.indexOf(m.peers_secao_alcance());
-    const aparelho = texto.indexOf(m.maquinas_este_aparelho());
+    const secao = texto.indexOf(m.maquinas_secao());
     expect(esta).toBeGreaterThanOrEqual(0);
-    expect(esta).toBeLessThan(alcance);
-    expect(alcance).toBeLessThan(aparelho);
-    expect(texto).toContain(m.maquinas_este_aparelho_legenda());
+    expect(esta).toBeLessThan(secao);
+    expect(texto).toContain(m.maquinas_secao_legenda());
     unmount(comp);
   });
 
-  it('sem servidor resolvido, só o bloco deste aparelho aparece', async () => {
+  it('sem servidor resolvido, só a lista de máquinas aparece', async () => {
     authMock.listServers.mockReturnValue([]);
     authMock.getActiveId.mockReturnValue(null);
     const el = document.createElement('div');
     document.body.appendChild(el);
-    const comp = mount(MaquinasSettings, { target: el, props: { resolvedServer: null, apiTarget: null, onPickTarget: vi.fn(), onLogout: vi.fn(async () => {}) } });
+    const comp = mount(MaquinasSettings, { target: el, props: { resolvedServer: null, apiTarget: null, onLogout: vi.fn(async () => {}) } });
     await tick();
     expect(el.textContent).not.toContain(m.peers_esta_maquina());
-    expect(el.textContent).not.toContain(m.peers_secao_alcance());
-    expect(el.textContent).toContain(m.maquinas_este_aparelho());
+    expect(el.textContent).toContain(m.maquinas_secao());
     unmount(comp as never);
   });
 });

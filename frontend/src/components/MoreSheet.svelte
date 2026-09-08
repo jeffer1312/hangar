@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
 
   // Acoes que saíram da NavBar do CELULAR pro menu "⋯". Elas custavam 80px fixos da barra e sao de
   // uso raro; o nome da sessao, que e a informacao mais disputada ali, chegava a "clau…". No desktop
@@ -29,7 +30,7 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.navbar_mais_acoes()}>
+<BottomSheet {open} {onClose} ariaLabel={m.navbar_mais_acoes()} centered={desktop.atual}>
   <div class="more">
     <h2 class="more-title">{m.navbar_mais_acoes()}</h2>
 

@@ -80,8 +80,17 @@
 </div>
 
 <style>
+  /* Mesmo material do cartão nativo (AskQuestionCard): os dois desenham a MESMA coisa — uma
+     pergunta com opções — e antes um era um cartão e o outro, botões soltos sobre o papel de
+     parede. Sem `--surface-raised` cru: quem tem papel de parede via retângulo chapado boiando. */
   .options-wrap {
-    padding: var(--space-4) var(--space-4) var(--space-6);
+    align-self: stretch;
+    max-width: 600px;
+    margin: var(--space-2) 0;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4) var(--space-4) var(--space-5);
   }
 
   .question {
@@ -106,7 +115,9 @@
   .q-code {
     font-family: var(--font-mono);
     font-size: 0.85em;
-    background: var(--surface-raised);
+    /* `--surface-inset`, não `--surface-raised`: este é o mesmo token do cartão que agora envolve a
+       pergunta, e o trecho em code sumia dentro dele. */
+    background: var(--surface-inset);
     padding: 2px 6px;
     border-radius: 4px;
     word-break: break-all;
@@ -136,7 +147,9 @@
   .option-btn {
     width: 100%;
     min-height: 52px;
-    background: var(--surface-raised);
+    /* Dentro do cartão, a opção precisa se destacar DELE: `--surface-inset` é o token de campo
+       (o que recebe toque/entrada), e é ele que dá contraste sem virar segundo cartão. */
+    background: var(--surface-inset);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
     display: flex;

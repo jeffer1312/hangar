@@ -29,6 +29,7 @@ import { matchesKey, Text, type TUI, truncateToWidth } from '@earendil-works/pi-
 import { type Static, Type } from 'typebox'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
+import { getAgentContext } from './lib/agent-context'
 
 const COLLAPSE_CONFIG_PATH = `${os.homedir()}/.pi/agent/claude-todo.json`
 let widgetCollapsed = true
@@ -346,6 +347,8 @@ const renderTodoListResult = (todoList: Todo[], expanded: boolean, theme: Theme)
 }
 
 export default function todoExtension(pi: ExtensionAPI) {
+  // No OMP, substituir a ferramenta nativa quebra o estado de tarefas usado pelo próprio núcleo.
+  if (getAgentContext().harness === 'omp') return
   // In-memory state (reconstructed from session on load)
   let todos: Todo[] = []
   let nextId = 1

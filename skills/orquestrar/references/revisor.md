@@ -38,7 +38,7 @@ report.
 | **REPROVA** | the **executor only** — the report as a `.md`, the message is its path | no copy to the arbiter: he is not a correction middleman, and every pass through him costs his whole context |
 | **APROVA** | **both, in this order**: the executor first (it is their authorization to commit — nobody else can give it), then the arbiter (his check reads the branch tip, which only moves after the commit) | it is not the author closing their own gate: you close it |
 | **DEVOLVIDO** | the **arbiter only** | gate closed, he decides |
-| every round | one `veredito` line appended to `eventos.jsonl`, by you, directly | fields `task`, `rodada`, `resultado`, `sessao`, optional `motivo`; on the second rejection of the same cause, `"reincide": true` — the door through which the arbiter enters the loop |
+| every round | one `veredito` line appended to `eventos.jsonl`, by you, directly | fields `task`, `rodada`, `resultado` (**lowercase**, the same vocabulary as the report), `sessao`, optional `motivo`; on the second rejection of the same cause, `"reincide": true` — the door through which the arbiter enters the loop. Run `${CLAUDE_SKILL_DIR}/scripts/orq-valida-eventos.py <file>` right after appending — one line per round, and the commit hash is a **field** of the verdict, never a line of its own |
 
 The line is a file, not a message, because a message wakes his session; and it doesn't break "only
 the arbiter writes the contract and the lessons" — that rule stops a session from recording its
@@ -79,6 +79,15 @@ NOTED 1: <one line> — not fixed now because <reason>; stays in the contract.
 
 WASTE this round: <what the executor did that became nothing> — would have prevented: <the instruction>.
 ```
+
+**A blocker names its source when there are two authorities.** A Task with a bar has two documents
+that can demand things, and they can disagree: the **excerpt** (what the user asked for) and the
+**bar** (what the reference does today). Where the excerpt deliberately goes beyond the reference,
+the reference **stops being able to arbitrate that element** — and a blocker that cites the bar for
+something the excerpt added inverts the criterion, sending the executor to prove a fidelity nobody
+asked for. One word per blocker line settles it: *from the excerpt* or *from the bar*. In doubt,
+open the reference before writing the line — the executor will, and a wrong source costs them a
+section of report and a capture to disprove.
 
 ### The last line is mandatory, including on APROVA
 

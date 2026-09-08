@@ -74,6 +74,13 @@ import * as m from '../paraglide/messages';
   // Lista de servidores (gerenciada no menu de conta: adicionar/remover). Sem "ativo" fixo — a lista é
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar. Vem do store (derived).
   const servers = $derived(sessionsStore.servers);
+  // Só `error`, SEM o portão `!loaded` do `serverErrors` acima: aquele existe pra o BANNER não
+  // gritar num piscar, mas aqui a pergunta é outra — "dá pra criar sessão nessa máquina agora?" —, e
+  // quem respondeu há 5 minutos e calou não dá. Piscar não gera vaivém do chip: o erro só é marcado
+  // depois de 25s de silêncio (watchdog) ou 10s sem o primeiro quadro.
+  const servidoresOffline = $derived(
+    new Set(sessionsStore.byServer.filter((b) => b.error).map((b) => b.server.id)),
+  );
 
   // 1 SSE por servidor via store, refcount pareado EXATAMENTE 1x (retain no mount, release no cleanup).
   onMount(() => {
@@ -180,16 +187,18 @@ import * as m from '../paraglide/messages';
   // cai no servidor certo. O stream SSE emitirá um evento sessions com a sessão nova.
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null, model?: string | null, effort?: string | null,
-                              permissionMode?: string | null) {
-    await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode);
+                              permissionMode?: string | null, ompProfile?: string | null) {
+    await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode, ompProfile);
   }
 
   // Abrir/apagar precisam mirar o servidor DA sessão: selectServer(serverId) antes, pois api.ts lê
   // o ativo a cada chamada (sem reload). Assim chat/SSE/delete vão pro backend certo.
   function openSession(s: AggSession) {
-    // Sem id confiável não abre (exceção kimi) — o modelo bloqueia igual; repetir aqui é pra não
-    // salvar o scroll nem congelar o save de uma saída que não vai acontecer.
-    if (s.tracked === false && s.provider !== 'kimi') return;
+    // Sem id confiável não abre (exceções kimi e codex) — o modelo bloqueia igual; repetir aqui é
+    // pra não salvar o scroll nem congelar o save de uma saída que não vai acontecer. A cópia da
+    // regra é a divergência entre as duas views em pessoa: liberar o Codex no modelo e esquecer
+    // esta linha deixou o card sem abrir NO CELULAR, que é onde ela é a única saída.
+    if (s.tracked === false && s.provider !== 'kimi' && s.provider !== 'codex') return;
     // Captura a posição AGORA (DOM intacto) e congela o save — ver comentário do restore.
     if (restoreTarget <= 0) savedScroll = listEl?.scrollTop ?? savedScroll;
     leaving = true;
@@ -601,6 +610,8 @@ import * as m from '../paraglide/messages';
   <CreateSessionSheet
     open={showCreateSheet}
     {servers}
+    offline={servidoresOffline}
+    latencias={sessionsStore.latencias}
     onClose={() => (showCreateSheet = false)}
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}

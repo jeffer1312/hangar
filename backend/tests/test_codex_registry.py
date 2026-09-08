@@ -362,7 +362,7 @@ def test_pane_codex_sem_sidecar_nao_vira_sessao_claude(tmp_path):
     panes = {"cx": [{"name": "cx", "cwd": "/tmp/a", "pid": 321, "pane_id": "%3", "active": True}]}
     with patch.object(registry.tmux, "list_panes_all", return_value=panes), \
          patch.object(procinfo, "_proc_children_map", return_value={}), \
-         patch.object(registry, "provider_of_pane", return_value="codex"), \
+         patch.object(registry, "agente_do_pane", return_value=("codex", 111)), \
          patch.object(SessionRegistry, "resolve_tracked") as resolve, \
          patch.object(SessionRegistry, "_repl_sid", return_value=None):
         out = reg.list()

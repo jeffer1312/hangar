@@ -77,6 +77,9 @@ class JanelaCota(BaseModel):
     rotulo: str
     pct: float
     reset_ts: float | None = None
+    # Janela de UM modelo (o `weekly_scoped` do Fable): só aperta a sessão que roda nele. A
+    # pílula do topo precisa disto pra não mostrar "Fable 100%" numa sessão Opus com 5h a 15%.
+    por_modelo: bool = False
 
 
 class CotaConta(BaseModel):
@@ -258,7 +261,8 @@ def _janelas_por_modelo(limits: object) -> list[JanelaCota]:
         if not isinstance(nome, str) or not nome or not isinstance(pct, (int, float)) \
                 or isinstance(pct, bool):
             continue
-        out.append(JanelaCota(rotulo=nome, pct=float(pct), reset_ts=_iso_ts(lim.get("resets_at"))))
+        out.append(JanelaCota(rotulo=nome, pct=float(pct), reset_ts=_iso_ts(lim.get("resets_at")),
+                              por_modelo=True))
     return out
 
 

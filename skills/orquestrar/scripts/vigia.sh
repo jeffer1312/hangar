@@ -13,11 +13,15 @@
 #      `--tmux` is MANDATORY: plain `hangar-send` REFUSES to talk to a Claude session on the same
 #      machine (rc=3, "use SendMessage") — and a shell script has no SendMessage.
 #
-# The firing condition is conservative on purpose: only when ALL of them are stopped at the same
-# time. An idle arbiter with someone working is the NORMAL state (he waits), and waking him there
-# is noise that spends the most expensive token at the table. In a parallel batch this matters
-# even more: with ONE watchdog per pair, each saw only its own slice and woke the arbiter while
-# another executor worked.
+# It fires in TWO independent ways, and the second is the one that produces false alarms:
+#   - collectively, when NOBODY on the list has the ball (a deadlocked pipeline);
+#   - per session, when ANY listed session other than the arbiter sits idle for the interval —
+#     including one that is waiting exactly as it was told to. Whoever is on the list is being
+#     WATCHED, not "being considered": the list is who has the ball right now, never the whole
+#     cast. An idle arbiter with someone working is the NORMAL state (he waits), and waking him
+#     there is noise that spends the most expensive token at the table. In a parallel batch every
+#     writer has the ball, so all of them go in ONE watchdog: with one watchdog per pair, each saw
+#     only its own slice and woke the arbiter while another executor worked.
 #
 # Run it as a SERVICE, never as a background process of the turn (`setsid nohup … &` dies with
 # the turn that launched it — gone from ps, empty log, no error):

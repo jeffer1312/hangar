@@ -111,12 +111,25 @@ def _question(lines: list[str]) -> Optional[str]:
 _FOOTER_RE = re.compile(r"to navigate|Esc to cancel|Enter to select|Enter select")
 
 
+def _rodape(lines: list[str], n: int = 8) -> str:
+    """As `n` ultimas linhas do pane, DESCARTANDO as em branco do fim.
+
+    O `capture-pane` devolve a altura inteira, entao um desenho no ALTO do pane (dialogo, picker
+    curto) deixa o fundo vazio e empurra o rodape pra fora da janela — foi assim que o "Accessing
+    workspace" do Claude Code passou por "tela livre" e o Enter do envio caiu no "No, exit" dele,
+    matando a sessao. Mesma correcao que o `_pane_tail` do terminal_input ja fazia."""
+    fim = len(lines)
+    while fim and not lines[fim - 1].strip():
+        fim -= 1
+    return "\n".join(lines[max(0, fim - n):fim])
+
+
 def is_overlay(pane_text: str) -> bool:
     # Overlay so-TUI aberto: rodape de navegacao por teclas no FUNDO do pane (ultimas 8 linhas — nao o
     # pane todo, senao a MESMA frase citada na conversa/scrollback dava falso-positivo). Cobre pickers
     # (/model) e paineis (/status, /config, /help) alem do AskUserQuestion. Fonte unica de "overlay"
     # (StateMonitor e terminal_input.deliverable usam esta).
-    return bool(_FOOTER_RE.search("\n".join(pane_text.splitlines()[-8:])))
+    return bool(_FOOTER_RE.search(_rodape(pane_text.splitlines())))
 
 
 # Marcadores da tela de welcome/login do Claude Code (tema -> metodo -> URL OAuth -> colar code).
@@ -134,31 +147,25 @@ def is_login(pane_text: str) -> bool:
     return bool(_LOGIN_RE.search(pane_text))
 
 
-# Banner de rate-limit (feature #8). ponytail: texto EXATO do Claude Code nao documentado
-# publicamente -- CALIBRATION KNOB, igual ao _LOGIN_RE acima: melhor-esforco, ajustar aqui quando
-# confirmado contra o banner real. Cobre variantes plausiveis ("usage limit reached" / "5-hour limit
-# reached" / "rate limit") seguidas da frase de reset ("resets at 3pm" / "resets 15:30" / "try again
-# at ..."), capturando so o horario.
+# Banner de limite de uso (feature #8), calibrado contra o Claude Code real (fixture
+# pane_limite_uso.txt): o rodape mostra `⚠ Usage limit reached · continuing automatically at 9:10pm`
+# e a conversa ecoa `You've hit your session limit · resets 9:10pm`. Frase e horario na MESMA linha.
 _LIMIT_RE = re.compile(
-    r"(?:usage limit reached|rate limit reached|limit reached)"
-    r".{0,80}?"
-    r"(?:resets?|reset|try again)\s*(?:at\s*)?"
+    r"(?:usage limit reached|hit your \w+ limit|limit reached)"
+    r"[^\n]{0,80}?"
+    r"(?:resets?|continuing automatically|try again)\s*(?:at\s*)?"
     r"([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)",
-    re.I | re.S,
+    re.I,
 )
+# So o rodape, como o is_overlay: o banner mora la enquanto a sessao espera, e uma sessao que CITA
+# o texto na conversa (saida de ferramenta, grep) ganhava o chip de limite sem ter limite nenhum.
+_LIMIT_TAIL = 8
 
 
 def rate_limit_reset(pane_text: str) -> Optional[str]:
-    """Horario de reset do limite de uso (string crua, ex: "3pm"/"15:30"), se o pane mostra o
-    banner de rate-limit. None numa sessao normal. ponytail: calibration knob -- ver _LIMIT_RE.
-
-    LIMITACAO DE COBERTURA (feature #8): so roda sobre um pane REALMENTE capturado. O StateMonitor
-    (chat aberto) captura sempre, entao o campo `limited` funciona la; mas a LISTA (list_with_state)
-    fast-pathea sessoes working/idle pelo marcador do hook e PULA a captura -> nesse caminho (o normal
-    pra uma sessao rate-limited, que fica working/idle) rate_limit_reset nunca e chamado e limited fica
-    False. Ver a nota no fast-path de registry.list_with_state. Nao mover a deteccao pro watchdog antes
-    de _LIMIT_RE ser calibrado contra o banner real (hoje e chute nao-calibrado)."""
-    m = _LIMIT_RE.search(pane_text)
+    """Horario de volta do limite de uso (string crua, ex: "9:10pm"/"15:30") se o rodape do pane
+    mostra o banner; None numa sessao normal."""
+    m = _LIMIT_RE.search("\n".join(pane_text.splitlines()[-_LIMIT_TAIL:]))
     return m.group(1).strip() if m else None
 # Glifos que marcam a BORDA do box do picker: bullet de assistente, junta de tool-result e
 # spinners. Scrollback (incl. listas numeradas perdidas) vive alem dessas linhas.
@@ -202,7 +209,7 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
     # Cursor do Pi ("> N.") so e picker VIVO se o rodape de navegacao estiver nas ultimas linhas do
     # pane (mesma janela do is_overlay). Uma citacao do picker no scrollback tem o "> 1." mas o
     # rodape dela subiu junto — sem a trava ela travava o app num menu fantasma.
-    if pi_cursor and not _FOOTER_RE.search("\n".join(lines[-8:])):
+    if pi_cursor and not _FOOTER_RE.search(_rodape(lines)):
         return None
     # No omp o bloco e o proprio box, delimitado — nao ha o que adivinhar subindo linha a linha (ver
     # omp_box: o cartao-resumo que fica na tela tem as mesmas marcas de opcao).
@@ -269,6 +276,47 @@ def _live_spinner(pane_text: str) -> Optional[str]:
         if len(s) >= 2 and s[0] in SPINNER_GLYPHS and s[1] == " ":
             return s
     return None
+
+
+# Seletor da TUI do Codex ANTES da thread (aprovar hooks, escolher login). Cursor proprio: `›`
+# (U+203A), que o `classify` nao conhece — e nao entra la de proposito, porque o `classify` roda em
+# TODO pane e um chevron solto no scrollback viraria menu fantasma. Aqui o portao e o rodape do
+# proprio widget, que so existe com ele na tela.
+_CODEX_OPT_RE = re.compile(r"^\s*[›>]?\s*(\d+)\.\s+(.*\S)\s*$")
+_CODEX_RODAPE = "press enter to confirm"
+
+
+def menu_codex(pane_text: str) -> Optional[tuple[Optional[str], list[str]]]:
+    """(pergunta, opcoes) do seletor do Codex, ou None quando nao ha seletor na tela.
+
+    Existe separado do `classify` porque a TUI do Codex nao tem regua nem composer pra ancorar a
+    leitura — sem menu, ler o pane dela devolve as duas ultimas linhas como se fossem estado. Aqui
+    so o widget e reconhecido: rodape presente, opcoes numeradas em sequencia (1, 2, 3...) e
+    contiguas. Qualquer desvio disso devolve None, que e "nao sei", nao "nao ha".
+    """
+    linhas = pane_text.splitlines()
+    # `_rodape` e nao `linhas[-6:]`: o widget desenha no ALTO do pane e o `capture-pane` devolve a
+    # altura inteira, entao as ultimas linhas sao brancas — o mesmo tropeco do dialogo de confianca.
+    if _CODEX_RODAPE not in _rodape(linhas).lower():
+        return None
+    opcoes: list[str] = []
+    primeira = None
+    for i, ln in enumerate(linhas):
+        mm = _CODEX_OPT_RE.match(ln)
+        if not mm:
+            if opcoes:
+                break          # bloco contiguo: a primeira linha fora do padrao fecha o menu
+            continue
+        if int(mm.group(1)) != len(opcoes) + 1:
+            return None        # numeracao fora de ordem: nao e o widget
+        if primeira is None:
+            primeira = i
+        opcoes.append(mm.group(2))
+    if len(opcoes) < 2:
+        return None
+    # Pergunta = a ultima linha nao vazia acima do bloco (o titulo do widget).
+    pergunta = next((ln.strip() for ln in reversed(linhas[:primeira]) if ln.strip()), None)
+    return pergunta, opcoes
 
 
 def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optional[list[str]]]:

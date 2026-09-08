@@ -1,5 +1,7 @@
 <script lang="ts">
 import BottomSheet from './BottomSheet.svelte';
+import NavRemoto from './NavRemoto.svelte';
+import { desktop } from '../lib/desktop.svelte';
 import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import { getNavegadorDaSessao, getPreview, startPreview, stopPreview } from '@hangar/core';
@@ -16,18 +18,26 @@ import * as m from '../paraglide/messages';
   let navUrl = $state('');
   let navPorta = $state<number | null>(null);
   let navPath = $state('/');
+  // Ter navegador e ter porta local são coisas diferentes: o acesso remoto vale pra qualquer página
+  // (é o navegador de lá que renderiza), e só o túnel exige que a URL seja desta máquina.
+  let temNav = $state(false);
   async function lerNavegador() {
-    navUrl = ''; navPorta = null; navPath = '/';
+    navUrl = ''; navPorta = null; navPath = '/'; temNav = false;
     if (!sessionName) return;
     try {
       const u = (await getNavegadorDaSessao(sessionName)).url;
       if (!u) return;
+      temNav = true;
       const p = new URL(u);
       if (!['localhost', '127.0.0.1', '[::1]'].includes(p.hostname)) return;
       navUrl = u;
       navPorta = p.port ? Number(p.port) : (p.protocol === 'https:' ? 443 : 80);
       navPath = p.pathname + p.search + p.hash;
-    } catch { /* sem navegador ou fora do app desktop */ }
+    } catch (e) {
+      // Sem navegador e fora do app desktop são o caso normal — a seção some e está certo. O log
+      // existe pro outro caso, que some igualzinho: o backend fora do ar ou respondendo erro.
+      console.debug('PreviewSheet: navegador da sessão não respondeu', e);
+    }
   }
   async function abrirNavegador() {
     if (navPorta == null) return;
@@ -109,17 +119,24 @@ import * as m from '../paraglide/messages';
   </ModalDialog>
 {/if}
 
-<BottomSheet {open} {onClose} ariaLabel={m.preview_titulo()}>
+<BottomSheet {open} {onClose} ariaLabel={m.preview_titulo()} wide={desktop.atual} centered={desktop.atual}>
   <div class="pv">
-    <div class="pv-head">
-      <h2 class="pv-title">{m.preview_titulo()}</h2>
-      <p class="pv-sub">{m.preview_descricao()}</p>
-    </div>
-
-    {#if navUrl}
-      <div class="pv-bar">
-        <span class="pv-url" title={navUrl}>{m.preview_navegador_sessao()} · {navUrl}</span>
-        <button class="pv-ext" disabled={busy} onclick={abrirNavegador}>{m.preview_navegador_abrir()}</button>
+    {#if temNav}
+      <!-- Com navegador aberto, ele É a tela: título, descrição e o formulário de porta viram
+           acessório, porque quem abriu isto quer ver o que o agente está fazendo agora. Cabeçalho
+           e explicação comiam metade da altura do celular antes de a imagem começar. -->
+      <h2 class="pv-title">{m.nav_remoto_titulo()}</h2>
+      <NavRemoto {sessionName} ativo={open} />
+      {#if navPorta != null}
+        <div class="pv-bar">
+          <span class="pv-url" title={navUrl}>{m.preview_navegador_sessao()} · {navUrl}</span>
+          <button class="pv-ext" disabled={busy} onclick={abrirNavegador}>{m.preview_navegador_abrir()}</button>
+        </div>
+      {/if}
+    {:else}
+      <div class="pv-head">
+        <h2 class="pv-title">{m.preview_titulo()}</h2>
+        <p class="pv-sub">{m.preview_descricao()}</p>
       </div>
     {/if}
 

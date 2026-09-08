@@ -25,6 +25,8 @@
 #                                  --engine <motor> nasce num motor de ~/.claude/engines.json
 #                                  (outro modelo, conta do provedor — ver "Par noutro modelo").
 #                                  --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo).
+#                                  --profile <nome> (só --provider omp) nasce num perfil do omp:
+#                                  login, sessões e config em ~/.omp/profiles/<nome>/agent.
 #                                  --conta auto deixa a cota escolher: a conta Claude com mais
 #                                  folga na janela que mais aperta (5h, 7d ou a do modelo).
 #                                  --model <id> a sessão já ABRE nesse modelo (opus, sonnet,
@@ -107,9 +109,12 @@ PY
 # api <METHOD> <path> [json-body] — imprime o corpo no stdout; falha (!2xx) imprime status + corpo
 # real da API no stderr e retorna 1. Sem -f: mascarar o detail ("sessão não encontrada" vs 401 vs
 # 502) deixava quem chama (inclusive um Claude) sem como se corrigir.
+# Máquina desligada no Tailscale não RECUSA a conexão, ela pendura: sem --connect-timeout o curl
+# espera o teto do SO e a varredura de peers nunca volta. API_TIMEOUT sobe pra operação local longa.
 api() {
     local method=$1 path=$2 body=${3:-} out code
-    out=$(curl -s -w $'\n%{http_code}' -X "$method" -H "$AUTH" \
+    out=$(curl -s --connect-timeout "${API_CONNECT_TIMEOUT:-3}" -m "${API_TIMEOUT:-30}" \
+        -w $'\n%{http_code}' -X "$method" -H "$AUTH" \
         ${body:+-H "Content-Type: application/json" -d "$body"} "$BASE$path") || {
         echo "erro: backend inacessível em $BASE (hangar rodando?)" >&2; return 1; }
     code=${out##*$'\n'}
@@ -137,18 +142,33 @@ for k, v in json.load(open(sys.argv[1])).items():
         continue
     print("%s\t%s\t%s" % (k, v["base_url"].rstrip("/"), v["token"]))' "$PEERS_FILE") \
             || { echo "⚠ $PEERS_FILE inválido — servidores remotos ignorados" >&2; peers_tsv=""; }
+        # Um peer POR PROCESSO, todos ao mesmo tempo: em série, uma máquina fora do ar atrasava
+        # todas as seguintes pelo tempo dela — e as que vinham depois nem chegavam a ser tentadas.
+        # A saída volta arquivada e é impressa na ordem do peers.json, senão as linhas intercalam.
+        tmpd=$(mktemp -d) || { echo "erro: mktemp falhou" >&2; exit 1; }
+        trap 'rm -rf "$tmpd"' EXIT
+        n=0
         while IFS=$'\t' read -r pid pbase ptok; do
             [[ -n "$pid" ]] || continue
-            BASE="$pbase" AUTH="Authorization: Bearer $ptok" api GET /api/sessions \
-                | python3 -c 'import json, sys
+            n=$((n + 1))
+            (
+                BASE="$pbase" AUTH="Authorization: Bearer $ptok" API_TIMEOUT=8 \
+                    api GET /api/sessions \
+                    | python3 -c 'import json, sys
 try:
     sessions = json.load(sys.stdin)
 except ValueError:  # api() falhou -> stdin vazio; o detalhe real já saiu no stderr dela
     sys.exit(1)
 for s in sessions:
     print("%-24s %-15s %s" % (sys.argv[1] + "::" + s["name"], s["state"], s["cwd"]))' "$pid" \
-                || echo "⚠ servidor '$pid' falhou ($pbase) — detalhe acima" >&2
+                    || echo "⚠ servidor '$pid' falhou ($pbase) — detalhe acima" >&2
+            ) >"$tmpd/$n.out" 2>"$tmpd/$n.err" &
         done <<< "$peers_tsv"
+        wait
+        for ((i = 1; i <= n; i++)); do
+            cat "$tmpd/$i.out"
+            cat "$tmpd/$i.err" >&2
+        done
     fi
     exit 0
 fi
@@ -223,7 +243,7 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]}"
+    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--profile <nome>]}"
     shift
     if [[ "$name" == *::* ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
@@ -234,7 +254,7 @@ if [[ "$1" == "--new" ]]; then
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]" >&2
+        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--profile <nome>]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
@@ -252,12 +272,17 @@ if [[ "$1" == "--new" ]]; then
     # --model/--effort/--permissao: repassados crus pro backend (CreateBody.model/effort/
     # permission_mode), que valida contra as listas fechadas de app/model_args.py — não duplicar
     # os valores aqui, senão o script envelhece separado do backend (mesma regra do --provider).
-    cwd=""; engine=""; provider=""; conta=""; config_dir=""; model=""; effort=""; permissao=""
+    # --profile: perfil do omp (`omp --profile x`): login, sessões e config em ~/.omp/profiles/x.
+    # Só com --provider omp; o backend recusa o resto e valida o nome.
+    cwd=""; engine=""; provider=""; conta=""; config_dir=""; model=""; effort=""; permissao=""; perfil=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --engine)
                 [[ -n "$engine" ]] && { echo "erro: --engine informado duas vezes" >&2; exit 2; }
                 engine="${2:?uso: --engine <motor>}"; shift 2 ;;
+            --profile)
+                [[ -n "$perfil" ]] && { echo "erro: --profile informado duas vezes" >&2; exit 2; }
+                perfil="${2:?uso: --profile <nome>}"; shift 2 ;;
             --conta)
                 [[ -n "$conta" ]] && { echo "erro: --conta informado duas vezes" >&2; exit 2; }
                 conta="${2:?uso: --conta <nome>}"; shift 2 ;;
@@ -320,10 +345,12 @@ if sys.argv[7]:
     d["effort"] = sys.argv[7]
 if sys.argv[8]:
     d["permission_mode"] = sys.argv[8]
+if sys.argv[9]:
+    d["omp_profile"] = sys.argv[9]
 print(json.dumps(d))' \
-           "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao")
+           "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao" "$perfil")
     api POST /api/sessions "$body" >/dev/null
-    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]} — fala com ela via: hangar-send $name \"msg\""
+    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]}${perfil:+ [perfil: $perfil]} — fala com ela via: hangar-send $name \"msg\""
     exit 0
 fi
 

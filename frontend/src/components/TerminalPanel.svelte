@@ -1,5 +1,6 @@
 <script lang="ts">
   import { TermSocket, termUrlForServer, sessionExistsOnServer } from '../lib/term';
+  import { motivoDeOrigemRecusada } from '../lib/termOrigem';
   import { openShell, openNativeTerminal } from '@hangar/core';
   import { listServers, onServersChanged } from '../lib/auth';
   import type { Server } from '../lib/auth';
@@ -97,8 +98,8 @@
   // do painel de proposito -- o painel fecha ANTES do POST sair (ver abrirTerminalNativo), entao
   // qualquer erro so chega DEPOIS que a `<section>` (que so existe com `open`) ja sumiu do DOM. Por
   // isso este aviso mora FORA do bloco `{#if open}` no template. Sem toast global no app (nao existe
-  // um; `window.alert()` foi descartado -- ver o comentario de EnginesSettings.svelte sobre nao usar
-  // dialogo nativo, quebra o tema), entao e um aviso local mesmo, auto-some.
+  // um; `window.alert()` foi descartado -- dialogo nativo do navegador nao segue o tema escuro),
+  // entao e um aviso local mesmo, auto-some.
   let nativeErro = $state<string | null>(null);
   let nativeErroTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -305,7 +306,14 @@
         // sessao, o cleanup fecha o socket velho -> o efeito novo zera `caiu` -> DEPOIS chega o
         // onclose do socket velho -> sem a guarda, `caiu = true` aterrissava na sessao ERRADA (ou
         // num componente ja destruido, se foi o painel que fechou).
-        close: (motivoFechamento) => { if (vivo) { caiu = true; motivo = motivoFechamento ?? null; } },
+        close: (motivoFechamento) => {
+          if (!vivo) return;
+          caiu = true;
+          motivo = motivoFechamento ?? null;
+          // Fechou MUDO: pode ser a origem recusada no handshake (403 antes do accept, ilegível pro
+          // navegador). Mesma pergunta por HTTP, que responde com texto.
+          if (!motivo) void motivoDeOrigemRecusada(srv).then((r) => { if (vivo && r) motivo = r; });
+        },
       });
       t.onData((d: string) => sock?.send(enc.encode(d)));
 

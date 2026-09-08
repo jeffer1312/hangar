@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
 import * as m from '../paraglide/messages';
   import { getSessions, sendInput } from '@hangar/core';
   import { rotuloEstado, stateColors } from '@hangar/core';
@@ -46,7 +47,7 @@ import * as m from '../paraglide/messages';
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.forward_para_outra()}>
+<BottomSheet {open} {onClose} ariaLabel={m.forward_para_outra()} centered={desktop.atual}>
   <div class="fwd">
     <h2 class="title">{m.forward_titulo()}</h2>
     <p class="excerpt">{text.length > 160 ? text.slice(0, 160) + '…' : text}</p>

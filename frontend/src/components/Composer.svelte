@@ -21,6 +21,7 @@
   import { novoEstadoVad, passoVad } from '@hangar/core';
   import type { EstadoVad } from '@hangar/core';
   import { lerMaosLivres } from '../lib/maosLivres';
+  import { glifoPermissao, rotuloPermissao } from '../lib/permissaoRotulo';
   import { podeEnviarSozinho } from '@hangar/core';
   import type { MotivoFim } from '@hangar/core';
   import IconSend from './icons/IconSend.svelte';
@@ -28,13 +29,21 @@
   import IconAttach from './icons/IconAttach.svelte';
   import IconMic from './icons/IconMic.svelte';
   import IconMonitor from './icons/IconMonitor.svelte';
+  import IconCamera from './icons/IconCamera.svelte';
+  import IconImagem from './icons/IconImagem.svelte';
+  import { tipoDoArquivo, quadroDeVideo, type TipoAnexo } from '../lib/tipoAnexo';
+  import FileIcon from './files/FileIcon.svelte';
+  import { scale } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
+  import IconComandos from './icons/IconComandos.svelte';
+  import IconOrquestrar from './icons/IconOrquestrar.svelte';
   import IconFolder from './icons/IconFolder.svelte';
   import { prepareImage } from '../lib/imagePrep';
   import ContextRing from './ContextRing.svelte';
   import ClaudeModelPopover from './ClaudeModelPopover.svelte';
   import ClaudeEffortPopover from './ClaudeEffortPopover.svelte';
   import ClaudePermissionPopover from './ClaudePermissionPopover.svelte';
-  import Popover from './Popover.svelte';
+  import BottomSheet from './BottomSheet.svelte';
   import CodexModelPopover from './CodexModelPopover.svelte';
   import CodexEffortPopover from './CodexEffortPopover.svelte';
   import PiModelPopover from './PiModelPopover.svelte';
@@ -47,7 +56,9 @@
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
   import { estilosDitado, type EstiloDitado } from '@hangar/core';
-  import { getCommands, setModelEffort, uploadFile, uploadUrl, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '@hangar/core';
+  import { desktop } from '../lib/desktop.svelte';
+  import { getCommands, setModelEffort, uploadFile, uploadUrl, listUploads, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '@hangar/core';
+  import type { UploadFile } from '@hangar/core';
   import { aoAquecer } from '../lib/aquecimento';
   import type { Provider, State, StatsEvent } from '@hangar/core';
   import type { StatusFields } from '@hangar/core';
@@ -208,13 +219,68 @@
   // isImage -> preview; resto -> chip de arquivo. Audio NAO vira anexo: e transcrito e cai no textarea.
   // Restaura do cache em memoria da sessao atual (mesma ideia do draft de texto em Chat.svelte).
   // svelte-ignore state_referenced_locally
-  let attachments = $state<{ file: File; url: string; isImage: boolean }[]>(attachmentCache.get(sessionName) ?? []);
+  // `pct`: null = parado (ainda não é a vez dele ou nem começou), 0..100 = subindo agora, 100 =
+  // pronto. Fica FORA do cache entre sessões — progresso de um envio que já acabou não significa
+  // nada quando a pessoa volta pro chat.
+  let attachments = $state<{ file: File; url: string; isImage: boolean; tipo?: TipoAnexo; pct?: number | null }[]>(
+    attachmentCache.get(sessionName) ?? [],
+  );
   // Mantem o cache em sincronia a cada mudanca (add/remove/clear); some da sessao ao esvaziar.
   $effect(() => {
     if (attachments.length) attachmentCache.set(sessionName, attachments);
     else attachmentCache.delete(sessionName);
   });
   let fileInput: HTMLInputElement | undefined = $state();
+  let cameraInput: HTMLInputElement | undefined = $state();
+  let imagemInput: HTMLInputElement | undefined = $state();
+
+  // Anexos já enviados NESTA sessão, no lugar onde o app do Claude põe o rolo da câmera (que uma
+  // página web não pode ler). Só imagem, e só as 8 mais novas: é uma faixa, não uma galeria — a
+  // galeria inteira já tem tela própria (AttachmentsSheet).
+  let recentes = $state<UploadFile[]>([]);
+  $effect(() => {
+    if (!plusOpen || !sessionName) return;
+    let vivo = true;
+    void listUploads(sessionName)
+      .then(({ files }) => {
+        if (!vivo) return;
+        recentes = files
+          .filter((f) => /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(f.filename))
+          .sort((a, b) => b.mtime - a.mtime)
+          .slice(0, 8);
+      })
+      // Sem anexo nenhum, ou backend fora: a faixa fica só com câmera e fotos, que é o essencial.
+      .catch((e) => console.debug('composer: recentes não vieram', e));
+    return () => { vivo = false; };
+  });
+
+  // Reanexa um arquivo que já está no servidor: baixa de volta e entra na lista como qualquer
+  // outro. Baixar em vez de referenciar o caminho mantém UM caminho de envio — o mesmo do arquivo
+  // escolhido agora, com prévia, anel de progresso e remoção.
+  // Quem está sendo baixado agora. Sem isto o toque na miniatura não deixava rastro: o menu fecha
+  // na hora, e numa rede lenta a pessoa reabre e toca de novo — `addFiles` não deduplica por nome,
+  // então o mesmo arquivo entrava duas vezes.
+  let reanexando = $state<string | null>(null);
+  async function reanexar(filename: string) {
+    if (reanexando) return;
+    attachError = '';
+    reanexando = filename;
+    try {
+      // Teto: o mesmo do upload. Sem ele, rede caída deixa a promessa pendurada e a miniatura
+      // presa em "baixando" pra sempre.
+      const res = await fetch(uploadUrl(sessionName, filename), {
+        signal: AbortSignal.timeout(180_000),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const blob = await res.blob();
+      addFiles([new File([blob], filename, { type: blob.type })]);
+    } catch (e) {
+      attachError = e instanceof Error ? e.message : m.composer_falha_envio();
+    } finally {
+      reanexando = null;
+      plusOpen = false;      // fecha no FIM, dando certo ou não; o erro aparece no composer
+    }
+  }
   let uploading = $state(false);
   let attachError = $state('');
   let sending = $state(false);
@@ -346,6 +412,14 @@
   const canSend = $derived(hasInput && !uploading && !sending && !recording && !transcribing);
   const isWorking = $derived(sessionState === 'working');
 
+  // Com os atalhos de volta na fileira de baixo, a aba pode não ter nada: sessão fora de repo, sem
+  // par, sem cache. Faixa vazia pendurada é pior que faixa ausente.
+  const temAba = $derived(
+    !!status?.repo || !!lastCache || status?.ctxPct != null
+    || !!onOpenPair || (isKimi && isWorking && filaCount > 0 && !!onSteer)
+    || (shellsRodando > 0 && !!onOpenActivity),
+  );
+
   // ── Contagem regressiva do maos-livres: 3s antes do envio automatico ────────
   // Segundos restantes, ou null = sem contagem. $state porque aparece no template (mesmo padrao
   // de recError/recSeconds).
@@ -452,20 +526,31 @@
     return () => document.removeEventListener('keydown', aoAtalhoMic);
   });
 
-  // Atalho de permissão (só desktop, só Claude): Alt+Shift+P passa pro PRÓXIMO modo do ciclo
-  // vivo — a mesma lista que a pílula mostra (4 ou 5 modos lidos da sessão), nunca a lista
-  // canônica: modo só-de-criação não entra no ciclo. Mesmos guards do atalho do mic.
+  // Atalho de permissão (só Claude): Alt+Shift+P em qualquer lugar da tela, e Shift+Tab com o
+  // foco no campo de texto (a mesma tecla do terminal), passam pro PRÓXIMO modo do ciclo vivo —
+  // a mesma lista que a pílula mostra (4 ou 5 modos lidos da sessão), nunca a lista canônica:
+  // modo só-de-criação não entra no ciclo. Mesmos guards do atalho do mic.
   function aoAtalhoPermissao(e: KeyboardEvent) {
     if (e.repeat || !e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey || e.code !== 'KeyP') return;
-    if (!isClaude || !window.matchMedia('(min-width: 820px)').matches) return;
+    if (!isClaude) return;
     if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     void ciclarPermissao();
   }
 
+  // Ctrl+L: foco no campo de texto de onde estiver (lista, painel, terminal embutido).
+  function aoAtalhoFoco(e: KeyboardEvent) {
+    if (e.repeat || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyL') return;
+    if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    textareaEl?.focus();
+  }
+
   async function ciclarPermissao() {
-    if (permCarregando || !permSondavel) return;
+    if (permCarregando) return;
+    if (!permSondavel) { permError = m.permissao_sem_ciclo(); return; }
     // Mesmo token de sequência e mesma amarra de sessão do poll (permSeq / sn): a resposta de
     // uma sessão que saiu da tela não pode escrever o ciclo da que entrou, nem o atalho aplicar
     // na sessão atual um modo calculado pelo ciclo da anterior.
@@ -475,7 +560,9 @@
     if (modos.length === 0) {
       permCarregando = true;
       try {
-        const res = await getPermissionModes(sn);
+        // Sonda (sondar=1), como a pílula: sem ela o servidor devolve [] enquanto não tem cache e
+        // o atalho morria calado até a pílula ser aberta uma vez.
+        const res = await getPermissionModes(sn, true);
         if (seq !== permSeq || sn !== sessionName) return;
         permCurrent = res.current;
         permModes = res.modes;
@@ -497,7 +584,11 @@
 
   $effect(() => {
     document.addEventListener('keydown', aoAtalhoPermissao);
-    return () => document.removeEventListener('keydown', aoAtalhoPermissao);
+    document.addEventListener('keydown', aoAtalhoFoco);
+    return () => {
+      document.removeEventListener('keydown', aoAtalhoPermissao);
+      document.removeEventListener('keydown', aoAtalhoFoco);
+    };
   });
 
   // ── Pills de modelo e de esforco: cada uma abre seu popover (aplica via endpoint dedicado) ──
@@ -878,6 +969,13 @@
         && window.matchMedia('(min-width: 820px)').matches) {
       e.preventDefault();
       submit();
+      return;
+    }
+    // Shift+Tab no campo = a tecla do terminal do Claude. Só com o foco aqui, pra não roubar a
+    // navegação por teclado do resto da tela.
+    if (e.key === 'Tab' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && isClaude) {
+      e.preventDefault();
+      void ciclarPermissao();
     }
   }
 
@@ -893,9 +991,20 @@
         transcribeIntoComposer(f, { ditado: !!opts?.ditado, avisoTeto: !!opts?.avisoTeto });
         continue;
       }
-      const isImage = f.type.startsWith('image/');
-      // url so pra preview de imagem; outros tipos viram chip com o nome (sem objectURL pra revogar).
-      attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage }];
+      const tipo = tipoDoArquivo(f);
+      const isImage = tipo === 'imagem';
+      // url = miniatura do tile. Imagem tem a sua na hora; vídeo ganha o primeiro quadro logo
+      // depois (assíncrono, e o tile mostra o ícone enquanto isso); o resto fica no ícone do tipo.
+      attachments = [...attachments, { file: f, url: isImage ? URL.createObjectURL(f) : '', isImage, tipo }];
+      if (tipo === 'video') {
+        void quadroDeVideo(f).then((thumb) => {
+          if (!thumb) return;
+          // Reencontra pelo arquivo: entre pedir o quadro e ele chegar, a pessoa pode ter removido
+          // este anexo ou anexado outros, e o índice de agora não vale mais.
+          const i = attachments.findIndex((a) => a.file === f);
+          if (i >= 0) attachments[i].url = thumb;
+        });
+      }
     }
     attachError = '';
   }
@@ -1482,10 +1591,19 @@
         // Sobe todos os anexos e junta os paths numa UNICA linha (o backend rejeita '\n' no
         // send-keys). Cada path nao tem espaco (nome gerado). Marca imagem x arquivo pelo tipo.
         const parts: string[] = [];
-        for (const a of attachments) {
+        // Percorre uma CÓPIA e escreve no objeto, nunca em `attachments[i]`: quem já subiu e quem
+        // ainda espera continuam com o ✕ à mostra, então dá pra remover um anexo no meio do envio —
+        // e aí o índice de todo mundo depois dele anda, e o anel ia parar no tile errado (pior: um
+        // anexo que nunca subiu ganhava 100%). A referência do objeto sobrevive ao filter.
+        for (const a of [...attachments]) {
           // Encolhe foto/converte HEIC antes de subir. Falhou? prepareImage devolve o original.
           const arquivo = a.isImage ? await prepareImage(a.file) : a.file;
-          const { path, frames, transcript } = await uploadFile(sessionName, arquivo);
+          // O anel começa em 0 ANTES do primeiro byte: sem isso, arquivo pequeno ia de "esperando"
+          // direto pra "pronto" e a fila não aparecia.
+          a.pct = 0;
+          const { path, frames, transcript } = await uploadFile(
+            sessionName, arquivo, (pct) => { a.pct = pct; });
+          a.pct = 100;
           parts.push((a.isImage ? `📎 ${m.board_imagem()}: ` : `📎 ${m.board_arquivo()}: `) + path);
           // Video: o backend extraiu quadros ao longo da duracao e transcreveu a fala. Os quadros
           // entram como imagens (o Read abre; a lista tambem vira miniatura no chat) e a fala vai
@@ -1551,6 +1669,121 @@
     aria-hidden="true"
     tabindex="-1"
   />
+  <!-- Três entradas, três telas do sistema: arquivo (acima), câmera e fototeca. `capture` abre a
+       câmera direto; sem ele, `image/*` cai no seletor de imagens. Um input só levava sempre à
+       mesma tela genérica, e a pessoa pagava um toque pra escolher de onde vinha. -->
+  <input
+    type="file"
+    accept="image/*"
+    capture="environment"
+    bind:this={cameraInput}
+    onchange={onPickFile}
+    class="file-input"
+    aria-hidden="true"
+    tabindex="-1"
+  />
+  <input
+    type="file"
+    accept="image/*"
+    multiple
+    bind:this={imagemInput}
+    onchange={onPickFile}
+    class="file-input"
+    aria-hidden="true"
+    tabindex="-1"
+  />
+  <div class="composer-dock">
+  <!-- Faixa pendurada na borda de cima do card (referência: BoardUI Composer Panel). Tudo que era a
+       fileira de dentro mudou pra cá: atalhos e estado da sessão à esquerda, o que só se lê (repo,
+       branch, prazo do cache, contexto) à direita. Dentro do card ficam texto e controles do envio,
+       que é o que a pessoa usa a cada mensagem. -->
+  {#if temAba}
+  <div class="status-tab">
+    <div class="tab-left">
+      {#if onOpenPair}
+        {@const pairLabel = pairPeers?.length === 1 ? pairPeers[0]
+          : pairPeers?.length ? `grupo (${pairPeers.length + 1})` : null}
+        <button class="repo-chip pair-chip" class:pair-chip--on={!!pairPeers?.length}
+                title={pairPeers?.length ? m.composer_grupo_voce({ n: pairPeers.join(', ') }) : m.composer_parear_outra()}
+                onclick={onOpenPair} aria-label={m.composer_pareamento_sessoes()}>
+          <span class="repo-glyph" aria-hidden="true"><GroupGlyph size={13} /></span>
+          {#if pairLabel}
+            <span class="repo-name">{pairLabel}</span>
+            {#if pairedState}
+              <!-- Estado vivo do par ÚNICO (mesmas cores da lista); grupo de N não tem bolinha. -->
+              <span class="pair-dot" style="background: {stateColors[pairedState as keyof typeof stateColors] ?? 'var(--text-muted)'};"
+                    title={m.composer_par_estado({ n: pairedState })} aria-hidden="true"></span>
+            {/if}
+          {/if}
+        </button>
+        {#if pairPeers?.length && onToggleSendToPair}
+          <!-- "Mandar pro grupo": prompt vai pra esta sessão E pros membros (broadcast). Aceso = ativo. -->
+          <button class="repo-chip both-chip" class:both-chip--on={sendToPair}
+                  title={sendToPair ? m.composer_mandando_grupo() : m.composer_mandar_tambem({ n: pairPeers.join(', ') })}
+                  onclick={onToggleSendToPair} aria-pressed={sendToPair} aria-label={m.composer_mandar_grupo()}>
+            <span class="repo-glyph" aria-hidden="true">⇄</span>
+            {#if sendToPair}<span class="repo-name">{pairPeers.length === 1 ? m.composer_pros_dois() : m.composer_pro_grupo()}</span>{/if}
+          </button>
+        {/if}
+      {/if}
+      {#if isKimi && isWorking && filaCount > 0 && onSteer}
+        <!-- FILA da TUI do Kimi: msg já mandada, esperando o turno atual acabar. O chip existe pra
+             DIZER que há fila (antes disso a bolha translúcida era a única pista) e dar a saída:
+             tocar manda o `ctrl-s`, que promove a msg pro turno em curso. Não tocar = espera, que
+             é o comportamento de sempre. -->
+        <button class="repo-chip fila-chip" onclick={steerFila}
+                title={m.composer_fila_titulo()}
+                aria-label={m.composer_fila_aria()}>
+          <span class="repo-glyph" aria-hidden="true">⏳</span>
+          <span class="repo-name">{m.composer_fila_contagem({ n: filaCount })}</span>
+          <span class="repo-sep" aria-hidden="true">·</span>
+          <span class="fila-acao">{m.composer_fila_acao()}</span>
+        </button>
+      {/if}
+      {#if shellsRodando > 0 && onOpenActivity}
+        <!-- Shells de FUNDO: comando que continua rodando depois que a ferramenta respondeu. O
+             terminal mostra "N shells still running" no rodapé e o app não mostrava nada — dava
+             pra sair da sessão sem saber que um build ainda estava de pé. O toque abre a
+             Atividade, onde está qual comando é e há quanto tempo. -->
+        <button class="repo-chip shell-chip" onclick={onOpenActivity}
+                title={m.composer_shells_titulo({ n: shellsRodando })}
+                aria-label={m.composer_shells_titulo({ n: shellsRodando })}>
+          <span class="repo-glyph" aria-hidden="true">&gt;_</span>
+          <span class="repo-name">{m.composer_shells_contagem({ n: shellsRodando })}</span>
+          <span class="shell-dot" aria-hidden="true"></span>
+        </button>
+      {/if}
+    </div>
+    <div class="tab-right">
+      {#if status?.repo}
+        <button class="repo-chip" title={m.composer_git_chip()} onclick={onOpenGit}>
+          <IconFolder size={13} />
+          <span class="repo-name">{status.repo}</span>
+          {#if status.branch}
+            <span class="repo-sep" aria-hidden="true">·</span>
+            <span class="repo-branch">{status.branch}{#if status.dirty}<span class="repo-dirty" aria-label={m.composer_alteracoes_nao_commitadas()}>*</span>{/if}</span>
+          {/if}
+        </button>
+      {/if}
+        {#if lastCache}
+          <!-- Prazo do cache. Nao e botao: nao ha o que fazer com ele alem de saber. -->
+          <span
+            class="cache-chip"
+            class:acabando={cacheAcabando}
+            class:frio={!cacheAtivo}
+            title={cacheAtivo
+              ? m.composer_cache_vale({ label: cacheLabel, janela: lastCache.ttl >= 3600 ? m.composer_cache_1_hora() : m.composer_cache_5_min() })
+              : m.composer_cache_expirou()}
+          >
+            <span class="cache-glyph" aria-hidden="true"></span>{cacheLabel}
+          </span>
+        {/if}
+      {#if status?.ctxPct != null}
+        <ContextRing pct={status.ctxPct} size={22} />
+      {/if}
+    </div>
+  </div>
+  {/if}
   <!-- O card precisa delegar foco para a textarea em areas vazias, mas contem varios botoes:
        nao pode virar button/role=button sem aninhar controles interativos. -->
   <div class="composer-card" class:arrastando role="button" tabindex="-1" onclick={focusInput} onkeydown={focusInput}
@@ -1558,118 +1791,58 @@
     {#if arrastando}
       <div class="solte-anexo" aria-hidden="true">{m.composer_soltar_anexo()}</div>
     {/if}
-    <div class="composer-top">
-      <div class="top-left">
-        {#if !isCodex}
-          <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label={m.comandos_titulo()}>
-            <span class="slash-glyph" aria-hidden="true">/</span>
-          </button>
-        {/if}
-        <button class="slash-btn" onclick={onOpenPreview} aria-label={m.composer_preview_rodando()}>
-          <IconMonitor size={17} />
-        </button>
-        {#if onOpenPair}
-          {@const pairLabel = pairPeers?.length === 1 ? pairPeers[0]
-            : pairPeers?.length ? `grupo (${pairPeers.length + 1})` : null}
-          <button class="repo-chip pair-chip" class:pair-chip--on={!!pairPeers?.length}
-                  title={pairPeers?.length ? m.composer_grupo_voce({ n: pairPeers.join(', ') }) : m.composer_parear_outra()}
-                  onclick={onOpenPair} aria-label={m.composer_pareamento_sessoes()}>
-            <span class="repo-glyph" aria-hidden="true"><GroupGlyph size={13} /></span>
-            {#if pairLabel}
-              <span class="repo-name">{pairLabel}</span>
-              {#if pairedState}
-                <!-- Estado vivo do par ÚNICO (mesmas cores da lista); grupo de N não tem bolinha. -->
-                <span class="pair-dot" style="background: {stateColors[pairedState as keyof typeof stateColors] ?? 'var(--text-muted)'};"
-                      title={m.composer_par_estado({ n: pairedState })} aria-hidden="true"></span>
-              {/if}
-            {/if}
-          </button>
-          {#if onOpenOrq}
-            <button class="repo-chip" title={m.orqcfg_titulo()} onclick={onOpenOrq} aria-label={m.orqcfg_titulo()}>
-              <span class="repo-glyph" aria-hidden="true">🎛</span>
-            </button>
-          {/if}
-          {#if pairPeers?.length && onToggleSendToPair}
-            <!-- "Mandar pro grupo": prompt vai pra esta sessão E pros membros (broadcast). Aceso = ativo. -->
-            <button class="repo-chip both-chip" class:both-chip--on={sendToPair}
-                    title={sendToPair ? m.composer_mandando_grupo() : m.composer_mandar_tambem({ n: pairPeers.join(', ') })}
-                    onclick={onToggleSendToPair} aria-pressed={sendToPair} aria-label={m.composer_mandar_grupo()}>
-              <span class="repo-glyph" aria-hidden="true">⇄</span>
-              {#if sendToPair}<span class="repo-name">{pairPeers.length === 1 ? m.composer_pros_dois() : m.composer_pro_grupo()}</span>{/if}
-            </button>
-          {/if}
-        {/if}
-        {#if isKimi && isWorking && filaCount > 0 && onSteer}
-          <!-- FILA da TUI do Kimi: msg já mandada, esperando o turno atual acabar. O chip existe pra
-               DIZER que há fila (antes disso a bolha translúcida era a única pista) e dar a saída:
-               tocar manda o `ctrl-s`, que promove a msg pro turno em curso. Não tocar = espera, que
-               é o comportamento de sempre. -->
-          <button class="repo-chip fila-chip" onclick={steerFila}
-                  title={m.composer_fila_titulo()}
-                  aria-label={m.composer_fila_aria()}>
-            <span class="repo-glyph" aria-hidden="true">⏳</span>
-            <span class="repo-name">{m.composer_fila_contagem({ n: filaCount })}</span>
-            <span class="repo-sep" aria-hidden="true">·</span>
-            <span class="fila-acao">{m.composer_fila_acao()}</span>
-          </button>
-        {/if}
-        {#if shellsRodando > 0 && onOpenActivity}
-          <!-- Shells de FUNDO: comando que continua rodando depois que a ferramenta respondeu. O
-               terminal mostra "N shells still running" no rodapé e o app não mostrava nada — dava
-               pra sair da sessão sem saber que um build ainda estava de pé. O toque abre a
-               Atividade, onde está qual comando é e há quanto tempo. -->
-          <button class="repo-chip shell-chip" onclick={onOpenActivity}
-                  title={m.composer_shells_titulo({ n: shellsRodando })}
-                  aria-label={m.composer_shells_titulo({ n: shellsRodando })}>
-            <span class="repo-glyph" aria-hidden="true">&gt;_</span>
-            <span class="repo-name">{m.composer_shells_contagem({ n: shellsRodando })}</span>
-            <span class="shell-dot" aria-hidden="true"></span>
-          </button>
-        {/if}
-        {#if status?.repo}
-          <button class="repo-chip" title={m.composer_git_chip()} onclick={onOpenGit}>
-            <IconFolder size={13} />
-            <span class="repo-name">{status.repo}</span>
-            {#if status.branch}
-              <span class="repo-sep" aria-hidden="true">·</span>
-              <span class="repo-branch">{status.branch}{#if status.dirty}<span class="repo-dirty" aria-label={m.composer_alteracoes_nao_commitadas()}>*</span>{/if}</span>
-            {/if}
-          </button>
-        {/if}
-      </div>
-      {#if lastCache}
-        <!-- Prazo do cache. Nao e botao: nao ha o que fazer com ele alem de saber. -->
-        <span
-          class="cache-chip"
-          class:acabando={cacheAcabando}
-          class:frio={!cacheAtivo}
-          title={cacheAtivo
-            ? m.composer_cache_vale({ label: cacheLabel, janela: lastCache.ttl >= 3600 ? m.composer_cache_1_hora() : m.composer_cache_5_min() })
-            : m.composer_cache_expirou()}
-        >
-          <span class="cache-glyph" aria-hidden="true"></span>{cacheLabel}
-        </span>
-      {/if}
-    </div>
-
     {#if attachments.length}
+      <!-- Tiles quadrados com o anel do envio em volta (referência: BoardUI Composer Attachments).
+           O upload acontece no ENVIO, não ao anexar — então o anel só cresce a partir do toque em
+           enviar, e os que ainda não começaram ficam apagados esperando a vez. -->
       <div class="attach-row">
         {#each attachments as a, idx (a.file)}
-          <div class="attach-chip">
-            {#if a.isImage}
-              <img class="attach-thumb" src={a.url} alt="anexo" />
-            {:else}
-              <span class="attach-file" title={a.file.name}>
-                <span class="attach-file-glyph" aria-hidden="true">📎</span>
-                <span class="attach-file-name">{a.file.name}</span>
-              </span>
+          <div class="attach-tile" class:esperando={uploading && a.pct == null} in:scale={{ duration: 180, start: 0.85, easing: cubicOut }}>
+            <div class="tile-box">
+              {#if a.url}
+                <!-- Imagem e vídeo mostram o conteúdo; o vídeo ganha o play por cima pra não virar
+                     uma foto qualquer. -->
+                <img class="tile-thumb" src={a.url} alt="" />
+                {#if a.tipo === 'video'}
+                  <span class="tile-play" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M9 7.5l8 4.5-8 4.5z" />
+                    </svg>
+                  </span>
+                {/if}
+              {:else}
+                <!-- O MESMO ícone da aba Arquivos: é o material-icon-theme (o do VS Code), que o
+                     projeto já gera em fileIcons.generated.ts. Ele conhece a extensão de verdade —
+                     `.ts` é o losango azul do TypeScript, não uma folha genérica. -->
+                <span class="tile-glyph" aria-hidden="true"><FileIcon nome={a.file.name} /></span>
+                <span class="tile-name" title={a.file.name}>{a.file.name}</span>
+              {/if}
+            </div>
+            {#if a.pct != null}
+              <!-- O traço segue a BORDA do tile, que é um quadrado de cantos redondos — anel
+                   circular em volta de tile quadrado deixa o progresso descolado da imagem.
+                   Começa no topo e anda no sentido horário porque é onde o path do `rect`
+                   começa (x+rx, y); daí não haver rotação nenhuma aqui. -->
+              <svg class="tile-ring" viewBox="0 0 66 66" aria-hidden="true">
+                <rect class="ring-trilho" x="1.25" y="1.25" width="63.5" height="63.5" rx="15.75" />
+                <!-- `pathLength="100"`: o navegador normaliza o comprimento do contorno pra 100, e
+                     aí o traço é a própria porcentagem. A conta à mão (2(l+a) − 8r + 2πr) erra
+                     0,28% porque os cantos são Bézier, não arco de círculo. -->
+                <rect
+                  class="ring-arco" x="1.25" y="1.25" width="63.5" height="63.5" rx="15.75"
+                  pathLength="100" stroke-dasharray="100" stroke-dashoffset={100 - a.pct}
+                />
+              </svg>
             {/if}
-            <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label={m.board_remover_anexo()}>×</button>
+            {#if a.pct != null && a.pct < 100}
+              <span class="tile-pct" role="status">{a.pct}%</span>
+            {:else}
+              <button class="tile-x" onclick={() => removeAttachment(idx)} aria-label={m.board_remover_anexo()}>×</button>
+            {/if}
           </div>
         {/each}
-        {#if uploading}<span class="attach-status">{m.composer_enviando()}</span>{/if}
-        {#if attachError}<span class="attach-error">{attachError}</span>{/if}
       </div>
+      {#if attachError}<span class="attach-error">{attachError}</span>{/if}
     {/if}
 
     {#if !isCodex}
@@ -1769,6 +1942,21 @@
 
     <div class="control-row">
       <div class="control-left">
+        <!-- Atalhos: abrem outra tela e existem sempre. Ficam aqui, e não na aba de cima, que é
+             para o ESTADO da sessão — juntos, os dois grupos espremiam oito itens numa faixa de
+             390px no celular. Levam a mesma classe do clipe e do mic porque na fileira quem tem
+             fundo carrega um valor escolhido (modelo, esforço, permissão); quem só executa uma
+             ação não tem. -->
+        {#if !isCodex}
+          <button class="attach-btn" onclick={() => (commandSheetOpen = true)} aria-label={m.comandos_titulo()}>
+            <IconComandos size={20} />
+          </button>
+        {/if}
+        {#if onOpenOrq}
+          <button class="attach-btn" title={m.orqcfg_titulo()} onclick={onOpenOrq} aria-label={m.orqcfg_titulo()}>
+            <IconOrquestrar size={20} />
+          </button>
+        {/if}
         <!-- "+" do celular (referência: app do Claude): anexo e estilo do ditado moram AQUI no
              mobile, não na fileira — com modelo+esforço+permissão+ações a fileira estourava e
              quebrava os controles. No desktop ele some e anexo/estilo ficam na fileira (CSS). -->
@@ -1801,7 +1989,6 @@
               <span class="pill-label">
                 <span class="pill-model">{piModel ?? status?.model ?? m.composer_modelo()}</span>
               </span>
-              <ContextRing pct={status?.ctxPct ?? null} />
             </button>
             <!-- Nivel de raciocinio em pill propria (referencia: opencode). Antes vivia dentro da
                  folha de modelo, atras da lista de 390 itens. -->
@@ -1835,7 +2022,6 @@
               <span class="pill-label">
                 <span class="pill-model">{kimiModel ?? status?.model ?? m.composer_modelo()}</span>
               </span>
-              <ContextRing pct={status?.ctxPct ?? null} />
             </button>
             <button
               class="model-pill"
@@ -1863,7 +2049,6 @@
               <span class="pill-label">
                 <span class="pill-model">{pillModel ?? m.composer_modelo()}</span>
               </span>
-              <ContextRing pct={status?.ctxPct ?? null} />
             </button>
             <!-- Esforco em pill propria. Some no Haiku, que nao usa esforco (o picker responde
                  "Effort not supported") — pill que nao aplica nada e pior que pill ausente. -->
@@ -1877,14 +2062,16 @@
                 aria-label={m.composer_esforco_raciocinio()}
               >
                 <span class="pill-label">
+                  <span class="pill-glifo" aria-hidden="true">✦</span>
                   <span class="pill-model">{pillEffort ?? m.composer_esforco()}</span>
                 </span>
               </button>
             {/if}
-            <!-- Permissão: linha dentro do seletor de modelo (ClaudeModelPopover) em qualquer tela,
-                 e pill própria SÓ no desktop (.pill-perm some no celular via media query): ali a
-                 palavra do modo ("bypassPermissions") estourava a linha e derrubava os controles.
-                 Alt+Shift+P passa pro próximo modo do ciclo. -->
+            <!-- Permissão: pill própria nas duas telas, e também uma linha dentro do seletor de
+                 modelo (ClaudeModelPopover). No celular ela ficou fora enquanto a fileira levava
+                 sete peças; com os atalhos no "+" sobrou espaço, e o rótulo curto trunca em vez de
+                 empurrar. Glifo + rótulo são os do rodapé do próprio Claude (⏸/⏵⏵). Shift+Tab no
+                 campo ou Alt+Shift+P passam pro próximo modo do ciclo. -->
             {#if permCurrent}
               <button
                 class="model-pill pill-perm"
@@ -1895,7 +2082,8 @@
                 title={m.permissao_atalho()}
               >
                 <span class="pill-label">
-                  <span class="pill-model">{permCurrent}</span>
+                  <span class="pill-glifo" aria-hidden="true">{glifoPermissao(permCurrent)}</span>
+                  <span class="pill-model">{rotuloPermissao(permCurrent)}</span>
                 </span>
               </button>
             {/if}
@@ -1916,7 +2104,6 @@
               <span class="pill-label">
                 <span class="pill-model">{codexModel ?? m.composer_modelo()}</span>
               </span>
-              <ContextRing pct={status?.ctxPct ?? null} />
             </button>
             <button
               class="model-pill"
@@ -1983,6 +2170,7 @@
         {/if}
       </div>
     </div>
+  </div>
   </div>
 
   {#if stats}
@@ -2126,17 +2314,69 @@
     onClose={() => (estiloAberto = false)}
   />
 
-  <!-- Menu do "+" (mobile): as duas ações que saíram da fileira. -->
-  <Popover open={plusOpen} anchor={plusBtnEl} onClose={() => (plusOpen = false)} width={260} ariaLabel={m.tabs_mais_opcoes()}>
-    <button class="plus-item" onclick={() => { plusOpen = false; fileInput?.click(); }}>
-      <IconAttach size={16} />
-      <span>{m.composer_anexar_arquivo()}</span>
-    </button>
-    <button class="plus-item" onclick={() => { plusOpen = false; estiloAberto = true; }}>
-      <span class="plus-item-label">{m.ditado_estilo_titulo()}</span>
-      <span class="plus-item-value">{rotuloEstilo}</span>
-    </button>
-  </Popover>
+  <!-- Menu do "+" (mobile): as ações que saíram da fileira. Sheet subindo de baixo, não popover
+       ancorado — é o desenho do app do Claude, e no celular a largura inteira é o que deixa a
+       faixa de fotos caber. -->
+  <BottomSheet open={plusOpen} onClose={() => (plusOpen = false)} ariaLabel={m.composer_adicionar_ao_chat()}>
+    <!-- Desenho do app do Claude no celular: câmera e imagens numa faixa em cima, o resto em
+         grupos com separador fino. Câmera e Fotos são ENTRADAS SEPARADAS porque no iOS levam a
+         telas diferentes (câmera direto x Fototeca) — juntas custavam um toque a mais. Miniatura
+         da galeria do aparelho é impossível numa página web: o sistema só entrega a foto depois
+         que a pessoa escolhe. No lugar dela vão os anexos já enviados NESTA sessão, que o backend
+         tem — reanexar vira um toque. -->
+    <h2 class="plus-titulo">{m.composer_adicionar_ao_chat()}</h2>
+    <div class="plus-faixa">
+      <button class="faixa-btn" onclick={() => { plusOpen = false; cameraInput?.click(); }}>
+        <IconCamera size={20} />
+        <span>{m.composer_camera()}</span>
+      </button>
+      <button class="faixa-btn" onclick={() => { plusOpen = false; imagemInput?.click(); }}>
+        <IconImagem size={20} />
+        <span>{m.composer_fotos()}</span>
+      </button>
+      {#each recentes as r (r.filename)}
+        <!-- A folha fica aberta enquanto baixa e fecha ao terminar: fechando no toque, o único
+             sinal de que algo acontece ia embora junto, e numa rede lenta a pessoa tocava de novo. -->
+        <button class="faixa-thumb" title={r.filename}
+                class:baixando={reanexando === r.filename}
+                disabled={!!reanexando}
+                onclick={() => void reanexar(r.filename)}>
+          <img src={uploadUrl(sessionName, r.filename)} alt="" loading="lazy" />
+        </button>
+      {/each}
+    </div>
+
+    <div class="plus-grupo">
+      <button class="plus-item" onclick={() => { plusOpen = false; fileInput?.click(); }}>
+        <IconAttach size={16} />
+        <span>{m.composer_anexar_arquivo()}</span>
+      </button>
+      <button class="plus-item" onclick={() => { plusOpen = false; estiloAberto = true; }}>
+        <IconMic size={16} />
+        <span class="plus-item-label">{m.ditado_estilo_titulo()}</span>
+        <span class="plus-item-value">{rotuloEstilo}</span>
+      </button>
+    </div>
+
+    <div class="plus-grupo">
+      {#if !isCodex}
+        <button class="plus-item" onclick={() => { plusOpen = false; commandSheetOpen = true; }}>
+          <IconComandos size={16} />
+          <span>{m.comandos_titulo()}</span>
+        </button>
+      {/if}
+      <button class="plus-item" onclick={() => { plusOpen = false; onOpenPreview?.(); }}>
+        <IconMonitor size={16} />
+        <span>{m.composer_preview_rodando()}</span>
+      </button>
+      {#if onOpenOrq}
+        <button class="plus-item" onclick={() => { plusOpen = false; onOpenOrq?.(); }}>
+          <IconOrquestrar size={16} />
+          <span>{m.orqcfg_titulo()}</span>
+        </button>
+      {/if}
+    </div>
+  </BottomSheet>
 
   <ConfirmSheet
     open={confirmStopOpen}
@@ -2188,13 +2428,81 @@
   .stats-strip .dot { opacity: 0.5; }
   .stats-strip .sep { color: var(--border-strong); }
 
+  /* Aba + card andam juntos: a largura mora aqui pra os dois ficarem alinhados. */
+  .composer-dock {
+    max-width: 600px;
+    margin: 0 auto;
+  }
+  @media (min-width: 820px) {
+    .composer-dock { max-width: min(1400px, 94vw); }
+  }
+
+  /* Aba de status: faixa fina recuada nas duas pontas, arredondada só em cima, encostada no card
+     (-1px come a borda dupla). Fundo = o vidro do card com uma demão de tinta por cima, pra ela
+     ler como um degrau atrás e continuar entrando no véu do papel de parede. */
+  .status-tab {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 34px;
+    margin: 0 var(--space-4) -1px;
+    padding: 0 var(--space-2);
+    /* Mesmo material do card, não uma cor parecida: o vidro dele muda de receita no Chromium
+       (refração do liquid glass) e uma tinta chapada aqui destoava justamente ali. Quem separa a
+       aba do card é a borda e o recorte, não a cor. */
+    position: relative;
+    isolation: isolate;
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    border-bottom: 0;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    box-shadow: inset 0 1px 1px var(--glass-specular);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    overflow: hidden;
+  }
+  /* Camada de vidro: leaf isolado, mesma regra do .composer-card::before (WebKit sem filtro). */
+  .status-tab::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--chrome-bg);
+  }
+  :global(html[data-liquid]) .status-tab::before {
+    background: var(--glass-bg);
+    backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
+  }
+  @media (min-width: 820px) {
+    .status-tab { margin-inline: var(--space-6); }
+  }
+  /* Esquerda rola de lado quando não cabe (par + grupo + fila + shell no celular); quebrar linha
+     engordaria a faixa e ela deixaria de ser uma aba. */
+  .tab-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tab-left::-webkit-scrollbar { display: none; }
+  .tab-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+    padding-left: var(--space-2);
+    flex-shrink: 0;
+  }
+
   /* Card unico que reune status, textarea e controles. */
   .composer-card {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    max-width: 600px;
-    margin: 0 auto;
     /* Card de vidro fosco. O blur NÃO fica mais aqui: ficava no MESMO elemento que tem conteúdo +
        borda + filhos, forçando o WebKit a promover a subárvore e quebrar o fast-path do scroll ->
        bloco PRETO no topo durante o streaming (WebKit #89475). Agora o filtro vive só no ::before
@@ -2254,12 +2562,6 @@
   :global(html[data-liquid]) .composer-card::before {
     background: var(--glass-bg);
     backdrop-filter: url(#liquid-glass) blur(16px) saturate(180%);
-  }
-
-  /* Desktop: composer mais largo (aditivo; mobile fica nos 600px). min() acompanha a lista
-     (messages-inner): sem degrau 600->1400 em tablet. */
-  @media (min-width: 820px) {
-    .composer-card { max-width: min(1400px, 94vw); }
   }
 
   /* ── Textarea (transparente dentro do card) ─────────────────────────────── */
@@ -2331,9 +2633,61 @@
      fileira e ele some. */
   .plus-btn { display: none; }
 
+  /* Menu do "+": faixa rolando de lado em cima, cartões embaixo (referência: app do Claude). */
+  .plus-titulo {
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-lg); font-weight: 600; color: var(--text-primary);
+  }
+  /* Sangra até a borda da folha (que tem --space-5 de padding): a faixa rola de lado, e a foto
+     cortada na borda é o que conta que há mais pro lado. */
+  .plus-faixa {
+    display: flex; gap: var(--space-2);
+    margin: 0 calc(-1 * var(--space-5)) var(--space-4);
+    padding: 0 var(--space-5);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .plus-faixa::-webkit-scrollbar { display: none; }
+  .faixa-btn, .faixa-thumb {
+    flex: 0 0 auto; width: 96px; height: 96px;
+    border: none; border-radius: var(--radius-md);
+    background: var(--fill-subtle); cursor: pointer;
+  }
+  .faixa-btn {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; color: var(--text-primary); font-size: var(--text-xs);
+  }
+  .faixa-thumb { padding: 0; overflow: hidden; }
+  /* Baixando: a miniatura apaga e pulsa. É o único aviso de que o toque foi recebido — sem ele,
+     rede lenta parecia toque perdido. As outras ficam desabilitadas junto, uma de cada vez. */
+  .faixa-thumb.baixando { animation: faixa-pulso 1.1s var(--ease-out, ease-out) infinite; }
+  .faixa-thumb:disabled { cursor: default; }
+  .faixa-thumb:disabled:not(.baixando) { opacity: 0.45; }
+  @keyframes faixa-pulso { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  .faixa-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  @media (hover: hover) {
+    .faixa-btn:hover, .faixa-thumb:hover { background: var(--bg-hover); }
+  }
+
+  /* Cartão com as linhas: separador fino ENTRE elas, recuado até o texto (sai debaixo do ícone),
+     senão a linha cruza o cartão inteiro e some a leitura de grupo. */
+  .plus-grupo {
+    margin: 0 0 var(--space-3);
+    background: var(--fill-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .plus-grupo .plus-item + .plus-item { position: relative; }
+  .plus-grupo .plus-item + .plus-item::before {
+    content: ''; position: absolute; left: 40px; right: 0; top: 0; height: 1px;
+    background: var(--border-subtle);
+  }
+
   /* Linhas do menu do "+". */
   .plus-item {
-    display: flex; align-items: center; gap: var(--space-2);
+    /* `justify-content` explícito: o reset global centraliza todo `button` (app.css, alvo de
+       toque), e as linhas sem rótulo esticado ficavam no meio enquanto as com `.plus-item-label`
+       encostavam à esquerda — o menu saía com duas colunas de ícone. */
+    display: flex; align-items: center; justify-content: flex-start; gap: var(--space-2);
     width: 100%; padding: 10px var(--space-3);
     background: transparent; border: none; color: var(--text-primary);
     font-size: var(--text-sm); text-align: left; cursor: pointer;
@@ -2348,10 +2702,18 @@
        "bypassPermissions") e estourava, derrubando mic e estilo órfãos pra uma segunda linha. */
     .control-left { gap: 6px; flex-wrap: nowrap; }
     .plus-btn { display: inline-flex; }
-    /* Anexo e pill de estilo saem da fileira (estão no "+"); o mic fica. */
+    /* Anexo, pill de estilo e os atalhos saem da fileira (estão no "+"); o mic fica. */
     .control-left > .attach-btn:not(.mic-btn):not(.plus-btn) { display: none; }
     .control-left > .model-pill { display: none; }
-    .pill-perm { display: none; }
+    /* A permissão voltou pro celular: ela sumia porque a fileira levava sete peças e estourava;
+       hoje são quatro. O teto de largura é pro rótulo mais comprido ("Aceitar edições"), que
+       trunca em vez de empurrar o resto. */
+    .pill-perm { display: inline-flex; flex-shrink: 1; min-width: 0; max-width: 108px; }
+    .pill-perm .pill-model {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .pill-duo {
       display: inline-flex;
       align-items: center;
@@ -2395,6 +2757,8 @@
     min-width: 0;
   }
 
+  .pill-glifo { flex-shrink: 0; font-size: 0.85em; color: var(--text-muted); }
+
   .pill-model {
     white-space: nowrap;
     overflow: hidden;
@@ -2402,38 +2766,6 @@
     max-width: 130px;
     color: var(--text-primary);
     font-weight: 600;
-  }
-
-  /* Botao [ / ]: abre o CommandSheet. Chip compacto na faixa do topo, igual ao cost-chip.
-     min-height/min-width:0 sobrescrevem o alvo global de 44px pra manter o chip enxuto
-     (tap confortavel dentro da faixa). */
-  .slash-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 28px;
-    min-height: 0;
-    min-width: 0;
-    padding: 0 var(--space-2);
-    flex-shrink: 0;
-    border-radius: var(--radius-md);
-    /* `--surface-raised`, nao `--bg-hover` cru: o chip fica DENTRO do composer, que e vidro sobre a
-       foto — com cor opaca ele virava um retangulo chapado por cima do vidro e ignorava o slider
-       Solidez (CLAUDE.md, "Transparencia"). O realce de :active abaixo segue em `--bg-*` cru, que e
-       tinta de estado por cima, nao superficie. */
-    background: var(--surface-raised);
-    color: var(--text-secondary);
-  }
-
-  .slash-btn:active {
-    background: var(--bg-elevated);
-  }
-
-  .slash-glyph {
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    font-weight: 600;
-    line-height: 1;
   }
 
   .control-right {
@@ -2482,18 +2814,6 @@
   .cache-chip.acabando .cache-glyph { background: var(--warning); }
   .cache-chip.frio .cache-glyph { background: var(--text-muted); opacity: 0.5; }
 
-  .composer-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .top-left {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-width: 0;
-  }
   /* Pareada: chip acende no accent (o 🤝 sem par fica na cor muted padrão do repo-chip). */
   .pair-chip--on { color: var(--accent); }
   .pair-chip--on .repo-name { color: var(--accent); }
@@ -2584,62 +2904,109 @@
   /* ── Anexo de imagem ────────────────────────────────────────────────────── */
   .file-input { display: none; }
 
+  /* Rola de lado em vez de quebrar linha: com quatro anexos o dock crescia e empurrava a conversa.
+     O padding é a folga do anel, que passa 5px de cada lado do tile. */
   .attach-row {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-2);
+    gap: 14px;
+    padding: 7px 2px 9px;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
-  .attach-chip {
+  .attach-row::-webkit-scrollbar { display: none; }
+
+  .attach-tile {
     position: relative;
-    flex-shrink: 0;
+    width: 56px;
+    height: 56px;
+    flex: 0 0 56px;
   }
-  .attach-thumb {
-    width: 48px;
-    height: 48px;
-    border-radius: var(--radius-sm);
-    object-fit: cover;
-    display: block;
-  }
-  .attach-file {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    max-width: 140px;
-    height: 48px;
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-sm);
-    background: var(--bg-elevated);
+  .tile-box {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--surface-inset);
     border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    transition: opacity 180ms var(--ease-out);
   }
-  .attach-file-glyph { flex-shrink: 0; font-size: 13px; }
-  .attach-file-name {
+  /* Esperando a vez na fila: apagado, mas presente — some a dúvida de "esse foi ou não foi?". */
+  .attach-tile.esperando .tile-box { opacity: 0.45; }
+  .tile-box { position: relative; }
+  .tile-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* Play sobre o quadro do vídeo: fundo escuro por baixo porque o quadro pode ser claro. */
+  .tile-play {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.28);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  }
+  .tile-glyph { display: flex; color: var(--text-secondary); line-height: 1; }
+  .tile-name {
+    max-width: 50px;
     font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
+    font-size: 9px;
+    color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .attach-status { font-size: var(--text-xs); color: var(--text-muted); }
-  .attach-error { font-size: var(--text-xs); color: var(--error); }
-  .attach-remove {
+
+  .tile-ring {
     position: absolute;
-    top: -6px;
-    right: -6px;
-    width: 20px;
-    height: 20px;
+    inset: -5px;
+    width: 66px;
+    height: 66px;
+    pointer-events: none;
+  }
+  .tile-ring rect { fill: none; stroke-width: 2.5; }
+  .ring-trilho { stroke: var(--border-default); }
+  .ring-arco {
+    stroke: var(--accent);
+    stroke-linecap: round;
+    /* Mesma duração do ContextRing: o salto entre dois eventos de progresso vira movimento. */
+    transition: stroke-dashoffset 200ms linear;
+  }
+
+  /* % e ✕ ocupam o MESMO canto: um sai quando o outro entra, e é o que faz o tile "terminar". */
+  .tile-pct,
+  .tile-x {
+    position: absolute;
+    right: -7px;
+    bottom: -6px;
+    min-width: 22px;
+    height: 16px;
     min-height: 0;
+    padding: 0 3px;
     display: flex;
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-full);
     background: var(--bg-base);
     border: 1px solid var(--border-default);
+    font-size: 9px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .tile-pct { color: var(--accent); }
+  .tile-x {
+    top: -7px;
+    bottom: auto;
+    width: 20px;
+    height: 20px;
     color: var(--text-secondary);
     font-size: 14px;
-    line-height: 1;
   }
+  .attach-error { font-size: var(--text-xs); color: var(--error); }
 
   .attach-btn {
     width: 44px; height: 44px; flex-shrink: 0;

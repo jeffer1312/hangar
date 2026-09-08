@@ -14,6 +14,7 @@
   import { TermSocket, termUrlForServer, sessionExistsOnServer } from '../lib/term';
   import { novoTerminal, temaDe } from '../lib/xterm';
   import { listServers, getActiveId } from '../lib/auth';
+  import { motivoDeOrigemRecusada } from '../lib/termOrigem';
   import type { Terminal } from '@xterm/xterm';
   import type { FitAddon } from '@xterm/addon-fit';
   import * as m from '../paraglide/messages';
@@ -149,7 +150,14 @@
         // `vivo`, nao incondicional: o close() dispara onclose ASSINCRONO, e sem a guarda o "caiu"
         // de um socket ja descartado aterrissava na proxima conexao (ou num componente destruido).
         close: (motivoFechamento) => {
-          if (vivo) { caiu = true; pronto = false; motivo = motivoFechamento ?? null; }
+          if (!vivo) return;
+          caiu = true;
+          pronto = false;
+          motivo = motivoFechamento ?? null;
+          // Fechou MUDO: pode ser a origem recusada no handshake (403 antes do accept, que o
+          // navegador não deixa ler). Pergunta por HTTP e, se for isso, troca "desconectado" pela
+          // frase que diz o que fazer.
+          if (!motivo) void motivoDeOrigemRecusada(srv).then((r) => { if (vivo && r) motivo = r; });
         },
       });
       // Digitar e DIRETO no xterm: tocar na tela ja levanta o teclado do sistema (o xterm foca

@@ -220,6 +220,13 @@ by you measures your own guess, not the work.
 the arbiter before sending the round.** It is a phase-1 decision left blank; he asks the user and
 brings you the answer. Sending anyway costs the whole round, because the reviewer returns it.
 
+**The blind choice answers "which looks more finished" — never "which does more".** A screen that
+lost a warning, a button or a hint looks *cleaner*, and wins. When the Task replaces an existing
+surface, this step does not release you from the inventory of what the old one did (the arbiter's
+page, "A Task that REPLACES an existing surface"): they are two gates, and only one of them is
+about pixels. A blind choice won on the same round that an inventory rejects is the normal case,
+not a contradiction.
+
 ### What goes in the report
 
 Per state: the screenshot's path, what you **clicked** and what happened, the question you asked

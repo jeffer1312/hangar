@@ -16,6 +16,14 @@ def _auth(monkeypatch):
     monkeypatch.setattr(settings, "auth_token", TOKEN)
 
 
+@pytest.fixture(autouse=True)
+def _pane_vivo_e_limpo():
+    """O guard de permissão só olha se a sessão vive e se há menu aberto no pane — nunca o tmux
+    real da máquina de quem roda a suíte. Teste que quer menu aberto sobrescreve `is_overlay`."""
+    with patch("app.tmux.has_session", return_value=True), patch("app.tmux.capture_pane", return_value=""):
+        yield
+
+
 def _client():
     from app.api import app
 
@@ -36,6 +44,20 @@ def test_create_com_permissao_kimi_409():
             "name": "x", "cwd": "/tmp", "provider": "kimi", "permission_mode": "plan"})
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "erro_permissao_so_claude"
+    cr.assert_not_called()
+
+
+def test_create_com_perfil_omp_passa_e_fora_do_omp_400():
+    with patch("app.api.registry.create", return_value=SessionInfo(name="x", cwd="/tmp", provider="omp")) as cr:
+        r = _client().post("/api/sessions", headers=AUTH, json={
+            "name": "x", "cwd": "/tmp", "provider": "omp", "omp_profile": "trabalho"})
+    assert r.status_code == 200
+    assert cr.call_args.kwargs.get("omp_profile") == "trabalho"
+    with patch("app.api.registry.create") as cr:
+        r = _client().post("/api/sessions", headers=AUTH, json={
+            "name": "x", "cwd": "/tmp", "provider": "claude", "omp_profile": "trabalho"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_perfil_so_omp"
     cr.assert_not_called()
 
 
@@ -134,14 +156,37 @@ def test_perm_get_sessao_trabalhando_200_le_o_modo():
     assert mock_ler.call_count == 1
     assert mock_listar.call_count == 0
 
-def test_perm_get_sondar_com_sessao_trabalhando_409():
-    # com sondar=1 e sessão trabalhando: o guard de escrita deve recusar com 409
+def test_perm_sondar_e_trocar_com_sessao_trabalhando_passam():
+    # BTab troca o modo no meio do turno (medido): trabalhar não recusa nem sonda nem troca.
+    # Só um menu aberto no pane recusa.
     from app.terminal_input import TerminalInput
-    info = _info_claude()
+    from app.api import _perm_modes_cache
+    _perm_modes_cache.clear()
+    info = _info_claude(name="sess-work", jsonl="/tmp/work.jsonl")
     with patch("app.api._cached_info", return_value=info), \
          patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.api.terminal._require_drivable", side_effect=TerminalInput.NaoDigitou(409, "a sessao esta trabalhando — espere ela terminar")):
-        r = _client().get("/api/sessions/sess/permission-modes?sondar=1", headers=AUTH)
+         patch("app.api.terminal._require_drivable", side_effect=TerminalInput.NaoDigitou(409, "a sessao esta trabalhando — espere ela terminar")), \
+         patch("app.tmux.has_session", return_value=True), \
+         patch("app.tmux.capture_pane", return_value="✻ Ebbing… (6s)\n⏵⏵ bypass permissions on"), \
+         patch("app.permission_mode.ler_modo", return_value="bypassPermissions"), \
+         patch("app.permission_mode.listar_modos", return_value=("bypassPermissions", ["bypassPermissions", "auto", "manual", "acceptEdits", "plan"])), \
+         patch("app.permission_mode.trocar_modo", return_value="auto"):
+        r = _client().get("/api/sessions/sess-work/permission-modes?sondar=1", headers=AUTH)
+        assert r.status_code == 200
+        assert len(r.json()["modes"]) == 5
+        r2 = _client().post("/api/sessions/sess-work/permission-mode", headers=AUTH, json={"mode": "auto"})
+    assert r2.status_code == 200
+    assert r2.json()["mode"] == "auto"
+
+
+def test_perm_menu_aberto_no_pane_409():
+    info = _info_claude(name="sess-menu", jsonl="/tmp/menu.jsonl")
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.tmux.has_session", return_value=True), \
+         patch("app.tmux.capture_pane", return_value="x"), \
+         patch("app.state.is_overlay", return_value=True):
+        r = _client().post("/api/sessions/sess-menu/permission-mode", headers=AUTH, json={"mode": "auto"})
     assert r.status_code == 409
 
 def test_perm_get_nao_claude_409():

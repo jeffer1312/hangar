@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import * as m from '../paraglide/messages';
 import { intlLocale } from '../lib/locale';
   import type { StatusFields } from '@hangar/core';
@@ -33,7 +34,7 @@ import { intlLocale } from '../lib/locale';
   });
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.uso_aria()}>
+<BottomSheet {open} {onClose} ariaLabel={m.uso_aria()} centered={desktop.atual}>
   <div class="usage">
     <h2 class="usage-title">{m.uso_titulo()}</h2>
     {#each rows as r}

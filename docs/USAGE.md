@@ -62,7 +62,7 @@ Lá o multiplexador é o [psmux](https://github.com/psmux/psmux) (tmux nativo de
 ConPTY) — não existe `tmux` no Windows, e o WSL não é necessário. O `hangar-send` (recado/pareamento
 entre sessões) e o `claude-conta` vão junto, via o bash do Git for Windows. Três coisas **não**
 vão: os wrappers do `codex`, `pi` e `kimi` (sessão deles, só criada pelo app), os motores de modelo
-(tela Motores — o `hangar-engine` depende de `execvpe`, que no Windows não substitui o processo) e os
+(Contas e modelos → Modelo e opções — o `hangar-engine` depende de `execvpe`, que no Windows não substitui o processo) e os
 plugins de persistência entre reboots.
 
 ## 2. Subir (3 partes)
@@ -233,6 +233,17 @@ Cada PC roda backend+vite+`tailscale serve` com o **mesmo** `CP_AUTH_TOKEN`. O a
 servidores** e troca entre eles (switcher) — útil pra dirigir o Claude de máquinas diferentes do
 mesmo celular.
 
+### Opções do Claude Code
+
+Em **Configurações → Harnesses → Claude Code → Opções**, a preferência **Atualizar barra de
+status** permite ao instalador do Hangar configurar a barra do Claude Code. Ela vem ligada por
+padrão. Para manter uma barra personalizada, desligue a opção e clique em **Salvar**.
+
+A escolha fica no servidor selecionado e vale nas instalações e atualizações seguintes, em
+Linux e Windows, mesmo com o backend parado. Salvar a preferência não troca nem restaura a barra
+atual; desligá-la preserva o comando que já está configurado. No desktop, as opções abrem em
+modal; no celular, em uma folha.
+
 ### Desktop (≥820px)
 Abrindo a mesma URL num monitor largo, vira **shell de duas colunas**: sidebar de sessões +
 chat largo. O fluxo mobile fica intacto abaixo de 820px.
@@ -272,6 +283,91 @@ não tem).
   um `systemctl --user restart` a derruba junto. Sem emulador conhecido no PATH ele diz isso; pra
   escolher qual usar, `CP_TERMINAL` (tabela da seção 2).
 
+### Checkpoints de código (Pi e OMP)
+
+Requer **Git 2.32 ou superior**, para isolar a configuração global durante as operações.
+
+Com a extensão do Hangar carregada, cada pedido em uma árvore Git recebe um checkpoint antes
+da atuação do agente. No **OMP**, use `/hangar-rewind`; no **Pi**, use `/rewind`.
+Escolha o checkpoint do ramo atual e um dos três modos:
+
+- **Código e conversa:** repõe os arquivos e reposiciona a conversa.
+- **Somente conversa:** mantém os arquivos como estão.
+- **Somente código:** mantém a conversa como está.
+
+Arquivos modificados ou apagados voltam ao estado capturado. **Arquivos criados depois são
+preservados**, e o índice, a branch e os commits do seu repositório não são alterados.
+As exclusões do Git são respeitadas; os objetos ficam em `<agentDir>/checkpoints`, onde
+`agentDir` vem de `PI_CODING_AGENT_DIR` ou da pasta padrão do harness.
+
+Retomar ou ramificar uma sessão preserva a referência aos objetos originais. Se eles não
+estiverem disponíveis ou pertencerem a outro projeto, a restauração do código é recusada.
+Mudança de sessão/estado durante a escolha exige uma nova seleção. Se os arquivos voltarem
+mas a conversa falhar, o aviso informa a conclusão parcial. No OMP, uma captura que exceda
+25 segundos interrompe o pedido, sem publicar um checkpoint tardio.
+
+### Marketplaces e plugins no OMP
+
+A importação de marketplaces do Claude usa o gerenciador nativo do OMP. É genérica: não
+depende do nome do catálogo ou do plugin. Catálogos já registrados com a mesma origem não
+são importados novamente; um nome ocupado por outra origem é preservado e informado como
+conflito. Origens inválidas ou não representáveis são informadas, sem mudar configurações.
+
+**Importar um marketplace não instala todos os seus plugins nem converte instalações Git
+existentes.** Os plugins instalados por marketplace continuam sob responsabilidade do OMP.
+Na opção nativa **Marketplace Auto-Update**, `notify` (padrão) verifica e avisa na abertura
+da sessão; `auto` também instala as atualizações. A importação não altera essa preferência.
+
+Para plugins Git diretos elegíveis, a integração compara origem e revisão, não apenas o
+nome ou a versão textual. Arquivos/preferências alterados manualmente suspendem a gestão.
+Plugins sem prova suficiente são diagnosticados, não instalados por suposição. A inspeção
+`dry_run` não executa instaladores nem escreve no perfil pessoal.
+Registro de propriedade inválido interrompe a passagem sem remover plugins. Se duas origens
+disputarem o mesmo nome de pacote, nenhuma vence pela ordem do cadastro; a instalação
+existente é preservada e o conflito é informado. Os diagnósticos não incluem linhas brutas
+de arquivos de configuração ou credenciais.
+
+**Execução periódica (opcional):** configure `CP_OMP_PLUGIN_SYNC_ENABLED=1` no ambiente do
+backend. `CP_OMP_PLUGIN_SYNC_INTERVAL` define o intervalo em segundos (padrão **300**; deve
+ser positivo e finito). Sem habilitação explícita, nenhuma passagem é iniciada. O controle
+global de automações também precisa estar habilitado; a integração não o liga por conta própria.
+
+A primeira passagem acontece na subida; as seguintes começam após o intervalo contado do
+fim da anterior, sem sobreposição. A API permanece disponível durante o trabalho. No
+encerramento, o backend sinaliza parada e aguarda a operação em andamento antes de sair.
+
+Consulte **`GET /api/omp/plugin-sync`**, com a autenticação normal da API, para ver
+`disabled` (desligado), `paused` (automações pausadas), `running` (executando), `updated`
+(houve ações), `unchanged` (sem mudanças), `suspended` (conflito/alteração manual), `error`
+(falha) ou `stopped` (encerrado). O relatório detalha cada catálogo/plugin; `updated` não
+significa que candidatos sem prova foram instalados. Erros não encerram o ciclo periódico.
+
+O diretório global de plugins não é derivado do diretório do agente. A integração respeita
+`PI_CONFIG_DIR`, o perfil OMP selecionado e o layout XDG já existente. Um agente em diretório
+personalizado não desloca sozinho os plugins. Caso a configuração passe a apontar para
+outra raiz, um registro de propriedade antigo é preservado e diagnosticado, não migrado
+automaticamente.
+
+### Contexto CLAUDE.md no OMP
+
+Com `CP_OMP_CLAUDE_CONTEXT_ENABLED=1`, a subida do backend configura somente o OMP:
+
+- Usa o `CLAUDE.md` global existente por um link `APPEND_SYSTEM.md`, sem copiar seu conteúdo
+  para o repositório e sem substituir um arquivo/link personalizado.
+- Instala ou reutiliza a regra que exige ler o `CLAUDE.md` do projeto antes do trabalho.
+- Acrescenta os dois identificadores de contexto AGENTS à lista de recursos desativados,
+  preservando as outras entradas. Nenhum arquivo `AGENTS.md` é apagado.
+
+Se o projeto não tiver `CLAUDE.md`, a regra exige informar a ausência, não fingir que o
+arquivo foi carregado. Conflitos com contexto personalizado são informados, sem sobrescrita.
+Uma regra desativada, restrita a agentes/condições ou bloqueada nas configurações pessoais
+não é reativada por conta própria. Regras equivalentes `.md` e `.mdc` no nível direto são
+reutilizadas; arquivos em subdiretórios não substituem uma regra que o OMP precisa descobrir.
+Mudanças concorrentes nos arquivos ou no diretório de regras geram diagnóstico, sem gravar
+em um destino externo.
+A alteração usa o CLI nativo de configuração, que pode normalizar formatos legados sem
+mudar a preferência efetiva. Reabra a sessão OMP para carregar a política recém-configurada.
+
 ### Git
 
 O ícone de branch abre o **modal de git** da sessão — o mesmo nas duas views: no desktop ele é um
@@ -308,18 +404,19 @@ Cada aba lembra em que nível estava: trocar de aba e voltar não perde o lugar.
   fechar e reabrir o modal não perde o estado, que é lido do próprio repositório.
 - Sessão cujo diretório não é repositório git diz isso em uma frase, sem despejar a saída do git.
 
-### Motores de modelo (Kimi, gateway próprio, …)
+### Rodar uma sessão em outro modelo (Kimi, gateway próprio, …)
 
 Dá para abrir uma sessão que roda em outro provedor de modelo sem criar perfil novo e sem
 desconectar sua conta Anthropic. A sessão continua no **mesmo** `~/.claude`: skills, hooks,
 `CLAUDE.md`, plugins, statusline e histórico, tudo igual — só muda um punhado de variáveis de
 ambiente no processo daquela sessão.
 
-**Configurar:** menu da conta → **Configurações** → **Motores de modelo** → Adicionar. Preencha o
+**Configurar:** menu da conta → **Configurações** → **Contas e modelos** → **+ Nova conta**. Preencha o
 endereço e a chave e toque em **Testar e listar modelos**: os ids e a janela de contexto vêm do seu
 provedor, com a sua chave — nada de tabela chumbada que envelhece. O mesmo botão serve de checagem
 de conectividade/chave: chave errada volta com a mensagem do próprio provedor, não um "não
-respondeu" genérico.
+respondeu" genérico. Subagentes, janela de contexto e as opções avançadas ficam em **Modelo e
+opções**, dentro do card da chave, depois de criada.
 
 - O endereço vai **sem o `/v1`** no fim (o Claude Code monta o caminho).
 - **Kimi Code** é `https://api.kimi.com/coding` — e **não** é a mesma coisa que a plataforma aberta
@@ -481,7 +578,7 @@ CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_SYNC=1 CP_SYNC_BOOTSTRAP=$(openssl rand
 | Não vejo código novo após mudar | PWA com service worker servindo JS velho → **hard reload** / limpar dados do site / re-adicionar o PWA. |
 | Backend reiniciar | precisa do cwd=`backend` (`python -m app.main` acha `app`). Sem `--reload` (trava SSE no SIGTERM). |
 | Pane de sessão de motor morre na hora, sem chat nenhum | `hangar-engine` não está no PATH do **servidor tmux** (a sessão nasce via `hangar-engine --exec`). Garanta que o PATH usado pelo tmux enxerga `hangar-engine` (mesmo instalado pelo `install-claude-wrapper.sh`). |
-| Tela de Motores de modelo diz que não conseguiu ler o arquivo | `~/.claude/engines.json` foi editado à mão e ficou com JSON inválido — corrija-o (ou restaure um backup) antes de adicionar um motor novo; o app se recusa a gravar por cima de um arquivo que não conseguiu ler, pra não apagar os motores que já estavam lá. |
+| Contas e modelos avisa que não conseguiu ler o `engines.json` | `~/.claude/engines.json` foi editado à mão e ficou com JSON inválido — corrija-o (ou restaure um backup) antes de adicionar um motor novo; o app se recusa a gravar por cima de um arquivo que não conseguiu ler, pra não apagar os motores que já estavam lá. |
 
 ## 8. Segurança (resumo)
 

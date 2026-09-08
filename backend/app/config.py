@@ -211,6 +211,17 @@ class Settings(BaseSettings):
     # parseia num horario confiavel, arma um Timer pra drenar sozinha no reset. Default OFF -- e uma
     # acao UNATTENDED (manda prompt sem o usuario olhar); liga so quem quer. CP_AUTO_RESUME.
     auto_resume: bool = False
+    # Importação/sincronização OMP é opt-in e também respeita o kill-switch mestre.
+    omp_plugin_sync_enabled: bool = False
+    omp_plugin_sync_interval: float = Field(300, gt=0, allow_inf_nan=False)
+    omp_claude_context_enabled: bool = False
+
+    @field_validator("omp_plugin_sync_interval", mode="before")
+    @classmethod
+    def _intervalo_vazio_e_ausencia(cls, v: object) -> object:
+        # Vazio no .env preserva o padrão, como em front_port; números inválidos continuam recusados.
+        return 300 if isinstance(v, str) and not v.strip() else v
+
     # Cloud sync hub (opt-in). CP_SYNC=1 turns THIS backend into the sync hub: it mounts /api/sync/*.
     # Stores only salt + auth verifier + ciphertext (zero-knowledge; tokens are encrypted client-side).
     sync: bool = False
@@ -238,6 +249,11 @@ class Settings(BaseSettings):
     # seu proprio opt-in/config — isto e um portao ADICIONAL, nao substitui CP_AUTO_RESUME). CP_AUTOMATIONS=0
     # desliga tudo de uma vez (ex: antes de um teste manual, ou se uma automacao ficar barulhenta).
     automations: bool = True
+    # Reconciliacao automatica do Codex (codex_integracao.acompanhar + abertura de TUI). Portao
+    # PROPRIO por cima do `automations`, editavel pela tela (card do Codex em Harnesses).
+    codex_sync: bool = True
+    # A preferência salva também é lida pelos instaladores, sem depender do backend em execução.
+    claude_statusline_update: bool = True
     # Chave da Groq pra transcricao de audio (whisper-large-v3-turbo). Aceita CP_GROQ_API_KEY (padrao
     # do .env, com prefixo) OU GROQ_API_KEY (convencao do Groq/OpenAI SDK, ex: no Environment do systemd).
     # Vazio = transcricao desligada (o endpoint /transcribe responde 503). Ver docs/USAGE.md.

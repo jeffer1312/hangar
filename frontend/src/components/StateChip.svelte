@@ -10,6 +10,7 @@
   //
   // `stateColors` (lib/format.ts) continua existindo pra quem precisa da cor CRUA num style
   // inline (o anel do PlanRing, a bolinha de um grafico) — aqui nao se usa.
+  import * as m from '../paraglide/messages';
   import { rotuloEstado } from '@hangar/core';
   import type { State } from '@hangar/core';
 
@@ -23,18 +24,25 @@
     // Rotulo proprio (o Canvas abrevia: "exec", "voce"). Sem isto ele tinha o proprio markup.
     label?: string;
     title?: string;
+    // Parada no limite de uso (radar de limite): o estado interno segue `working` — a sessão
+    // volta sozinha —, mas na tela isso nem trabalha nem está pronta. Cor e texto próprios.
+    limited?: boolean;
+    limitReset?: string | null;
   }
-  let { state, size = 'sm', dot = false, label, title }: Props = $props();
+  let { state, size = 'sm', dot = false, label, title, limited = false, limitReset = null }: Props = $props();
 
-  const texto = $derived(label ?? rotuloEstado(state));
+  const tom = $derived(limited ? 'limite' : state);
+  const texto = $derived(
+    label ?? (limited ? (limitReset ? m.estado_limite_volta({ n: limitReset }) : m.estado_limite()) : rotuloEstado(state)),
+  );
 </script>
 
 {#if dot}
   <!-- aria-hidden: o ponto e redundante — quem o usa sempre tem o nome da sessao e o estado
        em texto por perto (aria-label da linha). Anunciar "ponto" nao ajuda ninguem. -->
-  <span class="chip ponto {state}" aria-hidden="true" title={title ?? texto}></span>
+  <span class="chip ponto {tom}" aria-hidden="true" title={title ?? texto}></span>
 {:else}
-  <span class="chip {size} {state}" {title}>{texto}</span>
+  <span class="chip {size} {tom}" {title}>{texto}</span>
 {/if}
 
 <style>
@@ -54,6 +62,7 @@
   .idle           { background: var(--pill-idle-bg);    color: var(--pill-idle-fg); }
   .awaiting_input { background: var(--pill-input-bg);   color: var(--pill-input-fg); }
   .dead           { background: var(--pill-dead-bg);    color: var(--pill-dead-fg); }
+  .limite         { background: var(--pill-limite-bg);  color: var(--pill-limite-fg); font-variant-numeric: tabular-nums; }
 
   /* O ponto usa a cor de TEXTO do estado (o -fg), nao a de fundo: o -bg e uma tinta de 12-16%
      de alfa, que numa bolinha de 8px sobre o vidro simplesmente nao aparece. */
@@ -67,4 +76,5 @@
   .ponto.idle           { background: var(--pill-idle-fg); }
   .ponto.awaiting_input { background: var(--pill-input-fg); }
   .ponto.dead           { background: var(--pill-dead-fg); }
+  .ponto.limite         { background: var(--pill-limite-fg); }
 </style>

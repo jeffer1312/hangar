@@ -36,6 +36,16 @@
   let carregando = $state(false);
   let podeVoltar = $state(false);
   let podeAvancar = $state(false);
+  // Fechado por fora (`hangar-preview close`): mesmo caminho do ×, menos o `close` ao shell, que já
+  // fechou. Sem isto o painel seguia aberto sobre um view morto.
+  $effect(() => {
+    if (!nativo?.onFechado) return;
+    return nativo.onFechado((p) => {
+      if (p.chave !== navKey) return;
+      fecharNav(navKey);
+      ctxPanel.aba = 'contexto';
+    });
+  });
   $effect(() => {
     if (!nativo?.onEstado) return;
     return nativo.onEstado((p) => {

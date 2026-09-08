@@ -7,6 +7,20 @@ on:
   pull_request:
 
 jobs:
+  statusline:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test scripts/test-configure-statusline.cjs
+
   backend:
     runs-on: ubuntu-latest
     # So roda teste/build — nao escreve nada no repo. Declarado explicito pra nao herdar
@@ -26,6 +40,20 @@ jobs:
       # ele os testes de busca voltavam ZERO acerto — falha que so aparecia aqui, porque a maquina
       # de quem desenvolve tem o rg como requisito do instalador.
       - run: sudo apt-get update && sudo apt-get install -y tmux ripgrep
+      - name: Instalar OMP oficial para provas de extensões
+        run: |
+          mkdir -p "$RUNNER_TEMP/omp"
+          cd "$RUNNER_TEMP/omp"
+          # Com retry: em 07/09/2026 o CDN do GitHub devolveu 504 no SHA256SUMS.txt (92 bytes),
+          # `curl --fail` saiu 22 e a suíte inteira do backend nem chegou a rodar — enquanto o
+          # binário de 190 MB, logo acima, tinha baixado em 2s. `--retry-all-errors` porque o
+          # `--retry` sozinho ignora conexão cortada, que é o outro jeito de o mesmo CDN falhar.
+          curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 --output omp-linux-x64 \
+            https://github.com/can1357/oh-my-pi/releases/download/v18.1.11/omp-linux-x64
+          curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 --output SHA256SUMS.txt \
+            https://github.com/can1357/oh-my-pi/releases/download/v18.1.11/SHA256SUMS.txt
+          sha256sum --check --ignore-missing SHA256SUMS.txt
+          sudo install -m 755 omp-linux-x64 /usr/local/bin/omp
       - run: uv sync
       - run: uv run pytest -q
 

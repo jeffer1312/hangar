@@ -7,6 +7,7 @@ import * as m from '../paraglide/messages';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { buildSessionTabs, focusedTabKey, tabKeyOf } from '../lib/sessionTabs';
   import { stateColors, rotuloEstado } from '@hangar/core';
+  import { parseStatusLine } from '@hangar/core';
   import { planBadge } from '@hangar/core';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
@@ -58,9 +59,11 @@ import * as m from '../paraglide/messages';
   // pior-geral — pedido do usuário. Sem sessão aberta: null, e a pílula cai no smart. A sessão Pi
   // passou a ter conta em 28/08/2026 (a credencial do modelo escolhido NELA, casada pela chave no
   // backend); só fica sem quando o provedor dela não é nenhuma credencial conhecida.
-  const contaAtiva = $derived(
-    model.tabs.find((t) => tabKeyOf(t.session) === currentKey)?.session.conta ?? null,
-  );
+  const sessaoAtiva = $derived(model.tabs.find((t) => tabKeyOf(t.session) === currentKey)?.session ?? null);
+  const contaAtiva = $derived(sessaoAtiva?.conta ?? null);
+  // Modelo da sessão aberta, da statusline dela: a pílula só deixa a janela por modelo (Fable)
+  // concorrer quando a sessão roda nele.
+  const modeloAtivo = $derived(parseStatusLine(sessaoAtiva?.status_line)?.model ?? null);
 
   // Roving tabindex: focusedKey é a aba que o USUÁRIO focou (Tab/setas); a ÚNICA com tabindex=0
   // é a focável da vez (focusedKey válido -> currentKey -> primeira). Tudo por refs locais — nada
@@ -219,7 +222,7 @@ import * as m from '../paraglide/messages';
   <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label={m.tabs_mais_opcoes()} title={m.tabs_buscar_arquivo_custos()}>⋯</button>
   <!-- Pílula de cota (o medidor do super.engineering): entre o ⋯ e a engrenagem, no espaço morto
        da barra. Mostra a conta da sessão ativa (ou a pior, sem sessão); o clique abre o detalhe. -->
-  <QuotaPill serverKey={servidorAtivo?.id ?? ''} {contaAtiva} {onIrParaContas} />
+  <QuotaPill serverKey={servidorAtivo?.id ?? ''} {contaAtiva} {modeloAtivo} {onIrParaContas} />
   <!-- O ponto colorido veio junto com a engrenagem quando ela saiu do rodapé do trilho: ele não é
        enfeite, é a única coisa na tela que diz EM QUAL SERVIDOR você está, na mesma cor que agrupa
        as sessões por servidor. Tirar a engrenagem de lá sem trazer o ponto perderia essa metade da

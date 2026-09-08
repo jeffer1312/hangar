@@ -30,9 +30,11 @@
     /** Conta da sessão ABERTA (id do /api/cotas). Quando existe e tem leitura, a pílula mostra o
      *  uso DELA (pedido do usuário); sem ela, cai no pior-geral (smart). */
     contaAtiva: string | null;
+    /** Modelo da sessão aberta (statusline). Filtra as janelas por modelo — ver `piorJanela`. */
+    modeloAtivo?: string | null;
     onIrParaContas: () => void;
   }
-  let { serverKey, contaAtiva, onIrParaContas }: Props = $props();
+  let { serverKey, contaAtiva, modeloAtivo = null, onIrParaContas }: Props = $props();
 
   let aberto = $state(false);
   let pillEl = $state<HTMLButtonElement | null>(null);
@@ -53,7 +55,7 @@
   const contaDaSessao = $derived(linha?.find((c) => c.id === contaAtiva) ?? null);
   const mostrada = $derived.by(() => {
     if (contaDaSessao?.janelas.length) {
-      const p = piorJanela([contaDaSessao]);
+      const p = piorJanela([contaDaSessao], modeloAtivo);
       if (p) return { ...p, smart: false };
     }
     const p = piorJanela(linha);

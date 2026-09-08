@@ -34,8 +34,12 @@ pass more easily on a greenfield, and the command exists precisely so they are a
    **Check in the STEPS, not the Task's header.** That is where collisions hide: a Task's header
    doesn't cite the file while one of its steps orders editing it — the "no file in common"
    declaration is written and false.
-2. **No symbol crosses.** Nothing Task A creates is consumed by Task B of the same batch. If B
-   expects a function A is still writing, B works against a void.
+2. **No symbol crosses.** Nothing Task A creates **or modifies** is consumed by Task B of the same
+   batch. If B expects a function A is still writing, B works against a void — and if B *mounts*
+   what A is editing, the collision arrives later and disguised: a blocker found in the consumer
+   very often has its fix **inside** the component the other Task owns, and the recipe then has to
+   touch a file frozen for it. Disjoint files are not enough; ask who **consumes** each file of the
+   batch, not only who writes it.
 3. **No shared STATE.** Store, module singleton, registry, cache, table: two Tasks mounting
    hosts of the same state are not independent however disjoint the files, and the collision
    **doesn't show at the merge** — it shows as review rounds, where it costs most: one host
@@ -101,8 +105,11 @@ Post-merge red **returns to the full cycle**, just like a conflict: the executor
 main line and the **reviewer judges the fix before its commit**, as in any round — dirty tree,
 frozen object, APROVA, only then the commit.
 
-**While a fix is open on the main line, you STOP merging.** The fix keeps the tree dirty until its
-APROVA, and a merge entering in that meantime mixes the two: `git merge` of non-overlapping files
+**While ANY round is open on the main line, you STOP merging** — a fix after a post-merge red, and
+equally the ordinary round of a serial Task running beside the batch. Git itself refuses the merge
+with the tree dirty, and that refusal is the rule enforcing itself, not an obstacle to route
+around. The round keeps the tree dirty until its APROVA, and a merge entering in that meantime
+mixes the two: `git merge` of non-overlapping files
 passes without conflict, and the full verification you run after it would be running over
 **unreviewed** code from another Task — a green that proves nothing, a red charged to the wrong
 executor. A merge paused a few minutes is cheaper than a meaningless verification; the only thing

@@ -73,6 +73,18 @@ def test_listagem_mascara_a_credencial(arquivo_peers, cli):
     assert json.loads(arquivo_peers.read_text(encoding="utf-8"))["notebook"]["token"] == "segredo-super-secreto"
 
 
+def test_listagem_leva_enabled_so_quando_e_booleano(arquivo_peers, cli):
+    arquivo_peers.write_text(json.dumps({
+        "mac": {"base_url": "https://mac", "token": "t", "enabled": False},
+        "vps": {"base_url": "https://vps", "token": "t"},
+        "lixo": {"base_url": "https://lixo", "token": "t", "enabled": "sim"},
+    }))
+    por_id = {p["id"]: p for p in cli.get("/api/peers", headers=AUTH).json()}
+    assert por_id["mac"]["enabled"] is False
+    assert "enabled" not in por_id["vps"]
+    assert "enabled" not in por_id["lixo"]
+
+
 def test_listagem_ignora_entrada_malformada(arquivo_peers, cli):
     arquivo_peers.write_text(json.dumps({"pc": "nao-e-dict", "ok": {"base_url": "http://ok:8765", "token": "t"}}),
                              encoding="utf-8")

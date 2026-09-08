@@ -224,10 +224,16 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     if (rules.restoreServerAfterAction && prev && prev !== serverId) selectServer(prev);
   }
 
-  // Sem id confiável não abre. Exceção Kimi: "sem id" é o normal antes do 1º prompt, e o /input
-  // não depende de jsonl — bloquear impedia a sessão de nascer.
+  // Sem id confiável não abre. DUAS exceções, pelo mesmo motivo: "sem id" ali é o estado normal de
+  // antes de a conversa existir, não um defeito.
+  // - Kimi: o id nasce no 1º prompt, e o /input não depende de jsonl — bloquear impedia a sessão
+  //   de nascer.
+  // - Codex: o id vem da thread, e a TUI pode estar parada num prompt DELA (a aprovação dos hooks,
+  //   por exemplo). Bloquear trancava a única saída: com o card fechado, o terminal — que só
+  //   precisa do nome no tmux — ficava inalcançável pelo celular, e a sessão não tinha como sair
+  //   do lugar sem um `tmux attach` na máquina.
   function open(s: { name: string; serverId: string; tracked?: boolean; provider?: AggSession['provider'] }): boolean {
-    if (s.tracked === false && s.provider !== 'kimi') return false;
+    if (s.tracked === false && s.provider !== 'kimi' && s.provider !== 'codex') return false;
     selectServer(s.serverId);   // o Chat usa o servidor ativo
     opts.onOpen(s.name);
     return true;

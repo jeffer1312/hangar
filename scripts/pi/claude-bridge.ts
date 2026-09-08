@@ -1,598 +1,511 @@
-/**
- * pi-claude-bridge: usa a config do Claude Code (~/.claude) dentro do pi sem duplicar
- * nem editar nada na origem. Roda no load de cada sessão e materializa:
- *
- *  1. AGENTS  — ~/.claude/agents + ~/.claude/plugins/marketplaces/<x>/agents
- *               -> ~/.pi/agent/agents/claude-bridge/<fonte>/<nome>.md (pro pi-subagents).
- *               tools em array JSON viram lista pi (Read->read, Glob->find,
- *               WebSearch->web_search, WebFetch->fetch_content, Task->subagent,
- *               mcp__servidor__tool -> servidor_tool); model alias Anthropic
- *               (sonnet/opus/haiku/inherit/claude-*) é removido -> herda o modelo da
- *               sessão, qualquer provider; effort -> thinking.
- *  2. COMMANDS — ~/.claude/commands + marketplaces/<x>/commands
- *               -> ~/.pi/agent/prompts/<nome>.md (prompt template nativo do pi;
- *               $ARGUMENTS/$1 já funcionam). Nunca sobrescreve prompt que não é da
- *               ponte (manifest em ~/.pi/agent/claude-bridge-manifest.json).
- *  3. SKILLS de plugin versionado — ~/.claude/plugins/cache/<mkt>/<plugin>/<versão>/skills
- *               -> symlink ~/.pi/agent/skills-bridge/<plugin> sempre re-apontado pra
- *               versão mais nova (default: superpowers + ecc). O cache é de onde o
- *               Claude carrega de verdade — poda tipo ecc-slim.sh (move pra
- *               skills-disabled/) vale automaticamente pro pi. ecc commands idem
- *               (cacheCommands). Garante o dir em settings.skills e remove entradas legadas.
- *
- * Config opcional: ~/.pi/agent/claude-bridge.json
- *   { "enabled": true,
- *     "agents":   { "extraSources": [], "exclude": [], "modelMap": {"opus": "prov/id"} },
- *     "commands": { "extraSources": [], "exclude": [] },
- *     "skillPlugins": ["superpowers", "ecc"],
- *     "marketplaceSkills": [],
- *     "cacheCommands": ["ecc"],
- *     "disabledSources": { "agents": [], "commands": [], "skills": [] } }
- *
- * Comandos: /claude-bridge (status + resync) e /claude-bridge-config (liga/desliga
- * fontes num menu estilo /plugins do Claude; skills valem na próxima sessão).
- */
+// A ponte converte lacunas do Claude; plugins nativos continuam com o instalador do harness.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import type { AgentContext } from "./lib/agent-context";
+import type { FrontmatterParser, ParsedFrontmatter } from "./lib/frontmatter";
+import { getAgentContext } from "./lib/agent-context";
+import { loadFrontmatterParser } from "./lib/frontmatter";
 import * as fs from "node:fs";
-import * as os from "node:os";
+import { homedir } from "node:os";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 
-const HOME = os.homedir();
-const CLAUDE_DIR = path.join(HOME, ".claude");
-const PI_AGENT_DIR = path.join(HOME, ".pi/agent");
-const AGENTS_OUT = path.join(PI_AGENT_DIR, "agents/claude-bridge");
-const PROMPTS_OUT = path.join(PI_AGENT_DIR, "prompts");
-const SKILLS_OUT = path.join(PI_AGENT_DIR, "skills-bridge");
-const CONFIG_PATH = path.join(PI_AGENT_DIR, "claude-bridge.json");
-const MANIFEST_PATH = path.join(PI_AGENT_DIR, "claude-bridge-manifest.json");
-const SETTINGS_PATH = path.join(PI_AGENT_DIR, "settings.json");
-// entradas antigas que a ponte já usou e hoje substitui (symlink preso em versão; clone do
-// marketplace que ignora a poda do ecc-slim — o Claude carrega do CACHE, não do clone)
-const LEGACY_SKILLS_ENTRIES = ["~/.claude/skills-superpowers", "~/.claude/plugins/marketplaces/ecc/skills"];
-
-type Config = {
+export type Config = {
 	enabled?: boolean;
 	agents?: { extraSources?: string[]; exclude?: string[]; modelMap?: Record<string, string> };
 	commands?: { extraSources?: string[]; exclude?: string[] };
 	skillPlugins?: string[];
 	marketplaceSkills?: string[];
-	/** Fontes de commands que vêm do cache versionado do plugin (respeita poda tipo ecc-slim). */
 	cacheCommands?: string[];
-	/** Fontes desligadas no /claude-bridge-config (labels de fonte; skills usa nome do plugin/marketplace). */
 	disabledSources?: { agents?: string[]; commands?: string[]; skills?: string[] };
 };
 
-function loadConfig(): Config {
-	try {
-		return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-	} catch {
-		return {};
-	}
-}
-
-function saveConfig(config: Config): void {
-	fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-	fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
-}
-
-function isDisabled(config: Config, kind: "agents" | "commands" | "skills", label: string): boolean {
-	return (config.disabledSources?.[kind] ?? []).includes(label);
-}
-
-function expandHome(p: string): string {
-	return p.replace(/^~(?=\/)/, HOME);
-}
-
-function listMd(dir: string): string[] {
-	try {
-		return fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
-	} catch {
-		return [];
-	}
-}
-
-/** Fontes <label, dir>: dir do usuário primeiro, depois marketplaces em ordem alfabética. */
-function discoverSources(kind: "agents" | "commands", extra: string[]): { label: string; dir: string }[] {
-	const sources: { label: string; dir: string }[] = [];
-	const userDir = path.join(CLAUDE_DIR, kind);
-	if (fs.existsSync(userDir)) sources.push({ label: "user", dir: userDir });
-	const marketplaces = path.join(CLAUDE_DIR, "plugins/marketplaces");
-	let entries: fs.Dirent[] = [];
-	try {
-		entries = fs.readdirSync(marketplaces, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
-	} catch {}
-	for (const entry of entries) {
-		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-		const dir = path.join(marketplaces, entry.name, kind);
-		if (fs.existsSync(dir)) sources.push({ label: entry.name, dir });
-	}
-	for (const raw of extra) {
-		const dir = expandHome(raw);
-		if (fs.existsSync(dir)) sources.push({ label: path.basename(path.dirname(dir)), dir });
-	}
-	return sources;
-}
-
-// ---------------------------------------------------------------- agents
-
-// Claude tool -> pi tool; null = sem equivalente, cai fora da lista
-const TOOL_MAP: Record<string, string | null> = {
-	read: "read",
-	write: "write",
-	edit: "edit",
-	multiedit: "edit",
-	bash: "bash",
-	grep: "grep",
-	glob: "find",
-	ls: "ls",
-	websearch: "web_search", // pi-web-access
-	webfetch: "fetch_content", // pi-web-access
-	task: "subagent", // pi-subagents
-	agent: "subagent",
-	todowrite: null,
-	notebookedit: null,
-	skill: null,
-	askuserquestion: null,
+const PI_TOOLS: Record<string, string | null> = {
+	read: "read", write: "write", edit: "edit", multiedit: "edit", bash: "bash", grep: "grep",
+	glob: "find", ls: "ls", websearch: "web_search", webfetch: "fetch_content",
+	task: "subagent", agent: "subagent", todowrite: null, notebookedit: null, skill: null, askuserquestion: null,
 };
+const OMP_TOOLS: Record<string, string | null> = {
+	...PI_TOOLS, glob: "glob", ls: "read", webfetch: "read", task: "task", agent: "task",
+	todowrite: "todo", notebookedit: "edit", askuserquestion: "ask",
+};
+const MODEL_ALIASES: Record<string, true> = { sonnet: true, opus: true, haiku: true, fable: true, inherit: true };
+const THINKING_LEVELS: Record<string, true> = { off: true, minimal: true, low: true, medium: true, high: true, xhigh: true, max: true };
 
-const MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "inherit"]);
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-function convertTools(raw: unknown): { tools?: string[]; dropped: string[]; unusable: boolean } {
+function convertTools(raw: unknown, harness: AgentContext["harness"]): { tools?: string[]; dropped: string[]; unusable: boolean } {
 	if (raw === undefined) return { dropped: [], unusable: false };
-	let items: unknown[];
-	if (Array.isArray(raw)) items = raw;
-	else if (typeof raw === "string") items = raw.split(",");
-	else return { dropped: [], unusable: true };
+	const items = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",") : [];
 	const tools: string[] = [];
 	const dropped: string[] = [];
+	const mapping = harness === "omp" ? OMP_TOOLS : PI_TOOLS;
 	for (const item of items) {
-		if (typeof item !== "string") continue;
+		if (typeof item !== "string" || !item.trim()) continue;
 		const name = item.trim();
-		if (!name) continue;
-		// mcp__servidor__tool -> servidor_tool (formato do mcp.ts do pi-code)
-		if (name.startsWith("mcp__")) {
-			const piName = name.slice("mcp__".length).replace("__", "_").replaceAll("-", "_");
-			if (!tools.includes(piName)) tools.push(piName);
-			continue;
-		}
-		const mapped = TOOL_MAP[name.toLowerCase()];
-		if (mapped === undefined || mapped === null) {
-			dropped.push(name);
-			continue;
-		}
-		if (!tools.includes(mapped)) tools.push(mapped);
+		const mapped = name.startsWith("mcp__")
+			? harness === "omp" ? name : name.slice(5).replace("__", "_").replaceAll("-", "_")
+			: Object.hasOwn(mapping, name.toLowerCase()) ? mapping[name.toLowerCase()] : undefined;
+		if (!mapped) dropped.push(name);
+		else if (!tools.includes(mapped)) tools.push(mapped);
 	}
-	// tinha restrição mas nenhuma tool sobrou -> não pode rodar irrestrito
-	if (tools.length === 0) return { dropped, unusable: true };
-	return { tools, dropped, unusable: false };
+	// Restrição vazia ou incompatível nunca vira permissão irrestrita.
+	return { tools, dropped, unusable: tools.length === 0 };
 }
 
 function convertModel(raw: unknown, modelMap: Record<string, string>): string | undefined {
 	if (typeof raw !== "string" || !raw.trim()) return undefined;
 	const model = raw.trim();
 	const key = model.toLowerCase();
-	if (modelMap[key]) return modelMap[key];
-	// alias/id Anthropic sem provider -> remove, herda modelo da sessão
-	if (MODEL_ALIASES.has(key) || /^claude-/.test(key)) return undefined;
+	if (Object.hasOwn(modelMap, key)) return modelMap[key];
+	if (Object.hasOwn(MODEL_ALIASES, key) || /^claude-/.test(key)) return undefined;
 	return model;
 }
 
-export function convertAgent(
-	content: string,
-	config: Config,
-): { name: string; content: string; droppedTools: string[] } | null {
-	let parsed: { frontmatter: Record<string, unknown>; body: string };
-	try {
-		parsed = parseFrontmatter(content);
-	} catch {
-		return null;
-	}
+export function convertAgent(content: string, config: Config, harness: AgentContext["harness"], parse: FrontmatterParser): { name: string; content: string; droppedTools: string[] } | null {
+	let parsed: ParsedFrontmatter;
+	try { parsed = parse(content); } catch { return null; }
+	return convertParsedAgent(parsed, config, harness);
+}
+
+function convertParsedAgent(parsed: ParsedFrontmatter, config: Config, harness: AgentContext["harness"]) {
 	const fm = parsed.frontmatter;
 	const name = typeof fm.name === "string" ? fm.name.trim() : "";
 	const description = typeof fm.description === "string" ? fm.description : "";
-	if (!name || !description) return null;
+	if (!/^[\p{L}\p{N}_-][\p{L}\p{N}_.-]*$/u.test(name) || !description.trim()) return null;
+	if (harness === "omp" && ["main", "sub"].includes(name.toLowerCase())) return null;
 	if (config.agents?.exclude?.includes(name)) return null;
-
-	const { tools, dropped, unusable } = convertTools(fm.tools);
+	const { tools: allowed, dropped, unusable } = convertTools(fm.tools, harness);
 	if (unusable) return null;
+	let tools = allowed;
+	if (fm.disallowedTools !== undefined) {
+		const deniedItems: unknown[] | null = Array.isArray(fm.disallowedTools) ? fm.disallowedTools
+			: typeof fm.disallowedTools === "string" ? fm.disallowedTools.split(",") : null;
+		if (!deniedItems || !deniedItems.every((item): item is string => typeof item === "string" &&
+			(!item.trim().startsWith("mcp__") || /^mcp__[\w-]+__[\w-]+$/.test(item.trim())))) return null;
+		if (deniedItems.some(item => item.trim())) {
+			const denied = convertTools(fm.disallowedTools, harness);
+			// Sem inventário herdado ou negação representável, recusar é mais seguro que ampliar acesso.
+			if (!tools || denied.unusable || denied.dropped.length) return null;
+			tools = tools.filter(tool => !denied.tools?.includes(tool));
+			if (!tools.length) return null;
+		}
+	}
 	const model = convertModel(fm.model, config.agents?.modelMap ?? {});
-	const effort = typeof fm.effort === "string" && THINKING_LEVELS.has(fm.effort.trim().toLowerCase())
-		? fm.effort.trim().toLowerCase()
-		: undefined;
-
-	const lines = ["---", `name: ${name}`, `description: ${description.replace(/\s*\n\s*/g, " ").trim()}`];
-	if (tools) lines.push(`tools: ${tools.join(", ")}`);
-	if (model) lines.push(`model: ${model}`);
-	if (effort) lines.push(`thinking: ${effort}`);
+	const effort = typeof fm.effort === "string" ? fm.effort.trim().toLowerCase() : "";
+	const lines = ["---", `name: ${JSON.stringify(name)}`, `description: ${JSON.stringify(description.replace(/\s*\n\s*/g, " ").trim())}`];
+	if (tools) lines.push(`tools: ${harness === "omp" ? JSON.stringify(tools) : JSON.stringify(tools.join(", "))}`);
+	if (model) lines.push(`model: ${JSON.stringify(model)}`);
+	if (Object.hasOwn(THINKING_LEVELS, effort)) lines.push(`thinking: ${effort}`);
 	lines.push("---", "", parsed.body.trim(), "");
 	return { name, content: lines.join("\n"), droppedTools: dropped };
 }
 
-// ---------------------------------------------------------------- commands
+export function convertCommand(content: string, fileName: string, config: Config, parse: FrontmatterParser): { name: string; content: string } | null {
+	let parsed: ParsedFrontmatter;
+	try { parsed = parse(content); } catch { return null; }
+	return convertParsedCommand(parsed, fileName, config);
+}
 
-export function convertCommand(content: string, fileName: string, config: Config): { name: string; content: string } | null {
+function convertParsedCommand(parsed: ParsedFrontmatter, fileName: string, config: Config) {
 	const name = path.basename(fileName, ".md");
 	if (config.commands?.exclude?.includes(name)) return null;
-	let parsed: { frontmatter: Record<string, unknown>; body: string };
-	try {
-		parsed = parseFrontmatter(content);
-	} catch {
-		return null;
-	}
 	const body = parsed.body.trim();
 	if (!body) return null;
 	const description = typeof parsed.frontmatter.description === "string"
 		? parsed.frontmatter.description.replace(/\s*\n\s*/g, " ").trim()
 		: `Comando Claude ${name} (via claude-bridge)`;
-	// allowed-tools/model/argument-hint do Claude não têm equivalente em prompt do pi; body vai
-	// intacto ($ARGUMENTS e $1..$n funcionam nativo no pi)
-	return { name, content: ["---", `description: ${description}`, "---", "", body, ""].join("\n") };
+	return { name, content: ["---", `description: ${JSON.stringify(description)}`, "---", "", body, ""].join("\n") };
 }
 
-// ---------------------------------------------------------------- skills de plugin versionado
-
-function latestVersionDir(pluginDir: string): string | null {
-	let versions: string[] = [];
-	try {
-		versions = fs.readdirSync(pluginDir).filter((v) => /^\d+\.\d+\.\d+$/.test(v));
-	} catch {
-		return null;
-	}
-	if (!versions.length) return null;
-	versions.sort((a, b) => {
-		const pa = a.split(".").map(Number);
-		const pb = b.split(".").map(Number);
-		return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2];
-	});
-	return versions[versions.length - 1];
-}
-
-/** cache/<marketplace>/<plugin>/<maior versão>/<sub>, ou null se não existe. */
-function latestCacheSubdir(plugin: string, sub: string): string | null {
-	const cacheRoot = path.join(CLAUDE_DIR, "plugins/cache");
-	let marketplaces: string[] = [];
-	try {
-		marketplaces = fs.readdirSync(cacheRoot);
-	} catch {}
-	let target: string | null = null;
-	for (const marketplace of marketplaces) {
-		const version = latestVersionDir(path.join(cacheRoot, marketplace, plugin));
-		if (!version) continue;
-		const dir = path.join(cacheRoot, marketplace, plugin, version, sub);
-		if (fs.existsSync(dir)) target = dir;
-	}
-	return target;
-}
-
-/** skills-bridge/<plugin> -> cache/<marketplace>/<plugin>/<maior versão>/skills */
-function syncSkillLinks(plugins: string[], disabled: string[]): { linked: string[]; missing: string[] } {
-	const linked: string[] = [];
-	const missing: string[] = [];
-	for (const plugin of plugins) {
-		if (disabled.includes(plugin)) {
-			try {
-				fs.rmSync(path.join(SKILLS_OUT, plugin), { force: true });
-			} catch {}
-			continue;
-		}
-		const target = latestCacheSubdir(plugin, "skills");
-		if (!target) {
-			missing.push(plugin);
-			continue;
-		}
-		fs.mkdirSync(SKILLS_OUT, { recursive: true });
-		const link = path.join(SKILLS_OUT, plugin);
-		let current: string | undefined;
-		try {
-			current = fs.readlinkSync(link);
-		} catch {}
-		if (current !== target) {
-			try {
-				fs.rmSync(link, { force: true });
-			} catch {}
-			fs.symlinkSync(target, link);
-		}
-		linked.push(`${plugin} -> ${target}`);
-	}
-	return { linked, missing };
-}
-
-/**
- * Garante no settings.skills: skills-bridge + skills de marketplace (espelho do que está
- * ativo no Claude — ecc:config-gc poda no disco, então o dir JÁ é o conjunto ativo).
- * Tira a entrada legada do symlink preso em versão.
- */
-function ensureSettingsSkills(marketplaceSkills: string[], disabled: string[]): boolean {
-	let settings: Record<string, unknown>;
-	try {
-		settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf8"));
-	} catch {
-		return false;
-	}
-	const skills: unknown = settings.skills;
-	if (!Array.isArray(skills)) return false;
-	const wanted: string[] = ["~/.pi/agent/skills-bridge"];
-	const unwanted: string[] = [];
-	for (const marketplace of marketplaceSkills) {
-		const entry = `~/.claude/plugins/marketplaces/${marketplace}/skills`;
-		if (disabled.includes(marketplace)) unwanted.push(entry);
-		else if (fs.existsSync(expandHome(entry))) wanted.push(entry);
-	}
-	unwanted.push(...LEGACY_SKILLS_ENTRIES);
-	const next = skills.filter((s) => !unwanted.includes(s as string));
-	for (const entry of wanted) {
-		if (!next.includes(entry)) next.push(entry);
-	}
-	if (next.length === skills.length && next.every((s, i) => s === skills[i])) return false;
-	settings.skills = next;
-	fs.writeFileSync(SETTINGS_PATH, `${JSON.stringify(settings, null, 2)}\n`);
-	return true;
-}
-
-// ---------------------------------------------------------------- sync
-
-type SyncResult = {
-	agents: { total: number; written: number; removed: number; dropped: Record<string, string[]> };
+type Kind = "agents" | "commands";
+type OwnedFile = { kind: Kind; content: string };
+type Manifest = Record<string, OwnedFile>;
+export type SyncResult = {
+	agents: { total: number; written: number; removed: number; dropped: Record<string, string[]>; skipped: string[] };
 	commands: { total: number; written: number; removed: number; skipped: string[] };
 	skills: { linked: string[]; missing: string[]; settingsChanged: boolean };
 };
 
-function readManifest(): string[] {
-	try {
-		const parsed = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
-		return Array.isArray(parsed.prompts) ? parsed.prompts : [];
-	} catch {
-		return [];
+function readOptional(file: string): string | undefined {
+	try { return fs.readFileSync(file, "utf8"); }
+	catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
 	}
 }
 
-function writeIfChanged(target: string, content: string): boolean {
-	let current: string | undefined;
+function atomicWrite(file: string, content: string): void {
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		current = fs.readFileSync(target, "utf8");
-	} catch {}
-	if (current === content) return false;
-	fs.mkdirSync(path.dirname(target), { recursive: true });
-	fs.writeFileSync(target, content);
-	return true;
+		fs.writeFileSync(temporary, content, { flag: "wx" });
+		fs.renameSync(temporary, file);
+	} finally {
+		fs.rmSync(temporary, { force: true });
+	}
 }
 
-export function sync(): SyncResult {
-	const config = loadConfig();
-	const result: SyncResult = {
-		agents: { total: 0, written: 0, removed: 0, dropped: {} },
-		commands: { total: 0, written: 0, removed: 0, skipped: [] },
-		skills: { linked: [], missing: [], settingsChanged: false },
-	};
-	if (config.enabled === false) return result;
+function listMd(dir: string): string[] {
+	try { return fs.readdirSync(dir).filter(file => file.endsWith(".md")).sort(); }
+	catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+}
 
-	// -- agents
-	const expectedAgents = new Map<string, string>();
-	for (const source of discoverSources("agents", config.agents?.extraSources ?? [])) {
-		if (isDisabled(config, "agents", source.label)) continue;
-		for (const file of listMd(source.dir)) {
-			let content: string;
-			try {
-				content = fs.readFileSync(path.join(source.dir, file), "utf8");
-			} catch {
+function listMdDeep(dir: string, base = dir): string[] {
+	let entries: fs.Dirent[];
+	try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+	catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+	const files: string[] = [];
+	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) files.push(...listMdDeep(full, base));
+		else if (entry.isFile() && entry.name.endsWith(".md")) files.push(path.relative(base, full));
+	}
+	return files;
+}
+
+function latestVersionDir(pluginDir: string): string | null {
+	let versions: string[];
+	try { versions = fs.readdirSync(pluginDir).filter(v => /^\d+\.\d+\.\d+$/.test(v)); }
+	catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+		throw error;
+	}
+	versions.sort((a, b) => {
+		const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+		return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2];
+	});
+	return versions.at(-1) ?? null;
+}
+
+export async function createBridge(pi: ExtensionAPI, context: AgentContext = getAgentContext()) {
+	const parse = await loadFrontmatterParser(context);
+	const { harness, agentDir, claudeDir } = context;
+	const agentsOut = path.join(agentDir, harness === "omp" ? "agents" : "agents/claude-bridge");
+	const promptsOut = path.join(agentDir, "prompts");
+	const skillsOut = path.join(agentDir, "skills-bridge");
+	const configPath = path.join(agentDir, "claude-bridge.json");
+	const manifestPath = path.join(agentDir, "claude-bridge-manifest.json");
+	const settingsPath = path.join(agentDir, "settings.json");
+	const expandHome = (value: string) => path.resolve(value.replace(/^~(?=$|[\\/])/, homedir()));
+
+	function loadConfig(): Config {
+		const content = readOptional(configPath);
+		if (content === undefined) return {};
+		const parsed: unknown = JSON.parse(content);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Configuração da ponte inválida");
+		return parsed as Config;
+	}
+
+	function discoverSources(kind: Kind, extra: string[]): { label: string; dir: string }[] {
+		const sources = [{ label: "user", dir: path.join(claudeDir, kind) }];
+		// No OMP, os plugins já têm descoberta nativa; a lacuna são agents pessoais/extras.
+		if (harness === "pi") {
+			const marketplaces = path.join(claudeDir, "plugins/marketplaces");
+			let entries: fs.Dirent[] = [];
+			try { entries = fs.readdirSync(marketplaces, { withFileTypes: true }); }
+			catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+			for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+				if (entry.isDirectory() || entry.isSymbolicLink()) sources.push({ label: entry.name, dir: path.join(marketplaces, entry.name, kind) });
+			}
+		}
+		for (const raw of extra) {
+			const dir = expandHome(raw);
+			sources.push({ label: path.basename(path.dirname(dir)), dir });
+		}
+		return sources;
+	}
+
+	function latestCacheSubdir(plugin: string, sub: string): string | null {
+		const root = path.join(claudeDir, "plugins/cache");
+		let marketplaces: string[];
+		try { marketplaces = fs.readdirSync(root); }
+		catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+			throw error;
+		}
+		let target: string | null = null;
+		for (const marketplace of marketplaces) {
+			const version = latestVersionDir(path.join(root, marketplace, plugin));
+			if (!version) continue;
+			const dir = path.join(root, marketplace, plugin, version, sub);
+			if (fs.existsSync(dir)) target = dir;
+		}
+		return target;
+	}
+
+	// O manifesto v1 só listava nomes de prompts, e agents/claude-bridge/ era inteira da ponte —
+	// os dois já eram sobrescritos e apagados por ela. Adotar uma vez, lendo o disco, é o que
+	// impede toda instalação existente de virar conflito permanente na primeira rodada v2.
+	function adoptLegacy(prompts: unknown[]): Manifest {
+		const owned: Manifest = {};
+		const adopt = (relative: string, kind: Kind) => {
+			const full = path.join(agentDir, relative);
+			let stat: fs.Stats;
+			try { stat = fs.lstatSync(full); }
+			catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+				throw error;
+			}
+			if (stat.isFile()) owned[relative] = { kind, content: fs.readFileSync(full, "utf8") };
+		};
+		for (const name of prompts) {
+			if (typeof name === "string" && /^[^\\/]+\.md$/.test(name)) adopt(path.join("prompts", name), "commands");
+		}
+		const legacyAgents = path.join("agents", "claude-bridge");
+		for (const file of listMdDeep(path.join(agentDir, legacyAgents))) adopt(path.join(legacyAgents, file), "agents");
+		return owned;
+	}
+
+	function readManifest(): Manifest {
+		const content = readOptional(manifestPath);
+		if (content === undefined) return {};
+		const parsed = JSON.parse(content);
+		if (parsed && Array.isArray(parsed.prompts) && parsed.version === undefined) return adoptLegacy(parsed.prompts);
+		if (parsed?.version !== 2 || !parsed.files || typeof parsed.files !== "object" || Array.isArray(parsed.files)) throw new Error("Manifesto da ponte inválido");
+		for (const [relative, record] of Object.entries(parsed.files)) {
+			const entry = record as OwnedFile;
+			if (!entry || !["agents", "commands"].includes(entry.kind) || typeof entry.content !== "string" ||
+				path.isAbsolute(relative) || relative.split(/[\\/]/).some(part => part === ".." || !part) ||
+				!relative.startsWith((entry.kind === "agents" ? "agents" : "prompts") + path.sep)) throw new Error("Entrada inválida no manifesto da ponte");
+		}
+		return parsed.files;
+	}
+
+	function nativeNames(owned: Manifest): Set<string> {
+		const names = new Set<string>();
+		if (harness !== "omp") return names;
+		for (const file of listMd(agentsOut)) {
+			const full = path.join(agentsOut, file);
+			const content = fs.readFileSync(full, "utf8");
+			if (owned[path.relative(agentDir, full)]?.content === content) continue;
+			let name: unknown;
+			try { name = parse(content).frontmatter.name; }
+			catch (error) {
+				console.error(`[claude-bridge] agent nativo ilegível, ignorado na checagem de nomes: ${full} (${error instanceof Error ? error.message : String(error)})`);
 				continue;
 			}
-			const converted = convertAgent(content, config);
-			if (!converted) continue;
-			expectedAgents.set(path.join(source.label, `${converted.name}.md`), converted.content);
-			if (converted.droppedTools.length) result.agents.dropped[converted.name] = converted.droppedTools;
+			if (typeof name === "string") names.add(name);
+		}
+		return names;
+	}
+
+	// Com uma fonte ilegível não se sabe qual cópia gerenciada ela geraria: a ponte segue
+	// criando e atualizando, mas não remove nada até a fonte voltar a ser lida.
+	function reconcile(expected: Manifest, owned: Manifest, result: SyncResult, remove = true): Manifest {
+		const next = { ...owned };
+		for (const relative of new Set([...Object.keys(owned), ...Object.keys(expected)])) {
+			const wanted = expected[relative];
+			const previous = owned[relative];
+			const target = path.join(agentDir, relative);
+			const kind = (wanted ?? previous).kind;
+			// Um link pessoal, inclusive em diretório ancestral, não é arquivo da ponte.
+			let linked = false;
+			for (let current = target; current !== agentDir; current = path.dirname(current)) {
+				try { if (fs.lstatSync(current).isSymbolicLink()) { linked = true; break; } }
+				catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+			}
+			const current = linked ? undefined : readOptional(target);
+			if (linked || (current !== undefined && (!previous || previous.content !== current))) {
+				result[kind].skipped.push(relative);
+				continue;
+			}
+			if (wanted) {
+				if (current !== wanted.content) { atomicWrite(target, wanted.content); result[kind].written++; }
+				next[relative] = wanted;
+			} else if (!remove) {
+				continue;
+			} else {
+				if (current !== undefined) { fs.unlinkSync(target); result[kind].removed++; }
+				delete next[relative];
+			}
+		}
+		return next;
+	}
+
+	function syncSkills(config: Config, result: SyncResult): void {
+		const disabled = config.disabledSources?.skills ?? [];
+		for (const plugin of config.skillPlugins ?? ["superpowers", "ecc"]) {
+			if (!/^[\w.-]+$/.test(plugin) || plugin === "..") throw new Error("Nome de plugin inválido");
+			const link = path.join(skillsOut, plugin);
+			const target = latestCacheSubdir(plugin, "skills");
+			let current: string | undefined;
+			try { current = fs.readlinkSync(link); }
+			catch (error) { if (!["ENOENT", "EINVAL"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
+			const managed = current?.startsWith(path.join(claudeDir, "plugins/cache") + path.sep);
+			if (disabled.includes(plugin)) { if (managed) fs.unlinkSync(link); continue; }
+			if (!target) { result.skills.missing.push(plugin); continue; }
+			if (current !== target) {
+				if (fs.existsSync(link) && !managed) { result.skills.missing.push(`${plugin} (conflito)`); continue; }
+				if (managed) fs.unlinkSync(link);
+				fs.mkdirSync(skillsOut, { recursive: true });
+				fs.symlinkSync(target, link);
+			}
+			result.skills.linked.push(`${plugin} -> ${target}`);
+		}
+		const content = readOptional(settingsPath);
+		if (content === undefined) return;
+		const settings = JSON.parse(content);
+		if (!Array.isArray(settings.skills)) return;
+		const wanted = [skillsOut];
+		const unwanted = ["~/.claude/skills-superpowers", "~/.claude/plugins/marketplaces/ecc/skills"];
+		for (const marketplace of config.marketplaceSkills ?? []) {
+			const entry = path.join(claudeDir, "plugins/marketplaces", marketplace, "skills");
+			if (disabled.includes(marketplace)) unwanted.push(entry);
+			else if (fs.existsSync(entry)) wanted.push(entry);
+		}
+		const next = settings.skills.filter((entry: unknown) => typeof entry !== "string" || !unwanted.some(value => expandHome(value) === expandHome(entry)));
+		for (const entry of wanted) if (!next.some((value: unknown) => typeof value === "string" && expandHome(value) === entry)) next.push(entry);
+		if (JSON.stringify(next) !== JSON.stringify(settings.skills)) {
+			settings.skills = next;
+			atomicWrite(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+			result.skills.settingsChanged = true;
 		}
 	}
-	result.agents.total = expectedAgents.size;
-	for (const [relative, content] of expectedAgents) {
-		if (writeIfChanged(path.join(AGENTS_OUT, relative), content)) result.agents.written++;
+
+	function sync(): SyncResult {
+		const config = loadConfig();
+		const result: SyncResult = {
+			agents: { total: 0, written: 0, removed: 0, dropped: {}, skipped: [] },
+			commands: { total: 0, written: 0, removed: 0, skipped: [] },
+			skills: { linked: [], missing: [], settingsChanged: false },
+		};
+		const owned = readManifest();
+		const expected: Manifest = {};
+		let broken = 0;
+		const parseSource = (dir: string, file: string, kind: Kind, label: string): ParsedFrontmatter | null => {
+			try { return parse(fs.readFileSync(path.join(dir, file), "utf8")); }
+			catch (error) {
+				broken++;
+				result[kind].skipped.push(`${label}/${file} (frontmatter inválida: ${error instanceof Error ? error.message : String(error)})`);
+				return null;
+			}
+		};
+		if (config.enabled !== false) {
+			const native = nativeNames(owned);
+			const seen = new Set<string>();
+			for (const source of discoverSources("agents", config.agents?.extraSources ?? [])) {
+				if (config.disabledSources?.agents?.includes(source.label)) continue;
+				for (const file of listMd(source.dir)) {
+					const parsed = parseSource(source.dir, file, "agents", source.label);
+					if (!parsed) continue;
+					const converted = convertParsedAgent(parsed, config, harness);
+					if (!converted) {
+						result.agents.skipped.push(`${source.label}/${file} (definição incompatível ou excluída)`);
+						continue;
+					}
+					if (native.has(converted.name)) { result.agents.skipped.push(converted.name); continue; }
+					const relative = path.relative(agentDir, path.join(agentsOut, harness === "omp"
+						? `claude-bridge-${converted.name}.md` : path.join(encodeURIComponent(source.label), `${converted.name}.md`)));
+					if (seen.has(relative)) { result.agents.skipped.push(`${source.label}/${file} (nome ${converted.name} já usado por outra fonte)`); continue; }
+					seen.add(relative);
+					expected[relative] = { kind: "agents", content: converted.content };
+					result.agents.total++;
+					if (converted.droppedTools.length) result.agents.dropped[converted.name] = converted.droppedTools;
+				}
+			}
+			if (harness === "pi") {
+				const cacheCommands = config.cacheCommands ?? ["ecc"];
+				for (const source of discoverSources("commands", config.commands?.extraSources ?? [])) {
+					if (config.disabledSources?.commands?.includes(source.label)) continue;
+					const dir = cacheCommands.includes(source.label) ? latestCacheSubdir(source.label, "commands") ?? source.dir : source.dir;
+					for (const file of listMd(dir)) {
+						const parsed = parseSource(dir, file, "commands", source.label);
+						if (!parsed) continue;
+						const converted = convertParsedCommand(parsed, file, config);
+						if (!converted) continue;
+						const relative = path.relative(agentDir, path.join(promptsOut, `${converted.name}.md`));
+						if (expected[relative]) continue;
+						expected[relative] = { kind: "commands", content: converted.content };
+						result.commands.total++;
+					}
+				}
+			}
+		}
+		const files = reconcile(expected, owned, result, broken === 0);
+		atomicWrite(manifestPath, `${JSON.stringify({ version: 2, files }, null, 2)}\n`);
+		if (harness === "pi" && config.enabled !== false) syncSkills(config, result);
+		return result;
 	}
-	const staleAgents = (dir: string): void => {
-		let entries: fs.Dirent[] = [];
-		try {
-			entries = fs.readdirSync(dir, { withFileTypes: true });
-		} catch {
+
+	function memoryIndex(cwd: string): string | null {
+		const dir = path.join(claudeDir, "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"), "memory");
+		const index = readOptional(path.join(dir, "MEMORY.md"))?.trim();
+		return index ? `\n\n# Memórias do projeto (Claude, índice — corpo em ${dir}/)\n${index}` : null;
+	}
+
+	try { sync(); }
+	catch (error) { console.error(`[claude-bridge] Falha na sincronização: ${String(error)}`); }
+
+	let avisouConfig = false;
+	pi.on("before_agent_start", async (event: { systemPrompt: string | string[] }, ctx: { cwd: string }) => {
+		let config: Config;
+		try { config = loadConfig(); avisouConfig = false; }
+		catch (error) {
+			// Uma vez por quebra, não a cada prompt: o arquivo só muda quando alguém mexe nele.
+			if (!avisouConfig) console.error(`[claude-bridge] ${configPath} ilegível, memória do projeto desligada até consertar: ${String(error)}`);
+			avisouConfig = true;
 			return;
 		}
-		for (const entry of entries) {
-			const full = path.join(dir, entry.name);
-			if (entry.isDirectory()) {
-				staleAgents(full);
-				continue;
-			}
-			if (!expectedAgents.has(path.relative(AGENTS_OUT, full))) {
-				try {
-					fs.rmSync(full);
-					result.agents.removed++;
-				} catch {}
-			}
-		}
-	};
-	staleAgents(AGENTS_OUT);
-
-	// -- commands -> prompts (flat; primeiro que registra o nome ganha)
-	const owned = new Set(readManifest());
-	const expectedPrompts = new Map<string, string>();
-	const cacheCommands = config.cacheCommands ?? ["ecc"];
-	const commandSources = discoverSources("commands", config.commands?.extraSources ?? []).map((source) => {
-		// plugin com poda tipo ecc-slim: o conjunto ativo mora no cache, não no clone do marketplace
-		if (!cacheCommands.includes(source.label)) return source;
-		const cached = latestCacheSubdir(source.label, "commands");
-		return cached ? { label: source.label, dir: cached } : source;
-	});
-	for (const source of commandSources) {
-		if (isDisabled(config, "commands", source.label)) continue;
-		for (const file of listMd(source.dir)) {
-			let content: string;
-			try {
-				content = fs.readFileSync(path.join(source.dir, file), "utf8");
-			} catch {
-				continue;
-			}
-			const converted = convertCommand(content, file, config);
-			if (!converted || expectedPrompts.has(`${converted.name}.md`)) continue;
-			const target = path.join(PROMPTS_OUT, `${converted.name}.md`);
-			// prompt pré-existente que não é da ponte: não sobrescrever
-			if (!owned.has(`${converted.name}.md`) && fs.existsSync(target)) {
-				result.commands.skipped.push(converted.name);
-				continue;
-			}
-			expectedPrompts.set(`${converted.name}.md`, converted.content);
-		}
-	}
-	result.commands.total = expectedPrompts.size;
-	for (const [file, content] of expectedPrompts) {
-		if (writeIfChanged(path.join(PROMPTS_OUT, file), content)) result.commands.written++;
-	}
-	for (const file of owned) {
-		if (!expectedPrompts.has(file)) {
-			try {
-				fs.rmSync(path.join(PROMPTS_OUT, file));
-				result.commands.removed++;
-			} catch {}
-		}
-	}
-	fs.mkdirSync(path.dirname(MANIFEST_PATH), { recursive: true });
-	fs.writeFileSync(MANIFEST_PATH, `${JSON.stringify({ prompts: [...expectedPrompts.keys()] }, null, 2)}\n`);
-
-	// -- skills de plugin versionado + settings
-	const disabledSkills = config.disabledSources?.skills ?? [];
-	const links = syncSkillLinks(config.skillPlugins ?? ["superpowers", "ecc"], disabledSkills);
-	result.skills.linked = links.linked;
-	result.skills.missing = links.missing;
-	result.skills.settingsChanged = ensureSettingsSkills(config.marketplaceSkills ?? [], disabledSkills);
-
-	return result;
-}
-
-/**
- * Memórias por projeto do Claude (~/.claude/projects/<cwd-sanitizado>/memory/MEMORY.md) — o
- * índice entra no system prompt do pi, igual o Claude Code faz. O corpo das memórias fica em
- * disco; o modelo lê sob demanda com a tool read (o índice traz os caminhos).
- */
-function sanitizeCwd(cwd: string): string {
-	return cwd.replace(/[^A-Za-z0-9]/g, "-");
-}
-
-function memoryIndex(cwd: string): string | null {
-	const dir = path.join(CLAUDE_DIR, "projects", sanitizeCwd(cwd), "memory");
-	try {
-		const index = fs.readFileSync(path.join(dir, "MEMORY.md"), "utf8").trim();
-		return index ? `\n\n# Memórias do projeto (Claude, índice — corpo em ${dir}/)\n${index}` : null;
-	} catch {
-		return null;
-	}
-}
-
-export default function (pi: ExtensionAPI) {
-	try {
-		sync();
-	} catch {
-		// falha na ponte nunca derruba a sessão; /claude-bridge mostra o estado
-	}
-
-	pi.on("before_agent_start", async (event: any, ctx: any) => {
-		try {
-			const addition = memoryIndex(ctx?.cwd ?? process.cwd());
-			if (addition) return { systemPrompt: event.systemPrompt + addition };
-		} catch {}
+		if (config.enabled === false) return;
+		const addition = memoryIndex(ctx.cwd);
+		if (!addition) return;
+		const present = Array.isArray(event.systemPrompt)
+			? event.systemPrompt.some(block => block.includes(addition))
+			: event.systemPrompt.includes(addition);
+		if (present) return;
+		return { systemPrompt: Array.isArray(event.systemPrompt) ? [...event.systemPrompt, addition] : `${event.systemPrompt}${addition}` };
 	});
 
 	pi.registerCommand("claude-bridge-config", {
-		description: "Liga/desliga fontes da ponte Claude (agents, commands, skills) — estilo /plugins",
+		description: harness === "omp" ? "Configura fontes de agents pessoais do Claude" : "Configura fontes da ponte Claude (agents, commands, skills)",
 		handler: async (_args, ctx) => {
 			const config = loadConfig();
-			const disabled = {
-				agents: [...(config.disabledSources?.agents ?? [])],
-				commands: [...(config.disabledSources?.commands ?? [])],
-				skills: [...(config.disabledSources?.skills ?? [])],
-			};
-			type Item = { kind: "agents" | "commands" | "skills"; label: string; detail: string };
-			const items: Item[] = [];
-			for (const source of discoverSources("agents", config.agents?.extraSources ?? [])) {
-				const count = listMd(source.dir).length;
-				if (count) items.push({ kind: "agents", label: source.label, detail: `${count} agents` });
+			const disabled = { agents: [...(config.disabledSources?.agents ?? [])], commands: [...(config.disabledSources?.commands ?? [])], skills: [...(config.disabledSources?.skills ?? [])] };
+			const items: { kind: Kind | "skills"; label: string; detail: string }[] = [];
+			for (const kind of harness === "omp" ? ["agents"] as const : ["agents", "commands"] as const) {
+				for (const source of discoverSources(kind, config[kind]?.extraSources ?? [])) {
+					const dir = kind === "commands" && (config.cacheCommands ?? ["ecc"]).includes(source.label) ? latestCacheSubdir(source.label, "commands") ?? source.dir : source.dir;
+					const count = listMd(dir).length;
+					if (count) items.push({ kind, label: source.label, detail: `${count} ${kind}` });
+				}
 			}
-			const cacheCommands = config.cacheCommands ?? ["ecc"];
-			for (const source of discoverSources("commands", config.commands?.extraSources ?? [])) {
-				const dir = cacheCommands.includes(source.label) ? (latestCacheSubdir(source.label, "commands") ?? source.dir) : source.dir;
-				const count = listMd(dir).length;
-				if (count) items.push({ kind: "commands", label: source.label, detail: `${count} commands` });
+			if (harness === "pi") {
+				for (const label of [...(config.marketplaceSkills ?? []), ...(config.skillPlugins ?? ["superpowers", "ecc"])]) items.push({ kind: "skills", label, detail: "skills" });
 			}
-			for (const marketplace of config.marketplaceSkills ?? []) {
-				const dir = path.join(CLAUDE_DIR, "plugins/marketplaces", marketplace, "skills");
-				if (!fs.existsSync(dir)) continue;
-				let count = 0;
-				try {
-					count = fs.readdirSync(dir).length;
-				} catch {}
-				items.push({ kind: "skills", label: marketplace, detail: `${count} skills (marketplace)` });
-			}
-			for (const plugin of config.skillPlugins ?? ["superpowers", "ecc"]) {
-				const dir = latestCacheSubdir(plugin, "skills");
-				let count = 0;
-				try {
-					count = dir ? fs.readdirSync(dir).length : 0;
-				} catch {}
-				items.push({ kind: "skills", label: plugin, detail: `${count} skills ativas (cache — segue poda do Claude)` });
-			}
-
-			const SAVE = "salvar e resync";
-			const CANCEL = "cancelar";
 			while (true) {
-				const options = [
-					...items.map((item) => {
-						const on = !disabled[item.kind].includes(item.label);
-						return `[${on ? "x" : " "}] ${item.kind}: ${item.label} — ${item.detail}`;
-					}),
-					SAVE,
-					CANCEL,
-				];
+				const options = [...items.map(item => `[${disabled[item.kind].includes(item.label) ? " " : "x"}] ${item.kind}: ${item.label} — ${item.detail}`), "salvar e resync", "cancelar"];
 				const choice = await ctx.ui.select("claude-bridge — enter alterna, salvar aplica", options);
-				if (choice === undefined || choice === CANCEL) return;
-				if (choice === SAVE) break;
-				const index = options.indexOf(choice);
-				const item = items[index];
+				if (choice === undefined || choice === "cancelar") return;
+				if (choice === "salvar e resync") break;
+				const item = items[options.indexOf(choice)];
 				if (!item) continue;
-				const list = disabled[item.kind];
-				const at = list.indexOf(item.label);
-				if (at === -1) list.push(item.label);
-				else list.splice(at, 1);
+				const list = disabled[item.kind], at = list.indexOf(item.label);
+				if (at === -1) list.push(item.label); else list.splice(at, 1);
 			}
-
 			config.disabledSources = disabled;
-			saveConfig(config);
-			const r = sync();
-			ctx.ui.notify(
-				[
-					`salvo em ${CONFIG_PATH}`,
-					`agents: ${r.agents.total} · commands: ${r.commands.total} · skills: ${r.skills.linked.length ? r.skills.linked.map((l) => l.split(" -> ")[0]).join(", ") : "—"}`,
-					"skills desligadas/religadas valem a partir da PRÓXIMA sessão (lista já carregada nesta).",
-				].join("\n"),
-				"info",
-			);
+			atomicWrite(configPath, `${JSON.stringify(config, null, 2)}\n`);
+			const result = sync();
+			ctx.ui.notify(`Salvo em ${configPath}\nAgents: ${result.agents.total}. Recursos são recarregados na próxima sessão.`, "info");
 		},
 	});
-
 	pi.registerCommand("claude-bridge", {
-		description: "Resync Claude -> pi (agents, commands, skills) e mostra status",
+		description: `Sincroniza a ponte Claude no ${harness} e mostra o estado`,
 		handler: async (_args, ctx) => {
-			const r = sync();
-			const droppedLines = Object.entries(r.agents.dropped)
-				.slice(0, 10)
-				.map(([agent, tools]) => `  ${agent}: sem equivalente pi -> ${tools.join(", ")}`);
-			ctx.ui.notify(
-				[
-					`agents: ${r.agents.total} (alterados: ${r.agents.written}, removidos: ${r.agents.removed}) -> ${AGENTS_OUT}`,
-					`commands: ${r.commands.total} (alterados: ${r.commands.written}, removidos: ${r.commands.removed}${r.commands.skipped.length ? `, pulados por conflito: ${r.commands.skipped.join(", ")}` : ""}) -> ${PROMPTS_OUT}`,
-					`skills: ${r.skills.linked.join("; ") || "nenhum plugin"}${r.skills.missing.length ? ` | sem cache: ${r.skills.missing.join(", ")}` : ""}`,
-					`config: ${CONFIG_PATH}`,
-					...(droppedLines.length ? ["tools descartadas:", ...droppedLines] : []),
-				].join("\n"),
-				"info",
-			);
+			const result = sync();
+			const lines = [`Agents: ${result.agents.total} (alterados: ${result.agents.written}, removidos: ${result.agents.removed}) → ${agentsOut}`, `Configuração: ${configPath}`];
+			if (harness === "pi") lines.push(`Commands: ${result.commands.total} → ${promptsOut}`, `Skills: ${result.skills.linked.join("; ") || "nenhum plugin"}`, `Sem cache: ${result.skills.missing.join(", ")}`);
+			for (const kind of ["agents", "commands"] as const) if (result[kind].skipped.length) lines.push(`Conflitos preservados (${kind}): ${result[kind].skipped.join(", ")}`);
+			for (const [name, tools] of Object.entries(result.agents.dropped)) lines.push(`${name}: sem equivalente ${harness} → ${tools.join(", ")}`);
+			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});
+	return { sync };
+}
+
+export default async function (pi: ExtensionAPI) {
+	return createBridge(pi, getAgentContext());
 }

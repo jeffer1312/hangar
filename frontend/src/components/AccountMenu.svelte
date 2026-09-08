@@ -5,6 +5,7 @@
   import { abrirConfig } from '../lib/configNav';
   import { prefetchContas } from '../lib/queries';
   import ServerManager from './ServerManager.svelte';
+  import { vaultPush } from '../lib/vaultPush.svelte';
   import PushQuiet from './PushQuiet.svelte';
   import type { Server } from '../lib/auth';
 
@@ -92,6 +93,13 @@
          fica: ali a linha TROCA o servidor ativo. Push/horas silenciosas e Reconectar seguem a
          mesma régua: no drawer eram um formulário dentro de um menu de navegação, e os dois já
          vivem em Configurações (Notificações / Servidores). -->
+    <!-- O aviso do sync é a EXCEÇÃO à regra acima: a lista de servidores não vai pro drawer, mas
+         este aviso tem que ir. Ele mora dentro do ServerManager, que só monta no popover do
+         desktop — então no celular ele existia no estado e não aparecia em lugar nenhum, e é no
+         celular que se apaga servidor. Não é ruído: 'idle' (ninguém configurou sync) não imprime. -->
+    {#if embedded && (vaultPush.estado === 'error' || vaultPush.estado === 'locked')}
+      <div class="am-sync-warn" role="status">⚠ {vaultPush.detalhe}</div>
+    {/if}
     {#if !embedded}
       <ServerManager
         {servers}
@@ -189,6 +197,11 @@
 <style>
   /* Backdrop full-screen: captura o clique-fora pra fechar. display:none quando fechado (o nó vive
      no body pra sempre — o portal monta uma vez e a visibilidade é CSS). */
+  /* Mesmos valores do .sm-sync-warn (ServerManager), que é o gêmeo deste aviso no popover. */
+  .am-sync-warn {
+    font-size: var(--text-xs); color: var(--warning); line-height: 1.4;
+    padding: var(--space-1) var(--space-4) var(--space-2);
+  }
   .am-backdrop { position: fixed; inset: 0; z-index: 60; display: none; }
   .am-backdrop.open { display: block; }
 

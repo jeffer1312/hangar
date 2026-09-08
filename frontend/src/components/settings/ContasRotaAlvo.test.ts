@@ -30,9 +30,12 @@ beforeEach(() => {
   localStorage.setItem('cp_active', 'srv-a');
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
     urls.push(String(input));
-    return resposta(input.toString().includes('/api/alcance')
+    const u = input.toString();
+    return resposta(u.includes('/api/alcance')
       ? { loopback: false, bind: 'x', enderecos: [] }
-      : []);
+      : u.includes('/api/engines')
+        ? { motores: {}, arquivo_corrompido: false, arquivo_caminho: '' }
+        : []);
   });
 });
 afterEach(() => {

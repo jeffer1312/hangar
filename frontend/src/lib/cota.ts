@@ -30,6 +30,8 @@ export interface JanelaExibida {
   nivel: NivelCota;
   /** Epoch do reset, quando o provedor manda. Vira contagem regressiva na tela. */
   resetTs: number | null;
+  /** Janela de um modelo só (rotulo = nome do modelo). Ver `piorJanela`. */
+  porModelo: boolean;
 }
 
 export interface ContaCota {
@@ -67,6 +69,7 @@ export function faixaDeCota(contas: CotaConta[]): ContaCota[] | null {
         pct: j.pct,
         nivel: nivelDePct(j.pct),
         resetTs: j.reset_ts ?? null,
+        porModelo: j.por_modelo === true,
       }));
     // Estado 'lida' sem nenhuma janela não é leitura de limite: cai no mesmo balde de quem não
     // conseguiu ler (a conta aparece nomeada, sem número — nunca com zero).
@@ -146,11 +149,16 @@ export function motivoParado(motivo?: string | null): boolean {
  *  um relance responde "tenho com o que trabalhar?" sem ler conta por conta. Empate de %: ganha
  *  a que RESETA ANTES (janela mais curta aperta primeiro — o rótulo é dado do provedor e "10h" <
  *  "5h" lexicograficamente elegeria a mais LONGA, contra a regra). Sem resetTs nas duas, tanto faz. */
-export function piorJanela(linha: ContaCota[] | null): { conta: ContaCota; janela: JanelaExibida } | null {
+// `modelo` = o modelo da sessão aberta (da statusline, "Opus5·1M"). Com ele, a janela de UM
+// modelo só concorre quando é o dele: "Fable 100%" numa sessão Opus não é o que a segura — a 5h
+// é. Sem modelo (pílula no smart, statusline ausente) toda janela concorre, como antes.
+export function piorJanela(linha: ContaCota[] | null, modelo?: string | null): { conta: ContaCota; janela: JanelaExibida } | null {
   if (!linha) return null;
+  const m = modelo?.toLowerCase() ?? null;
   let pior: { conta: ContaCota; janela: JanelaExibida } | null = null;
   for (const conta of linha) {
     for (const janela of conta.janelas) {
+      if (m && janela.porModelo && !m.includes(janela.rotulo.toLowerCase())) continue;
       if (!pior || janela.pct > pior.janela.pct) { pior = { conta, janela }; continue; }
       if (janela.pct === pior.janela.pct &&
           janela.resetTs != null && (pior.janela.resetTs == null || janela.resetTs < pior.janela.resetTs)) {

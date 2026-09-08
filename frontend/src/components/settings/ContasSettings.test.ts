@@ -21,7 +21,14 @@ import { clienteQuery } from '../../lib/queries';
 
 vi.mock('../../lib/credenciais', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/credenciais')>();
-  return { ...real, listarCredenciais: vi.fn(), definirApelido: vi.fn(async () => ({ id: 'x', apelido: null })) };
+  // `sincronizarNosAgentes` entra no mock porque o MotorForm a chama DEPOIS do PUT: real, ela
+  // faria um POST de verdade no meio do teste do card.
+  return {
+    ...real,
+    listarCredenciais: vi.fn(),
+    definirApelido: vi.fn(async () => ({ id: 'x', apelido: null })),
+    sincronizarNosAgentes: vi.fn(async () => ({ resultado: { pi: { ok: true, motivo: '' } } })),
+  };
 });
 vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
@@ -33,6 +40,10 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   putEngineForServer: vi.fn(async () => ({ motores: {} })),
   deleteEngine: vi.fn(async () => ({ ok: true })),
   deleteEngineForServer: vi.fn(async () => ({ ok: true })),
+  getEngines: vi.fn(async () => ({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' })),
+  getEnginesForServer: vi.fn(async () => ({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' })),
+  engineModelos: vi.fn(async () => ({ modelos: [] })),
+  engineModelosForServer: vi.fn(async () => ({ modelos: [] })),
   isAbortError: () => false,
   isTimeoutError: () => false,
 }));
@@ -188,19 +199,21 @@ describe('ContasSettings — a lista', () => {
 });
 
 describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
-  it('+ Nova conta abre o catálogo de provedores (a escolha saiu da linha do rodapé)', async () => {
-    // O rodapé tem UM botão. A escolha do provedor e o formulário vivem no modal
-    // (NovaCredencialSheet): inline, a pergunta e as opções viravam cinco controles competindo
-    // pela mesma linha — o que o usuário apontou em 18/08.
+  it('+ Adicionar (cabeçalho) abre a folha perguntando O QUÊ criar', async () => {
+    // O botão saiu do rodapé da lista e virou o primeiro controle do cabeçalho — criar era o
+    // 13º item da tela. A folha (NovaCredencialSheet, montada em document.body) passa a abrir
+    // no passo "o quê": conta do Claude, modelo pro Claude Code ou chave de outro agente; o
+    // catálogo de provedores só aparece depois dessa escolha.
     const t = montar([LOGADA]);
     await tick(); await tick();
-    const rodape = [...t.el.querySelectorAll<HTMLButtonElement>('.ct-rodape .ct-btn')];
-    expect(rodape.map((b) => b.textContent)).toEqual([m.contas_nova()]);
-    rodape[0].click();
+    const add = t.el.querySelector<HTMLButtonElement>(`.ct-cab button[aria-label="${m.contas_add_aria()}"]`)!;
+    expect(add).not.toBeNull();
+    expect(add.textContent).toContain(m.contas_add());
+    add.click();
     await tick(); await tick();
-    // O catálogo é do modal, que monta em document.body (BottomSheet), não dentro da aba.
-    expect(document.body.textContent).toContain(m.novacred_custom_nome());
-    expect(document.body.textContent).toContain(m.novacred_claude_nome());
+    expect(document.body.textContent).toContain(m.contas_add_conta());
+    expect(document.body.textContent).toContain(m.contas_add_modelo());
+    expect(document.body.textContent).toContain(m.contas_add_chave());
     unmount(t.comp);
   });
 
@@ -275,8 +288,8 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     input.value = 'CODE-123';
     input.dispatchEvent(new Event('input'));
     await tick();
-    // O botão Confirmar código fica no SEGUNDO .ct-rodape (o primeiro é o da lista).
-    const rodapeLogin = [...t.el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    // O rodapé do login é o único que sobrou (o da lista virou o botão do cabeçalho).
+    const rodapeLogin = t.el.querySelector<HTMLElement>('.ct-rodape.login')!;
     rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
     await tick(); await tick();
     expect(loginMock.confirmarLogin).toHaveBeenCalledWith(ALVO, 'testes', 'CODE-123');
@@ -437,7 +450,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     input.value = 'CODE-123';
     input.dispatchEvent(new Event('input'));
     await tick();
-    const rodapeLogin = [...el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    const rodapeLogin = el.querySelector<HTMLElement>('.ct-rodape.login')!;
     rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
     await tick(); await tick();
     expect(loginMock.confirmarLogin).toHaveBeenCalledWith(A, 'testes', 'CODE-123');
@@ -469,7 +482,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     input.value = 'CODE-123';
     input.dispatchEvent(new Event('input'));
     await tick();
-    const rodapeLogin = [...el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    const rodapeLogin = el.querySelector<HTMLElement>('.ct-rodape.login')!;
     rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
     await tick(); await tick();
     props.apiTarget = B;   // ?srv= trocou com o confirmar em voo
@@ -494,7 +507,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     input.value = 'CODE-123';
     input.dispatchEvent(new Event('input'));
     await tick();
-    const rodapeLogin = [...t.el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    const rodapeLogin = t.el.querySelector<HTMLElement>('.ct-rodape.login')!;
     rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
     await tick(); await tick(); await tick();
     // montagem + recarga do ramo de erro: a lista não fica presa no estado antigo.
@@ -519,8 +532,8 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     await tick(); await tick();
     t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
-    // O rodapé do login é o SEGUNDO .ct-rodape (o primeiro é o rodapé da lista, "+ Nova conta").
-    const rodapeLogin = [...t.el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    // O rodapé do login é o único .ct-rodape da tela (o da lista virou botão do cabeçalho).
+    const rodapeLogin = t.el.querySelector<HTMLElement>('.ct-rodape.login')!;
     rodapeLogin.querySelector<HTMLButtonElement>('button:not(.primario)')!.click();
     await tick(); await tick();
     expect(loginMock.cancelarLogin).toHaveBeenCalledWith(ALVO, 'testes');
@@ -609,6 +622,460 @@ describe('ContasSettings — botão de atualizar do cabeçalho', () => {
     await tick(); await tick();
     expect(t.el.querySelector('.ct-card')).not.toBeNull();
     expect(t.el.querySelector<HTMLElement>('.ct-aviso.erro')!.textContent).toContain('sem rota');
+    unmount(t.comp);
+  });
+});
+
+describe('ContasSettings — modelo e opções da chave (Contas e modelos)', () => {
+  const MOTORES = {
+    motores: { kimi: { label: 'Kimi', base_url: 'https://api.kimi.com/coding', model: 'kimi-k3', context_window: 256000, api_key: 'sk-k••••4f2a', api_key_definida: true } },
+    arquivo_corrompido: false, arquivo_caminho: '',
+  };
+  const SEM_MOTORES = { motores: {}, arquivo_corrompido: false, arquivo_caminho: '' };
+  const botao = (raiz: Element, rotulo: string) =>
+    [...raiz.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === rotulo)!;
+  const abrirMotor = (raiz: Element) => botao(raiz, m.config_motores_editar()).click();
+  // `vi.clearAllMocks()` do arquivo limpa CONTAGENS, não `mockResolvedValue`/`mockRejectedValue`:
+  // sem repor aqui, o caso do arquivo corrompido (e o do erro) vazaria para o seguinte.
+  beforeEach(() => {
+    apiMock.getEnginesForServer.mockResolvedValue(SEM_MOTORES as never);
+    apiMock.getEngines.mockResolvedValue(SEM_MOTORES as never);
+    // O PUT devolve o mapa INTEIRO, e é dele que o card e o `{#if motor}` passam a viver: sem
+    // repor, o `{ motores: {} }` do mock do arquivo desmontaria o bloco a cada Salvar.
+    apiMock.putEngineForServer.mockResolvedValue({ motores: MOTORES.motores } as never);
+    credMock.sincronizarNosAgentes.mockResolvedValue({ resultado: { pi: { ok: true, motivo: '' } } } as never);
+  });
+
+  it('chave presente no engines.json mostra o modelo no card e o botão de abrir', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    expect(apiMock.getEnginesForServer).toHaveBeenCalledWith(ALVO);
+    // A janela mudou de lugar (virou chip), não sumiu: a linha do modelo é só o id do modelo.
+    expect(t.el.querySelector('.ct-modelo')!.textContent).toBe('kimi-k3');
+    expect(t.el.textContent).toContain(m.contas_chip_janela({ n: '256k' }));
+    const btn = [...t.el.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === m.config_motores_editar());
+    expect(btn).toBeDefined();
+    unmount(t.comp);
+  });
+
+  it('abrir mostra o formulário DENTRO do card e esconde o endereço repetido; salvar atualiza o card sem GET novo e o bloco segue aberto', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    apiMock.putEngineForServer.mockResolvedValueOnce({ motores: { kimi: { ...MOTORES.motores.kimi, model: 'kimi-k2.7' } } } as never);
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    expect(t.el.querySelector('.ct-card')!.textContent).toContain('https://api.kimi.com/coding/v1');
+    [...t.el.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === m.config_motores_editar())!.click();
+    await tick();
+    const card = t.el.querySelector('.ct-card')!;
+    expect(card.textContent).toContain(m.config_motores_avancado());
+    // "Um dado, um lugar": com o bloco aberto o card não repete endereço · chave nem o modelo.
+    expect(card.querySelector('.ct-sub')).toBeNull();
+    [...card.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === m.ctx_salvar())!.click();
+    await tick(); await tick(); await tick();
+    expect(apiMock.putEngineForServer).toHaveBeenCalledWith(ALVO, 'kimi', expect.objectContaining({ model: 'kimi-k3' }));
+    expect(apiMock.getEnginesForServer).toHaveBeenCalledTimes(1);
+    // Continua aberto (o resultado da sincronização mora aí); fechar devolve o card com o modelo novo.
+    expect(card.textContent).toContain(m.config_motores_avancado());
+    [...card.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === m.sessao_fechar())!.click();
+    await tick();
+    expect(t.el.querySelector('.ct-modelo')!.textContent).toBe('kimi-k2.7');
+    unmount(t.comp);
+  });
+
+  it('salvar DUAS vezes na mesma instância não deixa o resultado da sincronização anterior na tela', async () => {
+    // O bloco não fecha depois de salvar, então a mesma instância salva de novo. Sem zerar a área
+    // de resultado a cada Salvar, a sincronização da gravação ANTERIOR fica na tela ao lado do
+    // erro desta — foi o defeito que a Task 1 pagou uma rodada.
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    // 1º Salvar sincroniza com sucesso, 2º falha: é o segundo que tem de deixar a tela sem a
+    // linha verde do primeiro.
+    credMock.sincronizarNosAgentes
+      .mockResolvedValueOnce({ resultado: { pi: { ok: true, motivo: '' } } } as never)
+      .mockRejectedValueOnce(new Error('sync caiu'));
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    abrirMotor(t.el); await tick();
+    const card = t.el.querySelector('.ct-card')!;
+    botao(card, m.ctx_salvar()).click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(card.textContent).toContain(m.novacred_sync_ok());
+    // Segundo Salvar: a linha verde do primeiro não pode sobreviver ao lado do erro deste.
+    botao(card, m.ctx_salvar()).click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(card.textContent).toContain('sync caiu');
+    expect(card.textContent).not.toContain(m.novacred_sync_ok());
+    unmount(t.comp);
+  });
+
+  it('abrir, fechar e abrir de novo entrega um formulário com o dado ATUAL, não o da primeira vez', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    apiMock.putEngineForServer.mockResolvedValueOnce({ motores: { kimi: { ...MOTORES.motores.kimi, model: 'kimi-k2.7' } } } as never);
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    abrirMotor(t.el); await tick();
+    const card = t.el.querySelector('.ct-card')!;
+    botao(card, m.ctx_salvar()).click();
+    await tick(); await tick(); await tick(); await tick();
+    botao(card, m.sessao_fechar()).click();
+    await tick();
+    expect(t.el.querySelector('.mf')).toBeNull();
+    // Reabrir monta um MotorForm NOVO: o retrato tem de sair do motor de agora (kimi-k2.7), não
+    // do que estava no mapa quando o bloco abriu da primeira vez.
+    abrirMotor(t.el); await tick();
+    expect(t.el.querySelector<HTMLInputElement>('input[name="model"]')!.value).toBe('kimi-k2.7');
+    unmount(t.comp);
+  });
+
+  it('trocar de alvo com o Salvar do motor EM VOO não escreve a resposta da máquina antiga no cache da nova', async () => {
+    // Mesmo guard das outras mutações da tela: o MotorForm é desmontado na troca, mas o PUT em
+    // voo segue vivo e devolveria o mapa do alvo ANTIGO sob a chave do NOVO — o card da máquina
+    // nova mostraria um modelo que ela nunca teve.
+    const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+    const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' };
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    credMock.listarCredenciais.mockResolvedValue([chave()]);
+    let soltaPut!: (v: unknown) => void;
+    apiMock.putEngineForServer.mockReturnValueOnce(new Promise((r) => { soltaPut = r as never; }) as never);
+    const props = criarProps({ apiTarget: A as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ContasSettings, { target: el, props });
+    await tick(); await tick(); await tick();
+    abrirMotor(el); await tick();
+    botao(el.querySelector('.ct-card')!, m.ctx_salvar()).click();
+    await tick();
+    props.apiTarget = B;   // ?srv= trocou com o PUT em voo
+    await tick(); await tick(); await tick();
+    soltaPut({ motores: { kimi: { ...MOTORES.motores.kimi, model: 'da-maquina-antiga' } } });
+    await tick(); await tick(); await tick();
+    expect(clienteQuery.getQueryData(['motores', 'srv-b'])).not.toEqual(
+      expect.objectContaining({ motores: expect.objectContaining({ kimi: expect.objectContaining({ model: 'da-maquina-antiga' }) }) }));
+    unmount(comp as never);
+  });
+
+  // `carregar()` é o ponto único: é ele que o `onCriada` do NovaCredencialSheet e o apagar
+  // chamam. Apagar o exercita de ponta a ponta — o caminho de criar passa pela mesma função.
+  it('apagar uma chave revalida os motores (o botão nasce junto com a credencial)', async () => {
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    expect(apiMock.getEnginesForServer).toHaveBeenCalledTimes(1);
+    t.el.querySelector<HTMLButtonElement>('.ct-kebab')!.click();
+    await tick();
+    [...t.el.querySelectorAll<HTMLButtonElement>('.ct-menu-item')].find((b) => b.textContent?.trim() === m.comum_apagar())!.click();
+    await tick();
+    [...t.el.querySelectorAll<HTMLButtonElement>('.ct-confirma-btn')].find((b) => b.textContent?.trim() === m.comum_apagar())!.click();
+    await tick(); await tick(); await tick();
+    expect(apiMock.deleteEngineForServer).toHaveBeenCalledWith(ALVO, 'kimi');
+    expect(apiMock.getEnginesForServer).toHaveBeenCalledTimes(2);
+    unmount(t.comp);
+  });
+
+  it('erro ao ler os motores aparece na tela em vez de sumir com o botão calado', async () => {
+    apiMock.getEnginesForServer.mockRejectedValue(new Error('HTTP 500'));
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    expect(t.el.textContent).toContain('HTTP 500');
+    expect(t.el.textContent).not.toContain(m.config_motores_editar());
+    unmount(t.comp);
+  });
+
+  // Sem a lista de nomes na mão, o formulário de criação não tem como recusar um nome curto já
+  // ocupado — e o PUT é substituição, então criar apagaria o motor do outro, calado. Enquanto a
+  // consulta não voltou, ou se ela falhou, criar fica inerte: mesmo tratamento do arquivo corrompido.
+  it('consulta de modelos ainda pendente: + Adicionar fica desabilitado', async () => {
+    apiMock.getEnginesForServer.mockReturnValue(new Promise(() => {}) as never);
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    const nova = t.el.querySelector<HTMLButtonElement>(`button[aria-label="${m.contas_add_aria()}"]`)!;
+    expect(nova.disabled).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('consulta de modelos que falhou: + Adicionar fica desabilitado e o erro aparece', async () => {
+    apiMock.getEnginesForServer.mockRejectedValue(new Error('HTTP 500'));
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    const nova = t.el.querySelector<HTMLButtonElement>(`button[aria-label="${m.contas_add_aria()}"]`)!;
+    expect(nova.disabled).toBe(true);
+    expect(t.el.textContent).toContain('HTTP 500');
+    unmount(t.comp);
+  });
+
+  // Controle: com a consulta boa o botão volta a funcionar. Sem ele, um `disabled` chumbado em
+  // true passaria nos dois casos acima.
+  it('consulta de modelos que voltou: + Adicionar fica habilitado', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue(SEM_MOTORES as never);
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    const nova = t.el.querySelector<HTMLButtonElement>(`button[aria-label="${m.contas_add_aria()}"]`)!;
+    expect(nova.disabled).toBe(false);
+    unmount(t.comp);
+  });
+
+  it('conta do Claude e credencial só de cota (kimi_cli) NÃO ganham botão nem modelo', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    const t = montar([LOGADA, chave({ id: 'kimi:/home/u/.kimi-code', nome: 'Kimi CLI', nome_natural: 'Kimi CLI', usos: ['kimi_cli'], base_url: null })]);
+    await tick(); await tick(); await tick();
+    expect(t.el.textContent).not.toContain(m.config_motores_editar());
+    expect(t.el.textContent).not.toContain('kimi-k3');
+    unmount(t.comp);
+  });
+
+  it('engines.json corrompido: aviso no topo, nenhum botão de motor e + Adicionar desabilitado', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue({ motores: {}, arquivo_corrompido: true, arquivo_caminho: '/home/u/.claude/engines.json' } as never);
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    expect(t.el.textContent).toContain(m.config_motores_nao_consegui_1());
+    expect(t.el.textContent).toContain('/home/u/.claude/engines.json');
+    expect(t.el.textContent).not.toContain(m.config_motores_editar());
+    const nova = t.el.querySelector<HTMLButtonElement>(`button[aria-label="${m.contas_add_aria()}"]`)!;
+    expect(nova.disabled).toBe(true);
+    unmount(t.comp);
+  });
+
+  // As três portas do mesmo defeito: a prop é getter VIVO, então o que o MotorForm lê depois do
+  // await do PUT é o alvo de agora, não o de quem gravou. Nenhum valor guardado no PAI fecha isso.
+  const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+  const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' };
+
+  it('PUT em voo em A, troca pra B e REABRE o bloco em B: a resposta de A entra sob a chave de A, nunca sob a de B', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    let soltaPut!: (v: unknown) => void;
+    apiMock.putEngineForServer.mockReturnValueOnce(new Promise((r) => { soltaPut = r as never; }) as never);
+    credMock.listarCredenciais.mockResolvedValue([chave()]);
+    const props = criarProps({ apiTarget: A as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ContasSettings, { target: el, props });
+    await tick(); await tick(); await tick();
+    abrirMotor(el); await tick();
+    botao(el.querySelector('.ct-card')!, m.ctx_salvar()).click();
+    await tick();
+    props.apiTarget = B;
+    await tick(); await tick(); await tick();
+    abrirMotor(el); await tick();           // a segunda porta: um bloco aberto em B enquanto o PUT de A voa
+    soltaPut({ motores: { kimi: { ...MOTORES.motores.kimi, model: 'da-maquina-antiga' } } });
+    await tick(); await tick(); await tick();
+    expect(clienteQuery.getQueryData(['motores', 'srv-b'])).not.toEqual(
+      expect.objectContaining({ motores: expect.objectContaining({ kimi: expect.objectContaining({ model: 'da-maquina-antiga' }) }) }));
+    // E a resposta não se perde: mora sob a chave da máquina que respondeu.
+    expect(clienteQuery.getQueryData(['motores', 'srv-a'])).toEqual(
+      expect.objectContaining({ motores: expect.objectContaining({ kimi: expect.objectContaining({ model: 'da-maquina-antiga' }) }) }));
+    unmount(comp as never);
+  });
+
+  it('PUT em voo em A, troca pra B: a sincronização nos agentes vai pra A (quem gravou), não pra B', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    let soltaPut!: (v: unknown) => void;
+    apiMock.putEngineForServer.mockReturnValueOnce(new Promise((r) => { soltaPut = r as never; }) as never);
+    credMock.listarCredenciais.mockResolvedValue([chave()]);
+    const props = criarProps({ apiTarget: A as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ContasSettings, { target: el, props });
+    await tick(); await tick(); await tick();
+    abrirMotor(el); await tick();
+    botao(el.querySelector('.ct-card')!, m.ctx_salvar()).click();
+    await tick();
+    props.apiTarget = B;
+    await tick(); await tick(); await tick();
+    soltaPut({ motores: MOTORES.motores });
+    await tick(); await tick(); await tick();
+    expect(credMock.sincronizarNosAgentes).toHaveBeenCalledTimes(1);
+    expect(credMock.sincronizarNosAgentes.mock.calls[0][0]).toEqual(A);
+    unmount(comp as never);
+  });
+
+  it('refresh do cabeçalho com o bloco aberto, depois Salvar: o card mostra o modelo novo (nada é descartado calado)', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    apiMock.putEngineForServer.mockResolvedValueOnce({ motores: { kimi: { ...MOTORES.motores.kimi, model: 'kimi-k2.7' } } } as never);
+    const t = montar([chave()]);
+    await tick(); await tick(); await tick();
+    abrirMotor(t.el); await tick();
+    // atualizar(): ++geracao SEM trocar de alvo — é o segundo evento que mexe no mesmo contador.
+    [...t.el.querySelectorAll<HTMLButtonElement>('.ct-refresh')].at(-1)!.click();
+    await tick(); await tick(); await tick();
+    const card = t.el.querySelector('.ct-card')!;
+    botao(card, m.ctx_salvar()).click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(card.textContent).toContain(m.novacred_sync_ok());
+    botao(card, m.sessao_fechar()).click();
+    await tick();
+    expect(t.el.querySelector('.ct-modelo')!.textContent).toBe('kimi-k2.7');
+    unmount(t.comp);
+  });
+
+  it('confirmação de apagar uma chave avisa que sessões abertas continuam', async () => {
+    const t = montar([chave()]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-kebab')!.click();
+    await tick();
+    [...t.el.querySelectorAll<HTMLButtonElement>('.ct-menu-item')].find((b) => b.textContent?.trim() === m.comum_apagar())!.click();
+    await tick();
+    expect(t.el.querySelector('.ct-confirma')!.textContent).toContain(m.config_motores_sessoes_abertas());
+    unmount(t.comp);
+  });
+});
+
+describe('ContasSettings — as três seções da lista', () => {
+  // A tela nasceu da fusão de duas telas antigas e ficou com 12 credenciais numa lista só, sem
+  // seção nenhuma. Aqui cada credencial tem um lugar: conta do Claude, modelo pro Claude Code
+  // (chave que está no engines.json) e chave de outro agente. A CÓPIA que o agentes_sync grava
+  // no config.toml do Kimi tem o mesmo nome do motor — ela não é uma credencial a mais, é uma
+  // linha dentro do card do modelo.
+  const MOTORES = {
+    motores: {
+      kimi: {
+        label: 'Kimi', base_url: 'https://api.kimi.com/coding', model: 'kimi-k3',
+        context_window: 256000, subagent_model: 'kimi-k3-mini', adaptive_thinking: false,
+        api_key: 'sk-k••••4f2a', api_key_definida: true,
+      },
+      'command-code': {
+        // Sem context_window e sem subagent_model: é o caso dos chips "padrão"/"igual".
+        label: 'Command Code', base_url: 'https://gw.exemplo.com/provider', model: 'gpt-5.6-luna',
+        api_key: 'sk-cc••••1234', api_key_definida: true,
+      },
+    },
+    arquivo_corrompido: false, arquivo_caminho: '',
+  };
+  const CC = chave({
+    id: 'chave:command-code', nome: 'Command Code', nome_natural: 'command-code',
+    base_url: 'https://gw.exemplo.com/provider', chave_mascarada: 'sk-cc••••1234',
+  });
+  // A cópia do sync: id `kimi:<nome do motor>` (backend/app/cotas.py). O nome exibido é
+  // deliberadamente OUTRO — o que a linha do card diz é o nome do MOTOR, que é como o provider
+  // se chama dentro do Kimi, não o apelido que a cópia carrega.
+  const COPIA = chave({
+    id: 'kimi:command-code', nome: 'Apelido da cópia', nome_natural: 'command-code',
+    usos: ['kimi_cli'], base_url: null, cota: { estado: 'indisponivel', janelas: [] },
+  });
+  const KIMI_CLI = chave({
+    id: 'kimi:outro', nome: 'Kimi CLI', nome_natural: 'outro', usos: ['kimi_cli'],
+    base_url: null, cota: { estado: 'indisponivel', janelas: [] },
+  });
+  const CODEX = chave({
+    id: 'codex:chatgpt', nome: 'ChatGPT', nome_natural: 'chatgpt', usos: [],
+    base_url: null, cota: { estado: 'indisponivel', janelas: [] },
+  });
+  const LISTA = [LOGADA, chave(), CC, COPIA, KIMI_CLI, CODEX];
+
+  const secoes = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('.ct-grupo')];
+  const nomes = (g: HTMLElement) => [...g.querySelectorAll('.ct-nome')].map((n) => n.textContent);
+  const cardDe = (el: HTMLElement, nome: string) =>
+    [...el.querySelectorAll<HTMLElement>('.ct-card')]
+      .find((c) => c.querySelector('.ct-nome')?.textContent === nome)!;
+
+  beforeEach(() => {
+    apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
+    apiMock.getEngines.mockResolvedValue(MOTORES as never);
+  });
+
+  it('os três títulos aparecem nesta ordem: Claude, modelos, outros agentes', async () => {
+    const t = montar(LISTA);
+    await tick(); await tick(); await tick();
+    expect(secoes(t.el).map((s) => s.querySelector('.st-secao')!.textContent))
+      .toEqual([m.contas_secao_claude(), m.contas_secao_modelos(), m.contas_secao_outros()]);
+    unmount(t.comp);
+  });
+
+  it('cada credencial cai na sua seção (chave com motor = modelo; kimi/codex = outros)', async () => {
+    const t = montar(LISTA);
+    await tick(); await tick(); await tick();
+    const [claudes, modelos, outros] = secoes(t.el);
+    expect(nomes(claudes)).toEqual(['jefferson']);
+    expect(nomes(modelos)).toEqual(['Kimi', 'Command Code']);
+    expect(nomes(outros)).toEqual(['Kimi CLI', 'ChatGPT']);
+    unmount(t.comp);
+  });
+
+  it('a cópia do sync no Kimi não tem card próprio — é uma linha dentro do card do modelo', async () => {
+    const t = montar(LISTA);
+    await tick(); await tick(); await tick();
+    // 5 cards para 6 credenciais: a cópia foi absorvida.
+    expect(t.el.querySelectorAll('.ct-card').length).toBe(5);
+    expect(t.el.textContent).not.toContain('Apelido da cópia');
+    expect(cardDe(t.el, 'Command Code').textContent)
+      .toContain(m.contas_sync_kimi({ nome: 'command-code' }));
+    // E só no card dela: o outro modelo não ganhou a linha.
+    expect(cardDe(t.el, 'Kimi').textContent).not.toContain(m.contas_sync_kimi({ nome: 'command-code' }));
+    unmount(t.comp);
+  });
+
+  it('o botão de criar está no cabeçalho e o rodapé da lista não existe mais', async () => {
+    const t = montar(LISTA);
+    await tick(); await tick(); await tick();
+    const cab = t.el.querySelector<HTMLElement>('.ct-cab')!;
+    const add = cab.querySelector<HTMLButtonElement>(`button[aria-label="${m.contas_add_aria()}"]`)!;
+    expect(add).not.toBeNull();
+    expect(add.textContent!.trim()).toBe(`+ ${m.contas_add()}`);
+    // À esquerda dos dois botões redondos do cabeçalho (densidade e atualizar).
+    expect([...cab.querySelectorAll('button')].indexOf(add)).toBe(0);
+    // Sem login em voo não sobra rodapé nenhum na tela.
+    expect(t.el.querySelectorAll('.ct-rodape').length).toBe(0);
+    expect([...t.el.querySelectorAll('button')].some((b) => b.textContent?.trim() === m.contas_nova()))
+      .toBe(false);
+    unmount(t.comp);
+  });
+
+  it('o card do modelo mostra provedor, modelo e os três chips', async () => {
+    const t = montar(LISTA);
+    await tick(); await tick(); await tick();
+    const cc = cardDe(t.el, 'Command Code');
+    // Provedor é o HOST da base_url, não a URL inteira — o caminho (/provider) é ruído.
+    expect(cc.querySelector('.ct-provedor')!.textContent).toBe('gw.exemplo.com');
+    expect(cc.textContent).toContain('gpt-5.6-luna');
+    const chips = [...cc.querySelectorAll('.ct-chip')].map((c) => c.textContent);
+    expect(chips).toEqual([
+      m.contas_chip_janela_padrao(),          // sem context_window no motor
+      m.contas_chip_subagente_igual(),        // sem subagent_model
+      m.contas_chip_raciocinio_on(),          // default do backend é ligado
+    ]);
+    // O outro motor tem os três valores preenchidos.
+    const kimi = cardDe(t.el, 'Kimi');
+    expect([...kimi.querySelectorAll('.ct-chip')].map((c) => c.textContent)).toEqual([
+      m.contas_chip_janela({ n: '256k' }),
+      m.contas_chip_subagente({ id: 'kimi-k3-mini' }),
+      m.contas_chip_raciocinio_off(),
+    ]);
+    unmount(t.comp);
+  });
+
+  it('seção vazia não some: mostra o texto de vazio dela', async () => {
+    apiMock.getEnginesForServer.mockResolvedValue({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' } as never);
+    const t = montar([LOGADA]);
+    await tick(); await tick(); await tick();
+    const [claudes, modelos, outros] = secoes(t.el);
+    expect(claudes.querySelector('.ct-vazio')).toBeNull();
+    expect(modelos.querySelector('.ct-vazio')!.textContent).toBe(m.contas_secao_modelos_vazio());
+    expect(outros.querySelector('.ct-vazio')!.textContent).toBe(m.contas_secao_outros_vazio());
+    unmount(t.comp);
+  });
+
+  it('a etiqueta "chave de API" fica só nos outros agentes — na seção de modelos ela repetia o título', async () => {
+    const t = montar(LISTA);
+    await tick(); await tick(); await tick();
+    // Em "Chaves de outros agentes" a etiqueta informa: ali uma chave convive com o login do Codex.
+    expect(cardDe(t.el, 'Kimi CLI').querySelector('.ct-tag')!.textContent).toBe(m.contas_tipo_chave());
+    // No card do modelo, não: toda linha daquela seção é uma chave de API.
+    expect(cardDe(t.el, 'Command Code').querySelector('.ct-tag')).toBeNull();
+    expect(cardDe(t.el, 'Kimi').querySelector('.ct-tag')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('Editar e Remover aparecem NOMEADOS no card do modelo, não só dentro do kebab', async () => {
+    const t = montar(LISTA);
+    await tick(); await tick(); await tick();
+    const cc = cardDe(t.el, 'Command Code');
+    const acoes = [...cc.querySelectorAll<HTMLButtonElement>('.ct-acao')].map((b) => b.textContent?.trim());
+    expect(acoes).toContain(m.config_motores_editar());
+    expect(acoes).toContain(m.lista_remover());
+    // Remover cai na MESMA confirmação inline do kebab, com o aviso das sessões abertas.
+    [...cc.querySelectorAll<HTMLButtonElement>('.ct-acao')]
+      .find((b) => b.textContent?.trim() === m.lista_remover())!.click();
+    await tick();
+    const confirma = cardDe(t.el, 'Command Code').querySelector('.ct-confirma')!;
+    expect(confirma.textContent).toContain(m.config_motores_sessoes_abertas());
     unmount(t.comp);
   });
 });

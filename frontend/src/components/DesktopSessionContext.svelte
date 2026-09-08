@@ -136,7 +136,9 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
       return;
     }
     chaveVista = chave;
-    const lembrada = ABA_POR_SESSAO.get(chave) ?? 'contexto';
+    // Sessão que nunca escolheu aba mas já tem navegador (o agente abriu com ela fora da tela):
+    // entra direto nele — é o que "o navegador está aberto lá quando eu for" quer dizer.
+    const lembrada = ABA_POR_SESSAO.get(chave) ?? (temNav ? 'navegador' : 'contexto');
     if (lembrada !== aba) ctxPanel.aba = lembrada;   // reentra uma vez e cai no ramo de cima
   });
   // A aba é global (ctxPanel, por desenho) mas o navegador é POR SESSÃO: sessão sem navegador com

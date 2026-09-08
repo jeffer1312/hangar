@@ -29,8 +29,22 @@
 
 # Mesmo caminho que backend/app/adapters/pi/sessions.py:transcript_alvo monta pro `--session`:
 # <raiz>/<slug do cwd>/<ts>_<id>.jsonl. O slug troca só o separador por '-' (acento e espaço passam).
-hangar_omp_alvo() {  # $1 = uuid
+# Perfil pedido na linha (`--profile x` / `--profile=x`) ou já no ambiente (OMP_PROFILE). Vazio = sem perfil.
+hangar_omp_perfil() {
+    local a
+    while [ $# -gt 0 ]; do
+        a=$1; shift
+        case "$a" in
+            --profile) printf '%s' "${1:-}"; return ;;
+            --profile=*) printf '%s' "${a#--profile=}"; return ;;
+        esac
+    done
+    printf '%s' "${OMP_PROFILE:-}"
+}
+
+hangar_omp_alvo() {  # $1 = uuid; com perfil a raiz é a do perfil (o omp ignora PI_CODING_AGENT_DIR ali)
     local raiz="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/sessions"
+    [ -n "${OMP_PROFILE:-}" ] && raiz="$HOME/.omp/profiles/$OMP_PROFILE/agent/sessions"
     local slug="--$(printf '%s' "$PWD" | sed -e 's#^[/\\]##' -e 's#[/\\:]#-#g')--"
     printf '%s/%s/%s_%s.jsonl' "$raiz" "$slug" "$(date -u +%Y-%m-%dT%H-%M-%S-000Z)" "$1"
 }
@@ -72,6 +86,15 @@ read|render|say|search|setup|share|shell|ssh|stats|tiny-models|token|ttsr|update
                 ;;
         esac
     done
+
+    # Perfil vai como OMP_PROFILE (o omp honra; é de onde o backend lê o perfil de um pane vivo) e
+    # muda a raiz que o hangar_omp_alvo monta. `-e` no tmux porque o pane nasce do SERVIDOR, não deste shell.
+    local perfil envp=()
+    perfil=$(hangar_omp_perfil "$@")
+    if [ -n "$perfil" ]; then
+        export OMP_PROFILE="$perfil"
+        envp=(-e "OMP_PROFILE=$perfil")
+    fi
 
     local id
     id=$(uuidgen 2>/dev/null) || id=$(cat /proc/sys/kernel/random/uuid)
@@ -122,10 +145,10 @@ read|render|say|search|setup|share|shell|ssh|stats|tiny-models|token|ttsr|update
     # $0 vira "_" (placeholder), $1 o uuid, $2 o caminho do transcript, o resto os args originais.
     # CP_SESSION_NAME: carimbo de identidade pro hangar-send de dentro do pane (ver claude.posix.sh).
     if [ "$own_session" = 1 ]; then
-        "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" \
+        "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" "${envp[@]}" \
             sh -c 'exec omp "$@"' _ "$@"
     else
-        "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" \
+        "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" "${envp[@]}" \
             sh -c 'export CP_PI_SESSION="$1"; alvo="$2"; shift 2; exec omp --session "$alvo" "$@"' \
             _ "$id" "$(hangar_omp_alvo "$id")" "$@"
     fi

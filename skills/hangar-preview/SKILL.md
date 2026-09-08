@@ -29,6 +29,7 @@ Daí:
 hangar-preview open http://localhost:3000/login    # só se ainda não houver navegador (pisca na tela dele)
 hangar-preview wait --idle                          # rede parada
 hangar-preview shot /tmp/login-01.png               # print da viewport
+hangar-preview close                                # terminou: o painel some da tela do usuário
 ```
 
 Leia o PNG com a ferramenta de leitura de imagem e **cite o caminho absoluto do arquivo no texto da
@@ -85,9 +86,13 @@ tire `snapshot` de novo antes de agir.
 
 ## Comandos
 
-- `hangar-preview open <url>` — abre o navegador desta sessão com a url (o painel monta sozinho na
-  tela do usuário; se a sessão estiver fora da tela, abre quando ele abrir ela). **Avise o usuário**
-  no texto da resposta que você abriu — a janela dele muda na hora.
+- `hangar-preview open <url>` — abre o navegador desta sessão com a url. Com o app desktop aberto
+  ele nasce em segundos **mesmo com a sessão fora da tela** (escondido; `list` mostra `vivo`), e
+  todos os verbos funcionam ali, `shot` incluído: a página escondida é medida em 1280×800, então
+  o que você lê e fotografa é o layout de desktop. Quando o usuário abrir a sessão, o painel
+  aparece com o navegador na página em que você deixou, e aí a medida passa a ser o tamanho real
+  do painel — um `shot` de antes e um de depois podem ter tamanhos diferentes.
+  **Avise o usuário** no texto da resposta que você abriu — a janela dele muda quando ele for lá.
 - `hangar-preview snapshot` — árvore de acessibilidade compacta, com as refs atuais.
 - `hangar-preview click @eN` — clica (evento de mouse real, não `.click()` em JS).
 - `hangar-preview fill @eN <texto>` — foca o campo e substitui o conteúdo pelo texto.
@@ -117,6 +122,10 @@ tire `snapshot` de novo antes de agir.
   inteira; role com `eval 'scrollTo(0, 9999)'` pra ver o fim); default
   `/tmp/hangar-preview-<sessao>.png`. Leia o PNG com a ferramenta de leitura de imagem e cite o
   caminho na resposta.
+- `hangar-preview close` — fecha o navegador desta sessão de verdade (o painel some da tela do
+  usuário, o view morre). **Terminou de usar, feche.** Deixe aberto só se você ainda vai dirigir
+  ele ou se o usuário vai testar a página — e nesse caso diga isso na resposta. Navegador aberto
+  numa página cujo servidor você já derrubou é lixo órfão na tela dele.
 - `hangar-preview list` — quais sessões têm navegador vivo agora.
 - `--sessao <nome>` opera o navegador de OUTRA sessão — só quando o usuário pedir, e avise-o.
 

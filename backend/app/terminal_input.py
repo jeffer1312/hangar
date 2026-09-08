@@ -239,6 +239,27 @@ _INDISPONIVEL_DEFER_COUNT: dict[str, int] = {}
 _OCUPADO_DEFER_LIMIT = 5
 
 
+def _exige_clipboard(text: str, provider: str) -> bool:
+    """O texto tem contrabarra e este e o Windows? Entao o argv nao serve — va de clipboard.
+
+    O `send-keys -l` leva o texto no ARGV, e o psmux desescapa contrabarra dentro do argumento
+    citado (todo texto com espaco vira citado). Medido byte a byte em 07/09/2026, com o pane
+    gravando num arquivo o que recebe: corrida de N contrabarras chega com ceil(N/2) — 2 viram 1,
+    3 viram 2 — e uma aspa colada depois de uma contrabarra SOME. Um caminho UNC chega corrompido,
+    a prova de entrega da fila compara string, nao casa, e a msg vira bolha de 'nao chegou' sobre
+    uma msg que CHEGOU, mais duas redigitacoes.
+
+    O clipboard nao passa pelo argv: o texto entra por STDIN no `Set-Clipboard` e o `M-v` nao
+    carrega texto nenhum. Medido no mesmo dia, de ponta a ponta: 4 contrabarras enviadas, 4 no
+    transcript, string IDENTICA. A alternativa (dobrar contrabarra no argv) tambem round-tripa na
+    corrida pura, mas NAO cobre a aspa comida e seria compensar um parser que nao e nosso.
+
+    `claude` porque `Alt+V` e binding DELE — mesmo portao do ramo multi-linha. No POSIX devolve
+    False sempre: la o argv nao come nada e o caminho de uma linha segue byte-identico.
+    """
+    return os.name == "nt" and provider == "claude" and "\\" in text
+
+
 def _avisa_deferred(name: str, motivo: str, avisados: set[str], contadores: dict[str, int],
                      diag: str) -> None:
     """WARNING uma vez (aviso-uma-vez de praxe, ver _COMPOSER_WARNED/_READY_TIMEOUT_WARNED);
@@ -1549,7 +1570,7 @@ class TerminalInput:
                                 _OCUPADO_DEFER_COUNT, _diag_composer(_capture(name), text, name, None))
                 return "deferred"
             _limpa_deferred(name, _OCUPADO_WARNED, _OCUPADO_DEFER_COUNT)
-            if "\n" in text:
+            if "\n" in text or _exige_clipboard(text, provider):
                 # Foto dos placeholders de paste ANTES do nosso: so um numero NOVO conta como
                 # evidencia de entrega (ver _composer_residuo — paste alheio nao pode virar prova).
                 regiao_antes = _composer_regiao(_capture(name), name)

@@ -118,6 +118,22 @@ def _tamanho_da_janela(name: str) -> Optional[tuple[int, int]]:
     return (int(w), int(h)) if w.isdigit() and h.isdigit() else None
 
 
+def origens_extras() -> list[str]:
+    """CP_TERM_ORIGINS mais o que a tela gravou, sem duplicata e na ordem de declaracao.
+
+    Soma em vez de sobrescrever: quem edita pelo celular esta, quase por definicao, numa origem que
+    so funciona porque alguem a declarou antes — um override por inteiro se tiraria do ar sozinho.
+    """
+    from app import runtime_config
+    vistos: list[str] = []
+    for fonte in (settings.term_origins, str(runtime_config.get("term_origins") or "")):
+        for extra in fonte.split(","):
+            extra = extra.strip()
+            if extra and extra not in vistos:
+                vistos.append(extra)
+    return vistos
+
+
 def _origem_aceita(origem: str, host_req: Optional[str]) -> bool:
     """Origin permitida: a MESMA de onde o app foi servido, ou a `public_url` configurada.
 
@@ -142,9 +158,8 @@ def _origem_aceita(origem: str, host_req: Optional[str]) -> bool:
     # nao e peer nenhum — o PWA da VPS carrega de la e fala com este backend pelo Tailscale, entao
     # a Origin dele nao e mesma-origem, nao e a public_url e nao esta no peers.json. Sem isto o
     # terminal do celular levava 403 no handshake (medido 21/08/2026).
-    for extra in settings.term_origins.split(","):
-        extra = extra.strip()
-        if extra and alvo == (urlparse(extra).netloc or extra):
+    for extra in origens_extras():
+        if alvo == (urlparse(extra).netloc or extra):
             return True
     # A MALHA inteira, nao so este backend: o app e servido de UMA maquina e fala com VARIAS (o PWA
     # do celular carrega de um host e conversa com este backend por outro endereco). Sem isto, o

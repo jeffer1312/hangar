@@ -41,9 +41,44 @@ ships with the skill:
 
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
-  "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <session> [session...] <arbiter> -m 5 \
+  "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <who has the ball> <arbiter> -m 5 \
   -d ~/.hangar/orq/<date>-<gid>/registro.md
 ```
+
+In serial, "who has the ball" is **one** session, and it changes three times per round. Rewrite the
+command at each:
+
+| Window | The list is |
+|---|---|
+| kick-off dispatched → 1st round delivered | `<executor> <arbiter>` |
+| round delivered → verdict | `<reviewer> <arbiter>` |
+| APROVA → commit reported | `<executor> <arbiter>` |
+
+The pair together is never the list: the script nudges **any** session on the list that sits idle
+for the interval, not only when nobody has the ball — so the one legitimately waiting (the reviewer
+before the first round, the executor waiting for a verdict) collects a paid nudge and wakes you with
+a false alarm.
+
+**The list is a copy of something already written, and the copy goes stale by design.** Since the
+commit moved to after the review, the passes inside the executor↔reviewer loop happen **without
+you** — the round leaves, the verdict comes back, a rejection sends the ball back — and each pass is
+already a line in `eventos.jsonl`, written by whoever made it. The by-hand list is only right while
+it matches that file's last line:
+
+| Last line | The ball is with |
+|---|---|
+| `task_inicio` | the Task's `executor` |
+| `entrega` | the round's `revisor` |
+| `veredito` `reprova` | the `executor` again |
+| `veredito` `aprova` | the `executor`, until the `commit` field appears |
+| `execucao_fim` | nobody — disarm |
+
+So: **before acting on any alarm, compare the watchdog's argument list with that last line.** A
+mismatch is an alarm about the list, not about the session — re-arm, don't nudge, and don't read a
+session waiting exactly as ordered as a stalled one. And the ball **with the user** is nobody with
+the ball: disarm before asking, re-arm when the answer comes. The upgrade this table points at is a
+watchdog that reads the file itself and takes no list; until the script does that, the table is
+what you check by hand at each alarm.
 
 The command's manual — flags, why a service and not a background process, how to confirm it is
 alive — lives in the **header of `vigia.sh` itself**. Two things that are yours, not the

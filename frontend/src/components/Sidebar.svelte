@@ -14,6 +14,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import StateChip from './StateChip.svelte';
+  import { chipDaConta } from '../lib/conta';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import GroupGlyph from './icons/GroupGlyph.svelte';
   import type { SessionInfo, AggSession, Provider } from '@hangar/core';
@@ -136,6 +137,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     try { localStorage.setItem('cp_sidebar_w', String(width)); } catch { /* storage cheio/off */ }
   }
   const servers = $derived(sessionsStore.servers);
+  // A pergunta aqui é "dá pra criar sessão nessa máquina agora?", então basta `error` — quem
+  // respondeu há 5 minutos e calou não dá. Sem vaivém do chip: o erro só é marcado após 25s de
+  // silêncio (watchdog) ou 10s sem o primeiro quadro.
+  const servidoresOffline = $derived(
+    new Set(sessionsStore.byServer.filter((b) => b.error).map((b) => b.server.id)),
+  );
   // Agrupando por projeto, o cwd já está no header do grupo; mostrar o caminho em cada row é
   // redundância. Ele volta a aparecer quando o agrupamento é por servidor.
   const showCwd = $derived(model.groupMode === 'server');
@@ -203,9 +210,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null, model?: string | null, effort?: string | null,
-                              permissionMode?: string | null) {
+                              permissionMode?: string | null, ompProfile?: string | null) {
     // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
-    const info = await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode);
+    const info = await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode, ompProfile);
     abrirSessaoDoSheet(name);
     // Aviso da reconciliação da conta (plugin ligado sem instalação etc): antes só ia pro log do
     // backend e a sessão abria "normal" sem o plugin. Texto vem pronto do backend.
@@ -682,6 +689,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         {@const selKey = `${s.serverId}:${s.name}`}
         {@const provTag = model.showProviderTags ? providerTag(s.provider) : null}
         {@const sub = sidebarStatus(s)}
+        {@const contaChip = chipDaConta(s.conta)}
         {@const srvLabel = servers.find((sv) => sv.id === s.serverId)?.label ?? s.serverId}
         {@const estadoTxt = s.stalled ? m.sessao_pode_travada() : rotuloEstado(s.state)}
         <!-- role=presentation: a row e so o wrapper flex — a semantica toda vive no .sess-main
@@ -705,7 +713,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             <button
               class="sess-main"
               class:untracked={s.tracked === false}
-              class:untracked-open={s.tracked === false && s.provider === 'kimi'}
+              class:untracked-open={s.tracked === false && (s.provider === 'kimi' || s.provider === 'codex')}
               aria-pressed={model.selectMode ? model.selected.has(selKey) : undefined}
               aria-label={!expanded ? `${s.name} · ${srvLabel} · ${estadoTxt}` : undefined}
               title={!expanded
@@ -745,10 +753,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {/if}
                   {@const [l1, l2] = railLabel(s.name, item.label)}
                   <span class="rail-lbl" class:aguardando={s.state === 'awaiting_input' && !s.stalled}><b>{l1}</b><i>{l2}</i></span>
-                {:else if s.state === 'working'}
+                {:else if s.state === 'working' && !s.limited}
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarWorking size={18} /></span>
                 {:else}
-                  <span class="row-mark" style="color: {stateColors[s.state]};"><HangarMark size={18} /></span>
+                  <span class="row-mark" style="color: {s.limited ? 'var(--pill-limite-fg)' : stateColors[s.state]};"><HangarMark size={18} /></span>
                 {/if}
                 {#if !expanded && !model.selectMode && model.showProviderTags}
                   <!-- Mesma regra da lista aberta: quando a lista MISTURA agentes, todo mundo leva o
@@ -801,7 +809,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {#if s.git_added || s.git_removed}
                     <span class="diff-stats" aria-hidden="true">{#if s.git_added}<span class="diff-add">+{s.git_added}</span>{/if}{#if s.git_removed}<span class="diff-del">−{s.git_removed}</span>{/if}</span>
                   {/if}
-                  {#if model.showProviderTags || provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
+                  {#if model.showProviderTags || provTag || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name || contaChip}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
                     <span class="badges-line">
@@ -810,12 +818,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                              o TEXTO continua só nas não-Claude — o default se reconhece pela marca.
                              provider ausente = Claude (o campo só viaja quando não é Claude). -->
                         <span class="prov-chip" class:prov-chip--so-icone={!provTag} title={`${m.sessao_grupo()} ${provTag ?? 'Claude'}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span><ProviderGlyph provider={s.provider} size={12} />{#if provTag}{provTag}{/if}</span>
-                      {/if}
-                      {#if s.limited}
-                        <span
-                          class="limited-chip"
-                          title={s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}
-                        >⏳{#if s.limit_reset}&nbsp;{s.limit_reset}{/if}</span>
                       {/if}
                       {#if s.then_target}
                         <span class="chain-chip" title={m.sessao_chain_envia({ n: s.then_target })}>🔗&nbsp;{s.then_target}</span>
@@ -842,6 +844,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                              e mentiria pra um motor de outro provedor. -->
                         <span class="engine-chip" title={m.sessao_motor({ n: s.engine })}>⚙&nbsp;{s.engine}</span>
                       {/if}
+                      {#if contaChip}
+                        <!-- Conta Anthropic da sessão (paridade com o SessionCard do celular). -->
+                        <span class="conta-chip" style="color: {contaChip.cor}; border-color: {contaChip.cor};" title={m.sessao_conta({ n: contaChip.nome })}>{contaChip.label}</span>
+                      {/if}
                     </span>
                   {/if}
                   <PlanBar session={s} />
@@ -849,12 +855,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 <!-- O envelope .state-chip existe pelo anel de travada e pelas regras que ja
                      miravam essa classe (hover da linha, papel de parede no app.css); a pilula em
                      si e o StateChip. -->
-                <span class="state-chip" class:stalled={s.stalled === true}>
+                <span class="state-chip" class:stalled={s.stalled === true && !s.limited}>
                   <!-- "pronto" (idle) e o estado COMUM da lista: pilula com texto em toda linha e
                        ruido, nao informacao — e a largura dela truncava o nome da sessao. Vira o
                        ponto (a cor segue dizendo "pronto") e as pilulas de verdade (em execucao,
                        aguardando) sobressaem. O estado segue no aria-label da linha. -->
-                  <StateChip state={s.state} dot={s.state === 'idle'} title={s.stalled ? m.sessao_travada() : undefined} />
+                  <StateChip state={s.state} dot={s.state === 'idle'} limited={s.limited === true} limitReset={s.limit_reset} title={s.stalled && !s.limited ? m.sessao_travada() : undefined} />
                 </span>
               {/if}
             </button>
@@ -864,7 +870,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                    Fora do Pi/Kimi/OMP: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS
                    de matar o pane -> num pane Pi/Kimi/OMP ofereceria a conversa do agente errado e mataria
                    a sessao viva. Ali o title da linha ja diz o que fazer (untrackedReason). -->
-              {#if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi' && s.provider !== 'omp'}
+              {#if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi' && s.provider !== 'omp' && s.provider !== 'codex'}
                 <button
                   class="sess-resume"
                   onclick={(e) => handleResume(s.name, s.serverId, undefined, e)}
@@ -978,7 +984,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      overflow:hidden (e backdrop-filter no modo liquid, que vira containing block) e clipa o popover. -->
 {#if hp}<HoverPreview text={hp.text} x={hp.x} y={hp.y} />{/if}
 
-<CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={abrirSessaoDoSheet} bastao={bastaoAlvo} />
+<CreateSessionSheet open={showCreate} {servers} offline={servidoresOffline} latencias={sessionsStore.latencias} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={abrirSessaoDoSheet} bastao={bastaoAlvo} />
 
 <!-- "Buscar conversas" (nav): switcher em modo só-busca (busca de conteúdo cross-servidor, feature #10). -->
 <SessionSwitcherSheet
@@ -1662,12 +1668,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     outline: 1px solid var(--warning); outline-offset: -1px;
   }
   /* Rate-limit radar (feature #8): chip proprio, mesma familia visual do stalled (âmbar, calmo). */
-  .limited-chip {
+  /* Conta Anthropic da sessão: contorno na cor da conta, fundo transparente (rótulo de identidade,
+     como o prov-chip). */
+  .conta-chip {
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-    font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
-    padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
-    color: var(--warning); background: rgba(255, 159, 10, 0.12);
-    font-variant-numeric: tabular-nums;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    padding: 0 6px; border: 1px solid; border-radius: var(--radius-full); white-space: nowrap;
+    background: transparent;
   }
   /* Feature #12: indicador do vinculo 'then' — mesmo formato do limited-chip, cor neutra (accent). */
   .chain-chip {

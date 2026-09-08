@@ -83,6 +83,8 @@ export interface JanelaCota {
   rotulo: string;
   pct: number;
   reset_ts?: number | null;
+  /** Janela de um modelo só (o semanal do Fable): não aperta uma sessão que roda noutro modelo. */
+  por_modelo?: boolean;
 }
 
 export interface CotaConta {

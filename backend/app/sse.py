@@ -1,14 +1,16 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 import time
 import traceback
 from pathlib import Path
-from app import diag
+from app import atomico, diag
 from app.adapters import get_adapter
 from app.adapters.codex.preview import CodexPreviewSource
+from app.difusor import Difusor
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent, session_key
@@ -197,16 +199,90 @@ _list_lock = asyncio.Lock()
 
 
 # "Abrir o navegador embutido" vindo do AGENTE (POST /api/sessions/<nome>/nav, via CLI
-# hangar-preview open). One-shot por sessão, em MEMÓRIA: o stream SSE da sessão só existe com o
-# Chat dela montado; se o agente manda com a sessão fora da tela, o pendente espera aqui e sai
-# quando o usuário abrir a sessão. Backend reiniciou = perde (o agente re-tenta).
-_NAV_PENDENTES: dict[str, list[str]] = {}
+# hangar-preview open). É um MARCADOR por sessão {url, ts}, não uma fila: cada conexão SSE (a do
+# chat da sessão e a da lista) o entrega UMA vez e ele fica, até o desktop confirmar que criou o
+# view (DELETE /nav) ou vencer o prazo. Antes era `pop` pelo primeiro stream que passasse — o
+# celular lendo a mesma sessão comia o evento e o desktop nunca via. Gravado em disco porque
+# reiniciar o backend perdia o pedido.
+_NAV_TTL_S = 600.0
+_NAV_MARCADORES: dict[str, dict] = {}
+# Disco é lido UMA vez por processo (na primeira consulta). "Dict vazio" é o estado normal —
+# marcador é evento raro — e reler a cada poll de cada SSE seria I/O síncrono no loop.
+_nav_carregado = False
+# Monitores de estado compartilhados entre as conexoes de um mesmo chat (ver _monitor_de).
+_ESTADOS = Difusor()
+
+
+def _nav_arquivo() -> Path:
+    # Sublinhado como o `_srv.json`: a pasta é a dos sidecars de navegador (um por sessão, com
+    # `chave`), e quem a varre (CLI, `/navegador`) pula os arquivos de processo.
+    return Path.home() / ".hangar" / "nav" / "_pendentes.json"
+
+
+def _nav_carregar() -> None:
+    global _nav_carregado
+    if _nav_carregado:
+        return
+    _nav_carregado = True
+    try:
+        d = json.loads(_nav_arquivo().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(d, dict):
+        _NAV_MARCADORES.update({k: v for k, v in d.items()
+                                if isinstance(v, dict) and isinstance(v.get("url"), str) and isinstance(v.get("ts"), (int, float))})
+
+
+def _nav_gravar() -> None:
+    try:
+        arq = _nav_arquivo()
+        arq.parent.mkdir(parents=True, exist_ok=True)
+        tmp = arq.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(_NAV_MARCADORES), encoding="utf-8")
+        atomico.substituir(tmp, arq)
+    except OSError as e:
+        _log.warning("nav: marcador nao gravado em disco: %s", e)
 
 
 def nav_pendente(name: str, url: str) -> None:
-    # Só a ÚLTIMA url por sessão: é o que a UI abre, e o agente empurrando N urls com a sessão fora
-    # da tela não infla a memória pra sempre.
-    _NAV_PENDENTES[name] = [url]
+    # Só a ÚLTIMA url por sessão: é o que a UI abre.
+    _nav_carregar()
+    _NAV_MARCADORES[name] = {"url": url, "ts": time.time()}
+    _nav_gravar()
+
+
+def nav_confirmar(name: str) -> None:
+    """O desktop criou o view: o marcador cumpriu o papel."""
+    _nav_carregar()
+    if _NAV_MARCADORES.pop(name, None) is not None:
+        _nav_gravar()
+
+
+def nav_vivos() -> dict[str, dict]:
+    """Marcadores dentro do prazo; os vencidos saem no caminho."""
+    _nav_carregar()
+    agora = time.time()
+    vencidos = [n for n, m in _NAV_MARCADORES.items() if agora - float(m.get("ts", 0)) > _NAV_TTL_S]
+    for n in vencidos:
+        _NAV_MARCADORES.pop(n, None)
+    if vencidos:
+        _nav_gravar()
+    return _NAV_MARCADORES
+
+
+def nav_novos(vistos: dict[str, float], name: str | None = None) -> list[tuple[str, dict]]:
+    """O que esta conexão ainda não entregou: marcador cujo `ts` difere do que ela já mandou.
+    `name` restringe à sessão de um chat; None é a lista, que vê todas."""
+    saida = []
+    for n, m in nav_vivos().items():
+        if name is not None and n != name:
+            continue
+        ts = m.get("ts", 0)
+        if vistos.get(n) == ts:
+            continue
+        vistos[n] = ts
+        saida.append((n, m))
+    return saida
 
 
 async def _cached_list():
@@ -434,7 +510,21 @@ async def list_events(ping_secs: float = 8.0):
             await asyncio.sleep(ping_secs)
             await queue.put(("ping", "{}"))
 
-    tasks = [asyncio.create_task(reader()), asyncio.create_task(ping_loop())]
+    async def nav_pump():
+        # A lista e o unico stream que o desktop mantem aberto o tempo todo: e por aqui que "abrir
+        # navegador" chega com a sessao FORA da tela, e o shell cria o view escondido.
+        vistos: dict[str, float] = {}
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                for nome, marc in nav_novos(vistos):
+                    queue.put_nowait(("nav", json.dumps({"name": nome, "url": marc["url"]})))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("sse: nav_pump da lista morreu")
+
+    tasks = [asyncio.create_task(reader()), asyncio.create_task(ping_loop()), asyncio.create_task(nav_pump())]
     try:
         while True:
             event, data = await queue.get()
@@ -459,8 +549,13 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     def _monitor_de(prov):
         adap = get_adapter(prov)
         kw = {"transcript_get": lambda: current_jsonl} if prov == "kimi" else {}
-        return adap.state_monitor(
-            name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None, **kw)
+        # Um monitor por (sessao, provider, transcript), compartilhado entre as conexoes abertas
+        # nesse chat (desktop + celular = um capture-pane, nao dois). O transcript entra na chave
+        # porque o monitor fecha sobre o sid VIVO da conexao que o criou: apos um /clear, quem
+        # continua nele e recriado com a chave nova (ver __reset__) em vez de herdar a closure de
+        # uma conexao que pode ja ter ido embora.
+        return _ESTADOS.ouvir((name, prov, current_jsonl), lambda: adap.state_monitor(
+            name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None, **kw))
 
     monitor_stream = _monitor_de(provider)
     pqueue = PromptQueue(name)
@@ -518,15 +613,20 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             await queue.put(("ping", "{}"))
 
     async def nav_pump():
-        # Drena os "abrir navegador" pendentes DESTA sessao (agente via POST /nav). Poll de 1s
-        # basta: e evento raro e humano, nao canal quente.
-        while True:
-            await asyncio.sleep(1.0)
-            urls = _NAV_PENDENTES.pop(name, [])
-            # put_nowait, NÃO await put: sem suspensão entre o pop e a entrega, um cancel no meio
-            # não perde o evento calado.
-            for url in urls:
-                queue.put_nowait(("nav", json.dumps({"url": url})))
+        # Entrega o marcador "abrir navegador" DESTA sessao uma vez por conexao (ver nav_novos).
+        # Poll de 1s basta: e evento raro e humano, nao canal quente.
+        vistos: dict[str, float] = {}
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                for _, marc in nav_novos(vistos, name):
+                    queue.put_nowait(("nav", json.dumps({"url": marc["url"]})))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Feature, não núcleo (mesmo trato do stats_pump): morrer calado deixaria "abrir
+            # navegador" mudo nesta conexão sem rastro nenhum.
+            _log.exception("sse: nav_pump da sessão %s morreu", name)
 
     def _enqueue_preview(text: str, md: bool = False, full: bool = False):
         # Atualiza o slot e enfileira UM marcador 'preview' por vez (drop-old). Sem await entre as
@@ -570,10 +670,10 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # Faixa de estatísticas (turnos/steps/tokens/tempos) — fold incremental do MESMO arquivo
         # do transcript, IO no threadpool. FEATURE, não núcleo: diferente dos outros pumps, erro
         # aqui NUNCA derruba o stream (regra do incidente 2026-07-23) — loga e a faixa some.
+        acc = StatsAccumulator.compartilhado(current_provider, path)
+        if acc is None:
+            return                           # provider sem fold -> sem faixa
         try:
-            acc = StatsAccumulator.for_provider(current_provider, path)
-            if acc is None:
-                return                       # provider sem fold -> sem faixa
             last = None
             while True:
                 snap = await asyncio.to_thread(acc.collect)
@@ -585,6 +685,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             raise                            # rebind do /clear cancela de propósito
         except Exception:
             _log.exception("sse: stats_pump falhou name=%s (faixa desligada)", name)
+        finally:
+            acc.soltar()
 
     async def jsonl_watcher():
         # Detecta /clear (e qualquer troca de transcript): o claude abre um .jsonl NOVO, mas o tailer foi
@@ -752,6 +854,11 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 tasks.append(tail_task)
                 stats_task = asyncio.create_task(stats_pump(data))
                 tasks.append(stats_task)
+                # O monitor e compartilhado por transcript: o deste chat agora e outro.
+                tasks.remove(state_task)
+                state_task.cancel()
+                state_task = asyncio.create_task(pump("state", _monitor_de(current_provider)))
+                tasks.append(state_task)
                 yield {"event": "reset", "data": "{}"}
                 continue
             if event == "preview":

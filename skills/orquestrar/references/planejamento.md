@@ -558,16 +558,28 @@ Before closing the plan:
 Whatever you cannot run enters marked: `<!-- NOT VERIFIED: … -->`. The executor treats that as
 description, not recipe — and it is infinitely better than them finding out alone mid-Task.
 
-Four things the plan gets wrong **silently**, each worth a round or a blocker:
+Five things the plan gets wrong **silently**, each worth a round or a blocker:
 
 - **Every claim about an external lib's BEHAVIOR carries the mark, or the installed source snippet
   pasted alongside** — not just the API name. "Option X is a watchdog" and "after `error` the lib
   stops reconnecting" are exactly the sentences that fail without warning. The type checker
   enforces API names; behavior, nobody does.
-- **A Task that MOVES a file lists the old path's consumers** — and they are not just imports:
-  infra (CI, deploy, installers) and **tests that sweep the tree** point by string, and a
-  raw-text gate sweeping the old root goes blind to everything that moved out. Add mock helpers
-  that point at paths by string and show up neither in `import` searches nor in the compiler.
+- **A Task that MOVES or RETIRES something lists the consumers of what disappears** — and they are
+  not just imports: infra (CI, deploy, installers), shell wrappers, documentation and the project's
+  own instruction files point at it **by string**, and a raw-text gate rooted at the source
+  directory goes blind to every one of them. Two searches, not one: the code **symbol**, and the
+  **name the person reads on screen** — a retired screen keeps being announced by its old name in
+  places no compiler and no test ever open. Scope the gate at the repository root, minus what the
+  contract declares untouchable and minus dated history. Add mock helpers that point at paths by
+  string and show up neither in `import` searches nor in the compiler.
+- **A Task that EXTRACTS or MOVES existing code into a new home lists what the OLD home did for
+  FREE.** Correct code is correct *because of* its surroundings: the component that unmounted after
+  the action, the `await` that lived in the same function, the caller that held the lock. Those
+  guarantees do not travel with the code, and nothing catches their absence — the compiler sees a
+  valid program, and the copied tests pass because they were written for the old home. So the plan
+  states, for each extraction, **the lifecycle the old home provided and the destination does not**:
+  what reset for free, who owned the value after the await, what was dead code there and becomes
+  live here. A line that was a no-op at the origin is the first suspect at the destination.
 - **State shared between Tasks is a design decision written in the plan's HEADER**, not inside a
   Task — it crosses Tasks approved one by one and only shows in the set review, as the number-one
   blocker.

@@ -22,6 +22,8 @@
   import OrqPainelCard from './OrqPainelCard.svelte';
   import BastaoCard from './BastaoCard.svelte';
   import { lerRecadoBastao } from '../lib/bastaoRecado';
+  import SubagenteCard from './SubagenteCard.svelte';
+  import { lerSubagenteCodex } from '../lib/subagenteCodex';
   import { transcriptImageUrl, uploadUrl } from '@hangar/core';
   import { windowStartFor, nextWindowEnd, precisaPreencher, mostrarIrPraoFim } from '../lib/window';
 
@@ -46,6 +48,9 @@
     askActive?: boolean;
     onAnswer?: (answers: AnswerItem[]) => Promise<void>;
     onAskClose?: () => void;
+    /** Rolou até o topo e não há mais nada em memória — quem tem o resto é o servidor. Ausente
+     *  (arquivo, board) = a lista simplesmente para onde acabou, como antes. */
+    onFimDoLocal?: () => void;
     // Override da URL de imagem do transcript (ex: arquivo de conversas mortas, que nao tem sessao).
     imageUrl?: (id: string, idx: number) => string;
     // Ids de assistant_msg que substituiram um preview em tela: montam SEM animacao (swap invisivel).
@@ -56,12 +61,17 @@
     onOpenSession?: (name: string) => void;
     // Botao do cartao de orquestracao -> abre o modal de papeis. Ausente (Archive) = cartao sem acao.
     onOpenOrq?: () => void;
+    /** Contador que o dono da conversa incrementa a cada CARGA de historico (pintar do cache,
+     *  chegar a cauda do servidor, trocar de transcript). Cada mudanca re-ancora a janela na cauda
+     *  — ver `ancoraVista`. Quem nao carrega historico (Archive, ActivitySheet) nao passa. */
+    ancora?: number;
   }
 
   let {
     events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, onSelectOption, onSubmitSelected, onCancel,
-    askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds,
-    onForward, onOpenSession, onOpenOrq
+    askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, onFimDoLocal,
+    imageUrl, swapIds,
+    onForward, onOpenSession, onOpenOrq, ancora = 0
   }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
@@ -71,9 +81,9 @@
   let scrolledUp = $state(false);
 
   // Janela de render: monta SO os ultimos WINDOW eventos (a cauda). Sessao longa/compactada (milhares de
-  // linhas no .jsonl) montando tudo = tempestade de mount/layout = congela no celular. windowEnd inicia
-  // SINCRONO em events.length (o prop ja vem populado: o Chat so monta o MessageList apos loadHistory) ->
-  // ja no PRIMEIRO paint a fatia e a cauda, sem montar os 5000 e so depois encolher.
+  // linhas no .jsonl) montando tudo = tempestade de mount/layout = congela no celular. windowEnd e
+  // ancorado em events.length pelo `$effect.pre` da ancora, que roda ANTES do primeiro paint -> a
+  // fatia ja nasce sendo a cauda, sem montar os 5000 e so depois encolher.
   // WINDOW = botao de calibragem (ajuste no device real); tool_result e filtrado depois, entao bolhas < WINDOW.
   const WINDOW = 120;
   const PAGE = 100;            // quantos eventos antigos revelar por vez ao rolar pro topo (paginacao)
@@ -88,6 +98,12 @@
     scrolledUp = gap > listEl.clientHeight; // mais de uma tela do fim = "muito pra cima" -> botao
     // Perto do topo + ainda ha eventos antigos fora da janela -> revela a proxima pagina.
     if (listEl.scrollTop < 200 && hasOlder) revealOlder();
+    // Perto do topo e a memoria ACABOU: quem tem mais e o servidor. Este aviso e o que permite ao
+    // Chat buscar o historico antigo so quando ele e realmente pedido, em vez de puxa-lo sempre ao
+    // abrir — medido em 06/09/2026, era 1,2 MB por ENTRADA numa sessao grande, e quem entra pra ler
+    // as ultimas mensagens e sair nunca chega a rolar ate aqui. Quem evita repetir e o Chat: aqui
+    // nao da pra saber se ja veio tudo (a lista nao sabe o tamanho do transcript).
+    if (listEl.scrollTop < 200 && !hasOlder) onFimDoLocal?.();
   }
 
   // Janela curta demais pra rolar (rajada de tool calls colapsada em linhas de grupo) -> revela
@@ -167,7 +183,25 @@
   // nova quando a paginacao pra cima os revelasse.
   // svelte-ignore state_referenced_locally
   let headId: string | undefined = events[0]?.id;
+  // Carga de historico: a janela volta pra cauda, sem perguntar por onde o scroll anda. Comeca em
+  // -1 pra a PRIMEIRA passagem tambem ancorar — e ela roda antes do primeiro paint, entao a fatia
+  // ja nasce certa. Isto e o que faltava quando a tela era pintada de um cache antes do fetch: o
+  // unico caminho que avancava `windowEnd` era o effect de auto-scroll, que congela de proposito
+  // com `atBottom` falso — a cauda recem-chegada ficava fora da fatia e a resposta nao aparecia,
+  // com o sintoma de sempre ("so sair da conversa e voltar resolvia"). Numa carga ninguem rolou
+  // ainda: nao ha ponto de leitura a preservar, e `atBottom` volta a true pra o auto-scroll
+  // reencostar no fim.
+  let ancoraVista = -1;
   $effect.pre(() => {
+    if (ancora !== ancoraVista) {
+      ancoraVista = ancora;
+      headId = events[0]?.id;
+      windowEnd = events.length;
+      extra = 0;
+      piso = 0;
+      atBottom = true;
+      return;
+    }
     const first = events[0]?.id;
     if (first === headId) return;
     const grew = headId === undefined ? -1 : events.findIndex((e) => e.id === headId);
@@ -325,6 +359,9 @@
              `[hangar: passagem de bastão]`, e ler "passagem de bastão" como nome de remetente
              desenharia um chip "de: passagem de bastão" que não é sessão nenhuma. -->
         {@const bastao = ev.text ? lerRecadoBastao(ev.text) : null}
+        <!-- Notificação de subagente do Codex: ele a grava como mensagem de USER, então sem
+             cartão ela sai como bolha tua com o envelope e o JSON cru. -->
+        {@const sub = ev.text ? lerSubagenteCodex(ev.text) : null}
         {#if ev.image_count}
           <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). Quando a
                msg veio do APP (tem "📎 imagem: <path>"), a legenda entra LIMPA e as fotos enviadas
@@ -357,6 +394,8 @@
               <p class="queued-perdida" role="status">{m.msg_nao_chegou_reenvie()}</p>
             {/if}
           </div>
+        {:else if sub}
+          <SubagenteCard {sub} cru={ev.text ?? ''} ts={ev.ts} />
         {:else if imgFotos}
           <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
         {:else if bastao}

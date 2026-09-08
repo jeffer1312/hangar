@@ -1127,6 +1127,86 @@ def test_history_limit_maior_que_total_devolve_tudo(api_client, fake_session_wit
 
 
 # ---------------------------------------------------------------------------
+# GET /history condicional: entrar numa sessao e a leitura mais repetida do app e quase sempre nada
+# mudou. O validador (ETag) e o que faz o celular pagar ~200 bytes em vez dos 313 KB da cauda — e o
+# que dispensa qualquer regra de "quando invalidar o cache" no cliente.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sessao_com_jsonl_real(api_client, tmp_path):
+    """Como a fixture acima, mas com um jsonl QUE EXISTE: o validador sai de `stat`, entao sem
+    arquivo de verdade nao ha etag nenhum pra testar."""
+    jsonl = tmp_path / "cc.jsonl"
+    jsonl.write_text('{"a": 1}\n', encoding="utf-8")
+    evs = [ChatEvent(kind="user_msg", id="1", text="oi"),
+           ChatEvent(kind="assistant_msg", id="2", text="ola")]
+    info = SessionInfo(name="cc", cwd="/p", jsonl=str(jsonl), provider="claude")
+    with patch("app.api.registry.list", return_value=[info]), \
+         patch("app.pqueue.merged_history", return_value=evs):
+        yield "cc", jsonl
+
+
+def test_history_com_etag_igual_devolve_304_sem_corpo(api_client, sessao_com_jsonl_real):
+    nome, _ = sessao_com_jsonl_real
+    r1 = api_client.get(f"/api/sessions/{nome}/history?limit=2", headers=_h())
+    assert r1.status_code == 200
+    etag = r1.headers.get("etag")
+    assert etag
+
+    r2 = api_client.get(f"/api/sessions/{nome}/history?limit=2",
+                        headers={**_h(), "If-None-Match": etag})
+    assert r2.status_code == 304
+    assert r2.content == b""
+    assert r2.headers.get("etag") == etag
+
+
+def test_history_transcript_que_cresceu_nao_serve_304(api_client, sessao_com_jsonl_real):
+    nome, jsonl = sessao_com_jsonl_real
+    etag = api_client.get(f"/api/sessions/{nome}/history?limit=2", headers=_h()).headers["etag"]
+    with jsonl.open("a", encoding="utf-8") as fh:
+        fh.write('{"a": 2}\n')
+    r = api_client.get(f"/api/sessions/{nome}/history?limit=2",
+                       headers={**_h(), "If-None-Match": etag})
+    assert r.status_code == 200
+    assert r.headers["etag"] != etag
+
+
+def test_history_fila_durvel_tambem_invalida(api_client, sessao_com_jsonl_real):
+    # A resposta funde transcript + sidecar da fila: mensagem enfileirada aparece no historico ANTES
+    # de estar no jsonl. Validador so do transcript serviria 304 sobre uma conversa que mudou.
+    from app import pqueue
+    nome, _ = sessao_com_jsonl_real
+    etag = api_client.get(f"/api/sessions/{nome}/history?limit=2", headers=_h()).headers["etag"]
+    fila = pqueue._queue_dir() / f"{pqueue._sanitize(nome)}.jsonl"
+    fila.write_text('{"text": "na fila"}\n', encoding="utf-8")
+    r = api_client.get(f"/api/sessions/{nome}/history?limit=2",
+                       headers={**_h(), "If-None-Match": etag})
+    assert r.status_code == 200
+    assert r.headers["etag"] != etag
+
+
+def test_history_etag_e_por_representacao(api_client, sessao_com_jsonl_real):
+    # `limit` muda a resposta com os mesmos bytes em disco: o etag da cauda nao pode valer como
+    # "sem novidade" pro historico inteiro (a fase 2), nem o contrario.
+    nome, _ = sessao_com_jsonl_real
+    cauda = api_client.get(f"/api/sessions/{nome}/history?limit=2", headers=_h()).headers["etag"]
+    inteiro = api_client.get(f"/api/sessions/{nome}/history", headers=_h()).headers["etag"]
+    assert cauda != inteiro
+    r = api_client.get(f"/api/sessions/{nome}/history",
+                       headers={**_h(), "If-None-Match": cauda})
+    assert r.status_code == 200
+
+
+def test_history_sem_transcript_medivel_nao_tem_etag(api_client, fake_session_with_transcript):
+    # jsonl inexistente (a fixture aponta pra /r/cc.jsonl): sem `stat` nao ha o que validar. Melhor
+    # baixar sempre do que servir 304 sobre um arquivo que nem da pra medir.
+    r = api_client.get(f"/api/sessions/{fake_session_with_transcript}/history?limit=3", headers=_h())
+    assert r.status_code == 200
+    assert "etag" not in {k.lower() for k in r.headers}
+
+
+# ---------------------------------------------------------------------------
 # Feature #5: corpo rico do push de awaiting (askq -> classify -> fallback) + endpoints de mute/quiet-hours
 # ---------------------------------------------------------------------------
 from types import SimpleNamespace

@@ -1104,55 +1104,13 @@ if (-not (Test-Path $setupTmux)) {
 # O instalador do Linux ja fazia; o do Windows tinha ficado sem.
 Titulo '5c/8 Statusline do Claude Code'
 $slJs = "$raiz\scripts\omniroute-statusline.js"
-$settingsClaude = Join-Path $HOME '.claude\settings.json'
 if (-not (Test-Path $slJs)) {
     Falta 'omniroute-statusline.js nao encontrado - pulando'
 } elseif (-not (Tem 'node')) {
     Falta 'node nao encontrado - a statusline precisa dele'
 } else {
-    $nodeExe = (Get-Command node).Source
-    $cmdSl = "`"$nodeExe`" `"$slJs`""
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $settingsClaude) | Out-Null
-    # NADA de `ConvertFrom-Json -AsHashtable`: esse parametro so existe no PowerShell 6+, e no
-    # 5.1 que vem no Windows a chamada levanta - o catch abaixo transformava isso em "settings
-    # ilegivel" e o passo se pulava sozinho, num arquivo que estava perfeitamente legivel.
-    # PSCustomObject entao, com Add-Member -Force pra sobrescrever a chave.
-    $cfg = $null
-    if (Test-Path $settingsClaude) {
-        try {
-            # Ler-Texto e nao `Get-Content -Raw`: sem BOM o Get-Content assume ANSI no 5.1 e
-            # UTF-8 no 7, e como este bloco REESCREVE o arquivo inteiro, o chute errado corrompia
-            # todo acento que ja estava la (mesma historia do token no Set-EnvKey).
-            $bruto = Ler-Texto $settingsClaude
-            if ($bruto.Trim()) { $cfg = $bruto | ConvertFrom-Json }
-        } catch {
-            Falta 'settings.json do Claude ilegivel - nao vou reescrever por cima'
-            $cfg = 'ERRO'
-        }
-    }
-    if ($null -eq $cfg) { $cfg = New-Object psobject }
-    if ($cfg -ne 'ERRO') {
-        $atual = $null
-        if ($cfg.PSObject.Properties.Name -contains 'statusLine') { $atual = $cfg.statusLine.command }
-        if ($atual -eq $cmdSl) {
-            Ok 'statusline ja configurada'
-        } else {
-            if ($atual) { Copy-Item $settingsClaude "$settingsClaude.bak" -Force }
-            $valor = New-Object psobject -Property @{ type = 'command'; command = $cmdSl }
-            $cfg | Add-Member -NotePropertyName 'statusLine' -NotePropertyValue $valor -Force
-            # SEM BOM, e isto nao e preferencia: `Set-Content -Encoding UTF8` poe BOM no 5.1 e
-            # nao poe no 7 (medido), e quem le este arquivo e o Claude Code, em Node — medido
-            # aqui que `JSON.parse` de um arquivo com BOM levanta
-            # "Unexpected token, is not valid JSON". Ou seja, instalar pelo 5.1 podia deixar o
-            # settings.json do Claude ilegivel pra ele.
-            Escrever-Texto $settingsClaude ($cfg | ConvertTo-Json -Depth 20)
-            Ok 'statusline configurada no ~/.claude/settings.json'
-            Nota 'Vale nas sessoes NOVAS do Claude Code.'
-            # Mesmo aviso do Linux: o caminho do node fica CRAVADO no settings. Trocar de versao
-            # de node quebra a statusline em silencio - o app volta a dizer "medicao indisponivel".
-            Nota 'Se voce trocar a versao do node, rode este instalador de novo.'
-        }
-    }
+    & node (Join-Path $raiz 'scripts\configure-statusline.cjs')
+    if ($LASTEXITCODE -ne 0) { Falta 'Não foi possível configurar a barra de status do Claude Code' }
 }
 
 # -- 5d/8 Publicar o backend no Tailscale -------------------------------------
@@ -1933,6 +1891,62 @@ if (-not $bash) {
         else { Ok 'lancador hangar-engine.cmd ja atualizado' }
     }
 
+    # (2d) lancador pro hangar-preview (navegador embutido da sessao). Sem ele o script fica
+    # invisivel pro PowerShell e pro cmd: ele nao tem extensao, entao o PowerShell ACHA o arquivo
+    # (Get-Command devolve Application) e executar nao produz nada, com $LASTEXITCODE VAZIO - falha
+    # muda, pior que o "nao e reconhecido" do cmd.
+    # Por NODE, nao pelo bash nem pelo python: o hangar-preview e `#!/usr/bin/env node`. Copiar o
+    # corpo do hangar-send.cmd (que e bash de verdade) repetiria o erro ja cometido no hangar-conta.
+    $lancadorPreview = Join-Path $binUsuario 'hangar-preview.cmd'
+    $conteudoPreview = "@echo off`r`n" +
+                       "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
+                       "node `"$raiz\scripts\hangar-preview`" %*`r`n"
+    if (Escrever-Lancador $lancadorPreview $conteudoPreview 'cmd') { Ok "lancador hangar-preview.cmd criado em $binUsuario" }
+    else { Ok 'lancador hangar-preview.cmd ja atualizado' }
+
+    # (2e) lancadores do Codex. O `hangar-codex-tui` e o COMANDO do pane de toda sessao Codex, e o
+    # backend o procura com `shutil.which` (registry._exigir_lancador_codex). No Windows o `which`
+    # so acha o que casa PATHEXT (.COM;.EXE;.BAT;.CMD;...), entao arquivo SEM extensao nunca e
+    # achado por mais que ~/.local/bin esteja no PATH - medido: which('hangar-codex-tui')=None ao
+    # lado de which('hangar-engine')=...CMD. Sem estes artefatos, criar sessao Codex devolve 400.
+    # Por PYTHON (os dois sao `#!/usr/bin/env python3`), nunca por bash nem por node.
+    # O `-tui` leva o python do VENV, nao o do sistema: ele importa `websockets`, que so existe la
+    # (medido: sistema nao tem, venv tem 16.0). Ele TENTA se reexecutar no venv sozinho, mas
+    # procura `backend/.venv/bin/python` - layout POSIX, inexistente no Windows -, entao quem
+    # escolhe o interpretador tem de ser este instalador. O `hangar-codex` fica no python do
+    # sistema: ele so importa stdlib.
+    # `$rota` (forma /c/... do repo) so e calculada mais abaixo, no trecho do hangar-send —
+    # usar ela aqui gerava shim apontando pra `/scripts/...`. Calculo a minha.
+    $rotaRepo = ($raiz -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
+    $pyTui = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
+    $argTui = ''
+    if (-not (Test-Path $pyTui)) { $pyTui = $pyExe; $argTui = $arg }
+    if (-not $pyExe) {
+        Falta 'lancadores do Codex nao criados - precisa de um Python real (ver acima)'
+    } else {
+        foreach ($par in @(@('hangar-codex-tui', $pyTui, $argTui), @('hangar-codex', $pyExe, $arg))) {
+            $nome, $py, $a = $par
+            $cmdPath = Join-Path $binUsuario "$nome.cmd"
+            $corpo = "@echo off`r`n" +
+                     "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
+                     "`"$py`"$a `"$raiz\scripts\$nome`" %*`r`n"
+            if (Escrever-Lancador $cmdPath $corpo 'cmd') { Ok "lancador $nome.cmd criado em $binUsuario" }
+            else { Ok "lancador $nome.cmd ja atualizado" }
+            # Shim sh pro Git Bash, mesma razao do hangar-send/hangar-preview: o `ln -s` de la
+            # COPIA, e a copia resolve `_REPO = Path(__file__).parent.parent` como ~/.local, onde
+            # nao ha `backend/`. Interpretador PINADO em vez de deixar o shebang decidir: um
+            # `python3` no Git Bash cai no atalho da Microsoft Store.
+            $pyMsysTui = ($py -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
+            $shPath = Join-Path $binUsuario $nome
+            $corpoSh = "#!/bin/sh`n" +
+                       "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
+                       "PATH='$binMsys':`$PATH; export PATH`n" +
+                       "exec '$pyMsysTui'$a '$rotaRepo/scripts/$nome' `"`$@`"`n"
+            if (Escrever-Lancador $shPath $corpoSh 'sh') { Ok "$nome do ~/.local/bin aponta pro script do repo" }
+            else { Ok "$nome do ~/.local/bin ja atualizado" }
+        }
+    }
+
     # (3) PATH do usuario, pra `hangar-send` funcionar de qualquer terminal (e pro bash achar o shim).
     $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($pathUsuario -notlike "*$binUsuario*") {
@@ -1967,11 +1981,24 @@ if (-not $bash) {
         # python3 volta a ser o atalho da Microsoft Store. Os dois pontos de entrada precisam
         # da mesma garantia - consertar so um deles foi o que deixou o bug de pe.
         $corpoCp = "#!/bin/sh`n" +
-                   "# Gerado por hangar/install.ps1 - ver comentario no instalador.`n" +
+                   "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
                    "PATH='$binMsys':`$PATH; export PATH`n" +
                    "exec '$rota/scripts/hangar-send' `"`$@`"`n"
         if (Escrever-Lancador $cpSendSh $corpoCp 'sh') {
             Ok 'hangar-send do ~/.local/bin aponta pro script do repo'
+        }
+        # Mesmo conserto pro hangar-preview, e pela mesma razao com um agravante: o `import` ESM
+        # estatico dele (`../shell/preview_fmt.cjs`) e resolvido pelo lugar do ARQUIVO, entao a
+        # copia em ~/.local/bin procura ~/.local/shell/ e morre com ERR_MODULE_NOT_FOUND - quebrado
+        # ate no Git Bash, nao so no PowerShell. `exec node`, nao `exec <script>`: sh tambem nao
+        # honra shebang de arquivo que ele mesmo executa por caminho.
+        $cpPreviewSh = Join-Path $binUsuario 'hangar-preview'
+        $corpoPreview = "#!/bin/sh`n" +
+                        "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
+                        "PATH='$binMsys':`$PATH; export PATH`n" +
+                        "exec node '$rota/scripts/hangar-preview' `"`$@`"`n"
+        if (Escrever-Lancador $cpPreviewSh $corpoPreview 'sh') {
+            Ok 'hangar-preview do ~/.local/bin aponta pro script do repo'
         }
         Ok 'hangar-send + skills instalados'
         Nota 'teste (em terminal NOVO):  hangar-send --list'
@@ -2242,8 +2269,8 @@ $linhaQr
   O que este Windows ainda NAO tem:
   - wrappers do `codex`, do `pi` e do `kimi`, e a extensao hangar-state.ts do Pi. Sessao Codex, Pi
     ou Kimi aberta por voce no terminal nao aparece; criada pelo app, funciona.
-  - resurrect/continuum abaixo, e mais nada desta lista: motor de modelo (tela Motores /
-    `CP_ENGINE`) PASSOU a funcionar aqui - o hangar-engine roda o comando por subprocess no Windows
+  - resurrect/continuum abaixo, e mais nada desta lista: motor de modelo (Contas e modelos ->
+    Modelo e opcoes / `CP_ENGINE`) PASSOU a funcionar aqui - o hangar-engine roda o comando por subprocess no Windows
     (o exec com env crasha la, medido) e o passo 7b instala o hangar-engine.cmd.
   - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
     psmux nao roda plugin de tmux. Fechou o Windows, as sessoes se foram.

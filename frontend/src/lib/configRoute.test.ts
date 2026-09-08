@@ -7,7 +7,7 @@ describe('parseConfig', () => {
     expect(parseConfig('#/chat/127/x')).toBeNull();
   });
   it('le tela e servidor', () => {
-    expect(parseConfig('#/chat/127/x?config=motores&srv=abc')).toEqual({ tela: 'motores', srv: 'abc' });
+    expect(parseConfig('#/chat/127/x?config=voz&srv=abc')).toEqual({ tela: 'voz', srv: 'abc' });
   });
   it('srv ausente vira null, nao string vazia', () => {
     expect(parseConfig('#/?config=aparencia')).toEqual({ tela: 'aparencia', srv: null });
@@ -35,6 +35,9 @@ describe('parseConfig', () => {
   it('rota antiga do ditado abre a tela de Voz', () => {
     expect(parseConfig('#/?config=ditado')).toEqual({ tela: 'voz', srv: null });
   });
+  it('rota antiga de Motores abre Contas e modelos, preservando o servidor', () => {
+    expect(parseConfig('#/?config=motores&srv=vps')).toEqual({ tela: 'contas', srv: 'vps' });
+  });
 });
 
 describe('comConfig', () => {
@@ -56,6 +59,6 @@ describe('comConfig', () => {
     expect(parseConfig(h)).toEqual({ tela: 'notificacoes', srv: 'srv-1' });
   });
   it('as telas de servidor sao as que exigem alvo', () => {
-    expect(TELAS_DE_SERVIDOR).toEqual(['contas', 'notificacoes', 'anexos', 'avancado', 'motores', 'orquestracao', 'voz', 'harnesses']);
+    expect(TELAS_DE_SERVIDOR).toEqual(['contas', 'notificacoes', 'anexos', 'avancado', 'orquestracao', 'voz', 'harnesses']);
   });
 });

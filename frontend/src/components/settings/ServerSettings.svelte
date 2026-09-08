@@ -66,7 +66,10 @@
 
   // O que a tela Máquinas já mostra (identificador editável; porta, IP e URL na lista de endereços)
   // não se repete aqui — um dado, um lugar.
-  const LEITURA_EM_MAQUINAS = new Set(['port', 'lan_bind_ip', 'server_id', 'public_url']);
+  // `terminal_origem_ok` entra aqui não por morar em Máquinas como linha, e sim porque só faz
+  // sentido junto do campo que a resolve: sozinha nesta lista ela seria um "false" cru sem dizer
+  // o que fazer a respeito.
+  const LEITURA_EM_MAQUINAS = new Set(['port', 'lan_bind_ip', 'server_id', 'public_url', 'terminal_origem_ok']);
   const ROTULO_LEITURA: Record<string, string> = {
     terminal_panel: m.config_server_painel_terminal(),
   };

@@ -161,6 +161,16 @@ export function rotaGenerica(path: string): string {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetchRes(path, init);
+  await ensureOk(res);
+  return res.json() as Promise<T>;
+}
+
+// A metade de baixo do apiFetch: entrega a `Response` crua, sem `ensureOk` nem `json()`. Existe pra
+// quem precisa do STATUS ou de um header — hoje o histórico condicional (304 + ETag), que não tem
+// corpo pra desserializar e cujo status não é erro. O diário e o rastreio de "sem rede/voltou"
+// ficam aqui: um fetch escrito à mão sairia do registro sem ninguém notar.
+async function apiFetchRes(path: string, init?: RequestInit): Promise<Response> {
   const base = apiEnv().getBaseUrl();
   const url = `${base}${path}`;
   const t0 = Date.now();
@@ -214,7 +224,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   //    histórico dariam milhares de linhas por hora e afogariam o resto.
   const metodo = (init?.method ?? 'GET').toUpperCase();
   const acao = metodo !== 'GET';
-  if (acao || !res.ok) {
+  // 304 não é falha: é a resposta certa pra "o que eu tenho ainda vale". Sem esta exceção, toda
+  // entrada em sessão sem novidade viraria uma linha de aviso no diário.
+  if (acao || (!res.ok && res.status !== 304)) {
     // Falhou: junta o MOTIVO que o backend mandou no corpo. Só o status ("#409") diz que recusou e
     // não por quê, e o `detail` do backend é exatamente a explicação ("o terminal está aberto",
     // "sessão não encontrada — opção NÃO enviada"). Lido de um `clone()` porque o corpo só pode ser
@@ -243,8 +255,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       detalhe: [`${metodo} ${rotaGenerica(path)}`, motivo].filter(Boolean).join(' — '),
     });
   }
-  await ensureOk(res);
-  return res.json() as Promise<T>;
+  return res;
 }
 
 // Configurações abertas a partir da visão agregada precisam continuar no servidor capturado, sem
@@ -296,6 +307,17 @@ export async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> 
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<SessionInfo[]>;
+}
+
+// O shell criou o view do navegador embutido da sessão: o marcador 'nav' daquele servidor sai, e
+// nenhuma outra conexão (celular, outra janela) o recebe de novo.
+export async function confirmarNavForServer(s: Server, name: string): Promise<void> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/nav`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${s.token}` },
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
 }
 
 // Custo de UM servidor (baseUrl+token explicitos), sem mexer no ativo. Igual fetchSessionsForServer:
@@ -469,12 +491,14 @@ export function createSession(
   model?: string | null,
   effort?: string | null,
   permissionMode?: string | null,
+  ompProfile?: string | null,
 ): Promise<SessionInfo> {
-  // `model`/`effort`/`permissionMode` no FIM de propósito: chamador antigo com 5 argumentos continua válido e abre
+  // `model`/`effort`/`permissionMode`/`ompProfile` no FIM de propósito: chamador antigo com 5 argumentos continua válido e abre
   // no padrão, byte por byte (o backend valida None = comportamento de hoje).
   const body: Record<string, unknown> = { name, cwd, config_dir: configDir ?? null, provider, engine: engine ?? null,
                            model: model ?? null, effort: effort ?? null };
   if (permissionMode) body.permission_mode = permissionMode;
+  if (ompProfile) body.omp_profile = ompProfile;
   return apiFetch<SessionInfo>('/api/sessions', {
     method: 'POST',
     body: JSON.stringify(body),
@@ -527,6 +551,7 @@ export function passarBastao(
     model?: string | null;
     effort?: string | null;
     permission_mode?: string | null;
+    omp_profile?: string | null;
   },
 ): Promise<BastaoResult> {
   return apiFetch<BastaoResult>(`/api/sessions/${encodeURIComponent(name)}/bastao`, {
@@ -757,6 +782,28 @@ export function getHistory(name: string, limit?: number, signal?: AbortSignal,
   return apiFetch<ChatEvent[]>(`/api/sessions/${encodeURIComponent(name)}/history${q}`, {
     signal: signal ? AbortSignal.any([signal, cap]) : cap,
   });
+}
+
+/** A cauda do histórico, mas SÓ se mudou desde a última vez.
+ *
+ *  `etag` é o validador que veio no `ETag` da resposta anterior (guardado junto com os eventos).
+ *  Igual ao do servidor -> `'igual'`, ~200 bytes e nenhum corpo: o que está na tela continua sendo
+ *  a verdade. Diferente (ou sem etag) -> a cauda inteira, com o validador novo pra guardar.
+ *  Medido em 06/09/2026 na `pr-junior`: a cauda são 313 KB, pagos a cada entrada na sessão.
+ *
+ *  `etag: null` no retorno = servidor sem validador (transcript que não dá pra medir) — o chamador
+ *  guarda os eventos mesmo assim, só não terá o que perguntar na próxima. */
+export async function getHistoryDesde(
+  name: string, limit: number, etag: string | null, signal?: AbortSignal, timeoutMs = 45_000,
+): Promise<{ eventos: ChatEvent[]; etag: string | null } | 'igual'> {
+  const cap = AbortSignal.timeout(timeoutMs);
+  const res = await apiFetchRes(`/api/sessions/${encodeURIComponent(name)}/history?limit=${limit}`, {
+    signal: signal ? AbortSignal.any([signal, cap]) : cap,
+    headers: etag ? { 'If-None-Match': etag } : {},
+  });
+  if (res.status === 304) return 'igual';
+  await ensureOk(res);
+  return { eventos: (await res.json()) as ChatEvent[], etag: res.headers.get('ETag') };
 }
 
 export function getCommands(name: string): Promise<CommandInfo[]> {
@@ -1224,25 +1271,86 @@ export function engineModelosForServer(s: Server, corpo: EngineModelosBody): Pro
   return apiFetchForServer(s, '/api/engines/modelos', { method: 'POST', body: JSON.stringify(corpo) });
 }
 
-export async function uploadFile(
+/**
+ * Sobe um anexo da sessão. `onProgresso` recebe 0..100 conforme os bytes saem.
+ *
+ * XMLHttpRequest, e não `fetch`: só ele reporta progresso de UPLOAD (`fetch` só entrega o corpo da
+ * resposta, o que já chegou). Sem isso, o anel em volta do tile teria que ser inventado — animação
+ * que não mede nada é pior que nenhuma, porque some da tela junto com um arquivo que ainda está
+ * subindo. Cabeçalhos, teto e tratamento de erro são os mesmos do resto do arquivo.
+ */
+export function uploadFile(
   name: string,
   file: File,
+  onProgresso?: (pct: number) => void,
 ): Promise<{ path: string; frames?: string[]; transcript?: string }> {
   const base = apiEnv().getBaseUrl();
-  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/upload`, {
-    method: 'POST',
-    headers: {
-      ...authHeaders(),
-      'Content-Type': file.type || 'application/octet-stream',
-      'X-Filename': encodeURIComponent(file.name || 'arquivo'),
-    },
-    body: file,
-    // Mesmo teto do uploadFileForServer (o fix de ontem cobriu só a variante do board; esta é a
-    // do chat principal — auditoria achou o composer preso em "enviando…" por aqui também).
-    signal: AbortSignal.timeout(180_000),
+  // Diário à mão: sair do `apiFetchRes` significa sair do registro, e o comentário dele avisa
+  // exatamente isso. Upload é AÇÃO, então entra dando certo ou não — o mesmo id de pedido dos dois
+  // lados, que é o que deixa seguir a cadeia depois.
+  const req = novoReq();
+  const rota = 'POST /api/sessions/:name/upload';
+  const t0 = Date.now();
+  const anotar = (nivel: 'ok' | 'aviso' | 'erro', codigo: string, motivo = '') =>
+    registrarDiag({ evento: 'acao', nivel, codigo, ms: Date.now() - t0, req,
+                    detalhe: [rota, motivo].filter(Boolean).join(' — ') });
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${base}/api/sessions/${encodeURIComponent(name)}/upload`);
+    for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, String(v));
+    xhr.setRequestHeader('X-Hangar-Req', req);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name || 'arquivo'));
+    // Mesmo teto do uploadFileForServer: sem ele, uma foto grande num link ruim deixava o composer
+    // presto em "enviando…" pra sempre.
+    xhr.timeout = 180_000;
+    xhr.upload.onprogress = (e) => {
+      // `lengthComputable` é falso em algumas pontes (proxy que recodifica): aí não há fração pra
+      // mostrar, e quem chama decide o que fazer com a ausência.
+      if (e.lengthComputable && e.total > 0) onProgresso?.(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status === 401 && apiEnv().getToken()) {
+        anotar('erro', '401');
+        // No core quem sabe derrubar o servidor ativo e recarregar é o ambiente injetado.
+        apiEnv().onUnauthorized();
+        reject(Object.assign(new Error(m.sessao_expirada()), { status: 401 }));
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        // Mesma leitura de detalhe do `lerErro`, sobre o texto cru que o XHR entrega.
+        let msg = xhr.responseText || xhr.statusText || `falha ${xhr.status} sem detalhe do servidor`;
+        try {
+          const j = JSON.parse(xhr.responseText);
+          if (typeof j?.detail === 'string') msg = j.detail;
+          else if (typeof j?.detail?.code === 'string') {
+            msg = mensagemDeErro(j.detail.code, j.detail.params ?? {}) ?? j.detail.msg ?? j.detail.code;
+          }
+        } catch { /* corpo não-JSON: fica o texto cru */ }
+        anotar(xhr.status >= 500 ? 'erro' : 'aviso', String(xhr.status), msg);
+        reject(Object.assign(new Error(msg), { status: xhr.status }));
+        return;
+      }
+      try {
+        const corpo = JSON.parse(xhr.responseText);
+        anotar('ok', String(xhr.status));
+        resolve(corpo);
+      } catch (e) {
+        anotar('erro', String(xhr.status), 'resposta ilegivel');
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    };
+    xhr.onerror = () => {
+      // Sem status: nunca houve resposta. É o mesmo caso do `api.sem_rede` do apiFetchRes.
+      registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req, detalhe: rota });
+      reject(new Error(m.composer_falha_envio()));
+    };
+    xhr.ontimeout = () => {
+      anotar('erro', 'timeout');
+      reject(new Error(m.composer_falha_envio()));
+    };
+    xhr.send(file);
   });
-  await ensureOk(res);
-  return res.json() as Promise<{ path: string }>;
 }
 
 /**
@@ -1939,7 +2047,8 @@ export function setKimiModel(
 
 // ── Modo de permissão do Claude (Task 5) ────────────────────────────────────────
 // Leitura pelo rodapé (⏸/⏵⏵) e troca via BTab. 409 = sessão não é claude, terminal
-// aberto, sessão trabalhando, ou alvo fora do ciclo / teto de 6 teclas.
+// aberto, menu aberto no pane, ou alvo fora do ciclo / teto de 6 teclas. Sessão trabalhando
+// NÃO recusa: BTab troca o modo no meio do turno, como no terminal.
 // GET devolve o ciclo vivo (4 ou 5) + o atual; POST devolve o que FICOU.
 
 export function writeFile(name: string, path: string, text: string, digest: string | null): Promise<{ path: string; size: number; digest: string }> {

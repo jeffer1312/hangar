@@ -170,6 +170,11 @@ def _normalizar(nome: str, dados: dict[str, Any]) -> dict[str, Any]:
         elif tipo is int:
             if isinstance(valor, bool) or not isinstance(valor, (int, float, str)):
                 raise ValueError(f"{campo}: esperado número")
+            # Vazio LIMPA, como no ramo de texto logo abaixo: o campo sai do registro. Sem isto o
+            # numérico não tinha valor de limpeza nenhum — `""` era "esperado número" e `0`, "deve
+            # ser maior que zero" —, e apagar uma janela já gravada era impossível pela tela.
+            if isinstance(valor, str) and not valor.strip():
+                continue
             try:
                 n = int(valor)
             except (TypeError, ValueError):

@@ -10,9 +10,18 @@ function dubleDbg(respostas = {}) {
     // Mesma forma do Electron: um só evento 'message' com (event, método, params).
     emitir: (ev, p) => (ouvintes.get('message') || []).forEach((cb) => cb(null, ev, p)),
     on: (ev, cb) => ouvintes.set(ev, [...(ouvintes.get(ev) || []), cb]),
-    sendCommand: async (m, p) => { chamadas.push([m, p]); return respostas[m] ?? {}; },
+    // Resposta pode ser função do params: o mesmo 'Runtime.evaluate' serve ao quadro, ao cheque
+    // de foco e ao eval do usuário, e cada um lê uma coisa.
+    sendCommand: async (m, p) => {
+      chamadas.push([m, p]);
+      const r = respostas[m];
+      return (typeof r === 'function' ? r(p) : r) ?? {};
+    },
   };
 }
+// Cheque de foco respondendo "campo editável" (string vazia); o resto do Runtime.evaluate vazio.
+const focoEditavel = (p) => (String(p.expression).includes('activeElement') ? { result: { value: '' } } : {});
+const focoEm = (tag) => (p) => (String(p.expression).includes('activeElement') ? { result: { value: tag } } : {});
 
 test('tema aplica prefers-color-scheme e REAPLICA depois de navegar', async () => {
   const dbg = dubleDbg();
@@ -124,6 +133,7 @@ test('preencher foca, seleciona tudo com o comando de edicao e insere por cima',
       { nodeId: '1', role: { value: 'textbox' }, name: { value: 'Nome' }, childIds: [], backendDOMNodeId: 5 },
     ] },
     'DOM.getBoxModel': { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } },
+    'Runtime.evaluate': focoEditavel,
   });
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
   await ctl.snapshot();
@@ -146,6 +156,7 @@ test('preencher com texto vazio so limpa: seleciona tudo e insere string vazia',
       { nodeId: '1', role: { value: 'textbox' }, name: { value: 'Nome' }, childIds: [], backendDOMNodeId: 5 },
     ] },
     'DOM.getBoxModel': { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } },
+    'Runtime.evaluate': focoEditavel,
   });
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
   await ctl.snapshot();
@@ -162,8 +173,23 @@ test('preencher em ref desconhecida nao dispara evento nenhum', async () => {
   assert.equal(dbg.chamadas.filter(([m]) => m.startsWith('Input.')).length, 0);
 });
 
+test('preencher recusa quando o clique deixou o foco fora de um campo de texto', async () => {
+  const dbg = dubleDbg({
+    'Accessibility.getFullAXTree': { nodes: [
+      { nodeId: '1', role: { value: 'button' }, name: { value: 'Salvar' }, childIds: [], backendDOMNodeId: 5 },
+    ] },
+    'DOM.getBoxModel': { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } },
+    'Runtime.evaluate': focoEm('button'),
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  const saida = await ctl.preencher('@e1', 'texto');
+  assert.match(saida, /^erro: fill @e1: .*foco em button/);
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Input.insertText').length, 0, 'sem campo, nada e inserido');
+});
+
 test('digitar manda Input.insertText com o texto exato', async () => {
-  const dbg = dubleDbg();
+  const dbg = dubleDbg({ 'Runtime.evaluate': focoEditavel });
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
   const saida = await ctl.digitar('hello world');
   const inserir = dbg.chamadas.find(([m]) => m === 'Input.insertText');
@@ -171,17 +197,98 @@ test('digitar manda Input.insertText com o texto exato', async () => {
   assert.match(saida, /^ok: type/);
 });
 
-test('teclar manda keyDown e keyUp com a tecla pedida nessa ordem', async () => {
+test('digitar sem campo com foco devolve erro em vez de sumir com o texto', async () => {
+  const dbg = dubleDbg({ 'Runtime.evaluate': focoEm('nada') });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  assert.match(await ctl.digitar('senha'), /^erro: type: nenhum campo de texto com foco \(foco em nada\)/);
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Input.insertText').length, 0);
+});
+
+test('teclar Enter leva code, virtual key code e o caractere no keyDown — sem isso o form nao submete', async () => {
   const dbg = dubleDbg();
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
   const saida = await ctl.teclar('Enter');
   const eventos = dbg.chamadas.filter(([m]) => m === 'Input.dispatchKeyEvent');
   assert.equal(eventos.length, 2, 'keyDown e keyUp');
-  assert.equal(eventos[0][1].type, 'keyDown');
-  assert.equal(eventos[0][1].key, 'Enter');
-  assert.equal(eventos[1][1].type, 'keyUp');
-  assert.equal(eventos[1][1].key, 'Enter');
+  assert.deepEqual(eventos[0][1], { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r', unmodifiedText: '\r' });
+  assert.deepEqual(eventos[1][1], { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   assert.match(saida, /^ok: press Enter/);
+});
+
+test('teclar: tecla nomeada sem caractere, caractere solto e nome desconhecido', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.teclar('Tab');
+  await ctl.teclar('a');
+  await ctl.teclar('F13');
+  const descidas = dbg.chamadas.filter(([m, p]) => m === 'Input.dispatchKeyEvent' && p.type === 'keyDown').map(([, p]) => p);
+  assert.deepEqual(descidas[0], { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  assert.deepEqual(descidas[1], { type: 'keyDown', key: 'a', text: 'a', unmodifiedText: 'a', windowsVirtualKeyCode: 65 });
+  assert.deepEqual(descidas[2], { type: 'keyDown', key: 'F13' });
+});
+
+test('view visivel: capturarPagina usa o capturePage do Electron e nao pede print ao CDP', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, aoNavegar: () => {}, capturarPagina: async () => ({ isEmpty: () => false, marca: 'nativo' }) });
+  const img = await ctl.capturarPagina();
+  assert.equal(img.marca, 'nativo');
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Page.captureScreenshot').length, 0);
+});
+
+test('view escondido: capturarPagina nem tenta o nativo (ele REJEITA) e traz o PNG pelo CDP', async () => {
+  const png = Buffer.from('imagem-de-verdade');
+  const dbg = dubleDbg({ 'Page.captureScreenshot': { data: png.toString('base64') } });
+  let nativas = 0;
+  const ctl = criarControlador({ dbg, aoNavegar: () => {}, capturarPagina: async () => { nativas++; throw new Error('UnknownVizError'); } });
+  await ctl.definirOculto(true);
+  const img = await ctl.capturarPagina();
+  assert.equal(nativas, 0, 'no escondido o nativo so gastaria uma rejeicao');
+  assert.equal(img.isEmpty(), false);
+  assert.deepEqual(img.toPNG(), png);
+});
+
+test('definirOculto liga e desliga a emulacao de tamanho', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, aoNavegar: () => {}, capturarPagina: async () => ({ isEmpty: () => false }) });
+  await ctl.definirOculto(true);
+  await ctl.definirOculto(false);
+  const emulacao = dbg.chamadas.filter(([m]) => m.startsWith('Emulation.setDeviceMetrics') || m === 'Emulation.clearDeviceMetricsOverride');
+  assert.equal(emulacao[0][0], 'Emulation.setDeviceMetricsOverride');
+  assert.equal(emulacao[0][1].width, 1280);
+  assert.equal(emulacao[0][1].mobile, false, 'mobile:true traria de volta o layout de celular que isto conserta');
+  assert.equal(emulacao[1][0], 'Emulation.clearDeviceMetricsOverride');
+});
+
+test('escondido: a emulacao de tamanho e reaplicada depois de navegar', async () => {
+  const dbg = dubleDbg();
+  let renavegar = null;
+  const ctl = criarControlador({ dbg, aoNavegar: (cb) => (renavegar = cb), capturarPagina: async () => ({ isEmpty: () => false }) });
+  await ctl.definirOculto(true);
+  await renavegar();
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Emulation.setDeviceMetricsOverride').length, 2);
+});
+
+test('visivel: navegar NAO manda emulacao de tamanho nenhuma', async () => {
+  const dbg = dubleDbg();
+  let renavegar = null;
+  const ctl = criarControlador({ dbg, aoNavegar: (cb) => (renavegar = cb), capturarPagina: async () => ({ isEmpty: () => false }) });
+  await renavegar();
+  assert.equal(dbg.chamadas.filter(([m]) => m.includes('DeviceMetrics')).length, 0);
+});
+
+test('escondido: print que pendura devolve imagem vazia dentro do teto, sem travar o agente', async () => {
+  const dbg = dubleDbg();
+  const originalSend = dbg.sendCommand;
+  dbg.sendCommand = async (m, p) => {
+    if (m === 'Page.captureScreenshot') await new Promise(() => {});   // nunca resolve
+    return originalSend(m, p);
+  };
+  const ctl = criarControlador({ dbg, aoNavegar: () => {}, capturarPagina: async () => ({ isEmpty: () => true }) });
+  await ctl.definirOculto(true);
+  const inicio = Date.now();
+  const img = await ctl.capturarPagina();
+  assert.equal(img.isEmpty(), true, 'o servidor e quem traduz vazio em erro');
+  assert.ok(Date.now() - inicio < 5000, 'volta pelo teto, nao fica pendurado');
 });
 
 test('pairar manda mouseMoved no centro da caixa e nada quando ref nao existe', async () => {
@@ -392,7 +499,8 @@ test('click e shot esperam um quadro pintado antes de responder', async () => {
     'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
   });
   let capturas = 0;
-  const ctl = criarControlador({ dbg, capturarPagina: async () => { capturas++; return Buffer.alloc(0); }, aoNavegar: () => {} });
+  // O dublê imita o NativeImage do Electron, que é o que o capturePage devolve de verdade.
+  const ctl = criarControlador({ dbg, capturarPagina: async () => { capturas++; return { isEmpty: () => false, toPNG: () => Buffer.alloc(0) }; }, aoNavegar: () => {} });
   await ctl.snapshot();
   await ctl.clicar('@e1');
   const ordem = dbg.chamadas.map(([m, p]) => (m === 'Runtime.evaluate' ? `frame:${/requestAnimationFrame/.test(p.expression)}` : m));

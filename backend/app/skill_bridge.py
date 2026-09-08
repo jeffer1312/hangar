@@ -1,7 +1,7 @@
 """Ponte de skills: materializa as skills do ecossistema Claude nos CLIs que não descobrem sozinhos.
 
-O omp varre `~/.claude/skills`, o cache de plugins e `~/.agents/skills` na largada; pi, kimi e
-codex não — cada um lê só a(s) pasta(s) declarada na própria config. Sem esta ponte, cada CLI
+O omp varre `~/.claude/skills`, o cache de plugins e `~/.agents/skills` na largada; pi e kimi
+não — cada um lê só a(s) pasta(s) declarada na própria config. Sem esta ponte, cada CLI
 desses mantém uma fazenda de symlinks à mão apontando pro cache VERSIONADO dos plugins
 (`.../ecc/2.2.0/skills/...`): bump de versão do plugin = dezenas de links pendurados, calados.
 
@@ -9,7 +9,7 @@ O módulo rebuilda essas fazendas a partir das fontes, com duas regras duras:
 
 - **Só mexe em symlink cujo alvo RESOLVE pra dentro de uma fonte conhecida** (realpath +
   is_relative_to, nunca substring — um link pra `/mnt/backup/home/u/.claude/skills/foo` contém o
-  marcador como substring e NÃO é gerenciado). Arquivo/diretório real (o `.system` do codex, uma
+  marcador como substring e NÃO é gerenciado). Arquivo/diretório real (uma
   skill própria do usuário) e link pra fora das fontes nunca são criados, movidos ou apagados.
 - **Stdlib-only** (mesma regra do `engines.py`): o installer chama com o `python3` do sistema,
   sem a venv do backend. `tomllib` (3.11+) é importado condicionalmente — sem ele, só a
@@ -18,8 +18,8 @@ O módulo rebuilda essas fazendas a partir das fontes, com duas regras duras:
 Roda em dois momentos (precedente `migracao_sidecars`): no `install-claude-wrapper.sh` e na
 subida do backend — atualizar aqui é `git pull` + restart, e ninguém garante o installer.
 
-Harness novo = uma linha em `TARGETS`. O omp não está na tabela de propósito: ele descobre
-nativo, materializar seria duplicar.
+Harness novo = uma linha em `TARGETS`. O omp descobre nativamente. O Codex é gerenciado por
+`codex_integracao`, que usa o importador nativo e mantém apenas as compatibilidades necessárias.
 """
 
 from __future__ import annotations
@@ -151,7 +151,6 @@ def _config_ok_kimi(base: Path, ponte: Path) -> bool | None:
 TARGETS = (
     ("pi", Path(".pi/agent/skills-bridge"), Path(".pi/agent"), _config_ok_pi),
     ("kimi", Path(".kimi-code/skills-bridge"), Path(".kimi-code"), _config_ok_kimi),
-    ("codex", Path(".codex/skills"), Path(".codex"), None),
 )
 
 
@@ -196,7 +195,7 @@ def _rebuild_um(nome: str, ponte: Path, fontes: dict[str, Path], raizes: tuple[s
         if quer is None or not entrada.exists():
             st["removidos"] += 1
             if not dry_run:
-                # Dois rebuilds concorrentes (cada abertura de pi/kimi/codex dispara um, e o
+                # Dois rebuilds concorrentes (cada abertura de pi/kimi dispara um, e o
                 # `orquestrar` abre várias sessões de uma vez) decidem remover a MESMA entrada
                 # obsoleta; o segundo unlink chega num arquivo que já não está lá. Isso não é
                 # falha — é o outro processo tendo feito o mesmo trabalho —, e sem esta guarda
@@ -275,7 +274,7 @@ def rebuild(home: Path | None = None, *, dry_run: bool = False,
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Rebuilding skill bridges for pi/kimi/codex")
+    ap = argparse.ArgumentParser(description="Reconstrução das pontes de skills para Pi e Kimi")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
@@ -289,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
             if "erro" in st:
                 print(f"skill-bridge[{nome}]: FALHOU — ver aviso acima")
         if not stats:
-            print("skill-bridge: nenhum harness (pi/kimi/codex) encontrado")
+            print("skill-bridge: nenhum harness (pi/kimi) encontrado")
     return 0
 
 

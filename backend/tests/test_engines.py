@@ -521,12 +521,27 @@ def test_env_de_rejeita_inteiro_negativo_hand_editado(campo, tmp_path, monkeypat
         eng.env_de("kimi")
 
 
-@pytest.mark.parametrize("campo", ["auto_compact_window", "max_output_tokens"])
+@pytest.mark.parametrize("campo", ["context_window", "auto_compact_window", "max_output_tokens"])
 def test_salvar_rejeita_janela_nao_positiva(campo):
     with pytest.raises(ValueError, match="maior que zero"):
         eng.salvar("kimi", _kimi() | {campo: 0})
     with pytest.raises(ValueError, match="esperado número"):
         eng.salvar("kimi", _kimi() | {campo: "abc"})
+
+
+@pytest.mark.parametrize("campo", ["context_window", "auto_compact_window", "max_output_tokens"])
+def test_salvar_com_string_vazia_LIMPA_o_numerico(campo):
+    """Vazio é o valor de limpeza, o mesmo que o ramo de texto já usa. Sem isto a tela não tinha
+    COMO apagar uma janela já gravada: `""` voltava 400 "esperado número" e `0`, 400 "deve ser maior
+    que zero" — e o Salvar respondia sucesso com o número antigo intacto no disco."""
+    eng.salvar("kimi", _kimi() | {campo: 256000})
+    assert eng.listar()["kimi"][campo] == 256000
+    eng.salvar("kimi", _kimi() | {campo: ""})
+    assert campo not in eng.listar()["kimi"], "string vazia deveria APAGAR o campo"
+    # Espaço em branco é vazio também: o ramo de texto já faz `valor.strip()`.
+    eng.salvar("kimi", _kimi() | {campo: 256000})
+    eng.salvar("kimi", _kimi() | {campo: "  "})
+    assert campo not in eng.listar()["kimi"]
 
 
 @pytest.mark.parametrize("campo", ["bundled_skills", "tool_search", "experimental_betas",

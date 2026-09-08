@@ -56,6 +56,7 @@ export function untrackedReason(p: SessionInfo['provider'] | null | undefined): 
   if (p === 'pi') return m.formato_sem_transcript_pi();
   if (p === 'omp') return m.formato_sem_transcript_omp();
   if (p === 'kimi') return m.formato_sem_transcript_kimi();
+  if (p === 'codex') return m.formato_sem_transcript_codex();
   return m.formato_sem_transcript_claude();
 }
 

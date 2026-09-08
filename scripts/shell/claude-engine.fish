@@ -8,7 +8,7 @@
 #   claude-engine kimi         -> abre uma sessão no motor "kimi"
 #   claude-engine kimi --foo   -> args extras vão pro claude
 #
-# Configurar: app -> Configurações -> Motores de modelo (ou ~/.claude/engines.json).
+# Configurar: app -> Configurações -> Contas e modelos (ou ~/.claude/engines.json).
 function claude-engine
     if test (count $argv) -eq 0
         # $status depois de `set -l x (cmd)` é o exit code de cmd, não do `set` — distingue
@@ -21,7 +21,7 @@ function claude-engine
             return 1
         end
         if test -z "$lista"
-            echo "Nenhum motor configurado. Configure no app (Configurações -> Motores de modelo)."
+            echo "Nenhum motor configurado. Configure no app (Configurações -> Contas e modelos -> + Nova conta)."
             return 1
         end
         printf '%s\n' $lista

@@ -1,11 +1,18 @@
 ---
 name: orquestrar
 description: |
-  Use when the user asks to run a large piece of work with independent review and little interaction from them after planning - "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "uma sessao pra planejar e outra pra executar", "abre uma sessao pra revisar" - or when a large/risky plan is about to become an MR or a push. ALSO use when a kick-off message tells you to invoke this skill and states your role, and when such a work is already in progress and you need to know what to do now. One repo or several - what defines it is the Tasks, the gate between them and the independent reviewer; for multiple repos it agrees the interfaces first and opens one session per repo. Works with a plan in any format, or none (it writes a short orchestration plan pointing at the user's material). Do NOT use for - a small task one session can solve, or a one-off review of a diff (dispatch a review subagent directly).
+  Do NOT pick this skill on your own because a task looks large, risky, multi-step or about to become an MR/push - planning, implementing and reviewing on your own, however big, is NOT this skill. It is invoked in exactly two situations - (1) the user asks for the pipeline by name or in their own words - "orquestra", "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "abre uma sessao pra revisar", "arbitro/executor/revisor" - or (2) a kick-off message literally says to invoke the `orquestrar` skill and carries a `Role:` line (executor, reviewer, branch review, retrospective, arbiter). Nothing else triggers it. What it does - one large piece of work with independent review per commit, a gate between Tasks and little interaction from the user after planning; one repo or several, plan in any format or none. Not for a small task one session can solve, nor for a one-off review of a diff (dispatch a review subagent directly).
 allowed-tools: Bash(hangar-send:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git show:*), Bash(git branch:*), Bash(git grep:*), Bash(tmux display:*), Bash(date:*)
 ---
 
 # Pipeline: research → plan → autonomous execution with a gate
+
+> **Before anything else: were you told to invoke this skill by name?** Either the user asked for
+> the pipeline (by name or in their own words) or a kick-off message says "invoke the `orquestrar`
+> skill" with a `Role:` line. If neither happened — you picked it because the task looked large —
+> **stop here and ask the user** whether they want the pipeline, in one line. Do not plan, create
+> sessions, write a contract or read the role pages until they answer. A harness that "informs" the
+> user it is applying a skill has not asked them.
 
 A large piece of work crosses five phases, each in a session with the right context. The user
 decides everything in phase 1; after that the pipeline runs **on its own** and only wakes them for

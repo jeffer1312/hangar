@@ -26,6 +26,26 @@ test('recusa sem token e atende com token', async () => {
   srv.fechar();
 });
 
+test('close fecha pela chave sem passar pelo controlador, e chave sem navegador vira erro', async () => {
+  const fechadas = [];
+  const srv = await subirServidor({
+    controladorDe: () => { throw new Error('close nao pode consultar o controlador'); },
+    fecharDe: (chave) => { fechadas.push(chave); return chave === 'srv::a'; },
+    escrever: () => {},
+  });
+  const pedir = (chave) => fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
+    method: 'POST', body: JSON.stringify({ chave, verbo: 'close', args: [] }),
+    headers: { Authorization: `Bearer ${srv.token}` },
+  });
+  const ok = await pedir('srv::a');
+  assert.equal(ok.status, 200);
+  assert.equal(await ok.text(), 'ok: close');
+  const nada = await pedir('srv::b');
+  assert.equal(await nada.text(), 'erro: a sessao srv::b nao tem navegador aberto');
+  assert.deepEqual(fechadas, ['srv::a', 'srv::b']);
+  srv.fechar();
+});
+
 test('token de tamanho diferente do certo recusa sem lancar (timingSafeEqual)', async () => {
   const srv = await subirServidor({ controladorDe: () => ctlFalso, escrever: () => {} });
   const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
@@ -113,7 +133,7 @@ test('verbo url devolve location.href via avaliar', async () => {
 
 test('verbo shot grava PNG no caminho pedido', async () => {
   const destino = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'preview-shot-')), 'print.png');
-  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ toPNG: () => Buffer.from('png') }) };
+  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ isEmpty: () => false, toPNG: () => Buffer.from('png') }) };
   const srv = await subirServidor({ controladorDe: () => ctl, escrever: () => {} });
   const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
     method: 'POST',
@@ -123,6 +143,20 @@ test('verbo shot grava PNG no caminho pedido', async () => {
   assert.equal(r.status, 200);
   assert.equal(await r.text(), `ok: shot ${destino}`);
   assert.ok(fs.existsSync(destino));
+  srv.fechar();
+});
+
+test('verbo shot com quadro ausente ate o fim devolve erro claro em vez de PNG vazio', async () => {
+  const destino = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'preview-shot-')), 'print.png');
+  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) }) };
+  const srv = await subirServidor({ controladorDe: () => ctl, escrever: () => {} });
+  const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
+    method: 'POST',
+    body: JSON.stringify({ chave: 'srv::d2', verbo: 'shot', args: [destino] }),
+    headers: { Authorization: `Bearer ${srv.token}` },
+  });
+  assert.match(await r.text(), /^erro: .*nao produziu quadro/);
+  assert.ok(!fs.existsSync(destino));
   srv.fechar();
 });
 
@@ -139,7 +173,7 @@ test('verbo "constructor" nao alcanca o prototype de VERBOS', async () => {
 });
 
 test('verbo shot sem caminho devolve erro', async () => {
-  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ toPNG: () => Buffer.from('png') }) };
+  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ isEmpty: () => false, toPNG: () => Buffer.from('png') }) };
   const srv = await subirServidor({ controladorDe: () => ctl, escrever: () => {} });
   const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
     method: 'POST',

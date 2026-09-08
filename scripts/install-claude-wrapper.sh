@@ -6,7 +6,7 @@
 # it inside a tmux session named after the folder (the app only lists tmux sessions). See
 # scripts/shell/claude.fish + claude.posix.sh, and their pi.fish / pi.posix.sh twins.
 #
-# It also (opt-in) sets the claude-pocket statusline as your Claude Code statusLine, so the app can
+# Unless disabled in Harnesses → Claude Code → Options, it sets the Hangar statusline so the app can
 # parse model / context / cost / rate-limit reliably (the parser expects that format). See
 # scripts/omniroute-statusline.js.
 #
@@ -19,13 +19,12 @@
 #   (no shell arg)   auto-detect from $SHELL
 #   all              install for fish + bash + zsh
 #   --no-tmux        skip the ~/.tmux.conf truecolor + window-rename block
-#   --statusline     set the claude-pocket statusline as your Claude statusLine (no prompt)
+#   --statusline     configure the Hangar statusline, respecting the saved preference (no prompt)
 #   --no-statusline  skip the statusline step
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SHELL_DIR="$SCRIPT_DIR/shell"
-STATUSLINE_JS="$SCRIPT_DIR/omniroute-statusline.js"
 BEGIN_MARK="# >>> hangar >>>"
 END_MARK="# <<< hangar <<<"
 # Marcador que este projeto usava antes do rename. O bloco velho é ARRANCADO antes de o novo
@@ -121,12 +120,42 @@ install_fish() {
 # Helper chamado pelos wrappers de shell. Symlink absoluto preserva a descoberta do backend/.env
 # mesmo quando executado de qualquer cwd e atualiza automaticamente depois de git pull.
 mkdir -p "$HOME/.local/bin"
-chmod +x "$SCRIPT_DIR/hangar-codex"
-ln -sfn "$SCRIPT_DIR/hangar-codex" "$HOME/.local/bin/hangar-codex"
-echo "  installed Codex helper -> $HOME/.local/bin/hangar-codex"
-chmod +x "$SCRIPT_DIR/hangar-codex-tui"
-ln -sfn "$SCRIPT_DIR/hangar-codex-tui" "$HOME/.local/bin/hangar-codex-tui"
-echo "  installed Codex launcher -> $HOME/.local/bin/hangar-codex-tui"
+# No Git Bash o `ln -s` COPIA e devolve 0, e a copia se localiza pelo PROPRIO caminho: os dois
+# scripts do Codex fazem `_REPO = Path(__file__).parent.parent`, entao a copia em ~/.local/bin
+# procura `backend/` em ~/.local e morre. Por isso a checagem e `test -L` DEPOIS do ln, e nao o
+# codigo de saida dele. Mesmo conserto que o install-hangar-send.sh ja faz, e o mesmo shim que o
+# install.ps1 escreve — as duas fontes precisam produzir a mesma coisa.
+# Interpretador PINADO: deixar o shebang decidir cai no `python3` do PATH, que no Windows e o
+# atalho da Microsoft Store. O venv do backend e o unico que tem `websockets`, que o -tui importa.
+# No Linux o `ln` linka de verdade, `test -L` e verdadeiro e nada abaixo do `if` roda.
+py_do_venv() {
+    for c in "$REPO_DIR/backend/.venv/bin/python" "$REPO_DIR/backend/.venv/Scripts/python.exe"; do
+        [ -x "$c" ] && { echo "$c"; return; }
+    done
+    echo python3
+}
+
+linkar_codex() {
+    origem="$SCRIPT_DIR/$1"; destino="$HOME/.local/bin/$1"
+    chmod +x "$origem"
+    ln -sfn "$origem" "$destino"
+    if [ -L "$destino" ]; then
+        echo "  installed $2 -> $destino"
+        return
+    fi
+    {
+        echo "#!/bin/sh"
+        echo "# Gerado pelo instalador do hangar (install.ps1 / install-claude-wrapper.sh)."
+        echo "PATH='$HOME/.local/bin':\$PATH; export PATH"
+        echo "exec '$(py_do_venv)' '$origem' \"\$@\""
+    } > "$destino"
+    chmod +x "$destino"
+    echo "  installed $2 -> $destino (copia -> shim; o ln do Git Bash nao linka)"
+}
+
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+linkar_codex hangar-codex "Codex helper"
+linkar_codex hangar-codex-tui "Codex launcher"
 chmod +x "$SCRIPT_DIR/hangar-engine"
 ln -sfn "$SCRIPT_DIR/hangar-engine" "$HOME/.local/bin/hangar-engine"
 echo "  installed engine helper -> $HOME/.local/bin/hangar-engine"
@@ -152,7 +181,7 @@ done
 
 # Point Claude Code's statusLine at scripts/omniroute-statusline.js so the app parses it reliably.
 install_statusline() {
-  local node settings
+  local node
   node="$(command -v node || true)"
   # Resolve symlinks (fnm/nvm shims live in volatile per-shell dirs) -> stable real binary path.
   [ -n "$node" ] && node="$(readlink -f "$node" 2>/dev/null || echo "$node")"
@@ -160,22 +189,8 @@ install_statusline() {
     echo "  node not found in PATH — skipping statusline (install Node 20+ and re-run with --statusline)"
     return
   fi
-  settings="$HOME/.claude/settings.json"
-  mkdir -p "$(dirname "$settings")"
-  [ -f "$settings" ] || echo '{}' >"$settings"
-  cp "$settings" "$settings.bak"
-  SP_NODE="$node" SP_SCRIPT="$STATUSLINE_JS" SP_FILE="$settings" "$node" -e '
-    const fs = require("fs");
-    const p = process.env.SP_FILE;
-    let d = {}; try { d = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
-    d.statusLine = { type: "command", command: process.env.SP_NODE + " " + process.env.SP_SCRIPT };
-    fs.writeFileSync(p, JSON.stringify(d, null, 2));
-  '
-  echo "  set Claude statusLine -> $node $STATUSLINE_JS (backup: $settings.bak)"
-  case "$node" in
-    *fnm*|*nvm*|*node-versions*)
-      echo "  note: statusLine is pinned to this exact node version path — re-run this installer after upgrading node" ;;
-  esac
+  # Passo opcional: sob `set -e`, o exit 1 daqui abortaria o instalador antes do hangar-send.
+  "$node" "$SCRIPT_DIR/configure-statusline.cjs" || echo "  aviso: statusline não configurada (o resto da instalação segue)"
 }
 
 instalados=""
@@ -238,9 +253,8 @@ fi
 # pane). rich-status-line.ts: desenha o rodape E publica a linha INTEIRA no sidecar que o app le —
 # o que sai no terminal ja vem cortado na largura da janela (ver "Statusline por sidecar" no
 # CLAUDE.md), entao sem ela a sessao em janela estreita fica sem contexto/cota no app.
-# fullscreen-tui.ts: troca o TUI para o alternate screen, mantendo o compositor preso na tela ao
-# rolar — equivalente ao fullscreen do Claude dentro de um terminal/tmux.
-# As MESMAS extensoes servem os dois: o omp e um fork do Pi, com a mesma API de extensao.
+# No OMP, tarefas e rolagem ficam com o núcleo. As outras extensões acrescentam capacidades
+# próprias do Hangar; não são substituídas só porque o harness descobre skills e comandos.
 link_agent_extensions() {  # $1 = binario, $2 = dir de extensoes
   local binario=$1 extensions_dir=$2 ext target source_ext current_target
   if ! command -v "$binario" >/dev/null 2>&1; then
@@ -258,12 +272,20 @@ link_agent_extensions() {  # $1 = binario, $2 = dir de extensoes
   # settings.json nos eventos do Pi), git-checkpoint (/rewind) e fullscreen-tui (alternate screen).
   for ext in hangar-state rich-status-line claude-bridge claude-todo claude-hooks-adapter git-checkpoint fullscreen-tui; do
     source_ext="$SCRIPT_DIR/pi/$ext.ts"
+    target="$extensions_dir/$ext.ts"
+    if [ "$binario" = omp ] && { [ "$ext" = claude-todo ] || [ "$ext" = fullscreen-tui ]; }; then
+      # Retira somente links deste checkout; arquivos e links personalizados são do usuário.
+      if [ -L "$target" ] && { [ "$target" -ef "$source_ext" ] || [ "$(readlink "$target")" = "$source_ext" ]; }; then
+        rm "$target"
+        echo "  removido $ext.ts do OMP — recurso nativo preservado"
+      fi
+      continue
+    fi
     # Fonte ausente = link pendurado que o Pi ignora calado; melhor dizer do que fingir "linked".
     if [ ! -f "$source_ext" ]; then
       echo "  ⚠ $source_ext nao existe — $ext pulada (checkout incompleto?)"
       continue
     fi
-    target="$extensions_dir/$ext.ts"
     if [ -L "$target" ]; then
       current_target=$(readlink "$target")
       if [ "$current_target" = "$source_ext" ]; then
@@ -280,6 +302,21 @@ link_agent_extensions() {  # $1 = binario, $2 = dir de extensoes
       echo "  linked $ext.ts into $extensions_dir"
     fi
   done
+  # Os helpers compartilhados (scripts/pi/lib) vao como PASTA: o loader do Pi resolve o import
+  # relativo pelo caminho do link, e um .ts solto em extensions/ e carregado como extensao.
+  target="$extensions_dir/lib"
+  if [ -L "$target" ]; then
+    if [ "$(readlink "$target")" = "$SCRIPT_DIR/pi/lib" ]; then
+      echo "  linked lib/ into $extensions_dir (ja apontada)"
+    else
+      echo "  ⚠ $target e um symlink customizado — mantido como esta."
+    fi
+  elif [ -e "$target" ]; then
+    echo "  ⚠ $target ja existe e nao e symlink — mantido como esta."
+  else
+    ln -s "$SCRIPT_DIR/pi/lib" "$target"
+    echo "  linked lib/ into $extensions_dir"
+  fi
 }
 
 enable_fullscreen() {  # $1 = binario, $2 = dir do agente
@@ -313,7 +350,6 @@ OMP_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
 link_agent_extensions pi  "$PI_AGENT_DIR/extensions"
 link_agent_extensions omp "$OMP_AGENT_DIR/extensions"
 enable_fullscreen pi  "$PI_AGENT_DIR"
-enable_fullscreen omp "$OMP_AGENT_DIR"
 
 # --- ponte de skills (pi/kimi/codex) -----------------------------------------------------------
 # O omp descobre as skills dos outros CLIs sozinho na largada; pi, kimi e codex nao — leem so as

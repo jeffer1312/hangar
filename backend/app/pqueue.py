@@ -42,6 +42,30 @@ def _sanitize(name: str) -> str:
 _PREFIXO_MIN = 8   # piso de prefixo: "ok"/"sim"/"1" nao confirmam frase alheia que comeca igual
 
 
+_RUN_CONTRABARRA = re.compile(r"\\\\+")
+
+
+def _encolhe_contrabarra(s: str) -> str:
+    """O texto como o transcript o guarda quando o psmux comeu contrabarra no caminho.
+
+    No Windows o `send-keys -l` leva o texto no argv, e o psmux desescapa: corrida de N
+    contrabarras chega com ceil(N/2) (medido byte a byte em 07/09/2026 — 2 viram 1, 3 viram 2).
+    A prova de entrega compara STRING, entao o eco corrompido nunca casava com a entrada e a msg
+    virava bolha de 'nao chegou' sobre uma msg que CHEGOU — e o RESGATE, que existe justamente
+    pra desfazer isso, tambem nao disparava.
+
+    Aplicar a mesma regra do lado da ENTRADA da fila devolve a forma que o transcript tem. Isto
+    nao e conserto da origem (esse mora no terminal_input, que passou a colar pelo clipboard):
+    e tolerancia pro que JA aconteceu e esta gravado na fila.
+
+    Sem contrabarra no texto, devolve o proprio objeto — nenhuma mensagem normal paga nada, e no
+    Linux (onde o argv nao come nada) a forma extra so nunca casa com linha nenhuma.
+    """
+    if "\\" not in s:
+        return s
+    return _RUN_CONTRABARRA.sub(lambda m: "\\" * -(-len(m.group(0)) // 2), s)
+
+
 def _linhas_da_entrada(r: dict) -> set[str]:
     """Formas do texto de UMA entrada da fila: cru, sem o marcador de anexo, e cada uma por linha.
 
@@ -53,6 +77,9 @@ def _linhas_da_entrada(r: dict) -> set[str]:
     ls = {cru, podado,
           *(ln.strip() for ln in cru.split("\n")),
           *(ln.strip() for ln in podado.split("\n"))}
+    # Formas ENCOLHIDAS junto: no Windows o eco pode ter chegado com contrabarra a menos (ver
+    # _encolhe_contrabarra), e sem elas nem o casamento normal nem o resgate casavam.
+    ls |= {_encolhe_contrabarra(x) for x in ls}
     ls.discard("")
     return ls
 
@@ -845,3 +872,27 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
 
     items.sort(key=lambda x: (x[0], x[1]))
     return [ev for _, _, ev in items]
+
+
+def historico_etag(name: str, jsonl: str, provider: str, limit: int | None) -> str | None:
+    """Validador do que `merged_history` devolveria, por METADADO -- sem ler os arquivos.
+
+    Cobre as DUAS fontes que ela funde (transcript e sidecar da fila) porque mensagem enfileirada
+    aparece no historico antes de estar no jsonl. `provider` e `limit` entram porque mudam a
+    resposta com os mesmos bytes em disco (parser diferente, cauda de tamanho diferente).
+
+    Granularidade: tamanho + mtime_ns. Os dois arquivos so crescem por append, entao escrita que
+    nao mexe no tamanho nem no relogio nao existe aqui. Sem o transcript nao ha validador (None):
+    melhor sempre baixar do que servir 304 sobre um arquivo que nem da pra medir.
+    """
+    def marca(p: str | Path) -> str:
+        try:
+            st = os.stat(p)
+        except OSError:
+            return "-"
+        return f"{st.st_size}.{st.st_mtime_ns}"
+
+    t = marca(jsonl)
+    if t == "-":
+        return None
+    return f'"{t}-{marca(_queue_dir() / f"{_sanitize(name)}.jsonl")}-{provider}-{limit}"'

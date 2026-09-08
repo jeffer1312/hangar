@@ -96,6 +96,10 @@
     // nao inicia o arraste quando o toque comeca num controle: preserva forms/rows
     const t = e.target as HTMLElement;
     if (t.closest('input, textarea, select, button, a')) return;
+    // `[data-gesto-proprio]`: area que trata o proprio arrasto (o navegador remoto rola a pagina do
+    // outro lado com o dedo). Sem isto, todo arrasto ali virava swipe-pra-fechar e a area ficava
+    // impossivel de usar — o toque simples funcionava e o resto, nao.
+    if (t.closest('[data-gesto-proprio]')) return;
     // conteudo rolado pra baixo: o gesto e scroll interno, nao dismiss — senao o swipe
     // que deveria voltar o scroll pro topo arrastava o sheet junto
     if (sheetEl && sheetEl.scrollTop > 0) return;

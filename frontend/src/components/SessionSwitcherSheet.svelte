@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
 import * as m from '../paraglide/messages';
   import ThemeToggle from './ThemeToggle.svelte';
   import BackgroundToggle from './BackgroundToggle.svelte';
@@ -197,7 +198,7 @@ import * as m from '../paraglide/messages';
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={searchOnly ? m.lista_buscar() : m.sessao_trocar_de()}>
+<BottomSheet {open} {onClose} ariaLabel={searchOnly ? m.lista_buscar() : m.sessao_trocar_de()} centered={desktop.atual}>
   <h2 class="sheet-title">{searchOnly ? m.lista_buscar() : m.lista_titulo()}</h2>
 
   <!-- Alterna entre trocar de sessao (vivas) e buscar conteudo em todas as conversas (feature #10).

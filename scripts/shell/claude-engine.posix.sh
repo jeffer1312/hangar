@@ -16,7 +16,7 @@ claude-engine() {
             return 1
         fi
         if [ -z "$lista" ]; then
-            echo "Nenhum motor configurado. Configure no app (Configurações -> Motores de modelo)."
+            echo "Nenhum motor configurado. Configure no app (Configurações -> Contas e modelos -> + Nova conta)."
             return 1
         fi
         printf '%s\n' "$lista"

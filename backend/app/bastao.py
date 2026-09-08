@@ -321,9 +321,10 @@ def _linhas_do_plano(prog, origem: str) -> list[str]:
 
 
 def _o_que_falta(jsonl: str, cwd: str | None, nome: str, eventos: list, plano: str | None) -> list[str]:
-    """Sinal mais forte disponível, nesta ordem: plano citado pela sessão (senão o que a barra do
-    app mostra, dito como tal), loop ATIVO, pedidos sem resposta. Diz qual usou. Absorve a antiga
-    "O plano": no dossiê medido ela citava o plano errado ao lado do certo."""
+    """Sinal mais forte disponível, nesta ordem: plano citado pela sessão, loop ATIVO, pedidos sem
+    resposta. Diz qual usou. Absorve a antiga "O plano": no dossiê medido ela citava o plano errado
+    ao lado do certo. O plano da barra do app NÃO entra: ele é eleito pelo repositório, e uma
+    sessão que nunca o abriu ganhava um "próximo Step" de trabalho alheio no topo do dossiê."""
     from app import loop as loop_mod, planprog
     from app.loop import LoopLink
 
@@ -337,10 +338,6 @@ def _o_que_falta(jsonl: str, cwd: str | None, nome: str, eventos: list, plano: s
             prog = None
         out += (_linhas_do_plano(prog, "citado pela sessão") if prog
                 else [f"- Plano citado pela sessão não pôde ser lido: `{caminho}`"])
-    else:
-        prog = planprog.plan_progress(cwd)
-        if prog:
-            out += _linhas_do_plano(prog, "o que a barra do app mostra — a sessão não citou plano")
     loop = LoopLink(nome).get() if nome else None
     loop_ativo = bool(loop and loop.get("status") in loop_mod.ACTIVE)
     if loop_ativo:

@@ -28,9 +28,28 @@
 
 # Mesmo caminho que backend/app/adapters/pi/sessions.py:transcript_alvo monta pro `--session`:
 # <raiz>/<slug do cwd>/<ts>_<id>.jsonl. O slug troca só o separador por '-' (acento e espaço passam).
+# Perfil pedido na linha (`--profile x` / `--profile=x`) ou já no ambiente (OMP_PROFILE). Vazio = sem perfil.
+function hangar_omp_perfil
+    set -l esperando 0
+    for a in $argv
+        if test $esperando -eq 1
+            printf '%s' "$a"; return
+        end
+        switch $a
+            case --profile
+                set esperando 1
+            case '--profile=*'
+                printf '%s' (string replace -- '--profile=' '' "$a"); return
+        end
+    end
+    printf '%s' "$OMP_PROFILE"
+end
+
 function hangar_omp_alvo --argument-names id
     set -l raiz "$PI_CODING_AGENT_DIR"
     test -n "$raiz"; or set raiz "$HOME/.omp/agent"
+    # Com perfil a raiz é a do perfil (o omp ignora PI_CODING_AGENT_DIR ali).
+    test -n "$OMP_PROFILE"; and set raiz "$HOME/.omp/profiles/$OMP_PROFILE/agent"
     set -l slug "--"(string replace -r '^[/\\\\]' '' -- "$PWD" | string replace -ra '[/\\\\:]' '-')"--"
     printf '%s/sessions/%s/%s_%s.jsonl' "$raiz" "$slug" (date -u +%Y-%m-%dT%H-%M-%S-000Z) "$id"
 end
@@ -75,6 +94,15 @@ function omp
     # Substituição que falha deixa a variável como LISTA VAZIA no fish (não como string vazia): sem o
     # fallback — o mesmo do omp.posix.sh — uma máquina sem uuidgen faria o nome do transcript nascer
     # sem uuid nenhum, e o backend nunca acharia o arquivo pelo glob `*_<uuid>.jsonl`.
+    # Perfil vai como OMP_PROFILE (o omp honra; é de onde o backend lê o perfil de um pane vivo) e
+    # muda a raiz que o hangar_omp_alvo monta. `-e` no tmux porque o pane nasce do SERVIDOR, não deste shell.
+    set -l envp
+    set -l perfil (hangar_omp_perfil $argv)
+    if test -n "$perfil"
+        set -gx OMP_PROFILE $perfil
+        set envp -e "OMP_PROFILE=$perfil"
+    end
+
     set -l id (uuidgen 2>/dev/null)
     test -n "$id"; or set id (cat /proc/sys/kernel/random/uuid 2>/dev/null)
 
@@ -119,19 +147,19 @@ function omp
     # CP_SESSION_NAME: carimbo de identidade pro hangar-send de dentro do pane (ver claude.fish).
     if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
         if test $own_session -eq 1
-            systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" \
+            systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" $envp \
                 sh -c 'exec omp "$@"' _ $argv
         else
-            systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" \
+            systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" $envp \
                 sh -c 'export CP_PI_SESSION="$1"; alvo="$2"; shift 2; exec omp --session "$alvo" "$@"' \
                 _ "$id" (hangar_omp_alvo "$id") $argv
         end
     else
         if test $own_session -eq 1
-            tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" \
+            tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" $envp \
                 sh -c 'exec omp "$@"' _ $argv
         else
-            tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" \
+            tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" $envp \
                 sh -c 'export CP_PI_SESSION="$1"; alvo="$2"; shift 2; exec omp --session "$alvo" "$@"' \
                 _ "$id" (hangar_omp_alvo "$id") $argv
         end

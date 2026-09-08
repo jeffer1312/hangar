@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import * as m from '../paraglide/messages';
   import { listUploads, uploadUrl } from '@hangar/core';
   import { fileKind, fmtBytes, relativeTime } from '@hangar/core';
@@ -110,7 +111,7 @@
 
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.ctx_anexos_da_sessao()}>
+<BottomSheet {open} {onClose} ariaLabel={m.ctx_anexos_da_sessao()} wide={desktop.atual} centered={desktop.atual}>
   <div class="atts">
     <h2 class="atts-title">
       {m.ctx_anexos()}

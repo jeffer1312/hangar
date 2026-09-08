@@ -158,6 +158,56 @@ async def test_follow_backfills_only_tail(tmp_path, monkeypatch):
     assert got == ["u2", "u3"]             # u1 (fora do tail) NAO veio no backfill
 
 
+@pytest.mark.asyncio
+async def test_follow_espera_a_pasta_nascer(tmp_path, monkeypatch):
+    # Sessao recem-criada: o agente ainda nao escreveu nada, entao projects/<slug> nem existe. O
+    # awatch levantava FileNotFoundError, o SSE morria e o front reconectava no mesmo erro pra
+    # sempre ("reconectando", chat mudo). Tem que esperar a pasta e entregar o 1o evento.
+    monkeypatch.setattr("app.transcript._ESPERA_PASTA_S", 0.05)
+    f = tmp_path / "ainda-nao-existe" / "s.jsonl"
+    got: list[str] = []
+
+    async def consume():
+        async for ev in TranscriptTailer(f).follow():
+            got.append(ev.id)
+            return
+
+    async def criar():
+        await asyncio.sleep(0.2)
+        f.parent.mkdir()
+        f.write_text(_user("u1", "a"))
+
+    await asyncio.wait_for(asyncio.gather(consume(), criar()), timeout=10)
+    assert got == ["u1"]
+
+
+@pytest.mark.asyncio
+async def test_follow_nao_engole_erro_com_a_pasta_no_lugar(tmp_path):
+    # O `except FileNotFoundError` do watch existe pra pasta que sumiu. Com a pasta NO LUGAR o erro
+    # veio de outra coisa (a leitura roda dentro do mesmo try) e tem que subir pro pump do sse —
+    # engolir ali deixaria o chat mudo sem uma linha de log.
+    f = tmp_path / "s.jsonl"
+    f.write_text(_user("u1", "a"))
+    t = TranscriptTailer(f)
+    real = t._read_from
+    chamadas = []
+
+    def _read_from(pos):
+        chamadas.append(pos)
+        if len(chamadas) == 1:
+            return real(pos)                    # backfill normal
+        raise FileNotFoundError("outra coisa")  # corrida real, nao "pasta ainda nao nasceu"
+
+    t._read_from = _read_from
+
+    async def consume():
+        async for _ in t.follow():
+            f.write_text(_user("u1", "a") + _user("u2", "b"))   # acorda o watch -> 2a leitura
+
+    with pytest.raises(FileNotFoundError):
+        await asyncio.wait_for(consume(), timeout=15)
+
+
 # --- retomada exata via Last-Event-ID (offset por evento) -----------------------------------
 # A janela de backfill (200 linhas) cobre so ~2 min de trabalho pesado — medido nesta sessao:
 # mediana 44 linhas/min, pico 133. Uma queda de celular mais longa perdia o miolo do buraco.

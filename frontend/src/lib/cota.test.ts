@@ -137,6 +137,15 @@ describe('piorJanela — o smart da pílula do topo', () => {
     expect(r?.janela.rotulo).toBe('5h');
   });
 
+  it('janela de um modelo só concorre quando a sessão roda nele', () => {
+    const conta = lida('200-3', 15, 61);
+    conta.janelas = [...conta.janelas, { rotulo: 'Fable', pct: 100, reset_ts: 300_000, por_modelo: true }];
+    const linha = faixaDeCota([conta]);
+    expect(piorJanela(linha, 'Opus5·1M')?.janela.rotulo).toBe('7d');       // Opus: o Fable cheio não a segura
+    expect(piorJanela(linha, 'Fable5.1')?.janela.rotulo).toBe('Fable');   // Fable: é a dele
+    expect(piorJanela(linha)?.janela.rotulo).toBe('Fable');               // sem modelo: como antes
+  });
+
   it('sem conta ou sem janela nenhuma: null (a pílula não inventa número)', () => {
     expect(piorJanela(faixaDeCota([]))).toBeNull();
     expect(piorJanela(faixaDeCota([semLeitura('jefferson')]))).toBeNull();

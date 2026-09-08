@@ -24,15 +24,18 @@ _SEP_RE = re.compile(r"[/\\:]")
 _LEADING_SEP_RE = re.compile(r"^[/\\]")
 
 
-def sessions_root(provider: str) -> Path:
+def sessions_root(provider: str, perfil: str | None = None) -> Path:
     # Raiz por provider, sem default: cada chamador declara de quem e a pasta. O omp so tem a var
     # do diretorio do agente (PI_CODING_AGENT_DIR) e as sessoes ficam em <dir>/sessions.
+    # `perfil` e o perfil do omp DAQUELA sessao (--profile / OMP_PROFILE do pane), que move a raiz
+    # pra ~/.omp/profiles/<perfil>/agent; None = o perfil do proprio backend, se houver.
     if provider == "pi":
         env = os.environ.get("PI_CODING_AGENT_SESSION_DIR")
         return Path(env) if env else Path.home() / ".pi" / "agent" / "sessions"
     if provider == "omp":
-        env = os.environ.get("PI_CODING_AGENT_DIR")
-        return (Path(env) if env else Path.home() / ".omp" / "agent") / "sessions"
+        from app import omp_dirs
+        env = dict(os.environ, OMP_PROFILE=perfil) if perfil else None
+        return omp_dirs.agent_dir(env=env) / "sessions"
     raise ValueError(f"provider sem raiz de sessoes: {provider!r}")
 
 
@@ -80,23 +83,23 @@ def root_transcript(path: str) -> str:
     return ""
 
 
-def transcript_path(cwd: str, session_id: str, provider: str) -> str:
+def transcript_path(cwd: str, session_id: str, provider: str, perfil: str | None = None) -> str:
     """Caminho do JSONL da sessao, ou "" se ela ainda nao escreveu nada ("" e nao excecao: o
     registry chama isto logo depois do spawn, e a TUI so cria o arquivo no primeiro turno)."""
-    d = sessions_root(provider) / cwd_slug(cwd)
+    d = sessions_root(provider, perfil) / cwd_slug(cwd)
     if d.is_dir():
         cands = sorted(d.glob(f"*_{session_id}.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         if cands:
             return str(cands[0])
-    return localizar_na_raiz(f"*_{session_id}.jsonl", provider) if provider == "omp" else ""
+    return localizar_na_raiz(f"*_{session_id}.jsonl", provider, perfil) if provider == "omp" else ""
 
 
-def localizar_na_raiz(padrao: str, provider: str) -> str:
+def localizar_na_raiz(padrao: str, provider: str, perfil: str | None = None) -> str:
     """Procura o arquivo em QUALQUER pasta de cwd da raiz de sessoes. O omp nao honra o diretorio
     do `--session`: grava o transcript principal em `sessions/-/<nome>` (so os subagentes vao
     pro diretorio pedido), entao o caminho que a gente montou — e que a extensao dele devolve
     em getSessionFile() — pode nao existir."""
-    raiz = sessions_root(provider)
+    raiz = sessions_root(provider, perfil)
     if not raiz.is_dir():
         return ""
     cands = [p for p in raiz.glob(f"*/{padrao}") if p.is_file()]
@@ -105,9 +108,9 @@ def localizar_na_raiz(padrao: str, provider: str) -> str:
     return str(max(cands, key=lambda p: p.stat().st_mtime))
 
 
-def transcript_alvo(cwd: str, session_id: str, provider: str) -> str:
+def transcript_alvo(cwd: str, session_id: str, provider: str, perfil: str | None = None) -> str:
     """Onde o transcript de uma sessao NOVA deve nascer (o omp aceita o caminho por `--session`).
     Mesmo layout que o agente usaria sozinho, pra sessao continuar no picker dele."""
     agora = datetime.now(timezone.utc)
     ts = agora.strftime("%Y-%m-%dT%H-%M-%S-") + f"{agora.microsecond // 1000:03d}Z"
-    return str(sessions_root(provider) / cwd_slug(cwd) / f"{ts}_{session_id}.jsonl")
+    return str(sessions_root(provider, perfil) / cwd_slug(cwd) / f"{ts}_{session_id}.jsonl")

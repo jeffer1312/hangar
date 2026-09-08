@@ -27,7 +27,7 @@ que já foi levantado do código, para as sete restantes saírem sem refazer a a
 | Voz | Ditado + a parte de transcrição/leitura de Anexos + o grupo "Ditado e voz" do Avançado | **pronta** |
 | Aparência e idioma | Geral + Aparência | a fazer |
 | Conversa | ferramentas/tarefas/pensamento/gráfico (hoje em Aparência) + prazo dos anexos + "mostrar o raciocínio do agente" | a fazer |
-| Contas e modelos | Contas + Motores de modelo | a fazer |
+| Contas e modelos | Contas + Motores de modelo | **pronta** |
 | Máquinas | Acesso + Servidores + o identificador do servidor, hoje repetido no Avançado | a fazer |
 | Notificações | Notificações + a assinatura push e as horas silenciosas de Servidores | a fazer |
 | Automação | `automations`, `editor` e `scan_roots`, extraídos do Avançado + Orquestração | a fazer |

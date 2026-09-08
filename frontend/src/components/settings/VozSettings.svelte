@@ -387,7 +387,7 @@
   .sub { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--text-muted); }
 
   /* CHROME FUNCIONAL, sólido de propósito: grudado no fim da folha — mesma exceção que o
-     .rodape do ServerSettings/EnginesSettings já documenta. NÃO converter pra token de véu. */
+     .rodape do ServerSettings já documenta. NÃO converter pra token de véu. */
   /* Rodapé de ponta a ponta: as margens negativas cancelam o respiro de quem envolve o rodapé — e
      esse respiro muda por modo (a folha no celular tem --space-5 de sobra + faixa segura embaixo,
      a coluna do modal dividido tem --space-4). Base calibrada pra folha; o override abaixo troca

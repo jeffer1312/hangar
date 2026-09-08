@@ -265,3 +265,19 @@ def test_put_com_string_vazia_LIMPA_o_campo(cli):
     # é assim que a tela limpa: manda a chave com string vazia
     cli.put("/api/engines/kimi", json=_kimi() | {"subagent_model": ""}, headers=AUTH)
     assert "subagent_model" not in eng.listar()["kimi"], "string vazia deveria APAGAR o campo"
+
+
+def test_put_com_string_vazia_LIMPA_tambem_o_numerico(cli):
+    """Antes só o texto tinha valor de limpeza. Apagar a janela de contexto na tela era impossível:
+    `""` batia em 400 "esperado número", `0` em 400 "deve ser maior que zero", e omitir o campo fazia
+    o handler herdar o valor do disco — Salvar respondia 200 com o número antigo de volta."""
+    cli.put("/api/engines/kimi", json=_kimi() | {"context_window": 256000}, headers=AUTH)
+    assert eng.listar()["kimi"]["context_window"] == 256000
+    r = cli.put("/api/engines/kimi", json=_kimi() | {"context_window": ""}, headers=AUTH)
+    assert r.status_code == 200
+    assert "context_window" not in eng.listar()["kimi"], "string vazia deveria APAGAR a janela"
+    # Número inválido continua sendo erro, não pedido de limpeza.
+    assert cli.put("/api/engines/kimi", json=_kimi() | {"context_window": 0},
+                   headers=AUTH).status_code == 400
+    assert cli.put("/api/engines/kimi", json=_kimi() | {"context_window": "abc"},
+                   headers=AUTH).status_code == 400

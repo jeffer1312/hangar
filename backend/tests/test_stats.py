@@ -328,3 +328,55 @@ class _PathPermissionError:
 
     def stat(self):
         raise PermissionError("negado")
+
+
+# -- Acumulador compartilhado entre conexoes ---------------------------------------------------
+
+def test_compartilhado_nao_rele_o_transcript_para_a_segunda_conexao(tmp_path, monkeypatch):
+    # Cada SSE criava um Accumulator novo e relia o arquivo INTEIRO (109-204ms num de 21 MiB, a
+    # cada reconexao ou 2o aparelho). Compartilhado por (provider, path), a 2a conexao entra no
+    # fold ja feito e so le o que chegou depois.
+    p = tmp_path / "s.jsonl"
+    _w(p, [_claude_user("2026-08-17T12:00:00Z"), _claude_assistant("2026-08-17T12:00:02Z", "m1")])
+    aberturas = []
+    original = Path.open
+
+    def contar(self, *a, **k):
+        aberturas.append(str(self))
+        return original(self, *a, **k)
+
+    monkeypatch.setattr(Path, "open", contar)
+    a = Accumulator.compartilhado("claude", str(p))
+    assert a.collect()["steps"] == 1
+    b = Accumulator.compartilhado("claude", str(p))
+    assert b is a
+    assert b.collect()["steps"] == 1
+    assert len(aberturas) == 1, "a 2a conexao nao pode reabrir o arquivo do zero"
+    a.soltar()
+    c = Accumulator.compartilhado("claude", str(p))
+    assert c is a                                              # b ainda segura
+    b.soltar()
+    c.soltar()
+    assert Accumulator.compartilhado("claude", str(p)) is not a  # ultimo soltou -> instancia nova
+
+
+def test_soltar_acha_a_entrada_mesmo_com_caminho_nao_canonico(tmp_path):
+    # `compartilhado` recebia a string crua e `soltar` procurava por `str(Path)`: com `./` ou
+    # barra dupla no caminho as chaves divergiam, o refcount ficava negativo e a entrada nunca
+    # saia do dicionario.
+    p = tmp_path / "s.jsonl"
+    _w(p, [_claude_user("2026-08-17T12:00:00Z")])
+    torto = f"{tmp_path}/./s.jsonl"
+    a = Accumulator.compartilhado("claude", torto)
+    a.soltar()
+    assert Accumulator._compartilhados == {} or all(
+        v is not a for v in Accumulator._compartilhados.values())
+
+
+def test_compartilhado_por_provider_e_caminho(tmp_path):
+    p = tmp_path / "s.jsonl"
+    _w(p, [_claude_user("2026-08-17T12:00:00Z")])
+    a = Accumulator.compartilhado("claude", str(p))
+    assert Accumulator.compartilhado("kimi", str(p)) is not a
+    assert Accumulator.compartilhado("claude", str(tmp_path / "outro.jsonl")) is not a
+    assert Accumulator.compartilhado("inexistente", str(p)) is None

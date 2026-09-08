@@ -18,7 +18,7 @@
 //   hangar-preview network                 últimas respostas de rede
 //   hangar-preview text                    texto visível da página (innerText)
 //   hangar-preview url                     URL atual do navegador desta sessão
-//   hangar-preview shot [arquivo.png]      screenshot (default /tmp/hangar-preview-<sessao>.png)
+//   hangar-preview shot [arquivo.png]      screenshot (default <tmp do sistema>/hangar-preview-<sessao>.png)
 //   hangar-preview batch                   lê várias linhas do stdin, uma por comando (ver skill)
 //
 // A sessão é resolvida pelo nome da sessão tmux atual (dentro do tmux); fora dele, ou pra operar
@@ -31,9 +31,9 @@
 // webContents está aberto. `open` e `list` continuam fora do servidor: `open` passa pelo backend
 // (quem monta o painel na tela) e `list` só lê os sidecares de sessão — os dois têm que funcionar
 // mesmo com o shell fora do ar.
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import fmt from '../shell/preview_fmt.cjs';
 
@@ -41,7 +41,7 @@ const CDP = 'http://127.0.0.1:9223';
 const DIR = join(homedir(), '.hangar', 'nav');
 const VERBOS_SERVIDOR = new Set([
   'snapshot', 'click', 'fill', 'type', 'press', 'hover', 'wait', 'eval',
-  'tema', 'console', 'network', 'text', 'url', 'shot',
+  'tema', 'layout', 'console', 'network', 'text', 'url', 'shot', 'close',
 ]);
 
 function erro(msg, codigo = 1) {
@@ -72,11 +72,13 @@ if (!cmd || cmd === 'help' || cmd === '--help') {
   wait <alvo>             @eN | --url <trecho> | --text <trecho> | --idle | <ms>
   eval '<js>'             roda JS na página (expressão ou declarações) e imprime o resultado
   tema <claro|escuro|sistema>
+  layout [mobile|desktop] tamanho e user-agent do navegador de verdade (sem valor, diz o atual)
   console [--limpar]      log do console da página
   network                 últimas respostas de rede
   text                    texto visível da página (innerText), sem árvore
   url                     URL atual
-  shot [arquivo.png]      screenshot (default /tmp/hangar-preview-<sessao>.png)
+  shot [arquivo.png]      screenshot (default <tmp do sistema>/hangar-preview-<sessao>.png)
+  close                   fecha o navegador desta sessão (o painel some; terminou de usar, feche)
   batch                   lê várias linhas do stdin, uma por comando
 
 Referência completa: skill hangar-preview.`);
@@ -86,9 +88,21 @@ Referência completa: skill hangar-preview.`);
 // --- resolve a sessão (chave serverId::nome) ---
 function nomeSessao() {
   if (flags.sessao) return flags.sessao;
+  // O carimbo do nascimento (posto pelo new_session do tmux.py) vem do env do PANE, então é imune
+  // a qual cliente está anexado. Só vale se a sessão ainda se chamar assim: `rename-session` não
+  // reescreve env de processo já rodando, e nome obsoleto endereçaria OUTRA sessão — pior que
+  // nome ausente. O `=` força match exato (sem ele o tmux cai em prefix match).
+  const carimbo = process.env.CP_SESSION_NAME;
+  if (carimbo) {
+    try {
+      execFileSync('tmux', ['has-session', '-t', `=${carimbo}`], { stdio: 'ignore' });
+      return carimbo;
+    } catch { /* sessão renomeada, morta, ou sem tmux — cai no fallback */ }
+  }
   if (process.env.TMUX) {
     try {
-      return execSync('tmux display-message -p "#S"').toString().trim();
+      const nome = execSync('tmux display-message -p "#S"').toString().trim();
+      if (nome) return nome;
     } catch { /* tmux indisponível */ }
   }
   return null;
@@ -97,12 +111,13 @@ function nomeSessao() {
 function lerSidecars() {
   if (!existsSync(DIR)) return [];
   return readdirSync(DIR)
-    // _srv.json é o sidecar do PROCESSO (porta+token do servidor local), não de um navegador.
-    .filter((a) => a.endsWith('.json') && !a.startsWith('.') && a !== '_srv.json')
+    // Arquivos com `_` são de processo (_srv.json: porta+token do servidor local; _pendentes.json:
+    // marcadores do backend), não de um navegador.
+    .filter((a) => a.endsWith('.json') && !a.startsWith('.') && !a.startsWith('_'))
     .map((a) => {
       try { return JSON.parse(readFileSync(join(DIR, a), 'utf8')); } catch { return null; }
     })
-    .filter(Boolean);
+    .filter((s) => s && typeof s.chave === 'string');
 }
 
 function sidecarDa(nome) {
@@ -183,7 +198,7 @@ if (cmd === 'open') {
   });
   if (res.status === 404) erro(`a sessão "${nome}" não existe no backend`);
   if (!res.ok) erro(`o backend recusou: ${res.status} ${await res.text()}`);
-  console.log(`navegador de "${nome}" abrindo com ${url} (se a sessão estiver fora da tela, abre quando o usuário abrir ela)`);
+  console.log(`navegador de "${nome}" abrindo com ${url} (com o app desktop aberto ele nasce em segundos, mesmo com a sessão fora da tela; o painel aparece quando o usuário abrir ela)`);
   process.exit(0);
 }
 
@@ -205,7 +220,8 @@ if (VERBOS_SERVIDOR.has(cmd)) {
   // relativo mandado cru pro shell grava no cwd de onde o ELECTRON subiu, não no do agente, e a
   // resposta citava um caminho que não existia onde o agente (e o app do celular) foram procurar.
   if (cmd === 'shot') {
-    cmdArgs[0] = resolve(cmdArgs[0] || `/tmp/hangar-preview-${(nomeSessao() || 'nav').replace(/\W+/g, '-')}.png`);
+    cmdArgs[0] = resolve(cmdArgs[0]
+      || join(tmpdir(), `hangar-preview-${(nomeSessao() || 'nav').replace(/\W+/g, '-')}.png`));
   }
   process.exit(await comando(chave, cmd, cmdArgs));
 }
@@ -227,4 +243,4 @@ if (cmd === 'batch') {
   process.exit(0);
 }
 
-erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|console|network|text|url|shot|batch)`);
+erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|layout|console|network|text|url|shot|close|batch)`);

@@ -27,6 +27,8 @@ EDITAVEIS: dict[str, type] = {
     "finish_min_seconds": int,
     "stall_seconds": int,
     "automations": bool,           # kill-switch das automações desatendidas
+    "codex_sync": bool,            # reconciliação automática do Codex (por cima do automations)
+    "claude_statusline_update": bool,  # permite ao instalador atualizar a barra do Claude Code
     "editor": str,
     "elevenlabs_api_key": str,     # sintese de voz (ouvir a selecao)
     "elevenlabs_voice_id": str,    # id da voz escolhida na conta
@@ -62,6 +64,11 @@ EDITAVEIS: dict[str, type] = {
     # Quanto o ditado pode mexer no que voce falou: "limpar" | "prosa" | "briefing".
     # Ver narrar.ESTILOS_DITADO — cada um e um prompt E um conjunto de travas diferente.
     "ditado_estilo": str,
+    # Origens EXTRAS que podem abrir o terminal, no mesmo formato "a,b" do CP_TERM_ORIGINS.
+    # SOMA com o env, ao contrario do scan_roots logo abaixo, que sobrescreve: aqui a lista e o
+    # perimetro de quem PODE abrir o terminal, e um override por inteiro feito do celular tiraria
+    # do ar a origem que o dono declarou no .env — inclusive a que ele esta usando pra editar.
+    "term_origins": str,
     # Raizes do seletor de pasta (fs-scanner), no MESMO formato "a,b" do CP_SCAN_ROOTS.
     # Override vale por inteiro (nao soma com o env); vazio = volta ao env. Ver
     # config.resolve_scan_roots, que le daqui primeiro.
@@ -185,6 +192,20 @@ def _coagir(campo: str, valor: Any) -> Any:
                 f"ditado_vocabulario: {len(texto)} caracteres, o maximo e {VOCAB_USUARIO_MAX} "
                 "(a Whisper ignora o resto). Tire os termos que voce menos erra."
             )
+    if campo == "term_origins" and texto:
+        # Entrada aqui vira permissao de abrir terminal na maquina. O que a checagem compara e o
+        # netloc, entao aceitar texto solto ("pocket") deixaria a pessoa salvar uma linha que nunca
+        # casa e concluir que o app ignorou o que ela configurou — o mesmo defeito que o
+        # scan_roots resolveu recusando na gravacao.
+        from urllib.parse import urlparse
+        for entrada in texto.split(","):
+            entrada = entrada.strip()
+            if not entrada:
+                continue
+            if not (entrada.startswith("http://") or entrada.startswith("https://")):
+                raise ValueError(f"term_origins: '{entrada}' precisa comecar com http:// ou https://")
+            if not urlparse(entrada).netloc:
+                raise ValueError(f"term_origins: '{entrada}' nao tem endereco (ex: https://app.exemplo.com)")
     if campo in ("llm_base_url", "llm_briefing_base_url") and texto and not (texto.startswith("http://") or texto.startswith("https://")):
         # Mesmo argumento do editor: antes so o dono da maquina escolhia o endpoint (env), agora o
         # celular escreve. Aceita vazio (volta ao padrao) ou uma URL http(s) de verdade.

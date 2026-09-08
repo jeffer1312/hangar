@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import * as m from '../paraglide/messages';
 
   interface Props {
@@ -22,7 +23,7 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={title} {fallbackFocus}>
+<BottomSheet {open} {onClose} ariaLabel={title} {fallbackFocus} centered={desktop.atual}>
   <div class="confirm">
     <h2 class="confirm-title">{title}</h2>
     {#if message}<p class="confirm-msg">{message}</p>{/if}

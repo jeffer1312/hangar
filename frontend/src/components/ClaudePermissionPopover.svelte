@@ -4,15 +4,10 @@
   // os que só existem na criação (dontAsk isolado, bypassPermissions fora do ciclo).
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
-
-  const MODOS_TODOS = ['plan', 'auto', 'manual', 'acceptEdits', 'bypassPermissions', 'dontAsk'] as const;
-  type Modo = typeof MODOS_TODOS[number];
-
-  // Rótulo humano para a pill (curto). O id do CLI já é o nome real da flag —
-  // dado, não interface — então o rótulo é o próprio id.
-  function rotulo(modo: string): string {
-    return modo;
-  }
+  import {
+    rotuloPermissao, descricaoPermissao, permissaoSemFreio, MODOS_PERMISSAO,
+  } from '../lib/permissaoRotulo';
+  import IconPermissao from './icons/IconPermissao.svelte';
 
   interface Props {
     open: boolean;
@@ -70,7 +65,7 @@
     <p class="dica">{m.permissao_dica()}</p>
   {:else}
     <ul class="lista">
-      {#each MODOS_TODOS as modo (modo)}
+      {#each MODOS_PERMISSAO as modo (modo)}
         {@const habilitado = habilitados.has(modo)}
         {@const ativo = current === modo}
         <li>
@@ -78,17 +73,25 @@
             class="linha"
             class:ativa={ativo}
             class:desabilitado={!habilitado}
+            class:sem-freio={permissaoSemFreio(modo)}
             aria-pressed={ativo}
             aria-disabled={!habilitado}
+            aria-describedby={!habilitado ? `perm-motivo-${modo}` : undefined}
             disabled={!!aplicando || !habilitado}
             data-foco={ativo ? true : undefined}
             onclick={() => escolher(modo)}
-            title={!habilitado ? m.permissao_so_criacao() : undefined}
+            title={modo}
           >
-            <span class="nome">{rotulo(modo)}</span>
-            {#if !habilitado}
-              <span class="dica-desab" aria-hidden="true">{m.permissao_so_criacao_curto()}</span>
-            {:else if aplicando === modo}
+            <span class="glifo"><IconPermissao {modo} /></span>
+            <span class="nome">
+              <span class="rotulo">{rotuloPermissao(modo)}</span>
+              <!-- A frase do modo indisponível fica em opacidade NORMAL: é ela que explica por que
+                   a linha está apagada, e apagar as duas junto some com a explicação. -->
+              <span class="desc" id={!habilitado ? `perm-motivo-${modo}` : undefined}>
+                {descricaoPermissao(modo)}{#if !habilitado} · {m.permissao_so_criacao()}{/if}
+              </span>
+            </span>
+            {#if aplicando === modo}
               <span class="tick" aria-hidden="true">…</span>
             {:else if ativo}
               <svg class="tick" width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -98,13 +101,9 @@
               </svg>
             {/if}
           </button>
-          {#if !habilitado}
-            <span class="motivo">{m.permissao_so_criacao()}</span>
-          {/if}
         </li>
       {/each}
     </ul>
-    <p class="dica">{m.permissao_dica()}</p>
   {/if}
 </Popover>
 
@@ -114,27 +113,26 @@
   .lista { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
 
   .linha {
-    display: flex; align-items: center; gap: 6px; width: 100%;
-    padding: 6px 10px; background: transparent; border: none;
+    display: flex; align-items: flex-start; gap: 8px; width: 100%;
+    padding: 8px 10px; background: transparent; border: none;
     color: var(--text-primary); font-size: var(--text-sm); text-align: left; cursor: pointer;
   }
   .linha:hover:not(:disabled):not(.desabilitado) { background: var(--bg-hover); }
   .linha.ativa:hover:not(:disabled) { background: var(--accent-dim); }
   .linha:disabled { cursor: default; }
   .linha.ativa { background: var(--accent-dim); color: var(--text-primary); }
-  .linha.desabilitado { opacity: 0.5; cursor: not-allowed; }
+  .linha.desabilitado { cursor: not-allowed; }
 
-  .nome { flex: 1; text-transform: none; }
-  .dica-desab { font-size: var(--text-xs); color: var(--text-muted); flex: none; }
-  .tick { flex: none; color: var(--accent); }
+  .nome { flex: 1; min-width: 0; text-transform: none; display: flex; flex-direction: column; gap: 1px; }
+  .rotulo { line-height: 1.25; }
+  .desc { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.3; }
+  .glifo { flex: none; width: 1.6em; font-size: 0.85em; color: var(--text-muted); padding-top: 2px; }
+  /* Os dois sem confirmação: tinta mais quente no glifo. Fundo de alerta fica pra erro — escolher
+     um modo mais solto de propósito não é erro. */
+  .linha.sem-freio .glifo { color: var(--warning); }
+  .tick { flex: none; color: var(--accent); padding-top: 2px; }
 
-  .motivo {
-    display: block; font-size: var(--text-xs); color: var(--text-muted);
-    padding: 0 10px 4px 10px;
-  }
-
-  .dica {
-    font-size: var(--text-xs); color: var(--text-muted);
-    padding: 6px 10px 8px; margin: 0; border-top: 1px solid var(--border-subtle);
-  }
+  /* A linha apaga, a explicação não: é ela que diz por que a opção está fora de alcance. */
+  .linha.desabilitado .rotulo,
+  .linha.desabilitado .glifo { opacity: 0.5; }
 </style>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import { getRunners, startRun, stopRun, getRunPane } from '@hangar/core';
   import type { Runner, RunInfo } from '@hangar/core';
   import * as m from '../paraglide/messages';
@@ -68,7 +69,7 @@
   });
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.ctx_rodar_projeto()}>
+<BottomSheet {open} {onClose} ariaLabel={m.ctx_rodar_projeto()} centered={desktop.atual}>
   <h2 class="sheet-title">{m.ctx_rodar()}</h2>
 
   {#if err}<p class="err">{err}</p>{/if}

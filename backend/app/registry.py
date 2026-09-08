@@ -23,7 +23,8 @@ from app.pair import PairLink, rename_pair, leave as pair_leave
 from app.adapters.codex import sessions as codex_sessions
 from app.askquestion import clear_pending_askq, pergunta_aberta
 from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
-                       aprovacao_kimi, codex_turno_aberto, status_line as _pane_status)
+                       aprovacao_kimi, codex_turno_aberto, menu_codex,
+                       status_line as _pane_status)
 from app.statusline import read as _sidecar_status
 from app.adapters.codex.adapter import status_line_do_rollout as _codex_status_line
 from app.hook_state import hook_state
@@ -55,6 +56,24 @@ _AWAITING_DEMOTE_GRACE_S = 10.0
 # (PlanBar.svelte), acima disso desenha barra unica e ignora a lista. 9 e nao 8 DE PROPOSITO: cortar
 # em 8 exatos faria o front achar que o plano TEM 8 Tasks e segmentar um plano de 30.
 _MAX_PLAN_TASK_SEGMENTS = 9
+
+
+# Ultimo git bom por cwd: (summary, diffstat). Resultado None (repo sumiu, timeout) NAO apaga o
+# anterior — erro nunca vira "repositorio limpo" no card.
+_git_ultimo: dict[str, tuple[dict | None, dict | None]] = {}
+_git_em_voo: set[str] = set()
+
+
+async def _atualizar_git(cwd: str) -> None:
+    try:
+        summary, diffstat = await asyncio.to_thread(lambda: (git_summary(cwd), git_diffstat(cwd)))
+        antes = _git_ultimo.get(cwd, (None, None))
+        _git_ultimo[cwd] = (summary if summary is not None else antes[0],
+                            diffstat if diffstat is not None else antes[1])
+    except Exception:
+        _log.exception("git em segundo plano falhou cwd=%s (mantido o ultimo numero)", cwd)
+    finally:
+        _git_em_voo.discard(cwd)
 
 
 def _decorate_loop(info) -> None:
@@ -100,6 +119,15 @@ def sanitize_cwd(cwd: str) -> str:
 _pretrust_lock = threading.Lock()
 
 
+def _chave_trust(cwd: str, windows: bool = os.name == "nt") -> str:
+    """A chave que o Claude Code usa em `projects` do `.claude.json` para esta pasta.
+
+    No Windows ele normaliza o caminho pra barra NORMAL antes de indexar; gravar com contrabarra
+    escreve uma chave que ninguem le, e a sessao nova nascia presa no "trust this folder?" mesmo
+    com o pre-trust rodando."""
+    return cwd.replace("\\", "/") if windows else cwd
+
+
 def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
     """Marca `hasTrustDialogAccepted=True` pra `cwd` no .claude.json que a sessão nova vai LER —
     quem responde qual é o arquivo é `tmux.claude_json_de`, o mesmo lugar que decide se o pane
@@ -121,7 +149,7 @@ def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
             cfg = tmux.claude_json_de(config_dir)
             data = json.loads(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
             projects = data.setdefault("projects", {})
-            entry = projects.setdefault(cwd, {})
+            entry = projects.setdefault(_chave_trust(cwd), {})
             if entry.get("hasTrustDialogAccepted") is True:
                 return  # já confiada -> não reescreve o arquivo (evita corrida à toa)
             entry["hasTrustDialogAccepted"] = True
@@ -334,18 +362,23 @@ def _provider_do_argv(argv: list[str]) -> Optional[str]:
     return None
 
 
-def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> str:
-    """Qual agente roda neste pane, lido do /proc dos descendentes.
+def agente_do_pane(pid, children: Optional[dict[int, list[int]]] = None) -> tuple[str, Optional[int]]:
+    """Qual agente roda neste pane e QUAL pid e o dele, lidos do /proc dos descendentes.
 
     NAO ha campo de comando no pane: tmux.list_panes_active() devolve so name/pid/cwd/pane_id, entao
     o caminho e o mesmo do _repl_sid — descer os descendentes e ler o cmdline.
 
+    O pid importa porque `CLAUDE_CONFIG_DIR`/`CP_ENGINE` moram no ambiente do processo do AGENTE. Numa
+    sessao aberta a mao o pane e o shell, que nao declara nenhum dos dois: lendo o pid do pane, a conta
+    caia no default (`~/.claude`) e a sessao aparecia com o badge da conta errada.
+
     Default "claude" preserva o comportamento anterior a esta funcao existir: pane nao reconhecido
-    segue tratado como Claude, em vez de sumir da lista.
+    segue tratado como Claude, em vez de sumir da lista. Pid None = nao achou agente; o call site
+    decide o fallback.
     """
     if not pid:
         # pid 0 (System Idle no Windows) e pai dele mesmo no mapa do psutil e tem a arvore da maquina inteira embaixo — visitar ele custa um _cmdline por processo da maquina, a cada poll
-        return "claude"
+        return "claude", None
     for p in _descendant_pids(pid, children):
         cmd = _cmdline(p)
         if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
@@ -355,8 +388,12 @@ def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> st
         # acima segue servindo pra exclusao por substring, que e o uso dele.
         prov = _provider_do_argv(_argv(p))
         if prov:
-            return prov
-    return "claude"
+            return prov, p
+    return "claude", None
+
+
+def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> str:
+    return agente_do_pane(pid, children)[0]
 
 
 # Cache pid -> (instante de inicio do processo, nome da sessao tmux). Um processo nunca muda de
@@ -473,12 +510,18 @@ def _pi_sid_of(pid: int) -> Optional[str]:
     return None
 
 
-def _pi_transcript_of_id(cwd: str, sid: str, provider: str = "pi") -> Optional[str]:
+def _pi_transcript_of_id(cwd: str, sid: str, provider: str = "pi", perfil: str | None = None) -> Optional[str]:
     # Indireção pro adapter (Task 1), que sabe o slug e o glob <timestamp>_<uuid>.jsonl. Import local
     # pelo mesmo motivo do get_adapter em create(): evita qualquer ciclo se um adapter futuro vier a
     # importar daqui.
     from app.adapters import get_adapter
-    return get_adapter(provider).transcript_path(cwd, sid) or None
+    return get_adapter(provider).transcript_path(cwd, sid, perfil) or None
+
+
+def _omp_profile_of(pid: Optional[int]) -> Optional[str]:
+    # Perfil do omp DAQUELE pane: move a raiz das sessoes pra ~/.omp/profiles/<p>/agent. Lido do
+    # processo vivo, como CP_ENGINE e CLAUDE_CONFIG_DIR — o backend pode estar noutro perfil.
+    return procinfo._env_var_of(pid, "OMP_PROFILE") if pid else None
 
 
 def _pi_is_subagent(path: str) -> bool:
@@ -592,11 +635,14 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
             # em `sessions/-/<nome>` (ver pi_sessions.localizar_na_raiz). Mesmo nome, outra pasta.
             if provider == "omp" and not os.path.exists(f):
                 from app.adapters.pi.sessions import localizar_na_raiz   # import local, como os irmaos acima
-                f = localizar_na_raiz(os.path.basename(f), provider) or f
+                f = localizar_na_raiz(os.path.basename(f), provider, _omp_profile_of(pid)) or f
             return f
     except (OSError, ValueError):
         pass
-    return _pi_transcript_of_id(cwd, sid, provider) if sid else None
+    if not sid:
+        return None
+    perfil = _omp_profile_of(pid) if provider == "omp" else None
+    return _pi_transcript_of_id(cwd, sid, provider, perfil) if perfil else _pi_transcript_of_id(cwd, sid, provider)
 
 
 _KIMI_TICKET_WARNED: set[tuple[str, str]] = set()
@@ -697,6 +743,11 @@ class SessionRegistry:
     # Texto do spinner ("Hyperspacing… (1m51s · ↓2.1k tokens)") extraido da MESMA captura do sweep:
     # o fast-path de marcador deixa label=None e o card nunca mostrava a barrinha de "trabalhando".
     _label_cache: dict[str, Optional[str]] = {}
+    # Banner de limite de uso por sessao TRAVADA: name -> (monotonic, horario de volta ou None).
+    # Sessao em limite fica `working` pelo marcador e nunca passaria pela captura; olhar o pane so
+    # das travadas, com este cache, e o que liga o radar sem raspar toda sessao a cada poll.
+    _limit_cache: dict[str, tuple[float, Optional[str]]] = {}
+    _LIMIT_CACHE_S = 30.0
     # Nomes ja avisados por _agent_pane (Task 5.5): sessao com 2+ panes e nenhum reconhecido como
     # agente. De classe pela MESMA razao das demais acima (list() roda em ambas instancias).
     _SEM_AGENTE_AVISADAS: set[str] = set()
@@ -911,6 +962,7 @@ class SessionRegistry:
         # por ate _STATUS_TTL (e o dict cresceria sem poda a cada create/kill).
         self._status_cache.pop(name, None)
         self._label_cache.pop(name, None)
+        self._limit_cache.pop(name, None)
 
     def _repl_sid(self, pid, children: Optional[dict[int, list[int]]] = None) -> Optional[str]:
         # --session-id do REPL principal da sessao (pula daemon/agent). Identidade do DONO de um
@@ -1054,7 +1106,10 @@ class SessionRegistry:
             # jsonl muda: o --session-id nao sobrevive no cmdline (Task 0, fato 7) e resolve_tracked
             # cairia no fallback newest-by-mtime, que pegaria o transcript do CLAUDE do mesmo cwd (a
             # regressao mais cara desta task). Resolve pelo bilhete da extensao / env do wrapper.
-            prov = provider_of_pane(p["pid"], children)
+            prov, pid_agente = agente_do_pane(p["pid"], children)
+            # Quem declara conta e motor e o processo do agente, nao o pane: numa sessao aberta a mao
+            # o pane e o shell, e o shell nao tem CLAUDE_CONFIG_DIR nem CP_ENGINE.
+            pid_env = pid_agente or p["pid"]
             if prov in ("pi", "omp"):
                 jsonl = pi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"], prov)
                 # tracked segue o TRANSCRITO, nao o provider. O bilhete/env sao deterministicos
@@ -1096,7 +1151,7 @@ class SessionRegistry:
             # Motor da sessão, do mesmo pid que já resolve o config_dir. É uma leitura de
             # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
             # não é de graça, mas é local e sem rede. Feature em tick do SSE tem que ser barata.
-            info.engine = _engine_of(p["pid"]) if p.get("pid") else None
+            info.engine = _engine_of(pid_env) if pid_env else None
             # Conta pra pílula de cota (id do /api/cotas): com motor, a chave do engines.json; sem
             # motor e Claude, o config dir do pane — ou o default (~/.claude) quando o processo não
             # declara CLAUDE_CONFIG_DIR (o fallback é idiom dos call sites, não do _config_dir_of).
@@ -1118,7 +1173,7 @@ class SessionRegistry:
                 # desta lista. Provider sem chave conhecida (OAuth do Codex, provedor só do Pi)
                 # segue None, e a pílula cai no pior-geral como antes.
                 from app import cotas, pi_models
-                cfg_pi = _config_dir_of(p["pid"]) if p.get("pid") else None
+                cfg_pi = _config_dir_of(pid_env) if pid_env else None
                 atual = pi_models.provider_atual(jsonl, cfg_pi) if jsonl else None
                 info.conta = cotas.conta_de_provider_pi(atual)
             elif prov == "codex":
@@ -1126,7 +1181,7 @@ class SessionRegistry:
                 # /api/cotas — cair no `else` abaixo carimbaria uma conta Claude que ela nao gasta.
                 info.conta = conta_codex
             else:
-                cdir = (_config_dir_of(p["pid"]) if p.get("pid") else None) or (Path.home() / ".claude")
+                cdir = (_config_dir_of(pid_env) if pid_env else None) or (Path.home() / ".claude")
                 info.conta = f"claude:{Path(cdir).resolve()}"
             out.append(info)
             sids[p["name"]] = self._repl_sid(p["pid"], children)
@@ -1150,6 +1205,31 @@ class SessionRegistry:
         except Exception as e:
             _log.warning("varredura de pares falhou (lista segue): %r", e)
         return out
+
+    async def _radar_de_limite(self, infos: list[SessionInfo], raspadas: set[str]) -> None:
+        """Preenche limited/limit_reset das sessoes TRAVADAS que o fast-path de marcador nao raspou.
+        Uma sessao esperando o limite voltar e `working` pelo hook e sem transcript avancando —
+        exatamente `stalled` —, e so ela paga a captura, uma vez a cada _LIMIT_CACHE_S."""
+        # Codex nunca raspa o pane (a TUI dele nao tem o rodape do Claude Code) — fica de fora.
+        alvos = [i for i in infos if getattr(i, "stalled", False) and i.name not in raspadas
+                 and getattr(i, "provider", "claude") != "codex"]
+        agora = time.monotonic()
+        frescos = [i for i in alvos
+                   if agora - self._limit_cache.get(i.name, (0.0, None))[0] > self._LIMIT_CACHE_S]
+        if frescos:
+            frames = await asyncio.gather(
+                *[asyncio.to_thread(tmux.capture_pane, i.name) for i in frescos], return_exceptions=True)
+            for i, f in zip(frescos, frames):
+                if isinstance(f, str):
+                    reset = rate_limit_reset(f)
+                else:
+                    # tmux engasgado: preserva o ultimo valor bom (mesma regra do sweep de statusline).
+                    _log.debug("radar de limite: captura falhou pra %s: %r", i.name, f)
+                    reset = self._limit_cache.get(i.name, (0.0, None))[1]
+                self._limit_cache[i.name] = (agora, reset)
+        for i in alvos:
+            i.limit_reset = self._limit_cache.get(i.name, (0.0, None))[1]
+            i.limited = i.limit_reset is not None
 
     async def list_with_state(self, infos: Optional[list[SessionInfo]] = None) -> list[SessionInfo]:
         # Listagem COM estado vivo por sessao (pro /api/sessions). Faz a resolucao otimizada (sync, num
@@ -1209,6 +1289,7 @@ class SessionRegistry:
 
             corrigidos, aprovacoes = await asyncio.to_thread(_kimi_sweep)
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
+        pendente_sem_thread = []  # Codex antes da thread -> raspa o pane SO pra achar menu
         for info in infos:
             # Codex: le o marcador como os outros, mas NUNCA raspa o pane. A TUI dele nao tem regua
             # nem caixa de composer, entao `classify` devolveria as duas ultimas linhas verbatim —
@@ -1221,6 +1302,14 @@ class SessionRegistry:
                     # tanto a chave do marcador quanto a leitura do turno EXIGEM um caminho
                     # (session_key(None) levanta TypeError). Sem esta saida, uma sessao Codex
                     # recem-criada derrubaria a lista INTEIRA — todas as sessoes de todo mundo.
+                    #
+                    # Mas e justamente aqui que a TUI costuma estar PERGUNTANDO alguma coisa
+                    # (aprovar os hooks que a integracao escreveu, escolher o login), e sem isto a
+                    # unica saida era um `tmux attach` na maquina. O pane so e raspado por MENU: a
+                    # ressalva acima (as duas ultimas linhas virariam uma segunda statusline) vale
+                    # pro Codex JA rodando, nao pra um seletor numerado, que e o que `classify`
+                    # reconhece. Sem menu na tela, nada muda — segue o default idle.
+                    pendente_sem_thread.append(info)
                     continue
                 marker = hook_state.get_state(_sid(info.jsonl))
                 if marker and marker[0] != "awaiting_input":
@@ -1305,9 +1394,17 @@ class SessionRegistry:
                 # (marker path fica com o default False/None, igual a label/question/options).
                 info.limit_reset = rate_limit_reset(frame)
                 info.limited = info.limit_reset is not None
+                self._limit_cache[info.name] = (time.monotonic(), info.limit_reset)
                 # Statusline + label de graca: o frame ja foi capturado pra classificar.
                 self._status_cache[info.name] = (time.monotonic(), _pane_status(frame))
                 self._label_cache[info.name] = c[1]
+        if pendente_sem_thread:
+            quadros = await asyncio.gather(*[asyncio.to_thread(tmux.capture_pane, i.name)
+                                            for i in pendente_sem_thread])
+            for info, frame in zip(pendente_sem_thread, quadros):
+                menu = menu_codex(frame)
+                if menu:
+                    info.state, (info.question, info.options) = "awaiting_input", menu
         # Pergunta que o pane nao mostra (o menu rolou pra fora — ver askquestion.pergunta_aberta).
         # FORA dos dois ramos acima de proposito: com marcador de hook a sessao nem raspa o pane, e
         # era justamente ali que a pergunta sumia. So pras que ficaram SEM menu — com menu visivel
@@ -1349,6 +1446,8 @@ class SessionRegistry:
             try:
                 pane = await asyncio.to_thread(tmux.capture_pane, info.name)
                 self._status_cache[info.name] = (time.monotonic(), _pane_status(pane))
+                # Mesma captura serve o radar de limite: assim a travada raramente paga a sua.
+                self._limit_cache[info.name] = (time.monotonic(), rate_limit_reset(pane))
                 # Spinner da MESMA captura (classify e puro/regex): e o que devolve a barrinha de
                 # "trabalhando" pro card quando o estado veio do marcador (que nao traz label).
                 # SO grava se a captura PARECE working — captura unica nao distingue spinner vivo
@@ -1414,30 +1513,37 @@ class SessionRegistry:
                 and info.last_activity is not None
                 and (now - info.last_activity) > runtime_config.get("stall_seconds")
             )
+        await self._radar_de_limite(infos, raspadas={i.name for i in pending})
         # Estado de git por sessão — SÓ aqui (payload do /api/sessions), nunca em list(): git_summary
         # forka `git status` e list() é o caminho leve chamado por kill()/resume/SSE. E como
         # list_with_state é awaitado direto no event loop (/api/sessions, sse, stall_watch), o loop
         # de forks vai pro threadpool via asyncio.to_thread — rodar na corrotina congelaria o backend
         # inteiro no cache-miss. Gate em .git e except GitError moram no git_summary; cache de 3s
         # segura o custo vs o poll de 2s.
-        def _decorate_git() -> None:
+        # O git NAO segura a lista: ela sai com o ultimo numero conhecido por cwd e o git atualiza
+        # em segundo plano, um por repositorio (single-flight). Em serie, um repositorio lento
+        # atrasava o card de TODAS as sessoes — inclusive as que acabaram de mudar de estado.
+        for info in infos:
+            summary, diffstat = _git_ultimo.get(info.cwd, (None, None))
+            if summary is not None:
+                info.git_dirty = summary["dirty"]
+                info.git_ahead = summary["ahead"]
+                info.git_behind = summary["behind"]
+            if diffstat is not None:
+                info.git_added = diffstat["added"]
+                info.git_removed = diffstat["removed"]
+        for cwd in {i.cwd for i in infos if i.cwd}:
+            if cwd not in _git_em_voo:
+                _git_em_voo.add(cwd)
+                asyncio.create_task(_atualizar_git(cwd))
+
+        def _decorate_planos() -> None:
+            # Le markdown do disco: ler arquivo na corrotina e a mesma classe de erro que motivou
+            # o to_thread do git.
             for info in infos:
-                summary = git_summary(info.cwd)
-                if summary is not None:
-                    info.git_dirty = summary["dirty"]
-                    info.git_ahead = summary["ahead"]
-                    info.git_behind = summary["behind"]
-                # "+N -M" do card: mesmo gate/cache do summary (fork extra por cwd so no
-                # cache-miss, seguro pelo TTL de 3s contra o poll de 2s).
-                diffstat = git_diffstat(info.cwd)
-                if diffstat is not None:
-                    info.git_added = diffstat["added"]
-                    info.git_removed = diffstat["removed"]
-                # Plano vive AQUI dentro, no mesmo to_thread: le markdown do disco, e ler arquivo na
-                # corrotina e a mesma classe de erro que motivou o to_thread do git.
                 _decorate_plan(info)
 
-        await asyncio.to_thread(_decorate_git)
+        await asyncio.to_thread(_decorate_planos)
         for info in infos:
             _decorate_loop(info)
         return infos
@@ -1447,12 +1553,22 @@ class SessionRegistry:
                engine: str | None = None, model: str | None = None,
                effort: str | None = None, context_window: int | None = None,
                permission_mode: str | None = None,
-               initial_prompt: str | None = None) -> SessionInfo:
+               initial_prompt: str | None = None,
+               omp_profile: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
         if not name:
             raise ValueError("nome invalido")
+        if omp_profile:
+            if provider != "omp":
+                raise ValueError("perfil so vale para provider omp")
+            # A MESMA regra de nome do omp (resolve_omp_directories): o valor vai pro ambiente do pane.
+            from app.omp_plugin_sync import InventoryError, resolve_omp_directories
+            try:
+                resolve_omp_directories(Path.home(), {"OMP_PROFILE": omp_profile}, Path.home())
+            except InventoryError as e:
+                raise ValueError(str(e)) from None
         # Motor de modelo: valida ANTES de criar o pane. Motor inexistente com env vazio faria a
         # sessão subir na conta Anthropic ACHANDO que é o motor pedido — falha silenciosa.
         if engine:
@@ -1481,7 +1597,7 @@ class SessionRegistry:
         # quem materializa as skills do Claude la e a ponte, e ela era refeita apenas na subida do
         # backend — instalar uma skill exigia reiniciar o servico. Claude e omp ficam de fora
         # porque os dois descobrem as fontes sozinhos. Fail-soft: criar sessao nunca depende disto.
-        if provider in ("pi", "kimi", "codex"):
+        if provider in ("pi", "kimi"):
             try:
                 from app import skill_bridge
                 # Silencioso no caso comum (nada mudou) e falante quando MEXEU: sem a segunda
@@ -1537,7 +1653,7 @@ class SessionRegistry:
                     raise ValueError("session_id invalido")
                 sid = resume_session_id
                 from app.adapters import get_adapter
-                cmd = tmux.join_cmd(get_adapter("omp").resume_command(cwd, sid, model, effort))
+                cmd = tmux.join_cmd(get_adapter("omp").resume_command(cwd, sid, model, effort, omp_profile))
             elif provider == "pi":
                 # `pi --session-id <id>` RETOMA quando o id ja existe ("creating it if missing", no
                 # --help do 0.82.1) -> o comando do resume e o mesmo do spawn, so com o id antigo.
@@ -1569,6 +1685,8 @@ class SessionRegistry:
             # que estar no comando do pane. Os outros providers recebem prompt inicial por /input,
             # e aceitar o argumento neles seria escolha que some calada.
             extra = {"initial_prompt": initial_prompt} if provider == "codex" else {}
+            if provider == "omp" and omp_profile:
+                extra["perfil"] = omp_profile
             cmd = tmux.join_cmd(get_adapter(provider).spawn_command(
                 cwd, sid, model, effort, permission_mode, **extra))
         if engine:
@@ -1658,6 +1776,8 @@ class SessionRegistry:
             self._status_cache[new] = st
         if old in self._label_cache:
             self._label_cache[new] = self._label_cache.pop(old)
+        if old in self._limit_cache:
+            self._limit_cache[new] = self._limit_cache.pop(old)
         # A fila duravel tambem e keyed por NOME -> move junto, senao a sessao renomeada perde as
         # entradas nao-drenadas e elas ficam orfas no nome velho (fantasma se reusarem `old`).
         PromptQueue(old).rename(new)

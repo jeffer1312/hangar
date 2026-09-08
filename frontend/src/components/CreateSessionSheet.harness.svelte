@@ -6,7 +6,8 @@
   import type { Provider } from '@hangar/core';
   import type { Server } from '../lib/auth';
 
-  let { onCreate, onOpenSession, servidores = [], bastao = null } = $props<{
+  let { onCreate, onOpenSession, servidores = [], bastao = null, offline = new Set<string>(),
+        latencias = new Map<string, number>() } = $props<{
     onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                engine?: string | null, model?: string | null, effort?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
@@ -14,9 +15,13 @@
     servidores?: Server[];
     /** Origem da passagem de bastão; null = a folha normal de criar. */
     bastao?: { name: string; cwd: string; serverId: string } | null;
+    /** Ids fora do ar; o padrão vazio mantém os casos antigos byte por byte. */
+    offline?: ReadonlySet<string>;
+    /** ms até o primeiro quadro por servidor; vazio = nenhum número na tela, como antes. */
+    latencias?: ReadonlyMap<string, number>;
   }>();
   let open = $state(true);
 </script>
 
 <button type="button" data-testid="sheet-toggle" onclick={() => (open = !open)}>toggle</button>
-<CreateSessionSheet {open} servers={servidores} onClose={() => (open = false)} {onCreate} {onOpenSession} {bastao} />
+<CreateSessionSheet {open} servers={servidores} {offline} {latencias} onClose={() => (open = false)} {onCreate} {onOpenSession} {bastao} />

@@ -24,15 +24,23 @@
     onClose: () => void;
     onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                engine?: string | null, model?: string | null, effort?: string | null,
-               permissionMode?: string | null) => Promise<void>;
+               permissionMode?: string | null, ompProfile?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
     /** Passagem de bastão: a MESMA folha, aberta pra criar a sessão que CONTINUA `bastao.name`.
      *  Não-nulo = modo bastão — servidor travado no da origem, cwd/nome pré-preenchidos, e o
      *  botão chama `POST /api/sessions/{origem}/bastao` (que grava o dossiê e enfileira o
      *  kick-off) em vez do create normal. */
     bastao?: { name: string; cwd: string; serverId: string } | null;
+    /** Ids que o stream da lista marcou como fora do ar. Só escondem o CHIP: `servers` segue
+     *  inteiro pra resolução de alvo/bastão, senão uma máquina que oscila trocaria o alvo sozinha. */
+    offline?: ReadonlySet<string>;
+    /** ms até o primeiro quadro de cada servidor. A MESMA máquina costuma estar cadastrada duas
+     *  vezes, por duas rotas (Tailscale direto e o desvio pela VPS) — com as duas no ar, isto é o
+     *  que diz qual escolher. */
+    latencias?: ReadonlyMap<string, number>;
   }
-  let { open, servers, onClose, onCreate, onOpenSession, bastao = null }: Props = $props();
+  let { open, servers, onClose, onCreate, onOpenSession, bastao = null,
+        offline = new Set<string>(), latencias = new Map<string, number>() }: Props = $props();
 
   // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir), Pi,
   // Kimi ou OMP (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor
@@ -54,6 +62,22 @@
     loadConfigs();
     carregarProviders();
   }
+
+  // Criar sessão em máquina desligada não funciona, então ela não é oferecida. O alvo atual fica
+  // visível mesmo offline: sumir com o chip selecionado deixaria a folha sem seleção nenhuma.
+  const serversVisiveis = $derived(
+    servers.filter((s) => !offline.has(s.id) || s.id === targetServer),
+  );
+  // Quantas sumiram. Esconder calado vira "cadê minha máquina?" — a pessoa não tem como saber se
+  // ela foi apagada, se o app perdeu, ou se está só desligada. Uma linha resolve.
+  const ocultas = $derived(servers.length - serversVisiveis.length);
+  // A rota mais rápida ENTRE AS VISÍVEIS. Só marca com 2+ medidas: com uma só, "a mais rápida" é
+  // a única, e a coroa não informa nada. Empate fica com a primeira, que é a ordem do cadastro.
+  const maisRapido = $derived.by(() => {
+    const medidos = serversVisiveis.filter((s) => latencias.has(s.id));
+    if (medidos.length < 2) return null;
+    return medidos.reduce((a, b) => (latencias.get(b.id)! < latencias.get(a.id)! ? b : a)).id;
+  });
 
   // Fluxo em dois passos: 1) escolher a pasta (scanner) -> 2) criar uma sessao nova com nome UNICO
   // derivado do basename. Varias sessoes na mesma pasta sao permitidas (cada uma tem nome+jsonl
@@ -103,6 +127,8 @@
   // Motor de modelo (Task 5): '' = conta Anthropic (o padrão de sempre). Só faz sentido com provider claude.
   let engine = $state('');
   let motores = $state<Record<string, Motor>>({});
+  // Perfil do omp (`omp --profile x`): '' = sem perfil. Só vale com provider omp; o backend valida o nome.
+  let perfilOmp = $state('');
 
   // Escolha de modelo e esforço (modelo: claude, pi e kimi; esforço: só claude e pi — o Kimi não
   // tem flag de esforço no CLI, ver NIVEIS abaixo). `''` = Padrão, ou seja
@@ -701,6 +727,7 @@
           model: modelo || null,
           effort: esforco || null,
           permission_mode: provider === 'claude' ? (permissao || null) : null,
+          omp_profile: provider === 'omp' ? (perfilOmp.trim() || null) : null,
         });
         onClose();
         onOpenSession(r.name);
@@ -708,7 +735,9 @@
       }
       await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
                      provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null,
-                     provider === 'claude' ? (permissao || null) : null);
+                     provider === 'claude' ? (permissao || null) : null,
+                     // O 9º argumento só existe pro omp: os outros providers chamam como sempre chamaram.
+                     ...(provider === 'omp' ? [perfilOmp.trim() || null] : []));
       onClose();
     } catch (err) {
       error = err instanceof Error ? err.message : m.criar_sessao_erro();
@@ -733,24 +762,37 @@
   {/snippet}
 
   {#snippet chipsServidor()}
-    {#if servers.length > 1}
+    <!-- Os chips só valem com mais de uma máquina pra escolher, mas o aviso de ocultas vale sempre:
+         com 3 cadastradas e 2 fora do ar sobra 1 visível, o seletor some, e sem esta linha a pessoa
+         não teria como saber que as outras duas existem e estão desligadas. -->
+    {#if serversVisiveis.length > 1 || ocultas > 0}
       <div class="server-select">
+        {#if serversVisiveis.length > 1}
         <span class="server-select-label">{m.lista_agrupar_servidor()}</span>
         <div class="server-chips">
-          {#each servers as s (s.id)}
+          {#each serversVisiveis as s (s.id)}
             <button
               type="button"
               class="server-chip"
               class:on={targetServer === s.id}
+              class:fora={offline.has(s.id)}
+              title={offline.has(s.id) ? m.lista_servidor_offline({ label: s.label }) : undefined}
               style="--chip: {serverColor(s.id)};"
               onclick={() => pickTarget(s.id)}
               disabled={contaOcupada || (bastao !== null && s.id !== bastao.serverId)}
             >
               <span class="chip-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
               {s.label}
+              {#if latencias.has(s.id)}
+                <span class="chip-ms" class:rapido={maisRapido === s.id}>{latencias.get(s.id)}ms</span>
+              {/if}
             </button>
           {/each}
         </div>
+        {/if}
+        {#if ocultas > 0}
+          <p class="hint">{ocultas === 1 ? m.sessao_offline_1() : m.sessao_offline({ n: String(ocultas) })}</p>
+        {/if}
         {#if bastao && !bastaoSemServidor}
           <!-- Travado, e a tela DIZ por quê: o dossiê é arquivo local, então cross-server não é
                uma opção que a v1 recusa por preguiça — não há transporte pra ele. O rótulo vem do
@@ -979,6 +1021,14 @@
         </div>
       {/if}
 
+      {#if provider === 'omp' && !conversaAlvo}
+        <div class="field">
+          <label class="field-label" for="omp-profile">{m.criar_perfil_omp()}</label>
+          <input id="omp-profile" class="field-input" type="text" bind:value={perfilOmp}
+                 placeholder={m.criar_perfil_omp_dica()} autocomplete="off" spellcheck="false" />
+        </div>
+      {/if}
+
       <!-- Modelo, esforço e permissão lado a lado: cada um numa linha só gastava três alturas de
            campo com três palavras. `auto-fit`+`minmax` faz a conta sozinho — no painel largo dá três
            colunas, num estreito (celular, ou só um dos três visível) volta a empilhar sem media
@@ -1179,6 +1229,28 @@
   .server-chip:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+  /* O único chip offline que sobrevive ao filtro é o ALVO atual (ver `serversVisiveis`). Sem marca
+     ele fica idêntico a uma máquina no ar, e a pessoa só descobre no erro depois do "Criar". */
+  .server-chip.fora {
+    opacity: 0.55;
+  }
+  /* O número mede a ROTA, não a máquina: a mesma máquina cadastrada por Tailscale e pela VPS dá
+     dois valores bem diferentes, e é essa diferença que se quer ver. */
+  .chip-ms {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-tertiary, var(--text-secondary));
+    opacity: 0.7;
+  }
+  .chip-ms.rapido {
+    color: var(--success, var(--accent));
+    opacity: 1;
+    font-weight: 600;
+  }
+  .server-chip.fora .chip-dot {
+    background: transparent !important;
+    border: 1px solid var(--border-default);
   }
   .chip-dot {
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;

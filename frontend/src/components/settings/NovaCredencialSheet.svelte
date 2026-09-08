@@ -13,6 +13,8 @@
   // digitar id de modelo à mão, como o formulário da referência exige.
   import BottomSheet from '../BottomSheet.svelte';
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
+  import MotorForm, { idDe } from './MotorForm.svelte';
+  import ConfigIcone from './ConfigIcone.svelte';
   import * as m from '../../paraglide/messages';
   import { engineModelos, engineModelosForServer, putEngine, putEngineForServer,
            criarConta, type ModeloProvedor } from '@hangar/core';
@@ -26,8 +28,10 @@
     onFechar: () => void;
     // Chamado depois de criar — quem abriu recarrega a lista (fonte única, não insere item na mão).
     onCriada: () => void;
+    // Só repassada ao formulário do modelo, que recusa nome curto já ocupado antes de gravar.
+    nomesExistentes?: string[];
   }
-  let { apiTarget, onFechar, onCriada }: Props = $props();
+  let { apiTarget, onFechar, onCriada, nomesExistentes = [] }: Props = $props();
 
   // Catálogo. `url` vazia = o usuário digita (provedor personalizado); `login` = conta do Claude por
   // assinatura, que não tem URL nem chave. Só entra aqui provedor que a gente sabe usar de verdade —
@@ -38,20 +42,42 @@
   // backend também tira o `/v1` sozinho agora, então o campo aceita as duas formas.
   // `login: 'codex'` = conta do ChatGPT por código de dispositivo, que o servidor espalha pro
   // Codex, Pi e omp (o mesmo OAuth nos três) — nem URL nem chave nem nome.
-  type Item = { id: string; nome: string; desc: string; url: string; login?: 'claude' | 'codex' };
+  // Três coisas MUITO diferentes moram nesta folha, e o catálogo sozinho respondia uma pergunta que
+  // nunca foi feita — tanto que "modelo pro Claude Code" não tinha porta nenhuma na interface.
+  // `caminhos` diz em qual dos três um provedor faz sentido: entrar numa assinatura não é cadastrar
+  // modelo, e o login do ChatGPT não vira motor do Claude Code.
+  type Caminho = 'conta' | 'modelo' | 'chave';
+  type Item = { id: string; nome: string; desc: string; url: string; caminhos: Caminho[];
+                login?: 'claude' | 'codex' };
   const CATALOGO: Item[] = [
-    { id: 'claude', nome: m.novacred_claude_nome(), desc: m.novacred_claude_desc(), url: '', login: 'claude' },
-    { id: 'codex', nome: m.novacred_codex_nome(), desc: m.novacred_codex_desc(), url: '', login: 'codex' },
-    { id: 'opencode', nome: 'OpenCode Zen', desc: m.novacred_opencode_desc(), url: 'https://opencode.ai/zen' },
-    { id: 'kimi', nome: 'Kimi Code', desc: m.novacred_kimi_desc(), url: 'https://api.kimi.com/coding' },
-    { id: 'anthropic', nome: 'Anthropic', desc: m.novacred_anthropic_desc(), url: 'https://api.anthropic.com' },
-    { id: 'openrouter', nome: 'OpenRouter', desc: m.novacred_openrouter_desc(), url: 'https://openrouter.ai/api' },
-    { id: 'groq', nome: 'Groq', desc: m.novacred_groq_desc(), url: 'https://api.groq.com/openai' },
-    { id: 'deepseek', nome: 'DeepSeek', desc: m.novacred_deepseek_desc(), url: 'https://api.deepseek.com' },
-    { id: 'custom', nome: m.novacred_custom_nome(), desc: m.novacred_custom_desc(), url: '' },
+    { id: 'claude', nome: m.novacred_claude_nome(), desc: m.novacred_claude_desc(), url: '', login: 'claude', caminhos: ['conta'] },
+    { id: 'codex', nome: m.novacred_codex_nome(), desc: m.novacred_codex_desc(), url: '', login: 'codex', caminhos: ['chave'] },
+    { id: 'opencode', nome: 'OpenCode Zen', desc: m.novacred_opencode_desc(), url: 'https://opencode.ai/zen', caminhos: ['modelo', 'chave'] },
+    { id: 'kimi', nome: 'Kimi Code', desc: m.novacred_kimi_desc(), url: 'https://api.kimi.com/coding', caminhos: ['modelo', 'chave'] },
+    { id: 'omni', nome: 'OmniRoute', desc: m.novacred_omni_desc(), url: 'https://ai.omniwise.com.br', caminhos: ['modelo', 'chave'] },
+    { id: 'anthropic', nome: 'Anthropic', desc: m.novacred_anthropic_desc(), url: 'https://api.anthropic.com', caminhos: ['modelo', 'chave'] },
+    { id: 'openrouter', nome: 'OpenRouter', desc: m.novacred_openrouter_desc(), url: 'https://openrouter.ai/api', caminhos: ['modelo', 'chave'] },
+    { id: 'groq', nome: 'Groq', desc: m.novacred_groq_desc(), url: 'https://api.groq.com/openai', caminhos: ['modelo', 'chave'] },
+    { id: 'deepseek', nome: 'DeepSeek', desc: m.novacred_deepseek_desc(), url: 'https://api.deepseek.com', caminhos: ['modelo', 'chave'] },
+    { id: 'custom', nome: m.novacred_custom_nome(), desc: m.novacred_custom_desc(), url: '', caminhos: ['modelo', 'chave'] },
   ];
 
+  const OPCOES: { id: Caminho; nome: string; desc: string; icone: 'pessoa' | 'pulso' | 'chave' }[] = [
+    { id: 'conta', nome: m.contas_add_conta(), desc: m.contas_add_conta_desc(), icone: 'pessoa' },
+    { id: 'modelo', nome: m.contas_add_modelo(), desc: m.contas_add_modelo_desc(), icone: 'pulso' },
+    { id: 'chave', nome: m.contas_add_chave(), desc: m.contas_add_chave_desc(), icone: 'chave' },
+  ];
+
+  let caminho = $state<Caminho | null>(null);
   let escolhido = $state<Item | null>(null);
+  const opcaoAtual = $derived(OPCOES.find((o) => o.id === caminho) ?? null);
+  const catalogo = $derived(caminho ? CATALOGO.filter((i) => i.caminhos.includes(caminho!)) : []);
+
+  // "Conta do Claude" tem UM provedor possível: um catálogo de uma linha só seria um passo vazio.
+  function escolherCaminho(c: Caminho) {
+    caminho = c;
+    if (c === 'conta') abrir(CATALOGO.find((i) => i.login === 'claude')!);
+  }
   let nome = $state('');
   let url = $state('');
   let chave = $state('');
@@ -133,10 +159,14 @@
     if (item.login === 'codex') iniciarCodex();
   }
 
+  // Um passo de cada vez: do formulário pro catálogo, do catálogo pro "o quê". O caminho `conta`
+  // não tem catálogo (ver escolherCaminho), então de lá o ← já devolve a pergunta.
   function voltar() {
     cancelarCodex();
-    escolhido = null;
     erro = '';
+    if (escolhido && caminho !== 'conta') { escolhido = null; return; }
+    escolhido = null;
+    caminho = null;
   }
 
   const podeBuscar = $derived(!!url.trim() && !!chave.trim() && !buscando);
@@ -168,15 +198,6 @@
     } finally {
       buscando = false;
     }
-  }
-
-  // O engines.json tem alfabeto próprio pro nome (minúsculas, números, '-', '_'): o nome bonito vai
-  // pro `label` e o id sai daqui. Sem isto, "Meu Provedor" seria recusado com 400 e o usuário
-  // levaria a culpa por ter digitado um espaço.
-  function idDe(texto: string): string {
-    const base = texto.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
-    return base || 'chave';
   }
 
   async function salvar() {
@@ -242,19 +263,42 @@
              wide={isDesktop} centered={isDesktop}>
   <div class="nc">
     <div class="nc-topo">
-      {#if escolhido}
+      {#if caminho}
         <button type="button" class="nc-voltar" onclick={voltar} aria-label={m.comum_voltar()}>←</button>
       {/if}
       {#if escolhido}
         <ProvedorIcone tipo={escolhido.login === 'claude' ? 'claude' : 'chave'} baseUrl={escolhido.url}
           iniciais={escolhido.nome.slice(0, 2).toUpperCase()} size={26} />
       {/if}
-      <h2 class="nc-titulo">{escolhido ? escolhido.nome : m.contas_nova_escolha()}</h2>
+      <h2 class="nc-titulo">
+        {escolhido ? escolhido.nome : (opcaoAtual ? opcaoAtual.nome : m.contas_nova_escolha())}
+      </h2>
     </div>
 
-    {#if !escolhido}
+    {#if !caminho}
       <div class="nc-lista">
-        {#each CATALOGO as item (item.id)}
+        {#each OPCOES as op (op.id)}
+          <div class="nc-item">
+            <!-- Traço do ConfigIcone, não o ProvedorIcone: as iniciais existem pra distinguir MARCA
+                 numa lista de provedores, e "MO"/"CH" num caminho de escolha lê como placeholder.
+                 A caixa em volta é a mesma do ProvedorIcone, pra as duas listas ficarem alinhadas. -->
+            <span class="nc-op-icone">
+              <ConfigIcone nome={op.icone} size={17} />
+            </span>
+            <span class="nc-item-txt">
+              <span class="nc-item-nome">{op.nome}</span>
+              <span class="nc-item-desc">{op.desc}</span>
+            </span>
+            <!-- "Escolher", não "+ Conectar": aqui ninguém conecta credencial nenhuma, só se
+                 decide qual dos três caminhos seguir. -->
+            <button type="button" class="nc-conectar" onclick={() => escolherCaminho(op.id)}
+              >{m.contas_add_escolher()}</button>
+          </div>
+        {/each}
+      </div>
+    {:else if !escolhido}
+      <div class="nc-lista">
+        {#each catalogo as item (item.id)}
           <div class="nc-item">
             <ProvedorIcone tipo={item.login === 'claude' ? 'claude' : 'chave'} baseUrl={item.url}
               iniciais={item.nome.slice(0, 2).toUpperCase()} size={30} />
@@ -267,6 +311,14 @@
           </div>
         {/each}
       </div>
+    {:else if caminho === 'modelo'}
+      <!-- Modelo pro Claude Code é o formulário COMPLETO do motor, não o resumido da chave: sem
+           modelo, janela de contexto e o Avançado, o motor nasce pela metade e a sessão compacta
+           a 200k. Salvar ali já faz PUT + sincronização; aqui só a lista de fora é recarregada. -->
+      <p class="nc-leg">{escolhido.desc}</p>
+      <MotorForm {apiTarget} criando nome="" {nomesExistentes}
+        motor={{ base_url: escolhido.url, model: '', api_key: '', api_key_definida: false }}
+        onSalvo={() => onCriada()} {onFechar} />
     {:else if escolhido.login === 'codex'}
       <p class="nc-leg">{escolhido.desc}</p>
       {#if codex.etapa === 'aguardando' || codex.etapa === 'concluido'}
@@ -403,6 +455,13 @@
     background: var(--surface-raised);
   }
   .nc-item:last-child { border-bottom: none; }
+  /* Mesma caixa do ProvedorIcone (30px, raio 9), pra a linha do passo "o quê" e a do catálogo
+     alinharem o texto no mesmo ponto. Cor pelo --accent, que a folha já usa. */
+  .nc-op-icone {
+    width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px;
+    display: grid; place-items: center; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+  }
   .nc-item-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .nc-item-nome { color: var(--text-primary); font-size: var(--text-sm); font-weight: 600; }
   .nc-item-desc { color: var(--text-muted); font-size: var(--text-xs); }

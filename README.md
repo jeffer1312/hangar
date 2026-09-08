@@ -135,9 +135,27 @@ Install the wrapper once so sessions receive stable ids and appear reliably in t
 ./scripts/install-claude-wrapper.sh
 ```
 
-On Linux/macOS, the wrapper installer also links the shared fullscreen TUI extension into Pi and
-Oh My Pi and enables it on first install. Use `/fullscreen-off` in either agent to opt out; the
-installer preserves that choice. To zoom an individual tmux pane, use `Ctrl-b z`.
+No Linux/macOS, o instalador habilita a extensão fullscreen no Pi na primeira instalação;
+`/fullscreen-off` preserva a escolha de desligá-la. No Oh My Pi (OMP), tarefas e rolagem ficam
+com o núcleo: `claude-todo` e `fullscreen-tui` não são instaladas nem exigidas pelo painel de
+saúde. Atualizações removem somente links dessas duas extensões que apontem para este checkout,
+sem alterar configurações ou extensões personalizadas. As demais integrações do Hangar são
+mantidas; descoberta de skills não substitui execução de hooks CLI nem snapshots de código.
+Para ampliar um painel do tmux, use `Ctrl-b z`.
+
+A ponte Claude respeita `PI_CODING_AGENT_DIR` e `CLAUDE_CONFIG_DIR` (aceitam `~`).
+No OMP, importa agents pessoais de `<claudeDir>/agents` para `<agentDir>/agents`,
+sem espelhar skills ou comandos que o núcleo já descobre. No Pi, mantém as conversões
+e os diretórios de recursos próprios. A configuração fica em `<agentDir>/claude-bridge.json`;
+`enabled: false` desativa também a memória. Agents nativos e arquivos editados manualmente
+são preservados; `/claude-bridge` informa conflitos. A ponte não instala plugins no lugar
+do gerenciador nativo do OMP.
+
+Opcionalmente, `CP_OMP_CLAUDE_CONTEXT_ENABLED=1` configura o OMP para priorizar `CLAUDE.md`,
+com regra explícita e preservação de arquivos/links pessoais. `CP_OMP_PLUGIN_SYNC_ENABLED=1`
+ativa a importação genérica de marketplaces e reconciliação nativa em background (300 s
+por padrão), respeitando o controle global de automações. Ambos ficam desligados por padrão.
+Detalhes, limitações e diagnóstico estão em [`docs/USAGE.md`](docs/USAGE.md).
 
 Start the backend on loopback:
 

@@ -3,6 +3,7 @@
   // Codex, aberto pelo badge "Codex" da NavBar. Fetch-on-open, mesmo padrao do RunSheet.
   import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import { getLimits } from '@hangar/core';
   import { resetsIn } from '@hangar/core';
   import type { SessionLimits, RateLimitWindow } from '@hangar/core';
@@ -38,7 +39,7 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.codex_limites_titulo()}>
+<BottomSheet {open} {onClose} ariaLabel={m.codex_limites_titulo()} centered={desktop.atual}>
   <h2 class="sheet-title">{m.ctx_limites()}</h2>
 
   {#if err}

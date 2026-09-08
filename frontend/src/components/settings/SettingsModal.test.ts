@@ -25,6 +25,12 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   setQuietHoursForServer: vi.fn(),
   criarConta: vi.fn(async () => ({ path: '/x', label: 'x', active: false })),
   apagarConta: vi.fn(async () => {}),
+  // Montar a aba Contas passa a CHAMAR getEngines pela queryFn (é o que dá modelo ao card da
+  // chave); sem estes o vitest acusa "No export is defined on the mock" só na chamada.
+  getEngines: vi.fn(async () => ({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' })),
+  getEnginesForServer: vi.fn(async () => ({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' })),
+  engineModelos: vi.fn(async () => ({ modelos: [] })),
+  engineModelosForServer: vi.fn(async () => ({ modelos: [] })),
 }));
 // A aba Contas busca a lista única /api/credenciais — sem este mock, montar a aba
 // faria fetch real no teste. formatarIntervalo segue real (puro; mantido via importOriginal).
@@ -60,6 +66,7 @@ vi.mock('../../lib/peers', () => ({
   listarPeers: vi.fn(async () => []),
   gravarPeer: vi.fn(),
   removerPeer: vi.fn(),
+  removerPeerDoisLados: vi.fn(),
   checkPeer: vi.fn(async () => ({ estado: 'ok' })),
 }));
 vi.mock('../../lib/alcance', () => ({
@@ -152,13 +159,13 @@ describe('SettingsModal — GET config por tela', () => {
     const rotulos = itens.map((b) => b.textContent?.trim() ?? '');
     const acha = (rot: string) => rotulos.findIndex((r) => r.includes(rot));
     expect(acha(m.maquinas_titulo())).toBeGreaterThanOrEqual(0);
-    expect(acha(m.contas_titulo())).toBeGreaterThanOrEqual(0);
+    expect(acha(m.contas_modelos_titulo())).toBeGreaterThanOrEqual(0);
     // Grupo do servidor: Máquinas vem antes de Contas (já era a primeira do grupo).
-    expect(acha(m.maquinas_titulo())).toBeLessThan(acha(m.contas_titulo()));
+    expect(acha(m.maquinas_titulo())).toBeLessThan(acha(m.contas_modelos_titulo()));
     // Clicar em cada uma troca a tela (o dono da rota é o App, que recebe o id via onIrPara).
     itens[acha(m.maquinas_titulo())].click();
     expect(t.onIrPara).toHaveBeenCalledWith('maquinas');
-    itens[acha(m.contas_titulo())].click();
+    itens[acha(m.contas_modelos_titulo())].click();
     expect(t.onIrPara).toHaveBeenCalledWith('contas');
     unmount(t.comp);
   });

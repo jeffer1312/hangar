@@ -109,9 +109,11 @@ allowed.**
    commit existing, and what recovers your work if the session dies (`git stash apply <H>`).
    Verified: with the `store`, the object survives `gc --prune=now` with an expired reflog.
 6. Send it to the **reviewer the kick-off named** — directly, not through the arbiter — and
-   append the `entrega` line to `eventos.jsonl` (the closed type that already exists: `task`,
-   `rodada`, and here the round's hash in place of the commit). The arbiter reads it when he
-   wakes; the line doesn't wake him.
+   append the `entrega` line to `eventos.jsonl` — the type and its fields are the **validator's**
+   contract, `${CLAUDE_SKILL_DIR}/scripts/orq-valida-eventos.py` (run it on the file right after
+   appending; it exits 0 when the contract holds). New types are refused there for a reason: the
+   app aggregates by the six, and a line outside the contract is normalized by hand later, by
+   someone who wasn't there. The arbiter reads the line when he wakes; it doesn't wake him.
 7. **STOP writing.** While the reviewer reads, the tree is not yours: no "just tidying one
    detail". The review is about the object you froze, and touching here makes an APROVA hold over
    code that no longer exists.

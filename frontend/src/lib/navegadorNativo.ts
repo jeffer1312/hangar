@@ -12,8 +12,9 @@ export type NavBounds = { x: number; y: number; width: number; height: number };
 export type NavEstado = { chave: string; url: string; carregando: boolean; voltar: boolean; avancar: boolean };
 
 export type NavNativo = {
-  /** Cria ou reexibe o view da sessão. Sem `url`: só reexibe — ok:false se o main não tem o view. */
-  open: (chave: string, url: string | undefined, bounds: NavBounds) => Promise<{ ok: boolean }>;
+  /** Cria ou reexibe o view da sessão. Sem `url`: só reexibe — ok:false se o main não tem o view.
+   *  `oculto`: cria escondido (sessão fora da tela) — o painel reexibe depois; view visível não muda. */
+  open: (chave: string, url: string | undefined, bounds: NavBounds, extra?: { oculto?: boolean }) => Promise<{ ok: boolean; oculto?: boolean }>;
   hide: (chave: string) => void;
   bounds: (chave: string, b: NavBounds) => void;
   reload: (chave: string) => void;
@@ -23,6 +24,8 @@ export type NavNativo = {
   back?: (chave: string) => void;
   forward?: (chave: string) => void;
   onEstado?: (cb: (p: NavEstado) => void) => () => void;
+  /** Navegador fechado por fora do painel (`hangar-preview close`). Opcional: shell antigo não tem. */
+  onFechado?: (cb: (p: { chave: string }) => void) => () => void;
   /** Cookies do Chrome real (CDP) pro view. Opcional: shell antigo não tem. Nunca rejeita. */
   importCookies?: (chave: string, host: string, porta?: number, recarregar?: boolean) =>
     Promise<{ ok: boolean; gravados: number; falhos: number; erro?: string; detalhe?: string }>;

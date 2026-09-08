@@ -22,7 +22,7 @@ from pathlib import Path
 
 import sqlite3
 
-from app import agentes_sync, contas, engine_probe, engines, hook_installer, kimi_hook_installer, oauth_codex, skill_bridge
+from app import agentes_sync, contas, engine_probe, engines, hook_installer, kimi_hook_installer, oauth_codex, omp_dirs, skill_bridge
 from app.adapters.kimi.sessions import kimi_home
 from app.agentes_sync import _codex_dir, provedor_embutido_do_pi
 from app.config import list_config_dirs
@@ -33,6 +33,10 @@ _log = logging.getLogger("hangar.harness_saude")
 _REPO = Path(__file__).resolve().parents[2]
 _EXTENSOES_PI = ("hangar-state", "rich-status-line", "claude-bridge", "claude-todo",
                  "claude-hooks-adapter", "git-checkpoint", "fullscreen-tui")
+_EXTENSOES_POR_CLI = {
+    "pi": _EXTENSOES_PI,
+    "omp": tuple(nome for nome in _EXTENSOES_PI if nome not in ("claude-todo", "fullscreen-tui")),
+}
 _HOOKS_CLAUDE = ("state_hook.py", "askq_capture.py", "preview_hook.py", "subagent_hook.py",
                  "pair_hook.py", "nav_hook.py")
 
@@ -45,9 +49,15 @@ def _versao(cli: str) -> str | None:
     if hit and time.monotonic() - hit[0] < 600:
         return hit[1]
     v: str | None = None
-    if shutil.which(cli):
+    # O CAMINHO resolvido, nao o nome: no Windows o `CreateProcess` nao aplica PATHEXT, entao
+    # `run(["codex", ...])` levanta FileNotFoundError — que e OSError, cai no except abaixo e
+    # zerava a versao. Efeito medido em 07/09/2026: TODO harness instalado por npm (codex, pi —
+    # sao .CMD) aparecia com versao vazia no painel, enquanto os .EXE (claude, tmux) apareciam
+    # certos. No Linux o which devolve o mesmo caminho que o exec resolveria, entao nada muda la.
+    exe = shutil.which(cli)
+    if exe:
         try:
-            r = subprocess.run([cli, "-V" if cli == "tmux" else "--version"], capture_output=True, text=True, timeout=8,
+            r = subprocess.run([exe, "-V" if cli == "tmux" else "--version"], capture_output=True, text=True, timeout=8,
                                encoding="utf-8", errors="replace")
             linha = (r.stdout or r.stderr or "").strip().splitlines()
             v = linha[0].strip() if linha else ""
@@ -56,6 +66,12 @@ def _versao(cli: str) -> str | None:
             v = ""
     _versoes[cli] = (time.monotonic(), v)
     return v
+
+
+def esquecer_versao(cli: str) -> None:
+    """Descarta o cache de `--version` de um CLI. Quem acabou de instalá-lo precisa disto: a
+    releitura devolveria a resposta de até 10 min atrás, ou seja, "não instalado"."""
+    _versoes.pop(cli, None)
 
 
 def _item(id_: str, ok: bool | None, codigo: str, conserto: str | None = None, *, info: bool = False,
@@ -212,10 +228,76 @@ def _ponte_skills(nome: str, home: Path) -> dict:
     return _item("skills", True, "skills_ok", n=len(links), origem=_origem_das_skills(ponte, home))
 
 
+# Constante de módulo, não `os.name` lido na hora: trocar `os.name` num teste leva o `pathlib`
+# junto e estoura no primeiro `Path(...)` do andaime (armadilha registrada no CLAUDE.md).
+_E_WINDOWS = os.name == "nt"
+
+
+def _perfil_powershell(home: Path) -> Path:
+    """O `$PROFILE` do PowerShell 7 — é nele que o `install.ps1` dot-sourceia os wrappers."""
+    docs = os.environ.get("USERPROFILE")
+    raiz = Path(docs) if docs else home
+    return raiz / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
+
+
+def _wrapper(cli: str) -> dict:
+    """O wrapper do Hangar para este CLI: a função de shell que faz ele subir DENTRO do tmux, com id
+    próprio, em vez de rodar solto.
+
+    É a diferença entre uma sessão que aparece no app e uma que não existe pra ele. Sem esta linha o
+    painel dava tudo verde para um CLI instalado à mão — o caso comum de quem já tinha o `codex`
+    antes do Hangar chegar, ou instalou depois por fora — enquanto nada que ele abrisse no terminal
+    aparecia na lista. O conserto é o instalador, que reescreve o bloco gerenciado do rc.
+
+    A conferência é por SHELL QUE A PESSOA TEM: exigir os três acusaria falta em quem só usa fish, e
+    aceitar "está num deles" esconderia o shell do dia a dia sem wrapper. O caminho do `source` não
+    é comparado com ESTE checkout de propósito — um wrapper apontando pra outro clone do projeto
+    funciona igual, e chamá-lo de ausente seria mentira.
+    """
+    home = Path.home()
+    faltam, onde = [], []
+    candidatos: list[tuple[str, Path, str]] = [
+        ("fish", home / ".config" / "fish", ""),
+        ("bash", home / ".bashrc", f"shell/{cli}.posix.sh"),
+        ("zsh", home / ".zshrc", f"shell/{cli}.posix.sh"),
+    ]
+    # No Windows o wrapper é o dot-source do `claude.ps1` no perfil do PowerShell (install.ps1,
+    # passo 5/8). Sem esta linha a checagem caía em "nenhum rc conhecido" nos cinco cards — ou
+    # seja, ficava cega justamente onde a cegueira que ela existe pra pegar é mais provável.
+    if _E_WINDOWS:
+        candidatos.append(("PowerShell", _perfil_powershell(home), f"shell/{cli}.ps1"))
+    for nome, marca, agulha in candidatos:
+        if not marca.exists():
+            continue
+        if not agulha:
+            ok = (marca / "functions" / f"{cli}.fish").is_file()
+        else:
+            try:
+                ok = agulha in marca.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return _item("wrapper", None, "config_ilegivel")
+        (onde if ok else faltam).append(nome)
+    # O Codex não sobe pelo wrapper sozinho: quem cria o par app-server+TUI é o lançador, e o
+    # BACKEND também o chama por este caminho. Faltando ele, nem o terminal nem o app abrem sessão.
+    # Vai rotulado porque a lista é lida como frase: sem o rótulo, "falta em: fish, hangar-codex"
+    # faz o lançador parecer mais um shell.
+    if cli == "codex":
+        faltam.extend(f"lançador {n}" for n in ("hangar-codex", "hangar-codex-tui")
+                      if not (home / ".local" / "bin" / n).exists())
+    if not onde and not faltam:
+        return _item("wrapper", None, "wrapper_sem_shell")
+    if faltam:
+        # Sem bash não há conserto a oferecer: o instalador é POSIX. Um botão que só sabe errar
+        # nessa máquina é pior que nenhum — e, na etapa de instalação, ele transformava "não deu
+        # pra ligar o wrapper aqui" em falha dura DEPOIS de o CLI já ter sido instalado.
+        conserto = "wrapper" if shutil.which("bash") else None
+        return _item("wrapper", False, "wrapper_falta", conserto, lista=", ".join(faltam))
+    return _item("wrapper", True, "wrapper_ok", onde=", ".join(onde))
+
+
 def _raiz_agente(cli: str) -> Path:
     if cli == "omp":
-        raiz = os.environ.get("PI_CODING_AGENT_DIR")
-        return Path(raiz) if raiz else Path.home() / ".omp" / "agent"
+        return omp_dirs.agent_dir()
     return Path.home() / ".pi" / "agent"
 
 
@@ -223,17 +305,41 @@ def _extensoes(cli: str) -> dict:
     raiz = _raiz_agente(cli)
     ext = raiz / "extensions"
     faltam = []
-    for nome in _EXTENSOES_PI:
+    # Link vivo pra outra fonte (o repo antigo das extensões, tipicamente): a extensão RODA, só não
+    # é a daqui. Dizer "falta" pra isso contradiz a linha de fullscreen logo abaixo dizendo "ligado".
+    outra_fonte = []
+    for nome in _EXTENSOES_POR_CLI[cli]:
         p = ext / f"{nome}.ts"
         fonte = _REPO / "scripts" / "pi" / f"{nome}.ts"
         if p.is_symlink() and p.exists() and p.resolve() == fonte.resolve():
             continue
         if p.exists() and not p.is_symlink():
             continue  # arquivo do usuário com o mesmo nome: é dele, não conta como falta
+        if p.is_symlink() and p.exists():
+            outra_fonte.append(f"{nome} → {_abreviar_home(p.resolve())}")
+            continue
         faltam.append(nome)
+    # Helpers de scripts/pi/lib vão como pasta: o Pi resolve import relativo pelo caminho do link.
+    lib = ext / "lib"
+    if lib.is_symlink() and lib.exists() and lib.resolve() != (_REPO / "scripts" / "pi" / "lib").resolve():
+        outra_fonte.append(f"lib → {_abreviar_home(lib.resolve())}")
+    elif not lib.exists():
+        faltam.append("lib")
+    if outra_fonte:
+        params = {"lista": ", ".join(outra_fonte)}
+        if faltam:
+            params["faltam"] = ", ".join(faltam)
+        return _item("extensoes", False, "extensoes_outra_fonte", f"extensoes:{cli}", **params)
     if faltam:
         return _item("extensoes", False, "faltam", f"extensoes:{cli}", lista=", ".join(faltam))
-    return _item("extensoes", True, "extensoes_ok", n=len(_EXTENSOES_PI))
+    return _item("extensoes", True, "extensoes_ok", n=len(_EXTENSOES_POR_CLI[cli]))
+
+
+def _abreviar_home(p: Path) -> str:
+    try:
+        return "~/" + str(p.relative_to(Path.home()))
+    except ValueError:
+        return str(p)
 
 
 def _fullscreen(cli: str) -> dict:
@@ -431,27 +537,29 @@ def diagnosticar() -> list[dict]:
     hooks = (next((i for i in itens if i["ok"] is False), None) or next((i for i in itens if i["ok"] is None), None)
              or (itens[0] if itens else _item("hooks", None, "nenhuma_conta")))
     saida.append({"id": "claude", "nome": "Claude Code", "instalado": v is not None, "versao": v,
-                  "itens": [hooks, _plugins_claude(), _fullscreen_claude(), _contas_claude(), _mcp("claude"),
-                            _modelo_padrao("claude")]})
+                  "itens": [hooks, _plugins_claude(), _wrapper("claude"), _fullscreen_claude(),
+                            _contas_claude(), _mcp("claude"), _modelo_padrao("claude")]})
 
     v = _versao("codex")
     d = home / ".codex"
     saida.append({"id": "codex", "nome": "Codex", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("codex"), _ponte_skills("codex", home), _hooks_codex(), _mcp("codex"),
+                  "itens": [_credenciais("codex"), _wrapper("codex"), _hooks_codex(), _mcp("codex"),
                             _modelo_padrao("codex")]
                   if d.is_dir() else []})
 
     v = _versao("pi")
     d = home / ".pi" / "agent"
     saida.append({"id": "pi", "nome": "Pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("pi"), _extensoes("pi"), _fullscreen("pi"), _ponte_skills("pi", home),
-                            _mcp("pi"), _modelo_padrao("pi")]
+                  "itens": [_credenciais("pi"), _wrapper("pi"), _extensoes("pi"), _fullscreen("pi"),
+                            _ponte_skills("pi", home), _mcp("pi"), _modelo_padrao("pi")]
                   if d.is_dir() else []})
 
     v = _versao("omp")
     d = _raiz_agente("omp")
     saida.append({"id": "omp", "nome": "oh-my-pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("omp"), _extensoes("omp"), _fullscreen("omp"), _mcp("omp"),
+                  # Sem `_fullscreen("omp")`: a conversa do omp mora no scrollback do terminal por
+                  # desenho — em alternate screen ela some e a roda vira seta (historico no composer).
+                  "itens": [_credenciais("omp"), _wrapper("omp"), _extensoes("omp"), _mcp("omp"),
                             _modelo_padrao("omp")] if d.is_dir() else []})
 
     v = _versao("kimi")
@@ -459,7 +567,7 @@ def diagnosticar() -> list[dict]:
     itens = []
     if d.is_dir():
         tem_status = (d / "statusline.js").is_file()
-        itens = [_credenciais("kimi"), _hooks_kimi(d), _ponte_skills("kimi", home),
+        itens = [_credenciais("kimi"), _wrapper("kimi"), _hooks_kimi(d), _ponte_skills("kimi", home),
                  _item("statusline", tem_status, "statusline_ok" if tem_status else "sem_statusline"),
                  _mcp("kimi"), _modelo_padrao("kimi")]
     saida.append({"id": "kimi", "nome": "Kimi Code", "instalado": v is not None or d.is_dir(), "versao": v, "itens": itens})
@@ -469,11 +577,42 @@ def diagnosticar() -> list[dict]:
 
 # ---------------------------------------------------------------- consertos
 
+# Um prazo só pro instalador, com dois donos: o botão do card do tmux e a etapa de wrapper da
+# instalação. Prazos diferentes fariam o MESMO script estourar num caminho e passar no outro.
+TIMEOUT_INSTALADOR = 900.0
+
+
+def cmd_instalador() -> list[str]:
+    """O comando do instalador POSIX, num lugar só porque tem dois donos.
+
+    É ele que escreve o bloco gerenciado do `~/.tmux.conf`, o bloco do rc que carrega os wrappers de
+    shell de todos os CLIs (`claude`, `codex`, `pi`, `omp`, `kimi`) e os lançadores em
+    `~/.local/bin` — `hangar-codex` e `hangar-codex-tui` entre eles, que é o que o backend chama pra
+    abrir uma sessão Codex. Sem ele um CLI recém-instalado roda, mas fora do alcance do app: quem
+    digita `codex` no terminal ganha uma sessão que o Hangar não enxerga.
+
+    Idempotente, e `--no-statusline` evita a pergunta interativa.
+    """
+    bash = shutil.which("bash")
+    if not bash:
+        raise ValueError("sem bash nesta máquina — os wrappers e o bloco do tmux são do instalador POSIX")
+    return [bash, str(_REPO / "scripts" / "install-claude-wrapper.sh"), "--no-statusline"]
+
+
 def _ligar_extensoes(cli: str) -> str:
     ext = _raiz_agente(cli) / "extensions"
     ext.mkdir(parents=True, exist_ok=True)
     feitos = []
+    esperadas = _EXTENSOES_POR_CLI[cli]
+    # Migra somente links nossos; configurações e extensões pessoais ficam intactas.
     for nome in _EXTENSOES_PI:
+        if nome in esperadas:
+            continue
+        p = ext / f"{nome}.ts"
+        fonte = _REPO / "scripts" / "pi" / f"{nome}.ts"
+        if p.is_symlink() and p.resolve() == fonte.resolve():
+            p.unlink()
+    for nome in esperadas:
         p = ext / f"{nome}.ts"
         fonte = _REPO / "scripts" / "pi" / f"{nome}.ts"
         if not fonte.is_file() or (p.exists() and not p.is_symlink()):
@@ -482,6 +621,13 @@ def _ligar_extensoes(cli: str) -> str:
             p.unlink()
         p.symlink_to(fonte)
         feitos.append(nome)
+    lib = ext / "lib"
+    fonte_lib = _REPO / "scripts" / "pi" / "lib"
+    if fonte_lib.is_dir() and not (lib.exists() and not lib.is_symlink()):
+        if lib.is_symlink():
+            lib.unlink()
+        lib.symlink_to(fonte_lib, target_is_directory=True)
+        feitos.append("lib")
     return f"{len(feitos)} extensões ligadas"
 
 
@@ -526,17 +672,14 @@ def consertar(id_: str) -> str:
         if any(not v["ok"] and v["motivo"] != "nao-instalado" for v in r.values()):
             raise ValueError(linha)
         return linha
-    if id_ == "tmux":
-        # O bloco gerenciado é do instalador (bash); rodar o próprio instalador é o único jeito de
-        # escrevê-lo igual ao de uma instalação nova. Idempotente, e o --no-statusline evita pergunta.
-        bash = shutil.which("bash")
-        if not bash:
-            raise ValueError("sem bash nesta máquina — o bloco do tmux é do instalador POSIX")
-        r = subprocess.run([bash, str(_REPO / "scripts" / "install-claude-wrapper.sh"), "--no-statusline"],
-                           capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
+    if id_ in ("tmux", "wrapper"):
+        r = subprocess.run(cmd_instalador(), capture_output=True, text=True,
+                           timeout=TIMEOUT_INSTALADOR, encoding="utf-8", errors="replace",
                            cwd=str(_REPO))
         if r.returncode != 0:
             raise ValueError(f"instalador saiu com {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
+        if id_ == "wrapper":
+            return "wrappers reescritos no rc — vale em terminal novo"
         return "bloco do ~/.tmux.conf refeito e recarregado"
     if id_ == "fullscreen:claude":
         settings = contas.compartilhado() / "settings.json"
@@ -546,8 +689,11 @@ def consertar(id_: str) -> str:
         d["tui"] = "fullscreen"
         hook_installer._write(settings, d)
         return "tui = fullscreen no settings.json; vale nas sessões novas"
-    if id_ in ("fullscreen:pi", "fullscreen:omp"):
-        cfg = _raiz_agente(id_.split(":", 1)[1]) / "fullscreen-tui.json"
+    if id_ == "fullscreen:omp":
+        # Tela cacheada de antes: o botao sumiu porque a rolagem do omp e a do scrollback.
+        raise ValueError("o omp não tem tela cheia: a rolagem dele é a do terminal (ver CLAUDE.md)")
+    if id_ == "fullscreen:pi":
+        cfg = _raiz_agente("pi") / "fullscreen-tui.json"
         if cfg.exists():
             raise ValueError("já configurado — /fullscreen-on na TUI")
         cfg.parent.mkdir(parents=True, exist_ok=True)

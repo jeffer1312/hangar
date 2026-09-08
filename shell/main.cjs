@@ -402,6 +402,22 @@ function soltarControlador(chave, view) {
   try { view.webContents.debugger.detach(); } catch { /* já solto */ }
 }
 
+// Conta ao controlador que o view saiu da tela (ou voltou pra ela): é ele quem liga a emulação
+// de tamanho que dá viewport e print a um view escondido. Espera a página carregar, porque
+// emular tamanho no `about:blank` de um view recém-criado derruba o processo com SIGSEGV.
+function avisarOculto(chave, view, oculto) {
+  const entrada = controladores.get(chave);
+  if (!entrada || entrada.view !== view || !entrada.ctl.definirOculto) return;
+  const aplicar = () => entrada.ctl.definirOculto(oculto).catch((err) => {
+    console.error('[nav] viewport do view escondido:', err && err.message);
+  });
+  // O critério é a página, não o estado de carregamento: `about:blank` (ou URL vazia) é
+  // exatamente o documento em que a emulação mata o processo.
+  const url = view.webContents.getURL();
+  if (!url || url === 'about:blank') view.webContents.once('did-finish-load', aplicar);
+  else aplicar();
+}
+
 function fecharNavegador(win, chave) {
   const m = navegadores.get(win);
   const view = m && m.get(chave);
@@ -409,9 +425,29 @@ function fecharNavegador(win, chave) {
   m.delete(chave);
   if (m.size === 0) navegadores.delete(win);
   soltarControlador(chave, view);
-  try { win.contentView.removeChildView(view); } catch { /* janela já destruída */ }
-  try { view.webContents.close(); } catch { /* idem */ }
-  try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch { /* sem sidecar */ }
+  // "Já morto" é silencioso; qualquer outra falha aqui deixaria um view vivo com o painel
+  // desmontado e o CLI dizendo "ok" — precisa aparecer no log.
+  const avisar = (etapa, err) => console.error(`[nav] fechar ${chave}: ${etapa}:`, err && err.message);
+  try { if (!win.isDestroyed()) win.contentView.removeChildView(view); } catch (err) { avisar('removeChildView', err); }
+  try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch (err) { avisar('close', err); }
+  try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch (err) { avisar('sidecar', err); }
+}
+
+// `hangar-preview close`: o CLI só conhece a chave, não a janela. O painel não pediu o fechamento,
+// então precisa ser avisado — sem o evento ele seguia mostrando um view que não existe mais.
+function fecharNavegadorPorChave(chave) {
+  // Duas janelas com a mesma chave: o navegador "de verdade" é o do controlador registrado
+  // (último open ganha em `controladores`); fechar o outro deixaria o vivo na tela.
+  const vivo = controladores.get(chave)?.view;
+  let alvo = null;
+  for (const [win, m] of navegadores) {
+    if (!m.has(chave)) continue;
+    if (!alvo || m.get(chave) === vivo) alvo = win;
+  }
+  if (!alvo) return false;
+  fecharNavegador(alvo, chave);
+  if (!alvo.isDestroyed()) alvo.webContents.send('hangar:nav-fechado', { chave });
+  return true;
 }
 
 // Sidecar por sessão em ~/.hangar/nav/<chave>.json — é o que o `hangar-preview` lê pra achar o
@@ -485,11 +521,16 @@ function viewDe(ev, chave) {
   return navegadores.get(BrowserWindow.fromWebContents(ev.sender))?.get(chave);
 }
 
-ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
+// `oculto`: pedido que veio pelo stream da LISTA (agente abriu com a sessão fora da tela). O view
+// nasce escondido e já carrega — o agente dirige via CDP desde já; o NavegadorPane reexibe quando
+// o usuário abrir a sessão. View já VISÍVEL fica como está: ali quem manda é o painel montado.
+ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}) => {
   const win = BrowserWindow.fromWebContents(ev.sender);
   if (!win || !chave) return { ok: false };
   const views = viewsDa(win);
   let view = views.get(chave);
+  if (oculto && view && view.webContents && !view.webContents.isDestroyed() && view.getVisible?.()) return { ok: true, oculto: true };
+  const novo = !view || !view.webContents || view.webContents.isDestroyed();
   // O webContents pode ter morrido por fora (fechado via CDP Target.closeTarget, crash do
   // renderer): sem esta checagem o view volta invisível e nunca mais pinta — a área fica preta.
   // Medido: um Target.closeTarget externo pode deixar `view.webContents` undefined (não só
@@ -581,14 +622,28 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     const destino = url ? urlNavegavel(url) : null;
     if (destino && view.webContents.getURL() !== destino) view.webContents.loadURL(destino);
   }
+  if (oculto) {
+    if (novo) view.setVisible(false);
+    // Escondido, a página fica em 0x0 e sem quadro: quem devolve viewport de desktop e print é a
+    // emulação de tamanho, e ela SÓ pode entrar com a página carregada (antes disso, SIGSEGV).
+    avisarOculto(chave, view, true);
+    // `oculto: true` na resposta é a prova de que este shell entendeu o pedido: um shell antigo
+    // ignora o campo, cria o view visível com bounds zero e devolve só {ok} — o front não confirma.
+    return { ok: true, oculto: true };
+  }
   view.setVisible(true);
   view.setBounds(normalizaBounds(bounds));
+  avisarOculto(chave, view, false);
   return { ok: true };
 });
 
 ipcMain.on('hangar:nav-hide', (ev, { chave } = {}) => {
   const view = viewDe(ev, chave);
-  if (view) view.setVisible(false);
+  if (!view) return;
+  view.setVisible(false);
+  // Sair da tela é o mesmo estado do view que nasceu escondido: sem a emulação, o agente que
+  // continuar dirigindo esta sessão passa a ler uma página de 0x0.
+  avisarOculto(chave, view, true);
 });
 
 ipcMain.on('hangar:nav-bounds', (ev, { chave, bounds } = {}) => {
@@ -698,6 +753,7 @@ if (!app.requestSingleInstanceLock()) {
     limparSidecaresNav();
     subirServidor({
       controladorDe: (chave) => controladores.get(chave)?.ctl || null,
+      fecharDe: fecharNavegadorPorChave,
       escrever: (dados) => {
         fs.mkdirSync(NAV_SIDECARS, { recursive: true });
         fs.writeFileSync(path.join(NAV_SIDECARS, '_srv.json'), JSON.stringify(dados), { mode: 0o600 });

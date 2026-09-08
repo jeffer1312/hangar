@@ -98,6 +98,7 @@ def test_janela_por_modelo_vem_de_limits(tmp_path, monkeypatch):
     assert estado == "lida"
     assert [(j.rotulo, j.pct) for j in janelas] == [("5h", 13.0), ("7d", 22.0), ("Fable", 79.0)]
     assert janelas[2].reset_ts is not None
+    assert [j.por_modelo for j in janelas] == [False, False, True]
 
 
 def test_limits_estragado_nao_derruba_as_janelas_base(tmp_path, monkeypatch):

@@ -15,6 +15,7 @@ const VERBOS = {
   wait: (c, a) => c.esperar(a),
   eval: (c, a) => c.avaliar(a[0]),
   tema: (c, a) => c.tema(a[0]),
+  layout: (c, a) => (a[0] ? c.layout(a[0]) : `layout: ${c.layoutAtual()}`),
   console: (c, a) => c.console(a[0] === '--limpar'),
   network: (c) => c.rede(),
   text: (c) => c.texto(),
@@ -22,6 +23,9 @@ const VERBOS = {
   shot: async (c, a) => {
     if (!a[0]) return 'erro: shot precisa de um caminho de arquivo';
     const img = await c.capturarPagina();
+    // O controlador já acordou o renderer e insistiu até o teto; imagem ainda vazia é view que
+    // não compõe (janela minimizada, por exemplo). PNG de 0 bytes com "ok" mentiria.
+    if (img.isEmpty()) return 'erro: o navegador desta sessao nao produziu quadro (janela minimizada?) — text/snapshot/click funcionam; o print sai com a janela do Hangar visivel';
     // Assincrona: writeFileSync roda na thread principal do Electron e travaria a interface
     // inteira enquanto um disco lento escreve o PNG.
     await fs.promises.writeFile(a[0], img.toPNG());
@@ -31,7 +35,10 @@ const VERBOS = {
 
 const TETO_CORPO = 128 * 1024; // folgado: o maior corpo real é um eval com trecho de JS
 
-async function subirServidor({ controladorDe, escrever }) {
+// `fecharDe(chave)` fecha o navegador de verdade (view, controlador, sidecar) e avisa o painel;
+// devolve false quando a chave não tem navegador. Fica fora de VERBOS porque não passa pela
+// fila do controlador — o controlador é justamente o que morre.
+async function subirServidor({ controladorDe, escrever, fecharDe }) {
   const token = crypto.randomBytes(24).toString('hex');
   const tokenBuf = Buffer.from(`Bearer ${token}`);
   const servidor = http.createServer(async (req, res) => {
@@ -62,6 +69,10 @@ async function subirServidor({ controladorDe, escrever }) {
       const bruto = Buffer.concat(pedacos).toString('utf8');
       let pedido;
       try { pedido = JSON.parse(bruto); } catch { return responder(400, 'erro: corpo invalido'); }
+      if (pedido.verbo === 'close') {
+        if (!fecharDe) return responder(500, 'erro: este shell nao sabe fechar navegador pelo CLI');
+        return responder(200, fecharDe(pedido.chave) ? 'ok: close' : `erro: a sessao ${pedido.chave} nao tem navegador aberto`);
+      }
       const ctl = controladorDe(pedido.chave);
       if (!ctl) return responder(404, `erro: a sessao ${pedido.chave} nao tem navegador aberto`);
       // Object.hasOwn, nao `VERBOS[pedido.verbo]` direto: um verbo tipo "constructor" alcancaria o

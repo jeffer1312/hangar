@@ -20,6 +20,12 @@ _log = logging.getLogger("hangar.transcript")
 # (poucos segundos) com folga; sessao com <= 200 linhas mantem o backfill completo (offset 0).
 _BACKFILL_LINES = 200
 
+# Intervalo do poll enquanto a pasta do transcript nao existe (ver o laco do follow). Vale so no
+# boot da sessao, entao 1s nao custa nada e nao atrasa nada que o usuario veja. Passando de
+# _AVISA_ESPERA_PASTA polls a espera deixou de ser boot e vira aviso (uma vez, nao a cada poll).
+_ESPERA_PASTA_S = 1.0
+_AVISA_ESPERA_PASTA = 30
+
 # Janela inicial do tail-read reverso do _tail_offset: 256KB cobre as 200 linhas do backfill na
 # esmagadora maioria dos transcripts; quando nao cobre (linha gigante com base64 de imagem colada),
 # ela quadruplica ate juntar as linhas ou alcancar o inicio do arquivo.
@@ -663,12 +669,40 @@ class TranscriptTailer:
         # yield_on_timeout: alem dos eventos do FS, acorda a cada rust_timeout mesmo sem mudanca
         # (changes vazio) e rele -> fecha a janela morta entre o backfill acima e o watcher armar
         # (evento gravado nesse gap so apareceria no proximo write) e cobre inotify perdido.
-        async for changes in awatch(self.path.parent, yield_on_timeout=True, rust_timeout=5000):
-            # O watch e do DIRETORIO (o proprio arquivo pode nem existir ainda), mas escrita de
-            # jsonl IRMAO (ex: subagente gravando o proprio transcript ao lado) acordava todos os
-            # tailers -> so rele quando o toque e no NOSSO arquivo (ou no timeout do heartbeat).
-            if changes and not any(Path(p).name == self.path.name for _, p in changes):
+        # A pasta do transcript pode NAO existir ainda (sessao recem-criada, agente ainda bootando):
+        # ali o awatch levanta FileNotFoundError, o pump do sse manda o erro pro cliente, o
+        # EventSource reconecta e cai no mesmo erro — laco de "reconectando" com o chat mudo. Espera
+        # a pasta nascer em vez de estourar.
+        esperas = 0
+        while True:
+            if not await asyncio.to_thread(self.path.parent.is_dir):
+                esperas += 1
+                # Espera sem teto e sem log seria chat mudo pra sempre quando a pasta nunca nasce
+                # (bug noutro lugar): avisa UMA vez, como o _warn_ready_timeout_once do envio.
+                if esperas == _AVISA_ESPERA_PASTA:
+                    _log.warning("transcript %s: a pasta %s nao existe ha %.0fs — seguindo em "
+                                 "espera; se a sessao esta viva, o chat fica mudo ate ela nascer",
+                                 self.path.name, self.path.parent,
+                                 esperas * _ESPERA_PASTA_S)
+                await asyncio.sleep(_ESPERA_PASTA_S)
                 continue
-            evs, pos = await asyncio.to_thread(self._read_from, pos)
-            for ev in evs:
-                yield ev
+            try:
+                async for changes in awatch(self.path.parent, yield_on_timeout=True,
+                                            rust_timeout=5000):
+                    # O watch e do DIRETORIO (o proprio arquivo pode nem existir ainda), mas escrita de
+                    # jsonl IRMAO (ex: subagente gravando o proprio transcript ao lado) acordava todos os
+                    # tailers -> so rele quando o toque e no NOSSO arquivo (ou no timeout do heartbeat).
+                    if changes and not any(Path(p).name == self.path.name for _, p in changes):
+                        continue
+                    evs, pos = await asyncio.to_thread(self._read_from, pos)
+                    for ev in evs:
+                        yield ev
+            except FileNotFoundError:
+                # So engole quando a pasta REALMENTE sumiu. Com ela no lugar o erro veio de outra
+                # coisa (o _read_from tambem roda dentro deste try) e tem que subir pro pump do sse,
+                # como antes — senao o chat fica mudo sem uma linha de log.
+                if await asyncio.to_thread(self.path.parent.is_dir):
+                    raise
+                _log.warning("transcript %s: a pasta %s sumiu debaixo do watch — esperando ela "
+                             "voltar", self.path.name, self.path.parent)
+                continue

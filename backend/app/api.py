@@ -62,7 +62,7 @@ from app import terminal_input
 from app.terminal_input import TerminalInput, drain
 from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
-from app.sse import merged_events, nav_pendente
+from app.sse import merged_events, nav_confirmar, nav_pendente
 from app.state import corrige_ocioso_kimi
 from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, UploadError, MAX_BYTES
 from app.video import is_video, extract_frames, extract_audio
@@ -97,6 +97,7 @@ from app.pair import PairLink, contract_path_for
 from app.hook_state import hook_state
 from app import push
 from app import stall_watch
+from app.omp_plugin_sync import PluginSynchronizer, PluginSyncLoop
 from app.sync import sync_router
 from app.deploy import deploy_router
 from app import desktop_palette
@@ -266,13 +267,27 @@ async def _lifespan(app: FastAPI):
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
     _loop_servidor = asyncio.get_running_loop()
+    from app.codex_integracao import SERVICO as integracao_codex
+    omp_sync = PluginSyncLoop(
+        PluginSynchronizer(home=Path.home(), claude_dir=_backend_config_base()),
+        enabled=settings.omp_plugin_sync_enabled,
+        interval=settings.omp_plugin_sync_interval,
+        permitted=automations_enabled,
+    )
+    app.state.omp_plugin_sync = omp_sync
+    await omp_sync.start()
     try:
         yield
     finally:
+        try:
+            await integracao_codex.fechar()
+        except Exception:
+            _log.exception("Falha ao encerrar a integração Codex")
         task.cancel()
         stall_task.cancel()
         prune_task.cancel()
         renova_task.cancel()
+        await omp_sync.close()
         try:
             await task
         except asyncio.CancelledError:
@@ -295,6 +310,16 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="hangar", lifespan=_lifespan)
+
+
+@app.get("/api/omp/plugin-sync", dependencies=[Depends(require_auth)])
+async def omp_plugin_sync_status(request: Request):
+    service = getattr(request.app.state, "omp_plugin_sync", None)
+    if service is None:
+        return {"enabled": settings.omp_plugin_sync_enabled,
+                "state": "idle" if settings.omp_plugin_sync_enabled else "disabled",
+                "interval": settings.omp_plugin_sync_interval, "last_report": None}
+    return service.status()
 
 
 @app.exception_handler(tmux.MuxIndisponivel)
@@ -345,6 +370,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=False,
+    # `allow_headers` cobre o pedido; o navegador so deixa o JS LER um header de resposta que esteja
+    # aqui. Sem o ETag exposto, o PWA servido pela VPS falando com o backend de casa (cross-origin)
+    # recebe o validador e nao consegue le-lo: o cache do chat nunca teria o que mandar no
+    # If-None-Match e cairia calado no download inteiro, em toda entrada.
+    expose_headers=["ETag"],
 )
 if settings.sync:
     app.include_router(sync_router)
@@ -505,6 +535,15 @@ async def term_ws_route(ws: WebSocket, name: str):
     # LOCAL. Aqui o celular vai precisar entrar de fora na fase 2.
     from app import termsock
     await termsock.term_ws(ws, name)
+
+
+@app.websocket("/api/sessions/{name}/nav-remoto")
+async def nav_ws_route(ws: WebSocket, name: str):
+    # Acesso remoto ao navegador embutido DAQUELA sessao: quadros pra fora, toque/tecla pra dentro.
+    # Mesma porta de entrada do painel de terminal (token + Origin) -- o de la abre um shell, este
+    # abre o navegador que o agente esta dirigindo.
+    from app import navsock
+    await navsock.nav_ws(ws, name)
 
 
 @app.post("/api/sessions/{name}/shell", dependencies=[Depends(require_auth)])
@@ -1203,6 +1242,9 @@ class CreateBody(_StrictBody):
     effort: str | None = None
     # Modo de permissão do Claude Code. None = padrão da conta (comportamento de hoje).
     permission_mode: str | None = None
+    # Perfil do omp (`omp --profile x`): login, sessões e config em ~/.omp/profiles/x/agent.
+    # None = sem perfil. Só vale com provider omp; o nome é validado no registry.
+    omp_profile: str | None = None
 
 
 class TtsBody(_StrictBody):
@@ -1328,7 +1370,24 @@ async def list_sessions():
     # MuxIndisponivel nao e tratada aqui: o handler de `_mux_indisponivel` cobre esta rota e as
     # outras quinze que chamam registry.list(). Um try/except so nesta seria a mesma resposta
     # escrita duas vezes, e a que envelhece primeiro.
-    return await registry.list_with_state()
+    #
+    # A RESOLUCAO (scan de /proc + fork de tmux) vem do snapshot de `_guardar_snap`, com TTL de 1s e
+    # single-flight; o ESTADO continua sendo classificado a cada chamada, entao a resposta nao fica
+    # velha. Medido em 06/09/2026: sem isto as chamadas nao se sobrepoem — 1 custa 13ms, 3 custam
+    # 35ms de parede, 6 custam 67ms e 12 custam 134ms, linear, porque cada uma refaz a varredura
+    # inteira. E o front chama isto a cada 2s POR cliente. Com o snapshot, N clientes que caem na
+    # mesma janela pagam uma varredura so. `to_thread` porque `_guardar_snap` bloqueia (mesma regra
+    # do git status na corrotina, o incidente de 2026-07-23).
+    #
+    # CADA requisicao decora as SUAS copias, e isto nao e zelo: `list_with_state` escreve NOS
+    # objetos (`info.state`, `info.last_activity`, `info.question`...), e o snapshot e a mesma lista
+    # servida a todo mundo dentro do TTL. Sem a copia, duas chamadas concorrentes — que e justamente
+    # o que este cache existe pra permitir — se intercalam nos MESMOS SessionInfo entre os awaits da
+    # decoracao, e o estado decorado ainda vazaria pro snapshot que `/history` e `/workflows` leem
+    # esperando a lista crua. `model_copy` rasa basta: a decoracao ATRIBUI campos, nunca muta em
+    # lugar o que ja esta neles.
+    snap = await asyncio.to_thread(_guardar_snap)
+    return await registry.list_with_state([i.model_copy() for i in snap])
 
 
 @app.post("/api/diag", dependencies=[Depends(require_auth)])
@@ -1525,6 +1584,8 @@ async def create_session(body: CreateBody):
     # permission_mode só vale para claude
     if body.permission_mode is not None and body.provider != "claude":
         raise HTTPException(409, detail=erro("erro_permissao_so_claude", "modo de permissao so vale para claude"))
+    if body.omp_profile and body.provider != "omp":
+        raise HTTPException(400, detail=erro("erro_perfil_so_omp", "perfil so vale para provider omp"))
     # Mesma regra das linhas acima, pro model/effort: recusa ANTES de qualquer efeito no disco,
     # inclusive pro provedor fora de escopo (codex/kimi) quando alguem pedir escolha — o valor
     # entraria num comando de shell montado por concatenacao.
@@ -1605,6 +1666,8 @@ async def create_session(body: CreateBody):
                                    effort=body.effort, context_window=janela)
                         if body.permission_mode is not None:
                             _kw["permission_mode"] = body.permission_mode
+                        if body.omp_profile:
+                            _kw["omp_profile"] = body.omp_profile
                         info = await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw)
                         return info.model_copy(update={"avisos": list(avisos)})
                     except ValueError as e:
@@ -1622,6 +1685,8 @@ async def create_session(body: CreateBody):
             _kw2["permission_mode"] = body.permission_mode
         if body.initial_prompt is not None:
             _kw2["initial_prompt"] = body.initial_prompt
+        if body.omp_profile:
+            _kw2["omp_profile"] = body.omp_profile
         return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw2)
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -1876,11 +1941,22 @@ def resume_session(name: str, body: ResumeBody):
 
 
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
-async def history(name: str, limit: int | None = None):
+async def history(request: Request, response: Response, name: str, limit: int | None = None):
     info = await _cached_info(name)
     if not info or not info.jsonl:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    from app.pqueue import merged_history
+    from app.pqueue import historico_etag, merged_history
+    # Entrar numa sessao e a leitura mais repetida do app, e quase sempre nada mudou desde a
+    # ultima: medido em 06/09/2026 na `pr-junior` (transcript de 31,9 MB), a cauda custava 313 KB
+    # POR ENTRADA pelo caminho do celular. O validador sai de dois `stat` -- barato aqui e, do lado
+    # do cliente, dispensa qualquer regra de "quando invalidar o cache": quem responde e o disco,
+    # entao msg deste aparelho, de outro, do terminal, /clear e sessao que continuou trabalhando
+    # caem todos no mesmo caminho.
+    etag = await asyncio.to_thread(historico_etag, name, info.jsonl, info.provider, limit)
+    if etag:
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        response.headers["ETag"] = etag
     # provider: o rollout do Codex tem um shape DIFERENTE do jsonl do Claude (ver
     # app.adapters.codex.rollout) -- sem isto merged_history tentava o parser do Claude em toda
     # linha do rollout, nunca casava e devolvia [] (chat do Codex abria vazio ate o SSE encher via
@@ -1970,6 +2046,7 @@ class BastaoBody(_StrictBody):
     model: str | None = None
     effort: str | None = None
     permission_mode: str | None = None
+    omp_profile: str | None = None
     # Endereçam a origem MORTA no archive (project + session_id); nunca a sucessora, e são
     # ignorados quando a origem está viva.
     project: str | None = None
@@ -2060,7 +2137,7 @@ async def bastao_passar(name: str, body: BastaoBody):
     novo = await create_session(CreateBody(
         name=destino, cwd=cwd, config_dir=body.config_dir, provider=body.provider,
         engine=body.engine, model=body.model, effort=body.effort,
-        permission_mode=body.permission_mode))
+        permission_mode=body.permission_mode, omp_profile=body.omp_profile))
     try:
         await asyncio.to_thread(lambda: PromptQueue(novo.name).append(
             kick, delivered=False, pre_transcript=True))
@@ -2564,15 +2641,23 @@ class NavBody(_StrictBody):
 async def abrir_nav_sessao(name: str, body: NavBody):
     """O AGENTE abre o navegador embutido da própria sessão (CLI `hangar-preview open <url>`).
 
-    O backend não cria view — quem posiciona é o painel no front: aqui só entrega o evento 'nav'
-    no SSE da sessão. Sem stream vivo (sessão fora da tela), o pendente espera em memória até o
-    usuário abrir a sessão; backend reiniciado perde e o agente re-tenta."""
+    O backend não cria view — quem cria é o shell desktop, avisado pelo evento 'nav' que sai no
+    SSE da sessão E no da lista (este o desktop mantém aberto o tempo todo, então funciona com a
+    sessão fora da tela). O marcador fica até o desktop confirmar (DELETE) ou vencer o prazo."""
     if not await _send_thread(_session_exists, name):
         raise HTTPException(404, "sessão não encontrada")
     u = body.url.strip()
     if not re.match(r"^https?://", u, re.I):
         u = "http://" + u
-    nav_pendente(name, u)
+    await asyncio.to_thread(nav_pendente, name, u)   # grava em disco: fora do loop
+    return {"ok": True}
+
+
+@app.delete("/api/sessions/{name}/nav", dependencies=[Depends(require_auth)])
+async def confirmar_nav_sessao(name: str):
+    """O shell desktop criou o view da sessão: o marcador 'nav' sai, e nenhuma outra conexão o
+    recebe de novo."""
+    await asyncio.to_thread(nav_confirmar, name)
     return {"ok": True}
 
 
@@ -3560,6 +3645,19 @@ def _painel_disponivel() -> bool:
     return termsock.painel_disponivel()
 
 
+def _origem_do_terminal_ok(request: Request) -> bool:
+    """A mesma pergunta que o handshake do terminal faz, respondida por HTTP (que tem corpo).
+
+    Sem `Origin` (cliente que nao e navegador) e True: o handshake tambem so cobra origem quando o
+    cabecalho existe, e responder False aqui poria um aviso de recusa numa tela que abre normal.
+    """
+    from app import termsock
+    origem = request.headers.get("origin")
+    if not origem:
+        return True
+    return termsock._origem_aceita(origem, request.headers.get("host"))
+
+
 # ─── Atualizar ─────────────────────────────────────────────────────────────────────────────────
 
 def _mudancas_pendentes() -> list[dict]:
@@ -3760,7 +3858,7 @@ async def _auto_update_loop():
 
 
 @app.get("/api/config", dependencies=[Depends(require_auth)])
-def get_config():
+def get_config(request: Request):
     """Config editavel pelo app + o que e so-leitura (exige reiniciar o servico).
 
     Segredo NUNCA volta inteiro: `estado()` devolve mascarado (gsk_••••1234) — da pra conferir QUAL
@@ -3779,6 +3877,11 @@ def get_config():
             # Ela tambem responde False num POSIX sem `pty`. Import tardio pelo mesmo motivo de
             # sempre: o termsock nao pode ser importado no topo deste modulo.
             "terminal_panel": _painel_disponivel(),
+            # A ORIGEM DESTE cliente abriria o terminal aqui? O handshake do WebSocket recusa com
+            # 403 e o navegador nao entrega corpo nem motivo — a tela dizia so "desconectado", e o
+            # unico lugar com a explicacao era o log do servidor. Com este campo a propria tela
+            # nomeia a origem recusada e manda pro campo que a libera.
+            "terminal_origem_ok": _origem_do_terminal_ok(request),
             # A versao do PROCESSO VIVO, nao a do checkout. Durante a janela entre o `git pull` e o
             # restart as duas divergem, e e exatamente ai que o botao Atualizar vive: dizer a do
             # disco aqui seria afirmar estar rodando codigo que ninguem carregou (o defeito que
@@ -3848,12 +3951,14 @@ async def put_engine(nome: str, request: Request):
     api_key ausente, vazia, ou IGUAL à máscara que o cliente recebeu = preserva a atual. Sem isso,
     salvar o formulário só para trocar o modelo apagava a chave, sem volta — o bug pago em 22ae599.
 
-    Campo AUSENTE do corpo herda o valor do disco; campo presente vale, inclusive `""`/`0`, que é
-    como se LIMPA (_normalizar descarta vazio, então o campo sai do registro). engines.salvar()
-    substitui o registro inteiro, e sem a herança um cliente que só conhece parte do schema — um PUT
-    de script, uma versão antiga do front — apagava o resto calado. Medido: o probe de modelos
-    devolve `context_length: null` para provedor que não informa (opencode), o PUT seguinte vinha sem
-    `context_window` e o motor perdia a janela de 1M, voltando a compactar em 200k sem avisar.
+    Campo AUSENTE do corpo herda o valor do disco; campo presente vale, inclusive `""`, que é como
+    se LIMPA (_normalizar descarta vazio, então o campo sai do registro — texto ou numérico). `0`
+    NÃO limpa: num campo numérico é valor inválido, e volta 400 "deve ser maior que zero".
+    engines.salvar() substitui o registro inteiro, e sem a herança um cliente que só conhece parte
+    do schema — um PUT de script, uma versão antiga do front — apagava o resto calado. Medido: o
+    probe de modelos devolve `context_length: null` para provedor que não informa (opencode), o PUT
+    seguinte vinha sem `context_window` e o motor perdia a janela de 1M, voltando a compactar em
+    200k sem avisar.
 
     `null` conta como AUSENTE de propósito (é o que o probe manda quando não sabe). Quem quer limpar
     manda `""` — a tela de Motores faz isso nos campos opcionais."""
@@ -5184,31 +5289,26 @@ def _cache_key_perm(name: str, info) -> str:
     j = getattr(info, "jsonl", None) if info else None
     return f"{name}::{j or 'sem-jsonl'}"
 
-def _guard_perm(name: str, info, escrita: bool) -> None:
-    """409 quando sessão não é claude, painel aberto, ou estado recusa digitação."""
+def _guard_perm(name: str, info) -> None:
+    """409 quando sessão não é claude, painel aberto, ou há menu aberto no pane."""
     if info is None:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if getattr(info, "provider", "claude") not in (None, "claude"):
         raise HTTPException(409, detail=erro("erro_permissao_so_claude", "modo de permissao so vale para claude"))
     _recusa_se_painel_aberto(name)
-    if escrita:
-        try:
-            terminal._require_drivable(name)
-        except terminal.NaoDigitou as e:
-            raise HTTPException(e.status, e.detail)
-        except PickerError as e:
-            raise HTTPException(e.status, e.detail)
-    else:
-        from app import tmux
-        from app.state import is_overlay
-        if not tmux.has_session(name):
-            raise HTTPException(409, "sessao nao esta viva")
-        try:
-            pane = tmux.capture_pane(name)
-        except Exception:
-            pane = ""
-        if pane and is_overlay(pane):
-            raise HTTPException(409, "ha um menu aberto no terminal da sessao")
+    # Sem `_require_drivable` aqui, de propósito: ele recusa sessão trabalhando porque `/model` é
+    # TEXTO e cairia no campo. BTab é tecla e o Claude a aplica no meio do turno (medido). Só um
+    # menu aberto engoliria a tecla.
+    from app import tmux
+    from app.state import is_overlay
+    if not tmux.has_session(name):
+        raise HTTPException(409, "sessao nao esta viva")
+    try:
+        pane = tmux.capture_pane(name)
+    except Exception:
+        pane = ""
+    if pane and is_overlay(pane):
+        raise HTTPException(409, "ha um menu aberto no terminal da sessao")
 
 @app.get("/api/sessions/{name}/permission-modes", dependencies=[Depends(require_auth)])
 async def permission_modes(name: str, sondar: bool = False):
@@ -5222,7 +5322,7 @@ async def permission_modes(name: str, sondar: bool = False):
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    _guard_perm(name, info, escrita=sondar)
+    _guard_perm(name, info)
     key = _cache_key_perm(name, info)
     # leitura do atual sem tecla (bloqueador 1)
     try:
@@ -5285,7 +5385,7 @@ async def permission_mode_set(name: str, body: PermissionModeBody):
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    _guard_perm(name, info, escrita=True)
+    _guard_perm(name, info)
     try:
         ficou = await asyncio.to_thread(perm_mode.trocar_modo, name, alvo)
     except RuntimeError as e:

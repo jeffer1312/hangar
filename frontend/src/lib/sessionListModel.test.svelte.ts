@@ -254,6 +254,11 @@ describe('seleção, broadcast e comparar (divergência #6 e #15)', () => {
 
 describe('abrir sessão (divergência #18)', () => {
   beforeEach(() => comServidores([{ id: 'srv-a', label: 'A', sessions: [] }]));
+  it('Codex "sem id" abre: a TUI pode estar parada num prompt e o terminal é a única saída', () => {
+    const o = opts('desktop'); const m1 = createSessionListModel(o);
+    expect(m1.open({ name: 'c', serverId: 'srv-a', tracked: false, provider: 'codex' })).toBe(true);
+    expect(o.onOpen).toHaveBeenCalledWith('c');
+  });
   it('rastreada abre; "sem id" bloqueia, exceto Kimi', () => {
     const o = opts('desktop'); const m1 = createSessionListModel(o);
     expect(m1.open({ name: 'x', serverId: 'srv-a', tracked: true })).toBe(true);

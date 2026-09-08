@@ -16,8 +16,12 @@
     payload: AskQuestionPayload | null;
     onSubmit: (answers: AnswerItem[]) => Promise<void>;
     onClose: () => void;
+    /** "Digitar resposta" e "Conversar sobre isso". Falso quando a pergunta não vem da ferramenta
+     *  AskUserQuestion e sim de um seletor de TUI, onde só as opções existem: as duas saídas
+     *  mandariam texto por um caminho que aquela sessão não tem, e falhariam calado. */
+    escapes?: boolean;
   }
-  let { open, payload, onSubmit, onClose }: Props = $props();
+  let { open, payload, onSubmit, onClose, escapes = true }: Props = $props();
 
   let step = $state(0);
   let picks = $state<PickState[]>([]);
@@ -171,12 +175,11 @@
     </button>
   {/if}
 
-  {#if !textOpen}
-    <div class="escapes">
-      <button class="ghost-btn" onclick={() => (textOpen = true)}>{m.askq_digitar_resposta()}</button>
-      <button class="ghost-btn" onclick={setChat}>{m.askq_conversar_sobre()}</button>
-    </div>
-  {:else}
+  <!-- `textOpen` PRIMEIRO: a caixa de texto é o estado aberto pelo "Digitar resposta", não o
+       contrário de mostrar as saídas. Escrito como `{#if !textOpen && escapes}{:else}`, desligar
+       as saídas caía no else e desenhava o campo de texto — exatamente o que a pergunta só-de-
+       escolha não deve ter. -->
+  {#if textOpen}
     <div class="text-escape">
       <!-- svelte-ignore a11y_autofocus -->
       <input
@@ -190,6 +193,11 @@
         <button class="primary-btn" onclick={confirmText} disabled={!textValue.trim()}>{m.comum_confirmar()}</button>
         <button class="ghost-btn" onclick={() => { textOpen = false; textValue = ''; }}>{m.comum_cancelar()}</button>
       </div>
+    </div>
+  {:else if escapes}
+    <div class="escapes">
+      <button class="ghost-btn" onclick={() => (textOpen = true)}>{m.askq_digitar_resposta()}</button>
+      <button class="ghost-btn" onclick={setChat}>{m.askq_conversar_sobre()}</button>
     </div>
   {/if}
 

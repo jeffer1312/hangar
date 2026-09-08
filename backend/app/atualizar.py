@@ -37,6 +37,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -234,15 +235,22 @@ def _log_do_estado(texto: str) -> None:
 
 
 def _rodar(args: list[str], cwd: Path | None = None,
-           timeout: float = _TIMEOUT_PADRAO) -> subprocess.CompletedProcess:
+           timeout: float = _TIMEOUT_PADRAO,
+           log: Callable[[str], None] | None = None) -> subprocess.CompletedProcess:
     """Um comando, com a saída capturada em texto.
 
     `errors="replace"` porque no Windows uma falha de decode estrita morre numa THREAD leitora:
     `run()` não levanta nada e `stdout` volta **None**, e o estouro aparece longe da causa (medido
     22/08/2026, registrado no CLAUDE.md). `LC_ALL=C` no git pela mesma razão do `git_ops._run`: a
     saída aqui é lida por código, e mensagem traduzida quebraria a leitura calada.
+
+    `log` desvia a saída ao vivo pra outro dono. O `harness_install` precisa da mesma leitura linha
+    a linha com prazo que existe aqui — e ela é medida, não óbvia (thread+fila porque o Windows não
+    faz select em pipe; teto de 1s pra o prazo valer com o comando calado) —, mas o destino dela lá
+    é o estado DELE, não o da atualização.
     """
-    _log_do_estado("$ " + " ".join(args))
+    _emitir = log or _log_do_estado
+    _emitir("$ " + " ".join(args))
     # Saída lida AO VIVO, linha a linha, e não com `capture_output` no fim. O `install.sh --update`
     # é um comando só que leva mais de um minuto (npm ci + build): esperando ele terminar pra
     # escrever, a caixinha da tela fica parada exatamente durante a espera que ela existe pra
@@ -296,11 +304,11 @@ def _rodar(args: list[str], cwd: Path | None = None,
         agora = time.monotonic()
         # Agrupa por ~1s: uma escrita de arquivo por linha faria centenas de tmp+rename num npm ci.
         if pendentes and agora - ultimo_flush >= 1.0:
-            _log_do_estado("\n".join(pendentes))
+            _emitir("\n".join(pendentes))
             pendentes = []
             ultimo_flush = agora
     if pendentes:
-        _log_do_estado("\n".join(pendentes))
+        _emitir("\n".join(pendentes))
     try:
         # COM prazo: o EOF do pipe não garante que o processo já saiu (um neto que herdou o fd pode
         # tê-lo fechado antes). Sem teto aqui, um `waitpid` que não retorna prenderia a atualização
@@ -310,7 +318,7 @@ def _rodar(args: list[str], cwd: Path | None = None,
         proc.kill()
         raise
     if proc.returncode != 0:
-        _log_do_estado(f"[saiu com {proc.returncode}]")
+        _emitir(f"[saiu com {proc.returncode}]")
     # Mesma forma de retorno de antes: quem chama lê `.returncode`, `.stdout` e `.stderr`. O stderr
     # foi fundido no stdout (a tela precisa dos dois em ORDEM), então `stderr` vem vazio e o
     # `_cauda` cai no stdout — que é o comportamento que ele já tinha quando não havia stderr.

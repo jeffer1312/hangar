@@ -12,6 +12,7 @@
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
   import TerminalMobile from '../components/TerminalMobile.svelte';
+  import AskQuestionCard from '../components/AskQuestionCard.svelte';
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
   import RunSheet from '../components/RunSheet.svelte';
   import MoreSheet from '../components/MoreSheet.svelte';
@@ -20,7 +21,8 @@
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
   import OrquestracaoSheet from '../components/OrquestracaoSheet.svelte';
-  import { prefetchOrq } from '../lib/queries';
+  import { prefetchOrq, lerCaudaChat, guardarCaudaChat } from '../lib/queries';
+  import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { aoAquecer, segurarAquecimento, soltarAquecimento } from '../lib/aquecimento';
   // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
   // dentro. Só o render é recursivo — o modal só existe com `peerChat` preenchido, e ele nunca
@@ -34,6 +36,7 @@
   import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
   import {
     getHistory,
+    getHistoryDesde,
     sendInput,
     steerSession,
     broadcast,
@@ -63,6 +66,7 @@
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '@hangar/core';
+  import { chipDaConta } from '../lib/conta';
   import * as diag from '../lib/diag';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
@@ -132,6 +136,18 @@
   segurarAquecimento(sessaoDoPortao);
 
   let events = $state<ChatEvent[]>([]);
+  // Sobe a cada CARGA de histórico (pintar do cache, chegar a cauda, trocar de transcript). A
+  // MessageList re-ancora a janela na cauda a cada mudança — sem isso, uma carga que chega com a
+  // lista já montada pode ficar fora da fatia visível e a conversa para na mensagem anterior.
+  let ancora = $state(0);
+  // Validador da cauda que está na tela (o `ETag` da última resposta do /history). Vai pro cache no
+  // onDestroy e volta como pergunta na entrada seguinte.
+  let etagCauda: string | null = null;
+  // Dono da conversa, capturado na ENTRADA. O `onDestroy` não pode perguntar "qual o servidor
+  // ativo?": navegando pra um chat de outra máquina, o `applyRouteServer` já trocou o ativo antes
+  // de este Chat desmontar, e a cauda desta sessão seria gravada sob a chave da OUTRA máquina.
+  // Mesmo padrão do `filesChave` abaixo, e pelo mesmo motivo.
+  const servidorDaCauda = getActiveId() ?? '';
 
   // Store da aba Arquivos — MESMA instância do FilesPanel (registry por identidade
   // serverId::sessionName). Quem desenha o arquivo aberto no DESKTOP é este Chat (mock 2: o
@@ -391,6 +407,14 @@
     };
   });
   let allSessions = $state<SessionInfo[]>([]);
+  // Servidores fora do ar, só pra folha de "Nova sessão" não oferecer máquina desligada. LÊ o store
+  // sem `retain`: leitura não abre stream nenhum, então a regra do comentário abaixo continua de pé.
+  // Consequência assumida: no celular nenhuma view de lista fica montada junto com o Chat, então o
+  // store está vazio aqui e o conjunto sai vazio — o seletor volta a mostrar todos, como antes. No
+  // desktop a Sidebar está sempre montada e o filtro vale.
+  const servidoresOffline = $derived(
+    new Set(sessionsStore.byServer.filter((b) => b.error).map((b) => b.server.id)),
+  );
   // Detalhe do plano (Task 5b): NÃO usa o sessionsStore (mesmo motivo do loopChip acima — reter o
   // store aqui abria 1 stream de lista por servidor no celular). `allSessions` já é populada por
   // getSessions() (loadSessionsForNav, a cada 5s nas DUAS views) — reusa ela pra achar plan_name.
@@ -504,8 +528,8 @@
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null, model?: string | null, effort?: string | null,
-                              permissionMode?: string | null) {
-    await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode);
+                              permissionMode?: string | null, ompProfile?: string | null) {
+    await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode, ompProfile);
     onNavigateToChat(name);
   }
 
@@ -681,18 +705,68 @@
   let kimiSemTranscript = $state(false);
   const kimiPreNascimento = $derived(sessionProvider === 'kimi'
     && (sessionTracked === false || (kimiSemTranscript && sessionTracked !== true)));
+  // Codex antes da thread: mesma familia do kimiPreNascimento, com uma diferenca que muda o texto
+  // da tela — aqui o composer NAO resolve. O id vem da thread, e a TUI so a abre depois de o
+  // usuario responder o que ela estiver perguntando (a aprovacao dos hooks da integracao nativa e
+  // o caso comum). Quem tira a sessao do lugar e o TERMINAL, entao e pra ele que a tela aponta.
+  const codexPreThread = $derived(sessionProvider === 'codex' && sessionTracked === false);
+  // Pergunta/opcoes vem da LISTA (poll de 5s), nao do SSE: sem thread nao ha /events pra esta
+  // sessao. A lista raspa o pane so nesse estado e so quando ha seletor na tela (registry).
+  const codexEntrada = $derived(codexPreThread ? allSessions.find((s) => s.name === sessionName) : null);
+  const codexOpcoes = $derived(codexEntrada?.options ?? []);
+  const codexPergunta = $derived(codexEntrada?.question ?? null);
+  // O seletor do pane no formato do cartão nativo: uma pergunta, escolha única, opções sem
+  // descrição (o pane não tem onde guardar uma).
+  // CONGELADO enquanto a sessão não tem thread: a lista repolla a cada 5s, e um poll que volte sem
+  // opções (pane ilegível no instante da captura) desmontaria o cartão — junto com a escolha que a
+  // pessoa marcou e ainda não enviou. O cartão só sai quando a sessão sai deste estado.
+  let codexPayload = $state<AskQuestionPayload | null>(null);
+  $effect(() => {
+    if (!codexPreThread) { codexPayload = null; return; }
+    if (!codexOpcoes.length) return;                     // poll vazio não apaga o que está na tela
+    const opts = codexOpcoes.map((label) => ({ label, description: '' }));
+    const pergunta = codexPergunta ?? m.chat_sem_thread_codex();
+    // Mesma pergunta e mesmas opções: NÃO troca a referência, senão o cartão remonta a cada poll e
+    // perde o passo em que a pessoa está.
+    const atual = codexPayload?.questions[0];
+    if (atual && atual.question === pergunta
+        && atual.options.length === opts.length
+        && atual.options.every((o, i) => o.label === opts[i].label)) return;
+    codexPayload = {
+      questions: [{
+        header: m.chat_sem_thread_codex_header(),
+        question: pergunta,
+        multiSelect: false,
+        options: opts,
+      }],
+    };
+  });
+  // O cartão devolve índices; o /select conta a partir de 1, como o picker do terminal.
+  async function responderCodex(answers: AnswerItem[]) {
+    const a = answers[0];
+    if (a?.kind === 'option' && a.indices.length) await handleSelect(a.indices[0] + 1);
+  }
   // Nascimento da sessao kimi: o hook grava o ticket ~1s apos o 1o prompt e o poll da lista traz
   // tracked=true — carrega history e conecta o SSE (que o guard de kimiPreNascimento no connectSSE
   // segurou ate aqui). Chave em PRIMITIVOS: allSessions troca de referencia a cada poll de 5s,
   // entao efeito lendo o objeto re-rodaria em todo poll (ver pairPeersKey).
-  let kimiEstavaSemId = false;
+  // Vale pro Codex pelo MESMO motivo: a thread nasce quando a pessoa responde o seletor, o poll
+  // traz tracked=true, e sem isto a conversa so aparecia saindo da sessao e voltando — a tela diz
+  // "responda e a conversa aparece aqui", e essa promessa e este efeito que cumpre.
+  let estavaSemId = false;
   $effect(() => {
-    const nasceu = sessionProvider === 'kimi' && sessionTracked === true;
-    if (kimiEstavaSemId && nasceu) {
+    const semId = kimiPreNascimento || codexPreThread;
+    const nasceu = !semId && (sessionProvider === 'kimi' || sessionProvider === 'codex')
+      && sessionTracked === true;
+    if (estavaSemId && nasceu) {
       kimiSemTranscript = false;
+      // O SSE pode ter sido recusado enquanto nao havia transcript (/events 404 -> CLOSED); sem
+      // limpar, a faixa de "servidor recusou" sobrevive a chegada do transcript.
+      sseRecusado = false;
+      error = '';
       loadHistory().then(() => { if (alive) connectSSE(); });
     }
-    kimiEstavaSemId = kimiPreNascimento;
+    estavaSemId = semId;
   });
   // Badge do provider na NavBar (mobile): so aparece quando NAO e Claude — antes so o Codex tinha
   // rotulo e uma sessao Pi ficava sem badge nenhum, indistinguivel de uma Claude no celular.
@@ -828,6 +902,7 @@
   // Header: breadcrumb desktop (servidor › sessao › branch) e subtítulo mobile (nome do servidor
   // sob o título — com N servidores, sessões homônimas ficavam indistinguíveis no celular).
   const serverLabel = $derived(listServers().find((s) => s.id === getActiveId())?.label ?? '');
+  const contaChip = $derived(chipDaConta(allSessions.find((s) => s.name === sessionName)?.conta));
 
   // Chip de loop no header: dentro do chat não havia NENHUM sinal de loop ativo (só a lista tinha
   // badge). Os campos vêm do sessionsStore (singleton refcounted — zero SSE novo); tap abre o sheet.
@@ -1051,16 +1126,16 @@
   // `g` (a geracao da carga) entra aqui pelo mesmo motivo de todo o resto do loadHistory: uma carga
   // velha nao pode escrever na tela da carga nova. Sem isso, o aviso ficava aceso pela ordem em que
   // os `finally` calham de rodar — que hoje funciona e nao e garantia de nada.
-  async function tailComRetentativa(signal: AbortSignal, g: number) {
+  async function tailComRetentativa(signal: AbortSignal, g: number, etag: string | null) {
     try {
-      return await getHistory(sessionName, TAIL_FIRST, signal, TAIL_TIMEOUT_1);
+      return await getHistoryDesde(sessionName, TAIL_FIRST, etag, signal, TAIL_TIMEOUT_1);
     } catch (err) {
       // So o TETO justifica repetir. Cancelamento (troca de sessao, /clear) e erro do servidor
       // (404/500) sobem: repetir os dois seria pedir de novo o que ja falhou de verdade.
       if (!isTimeoutError(err)) throw err;
       if (g === histGen) histRetentando = true;
       try {
-        return await getHistory(sessionName, TAIL_FIRST, signal, TAIL_TIMEOUT_2);
+        return await getHistoryDesde(sessionName, TAIL_FIRST, etag, signal, TAIL_TIMEOUT_2);
       } finally {
         if (g === histGen) histRetentando = false;
       }
@@ -1072,16 +1147,54 @@
     const g = histGen;
     histGap = '';
     histRetentando = false;   // carga nova comeca sem o aviso da anterior, igual ao histGap
-    try {
-      const tail = await tailComRetentativa(signal, g);
-      if (g !== histGen) return;   // outra carga assumiu no meio do voo: esta resposta é velha
-      events = tail;
+    // Carga nova = geração nova: a busca de antigos da anterior foi abortada junto, e deixar a
+    // trava levantada faria a primeira rolagem até o topo desta ser engolida em silêncio.
+    buscandoAntigos = false;
+    // A cauda da última visita pinta a tela ANTES de qualquer rede. Sem isto, voltar pra uma sessão
+    // dez segundos depois pagava a espera inteira de novo, porque a rota #/chat desmonta o Chat no
+    // celular e leva `events` junto. Pintar cedo já existiu e foi revertido (b9db4367) porque a
+    // janela da MessageList não re-ancorava numa carga que chegasse com a lista montada — quem
+    // conserta isso é a `ancora`, e ela sobe aqui e a cada resposta do servidor.
+    const cache = lerCaudaChat(servidorDaCauda, sessionName);
+    const pintouDoCache = !!cache?.eventos.length;
+    if (pintouDoCache) {
+      events = cache!.eventos;
+      etagCauda = cache!.etag;
       rebuildIndex();
       reseedDerived();
+      ancora++;
+      loading = false;
+    }
+    try {
+      const r = await tailComRetentativa(signal, g, pintouDoCache ? etagCauda : null);
+      if (g !== histGen) return;   // outra carga assumiu no meio do voo: esta resposta é velha
+      if (r === 'igual') {
+        // Nada mudou no servidor desde a cauda que está na tela: ela CONTINUA sendo a verdade, e
+        // não há corpo pra aplicar. É este o caminho que faz entrar numa sessão sem novidade custar
+        // ~200 bytes em vez de 313 KB.
+        temMaisNoServidor = events.length >= TAIL_FIRST;
+      } else {
+        // Costura SÓ quando o cache pintou; sem ele, substitui como sempre foi. `appendTail` assume
+        // que a cauda é a parte MAIS RECENTE, e no caminho do /clear o SSE pode ter posto uma
+        // mensagem nova em `events` durante o fetch — ali a suposição se inverte e o histórico
+        // entraria DEPOIS dela, fora de ordem. Com a condição no cache, esse caminho segue no
+        // comportamento antigo, byte por byte. Quando NENHUM id bate (transcript trocado por
+        // /clear), `appendTail` devolve só a cauda nova e joga o cache fora.
+        events = pintouDoCache ? appendTail(r.eventos, events) : r.eventos;
+        etagCauda = r.etag;
+        rebuildIndex();
+        reseedDerived();
+        ancora++;
+        // A fase 2 NÃO dispara mais aqui. Ela custava 1,2 MB por ENTRADA numa sessão grande (medido
+        // em 06/09/2026 na `pr-junior`, transcript de 31,9 MB) e servia a UMA coisa só: estar
+        // pronta caso a pessoa rolasse pra cima. Quem entra pra ler as últimas mensagens e sair — o
+        // uso normal no celular — pagava por um histórico que nunca olhou. Agora quem pede é a
+        // MessageList, quando a rolagem chega ao topo do que existe em memória (`onFimDoLocal`).
+        // Veio menos que o pedido = o transcript inteiro coube na cauda; nem há o que buscar.
+        temMaisNoServidor = r.eventos.length >= TAIL_FIRST;
+      }
       error = '';
       kimiSemTranscript = false;   // transcript existe -> sai do modo "kimi pre-1o-prompt"
-      // Veio menos que o pedido = o transcript inteiro coube na cauda; não há o que buscar.
-      if (tail.length >= TAIL_FIRST) loadOlderInBackground(g);
     } catch (err) {
       if (isAbortError(err) || g !== histGen) return;   // cancelado ≠ falhou: nada na tela
       // Teto estourado vira frase traduzida: o texto que o navegador poe no TimeoutError e
@@ -1098,6 +1211,10 @@
         kimiSemTranscript = true;
         return;
       }
+      // Codex antes da thread: o 404 e o estado NORMAL (nao ha rollout ate a TUI abrir a thread) —
+      // guardar o erro deixava a frase de falha esperando pra aparecer no instante em que a
+      // conversa nascesse, por cima dela.
+      if (sessionProvider === 'codex' && (err as { status?: number } | null)?.status === 404) return;
       error = msg;
     } finally {
       if (g === histGen) loading = false;
@@ -1108,10 +1225,26 @@
     }
   }
 
-  // Fase 2: o histórico ANTERIOR à cauda, em segundo plano. Não devolve promise de propósito —
+  // A cauda veio cheia, então existe histórico anterior a ela no servidor. Vira falso quando a
+  // fase 2 já trouxe tudo — sem isso, cada rolagem até o topo repetiria a busca do arquivo inteiro.
+  let temMaisNoServidor = false;
+  let buscandoAntigos = false;
+
+  // Chamado pela MessageList quando a rolagem chega ao topo do que há em memória.
+  function pedirMaisAntigos() {
+    if (!temMaisNoServidor) return;
+    loadOlderInBackground(histGen);
+  }
+
+  // Fase 2: o histórico ANTERIOR à cauda, sob demanda. Não devolve promise de propósito —
   // ninguém espera por ela, a tela já está utilizável. Anda junto com a carga da geração `g`: usa o
   // MESMO controller (não cria um novo), então quem invalida a geração aborta as duas fases.
   function loadOlderInBackground(g: number) {
+    // A trava mora AQUI, não em quem chama: os outros dois caminhos — a pílula de "tentar de novo"
+    // e a retomada do segundo plano — chamam esta função direto, e dois toques rápidos na pílula
+    // (que não desabilita durante a busca) disparavam dois downloads do arquivo inteiro.
+    if (buscandoAntigos) return;
+    buscandoAntigos = true;
     getHistory(sessionName, undefined, histAbort?.signal)
       .then((full) => {
         if (g !== histGen || !alive) return;   // resposta velha/pós-destroy: NÃO aplica
@@ -1132,6 +1265,15 @@
       .catch((err) => {
         if (isAbortError(err) || g !== histGen || !alive) return;   // cancelado ≠ falhou
         histGap = 'failed';
+      })
+      .finally(() => {
+        if (g !== histGen) return;
+        // Trouxe (ou tentou trazer) o arquivo INTEIRO: não há segunda página. Solta as duas travas
+        // — a de "está buscando" e a de "existe mais lá" —, senão a próxima rolagem até o topo
+        // repetiria o download completo. Falha some daqui de propósito: quem avisa é o `histGap`,
+        // e o toque nele é que tenta de novo.
+        buscandoAntigos = false;
+        temMaisNoServidor = false;
       });
   }
 
@@ -1172,7 +1314,9 @@
     // Kimi pre-1o-prompt: /events 404 (sem jsonl) -> nao conecta ate o flip tracked (efeito mais
     // abaixo dispara). Sem este guard o onerror virava retry com backoff martelando pra sempre um
     // endpoint que so passa a existir depois do primeiro envio.
-    if (kimiPreNascimento) return;
+    // Codex junto: sem thread o /events 404a igual, e o EventSource fecha em CLOSED — a faixa
+    // "o servidor recusou" aparecia sobre uma sessao que so ainda nao comecou.
+    if (kimiPreNascimento || codexPreThread) return;
     clearTimeout(reconnectTimer);
     if (es) { es.close(); es = null; }
     sseRecusado = false;
@@ -1377,6 +1521,12 @@
       // carregou" são indistinguíveis no arquivo que a pessoa manda.
       diag.registrar({ evento: 'chat.reset', tela: 'chat', sessao: sessionName });
       lastEventId = null;   // transcript trocado (/clear): id do arquivo antigo não vale mais
+      // A cauda guardada é do transcript ANTIGO, e o validador junto com ela. O `appendTail` da
+      // próxima entrada a descartaria (nenhum id em comum), mas só DEPOIS de ela já ter pintado —
+      // a conversa apagada apareceria por um instante. Apagar aqui é o único ponto em que se sabe
+      // que ela morreu.
+      guardarCaudaChat(servidorDaCauda, sessionName, { eventos: [], etag: null });
+      etagCauda = null;
       events = [];
       idIndex.clear();
       reseedDerived();          // zera activity/asstCount junto (loadHistory re-semeia com o novo)
@@ -1465,6 +1615,15 @@
   });
 
   onDestroy(() => {
+    // Guarda a CAUDA, não a conversa inteira: o que faz a tela pintar é a janela de 120 da
+    // MessageList, e cachear megabytes só moveria o custo de lugar. O validador vai junto — é ele
+    // que a próxima entrada manda no `If-None-Match`. Ele pode estar atrasado em relação aos
+    // eventos (o SSE acrescentou depois da resposta do /history), e isso é seguro na direção certa:
+    // o servidor devolve a cauda inteira de novo em vez de um 304 sobre dado que mudou.
+    if (events.length) {
+      guardarCaudaChat(servidorDaCauda, sessionName,
+                       { eventos: events.slice(-TAIL_FIRST), etag: etagCauda });
+    }
     alive = false;   // connectSSE/onVisible em voo viram no-op — sem EventSource fantasma
     histGen++;
     histAbort?.abort();   // e o /history em voo para de baixar (nao so de ser aplicado)
@@ -1894,7 +2053,7 @@
   {/if}
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {/if}
   </div>
 
@@ -1997,6 +2156,26 @@
         <p class="chat-error-hint">{m.chat_mensagem_enviada_kimi()}</p>
       {/if}
     </div>
+  {:else if codexPreThread}
+    <!-- Codex antes da thread: o composer NAO resolve (a entrada do Codex vai pelo app-server, que
+         so existe com a thread aberta). Se a TUI esta num seletor, os botoes vem da LISTA — nao ha
+         SSE aqui (o /events exige transcript, que so nasce com a thread), e a lista ja classifica
+         esse pane. O terminal fica como plano B, pra pergunta que nao e um seletor (login). -->
+    <!-- Contêiner PRÓPRIO: o `.chat-error` tem max-width de 380px, que é medida de frase de erro —
+         o cartão com opções ficava espremido e fora de centro numa área larga. -->
+    <div class="chat-error codex-pre">
+      <p class="chat-error-title">{m.chat_sem_thread_codex()}</p>
+      {#if codexPayload}
+        <!-- Cartão NATIVO, o mesmo do AskUserQuestion: aqui há uma pergunta e opções de verdade, e
+             o OptionButtons cru é o fallback de picker raspado do pane — sem Cancelar, que ali só
+             mandaria Esc e fecharia o seletor do Codex sem resolver nada. -->
+        <AskQuestionCard open payload={codexPayload} escapes={false}
+                         onSubmit={responderCodex} onClose={abrirTerminalReal} />
+      {:else}
+        <p class="chat-error-hint">{m.chat_sem_thread_codex_hint()}</p>
+      {/if}
+      <button class="chat-error-acao" onclick={abrirTerminalReal}>{m.chat_abrir_terminal_codex()}</button>
+    </div>
   {:else if error}
     <div class="chat-error">
       {#if errorInfo.notFound}
@@ -2017,6 +2196,8 @@
       {stateEvent}
       {pending}
       {sessionName}
+      onFimDoLocal={pedirMaisAntigos}
+      {ancora}
       {dockH}
       {swapIds}
       preview={previewText}
@@ -2087,7 +2268,9 @@
         <button class="back-btn" onclick={onBack}>{'← '}{m.comum_voltar()}</button>
       </div>
     {:else}
-      {#if sseRecusado}
+      <!-- `!codexPreThread`: sem thread o /events 404a por definição, e a faixa acusava o servidor
+           de recusar uma sessão que só ainda não começou — em cima do cartão que resolve isso. -->
+      {#if sseRecusado && !codexPreThread}
         <div class="sse-recusado" role="status">
           <span>{m.chat_sse_recusado()}</span>
           <button type="button" class="sse-retry" onclick={connectSSE}>{m.chat_sse_tentar()}</button>
@@ -2138,6 +2321,8 @@
   <CreateSessionSheet
     open={createOpen}
     servers={listServers()}
+    offline={servidoresOffline}
+    latencias={sessionsStore.latencias}
     onClose={() => (createOpen = false)}
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
@@ -2320,6 +2505,19 @@
     padding-top: var(--nav-h, 56px);
   }
 
+  /* Vence o teto de 380px do `.chat-error` por especificidade (duas classes contra uma): aqui o
+     conteúdo é um cartão de escolha, e ele acompanha a largura disponível até o teto do cartão. */
+  .chat-error.codex-pre {
+    max-width: 640px;
+    width: 100%;
+    padding-inline: var(--space-4);
+    box-sizing: border-box;
+  }
+  .chat-error.codex-pre :global(.ask-card) {
+    width: 100%;
+    max-width: none;
+  }
+
   /* Skeleton de boot (no lugar do splash): linhas shimmer ocupando a area do chat. */
   .chat-skeleton {
     flex: 1;
@@ -2372,6 +2570,17 @@
     color: var(--text-secondary);
     text-align: center;
     line-height: 1.5;
+  }
+  .chat-error-acao {
+    margin-top: 4px;
+    padding: 8px 16px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
   }
   .chat-error-hint code {
     font-family: var(--font-mono);

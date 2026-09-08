@@ -10,13 +10,15 @@
     payload: AskQuestionPayload | null;
     onSubmit: (answers: AnswerItem[]) => Promise<void>;
     onClose: () => void;
+    /** Repassado ao stepper: ver a prop lá. */
+    escapes?: boolean;
   }
-  let { open, payload, onSubmit, onClose }: Props = $props();
+  let { open, payload, onSubmit, onClose, escapes = true }: Props = $props();
 </script>
 
 {#if open}
   <div class="ask-card" role="group" aria-label={m.ask_perguntas()}>
-    <AskQuestionStepper {open} {payload} {onSubmit} {onClose} />
+    <AskQuestionStepper {open} {payload} {onSubmit} {onClose} {escapes} />
   </div>
 {/if}
 

@@ -44,6 +44,9 @@
     // (ex: "1 aguardando"), so renderiza quando ha acao pendente.
     subtitle?: string | null;
     subtitleHot?: string | null;
+    // Conta Anthropic da sessão, ao lado do título tappável (celular): o desktop tem a pílula de
+    // cota da barra de abas; no celular não havia como saber qual conta paga a sessão aberta.
+    conta?: { label: string; nome: string; cor: string } | null;
     // Desktop: breadcrumb (servidor › sessao › branch) no lugar do titulo centralizado + pilula de estado.
     crumbs?: { server: string; session: string; branch?: string; dirty?: boolean } | null;
     // Estado da sessao aberta, ao lado do breadcrumb (so no desktop; sem estado, sem pilula).
@@ -61,7 +64,7 @@
     loopColor?: string;
     onLoopTap?: () => void;
   }
-  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenNavegador, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, state, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
+  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenNavegador, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, conta = null, crumbs = null, state, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
 
   // Sinal do "⋯": no celular Rodar/Atividade moram dentro do menu, entao o estado deles precisa
   // aparecer no botao — senao voce so descobre que algo esta rodando abrindo o menu.
@@ -122,6 +125,11 @@
           >{providerLabel}</span>
         {:else if providerLabel}
           <span class="provider-badge">{providerLabel}</span>
+        {/if}
+        {#if conta}
+          <!-- Conta Anthropic da sessão aberta: o desktop tem a pílula de cota da barra de abas;
+               no celular este chip é o único lugar que diz qual conta paga a conversa. -->
+          <span class="navbar-conta" style="color: {conta.cor}; border-color: {conta.cor};" title={m.sessao_conta({ n: conta.nome })}>{conta.label}</span>
         {/if}
         {#if loopLabel}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -357,6 +365,11 @@
   .navbar-sub-hot {
     color: var(--warning);
     font-weight: 600;
+  }
+  .navbar-conta {
+    flex-shrink: 0;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    padding: 0 6px; border: 1px solid; border-radius: var(--radius-full);
   }
 
   /* Titulo tappavel: chip centralizado com chevron (abre o switcher de sessoes). */

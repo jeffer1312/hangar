@@ -48,11 +48,11 @@ def test_cache_usa_so_versao_mais_nova_do_plugin(tmp_path, monkeypatch):
     home = _home(tmp_path, monkeypatch)
     _skill(home, ".claude", "plugins", "cache", "ecc", "ecc", "2.2.0", "skills", "antiga")
     nova = _skill(home, ".claude", "plugins", "cache", "ecc", "ecc", "2.10.0", "skills", "nova")
-    (home / ".codex").mkdir()
+    (home / ".kimi-code").mkdir()
 
     skill_bridge.rebuild(home, log=lambda *a: None)
 
-    alvos = _alvos(home / ".codex" / "skills")
+    alvos = _alvos(home / ".kimi-code" / "skills-bridge")
     assert alvos == {"nova": str(nova)}  # 2.10.0 > 2.2.0 numericamente; a antiga nem entra
 
 
@@ -81,9 +81,9 @@ def test_rebuild_limpa_link_podre_e_troca_versao(tmp_path, monkeypatch):
 def test_nunca_toca_em_o_que_nao_e_gerenciado(tmp_path, monkeypatch):
     home = _home(tmp_path, monkeypatch)
     _skill(home, ".claude", "skills", "comum")
-    ponte = home / ".codex" / "skills"
+    ponte = home / ".kimi-code" / "skills-bridge"
     ponte.mkdir(parents=True)
-    real = ponte / ".system"  # dir real do codex
+    real = ponte / "pessoal"  # diretório real do usuário
     real.mkdir()
     (real / "SKILL.md").write_text("x", encoding="utf-8")
     link_estranho = ponte / "comum"  # link À MÃO pra fora das fontes, com nome de skill fonte
@@ -119,7 +119,7 @@ def test_marcador_como_substring_fora_das_fontes_nao_e_gerenciado(tmp_path, monk
     backup = tmp_path / "mnt" / "backup" / str(home).lstrip("/") / ".claude" / "skills" / "foo"
     backup.mkdir(parents=True)
     (backup / "SKILL.md").write_text("x", encoding="utf-8")
-    ponte = home / ".codex" / "skills"
+    ponte = home / ".kimi-code" / "skills-bridge"
     ponte.mkdir(parents=True)
     link = ponte / "backup-do-usuario"
     link.symlink_to(backup)
@@ -144,7 +144,7 @@ def test_link_relativo_pra_dentro_de_fonte_e_gerenciado(tmp_path, monkeypatch):
 
 
 def test_zero_skills_nas_fontes_recusa_o_sweep(tmp_path, monkeypatch):
-    """Update do Claude reorganizando o layout não pode derrubar as três pontes de uma vez."""
+    """Update do Claude reorganizando o layout não pode derrubar as pontes de uma vez."""
     home = _home(tmp_path, monkeypatch)
     ponte = home / ".pi" / "agent" / "skills-bridge"
     ponte.mkdir(parents=True)
@@ -174,3 +174,15 @@ def test_harness_ausente_e_ignorado(tmp_path, monkeypatch):
     _skill(home, ".claude", "skills", "s")
     # nenhum dir de harness — nada acontece, nada quebra
     assert skill_bridge.rebuild(home, log=lambda *a: None) == {}
+
+
+def test_codex_fica_inteiramente_a_cargo_do_reconciliador(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    _skill(home, ".claude", "skills", "nova")
+    ponte = home / ".codex" / "skills"
+    ponte.mkdir(parents=True)
+    antiga = ponte / "antiga"
+    antiga.symlink_to(home / ".claude" / "skills" / "removida")
+    assert skill_bridge.rebuild(home, log=lambda *a: None) == {}
+    assert antiga.is_symlink()
+    assert list(ponte.iterdir()) == [antiga]

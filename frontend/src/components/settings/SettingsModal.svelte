@@ -5,7 +5,6 @@
   import AppearanceSettings from './AppearanceSettings.svelte';
   import VozSettings from './VozSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
-  import EnginesSettings from './EnginesSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
   import DiarioSettings from './DiarioSettings.svelte';
   import MaquinasSettings from './MaquinasSettings.svelte';
@@ -94,11 +93,10 @@
     sobre: m.config_modal_sobre(),
     diario: m.config_diag_titulo(),
     maquinas: m.maquinas_titulo(),
-    contas: m.contas_titulo(),
+    contas: m.contas_modelos_titulo(),
     notificacoes: m.config_modal_notificacoes(),
     anexos: m.config_modal_anexos_curto(),
     avancado: m.config_modal_avancado(),
-    motores: m.config_modal_motores(),
     orquestracao: m.config_modal_orquestracao(),
     harnesses: m.harness_titulo(),
   };
@@ -111,13 +109,12 @@
     { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: 'recibo', servidor: false },
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
     { id: 'maquinas', secao: 'servidor', rotulo: m.maquinas_titulo(), icone: 'tela', servidor: false },
-    { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: 'pessoa', servidor: true },
+    { id: 'contas', secao: 'servidor', rotulo: m.contas_modelos_titulo(), icone: 'pessoa', servidor: true },
     { id: 'harnesses', secao: 'servidor', rotulo: m.harness_titulo(), icone: 'pulso', servidor: true },
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
     { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos_curto(), icone: 'clipe', servidor: true },
     { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: 'chave', servidor: true },
-    { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: 'plug', servidor: true },
     { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: 'sliders', servidor: true },
   ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; servidor: boolean }[];
   const SECOES = ['app', 'servidor'] as const;
@@ -176,7 +173,7 @@
   // que o painel esta tapando. A previa embutida resolve o caso comum; isto e pra quando a pessoa
   // quer ver a conversa de verdade mudando.
   let aoVivo = $state(false);
-  // Sair da Aparencia (ou ir pro celular) desliga: a caixinha e pequena demais pra tela de motores, e
+  // Sair da Aparencia (ou ir pro celular) desliga: a caixinha e pequena demais pras outras telas, e
   // no celular nao ha "atras" pra revelar.
   $effect(() => { if (telaAtual !== 'aparencia' || !isDesktop) aoVivo = false; });
 
@@ -346,8 +343,6 @@
     <GeneralSettings />
   {:else if telaAtual === 'aparencia'}
     <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
-  {:else if telaAtual === 'motores'}
-    <EnginesSettings targetServer={alvo} />
   {:else if telaAtual === 'orquestracao'}
     <OrquestracaoContas desktop={isDesktop} />
   {:else if telaAtual === 'diario'}
@@ -356,8 +351,8 @@
     <SobreSettings />
   {:else if telaAtual === 'maquinas'}
     <MaquinasSettings resolvedServer={resolvedServer} apiTarget={alvo}
-      fallbackFocus={fecharEl}
-      onPickTarget={onPickServer ?? (() => {})} onLogout={onLogout ?? (() => {})} />
+      fallbackFocus={fecharEl} {store}
+      onLogout={onLogout ?? (() => {})} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
   {:else if telaAtual === 'harnesses'}

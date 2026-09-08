@@ -32,6 +32,14 @@ export const vaultPush = {
     estado = 'locked';
     detalhe = m.vault_sync_deslogado();
   },
+  // O hub manda quando ja tem lista, e isso APAGA do localStorage o que so existia aqui. Some o
+  // servidor que a pessoa apagou noutro aparelho (o objetivo) e tambem o que ela adicionou aqui
+  // com o push quebrado -- do lado de dentro os dois casos sao a mesma coisa, "local tem, hub nao".
+  // O segundo e perda de dado, entao no minimo ele nao pode ser calado.
+  descartou(n: number) {
+    estado = 'error';
+    detalhe = m.vault_descartou_locais({ n: String(n) });
+  },
   error(e: unknown) {
     estado = 'error';
     detalhe = m.vault_nao_subiu({ msg: e instanceof Error ? e.message : String(e) });

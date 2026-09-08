@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { getSessions, pairSession, unpairSession, getHistory, getPairContract } from '@hangar/core';
   import { formataErro } from '@hangar/core';
@@ -176,7 +177,7 @@
 <!-- `resizable`: o painel do par carrega o contrato do grupo (um documento), a lista de membros e a
      conversa — nos 420px padrao o markdown saia com ~40 caracteres por linha. Fica arrastavel pela
      borda esquerda e a largura persiste. -->
-<BottomSheet {open} {onClose} resizable widthKey="cp_pairsheet_w" defaultWidth={760} ariaLabel={m.par_aria_sheet()}>
+<BottomSheet {open} {onClose} ariaLabel={m.par_aria_sheet()} wide={desktop.atual} centered={desktop.atual}>
   <div class="pair">
     {#if peers.length}
       <!-- Tudo que ROLA fica aqui; o rodape com "Sair do grupo" fica preso embaixo. -->

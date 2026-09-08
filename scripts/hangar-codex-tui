@@ -13,8 +13,10 @@ processo antes de ele chegar la.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -22,9 +24,46 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
+# Quanto a abertura espera o backend reconciliar; estourou, a sessão abre e ele termina sozinho.
+_PRAZO_INTEGRACAO = 20.0
+
+
+def _api_backend(method: str, path: str) -> dict:
+    env: dict[str, str] = {}
+    try:
+        for line in (_REPO / "backend" / ".env").read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                env[key.strip()] = value.strip()
+    except OSError:
+        pass
+    token = os.environ.get("CP_AUTH_TOKEN") or env.get("CP_AUTH_TOKEN")
+    port = os.environ.get("CP_PORT") or env.get("CP_PORT") or "8765"
+    if not token:
+        raise RuntimeError("CP_AUTH_TOKEN ausente")
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method,
+                                 headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=5) as response:
+        return json.load(response)
+
+
+def _integracao_codex(prazo: float = _PRAZO_INTEGRACAO) -> dict:
+    """Pede a reconciliação ao backend e espera até `prazo` por ela terminar."""
+    resultado = _api_backend("POST", "/api/harness/codex/integracao/sessao")
+    limite = time.monotonic() + prazo
+    while resultado.get("estado") == "executando" and time.monotonic() < limite:
+        time.sleep(0.5)
+        resultado = _api_backend("GET", "/api/harness/codex/integracao")
+    if resultado.get("estado") == "executando":
+        resultado = {**resultado, "avisos": [*resultado.get("avisos", []),
+                     f"reconciliação ainda em andamento após {prazo:.0f}s; a sessão abre sem ela"]}
+    return resultado
 # Quanto esperamos a TUI abrir a thread. Estourar NAO e fatal: o pane segue sendo um Codex
 # utilizavel; o que se perde e o vinculo com o app ate a proxima abertura.
 _ESPERA_THREAD = 60.0
@@ -65,6 +104,26 @@ def _rollout_de(thread_id: str) -> str:
     achados = sorted(raiz.glob(f"*/*/*/rollout-*-{thread_id}.jsonl"),
                      key=lambda p: p.stat().st_mtime, reverse=True)
     return str(achados[0]) if achados else ""
+
+
+def _codex() -> str:
+    """O caminho do binario `codex`, resolvido UMA vez.
+
+    Nome cru nao serve no Windows: o `CreateProcess` nao aplica PATHEXT, e o codex do npm e um
+    `codex.CMD` — `Popen(["codex", ...])` estoura com WinError 2 enquanto o mesmo comando com o
+    caminho resolvido funciona (medido 07/09/2026). O `shutil.which` aplica PATHEXT e devolve o
+    arquivo real, entao serve aos dois sistemas sem ramo por OS.
+
+    Falha ALTA e legivel: sem isto o pane morria com um traceback de FileNotFoundError apontando
+    pro `subprocess.py`, que nao diz a quem le que o que falta e o proprio Codex.
+    """
+    caminho = shutil.which("codex")
+    if not caminho:
+        raise SystemExit(
+            "hangar-codex-tui: nao achei o executavel `codex` no PATH deste processo. "
+            "Instale o Codex CLI (npm install -g @openai/codex) e reabra a sessao."
+        )
+    return caminho
 
 
 def _porta_livre() -> str:
@@ -171,22 +230,34 @@ def main() -> int:
     sys.path.insert(0, str(_REPO / "backend"))
     from app.adapters.codex import sessions as codex_sessions
     from app.adapters.codex.lancador import APPROVAL, SANDBOX
+    from app.codex_instrucoes import LIMITE_INSTRUCOES, limite_instrucoes, preparar_instrucoes
 
-    # Skill instalada no Claude vale JA nesta abertura: o codex le so a pasta dele, e a ponte que
-    # a materializa la era refeita apenas na subida do backend. Fail-soft — isto e conveniencia no
-    # caminho de abrir o agente, nunca motivo pra ele nao abrir.
+    # O cwd novo ainda pode não estar no config do Codex. O alias precisa existir antes do app-server.
+    # Falha (override pessoal, config.toml ilegível) não impede a TUI: fica sem alias e sem limite maior.
+    codex_home = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
+    limite = LIMITE_INSTRUCOES
     try:
-        from app import skill_bridge
-        # Calado quando nada mudou: este stderr e o pane que a pessoa esta olhando, e uma linha
-        # por harness a cada abertura de Codex seria ruido. Quando a ponte MEXEU, ela fala — sem
-        # isso nao ha como saber depois se ela rodou.
-        stats = skill_bridge.rebuild(log=lambda _m: None)
-        mexeu = {n: s for n, s in stats.items()
-                 if any(s.get(k) for k in ("criados", "trocados", "removidos", "erro"))}
-        if mexeu:
-            print(f"hangar-codex-tui: ponte de skills atualizada: {mexeu}", file=sys.stderr)
+        preparar_instrucoes(Path.home(), codex_home, Path(cwd))
+        limite = limite_instrucoes(codex_home)
     except Exception as exc:                          # noqa: BLE001
-        print(f"hangar-codex-tui: ponte de skills falhou ({exc}); a sessao abre assim mesmo",
+        print(f"hangar-codex-tui: instruções nativas não preparadas ({exc}); a sessão abre assim mesmo",
+              file=sys.stderr)
+
+    # A sessão lê a configuração já reconciliada; quem reconcilia é o BACKEND (um executor só, e
+    # uma instalação longa termina lá) — aqui só se avisa e se espera um pouco. Falha não impede a TUI.
+    try:
+        resultado = _integracao_codex()
+        texto = lambda m: m.get("texto", "") if isinstance(m, dict) else str(m or "")  # noqa: E731
+        if resultado.get("estado") not in (None, "ocioso", "ok") or resultado.get("erros"):
+            print(f"hangar-codex-tui: integração Codex: {resultado['estado']} — {texto(resultado.get('etapa'))}",
+                  file=sys.stderr)
+        for aviso in [*resultado.get("avisos", []), *resultado.get("erros", [])]:
+            print(f"hangar-codex-tui: {texto(aviso)}", file=sys.stderr)
+        if resultado.get("confianca_pendente"):
+            print("hangar-codex-tui: há itens aguardando sua confirmação de confiança no Codex",
+                  file=sys.stderr)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"hangar-codex-tui: integração Codex falhou ({exc}); a sessão abre assim mesmo",
               file=sys.stderr)
 
     endpoint = _porta_livre()
@@ -195,7 +266,7 @@ def main() -> int:
     # justamente a mensagem que explica uma largada que falhou.
     erros = tempfile.TemporaryFile()
     servidor = subprocess.Popen(
-        ["codex", "app-server", "--listen", endpoint],
+        [_codex(), "app-server", "--listen", endpoint, "-c", f"project_doc_max_bytes={limite}"],
         stdout=subprocess.DEVNULL, stderr=erros,
     )
 
@@ -226,8 +297,13 @@ def main() -> int:
 
     # SIGTERM/SIGHUP viram SystemExit pra que o `finally` rode: `tmux kill-session` derruba o pane
     # por sinal, e sem isto o app-server ficaria escutando sem dono.
-    for sinal in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sinal, lambda *_: sys.exit(143))
+    # `getattr`: SIGHUP nao existe no Windows e o acesso direto levantava AttributeError aqui,
+    # matando o pane DEPOIS de o app-server ja ter subido (medido 07/09/2026). No Linux os dois
+    # existem e o laco e o mesmo de antes.
+    for nome in ("SIGTERM", "SIGHUP"):
+        sinal = getattr(signal, nome, None)
+        if sinal is not None:
+            signal.signal(sinal, lambda *_: sys.exit(143))
 
     # A escolha de modelo do usuario, traduzida pro que o binario entende. Sao DUAS gramaticas
     # diferentes e e por isso que a traducao mora aqui, e nao no model_args como a dos outros
@@ -251,11 +327,11 @@ def main() -> int:
         # que ninguem vai responder — a TUI trava e o app fica olhando uma sessao muda.
         # `-C` fica de fora porque o pane ja nasce no cwd certo (`tmux new-session -c`) e a conversa
         # carrega o dela; o id vai no fim, onde o subcomando o espera.
-        argv = ["codex", "resume", "--remote", endpoint, "--no-alt-screen",
+        argv = [_codex(), "resume", "--remote", endpoint, "--no-alt-screen",
                 "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL,
                 *flags_da_escolha, args.resume]
     else:
-        argv = ["codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
+        argv = [_codex(), "--remote", endpoint, "--no-alt-screen", "-C", cwd,
                 "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL, *flags_da_escolha]
     if args.prompt:
         argv.append(args.prompt)

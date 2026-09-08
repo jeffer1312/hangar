@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import * as m from '../paraglide/messages';
   import AskQuestionStepper from './AskQuestionStepper.svelte';
   import type { AskQuestionPayload, AnswerItem } from '@hangar/core';
@@ -16,6 +17,6 @@
   let { open, payload, onSubmit, onClose }: Props = $props();
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.ask_perguntas()}>
+<BottomSheet {open} {onClose} ariaLabel={m.ask_perguntas()} centered={desktop.atual}>
   <AskQuestionStepper {open} {payload} {onSubmit} {onClose} />
 </BottomSheet>

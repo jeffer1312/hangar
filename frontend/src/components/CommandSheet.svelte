@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import { desktop } from '../lib/desktop.svelte';
   import * as m from '../paraglide/messages';
   import type { CommandInfo } from '@hangar/core';
 
@@ -115,7 +116,7 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.comandos_titulo()}>
+<BottomSheet {open} {onClose} ariaLabel={m.comandos_titulo()} wide={desktop.atual} centered={desktop.atual}>
   <h2 class="sheet-title">{m.comandos_titulo()}</h2>
 
   <input

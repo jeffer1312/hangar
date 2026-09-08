@@ -55,6 +55,21 @@ if os.name == "nt":
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _sem_integracao_codex_real():
+    # Lifespan e lançadores de teste não podem reconciliar o perfil real. Testes explícitos
+    # instanciam o serviço em tmp_path e exercitam reconciliar sem depender deste gatilho.
+    anterior = os.environ.get("CP_CODEX_SYNC_ENABLED")
+    os.environ["CP_CODEX_SYNC_ENABLED"] = "0"
+    try:
+        yield
+    finally:
+        if anterior is None:
+            os.environ.pop("CP_CODEX_SYNC_ENABLED", None)
+        else:
+            os.environ["CP_CODEX_SYNC_ENABLED"] = anterior
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _sem_git_dir_no_ambiente_de_teste():
     # git_ops._run passa os.environ inteiro pro subprocess: dentro de um hook (pre-push, p.ex.) o
     # processo herda GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE do git que roda o hook, e qualquer teste

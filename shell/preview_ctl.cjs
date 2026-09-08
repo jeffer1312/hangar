@@ -6,6 +6,59 @@ const { compactarAX } = require('./preview_fmt.cjs');
 const TETO_CONSOLE = 200;   // buffer circular: um app conversador não pode comer memória
 const TETO_REDE = 200;
 const TEMAS = { claro: 'light', escuro: 'dark', sistema: '' };
+// View escondido zera a viewport da página (0x0, independente dos bounds), e aí ela cai no
+// layout de celular e não há quadro pra fotografar. A emulação de tamanho a desamarra do
+// compositor. Tamanho fixo porque não há painel de onde tirar um: é o que o agente vê.
+const VIEWPORT_OCULTO = { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false };
+// Layout de celular: iPhone 14/15 em pontos CSS. `deviceScaleFactor: 2` porque site que serve
+// imagem por densidade decide por ele, e é o que se quer ver ao testar em celular.
+const VIEWPORT_MOVEL = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true };
+const UA_MOVEL = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 '
+  + '(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+// Teto do print por CDP. 3000 era APERTADO DEMAIS e recusava quadro que existia: o caminho do
+// `Page.captureScreenshot` é o ÚNICO de uma sessão fora do painel (`oculto`), e sem compositor
+// ele é lento — medido 2071-2902ms nesta VM, com a primeira captura consumindo 97% do teto.
+// Estourar aqui devolvia imagem vazia, que o preview_srv reporta como "não produziu quadro
+// (janela minimizada?)" — culpa trocada, porque o quadro estava lá. Alinhado ao `tetoEspera`
+// dos outros verbos: melhor um print que demora do que um print que mente.
+const TETO_SHOT_CDP = 15000;
+
+// Tecla nomeada precisa de `code` + virtual key code pra o Chromium reconhecer, e Enter precisa
+// do caractere: keyDown sem `text: "\r"` não gera char e o form não submete.
+const TECLAS = {
+  Enter: { code: 'Enter', vk: 13, text: '\r' },
+  Tab: { code: 'Tab', vk: 9 },
+  Escape: { code: 'Escape', vk: 27 },
+  Backspace: { code: 'Backspace', vk: 8 },
+  Delete: { code: 'Delete', vk: 46 },
+  ArrowUp: { code: 'ArrowUp', vk: 38 },
+  ArrowDown: { code: 'ArrowDown', vk: 40 },
+  ArrowLeft: { code: 'ArrowLeft', vk: 37 },
+  ArrowRight: { code: 'ArrowRight', vk: 39 },
+  Home: { code: 'Home', vk: 36 },
+  End: { code: 'End', vk: 35 },
+  PageUp: { code: 'PageUp', vk: 33 },
+  PageDown: { code: 'PageDown', vk: 34 },
+  Space: { key: ' ', code: 'Space', vk: 32, text: ' ' },
+};
+function eventoTecla(tecla) {
+  const t = TECLAS[tecla];
+  if (t) {
+    const ev = { key: t.key || tecla, code: t.code, windowsVirtualKeyCode: t.vk };
+    if (t.text) { ev.text = t.text; ev.unmodifiedText = t.text; }
+    return ev;
+  }
+  if (tecla.length === 1) {
+    return { key: tecla, text: tecla, unmodifiedText: tecla, windowsVirtualKeyCode: tecla.toUpperCase().charCodeAt(0) };
+  }
+  return { key: tecla };   // ponytail: tecla nomeada fora da tabela vai só com `key`, como antes
+}
+
+// `insertText` só entra em campo editável: sem foco num deles o texto some calado — e depois de
+// um clique o foco pode ter caído num botão ou no body. Devolve '' quando dá pra digitar.
+const FOCO = `(()=>{const a=document.activeElement;if(!a||a===document.body)return 'nada';const t=a.tagName.toLowerCase();`
+  + `const ok=a.isContentEditable||t==='textarea'||(t==='input'&&!/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(a.type||''));`
+  + `return ok?'':t+(a.type?'['+a.type+']':'')})()`;
 
 // tetoEspera vale pra TODO comando que pode não voltar (wait e eval): view escondido suspende
 // requestAnimationFrame, e um comando pendurado trava o agente sem erro nenhum.
@@ -13,6 +66,8 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
   let fila = Promise.resolve();
   let refs = new Map();
   let temaAtual = 'sistema';
+  let oculto = false;
+  let layoutMovel = false;
   let ultimaRede = Date.now();
   let requisicoesEmVoo = 0;
   const console_ = [];
@@ -58,6 +113,25 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
     return ligados.get(dominio);
   }
 
+  // Emular tamanho numa página que ainda não carregou (o `about:blank` de um view recém-criado)
+  // derruba o processo com SIGSEGV. Quem chama espera o load.
+  async function aplicarViewport() {
+    if (layoutMovel) {
+      // Layout de celular pedido por quem está olhando de fora (acesso remoto). Vale MAIS que o
+      // `oculto`: quem escolheu ver em celular quer o site servindo mobile, com ou sem painel.
+      // Sem a emulação de toque a página não recebe touchstart e um carrossel que só escuta toque
+      // fica morto — que é justamente o que se quer testar num layout de celular.
+      await dbg.sendCommand('Emulation.setDeviceMetricsOverride', VIEWPORT_MOVEL);
+      await dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+      await dbg.sendCommand('Emulation.setUserAgentOverride', { userAgent: UA_MOVEL });
+      return;
+    }
+    await dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await dbg.sendCommand('Emulation.setUserAgentOverride', { userAgent: '' });
+    if (oculto) await dbg.sendCommand('Emulation.setDeviceMetricsOverride', VIEWPORT_OCULTO);
+    else await dbg.sendCommand('Emulation.clearDeviceMetricsOverride');
+  }
+
   async function aplicarTema() {
     const valor = TEMAS[temaAtual] ?? '';
     await dbg.sendCommand('Emulation.setEmulatedMedia',
@@ -72,6 +146,16 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
     // ficaria preso até o teto na página nova.
     requisicoesEmVoo = 0;
     if (temaAtual !== 'sistema') await aplicarTema();
+    // A emulação de tamanho sobrevive à navegação, mas a do tema também deveria e não sobrevive;
+    // reaplicar custa um comando e o preço de errar é a página inteira em 0x0, calada.
+    // O `oculto` aceita falhar calado (o comentário acima diz por quê). O layout de celular, não:
+    // ele foi PEDIDO por alguém que está olhando, e se a emulação não voltar depois de navegar a
+    // página vira desktop com a pill ainda marcando celular.
+    if (oculto || layoutMovel) {
+      await aplicarViewport().catch((err) => {
+        if (layoutMovel) console.error(`[nav] layout de celular nao voltou apos navegar: ${err && err.message ? err.message : err}`);
+      });
+    }
   });
 
   // Dois frames, não um: o primeiro rAF roda ANTES da pintura do quadro seguinte; só o segundo
@@ -84,6 +168,12 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
     dbg.sendCommand('Runtime.evaluate', { expression: QUADRO, awaitPromise: true }).catch(() => {}),
     new Promise((r) => setTimeout(r, 500)),
   ]);
+
+  async function focoNaoEditavel() {
+    const r = await dbg.sendCommand('Runtime.evaluate', { expression: FOCO, returnByValue: true });
+    const v = r.result && r.result.value;
+    return v === '' ? null : (v || 'desconhecido');
+  }
 
   function enfileirar(fn) {
     const resultado = fila.then(fn, fn);
@@ -108,6 +198,16 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       await aplicarTema();
       return `tema: ${modo}`;
     },
+    // Layout do navegador de verdade — não de uma cópia: quem está vendo de fora escolhe, e o
+    // agente que dirige esta mesma sessão passa a ver a mesma coisa. Mora junto do tema porque os
+    // dois são emulação que `aplicarViewport`/`aoNavegar` precisam repor depois de navegar.
+    async layout(modo) {
+      if (modo !== 'mobile' && modo !== 'desktop') return `erro: layout desconhecido: ${modo}`;
+      layoutMovel = modo === 'mobile';
+      await aplicarViewport();
+      return `layout: ${modo}`;
+    },
+    layoutAtual: () => (layoutMovel ? 'mobile' : 'desktop'),
     console(limpar) {
       const saida = console_.join('\n');
       if (limpar) console_.length = 0;
@@ -120,7 +220,37 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       const r = await dbg.sendCommand('Runtime.evaluate', { expression: 'document.body.innerText', returnByValue: true });
       return String((r.result && r.result.value) ?? '');
     },
-    async capturarPagina() { await quadro(); return capturarPagina(); },
+    // Estado de exibição do view, dito pelo main quando ele esconde ou mostra. Guardado aqui
+    // porque é o mesmo lugar que já sabe reaplicar emulação depois de navegar.
+    async definirOculto(valor) {
+      oculto = !!valor;
+      await aplicarViewport();
+    },
+    // Dois caminhos, e qual serve depende de o view estar na tela. Visível: `capturePage` do
+    // Electron. Escondido: ele REJEITA com UnknownVizError (não devolve imagem vazia), e quem
+    // responde é o `Page.captureScreenshot` do CDP — mas só com a emulação de tamanho ligada,
+    // senão pendura. O teto é a rede pra esse caso.
+    async capturarPagina() {
+      await quadro();
+      if (!oculto) {
+        const img = await capturarPagina().catch(() => null);
+        if (img && !img.isEmpty()) return img;
+      }
+      const pedido = dbg.sendCommand('Page.captureScreenshot', { format: 'png' });
+      pedido.catch(() => {});   // rejeição atrasada não pode virar rejeição solta no processo
+      const r = await Promise.race([
+        pedido.catch(() => null),
+        new Promise((res) => setTimeout(() => res(null), TETO_SHOT_CDP)),
+      ]);
+      if (!r || !r.data) {
+        // Distinguir no LOG o que o retorno não distingue: o preview_srv só vê "imagem vazia" e
+        // atribui à janela minimizada. Quem for investigar precisa saber se foi o teto.
+        console.error(`[nav] captureScreenshot sem dado apos ${TETO_SHOT_CDP}ms (oculto=${oculto})`);
+        return { isEmpty: () => true, toPNG: () => Buffer.alloc(0) };
+      }
+      const png = Buffer.from(r.data, 'base64');
+      return { isEmpty: () => png.length === 0, toPNG: () => png };
+    },
     fechar() { console_.length = 0; rede.length = 0; refs = new Map(); },
     // Ref VELHA e ref INEXISTENTE dão no mesmo lugar de propósito: o `backendDOMNodeId` morre em
     // qualquer re-render que desmonte o nó, não só em navegação — e é justo o caso de uma lista
@@ -156,6 +286,8 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       const p = await this.centroDe(ref);
       if (!p) return `erro: ref ${ref} nao existe (rode snapshot de novo)`;
       await this.clicar(ref);
+      const foco = await focoNaoEditavel();
+      if (foco) return `erro: fill ${ref}: o clique nao deixou um campo de texto com foco (foco em ${foco}) — a ref e mesmo um campo? rode snapshot`;
       // SUBSTITUI: sem seleção o insertText gruda no que já estava. Quem seleciona é o campo
       // `commands` — a tecla sozinha (Ctrl+A) não seleciona nada, porque o Chromium mapeia
       // tecla→comando de edição pelo virtual key code, que o evento sintético não carrega.
@@ -168,13 +300,16 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       return `ok: fill ${ref}`;
     },
     async digitar(texto) {
+      const foco = await focoNaoEditavel();
+      if (foco) return `erro: type: nenhum campo de texto com foco (foco em ${foco}) — use fill @eN, ou click no campo antes`;
       await dbg.sendCommand('Input.insertText', { text: String(texto) });
       await quadro();
       return 'ok: type';
     },
     async teclar(tecla) {
-      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: tecla });
-      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: tecla });
+      const { text, unmodifiedText, ...soltar } = eventoTecla(String(tecla));
+      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...soltar, ...(text ? { text, unmodifiedText } : {}) });
+      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...soltar });
       await quadro();
       return `ok: press ${tecla}`;
     },

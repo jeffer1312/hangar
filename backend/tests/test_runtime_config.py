@@ -35,6 +35,15 @@ def test_campo_desconhecido_e_ignorado():
     assert salvo == {}          # o cliente não inventa setting
 
 
+def test_preferencia_statusline_ligada_por_padrao_e_persistida():
+    assert rc.get("claude_statusline_update") is True
+    rc.aplicar({"claude_statusline_update": False})
+    assert rc.estado()["claude_statusline_update"]["valor"] is False
+    assert json.loads(rc._caminho().read_text())["claude_statusline_update"] is False
+    with pytest.raises(ValueError):
+        rc.aplicar({"claude_statusline_update": "false"})
+
+
 def test_segredo_volta_mascarado_nunca_inteiro():
     rc.aplicar({"groq_api_key": "gsk_abcdefghijklmnop"})
     est = rc.estado()["groq_api_key"]

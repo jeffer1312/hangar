@@ -565,9 +565,28 @@ Task 3 — Bar: `EnginesSheet.svelte`, desktop 1440px, centered modal
 Task 5 — Bar: none — user's decision
 ```
 
-**A recorded `none` is worth as much as a bar.** It is what makes the reviewer judge the Task by
-the normal visual protocol instead of returning it for lack of a bar — and that is why the record
-must be in the contract, not only in your memory of the conversation.
+**A recorded `none` is worth as much as a bar — for a NEW surface.** It is what makes the reviewer
+judge the Task by the normal visual protocol instead of returning it for lack of a bar — and that
+is why the record must be in the contract, not only in your memory of the conversation.
+
+**A Task that REPLACES an existing surface is not this question.** When the Task merges, retires
+or moves a screen, a command or a settings page that already exists, the bar is not a matter of
+taste and there is nothing to ask: **the bar is the thing being replaced**, and `none` is not among
+the answers. A new screen has no predecessor and the question above holds; a replacement has one,
+and whoever approves it without holding the old one in hand is approving the diff, not the result.
+Judging the *delta* small ("only the menu loses a line", "the component just moves into a card")
+is exactly how the old surface goes unread.
+
+And the comparison it demands is not the visual one. The Task enters with an **inventory of the
+old surface**: one line per thing a person could do or read there — field, toggle, hint, warning,
+named button, empty-list text — and, next to each, where it is now. **Visible counts; behind a
+click that announces nothing does not.** A cheap method when the surface is code: the interface
+keys used by the old file (`git show <base>:<file>`) minus the ones used by the new ones is the list
+to judge. The inventory has a line per element **per mode** the surface has (create × edit, empty ×
+filled), because an element that exists in one mode and not in the other reads as present in a
+list with a single column. It goes into the Task's ready criterion, and the reviewer checks it item
+by item. A green gate and a clean diff say nothing about it: a regression of this kind is code that
+was deleted, and deleting code changes no test.
 
 ## Executor rotation
 
@@ -600,6 +619,15 @@ the same stage. The stop order says: stop, don't capture, don't commit, **releas
 without killing it**, nothing was lost. And **in the same act, notify whoever can send recipes to
 them** — the REPROVA goes straight from reviewer to executor, by design, and the reviewer doesn't
 know the new address: a recipe dispatched to a retired session is a round lost in silence.
+
+**And the two cases end differently.** Mid-gate — repeated failure, blown context, a substitution —
+the session is **released, not killed**: a turn dead by provider comes back to life, and the stop
+order is what keeps two writers off the same stage. At a **closed** milestone — Task approved,
+commit made, nothing of that role's is in flight — retiring **ends** the session: close it as soon
+as the milestone closes, by name, through the same API you created it with. A finished session left
+alive is a live address for a stale role: it collects the watchdog's nudges, it shows up in listings
+as team, and the next session that reuses the name inherits the confusion. "I'll close them at the
+end" ends up being the user asking why they are still there.
 
 There is no "I'll wait for the gate to close before swapping": the gate may never close, and the
 saturated session keeps producing ever-worse rounds. The first factually wrong report is already

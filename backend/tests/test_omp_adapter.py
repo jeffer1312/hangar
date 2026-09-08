@@ -27,6 +27,38 @@ def test_spawn_usa_session_com_caminho_e_nunca_session_id(monkeypatch, tmp_path)
     assert cmd[:cmd.index("omp")] == esperado
 
 
+def test_spawn_com_perfil_monta_a_raiz_do_perfil_e_exporta_omp_profile(monkeypatch, tmp_path):
+    from pathlib import Path
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    for key in ("OMP_PROFILE", "PI_PROFILE", "PI_CODING_AGENT_DIR"):
+        monkeypatch.delenv(key, raising=False)
+    cmd = OmpAdapter().spawn_command("/w", "abc", None, None, None, perfil="trabalho")
+    i = cmd.index("--session")
+    assert cmd[i + 1].startswith(str(tmp_path / ".omp" / "profiles" / "trabalho" / "agent" / "sessions"))
+    if os.name != "nt":
+        assert cmd[:cmd.index("omp")] == ["env", "CP_PI_SESSION=abc", "OMP_PROFILE=trabalho"]
+    # Sem perfil nada muda: nem a variável entra no comando.
+    sem = OmpAdapter().spawn_command("/w", "abc", None, None, None)
+    assert "OMP_PROFILE=trabalho" not in sem
+    assert sem[sem.index("--session") + 1].startswith(str(tmp_path / ".omp" / "agent" / "sessions"))
+
+
+def test_resume_com_perfil_procura_o_transcript_na_raiz_do_perfil(monkeypatch, tmp_path):
+    from pathlib import Path
+    from app.adapters.pi import sessions as s
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    for key in ("OMP_PROFILE", "PI_PROFILE", "PI_CODING_AGENT_DIR"):
+        monkeypatch.delenv(key, raising=False)
+    d = tmp_path / ".omp" / "profiles" / "trabalho" / "agent" / "sessions" / s.cwd_slug("/w")
+    d.mkdir(parents=True)
+    f = d / "2026-09-06T15-51-00-640Z_abc.jsonl"
+    f.write_text("")
+    cmd = OmpAdapter().resume_command("/w", "abc", None, None, perfil="trabalho")
+    assert cmd[cmd.index("omp"):] == ["omp", "-r", str(f)]
+    with pytest.raises(ValueError):
+        OmpAdapter().resume_command("/w", "abc", None, None)
+
+
 def test_resume_usa_r_com_o_caminho_existente_e_o_mesmo_env(monkeypatch, tmp_path):
     from app.adapters.pi import sessions as s
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path))

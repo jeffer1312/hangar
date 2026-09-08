@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('hangar', {
   // `bounds` vai por send, não invoke: dispara a cada frame de resize e não precisa de resposta.
   // O view não tem preload — o site aberto nele NUNCA recebe esta ponte; só o cockpit tem.
   nav: {
-    open: (chave, url, bounds) => ipcRenderer.invoke('hangar:nav-open', { chave, url, bounds }),
+    open: (chave, url, bounds, extra) => ipcRenderer.invoke('hangar:nav-open', { chave, url, bounds, ...(extra || {}) }),
     hide: (chave) => ipcRenderer.send('hangar:nav-hide', { chave }),
     bounds: (chave, b) => ipcRenderer.send('hangar:nav-bounds', { chave, bounds: b }),
     reload: (chave) => ipcRenderer.send('hangar:nav-reload', { chave }),
@@ -40,6 +40,13 @@ contextBridge.exposeInMainWorld('hangar', {
       return () => ipcRenderer.removeListener('hangar:nav-estado', h);
     },
     close: (chave) => ipcRenderer.send('hangar:nav-close', { chave }),
+    // O navegador foi fechado por fora do painel (`hangar-preview close`): o painel tem que
+    // desmontar sozinho, senão fica mostrando um view que já morreu.
+    onFechado: (cb) => {
+      const h = (_e, p) => cb(p);
+      ipcRenderer.on('hangar:nav-fechado', h);
+      return () => ipcRenderer.removeListener('hangar:nav-fechado', h);
+    },
     // Cookies do Chrome real (CDP) -> partição do view. Resolve sempre; erro vem no objeto.
     importCookies: (chave, host, porta, recarregar) => ipcRenderer.invoke('hangar:nav-import-cookies', { chave, host, porta, recarregar }),
     // Abre chrome://inspect/#remote-debugging no Chrome do usuário: é lá que ele liga a

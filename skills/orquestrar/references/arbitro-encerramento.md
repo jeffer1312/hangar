@@ -60,6 +60,17 @@ the fact, which is why the label has to be written at the origin.
 Across successive arbiters of one work, the handover that works is the short one pointing at
 files; the one that fails is "read the previous one's transcript".
 
+**And it points at the closing items — it does not restate them.** Trigger, scope and product of
+the branch review and of the retrospective are already written, in the contract and on their
+pages; a handover that rewrites them from memory is where a rule mutates, because the successor
+obeys the document in front of them and has no reason to go back to the source. It is the same rule
+that governs the kick-off ("the message points, it doesn't copy"), and it holds harder here: a
+kick-off that copies wrong costs a round, a handover that copies wrong costs the phase.
+
+**A retrospective's trigger is never conditional on things having gone badly.** A run that ends
+with no rejection is the one that ran with the team and the guidelines already tuned — exactly the
+half nobody would otherwise distill.
+
 ## Phase 4 — the final review
 
 **Trigger: every code Task approved.** Never "after Task N". A manual Task (uploading an asset,
@@ -119,6 +130,20 @@ fresh subagent — different things, don't mix them up.)
 
 Kick-off with `Role: branch review`, the range (`<base>..<tip>`), the parallel paths to ignore,
 and what is out of scope. Its findings return to the normal cycle. Push and MR are the user's.
+
+**On a shared branch, `<base>..<tip>` is not "the work".** Other people commit to the branch while
+the pipeline runs, and the range sweeps their commits in silently. The kick-off says which commits
+in the range the pipeline produced and which it did not, and what is expected of the foreign ones:
+reviewed, or **declared out of scope**. Neither answer is wrong; the silence is, because it turns
+"the range was approved" into a claim about code nobody read. A foreign commit that is the **base**
+of a Task deserves at least a directed question — a defect there travels under every round.
+
+**And your closing sentence to the user carries two things beyond "approved".** First, which
+commits inside the range came from outside the pipeline. Second, **by which step the approved code
+reaches the screen they will open**: when a build, a deploy or a publish step sits between the
+merge and the user, and that step is not yours, the branch being approved does not mean what they
+open changed. A user who opens the app and sees the old screen reads it as a regression, and the
+most expensive thing this pipeline can produce is a false regression.
 
 **A final review that rejects needs a LIVE executor — and there almost never is one.** The Tasks'
 executors were closed when the plan ended; the final review arrives after that, at a moment when

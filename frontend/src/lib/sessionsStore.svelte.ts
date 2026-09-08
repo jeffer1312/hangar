@@ -9,6 +9,8 @@ import * as m from '../paraglide/messages';
 import type { EventSourceLike } from '@hangar/core';
 import { openSessionsStream } from '@hangar/core';
 import { listServers, onServersChanged, type Server } from './auth';
+import { navPelaLista } from './navPelaLista';
+import { podarNavMortos } from './navegadorPanel.svelte';
 import { aggregateSessions, sweepHidden, type Slot, type Aggregate } from '@hangar/core';
 
 function createSessionsStore() {
@@ -25,6 +27,16 @@ function createSessionsStore() {
   // views congelavam em silêncio até um reconnect manual. Sem sinal por 25s -> fecha e reabre.
   const watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   const WATCHDOG_MS = 25_000;
+  // Prazo só do PRIMEIRO quadro (ver o comentário no connect). 10s e não 3s porque a medição de
+  // 06/09/2026 achou 1,8s de p90 no caminho do celular quando o túnel está perdendo pacote —
+  // apertar demais esconderia da lista um servidor que está no ar, e isso é pior que mostrar um
+  // morto por mais alguns segundos.
+  const PRIMEIRO_QUADRO_MS = 10_000;
+  const primeiros = new Map<string, ReturnType<typeof setTimeout>>();
+  // ms até o primeiro quadro de cada servidor — ver o comentário no `chegou` do connect().
+  // `$state.raw` porque o Map é SUBSTITUÍDO inteiro a cada medição (mesma escolha do `agg` acima):
+  // sem ser estado reativo, a reatribuição não chegaria em quem lê num `$derived`.
+  let latencias = $state.raw(new Map<string, number>());
   // Backoff por servidor OFFLINE: o auto-retry do EventSource martela a cada ~3s pra sempre —
   // num tablet com 2+ servidores desligados isso é rádio/bateria à toa. Falhou -> fecha o stream
   // e re-tenta com espera crescente (5s -> 60s); qualquer frame bom zera a espera.
@@ -53,6 +65,11 @@ function createSessionsStore() {
   function recompute() {
     hidden = sweepHidden(hidden, slots);
     agg = aggregateSessions(servers, slots, hidden);
+    const vivos = new Map<string, Map<string, string | null>>();
+    for (const [id, slot] of slots) {
+      if (slot.sessions && !slot.error) vivos.set(id, new Map(slot.sessions.map((s) => [s.name, s.jsonl ?? null])));
+    }
+    podarNavMortos(vivos);
   }
 
   // Reconcilia streams com a lista: fecha o que sumiu, abre o que entrou, mantém o resto.
@@ -61,7 +78,9 @@ function createSessionsStore() {
       if (!list.some((s) => s.id === id)) {
         es.close(); streams.delete(id); slots.delete(id);
         clearTimeout(watchdogs.get(id)); watchdogs.delete(id);
+        clearTimeout(primeiros.get(id)); primeiros.delete(id);
         clearTimeout(retryTimers.get(id)); retryTimers.delete(id); retryDelays.delete(id);
+        if (latencias.has(id)) { latencias = new Map(latencias); latencias.delete(id); }
       }
     }
     for (const s of list) {
@@ -75,6 +94,7 @@ function createSessionsStore() {
           es.close();
           streams.delete(s.id);
           watchdogs.delete(s.id);
+          cancelarPrazo();   // o stream acabou; NÃO mede — silêncio não é latência
           // Mesmo tratamento do onerror: o slot que motivou o watchdog está potencialmente velho —
           // marca offline (mantendo a última lista boa) em vez de segui-lo servindo como bom.
           slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
@@ -82,7 +102,59 @@ function createSessionsStore() {
           scheduleRetry(s.id);
         }, WATCHDOG_MS));
       };
+      // Prazo do PRIMEIRO quadro, separado do watchdog. O slot só nasce quando chega evento, então
+      // até lá o servidor tem `error` nulo e passa por vivo em quem filtra offline — com o watchdog
+      // de 25s isso era meio minuto oferecendo máquina desligada na folha de "Nova sessão". O
+      // stream da lista manda `sessions` na conexão (medido em 5ms daqui), então silêncio longo
+      // aqui é máquina fora do ar, não lentidão. Só MARCA: não fecha o stream nem mexe no retry,
+      // pra um servidor lento que responda depois voltar sozinho no próximo evento.
+      // Sem guarda de "o slot já existe": `reconnect()` (botão Atualizar) e `onVisibleKick` (celular
+      // acordando) reabrem o stream MANTENDO o slot antigo, e ali a guarda fazia o prazo virar
+      // no-op — o celular acordando é justamente quando isto precisa valer. O timer chegar a
+      // disparar já prova o que interessa: nenhum quadro nesta conexão. Preserva a última lista boa
+      // (mesmo tratamento do watchdog): "offline com dado velho" é diferente de "nunca respondeu",
+      // e o banner de erro depende dessa distinção.
+      const tPrimeiro = setTimeout(() => {
+        if (primeiros.get(s.id) === tPrimeiro) primeiros.delete(s.id);
+        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+        recompute();
+      }, PRIMEIRO_QUADRO_MS);
+      primeiros.set(s.id, tPrimeiro);
+      // `delete` só se a entrada ainda for ESTE timer: um timer fantasma de tentativa anterior
+      // apagaria do Map o timer da tentativa atual, e aí ninguém mais conseguiria cancelá-lo.
+      // Custo da ROTA até esta máquina. A mesma máquina costuma estar cadastrada duas vezes, por
+      // dois caminhos (Tailscale direto e o desvio pela VPS), e com as duas no ar não havia como
+      // saber qual escolher: medido em 06/09/2026, 45ms contra 134ms pro mesmo backend. O tempo até
+      // o primeiro quadro já inclui conexão e TLS, que é exatamente o que separa as rotas.
+      // Mede a cada CONEXÃO, não só a primeira: ligar ou desligar a VPN troca a rota, e é
+      // justamente aí que o número velho enganaria. `medido` é por conexão porque `chegou` também
+      // roda nos pings seguintes, e ali o relógio já não mede abertura nenhuma.
+      const abriuEm = performance.now();
+      let medido = false;
+      // CANCELAR o prazo e MEDIR são coisas separadas, e misturá-las inverte o sentido do número:
+      // o watchdog e o `onerror` também precisam cancelar, e uma conexão RECUSADA na hora falha em
+      // poucos ms — gravada como latência, a rota morta viraria "a mais rápida", em verde, que é
+      // exatamente a escolha errada que este número existe pra evitar. Só quadro de verdade mede.
+      const cancelarPrazo = () => {
+        clearTimeout(tPrimeiro);
+        if (primeiros.get(s.id) === tPrimeiro) primeiros.delete(s.id);
+      };
+      const chegou = () => {
+        if (!medido) {
+          medido = true;
+          // Map NOVO, não `.set` no mesmo: quem lê isto num `$derived` acompanha a REFERÊNCIA —
+          // mutar em lugar não avisa ninguém e o número nunca apareceria na tela.
+          latencias = new Map(latencias).set(s.id, Math.round(performance.now() - abriuEm));
+          recompute();
+        }
+        cancelarPrazo();
+      };
       arm();
+      // O ping é prova de vida (cancela o prazo), mas NÃO mede: ele só sai de 8 em 8 segundos, e
+      // com o refresher do backend frio ele é o PRIMEIRO evento a chegar — a "latência da rota"
+      // viraria ~8000ms de espera do servidor. Quem mede é o quadro de dados.
+      es.addEventListener('ping', cancelarPrazo);
+      es.addEventListener('sessions', chegou);
       es.addEventListener('ping', arm);
       es.addEventListener('sessions', (e) => {
         arm();
@@ -95,6 +167,12 @@ function createSessionsStore() {
           slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
         }
         recompute();
+      });
+      // O agente abriu o navegador embutido de uma sessão (possivelmente fora da tela) — ver
+      // navPelaLista. Vai pelo stream da lista porque é o único que o desktop mantém sempre aberto.
+      es.addEventListener('nav', (e) => {
+        arm();
+        void navPelaLista(s, (e as MessageEvent).data);
       });
       // Refresher do backend falhou (achado do hunter): sem isto, lista vazia por erro interno era
       // indistinguível de zero sessões. Mantém a última lista boa; o erro aparece distinto de offline.
@@ -110,6 +188,7 @@ function createSessionsStore() {
         es.close();
         streams.delete(s.id);
         clearTimeout(watchdogs.get(s.id)); watchdogs.delete(s.id);
+        cancelarPrazo();   // o stream falhou; NÃO mede — falhar rápido não é ser rápido
         scheduleRetry(s.id);
       };
       streams.set(s.id, es);
@@ -140,6 +219,12 @@ function createSessionsStore() {
     // Timers primeiro: um watchdog disparando pós-stop reabriria streams com refs = 0.
     for (const t of watchdogs.values()) clearTimeout(t);
     watchdogs.clear();
+    for (const t of primeiros.values()) clearTimeout(t);
+    primeiros.clear();
+    // A poda por servidor removido mora no laço do `connect()`, que compara com `streams` — e aqui
+    // `streams` já foi esvaziado. Sem zerar, um servidor apagado enquanto ninguém segurava o store
+    // voltaria exibindo a latência de outra época, que ninguém mais vai corrigir.
+    latencias = new Map();
     for (const t of retryTimers.values()) clearTimeout(t);
     retryTimers.clear(); retryDelays.clear();
     for (const es of streams.values()) es.close();
@@ -151,6 +236,7 @@ function createSessionsStore() {
   return {
     get rows() { return agg.rows; },
     get byServer() { return agg.byServer; },
+    get latencias() { return latencias; },
     get loading() { return agg.loading; },
     get servers() { return servers; },
     retain() { if (++refs === 1) start(); },
