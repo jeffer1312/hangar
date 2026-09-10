@@ -137,6 +137,47 @@ def test_slug_malformado_nao_permite_sair_do_diretorio(tmp_path):
     assert descobrir(transcript, tmp_path) is None
 
 
+@pytest.mark.parametrize("resposta", [
+    "User has approved your plan. You can now start coding.",
+    "User has approved exiting plan mode. You can now proceed.",
+    'User has approved the plan. There is nothing else needed from you now. Please respond with "ok"',
+])
+def test_aprovacao_nativa_encerra_plano_sem_novo_prompt(tmp_path, resposta):
+    config = tmp_path / "conta"
+    linhas = [_assistente("proposta", "u1", {
+        "type": "tool_use", "id": "exit", "name": "ExitPlanMode", "input": {},
+    }, slug="plano-nativo")]
+    transcript = _transcript(tmp_path, config, "s1", linhas)
+    assert descobrir(transcript, tmp_path).anchor_id == "proposta"
+
+    linhas.append(json.dumps({
+        "type": "user", "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "exit", "content": resposta,
+        }]},
+    }))
+    linhas.append(_assistente("implementando", "proposta", {"type": "text", "text": "OK"}))
+    linhas.extend([
+        _evento_tool("progresso", config / "plans" / "plano-nativo.md"),
+        _resultado("progresso"),
+    ])
+    _transcript(tmp_path, config, "s1", linhas)
+    assert descobrir(transcript, tmp_path) is None
+
+
+def test_envio_ao_lider_nao_e_aprovacao(tmp_path):
+    config = tmp_path / "conta"
+    transcript = _transcript(tmp_path, config, "s1", [
+        _assistente("proposta", "u1", {
+            "type": "tool_use", "id": "exit", "name": "ExitPlanMode", "input": {},
+        }, slug="plano-nativo"),
+        json.dumps({"type": "user", "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "exit",
+            "content": "Your plan has been submitted to the team lead for approval.",
+        }]}}),
+    ])
+    assert descobrir(transcript, tmp_path).anchor_id == "proposta"
+
+
 def test_slug_de_sessao_normal_sem_plano_nao_anuncia_arquivo(tmp_path):
     config = tmp_path / "conta"
     transcript = _transcript(tmp_path, config, "s1", [
@@ -160,7 +201,7 @@ def test_write_confirmado_prevalece_sobre_slug_sem_arquivo(tmp_path):
     assert encontrado.caminho == plano
 
 
-def test_ancora_resposta_do_mesmo_turno_e_nao_resposta_anterior_ou_posterior(tmp_path):
+def test_resposta_humana_encerra_proposta_anterior(tmp_path):
     config = tmp_path / "conta"
     plano = config / "plans" / "turno.md"
     transcript = _transcript(tmp_path, config, "s1", [
@@ -177,11 +218,10 @@ def test_ancora_resposta_do_mesmo_turno_e_nao_resposta_anterior_ou_posterior(tmp
 
     encontrado = descobrir(transcript, tmp_path)
 
-    assert encontrado is not None
-    assert encontrado.anchor_id == "a-plan"
+    assert encontrado is None
 
 
-def test_escrita_confirmada_sem_texto_usa_o_evento_da_escrita(tmp_path):
+def test_escrita_sem_texto_nao_reaparece_depois_de_outro_prompt(tmp_path):
     config = tmp_path / "conta"
     plano = config / "plans" / "sem-texto.md"
     transcript = _transcript(tmp_path, config, "s1", [
@@ -196,8 +236,7 @@ def test_escrita_confirmada_sem_texto_usa_o_evento_da_escrita(tmp_path):
 
     encontrado = descobrir(transcript, tmp_path)
 
-    assert encontrado is not None
-    assert encontrado.anchor_id == "a-write"
+    assert encontrado is None
 
 
 def test_plano_novo_no_turno_seguinte_troca_caminho_e_ancora(tmp_path):

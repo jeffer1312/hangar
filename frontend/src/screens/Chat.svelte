@@ -804,6 +804,14 @@
     claudePlanLastRetry = retry;
     const first = previous === null;
     const concluded = previous === 'working' && (state === 'idle' || state === 'awaiting_input');
+    const answered = previous === 'awaiting_input' && state === 'working';
+    if (answered) {
+      claudePlanGeneration++;
+      claudePlanDiscovery = null;
+      claudePlanDiscoveryLoading = false;
+      claudePlanDiscoveryError = '';
+      return;
+    }
     if (!first && !concluded && !retryChanged) return;
     const request = ++claudePlanGeneration;
     claudePlanDiscoveryLoading = true;
@@ -824,7 +832,14 @@
   const planAnchorId = $derived.by(() => {
     if (sessionProvider === 'codex') return codexPlanEvent?.id ?? null;
     if (sessionProvider !== 'claude') return null;
-    return claudePlanDiscovery?.anchor_id ?? null;
+    const id = claudePlanDiscovery?.anchor_id;
+    if (!id) return null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
+      if (event.kind === 'user_msg' && !event.id.startsWith('queued-')) return null;
+      if (event.id === id) return id;
+    }
+    return null;
   });
   const planControls = $derived((sessionProvider === 'claude' || planAnchorId) ? {
     eventId: planAnchorId,
@@ -835,7 +850,7 @@
     codexPlan,
     disabled: currentState !== 'idle' || pending.length > 0,
     onImplement: implementCodexPlan,
-    discovery: sessionProvider === 'claude' ? claudePlanDiscovery : undefined,
+    discovery: sessionProvider === 'claude' ? (planAnchorId ? claudePlanDiscovery : null) : undefined,
     discoveryLoading: sessionProvider === 'claude' ? claudePlanDiscoveryLoading : false,
     discoveryError: sessionProvider === 'claude' ? claudePlanDiscoveryError : '',
     onRetryDiscovery: sessionProvider === 'claude' ? () => { claudePlanDiscoveryRetry++; } : undefined,
