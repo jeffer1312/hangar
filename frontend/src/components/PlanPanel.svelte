@@ -5,6 +5,7 @@
   import Select from './Select.svelte';
   import * as m from '../paraglide/messages';
   import { renderMarkdown } from '../lib/markdown';
+  import { aoAquecer } from '../lib/aquecimento';
   import { getPlans, setPlanPin, setPlanStep, archivePlan, type PlanListItem } from '@hangar/core';
   import { planBadge } from '@hangar/core';
   import type { PlanDetail, SessionInfo } from '@hangar/core';
@@ -59,6 +60,8 @@
     const minha = ++vez;
     (async () => {
       try {
+        await aoAquecer(nome);        // lista do seletor não é pra agora: espera a conversa pintar
+        if (minha !== vez) return;
         const r = await getPlans(nome);
         if (minha !== vez) return;   // chegou tarde: já tem requisição mais nova no ar, descarta
         plans = r.plans;

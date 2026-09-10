@@ -503,7 +503,9 @@
     if (!planPanelVisible) return;   // plano existe, mas nada o mostra agora: não busca à toa
     planLoading = true;
     planError = false;
-    getPlan(sessionName)
+    // Painel docado no desktop: este GET (105 KB de markdown) saía junto do histórico. Espera a
+    // conversa pintar, como os outros aquecimentos.
+    aoAquecer(sessionName).then(() => getPlan(sessionName))
       .then((d) => {
         if (planKey !== key) return;   // chegou tarde: já tem fetch mais novo no ar, descarta
         planDetail = d;
