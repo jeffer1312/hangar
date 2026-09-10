@@ -49,6 +49,15 @@ MAX_CHARS = 4000
 _MAX_CACHE = 500
 _cache: dict[str, str] = {}
 _lock = threading.Lock()
+# Provedor que falhou fica em PAUSA: cada bloco visivel na tela dispara um pedido, e com o
+# provedor em 500 eram dezenas de chamadas de 12s em paralelo (mais um `claude -p` por falha)
+# saturando o threadpool — a lista de sessoes estourava 4s e abrir um chat levava 8s. Dentro da
+# pausa o texto volta em ingles na hora.
+_PAUSA_S = 120.0
+_pausado_ate = 0.0
+# Quantas traducoes ao mesmo tempo. Quem nao pega vaga devolve o original: o bloco tenta de
+# novo no clique, e a conversa nao espera atras de tradução.
+_vagas = threading.BoundedSemaphore(2)
 
 
 def _chave(texto: str) -> str:
@@ -65,16 +74,23 @@ def traduzir(texto: str) -> str:
         pronto = _cache.get(k)
     if pronto is not None:
         return pronto
+    global _pausado_ate
+    if time.monotonic() < _pausado_ate:
+        return texto
     try:
-        saida = chamar_chat(_SYSTEM, texto, temperature=_TEMPERATURA, timeout=_TIMEOUT).strip()
+        saida = chamar_chat(_SYSTEM, texto, temperature=_TEMPERATURA, timeout=_TIMEOUT,
+                            plano_b=False).strip()
     except NarrarError as e:
         # warning, e não info: na tela isto some (o texto original volta no lugar), então o log é o
         # ÚNICO sinal de que a chave está errada ou o provedor caiu. Em info ele se mistura ao
         # tráfego normal e ninguém descobre por que a tradução parou de acontecer.
-        _log.warning("traducao do pensamento falhou (%s): %s", e.status, e.detail)
+        _log.warning("traducao do pensamento falhou (%s): %s — pausando %.0fs",
+                     e.status, e.detail, _PAUSA_S)
+        _pausado_ate = time.monotonic() + _PAUSA_S
         return texto
     except Exception:                       # noqa: BLE001 — tradução nunca derruba a leitura
-        _log.warning("traducao do pensamento falhou", exc_info=True)
+        _log.warning("traducao do pensamento falhou — pausando %.0fs", _PAUSA_S, exc_info=True)
+        _pausado_ate = time.monotonic() + _PAUSA_S
         return texto
     if not saida:
         return texto
@@ -92,8 +108,13 @@ def traduzir_varios(textos: list[str]) -> list[str]:
     do provedor produzindo texto que ninguém vai receber é custo puro. Já traduzido fica no cache,
     então a próxima passada continua de onde parou em vez de recomeçar.
     """
-    prazo = time.monotonic() + _PRAZO_TOTAL
-    saida = []
-    for t in textos:
-        saida.append(traduzir(t) if time.monotonic() < prazo else t)
-    return saida
+    if not _vagas.acquire(blocking=False):
+        return list(textos)
+    try:
+        prazo = time.monotonic() + _PRAZO_TOTAL
+        saida = []
+        for t in textos:
+            saida.append(traduzir(t) if time.monotonic() < prazo else t)
+        return saida
+    finally:
+        _vagas.release()

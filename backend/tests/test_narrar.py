@@ -131,6 +131,21 @@ def test_request_vai_pra_url_certa_e_com_user_agent(monkeypatch):
     assert req.headers["Authorization"].startswith("Bearer ")
 
 
+def test_sem_plano_b_a_falha_do_provedor_vira_502_sem_claude_p(monkeypatch):
+    # Quem chama em rajada (traducao do pensamento) nao pode subir um `claude -p` por falha:
+    # foi isso, com o provedor em 500, que saturou o backend (dezenas de processos em paralelo).
+    _com_chave(monkeypatch)
+    import urllib.error
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 500, "Internal", {}, None)
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(narrar, "_via_claude",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("plano B chamado")))
+    with pytest.raises(NarrarError) as e:
+        narrar.chamar_chat("s", "p", temperature=0.1, timeout=5, plano_b=False)
+    assert e.value.status == 502 and "500" in e.value.detail
+
+
 def test_corpo_manda_modelo_e_temperatura(monkeypatch):
     _com_chave(monkeypatch)
     captured = {}
