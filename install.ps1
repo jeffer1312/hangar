@@ -1673,7 +1673,12 @@ if ($registrou) {
         foreach ($t in $tarefas) {
             # -Exe pelo caminho completo: a tarefa nasce com o PATH do sistema, nao com o do
             # seu shell - `uv` instalado em ~\.local\bin nao seria encontrado.
-            $exe = (Get-Command $t.Exe).Source
+            # -CommandType Application: no Windows `npm` resolve PRIMEIRO pro shim npm.ps1
+            # (ExternalScript, antes do npm.cmd). O .vbs virava `cmd /c "...\npm.ps1" run preview`,
+            # e o cmd abre .ps1 pelo associador padrao - o Notepad - em vez de executar; a vigia,
+            # vendo a porta fechada, reiniciava a tarefa a cada 5 min e o Notepad reabria sem parar.
+            $exe = (Get-Command $t.Exe -CommandType Application | Select-Object -First 1).Source
+            if (-not $exe) { throw "executavel '$($t.Exe)' nao encontrado no PATH" }
             # Rodar o programa DIRETO abre uma janela de console e ela fica na tela pra sempre -
             # todo processo de console no Windows abre uma. Passando por um powershell oculto, a
             # janela some e os filhos herdam o console escondido.
@@ -1945,10 +1950,20 @@ CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass
     # e justamente o notebook - a vigia ficaria morta exatamente quando e necessaria, e o teste na
     # tomada passaria. As tarefas existentes ja passam estes dois (acima).
     $vigiaSet = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName 'hangar-vigia' `
-        -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
-        -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
-        -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
+    # Mesma ressalva das tarefas dos servicos (acima): instalador rodado ELEVADO uma vez deixa a
+    # tarefa com dono Administradores, e o -Force do Atualizar (nao elevado) volta "Acesso negado".
+    # Aqui reaproveitar e inteiro: a tarefa aponta pro MESMO .vbs em %LOCALAPPDATA%, que acabou de
+    # ser reescrito. Sem isto o -Update fechava em "NAO terminou: vigia" com tudo no ar, e a
+    # pessoa rodava o instalador como admin pra "consertar" - perpetuando o dono errado.
+    try {
+        Register-ScheduledTask -TaskName 'hangar-vigia' `
+            -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
+            -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
+            -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
+    } catch {
+        if (-not (Get-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue)) { throw }
+        Nota "sem permissao pra re-registrar hangar-vigia - reaproveitando a existente (o .vbs dela foi atualizado)"
+    }
     # CONFERE o NextRunTime, nao anuncia so por ter registrado - achado IMPORTANTE da revisao final:
     # este exato ponto ja mediu ERRADO 2x nesta maquina (o gatilho antigo -AtLogOn puro deixava
     # NextRunTime vazio, comentario acima sobre a medicao de 09/08/2026). So afirma com o campo
