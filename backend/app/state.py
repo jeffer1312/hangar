@@ -283,7 +283,8 @@ def _live_spinner(pane_text: str) -> Optional[str]:
 # TODO pane e um chevron solto no scrollback viraria menu fantasma. Aqui o portao e o rodape do
 # proprio widget, que so existe com ele na tela.
 _CODEX_OPT_RE = re.compile(r"^\s*[›>]?\s*(\d+)\.\s+(.*\S)\s*$")
-_CODEX_RODAPE = "press enter to confirm"
+# "confirm" nos seletores de hooks/permissoes; "continue" no aviso de atualizacao do CLI.
+_CODEX_RODAPES = ("press enter to confirm", "press enter to continue")
 
 
 def menu_codex(pane_text: str) -> Optional[tuple[Optional[str], list[str]]]:
@@ -297,16 +298,23 @@ def menu_codex(pane_text: str) -> Optional[tuple[Optional[str], list[str]]]:
     linhas = pane_text.splitlines()
     # `_rodape` e nao `linhas[-6:]`: o widget desenha no ALTO do pane e o `capture-pane` devolve a
     # altura inteira, entao as ultimas linhas sao brancas — o mesmo tropeco do dialogo de confianca.
-    if _CODEX_RODAPE not in _rodape(linhas).lower():
+    rodape = _rodape(linhas).lower()
+    if not any(r in rodape for r in _CODEX_RODAPES):
         return None
     opcoes: list[str] = []
     primeira = None
     for i, ln in enumerate(linhas):
         mm = _CODEX_OPT_RE.match(ln)
         if not mm:
-            if opcoes:
-                break          # bloco contiguo: a primeira linha fora do padrao fecha o menu
-            continue
+            if not opcoes:
+                continue
+            # Opcao longa quebra em varias linhas num pane estreito: a continuacao vem indentada
+            # e sem numero. Ela e parte da opcao; o rodape, ou uma linha vazia, fecha o bloco.
+            texto = ln.strip()
+            if texto and ln[:1].isspace() and not any(r in texto.lower() for r in _CODEX_RODAPES):
+                opcoes[-1] = f"{opcoes[-1]} {texto}"
+                continue
+            break          # bloco contiguo: a primeira linha fora do padrao fecha o menu
         if int(mm.group(1)) != len(opcoes) + 1:
             return None        # numeracao fora de ordem: nao e o widget
         if primeira is None:

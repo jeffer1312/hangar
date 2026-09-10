@@ -669,6 +669,32 @@ def test_menu_codex_le_o_seletor_de_hooks_do_pane_real():
     assert classify(pane)[0] != "awaiting_input"
 
 
+def test_menu_codex_le_o_aviso_de_atualizacao_do_pane_real():
+    # Fixture capturada de uma sessao Codex recem-criada com o CLI desatualizado: o aviso de update
+    # trava a TUI antes da thread e o rodape dele e "Press enter to continue", nao "confirm".
+    pane = (Path(__file__).parent / "fixtures" / "pane_codex_update.txt").read_text(encoding="utf-8")
+    pergunta, opcoes = state_mod.menu_codex(pane)
+    assert opcoes == ["Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | "
+                      "CODEX_NON_INTERACTIVE=1 sh'`)", "Skip", "Skip until next version"]
+    assert "release notes" in (pergunta or "").lower()
+
+
+def test_menu_codex_junta_opcao_quebrada_pela_largura_do_pane():
+    # Com o terminal do celular anexado o pane encolhe e a opcao 1 quebra em tres linhas; as
+    # continuacoes sao parte da opcao, nao o fim do bloco.
+    pane = ("  ✨ Update available! 0.153.4 -> 0.154.0\n"
+            "  Release notes: https://github.com/openai/codex/releases/latest\n"
+            "› 1. Update now (runs `sh -c 'curl -fsSL\n"
+            "     https://chatgpt.com/codex/install.sh |\n"
+            "     CODEX_NON_INTERACTIVE=1 sh'`)\n"
+            "  2. Skip\n"
+            "  3. Skip until next version\n"
+            "  Press enter to continue\n")
+    _, opcoes = state_mod.menu_codex(pane)
+    assert opcoes == ["Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | "
+                      "CODEX_NON_INTERACTIVE=1 sh'`)", "Skip", "Skip until next version"]
+
+
 def test_menu_codex_exige_o_rodape_do_widget():
     # Lista numerada solta na conversa nao e seletor — sem o rodape, nao ha nada na tela pra clicar.
     assert state_mod.menu_codex("passos:\n  1. um\n  2. dois\n") is None

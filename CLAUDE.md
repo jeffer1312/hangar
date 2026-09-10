@@ -1968,6 +1968,22 @@ de atualização do Claude Mem não reproduziu na nova tentativa: catálogo loca
 coincidiram e a reconciliação terminou `ok`, sem erros nem marketplaces pendentes. Isso comprova a
 recuperação, não a causa da falha anterior, cujo detalhe não foi preservado pelo backend antigo.
 
+**O que segura a abertura de uma sessão Codex é a TUI parada num widget, não a sincronização**
+(medido 10/09/2026, codex-cli 0.153.4 → 0.154.0). Com o CLI desatualizado a TUI abre com
+"✨ Update available … Press enter to continue" ANTES do `thread/start`; sem thread não há
+sidecar, e o app fica em "A conversa do Codex ainda não começou" para sempre (150 s medidos, sem
+sidecar). O cartão de seletor pré-thread já existia (`menu_codex` + lista), mas só reconhecia o
+rodapé "press enter to confirm" dos seletores de hooks/permissões — o do aviso de update é
+"continue", e no pane estreito (terminal do celular anexado) a opção 1 quebra em 3 linhas, que
+fechavam o bloco com 1 opção. Hoje os dois rodapés valem e continuação indentada sem número cola
+na opção anterior. Escolher "Update now" pelo app funciona, mas o Codex SAI depois de atualizar e
+o pane morre: a sessão some da lista e precisa ser criada de novo. A reconciliação custa ~20 s
+quando roda (fingerprint mudou, 6 h do marketplace, ou 5 min após falha); em 10/09 ela rodou em
+toda abertura porque o "auto-upgrade was in flight" do marketplace `ecc` contava como falha
+(`fcdd382b`). Sem o aviso de update, a thread abriu em 21 s nesta máquina. Pendente, visto uma vez no
+0.154.0: o seletor de hooks passou a desenhar SEM número (`›    Review hooks`), e `menu_codex`
+exige `N.` — captura real do widget antes de mexer.
+
 **Instruções nativas (07/09/2026, PR #3):** `codex_instrucoes.py` prepara `AGENTS.override.md`
 — nome que o Codex 0.153.4 lê no lugar do `AGENTS.md` da mesma pasta — como link para o
 `CLAUDE.md` global (`<codex>/AGENTS.override.md`) e dos projetos registrados no `config.toml`; o
