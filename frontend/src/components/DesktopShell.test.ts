@@ -57,6 +57,7 @@ vi.mock('../lib/auth', () => ({
 vi.mock('../lib/sessionsStore.svelte', () => ({
   sessionsStore: {
     retain: vi.fn(), release: vi.fn(), refreshServers: vi.fn(), reconnect: vi.fn(),
+    epoca: vi.fn(() => 0),
     byServer: [], rows: [], servers: [], loading: false,
   },
 }));
