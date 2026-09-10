@@ -87,17 +87,30 @@ describe('aggregateSessions', () => {
 });
 
 describe('epocasDeRecriacao', () => {
-  const zero = { vistas: new Set<string>(), sumidas: new Set<string>(), epochs: new Map<string, number>() };
+  const zero = { vistas: new Map<string, string | null>(), sumidas: new Map<string, string | null>(), epochs: new Map<string, number>() };
 
-  it('sessão que some e volta com o mesmo nome ganha época nova; as demais não mudam', () => {
+  it('sessão que some e volta com o mesmo nome e OUTRO transcript ganha época nova; as demais não mudam', () => {
     const e1 = epocasDeRecriacao(zero, slots({ a: { sessions: [sess('x'), sess('y')], error: null } }));
     expect(e1.epochs.size).toBe(0);                       // primeira lista: nada foi recriado
     const e2 = epocasDeRecriacao(e1, slots({ a: { sessions: [sess('y')], error: null } }));
     expect(e2.epochs.get('a::x')).toBeUndefined();        // sumir não é recriar
-    const e3 = epocasDeRecriacao(e2, slots({ a: { sessions: [sess('y'), sess('x')], error: null } }));
+    // Codex recém-criado ainda não tem thread: jsonl null. Diferente do da morta = recriada.
+    const e3 = epocasDeRecriacao(e2, slots({ a: { sessions: [sess('y'), sess('x', { jsonl: null })], error: null } }));
     expect(e3.epochs.get('a::x')).toBe(1);
     expect(e3.epochs.get('a::y')).toBeUndefined();
     expect(e3.epochs).not.toBe(e2.epochs);                // reatribuído: quem lê num $derived acorda
+  });
+
+  it('sumiço passageiro (mesmo transcript ao voltar) não é recriação: o Chat não remonta', () => {
+    const e1 = epocasDeRecriacao(zero, slots({ a: { sessions: [sess('x')], error: null } }));
+    const e2 = epocasDeRecriacao(e1, slots({ a: { sessions: [], error: null } }));
+    const e3 = epocasDeRecriacao(e2, slots({ a: { sessions: [sess('x')], error: null } }));
+    expect(e3.epochs.size).toBe(0);
+    expect(e3.epochs).toBe(e1.epochs);
+    // A volta com o mesmo transcript esquece o sumiço: uma recriação de verdade depois ainda conta.
+    const e4 = epocasDeRecriacao(e3, slots({ a: { sessions: [], error: null } }));
+    const e5 = epocasDeRecriacao(e4, slots({ a: { sessions: [sess('x', { jsonl: '/j/x2.jsonl' })], error: null } }));
+    expect(e5.epochs.get('a::x')).toBe(1);
   });
 
   it('servidor offline guarda a última lista: não conta como sumiço nem como volta', () => {

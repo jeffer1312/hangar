@@ -85,16 +85,27 @@ export function aggregateSessions(
 // outra `x` dava a mesma chave, e a conversa da morta ficava na tela enquanto a nova subia (pré-thread
 // do Codex). Lê os `slots` e não a lista filtrada: a exclusão otimista (`hidden`) e um servidor
 // offline (que guarda a última lista) não são sumiço.
-export interface Epocas { vistas: ReadonlySet<string>; sumidas: ReadonlySet<string>; epochs: ReadonlyMap<string, number> }
+// Quem separa recriação de sumiço passageiro é o TRANSCRIPT: a sessão nova nasce com outro jsonl
+// (ou nenhum), a mesma volta com o de antes. Só a ausência do nome remontava o Chat — e com isso
+// perdia foco, rolagem e prévia — em qualquer lista que deixasse de citar uma sessão viva por um
+// instante.
+export interface Epocas {
+  vistas: ReadonlyMap<string, string | null>;    // chave -> jsonl na última lista
+  sumidas: ReadonlyMap<string, string | null>;   // chave -> jsonl com que sumiu
+  epochs: ReadonlyMap<string, number>;
+}
 
 export function epocasDeRecriacao(anterior: Epocas, slots: ReadonlyMap<string, Slot>): Epocas {
-  const atuais = new Set<string>();
-  for (const [serverId, slot] of slots) for (const s of slot.sessions ?? []) atuais.add(`${serverId}::${s.name}`);
-  const sumidas = new Set(anterior.sumidas);
-  for (const k of anterior.vistas) if (!atuais.has(k)) sumidas.add(k);
+  const atuais = new Map<string, string | null>();
+  for (const [serverId, slot] of slots) for (const s of slot.sessions ?? []) atuais.set(`${serverId}::${s.name}`, s.jsonl ?? null);
+  const sumidas = new Map(anterior.sumidas);
+  for (const [k, jsonl] of anterior.vistas) if (!atuais.has(k)) sumidas.set(k, jsonl);
   let epochs = anterior.epochs;
-  for (const k of atuais) {
-    if (!sumidas.delete(k)) continue;
+  for (const [k, jsonl] of atuais) {
+    if (!sumidas.has(k)) continue;
+    const antes = sumidas.get(k) ?? null;
+    sumidas.delete(k);
+    if (antes === jsonl) continue;
     if (epochs === anterior.epochs) epochs = new Map(epochs);
     (epochs as Map<string, number>).set(k, (epochs.get(k) ?? 0) + 1);
   }

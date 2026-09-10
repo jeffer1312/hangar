@@ -63,7 +63,7 @@ function createSessionsStore() {
   let hidden = new Map<string, string | null>();
   // Época de recriação por `serverId::name` (ver epocasDeRecriacao). `$state.raw` e o Map
   // SUBSTITUÍDO quando muda, como `latencias`: é o que acorda o `{#key}` do Chat no desktop.
-  let epocas: Epocas = { vistas: new Set(), sumidas: new Set(), epochs: new Map() };
+  let epocas: Epocas = { vistas: new Map(), sumidas: new Map(), epochs: new Map() };
   let epochs = $state.raw<ReadonlyMap<string, number>>(epocas.epochs);
 
   function recompute() {
@@ -238,7 +238,7 @@ function createSessionsStore() {
     slots.clear();
     // Parar não é sumiço: sem isto, o próximo retain() (o próprio DesktopShell, ao remontar)
     // veria todo nome "voltar" e subiria a época de todas as sessões — remontando chats vivos.
-    epocas = { vistas: new Set(), sumidas: new Set(), epochs: epocas.epochs };
+    epocas = { vistas: new Map(), sumidas: new Map(), epochs: epocas.epochs };
     recompute();
   }
 

@@ -29,6 +29,7 @@
   import { lerSubagenteCodex } from '../lib/subagenteCodex';
   import { transcriptImageUrl, uploadUrl } from '@hangar/core';
   import { windowStartFor, nextWindowEnd, precisaPreencher, mostrarIrPraoFim } from '../lib/window';
+  import * as diag from '../lib/diag';
 
   interface Props {
     events: ChatEvent[];
@@ -156,6 +157,33 @@
     // as ultimas mensagens e sair nunca chega a rolar ate aqui. Quem evita repetir e o Chat: aqui
     // nao da pra saber se ja veio tudo (a lista nao sabe o tamanho do transcript).
     if (listEl.scrollTop < 200 && !hasOlder) onFimDoLocal?.();
+    if (gap < 64) sondarVazioNoFim();
+  }
+
+  // Sonda do "espaço vazio no fim" (relatado por dois usuários, nunca reproduzido): a lista rola
+  // além do último conteúdo visível. Quando o fim rolável fica mais de 150px abaixo do último filho
+  // pintado (descontado o padding do dock), registra UMA vez por montagem, no diário, a cauda dos
+  // filhos com altura/opacidade/visibilidade — é o que separa "elemento invisível com altura" de
+  // "padding errado". Sem conteúdo de conversa: só classes e números.
+  let sondou = false;
+  function sondarVazioNoFim() {
+    if (sondou || !listEl) return;
+    const inner = listEl.querySelector('.messages-inner');
+    if (!inner) return;
+    const filhos = Array.from(inner.children) as HTMLElement[];
+    const ultimo = [...filhos].reverse().find((f) => f.getBoundingClientRect().height > 0);
+    if (!ultimo) return;
+    const fimConteudo = ultimo.getBoundingClientRect().bottom - listEl.getBoundingClientRect().top + listEl.scrollTop;
+    const pad = parseFloat(getComputedStyle(inner).paddingBottom) || 0;
+    const sobra = listEl.scrollHeight - fimConteudo - pad;
+    if (sobra < 150) return;
+    sondou = true;
+    const cauda = filhos.slice(-6).map((f) => {
+      const cs = getComputedStyle(f);
+      return `${f.className.split(' ')[0]}:${Math.round(f.getBoundingClientRect().height)}/${cs.opacity}/${cs.visibility}`;
+    }).join(' ');
+    diag.registrar({ evento: 'chat.vazio_no_fim', nivel: 'aviso', tela: 'chat', sessao: sessionName,
+                     detalhe: `sobra=${Math.round(sobra)} pad=${Math.round(pad)} sh=${listEl.scrollHeight} inner=${Math.round(inner.getBoundingClientRect().height)} ${cauda}` });
   }
 
   // Janela curta demais pra rolar (rajada de tool calls colapsada em linhas de grupo) -> revela
