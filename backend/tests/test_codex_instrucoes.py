@@ -278,3 +278,35 @@ def test_import_ciclico_nao_entra_em_recursao(tmp_path, monkeypatch):
     (home / '.claude/a.md').write_text('A\n@~/.claude/CLAUDE.md\n')
     preparar_instrucoes(home, cx, projeto)
     assert (cx / 'AGENTS.override.md').read_text() == 'raiz\nA\n@~/.claude/CLAUDE.md\n'
+
+
+def test_fonte_com_import_so_atualiza_na_proxima_prep(tmp_path, monkeypatch):
+    """Contrapartida de test_link_acompanha_edicao_atomica_sem_reconciliar: expandir o import
+    exige gravar arquivo, e arquivo não acompanha a fonte sozinho como o link acompanha."""
+    home, cx, projeto = ambiente(tmp_path)
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('USERPROFILE', str(home))
+    (home / '.claude/extra.md').write_text('IMPORTADO')
+    (home / '.claude/CLAUDE.md').write_text('antes\n@~/.claude/extra.md\n')
+    preparar_instrucoes(home, cx, projeto)
+    alias = cx / 'AGENTS.override.md'
+    assert alias.read_text() == 'antes\nIMPORTADO\n'
+    assert not alias.is_symlink()
+    (home / '.claude/CLAUDE.md').write_text('depois\n@~/.claude/extra.md\n')
+    assert alias.read_text() == 'antes\nIMPORTADO\n'
+    preparar_instrucoes(home, cx, projeto)
+    assert alias.read_text() == 'depois\nIMPORTADO\n'
+
+
+def test_edicao_do_arquivo_importado_tambem_espera_a_prep(tmp_path, monkeypatch):
+    home, cx, projeto = ambiente(tmp_path)
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('USERPROFILE', str(home))
+    (home / '.claude/extra.md').write_text('ANTIGO')
+    (home / '.claude/CLAUDE.md').write_text('base\n@~/.claude/extra.md\n')
+    preparar_instrucoes(home, cx, projeto)
+    alias = cx / 'AGENTS.override.md'
+    (home / '.claude/extra.md').write_text('NOVO')
+    assert alias.read_text() == 'base\nANTIGO\n'
+    preparar_instrucoes(home, cx, projeto)
+    assert alias.read_text() == 'base\nNOVO\n'
