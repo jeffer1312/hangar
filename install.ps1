@@ -1242,8 +1242,11 @@ if ($jaTem -or (Pergunte '  Instalar (recomendado)?')) {
         (& $_.exe -NoProfile -Command 'Get-ExecutionPolicy' 2>$null) -eq 'Restricted' })
     if ($restritos.Count -gt 0) {
         Nota ("ExecutionPolicy=Restricted em: " + (($restritos | ForEach-Object { $_.nome }) -join ', ') + ". Nenhum perfil carrega la.")
-        Nota 'Sem mudar isso, o wrapper nao funciona E todo terminal novo mostra erro.'
-        if (Pergunte '  Liberar script local pro seu usuario (RemoteSigned, sem admin)?') {
+        # Sem perguntar: RemoteSigned no escopo do usuario e o que o wrapper, o `codex.ps1` do
+        # npm e qualquer ferramenta de PowerShell exigem; a pergunta so deixava instalacao sem
+        # terminal (-Sim, pelo app) com o wrapper de fora, calada.
+        Nota 'Liberando script local pro seu usuario (RemoteSigned, sem admin).'
+        if ($true) {
             foreach ($i in $restritos) {
                 & $i.exe -NoProfile -Command 'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force' 2>$null
                 # Prova relendo: o Set roda noutro processo e uma politica travada por GPO falha
@@ -1622,7 +1625,13 @@ $tarefas = @(
     # fica segurando a porta e o `python` neto. Serve pro filtro por PADRAO do Pare-Servico — sem ele,
     # o casamento e substring pura da linha de comando, e QUALQUER processo que so MENCIONE este
     # caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
-    @{ Nome = 'hangar-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
+    # O python do venv DIRETO, nao `uv run`: o uv reconferia o lock a cada subida (lento no boot,
+    # e um lock mudado por `git pull` sem rede o fazia falhar antes de o backend nascer) e punha
+    # dois processos a mais na cadeia (uv.exe -> python trampolim -> python). O venv ja existe
+    # aqui (passo 2/8, `uv sync`); sem ele cai no uv como antes.
+    @{ Nome = 'hangar-backend';  Exe = $(if (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { "$raiz\backend\.venv\Scripts\python.exe" } else { 'uv' })
+       Args = $(if (Test-Path "$raiz\backend\.venv\Scripts\python.exe") { '-m app.main' } else { 'run python -m app.main' })
+       Dir = "$raiz\backend"
        Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend"); ExeProc = 'uv|python' }
 )
 if ($temTarefaFront) {
@@ -1673,21 +1682,19 @@ if ($registrou) {
             # (nao cresce sem limite; o que interessa e sempre a execucao atual).
             $log = Join-Path $env:LOCALAPPDATA "hangar\$($t.Nome).log"
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
-            # -EncodedCommand (base64 UTF-16LE) em vez de -Command com aspas: o PowerShell NAO
-            # escapa com barra invertida, e a string aninhada quebrava o New-ScheduledTaskAction
-            # ("nao e possivel localizar um parametro posicional"). Codificado nao ha o que escapar.
-            $interno = "& '$exe' $($t.Args) *>&1 | Out-File -FilePath '$log' -Encoding utf8"
-            $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($interno))
-
             # Por que um .vbs e nao `powershell -WindowStyle Hidden` direto: esse parametro nao
             # impede a janela de EXISTIR - o console e criado e so depois escondido, e lancado pelo
             # Agendador ele fica na barra de tarefas. Medido: duas janelas abertas e paradas.
             # O wscript nao tem console proprio, e o Run(..., 0, False) inicia ja oculto e nao
             # espera. Alternativa seria rodar a tarefa "esteja o usuario logado ou nao", mas ai ela
             # cai na sessao 0 e o servidor do multiplexador nasceria fora da sessao do usuario.
+            # O redirecionamento e do cmd, nao de um `| Out-File` do PowerShell: no pipeline cada
+            # linha de log virava objeto num powershell que ficava entre o Agendador e o servidor
+            # (um processo a mais pra morrer, e o vigia ja registrou OutOfMemory num desses).
+            # Aspas dobradas dentro da string VBS; `> log 2>&1` sobrescreve a cada subida.
             $vbs = Join-Path (Split-Path -Parent $log) "$($t.Nome).vbs"
-            $linhaVbs = 'CreateObject("WScript.Shell").Run "powershell -NoProfile ' +
-                        "-ExecutionPolicy Bypass -EncodedCommand $b64" + '", 0, False'
+            $cmdLinha = "cmd /c """"$exe"" $($t.Args) > ""$log"" 2>&1"""
+            $linhaVbs = 'CreateObject("WScript.Shell").Run "' + $cmdLinha.Replace('"', '""') + '", 0, False'
             # O .vbs carrega o caminho do LOG, que fica em %LOCALAPPDATA% — ou seja, no perfil do
             # usuario, que pode ter acento no nome. Ver Escrever-Lancador.
             Escrever-Lancador $vbs ($linhaVbs + "`r`n") 'vbs' | Out-Null
@@ -2361,8 +2368,23 @@ if ($vivo -and -not $Update) {
     $base = if ($script:cpPublicUrl) { $script:cpPublicUrl } else { "http://127.0.0.1:$portaBack" }
     $abrir = if ($tokenAgora) { "$base/?token=$([uri]::EscapeDataString($tokenAgora))" } else { $base }
     Pausa-Log   # a URL de fallback carrega o token
-    try { Start-Process $abrir | Out-Null; Retoma-Log; Ok "abri $base no navegador (ja autenticado)" }
-    catch { Nota "abra na mao: $abrir"; Retoma-Log }
+    # O app de desktop (Electron) quando existe; o navegador so como reserva. O main.cjs le a URL
+    # inicial de COCKPIT_URL, e a tela de login guarda o `?token=` igual ao QR.
+    $electronExe = "$raiz\shell\node_modules\electron\dist\electron.exe"
+    $abriuApp = $false
+    if (Test-Path $electronExe) {
+        try {
+            $env:COCKPIT_URL = $abrir
+            Start-Process -FilePath $electronExe -ArgumentList 'main.cjs' -WorkingDirectory "$raiz\shell" | Out-Null
+            Remove-Item Env:COCKPIT_URL -ErrorAction SilentlyContinue
+            $abriuApp = $true
+            Retoma-Log; Ok "abri o app Hangar (ja autenticado em $base)"
+        } catch { Remove-Item Env:COCKPIT_URL -ErrorAction SilentlyContinue; Nota "nao consegui abrir o app: $($_.Exception.Message)" }
+    }
+    if (-not $abriuApp) {
+        try { Start-Process $abrir | Out-Null; Retoma-Log; Ok "abri $base no navegador (ja autenticado)" }
+        catch { Nota "abra na mao: $abrir"; Retoma-Log }
+    }
 }
 
 # -- Fim ---------------------------------------------------------------------
