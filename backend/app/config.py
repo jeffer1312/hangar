@@ -252,6 +252,8 @@ class Settings(BaseSettings):
     # Reconciliacao automatica do Codex (codex_integracao.acompanhar + abertura de TUI). Portao
     # PROPRIO por cima do `automations`, editavel pela tela (card do Codex em Harnesses).
     codex_sync: bool = True
+    # Voz realtime do Codex é experimental e nasce desligada; habilitada nas Opções do harness.
+    codex_voice_beta: bool = False
     # A preferência salva também é lida pelos instaladores, sem depender do backend em execução.
     claude_statusline_update: bool = True
     # Chave da Groq pra transcricao de audio (whisper-large-v3-turbo). Aceita CP_GROQ_API_KEY (padrao

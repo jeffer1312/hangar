@@ -825,7 +825,7 @@ class CodexAdapter:
 
     async def _bombear(self, name: str, client: AppServerClient) -> None:
         """Le a fila do app-server, aplica o efeito de cada notification na sessao (estado, previa,
-        drain-on-complete) e espalha os StateEvents pros ouvintes. Vive enquanto houver um SSE.
+        drain-on-complete) e espalha os StateEvents pros ouvintes do chat ou da chamada de voz.
 
         Roda numa task propria, entao uma excecao aqui nao sobe sozinha: ela e repassada aos
         ouvintes (que a levantam no SSE) e o sentinela final sai SEMPRE — sem isso cada ouvinte
@@ -864,6 +864,9 @@ class CodexAdapter:
             # O app-server também publica estados de outras threads, inclusive subagentes.
             if params.get("threadId") is not None and params["threadId"] != sess["thread_id"]:
                 continue
+            if sess.get("voice_events") is not None:
+                from app.codex_voice import forward
+                forward(sess, notif)
             mapped = map_state(notif)
             method = notif.get("method")
             if mapped.state is not None:

@@ -42,15 +42,31 @@ import type {
 
 export interface CodexOpcoes {
   contexto_estendido: boolean;
+  codex_voice_beta: boolean;
   contexto_configurado: number | null;
   compactacao: number | null;
   modelos: { model: string; default: number; max: number }[];
 }
 
-export function codexOpcoes(alvo: Server | null, signal: AbortSignal, habilitar?: boolean): Promise<CodexOpcoes> {
+export function codexVoiceUrlForServer(server: Server, name: string, origin: string): string {
+  const base = (server.baseUrl || origin).replace(/\/$/, '').replace(/^http/, 'ws');
+  return `${base}/api/sessions/${encodeURIComponent(name)}/codex/voice?${new URLSearchParams({ token: server.token })}`;
+}
+
+export async function getCodexVoicesForServer(server: Server, name: string): Promise<string[]> {
+  const result = await apiFetchForServer<{ voices: string[] }>(server, `/api/sessions/${encodeURIComponent(name)}/codex/voices`);
+  return result.voices;
+}
+
+export function codexOpcoes(
+  alvo: Server | null,
+  signal: AbortSignal,
+  mudancas?: boolean | Pick<CodexOpcoes, 'contexto_estendido' | 'codex_voice_beta'>,
+): Promise<CodexOpcoes> {
+  const body = typeof mudancas === 'boolean' ? { contexto_estendido: mudancas } : mudancas;
   const init = {
-    signal: comTeto(signal, 8000), method: habilitar === undefined ? 'GET' : 'POST',
-    body: habilitar === undefined ? undefined : JSON.stringify({ contexto_estendido: habilitar }),
+    signal: comTeto(signal, 8000), method: mudancas === undefined ? 'GET' : 'POST',
+    body: body === undefined ? undefined : JSON.stringify(body),
   };
   return alvo ? apiFetchForServer(alvo, '/api/harness/codex/opcoes', init)
               : apiFetch('/api/harness/codex/opcoes', init);

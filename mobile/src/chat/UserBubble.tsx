@@ -1,8 +1,9 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
-import { parseImageMessage, uploadUrlNative, fileAuthHeader } from '@hangar/core';
+import { parseImageMessage, parseRealtimeDelegation, uploadUrlNative, fileAuthHeader } from '@hangar/core';
+import * as m from '../paraglide/messages';
 import { BubbleActions } from './BubbleActions';
 import { superficie } from '../theme/superficie';
 
@@ -10,10 +11,27 @@ import { superficie } from '../theme/superficie';
 // Se parseImageMessage(text) não nulo → legenda + miniaturas (uploadUrl/fileUrl).
 export const UserBubble = memo(function UserBubble({ text, sessionName, ts }: { text: string; sessionName?: string; ts?: number | null }) {
   const { theme } = useUnistyles();
+  const voice = parseRealtimeDelegation(text);
+  const [showOriginal, setShowOriginal] = useState(false);
   const parsed = parseImageMessage(text);
   const hasImages = !!parsed && !!sessionName;
   const caption = hasImages ? parsed!.caption : '';
   const filenames = hasImages ? parsed!.filenames : [];
+
+  if (voice) {
+    return (
+      <View style={[styles.bubble, styles.voice]}>
+        <Text style={styles.voiceLabel}>{m.voice_message_origin()}</Text>
+        <Text style={[styles.txt, { color: theme.tokens.text.primary }]} selectable>{voice.input}</Text>
+        <Pressable accessibilityRole="button" accessibilityState={{ expanded: showOriginal }}
+          onPress={() => setShowOriginal(value => !value)} style={styles.detailsButton}>
+          <Text style={{ color: theme.tokens.text.secondary }}>{m.voice_message_original()}</Text>
+        </Pressable>
+        {showOriginal ? <Text style={[styles.txt, { color: theme.tokens.text.secondary }]} selectable>{text}</Text> : null}
+        <BubbleActions text={voice.input} ts={ts} ouvir={false} />
+      </View>
+    );
+  }
 
   // Se há imagens válidas, exibe legenda + thumbnails; senão fallback texto cru
   if (hasImages) {
@@ -73,6 +91,9 @@ const styles = StyleSheet.create((theme) => ({
   txt: {
     fontSize: theme.base.text.base,
   },
+  voice: { alignSelf: 'flex-start', borderWidth: 1, borderColor: theme.tokens.accent.base },
+  voiceLabel: { color: theme.tokens.accent.base, fontWeight: '600', fontSize: theme.base.text.sm },
+  detailsButton: { minHeight: 44, justifyContent: 'center' },
   thumbs: {
     flexDirection: 'row',
     flexWrap: 'wrap',

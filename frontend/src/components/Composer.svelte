@@ -46,6 +46,7 @@
   import CodexModelPopover from './CodexModelPopover.svelte';
   import CodexEffortPopover from './CodexEffortPopover.svelte';
   import CodexPermissionPopover from './CodexPermissionPopover.svelte';
+  import CodexVoice from './CodexVoice.svelte';
   import PiModelPopover from './PiModelPopover.svelte';
   import KimiModelPopover from './KimiModelPopover.svelte';
   import KimiEffortPopover from './KimiEffortPopover.svelte';
@@ -109,6 +110,7 @@
     // abertos, o chat vive em ~500px dentro de uma janela de 1900. A fileira de controles precisa
     // do arranjo de celular ali. Sem prop = decide pela janela, como sempre.
     estreito?: boolean;
+    voiceBeta?: boolean;
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
@@ -124,6 +126,7 @@
     claudePreviousNonPlan = null,
     stats = null,
     estreito = false,
+    voiceBeta = false,
   }: Props = $props();
 
   // OU, não `??`: a janela estreita (celular) manda sozinha, e a coluna estreita no desktop soma.
@@ -1300,6 +1303,12 @@
   // sessao do app. Custo aceito: o indicador de microfone do iOS fica aceso com o app aberto.
   // Troca de sessao desmonta o Composer e encerra de verdade (onDestroy, mais abaixo).
   let micMorno: MediaStream | undefined;
+  let voiceBusy = $state(false);
+
+  function prepareVoice() {
+    pararMicMorno();
+    ttsPlayer.close();
+  }
 
   // Devolve o stream morno pronto pra gravar (tracks reabilitadas), ou undefined se nao existe /
   // morreu (o SO encerra a captura em background — a proxima gravacao cai no getUserMedia normal).
@@ -1519,6 +1528,7 @@
   }
 
   async function toggleRecord() {
+    if (voiceBusy) return;
     if (recording) {
       pararPorMotivo('botao');
       return;
@@ -2257,6 +2267,7 @@
         <button
           class="attach-btn mic-btn"
           class:mic-btn--recording={recording}
+          disabled={voiceBusy}
           onclick={toggleRecord}
           aria-label={recording ? m.composer_parar_gravacao() : starting ? m.composer_cancelar_prep_mic() : m.composer_gravar_audio()}
         >
@@ -2286,6 +2297,10 @@
         {@render seletorModo()}
       {/if}
       <div class="control-right">
+        {#if isCodex && voiceBeta}
+          <CodexVoice {sessionName} disabled={recording || starting || transcribing}
+            onPrepare={prepareVoice} onBusyChange={(busy) => { voiceBusy = busy; }} />
+        {/if}
         {#if isCodex && isWorking && hasInput && !sendToPair}
           <button class="model-pill" onclick={() => submit(true)} disabled={!canSend}
             title={m.codex_orientar_ajuda()}>{m.codex_orientar()}</button>

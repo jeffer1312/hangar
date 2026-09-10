@@ -28,6 +28,7 @@ EDITAVEIS: dict[str, type] = {
     "stall_seconds": int,
     "automations": bool,           # kill-switch das automações desatendidas
     "codex_sync": bool,            # reconciliação automática do Codex (por cima do automations)
+    "codex_voice_beta": bool,      # conversa realtime do Codex (experimental, opt-in)
     "claude_statusline_update": bool,  # permite ao instalador atualizar a barra do Claude Code
     "editor": str,
     "elevenlabs_api_key": str,     # sintese de voz (ouvir a selecao)
@@ -123,6 +124,12 @@ def get(campo: str) -> Any:
     return getattr(settings, campo, None)
 
 
+def override(campo: str) -> tuple[bool, Any]:
+    """Presença e valor cru do override, para rollback preservar a origem da configuração."""
+    d = _carregar()
+    return campo in d, d.get(campo)
+
+
 def mascarar(valor: str) -> str:
     """Segredo em forma conferível, não copiável: mostra só o começo e o fim."""
     if not valor:
@@ -213,18 +220,21 @@ def _coagir(campo: str, valor: Any) -> Any:
     return texto
 
 
-def aplicar(mudancas: dict[str, Any]) -> dict[str, Any]:
+def aplicar(mudancas: dict[str, Any], *, remover: set[str] | None = None) -> dict[str, Any]:
     """Grava os overrides. Ignora campo desconhecido (não deixa o cliente inventar setting).
 
     Escrita atômica (tmp + replace): um corte de energia no meio não deixa um JSON pela metade,
     que na próxima leitura viraria "sem override nenhum" — perder a configuração inteira calado.
     """
     with _LOCK:
-        return _aplicar_travado(mudancas)
+        return _aplicar_travado(mudancas, remover or set())
 
 
-def _aplicar_travado(mudancas: dict[str, Any]) -> dict[str, Any]:
+def _aplicar_travado(mudancas: dict[str, Any], remover: set[str]) -> dict[str, Any]:
     atual = _carregar()
+    for campo in remover:
+        if campo in EDITAVEIS:
+            atual.pop(campo, None)
     # Campo EXTERNO grava em OUTRO arquivo (o settings.json do Claude), então ele fica pro fim: o
     # front manda o rascunho INTEIRO num POST só, e um campo inválido no meio levantava ValueError
     # DEPOIS de a chave já ter sido escrita lá. A tela mostrava o erro e mantinha o rascunho — ou

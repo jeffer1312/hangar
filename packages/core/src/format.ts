@@ -297,6 +297,13 @@ export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[]
 // normal do usuário. Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do
 // Chat compara o cru).
 const _PEER_RE = /^\[(de|grupo|painel):\s*([^\]]+)\]\s*/;
+
+// Só apresentação: o envelope original continua no histórico e na deduplicação.
+export function parseRealtimeDelegation(text: string): { input: string; transcript: string } | null {
+  const match = /^\s*<realtime_delegation(?:\s+request_id="[a-f0-9]{32}")?>\s*<input>([\s\S]*?)<\/input>(?:\s*<transcript_delta>([\s\S]*?)<\/transcript_delta>)?\s*<\/realtime_delegation>\s*$/.exec(text);
+  return match ? { input: match[1].trim(), transcript: match[2]?.trim() ?? '' } : null;
+}
+
 export type PeerScope = 'peer' | 'group' | 'panel';
 const _SCOPES: Record<string, PeerScope> = { de: 'peer', grupo: 'group', painel: 'panel' };
 export function parsePeerMessage(text: string): { from: string; text: string; scope: PeerScope } | null {

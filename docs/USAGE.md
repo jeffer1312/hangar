@@ -213,6 +213,10 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   ambiente do backend, reiniciando-o), ou a **chave da Groq** em Configurações → Anexos e
   transcrição. Sem chave, a gravação funciona mas a transcrição responde 503. Pegue a chave grátis
   em <https://console.groq.com>.
+- **Conversa por voz com Codex (Beta):** nasce desligada. Ative em **Configurações → Harnesses →
+  Codex → Opções → Conversa por voz**. O botão **Voz · Beta** aparece nas sessões Codex daquele
+  servidor. A escolha vale só para esse servidor; desligar durante uma chamada encerra o microfone
+  e a conexão. A voz escolhida fica salva neste navegador.
 - **Limpeza do ditado:** o texto gravado pelo microfone passa por um modelo que aplica a correção
   que você falou em voz alta — dizer "usa o postgres, não, o redis" vira "Usa o Redis." —, tira
   hesitação ("é... tipo assim...") e pontua. Preserva nome de arquivo, caminho, comando, sigla e

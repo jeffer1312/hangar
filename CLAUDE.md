@@ -92,6 +92,45 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
   parse inteiro por parse do último bloco (Markdown novo muda a leitura do anterior). No celular
   não foi medido — a sonda é `PerformanceObserver('longtask')` + `requestAnimationFrame` na
   página do chat, e teria que rodar no iPhone.
+- **Voz Codex no web** (`codex_voice.py`, `CodexVoice.svelte`, `lib/codexVoice.ts`, 10/09/2026):
+  é beta e opt-in por servidor: `codex_voice_beta` nasce `false` no runtime config e aparece em
+  Harnesses → Codex → Opções. Desligada, o botão não monta e o backend recusa WebSocket e catálogo
+  de vozes; um front antigo não contorna a trava. O botão e a opção exibem o badge Beta. Salvar
+  atualiza o chat do mesmo servidor sem exigir reload; desligar durante uma chamada desmonta o
+  componente e encerra áudio/WebRTC pelo teardown existente.
+  o botão Voz usa a conta e o app-server da sessão aberta. A conversa roda numa thread efêmera
+  organizadora; a thread de trabalho só recebe o pedido consolidado depois da confirmação.
+  WebRTC com `version: "v3"` negociou com login ChatGPT Pro no CLI 0.154.0; o transporte WebSocket
+  do Codex exigiu API key e o padrão WebRTC foi recusado por versão do protocolo. O WebSocket do
+  **Hangar** só leva sinalização e mantém a posse da chamada (uma por sessão, heartbeat com prazo).
+  `_consumir` continua sendo o único leitor das notifications; a chamada mantém um ouvinte de estado
+  enquanto o SSE reconecta. O botão fica no compositor: o modal configura a chamada e fecha quando
+  conecta, deixando o indicador "Em voz". Reabrir/fechar os controles não desliga a voz. Encerrar
+  ou trocar de sessão libera áudio e envia realtime/stop,
+  sem fechar o cliente compartilhado nem cancelar o turno do agente. Ditado fica bloqueado durante
+  a chamada. A escolha fica em `cp_codex_voice`, por navegador/origem. O medidor usa RMS separado
+  do microfone e do áudio recebido; anima apenas o span HTML da marca, nunca o SVG.
+  Verificado com faixa silenciosa no navegador:
+  ICE/DTLS conectados, silenciar desabilita a track, desmontagem encerra a track e o peer. A fala
+  real foi exercitada na POC pelo usuário; interrupção nesta integração ainda requer teste falado.
+  O app Expo ainda não tem esse controle.
+  Encaminhamentos `<realtime_delegation>` são reconhecidos só na apresentação (`parseRealtimeDelegation`
+  no core): cabeçalho "Conversa de voz", pedido no corpo e envelope integral nos detalhes. O texto
+  original e seu ID continuam intactos; não usar `parsePeerMessage`, que também decide tráfego de pares.
+  Só trocar o prompt não resolveu o envio de fragmentos. No CLI 0.154.0, `HandoffRequested`
+  encaminha a transcrição da última fala antes de avisar o cliente. O organizador em
+  `codex_voice_broker.py` usa ferramentas dinâmicas para preparar/cancelar/confirmar um rascunho.
+  A confirmação deve vir de outra interação, pelo `userMessage` real do app-server, e corresponder
+  a uma autorização curta; o texto enviado é o rascunho imutável, não a confirmação. Revisão muda
+  o ID; repetição não reenvia. A fila durável existente recebe o pedido, inclusive se o alvo estiver
+  ocupado. Rascunhos ainda não enviados valem apenas durante a chamada. Shell, apps, hooks e MCPs
+  ficam desabilitados no organizador; o catálogo foi conferido no request do CLI real com provedor
+  local, sem modelo externo. O modelo é o da sessão, com esforço baixo, e há custo de organização
+  na mesma conta. Contexto inicial usa a cauda já lida pelo Hangar, sem pedir o histórico inteiro
+  pelo app-server. O organizador resume o resultado final e usa `appendSpeech`: `appendText` sozinho
+  adicionava contexto, mas não produziu fala no teste. Teste com dois turnos de organização e
+  entrada de áudio silenciosa confirmou pedido completo, resposta da sessão e retorno transcrito
+  "A sessão respondeu: pinguim azul". Pausas e confirmações por áudio ainda exigem teste falado.
 - `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
   same tmux-native shape as Pi: TUI in the pane, chat from
   `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in

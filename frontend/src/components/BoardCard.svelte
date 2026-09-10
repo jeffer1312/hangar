@@ -8,7 +8,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     uploadFileForServer, transcribeFileForServer,
   } from '@hangar/core';
   import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
-  import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, providerTag } from '@hangar/core';
+  import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, parseRealtimeDelegation, providerTag } from '@hangar/core';
   import { parseStatusLine } from '@hangar/core';
   import { lerSubagenteCodex, rotuloSubagente } from '../lib/subagenteCodex';
   import { loopBadge, LOOP_TONE_COLOR, type ChatEvent } from '@hangar/core';
@@ -482,11 +482,17 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
           <AssistantBubble text={e.text ?? ''} animate={false} />
         {:else}
           {@const peer = e.text ? parsePeerMessage(e.text) : null}
+          {@const voice = e.text ? parseRealtimeDelegation(e.text) : null}
           {@const sub = e.text ? lerSubagenteCodex(e.text) : null}
           {#if sub}
             <!-- Notificação de subagente do Codex (mensagem de user no rollout): uma linha, senão
                  o card do quadro enche de JSON. O relatório inteiro está no chat. -->
             <p class="bc-user bc-sub">{rotuloSubagente(sub.status)}</p>
+          {:else if voice}
+            <div class="bc-user bc-peer">
+              <span class="bc-peer-chip">{m.voice_message_origin()}</span>
+              <p class="bc-peer-text">{voice.input}</p>
+            </div>
           {:else if peer}
             <!-- Recado de par ([de: X]/[grupo: X]): mesma linguagem da bolha do chat cheio
                  (chip 📟/📣 + tinta accent), versão compacta — sem isto o card mostrava o

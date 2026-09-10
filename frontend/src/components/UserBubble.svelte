@@ -1,7 +1,7 @@
 <script lang="ts">
 import { intlLocale } from '../lib/locale';
 import { renderMarkdown } from '../lib/markdown';
-import { parseCanal } from '@hangar/core';
+import { parseCanal, parseRealtimeDelegation } from '@hangar/core';
 import * as m from '../paraglide/messages';
   interface Props {
     text: string;
@@ -18,6 +18,7 @@ import * as m from '../paraglide/messages';
   // "**Você não precisa fazer nada.**" com os asteriscos à mostra (regra do app: markdown nunca
   // aparece cru). O que VOCÊ digitou continua texto puro — ali um `*` é um asterisco mesmo.
   const canal = $derived(from ? parseCanal(text) : null);
+  const voice = $derived(!from ? parseRealtimeDelegation(text) : null);
   const corpo = $derived(canal ? canal.text : text);
   const html = $derived(from ? renderMarkdown(corpo) : '');
 
@@ -35,11 +36,13 @@ import * as m from '../paraglide/messages';
 <div class="bubble-wrap" class:noanim={!animate}>
   <div
     class="bubble"
-    class:peer={!!from}
+    class:peer={!!from || !!voice}
     class:group={scope === 'group'}
     class:panel={scope === 'panel'}
   >
-    {#if from}
+    {#if voice}
+      <div class="peer-head"><span class="peer-chip">{m.voice_message_origin()}</span></div>
+    {:else if from}
       {@const label = scope === 'group' ? m.board_peer_grupo({ n: from }) : scope === 'panel' ? m.board_peer_painel({ n: from }) : m.board_peer_de({ n: from })}
       <div class="peer-head">
         {#if onOpenPeer && scope !== 'panel'}
@@ -55,7 +58,13 @@ import * as m from '../paraglide/messages';
       <!-- Sem superfície de XSS: `renderMarkdown` escapa tudo antes de montar o HTML. -->
       <div class="bubble-text md">{@html html}</div>
     {:else}
-      <p class="bubble-text">{text}</p>
+      <p class="bubble-text">{voice ? voice.input : text}</p>
+    {/if}
+    {#if voice}
+      <details class="voice-details">
+        <summary>{m.voice_message_original()}</summary>
+        <pre>{text}</pre>
+      </details>
     {/if}
   </div>
   {#if ts || onForward}
@@ -122,6 +131,10 @@ import * as m from '../paraglide/messages';
     gap: 6px;
     margin-bottom: var(--space-1);
   }
+
+  .voice-details { margin-top: var(--space-2); font-size: var(--text-xs); color: var(--text-secondary); }
+  .voice-details summary { cursor: pointer; padding-block: 6px; }
+  .voice-details pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); margin-top: var(--space-2); }
 
   .peer-chip {
     display: block;

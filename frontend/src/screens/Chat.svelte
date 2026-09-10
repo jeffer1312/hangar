@@ -949,6 +949,20 @@
     return () => { vivo = false; };
   });
 
+  let codexVoiceBeta = $state(false);
+  $effect(() => {
+    let vivo = true;
+    const configMudou = (event: Event) => {
+      const detail = (event as CustomEvent<{ serverId: string | null; enabled: boolean }>).detail;
+      if (detail && (detail.serverId === null || detail.serverId === getActiveId())) codexVoiceBeta = detail.enabled === true;
+    };
+    window.addEventListener('hangar:codex-voice-config', configMudou);
+    getConfig()
+      .then((c) => { if (vivo) codexVoiceBeta = c.campos.codex_voice_beta?.valor === true; })
+      .catch(() => {});
+    return () => { vivo = false; window.removeEventListener('hangar:codex-voice-config', configMudou); };
+  });
+
   // Pergunta nativa do Pi (tool `question`). O Pi nao tem o hook de AskUserQuestion do Claude, mas
   // nao precisa: o toolCall cai no transcript com o payload COMPLETO (pergunta, header, opcoes com
   // descricao) no instante da pergunta. Aqui o app sintetiza o MESMO AskQuestionPayload do Claude e
@@ -2495,6 +2509,7 @@
         {sessionName}
         bind:inputText={composerText}
         estreito={colunaEstreita}
+        voiceBeta={codexVoiceBeta}
         sessionState={currentState}
         status={status}
         {lastCache}

@@ -20,7 +20,7 @@
   import Spinner from './Spinner.svelte';
   import ImageBubble from './ImageBubble.svelte';
   import FileAttachment from './FileAttachment.svelte';
-  import { parseImageMessage, parseFilePaths, parsePeerMessage } from '@hangar/core';
+  import { parseImageMessage, parseFilePaths, parsePeerMessage, parseRealtimeDelegation } from '@hangar/core';
   import { lerRecadoOrq } from '../lib/orqRecado';
   import OrqPainelCard from './OrqPainelCard.svelte';
   import BastaoCard from './BastaoCard.svelte';
@@ -437,7 +437,9 @@
              image_count (que traz a foto do transcript) usa o `img` sozinho. -->
         {@const imgFotos = img && img.filenames.length ? img : null}
         {@const peer = ev.text ? parsePeerMessage(ev.text) : null}
+        {@const voice = ev.text ? parseRealtimeDelegation(ev.text) : null}
         {@const shownText = peer ? peer.text : ev.text ?? ''}
+        {@const forwardText = voice?.input ?? shownText}
         {@const orq = peer?.scope === 'panel' ? lerRecadoOrq(peer.text) : null}
         <!-- O kick-off da passagem NÃO passa pelo parsePeerMessage: o prefixo dele é
              `[hangar: passagem de bastão]`, e ler "passagem de bastão" como nome de remetente
@@ -471,7 +473,7 @@
                           onAbrirOrigem={onOpenSession ? () => onOpenSession(bastao.origem) : null} />
             {:else}
               <UserBubble text={shownText} ts={ev.ts} from={peer?.from} scope={peer?.scope}
-                          onForward={onForward ? () => onForward(shownText) : null}
+                          onForward={onForward ? () => onForward(forwardText) : null}
                           onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
             {/if}
             {#if ev.desistiu}
@@ -493,9 +495,9 @@
           <OrqPainelCard recado={orq} cru={shownText} ts={ev.ts} onAbrirPainel={onOpenOrq ?? null} />
         {:else}
           <UserBubble text={shownText} ts={ev.ts} animate={!histIds.has(ev.id)} from={peer?.from} scope={peer?.scope}
-                      onForward={onForward ? () => onForward(shownText) : null}
+                      onForward={onForward ? () => onForward(forwardText) : null}
                       onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
-          {#if ev.text}{@const fr = parseFilePaths(ev.text)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
+          {#if forwardText}{@const fr = parseFilePaths(forwardText)}{#if fr.length}<FileAttachment {sessionName} refs={fr} />{/if}{/if}
         {/if}
       {:else if ev.kind === 'assistant_msg' && ev.text}
         <AssistantBubble text={codex ? planDisplayText(ev.text) : ev.text} ts={ev.ts} {sessionName}

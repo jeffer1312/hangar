@@ -1,14 +1,17 @@
 """Rotas do painel de saúde dos harnesses (app/harness_saude.py)."""
 import asyncio
+import logging
 import sqlite3
 import subprocess
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, StrictBool
 
-from app import codex_integracao, contas, harness_install, harness_saude
+from app import codex_integracao, contas, harness_install, harness_saude, runtime_config
 from app.auth import require_auth
 from app.mensagens import erro
+
+_log = logging.getLogger(__name__)
 
 harness_router = APIRouter(prefix="/api/harness")
 
@@ -16,20 +19,36 @@ harness_router = APIRouter(prefix="/api/harness")
 class CodexOpcoesBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     contexto_estendido: StrictBool
+    codex_voice_beta: StrictBool | None = None
 
 
 @harness_router.get("/codex/opcoes", dependencies=[Depends(require_auth)])
 async def codex_opcoes_ler() -> dict:
     from app.codex_opcoes import ler_opcoes
-    return await asyncio.to_thread(ler_opcoes, codex_integracao.SERVICO)
+    return {**await asyncio.to_thread(ler_opcoes, codex_integracao.SERVICO),
+            "codex_voice_beta": runtime_config.get("codex_voice_beta") is True}
 
 
 @harness_router.post("/codex/opcoes", dependencies=[Depends(require_auth)])
 async def codex_opcoes_salvar(body: CodexOpcoesBody) -> dict:
     from app.codex_opcoes import salvar_opcoes
+    voz_tinha_override, voz_override = runtime_config.override("codex_voice_beta")
+    voz_anterior = runtime_config.get("codex_voice_beta") is True
+    mudou_voz = body.codex_voice_beta is not None and body.codex_voice_beta != voz_anterior
     try:
-        return await salvar_opcoes(codex_integracao.SERVICO, body.contexto_estendido)
+        if mudou_voz:
+            await asyncio.to_thread(runtime_config.aplicar, {"codex_voice_beta": body.codex_voice_beta})
+        resposta = await salvar_opcoes(codex_integracao.SERVICO, body.contexto_estendido)
+        return {**resposta, "codex_voice_beta": runtime_config.get("codex_voice_beta") is True}
     except (OSError, ValueError, RuntimeError):
+        if mudou_voz:
+            try:
+                if voz_tinha_override:
+                    await asyncio.to_thread(runtime_config.aplicar, {"codex_voice_beta": voz_override})
+                else:
+                    await asyncio.to_thread(runtime_config.aplicar, {}, remover={"codex_voice_beta"})
+            except (OSError, ValueError):
+                _log.exception("falha ao restaurar codex_voice_beta após erro nas opções do Codex")
         raise HTTPException(409, detail=erro("erro_codex_opcoes", "Não foi possível salvar as opções do Codex.")) from None
 
 

@@ -7,7 +7,7 @@ import {
   untrackedReason,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
   rotuloEstado,
-  splitTodoBlock, parseImageMessage, parseCanal, basename,
+  splitTodoBlock, parseImageMessage, parseCanal, parseRealtimeDelegation, parsePeerMessage, basename,
 } from './format';
 import type { ChatEvent, State } from './types';
 import { overwriteGetLocale } from './paraglide/runtime';
@@ -16,6 +16,18 @@ import { intlLocale } from './i18n';
 // Default dos testes antigos: eles foram escritos esperando pt-BR. Quem troca de idioma seta
 // o locale DENTRO do teste e o beforeEach repoe o pt a cada it — nenhum estado vaza entre tests.
 beforeEach(() => overwriteGetLocale(() => 'pt'));
+
+it('identifica origem de voz sem confundir com par nem perder o contexto', () => {
+  const raw = '<realtime_delegation>\n  <input>Essa sessão, cê consegue ver?</input>\n'
+    + '  <transcript_delta>user: Essas...\nassistant: Vou conferir.</transcript_delta>\n</realtime_delegation>';
+  expect(parseRealtimeDelegation(raw)).toEqual({ input: 'Essa sessão, cê consegue ver?', transcript: 'user: Essas...\nassistant: Vou conferir.' });
+  expect(parsePeerMessage(raw)).toBeNull();
+  expect(parseRealtimeDelegation('Explique ' + raw)).toBeNull();
+  expect(parseRealtimeDelegation('```xml\n' + raw + '\n```')).toBeNull();
+  expect(parseRealtimeDelegation('<realtime_delegation><input>incompleto')).toBeNull();
+  expect(parseRealtimeDelegation('<realtime_delegation request_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"><input>Enviar completo</input></realtime_delegation>')?.input)
+    .toBe('Enviar completo');
+});
 
 describe('abbrevNum', () => {
   it('abbreviates millions', () => {
