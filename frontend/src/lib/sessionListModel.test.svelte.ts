@@ -142,13 +142,15 @@ describe('filtro (divergência #4)', () => {
 });
 
 describe('colapso de grupo', () => {
-  it('persiste servidor/projeto e NÃO persiste cluster de pareamento', () => {
-    comServidores([{ id: 'srv-a', label: 'A', sessions: [] }]);
+  it('persiste servidor/projeto e cluster de pareamento VIVO; gid que não está na lista é podado', () => {
+    comServidores([{ id: 'srv-a', label: 'A', sessions: [sess('um', 'srv-a', { pair_gid: 'g1' })] }]);
     const m = createSessionListModel(opts('mobile'));
-    m.toggleGroup('srv-a'); m.toggleGroup('pair:g1');
+    m.toggleGroup('srv-a'); m.toggleGroup('pair:g1'); m.toggleGroup('pair:morto');
     expect(m.collapsed.has('srv-a')).toBe(true);
     expect(m.collapsed.has('pair:g1')).toBe(true);
-    expect(JSON.parse(localStorage.getItem('cp_collapsed_servers')!)).toEqual(['srv-a']);
+    expect(JSON.parse(localStorage.getItem('cp_collapsed_servers')!)).toEqual(['srv-a', 'pair:g1']);
+    // Nova instância (lista remontada no celular): o grupo continua colapsado.
+    expect(createSessionListModel(opts('mobile')).collapsed.has('pair:g1')).toBe(true);
     m.toggleGroup('srv-a');
     expect(m.collapsed.has('srv-a')).toBe(false);
   });

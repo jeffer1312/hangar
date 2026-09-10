@@ -153,9 +153,14 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     const next = new Set(collapsed);
     if (next.has(id)) next.delete(id); else next.add(id);
     collapsed = next;
-    // O colapso de cluster de pareamento ('pair:<gid>') é efêmero: o gid renasce a cada
-    // pareamento, e gravá-lo acumularia lixo pra sempre.
-    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:')))); } catch { /* idem */ }
+    // O colapso de cluster de pareamento ('pair:<gid>') é gravado enquanto o grupo existir na
+    // lista: no celular a lista desmonta ao abrir um chat, e sem gravar o grupo voltava aberto a
+    // cada volta. O gid renasce a cada pareamento, então o que não está mais na lista é podado
+    // aqui mesmo, e o localStorage não acumula gid morto.
+    const vivos = new Set(rows.map((s) => `pair:${s.pair_gid ?? ''}`));
+    try {
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:') || vivos.has(k))));
+    } catch { /* idem */ }
   }
 
   // ── Seleção múltipla: broadcast (1 prompt pra N sessões) e comparar (grade lado a lado) ──
