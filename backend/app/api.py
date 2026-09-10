@@ -24,8 +24,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app import (atomico, atualizacoes, atualizar, diag, harness_api, migracao_sidecars,
-                 pensamento_pt, procinfo, tmux)
+from app import (agentes_sync, atomico, atualizacoes, atualizar, diag, harness_api,
+                 migracao_sidecars, pensamento_pt, procinfo, tmux)
 from app.auth import require_auth, require_loopback
 from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
 from app.bastao import montar as bastao_montar
