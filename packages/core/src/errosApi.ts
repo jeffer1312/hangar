@@ -146,6 +146,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 
   // /api/engines — motor nao existe, nome misturado com dados, ou faltando
   erro_motor_nao_encontrado: () => m.erro_motor_nao_encontrado(),
+  erro_credencial_nao_gerenciada: () => m.erro_credencial_nao_gerenciada(),
   erro_motor_nome_com_dados: () => m.erro_motor_nome_com_dados(),
   erro_motor_nome_ou_dados: () => m.erro_motor_nome_ou_dados(),
 

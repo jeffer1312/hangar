@@ -4406,6 +4406,12 @@ async def delete_engine(nome: str):
         raise HTTPException(400, str(e))
     # Mesma invalidação do PUT: a chave do cache é o NOME do motor.
     _engine_models_cache.pop(nome, None)
+    # O espelho nos outros agentes sai junto; sem isso o Kimi seguia listando um provedor cuja
+    # chave o app já não conhece.
+    espelhos = await asyncio.to_thread(agentes_sync.remover, nome)
+    for alvo, r in espelhos.items():
+        if not r["ok"] and r["motivo"] not in ("nao-gerenciado", "nao-instalado"):
+            _log.warning("motor %r apagado, mas o espelho no %s ficou: %s", nome, alvo, r["motivo"])
     return {"ok": True}
 
 

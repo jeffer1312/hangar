@@ -751,6 +751,17 @@ export async function criarConta(alvo: Server | null, nome: string): Promise<Con
     : apiFetch<ConfigDirInfo>('/api/claude-configs', init);
 }
 
+/** Bloco que o app gravou no config do Kimi e que ficou órfão — o provedor nativo dele dá 404. */
+export async function apagarProvedorKimi(alvo: Server | null, nome: string): Promise<void> {
+  const rota = `/api/credenciais/kimi/${encodeURIComponent(nome)}`;
+  const init = { method: 'DELETE' };
+  if (alvo) {
+    await apiFetchForServer<void>(alvo, rota, init);
+    return;
+  }
+  await apiFetch(rota, init);
+}
+
 // Apaga a conta e os transcripts dela no servidor. Recusa 409 se houver sessão viva usando-a.
 export async function apagarConta(alvo: Server | null, nome: string): Promise<void> {
   const init = { method: 'DELETE' };

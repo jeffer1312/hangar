@@ -29,6 +29,7 @@ from app import engine_probe
 from app.config import list_config_dirs
 from app.mensagens import erro
 from app.conta_estado import EstadoLogin, _login_de
+from app.adapters.kimi.sessions import kimi_home
 
 _log = logging.getLogger("hangar.credenciais")
 
@@ -77,6 +78,9 @@ class Credencial(BaseModel):
     # credencial aceita cookie, e se já tem um — pra oferecer o campo sem prometer o que não dá.
     aceita_cookie: bool = False
     cookie_definido: bool = False
+    # Chave que o app tem como apagar: cadastrada nele (engines.json) ou bloco que ele mesmo gravou
+    # na config de outro agente. O provedor nativo do Kimi é da pessoa — a tela não oferece Apagar.
+    gerenciada: bool = True
 
 
 def _mascarar(chave: str) -> str:
@@ -184,6 +188,8 @@ def listar(forcar: bool = False, *, codex_snapshots: list[dict] | tuple = ()) ->
             auth_method="unknown" if uso == "codex_cli" else "api_key",
             nome=nomes.get(cid) or natural, nome_natural=natural,
             apelido=nomes.get(cid), usos=[uso], cota=resumo,
+            gerenciada=uso != "kimi_cli" or agentes_sync.bloco_gerenciado(
+                kimi_home() / "config.toml", cid.split(":", 1)[1]),
         ))
     return saida
 
@@ -300,3 +306,14 @@ def codex_login_passo() -> dict:
 @credenciais_router.delete("/codex/login", dependencies=[Depends(require_auth)])
 def codex_login_cancelar() -> dict:
     return oauth_codex.cancelar()
+
+
+@credenciais_router.delete("/kimi/{nome}", dependencies=[Depends(require_auth)])
+def apagar_provedor_kimi(nome: str) -> dict:
+    """Só o bloco que o app gravou no config do Kimi (provedor órfão de um motor já apagado).
+    Provedor do usuário nunca é tocado: 404, não remoção."""
+    ok, motivo = agentes_sync.remover_kimi(nome)
+    if not ok:
+        raise HTTPException(404 if motivo in ("nao-gerenciado", "nao-instalado") else 400,
+                            detail=erro("erro_credencial_nao_gerenciada", "credencial nao gerenciada pelo app"))
+    return {"ok": True}

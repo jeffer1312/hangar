@@ -502,6 +502,109 @@ def gravar_codex(
 _FUNCOES = {"pi": gravar_pi, "kimi": gravar_kimi, "codex": gravar_codex}
 
 
+# ---------------------------------------------------------------- remoção
+
+def bloco_gerenciado(cfg: Path, nome: str) -> bool:
+    """O TOML tem um bloco NOSSO pra esse provedor? É o que separa o que o app pode apagar do que é
+    do usuário (o `[providers.apikey]` nativo do Kimi, por exemplo)."""
+    try:
+        raw = cfg.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    ini, fim = _sentinelas(nome)
+    i = raw.find(ini)
+    return i >= 0 and raw.find(fim, i) >= 0
+
+
+def _remover_bloco_toml(cfg: Path, nome: str, tabelas: dict[str, list[str]]) -> tuple[bool, str]:
+    """Tira só o nosso bloco; o que outro programa apendou dentro dele fica (mesma regra do gravar)."""
+    if not cfg.exists():
+        return False, "nao-gerenciado"
+    try:
+        raw = cfg.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return False, "config-invalido"
+    ini, fim = _sentinelas(nome)
+    i = raw.find(ini)
+    if i < 0:
+        return False, "nao-gerenciado"
+    j = raw.find(fim, i)
+    if j < 0:
+        return False, "bloco-incompleto"
+    miolo = raw[i:j]
+    if "models" in tabelas:
+        # Os modelos do bloco são `[models."<nome>/<id>"]`; o gravar sabe os ids, aqui só o prefixo.
+        tabelas = {**tabelas, "models": [
+            m.group(1).replace('"', "").strip().removeprefix("models.")
+            for m in map(_TABELA_RE.match, miolo.splitlines())
+            if m and m.group(1).replace('"', "").strip().startswith(f"models.{nome}/")]}
+    alheio = _cauda_alheia(miolo, tabelas)
+    j = raw.find("\n", j)
+    j = len(raw) if j < 0 else j + 1
+    _backup(cfg)
+    _gravar_preservando(cfg, raw[:i] + alheio + raw[j:])
+    return True, str(cfg)
+
+
+def remover_kimi(nome: str, *, home: Path | None = None) -> tuple[bool, str]:
+    d = _kimi_dir(home)
+    if not d.is_dir():
+        return False, "nao-instalado"
+    return _remover_bloco_toml(d / "config.toml", nome, {"providers": [nome], "models": []})
+
+
+def remover_codex(nome: str, *, home: Path | None = None) -> tuple[bool, str]:
+    d = _codex_dir(home)
+    if not d.is_dir():
+        return False, "nao-instalado"
+    return _remover_bloco_toml(d / "config.toml", nome, {"model_providers": [nome]})
+
+
+def remover_pi(nome: str, *, home: Path | None = None) -> tuple[bool, str]:
+    """Só o provedor manual do `models.json`. A entrada do `auth.json` (provedor embutido) fica:
+    ali o nome é o do Pi, compartilhado com o login que a pessoa fez por conta própria."""
+    d = _pi_dir(home)
+    if not d.is_dir():
+        return False, "nao-instalado"
+    cfg = d / "models.json"
+    if not cfg.exists():
+        return False, "nao-gerenciado"
+    try:
+        dados = json.loads(cfg.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        return False, "config-invalido"
+    provedores = dados.get("providers") if isinstance(dados, dict) else None
+    if not isinstance(provedores, dict) or nome not in provedores:
+        return False, "nao-gerenciado"
+    del provedores[nome]
+    _backup(cfg)
+    _gravar_preservando(cfg, json.dumps(dados, indent=2, ensure_ascii=False) + "\n")
+    return True, str(cfg)
+
+
+_REMOVER = {"pi": remover_pi, "kimi": remover_kimi, "codex": remover_codex}
+
+
+def remover(
+    nome: str, alvos: tuple[str, ...] = ALVOS, *, homes: dict[str, Path] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Desfaz o `sincronizar` em cada alvo. Mesma regra: NUNCA levanta, e `nao-gerenciado` não é
+    falha — é o alvo dizendo que nunca recebeu esse provedor (ou que ele é do usuário)."""
+    out: dict[str, dict[str, Any]] = {}
+    for alvo in alvos:
+        fn = _REMOVER.get(alvo)
+        if fn is None:
+            out[alvo] = {"ok": False, "motivo": "alvo-desconhecido"}
+            continue
+        try:
+            ok, motivo = fn(nome, home=(homes or {}).get(alvo))
+        except Exception as e:
+            _log.exception("%s: falha inesperada ao remover %r", alvo, nome)
+            ok, motivo = False, f"erro: {e}"
+        out[alvo] = {"ok": ok, "motivo": motivo}
+    return out
+
+
 def sincronizar(
     nome: str, base_url: str, api_key: str, modelos: list[dict],
     alvos: tuple[str, ...] = ALVOS, *, homes: dict[str, Path] | None = None,

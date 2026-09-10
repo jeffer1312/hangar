@@ -42,6 +42,8 @@ export interface Credencial {
   cota?: CotaResumo | null;
   aceita_cookie?: boolean;
   cookie_definido?: boolean;
+  /** false = chave do próprio agente (o `apikey` do Kimi): o app lista, mas não apaga. */
+  gerenciada?: boolean;
 }
 
 export function credentialAuth(c: Credencial): AuthMethod {
