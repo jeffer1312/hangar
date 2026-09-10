@@ -236,6 +236,9 @@ function createSessionsStore() {
     for (const es of streams.values()) es.close();
     streams.clear();
     slots.clear();
+    // Parar não é sumiço: sem isto, o próximo retain() (o próprio DesktopShell, ao remontar)
+    // veria todo nome "voltar" e subiria a época de todas as sessões — remontando chats vivos.
+    epocas = { vistas: new Set(), sumidas: new Set(), epochs: epocas.epochs };
     recompute();
   }
 

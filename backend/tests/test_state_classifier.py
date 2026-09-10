@@ -695,6 +695,15 @@ def test_menu_codex_junta_opcao_quebrada_pela_largura_do_pane():
                       "CODEX_NON_INTERACTIVE=1 sh'`)", "Skip", "Skip until next version"]
 
 
+def test_menu_codex_nao_confunde_descricao_em_coluna_com_opcao_quebrada():
+    # O picker de /permissions desenha `N. Rotulo   Descricao` e quebra a descricao alinhada a ela,
+    # mais funda que o rotulo. Isso nao e opcao quebrada: o widget continua sendo do detector
+    # dedicado (codex_permissions), e aqui a resposta segue None — a premissa que
+    # terminal_input._recusa_com_menu_do_codex documenta.
+    pane = (Path(__file__).parent / "fixtures" / "pane_codex_permissions.txt").read_text(encoding="utf-8")
+    assert state_mod.menu_codex(pane) is None
+
+
 def test_menu_codex_exige_o_rodape_do_widget():
     # Lista numerada solta na conversa nao e seletor — sem o rodape, nao ha nada na tela pra clicar.
     assert state_mod.menu_codex("passos:\n  1. um\n  2. dois\n") is None

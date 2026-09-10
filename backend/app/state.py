@@ -303,18 +303,23 @@ def menu_codex(pane_text: str) -> Optional[tuple[Optional[str], list[str]]]:
         return None
     opcoes: list[str] = []
     primeira = None
+    coluna = 0
     for i, ln in enumerate(linhas):
         mm = _CODEX_OPT_RE.match(ln)
         if not mm:
             if not opcoes:
                 continue
-            # Opcao longa quebra em varias linhas num pane estreito: a continuacao vem indentada
-            # e sem numero. Ela e parte da opcao; o rodape, ou uma linha vazia, fecha o bloco.
+            # Opcao longa quebra em varias linhas num pane estreito: a continuacao vem sem numero
+            # e NA MESMA COLUNA em que o texto da opcao comeca. Linha mais funda e descricao
+            # (o picker de /permissions desenha `N. Rotulo   Descricao` em duas colunas e quebra
+            # a descricao alinhada a ela) — essa nao e opcao, e o bloco fecha como antes.
             texto = ln.strip()
-            if texto and ln[:1].isspace() and not any(r in texto.lower() for r in _CODEX_RODAPES):
+            if texto and len(ln) - len(ln.lstrip()) == coluna \
+                    and not any(r in texto.lower() for r in _CODEX_RODAPES):
                 opcoes[-1] = f"{opcoes[-1]} {texto}"
                 continue
             break          # bloco contiguo: a primeira linha fora do padrao fecha o menu
+        coluna = mm.start(2)
         if int(mm.group(1)) != len(opcoes) + 1:
             return None        # numeracao fora de ordem: nao e o widget
         if primeira is None:
