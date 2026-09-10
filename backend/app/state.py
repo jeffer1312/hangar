@@ -693,9 +693,13 @@ class StateMonitor:
             # e so ai vale pagar o has-session pra separar "morreu" de "pane em branco". No psmux
             # cada comando custa ~50ms (medido na VM), e isto roda a 0,75s por chat aberto.
             pane = await asyncio.to_thread(tmux.capture_pane, self.name)
-            if not pane and not await asyncio.to_thread(tmux.has_session, self.name):
-                yield StateEvent(session=self.name, state="dead")
-                return
+            if not pane:
+                # None = tmux nao respondeu: nao e morte (o watcher do Codex ja matou app-servers
+                # vivos lendo timeout como sessao sumida); espera o proximo tick.
+                existe = await asyncio.to_thread(tmux.sessao_existe, self.name)
+                if existe is False:
+                    yield StateEvent(session=self.name, state="dead")
+                    return
             if self.observe_permission:
                 from app.permission_mode import observar_ou_confirmado, parse_permission_mode
                 permission_key = self.sid_get() or self.name

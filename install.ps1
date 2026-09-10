@@ -2375,10 +2375,14 @@ if ($vivo -and -not $Update) {
     if (Test-Path $electronExe) {
         try {
             $env:COCKPIT_URL = $abrir
-            Start-Process -FilePath $electronExe -ArgumentList 'main.cjs' -WorkingDirectory "$raiz\shell" | Out-Null
+            $procApp = Start-Process -FilePath $electronExe -ArgumentList 'main.cjs' -WorkingDirectory "$raiz\shell" -PassThru
             Remove-Item Env:COCKPIT_URL -ErrorAction SilentlyContinue
-            $abriuApp = $true
-            Retoma-Log; Ok "abri o app Hangar (ja autenticado em $base)"
+            # Lancar nao prova que abriu: um crash na largada (node_modules quebrado) sai depois.
+            Start-Sleep 2
+            if ($procApp -and -not $procApp.HasExited) {
+                $abriuApp = $true
+                Retoma-Log; Ok "abri o app Hangar (ja autenticado em $base)"
+            } else { Nota 'o app Hangar fechou logo ao abrir; abrindo no navegador' }
         } catch { Remove-Item Env:COCKPIT_URL -ErrorAction SilentlyContinue; Nota "nao consegui abrir o app: $($_.Exception.Message)" }
     }
     if (-not $abriuApp) {
