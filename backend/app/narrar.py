@@ -155,7 +155,7 @@ def _via_claude(system: str, prompt: str, timeout: int, motivo: str) -> str:
 
 
 def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int,
-                perfil: str = "padrao") -> str:
+                perfil: str = "padrao", plano_b: bool = True) -> str:
     """Chat completions no formato da OpenAI. Compartilhada pela narracao guiada e pela limpeza do
     ditado — o que muda entre elas e so o prompt, a temperatura e o timeout.
 
@@ -207,6 +207,13 @@ def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int,
             "User-Agent": "hangar/1.0",
         },
     )
+    def falhou(motivo: str) -> str:
+        # plano_b=False: quem chama em rajada (traducao do pensamento, dezenas por tela) nao pode
+        # subir um `claude -p` por falha — e o que saturou o backend com o provedor em 500.
+        if not plano_b:
+            raise NarrarError(502, motivo)
+        return _via_claude(system, prompt, timeout, motivo)
+
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             dados = json.loads(resp.read().decode("utf-8", "replace"))
@@ -215,20 +222,20 @@ def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int,
             detalhe = e.read().decode("utf-8", "replace")[:300]
         except (OSError, http.client.HTTPException):
             detalhe = "(sem corpo)"
-        return _via_claude(system, prompt, timeout, f"provedor {e.code}: {detalhe}")
+        return falhou(f"provedor {e.code}: {detalhe}")
     except (OSError, http.client.HTTPException) as e:
-        return _via_claude(system, prompt, timeout, f"falha ao contatar o provedor: {e}")
+        return falhou(f"falha ao contatar o provedor: {e}")
     except json.JSONDecodeError:
-        return _via_claude(system, prompt, timeout, "resposta do provedor nao e JSON valido")
+        return falhou("resposta do provedor nao e JSON valido")
     try:
         # AttributeError entra na lista porque `content` pode vir None (modelo so devolveu
         # tool_calls, ou foi filtrado) ou uma lista de partes (formato de varios proxies
         # compativeis) — dois payloads reais que nao tem `.strip()`.
         texto_tratado = dados["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError, TypeError, AttributeError):
-        return _via_claude(system, prompt, timeout, "resposta do provedor sem o texto esperado")
+        return falhou("resposta do provedor sem o texto esperado")
     if not texto_tratado:
-        return _via_claude(system, prompt, timeout, "provedor devolveu texto vazio")
+        return falhou("provedor devolveu texto vazio")
     return texto_tratado
 
 

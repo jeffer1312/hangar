@@ -23,7 +23,10 @@ _COMPLETED = "externalAgentConfig/import/completed"
 
 
 class CodexNativoErro(RuntimeError):
-    """Falha do processo ou do protocolo nativo, sem expor configurações sensíveis."""
+    """Falha do processo ou do protocolo nativo, sem expor configurações sensíveis.
+
+    `data` pode carregar a cauda do stderr (URL com token, por exemplo): é pra decisão interna,
+    nunca pra resposta HTTP ou tela."""
 
     def __init__(self, message: str, *, code: int | None = None, data: dict | None = None) -> None:
         super().__init__(message)
@@ -325,7 +328,10 @@ class CodexNativo:
                 raise CodexNativoErro("O comando do Codex excedeu o tempo limite.") from None
             if proc.returncode:
                 self._diagnostico_cli(args, proc.returncode, stdout, stderr)
-                raise CodexNativoErro(f"O comando do Codex falhou (código {proc.returncode}).")
+                # A cauda vai só em `data`, pra decisão interna (auto-upgrade em curso); nunca no log.
+                cauda = stderr.decode(errors="replace")[-500:].strip()
+                raise CodexNativoErro(f"O comando do Codex falhou (código {proc.returncode}).",
+                                      data={"stderr": cauda})
             try:
                 result = json.loads(stdout)
             except (ValueError, UnicodeError):
@@ -358,4 +364,11 @@ class CodexNativo:
         return marketplaces
 
     async def atualizar_marketplace(self, nome: str) -> dict:
-        return await self.cli(["plugin", "marketplace", "upgrade", nome, "--json"])
+        try:
+            return await self.cli(["plugin", "marketplace", "upgrade", nome, "--json"])
+        except CodexNativoErro as exc:
+            # O próprio Codex já está atualizando esse marketplace (auto-upgrade ao abrir sessão):
+            # o trabalho vai ser feito por ele, não é falha a retentar nem a pintar de vermelho.
+            if "auto-upgrade was in flight" in (exc.data or {}).get("stderr", ""):
+                return {"selectedMarketplaces": [nome], "upgradedRoots": [], "errors": []}
+            raise

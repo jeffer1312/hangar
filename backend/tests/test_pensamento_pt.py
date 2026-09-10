@@ -8,8 +8,43 @@ from app.narrar import NarrarError
 @pytest.fixture(autouse=True)
 def _limpa_cache():
     pensamento_pt._cache.clear()
+    pensamento_pt._pausado_ate = 0.0
     yield
     pensamento_pt._cache.clear()
+    pensamento_pt._pausado_ate = 0.0
+
+
+def test_falha_pausa_o_provedor_e_nao_usa_o_plano_b(monkeypatch):
+    # Com o provedor em 500, cada bloco visivel disparava chamadas de 12s + um `claude -p` por
+    # falha, em paralelo, e o backend inteiro engasgava (lista estourando 4s, chat abrindo em 8s).
+    chamadas = []
+    def explode(*a, **k):
+        chamadas.append(k.get("plano_b"))
+        raise NarrarError(502, "provedor 500")
+    monkeypatch.setattr(pensamento_pt, "chamar_chat", explode)
+    assert pensamento_pt.traduzir("one") == "one"
+    assert pensamento_pt.traduzir("two") == "two"     # em pausa: nem chama o provedor
+    assert chamadas == [False]
+    pensamento_pt._pausado_ate = 0.0
+    assert pensamento_pt.traduzir("three") == "three"
+    assert chamadas == [False, False]
+
+
+def test_sem_vaga_devolve_o_original_mas_o_cache_ainda_responde(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(pensamento_pt, "chamar_chat", lambda *a, **k: chamadas.append(1) or "pt")
+    assert pensamento_pt.traduzir("ja") == "pt"        # entra no cache
+    # As duas vagas ocupadas: quem precisa do provedor nao espera na fila, devolve como veio;
+    # o que ja esta no cache responde igual (a vaga so vale pra chamada ao provedor).
+    assert pensamento_pt._vagas.acquire(blocking=False)
+    assert pensamento_pt._vagas.acquire(blocking=False)
+    try:
+        assert pensamento_pt.traduzir_varios(["a", "ja"]) == ["a", "pt"]
+        assert chamadas == [1]
+    finally:
+        pensamento_pt._vagas.release()
+        pensamento_pt._vagas.release()
+    assert pensamento_pt.traduzir_varios(["a"]) == ["pt"]
 
 
 def test_falha_do_provedor_devolve_o_original(monkeypatch):

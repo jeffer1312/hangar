@@ -258,7 +258,7 @@ it('Claude redescobre no fim de cada turno e ancora o cartão no plano novo', as
   expect(document.body.textContent).not.toContain('Resposta anterior.Plano');
 });
 
-it('Claude mantém o cartão visível sem âncora e quando a âncora sai da janela', async () => {
+it('Claude não mostra cartão sem âncora ou fora da janela da conversa', async () => {
   harness.provider = 'claude';
   const history = Array.from({ length: 121 }, (_, i) => ({
     id: i === 0 ? 'a-plan-old' : `a-${i}`,
@@ -273,7 +273,7 @@ it('Claude mantém o cartão visível sem âncora e quando a âncora sai da jane
 
   await montarClaude();
 
-  expect(document.querySelectorAll('.plan-preview')).toHaveLength(1);
+  expect(document.querySelectorAll('.plan-preview')).toHaveLength(0);
   expect(api.getSessionPlanPreview).toHaveBeenCalledWith('codex-flow', false);
 
   vi.mocked(api.getSessionPlanPreview).mockResolvedValueOnce({
@@ -282,5 +282,30 @@ it('Claude mantém o cartão visível sem âncora e quando a âncora sai da jane
   await emit('state', { session: 'codex-flow', state: 'working' });
   await emit('state', { session: 'codex-flow', state: 'idle' });
 
-  expect(document.querySelectorAll('.plan-preview')).toHaveLength(1);
+  expect(document.querySelectorAll('.plan-preview')).toHaveLength(0);
+});
+
+it('Claude não anuncia plano enquanto a descoberta está em andamento', async () => {
+  harness.provider = 'claude';
+  let resolve!: (value: null) => void;
+  vi.mocked(api.getSessionPlanPreview).mockReturnValueOnce(new Promise(r => { resolve = r; }));
+  await montarClaude();
+  expect(document.querySelector('.plan-preview')).toBeNull();
+  resolve(null); await flush();
+  expect(document.querySelector('.plan-preview')).toBeNull();
+});
+
+it('Claude retira a proposta quando a resposta humana chega, sem esperar outro turno terminar', async () => {
+  harness.provider = 'claude';
+  vi.mocked(api.getHistory).mockResolvedValueOnce([
+    { id: 'proposta', kind: 'assistant_msg', text: 'Plano para conferir.' },
+  ]);
+  vi.mocked(api.getSessionPlanPreview).mockResolvedValueOnce({
+    name: 'plano', path: '/p/plano.md', anchor_id: 'proposta',
+  } as unknown as Awaited<ReturnType<typeof api.getSessionPlanPreview>>);
+  await montarClaude();
+  await emit('message', { id: 'proposta', kind: 'assistant_msg', text: 'Plano para conferir.' });
+  expect(document.querySelector('.plan-preview')).not.toBeNull();
+  await emit('message', { id: 'aceite', kind: 'user_msg', text: 'Pode implementar.' });
+  expect(document.querySelector('.plan-preview')).toBeNull();
 });

@@ -31,6 +31,25 @@ def test_account_creation_is_isolated(isolated_home):
     assert [a.id for a in accounts.list_accounts()] == ["default", "work"]
 
 
+def test_delete_removes_managed_account_only(isolated_home):
+    work = accounts.create_account("work")
+    (work.home / "auth.json").write_text("x")
+    alheia = isolated_home / ".codex-alheia"
+    alheia.mkdir()
+
+    accounts.delete_account(work)
+    assert not work.home.exists()
+
+    with pytest.raises(accounts.AccountError) as padrao:
+        accounts.delete_account(accounts.resolve_account("default"))
+    assert padrao.value.code == "codex_account_default_protected"
+
+    with pytest.raises(accounts.AccountError) as sem_marcador:
+        accounts.delete_account(accounts.Account("alheia", alheia, False))
+    assert sem_marcador.value.code == "codex_account_invalid_marker"
+    assert alheia.exists()
+
+
 @pytest.mark.parametrize("name", ["default", "../other", "a/b", "a\n", "", "a" * 33])
 def test_invalid_account_names_are_rejected(isolated_home, name):
     with pytest.raises(accounts.AccountError) as error:

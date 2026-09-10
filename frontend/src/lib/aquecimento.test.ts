@@ -33,8 +33,15 @@ describe('aquecimento', () => {
   it('segura enquanto o histórico não chega e solta quando ele chega', async () => {
     segurarAquecimento(A);
     expect(await liberado(A)).toBe(false);
+    // Escalonado: acorda depois da folga inicial, um por vez — não no mesmo instante do histórico.
+    let ok = false;
+    void aoAquecer(A).then(() => { ok = true; });
     soltarAquecimento(A);
-    expect(await liberado(A)).toBe(true);
+    // O `liberado` acima já era o 1º da fila; este é o 2º: folga inicial + um espaço.
+    await vi.advanceTimersByTimeAsync(700 + 300 - 1);
+    expect(ok).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ok).toBe(true);
   });
 
   it('soltar duas vezes não quebra, e quem esperava só é acordado uma vez', async () => {
@@ -43,7 +50,7 @@ describe('aquecimento', () => {
     void aoAquecer(A).then(() => { acordou += 1; });
     soltarAquecimento(A);
     soltarAquecimento(A);
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(2000);
     expect(acordou).toBe(1);
   });
 
@@ -52,13 +59,33 @@ describe('aquecimento', () => {
     // pra sempre, e uma trava calada é pior que a disputa que este módulo veio resolver.
     segurarAquecimento(A);
     expect(await liberado(A)).toBe(false);
-    await vi.advanceTimersByTimeAsync(6000);
+    await vi.advanceTimersByTimeAsync(6000 + 1000);
+    expect(await liberado(A)).toBe(true);
+  });
+
+  it('os esperadores saem um por vez, com folga, na ordem de chegada', async () => {
+    segurarAquecimento(A);
+    const ordem: number[] = [];
+    void aoAquecer(A).then(() => ordem.push(1));
+    void aoAquecer(A).then(() => ordem.push(2));
+    void aoAquecer(A).then(() => ordem.push(3));
+    soltarAquecimento(A);
+    await vi.advanceTimersByTimeAsync(699);
+    expect(ordem).toEqual([]);                 // folga pro SSE e o 1º estado passarem antes
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ordem).toEqual([1]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(ordem).toEqual([1, 2]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(ordem).toEqual([1, 2, 3]);
+    await vi.advanceTimersByTimeAsync(300);    // fila esvaziou: portão sumiu, chat já carregado
     expect(await liberado(A)).toBe(true);
   });
 
   it('sessão nova segura de novo depois de uma solta', async () => {
     segurarAquecimento(A);
     soltarAquecimento(A);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(await liberado(A)).toBe(true);
     segurarAquecimento(A);
     expect(await liberado(A)).toBe(false);
@@ -79,6 +106,7 @@ describe('aquecimento', () => {
     segurarAquecimento(A);
     segurarAquecimento(B);
     soltarAquecimento(A);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(await liberado(A)).toBe(true);
     expect(await liberado(B)).toBe(false);   // B esperava o próprio histórico, não o de A
   });
@@ -89,7 +117,7 @@ describe('aquecimento', () => {
     segurarAquecimento(A);
     await vi.advanceTimersByTimeAsync(3000);
     segurarAquecimento(B);
-    await vi.advanceTimersByTimeAsync(3100);
+    await vi.advanceTimersByTimeAsync(3100 + 1000);
     expect(await liberado(A)).toBe(true);
     expect(await liberado(B)).toBe(false);   // B abriu depois: o teto dele ainda não venceu
   });

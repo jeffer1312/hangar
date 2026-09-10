@@ -12,7 +12,7 @@
   // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
   // existe assim que a pessoa renomear a primeira.
   import { onDestroy, untrack } from 'svelte';
-import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
+import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
@@ -314,9 +314,14 @@ import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeo
     aviso = '';
     avisoErro = false;
     try {
-      if (conta.tipo === 'chave') {
+      if (conta.id.startsWith('kimi:')) {
+        await apagarProvedorKimi(apiTarget, conta.id.slice('kimi:'.length));
+      } else if (conta.tipo === 'chave') {
         if (apiTarget) await deleteEngineForServer(apiTarget, idDisco);
         else await deleteEngine(idDisco);
+      } else if (conta.tipo === 'codex') {
+        if (!codexServer || !conta.codex_account) throw new Error(m.falha_conexao());
+        await deleteCodexAccountForServer(codexServer, conta.codex_account);
       } else {
         await apagarConta(apiTarget, idDisco);
       }
@@ -572,6 +577,7 @@ import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeo
         {@const marcas = [
           ...(conta.usos.includes('claude_code') ? [m.contas_usa_claude_code()] : []),
           ...(conta.cookie_definido ? [m.contas_cookie_definido()] : []),
+          ...(conta.gerenciada === false ? [m.contas_chave_do_agente()] : []),
         ]}
         <!-- Só o NOME NO DISCO, não o caminho inteiro: o prefixo (/home/jefferson/) é igual em
              todas e a elipse cortava justamente o final — que é o que distingue uma conta da
@@ -711,6 +717,11 @@ import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeo
             {#if conta.tipo === 'codex' && conta.codex_account && credentialAuth(conta) === 'none'}
               <button type="button" class="ct-acao primaria" onclick={() => codexLogin = conta.codex_account ?? null}>{m.contas_entrar()}</button>
             {/if}
+            <!-- Só a conta adicional (~/.codex-<nome>) sai; a padrão é o ~/.codex da máquina. -->
+            {#if conta.tipo === 'codex' && conta.codex_account && !conta.ativa}
+              <button type="button" class="ct-acao"
+                onclick={() => { menuDe = null; confirmando = conta.id; }}>{m.lista_remover()}</button>
+            {/if}
             {#if conta.tipo === 'claude' && conta.login?.estado === 'ok' && !conta.login.loggedIn}
               <button type="button" class="ct-acao primaria"
                 aria-label={m.contas_entrar_titulo({ nome: conta.nome })}
@@ -729,7 +740,7 @@ import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeo
                 onclick={() => { menuDe = null; confirmando = conta.id; }}>{m.lista_remover()}</button>
             {/if}
 
-            {#if conta.tipo !== 'codex'}
+            {#if conta.tipo !== 'codex' && (conta.gerenciada !== false || conta.aceita_cookie)}
             <button type="button" class="ct-kebab" aria-haspopup="true" aria-expanded={menuDe === conta.id}
               aria-label={m.comum_fechar_menu_conta()} onclick={() => (menuDe = menuDe === conta.id ? null : conta.id)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -794,8 +805,10 @@ import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeo
                     >{m.contas_cookie_apagar()}</button>
                 {/if}
               {/if}
-              <button type="button" class="ct-menu-item"
-                onclick={() => { menuDe = null; confirmando = conta.id; }}>{m.comum_apagar()}</button>
+              {#if conta.gerenciada !== false}
+                <button type="button" class="ct-menu-item"
+                  onclick={() => { menuDe = null; confirmando = conta.id; }}>{m.comum_apagar()}</button>
+              {/if}
             </div>
           {/if}
 

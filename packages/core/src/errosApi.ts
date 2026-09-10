@@ -68,6 +68,8 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   codex_account_auth_storage_invalid: () => m.codex_account_auth_storage_invalid(),
   codex_account_creation_in_progress: () => m.codex_account_creation_in_progress(),
   codex_account_in_use: () => m.codex_account_in_use(),
+  codex_account_default_protected: () => m.codex_account_default_protected(),
+  codex_account_delete_failed: () => m.codex_account_delete_failed(),
   codex_account_login_in_progress: () => m.codex_account_login_in_progress(),
   codex_account_prepare_required: () => m.codex_account_prepare_required(),
   codex_account_preparing: () => m.codex_account_preparing(),
@@ -144,6 +146,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 
   // /api/engines — motor nao existe, nome misturado com dados, ou faltando
   erro_motor_nao_encontrado: () => m.erro_motor_nao_encontrado(),
+  erro_credencial_nao_gerenciada: () => m.erro_credencial_nao_gerenciada(),
   erro_motor_nome_com_dados: () => m.erro_motor_nome_com_dados(),
   erro_motor_nome_ou_dados: () => m.erro_motor_nome_ou_dados(),
 

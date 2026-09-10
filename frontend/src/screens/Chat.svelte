@@ -26,6 +26,7 @@
   import { prefetchOrq, lerCaudaChat, guardarCaudaChat } from '../lib/queries';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { aoAquecer, segurarAquecimento, soltarAquecimento } from '../lib/aquecimento';
+  import { capacidades } from '../lib/capacidades.svelte';
   // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
   // dentro. Só o render é recursivo — o modal só existe com `peerChat` preenchido, e ele nunca
   // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
@@ -503,7 +504,9 @@
     if (!planPanelVisible) return;   // plano existe, mas nada o mostra agora: não busca à toa
     planLoading = true;
     planError = false;
-    getPlan(sessionName)
+    // Painel docado no desktop: este GET (105 KB de markdown) saía junto do histórico. Espera a
+    // conversa pintar, como os outros aquecimentos.
+    aoAquecer(sessionName).then(() => getPlan(sessionName))
       .then((d) => {
         if (planKey !== key) return;   // chegou tarde: já tem fetch mais novo no ar, descarta
         planDetail = d;
@@ -804,6 +807,14 @@
     claudePlanLastRetry = retry;
     const first = previous === null;
     const concluded = previous === 'working' && (state === 'idle' || state === 'awaiting_input');
+    const answered = previous === 'awaiting_input' && state === 'working';
+    if (answered) {
+      claudePlanGeneration++;
+      claudePlanDiscovery = null;
+      claudePlanDiscoveryLoading = false;
+      claudePlanDiscoveryError = '';
+      return;
+    }
     if (!first && !concluded && !retryChanged) return;
     const request = ++claudePlanGeneration;
     claudePlanDiscoveryLoading = true;
@@ -824,7 +835,14 @@
   const planAnchorId = $derived.by(() => {
     if (sessionProvider === 'codex') return codexPlanEvent?.id ?? null;
     if (sessionProvider !== 'claude') return null;
-    return claudePlanDiscovery?.anchor_id ?? null;
+    const id = claudePlanDiscovery?.anchor_id;
+    if (!id) return null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
+      if (event.kind === 'user_msg' && !event.id.startsWith('queued-')) return null;
+      if (event.id === id) return id;
+    }
+    return null;
   });
   const planControls = $derived((sessionProvider === 'claude' || planAnchorId) ? {
     eventId: planAnchorId,
@@ -835,7 +853,7 @@
     codexPlan,
     disabled: currentState !== 'idle' || pending.length > 0,
     onImplement: implementCodexPlan,
-    discovery: sessionProvider === 'claude' ? claudePlanDiscovery : undefined,
+    discovery: sessionProvider === 'claude' ? (planAnchorId ? claudePlanDiscovery : null) : undefined,
     discoveryLoading: sessionProvider === 'claude' ? claudePlanDiscoveryLoading : false,
     discoveryError: sessionProvider === 'claude' ? claudePlanDiscoveryError : '',
     onRetryDiscovery: sessionProvider === 'claude' ? () => { claudePlanDiscoveryRetry++; } : undefined,
@@ -921,7 +939,12 @@
     if (desktop) return;
     let vivo = true;
     getConfig()
-      .then((c) => { if (vivo) terminalCapazMobile = c.somente_leitura.terminal_panel !== false; })
+      .then((c) => {
+        if (!vivo) return;
+        terminalCapazMobile = c.somente_leitura.terminal_panel !== false;
+        // Sem provedor de LLM com chave, o bloco de pensamento nem pede tradução.
+        capacidades.traducaoPensamento = c.somente_leitura.traducao_pensamento !== false;
+      })
       .catch(() => {});
     return () => { vivo = false; };
   });

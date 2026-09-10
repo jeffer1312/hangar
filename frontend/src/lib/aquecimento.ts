@@ -28,9 +28,33 @@ interface Portao {
   vez: Promise<void>;
   liberar: () => void;
   relogio: ReturnType<typeof setTimeout> | null;
+  // Quem espera a vez, na ordem de chegada. Soltar o portão NÃO acorda todos de uma vez: o
+  // histórico chegando disparava os onze aquecimentos no mesmo instante, e eles disputavam com
+  // o SSE (o 1º evento de estado levava ~600ms atrás deles, medido 10/09/2026 no Windows, onde
+  // cada um custa 200–600ms de backend). Saem um por vez, com folga entre eles.
+  fila: Array<() => void>;
+  aberto: boolean;
+  drenando: ReturnType<typeof setTimeout> | null;
 }
 
 const portoes = new Map<string, Portao>();
+
+// Depois do histórico: folga pro SSE abrir e o 1º estado chegar antes do 1º aquecimento, e o
+// espaço entre um aquecimento e o seguinte.
+const ATRASO_INICIAL_MS = 700;
+const ESPACO_MS = 300;
+
+function drenar(sessao: string, p: Portao): void {
+  p.drenando = null;
+  const proximo = p.fila.shift();
+  if (proximo) {
+    proximo();
+    p.drenando = setTimeout(() => drenar(sessao, p), ESPACO_MS);
+    return;
+  }
+  // Fila vazia: portão some, e quem chegar depois corre na hora (chat já carregado).
+  if (portoes.get(sessao) === p) portoes.delete(sessao);
+}
 
 // Teto de segurança. Um histórico que nunca resolve (erro de rede, sessão Kimi antes do 1º
 // prompt) não pode deixar o aquecimento preso pra sempre — o popover abriria em "Carregando…"
@@ -41,7 +65,7 @@ const TETO_MS = 6000;
 export function segurarAquecimento(sessao: string): void {
   // Mesma sessão remontando ({#key} na troca de aba): o portão anterior dela sai do caminho, senão
   // quem ficou esperando nele nunca mais é acordado — o `Chat` que o soltaria já morreu.
-  soltarAquecimento(sessao);
+  soltarAquecimento(sessao, true);
   let liberar: () => void = () => {};
   const vez = new Promise<void>((resolve) => { liberar = resolve; });
   const relogio = setTimeout(() => {
@@ -50,20 +74,32 @@ export function segurarAquecimento(sessao: string): void {
     console.warn(`[hangar] histórico de "${sessao}" não chegou em ${TETO_MS}ms; soltando o aquecimento`);
     soltarAquecimento(sessao);
   }, TETO_MS);
-  portoes.set(sessao, { vez, liberar, relogio });
+  portoes.set(sessao, { vez, liberar, relogio, fila: [], aberto: false, drenando: null });
 }
 
-/** Chat: histórico na tela (ou desistiu dele). Pode aquecer. Idempotente. */
-export function soltarAquecimento(sessao: string): void {
+/** Chat: histórico na tela (ou desistiu dele). Pode aquecer. Idempotente.
+ *  Quem espera sai um por vez (ver `drenar`); `imediato` acorda todos de uma vez — é o caso do
+ *  portão substituído por uma remontagem, cujos esperadores pertencem a um Chat que já morreu. */
+export function soltarAquecimento(sessao: string, imediato = false): void {
   const p = portoes.get(sessao);
   if (!p) return;
-  if (p.relogio) clearTimeout(p.relogio);
-  portoes.delete(sessao);
+  if (p.relogio) { clearTimeout(p.relogio); p.relogio = null; }
+  if (p.aberto && !imediato) return;
+  p.aberto = true;
   p.liberar();
+  if (imediato) {
+    if (p.drenando) clearTimeout(p.drenando);
+    portoes.delete(sessao);
+    for (const acorda of p.fila.splice(0)) acorda();
+    return;
+  }
+  if (!p.drenando) p.drenando = setTimeout(() => drenar(sessao, p), ATRASO_INICIAL_MS);
 }
 
 /** Quem aquece espera aqui antes de tocar no backend. Sessão sem portão (Quadro, Canvas, chat já
- *  carregado) não espera nada. */
+ *  carregado) não espera nada; com portão, espera a vez na fila. */
 export function aoAquecer(sessao: string): Promise<void> {
-  return portoes.get(sessao)?.vez ?? Promise.resolve();
+  const p = portoes.get(sessao);
+  if (!p) return Promise.resolve();
+  return new Promise<void>((resolve) => { p.fila.push(resolve); });
 }

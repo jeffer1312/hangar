@@ -283,6 +283,48 @@ def _chaves_de_commit(text: str) -> set[str]:
     return out
 
 
+def fila_interna_pendente(jsonl: str, provider: str = "claude") -> set[str]:
+    """Textos que o Claude Code ENFILEIROU (`queue-operation`/enqueue) e ainda nao consumiu.
+
+    Entre o enqueue e o dequeue/remove a mensagem existe so na fila interna da TUI: o
+    `committed_user_lines` a conta como aterrissada (pra nao redigitar), e o parser nao a
+    renderiza (pra nao duplicar com o dequeue) — ou seja, ela sumia da tela ao recarregar. O
+    reconcile usa isto pra deixar a entrada entregue-e-nao-confirmada (bolha da fila visivel)
+    ate o consumo aparecer no transcript. Falha de leitura vira set vazio: aqui "nao sei" so
+    deixa de SEGURAR a confirmacao, nunca redigita nem esconde nada por si.
+    """
+    if provider != "claude":
+        return set()
+    pendente: dict[str, int] = {}
+    try:
+        with open(jsonl, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if obj.get("type") != "queue-operation" or not isinstance(obj.get("content"), str):
+                    continue
+                c = obj["content"].strip()
+                if obj.get("operation") == "enqueue":
+                    pendente[c] = pendente.get(c, 0) + 1
+                elif c in pendente:
+                    pendente[c] -= 1
+                    if pendente[c] <= 0:
+                        del pendente[c]
+    except OSError:
+        return set()
+    out: set[str] = set()
+    for t in pendente:
+        base = _IMG_PREFIX.sub("", t)
+        for variant in (t, base, _strip_attach(t), _strip_attach(base)):
+            variant = variant.strip()
+            if variant:
+                out.add(variant)
+                out.update(ln.strip() for ln in variant.split("\n"))
+    return out
+
+
 def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str] | None:
     """Textos que ATERRISSARAM no transcript (inteiros + por linha), pra confirmar entregas.
 
@@ -540,7 +582,8 @@ class PromptQueue:
 
     def reconcile_delivered(self, committed: set[str], min_ts: float, now: float,
                             grace: float = 8.0, max_attempts: int = 2,
-                            confirm_only: bool = False) -> list[dict]:
+                            confirm_only: bool = False,
+                            na_fila_tui: set[str] | frozenset[str] = frozenset()) -> list[dict]:
         """Confirma entregas contra o transcript ou RE-ENFILEIRA as engolidas. delivered=True quer
         dizer 'send_keys chamado', nao 'Claude recebeu' — a TUI pode engolir as teclas (redraw) e a
         msg sumia com cara de entregue. Entrada delivered, nao-confirmada, da sessao atual e mais
@@ -611,6 +654,10 @@ class PromptQueue:
                 # podado deixava msg com anexo orfa -> requeue indevido.
                 text_raw = str(r.get("text") or "").strip()
                 lines = _linhas_da_entrada(r)
+                if lines & na_fila_tui:
+                    # Entregue e AINDA na fila interna da TUI: nao confirma (a bolha real so nasce
+                    # no consumo) nem redigita/desiste (chegou). Fica visivel como bolha da fila.
+                    continue
                 cons = _casam(lines, disponiveis, reservadas, dono)
                 if not text_raw or cons:
                     disponiveis -= cons            # as linhas casadas confirmam UMA entrada so

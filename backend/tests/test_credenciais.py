@@ -111,6 +111,16 @@ def test_credencial_que_so_a_cota_conhece_aparece_na_lista(casa, monkeypatch):
     linhas = credenciais.listar()
     assert [(c.id, c.tipo, c.usos) for c in linhas] == [("kimi:apikey", "chave", ["kimi_cli"])]
     assert linhas[0].nome_natural == "apikey"
+    # provedor nativo do Kimi: o app lista, mas não é dele pra apagar
+    assert linhas[0].gerenciada is False
+
+
+def test_bloco_orfao_do_app_no_kimi_e_gerenciado(casa, monkeypatch):
+    from app import agentes_sync
+    monkeypatch.setattr(agentes_sync, "bloco_gerenciado", lambda cfg, nome: nome == "orfao")
+    _monta(monkeypatch, cotas_lista=[_cota("kimi:orfao", 5.0, label="orfao"),
+                                     _cota("kimi:apikey", 5.0, label="apikey")])
+    assert {c.id: c.gerenciada for c in credenciais.listar()} == {"kimi:orfao": True, "kimi:apikey": False}
 
 
 @pytest.mark.parametrize("method,status", [("oauth", "connected"), ("api_key", "connected"),

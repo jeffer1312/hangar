@@ -278,6 +278,37 @@ def test_committed_lines_include_queue_ops_and_raw_meta(tmp_path):
     assert "na fila interna" in lines
 
 
+def test_enfileirada_na_tui_fica_visivel_ate_ser_consumida(tmp_path):
+    # Entre o enqueue e o consumo a msg so existe na fila interna do Claude Code: o oraculo a conta
+    # como aterrissada (nao redigita) e o parser nao a renderiza (nao duplica com o dequeue). Sem
+    # segurar a confirmacao ela sumia da tela ao recarregar o chat (medido 10/09/2026).
+    import json
+    j = tmp_path / "t.jsonl"
+    enq = json.dumps({"type": "queue-operation", "operation": "enqueue", "content": "na fila",
+                      "timestamp": "2026-09-10T13:57:51.181Z"})
+    j.write_text(enq + "\n", encoding="utf-8")
+    q = PromptQueue("s")
+    # ts da entrada DEPOIS do inicio do transcript (a poda de sessao anterior usa o relogio da linha).
+    q.path.write_text(json.dumps({"id": "a1", "text": "na fila", "ts": 1789048672.0, "delivered": True}) + "\n",
+                      encoding="utf-8")
+    na_fila = pqueue.fila_interna_pendente(str(j))
+    assert "na fila" in na_fila
+    committed = pqueue.committed_user_lines(str(j))
+    assert q.reconcile_delivered(committed, min_ts=100.0, now=1789048700.0, na_fila_tui=na_fila) == []
+    row = q.load()[0]
+    assert row["delivered"] is True and not row.get("confirmed") and not row.get("desistiu")
+    assert any(e.id == "queued-a1" for e in pqueue.merged_history("s", str(j)))
+
+    # Consumida no meio do turno (`remove`): sai da fila interna e a confirmacao volta a valer.
+    rem = json.dumps({"type": "queue-operation", "operation": "remove", "content": "na fila",
+                      "reason": "absorbed_mid_turn", "timestamp": "2026-09-10T13:59:44.307Z"})
+    j.write_text(enq + "\n" + rem + "\n", encoding="utf-8")
+    assert pqueue.fila_interna_pendente(str(j)) == set()
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1789048800.0,
+                          na_fila_tui=pqueue.fila_interna_pendente(str(j)))
+    assert q.load()[0]["confirmed"] is True
+
+
 def test_merged_history_skips_confirmed_entries(tmp_path):
     # Entrada CONFIRMADA (texto comprovado no transcript pelo reconcile) nao vira bolha nunca mais
     # — nem no history nem no follow (mesmo flag) — mesmo que o dedup por texto nao a alcance.

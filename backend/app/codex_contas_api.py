@@ -49,6 +49,9 @@ def _account_error(exc: accounts.AccountError) -> HTTPException:
         "codex_account_prepare_required": "prepare a conta Codex antes do login",
         "codex_account_auth_storage_invalid": "a conta Codex precisa usar armazenamento em arquivo",
         "codex_login_attempt_mismatch": "a tentativa de login já mudou",
+        "codex_account_default_protected": "a conta padrão do Codex não pode ser apagada",
+        "codex_account_invalid_marker": "conta Codex inválida",
+        "codex_account_delete_failed": "não foi possível apagar a conta Codex",
     }
     return HTTPException(exc.status, detail=erro(exc.code, messages.get(exc.code, "operação de conta Codex recusada"),
                                                   **exc.params))
@@ -65,6 +68,17 @@ async def create_codex_account(body: CreateAccountBody, request: Request) -> dic
         return await _service(request).create_account(body.name)
     except accounts.AccountError as exc:
         raise _account_error(exc) from None
+
+
+@codex_contas_router.delete("/{account_id}", dependencies=[Depends(require_auth)])
+async def delete_codex_account(account_id: str, request: Request) -> dict:
+    account = _account(account_id)
+    try:
+        await _service(request).delete_account(account)
+    except accounts.AccountError as exc:
+        raise _account_error(exc) from None
+    # Corpo JSON, nao 204: o apiFetchForServer do core sempre faz res.json().
+    return {"ok": True}
 
 
 @codex_contas_router.post("/{account_id}/prepare", status_code=202,

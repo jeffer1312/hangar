@@ -340,3 +340,42 @@ def test_aspas_no_id_do_modelo_nao_quebram_o_toml(tmp_path):
     d = tomllib.loads((tmp_path / ".kimi-code" / "config.toml").read_text())
     assert d["providers"]["cred"]["api_key"] == 'sk-com"aspas\\barra'
     assert d["models"]['cred/mo"del']["model"] == 'mo"del'
+
+
+def test_remover_tira_so_o_nosso_bloco_nos_tres_agentes(tmp_path):
+    homes = _homes(tmp_path, "pi", "kimi", "codex")
+    cfg_kimi = tmp_path / ".kimi-code" / "config.toml"
+    cfg_kimi.write_text(CONFIG_KIMI)
+    (tmp_path / ".pi" / "agent" / "models.json").write_text(
+        '{"providers": {"meu": {"baseUrl": "https://u.dev/v1", "apiKey": "sk-u", "models": []}}}')
+    assert all(r["ok"] for r in agentes_sync.sincronizar(
+        "cred", "https://x.dev", "sk-abc", MODELOS, homes=homes).values())
+    # o Codex apendou por fora, dentro do nosso bloco (mesmo caso do gravar)
+    cfg_codex = tmp_path / ".codex" / "config.toml"
+    cfg_codex.write_text(cfg_codex.read_text() + '[hooks.state."x:y:0:0"]\ntrusted = true\n')
+    assert agentes_sync.bloco_gerenciado(cfg_kimi, "cred")
+    assert not agentes_sync.bloco_gerenciado(cfg_kimi, "apikey")
+
+    out = agentes_sync.remover("cred", homes=homes)
+    assert all(r["ok"] for r in out.values()), out
+    kimi = tomllib.loads(cfg_kimi.read_text())
+    assert "cred" not in kimi["providers"] and "cred/k3" not in kimi["models"]
+    assert kimi["providers"]["apikey"]["api_key"] == "sk-do-usuario"
+    assert kimi["hooks"][0]["event"] == "Stop"
+    assert "hangar" not in cfg_kimi.read_text()
+    codex = tomllib.loads(cfg_codex.read_text())
+    assert "cred" not in codex.get("model_providers", {})
+    assert codex["hooks"]["state"]["x:y:0:0"]["trusted"] is True
+    pi = json.loads((tmp_path / ".pi" / "agent" / "models.json").read_text())
+    assert list(pi["providers"]) == ["meu"]
+    # segunda remoção: nada a fazer, sem erro alto
+    assert {a: r["motivo"] for a, r in agentes_sync.remover("cred", homes=homes).items()} == \
+        {"pi": "nao-gerenciado", "kimi": "nao-gerenciado", "codex": "nao-gerenciado"}
+
+
+def test_remover_nao_toca_provedor_do_usuario(tmp_path):
+    homes = _homes(tmp_path, "kimi")
+    cfg = tmp_path / ".kimi-code" / "config.toml"
+    cfg.write_text(CONFIG_KIMI)
+    assert agentes_sync.remover("apikey", alvos=("kimi",), homes=homes)["kimi"]["motivo"] == "nao-gerenciado"
+    assert cfg.read_text() == CONFIG_KIMI

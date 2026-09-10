@@ -102,7 +102,7 @@ def _eh_prompt_humano(conteudo: Any) -> bool:
 
 
 def descobrir(transcript: str | Path, cwd: str | Path) -> PlanoClaude | None:
-    """Encontra o último plano confirmado pelo transcript principal da sessão."""
+    """Encontra a proposta ainda sem resposta no transcript principal da sessão."""
     arquivo = Path(transcript)
     raiz = _diretorio_de_planos(arquivo, Path(cwd))
     candidatos: dict[str, tuple[Path, str | None]] = {}
@@ -111,6 +111,7 @@ def descobrir(transcript: str | Path, cwd: str | Path) -> PlanoClaude | None:
     ultimo_slug: str | None = None
     slug_confirmado: tuple[str, str | None] | None = None
     aguardando_resposta: tuple[Path, str | None] | None = None
+    aprovado = False
 
     try:
         linhas = arquivo.open(encoding="utf-8")
@@ -131,6 +132,11 @@ def descobrir(transcript: str | Path, cwd: str | Path) -> PlanoClaude | None:
             conteudo = mensagem.get("content") if isinstance(mensagem, dict) else None
             if evento.get("type") == "user" and _eh_prompt_humano(conteudo):
                 aguardando_resposta = None
+                ultimo = None
+                slug_confirmado = None
+                candidatos.clear()
+                saidas_do_modo_plano.clear()
+                aprovado = False
             if not isinstance(conteudo, list):
                 continue
             if evento.get("type") == "assistant" and aguardando_resposta is not None:
@@ -143,12 +149,20 @@ def descobrir(transcript: str | Path, cwd: str | Path) -> PlanoClaude | None:
                     continue
                 if bloco.get("type") == "tool_use":
                     identificador = bloco.get("id")
+                    if bloco.get("name") in {"EnterPlanMode", "ExitPlanMode"}:
+                        aprovado = False
+                    if aprovado:
+                        continue
                     if (bloco.get("name") == "ExitPlanMode" and isinstance(identificador, str)
-                            and ultimo_slug is not None):
+                            and (ultimo_slug is not None or ultimo is not None)):
+                        nome = ultimo_slug if ultimo_slug is not None else ultimo[0].stem
+                        ancora = _id_bloco_assistente(evento, tipo="tool_use", valor=identificador)
                         saidas_do_modo_plano[identificador] = (
-                            ultimo_slug,
-                            _id_bloco_assistente(evento, tipo="tool_use", valor=identificador),
+                            nome, ancora,
                         )
+                        caminho = ultimo[0] if ultimo is not None else (raiz / f"{nome}.md").resolve()
+                        ultimo = (caminho, ancora)
+                        aguardando_resposta = None
                     bruto = _caminho_de_bloco(bloco)
                     if not bruto or not isinstance(identificador, str):
                         continue
@@ -167,6 +181,19 @@ def descobrir(transcript: str | Path, cwd: str | Path) -> PlanoClaude | None:
                         aguardando_resposta = candidato
                     saida = saidas_do_modo_plano.pop(identificador, None)
                     if saida is not None and bloco.get("is_error") is not True:
+                        texto = bloco.get("content")
+                        # ExitPlanMode também pode apenas encaminhar o plano para um líder.
+                        if isinstance(texto, str) and texto.startswith((
+                            "User has approved your plan.",
+                            "User has approved exiting plan mode.",
+                            "User has approved the plan.",
+                        )):
+                            ultimo = None
+                            slug_confirmado = None
+                            aguardando_resposta = None
+                            candidatos.clear()
+                            aprovado = True
+                            continue
                         slug_confirmado = saida
                         if candidato is not None:
                             caminho = candidato[0]

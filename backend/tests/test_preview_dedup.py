@@ -308,6 +308,40 @@ def test_painel_de_subagentes_nao_vira_previa():
     assert out == "Dinheiro: a cobranca e por caractere do texto que voce manda."
 
 
+PANE_AVISO_DE_LARGADA = (
+    "  Claude Code v2.1.267\n"
+    "\n"
+    "⚠ CLAUDE.md is over the 150.0k-char limit (178.4k chars)\n"
+    "\n"
+    '● ecc: hooks.json: unknown keys "$schema", "description" in hooks.PreToolUse[0]\n'
+    "  ignored\n"
+    "\n"
+    "❯ pq isso esta aparecendo no hangar?\n"
+    "\n"
+    "  Thought for 5s, read 2 files\n"
+    "\n"
+    + "─" * 40 + "\n"
+    "❯ \n"
+    + "─" * 40 + "\n"
+)
+
+
+def test_aviso_de_largada_nao_vira_previa():
+    # O Claude Code imprime o aviso de largada com o MESMO ● da prosa. Numa sessao recem-aberta que
+    # so rodou ferramenta, ele era o ultimo ● e virava previa. Corta pela ultima mensagem do usuario
+    # -- prosa em voo e sempre posterior a ela.
+    assert extract_assistant_text(PANE_AVISO_DE_LARGADA) == ""
+
+
+def test_prosa_depois_da_mensagem_do_usuario_continua_sendo_previa():
+    # O corte nao pode zerar o caso normal: o ❯ da caixa de digitar (regua/❯/regua) nao conta.
+    pane = PANE_AVISO_DE_LARGADA.replace(
+        "  Thought for 5s, read 2 files\n",
+        "● Sao duas coisas. O aviso vem do plugin ecc.\n",
+    )
+    assert extract_assistant_text(pane) == "Sao duas coisas. O aviso vem do plugin ecc."
+
+
 PANE_SUBAGENTE_AO_VIVO = (
     "   Thought for 2s\n"
     "\n"

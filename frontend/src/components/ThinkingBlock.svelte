@@ -3,6 +3,7 @@
   import { summarizeToolInput, resumoPensamento } from '@hangar/core';
   import { pensamentoEmPt } from '@hangar/core';
   import { ehBusca } from '../lib/pensamentoTools.svelte';
+  import { capacidades } from '../lib/capacidades.svelte';
   import type { ChatEvent } from '@hangar/core';
 
   // Um turno de raciocínio RECOLHIDO numa linha só, do tamanho do cabeçalho de grupo de ferramenta
@@ -64,6 +65,8 @@
   let pronto = false;    // já traduzido: não repete a chamada nem no clique nem no scroll
   async function traduzir() {
     if (pedindo || pronto || !pensamentos.length) return;
+    if (capacidades.traducaoPensamento === false) return;   // servidor sem provedor com chave
+
     pedindo = true;
     const ids = pensamentos.map((e) => e.id);
     try {

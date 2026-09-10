@@ -73,12 +73,12 @@ it('busca conteúdo para o título na montagem e revalida ao abrir', async () =>
   expect(document.querySelector('.prose strong')?.textContent).toBe('Forte');
 });
 
-it('mostra carregamento enquanto o título do plano Claude é desconhecido', async () => {
+it('espera confirmar o plano Claude antes de mostrar o cartão', async () => {
   let resolve!: (value: { name: string; path: string; markdown: string }) => void;
   getPreview.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
   await montar();
 
-  expect(document.querySelector('[role="status"]')?.textContent).toBe(m.chat_plan_carregando());
+  expect(document.querySelector('.plan-preview')).toBeNull();
   resolve({ name: 'plano', path: '/planos/plano.md', markdown: '# Descoberto' });
   await estabilizar();
   expect(document.querySelector('.plan-name')?.textContent).toBe('Descoberto');
@@ -142,6 +142,7 @@ it('Codex executa somente ao aprovar e continuar planejando apenas dispensa as a
   await montar({ provider: 'codex', codexPlan: '# Primeiro', onImplement: executar });
   botao(m.chat_plan_implementar())!.click(); await estabilizar();
   expect(executar).toHaveBeenCalledWith('# Primeiro');
+  expect(document.querySelector('.plan-preview')).toBeNull();
 
   await unmount(montados.pop()!);
   document.body.innerHTML = '';
@@ -185,4 +186,9 @@ it('mantém a ação disponível e mostra o erro quando a execução falha', asy
 
   expect(document.querySelector('[role="alert"]')?.textContent).toBe('Turno encerrado');
   expect(botao(m.chat_plan_implementar())).toBeTruthy();
+});
+
+it('carregamento sem plano confirmado não cria cartão', async () => {
+  await montar({ discovery: null, discoveryLoading: true });
+  expect(document.querySelector('.plan-preview')).toBeNull();
 });

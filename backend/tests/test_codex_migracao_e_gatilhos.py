@@ -41,7 +41,8 @@ def test_primeira_rodada_tira_so_o_que_o_instalador_antigo_escreveu(tmp_path):
     novo = json.loads((home / ".codex/hooks.json").read_text())
     estado_novo = _grupo(codex_hook_installer._STATE_COMMAND)
     assert novo == {"hooks": {"SessionStart": [_grupo(depois_a_mao), estado_novo],
-                              "UserPromptSubmit": [estado_novo], "PreToolUse": [estado_novo],
+                              "UserPromptSubmit": [estado_novo, _grupo(codex_hook_installer.comando_navegador())],
+                              "PreToolUse": [estado_novo],
                               "PostToolUse": [estado_novo], "Stop": [estado_novo]}}
     assert not (home / ".codex/.hangar-hooks.json").exists()
     assert list(service.backups.iterdir()), "o espelho e o hooks.json anterior vão pro backup"
@@ -82,8 +83,36 @@ def test_instalador_acrescenta_uma_vez_e_nao_reescreve_entrada_existente(tmp_pat
     assert data["hooks"]["SessionStart"] == [_grupo(ESTADO)], "formato antigo fica como está"
     assert [h["command"] for g in data["hooks"]["PreToolUse"] for h in g["hooks"]] == [
         PESSOAL, codex_hook_installer._STATE_COMMAND]
+    assert [h["command"] for g in data["hooks"]["UserPromptSubmit"] for h in g["hooks"]] == [
+        codex_hook_installer._STATE_COMMAND, codex_hook_installer.comando_navegador()]
     assert codex_hook_installer.ensure_codex_state_hook_installed(codex) == []
     assert json.loads((codex / "hooks.json").read_text()) == data
+
+
+def test_no_windows_o_hook_de_estado_vai_em_powershell_e_o_formato_cmd_e_reescrito(tmp_path, monkeypatch):
+    # Medido na VM (codex 0.154.0): hooks rodam no PowerShell 7; `"exe" "arg" || exit 0` e
+    # UnexpectedToken e sai com 1 em todo evento. Formato antigo nosso e reescrito SO no Windows.
+    ps = codex_hook_installer.comando_estado(windows=True)
+    assert ps.startswith('& "') and ps.endswith('" ; exit 0') and "state_hook.py" in ps
+    assert codex_hook_installer.comando_estado(windows=False) == codex_hook_installer._STATE_COMMAND
+    codex = tmp_path / ".codex"
+    codex.mkdir()
+    (codex / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [_grupo(ESTADO)],
+                                                             "PreToolUse": [_grupo(PESSOAL)]}}))
+    monkeypatch.setattr(codex_hook_installer.os, "name", "nt")
+    gravados = codex_hook_installer.ensure_codex_state_hook_installed(codex)
+    assert "SessionStart" in gravados
+    data = json.loads((codex / "hooks.json").read_text())
+    assert data["hooks"]["SessionStart"] == [_grupo(ps)], "formato cmd reescrito no Windows"
+    assert [h["command"] for g in data["hooks"]["PreToolUse"] for h in g["hooks"]] == [PESSOAL, ps]
+    assert codex_hook_installer.ensure_codex_state_hook_installed(codex) == []
+    # Forma PowerShell de OUTRO venv/checkout ja funciona: nao e reescrita (preserva a aprovacao).
+    # Barras normais: o basename POSIX deste teste nao separa `\`; no Windows real os dois valem.
+    outro = '& "D:/outro/python.exe" "D:/outro/hooks/state_hook.py" ; exit 0'
+    (codex / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [_grupo(outro)]}}))
+    gravados = codex_hook_installer.ensure_codex_state_hook_installed(codex)
+    assert "SessionStart" not in gravados
+    assert json.loads((codex / "hooks.json").read_text())["hooks"]["SessionStart"] == [_grupo(outro)]
 
 
 def test_instalador_nao_zera_evento_que_nao_e_lista(tmp_path):
@@ -93,6 +122,26 @@ def test_instalador_nao_zera_evento_que_nao_e_lista(tmp_path):
     gravados = codex_hook_installer.ensure_codex_state_hook_installed(codex)
     assert "Stop" not in gravados
     assert json.loads((codex / "hooks.json").read_text())["hooks"]["Stop"] == {"editado": "à mão"}
+
+
+def test_navegador_preserva_comando_existente_e_confianca(tmp_path):
+    comando = 'python3 /outro/checkout/backend/hooks/nav_hook.py'
+    confianca = {"pessoal": {"approved": True}}
+    (tmp_path / "hooks.json").write_text(json.dumps({"hooks": {
+        "state": confianca, "UserPromptSubmit": [_grupo(comando)],
+    }}))
+    codex_hook_installer.ensure_codex_state_hook_installed(tmp_path)
+    data = json.loads((tmp_path / "hooks.json").read_text())
+    comandos = [h["command"] for g in data["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+    assert comandos == [comando, codex_hook_installer._STATE_COMMAND]
+    assert data["hooks"]["state"] == confianca
+    assert codex_hook_installer.ensure_codex_state_hook_installed(tmp_path) == []
+
+
+def test_navegador_tem_comando_powershell_no_windows():
+    comando = codex_hook_installer.comando_navegador(windows=True)
+    assert comando.startswith('& "') and comando.endswith('" ; exit 0')
+    assert "nav_hook.py" in comando
 
 
 @pytest.mark.parametrize("conteudo", ["{ quebrado", '{"hooks": []}'])
