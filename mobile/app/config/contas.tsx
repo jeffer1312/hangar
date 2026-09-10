@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Alert, Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { credentialAuth, credentialGroup, getCodexAccountsForServer, getCredentialsForServer,
-  type CodexAccount, type Credencial } from '@hangar/core';
+import { credentialAuth, credentialGroup, deleteCodexAccountForServer, getCodexAccountsForServer,
+  getCredentialsForServer, type CodexAccount, type Credencial } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { Linha } from '../../src/features/config/Linha';
 import { CodexContaLogin } from '../../src/features/config/CodexContaLogin';
@@ -88,6 +88,19 @@ export default function Contas() {
     }
     return credential.apelido || credential.nome_natural || credential.nome;
   };
+  // Só conta adicional (~/.codex-<nome>); a padrão é o ~/.codex da máquina e o backend recusa.
+  const removeAccount = (account: CodexAccount) => {
+    if (!server) return;
+    const s = server;
+    Alert.alert(m.comum_apagar(), account.name, [
+      { text: m.comum_cancelar(), style: 'cancel' },
+      { text: m.lista_remover(), style: 'destructive', onPress: () => {
+        deleteCodexAccountForServer(s, account.id)
+          .then(() => load(s))
+          .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : m.codex_account_delete_failed()));
+      } },
+    ]);
+  };
   const startLogin = (accountId?: string) => {
     if (!server) return;
     setNewLogin(accountId === undefined);
@@ -127,15 +140,29 @@ export default function Contas() {
       icon="KeyRound"
       titulo={identity.title}
       descricao={identity.description}
-      direita={identity.account && identity.account.auth.status !== 'connected' ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={m.contas_entrar()}
-          onPress={() => startLogin(identity.account!.id)}
-          style={styles.action}
-        >
-          <Text style={styles.actionText}>{m.contas_entrar()}</Text>
-        </Pressable>
+      direita={identity.account ? (
+        <View style={styles.actions}>
+          {identity.account.auth.status !== 'connected' ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={m.contas_entrar()}
+              onPress={() => startLogin(identity.account!.id)}
+              style={styles.action}
+            >
+              <Text style={styles.actionText}>{m.contas_entrar()}</Text>
+            </Pressable>
+          ) : null}
+          {!identity.account.is_default ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={m.lista_remover()}
+              onPress={() => removeAccount(identity.account!)}
+              style={styles.action}
+            >
+              <Text style={styles.actionText}>{m.lista_remover()}</Text>
+            </Pressable>
+          ) : null}
+        </View>
       ) : null}
     />
   );
@@ -202,6 +229,7 @@ const styles = StyleSheet.create((theme) => ({
   serverUrl: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xs, color: theme.tokens.text.muted },
   muted: { fontSize: theme.base.text.sm, color: theme.tokens.text.muted },
   error: { fontSize: theme.base.text.sm, color: theme.tokens.status.error },
+  actions: { flexDirection: 'row', alignItems: 'center' },
   action: { minHeight: 44, justifyContent: 'center', paddingHorizontal: theme.base.space[2] },
   actionText: { color: theme.tokens.accent.base, fontSize: theme.base.text.xs, fontWeight: '600' },
   login: { gap: theme.base.space[3], padding: theme.base.space[3], borderRadius: theme.base.radius.lg, backgroundColor: theme.tokens.bg.surface },

@@ -13,6 +13,8 @@
   "codex_account_auth_storage_invalid": "A conta Codex precisa guardar o login em arquivo.",
   "codex_account_creation_in_progress": "Há uma sessão sendo criada nesta conta.",
   "codex_account_in_use": "Esta conta está em uso por uma sessão.",
+  "codex_account_default_protected": "A conta padrão do Codex não pode ser apagada.",
+  "codex_account_delete_failed": "Não foi possível apagar a conta Codex.",
   "codex_account_login_in_progress": "Já existe um login em andamento nesta conta.",
   "codex_account_prepare_required": "Prepare a conta Codex antes de continuar.",
   "codex_account_preparing": "A preparação da conta Codex está em andamento.",

@@ -417,6 +417,18 @@ class CodexContasLogin:
             return {"status": "running", "trust_pending": False, "issues": []}
         return codex_contas_sync.preparation_status(account)
 
+    async def delete_account(self, account: accounts.Account) -> None:
+        # Mesma trava do login: conta com sessao viva, login ou preparo em andamento nao sai.
+        reservation = self._reserve(account, "login")
+        try:
+            await asyncio.to_thread(accounts.delete_account, account)
+            key = self._key(account)
+            with self._lock:
+                self._auth_cache.pop(key, None)
+                self._preparations.pop(key, None)
+        finally:
+            reservation.release()
+
     async def create_account(self, name: str) -> dict:
         account = await asyncio.to_thread(accounts.create_account, name)
         await self.prepare(account)

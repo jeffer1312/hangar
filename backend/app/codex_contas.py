@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 
 
 _NOME = r"[a-z0-9][a-z0-9_-]{0,31}"
@@ -187,6 +188,18 @@ def create_account(name: str) -> Account:
         _cleanup_new_directory(target)
         raise AccountError(500, "codex_account_marker_failed", {"account_id": name}) from error
     return _account(name, target)
+
+
+def delete_account(account: Account) -> None:
+    """Apaga a pasta de uma conta ADICIONAL gerenciada. A padrao (~/.codex) nunca e apagada."""
+    if account.is_default or _canonical(account.home) == _canonical(default_home()):
+        raise AccountError(409, "codex_account_default_protected", {"account_id": account.id})
+    if not _managed(account.home, account.id):
+        raise AccountError(409, "codex_account_invalid_marker", {"account_id": account.id})
+    try:
+        shutil.rmtree(account.home)
+    except OSError as error:
+        raise AccountError(500, "codex_account_delete_failed", {"account_id": account.id}) from error
 
 
 def _under(path: Path, root: Path) -> bool:

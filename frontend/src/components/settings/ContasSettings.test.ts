@@ -40,6 +40,7 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   putEngineForServer: vi.fn(async () => ({ motores: {} })),
   deleteEngine: vi.fn(async () => ({ ok: true })),
   deleteEngineForServer: vi.fn(async () => ({ ok: true })),
+  deleteCodexAccountForServer: vi.fn(async () => {}),
   getEngines: vi.fn(async () => ({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' })),
   getEnginesForServer: vi.fn(async () => ({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' })),
   engineModelos: vi.fn(async () => ({ modelos: [] })),
@@ -214,6 +215,27 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     expect(document.body.textContent).toContain(m.contas_add_conta());
     expect(document.body.textContent).toContain(m.contas_add_modelo());
     expect(document.body.textContent).toContain(m.contas_add_chave());
+    unmount(t.comp);
+  });
+
+  it('conta Codex adicional tem Remover; a padrão (ativa) não', async () => {
+    const padrao = chave({ tipo: 'codex', auth_method: 'none', codex_account: 'default', ativa: true,
+      id: 'codex:/h/.codex', nome: 'default', nome_natural: 'default', usos: [] });
+    const extra = chave({ tipo: 'codex', auth_method: 'none', codex_account: 'work', ativa: false,
+      id: 'codex:/h/.codex-work', nome: 'work', nome_natural: 'work', usos: [] });
+    const t = montar([padrao, extra]);
+    await tick(); await tick();
+    const card = (nome: string) => [...t.el.querySelectorAll<HTMLElement>('.ct-card')]
+      .find((c) => c.querySelector('.ct-nome')?.textContent === nome)!;
+    const remover = (nome: string) => [...card(nome).querySelectorAll<HTMLButtonElement>('.ct-acao')]
+      .find((b) => b.textContent === m.lista_remover());
+    expect(remover('default')).toBeUndefined();
+    remover('work')!.click();
+    await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
+    await tick(); await tick();
+    expect(apiMock.deleteCodexAccountForServer).toHaveBeenCalledWith(ALVO, 'work');
+    expect(apiMock.apagarConta).not.toHaveBeenCalled();
     unmount(t.comp);
   });
 

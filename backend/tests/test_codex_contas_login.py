@@ -276,6 +276,19 @@ async def test_conta_viva_recusa_login_antes_do_process(contas, monkeypatch):
     assert not FakeNative.instances
 
 
+async def test_apagar_conta_recusa_viva_e_apaga_parada(contas, service, monkeypatch):
+    _, work = contas
+    monkeypatch.setattr("app.codex_contas_login.CodexNativo", FakeNative)
+    live = CodexContasLogin(native=FakeNative, account_in_use=lambda account: True)
+    with pytest.raises(accounts.AccountError) as error:
+        await live.delete_account(work)
+    assert error.value.code == "codex_account_in_use"
+    assert work.home.exists()
+
+    await service.delete_account(work)
+    assert not work.home.exists()
+
+
 async def test_preparacao_em_curso_reserva_a_conta(contas, service, monkeypatch):
     _, work = contas
     gate = asyncio.Event()

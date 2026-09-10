@@ -30,6 +30,7 @@ def painel(monkeypatch):
         start_login=AsyncMock(return_value={"attempt_id": "a1", "status": "waiting"}),
         login_status=Mock(return_value=None),
         cancel_login=AsyncMock(return_value={"attempt_id": "a1", "status": "cancelled"}),
+        delete_account=AsyncMock(return_value=None),
     )
     monkeypatch.setattr(settings, "auth_token", TOKEN)
     monkeypatch.setattr(codex_contas_api.accounts, "resolve_account",
@@ -49,6 +50,21 @@ def test_rotas_exigem_auth(painel):
     assert client.get("/api/codex-contas").status_code == 401
     assert client.post("/api/codex-contas", json={"name": "work"}).status_code == 401
     service.accounts_snapshot.assert_not_awaited()
+
+
+def test_delete_apaga_pelo_servico_e_traduz_recusa(painel):
+    client, service = painel
+
+    assert client.delete("/api/codex-contas/work").status_code == 401
+    assert client.delete("/api/codex-contas/work", headers=AUTH).json() == {"ok": True}
+    service.delete_account.assert_awaited_once()
+    assert service.delete_account.await_args.args[0].id == "work"
+
+    service.delete_account.side_effect = accounts.AccountError(
+        409, "codex_account_default_protected", {"account_id": "default"})
+    resp = client.delete("/api/codex-contas/default", headers=AUTH)
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "codex_account_default_protected"
 
 
 def test_get_nao_cria_nem_prepara(painel):

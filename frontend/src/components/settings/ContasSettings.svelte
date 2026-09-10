@@ -12,7 +12,7 @@
   // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
   // existe assim que a pessoa renomear a primeira.
   import { onDestroy, untrack } from 'svelte';
-import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
+import { apagarConta, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
@@ -317,6 +317,9 @@ import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeo
       if (conta.tipo === 'chave') {
         if (apiTarget) await deleteEngineForServer(apiTarget, idDisco);
         else await deleteEngine(idDisco);
+      } else if (conta.tipo === 'codex') {
+        if (!codexServer || !conta.codex_account) return;
+        await deleteCodexAccountForServer(codexServer, conta.codex_account);
       } else {
         await apagarConta(apiTarget, idDisco);
       }
@@ -710,6 +713,11 @@ import { apagarConta, deleteEngine, deleteEngineForServer, isAbortError, isTimeo
           <span class="ct-acoes">
             {#if conta.tipo === 'codex' && conta.codex_account && credentialAuth(conta) === 'none'}
               <button type="button" class="ct-acao primaria" onclick={() => codexLogin = conta.codex_account ?? null}>{m.contas_entrar()}</button>
+            {/if}
+            <!-- Só a conta adicional (~/.codex-<nome>) sai; a padrão é o ~/.codex da máquina. -->
+            {#if conta.tipo === 'codex' && conta.codex_account && !conta.ativa}
+              <button type="button" class="ct-acao"
+                onclick={() => { menuDe = null; confirmando = conta.id; }}>{m.lista_remover()}</button>
             {/if}
             {#if conta.tipo === 'claude' && conta.login?.estado === 'ok' && !conta.login.loggedIn}
               <button type="button" class="ct-acao primaria"

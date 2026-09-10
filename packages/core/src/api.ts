@@ -718,6 +718,9 @@ export function getCodexAccountsForServer(server: Server, signal?: AbortSignal):
 export function createCodexAccountForServer(server: Server, name: string): Promise<CodexAccount> {
   return apiFetchForServer(server, '/api/codex-contas', { method: 'POST', body: JSON.stringify({ name }) });
 }
+export function deleteCodexAccountForServer(server: Server, id: string): Promise<void> {
+  return apiFetchForServer(server, `/api/codex-contas/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
 function codexAccountPath(id: string, action: string): string {
   return `/api/codex-contas/${encodeURIComponent(id)}/${action}`;
 }

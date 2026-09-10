@@ -68,6 +68,8 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   codex_account_auth_storage_invalid: () => m.codex_account_auth_storage_invalid(),
   codex_account_creation_in_progress: () => m.codex_account_creation_in_progress(),
   codex_account_in_use: () => m.codex_account_in_use(),
+  codex_account_default_protected: () => m.codex_account_default_protected(),
+  codex_account_delete_failed: () => m.codex_account_delete_failed(),
   codex_account_login_in_progress: () => m.codex_account_login_in_progress(),
   codex_account_prepare_required: () => m.codex_account_prepare_required(),
   codex_account_preparing: () => m.codex_account_preparing(),

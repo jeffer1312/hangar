@@ -13,6 +13,8 @@
   "codex_account_auth_storage_invalid": "The Codex account must store its login in a file.",
   "codex_account_creation_in_progress": "A session is being created for this account.",
   "codex_account_in_use": "This account is in use by a session.",
+  "codex_account_default_protected": "The default Codex account cannot be deleted.",
+  "codex_account_delete_failed": "Could not delete the Codex account.",
   "codex_account_login_in_progress": "A login is already in progress for this account.",
   "codex_account_prepare_required": "Prepare the Codex account before continuing.",
   "codex_account_preparing": "The Codex account is being prepared.",
