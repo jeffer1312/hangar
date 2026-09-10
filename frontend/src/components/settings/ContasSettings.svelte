@@ -318,7 +318,7 @@ import { apagarConta, deleteEngine, deleteEngineForServer, deleteCodexAccountFor
         if (apiTarget) await deleteEngineForServer(apiTarget, idDisco);
         else await deleteEngine(idDisco);
       } else if (conta.tipo === 'codex') {
-        if (!codexServer || !conta.codex_account) return;
+        if (!codexServer || !conta.codex_account) throw new Error(m.falha_conexao());
         await deleteCodexAccountForServer(codexServer, conta.codex_account);
       } else {
         await apagarConta(apiTarget, idDisco);
