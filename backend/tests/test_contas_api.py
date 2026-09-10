@@ -196,6 +196,72 @@ def test_apagar_com_resolucao_de_sessao_nao_confiavel_devolve_409(casa, monkeypa
     assert (casa / ".claude-conta2").is_dir()
 
 
+@pytest.mark.parametrize("situacao", ["outra_conta", "mesma_conta", "acesso_negado"])
+def test_apagar_conta_duplicada_com_sessao_sem_proc(casa, monkeypatch, situacao):
+    import psutil
+    from types import SimpleNamespace
+    from app import tmux
+
+    original = contas.criar("original")
+    duplicada = contas.criar("duplicada")
+    for pasta in (original, duplicada):
+        (pasta / ".credentials.json").write_text("mesmo-login", encoding="utf-8")
+        (pasta / "projects" / "conversa.jsonl").write_text("historico", encoding="utf-8")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [SimpleNamespace(name="sessao-aberta")])
+    monkeypatch.setattr(tmux, "pane_pid", lambda name: 12345)
+    monkeypatch.setattr(api_mod.procinfo, "_TEM_PROC", False)
+    monkeypatch.setattr(api_mod.procinfo, "psutil", psutil, raising=False)
+    monkeypatch.setattr(api_mod.procinfo, "_proc_environ_path", lambda pid: str(casa / "sem-proc"))
+    monkeypatch.setattr(api_mod.procinfo, "_pids_com_config_dir", lambda alvo: ([], True))
+
+    def ambiente():
+        if situacao == "acesso_negado":
+            raise psutil.AccessDenied(12345)
+        return {"CLAUDE_CONFIG_DIR": str(duplicada if situacao == "mesma_conta" else original)}
+
+    monkeypatch.setattr(psutil, "Process", lambda pid: SimpleNamespace(environ=ambiente))
+    resposta = TestClient(app).delete("/api/claude-configs/duplicada", headers=AUTH)
+    assert resposta.status_code == (200 if situacao == "outra_conta" else 409)
+    assert duplicada.exists() == (situacao != "outra_conta")
+    assert (original / ".credentials.json").read_text(encoding="utf-8") == "mesmo-login"
+    assert (original / "projects" / "conversa.jsonl").read_text(encoding="utf-8") == "historico"
+    assert (casa / ".claude" / "projects").is_dir()
+
+
+def test_apagar_sem_proc_confere_ambiente_de_processo_real(casa, monkeypatch):
+    import os
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    import psutil
+    from app import tmux
+
+    original = contas.criar("original")
+    duplicada = contas.criar("duplicada")
+    credencial = original / ".credentials.json"
+    credencial.write_text("login-preservado", encoding="utf-8")
+    with subprocess.Popen(
+        [sys.executable, "-c", "import sys; print('pronto', flush=True); sys.stdin.read()"],
+        env={**os.environ, "CLAUDE_CONFIG_DIR": str(original)},
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    ) as processo:
+        try:
+            assert processo.stdout.readline().strip() == "pronto"
+            monkeypatch.setattr(api_mod.registry, "list", lambda: [SimpleNamespace(name="original-aberta")])
+            monkeypatch.setattr(tmux, "pane_pid", lambda name: processo.pid)
+            monkeypatch.setattr(api_mod.procinfo, "_TEM_PROC", False)
+            monkeypatch.setattr(api_mod.procinfo, "psutil", psutil, raising=False)
+            cliente = TestClient(app)
+            assert cliente.delete("/api/claude-configs/original", headers=AUTH).status_code == 409
+            assert cliente.delete("/api/claude-configs/duplicada", headers=AUTH).status_code == 200
+            assert not duplicada.exists()
+            assert credencial.read_text(encoding="utf-8") == "login-preservado"
+            assert processo.poll() is None
+        finally:
+            processo.stdin.close()
+            processo.wait(timeout=5)
+
+
 def test_apagar_com_processo_vivo_usando_a_conta_devolve_409(casa, monkeypatch):
     """Um `claude` aberto FORA do tmux não aparece no registry: a consulta por CLAUDE_CONFIG_DIR
     no /proc é quem segura o apagar debaixo dele."""

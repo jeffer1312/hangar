@@ -58,6 +58,40 @@ def test_environ_igual_nas_duas_implementacoes(via_psutil, monkeypatch):
     assert "PATH" in env
 
 
+@pytest.mark.parametrize("value", [b"/tmp/conta", b"/tmp/conta-\xff", b"", None])
+def test_config_dir_strict_proc(tmp_path, monkeypatch, value):
+    env = tmp_path / "environ"
+    env.write_bytes(b"PATH=/bin\x00" + (
+        b"CLAUDE_CONFIG_DIR=" + value + b"\x00" if value is not None else b""))
+    monkeypatch.setattr(procinfo, "_TEM_PROC", True)
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
+    expected = Path(value.decode("utf-8", "surrogateescape")) if value else None
+    assert procinfo._config_dir_of_strict(123) == (expected, True)
+
+
+def test_config_dir_strict_proc_ilegivel(tmp_path, monkeypatch):
+    monkeypatch.setattr(procinfo, "_TEM_PROC", True)
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(tmp_path / "ausente"))
+    assert procinfo._config_dir_of_strict(123) == (None, False)
+
+
+@pytest.mark.parametrize("value", ["/tmp/conta", "", None])
+def test_config_dir_strict_psutil(via_psutil, monkeypatch, value):
+    monkeypatch.setattr(psutil.Process, "environ", lambda self: (
+        {"CLAUDE_CONFIG_DIR": value} if value is not None else {}))
+    assert procinfo._config_dir_of_strict(os.getpid()) == (
+        Path(value) if value else None, True)
+
+
+@pytest.mark.parametrize("error", [psutil.AccessDenied, psutil.NoSuchProcess])
+def test_config_dir_strict_psutil_ilegivel(via_psutil, monkeypatch, error):
+    def unreadable(self):
+        raise error(self.pid)
+
+    monkeypatch.setattr(psutil.Process, "environ", unreadable)
+    assert procinfo._config_dir_of_strict(os.getpid()) == (None, False)
+
+
 def test_start_time_bate_com_o_do_proc(via_psutil):
     eu = os.getpid()
     # Mesmo instante de nascimento pelos dois caminhos. 1s de folga: o lado /proc reconstroi de

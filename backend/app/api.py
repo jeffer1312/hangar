@@ -6203,15 +6203,7 @@ def _session_config_dir_strict(name: str) -> tuple[Path | None, bool]:
         return None, False
     if not pid:
         return None, True   # sem processo vivo: ninguém está usando nada
-    try:
-        with open(procinfo._proc_environ_path(pid), "rb") as fh:
-            env = fh.read()
-    except OSError:
-        return None, False
-    for kv in env.split(b"\x00"):
-        if kv.startswith(b"CLAUDE_CONFIG_DIR="):
-            return (Path(kv.split(b"=", 1)[1].decode("utf-8", "surrogateescape")), True)
-    return None, True
+    return procinfo._config_dir_of_strict(pid)
 
 
 async def _pi_catalog(name: str) -> tuple[dict, str]:

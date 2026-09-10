@@ -211,6 +211,26 @@ def _config_dir_of(pid: int) -> Optional[Path]:
     return None
 
 
+def _config_dir_of_strict(pid: int) -> tuple[Path | None, bool]:
+    """A exclusão precisa distinguir variável ausente de ambiente ilegível."""
+    if not _TEM_PROC:
+        try:
+            value = psutil.Process(pid).environ().get("CLAUDE_CONFIG_DIR")
+        except psutil.Error:
+            return None, False
+        return (Path(value) if value else None), True
+    try:
+        with open(_proc_environ_path(pid), "rb") as fh:
+            env = fh.read()
+    except OSError:
+        return None, False
+    for entry in env.split(b"\x00"):
+        if entry.startswith(b"CLAUDE_CONFIG_DIR="):
+            value = entry.split(b"=", 1)[1].decode("utf-8", "surrogateescape")
+            return (Path(value) if value else None), True
+    return None, True
+
+
 def _proc_environ_path(pid: int) -> str:
     # Indireção só para o teste poder apontar para um arquivo de mentira.
     return f"/proc/{pid}/environ"

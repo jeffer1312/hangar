@@ -278,6 +278,28 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     expect(t.el.querySelector('.ct-confirma')).not.toBeNull();
     unmount(t.comp);
   });
+
+  it('apaga só o cadastro escolhido quando duas contas têm o mesmo login e apelido', async () => {
+    const original = claude({ nome: 'Minha conta', nome_natural: 'original' });
+    const duplicada = claude({ id: 'claude:/home/u/.claude-duplicada',
+      path: '/home/u/.claude-duplicada', nome: 'Minha conta', nome_natural: 'duplicada', ativa: false });
+    const t = montar([original, duplicada]);
+    try {
+      await tick(); await tick();
+      expect(t.el.querySelectorAll('.ct-card')).toHaveLength(2);
+      const card = t.el.querySelectorAll('.ct-card')[1];
+      card.querySelector<HTMLButtonElement>('.ct-kebab')!.click();
+      await tick();
+      card.querySelector<HTMLButtonElement>('.ct-menu-item')!.click();
+      await tick();
+      credMock.listarCredenciais.mockResolvedValue([original]);
+      card.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
+      for (let i = 0; i < 12; i++) await tick();
+      expect(apiMock.apagarConta).toHaveBeenCalledExactlyOnceWith(ALVO, 'duplicada');
+      expect(t.el.querySelectorAll('.ct-card')).toHaveLength(1);
+      expect(t.el.querySelector('.ct-nome')!.textContent).toBe('Minha conta');
+    } finally { await unmount(t.comp); }
+  });
 });
 
 describe('ContasSettings — o botão Entrar (Task 7)', () => {
