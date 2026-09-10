@@ -180,7 +180,7 @@
     sondou = true;
     const cauda = filhos.slice(-6).map((f) => {
       const cs = getComputedStyle(f);
-      return `${f.className.split(' ')[0]}:${Math.round(f.getBoundingClientRect().height)}/${cs.opacity}/${cs.visibility}`;
+      return `${f.classList[0] ?? f.tagName}:${Math.round(f.getBoundingClientRect().height)}/${cs.opacity}/${cs.visibility}`;
     }).join(' ');
     diag.registrar({ evento: 'chat.vazio_no_fim', nivel: 'aviso', tela: 'chat', sessao: sessionName,
                      detalhe: `sobra=${Math.round(sobra)} pad=${Math.round(pad)} sh=${listEl.scrollHeight} inner=${Math.round(inner.getBoundingClientRect().height)} ${cauda}` });
@@ -404,6 +404,7 @@
       if (!listEl) return;
       const target = listEl.scrollHeight - listEl.clientHeight;
       if (Math.abs(listEl.scrollTop - target) > 2) listEl.scrollTop = target;
+      sondarVazioNoFim();
     });
   }
 </script>
