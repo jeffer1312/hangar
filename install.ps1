@@ -1245,8 +1245,16 @@ if ($jaTem -or (Pergunte '  Instalar (recomendado)?')) {
         Nota 'Sem mudar isso, o wrapper nao funciona E todo terminal novo mostra erro.'
         if (Pergunte '  Liberar script local pro seu usuario (RemoteSigned, sem admin)?') {
             foreach ($i in $restritos) {
-                & $i.exe -NoProfile -Command 'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force'
-                Ok "$($i.nome): ExecutionPolicy do usuario = RemoteSigned"
+                & $i.exe -NoProfile -Command 'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force' 2>$null
+                # Prova relendo: o Set roda noutro processo e uma politica travada por GPO falha
+                # la sem chegar aqui — "Ok" sem reler escreveria o perfil que todo terminal recusaria.
+                $agora = (& $i.exe -NoProfile -Command 'Get-ExecutionPolicy' 2>$null)
+                if ($agora -eq 'Restricted' -or -not $agora) {
+                    $podeEscrever = $false
+                    Falta "$($i.nome): ExecutionPolicy continua Restricted (GPO?) - wrapper NAO instalado"
+                } else {
+                    Ok "$($i.nome): ExecutionPolicy do usuario = $agora"
+                }
             }
         } else {
             $podeEscrever = $false

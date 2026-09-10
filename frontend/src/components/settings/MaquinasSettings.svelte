@@ -464,6 +464,7 @@
     {/if}
     <!-- O campo escreve num rascunho; sem este botão a tela pedia pra somar a origem e não tinha
          como gravar (o Salvar do rascunho só existia em Configurações do servidor). -->
+    {#if store.erro}<p class="id-erro" role="alert">{store.erro}</p>{/if}
     {#if store.temMudanca || store.salvando || store.salvo}
       <div class="id-linha">
         {#if store.salvo}<span class="id-ok">{m.config_server_salvo()}</span>{/if}

@@ -54,8 +54,10 @@ def _reescrever_formato_cmd(hooks: dict, comando: str) -> list[str]:
             continue
         for g in grupos:
             for h in (g.get("hooks") if isinstance(g, dict) and isinstance(g.get("hooks"), list) else []):
+                # So o formato cmd (sem `&`): um `& ...` de outro venv/checkout ja funciona e
+                # reescreve-lo invalidaria a aprovacao a cada subida de outra arvore.
                 if (isinstance(h, dict) and _refers_to(h.get("command"), STATE_HOOK, por_nome=True)
-                        and h.get("command") != comando):
+                        and not str(h.get("command") or "").lstrip().startswith("&")):
                     h["command"] = comando
                     tocados.append(ev)
     return tocados
