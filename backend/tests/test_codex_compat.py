@@ -191,7 +191,8 @@ def test_windows_preserva_barras_aspas_espacos_e_argumentos():
     resultado = normalizar_hooks(_config(command), python, wrapper, windows=True)
     novo = _hook(resultado)["command"]
     assert _split_windows(novo) == [python, str(wrapper), "--", *_split_windows(command)]
-    assert novo.startswith(r'"C:\Program Files\Python\python.exe"')
+    # `& ` porque o Codex roda o hook pelo PowerShell no Windows (medido 7.6.6).
+    assert novo.startswith(r'& "C:\Program Files\Python\python.exe"')
     assert '"a&b"' in novo
     assert normalizar_hooks(resultado, python, wrapper, windows=True) == resultado
 

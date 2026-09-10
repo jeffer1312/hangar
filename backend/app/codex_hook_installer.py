@@ -11,6 +11,7 @@ como esta. Reescrever o comando muda o hook, e no Codex hook alterado e hook nao
 """
 import logging
 import os
+import sys
 from pathlib import Path
 
 from app.hook_installer import STATE_HOOK, _STATE_COMMAND, _load_settings, _refers_to, _write
@@ -25,12 +26,39 @@ def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
+def comando_estado(windows: bool | None = None) -> str:
+    """O command do hook de estado no formato que o Codex executa NESTE sistema.
+
+    No Windows o Codex roda hooks pelo PowerShell (medido: 7.6.6), onde `"exe" "arg"` e erro de
+    sintaxe (UnexpectedToken) e o hook sai com 1 em todo evento; a forma e `& "exe" "arg"`. O
+    `; exit 0` faz o papel do `|| exit 0` sem depender do `||`, que o PowerShell 5.1 nao tem.
+    """
+    windows = os.name == "nt" if windows is None else windows
+    if not windows:
+        return _STATE_COMMAND
+    return f'& "{sys.executable}" "{STATE_HOOK}" ; exit 0'
+
+
 def _tem_hook(grupos: object) -> bool:
     return isinstance(grupos, list) and any(
         isinstance(g, dict) and isinstance(g.get("hooks"), list)
         and any(isinstance(h, dict) and _refers_to(h.get("command"), STATE_HOOK, por_nome=True)
                 for h in g["hooks"])
         for g in grupos)
+
+
+def _reescrever_formato_cmd(hooks: dict, comando: str) -> list[str]:
+    tocados: list[str] = []
+    for ev, grupos in hooks.items():
+        if not isinstance(grupos, list):
+            continue
+        for g in grupos:
+            for h in (g.get("hooks") if isinstance(g, dict) and isinstance(g.get("hooks"), list) else []):
+                if (isinstance(h, dict) and _refers_to(h.get("command"), STATE_HOOK, por_nome=True)
+                        and h.get("command") != comando):
+                    h["command"] = comando
+                    tocados.append(ev)
+    return tocados
 
 
 def ensure_codex_state_hook_installed(home: Path | None = None) -> list[str]:
@@ -46,10 +74,16 @@ def ensure_codex_state_hook_installed(home: Path | None = None) -> list[str]:
         hooks = data.setdefault("hooks", {})
         # Evento com valor que não é lista é arquivo editado à mão: não se mexe (mesma regra do
         # _sync_hook do Claude), em vez de zerar o que estava lá.
+        comando = comando_estado()
         faltando = [ev for ev in _EVENTOS
                     if isinstance(hooks.get(ev, []), list) and not _tem_hook(hooks.get(ev))]
         for ev in faltando:
-            hooks.setdefault(ev, []).append({"hooks": [{"type": "command", "command": _STATE_COMMAND}]})
+            hooks.setdefault(ev, []).append({"hooks": [{"type": "command", "command": comando}]})
+        # Entrada nossa no formato cmd (`"exe" "arg" || exit 0`) e reescrita SO no Windows: la ela
+        # falha em todo evento, e hook que falha nao tem aprovacao a preservar. No POSIX o formato
+        # antigo fica como esta (reescrever invalidaria a confianca dada no Codex).
+        if os.name == "nt":
+            faltando += _reescrever_formato_cmd(hooks, comando)
         if faltando:
             _write(path, data)
         return faltando

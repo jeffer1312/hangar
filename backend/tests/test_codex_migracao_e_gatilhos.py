@@ -86,6 +86,25 @@ def test_instalador_acrescenta_uma_vez_e_nao_reescreve_entrada_existente(tmp_pat
     assert json.loads((codex / "hooks.json").read_text()) == data
 
 
+def test_no_windows_o_hook_de_estado_vai_em_powershell_e_o_formato_cmd_e_reescrito(tmp_path, monkeypatch):
+    # Medido na VM (codex 0.154.0): hooks rodam no PowerShell 7; `"exe" "arg" || exit 0` e
+    # UnexpectedToken e sai com 1 em todo evento. Formato antigo nosso e reescrito SO no Windows.
+    ps = codex_hook_installer.comando_estado(windows=True)
+    assert ps.startswith('& "') and ps.endswith('" ; exit 0') and "state_hook.py" in ps
+    assert codex_hook_installer.comando_estado(windows=False) == codex_hook_installer._STATE_COMMAND
+    codex = tmp_path / ".codex"
+    codex.mkdir()
+    (codex / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [_grupo(ESTADO)],
+                                                             "PreToolUse": [_grupo(PESSOAL)]}}))
+    monkeypatch.setattr(codex_hook_installer.os, "name", "nt")
+    gravados = codex_hook_installer.ensure_codex_state_hook_installed(codex)
+    assert "SessionStart" in gravados
+    data = json.loads((codex / "hooks.json").read_text())
+    assert data["hooks"]["SessionStart"] == [_grupo(ps)], "formato cmd reescrito no Windows"
+    assert [h["command"] for g in data["hooks"]["PreToolUse"] for h in g["hooks"]] == [PESSOAL, ps]
+    assert codex_hook_installer.ensure_codex_state_hook_installed(codex) == []
+
+
 def test_instalador_nao_zera_evento_que_nao_e_lista(tmp_path):
     codex = tmp_path / ".codex"
     codex.mkdir()

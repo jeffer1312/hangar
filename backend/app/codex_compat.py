@@ -104,7 +104,8 @@ def _split_windows(command: str) -> list[str]:
         raise ValueError("Aspas incompletas no comando Windows")
     if iniciado:
         args.append("".join(atual))
-    return args
+    # O `&` de invocacao do PowerShell nao e argumento.
+    return args[1:] if args[:1] == ["&"] else args
 
 
 def _nome_binario(value: str) -> str:
@@ -160,7 +161,9 @@ def _comando(args: list[str], *, windows: bool) -> str:
         return shlex.join(args)
     # list2cmdline trata barras finais/aspas; envolver os argumentos simples
     # também protege metacaracteres como & e | do cmd.exe.
-    tokens = []
+    # `& ` na frente: o Codex roda o hook pelo PowerShell (medido 7.6.6), onde uma string entre
+    # aspas no inicio da linha nao executa nada (UnexpectedToken) — o hook saia com 1 sempre.
+    tokens = ["&"]
     for arg in args:
         token = subprocess.list2cmdline([arg])
         if not token.startswith('"'):

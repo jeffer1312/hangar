@@ -22,6 +22,8 @@ _LOGIN_COMPLETED = "account/login/completed"
 _LOGIN_TIMEOUT = 15 * 60.0
 _REQUEST_TIMEOUT = 30.0
 _AUTH_TTL = 60.0
+# Quanto tempo um "indisponivel" (app-server que nao respondeu) vale sem tentar de novo.
+_INDISPONIVEL_TTL = 20.0
 
 
 def _error(code: str, **params) -> dict:
@@ -105,6 +107,7 @@ class CodexContasLogin:
         self._preparations: dict[str, asyncio.Task] = {}
         self._auth_cache: dict[str, tuple[tuple, int, float, dict]] = {}
         self._auth_generation: dict[str, int] = {}
+        self._indisponivel: dict[str, tuple[tuple, float]] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -224,14 +227,21 @@ class CodexContasLogin:
         if (not refresh and cached and cached[0] == signature and cached[1] == generation
                 and time.monotonic() - cached[2] <= _AUTH_TTL):
             return copy.deepcopy(cached[3])
+        indisponivel = self._indisponivel.get(key)
+        if not refresh and indisponivel and indisponivel[0] == signature \
+                and time.monotonic() - indisponivel[1] <= _INDISPONIVEL_TTL:
+            return {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
         try:
             async with self.native(Path.home(), account.home, account=account) as native:
                 result = await self._read_auth_native(native)
         except (CodexNativoErro, OSError, RuntimeError, ValueError):
-            return {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
+            result = {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
         current_signature = self._auth_signature(account)
-        if result["status"] != "unavailable" and self._auth_generation.get(key, 0) == generation \
-                and current_signature == signature:
+        if result["status"] == "unavailable":
+            # Tambem se lembra do fracasso: sem isto cada listagem de credenciais subia um
+            # app-server por conta e esperava o teto de 3s de cada um (medido: 6,4s no Windows).
+            self._indisponivel[key] = (current_signature, time.monotonic())
+        elif self._auth_generation.get(key, 0) == generation and current_signature == signature:
             self._auth_cache[key] = (signature, generation, time.monotonic(), copy.deepcopy(result))
         return result
 

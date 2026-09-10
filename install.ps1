@@ -1232,12 +1232,21 @@ if ($jaTem -or (Pergunte '  Instalar (recomendado)?')) {
     # PowerShell pede: script local roda, script baixado da internet so assinado.
     # `return` aqui encerraria o SCRIPT (nao estamos numa funcao) e pularia os passos 6, 7 e 8.
     $podeEscrever = $true
-    if ((Get-ExecutionPolicy) -eq 'Restricted') {
-        Nota 'O Windows esta com ExecutionPolicy=Restricted: nenhum perfil carrega.'
+    # A politica e POR INTERPRETADOR: rodando no pwsh 7 (RemoteSigned de fabrica) o Get daqui nao
+    # ve o Windows PowerShell 5.1 em Restricted — e o 5.1 e o terminal padrao, onde o perfil e o
+    # `codex.ps1` do npm morriam com PSSecurityException mesmo depois de instalar.
+    $interpretes = @(@{ nome = 'Windows PowerShell 5.1'; exe = 'powershell.exe' })
+    if (Get-Command pwsh -ErrorAction SilentlyContinue) { $interpretes += @{ nome = 'PowerShell 7'; exe = 'pwsh' } }
+    $restritos = @($interpretes | Where-Object {
+        (& $_.exe -NoProfile -Command 'Get-ExecutionPolicy' 2>$null) -eq 'Restricted' })
+    if ($restritos.Count -gt 0) {
+        Nota ("ExecutionPolicy=Restricted em: " + (($restritos | ForEach-Object { $_.nome }) -join ', ') + ". Nenhum perfil carrega la.")
         Nota 'Sem mudar isso, o wrapper nao funciona E todo terminal novo mostra erro.'
         if (Pergunte '  Liberar script local pro seu usuario (RemoteSigned, sem admin)?') {
-            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
-            Ok 'ExecutionPolicy do usuario = RemoteSigned'
+            foreach ($i in $restritos) {
+                & $i.exe -NoProfile -Command 'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force'
+                Ok "$($i.nome): ExecutionPolicy do usuario = RemoteSigned"
+            }
         } else {
             $podeEscrever = $false
             Falta 'wrapper NAO instalado - assim ele so criaria erro em todo terminal novo'

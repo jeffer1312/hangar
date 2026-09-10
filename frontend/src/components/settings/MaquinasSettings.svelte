@@ -462,6 +462,18 @@
     {#if origemRecusada}
       <p class="id-aviso" role="status">{m.config_term_origins_recusada({ origem: origemRecusada })}</p>
     {/if}
+    <!-- O campo escreve num rascunho; sem este botão a tela pedia pra somar a origem e não tinha
+         como gravar (o Salvar do rascunho só existia em Configurações do servidor). -->
+    {#if store.temMudanca || store.salvando || store.salvo}
+      <div class="id-linha">
+        {#if store.salvo}<span class="id-ok">{m.config_server_salvo()}</span>{/if}
+        {#if store.temMudanca || store.salvando}
+          <button type="button" class="btn primario" onclick={store.salvar} disabled={store.salvando}>
+            {store.salvando ? m.config_motores_salvando() : m.ctx_salvar()}
+          </button>
+        {/if}
+      </div>
+    {/if}
   {/if}
 
   <div class="ss-sep"></div>
@@ -592,4 +604,16 @@
   .id-campo:read-only { opacity: 0.6; }
   .id-aviso { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--warning); }
   .id-erro { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--error); }
+  .id-linha { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); margin: 0 0 var(--space-3); }
+  .id-ok { font-size: var(--text-xs); color: var(--text-secondary); }
+  .btn {
+    height: 40px; padding: 0 var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated); color: var(--text-primary);
+    font-size: var(--text-sm); font-weight: 600;
+    transition: transform 160ms ease-out;
+  }
+  .btn:not(:disabled):active { transform: scale(0.97); }
+  .btn.primario { background: var(--accent); color: #fff; }
+  .btn:disabled { opacity: 0.45; }
 </style>
