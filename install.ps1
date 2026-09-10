@@ -111,10 +111,14 @@ function Reparar-DonoTarefa($nome) {
 }
 
 function Symlink-Funciona {
+    # `mklink`, e NAO `New-Item -ItemType SymbolicLink`: no Windows PowerShell 5.1 o New-Item nao
+    # pede o flag de criacao sem privilegio, entao falha ("requer privilegio de administrador")
+    # mesmo com o Modo Desenvolvedor ligado — e o instalador dizia que o modo estava desligado.
+    # O mklink e o os.symlink do Python (quem cria os atalhos de verdade) honram o modo.
     $t = Join-Path $env:TEMP ("hangar-symlink-" + [guid]::NewGuid().ToString('N'))
     try {
-        New-Item -ItemType SymbolicLink -Path $t -Target $env:TEMP -ErrorAction Stop | Out-Null
-        return $true
+        & cmd /c mklink /D "$t" "$env:TEMP" 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $t))
     } catch { return $false }
     # Directory.Delete e nao Remove-Item: no 5.1 o Remove-Item num symlink de pasta estoura
     # NullReferenceException (medido), e o Delete do .NET apaga so o link, nunca o alvo.

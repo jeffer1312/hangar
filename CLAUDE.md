@@ -1776,6 +1776,12 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     `pair_texto.py`, stdlib-only (mesma regra do `engines.py`).
   - **Protocolo completo só pro recém-chegado** (`snap[m] is None`); veterano recebe "fulano entrou";
     peers e tarefa iguais = nada. Adicionar o 5º membro disparava 5 prompts de 1,5KB, 4 redundantes.
+  **A sonda é `cmd /c mklink /D`, não `New-Item -ItemType SymbolicLink`** (medido 10/09/2026 na
+  VM, PowerShell 5.1.26100, token restrito via `runas /trustlevel:0x20000`): com o Modo
+  Desenvolvedor LIGADO o `New-Item` do 5.1 ainda falha com "requer privilégio de administrador",
+  porque não pede o flag de criação sem privilégio; `mklink` e o `os.symlink` do Python (quem cria
+  os atalhos das contas) funcionam. Com o `New-Item` o instalador dizia "modo desligado" pra quem
+  tinha acabado de ligar. A sonda nova dá `False` com o modo desligado e `True` ligado.
   - **Tarefa diferente da existente é 409** sem `--substituir-tarefa` — cada `--pair` de um árbitro
     sobrescrevia a de todos, calado.
   - **Toda saída avisa quem ficou pela mesma esteira**: unpair, kill (não avisava ninguém — os pares
