@@ -1181,6 +1181,7 @@ function Instalar-Bloco-No-Perfil($perfil) {
     $bloco = @($marca,
                ". `"$raiz\scripts\shell\claude.ps1`"",
                ". `"$raiz\scripts\shell\claude-conta.ps1`"",
+               ". `"$raiz\scripts\shell\codex.ps1`"",
                $marcaFim) -join "`r`n"
 
     # Marca de abertura SEM a de fechamento: arquivo mexido na mao. Nao adivinha onde o bloco

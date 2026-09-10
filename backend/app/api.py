@@ -53,7 +53,7 @@ from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, Run
 from app.planprog import (plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir,
                           PlanPinError, PIN_NONE, marcar_step, arquivar, caminho_do_plano,
                           PlanWriteError)
-from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
+from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines, fila_interna_pendente,
                         linha_mais_parecida)
 from app.prune import prune_loop as _prune_loop
 from app.renova_token import laco as _renova_token_loop
@@ -1049,6 +1049,9 @@ def _confirm_and_drain(name: str) -> None:
         # mesmo defeito, pela porta do lado. Aqui "nao sei" nunca decide nada.
         committed = committed_user_lines(info.jsonl, info.provider)
         inicio_ts = _transcript_start_ts(info.jsonl)
+        # Enfileirada na TUI e ainda nao consumida: entregue, mas sem bolha real — segue visivel
+        # como bolha da fila em vez de ser confirmada (escondida) pela linha de enqueue.
+        na_fila = fila_interna_pendente(info.jsonl, info.provider)
         if committed is None or inicio_ts is None:
             _log.warning("confirmacao adiada name=%s: transcript ilegivel agora (nada foi "
                          "reenfileirado nem dado por perdido)", name)
@@ -1066,6 +1069,7 @@ def _confirm_and_drain(name: str) -> None:
                 time.time(),
                 grace=grace,
                 confirm_only=True,
+                na_fila_tui=na_fila,
             )
         else:
             # Estado DESCONHECIDO (marcador ausente): nao da pra provar que a sessao nao esta no meio de
@@ -1096,6 +1100,7 @@ def _confirm_and_drain(name: str) -> None:
                 time.time(),
                 grace=grace,
                 max_attempts=max_attempts,
+                na_fila_tui=na_fila,
             )
             if requeued:
                 # Log com o TEXTO e com a linha mais parecida do transcript. `REQUEUE name=X n=1`
