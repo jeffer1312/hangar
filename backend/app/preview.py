@@ -309,8 +309,21 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     fim = max((i for i, ln in enumerate(lines)
                if _RULE_RE.match(ln) or _OVERLAY_RULE_RE.match(ln) or _PI_BOX_RE.match(ln)),
               default=len(lines))
+    # E a conversa COMEÇA na última mensagem do usuário: prosa em voo é sempre posterior a ela.
+    # O que motivou: o Claude Code imprime o aviso de largada (plugin com chave fora do schema no
+    # hooks.json, CLAUDE.md acima do limite) com o MESMO ● do bloco do assistente, e como a varredura
+    # pega o ÚLTIMO ●, uma sessão recém-aberta que só rodou ferramenta mostrava o aviso como se fosse
+    # o assistente falando. Corte por POSIÇÃO, igual ao do rodapé — qualquer chrome futuro de largada
+    # cai fora junto. Sem ❯ no pane (rolou pra fora) -> varre tudo, como antes.
+    # O ❯ da CAIXA DE DIGITAR não conta: ela é desenhada régua/❯/régua e cai dentro do `fim` (o corte
+    # de rodapé pega a régua de BAIXO), então cortar por ela zeraria a prévia sempre. ❯ logo depois de
+    # uma régua é a caixa; qualquer outro é a mensagem que o usuário mandou. Nenhum sobrando -> varre
+    # tudo, como antes.
+    inicio = max((i + 1 for i, ln in enumerate(lines[:fim])
+                  if _USER_PROMPT_RE.match(ln) and not (i and _RULE_RE.match(lines[i - 1]))),
+                 default=0)
     start = -1
-    for i, ln in enumerate(lines[:fim]):   # sem régua, fim == len(lines) e a fatia é a lista toda
+    for i, ln in enumerate(lines[inicio:fim], inicio):  # sem régua, fim == len(lines)
         s = ln.lstrip()
         corpo = s[1:].lstrip()
         if (s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo)
