@@ -28,8 +28,8 @@
   // `--chart-N` vem do app.css (bloco escuro + bloco claro), não daqui: cor de tema tem que
   // trocar junto com o tema, e hex dentro do componente fica de fora dessa troca.
   const TIPOS: { id: Tipo; label: string; slot: string }[] = [
-    { id: 'input', label: 'input', slot: '--chart-1' },
-    { id: 'output', label: 'output', slot: '--chart-2' },
+    { id: 'input', label: m.custos_input_sem_cache(), slot: '--chart-1' },
+    { id: 'output', label: m.custos_output_total(), slot: '--chart-2' },
     { id: 'cache_write', label: m.custos_tipo_cache_escrito(), slot: '--chart-3' },
     { id: 'cache_read', label: m.custos_tipo_cache_lido(), slot: '--chart-4' },
   ];
@@ -59,11 +59,11 @@
   // Cor por fonte, não por posição na lista: com a paleta seguindo a ordem do ranking, um dia em
   // que o Codex passasse o Claude trocaria as duas cores no meio da série.
   const SLOT_FONTE: Record<string, string> = {
-    claude: '--chart-1', codex: '--chart-2', pi: '--chart-3',
+    claude: '--chart-1', codex: '--chart-2', pi: '--chart-3', omp: '--chart-4', kimi: '--text-secondary',
   };
-  // ponytail: fonte fora das três que o backend produz cai no slot 4; duas delas colidiriam na
-  // cor — quando existir uma quarta fonte, o lugar de nomeá-la é este mapa.
   const corDaFonte = (k: string) => SLOT_FONTE[k] ?? '--chart-4';
+  const SOURCE_NAMES: Record<string, string> = { claude: m.custos_claude_code(), codex: 'Codex', pi: 'Pi', omp: 'oh-my-pi', kimi: 'Kimi' };
+  const sourceName = (key: string) => SOURCE_NAMES[key] ?? key;
 
   const vazio = (): DimBucket => ({
     key: 'totals', sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
@@ -79,6 +79,7 @@
   });
 
   let loading = $state(true);
+  let pendingServers = $state(0);
   let merged = $state<MergedReport>(relatorioVazio());
   let period = $state<Periodo>('30d');
   let currency = $state<Cur>(localStorage.getItem('cp_costs_currency') === 'BRL' ? 'BRL' : 'USD');
@@ -93,6 +94,8 @@
   let ocultos = $state<Set<string>>(new Set(lerOcultos()));
   let larguraGrafico = $state(0);
   let diaSobHover = $state<number | null>(null);
+  let dailyMetric = $state<Metrica>('tokens');
+  const dailyValue = (value: number) => dailyMetric === 'tokens' ? tok(value) : moeda(value);
 
   const OCULTOS_KEY = 'cp_proj_ocultos';
   function lerOcultos(): string[] {
@@ -150,15 +153,22 @@
   async function load(p: Periodo, alvo: Server[], forcar = false) {
     const meu = ++geracao;
     loading = true;
+    pendingServers = alvo.length;
     // "Tentar de novo" tem de furar o cache: quem clica ali está dizendo que o que está na tela
     // não serve. Sem isto o botão devolveria o mesmo dado cacheado e pareceria não fazer nada.
     if (forcar) await clienteQuery.invalidateQueries({ queryKey: ['custos'] });
-    const results: ServerResult[] = await Promise.all(
+    const results: ServerResult[] = [];
+    await Promise.all(
       alvo.map(async (s) => {
-        // Pelo cache: trocar de período e voltar não repete a leitura (a mais cara do app).
-        try { return { report: await clienteQuery.fetchQuery(custos(s, p)), label: s.label, id: s.id }; }
-        // `label` também no erro: o aviso de parcial precisa dizer o NOME da máquina.
-        catch { return { report: null, label: s.label, id: s.id }; }
+        let result: ServerResult;
+        try { result = { report: await clienteQuery.fetchQuery(custos(s, p)), label: s.label, id: s.id }; }
+        catch { result = { report: null, label: s.label, id: s.id }; }
+        if (meu !== geracao) return;
+        results.push(result);
+        pendingServers -= 1;
+        merged = mergeReports(results, p);
+        // Uma máquina lenta não segura os relatórios que já chegaram.
+        if (result.report || pendingServers === 0) loading = false;
       }),
     );
     if (meu !== geracao) return; // resposta de um período que o usuário já trocou
@@ -235,7 +245,13 @@
   // o detalhamento manda só a chave, então o rótulo se busca neste mapa.
   const rotulos = $derived(new Map(
     report.by_provider.filter((b) => b.label).map((b) => [b.key, b.label as string])));
-  const rot = (b: DimBucket) => b.label || rotulos.get(b.key) || b.key;
+  function providerName(key: string, label?: string | null): string {
+    const name = label || rotulos.get(key) || key;
+    const cli = key.startsWith('anthropic:') ? sourceName('claude')
+      : key.startsWith('codex:') ? sourceName('codex') : '';
+    return cli && !name.startsWith(`${cli} · `) ? `${cli} · ${name}` : name;
+  }
+  const rot = (b: DimBucket) => providerName(b.key, b.label);
   // Nome legível de uma chave no rótulo do recorte: provedor usa o e-mail (rotulos), projeto o
   // basename — o caminho cru de 80 chars no texto do recorte não é "nome amigável" de nada.
   // Prefere o rótulo VIVO de `servidores`: o load é chaveado por id|baseUrl|token (rename não
@@ -246,9 +262,9 @@
     ?? report.by_servidor.find((b) => b.key === id)?.label ?? id;
 
   const nomeDa = (d: Dim, key: string) =>
-    d === 'provider' ? (rotulos.get(key) ?? key)
+    d === 'provider' ? providerName(key)
       : d === 'project' ? projectLabel(key)
-        : d === 'servidor' ? nomeServidor(key) : key;
+        : d === 'servidor' ? nomeServidor(key) : d === 'source' ? sourceName(key) : key;
 
   // A lista de UMA dimensão é o RECORTE COMPLETO, incluindo o filtro da própria dimensão:
   // com o modelo X selecionado, a tabela "Por modelo" mostra só o X — decidido 2026-08-06, o
@@ -352,7 +368,7 @@
   const camadas = $derived(
     temCombos
       ? agruparPor(recorte, 'source')
-          .map((b) => ({ id: b.key, label: b.key, slot: corDaFonte(b.key) }))
+          .map((b) => ({ id: b.key, label: sourceName(b.key), slot: corDaFonte(b.key) }))
       : TIPOS.map((t) => ({ id: t.id as string, label: t.label, slot: t.slot })),
   );
   const camadasVisiveis = $derived(camadas.filter((c) => !camadasOff.has(c.id)));
@@ -371,12 +387,12 @@
       }
       dias = [...porDia].map(([key, linhas]) => ({
         key, bucket: { ...somar(linhas), key },
-        custos: new Map(agruparPor(linhas, 'source').map((b) => [b.key, b.cost])),
+        custos: new Map(agruparPor(linhas, 'source').map((b) => [b.key, valorDe(b, dailyMetric)])),
       })).sort((a, b) => b.key.localeCompare(a.key));
     } else {
       dias = report.by_day.map((b) => ({
         key: b.key, bucket: b,
-        custos: new Map<string, number>(TIPOS.map((t) => [t.id as string, custoDe(b, t.id)])),
+        custos: new Map<string, number>(TIPOS.map((t) => [t.id as string, dailyMetric === 'tokens' ? tokensDe(b, t.id) : custoDe(b, t.id)])),
       }));
     }
     const mapa = new Map(dias.map((d) => [d.key, d]));
@@ -457,6 +473,8 @@
 
   // Partição + régua em lib/costs.ts, com teste: a garantia é "esconder não muda total nenhum".
   const partido = $derived(partirOcultos(projetos, ocultos));
+  let allProjects = $state(false);
+  const shownProjects = $derived(allProjects ? partido.visiveis : partido.visiveis.slice(0, 12));
   const projetosOcultos = $derived(partido.escondidos);
   const picoProjeto = $derived(partido.pico);
 
@@ -508,6 +526,8 @@
   // Rodapé: os grátis saem da lista de "sem tarifa conhecida" — o rótulo ali contradiz o "grátis"
   // da linha do modelo. Cada grupo ganha a própria frase.
   const semTarifaFooter = $derived(report.sem_tarifa.filter((m) => !isFree(m)));
+  const unknownInSelection = $derived(semTarifaFooter.filter((model) =>
+    !temCombos || recorte.some((row) => row.model === model)));
   const freeFooter = $derived(report.sem_tarifa.filter((m) => isFree(m)));
   const mFoco = (n: number) => (semTarifa || recorteVazio ? '—' : moeda(n));
   const m2Foco = (n: number) => (semTarifa || recorteVazio ? '—' : m2(n));
@@ -641,16 +661,25 @@
 
 <div class="costs">
  <div class="inner">
-  <div class="filtros">
+  <div class="page-intro">
+    <div><h1>{m.custos_consumo_estimativa()}</h1><p>{m.custos_aviso_estimativa()}</p></div>
+    <button class="clear" disabled={loading || pendingServers > 0} onclick={() => load(period, servidoresAtivos, true)}>{m.custos_atualizar()}</button>
+  </div>
+  <div class="period-toolbar">
     <span class="seg" role="group" aria-label={m.custos_periodo()}>
       {#each PERIODOS as p}
         <button aria-pressed={period === p.id} onclick={() => (period = p.id)}>{p.label}</button>
       {/each}
     </span>
-
-    <!-- Cada seletor lista a SUA dimensão dentro do RECORTE completo (listaDa aplica até o
-         próprio filtro): com um filtro ativo a lista fica só com o que existe nele, e trocar de
-         valor é via "limpar filtros". -->
+    <span class="seg" role="group" aria-label={m.custos_moeda()}>
+      <button aria-pressed={currency === 'USD'} onclick={() => setCurrency('USD')}>US$</button>
+      <button aria-pressed={currency === 'BRL'} onclick={() => setCurrency('BRL')}
+        disabled={!rate} title={rate ? undefined : m.custos_cotacao_indisponivel()}>R$</button>
+    </span>
+  </div>
+  <details class="filter-details" open={window.matchMedia('(min-width: 820px)').matches}>
+    <summary>{m.custos_filtros()}</summary>
+    <div class="filtros">
     <span class="fgroup">
       <span class="flabel" id="lbl-prov">{m.custos_dim_provedor()}</span>
       <Select ariaLabel={m.custos_dim_provedor()} value={filtroAtivo.provider ?? ''}
@@ -663,7 +692,7 @@
       <span class="flabel" id="lbl-fonte">{m.custos_dim_fonte()}</span>
       <Select ariaLabel={m.custos_dim_fonte()} value={filtroAtivo.source ?? ''}
         opcoes={[{ value: '', label: m.custos_todas_n({ n: opcoesFonte.length }) },
-                 ...opcoesFonte.map((b) => ({ value: b.key, label: b.key, hint: custoDesconhecido(b) ? '—' : moeda(b.cost) }))]}
+                 ...opcoesFonte.map((b) => ({ value: b.key, label: sourceName(b.key), hint: custoDesconhecido(b) ? '—' : moeda(b.cost) }))]}
         onchange={(v) => setFiltro('source', v)} />
     </span>
 
@@ -728,14 +757,9 @@
       </span>
     {/if}
 
-    <span class="seg" role="group" aria-label={m.custos_moeda()}>
-      <button aria-pressed={currency === 'USD'} onclick={() => setCurrency('USD')}>US$</button>
-      <button aria-pressed={currency === 'BRL'} onclick={() => setCurrency('BRL')}
-        disabled={!rate} title={rate ? undefined : m.custos_cotacao_indisponivel()}>R$</button>
-    </span>
-
-    <button class="clear" onclick={limpar}>{m.custos_limpar_filtros()}</button>
-  </div>
+    <button class="clear" disabled={!temFiltro && !camadasOff.size} onclick={limpar}>{m.custos_limpar_filtros()}</button>
+    </div>
+  </details>
 
   {#if mostrarServidores && servidores.length > 1}
     <div class="chips" role="group" aria-label={m.custos_servidores_relatorio()}>
@@ -785,12 +809,27 @@
     </p>
   {/if}
 
+  {#if pendingServers > 0}
+    <p class="loading-status" role="status">{m.custos_carregando_maquinas({ n: pendingServers })}</p>
+  {/if}
   {#if loading}
     <p class="muted">{m.comum_carregando()}</p>
   {:else if vazioNoPeriodo}
     <p class="muted">{m.custos_sem_dados_periodo()}</p>
   {:else}
-    <dl class="kpis">
+    <div class="source-tabs" role="group" aria-label={m.custos_dim_fonte()}>
+      <button aria-pressed={!filtroAtivo.source} onclick={() => setFiltro('source', '')}>{m.custos_todas_fontes()}</button>
+      {#each opcoesFonte as source (source.key)}
+        <button aria-pressed={filtroAtivo.source === source.key} onclick={() => alternar('source', source.key)}>
+          <span class="swatch" style="background: var({corDaFonte(source.key)})"></span>
+          {sourceName(source.key)} <span class="dim">{tok(brutos(source))}</span>
+        </button>
+      {/each}
+    </div>
+    {#if unknownInSelection.length}
+      <p class="warn">{m.custos_estimativa_incompleta({ n: unknownInSelection.length })}</p>
+    {/if}
+    <dl class="kpis overview">
       <div class="kpi">
         <dt>{m.custos_custo_periodo()}</dt>
         <!-- Traço, nunca US$ 0,00, quando o recorte é um modelo sem tarifa ou vazio: o zero que o
@@ -823,18 +862,9 @@
         <div class="foot">{m.custos_passaram_modelo()}</div>
       </div>
       <div class="kpi">
-        <dt>{m.custos_equivalente_cobrado()}</dt>
-        <!-- Com detalhamento o front recalcula do recorte (tarifas viajam nos rates); sem ele o
-             escalar do servidor vale só pro total do período, e dentro de um recorte é traço,
-             nunca o número global. -->
-        <dd>{temFiltro && (!temCombos || semTarifa || recorteVazio) ? '—' : tok(equivalenteRecorte)}</dd>
-        <div class="foot">
-          {#if temFiltro && !temCombos}{m.custos_so_total_periodo()}
-          {:else if recorteVazio}{m.custos_sem_dados_recorte_short()}
-          {:else if semTarifa}{m.custos_so_volume_medido()}
-          {:else if tudoGratis}{m.custos_modelo_gratis_nada()}
-          {:else}{m.custos_do_bruto({ pct: pct(equivalenteRecorte, brutos(foco)) })}{/if}
-        </div>
+        <dt>{m.custos_cache_na_entrada()}</dt>
+        <dd>{pct(foco.cache_read, foco.input + foco.cache_read + foco.cache_write)}</dd>
+        <div class="foot">{tok(foco.cache_read)} {m.custos_tokens_reutilizados()}</div>
       </div>
       <div class="kpi">
         <dt>{m.custos_economia_cache()}</dt>
@@ -850,7 +880,13 @@
     </dl>
 
     <div class="card">
-      <h2>{m.custos_gasto_por_dia()}</h2>
+      <div class="chart-heading">
+        <h2>{m.custos_uso_por_dia()}</h2>
+        <span class="seg" role="group" aria-label={m.custos_metrica_diaria()}>
+          <button aria-pressed={dailyMetric === 'tokens'} onclick={() => { dailyMetric = 'tokens'; diaSobHover = null; }}>{m.ctx_tokens()}</button>
+          <button aria-pressed={dailyMetric === 'custo'} onclick={() => { dailyMetric = 'custo'; diaSobHover = null; }}>{m.custos_estimativa_api()}</button>
+        </span>
+      </div>
       <p class="hint">
         {m.custos_empilhado_por({ modo: temCombos ? m.custos_dim_fonte() : m.custos_tipo_token() })}{#if temFiltro}{RESSALVA}{/if}
       </p>
@@ -871,21 +907,24 @@
         {#if serie.length}
           <svg viewBox="0 0 {grafico.W} {grafico.H}" width={grafico.W} height={grafico.H}
             role="img"
-            aria-label={m.custos_grafico_aria({ modo: temCombos ? m.custos_dim_fonte() : m.custos_tipo_token() })}>
+            aria-label={m.custos_grafico_diario({ metrica: dailyMetric === 'tokens' ? m.ctx_tokens() : m.custos_estimativa_api() })}>
             {#each grafico.linhas as g}
               <line class="grid-line" x1={grafico.padL} x2={grafico.W} y1={grafico.yDe(g)} y2={grafico.yDe(g)} />
-              <text x={grafico.padL - 8} y={grafico.yDe(g) + 3} text-anchor="end">{moeda(g)}</text>
+              <text x={grafico.padL - 8} y={grafico.yDe(g) + 3} text-anchor="end">{dailyValue(g)}</text>
             {/each}
             {#each grafico.barras as b, i}
               {#each b.segs as s}
                 <rect x={b.x} y={s.y} width={grafico.bw} height={s.h} rx="2" fill="var({s.slot})" />
               {/each}
               {#if b.total > 0}
-                <!-- role="presentation": a área de hover é ponteiro puro, e o conteúdo dela já é
-                     lido no aria-label do gráfico e na legenda — não é um segundo controle. -->
-                <rect class="hit" role="presentation" x={b.x} y={grafico.padT}
+                <rect class="hit" role="button" tabindex="0"
+                  aria-label="{rotuloDia(b.dia.key)}: {dailyValue(b.total)}" x={b.x} y={grafico.padT}
                   width={grafico.bw} height={grafico.plotH}
-                  onpointerenter={() => (diaSobHover = i)} onpointerleave={() => (diaSobHover = null)} />
+                  onclick={() => (diaSobHover = i)}
+                  onkeydown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); diaSobHover = i; }
+                  }}
+                  onfocus={() => (diaSobHover = i)} onpointerenter={() => (diaSobHover = i)} />
               {/if}
             {/each}
             {#each grafico.barras as b, i}
@@ -904,8 +943,8 @@
       <p class="caption">
         {#if diaSobHover !== null && grafico.barras[diaSobHover]}
           {@const b = grafico.barras[diaSobHover]}
-          <b>{rotuloDia(b.dia.key)}</b> · {m2(b.total)} · {sess(b.dia.bucket.sessions)}
-          {#each b.segs as s}<span class="cap-seg"><i class="swatch" style="background: var({s.slot})"></i>{s.label} {m2(s.cost)}</span>{/each}
+          <b>{rotuloDia(b.dia.key)}</b> · {dailyMetric === 'tokens' ? tok(b.total) : m2(b.total)} · {sess(b.dia.bucket.sessions)}
+          {#each b.segs as s}<span class="cap-seg"><i class="swatch" style="background: var({s.slot})"></i>{s.label} {dailyMetric === 'tokens' ? tok(s.cost) : m2(s.cost)}</span>{/each}
         {:else}
           {m.custos_hover_detalhe()}
         {/if}
@@ -1011,7 +1050,7 @@
             <div class="row">
               <button aria-pressed={filtroAtivo.source === b.key}
                 onclick={() => alternar('source', b.key)}>
-                <span class="nm">{b.key}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
+                <span class="nm">{sourceName(b.key)}</span><span class="vl">{custoDesconhecido(b) ? '—' : m2(b.cost)}</span>
                 <span class="track" style="width: {Math.max(1.5, (b.cost / picoFonte) * 100)}%">
                   {#each TIPOS as t}{#if custoDe(b, t.id) > 0}<i style="background: var({t.slot}); flex: {custoDe(b, t.id)}"></i>{/if}{/each}
                 </span>
@@ -1055,7 +1094,7 @@
         {m.custos_pasta_sessao()}{#if temFiltro}{RESSALVA}{/if}
       </p>
       <div class="rank">
-        {#each partido.visiveis as b}
+        {#each shownProjects as b (b.key)}
           <div class="row">
             <button aria-pressed={filtroAtivo.project === b.key}
               title={m.custos_clique_recortar()} onclick={() => alternar('project', b.key)}>
@@ -1071,6 +1110,11 @@
         {:else}
           <p class="empty">{m.custos_sem_dados_no_periodo()}</p>
         {/each}
+        {#if partido.visiveis.length > 12}
+          <button class="project-expand" aria-expanded={allProjects} onclick={() => (allProjects = !allProjects)}>
+            {allProjects ? m.custos_mostrar_menos() : m.custos_ver_projetos({ n: partido.visiveis.length })}
+          </button>
+        {/if}
         {#if projetosOcultos.length}
           <div class="hiddenbar">
             <span>
@@ -1257,10 +1301,17 @@
       {/if}
     </div>
 
-    <div class="card">
+    <details class="card methodology">
+      <summary>{m.custos_como_calculamos()}</summary>
+      <p class="note">{m.custos_metodo_codex()}</p>
+      <p class="note">{m.custos_metodo_standard()}</p>
       <p class="note">
-        <b>{m.custos_fontes()}</b> Claude Code (<code>~/.claude/projects/**/*.jsonl</code>) ·
-        Codex (<code>~/.codex/sessions</code>) · Pi (<code>~/.pi/agent/sessions</code>).<br />
+        <b>{m.custos_equivalente_cobrado()}:</b>
+        {temFiltro && (!temCombos || semTarifa || recorteVazio) ? '—' : tok(equivalenteRecorte)}.
+        {m.custos_equivalente_metodo()}
+      </p>
+      <p class="note">
+        <b>{m.custos_fontes()}</b> {Object.values(SOURCE_NAMES).join(' · ')}.<br />
         <b>{m.custos_tarifas()}</b>{m.custos_tarifas_models()}<br />
         {#if currency === 'BRL' && rate}<b>{m.custos_cotacao()}</b> {m.custos_usd_brl({ taxa: dec(rate, 2) })}<br />{/if}
         {m.custos_custo_tabela()}<b>{m.custos_nao_fatura()}</b>{m.custos_assinatura()}
@@ -1275,7 +1326,7 @@
           {m.custos_aparecem_traco({ lista: semTarifaFooter.join(', ') })}
         {/if}
       </p>
-    </div>
+    </details>
   {/if}
  </div>
 </div>
@@ -1298,7 +1349,28 @@
     padding: var(--navbar-fade) var(--space-4) var(--space-10);
   }
   .inner { max-width: 1120px; margin-inline: auto; }
+  .page-intro { display: flex; align-items: start; gap: var(--space-4); margin-bottom: var(--space-5); }
+  .page-intro h1 { font-size: var(--text-xl); font-weight: 650; margin-bottom: var(--space-1); }
+  .page-intro p { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; max-width: 70ch; }
+  .page-intro .clear { flex: none; }
+  .period-toolbar { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+  .filter-details { margin-bottom: var(--space-4); }
+  .filter-details > summary { cursor: pointer; color: var(--text-secondary); font-size: var(--text-sm); padding-block: var(--space-3); }
+  .filter-details .filtros { margin-bottom: 0; }
+  .source-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+  .source-tabs button { display: inline-flex; align-items: center; gap: var(--space-2); padding: 10px 12px; min-height: 44px; background: transparent; color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+  .source-tabs button[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-dim); }
+  .source-tabs button:hover { background: var(--bg-hover); }
+  .chart-heading { display: flex; justify-content: space-between; gap: var(--space-3); align-items: center; margin-bottom: var(--space-2); }
+  .chart-heading h2 { font-size: var(--text-base); font-weight: 650; }
+  .methodology summary { cursor: pointer; font-size: var(--text-sm); font-weight: 600; }
+  .methodology .note { margin-top: var(--space-3); }
+  .kpis.overview { border-block: 1px solid var(--border-subtle); padding-block: var(--space-4); }
+  .overview .kpi { background: transparent; border: 0; border-radius: 0; padding: var(--space-2); }
+  .overview .kpi dd { font-size: 28px; font-variant-numeric: tabular-nums; }
+  .overview .kpi dd.hero { color: var(--text-primary); font-size: 30px; }
   .muted { color: var(--text-secondary); }
+  .loading-status { color: var(--text-secondary); font-size: var(--text-sm); margin-bottom: var(--space-3); }
   .dim { color: var(--text-secondary); }
 
   /* ── barra de filtro: uma linha, vale pra tudo abaixo ── */
@@ -1307,7 +1379,7 @@
      de provedores atravessava a barra e os dois textos viravam um borrão. --chrome-bg é o mesmo
      vidro da NavBar logo acima, e acompanha o slider de Solidez igual. */
   .filtros {
-    display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: center;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); align-items: end;
     background: var(--chrome-bg); border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md); padding: var(--space-2) var(--space-3);
     margin-bottom: var(--space-4);
@@ -1356,13 +1428,19 @@
   /* rótulo e controle andam juntos: soltos, a quebra de linha deixava "modelo" no fim de uma
      linha e o seletor dele no começo da outra. */
   .fgroup { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+  .filtros .fgroup { flex-direction: column; align-items: stretch; gap: 6px; }
+  .filtros .fgroup:has(.seg) { grid-column: span 2; }
+  .filtros .fgroup :global(.sel-campo) { width: 100%; max-width: none; height: 40px; font-family: var(--font-ui); font-size: var(--text-sm); }
+  .filtros .seg button { flex: 1; }
+  .filtros .clear { margin-left: 0; justify-self: end; grid-column: -2; }
   .flabel { font-size: var(--text-xs); color: var(--text-muted); }
   .clear {
     margin-left: auto; background: transparent; border: 1px solid var(--border-default);
     color: var(--text-secondary); border-radius: var(--radius-sm); padding: 6px 10px;
     font: inherit; font-size: var(--text-xs); cursor: pointer; min-height: 34px;
   }
-  .clear:hover { background: var(--bg-hover); }
+  .clear:disabled { opacity: 0.45; cursor: default; }
+  .clear:hover:not(:disabled) { background: var(--bg-hover); }
 
   .warn { color: var(--warning); font-size: var(--text-sm); margin-bottom: var(--space-3); }
   .recorte {
@@ -1433,7 +1511,8 @@
   .grid-line { stroke: var(--grid-line); stroke-width: 1; }
   .axis-line { stroke: var(--axis-line); stroke-width: 1; }
   text { fill: var(--text-muted); font-size: 10px; font-family: inherit; }
-  .hit { fill: transparent; cursor: crosshair; }
+  .hit { fill: transparent; cursor: pointer; }
+  .hit:focus-visible { outline: 2px solid var(--accent); }
   .caption {
     font-size: var(--text-xs); color: var(--text-secondary); margin-top: var(--space-2);
     display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: center;
@@ -1489,6 +1568,7 @@
     display: flex; gap: 2px; overflow: hidden;
   }
   .rank .track > i { display: block; }
+  .rank .project-expand { display: block; min-height: 44px; color: var(--accent); text-align: center; }
   .hidebtn {
     flex: none; background: none; border: 0; color: var(--text-muted); cursor: pointer;
     font-size: 15px; line-height: 1; padding: 6px; border-radius: 6px; opacity: 0;
@@ -1549,4 +1629,18 @@
   .note { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.6; }
   .note b { color: var(--text-secondary); font-weight: 600; }
   .empty { color: var(--text-muted); font-size: var(--text-sm); padding: var(--space-5) 0; text-align: center; }
+  @media (max-width: 600px) {
+    .filtros { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .page-intro { flex-wrap: wrap; }
+    .page-intro .clear { margin-left: 0; }
+    .chart-heading { align-items: start; flex-direction: column; }
+    .kpis.overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .overview .kpi dd, .overview .kpi dd.hero { font-size: 24px; }
+    .fgroup { flex-wrap: wrap; }
+    .seg button, .clear { min-height: 44px; }
+    .fgroup :global(.sel-campo) { min-height: 44px; }
+    .source-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: var(--space-1); }
+    .source-tabs button { flex: none; }
+    .filter-details { border-block: 1px solid var(--border-subtle); }
+  }
 </style>

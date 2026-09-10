@@ -39,7 +39,7 @@ _log = logging.getLogger(__name__)
 LOCAL = timezone(timedelta(hours=-3))
 
 # Suba isto ao mudar o formato do resumo, senão o cache velho é servido pra sempre.
-CACHE_VERSAO = 1
+CACHE_VERSAO = 2
 
 # Marcador do subagente. O caminho é `<projeto>/<sessionId>/subagents/agent-*.jsonl`.
 # Medido em 01/08/2026: 2.714 arquivos assim, contra 446 de conversa — cresce toda semana.
@@ -47,20 +47,21 @@ _DIR_SUBAGENTE = "subagents"
 
 _CACHE_DIR = Path.home() / ".claude" / ".hangar-custos"
 _lock = threading.Lock()
-_mem: dict[str, dict[str, tuple[tuple[int, int], dict | None]]] = {}
+_mem: dict[str, dict[str, tuple[tuple[int, int], list[dict]]]] = {}
 
 
 @dataclass(frozen=True)
 class UsoSessao:
     session_id: str       # id ÚNICO, derivado do CAMINHO relativo (ver `varrer`)
-    ts: datetime          # PRIMEIRO turno: a sessão pertence ao dia em que começou
-    model: str            # ÚLTIMO modelo NÃO-ignorado
+    ts: datetime          # Primeira resposta deste segmento diário.
+    model: str
     cwd: str
     subagente: bool
     input: int
     output: int
     cache_write: int
     cache_read: int
+    cache_write_1h: int = 0
 
 
 def raiz_projetos(config_dir: Path | None = None) -> Path:
@@ -84,24 +85,15 @@ def _int(v) -> int:
         return 0
 
 
-def ler_transcript(path: Path) -> UsoSessao | None:
-    """Soma o `usage` dos turnos de assistente. None se não sobrar nenhum turno válido.
-
-    Turno cujo modelo está em `pricing.IGNORADOS` (`<synthetic>`, `unknown`) é PULADO INTEIRO:
-    não soma e não vira "último modelo". Sem isso, um turno sintético no fim rouba o slot do
-    modelo e o `linhas_claude` descarta a sessão inteira — é a regressão crítica que a revisão
-    final da fase 1 pegou, noutra forma.
-    """
-    cwd = modelo = ""
-    primeiro: datetime | None = None
-    tot = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0}
-    viu = False
+def ler_transcript(path: Path) -> list[UsoSessao]:
+    """Uso por resposta, separado por dia/modelo; blocos da mesma resposta não somam novamente."""
+    respostas: dict[tuple, UsoSessao] = {}
     try:
         f = path.open(encoding="utf-8", errors="replace")
     except OSError:
-        return None
+        return []
     with f:
-        for linha in f:
+        for numero, linha in enumerate(f):
             # Pré-filtro barato: 5,2 GB de transcript e só a minoria das linhas tem uso.
             # Sem isto o json.loads roda em tudo e a varredura triplica.
             if '"usage"' not in linha:
@@ -119,24 +111,34 @@ def ler_transcript(path: Path) -> UsoSessao | None:
             m = msg.get("model")
             if isinstance(m, str) and m.strip() in pricing.IGNORADOS:
                 continue
-            viu = True
-            cwd = d.get("cwd") or cwd
-            if isinstance(m, str) and m:
-                modelo = m
             ts = d.get("timestamp")
-            if ts and primeiro is None:
-                try:
-                    primeiro = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(LOCAL)
-                except (ValueError, TypeError):
-                    pass
-            tot["input"] += _int(u.get("input_tokens"))
-            tot["output"] += _int(u.get("output_tokens"))
-            tot["cache_write"] += _int(u.get("cache_creation_input_tokens"))
-            tot["cache_read"] += _int(u.get("cache_read_input_tokens"))
-    if not viu or primeiro is None:
-        return None
-    return UsoSessao(session_id="", ts=primeiro, model=modelo or "?", cwd=cwd,
-                     subagente=(_DIR_SUBAGENTE in path.parts), **tot)
+            if not isinstance(ts, str):
+                continue
+            try:
+                quando = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(LOCAL)
+            except ValueError:
+                continue
+            # Sem identidade não há prova de repetição: preserva as linhas antigas.
+            key = (d.get("requestId"), msg["id"]) if msg.get("id") else (numero,)
+            criacao = u.get("cache_creation")
+            cache_1h = _int(criacao.get("ephemeral_1h_input_tokens")) if isinstance(criacao, dict) else 0
+            respostas[key] = UsoSessao(
+                session_id="", ts=quando, model=m or "?", cwd=d.get("cwd") or "",
+                subagente=(_DIR_SUBAGENTE in path.parts),
+                input=_int(u.get("input_tokens")), output=_int(u.get("output_tokens")),
+                cache_write=_int(u.get("cache_creation_input_tokens")),
+                cache_read=_int(u.get("cache_read_input_tokens")),
+                cache_write_1h=min(max(0, cache_1h), max(0, _int(u.get("cache_creation_input_tokens")))))
+    grupos: dict[tuple, UsoSessao] = {}
+    for uso in respostas.values():
+        key = (uso.ts.date(), uso.model, uso.cwd)
+        antes = grupos.get(key)
+        grupos[key] = uso if antes is None else replace(
+            antes, input=antes.input + uso.input, output=antes.output + uso.output,
+            cache_write=antes.cache_write + uso.cache_write,
+            cache_read=antes.cache_read + uso.cache_read,
+            cache_write_1h=antes.cache_write_1h + uso.cache_write_1h)
+    return sorted(grupos.values(), key=lambda u: (u.ts, u.model, u.cwd))
 
 
 def invalidar_cache() -> None:
@@ -151,7 +153,7 @@ def _caminho_cache(raiz: Path) -> Path:
     return _CACHE_DIR / f"transcripts-{h}.json"
 
 
-def _ler_cache(raiz: Path) -> dict[str, tuple[tuple[int, int], dict | None]]:
+def _ler_cache(raiz: Path) -> dict[str, tuple[tuple[int, int], list[dict]]]:
     chave = str(raiz)
     if chave in _mem:
         return _mem[chave]
@@ -165,7 +167,7 @@ def _ler_cache(raiz: Path) -> dict[str, tuple[tuple[int, int], dict | None]]:
         _mem[chave] = {}
         return _mem[chave]
     itens = bruto.get("itens")
-    out: dict[str, tuple[tuple[int, int], dict | None]] = {}
+    out: dict[str, tuple[tuple[int, int], list[dict]]] = {}
     if isinstance(itens, dict):
         for k, v in itens.items():
             # try por ITEM: `{"sig": ["abc", 1]}` é JSON válido e levantaria ValueError aqui,
@@ -194,7 +196,8 @@ def _gravar_cache(raiz: Path, estado: dict) -> None:
 def _serializar(u: UsoSessao) -> dict:
     return {"ts": u.ts.isoformat(), "model": u.model, "cwd": u.cwd,
             "subagente": u.subagente, "input": u.input, "output": u.output,
-            "cache_write": u.cache_write, "cache_read": u.cache_read}
+            "cache_write": u.cache_write, "cache_read": u.cache_read,
+            "cache_write_1h": u.cache_write_1h}
 
 
 def _desserializar(d: dict) -> UsoSessao | None:
@@ -203,7 +206,8 @@ def _desserializar(d: dict) -> UsoSessao | None:
                          model=d["model"], cwd=d.get("cwd", ""),
                          subagente=bool(d.get("subagente")),
                          input=int(d["input"]), output=int(d["output"]),
-                         cache_write=int(d["cache_write"]), cache_read=int(d["cache_read"]))
+                         cache_write=int(d["cache_write"]), cache_read=int(d["cache_read"]),
+                         cache_write_1h=int(d.get("cache_write_1h", 0)))
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -214,7 +218,7 @@ def varrer(raiz: Path) -> list[UsoSessao]:
         return []
     with _lock:
         cache = _ler_cache(raiz)
-        novo: dict[str, tuple[tuple[int, int], dict | None]] = {}
+        novo: dict[str, tuple[tuple[int, int], list[dict]]] = {}
         out: list[UsoSessao] = []
         mudou = False
         for p in raiz.rglob("*.jsonl"):
@@ -225,20 +229,20 @@ def varrer(raiz: Path) -> list[UsoSessao]:
             chave = str(p)
             sig = (st.st_mtime_ns, st.st_size)
             hit = cache.get(chave)
-            uso = None
+            usos = []
             if hit is not None and hit[0] == sig:
-                uso = _desserializar(hit[1]) if isinstance(hit[1], dict) else None
+                usos = [_desserializar(item) for item in hit[1]] if isinstance(hit[1], list) else [None]
                 # entrada gravada que não desserializa é MISS: mantê-la faria a sessão sumir
                 # da conta e nunca ser relida, porque o sig continua batendo.
-                if uso is None and hit[1] is not None:
+                if any(uso is None for uso in usos):
                     hit = None
             if hit is None or hit[0] != sig:
                 mudou = True
-                uso = ler_transcript(p)
-                novo[chave] = (sig, _serializar(uso) if uso else None)
+                usos = ler_transcript(p)
+                novo[chave] = (sig, [_serializar(uso) for uso in usos])
             else:
                 novo[chave] = hit
-            if uso is not None:
+            for uso in usos:
                 # Identidade pelo CAMINHO relativo: o `sessionId` do subagente é o do PAI
                 # (medido: 168 de 446 ids repetidos entre arquivos).
                 out.append(replace(uso, session_id=str(p.relative_to(raiz).with_suffix(""))))

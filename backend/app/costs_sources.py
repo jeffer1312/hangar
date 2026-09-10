@@ -3,8 +3,8 @@
 A armadilha central: cada fonte ACUMULA de um jeito diferente. Usar a regra errada não quebra
 nada — devolve um número plausível e errado.
 
-  Claude  cumulativo por sessão -> ÚLTIMA linha por session_id
-  Codex   cumulativo            -> ÚLTIMO evento token_count
+  Claude  por resposta          -> dedup por identidade, separado por dia/modelo
+  Codex   por resposta          -> token_usage_record; deltas de token_count no legado
   Pi      por mensagem          -> SOMA de todos os usage
   Kimi    por evento/turno      -> SOMA dos usage.record
 """
@@ -14,7 +14,7 @@ import json
 import logging
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -44,6 +44,8 @@ class UsageRow:
     cache_read: int
     subagente: bool = False   # transcript de subagente (Task tool), não de conversa
     account_id: str | None = None
+    codex_long_context: bool = False
+    cache_write_1h: int = 0
 
 
 def _ler_jsonl(path: Path) -> Iterator[dict]:
@@ -114,6 +116,7 @@ def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
             project=u.cwd or PROJETO_DESCONHECIDO, session_id=u.session_id,
             input=u.input, output=u.output,
             cache_write=u.cache_write, cache_read=u.cache_read,
+            cache_write_1h=u.cache_write_1h,
             subagente=u.subagente,
         ))
     return out
@@ -126,19 +129,7 @@ def raiz_codex(home: Path | str | None = None) -> Path:
 
 def linhas_codex(home: Path | str | None = None, account_id: str | None = None,
                  *, only_paths: set[Path] | None = None) -> list[UsageRow]:
-    """~/.codex/sessions/**/rollout-*.jsonl — cumulativo, último token_count vence.
-
-    Dois detalhes medidos em 30/07/2026 que só se descobre olhando o arquivo:
-      - `input_tokens` INCLUI o cacheado -> input real = input_tokens - cached_input_tokens
-      - `reasoning_output_tokens` é SUBCONJUNTO de `output_tokens` (16242+18=16260) -> não somar
-    O adapter já registra que este campo é cumulativo (adapters/codex/adapter.py:144); lá isso é
-    problema, aqui é exatamente o que queremos.
-
-    Thread encerrada é MOVIDA (não copiada) para `archived_sessions/`, diretório IRMÃO de
-    `sessions/` — sem varrer os dois, todo gasto de thread arquivada some do painel. Como é
-    move e não copy, os `session_id` dos dois diretórios não se sobrepõem: ler os dois não
-    duplica nada.
-    """
+    """Uso por resposta; rollouts antigos usam deltas dos contadores cumulativos."""
     base = (codex_contas.default_home() if home is None else Path(home)).expanduser().absolute()
     viva = raiz_codex() if home is None else raiz_codex(base)
     arquivada = viva.parent / "archived_sessions"
@@ -157,39 +148,135 @@ def linhas_codex(home: Path | str | None = None, account_id: str | None = None,
             if only_paths is not None and canonical not in only_paths:
                 continue
             vistos.add(canonical)
-            cwd = prov = modelo = sid = ""
-            ts = None
-            ultimo: dict | None = None
-            for d in _ler_jsonl(arq):
-                p = d.get("payload")
-                if not isinstance(p, dict):
-                    continue
-                if d.get("type") == "session_meta":
-                    cwd = p.get("cwd") or cwd
-                    prov = p.get("model_provider") or prov
-                    sid = p.get("session_id") or sid
-                    ts = _quando(d.get("timestamp")) or ts
-                # `model` só é confiável vindo de `turn_context` — não amarrar ao tipo faria
-                # o valor vazar de qualquer evento futuro que ganhe um campo `model` incidental.
-                if d.get("type") == "turn_context" and isinstance(p.get("model"), str):
-                    modelo = p["model"]
-                if p.get("type") == "token_count":
-                    info = p.get("info")
-                    if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
-                        ultimo = info["total_token_usage"]
-            if ultimo is None or ts is None:
-                continue
-            cr = _int(ultimo.get("cached_input_tokens"))
-            out.append(UsageRow(
-                ts=ts, source="codex",
-                provider=pricing.canonizar_provedor(prov) or "openai", model=modelo or "?",
-                project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
-                input=max(0, _int(ultimo.get("input_tokens")) - cr),
-                output=_int(ultimo.get("output_tokens")),
-                cache_write=0, cache_read=cr,
-                account_id=account_id or f"codex:{base.resolve(strict=False)}",
-            ))
+            out.extend(_linhas_rollout_codex(
+                arq, account_id or f"codex:{base.resolve(strict=False)}"))
     return out
+
+
+def _linhas_rollout_codex(arq: Path, account_id: str) -> list[UsageRow]:
+    cwd = prov = modelo = turno = ""
+    sid = arq.stem
+    inicio = None
+    subagente = False
+    meta_lida = False
+    herdado = False
+    anterior = {k: 0 for k in ("input_tokens", "cached_input_tokens",
+                               "cache_write_input_tokens", "output_tokens")}
+    respostas: dict[str, list[UsageRow]] = {}
+    legado: dict[str, list[UsageRow]] = {}
+    vistos: set[str] = set()
+    for d in _ler_jsonl(arq):
+        p = d.get("payload")
+        if not isinstance(p, dict):
+            continue
+        tipo = d.get("type")
+        if tipo == "session_meta" and meta_lida:
+            identidade = p.get("id") or p.get("session_id")
+            if identidade:
+                herdado = identidade != sid
+        if tipo == "session_meta" and not meta_lida:
+            # Forks também contêm a metadata do pai; só a primeira identifica este arquivo.
+            meta_lida = True
+            sid = p.get("id") or p.get("session_id") or sid
+            cwd = p.get("cwd") or ""
+            prov = p.get("model_provider") or ""
+            inicio = _quando(d.get("timestamp"))
+            source = p.get("source")
+            subagente = (isinstance(source, dict) and "subagent" in source) or source == "subagent"
+        if tipo == "turn_context":
+            contexto_ts = _quando(d.get("timestamp"))
+            if herdado and inicio and contexto_ts and contexto_ts >= inicio:
+                herdado = False
+            turno = p.get("turn_id") or turno
+            if isinstance(p.get("model"), str):
+                modelo = p["model"]
+        ts = _quando(d.get("timestamp")) or inicio
+        if ts is None:
+            continue
+        if tipo == "token_usage_record":
+            if p.get("thread_id") and p["thread_id"] != sid:
+                respostas.setdefault(p.get("turn_id") or turno, [])
+                continue
+            if p.get("thread_id") == sid:
+                herdado = False
+            u = p.get("usage")
+            if not isinstance(u, dict):
+                continue
+            response_id = p.get("response_id")
+            if response_id and response_id in vistos:
+                continue
+            if response_id:
+                vistos.add(response_id)
+            destino = respostas.setdefault(p.get("turn_id") or turno, [])
+        elif tipo == "event_msg" and p.get("type") == "token_count":
+            info = p.get("info")
+            total = info.get("total_token_usage") if isinstance(info, dict) else None
+            if not isinstance(total, dict):
+                continue
+            atual = {k: max(0, _int(total.get(k))) for k in anterior}
+            if atual == anterior:
+                continue
+            # Retomar pode reiniciar os contadores: a primeira resposta do trecho é uso novo.
+            reiniciou = any(atual[k] < anterior[k] for k in anterior)
+            u = {k: atual[k] - (0 if reiniciou else anterior[k]) for k in anterior}
+            anterior = atual
+            if herdado:
+                continue
+            destino = legado.setdefault(turno, [])
+        else:
+            continue
+        entrada = max(0, _int(u.get("input_tokens")))
+        cache = min(entrada, max(0, _int(u.get("cached_input_tokens"))))
+        escrita = min(entrada - cache, max(0, _int(u.get("cache_write_input_tokens"))))
+        destino.append(UsageRow(
+            ts=ts, source="codex", provider=pricing.canonizar_provedor(prov) or "openai",
+            model=modelo or "?", project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
+            input=entrada - cache - escrita, output=max(0, _int(u.get("output_tokens"))),
+            cache_write=escrita, cache_read=cache, subagente=subagente, account_id=account_id,
+            codex_long_context=entrada > 272_000,
+        ))
+    campos = ("input", "cache_read", "cache_write", "output")
+
+    def assinatura(r: UsageRow) -> tuple:
+        return (r.model, *(getattr(r, campo) for campo in campos))
+
+    linhas = []
+    for key in legado.keys() | respostas.keys():
+        modernos = respostas.get(key, [])
+        linhas.extend(modernos)
+        if key in respostas and not modernos:
+            continue
+        # Registros por resposta podem chegar depois do contador; só retiramos o uso coberto.
+        cobertos: dict[tuple, int] = {}
+        for r in modernos:
+            sig = assinatura(r)
+            cobertos[sig] = cobertos.get(sig, 0) + 1
+        pendentes = []
+        for r in legado.get(key, []):
+            sig = assinatura(r)
+            if cobertos.get(sig, 0):
+                cobertos[sig] -= 1
+            else:
+                pendentes.append(r)
+        saldo = {campo: sum(sig[i + 1] * n for sig, n in cobertos.items())
+                 for i, campo in enumerate(campos)}
+        for r in pendentes:
+            valores = {}
+            for campo in campos:
+                abatido = min(getattr(r, campo), saldo[campo])
+                saldo[campo] -= abatido
+                valores[campo] = getattr(r, campo) - abatido
+            if any(valores.values()):
+                linhas.append(replace(r, **valores))
+    agrupadas: dict[tuple, UsageRow] = {}
+    for r in linhas:
+        key = (r.ts.date(), r.model, r.codex_long_context)
+        antes = agrupadas.get(key)
+        agrupadas[key] = r if antes is None else replace(
+            antes, input=antes.input + r.input, output=antes.output + r.output,
+            cache_read=antes.cache_read + r.cache_read,
+            cache_write=antes.cache_write + r.cache_write)
+    return sorted(agrupadas.values(), key=lambda r: (r.ts, r.model))
 
 
 def raiz_pi() -> Path:
@@ -335,10 +422,9 @@ def linhas_kimi() -> list[UsageRow]:
     return out
 
 
-# Cache por ARQUIVO, chaveado por (mtime_ns, st_size) — mesmo padrão do planprog.py.
-# Guarda só Codex e Pi (o Claude saiu daqui, foi pro cache em disco de costs_claude_transcript.py).
-# Rollout e sessão de Pi fechados nunca mudam e ficam aqui pra sempre.
-_cache: dict[str, tuple[tuple[int, int], list[UsageRow]]] = {}
+# Pi/OMP/Kimi invalidam por árvore; Codex por arquivo, para um turno novo não reler a conta inteira.
+_cache: dict[str, tuple[tuple, list[UsageRow]]] = {}
+_cache_codex: dict[tuple[str, Path], tuple[tuple[int, int], list[UsageRow]]] = {}
 # O endpoint é `def` e roda no threadpool: celular + desktop + peer batendo juntos com cache frio
 # fariam N parses simultâneos do mesmo arquivo. Precedente: engines.py:58.
 # ponytail: a trava cobre o CORPO INTEIRO de coletar() (walk de Codex/Pi + parse das três
@@ -350,6 +436,7 @@ _cache_lock = threading.Lock()
 def invalidar_cache() -> None:
     with _cache_lock:
         _cache.clear()
+        _cache_codex.clear()
 
 
 def _assinatura(p: Path) -> tuple[int, int] | None:
@@ -449,16 +536,26 @@ def coletar() -> list[UsageRow]:
             out.extend(linhas_claude(Path(caminho), account_id))
 
         por_conta = _rollouts_codex_por_conta(_contas_codex())
-        for chave, (owner, caminhos) in por_conta.items():
+        presentes: set[tuple[str, Path]] = set()
+        for owner, caminhos in por_conta.values():
             home = owner.home.expanduser().absolute().resolve(strict=False)
-            sig_dir = tuple(sorted(
-                (str(path), *(_assinatura(path) or (0, 0))) for path in caminhos))
-            hit = _cache.get(chave)
-            if hit is None or hit[0] != sig_dir:
-                linhas = linhas_codex(home, account_id=f"codex:{home}", only_paths=caminhos)
-                hit = (sig_dir, linhas)
-                _cache[chave] = hit
-            out.extend(hit[1])
+            identidade = f"codex:{home}"
+            _ROTULOS[identidade] = f"Codex · {owner.id}"
+            for path in sorted(caminhos):
+                sig = _assinatura(path)
+                if sig is None:
+                    continue
+                chave = (identidade, path)
+                presentes.add(chave)
+                hit = _cache_codex.get(chave)
+                if hit is None or hit[0] != sig:
+                    linhas = [replace(r, provider=identidade) if r.provider == "openai" else r
+                              for r in _linhas_rollout_codex(path, identidade)]
+                    hit = (sig, linhas)
+                    _cache_codex[chave] = hit
+                out.extend(hit[1])
+        for chave in _cache_codex.keys() - presentes:
+            del _cache_codex[chave]
 
         for nome, raiz, leitor in (("pi", raiz_pi(), linhas_pi),
                                    ("omp", raiz_omp(), linhas_omp),

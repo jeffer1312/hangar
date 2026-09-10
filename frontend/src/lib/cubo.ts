@@ -50,8 +50,13 @@ const zero = (key: string): DimBucket => ({
 // `?? 0` em toda entrada: servidor antigo da malha pode não mandar um campo, e
 // `undefined + n` vira NaN, que se espalha e apaga a coluna inteira — inclusive as linhas
 // dos servidores que mandaram o dado certo.
-function acumular(alvo: DimBucket, c: ComboLocal): void {
-  alvo.sessions += c.sessions ?? 0;
+function acumular(alvo: DimBucket, c: ComboLocal, sessoes: Set<string>): void {
+  if (c.session_ids) {
+    for (const id of c.session_ids) {
+      const chave = JSON.stringify([c.servidor, id]);
+      if (!sessoes.has(chave)) { sessoes.add(chave); alvo.sessions += 1; }
+    }
+  } else alvo.sessions += c.sessions ?? 0;
   alvo.input += c.input ?? 0;
   alvo.output += c.output ?? 0;
   alvo.cache_write += c.cache_write ?? 0;
@@ -65,17 +70,19 @@ function acumular(alvo: DimBucket, c: ComboLocal): void {
 
 export function somar(combos: ComboLocal[]): DimBucket {
   const t = zero('totals');
-  for (const c of combos) acumular(t, c);
+  const sessoes = new Set<string>();
+  for (const c of combos) acumular(t, c, sessoes);
   return t;
 }
 
 export function agruparPor(combos: ComboLocal[], dim: Dim): DimBucket[] {
   const m = new Map<string, DimBucket>();
+  const sessoes = new Map<string, Set<string>>();
   for (const c of combos) {
     const k = c[dim];
     let b = m.get(k);
-    if (!b) { b = zero(k); m.set(k, b); }
-    acumular(b, c);
+    if (!b) { b = zero(k); m.set(k, b); sessoes.set(k, new Set()); }
+    acumular(b, c, sessoes.get(k)!);
   }
   return [...m.values()].sort((a, b) =>
     dim === 'dia' ? b.key.localeCompare(a.key) : b.cost - a.cost || a.key.localeCompare(b.key));

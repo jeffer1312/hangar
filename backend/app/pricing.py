@@ -16,7 +16,7 @@ import os
 import threading
 import time
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app import atomico
@@ -282,6 +282,16 @@ def custo(rate: Rate, entrada: int, saida: int, cw: int, cr: int) -> dict[str, f
         "cache_write": cw / 1e6 * rate.cache_write,
         "cache_read": cr / 1e6 * rate.cache_read,
     }
+
+
+def rate_codex(rate: Rate, model: str, long_context: bool) -> Rate:
+    """Tarifa Standard por resposta; o total de uma sessão não define contexto longo."""
+    if not long_context or rate.origin == "override" or rate.provider != "openai" or canonizar(model) not in {
+        "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    }:
+        return rate
+    return replace(rate, input=rate.input * 2, output=rate.output * 1.5,
+                   cache_read=rate.cache_read * 2, cache_write=rate.cache_write * 2)
 
 
 _ultima_tentativa = 0.0

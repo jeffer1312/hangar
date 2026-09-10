@@ -8,6 +8,7 @@
   // Aqui a lista é HTML comum, em portal pro <body> com posição calculada: cabe na viewport, escolhe
   // o lado por espaço real, e segue o tema. Bônus que o nativo não dá: filtro por digitação, que num
   // combo de 20 modelos com nomes parecidos (deepseek-v4-flash / -pro) é o que evita erro de clique.
+  import { tick } from 'svelte';
   import * as m from '../paraglide/messages';
   interface Opcao {
     value: string;
@@ -38,7 +39,8 @@
   let botao = $state<HTMLButtonElement | null>(null);
   let listaEl = $state<HTMLElement | null>(null);
   let campoFiltro = $state<HTMLInputElement | null>(null);
-  let pos = $state({ top: 0, left: 0, width: 0, maxH: 320, acima: false });
+  let pos = $state<{ top: number | null; bottom: number | null; left: number; width: number; maxH: number }>(
+    { top: 0, bottom: null, left: 0, width: 0, maxH: 320 });
 
   // Prefixo dos ids dos itens, pro aria-activedescendant apontar o item corrente. $props.id() dá um
   // valor único por instância — duas telas com Select aberto não colidem.
@@ -49,7 +51,7 @@
   const comFiltro = $derived(opcoes.length > filtroAcimaDe);
   const visiveis = $derived(
     filtro.trim()
-      ? opcoes.filter((o) => (o.label + ' ' + (o.hint ?? '')).toLowerCase().includes(filtro.trim().toLowerCase()))
+      ? opcoes.filter((o) => [o.label, o.value, o.hint, o.title].join(' ').toLowerCase().includes(filtro.trim().toLowerCase()))
       : opcoes,
   );
 
@@ -64,8 +66,12 @@
     if (!botao) return;
     const r = botao.getBoundingClientRect();
     const margem = 8;
-    const abaixo = window.innerHeight - r.bottom - margem;
-    const acima = r.top - margem;
+    const gap = 4;
+    const viewport = window.visualViewport;
+    const topo = viewport?.offsetTop ?? 0;
+    const altura = viewport?.height ?? window.innerHeight;
+    const abaixo = topo + altura - r.bottom - margem - gap;
+    const acima = r.top - topo - margem - gap;
     // Abre pra baixo por padrão; pra cima só quando lá caberia mais. `maxH` é o espaço REAL do lado
     // escolhido, então a lista rola dentro de si em vez de vazar (que era o bug do nativo).
     const paraCima = abaixo < 180 && acima > abaixo;
@@ -73,30 +79,28 @@
     // modelo/esforço do CreateSessionSheet) cada campo tem ~170px e id de modelo fica ilegível.
     // A lista aberta então toma quase a viewport, ancorada no campo mas sem vazar pelas bordas.
     const estreito = window.innerWidth < 820;
-    const width = estreito ? Math.min(window.innerWidth - margem * 2, 480) : r.width;
-    const left = estreito
-      ? Math.min(Math.max(margem, r.left), window.innerWidth - width - margem)
-      : r.left;
+    const width = Math.max(0, Math.min(window.innerWidth - margem * 2,
+      estreito ? 480 : Math.max(320, r.width)));
+    const left = Math.max(margem, Math.min(r.left, window.innerWidth - width - margem));
     pos = {
-      top: paraCima ? Math.max(margem, r.top - Math.min(acima, 320)) : r.bottom + 4,
+      top: paraCima ? null : r.bottom + gap,
+      bottom: paraCima ? window.innerHeight - r.top + gap : null,
       left,
       width,
-      maxH: Math.min(paraCima ? acima : abaixo, 320),
-      acima: paraCima,
+      maxH: Math.max(0, Math.min(paraCima ? acima : abaixo, 320)),
     };
   }
 
-  function abrir() {
+  async function abrir() {
     if (disabled) return;
     filtro = '';
     ativo = Math.max(0, opcoes.findIndex((o) => o.value === value));
     medir();
     aberto = true;
-    // Foco no filtro (quando há) só depois do render, senão o input ainda não existe.
-    requestAnimationFrame(() => {
-      if (comFiltro) campoFiltro?.focus();
-      listaEl?.querySelector<HTMLElement>('[data-ativo="true"]')?.scrollIntoView({ block: 'nearest' });
-    });
+    await tick();
+    if (!aberto) return;
+    if (comFiltro) campoFiltro?.focus();
+    listaEl?.querySelector<HTMLElement>('[data-ativo="true"]')?.scrollIntoView({ block: 'nearest' });
   }
 
   function fechar() {
@@ -114,12 +118,12 @@
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') { e.preventDefault(); abrir(); }
       return;
     }
-    if (e.key === 'Escape') { e.preventDefault(); fechar(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); fechar(); return; }
     // Tab FECHA (o <select> nativo fecha o popup do SO antes de mover o foco; aqui não fechava).
     // Sem isto a lista ficava pairando aberta e desconectada de onde o foco foi: os itens vivem no
     // fim do <body> (portal), então o Tab saía do widget e nada mais respondia a Escape — quem
     // navega só por teclado ficava sem como fechar, dependendo de um clique fora.
-    if (e.key === 'Tab') { aberto = false; return; }   // sem fechar(), que devolveria o foco ao botão
+    if (e.key === 'Tab') { fechar(); return; } // O Tab nativo continua a partir do gatilho, não do portal.
     if (e.key === 'Enter') {
       e.preventDefault();
       const o = visiveis[ativo];
@@ -142,9 +146,13 @@
     const on = () => medir();
     window.addEventListener('scroll', on, true);
     window.addEventListener('resize', on);
+    window.visualViewport?.addEventListener('resize', on);
+    window.visualViewport?.addEventListener('scroll', on);
     return () => {
       window.removeEventListener('scroll', on, true);
       window.removeEventListener('resize', on);
+      window.visualViewport?.removeEventListener('resize', on);
+      window.visualViewport?.removeEventListener('scroll', on);
     };
   });
 </script>
@@ -176,9 +184,7 @@
   <div
     class="sel-lista"
     use:portal
-    role="listbox"
-    aria-label={ariaLabel}
-    style="top:{pos.top}px; left:{pos.left}px; width:{pos.width}px; max-height:{pos.maxH}px"
+    style="top:{pos.top === null ? 'auto' : `${pos.top}px`}; bottom:{pos.bottom === null ? 'auto' : `${pos.bottom}px`}; left:{pos.left}px; width:{pos.width}px; max-height:{pos.maxH}px"
   >
     {#if comFiltro}
       <input
@@ -189,6 +195,8 @@
         autocapitalize="off"
         spellcheck="false"
         role="combobox"
+        aria-label={ariaLabel ? m.select_filtrar_campo({ campo: ariaLabel }) : m.select_filtrar()}
+        aria-autocomplete="list"
         aria-controls={idLista}
         aria-expanded="true"
         aria-activedescendant={visiveis.length ? `${idLista}-${ativo}` : undefined}
@@ -197,7 +205,7 @@
         onkeydown={teclado}
       />
     {/if}
-    <div class="sel-itens" id={idLista} bind:this={listaEl}>
+    <div class="sel-itens" id={idLista} role="listbox" aria-label={ariaLabel} bind:this={listaEl}>
       {#each visiveis as o, i (o.value)}
         <!-- tabindex="-1" + id: padrão ARIA de listbox é UM ponto de foco (o botão/filtro) e o item
              corrente apontado por aria-activedescendant. Sem o -1 cada item virava parada própria do
@@ -232,7 +240,7 @@
   .sel-campo {
     display: flex; align-items: center; gap: var(--space-2);
     width: 100%; height: 40px; min-width: 0;
-    background: var(--surface-inset);
+    background: var(--bg-base);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     color: var(--text-primary);
@@ -258,7 +266,7 @@
   }
   .sel-filtro {
     flex: none; height: 34px; margin: var(--space-2) var(--space-2) 0;
-    background: var(--surface-inset);
+    background: var(--bg-base);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     color: var(--text-primary);
@@ -269,6 +277,7 @@
   .sel-itens { overflow-y: auto; padding: var(--space-1); min-height: 0; }
   .sel-item {
     display: flex; align-items: baseline; gap: var(--space-2);
+    min-height: 44px;
     width: 100%; background: none; border: 0;
     border-radius: var(--radius-sm);
     color: var(--text-primary);
@@ -281,7 +290,7 @@
   /* Label quebra linha em vez de truncar: id de modelo (muse-spark-1.2-contributor-free) não cabe
      numa linha nem com a lista larga, e cortado o usuário não distingue um modelo do irmão. */
   .sel-item-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .sel-item-hint { flex: none; color: var(--text-secondary); font-size: 12px; }
+  .sel-item-hint { flex: 0 1 auto; max-width: 45%; overflow-wrap: anywhere; color: var(--text-secondary); font-size: 12px; text-align: right; }
   /* Alvo de toque: 7px de padding vertical dá ~30px de item, abaixo dos ~44px de dedo. */
   @media (pointer: coarse) {
     .sel-item { padding: 10px var(--space-2); }

@@ -33,6 +33,28 @@ describe('cubo', () => {
     expect(somar(filtrar(dados, {})).cost).toBe(140);
   });
 
+  it('conta a mesma sessão uma vez ao juntar dias e modelos', () => {
+    const linhas = [
+      c({ session_ids: ['codex:a'], input: 10 }),
+      c({ session_ids: ['codex:a'], dia: '2026-07-02', model: 'outro', input: 20 }),
+      c({ session_ids: ['codex:a'], servidor: 'srv-b', input: 30 }),
+      c({ session_ids: ['codex:b'], subagente: true, input: 40 }),
+    ];
+    expect(somar(linhas)).toMatchObject({ sessions: 3, input: 100 });
+    expect(agruparPor(linhas, 'project')[0].sessions).toBe(3);
+    expect(somar(filtrar(linhas, { servidor: 'srv-a', subagente: false })).sessions).toBe(1);
+  });
+
+  it('mantém a contagem legada quando a máquina não fornece identidades', () => {
+    const linhas = [
+      c({ session_ids: ['codex:a'] }),
+      c({ session_ids: ['codex:a'], dia: '2026-07-02' }),
+      c({ servidor: 'srv-antigo', sessions: 4 }),
+    ];
+    expect(somar(linhas).sessions).toBe(5);
+    expect(agruparPor(linhas, 'source')[0].sessions).toBe(5);
+  });
+
   it('agrupar por qualquer dimensão bate com o total', () => {
     // a invariante que a fase 1 perdeu ao apagar um teste: fatiar não cria nem some
     for (const dim of ['dia', 'provider', 'source', 'project', 'model'] as const) {

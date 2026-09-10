@@ -113,6 +113,78 @@ def test_codex_sem_diretorio_devolve_lista_vazia(tmp_path, monkeypatch):
     assert cs.linhas_codex() == []
 
 
+def test_codex_respostas_reais_separam_dia_modelo_e_preservam_identidade_do_filho(tmp_path):
+    def uso(tipo, ts, turno, entrada, cache, saida, resposta="r1", thread="filho"):
+        u = {"input_tokens": entrada, "cached_input_tokens": cache,
+             "output_tokens": saida, "reasoning_output_tokens": saida - 1}
+        p = ({"thread_id": thread, "turn_id": turno, "response_id": resposta, "usage": u}
+             if tipo == "token_usage_record" else
+             {"type": "token_count", "info": {"total_token_usage": u}})
+        return {"type": tipo, "timestamp": ts, "payload": p}
+
+    primeiro = "2026-09-09T23:00:00Z"
+    segundo = "2026-09-10T12:00:00Z"
+    p = tmp_path / "sessions" / "rollout-filho.jsonl"
+    registro = uso("token_usage_record", primeiro, "t1", 100, 80, 10)
+    _escrever(p, [
+        {"type": "session_meta", "timestamp": primeiro, "payload": {
+            "id": "filho", "session_id": "pai", "cwd": "/filho", "model_provider": "openai",
+            "source": {"subagent": {"thread_spawn": {"parent_thread_id": "pai"}}}}},
+        {"type": "session_meta", "timestamp": primeiro,
+         "payload": {"id": "pai", "session_id": "pai", "cwd": "/pai"}},
+        {"type": "turn_context", "payload": {"turn_id": "t1", "model": "gpt-5.6-luna"}},
+        uso("token_usage_record", primeiro, "pai-t1", 999, 0, 99, "rp", "pai"),
+        registro, registro,
+        uso("event_msg", primeiro, "t1", 100, 80, 10),
+        {"type": "turn_context", "payload": {"turn_id": "t2", "model": "gpt-6-astra"}},
+        uso("token_usage_record", segundo, "t2", 50, 20, 5, "r2"),
+        uso("event_msg", segundo, "t2", 50, 20, 5),
+    ])
+    rows = cs.linhas_codex(tmp_path)
+    assert [(r.ts.day, r.model, r.input, r.cache_read, r.output) for r in rows] == [
+        (9, "gpt-5.6-luna", 20, 80, 10), (10, "gpt-6-astra", 30, 20, 5)]
+    assert all(r.session_id == "filho" and r.project == "/filho" and r.subagente for r in rows)
+
+
+def test_codex_legado_nao_perde_uso_ao_retomar_nem_soma_repeticoes(tmp_path):
+    linhas = _rollout_codex("/r", "s", {"input_tokens": 100, "cached_input_tokens": 80,
+                                        "output_tokens": 10})
+    linhas.extend([linhas[-1],
+        {"type": "turn_context", "payload": {"turn_id": "novo", "model": "gpt-6-astra"}},
+        {"type": "event_msg", "timestamp": "2026-09-10T12:00:00Z", "payload": {
+            "type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": 50, "cached_input_tokens": 20, "output_tokens": 5}}}},
+    ])
+    _escrever(tmp_path / "sessions" / "rollout-s.jsonl", linhas)
+    rows = cs.linhas_codex(tmp_path)
+    assert sum(r.input for r in rows) == 50
+    assert sum(r.cache_read for r in rows) == 100
+    assert sum(r.output for r in rows) == 15
+    assert rows[-1].ts.day == 10
+
+
+def test_codex_cache_write_e_subconjunto_da_entrada(tmp_path):
+    linhas = _rollout_codex("/r", "s", {
+        "input_tokens": 100, "cached_input_tokens": 60, "cache_write_input_tokens": 30,
+        "output_tokens": 10, "reasoning_output_tokens": 9})
+    _escrever(tmp_path / "sessions" / "rollout-s.jsonl", linhas)
+    (r,) = cs.linhas_codex(tmp_path)
+    assert (r.input, r.cache_read, r.cache_write, r.output) == (10, 60, 30, 10)
+
+
+def test_codex_contexto_longo_e_por_resposta_incluindo_cache(tmp_path):
+    linhas = _rollout_codex("/r", "s", {"input_tokens": 272_000, "output_tokens": 1})[:2]
+    for i, entrada in enumerate((272_000, 272_001)):
+        linhas.append({"type": "token_usage_record", "timestamp": "2026-09-10T12:00:00Z",
+                       "payload": {"thread_id": "s", "response_id": f"r{i}", "usage": {
+                           "input_tokens": entrada, "cached_input_tokens": 270_000,
+                           "output_tokens": 10}}})
+    _escrever(tmp_path / "sessions" / "rollout-s.jsonl", linhas)
+    rows = cs.linhas_codex(tmp_path)
+    assert len(rows) == 2
+    assert {(r.input, r.codex_long_context) for r in rows} == {(2000, False), (2001, True)}
+
+
 def test_codex_rollout_sem_token_count_e_pulado(tmp_path, monkeypatch):
     raiz = tmp_path / "sessions" / "2026" / "08" / "01"
     _escrever(raiz / "rollout-x.jsonl", [
@@ -537,6 +609,9 @@ def test_coletar_codex_separa_contas_e_deduplica_rollout_canonico(tmp_path, monk
     assert {row.account_id for row in rows if row.source == "codex"} == {
         f"codex:{default.home.resolve()}", f"codex:{work.home.resolve()}"
     }
+    assert {row.provider for row in rows if row.source == "codex"} == {
+        f"codex:{default.home.resolve()}", f"codex:{work.home.resolve()}"
+    }
 
 
 def test_coletar_link_da_padrao_para_secundaria_preserva_dono_e_cache(tmp_path, monkeypatch):
@@ -568,3 +643,17 @@ def test_coletar_link_da_padrao_para_secundaria_preserva_dono_e_cache(tmp_path, 
         [("only", f"codex:{work.home.resolve()}", 10)]
     assert [(row.session_id, row.account_id, row.input) for row in third] == \
         [("only", f"codex:{work.home.resolve()}", 10)]
+
+
+def test_coletar_codex_gateway_nao_atribui_custo_a_conta_openai(tmp_path, monkeypatch):
+    home = tmp_path / ".codex"
+    linhas = _rollout_codex("/r", "gateway", {"input_tokens": 10, "output_tokens": 1})
+    linhas[0]["payload"]["model_provider"] = "gateway-proprio"
+    _escrever(home / "sessions" / "rollout-gateway.jsonl", linhas)
+    monkeypatch.setattr(cs, "_config_dirs", lambda: [])
+    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "pi")
+    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "omp")
+    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "kimi")
+    (row,) = cs.coletar()
+    assert row.provider == "gateway-proprio"
+    assert row.account_id == f"codex:{home.resolve()}"

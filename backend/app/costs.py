@@ -27,11 +27,18 @@ def _custo_da_linha(r: UsageRow) -> dict[str, float] | None:
     rate = pricing.rate_for(r.model)
     if rate is None:
         return None
-    return pricing.custo(rate, r.input, r.output, r.cache_write, r.cache_read)
+    if r.source == "codex":
+        rate = pricing.rate_codex(rate, r.model, r.codex_long_context)
+    custo = pricing.custo(rate, r.input, r.output, r.cache_write, r.cache_read)
+    if rate.provider == "anthropic" and rate.origin != "override":
+        custo["cache_write"] += r.cache_write_1h / 1e6 * (rate.input * 2 - rate.cache_write)
+    return custo
 
 
 def _somar(b: dict, r: UsageRow, c: dict[str, float] | None) -> None:
-    b["sessions"] += 1
+    identidade = json.dumps([r.source, r.account_id or r.provider, r.session_id, r.subagente])
+    b["session_ids"].add(identidade)
+    b["sessions"] = len(b["session_ids"])
     b["input"] += r.input
     b["output"] += r.output
     b["cache_write"] += r.cache_write
@@ -43,7 +50,8 @@ def _somar(b: dict, r: UsageRow, c: dict[str, float] | None) -> None:
 
 
 def _zero() -> dict:
-    z = {"sessions": 0, "cost": 0.0}
+    z = {"sessions": 0, "session_ids": set(), "cost": 0.0,
+         "custo_sem_cache": 0.0, "equivalente_cobrado": 0.0}
     for t in TIPOS:
         z[t] = 0
         z[f"cost_{t}"] = 0.0
@@ -115,8 +123,9 @@ def montar(linhas: list[UsageRow], period: str = "all",
     for i, r in enumerate(linhas):
         c = custos[i]
         _somar(total, r, c)
-        _somar(combos_agg[(r.ts.strftime("%Y-%m-%d"), r.provider, r.source, r.project,
-                           pricing.canonizar(r.model), r.subagente)], r, c)
+        combo = combos_agg[(r.ts.strftime("%Y-%m-%d"), r.provider, r.source, r.project,
+                           pricing.canonizar(r.model), r.subagente)]
+        _somar(combo, r, c)
         for t in TIPOS:
             kinds[t]["tokens"] += getattr(r, t)
             if c:
@@ -133,16 +142,24 @@ def montar(linhas: list[UsageRow], period: str = "all",
             if canon not in pricing.IGNORADOS:
                 sem_tarifa.add(canon)
             continue
+        efetiva = (pricing.rate_codex(rate, r.model, r.codex_long_context)
+                   if r.source == "codex" else rate)
         # Preço cheio: os mesmos tokens se NENHUM fosse cache.
-        sem_cache += ((r.input + r.cache_write + r.cache_read) / 1e6 * rate.input
-                      + r.output / 1e6 * rate.output)
+        cheio = ((r.input + r.cache_write + r.cache_read) / 1e6 * efetiva.input
+                 + r.output / 1e6 * efetiva.output)
+        sem_cache += cheio
+        combo["custo_sem_cache"] += cheio
         # Equivalente-input: cada tipo pesado pela própria tarifa. Sem preço de input não há
         # régua pra converter, e a linha simplesmente não entra (o custo dela já entrou).
-        if rate.input:
-            equivalente += (r.input
-                            + r.output * (rate.output / rate.input)
-                            + r.cache_write * (rate.cache_write / rate.input)
-                            + r.cache_read * (rate.cache_read / rate.input))
+        if efetiva.input:
+            peso = (r.input
+                    + r.output * (efetiva.output / efetiva.input)
+                    + r.cache_write * (efetiva.cache_write / efetiva.input)
+                    + r.cache_read * (efetiva.cache_read / efetiva.input))
+            if efetiva.provider == "anthropic" and efetiva.origin != "override":
+                peso += r.cache_write_1h * (2 - efetiva.cache_write / efetiva.input)
+            equivalente += peso
+            combo["equivalente_cobrado"] += peso
         rates.setdefault(pricing.canonizar(r.model), RateInfo(
             model=pricing.canonizar(r.model), provider=rate.provider,
             input=rate.input, output=rate.output, cache_read=rate.cache_read,
@@ -166,7 +183,7 @@ def montar(linhas: list[UsageRow], period: str = "all",
         applied=Applied(period=period),
         usd_brl=usd_brl(),
         combos=[ComboRow(dia=k[0], provider=k[1], source=k[2], project=k[3], model=k[4],
-                         subagente=k[5], **v)
+                         subagente=k[5], **{**v, "session_ids": sorted(v["session_ids"])})
                 for k, v in sorted(combos_agg.items(), key=lambda kv: (kv[0][0], -kv[1]["cost"]))],
     )
 

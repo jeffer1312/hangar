@@ -95,6 +95,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
   let partial = false;
   let semCache = 0;
   let equivalente = 0;
+  let detalhamentoCompleto = true;
   let usdBrl: number | null = null;
 
   results.forEach((res, i) => {
@@ -139,6 +140,8 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
     // calado.
     for (const t of r.rates ?? []) rates.set(`${t.provider}|${t.model}`, t);
     for (const m of r.sem_tarifa ?? []) semTarifa.add(m);
+    if (!r.combos?.length && [bs.sessions, bs.input, bs.output, bs.cache_write, bs.cache_read, bs.cost]
+      .some((valor) => valor > 0)) detalhamentoCompleto = false;
     for (const cb of r.combos ?? []) combos.push({ ...cb, servidor: sid });
     semCache += r.custo_sem_cache ?? 0;
     equivalente += r.equivalente_cobrado ?? 0;
@@ -164,7 +167,8 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
       // uma, então a tela mostraria uma alta que não existe. "Sem período anterior completo
       // pra comparar" é a mensagem honesta.
       anterior: entraram > 0 && comAnterior === entraram ? anterior : null,
-      combos,
+      // Um cruzamento parcial descartaria do foco o consumo das máquinas antigas.
+      combos: detalhamentoCompleto ? combos : [],
       by_servidor: [...servidores].sort((a, b) => b.cost - a.cost || a.key.localeCompare(b.key)),
       applied: { period },
       usd_brl: usdBrl,
@@ -235,6 +239,7 @@ export function precoParcial(model: string, temTarifa: boolean, semTarifa: strin
 export function custoSemCacheDe(combos: ComboRow[], tarifas: Map<string, RateInfo | null>): number {
   let soma = 0;
   for (const c of combos) {
+    if (c.custo_sem_cache != null) { soma += c.custo_sem_cache; continue; }
     const t = tarifas.get(c.model);
     if (!t) continue;
     soma += ((c.input + c.cache_write + c.cache_read) / 1e6 * t.input + c.output / 1e6 * t.output);
@@ -245,6 +250,7 @@ export function custoSemCacheDe(combos: ComboRow[], tarifas: Map<string, RateInf
 export function equivalenteDe(combos: ComboRow[], tarifas: Map<string, RateInfo | null>): number {
   let soma = 0;
   for (const c of combos) {
+    if (c.equivalente_cobrado != null) { soma += c.equivalente_cobrado; continue; }
     const t = tarifas.get(c.model);
     if (!t || !t.input) continue;
     soma += c.input + c.output * (t.output / t.input)

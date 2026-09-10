@@ -228,3 +228,28 @@ def test_custo_aplica_tarifa_por_tipo_de_token():
     r = pricing.rate_for("claude-opus-5")
     c = pricing.custo(r, entrada=1_000_000, saida=1_000_000, cw=1_000_000, cr=1_000_000)
     assert c == {"input": 5.0, "output": 25.0, "cache_write": 6.25, "cache_read": 0.5}
+
+
+@pytest.mark.parametrize("model,prices", [
+    ("gpt-6-astra", (10.0, 1.0, 12.5, 50.0)),
+    ("gpt-5.6-sol", (4.0, 0.4, 5.0, 20.0)),
+    ("gpt-5.6-luna", (0.2, 0.02, 0.25, 1.2)),
+])
+def test_tarifas_codex_snapshot_e_contexto_longo(model, prices):
+    rate = pricing.rate_for(model)
+    assert rate is not None
+    assert (rate.input, rate.cache_read, rate.cache_write, rate.output) == prices
+    assert pricing.rate_codex(rate, model, False) == rate
+    long_rate = pricing.rate_codex(rate, model, True)
+    assert (long_rate.input, long_rate.cache_read, long_rate.cache_write, long_rate.output) == (
+        prices[0] * 2, prices[1] * 2, prices[2] * 2, prices[3] * 1.5)
+
+
+def test_contexto_longo_nao_inventa_regra_para_outro_modelo():
+    rate = pricing.rate_for("claude-opus-5")
+    assert pricing.rate_codex(rate, "claude-opus-5", True) == rate
+
+
+def test_contexto_longo_preserva_tarifa_manual():
+    rate = pricing.Rate(1, 2, 0.1, 1.25, "openai", "override", False)
+    assert pricing.rate_codex(rate, "gpt-6-astra", True) == rate

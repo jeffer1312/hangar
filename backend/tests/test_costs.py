@@ -285,3 +285,43 @@ def test_combos_nao_quebram_o_que_ja_existia():
     assert r.by_provider and r.by_source and r.by_project and r.by_model and r.by_day
     assert r.equivalente_cobrado > 0
     assert r.custo_sem_cache > 0
+
+
+def test_sessao_codex_em_dias_e_modelos_distintos_conta_uma_vez():
+    linhas = [
+        _linha(source="codex", account_id="codex:/a", model="gpt-5.6-luna"),
+        _linha(source="codex", account_id="codex:/a", model="gpt-6-astra",
+               ts=datetime(2026, 8, 2, 10, tzinfo=costs.LOCAL)),
+        _linha(source="codex", account_id="codex:/b", model="gpt-6-astra"),
+    ]
+    r = costs.montar(linhas, now=datetime(2026, 8, 2, 12, tzinfo=costs.LOCAL))
+    assert r.totals.sessions == 2
+    assert r.by_source[0].sessions == 2
+    assert len({sid for c in r.combos for sid in c.session_ids}) == 2
+    assert sum(c.input for c in r.combos) == r.totals.input == 3_000_000
+
+
+def test_codex_tarifa_por_resposta_preservada_no_combo():
+    linhas = [
+        _linha(source="codex", model="gpt-6-astra", input=200_000, output=1000,
+               cache_read=0, cache_write=0),
+        _linha(source="codex", model="gpt-6-astra", input=100_000, output=1000,
+               cache_read=200_000, cache_write=0, codex_long_context=True),
+    ]
+    r = costs.montar(linhas, now=datetime(2026, 8, 1, 12, tzinfo=costs.LOCAL))
+    assert r.totals.cost == pytest.approx(2 + .05 + 2 + .4 + .075)
+    assert r.custo_sem_cache == pytest.approx(2 + .05 + 6 + .075)
+    assert len(r.combos) == 1
+    assert r.combos[0].cost == pytest.approx(r.totals.cost)
+    assert r.combos[0].custo_sem_cache == pytest.approx(r.custo_sem_cache)
+    assert r.combos[0].equivalente_cobrado == pytest.approx(r.equivalente_cobrado)
+    assert r.totals.sessions == 1
+
+
+def test_claude_cache_uma_hora_usa_tarifa_propria():
+    r = costs.montar([_linha(input=0, output=0, cache_write=1_000_000,
+                            cache_write_1h=400_000, cache_read=0)])
+    assert r.totals.cost_cache_write == pytest.approx(.6 * 6.25 + .4 * 10)
+    assert r.equivalente_cobrado == 1_550_000
+    assert r.combos[0].equivalente_cobrado == 1_550_000
+    assert r.custo_sem_cache == 5

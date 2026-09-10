@@ -386,6 +386,10 @@ export interface ComboRow {
   model: string;
   subagente: boolean;
   sessions: number;
+  // A mesma sessão pode contribuir em dias e modelos diferentes.
+  session_ids?: string[];
+  custo_sem_cache?: number;
+  equivalente_cobrado?: number;
   input: number;
   output: number;
   cache_write: number;

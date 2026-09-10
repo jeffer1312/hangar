@@ -218,6 +218,18 @@ describe('mergeReports', () => {
     expect(porChave.get('srv-velho')?.cost).toBe(40);
     expect(porChave.get('srv-velho')?.label).toBe('Notebook');
     expect(porChave.get('srv-novo')?.cost).toBe(10);
+    expect(m.report.totals.cost).toBe(50);
+    expect(m.report.combos).toEqual([]);
+  });
+
+  it('máquina sem consumo não impede detalhamento das demais', () => {
+    const nova = {
+      ...vazio(), totals: { ...vazio().totals, cost: 10, sessions: 1 },
+      combos: [linhaCombo({ cost: 10 })],
+    };
+    const m = mergeReports([{ report: vazio() }, { report: nova }], '30d');
+    expect(m.report.combos).toHaveLength(1);
+    expect(m.report.totals.cost).toBe(10);
   });
 
   it('servidor recusado pelo período não vira bucket nem carimbo', () => {
@@ -386,6 +398,13 @@ describe('custoSemCacheDe / equivalenteDe', () => {
     const sem = combo({ model: 'kimi-k3-free', cache_write: 500_000 });
     expect(custoSemCacheDe([sem], new Map())).toBe(0);
     expect(equivalenteDe([sem], new Map())).toBe(0);
+  });
+
+  it('preserva tarifas por resposta ao recortar contexto longo do Codex', () => {
+    const comContextoLongo = combo({ custo_sem_cache: 15, equivalente_cobrado: 1_500_000 });
+    expect(custoSemCacheDe([comContextoLongo], tarifas)).toBe(15);
+    expect(equivalenteDe([comContextoLongo], tarifas)).toBe(1_500_000);
+    expect(custoSemCacheDe([combo({ custo_sem_cache: 0 })], tarifas)).toBe(0);
   });
 
   it('ignora tarifa sem preço de input (sem régua pra converter)', () => {

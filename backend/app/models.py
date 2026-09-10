@@ -366,6 +366,9 @@ class ComboRow(BaseModel):
     model: str
     subagente: bool = False
     sessions: int = 0
+    session_ids: list[str] = []
+    custo_sem_cache: float = 0.0
+    equivalente_cobrado: float = 0.0
     input: int = 0
     output: int = 0
     cache_write: int = 0

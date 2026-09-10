@@ -51,7 +51,7 @@ def test_soma_os_turnos_da_sessao(tmp_path):
         _turno("claude-opus-5", 10, 1, 5, 100, "2026-07-01T10:00:01Z"),
         _turno("claude-opus-5", 20, 2, 0, 200, "2026-07-01T10:05:00Z"),
     ])
-    u = ct.ler_transcript(t)
+    (u,) = ct.ler_transcript(t)
     assert (u.input, u.output, u.cache_write, u.cache_read) == (30, 3, 5, 300)
     assert u.model == "claude-opus-5"
     assert u.cwd == "/repo/a"
@@ -68,7 +68,7 @@ def test_turno_IGNORADO_nao_soma_nem_vira_ultimo_modelo(tmp_path):
         _turno("claude-opus-5", 40, 7, 0, 900, "2026-07-01T10:00:00Z"),
         _turno("<synthetic>", 999, 999, 999, 999, "2026-07-01T10:01:00Z"),
     ])
-    u = ct.ler_transcript(t)
+    (u,) = ct.ler_transcript(t)
     assert u.model == "claude-opus-5", "o turno ignorado não pode virar o modelo da sessão"
     assert (u.input, u.output, u.cache_read) == (40, 7, 900), "nem somar"
 
@@ -76,18 +76,17 @@ def test_turno_IGNORADO_nao_soma_nem_vira_ultimo_modelo(tmp_path):
 def test_sessao_so_com_turno_ignorado_e_none(tmp_path):
     t = tmp_path / "proj" / "s1.jsonl"
     _escrever(t, [_turno("<synthetic>", 5, 5, 5, 5, "2026-07-01T10:00:00Z")])
-    assert ct.ler_transcript(t) is None
+    assert ct.ler_transcript(t) == []
 
 
-def test_ts_e_o_PRIMEIRO_turno(tmp_path):
-    """A sessão pertence ao dia em que começou. Usar o último jogaria para o dia seguinte
-    toda sessão que atravessa a meia-noite."""
+def test_segmento_respeita_dia_local_ao_atravessar_meia_noite_utc(tmp_path):
+    """Meia-noite UTC ainda é o mesmo dia local: as duas respostas ficam no mesmo segmento."""
     t = tmp_path / "proj" / "s1.jsonl"
     _escrever(t, [
         _turno("claude-opus-5", 1, 1, 0, 0, "2026-07-01T23:50:00Z"),
         _turno("claude-opus-5", 1, 1, 0, 0, "2026-07-02T00:10:00Z"),
     ])
-    assert ct.ler_transcript(t).ts.astimezone(timezone.utc).strftime("%Y-%m-%d") == "2026-07-01"
+    assert ct.ler_transcript(t)[0].ts.astimezone(timezone.utc).strftime("%Y-%m-%d") == "2026-07-01"
 
 
 def test_linha_invalida_e_tipo_errado_nao_derrubam(tmp_path):
@@ -97,7 +96,7 @@ def test_linha_invalida_e_tipo_errado_nao_derrubam(tmp_path):
     t.write_text("\n".join(["{quebrado", "null", "[1,2]",
                             json.dumps(_turno("claude-opus-5", 7, 1, 0, 0, "2026-07-01T10:00:00Z"))]),
                  encoding="utf-8")
-    assert ct.ler_transcript(t).input == 7
+    assert ct.ler_transcript(t)[0].input == 7
 
 
 def test_subagente_entra_com_identidade_PROPRIA(tmp_path):
@@ -208,3 +207,34 @@ def test_falha_ao_gravar_cache_nao_derruba(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ct, "_gravar_cache", explode)
     assert len(ct.varrer(tmp_path)) == 1
+
+
+def test_dias_modelos_e_blocos_da_mesma_resposta_sobrevivem_ao_cache(tmp_path, monkeypatch):
+    primeiro = _turno("claude-opus-5", 10, 2, 100, 200, "2026-09-10T02:59:00Z")
+    primeiro["requestId"] = "req1"
+    primeiro["message"]["id"] = "msg1"
+    primeiro["message"]["usage"]["cache_creation"] = {"ephemeral_1h_input_tokens": 70}
+    segundo = _turno("claude-sonnet-5", 20, 3, 50, 300, "2026-09-10T03:01:00Z")
+    segundo["requestId"] = "req2"
+    segundo["message"]["id"] = "msg2"
+    _escrever(tmp_path / "p" / "s.jsonl", [primeiro, primeiro, segundo])
+    antes = ct.varrer(tmp_path)
+    ct.invalidar_cache()
+    n = _contador(monkeypatch)
+    depois = ct.varrer(tmp_path)
+    assert n["v"] == 0
+    assert antes == depois
+    assert [(u.ts.day, u.model, u.input, u.cache_write_1h) for u in depois] == [
+        (9, "claude-opus-5", 10, 70), (10, "claude-sonnet-5", 20, 0)]
+    assert len({u.session_id for u in depois}) == 1
+    assert sum(u.output for u in depois) == 5
+
+
+def test_resposta_atualizada_substitui_usage_parcial(tmp_path):
+    parcial = _turno("claude-opus-5", 10, 2, 0, 0, "2026-09-10T12:00:00Z")
+    parcial["message"]["id"] = "mesma-resposta"
+    final = json.loads(json.dumps(parcial))
+    final["message"]["usage"]["output_tokens"] = 12
+    _escrever(tmp_path / "s.jsonl", [parcial, final])
+    (uso,) = ct.ler_transcript(tmp_path / "s.jsonl")
+    assert (uso.input, uso.output) == (10, 12)
