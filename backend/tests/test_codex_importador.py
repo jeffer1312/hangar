@@ -203,9 +203,12 @@ async def test_cli_e_wrappers_usam_ambiente_e_argumentos_literais(cliente):
     assert result["args"] == ["plugin", "marketplace", "upgrade", "market", "--json"]
 
 
-async def test_marketplace_em_auto_upgrade_do_codex_nao_e_falha(cliente):
-    result = await cliente("cli_auto_upgrade").atualizar_marketplace("market")
+async def test_marketplace_em_auto_upgrade_do_codex_nao_e_falha(cliente, caplog):
+    obj = cliente("cli_auto_upgrade")
+    result = await obj.atualizar_marketplace("market")
     assert result == {"selectedMarketplaces": ["market"], "upgradedRoots": [], "errors": []}
+    assert not (obj.codex_home / ".hangar-diagnosticos").exists()
+    assert "CLI Codex" not in caplog.text
     with pytest.raises(CodexNativoErro, match="código 7"):
         await cliente("cli_error").atualizar_marketplace("market")
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger("hangar.codex.importador")
 _READ_LIMIT = 8 * 1024 * 1024
 _COMPLETED = "externalAgentConfig/import/completed"
+_AUTO_UPGRADE_EM_CURSO = "auto-upgrade was in flight"
 
 
 class CodexNativoErro(RuntimeError):
@@ -307,15 +309,18 @@ class CodexNativo:
                                           "stderr": stderr[-8192:].decode(errors="replace")},
                                          ensure_ascii=False).encode("utf-8"))
             substituir(temporario, destino)
-            _log.warning("Falha do CLI Codex (código %s); diagnóstico local: %s", codigo, destino)
+            _log.warning("CLI Codex falhou ou devolveu erros (código %s); diagnóstico local: %s",
+                         codigo, destino)
         except OSError:
-            _log.warning("Falha do CLI Codex (código %s); não foi possível gravar o diagnóstico local", codigo)
+            _log.warning("CLI Codex falhou ou devolveu erros (código %s); não foi possível gravar "
+                         "o diagnóstico local", codigo)
         finally:
             if temporario is not None:
                 with contextlib.suppress(OSError):
                     temporario.unlink(missing_ok=True)
 
-    async def cli(self, args: list[str]) -> dict:
+    async def cli(self, args: list[str], *, esperado: str = "") -> dict:
+        """`esperado`: trecho do stderr que o chamador trata como benigno — sem diagnóstico nem aviso."""
         proc = await asyncio.create_subprocess_exec(
             *self._comando(), *args, cwd=self.home, env=self._env(),
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
@@ -326,22 +331,26 @@ class CodexNativo:
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
             except TimeoutError:
                 raise CodexNativoErro("O comando do Codex excedeu o tempo limite.") from None
+            # O arquivo vai pro thread: `substituir` pode dormir no Windows, e isto roda no loop do SSE.
+            diagnostico = functools.partial(asyncio.to_thread, self._diagnostico_cli,
+                                            args, proc.returncode, stdout, stderr)
             if proc.returncode:
-                self._diagnostico_cli(args, proc.returncode, stdout, stderr)
                 # A cauda vai só em `data`, pra decisão interna (auto-upgrade em curso); nunca no log.
                 cauda = stderr.decode(errors="replace")[-500:].strip()
+                if not (esperado and esperado in cauda):
+                    await diagnostico()
                 raise CodexNativoErro(f"O comando do Codex falhou (código {proc.returncode}).",
                                       data={"stderr": cauda})
             try:
                 result = json.loads(stdout)
             except (ValueError, UnicodeError):
-                self._diagnostico_cli(args, proc.returncode, stdout, stderr)
+                await diagnostico()
                 raise CodexNativoErro("O comando do Codex não retornou JSON válido.") from None
             if not isinstance(result, dict):
-                self._diagnostico_cli(args, proc.returncode, stdout, stderr)
+                await diagnostico()
                 raise CodexNativoErro("O comando do Codex retornou um resultado inválido.")
             if result.get("errors"):
-                self._diagnostico_cli(args, proc.returncode, stdout, stderr)
+                await diagnostico()
             return result
         finally:
             await self._stop(proc)
@@ -365,10 +374,11 @@ class CodexNativo:
 
     async def atualizar_marketplace(self, nome: str) -> dict:
         try:
-            return await self.cli(["plugin", "marketplace", "upgrade", nome, "--json"])
+            return await self.cli(["plugin", "marketplace", "upgrade", nome, "--json"],
+                                  esperado=_AUTO_UPGRADE_EM_CURSO)
         except CodexNativoErro as exc:
             # O próprio Codex já está atualizando esse marketplace (auto-upgrade ao abrir sessão):
             # o trabalho vai ser feito por ele, não é falha a retentar nem a pintar de vermelho.
-            if "auto-upgrade was in flight" in (exc.data or {}).get("stderr", ""):
+            if _AUTO_UPGRADE_EM_CURSO in (exc.data or {}).get("stderr", ""):
                 return {"selectedMarketplaces": [nome], "upgradedRoots": [], "errors": []}
             raise
