@@ -26,6 +26,10 @@ if args != ["app-server", "--stdio"]:
     if scenario == "cli_error":
         print("secret-token", file=sys.stderr)
         sys.exit(7)
+    if scenario == "cli_auto_upgrade":
+        print("Failed to upgrade marketplace `market`: installed marketplace `market` "
+              "changed while auto-upgrade was in flight", file=sys.stderr)
+        sys.exit(1)
     if scenario == "cli_invalid":
         print("secret-token")
         sys.exit(0)
@@ -194,6 +198,13 @@ async def test_cli_e_wrappers_usam_ambiente_e_argumentos_literais(cliente):
     assert os.environ.get("HOME") == original_home
     result = await obj.atualizar_marketplace("market")
     assert result["args"] == ["plugin", "marketplace", "upgrade", "market", "--json"]
+
+
+async def test_marketplace_em_auto_upgrade_do_codex_nao_e_falha(cliente):
+    result = await cliente("cli_auto_upgrade").atualizar_marketplace("market")
+    assert result == {"selectedMarketplaces": ["market"], "upgradedRoots": [], "errors": []}
+    with pytest.raises(CodexNativoErro, match="código 7"):
+        await cliente("cli_error").atualizar_marketplace("market")
 
 
 @pytest.mark.parametrize("scenario, message", [
