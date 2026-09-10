@@ -35,7 +35,7 @@ const _rowCache = new WeakMap<object, { label: string; color: string; byKey: Map
 export function aggregateSessions(
   servers: Server[],
   slots: ReadonlyMap<string, Slot>,
-  hidden?: ReadonlySet<string>,
+  hidden?: { has(key: string): boolean },
 ): Aggregate {
   const seen = new Set<string>(); // dedup global: backend compartilhado por 2 URLs não duplica
   const rows: AggSession[] = [];
@@ -80,14 +80,43 @@ export function aggregateSessions(
 // confirmou a exclusão — a marca otimista não é mais necessária. Devolve só as chaves ainda
 // pendentes (sessão presente na última lista boa, ou servidor sem lista — aí não dá pra saber
 // e a marca fica). Puro, pra ser testável no vitest node.
-export function sweepHidden(hidden: ReadonlySet<string>, slots: ReadonlyMap<string, Slot>): Set<string> {
-  const kept = new Set<string>();
-  for (const key of hidden) {
+// Época de RECRIAÇÃO por `serverId::name`: sobe quando uma sessão some da lista e outra com o mesmo
+// nome aparece depois. O Chat do desktop é remontado por `{#key}` com o nome — matar `x` e criar
+// outra `x` dava a mesma chave, e a conversa da morta ficava na tela enquanto a nova subia (pré-thread
+// do Codex). Lê os `slots` e não a lista filtrada: a exclusão otimista (`hidden`) e um servidor
+// offline (que guarda a última lista) não são sumiço.
+export interface Epocas { vistas: ReadonlySet<string>; sumidas: ReadonlySet<string>; epochs: ReadonlyMap<string, number> }
+
+export function epocasDeRecriacao(anterior: Epocas, slots: ReadonlyMap<string, Slot>): Epocas {
+  const atuais = new Set<string>();
+  for (const [serverId, slot] of slots) for (const s of slot.sessions ?? []) atuais.add(`${serverId}::${s.name}`);
+  const sumidas = new Set(anterior.sumidas);
+  for (const k of anterior.vistas) if (!atuais.has(k)) sumidas.add(k);
+  let epochs = anterior.epochs;
+  for (const k of atuais) {
+    if (!sumidas.delete(k)) continue;
+    if (epochs === anterior.epochs) epochs = new Map(epochs);
+    (epochs as Map<string, number>).set(k, (epochs.get(k) ?? 0) + 1);
+  }
+  return { vistas: atuais, sumidas, epochs };
+}
+
+// A marca guarda o `jsonl` da sessão que está sendo excluída: uma sessão NOVA com o mesmo nome
+// (jsonl outro, ou nenhum ainda) não é a que morreu, e não pode herdar a marca — senão a recriada
+// ficava escondida da lista até alguém a fechar de novo. Sem lista do servidor não dá pra saber.
+export function jsonlDaSessao(slots: ReadonlyMap<string, Slot>, serverId: string, name: string): string | null {
+  return slots.get(serverId)?.sessions?.find((s) => s.name === name)?.jsonl ?? null;
+}
+
+export function sweepHidden(hidden: ReadonlyMap<string, string | null>,
+                            slots: ReadonlyMap<string, Slot>): Map<string, string | null> {
+  const kept = new Map<string, string | null>();
+  for (const [key, jsonl] of hidden) {
     const i = key.indexOf('::');
     const serverId = key.slice(0, i);
     const name = key.slice(i + 2);
     const sessions = slots.get(serverId)?.sessions;
-    if (!sessions || sessions.some((s) => s.name === name)) kept.add(key);
+    if (!sessions || sessions.some((s) => s.name === name && (s.jsonl ?? null) === jsonl)) kept.set(key, jsonl);
   }
   return kept;
 }

@@ -489,7 +489,7 @@ import * as m from '../paraglide/messages';
              mesma razão do {#key currentKey ?? currentSession} abaixo. Inclui o SERVIDOR pelo mesmo
              motivo do currentKey: homônimas em servidores diferentes têm o mesmo nome, e só o nome na
              key deixaria o Chat preso no servidor antigo. -->
-        {#key workspaceSessionKey(overlaySession)}
+        {#key `${workspaceSessionKey(overlaySession)}#${sessionsStore.epoca(overlaySession.serverId, overlaySession.name)}`}
           {@const overlayName = overlaySession.name}
           <div class="board-overlay" class:aba-faixa={barraRecolhida && !terminalMaximizado}
                role="region" aria-label={m.shell_chat_da_sessao()}>
@@ -514,7 +514,9 @@ import * as m from '../paraglide/messages';
         {/key}
       {/if}
     {:else if currentSession && currentSession !== 'null' && currentSession !== 'undefined'}
-      {#key currentKey ?? currentSession}
+      <!-- A época entra na chave: matar `x` e criar outra `x` dá o mesmo nome, e sem ela o Chat da
+           morta seguia montado mostrando a conversa antiga enquanto a nova subia. -->
+      {#key `${currentKey ?? currentSession}#${sessionsStore.epoca(serverIdPrincipal, currentSession)}`}
         {@const cur = currentSession}
         <div class="pane">
           <Chat

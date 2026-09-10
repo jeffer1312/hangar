@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { openSessionsStream, aggregateSessions, sweepHidden } from '@hangar/core';
+import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden } from '@hangar/core';
 import type { SessionInfo, Server, AggSession } from '@hangar/core';
 import { sortSessions } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
@@ -36,7 +36,7 @@ const slots = new Map<string, Slot>();
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
 const retryDelays = new Map<string, number>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-let hidden = new Set<string>();
+let hidden = new Map<string, string | null>();
 let serversCache: Server[] = [];
 let refs = 0;
 let unsubServers: (() => void) | null = null;
@@ -147,7 +147,7 @@ function stop(set: (p: Partial<SessionsState>) => void) {
   streams.clear();
   slots.clear();
   // hidden mantém? Não — limpa ao parar para próximo retain começar limpo
-  hidden = new Set<string>();
+  hidden = new Map<string, string | null>();
   recompute(set);
 }
 
@@ -184,7 +184,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
     else recompute(set);
   },
   markDeleting(serverId: string, name: string) {
-    hidden.add(`${serverId}::${name}`);
+    hidden.set(`${serverId}::${name}`, jsonlDaSessao(slots, serverId, name));
     recompute(set);
   },
   unmarkDeleting(serverId: string, name: string) {
@@ -201,7 +201,7 @@ export function _resetSessionsForTests() {
   for (const es of streams.values()) es.close();
   streams.clear();
   slots.clear();
-  hidden = new Set<string>();
+  hidden = new Map<string, string | null>();
   serversCache = [];
   aggCache = { rows: [], byServer: [], loading: false };
   refs = 0;

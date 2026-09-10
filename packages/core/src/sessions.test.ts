@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Slot } from './sessions';
 import type { Server } from './servers';
 import type { SessionInfo } from './types';
-import { aggregateSessions, sweepHidden } from './sessions';
+import { aggregateSessions, epocasDeRecriacao, sweepHidden } from './sessions';
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
@@ -86,19 +86,51 @@ describe('aggregateSessions', () => {
   });
 });
 
+describe('epocasDeRecriacao', () => {
+  const zero = { vistas: new Set<string>(), sumidas: new Set<string>(), epochs: new Map<string, number>() };
+
+  it('sessão que some e volta com o mesmo nome ganha época nova; as demais não mudam', () => {
+    const e1 = epocasDeRecriacao(zero, slots({ a: { sessions: [sess('x'), sess('y')], error: null } }));
+    expect(e1.epochs.size).toBe(0);                       // primeira lista: nada foi recriado
+    const e2 = epocasDeRecriacao(e1, slots({ a: { sessions: [sess('y')], error: null } }));
+    expect(e2.epochs.get('a::x')).toBeUndefined();        // sumir não é recriar
+    const e3 = epocasDeRecriacao(e2, slots({ a: { sessions: [sess('y'), sess('x')], error: null } }));
+    expect(e3.epochs.get('a::x')).toBe(1);
+    expect(e3.epochs.get('a::y')).toBeUndefined();
+    expect(e3.epochs).not.toBe(e2.epochs);                // reatribuído: quem lê num $derived acorda
+  });
+
+  it('servidor offline guarda a última lista: não conta como sumiço nem como volta', () => {
+    const e1 = epocasDeRecriacao(zero, slots({ a: { sessions: [sess('x')], error: null } }));
+    const e2 = epocasDeRecriacao(e1, slots({ a: { sessions: [sess('x')], error: 'offline' } }));
+    const e3 = epocasDeRecriacao(e2, slots({ a: { sessions: [sess('x')], error: null } }));
+    expect(e3.epochs.size).toBe(0);
+    expect(e3.epochs).toBe(e1.epochs);
+  });
+});
+
 describe('sweepHidden', () => {
+  const marca = new Map([['a::x', '/j/x.jsonl']]);
+
   it('mantém a marca enquanto a sessão ainda aparece na lista do servidor', () => {
-    const kept = sweepHidden(new Set(['a::x']), slots({ a: { sessions: [sess('x')], error: null } }));
-    expect([...kept]).toEqual(['a::x']);
+    const kept = sweepHidden(marca, slots({ a: { sessions: [sess('x')], error: null } }));
+    expect([...kept.keys()]).toEqual(['a::x']);
   });
 
   it('remove a marca quando o SSE re-emite a lista sem a sessão (delete confirmado)', () => {
-    const kept = sweepHidden(new Set(['a::x']), slots({ a: { sessions: [sess('y')], error: null } }));
+    const kept = sweepHidden(marca, slots({ a: { sessions: [sess('y')], error: null } }));
     expect(kept.size).toBe(0);
   });
 
+  it('sessão NOVA com o mesmo nome (outro jsonl, ou nenhum) não herda a marca da que morreu', () => {
+    expect(sweepHidden(marca, slots({ a: { sessions: [sess('x', { jsonl: '/j/x2.jsonl' })], error: null } })).size).toBe(0);
+    expect(sweepHidden(marca, slots({ a: { sessions: [sess('x', { jsonl: null })], error: null } })).size).toBe(0);
+    // Sem jsonl nos dois lados (sessão sem transcript excluída e recriada) não há como separar: fica.
+    expect(sweepHidden(new Map([['a::x', null]]), slots({ a: { sessions: [sess('x', { jsonl: null })], error: null } })).size).toBe(1);
+  });
+
   it('servidor sem lista (offline/ainda sem slot): não dá pra saber, marca fica', () => {
-    expect(sweepHidden(new Set(['a::x']), slots({ a: { sessions: null, error: 'offline' } })).size).toBe(1);
-    expect(sweepHidden(new Set(['a::x']), new Map()).size).toBe(1);
+    expect(sweepHidden(marca, slots({ a: { sessions: null, error: 'offline' } })).size).toBe(1);
+    expect(sweepHidden(marca, new Map()).size).toBe(1);
   });
 });

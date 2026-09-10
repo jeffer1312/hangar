@@ -11,7 +11,7 @@ import { openSessionsStream } from '@hangar/core';
 import { listServers, onServersChanged, type Server } from './auth';
 import { navPelaLista } from './navPelaLista';
 import { podarNavMortos } from './navegadorPanel.svelte';
-import { aggregateSessions, sweepHidden, type Slot, type Aggregate } from '@hangar/core';
+import { aggregateSessions, epocasDeRecriacao, jsonlDaSessao, sweepHidden, type Slot, type Aggregate, type Epocas } from '@hangar/core';
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
@@ -60,11 +60,17 @@ function createSessionsStore() {
   let offChanged: (() => void) | null = null;
   // Exclusão otimista: chaves `serverId::name` escondidas da lista enquanto o delete está em voo.
   // A faxina roda a cada recompute — quando o SSE confirma o sumiço, a marca sai sozinha.
-  let hidden = new Set<string>();
+  let hidden = new Map<string, string | null>();
+  // Época de recriação por `serverId::name` (ver epocasDeRecriacao). `$state.raw` e o Map
+  // SUBSTITUÍDO quando muda, como `latencias`: é o que acorda o `{#key}` do Chat no desktop.
+  let epocas: Epocas = { vistas: new Set(), sumidas: new Set(), epochs: new Map() };
+  let epochs = $state.raw<ReadonlyMap<string, number>>(epocas.epochs);
 
   function recompute() {
     hidden = sweepHidden(hidden, slots);
     agg = aggregateSessions(servers, slots, hidden);
+    epocas = epocasDeRecriacao(epocas, slots);
+    if (epocas.epochs !== epochs) epochs = epocas.epochs;
     const vivos = new Map<string, Map<string, string | null>>();
     for (const [id, slot] of slots) {
       if (slot.sessions && !slot.error) vivos.set(id, new Map(slot.sessions.map((s) => [s.name, s.jsonl ?? null])));
@@ -237,6 +243,8 @@ function createSessionsStore() {
     get rows() { return agg.rows; },
     get byServer() { return agg.byServer; },
     get latencias() { return latencias; },
+    // Quantas vezes uma sessão com este nome já foi recriada nesta aba — entra na `{#key}` do Chat.
+    epoca(serverId: string, name: string): number { return epochs.get(`${serverId}::${name}`) ?? 0; },
     get loading() { return agg.loading; },
     get servers() { return servers; },
     retain() { if (++refs === 1) start(); },
@@ -260,7 +268,10 @@ function createSessionsStore() {
     // Exclusão otimista: a view marca antes do await (linha some na hora) e desmarca no catch
     // (linha REAPARECE = rollback visual). No sucesso ninguém desmarca — a faxina do recompute
     // remove a marca quando o SSE re-emitir a lista sem a sessão.
-    markDeleting(serverId: string, name: string) { hidden.add(`${serverId}::${name}`); recompute(); },
+    markDeleting(serverId: string, name: string) {
+      hidden.set(`${serverId}::${name}`, jsonlDaSessao(slots, serverId, name));
+      recompute();
+    },
     unmarkDeleting(serverId: string, name: string) { hidden.delete(`${serverId}::${name}`); recompute(); },
   };
 }

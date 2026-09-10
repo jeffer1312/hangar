@@ -1984,6 +1984,20 @@ toda abertura porque o "auto-upgrade was in flight" do marketplace `ecc` contava
 0.154.0: o seletor de hooks passou a desenhar SEM número (`›    Review hooks`), e `menu_codex`
 exige `N.` — captura real do widget antes de mexer.
 
+**Fechar `x` e criar outra `x`: a chave do Chat e a marca de exclusão eram só o NOME** (10/09/2026).
+No desktop o `Chat` remonta por `{#key serverId::nome}`; com o mesmo nome a chave não muda, o
+componente da morta segue montado com a conversa antiga e estado `dead` (sem reconectar), e o que
+o usuário via era a conversa do Claude enquanto o Codex de mesmo nome subia — o backend serviu o
+transcript certo em todas as aberturas do dia (medido no log). Hoje `sessionsStore.epoca()` sobe
+quando um nome some dos `slots` e volta (`epocasDeRecriacao`, no core), e as duas `{#key}` do
+`DesktopShell` a incluem. Segundo furo do mesmo nome: `markDeleting` escondia `serverId::nome` até
+a lista vir SEM ele; recriada antes disso, a nova ficava escondida pra sempre (a varredura via um
+`x` na lista e mantinha a marca). A marca agora guarda o `jsonl` da excluída, e `sweepHidden` só a
+mantém pra sessão com o mesmo nome E mesmo jsonl. Vale nas duas interfaces (store do front e
+`mobile/src/stores/sessions.ts`). O cache de cauda do chat (`chat-cauda`, TanStack) já era por
+jsonl e não entrou nisso. Não reproduzido de ponta a ponta pelo navegador embutido: o item
+"Fechar" do menu de contexto não aceitou o clique sintético.
+
 **Instruções nativas (07/09/2026, PR #3):** `codex_instrucoes.py` prepara `AGENTS.override.md`
 — nome que o Codex 0.153.4 lê no lugar do `AGENTS.md` da mesma pasta — como link para o
 `CLAUDE.md` global (`<codex>/AGENTS.override.md`) e dos projetos registrados no `config.toml`; o
