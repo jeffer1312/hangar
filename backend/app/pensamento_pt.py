@@ -77,6 +77,9 @@ def traduzir(texto: str) -> str:
     global _pausado_ate
     if time.monotonic() < _pausado_ate:
         return texto
+    # A vaga so vale pra chamada ao provedor: cache e pausa respondem sem disputar nada.
+    if not _vagas.acquire(blocking=False):
+        return texto
     try:
         saida = chamar_chat(_SYSTEM, texto, temperature=_TEMPERATURA, timeout=_TIMEOUT,
                             plano_b=False).strip()
@@ -92,6 +95,8 @@ def traduzir(texto: str) -> str:
         _log.warning("traducao do pensamento falhou — pausando %.0fs", _PAUSA_S, exc_info=True)
         _pausado_ate = time.monotonic() + _PAUSA_S
         return texto
+    finally:
+        _vagas.release()
     if not saida:
         return texto
     with _lock:
@@ -108,13 +113,8 @@ def traduzir_varios(textos: list[str]) -> list[str]:
     do provedor produzindo texto que ninguém vai receber é custo puro. Já traduzido fica no cache,
     então a próxima passada continua de onde parou em vez de recomeçar.
     """
-    if not _vagas.acquire(blocking=False):
-        return list(textos)
-    try:
-        prazo = time.monotonic() + _PRAZO_TOTAL
-        saida = []
-        for t in textos:
-            saida.append(traduzir(t) if time.monotonic() < prazo else t)
-        return saida
-    finally:
-        _vagas.release()
+    prazo = time.monotonic() + _PRAZO_TOTAL
+    saida = []
+    for t in textos:
+        saida.append(traduzir(t) if time.monotonic() < prazo else t)
+    return saida
