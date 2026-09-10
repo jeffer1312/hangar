@@ -26,6 +26,7 @@
   import { prefetchOrq, lerCaudaChat, guardarCaudaChat } from '../lib/queries';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { aoAquecer, segurarAquecimento, soltarAquecimento } from '../lib/aquecimento';
+  import { capacidades } from '../lib/capacidades.svelte';
   // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
   // dentro. Só o render é recursivo — o modal só existe com `peerChat` preenchido, e ele nunca
   // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
@@ -938,7 +939,12 @@
     if (desktop) return;
     let vivo = true;
     getConfig()
-      .then((c) => { if (vivo) terminalCapazMobile = c.somente_leitura.terminal_panel !== false; })
+      .then((c) => {
+        if (!vivo) return;
+        terminalCapazMobile = c.somente_leitura.terminal_panel !== false;
+        // Sem provedor de LLM com chave, o bloco de pensamento nem pede tradução.
+        capacidades.traducaoPensamento = c.somente_leitura.traducao_pensamento !== false;
+      })
       .catch(() => {});
     return () => { vivo = false; };
   });

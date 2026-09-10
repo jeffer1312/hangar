@@ -4037,6 +4037,14 @@ def _painel_disponivel() -> bool:
     return termsock.painel_disponivel()
 
 
+def _traducao_pensamento_disponivel() -> bool:
+    from app import narrar
+    try:
+        return bool(narrar._provedor()[1])
+    except Exception:  # noqa: BLE001 — capacidade: config estranha vale como "sem provedor"
+        return False
+
+
 def _origem_do_terminal_ok(request: Request) -> bool:
     """A mesma pergunta que o handshake do terminal faz, respondida por HTTP (que tem corpo).
 
@@ -4269,6 +4277,9 @@ def get_config(request: Request):
             # Ela tambem responde False num POSIX sem `pty`. Import tardio pelo mesmo motivo de
             # sempre: o termsock nao pode ser importado no topo deste modulo.
             "terminal_panel": _painel_disponivel(),
+            # Ha provedor de LLM com chave? Sem isso o front nem pede a traducao do pensamento —
+            # cada bloco visivel virava um POST que so voltava 503.
+            "traducao_pensamento": _traducao_pensamento_disponivel(),
             # A ORIGEM DESTE cliente abriria o terminal aqui? O handshake do WebSocket recusa com
             # 403 e o navegador nao entrega corpo nem motivo — a tela dizia so "desconectado", e o
             # unico lugar com a explicacao era o log do servidor. Com este campo a propria tela

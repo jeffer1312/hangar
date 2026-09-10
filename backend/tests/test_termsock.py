@@ -796,6 +796,18 @@ def test_config_expoe_capacidade_do_painel_de_terminal():
     assert valor is True
 
 
+def test_config_diz_se_a_traducao_do_pensamento_tem_provedor(monkeypatch):
+    # Sem chave o front nem pede: cada bloco visivel virava um POST que so voltava 503.
+    from app import narrar
+    c = _client()
+    monkeypatch.setattr(narrar, "_provedor", lambda perfil="padrao": ("https://x", "", "m"))
+    r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
+    assert r.json()["somente_leitura"]["traducao_pensamento"] is False
+    monkeypatch.setattr(narrar, "_provedor", lambda perfil="padrao": ("https://x", "k", "m"))
+    r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
+    assert r.json()["somente_leitura"]["traducao_pensamento"] is True
+
+
 def test_origem_mesma_do_host_e_aceita_mesmo_com_public_url_diferente(monkeypatch):
     # Regressao de producao: `public_url` aponta pro nome do Tailscale, mas o dono abre o app em
     # http://127.0.0.1:8765. Comparar SO com a public_url recusava a origem local com 403 e o painel
