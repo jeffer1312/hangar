@@ -104,7 +104,8 @@ def test_no_windows_o_hook_de_estado_vai_em_powershell_e_o_formato_cmd_e_reescri
     assert [h["command"] for g in data["hooks"]["PreToolUse"] for h in g["hooks"]] == [PESSOAL, ps]
     assert codex_hook_installer.ensure_codex_state_hook_installed(codex) == []
     # Forma PowerShell de OUTRO venv/checkout ja funciona: nao e reescrita (preserva a aprovacao).
-    outro = '& "D:\\outro\\python.exe" "D:\\outro\\hooks\\state_hook.py" ; exit 0'
+    # Barras normais: o basename POSIX deste teste nao separa `\`; no Windows real os dois valem.
+    outro = '& "D:/outro/python.exe" "D:/outro/hooks/state_hook.py" ; exit 0'
     (codex / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [_grupo(outro)]}}))
     gravados = codex_hook_installer.ensure_codex_state_hook_installed(codex)
     assert "SessionStart" not in gravados
