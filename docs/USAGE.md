@@ -66,6 +66,10 @@ está listado em "O que o Windows ainda não tem", mais abaixo.
 O instalador faz duas perguntas no começo (a senha do celular e se você vai usar fora de
 casa) e depois segue sozinho; só pede a senha de administrador avisando antes. No fim ele
 mostra um QR: leia com a câmera do celular.
+No Windows, **não abra o PowerShell como administrador**: o instalador recusa rodar elevado. O que
+precisar de admin (liberar porta no firewall, ligar o Modo Desenvolvedor) pede a senha na hora,
+só pra aquilo, e ele continua. Instalado como admin, o botão Atualizar do app (que roda como
+usuário) falha com "Acesso negado" nas tarefas agendadas.
 Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps1 -Avancado`
 (o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
 Algo não abriu? `hangar-doctor` diz o que falta e como consertar.

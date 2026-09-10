@@ -77,6 +77,50 @@ function Pare($mensagem, $dicas) {
 # alternativa seria P/Invoke de CreateFile dentro de um instalador.
 $script:Interativo = -not [Console]::IsInputRedirected
 
+# Um comando elevado, UAC na hora, e o instalador segue SEM elevacao. E a unica forma de admin
+# que existe aqui: rodar o instalador inteiro elevado deixa as tarefas agendadas com dono
+# Administradores, e dai todo Atualizar (que roda como usuario) leva "Acesso negado" pra sempre.
+function Eleva-E-Roda($descricao, $comando) {
+    if (-not $script:Interativo) { Nota "$descricao - precisa de UAC, e nao ha terminal pra confirmar"; return $false }
+    Nota "vai pedir a senha de administrador (UAC) so pra: $descricao"
+    try {
+        $p = Start-Process powershell -Verb RunAs -Wait -PassThru `
+            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', $comando
+        return ($p.ExitCode -eq 0)
+    } catch { return $false }   # UAC recusado ou fechado
+}
+
+# Espera a pessoa fazer algo fora do instalador (ligar uma opcao, habilitar HTTPS no site) e
+# CONFERE antes de seguir - nunca "rode o instalador de novo". 'p' pula e vira pendencia.
+function Espere-Ate($oQueFazer, [scriptblock]$prova) {
+    if (& $prova) { return $true }
+    if (-not $script:Interativo) { return $false }
+    while ($true) {
+        $r = Read-Host "  Quando tiver $oQueFazer, aperte Enter pra eu conferir (ou 'p' pra pular)"
+        if ($r -match '^[Pp]') { return $false }
+        if (& $prova) { return $true }
+        Falta 'ainda nao - confira e tente de novo'
+    }
+}
+
+function Reparar-DonoTarefa($nome) {
+    Falta "a tarefa $nome pertence ao Administrador (instalador rodado elevado um dia) - o Atualizar nao consegue mexer nela"
+    if (-not (Pergunte-Mesmo "  Recriar $nome como sua? (pede a senha de admin uma vez, so pra apagar a antiga)")) { return $false }
+    $ok = Eleva-E-Roda "apagar a tarefa antiga $nome" "Unregister-ScheduledTask -TaskName '$nome' -Confirm:`$false"
+    return $ok -and -not (Get-ScheduledTask -TaskName $nome -ErrorAction SilentlyContinue)
+}
+
+function Symlink-Funciona {
+    $t = Join-Path $env:TEMP ("hangar-symlink-" + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType SymbolicLink -Path $t -Target $env:TEMP -ErrorAction Stop | Out-Null
+        return $true
+    } catch { return $false }
+    # Directory.Delete e nao Remove-Item: no 5.1 o Remove-Item num symlink de pasta estoura
+    # NullReferenceException (medido), e o Delete do .NET apaga so o link, nunca o alvo.
+    finally { try { [IO.Directory]::Delete($t) } catch { } }
+}
+
 # Sem entrada interativa a resposta e NAO, alinhado ao install.sh: `irm | iex` chamado por outro
 # processo nao pode instalar terceiro nem mexer no firewall por conta propria.
 function Pergunte-Mesmo($texto) {
@@ -460,12 +504,20 @@ function Token-Do-Env {
 # -- 0/8 Antes de comecar ----------------------------------------------------
 # As duas unicas perguntas da instalacao ficam AQUI, juntas: token e "vai usar fora de casa?".
 # Depois daqui o instalador vai ate o fim sozinho.
+# Elevado NAO: tudo o que o instalador registra (tarefas, hooks, config) nasce com o dono do
+# processo, e o Atualizar do app roda como usuario. Instalar de um jeito e atualizar de outro e
+# o que dava "Acesso negado" na vigia. O firewall e o Modo Desenvolvedor pedem UAC sozinhos.
+if ((-not $SoChecar) -and (EhAdmin)) {
+    Pare 'este terminal esta como Administrador - feche e rode o instalador num PowerShell comum' @(
+        'Nao precisa de admin: o que exigir (firewall, Modo Desenvolvedor) pede a senha na hora, so pra aquilo.',
+        'Instalado como admin, o botao Atualizar do app (que roda como usuario) falha com "Acesso negado".')
+}
 if (-not $SoChecar -and -not $Update) {
 Titulo '0/8 Antes de comecar'
 Write-Host '  No maximo duas perguntas agora, e depois o instalador segue sozinho ate o fim.'
 Write-Host '  (Se voce disser que usa fora de casa, logo em seguida o Tailscale abre o navegador'
 Write-Host '   uma vez, para voce entrar na conta dele. Fora isso, nada mais e perguntado.)'
-Write-Host '  Se pedir permissao de administrador e para liberar a porta do Wi-Fi no firewall.'
+Write-Host '  Se pedir permissao de administrador (UAC) e so pra uma coisa pontual, e o instalador continua.'
 
 # O BLOCO INTEIRO do token fora do transcript: o Start-Transcript captura Read-Host e Write-Host,
 # entao tanto o que a pessoa digita quanto o aleatorio impresso no ramo nao-interativo cairiam
@@ -571,6 +623,30 @@ if (-not (Tem 'rg')) {
     }
 } else { Ok 'ripgrep' }
 
+# Symlink sem admin: as contas (~\.claude-<nome>) sao pastas reais cheias de atalhos pro ~\.claude,
+# e quem os cria e o BACKEND, como usuario. No Windows isso exige o Modo Desenvolvedor, e a pessoa
+# so descobria ao criar a primeira conta, por um erro de tres linhas. Confere aqui e resolve aqui.
+if (Symlink-Funciona) { Ok 'symlink sem admin (Modo Desenvolvedor)' }
+elseif ($SoChecar -or $Update) {
+    Falta 'symlink sem admin nao funciona - ligue o Modo Desenvolvedor (Configuracoes > Sistema > Para desenvolvedores) ou criar conta falha'
+    if ($SoChecar) { $pendencias += 'modo desenvolvedor' }
+} else {
+    Falta 'criar symlink sem admin nao funciona - criar conta no app vai falhar'
+    $regDev = 'reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock /v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f'
+    $ligou = $false
+    if (Pergunte-Mesmo '  Ligar o Modo Desenvolvedor agora por mim? (pede a senha de admin uma vez)') {
+        $ligou = (Eleva-E-Roda 'ligar o Modo Desenvolvedor' $regDev) -and (Symlink-Funciona)
+    }
+    if (-not $ligou) {
+        # Abre a tela certa e espera: sem isso a pessoa fechava o terminal e nunca voltava.
+        Nota 'Abrindo Configuracoes > Sistema > Para desenvolvedores. Ligue "Modo de desenvolvedor" e confirme.'
+        try { Start-Process 'ms-settings:developers' | Out-Null } catch { }
+        $ligou = Espere-Ate 'ligado o Modo de desenvolvedor' { Symlink-Funciona }
+    }
+    if ($ligou) { Ok 'Modo Desenvolvedor ligado - symlink funciona' }
+    else { $script:faltaDevMode = $true }   # so criar conta depende disso; nao trava o resto
+}
+
 # O Tailscale entra AQUI, junto das outras dependencias, e nao no passo 6: quem respondeu "uso fora
 # de casa" no passo 0 nao pode ser parado de novo no fim pra instalar terceiro. O login vem colado
 # na instalacao pelo mesmo motivo - e a mesma decisao, e o passo 5d publica sozinho depois.
@@ -596,6 +672,7 @@ if ($SoChecar) {
     exit 1
 }
 if ($pendencias.Count -gt 0) { Erro "faltam: $($pendencias -join ', ')"; Pausa-Log; exit 1 }
+if ($script:faltaDevMode) { $pendencias += 'modo desenvolvedor' }
 
 # -- 2/8 Backend -------------------------------------------------------------
 Titulo '2/8 Backend'
@@ -1399,9 +1476,22 @@ function Publica-Tailscale {
                     # que derrubaria o slot do preview de projeto e o que o dono tenha feito a mao.
                     Falta "tailscale ja publica '$proxy443' na raiz - NAO vou sobrescrever; ajuste na mao se quiser o backend ali"
                 } else {
+                  # Laco: HTTPS desligado no tailnet e resolvido no SITE, e a pessoa volta aqui e
+                  # aperta Enter - nunca "rode o instalador de novo". Permissao vai por UAC pontual.
+                  $tentativa = 0
+                  $jaAvisou = $false
+                  do {
+                    $tentativa++
+                    $repetir = $false
                     $saida = (& tailscale serve --bg --https=443 "localhost:$portaBack" 2>&1 | Out-String)
+                    $rcServe = $LASTEXITCODE
+                    if ($rcServe -ne 0 -and $saida -match '(?i)permission|access|denied|acesso|operator' -and $tentativa -eq 1) {
+                        if (Eleva-E-Roda 'publicar o backend no Tailscale (tailscale serve)' "tailscale serve --bg --https=443 localhost:$portaBack") {
+                            $rcServe = 0; $saida = ''
+                        }
+                    }
                     $falha = $null
-                    if ($LASTEXITCODE -ne 0) {
+                    if ($rcServe -ne 0) {
                         $falha = $saida.Trim()
                     } else {
                         # EVIDENCIA POSITIVA, como no build do front: exit 0 e necessario mas nao
@@ -1421,16 +1511,24 @@ function Publica-Tailscale {
                             $falha = "o serve aceitou o comando, mas o status mostra a raiz do :443 em '$proxyProva', nao na porta $portaBack"
                         }
                     }
+                    if ($falha -and $falha -match '(?i)https' -and -not $Update -and $script:Interativo) {
+                        Falta "tailscale serve falhou: $falha"
+                        Write-Host '  O HTTPS do seu tailnet esta desligado. Vou abrir a pagina certa; la:'
+                        Write-Host '    1. em "DNS", ligue o MagicDNS (se ainda estiver desligado);'
+                        Write-Host '    2. em "HTTPS Certificates", clique "Enable HTTPS" e confirme;'
+                        Write-Host '    3. volte aqui.'
+                        try { Start-Process 'https://login.tailscale.com/admin/dns' | Out-Null } catch { }
+                        $r = Read-Host "  Quando tiver habilitado o HTTPS, aperte Enter pra eu tentar de novo (ou 'p' pra pular)"
+                        if ($r -notmatch '^[Pp]') { $repetir = $true; continue }
+                        $jaAvisou = $true
+                    }
                     if ($falha) {
                         # A saida diz a causa real (permissao, HTTPS nao habilitado no tailnet); sem ela
-                        # sobraria chutar numa lista de tres. Se for permissao, o caminho e o mesmo que o
-                        # bloco de firewall ja ensina: abrir um PowerShell como Administrador.
-                        Falta "tailscale serve falhou: $falha"
-                        if ($falha -match '(?i)https') {
+                        # sobraria chutar numa lista de tres.
+                        if (-not $jaAvisou) { Falta "tailscale serve falhou: $falha" }
+                        if ($falha -match '(?i)https' -and -not $jaAvisou) {
                             Nota 'HTTPS nao esta habilitado no tailnet: entre em https://login.tailscale.com/admin/dns,'
-                            Nota 'ligue o MagicDNS, habilite o HTTPS e rode este instalador de novo.'
-                        } else {
-                            Nota 'Se falou em permissao/acesso negado: abra um PowerShell como Administrador e rode este instalador de novo.'
+                            Nota 'ligue o MagicDNS, clique "Enable HTTPS" e rode este instalador de novo.'
                         }
                         # A falha ENTRA no $pendencias, e o portao do fim responde "NAO terminou":
                         # instalacoes inteiras sairam "Pronto" com o serve quebrado porque isto so
@@ -1449,6 +1547,7 @@ function Publica-Tailscale {
                             $script:pendencias += 'tailscale serve'
                         }
                     }
+                  } while ($repetir)
                 }
                 if ($script:cpPublicUrl) {
                     # E isto que conserta o QR do BACKEND tambem: com public_url preenchido, pairing_url
@@ -1496,20 +1595,23 @@ $regras = @($portasFw | ForEach-Object {
 })
 if ($regras.Count -eq $portasFw.Count) {
     Ok "porta(s) $listaFw ja liberada(s) no firewall"
+} elseif ($script:cpPublicUrl -and -not $Avancado) {
+    # Com Tailscale publicado o celular entra pelo tunel e o serve entrega em localhost: o firewall
+    # nao ve porta nenhuma. Perguntar aqui era o que empurrava a pessoa pro instalador como admin.
+    Ok 'firewall nao precisa: o acesso e pelo Tailscale (so a LAN sem Tailscale precisa da porta aberta)'
 } elseif (Pergunte "  Liberar a(s) porta(s) $listaFw no firewall pra rede LOCAL?") {
-    if (EhAdmin) {
-        foreach ($p in $portasFw) {
-            $nome = "hangar $p"
-            Get-NetFirewallRule -DisplayName $nome -ErrorAction SilentlyContinue |
-                Remove-NetFirewallRule -ErrorAction SilentlyContinue
-            # Profile Private: rede de casa. Em rede Publica (cafe, aeroporto) segue fechado,
-            # que e o comportamento que se quer sem precisar lembrar de desligar nada.
-            New-NetFirewallRule -DisplayName $nome -Direction Inbound -Action Allow `
-                -Protocol TCP -LocalPort $p -Profile Private | Out-Null
-        }
+    # Profile Private: rede de casa. Em rede Publica (cafe, aeroporto) segue fechado,
+    # que e o comportamento que se quer sem precisar lembrar de desligar nada.
+    $cmdFw = ($portasFw | ForEach-Object {
+        "Get-NetFirewallRule -DisplayName 'hangar $_' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; " +
+        "New-NetFirewallRule -DisplayName 'hangar $_' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $_ -Profile Private | Out-Null"
+    }) -join '; '
+    $liberou = Eleva-E-Roda "liberar a(s) porta(s) $listaFw no firewall" $cmdFw
+    $regras = @($portasFw | ForEach-Object { Get-NetFirewallRule -DisplayName "hangar $_" -ErrorAction SilentlyContinue })
+    if ($liberou -and $regras.Count -eq $portasFw.Count) {
         Ok 'portas liberadas (perfil Private apenas)'
     } else {
-        Falta 'sem privilegio de administrador - abra um PowerShell como admin e rode:'
+        Falta 'firewall nao liberado (UAC recusado?) - num PowerShell como admin rode:'
         foreach ($p in $portasFw) {
             Nota "New-NetFirewallRule -DisplayName `"hangar $p`" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $p -Profile Private"
         }
@@ -1727,6 +1829,15 @@ if ($registrou) {
                     -Settings $cfg -Force | Out-Null
             } catch {
                 if (-not (Get-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue)) { throw }
+                # Reparo, uma vez: a tarefa e de quando alguem rodou o instalador como admin. Um
+                # Unregister elevado (UAC) tira a tarefa velha e o registro volta a ser do usuario.
+                # So interativo - no -Update pelo app nao ha quem confirme o UAC.
+                if (-not $Update -and (Reparar-DonoTarefa $t.Nome)) {
+                    Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
+                        -Settings $cfg -Force | Out-Null
+                    Ok "tarefa $($t.Nome) recriada como sua (antes era do Administrador)"
+                    $reaproveitou = $false
+                } else {
                 $reaproveitou = $true
                 Falta "sem permissao pra re-registrar $($t.Nome) - reaproveitando a tarefa existente ($_)"
                 # A ressalva importa: a tarefa guarda o caminho do .vbs e o diretorio DENTRO dela,
@@ -1736,6 +1847,7 @@ if ($registrou) {
                 Nota "  ela ainda aponta pro caminho de quando foi registrada; se o repo mudou de lugar, so um re-registro conserta"
                 Nota "  numa janela ELEVADA:  Unregister-ScheduledTask -TaskName $($t.Nome) -Confirm:`$false"
                 Nota '  e depois rode este instalador de novo SEM elevacao (ele recria a tarefa com o seu usuario como dono)'
+                }
             }
             # Registrar NAO inicia: o gatilho e "no logon", entao sem isto nada sobe ate o
             # proximo login e a pessoa abre o navegador numa porta morta logo apos instalar.
@@ -1962,7 +2074,15 @@ CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass
             -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
     } catch {
         if (-not (Get-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue)) { throw }
-        Nota "sem permissao pra re-registrar hangar-vigia - reaproveitando a existente (o .vbs dela foi atualizado)"
+        if (-not $Update -and (Reparar-DonoTarefa 'hangar-vigia')) {
+            Register-ScheduledTask -TaskName 'hangar-vigia' `
+                -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
+                -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
+                -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
+            Ok 'vigia recriada como sua (antes era do Administrador)'
+        } else {
+            Nota "sem permissao pra re-registrar hangar-vigia - reaproveitando a existente (o .vbs dela foi atualizado)"
+        }
     }
     # CONFERE o NextRunTime, nao anuncia so por ter registrado - achado IMPORTANTE da revisao final:
     # este exato ponto ja mediu ERRADO 2x nesta maquina (o gatilho antigo -AtLogOn puro deixava

@@ -1735,6 +1735,25 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   carrega o token, então QR e URL vão só pro `/dev/tty` e, no Windows, com o `Start-Transcript`
   pausado (ele captura `Read-Host` e `Write-Host`). O "pull automático" que parecia redundante
   com o Atualizar do app é o hook `post-merge`: complementares (o botão chama o mesmo
+- **O instalador do Windows NUNCA roda elevado, e admin é UAC pontual** (`install.ps1`,
+  `Eleva-E-Roda`/`Espere-Ate`, 10/09/2026). Tudo que ele registra (tarefas agendadas, hooks,
+  config) nasce com o dono do processo, e o Atualizar do app roda como usuário: instalar elevado
+  deixava `hangar-backend`/`-frontend`/`-vigia` com dono Administradores e todo `-Update`
+  seguinte batia em "Acesso negado" no `Register-ScheduledTask -Force` — a vigia nem tinha o
+  fallback de reaproveitar, e a tela dizia "NAO terminou: vigia" com tudo no ar (relato de
+  10/09). Hoje: `EhAdmin` no começo → `Pare` (menos `-SoChecar`); firewall e Modo Desenvolvedor
+  saem por `Start-Process -Verb RunAs` de UM comando; tarefa de dono admin é reparada com
+  `Unregister` elevado + re-registro como usuário (só interativo — no `-Update` não há quem
+  confirme o UAC, então reaproveita). Junto: com Tailscale publicado o firewall nem é
+  perguntado (o `serve` entrega em localhost, o firewall não vê porta); o HTTPS do tailnet
+  desligado abre `login.tailscale.com/admin/dns` e ESPERA Enter pra tentar de novo (um usuário
+  ficou parado ali sem saber onde ir); o symlink sem admin é conferido no 1/8 (`Symlink-Funciona`)
+  e, faltando, o instalador liga o Modo Desenvolvedor por UAC ou abre `ms-settings:developers` e
+  espera — antes a pessoa só descobria ao criar a primeira conta. Medido no 5.1: `Remove-Item`
+  num symlink de pasta estoura `NullReferenceException`; apagar link é `[IO.Directory]::Delete`.
+  E `(Get-Command npm).Source` é `npm.ps1`: o `.vbs` da tarefa do front chamava
+  `cmd /c "...\npm.ps1" run preview`, o cmd abria o `.ps1` no Notepad e a vigia repetia isso a
+  cada 5 min — `-CommandType Application` pra resolver lançador.
   `--update`); ele passou a instalar sem perguntar. `hangar-doctor` é UMA implementação
   (`app/doctor.py`), com cwd em `backend/` porque o `Settings` lê o `.env` pelo diretório
   atual; login do Claude é `EstadoLogin.loggedIn`, não `estado` (que só diz se o CLI
