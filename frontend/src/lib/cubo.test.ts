@@ -45,14 +45,27 @@ describe('cubo', () => {
     expect(somar(filtrar(linhas, { servidor: 'srv-a', subagente: false })).sessions).toBe(1);
   });
 
+  it('conta subagente à parte, sem tirá-lo do total', () => {
+    const linhas = [
+      c({ session_ids: ['claude:conversa'] }),
+      c({ session_ids: ['claude:sub-1'], subagente: true }),
+      c({ session_ids: ['claude:sub-2'], subagente: true, dia: '2026-07-02' }),
+    ];
+    // `sessions` continua sendo o total: quem separa é a tela, subtraindo `subagentes`.
+    expect(somar(linhas)).toMatchObject({ sessions: 3, subagentes: 2 });
+    expect(agruparPor(linhas, 'project')[0]).toMatchObject({ sessions: 3, subagentes: 2 });
+    expect(somar(filtrar(linhas, { subagente: false }))).toMatchObject({ sessions: 1, subagentes: 0 });
+  });
+
   it('mantém a contagem legada quando a máquina não fornece identidades', () => {
     const linhas = [
       c({ session_ids: ['codex:a'] }),
       c({ session_ids: ['codex:a'], dia: '2026-07-02' }),
       c({ servidor: 'srv-antigo', sessions: 4 }),
+      c({ servidor: 'srv-antigo', sessions: 3, subagente: true }),
     ];
-    expect(somar(linhas).sessions).toBe(5);
-    expect(agruparPor(linhas, 'source')[0].sessions).toBe(5);
+    expect(somar(linhas)).toMatchObject({ sessions: 8, subagentes: 3 });
+    expect(agruparPor(linhas, 'source')[0]).toMatchObject({ sessions: 8, subagentes: 3 });
   });
 
   it('agrupar por qualquer dimensão bate com o total', () => {

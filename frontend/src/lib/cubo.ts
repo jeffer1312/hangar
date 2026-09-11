@@ -43,7 +43,7 @@ export function filtrar(combos: ComboLocal[], f: Filtro): ComboLocal[] {
 }
 
 const zero = (key: string): DimBucket => ({
-  key, sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
+  key, sessions: 0, subagentes: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
   cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0,
 });
 
@@ -51,12 +51,22 @@ const zero = (key: string): DimBucket => ({
 // `undefined + n` vira NaN, que se espalha e apaga a coluna inteira — inclusive as linhas
 // dos servidores que mandaram o dado certo.
 function acumular(alvo: DimBucket, c: ComboLocal, sessoes: Set<string>): void {
+  // A identidade que o servidor põe em `session_ids` já carrega o flag de subagente
+  // (backend/app/costs.py:_somar), então o id de um subagente nunca colide com o da conversa
+  // e contar os dois lados pelo flag do combo não perde nem repete ninguém.
   if (c.session_ids) {
     for (const id of c.session_ids) {
       const chave = JSON.stringify([c.servidor, id]);
-      if (!sessoes.has(chave)) { sessoes.add(chave); alvo.sessions += 1; }
+      if (!sessoes.has(chave)) {
+        sessoes.add(chave);
+        alvo.sessions += 1;
+        if (c.subagente) alvo.subagentes = (alvo.subagentes ?? 0) + 1;
+      }
     }
-  } else alvo.sessions += c.sessions ?? 0;
+  } else {
+    alvo.sessions += c.sessions ?? 0;
+    if (c.subagente) alvo.subagentes = (alvo.subagentes ?? 0) + (c.sessions ?? 0);
+  }
   alvo.input += c.input ?? 0;
   alvo.output += c.output ?? 0;
   alvo.cache_write += c.cache_write ?? 0;

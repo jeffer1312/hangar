@@ -338,10 +338,20 @@
   // subagente, não só "exclui ou não": "só subagente" filtra pra SÓ linha de Task (`filtrar` em
   // cubo.ts), e "sessões e subagentes" ali afirmaria conversa que não está na conta. Sem
   // detalhamento (servidor antigo) não existe o filtro, e a soma é sempre mistura.
-  const sess = (n: number) => {
+  // Com o filtro em "tudo" os dois lados saem SEPARADOS (`N sessões · M subagentes`) em vez da
+  // soma de antes: um Task dispara dezenas de linhas de subagente, e somadas à conversa a
+  // palavra "sessões" contava um número que ninguém abriu.
+  const sess = (b: { sessions: number; subagentes?: number }) => {
+    const n = b.sessions;
     const um = n === 1;
     if (temCombos && filtroAtivo.subagente === false) return `${n} ${um ? m.sessao_singular() : m.lista_sessoes_plural()}`;
     if (temCombos && filtroAtivo.subagente === true) return `${n} ${um ? m.custos_subagente() : m.custos_subagentes()}`;
+    const sub = b.subagentes ?? 0;
+    if (temCombos && sub > 0) {
+      const conversa = n - sub;
+      return `${conversa} ${conversa === 1 ? m.sessao_singular() : m.lista_sessoes_plural()}`
+        + ` · ${sub} ${sub === 1 ? m.custos_subagente() : m.custos_subagentes()}`;
+    }
     return `${n} ${um ? m.custos_sessao_ou_subagente() : m.custos_sessoes_e_subagentes()}`;
   };
 
@@ -837,7 +847,7 @@
              ele afirmaria "não custou nada". -->
         <dd class="hero" class:tracinho={semTarifa || recorteVazio}>{mFoco(foco.cost)}</dd>
         <div class="foot">
-          {m2Foco(foco.cost)} · {sess(foco.sessions)} · {m2Foco(foco.cost / diasDoPeriodo)}{m.custos_por_dia()}
+          {m2Foco(foco.cost)} · {sess(foco)} · {m2Foco(foco.cost / diasDoPeriodo)}{m.custos_por_dia()}
         </div>
         {#if semTarifa}<div class="foot">{m.custos_sem_tarifa_volume()}</div>
         {:else if tudoGratis}<div class="foot">{m.custos_modelo_gratis_nada()}</div>
@@ -943,7 +953,7 @@
       <p class="caption">
         {#if diaSobHover !== null && grafico.barras[diaSobHover]}
           {@const b = grafico.barras[diaSobHover]}
-          <b>{rotuloDia(b.dia.key)}</b> · {dailyMetric === 'tokens' ? tok(b.total) : m2(b.total)} · {sess(b.dia.bucket.sessions)}
+          <b>{rotuloDia(b.dia.key)}</b> · {dailyMetric === 'tokens' ? tok(b.total) : m2(b.total)} · {sess(b.dia.bucket)}
           {#each b.segs as s}<span class="cap-seg"><i class="swatch" style="background: var({s.slot})"></i>{s.label} {dailyMetric === 'tokens' ? tok(s.cost) : m2(s.cost)}</span>{/each}
         {:else}
           {m.custos_hover_detalhe()}
@@ -1237,7 +1247,7 @@
               </div>
               <div class="cmpvalor">{valorFmt(b)}</div>
               <div class="foot">{metrica === 'custo' ? tok(brutos(b)) : (custoDesconhecido(b) ? '—' : m2(b.cost))}</div>
-              <div class="foot">{sess(b.sessions)}</div>
+              <div class="foot">{sess(b)}</div>
               <div class="foot">{(metrica === 'custo' && custoDesconhecido(b)) ? '—' : m.custos_do_comparado({ pct: pct(valorDe(b, metrica), totalComparado) })}</div>
               <div class="foot">{(metrica === 'custo' && custoDesconhecido(b)) ? '—' : rotuloMetrica(valorDe(b, metrica) / diasDoPeriodo)}{m.custos_por_dia()}</div>
             </div>

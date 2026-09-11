@@ -366,6 +366,9 @@ export interface DimBucket {
   // exibe `label ?? key`; ausente é o caso normal, em que a chave já é o nome.
   label?: string | null;
   sessions: number;
+  // Quantas das `sessions` são transcript de subagente. Só o cubo do cliente preenche: o
+  // servidor soma os `by_*` antes de mandar e lá os dois lados já estão misturados.
+  subagentes?: number;
   input: number;
   output: number;
   cache_write: number;
