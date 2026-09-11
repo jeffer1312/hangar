@@ -105,12 +105,14 @@
           {/if}
         </label>
       </span>
+      <!-- Ícone com o rótulo ao lado, nas duas larguras: o ✎ e o ✕ só se explicavam pelo
+           aria-label e por um `title`, e no toque não existe hover pra ler o `title`. -->
       {#if linha.navegador}
-        <button class="mq-editar" aria-label={m.servidor_editar_aria({ nome: linha.nome })} onclick={() => onEditar(linha)}>✎</button>
+        <button class="mq-editar" aria-label={m.servidor_editar_aria({ nome: linha.nome })} onclick={() => onEditar(linha)}><span aria-hidden="true">✎</span> <span class="mq-btn-txt">{m.config_motores_editar()}</span></button>
       {/if}
       <!-- Esta máquina sai só pelo Sair: removê-la daqui é deslogar o aparelho. -->
       {#if !linha.estaMaquina}
-        <button class="mq-editar mq-remover" aria-label={m.maquinas_remover_aria({ nome: linha.nome })} title={m.lista_remover()} onclick={() => onRemover(linha)}>✕</button>
+        <button class="mq-editar mq-remover" aria-label={m.maquinas_remover_aria({ nome: linha.nome })} onclick={() => onRemover(linha)}><span aria-hidden="true">✕</span> <span class="mq-btn-txt">{m.lista_remover()}</span></button>
       {/if}
       {#if corrige?.id === linha.identificador}
         <div class="corrige">
@@ -156,7 +158,11 @@
     .mq-caixas { flex-basis: 100%; }
   }
   .mq-tag { flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--accent); }
-  .mq-editar { width: 32px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+  /* Largura vem do rótulo: o botão deixou de ser um quadrado de 32px quando ganhou texto. */
+  .mq-editar { height: 32px; min-height: 0; flex-shrink: 0; display: inline-flex; align-items: center;
+               gap: 4px; padding: 0 var(--space-2); color: var(--text-muted); font-size: var(--text-sm);
+               border-radius: var(--radius-sm); }
+  .mq-btn-txt { font-size: var(--text-xs); white-space: nowrap; }
   .mq-editar:hover { color: var(--accent); background: var(--bg-hover); }
   .mq-remover:hover { color: var(--error); }
   .mq-vazio { padding: var(--space-3); font-size: var(--text-xs); color: var(--text-muted); }

@@ -100,8 +100,10 @@
        de baixar é fé, e quem recebe é que descobre que veio vazio. -->
   <div class="preview-head">
     <strong class="preview-tit">{m.config_diag_ultimas()}</strong>
+    <!-- Rótulo ao lado do ↻: no toque não há hover, e o aria-label sozinho não chega a quem vê. -->
     <button class="recarregar" onclick={carregar} disabled={recarregando}
-            aria-label={m.arq_recarregar()}>{recarregando ? '…' : '↻'}</button>
+            aria-label={m.arq_recarregar()}><span aria-hidden="true">{recarregando ? '…' : '↻'}</span>
+      <span class="recarregar-txt">{m.arq_recarregar()}</span></button>
   </div>
 
   {#if resumo?.ultimas?.length}
@@ -153,7 +155,10 @@
   }
   .preview-tit { font-size: var(--text-sm); color: var(--text-secondary); font-weight: 600; }
   .recarregar {
-    width: 30px; height: 30px;
+    /* Largura pelo rótulo, altura de antes: era um quadrado de 30px com só o ↻ dentro. */
+    height: 30px;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 0 var(--space-2);
     border-radius: var(--radius-sm);
     /* --surface-raised, não --bg-elevated: acompanha o véu do papel de parede. */
     background: var(--surface-raised);
@@ -162,6 +167,7 @@
     font-size: var(--text-sm);
   }
   .recarregar:disabled { opacity: 0.5; }
+  .recarregar-txt { font-size: var(--text-xs); white-space: nowrap; }
 
   .linhas {
     list-style: none;
