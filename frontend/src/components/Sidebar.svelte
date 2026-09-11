@@ -216,7 +216,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     abrirSessaoDoSheet(name);
     // Aviso da reconciliação da conta (plugin ligado sem instalação etc): antes só ia pro log do
     // backend e a sessão abria "normal" sem o plugin. Texto vem pronto do backend.
-    if (info?.avisos?.length) flash(m.sessao_flash_avisos_conta({ n: info.avisos.join(' · ') }));
+    // Não é erro: a conta foi sincronizada com o principal. Vai pra linha discreta, não pro toast.
+    if (info?.avisos?.length) notar(m.sessao_flash_avisos_conta({ n: info.avisos.join(' · ') }));
     // SSE stream emitirá a sessão nova automaticamente
   }
   // TODA saída do CreateSessionSheet passa por aqui — o create normal, o "continuar conversa" e a
@@ -336,9 +337,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
 
   // ── Menu de contexto (botao direito) na linha da sessao — so desktop ──────────
-  let menu = $state<{ x: number; y: number; name: string; serverId: string; cwd: string; thenTarget: string | null } | null>(null);
+  let menu = $state<{ x: number; y: number; name: string; serverId: string; cwd: string; branch: string | null; thenTarget: string | null } | null>(null);
   let menuOrigem: HTMLElement | null = null;
   let menuMsg = $state('');   // banner efemero pro resultado do git pull / erro do editor
+  let nota = $state('');      // aviso informativo, sem cara de erro: uma linha sutil no rodapé
+  let notaTimer: ReturnType<typeof setTimeout> | undefined;
+  function notar(msg: string) {
+    nota = msg;
+    clearTimeout(notaTimer);
+    notaTimer = setTimeout(() => { nota = ''; }, 10000);
+  }
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Recolhida, a <aside> inteira sai do DOM (gate no template) — trilho de iniciais e hover
@@ -354,7 +362,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
     hpLeave();   // botao direito nao move o mouse: fecha a espiada pra nao ficar atras do menu
     menuOrigem = (e.currentTarget as HTMLElement | null)?.closest('.sess-row')?.querySelector('.sess-main') as HTMLElement | null;
-    menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '', thenTarget: s.then_target ?? null };
+    menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '', branch: s.branch ?? null, thenTarget: s.then_target ?? null };
     // O SessionContextMenu carrega o estado de silenciar/branches/encadeamento na propria montagem.
   }
   function closeMenu() { menu = null; menuOrigem?.focus(); menuOrigem = null; }
@@ -944,6 +952,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   <!-- Rodapé (estilo Claude): botão da conta (avatar -> menu de conta) + CTA "Nova sessão". Tudo que
        era config/conta (servidores, notificações, horas silenciosas, reconectar, sair) vive no menu. -->
+  {#if expanded && nota}
+    <p class="side-nota" title={nota}>{nota}</p>
+  {/if}
   <div class="side-foot" class:rail={!expanded}>
     <!-- A engrenagem e o kebab MUDARAM pra barra do topo (10/08/2026, decisão do usuário):
          a barra é permanente, então os comandos do app moram nela, num lugar só. O ponto do
@@ -1040,7 +1051,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      guarda posicao/alvo em `menu` e decide o que dirty->confirm / checkout / GitSheet fazem. -->
 {#if menu}
   {@const m = menu}
-  <SessionContextMenu x={m.x} y={m.y} name={m.name} serverId={m.serverId} cwd={m.cwd} thenTarget={m.thenTarget}
+  <SessionContextMenu x={m.x} y={m.y} name={m.name} serverId={m.serverId} cwd={m.cwd} branch={m.branch} thenTarget={m.thenTarget}
     chainCandidates={chainCandidates(m.serverId, m.name)}
     onClose={closeMenu}
     onRename={menuRename} onDelete={menuDelete} onGit={menuGit} onBastao={menuBastao}
@@ -1861,6 +1872,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .broadcast-send:disabled { background: var(--bg-hover); color: var(--text-muted); }
 
   /* ── Rodapé: engrenagem (Configurações) + CTA "Nova sessão" ── */
+  .side-nota {
+    margin: 0; padding: var(--space-1) var(--space-2) 0;
+    font-size: 11px; line-height: 1.3; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .side-foot {
     display: flex; align-items: center; gap: var(--space-2);
     border-top: 1px solid var(--border-subtle); padding-top: var(--space-2); margin-top: var(--space-1);

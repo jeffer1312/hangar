@@ -8,7 +8,7 @@
 
   interface Props {
     x: number; y: number;
-    name: string; serverId: string; cwd: string; thenTarget: string | null;
+    name: string; serverId: string; cwd: string; branch: string | null; thenTarget: string | null;
     chainCandidates: { name: string }[];
     onClose: () => void;
     onRename: () => void;
@@ -18,7 +18,7 @@
     onPickBranch: (branch: string, dirty: boolean) => void;
     onFlash: (msg: string) => void;
   }
-  let { x, y, name, serverId, cwd, thenTarget, chainCandidates, onClose, onRename, onDelete, onGit, onBastao, onPickBranch, onFlash }: Props = $props();
+  let { x, y, name, serverId, cwd, branch, thenTarget, chainCandidates, onClose, onRename, onDelete, onGit, onBastao, onPickBranch, onFlash }: Props = $props();
 
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -159,6 +159,9 @@
           <button {...props}>{m.ctx_abrir_editor()}</button>
         {/snippet}
       </DropdownMenu.Item>
+      {#if branch != null}
+      <!-- Sem repositório (branch null) os itens de git nem aparecem: abri-los só devolvia
+           "fatal: not a git repository" como se fosse erro do app. -->
       <DropdownMenu.Separator class="ctx-sep" />
       <DropdownMenu.Item onSelect={onGit}>
         {#snippet child({ props })}
@@ -200,6 +203,7 @@
           {/if}
         </DropdownMenu.SubContent>
       </DropdownMenu.Sub>
+      {/if}
     {/if}
 
     <DropdownMenu.Separator class="ctx-sep" />

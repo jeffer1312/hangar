@@ -632,13 +632,14 @@ describe('Sidebar — filesInContext (Task 14/15): o Git do menu e a sessão hos
   function comSessao() {
     // Mock do store é plain: os deriveds leem as arrays uma vez, no mount (mesmo padrão
     // do comUmaSessao do describe de renomear — comStore/sess são escopados ao describe deles).
-    // cwd presente de propósito: o item Git do SessionContextMenu só renderiza com `{#if cwd}`.
+    // cwd e branch presentes de propósito: o item Git do SessionContextMenu só renderiza com
+    // `{#if cwd}` e `{#if branch != null}` (cwd sem repositório não mostra git).
     storeState.servers.length = 0;
     storeState.servers.push({ id: 'srv-a', label: 'Servidor A', baseUrl: 'http://a', token: 'x' });
     storeState.byServer.length = 0;
     storeState.byServer.push({
       server: { id: 'srv-a', label: 'Servidor A' },
-      sessions: [{ name: 'sess-1', serverId: 'srv-a', state: 'idle', cwd: '/repo/x' }],
+      sessions: [{ name: 'sess-1', serverId: 'srv-a', state: 'idle', cwd: '/repo/x', branch: 'main' }],
       error: null, loaded: true,
     });
   }
@@ -668,7 +669,7 @@ describe('Sidebar — filesInContext (Task 14/15): o Git do menu e a sessão hos
   async function abrirGitDaSessao() {
     sidebarBridge.openSessionMenu(
       new MouseEvent('contextmenu', { clientX: 5, clientY: 5 }),
-      { name: 'sess-1', serverId: 'srv-a', cwd: '/repo/x' } as unknown as AggSession,
+      { name: 'sess-1', serverId: 'srv-a', cwd: '/repo/x', branch: 'main' } as unknown as AggSession,
       'srv-a',
     );
     await tick();
