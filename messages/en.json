@@ -744,6 +744,8 @@
   "composer_medidor_audio": "audio meter unavailable",
   "composer_fala_video": "video speech: \"{texto}\"",
   "msg_nao_chegou_reenvie": "didn't reach the session — resend",
+  "msg_descartar_perdida": "discard",
+  "erro_fila_entrada_nao_encontrada": "that message is no longer in the queue",
   "msg_aria_mensagens": "Messages",
   "msg_ir_ultima": "Go to last message",
   "msg_novas_abaixo": "New messages — jump to the end",

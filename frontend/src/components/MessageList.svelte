@@ -77,6 +77,9 @@
     swapIds?: Set<string>;
     // Encaminhar bolha pra outra sessao (long-press/hover ↗). Ausente (ex: Archive) = sem acao.
     onForward?: (text: string) => void;
+    // Botao "descartar" da bolha que o backend desistiu de entregar: tira a entrada da fila
+    // duravel (id CRU, sem o prefixo "queued-"). Ausente (Archive) = so o aviso.
+    onDescartarFila?: (entryId: string) => void;
     // Tap no chip "de: X" de recado peer -> abre o chat da sessao remetente. Ausente = chip estatico.
     onOpenSession?: (name: string) => void;
     // Botao do cartao de orquestracao -> abre o modal de papeis. Ausente (Archive) = cartao sem acao.
@@ -91,7 +94,7 @@
     events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, onSelectOption, onSubmitSelected, onCancel,
     askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, onFimDoLocal,
     imageUrl, swapIds, codex = false, plan = null, footer,
-    onForward, onOpenSession, onOpenOrq, ancora = 0
+    onForward, onOpenSession, onOpenOrq, onDescartarFila, ancora = 0
   }: Props = $props();
 
   type PlanComponentProps = {
@@ -495,7 +498,13 @@
                           onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
             {/if}
             {#if ev.desistiu}
-              <p class="queued-perdida" role="status">{m.msg_nao_chegou_reenvie()}</p>
+              <p class="queued-perdida" role="status">
+                {m.msg_nao_chegou_reenvie()}
+                <!-- Só a fila durável tem id pra descartar; a "held:" é registro do hook, não entrada. -->
+                {#if onDescartarFila && ev.id.startsWith('queued-')}
+                  <button type="button" class="queued-descartar" onclick={() => onDescartarFila(ev.id.slice('queued-'.length))}>{m.msg_descartar_perdida()}</button>
+                {/if}
+              </p>
             {/if}
           </div>
         {:else if sub}
@@ -776,6 +785,12 @@
     margin: 2px 0 0 var(--space-1);
     font-size: var(--text-xs);
     color: var(--error);
+    display: flex; align-items: center; gap: var(--space-2);
+  }
+  .queued-descartar {
+    min-height: 0; padding: 2px 8px; border-radius: var(--radius-sm);
+    font-size: var(--text-xs); color: var(--text-secondary);
+    background: var(--surface-raised); border: 1px solid var(--border-subtle);
   }
 
   /* Botao flutuante "ir pro fim": fixo no canto, acima do dock (bottom = altura do composer + respiro).

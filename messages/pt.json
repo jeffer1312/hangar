@@ -744,6 +744,8 @@
   "composer_medidor_audio": "medidor de áudio indisponível",
   "composer_fala_video": "fala do vídeo: \"{texto}\"",
   "msg_nao_chegou_reenvie": "não chegou na sessão — reenvie",
+  "msg_descartar_perdida": "descartar",
+  "erro_fila_entrada_nao_encontrada": "essa mensagem já não está na fila",
   "msg_aria_mensagens": "Mensagens",
   "msg_ir_ultima": "Ir para a última mensagem",
   "msg_novas_abaixo": "Mensagens novas — ir para o fim",

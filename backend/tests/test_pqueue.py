@@ -929,6 +929,35 @@ def test_reconcile_resgata_desistida_que_apareceu_depois():
     assert "desistiu" not in r                # e para de avisar "nao chegou"
 
 
+def test_reconcile_descarta_desistida_quando_o_reenvio_confirma():
+    # O usuario reenviou: a entrada nova reivindica a linha do transcript e confirma; a velha,
+    # desistida, nao pode ser resgatada (uma linha, uma entrada) e ficava avisando "nao chegou"
+    # ao lado da mensagem que chegou. Com o texto confirmado por outra entrada, a desistida sai.
+    import json
+    import time as _t
+    q = PromptQueue("reenvio")
+    agora = _t.time()
+    q.path.write_text(
+        json.dumps({"id": "velha", "text": "?", "ts": agora - 3600, "delivered": True, "desistiu": True}) + "\n"
+        + json.dumps({"id": "nova", "text": "?", "ts": agora - 100, "delivered": True}) + "\n",
+        encoding="utf-8")
+    q.reconcile_delivered({"?"}, 0.0, agora)
+    rows = q.load()
+    assert [r["id"] for r in rows] == ["nova"]
+    assert rows[0].get("confirmed") is True
+
+
+def test_remove_tira_so_a_entrada_pedida():
+    import json
+    q = PromptQueue("remover")
+    q.path.write_text(json.dumps({"id": "a", "text": "x", "ts": 1.0, "delivered": True, "desistiu": True}) + "\n"
+                      + json.dumps({"id": "b", "text": "y", "ts": 2.0, "delivered": False}) + "\n",
+                      encoding="utf-8")
+    assert q.remove("a") is True
+    assert [r["id"] for r in q.load()] == ["b"]
+    assert q.remove("a") is False
+
+
 def test_reconcile_mantem_desistida_que_nao_apareceu():
     # O contrario, pra o resgate nao apagar falha de verdade: texto ausente do transcript continua
     # marcado como perdido.

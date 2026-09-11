@@ -1131,6 +1131,15 @@ export async function searchTranscriptsForServer(s: Server, q: string): Promise<
   return res.json() as Promise<SearchHit[]>;
 }
 
+// Tira da fila durável uma entrada que o backend desistiu de entregar (a bolha "não chegou").
+// `entryId` é o id CRU da fila — a bolha do chat é `queued-<id>`.
+export async function descartarDaFila(name: string, entryId: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(
+    `/api/sessions/${encodeURIComponent(name)}/queue/${encodeURIComponent(entryId)}`,
+    { method: 'DELETE' },
+  );
+}
+
 export async function sendInput(name: string, text: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/input`, {
     method: 'POST',

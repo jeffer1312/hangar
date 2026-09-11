@@ -59,6 +59,7 @@
     getSessionPlanPreview,
     getConfig,
     uploadUrl,
+    descartarDaFila,
   } from '@hangar/core';
   import { formataErro } from '@hangar/core';
   import { appendTail, hasSeam, prependOlder } from '@hangar/core';
@@ -2181,6 +2182,20 @@
     }
   }
 
+  // Botão "descartar" da bolha que o backend desistiu de entregar: tira a entrada da fila durável
+  // e a bolha da tela. Só no sucesso — a bolha sumir com a entrada ainda na fila voltaria no
+  // próximo reload, que é o "fantasma" que ela existe pra evitar.
+  async function descartarFila(entryId: string) {
+    try {
+      await descartarDaFila(sessionName, entryId);
+    } catch (err) {
+      mostrarAviso(formataErro(err));
+      return;
+    }
+    events = events.filter((e) => e.id !== `queued-${entryId}`);
+    rebuildIndex();
+  }
+
   async function handleInterrupt() {
     // Ao interromper, o Claude Code MANTEM a msg enfileirada no input -> proximo envio concatenava.
     // Se ha pendente, devolve o texto pro composer (editavel) e remove a bubble; pede clear ao backend
@@ -2439,6 +2454,7 @@
       onForward={(t) => (forwardText = t)}
       onOpenSession={onNavigateToChat}
       onOpenOrq={() => (orqOpen = true)}
+      onDescartarFila={descartarFila}
     />
   {/if}
 

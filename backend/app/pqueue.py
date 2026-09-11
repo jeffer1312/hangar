@@ -107,6 +107,25 @@ def _dono_do_prefixo(rows: list[dict], disponiveis: set[str]) -> dict[str, str]:
     return dono
 
 
+# Folga pra entrada desistida ANTES de `desistiu_ts` existir: sem o instante gravado, "reenvio" e
+# o mesmo texto mandado bem depois. Duas respostas iguais de picker saem em segundos; um reenvio
+# humano depois de ler "nao chegou" leva mais que isso.
+_REENVIO_FOLGA_LEGADO = 60.0
+
+
+def _tem_reenvio(r: dict, rows: list[dict]) -> bool:
+    """Ha outra entrada com o MESMO texto mandada depois de `r` desistir?"""
+    texto = str(r.get("text") or "").strip()
+    if not texto:
+        return False
+    limiar = r.get("desistiu_ts")
+    if not isinstance(limiar, (int, float)):
+        limiar = float(r.get("ts") or 0.0) + _REENVIO_FOLGA_LEGADO
+    return any(o is not r and str(o.get("text") or "").strip() == texto
+               and float(o.get("ts") or 0.0) > limiar
+               for o in rows)
+
+
 def _casam(linhas: set[str], disponiveis: set[str],
            reservadas: frozenset[str] = frozenset(),
            dono: dict[str, str] | None = None) -> set[str]:
@@ -602,6 +621,7 @@ class PromptQueue:
         with _append_lock:
             rows = self.load()
             requeued: list[dict] = []
+            descartadas: list[dict] = []
             changed = False
             # Cada linha do transcript so pode confirmar UMA entrada. `committed` e um set, entao
             # duas entradas com o MESMO texto (comum em resposta de picker: "Respondendo a pergunta:
@@ -635,6 +655,16 @@ class PromptQueue:
                     # comparada contra o transcript de AGORA, e um texto curto e repetido ("Sim",
                     # "1") casaria por coincidencia — dando por entregue o que nunca chegou.
                     if not _da_sessao_atual(r, min_ts):
+                        continue
+                    # REENVIO: o usuario mandou o mesmo texto DEPOIS de esta desistir. A linha do
+                    # transcript e da entrada nova (uma linha, uma entrada), entao esta nunca seria
+                    # resgatada e a bolha "nao chegou — reenvie" ficava pra sempre ao lado da
+                    # mensagem que chegou. Sai da fila. O criterio e o INSTANTE da desistencia,
+                    # nao so o texto: duas respostas iguais mandadas antes de qualquer desistencia
+                    # (dois "Sim" de picker, um perdido) continuam separadas, e a perdida segue
+                    # visivel — o teste das duas entradas iguais cobra isso.
+                    if _tem_reenvio(r, rows):
+                        descartadas.append(r)
                         continue
                     linhas_r = _linhas_da_entrada(r)
                     casou = _casam(linhas_r, disponiveis, reservadas, dono)
@@ -675,14 +705,28 @@ class PromptQueue:
                     # SSE, e o `pending` do front so a segura ate o proximo reload. Campo proprio:
                     # para de rechecar (o loop acima pula) SEM esconder.
                     r["desistiu"] = True
+                    r["desistiu_ts"] = now   # e o que separa "reenviou depois" de "mandou 2x"
                 else:
                     r["delivered"] = False
                     r["attempts"] = int(r.get("attempts") or 0) + 1
                     requeued.append(dict(r))
                 changed = True
+            if descartadas:
+                rows = [r for r in rows if not any(r is d for d in descartadas)]
+                changed = True
             if changed:
                 self._write_atomic(rows)
             return requeued
+
+    def remove(self, entry_id: str) -> bool:
+        """Tira UMA entrada da fila pelo id (o botao "descartar" da bolha perdida). True = existia."""
+        with _append_lock:
+            rows = self.load()
+            restantes = [r for r in rows if r.get("id") != entry_id]
+            if len(restantes) == len(rows):
+                return False
+            self._write_atomic(restantes)
+            return True
 
     def clear(self) -> None:
         # Remove o sidecar inteiro. Usado quando /clear reinicia a sessao do Claude Code: as entradas
