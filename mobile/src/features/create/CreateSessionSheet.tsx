@@ -306,7 +306,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
     try {
       const sync = await prepareCodex(target, entry.codex_account ?? codexAccount, codexGeneration.current);
       if (!sync || !mounted.current || generation !== archiveGeneration.current || codexGenerationAtStart !== codexGeneration.current) return;
-      if (sync.status !== 'ready') throw new Error(sync.issues.map(codexAccountMessage).join('\n') || m.codex_ui_prepare_error());
+      setCodexAccounts((items) => items.map((item) => item.id === (entry.codex_account ?? codexAccount) ? { ...item, sync } : item));
       const session = await resumeArchivedConversation(entry.project, entry.session_id, null, null,
         'codex', entry.codex_account ?? codexAccount, target);
       if (!mounted.current || generation !== archiveGeneration.current || codexGenerationAtStart !== codexGeneration.current) return;
@@ -333,7 +333,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
         if (!target || !account) return;
         const sync = await prepareCodex(target, account, generation);
         if (!sync || !mounted.current || generation !== codexGeneration.current) return;
-        if (sync.status !== 'ready') throw new Error(sync.issues.map(codexAccountMessage).join('\n') || m.codex_ui_prepare_error());
+        setCodexAccounts((items) => items.map((item) => item.id === account ? { ...item, sync } : item));
         const s = await createSessionForServer(target, {
           name: name.trim(), cwd: picked, provider: 'codex', model: modelo || null,
           effort: esforco || null, codex_account: account,

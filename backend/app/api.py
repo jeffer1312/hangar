@@ -184,7 +184,7 @@ def _resolve_codex_account(account_id: str | None):
         raise HTTPException(exc.status, detail=erro(exc.code, "conta Codex inválida", **exc.params)) from None
 
 
-def _codex_prepare_or_fail(account, service) -> None:
+def _codex_require_idle_preparation(account, service) -> None:
     if account.is_default:
         return
     if service is None:
@@ -196,10 +196,9 @@ def _codex_prepare_or_fail(account, service) -> None:
                                              "a preparação da conta Codex está em andamento",
                                              account_id=account.id))
     if status.get("status") != "ready":
-        raise HTTPException(409, detail=erro("codex_account_prepare_failed",
-                                             "a conta Codex tem pendências de preparação",
-                                             account_id=account.id,
-                                             issues=status.get("issues", [])))
+        _log.warning("conta Codex %s com sincronização %s; pendências: %s",
+                     account.id, status.get("status"),
+                     [issue.get("code") for issue in status.get("issues", [])])
 
 
 def _codex_account_in_use(account) -> bool:
@@ -386,11 +385,14 @@ async def _lifespan(app: FastAPI):
     global _loop_servidor
     _loop_servidor = asyncio.get_running_loop()
     codex_warm_task = asyncio.create_task(get_adapter("codex").watch_sessions())
-    codex_contas_login = CodexContasLogin(account_in_use=_codex_account_in_use)
+    from app.codex_integracao import SERVICO as integracao_codex
+    codex_contas_login = CodexContasLogin(
+        account_in_use=_codex_account_in_use,
+        atualizar_principal=integracao_codex.atualizar_e_aguardar,
+    )
     app.state.codex_contas_login = codex_contas_login
     cotas.registrar_codex_auth_cache(codex_contas_login.cached_auth)
     app.state.codex_creation_tasks = set()
-    from app.codex_integracao import SERVICO as integracao_codex
     omp_sync = PluginSyncLoop(
         PluginSynchronizer(home=Path.home(), claude_dir=_backend_config_base()),
         enabled=settings.omp_plugin_sync_enabled,
@@ -1733,7 +1735,7 @@ async def create_session(body: CreateBody):
             except ValueError as exc:
                 raise HTTPException(400, detail=erro("erro_criacao_sessao", str(exc))) from None
         if body.codex_account is not None:
-            _codex_prepare_or_fail(codex_account_obj, codex_service)
+            _codex_require_idle_preparation(codex_account_obj, codex_service)
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
     # Mesma guarda do config_dir. Codex nao usa spawn_command/tmux desse jeito, entao motor + codex e
@@ -6198,7 +6200,7 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
         return {"kind": "kimi", "reduced": False, "models": cat["models"], "default": cat["default"]}
     if provider == "codex":
         account = _resolve_codex_account(codex_account or None)
-        _codex_prepare_or_fail(account, _codex_service())
+        _codex_require_idle_preparation(account, _codex_service())
         # Nem config no disco (o ~/.codex/config.toml guarda o modelo escolhido, nunca a lista) nem
         # `codex --list-models`: a fonte e o `model/list` de um app-server efemero em stdio, a MESMA
         # que a folha da sessao viva usa. Ver app/codex_models.py.

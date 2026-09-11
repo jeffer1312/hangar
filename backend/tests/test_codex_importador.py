@@ -3,6 +3,7 @@
 import asyncio
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -19,6 +20,9 @@ import time
 
 scenario = sys.argv[1]
 args = sys.argv[2:]
+assert args[:2] == ["-c", "project_root_markers=[]"]
+args = args[2:]
+assert os.getcwd() != os.environ["HOME"]
 def send(value):
     print(json.dumps(value), flush=True)
 
@@ -196,7 +200,9 @@ async def test_cli_e_wrappers_usam_ambiente_e_argumentos_literais(cliente):
     original_home = os.environ.get("HOME")
     result = await obj.instalar_plugin("plugin & literal@market")
     assert result["args"] == ["plugin", "add", "plugin & literal@market", "--json"]
-    assert result["home"] == result["profile"] == result["cwd"] == str(obj.home)
+    assert result["home"] == result["profile"] == str(obj.home)
+    assert result["cwd"] != str(obj.home)
+    assert not Path(result["cwd"]).exists()
     assert result["codexHome"] == str(obj.codex_home)
     assert os.environ.get("HOME") == original_home
     result = await obj.atualizar_marketplace("market")

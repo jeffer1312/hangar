@@ -963,15 +963,13 @@ describe('CreateSessionSheet — modelo e esforço do Codex', () => {
     unmount(comp);
   });
 
-  it('falha no preparo é visível e não cria; nova tentativa reaproveita a conta', async () => {
+  it.each(['partial', 'error'] as const)('preparo %s não impede abrir com a conta escolhida', async (status) => {
     const { comp } = await abrirNoCodex();
-    vi.mocked(api.prepareCodexAccountForServer).mockResolvedValueOnce({ status: 'error', trust_pending: false, issues: [] });
-    (document.querySelector('.primary-btn') as HTMLElement).click(); await flush();
-    expect(document.body.textContent).toContain(m.codex_ui_prepare_error());
-    expect(api.createSessionForServer).not.toHaveBeenCalled();
-    expect(document.querySelector('#codex-account')?.textContent).toContain('Default');
+    vi.mocked(api.prepareCodexAccountForServer).mockResolvedValueOnce({ status, trust_pending: false, issues: [] });
     (document.querySelector('.primary-btn') as HTMLElement).click(); await flush();
     expect(api.createSessionForServer).toHaveBeenCalledOnce();
+    expect(api.createSessionForServer).toHaveBeenCalledWith(expect.objectContaining({ id: 'B' }),
+      expect.objectContaining({ codex_account: 'default' }));
     unmount(comp);
   });
 

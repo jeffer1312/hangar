@@ -22,6 +22,7 @@ _log = logging.getLogger("hangar.codex.importador")
 _READ_LIMIT = 8 * 1024 * 1024
 _COMPLETED = "externalAgentConfig/import/completed"
 _AUTO_UPGRADE_EM_CURSO = "auto-upgrade was in flight"
+_ADMIN_CONFIG = ("-c", "project_root_markers=[]")
 
 
 class CodexNativoErro(RuntimeError):
@@ -50,6 +51,7 @@ class CodexNativo:
         self.close_timeout = close_timeout
         self._proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
+        self._work_dir: tempfile.TemporaryDirectory | None = None
         self._pending: dict[int, asyncio.Future] = {}
         self._next_id = 0
         self._closed = True
@@ -94,8 +96,11 @@ class CodexNativo:
         if self._proc is not None:
             raise CodexNativoErro("O cliente nativo do Codex já está aberto.")
         try:
+            # Administração da conta não deve carregar configuração de nenhum projeto.
+            self._work_dir = tempfile.TemporaryDirectory(prefix="hangar-codex-admin-")
             self._proc = await asyncio.create_subprocess_exec(
-                *self._comando(), "app-server", "--stdio", cwd=self.home, env=self._env(),
+                *self._comando(), *_ADMIN_CONFIG, "app-server", "--stdio",
+                cwd=self._work_dir.name, env=self._env(),
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, limit=_READ_LIMIT,
             )
@@ -292,6 +297,9 @@ class CodexNativo:
                     await self._reader_task
                 self._reader_task = None
             self._proc = None
+            if self._work_dir is not None:
+                self._work_dir.cleanup()
+                self._work_dir = None
 
     def _diagnostico_cli(self, args: list[str], codigo: int | None,
                         stdout: bytes, stderr: bytes) -> None:
@@ -321,39 +329,40 @@ class CodexNativo:
 
     async def cli(self, args: list[str], *, esperado: str = "") -> dict:
         """`esperado`: trecho do stderr que o chamador trata como benigno — sem diagnóstico nem aviso."""
-        proc = await asyncio.create_subprocess_exec(
-            *self._comando(), *args, cwd=self.home, env=self._env(),
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
+        with tempfile.TemporaryDirectory(prefix="hangar-codex-admin-") as work_dir:
+            proc = await asyncio.create_subprocess_exec(
+                *self._comando(), *_ADMIN_CONFIG, *args, cwd=work_dir, env=self._env(),
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
-            except TimeoutError:
-                raise CodexNativoErro("O comando do Codex excedeu o tempo limite.") from None
-            # O arquivo vai pro thread: `substituir` pode dormir no Windows, e isto roda no loop do SSE.
-            diagnostico = functools.partial(asyncio.to_thread, self._diagnostico_cli,
-                                            args, proc.returncode, stdout, stderr)
-            if proc.returncode:
-                # A cauda vai só em `data`, pra decisão interna (auto-upgrade em curso); nunca no log.
-                cauda = stderr.decode(errors="replace")[-500:].strip()
-                if not (esperado and esperado in cauda):
+                try:
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
+                except TimeoutError:
+                    raise CodexNativoErro("O comando do Codex excedeu o tempo limite.") from None
+                # O arquivo vai pro thread: `substituir` pode dormir no Windows, e isto roda no loop do SSE.
+                diagnostico = functools.partial(asyncio.to_thread, self._diagnostico_cli,
+                                                args, proc.returncode, stdout, stderr)
+                if proc.returncode:
+                    # A cauda vai só em `data`, pra decisão interna (auto-upgrade em curso); nunca no log.
+                    cauda = stderr.decode(errors="replace")[-500:].strip()
+                    if not (esperado and esperado in cauda):
+                        await diagnostico()
+                    raise CodexNativoErro(f"O comando do Codex falhou (código {proc.returncode}).",
+                                          data={"stderr": cauda})
+                try:
+                    result = json.loads(stdout)
+                except (ValueError, UnicodeError):
                     await diagnostico()
-                raise CodexNativoErro(f"O comando do Codex falhou (código {proc.returncode}).",
-                                      data={"stderr": cauda})
-            try:
-                result = json.loads(stdout)
-            except (ValueError, UnicodeError):
-                await diagnostico()
-                raise CodexNativoErro("O comando do Codex não retornou JSON válido.") from None
-            if not isinstance(result, dict):
-                await diagnostico()
-                raise CodexNativoErro("O comando do Codex retornou um resultado inválido.")
-            if result.get("errors"):
-                await diagnostico()
-            return result
-        finally:
-            await self._stop(proc)
+                    raise CodexNativoErro("O comando do Codex não retornou JSON válido.") from None
+                if not isinstance(result, dict):
+                    await diagnostico()
+                    raise CodexNativoErro("O comando do Codex retornou um resultado inválido.")
+                if result.get("errors"):
+                    await diagnostico()
+                return result
+            finally:
+                await self._stop(proc)
 
     async def instalar_plugin(self, plugin_id: str) -> dict:
         return await self.cli(["plugin", "add", plugin_id, "--json"])

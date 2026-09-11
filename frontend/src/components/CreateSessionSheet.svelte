@@ -793,7 +793,7 @@
           sync = await getCodexPreparationForServer(server, account, codexController.signal);
         }
         if (g !== codexGeneration || !open || codexAccount !== account) return;
-        if (sync.status !== 'ready') throw new Error(sync.issues.map(codexAccountMessage).join('\n') || m.codex_ui_prepare_error());
+        codexAccounts = codexAccounts.map((item) => item.id === account ? { ...item, sync } : item);
         if (!baton) {
           const result = await createSessionForServer(server, body);
           if (g !== codexGeneration || !open || codexAccount !== account) return;

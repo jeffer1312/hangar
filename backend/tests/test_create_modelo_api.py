@@ -1,7 +1,7 @@
 """A borda HTTP da escolha de modelo."""
 import asyncio
 import threading
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -110,6 +110,32 @@ def test_preparacao_codex_em_andamento_nao_cria_pane(monkeypatch, tmp_path):
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "codex_account_preparing"
     cr.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["partial", "error", "idle"])
+def test_sync_incompleta_nao_bloqueia_sessao_nem_modelos(monkeypatch, tmp_path, status):
+    account = codex_accounts.Account("work", tmp_path / ".codex-work", False)
+    monkeypatch.setattr(codex_accounts, "resolve_account", lambda _: account)
+    snapshot = {"status": status, "issues": [
+        {"code": "codex_account_mcp_runtime_excluded", "params": {}},
+        {"code": "codex_account_plugin_marketplace_unavailable", "params": {}},
+    ]}
+    service = Mock()
+    service.preparation_status.return_value = snapshot
+    monkeypatch.setattr(app.state, "codex_contas_login", service, raising=False)
+    monkeypatch.setattr(api.tmux, "has_session", lambda _: False)
+    with patch("app.api.registry.create", return_value=SessionInfo(
+            name="cx-pending", cwd="/tmp", provider="codex")) as create, \
+            patch("app.api.codex_models.listar", return_value=[]) as models:
+        client = TestClient(app)
+        response = client.post("/api/sessions", headers=AUTH, json={
+            "name": "cx-pending", "cwd": "/tmp", "provider": "codex", "codex_account": "work"})
+        assert response.status_code == 200, response.text
+        response = client.get("/api/model-options?provider=codex&codex_account=work", headers=AUTH)
+        assert response.status_code == 200, response.text
+    assert create.call_args.kwargs["codex_account"] == "work"
+    models.assert_called_once_with(codex_home=account.home)
+    assert snapshot["status"] == status
 
 
 def test_criacao_codex_padrao_sem_campo_tambem_reserva(monkeypatch, tmp_path):

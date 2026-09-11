@@ -83,10 +83,11 @@ async def delete_codex_account(account_id: str, request: Request) -> dict:
 
 @codex_contas_router.post("/{account_id}/prepare", status_code=202,
                           dependencies=[Depends(require_auth)])
-async def prepare_codex_account(account_id: str, request: Request) -> dict:
+async def prepare_codex_account(account_id: str, request: Request,
+                                forcar: bool = Query(False)) -> dict:
     account = _account(account_id)
     try:
-        return await _service(request).prepare(account)
+        return await _service(request).prepare(account, forcar=forcar)
     except accounts.AccountError as exc:
         raise _account_error(exc) from None
 

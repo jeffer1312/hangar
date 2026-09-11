@@ -113,6 +113,16 @@ describe('CreateSessionSheet Codex', () => {
     root.unmount();
   });
 
+  it.each(['partial', 'error'])('abre a conta escolhida mesmo com sincronização %s', async (status) => {
+    calls.prepare.mockResolvedValue({ status, trust_pending: false, issues: [] });
+    const { container, root } = await renderSheet();
+    const create = [...container.querySelectorAll('button')].find((button) => button.textContent?.startsWith('sessao_nova'))!;
+    await act(async () => create.click());
+    expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ codex_account: 'work' }));
+    expect(calls.replace).toHaveBeenCalledWith('/s/server-b/nova');
+    root.unmount();
+  });
+
   it('cria normalmente sob StrictMode após o ciclo de efeitos', async () => {
     const { container, root } = await renderSheet(true);
     const create = [...container.querySelectorAll('button')].find((button) => button.textContent?.startsWith('sessao_nova'))!;

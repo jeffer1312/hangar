@@ -8,7 +8,7 @@
 // O fetch segue o mesmo par do contaEstado.ts: `null` = servidor ATIVO (401 desloga), Server
 // explícito = máquina do ?srv= (401 de outra máquina não pode apagar a credencial ativa).
 import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
-import { errorDetail, comTeto } from '@hangar/core';
+import { errorDetail, comTeto, type CodexAccount } from '@hangar/core';
 import * as m from '../paraglide/messages';
 export { listarCredenciais, credentialAuth, credentialGroup, codexAccountMessage } from '@hangar/core';
 export type { Credencial, CotaResumo, TipoCredencial, AuthMethod, CodexAccount, CodexLoginAttempt } from '@hangar/core';
@@ -163,7 +163,7 @@ export type MensagemCodex = { codigo: string | null; params: Record<string, stri
 
 export interface IntegracaoCodex {
   estado: 'ocioso' | 'executando' | 'ok' | 'parcial' | 'erro' | 'indisponivel';
-  etapa: MensagemCodex;
+  etapa: MensagemCodex | null;
   ultima_execucao: string | null;
   proxima_atualizacao: string | null;
   plugins: { id: string; versao: string; origem: string }[];
@@ -182,6 +182,25 @@ export function codexIntegracaoEstado(alvo: Server | null, signal?: AbortSignal)
 
 export function codexIntegracaoReconciliar(alvo: Server | null, signal?: AbortSignal): Promise<IntegracaoCodex> {
   return em(alvo, '/api/harness/codex/integracao', { method: 'POST', signal: comTeto(signal, 8000) });
+}
+
+export function listarContasCodex(alvo: Server | null, signal?: AbortSignal): Promise<CodexAccount[]> {
+  return em(alvo, '/api/codex-contas', { signal: comTeto(signal, 8000) });
+}
+
+export function prepararContaCodex(
+  alvo: Server | null, id: string, forcar = false, signal?: AbortSignal,
+): Promise<CodexAccount['sync']> {
+  const query = forcar ? '?forcar=true' : '';
+  return em(alvo, `/api/codex-contas/${encodeURIComponent(id)}/prepare${query}`,
+    { method: 'POST', signal: comTeto(signal, 8000) });
+}
+
+export function estadoContaCodex(
+  alvo: Server | null, id: string, signal?: AbortSignal,
+): Promise<CodexAccount['sync']> {
+  return em(alvo, `/api/codex-contas/${encodeURIComponent(id)}/prepare`,
+    { signal: comTeto(signal, 8000) });
 }
 
 // Instalar um CLI que falta (backend/app/harness_install.py). `comandos` diz o que dá pra instalar

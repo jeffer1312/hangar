@@ -121,6 +121,29 @@ async def test_login_captura_evento_antecipado_e_usa_o_destino_da_conta(contas, 
     assert all(item.closed for item in FakeNative.instances)
 
 
+@pytest.mark.parametrize("forcar", [False, True])
+async def test_preparo_atualiza_a_principal_antes_de_herdar_para_adicional(
+        contas, monkeypatch, forcar):
+    _, work = contas
+    ordem = []
+
+    async def atualizar_principal(forcar):
+        ordem.append(("principal", forcar))
+
+    async def herdar(account, force=False):
+        ordem.append((account.id, force))
+        return {"status": "ready", "trust_pending": False, "issues": []}
+
+    monkeypatch.setattr("app.codex_contas_login.codex_contas_sync.prepare_account", herdar)
+    checker = CodexContasLogin(native=FakeNative, atualizar_principal=atualizar_principal)
+
+    assert (await checker.prepare(work, forcar=forcar))["status"] == "running"
+    result = await checker._preparations[checker._key(work)]
+    assert result["status"] == "ready"
+    assert ordem == [("principal", forcar), ("work", forcar)]
+
+
+
 async def test_login_aceita_confirmacao_sem_login_id_permitida_pelo_schema(
         contas, service, monkeypatch):
     _, work = contas

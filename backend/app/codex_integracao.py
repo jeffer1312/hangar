@@ -208,6 +208,17 @@ class IntegracaoCodex:
             self._task = asyncio.create_task(self.reconciliar(motivo, forcar))
         return self.status()
 
+    async def atualizar_e_aguardar(self, forcar: bool = False) -> dict:
+        """Atualiza a conta principal e compartilha a rodada que já estiver em andamento."""
+        if forcar:
+            await self.iniciar("manual", True)
+        else:
+            await self.sessao()
+        task = self._task
+        if task is not None and not task.done():
+            await asyncio.shield(task)
+        return self.status()
+
     async def fechar(self) -> None:
         if self._task and not self._task.done():
             self._task.cancel()

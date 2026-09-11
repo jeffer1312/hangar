@@ -452,7 +452,7 @@ async def _trust_state(native) -> bool | None:
         return None
     try:
         async with native:
-            result = await native.request("hooks/list", {"cwds": [str(Path.home())]})
+            result = await native.request("hooks/list", {"cwds": []})
     except (OSError, ValueError, RuntimeError, CodexNativoErro):
         return None
     entries = result.get("data") if isinstance(result, dict) else None

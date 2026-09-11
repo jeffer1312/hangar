@@ -92,6 +92,14 @@ def test_post_prepare_e_login_usam_id_da_rota(painel):
     assert service.cancel_login.await_args.args[0].id == "work"
 
 
+def test_post_prepare_manual_forca_a_cadeia_completa(painel):
+    client, service = painel
+
+    assert client.post("/api/codex-contas/work/prepare?forcar=true", headers=AUTH).status_code == 202
+    service.prepare.assert_awaited_once()
+    assert service.prepare.await_args.kwargs == {"forcar": True}
+
+
 def test_nome_invalido_e_conta_ausente_falham(painel):
     client, service = painel
     async def create(name):

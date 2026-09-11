@@ -14,6 +14,16 @@ vi.mock('../../lib/credenciais', () => ({
   consertarHarness: vi.fn(),
   codexIntegracaoEstado: vi.fn(() => new Promise(() => {})),
   codexIntegracaoReconciliar: vi.fn(() => new Promise(() => {})),
+  listarContasCodex: vi.fn(async () => [
+    { id: 'default', name: 'default', is_default: true, home: '/default', credential_id: 'codex:/default',
+      auth: { method: 'oauth', status: 'connected', email: 'principal@x', plan: 'pro' },
+      sync: { status: 'ready', trust_pending: false, issues: [] } },
+    { id: 'work', name: 'work', is_default: false, home: '/work', credential_id: 'codex:/work',
+      auth: { method: 'oauth', status: 'connected', email: 'work@x', plan: 'plus' },
+      sync: { status: 'ready', trust_pending: false, issues: [] } },
+  ]),
+  prepararContaCodex: vi.fn(async () => ({ status: 'ready', trust_pending: false, issues: [] })),
+  estadoContaCodex: vi.fn(async () => ({ status: 'ready', trust_pending: false, issues: [] })),
   instalacaoEstado: vi.fn(),
   instalarHarness: vi.fn(),
 }));
@@ -55,18 +65,20 @@ function botoes(el: HTMLElement): (string | undefined)[] {
   return [...el.querySelectorAll('button')].map((b) => b.textContent?.trim());
 }
 
-beforeEach(() => { vi.clearAllMocks(); montados = []; document.body.innerHTML = ''; });
+beforeEach(() => { vi.clearAllMocks(); montados = []; document.body.innerHTML = ''; localStorage.clear(); });
 afterEach(async () => { for (const comp of montados) await unmount(comp); document.body.innerHTML = ''; });
 
 describe('HarnessSettings — instalar um CLI que falta', () => {
   it('card ausente com comando oferece o botão; instalado não oferece nada', async () => {
     const t = await montar([CARD_AUSENTE], estado());
     expect(botoes(t.el)).toContain(m.harness_inst_botao());
-    unmount(t.comp);
+    await unmount(t.comp);
+    montados = montados.filter((comp) => comp !== t.comp);
 
     const u = await montar([CARD_PRESENTE], estado());
     expect(botoes(u.el)).not.toContain(m.harness_inst_botao());
-    unmount(u.comp);
+    await unmount(u.comp);
+    montados = montados.filter((comp) => comp !== u.comp);
   });
 
   it('sem comando pra este sistema, mostra o link do fornecedor e nenhum botão', async () => {
@@ -224,5 +236,44 @@ describe('HarnessSettings — instalar um CLI que falta', () => {
     }, { timeout: 4000 });
     expect(c.listarHarnesses.mock.calls.length).toBeGreaterThan(1);
     unmount(t.comp);
+  });
+});
+
+describe('HarnessSettings — conta da integração Codex', () => {
+  it('seleciona uma conta adicional e reconcilia a cadeia dela', async () => {
+    c.codexIntegracaoEstado.mockResolvedValue({
+      estado: 'ok', etapa: null, ultima_execucao: null, proxima_atualizacao: null,
+      plugins: [], avisos: [], erros: [], confianca_pendente: false, automatica: true,
+    });
+    const t = await montar([
+      { id: 'codex', nome: 'Codex', instalado: true, versao: '0.154.0', itens: [] },
+    ], estado());
+    const seletorConta = `[aria-label="${m.codex_ui_account()}"]`;
+    await vi.waitFor(() => expect(
+      t.el.querySelector<HTMLSelectElement>(seletorConta),
+    ).not.toBeNull());
+    const seletor = t.el.querySelector<HTMLSelectElement>(seletorConta)!;
+    seletor.value = 'work';
+    seletor.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+    const botao = [...t.el.querySelectorAll('button')]
+      .find((item) => item.textContent?.includes(m.harness_codex_reconciliar()))!;
+    botao.click();
+    await tick(); await Promise.resolve(); await tick();
+
+    expect(c.prepararContaCodex).toHaveBeenCalledWith(null, 'work', true, expect.anything());
+    expect(t.el.textContent).toContain('work@x');
+    await unmount(t.comp);
+    montados = montados.filter((comp) => comp !== t.comp);
+
+    const u = await montar([
+      { id: 'codex', nome: 'Codex', instalado: true, versao: '0.154.0', itens: [] },
+    ], estado());
+    await vi.waitFor(() => expect(
+      u.el.querySelector<HTMLSelectElement>(seletorConta)?.value,
+    ).toBe('work'));
+    expect(u.el.textContent).toContain('work@x');
+    await unmount(u.comp);
+    montados = montados.filter((comp) => comp !== u.comp);
   });
 });

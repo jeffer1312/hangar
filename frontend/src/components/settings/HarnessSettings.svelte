@@ -6,8 +6,9 @@
   // no meio do trabalho.
   import {
     listarHarnesses, consertarHarness, codexIntegracaoEstado, codexIntegracaoReconciliar,
+    listarContasCodex, prepararContaCodex, estadoContaCodex, codexAccountMessage,
     instalacaoEstado, instalarHarness,
-    type Harness, type ItemHarness, type IntegracaoCodex, type MensagemCodex, type Instalacao,
+    type CodexAccount, type Harness, type ItemHarness, type IntegracaoCodex, type MensagemCodex, type Instalacao,
   } from '../../lib/credenciais';
   import { patchConfig, patchConfigForServer } from '@hangar/core';
   import * as m from '../../paraglide/messages';
@@ -29,9 +30,14 @@
   let opcoesClaude = $state<string | null>(null);
   let opcoesCodex = $state<string | null>(null);
   let integracao = $state<IntegracaoCodex | null>(null);
+  let contasCodex = $state<CodexAccount[]>([]);
+  let contaCodex = $state('default');
+  let syncConta = $state<CodexAccount['sync'] | null>(null);
+  let contaSelecionada = $derived(contasCodex.find((conta) => conta.id === contaCodex) ?? null);
   let erroIntegracao = $state('');
   let reconciliando = $state(false);
-  let integracaoOcupada = $derived(reconciliando || (integracao?.estado === 'executando' && !erroIntegracao));
+  let integracaoOcupada = $derived(reconciliando || (contaCodex === 'default'
+    ? integracao?.estado === 'executando' : syncConta?.status === 'running'));
   interface ConsultaIntegracao {
     alvo: Server | null;
     controle: AbortController;
@@ -39,6 +45,8 @@
     requisicao: number;
     timerInst?: ReturnType<typeof setTimeout>;
     reqInst: number;
+    timerConta?: ReturnType<typeof setTimeout>;
+    reqConta: number;
   }
   let consulta: ConsultaIntegracao | null = null;
 
@@ -132,9 +140,62 @@
     }
   }
 
+  function guardarSyncConta(id: string, sync: CodexAccount['sync']) {
+    syncConta = sync;
+    contasCodex = contasCodex.map((conta) => conta.id === id ? { ...conta, sync } : conta);
+  }
+
+  async function consultarConta(ctx: ConsultaIntegracao, reconciliar = false) {
+    if (ctx.timerConta) clearTimeout(ctx.timerConta);
+    const id = contaCodex;
+    if (id === 'default') return;
+    const requisicao = ++ctx.reqConta;
+    if (reconciliar) reconciliando = true;
+    erroIntegracao = '';
+    try {
+      const sync = await (reconciliar
+        ? prepararContaCodex(ctx.alvo, id, true, ctx.controle.signal)
+        : estadoContaCodex(ctx.alvo, id, ctx.controle.signal));
+      if (ctx.controle.signal.aborted || requisicao !== ctx.reqConta || contaCodex !== id) return;
+      guardarSyncConta(id, sync);
+      if (sync.status === 'running') {
+        ctx.timerConta = setTimeout(() => { void consultarConta(ctx); }, 1500);
+      }
+    } catch (e) {
+      if (!ctx.controle.signal.aborted && requisicao === ctx.reqConta && contaCodex === id) {
+        erroIntegracao = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      if (!ctx.controle.signal.aborted && requisicao === ctx.reqConta) reconciliando = false;
+    }
+  }
+
+  async function carregarContas(ctx: ConsultaIntegracao) {
+    try {
+      const contas = await listarContasCodex(ctx.alvo, ctx.controle.signal);
+      if (ctx.controle.signal.aborted) return;
+      contasCodex = contas;
+      const lembrada = localStorage.getItem(`cp_harness_codex_account:${ctx.alvo?.id ?? 'active'}`);
+      if (lembrada && contas.some((conta) => conta.id === lembrada)) contaCodex = lembrada;
+      else if (!contas.some((conta) => conta.id === contaCodex)) contaCodex = 'default';
+      syncConta = contas.find((conta) => conta.id === contaCodex)?.sync ?? null;
+    } catch (e) {
+      if (!ctx.controle.signal.aborted) erroIntegracao = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function trocarConta(ev: Event) {
+    contaCodex = (ev.currentTarget as HTMLSelectElement).value;
+    localStorage.setItem(`cp_harness_codex_account:${consulta?.alvo?.id ?? 'active'}`, contaCodex);
+    erroIntegracao = '';
+    syncConta = contasCodex.find((conta) => conta.id === contaCodex)?.sync ?? null;
+    if (consulta && contaCodex !== 'default') void consultarConta(consulta);
+  }
+
   function reconciliarIntegracao() {
     if (consulta && !integracaoOcupada) {
-      void consultarIntegracao(consulta, true);
+      if (contaCodex === 'default') void consultarIntegracao(consulta, true);
+      else void consultarConta(consulta, true);
     }
   }
 
@@ -165,6 +226,10 @@
   function atualizar() {
     void carregar();
     if (consulta && !reconciliando) void consultarIntegracao(consulta);
+    if (consulta) {
+      void carregarContas(consulta);
+      if (contaCodex !== 'default') void consultarConta(consulta);
+    }
     // Sem guard de "instalando": `consultarInstalacao` já limpa o timer e incrementa a geração no
     // topo, então reentrar é seguro — e o guard trancava justamente a saída manual de uma tela
     // presa em "rodando".
@@ -184,6 +249,11 @@
     ocioso: m.harness_codex_ocioso, executando: m.harness_codex_executando,
     ok: m.harness_codex_ok, parcial: m.harness_codex_parcial,
     erro: m.harness_codex_erro, indisponivel: m.harness_codex_indisponivel,
+  };
+
+  const ESTADOS_CONTA: Record<CodexAccount['sync']['status'], () => string> = {
+    idle: m.harness_codex_ocioso, running: m.harness_codex_executando,
+    ready: m.harness_codex_ok, partial: m.harness_codex_parcial, error: m.harness_codex_erro,
   };
 
   function dataIntegracao(valor: string | null): string {
@@ -224,14 +294,17 @@
   $effect(() => {
     const ctx: ConsultaIntegracao = {
       alvo: apiTarget, controle: new AbortController(), requisicao: 0, reqInst: 0,
+      reqConta: 0,
     };
     consulta = ctx;
     lista = []; feito = ''; consertando = null; opcoesClaude = null;
     opcoesCodex = null;
-    integracao = null; erroIntegracao = ''; reconciliando = false;
+    integracao = null; contasCodex = []; contaCodex = 'default'; syncConta = null;
+    erroIntegracao = ''; reconciliando = false;
     inst = null; erroInst = ''; confirmar = null;
     void carregar();
     void consultarIntegracao(ctx);
+    void carregarContas(ctx);
     // Também na montagem: é desta resposta que sai a lista de quem dá pra instalar por botão nesta
     // máquina, e sem ela nenhum card ausente saberia o que oferecer.
     void consultarInstalacao(ctx);
@@ -241,6 +314,7 @@
       ++ctx.reqInst;
       ctx.controle.abort();
       if (ctx.timer) clearTimeout(ctx.timer);
+      if (ctx.timerConta) clearTimeout(ctx.timerConta);
       if (ctx.timerInst) clearTimeout(ctx.timerInst);
       consulta = null;
     };
@@ -425,6 +499,14 @@
         <div class="hs-integracao">
           <div class="hs-item hs-integracao-cab">
             <span class="hs-item-txt"><b>{m.harness_codex_integracao()}</b></span>
+            {#if contasCodex.length}
+              <select class="hs-conta" aria-label={m.codex_ui_account()} value={contaCodex}
+                onchange={trocarConta} disabled={integracaoOcupada}>
+                {#each contasCodex as conta (conta.id)}
+                  <option value={conta.id}>{conta.name}{conta.is_default ? ` · ${m.criar_padrao()}` : ''}</option>
+                {/each}
+              </select>
+            {/if}
             <button type="button" class="hs-btn" onclick={reconciliarIntegracao}
               disabled={integracaoOcupada}
               >{integracaoOcupada ? m.harness_codex_executando() : m.harness_codex_reconciliar()}</button>
@@ -438,30 +520,41 @@
               <input type="checkbox" class="switch" checked={integracao.automatica}
                 disabled={trocandoAutomatica} onchange={trocarAutomatica} />
             </label>
-            <p class="hs-aviso" role="status">
-              {ESTADOS_INTEGRACAO[integracao.estado]?.() ?? integracao.estado}
-              {#if textoDe(integracao.etapa)} · {textoDe(integracao.etapa)}{/if}
-            </p>
-            <p class="hs-aviso">{m.harness_codex_ultima({ data: dataIntegracao(integracao.ultima_execucao) })}</p>
-            {#if integracao.proxima_atualizacao}
-              <p class="hs-aviso">{m.harness_codex_proxima({ data: dataIntegracao(integracao.proxima_atualizacao) })}</p>
+            {#if contaCodex === 'default'}
+              <p class="hs-aviso" role="status">
+                {ESTADOS_INTEGRACAO[integracao.estado]?.() ?? integracao.estado}
+                {#if textoDe(integracao.etapa)} · {textoDe(integracao.etapa)}{/if}
+              </p>
+              <p class="hs-aviso">{m.harness_codex_ultima({ data: dataIntegracao(integracao.ultima_execucao) })}</p>
+              {#if integracao.proxima_atualizacao}
+                <p class="hs-aviso">{m.harness_codex_proxima({ data: dataIntegracao(integracao.proxima_atualizacao) })}</p>
+              {/if}
+              <p class="hs-aviso">{m.harness_codex_plugins({ n: integracao.plugins.length })}</p>
+              {#if integracao.skills}
+                <p class="hs-aviso">{m.harness_codex_skills({ ponte: integracao.skills.ponte, nativas: integracao.skills.nativas })}</p>
+              {/if}
+              {#if integracao.plugins.length}
+                <ul class="hs-plugins">
+                  {#each integracao.plugins as plugin}
+                    <li><b>{plugin.id}</b> · {plugin.versao} · {plugin.origem}</li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if integracao.confianca_pendente}
+                <p class="hs-aviso" role="status">{m.harness_codex_confianca()}</p>
+              {/if}
+              {#each integracao.avisos as aviso}<p class="hs-aviso">{textoDe(aviso)}</p>{/each}
+              {#each integracao.erros as falha}<p class="hs-aviso erro" role="alert">{textoDe(falha)}</p>{/each}
+            {:else if contaSelecionada && syncConta}
+              {#if contaSelecionada.auth.email}<p class="hs-aviso">{contaSelecionada.auth.email}</p>{/if}
+              <p class="hs-aviso" role="status">{ESTADOS_CONTA[syncConta.status]?.() ?? syncConta.status}</p>
+              {#if syncConta.trust_pending}
+                <p class="hs-aviso" role="status">{m.harness_codex_confianca()}</p>
+              {/if}
+              {#each syncConta.issues as issue (`${issue.code}:${JSON.stringify(issue.params)}`)}
+                <p class="hs-aviso" class:erro={syncConta.status === 'error'}>{codexAccountMessage(issue)}</p>
+              {/each}
             {/if}
-            <p class="hs-aviso">{m.harness_codex_plugins({ n: integracao.plugins.length })}</p>
-            {#if integracao.skills}
-              <p class="hs-aviso">{m.harness_codex_skills({ ponte: integracao.skills.ponte, nativas: integracao.skills.nativas })}</p>
-            {/if}
-            {#if integracao.plugins.length}
-              <ul class="hs-plugins">
-                {#each integracao.plugins as plugin}
-                  <li><b>{plugin.id}</b> · {plugin.versao} · {plugin.origem}</li>
-                {/each}
-              </ul>
-            {/if}
-            {#if integracao.confianca_pendente}
-              <p class="hs-aviso" role="status">{m.harness_codex_confianca()}</p>
-            {/if}
-            {#each integracao.avisos as aviso}<p class="hs-aviso">{textoDe(aviso)}</p>{/each}
-            {#each integracao.erros as falha}<p class="hs-aviso erro" role="alert">{textoDe(falha)}</p>{/each}
           {/if}
           {#if erroIntegracao}<p class="hs-aviso erro" role="alert">{erroIntegracao}</p>{/if}
         </div>
@@ -560,6 +653,9 @@
                  white-space: pre-wrap; overflow-wrap: anywhere; }
   .hs-integracao { border-top: 1px solid var(--border-subtle); margin-top: var(--space-2); padding-top: var(--space-1); }
   .hs-integracao-cab { flex-wrap: wrap; }
+  .hs-conta { max-width: 240px; min-height: 30px; padding: 0 var(--space-2);
+              border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+              background: var(--surface-raised); color: var(--text-primary); font-size: var(--text-xs); }
   .hs-integracao .hs-aviso, .hs-plugins { overflow-wrap: anywhere; }
   .hs-plugins { margin: var(--space-1) 0 0; padding-left: var(--space-4); font-size: var(--text-xs); color: var(--text-secondary); }
 </style>

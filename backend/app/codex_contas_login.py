@@ -11,7 +11,7 @@ import threading
 import time
 import tomllib
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from app import codex_contas as accounts
 from app import codex_contas_sync
@@ -99,9 +99,11 @@ class CodexContasLogin:
     """Dono das tentativas efêmeras e da reserva compartilhada por CODEX_HOME."""
 
     def __init__(self, *, native=CodexNativo,
-                 account_in_use: Callable[[accounts.Account], bool] | None = None):
+                 account_in_use: Callable[[accounts.Account], bool] | None = None,
+                 atualizar_principal: Callable[[bool], Awaitable[dict | None]] | None = None):
         self.native = native
         self.account_in_use = account_in_use or _default_account_in_use
+        self.atualizar_principal = atualizar_principal
         self._attempts: dict[str, _Attempt] = {}
         self._reservations: dict[str, list[_Reservation]] = {}
         self._preparations: dict[str, asyncio.Task] = {}
@@ -397,7 +399,7 @@ class CodexContasLogin:
             await asyncio.shield(attempt.task)
         return self._public_attempt(attempt)
 
-    async def prepare(self, account: accounts.Account) -> dict:
+    async def prepare(self, account: accounts.Account, *, forcar: bool = False) -> dict:
         if account.is_default:
             return {"status": "ready", "trust_pending": False, "issues": []}
         key = self._key(account)
@@ -405,12 +407,17 @@ class CodexContasLogin:
             task = self._preparations.get(key)
             if task is None or task.done():
                 reservation = self._reserve(account, "prepare")
-                task = asyncio.create_task(self._prepare_one(account, reservation))
+                task = asyncio.create_task(self._prepare_one(account, reservation, forcar))
                 self._preparations[key] = task
         return self.preparation_status(account) if not task.done() else task.result()
 
-    async def _prepare_one(self, account: accounts.Account, reservation: _Reservation) -> dict:
+    async def _prepare_one(self, account: accounts.Account, reservation: _Reservation,
+                           forcar: bool) -> dict:
         try:
+            if self.atualizar_principal is not None:
+                await self.atualizar_principal(forcar)
+            if forcar:
+                return await codex_contas_sync.prepare_account(account, force=True)
             return await codex_contas_sync.prepare_account(account)
         except asyncio.CancelledError:
             raise
