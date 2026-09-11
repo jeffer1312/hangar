@@ -712,6 +712,12 @@ class PromptQueue:
                     requeued.append(dict(r))
                 changed = True
             if descartadas:
+                # Rastro obrigatorio: e o unico caminho em que uma entrada perdida sai da tela sem
+                # confirmacao propria — um "Sim" desistido pode ser descartado por um "Sim" de OUTRA
+                # pergunta horas depois. Sem esta linha a perda sumia sem vestigio.
+                for d in descartadas:
+                    _log.info("fila %s: entrada desistida %s descartada por reenvio do mesmo texto (%d chars)",
+                              self.path.stem, d.get("id"), len(str(d.get("text") or "")))
                 rows = [r for r in rows if not any(r is d for d in descartadas)]
                 changed = True
             if changed:
@@ -719,10 +725,12 @@ class PromptQueue:
             return requeued
 
     def remove(self, entry_id: str) -> bool:
-        """Tira UMA entrada da fila pelo id (o botao "descartar" da bolha perdida). True = existia."""
+        """Tira UMA entrada DESISTIDA da fila pelo id (o botao "descartar" da bolha perdida).
+        True = existia e saiu. Entrada ainda por entregar ou ja confirmada nao sai por aqui: o id
+        vem do cliente, e um id velho nao pode derrubar mensagem que ainda vai ser digitada."""
         with _append_lock:
             rows = self.load()
-            restantes = [r for r in rows if r.get("id") != entry_id]
+            restantes = [r for r in rows if not (r.get("id") == entry_id and r.get("desistiu"))]
             if len(restantes) == len(rows):
                 return False
             self._write_atomic(restantes)

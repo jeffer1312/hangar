@@ -953,6 +953,7 @@ def test_remove_tira_so_a_entrada_pedida():
     q.path.write_text(json.dumps({"id": "a", "text": "x", "ts": 1.0, "delivered": True, "desistiu": True}) + "\n"
                       + json.dumps({"id": "b", "text": "y", "ts": 2.0, "delivered": False}) + "\n",
                       encoding="utf-8")
+    assert q.remove("b") is False              # ainda por entregar: o descarte nao alcanca
     assert q.remove("a") is True
     assert [r["id"] for r in q.load()] == ["b"]
     assert q.remove("a") is False

@@ -249,6 +249,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_pareamento_aviso_unpair: (p) => m.erro_pareamento_aviso_unpair({ sessao: fmtParam(p.sessao), erro: fmtParam(p.erro) }),
   erro_pareamento_grupo_falha: (p) => m.erro_pareamento_grupo_falha({ avisos: fmtParam(p.avisos) }),
   erro_pareamento_saida_falhou: (p) => m.erro_pareamento_saida_falhou({ avisos: fmtParam(p.avisos) }),
+  erro_fila_entrada_nao_encontrada: () => m.erro_fila_entrada_nao_encontrada(),
   erro_pareamento_tarefa_existente: (p) => m.erro_pareamento_tarefa_existente({ existente: fmtParam(p.existente) }),
 
   // Envio: falhas fixas dos helpers _send_one/_send_one_codex, agora envelopadas

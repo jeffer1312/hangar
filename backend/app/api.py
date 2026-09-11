@@ -2009,7 +2009,7 @@ def clear_then_link(name: str):
 @app.delete("/api/sessions/{name}/queue/{entry_id}", dependencies=[Depends(require_auth)])
 async def descartar_da_fila(name: str, entry_id: str):
     # O botao "descartar" da bolha perdida: a entrada desistida sai da fila e do chat. So o id
-    # (a bolha `queued-<id>` do front); nao mexe em nada que ainda esteja por entregar.
+    # (a bolha `queued-<id>` do front); `remove` recusa o que ainda esta por entregar.
     if not await asyncio.to_thread(PromptQueue(name).remove, entry_id):
         raise HTTPException(404, erro("erro_fila_entrada_nao_encontrada", "entrada não está na fila"))
     return {"ok": True}

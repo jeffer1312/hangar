@@ -498,13 +498,14 @@
                           onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
             {/if}
             {#if ev.desistiu}
-              <p class="queued-perdida" role="status">
-                {m.msg_nao_chegou_reenvie()}
-                <!-- Só a fila durável tem id pra descartar; a "held:" é registro do hook, não entrada. -->
+              <div class="queued-perdida">
+                <p role="status">{m.msg_nao_chegou_reenvie()}</p>
+                <!-- Fora do role=status (região viva não leva controle). Só a fila durável tem id
+                     pra descartar; a "held:" é registro do hook, não entrada. -->
                 {#if onDescartarFila && ev.id.startsWith('queued-')}
                   <button type="button" class="queued-descartar" onclick={() => onDescartarFila(ev.id.slice('queued-'.length))}>{m.msg_descartar_perdida()}</button>
                 {/if}
-              </p>
+              </div>
             {/if}
           </div>
         {:else if sub}
@@ -787,6 +788,7 @@
     color: var(--error);
     display: flex; align-items: center; gap: var(--space-2);
   }
+  .queued-perdida p { margin: 0; }
   .queued-descartar {
     min-height: 0; padding: 2px 8px; border-radius: var(--radius-sm);
     font-size: var(--text-xs); color: var(--text-secondary);
