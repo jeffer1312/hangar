@@ -937,7 +937,6 @@
   // falha de rede tambem mantem true e deixa o proprio terminal mostrar o erro real.
   let terminalCapazMobile = $state(true);
   $effect(() => {
-    if (desktop) return;
     let vivo = true;
     getConfig()
       .then((c) => {

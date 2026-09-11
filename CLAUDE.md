@@ -1791,20 +1791,6 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   mexer nas chamadas), spinner nos comandos longos do sh (`gira` — sem TTY ou `--update`, passa
   direto com saída ao vivo), caixa RESUMO no fim (token só com TTY, mesma regra do passo 3/8).
 
-- **Instalador guiado: duas perguntas no passo 0, o resto é padrão** (`install.sh --avancado` /
-  `install.ps1 -Avancado` devolvem o wizard; 09/09/2026, spec em
-  `docs/superpowers/specs/2026-09-09-instalador-guiado-design.md`). Decisão do usuário para o
-  time não técnico: token (continua pergunta — é o que se digita no celular quando o QR não
-  dá) e "usar fora de casa?" (Tailscale instalado e logado no 1/8, publicado no 6/8 — o Linux
-  passou a rodar `sudo tailscale serve` como o Windows já fazia). Quatro sabores de pergunta:
-  `ask` sim por padrão, `ask_senha` sempre pergunta (sudo nunca aparece "do nada"), `ask_extra`
-  não por padrão (persistência tmux, painel), e sem terminal tudo é NÃO — o `Pergunte` do
-  Windows foi alinhado a isso (antes, sem console, respondia sim). Log em
-  `~/.hangar/install.log` / `%LOCALAPPDATA%\hangar\install.log`, nunca no `--update` (o app
-  lê `##HANGAR-AVISO##` da saída crua) e SEM o token: a URL de pareamento do `print_pairing`
-  carrega o token, então QR e URL vão só pro `/dev/tty` e, no Windows, com o `Start-Transcript`
-  pausado (ele captura `Read-Host` e `Write-Host`). O "pull automático" que parecia redundante
-  com o Atualizar do app é o hook `post-merge`: complementares (o botão chama o mesmo
 - **O instalador do Windows NUNCA roda elevado, e admin é UAC pontual** (`install.ps1`,
   `Eleva-E-Roda`/`Espere-Ate`, 10/09/2026). Tudo que ele registra (tarefas agendadas, hooks,
   config) nasce com o dono do processo, e o Atualizar do app roda como usuário: instalar elevado
@@ -1821,9 +1807,29 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   e, faltando, o instalador liga o Modo Desenvolvedor por UAC ou abre `ms-settings:developers` e
   espera — antes a pessoa só descobria ao criar a primeira conta. Medido no 5.1: `Remove-Item`
   num symlink de pasta estoura `NullReferenceException`; apagar link é `[IO.Directory]::Delete`.
+  **A sonda é `cmd /c mklink /D`, não `New-Item -ItemType SymbolicLink`** (medido 10/09/2026 na
+  VM, PowerShell 5.1.26100, token restrito via `runas /trustlevel:0x20000`): com o Modo
+  Desenvolvedor LIGADO o `New-Item` do 5.1 ainda falha com "requer privilégio de administrador",
+  porque não pede o flag de criação sem privilégio; `mklink` e o `os.symlink` do Python (quem cria
+  os atalhos das contas) funcionam. Com o `New-Item` o instalador dizia "modo desligado" pra quem
+  tinha acabado de ligar. A sonda nova dá `False` com o modo desligado e `True` ligado.
   E `(Get-Command npm).Source` é `npm.ps1`: o `.vbs` da tarefa do front chamava
   `cmd /c "...\npm.ps1" run preview`, o cmd abria o `.ps1` no Notepad e a vigia repetia isso a
   cada 5 min — `-CommandType Application` pra resolver lançador.
+- **Instalador guiado: duas perguntas no passo 0, o resto é padrão** (`install.sh --avancado` /
+  `install.ps1 -Avancado` devolvem o wizard; 09/09/2026, spec em
+  `docs/superpowers/specs/2026-09-09-instalador-guiado-design.md`). Decisão do usuário para o
+  time não técnico: token (continua pergunta — é o que se digita no celular quando o QR não
+  dá) e "usar fora de casa?" (Tailscale instalado e logado no 1/8, publicado no 6/8 — o Linux
+  passou a rodar `sudo tailscale serve` como o Windows já fazia). Quatro sabores de pergunta:
+  `ask` sim por padrão, `ask_senha` sempre pergunta (sudo nunca aparece "do nada"), `ask_extra`
+  não por padrão (persistência tmux, painel), e sem terminal tudo é NÃO — o `Pergunte` do
+  Windows foi alinhado a isso (antes, sem console, respondia sim). Log em
+  `~/.hangar/install.log` / `%LOCALAPPDATA%\hangar\install.log`, nunca no `--update` (o app
+  lê `##HANGAR-AVISO##` da saída crua) e SEM o token: a URL de pareamento do `print_pairing`
+  carrega o token, então QR e URL vão só pro `/dev/tty` e, no Windows, com o `Start-Transcript`
+  pausado (ele captura `Read-Host` e `Write-Host`). O "pull automático" que parecia redundante
+  com o Atualizar do app é o hook `post-merge`: complementares (o botão chama o mesmo
   `--update`); ele passou a instalar sem perguntar. `hangar-doctor` é UMA implementação
   (`app/doctor.py`), com cwd em `backend/` porque o `Settings` lê o `.env` pelo diretório
   atual; login do Claude é `EstadoLogin.loggedIn`, não `estado` (que só diz se o CLI
@@ -1846,12 +1852,6 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     `pair_texto.py`, stdlib-only (mesma regra do `engines.py`).
   - **Protocolo completo só pro recém-chegado** (`snap[m] is None`); veterano recebe "fulano entrou";
     peers e tarefa iguais = nada. Adicionar o 5º membro disparava 5 prompts de 1,5KB, 4 redundantes.
-  **A sonda é `cmd /c mklink /D`, não `New-Item -ItemType SymbolicLink`** (medido 10/09/2026 na
-  VM, PowerShell 5.1.26100, token restrito via `runas /trustlevel:0x20000`): com o Modo
-  Desenvolvedor LIGADO o `New-Item` do 5.1 ainda falha com "requer privilégio de administrador",
-  porque não pede o flag de criação sem privilégio; `mklink` e o `os.symlink` do Python (quem cria
-  os atalhos das contas) funcionam. Com o `New-Item` o instalador dizia "modo desligado" pra quem
-  tinha acabado de ligar. A sonda nova dá `False` com o modo desligado e `True` ligado.
   - **Tarefa diferente da existente é 409** sem `--substituir-tarefa` — cada `--pair` de um árbitro
     sobrescrevia a de todos, calado.
   - **Toda saída avisa quem ficou pela mesma esteira**: unpair, kill (não avisava ninguém — os pares
