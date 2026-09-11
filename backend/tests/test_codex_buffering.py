@@ -99,3 +99,19 @@ async def test_aviso_repetido_nao_reabre_apos_primeira_resposta(watching):
     await anext(stream)
     await queue.put(notice(turn="next"))
     assert (await asyncio.wait_for(anext(stream), 1)).codex_buffering
+
+
+@pytest.mark.parametrize("event", [
+    {"method": "item/agentMessage/delta", "params": {"threadId": "thread", "turnId": "previous", "delta": "Atrasada"}},
+    {"method": "item/completed", "params": {"threadId": "thread", "turnId": "previous", "item": {"type": "agentMessage", "text": "Atrasada"}}},
+])
+async def test_resposta_de_outro_turno_nao_apaga_aviso_atual(watching, event):
+    _, queue, stream = watching
+    await queue.put(notice())
+    await anext(stream)
+    await queue.put(event)
+    await queue.put({"method": "thread/tokenUsage/updated", "params": {"threadId": "thread", "tokenUsage": {"total": {"totalTokens": 1}}}})
+    assert (await asyncio.wait_for(anext(stream), 1)).codex_buffering
+    await queue.put(notice())
+    await queue.put({"method": "thread/tokenUsage/updated", "params": {"threadId": "thread", "tokenUsage": {"total": {"totalTokens": 2}}}})
+    assert (await asyncio.wait_for(anext(stream), 1)).codex_buffering

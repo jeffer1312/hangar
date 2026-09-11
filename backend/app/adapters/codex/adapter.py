@@ -985,10 +985,11 @@ class CodexAdapter:
                 forward(sess, notif)
             mapped = map_state(notif)
             method = notif.get("method")
-            response_started = bool(mapped.preview_delta) or (
+            current_turn = not sess.get("turn_id") or params.get("turnId") in (None, sess["turn_id"])
+            response_started = current_turn and (bool(mapped.preview_delta) or (
                 method == "item/completed" and (params.get("item") or {}).get("type") == "agentMessage"
                 and bool((params.get("item") or {}).get("text"))
-            )
+            ))
             if method == "turn/started" or mapped.state == "idle":
                 sess.pop("codex_response_started", None)
             elif response_started:
