@@ -25,7 +25,7 @@ _BANNER_RE = re.compile(r"^[\s▐▛█▝▜▀]*Claude Code v\d")
 # Aviso de plugin ("● ecc: hooks.json: unknown keys …"), com o ● da prosa. Os cortes por posição
 # não bastam: o Claude Code o reimprime no MEIO da conversa, depois do último ❯ (pane real de
 # 11/09, sessão em grupo do orquestrar), e ali ele é o último ● e vira prévia. Por conteúdo, então.
-_PLUGIN_WARNING_RE = re.compile(r"^[\w.-]+: hooks\.json: ")
+_PLUGIN_WARNING_RE = re.compile(r"^[a-z][\w.-]*: hooks\.json: [a-z]")
 
 
 def _norm(s: str) -> str:
@@ -335,8 +335,12 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     for i, ln in enumerate(lines[inicio:fim], inicio):  # sem régua, fim == len(lines)
         s = ln.lstrip()
         corpo = s[1:].lstrip()
+        if s[:1] == _ASSISTANT_GLYPH and _PLUGIN_WARNING_RE.match(corpo):
+            # O aviso ZERA a eleição, não é só pulado: pular faria a varredura cair num ● anterior,
+            # prosa já commitada, que voltaria como se estivesse em voo.
+            start = -1
+            continue
         if (s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo)
-                and not _PLUGIN_WARNING_RE.match(corpo)
                 and not _MCP_CALL_RE.match(corpo)
                 and not _AGENT_FINISHED_RE.match(corpo)
                 and not _TODO_PANEL_RE.match(ln)

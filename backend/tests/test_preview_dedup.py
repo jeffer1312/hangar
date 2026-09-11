@@ -365,7 +365,15 @@ def test_aviso_de_plugin_reimpresso_no_meio_da_conversa_nao_vira_previa():
         "❯ \n"
         + "─" * 40 + "\n"
     )
-    assert extract_assistant_text(pane) == "Ciente — grupo agora é hangar, cux-t3 e eu. Aguardando a rodada 1 do cux-t3."
+    # Vazio, e não o "Ciente…" anterior: aquele bloco já está no transcript, e reelegê-lo o
+    # traria de volta como bolha em voo.
+    assert extract_assistant_text(pane) == ""
+    # Prosa DEPOIS do aviso continua sendo a prévia (o aviso pode vir no começo do turno).
+    depois = pane.replace("  ignored\n", "  ignored\n\n● Agora sim, lendo o arquivo.\n")
+    assert extract_assistant_text(depois) == "Agora sim, lendo o arquivo."
+    # Prosa comum que começa parecida não é aviso.
+    prosa = pane.replace("● ecc: hooks.json: unknown keys", "● Nota: hooks.json: define os hooks")
+    assert extract_assistant_text(prosa).startswith("Nota: hooks.json: define")
 
 
 def test_prosa_depois_da_mensagem_do_usuario_continua_sendo_previa():
