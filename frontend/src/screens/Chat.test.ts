@@ -158,6 +158,31 @@ beforeEach(() => {
   filesStores.release('srv-test::sess');
 });
 
+it('abre o SSE sem esperar a primeira carga do histórico', async () => {
+  const api = await import('@hangar/core');
+  let concluirHistorico!: () => void;
+  vi.mocked(api.openEventStream).mockClear();
+  vi.mocked(api.getHistoryDesde).mockReturnValueOnce(new Promise((resolve) => {
+    concluirHistorico = () => resolve({ eventos: [], etag: null });
+  }));
+  const t = montar();
+  try {
+    await tick();
+    expect(api.openEventStream).toHaveBeenCalledOnce();
+    sseCtl.handlers.get('message')?.({ data: JSON.stringify({
+      id: 'ao-vivo', kind: 'assistant_msg', text: 'evento ao vivo', ts: '2026-09-11T12:00:00Z',
+    }) } as MessageEvent);
+    await tick();
+    expect(t.el.querySelector('.chat-skeleton')).toBeNull();
+    concluirHistorico();
+    await tick();
+    expect(t.el.querySelector('.chat-skeleton')).toBeNull();
+  } finally {
+    await unmount(t.comp);
+    vi.mocked(api.getHistoryDesde).mockResolvedValue({ eventos: [], etag: null });
+  }
+});
+
 it.each([true, false])('mostra a preparação do Codex sem conversa antiga (desktop=%s)', async (desktop) => {
   const api = await import('@hangar/core');
   const sessao = {

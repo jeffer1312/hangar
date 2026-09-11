@@ -1092,6 +1092,32 @@ async def test_bomba_continua_consumindo_sem_sse_aberto():
     await bomba
 
 
+async def test_bomba_publica_na_fonte_recriada_depois_que_sse_fecha():
+    adapter = CodexAdapter()
+    client = _LiveQueueClient()
+    adapter.attach("volta", client, "t")
+    async with asyncio.timeout(1):
+        while client.aberturas != 1:
+            await asyncio.sleep(0)
+
+    fonte_antiga = CodexPreviewSource.get("volta")
+    assinatura = fonte_antiga.subscribe()
+    await assinatura.__anext__()
+    await assinatura.aclose()
+    fonte_nova = CodexPreviewSource.get("volta")
+
+    await client._q.put({"method": "turn/started", "params": {"threadId": "t"}})
+    await client._q.put({"method": "item/agentMessage/delta",
+                         "params": {"threadId": "t", "delta": "voltou"}})
+    async with asyncio.timeout(1):
+        while fonte_nova.text != "voltou":
+            await asyncio.sleep(0)
+
+    bomba = adapter._sessions["volta"]["bomba"]
+    await client._q.put(None)
+    await bomba
+
+
 async def test_dois_sse_na_mesma_sessao_recebem_a_resposta_inteira():
     # Desktop + celular no mesmo chat: cada SSE abre um state_monitor. Com um consumidor por SSE
     # os deltas eram DIVIDIDOS entre eles (cada um ficava com metade da frase) e os dois empurravam

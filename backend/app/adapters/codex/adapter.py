@@ -720,6 +720,7 @@ class CodexAdapter:
         sub = self._subscribers.pop(name, None)
         if sub is not None:
             sub.cancel()
+        CodexPreviewSource._sources.pop(name, None)
         if sess is None:
             return
         bomba = sess.get("bomba")
@@ -736,6 +737,7 @@ class CodexAdapter:
         sub = self._subscribers.pop(old, None)
         if sub is not None:
             sub.cancel()
+        CodexPreviewSource._sources.pop(old, None)
         sess = self._sessions.pop(old, None)
         if sess is not None:
             bomba = sess.pop("bomba", None)
@@ -877,7 +879,6 @@ class CodexAdapter:
             espalhar(None)
 
     async def _consumir(self, name: str, client: AppServerClient, sess: dict, espalhar) -> None:
-        preview = CodexPreviewSource.get(name)
         # Buffer do turno em voo (deltas sao INCREMENTAIS -- concatena; ver docs/codex-app-server-
         # contract.md).
         buf = ""
@@ -917,19 +918,19 @@ class CodexAdapter:
                     sess["turn_id"] = turn_id
             elif mapped.preview_delta is not None:
                 buf += mapped.preview_delta
-                await preview.push(buf)
+                await CodexPreviewSource.get(name).push(buf)
             elif method in ("item/started", "item/completed") and \
                     ((notif.get("params") or {}).get("item") or {}).get("type") == "agentMessage":
                 # Um turno pode ter varios agentMessage (preambulo "Vou conferir…" + resposta). O
                 # completado vira bolha propria pelo rollout; se ficasse no buffer, a previa
                 # mostrava "Vou conferir.Resposta" ate o turno fechar.
                 buf = ""
-                await preview.push("")
+                await CodexPreviewSource.get(name).push("")
             elif method == "turn/completed":
                 # o texto final ja caiu no rollout -> vira ChatEvent autoritativo via
                 # transcript_stream; o sse.py tambem suprime via _already_committed. Limpa aqui pra
                 # nao deixar o ultimo delta pendurado ate o proximo turno.
-                await preview.push("")
+                await CodexPreviewSource.get(name).push("")
                 # Marca idle ANTES de drenar (nao depender do thread/status/changed idle ter chegado
                 # antes -- a ordem das notifications do app-server nao e garantida). A drain chama
                 # send_prompt -> deliverable(), que le in_progress: se ficasse True aqui, deliverable
@@ -939,11 +940,8 @@ class CodexAdapter:
                 sess["state"] = "idle"
                 sess["in_progress"] = False
                 sess["turn_id"] = None
-                # drain-on-complete (P2): turno terminou -> entrega a fila pendente (msgs enviadas
-                # via /input enquanto o Codex trabalhava). Reusa adapter.drain (claim-1-envia-1 pela
-                # TUI). ACOPLADO ao SSE ativo -- a bomba so roda com um ouvinte aberto; sem
-                # celular conectado nao ha drain-on-complete (mesma limitacao do preview).
-                # Best-effort: falha aqui nunca derruba o state stream.
+                # Turno terminou: a bomba única e permanente entrega a fila mesmo sem SSE aberto.
+                # Best-effort: falha aqui nunca derruba o consumidor do app-server.
                 try:
                     await self.drain(name, "")
                 except Exception:
@@ -986,6 +984,7 @@ class CodexAdapter:
         if getattr(client, "closed", False) and self._sessions.get(name) is sess:
             sess["state"] = "dead"
             self._sessions.pop(name, None)
+            CodexPreviewSource._sources.pop(name, None)
             espalhar(StateEvent(session=name, state="dead"))
 
     async def send_prompt(self, name: str, text: str) -> str:

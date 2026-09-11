@@ -905,7 +905,8 @@
       // limpar, a faixa de "servidor recusou" sobrevive a chegada do transcript.
       sseRecusado = false;
       error = '';
-      loadHistory().then(() => { if (alive) connectSSE(); });
+      connectSSE();
+      void loadHistory();
     }
     estavaSemId = semId;
   });
@@ -1348,13 +1349,9 @@
         // ~200 bytes em vez de 313 KB.
         temMaisNoServidor = events.length >= TAIL_FIRST;
       } else {
-        // Costura SÓ quando o cache pintou; sem ele, substitui como sempre foi. `appendTail` assume
-        // que a cauda é a parte MAIS RECENTE, e no caminho do /clear o SSE pode ter posto uma
-        // mensagem nova em `events` durante o fetch — ali a suposição se inverte e o histórico
-        // entraria DEPOIS dela, fora de ordem. Com a condição no cache, esse caminho segue no
-        // comportamento antigo, byte por byte. Quando NENHUM id bate (transcript trocado por
-        // /clear), `appendTail` devolve só a cauda nova e joga o cache fora.
-        events = pintouDoCache ? appendTail(r.eventos, events) : r.eventos;
+        // O SSE abre antes desta carga e pode ter posto eventos novos na tela. Costura a cauda
+        // recém-lida sem apagar esses eventos; sem nada ao vivo, substitui como antes.
+        events = events.length ? appendTail(r.eventos, events) : r.eventos;
         etagCauda = r.etag;
         rebuildIndex();
         reseedDerived();
@@ -1509,6 +1506,7 @@
 
     const onMessage = (e: { data: string; lastEventId?: string }) => {
       noteAlive();
+      if (loading) loading = false;
       // Chegou conversa: o aviso de "não carregou o histórico" não pode continuar na frente dela.
       // A tela de erro SUBSTITUI a lista inteira ({:else if error}), então um erro aceso por uma
       // carga que falhou ficava preso mesmo depois de o SSE se recuperar sozinho e voltar a
@@ -1751,12 +1749,8 @@
     };
   }
 
-  // App voltou pro foreground (mobile suspende a conexao no background). Agora o backfill do SSE so
-  // traz o TAIL (ultimas _BACKFILL_LINES linhas), entao um background LONGO pode ter perdido mais que
-  // isso. Re-seed do history (REST, completo e ordenado) ANTES de reconectar fecha o buraco; o backfill
-  // tail do SSE so faz a ponte ate a subscricao (dedup por id, sem reordenar). Falha aqui NAO trava a
-  // tela (o connectSSE/onerror re-sincroniza) -> ignora e segue. Reconexoes de blip (watchdog/onerror)
-  // continuam SO com o tail-K: cobrem poucos segundos sem re-shippar o arquivo inteiro.
+  // App voltou pro foreground (mobile suspende a conexão no background). Reconecta primeiro para o
+  // texto vivo não esperar o REST; a cauda ordenada chega em paralelo e fecha qualquer buraco longo.
   async function onVisible() {
     if (document.visibilityState !== 'visible') return;
     // Segura watchdog/retry DURANTE o re-seed: no wake do iOS o watchdog vencido disparava um
@@ -1764,6 +1758,7 @@
     clearTimeout(watchdog);
     clearTimeout(reconnectTimer);
     sseRetryDelay = SSE_RETRY_MIN;   // rede provavelmente voltou: reconexao rapida de novo
+    connectSSE();
     const signal = newHistLoad();   // aborta a carga de fundo que ficou pendurada no background
     const g = histGen;
     try {
@@ -1790,18 +1785,13 @@
       }
     }
     if (g !== histGen || !alive) return;
-    connectSSE();
   }
 
-  onMount(async () => {
+  onMount(() => {
     alive = true;
-    await loadHistory();
-    // Pos-await: o componente pode ter morrido durante o loadHistory (troca rapida de sessao via
-    // {#key}). Sem o guard, o addEventListener rodava DEPOIS do removeEventListener do destroy ->
-    // listener orfao preso pra sempre fazendo getHistory fantasma a cada visibilitychange.
-    if (!alive) return;
     connectSSE();
     document.addEventListener('visibilitychange', onVisible);
+    void loadHistory();
   });
 
   onDestroy(() => {
