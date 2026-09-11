@@ -1349,9 +1349,10 @@
         // ~200 bytes em vez de 313 KB.
         temMaisNoServidor = events.length >= TAIL_FIRST;
       } else {
-        // O SSE abre antes desta carga e pode ter posto eventos novos na tela. Costura a cauda
-        // recém-lida sem apagar esses eventos; sem nada ao vivo, substitui como antes.
-        events = events.length ? appendTail(r.eventos, events) : r.eventos;
+        // O SSE abre antes desta carga e pode ter posto eventos novos na tela. O histórico traz
+        // o que veio ANTES deles, então entra no começo — nunca no fim como se fosse mensagem nova.
+        const comAntigos = events.length ? prependOlder(r.eventos, events) : null;
+        events = comAntigos ?? (events.length && hasSeam(r.eventos, events) ? events : r.eventos);
         etagCauda = r.etag;
         rebuildIndex();
         reseedDerived();

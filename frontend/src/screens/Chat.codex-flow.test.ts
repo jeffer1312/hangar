@@ -236,6 +236,25 @@ it('aprovar o plano envia uma única vez à sessão atual mesmo com mandar pros 
   expect(both.getAttribute('aria-pressed')).toBe('true');
 });
 
+it('histórico que chega depois do SSE mantém mensagens antigas antes das atuais', async () => {
+  let resolverHistorico!: (value: Awaited<ReturnType<typeof api.getHistoryDesde>>) => void;
+  vi.mocked(api.getHistoryDesde).mockReturnValueOnce(new Promise((resolve) => {
+    resolverHistorico = resolve;
+  }));
+  await montar();
+  await emit('message', {
+    id: 'atual', kind: 'assistant_msg', ts: '2026-09-11T12:01:00Z', text: 'mensagem atual',
+  });
+  resolverHistorico({ eventos: [
+    { id: 'antiga', kind: 'assistant_msg', ts: 1, text: 'mensagem antiga' },
+    { id: 'atual', kind: 'assistant_msg', ts: 2, text: 'mensagem atual' },
+  ], etag: 'v1' });
+  await flush();
+  expect([...document.querySelectorAll('.assistant-msg:not(.preview)')]
+    .map((el) => el.textContent?.includes('mensagem antiga') ? 'antiga' : 'atual'))
+    .toEqual(['antiga', 'atual']);
+});
+
 it('Claude redescobre no fim de cada turno e ancora o cartão no plano novo', async () => {
   harness.provider = 'claude';
   vi.mocked(api.getHistory).mockResolvedValueOnce([]);
