@@ -401,6 +401,29 @@ describe('Sidebar — trilho original no modo rail', () => {
   const sess = (name: string, serverId: string, state: string, extra: Record<string, unknown> = {}) =>
     ({ name, serverId, state, ...extra });
 
+  it.each([false, true])('perguntas durante execução aparecem com rail recolhido=%s', async (collapsed) => {
+    navMode.mode = 'rail';
+    sidebarPin.setUser(collapsed);
+    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [
+      sess('codex', 'srv-a', 'working', { pending_questions: 2, question: 'Qual servidor?' }),
+      sess('outra', 'srv-a', 'working', { pending_questions: 0 }),
+    ] }]);
+    const t = montar();
+    await tick();
+    const badge = t.el.querySelector('.pending-questions');
+    expect(t.el.querySelectorAll('.pending-questions')).toHaveLength(1);
+    expect(badge?.textContent).toBe('? 2');
+    expect(badge?.getAttribute('title')).toBe(`${m.ask_perguntas()}: 2`);
+    if (collapsed) {
+      expect(t.el.querySelector('.estado-marca')).not.toBeNull();
+      expect(t.el.querySelector('.sess-main')?.getAttribute('aria-label')).toContain(`${m.ask_perguntas()}: 2`);
+    } else {
+      expect(t.el.querySelector('.row-mark')).not.toBeNull();
+      expect(t.el.querySelector('.status-sub.asking')?.textContent).toBe('Qual servidor?');
+    }
+    unmount(t.comp);
+  });
+
   it('RAIL no chat: sem WorkspaceNav, filtro nem cabeçalho de grupo', async () => {
     navMode.mode = 'rail';
     sidebarPin.setUser(true);   // pin recolhido -> trilho

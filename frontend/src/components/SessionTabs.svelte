@@ -162,10 +162,12 @@ import * as m from '../paraglide/messages';
       {@const active = key === currentKey}
       {@const badge = planBadge(tab.session)}
       {@const stateName = rotuloEstado(tab.session.state)}
+      {@const pendingQuestions = tab.session.pending_questions ?? 0}
+      {@const questionsLabel = pendingQuestions ? ` · ${m.ask_perguntas()}: ${pendingQuestions}` : ''}
       {@const plano = badge ? `${m.sessao_plano_pct({ n: Math.round(badge.pct) })}${badge.complete ? m.sessao_concluido() : ''}` : ''}
       <button class="tab" class:boundary={tab.boundary} class:active
         role="tab" aria-selected={active}
-        aria-label={`${tab.session.name} · ${stateName}${plano}`}
+        aria-label={`${tab.session.name} · ${stateName}${plano}${questionsLabel}`}
         tabindex={key === focusableKey ? 0 : -1}
         bind:this={tabEls[i]}
         onfocus={() => (focusedKey = key)}
@@ -174,7 +176,7 @@ import * as m from '../paraglide/messages';
           e.preventDefault();
           sidebarBridge.openSessionMenu(e, tab.session, tab.session.serverId);
         }}
-        title={`${tab.session.name} · ${stateName}${plano}`}>
+        title={`${tab.session.name} · ${stateName}${plano}${questionsLabel}`}>
         <!-- Trabalhando é a MESMA marca animada da lista, não um ponto de outra cor: entre um ponto
              azul e um verde, os dois parados, não dá pra ver quem está ocupada. Os demais estados
              seguem no ponto. -->
@@ -188,6 +190,7 @@ import * as m from '../paraglide/messages';
              ganha glifo — pedido do usuário: na aba o ícone é o reconhecimento, não há texto. -->
         <ProviderGlyph provider={tab.session.provider} size={14} />
         <span class="tab-name">{tab.session.name}</span>
+        {#if pendingQuestions > 0}<span class="tab-questions">? {pendingQuestions}</span>{/if}
         {#if badge}
           <span class="tab-plan" class:done={badge.complete} style:--pct={`${badge.pct}%`} title={badge.title} aria-hidden="true"></span>
         {/if}
@@ -353,6 +356,7 @@ import * as m from '../paraglide/messages';
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .tab-questions { flex: none; color: var(--warning); font-size: var(--text-xs); }
   /* Filete do progresso do plano, na base da aba: TRILHO cheio (--border-default) + preenchimento
      proporcional via --pct (gradiente num elemento só) — 0% mostra o trilho inteiro e se distingue
      de "sem plano" (elemento nem existe). Parcial = --text-secondary (mesma família do anel do

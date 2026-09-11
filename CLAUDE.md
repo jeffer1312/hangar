@@ -2112,6 +2112,20 @@ aberto pelo IDE/CLI cru precisa ser registrado e reconciliado antes de ganhar pr
 AGENTS existente. Sessões já abertas conservam o contexto inicial. Falha na preparação (override
 pessoal, `config.toml` ilegível) não impede a TUI de abrir: sai aviso no stderr do pane.
 
+**Perguntas assíncronas do Codex (11/09/2026, CLI 0.154.0):** `request_user_input_async`
+chega como `agentMessage` com `delivery: "async"` e `questions`, não como pedido JSON-RPC
+`item/tool/requestUserInput`. `async_questions.py` acompanha cada pergunta por thread/item/índice;
+o `thread/resume` repõe o histórico antes de reaplicar eventos recebidos durante a leitura.
+O backend acompanha também sessões recém-abertas pelo terminal. `pending_questions` alimenta os
+avisos das listas e abas sem trocar `working` por espera; o formulário existente recebe a pergunta.
+A resposta usa o mesmo `turn/start` da TUI, dirigido à thread original, com `> título\n\nresposta`.
+Cada pergunta é independente, inclusive quando uma chamada contém várias. O eco da resposta local
+não responde de novo outra pergunta com título igual. Provas com app-server/TUI reais e provedor
+local falso confirmaram envio durante o turno, resposta após seu fim e recuperação após reconexão.
+Limites nativos medidos: “Pular” só altera a memória da TUI, sem evento/histórico; uma resposta por
+outro cliente não fecha o widget já aberto no terminal. O Hangar reconhece respostas do terminal
+pelo histórico, mas não inventa confirmação de descarte.
+
 ## tmux + Claude Code truecolor
 
 Inside tmux, Claude Code caps color depth to 256 and renders theme colors wrong (teal / pink / washed-out)

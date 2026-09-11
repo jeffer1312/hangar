@@ -29,6 +29,20 @@ async function clicaNaRow(el: HTMLElement) {
 }
 
 describe('SessionCard: clique em sessão "sem id"', () => {
+  it.each([0, 2])('perguntas pendentes (%i) preservam a sessão trabalhando e o clique', async (pending_questions) => {
+    const { el, comp, onClick } = montar(sessao({
+      provider: 'codex', state: 'working', pending_questions,
+      question: 'Qual servidor?', label: 'Continuando o trabalho',
+    }));
+    const badge = el.querySelector('.pending-questions');
+    expect(badge?.textContent ?? null).toBe(pending_questions ? '? 2' : null);
+    expect(el.querySelector('.work-mark')).not.toBeNull();
+    expect(el.querySelector('.status-sub')?.textContent).toBe(pending_questions ? 'Qual servidor?' : 'Continuando o trabalho');
+    await clicaNaRow(el);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    unmount(comp);
+  });
+
   it('kimi sem id ABRE o chat (é o pré-1º-prompt por design, não um erro)', async () => {
     const { el, comp, onClick } = montar(sessao({ tracked: false, provider: 'kimi' }));
     await clicaNaRow(el);

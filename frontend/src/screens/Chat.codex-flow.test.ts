@@ -166,9 +166,9 @@ it('confirmação retira o eco antigo sem depender do replay do transcript', asy
   expect(bolhas('Recado aguardando')).toHaveLength(1);
 });
 
-it('uma pergunta SSE abre o stepper real e a resolução no terminal fecha o cartão', async () => {
-  await montar();
-  await emit('ask_question', { provider: 'codex', request_id: 7, questions: [{
+it.each([true, false])('pergunta assíncrona aparece sem abrir terminal, desktop=%s', async desktop => {
+  await montar(desktop);
+  await emit('ask_question', { provider: 'codex', request_id: 'async:thread:call:0', is_async: true, questions: [{
     id: 'destino', header: 'Destino', question: 'Onde aplicar a alteração?', multiSelect: false,
     isOther: true, options: [{ label: 'Nesta máquina', description: 'Preservar o servidor' }],
   }] });

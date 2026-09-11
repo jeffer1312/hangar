@@ -329,6 +329,22 @@ async def test_warm_sessions_reconnects_all_sidecars_without_stopping_on_error(m
     assert seen == ["um", "dois"]
 
 
+async def test_warm_descobre_nova_sessao_sem_reconectar_as_existentes(monkeypatch):
+    from types import SimpleNamespace
+    adapter = CodexAdapter()
+    metas = [{"name": "um", "thread_id": "thread-um"}]
+    monkeypatch.setattr(codex_sessions, "list_all", lambda: list(metas))
+    seen = []
+    async def ensure(name):
+        seen.append(name)
+        adapter._sessions[name] = {"thread_id": "thread-" + name, "client": SimpleNamespace(closed=False)}
+    monkeypatch.setattr(adapter, "ensure_running", ensure)
+    await adapter.warm_sessions()
+    metas.append({"name": "dois", "thread_id": "thread-dois"})
+    await adapter.warm_sessions()
+    assert seen == ["um", "dois"]
+
+
 async def test_send_prompt_uses_turn_start_not_tmux(monkeypatch):
     # O prompt vai por turn/start no app-server, NAO digitado no pane. Medido (probe contra
     # codex-cli 0.144.6): a TUI `codex --remote` renderiza turno iniciado por outro cliente, entao

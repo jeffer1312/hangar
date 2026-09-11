@@ -385,7 +385,7 @@ async def _lifespan(app: FastAPI):
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
     _loop_servidor = asyncio.get_running_loop()
-    codex_warm_task = asyncio.create_task(get_adapter("codex").warm_sessions())
+    codex_warm_task = asyncio.create_task(get_adapter("codex").watch_sessions())
     codex_contas_login = CodexContasLogin(account_in_use=_codex_account_in_use)
     app.state.codex_contas_login = codex_contas_login
     cotas.registrar_codex_auth_cache(codex_contas_login.cached_auth)

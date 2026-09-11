@@ -63,6 +63,7 @@ async def test_dois_sse_replay_resposta_nativa_e_resolucao_na_tui(conectado, mon
         return {}
     monkeypatch.setattr(ad, "ensure_running", running)
     monkeypatch.setattr(ad, "read_settings", settings)
+    monkeypatch.setattr(ad, "read_rate_limits", settings)
     streams = [ad.state_monitor("cx", lambda: "thread") for _ in range(2)]
     try:
         for stream in streams:
@@ -122,6 +123,64 @@ async def test_cancelamento_sem_sse_nao_reabre_pedido(conectado):
     await anext(notifications)
     assert not client.server_requests
     await notifications.aclose()
+
+
+async def test_async_visivel_trabalhando_reabre_e_responde_sem_terminal(conectado, monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    from app import pqueue
+    from tests.test_codex_async_questions import question, answer
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    client, ws = conectado
+    adapter = CodexAdapter()
+    adapter.attach("cx", client, "thread", subscribed=True)
+    adapter._sessions["cx"].update(state="working", in_progress=True)
+    monkeypatch.setattr(adapter, "read_settings", AsyncMock(return_value={}))
+    monkeypatch.setattr(adapter, "read_rate_limits", AsyncMock(return_value=None))
+    stream = adapter.state_monitor("cx", lambda: "thread")
+    try:
+        assert (await anext(stream)).codex_question is None
+        await ws.send(json.dumps({"method": "item/completed", "params": {"threadId": "thread", "item": question()}}))
+        event = await asyncio.wait_for(anext(stream), 2)
+        assert event.state == "working"
+        assert event.codex_question["is_async"]
+        assert adapter.async_question_status("cx") == (2, "Qual cor?")
+        await stream.aclose()
+        stream = adapter.state_monitor("cx", lambda: "thread")
+        assert (await anext(stream)).codex_question == event.codex_question
+        await ws.send(json.dumps({"method": "item/completed", "params": {"threadId": "thread", "item": answer()}}))
+        event = await asyncio.wait_for(anext(stream), 2)
+        assert event.codex_question["questions"][0]["question"] == "Qual tamanho?"
+        responding = asyncio.create_task(adapter.answer_questions("cx", event.codex_question["request_id"], [
+            {"question_id": "answer", "kind": "text", "value": "Grande"},
+        ]))
+        request = json.loads(await ws.recv())
+        assert request["method"] == "turn/start"
+        assert request["params"] == {"threadId": "thread", "input": [{"type": "text", "text": "> Qual tamanho?\n\nGrande"}]}
+        await ws.send(json.dumps({"id": request["id"], "result": {"turn": {"id": "turn"}}}))
+        await responding
+        assert (await anext(stream)).codex_question is None
+        assert pqueue.PromptQueue("cx").load() == []
+        assert adapter.async_question_status("cx") == (0, None)
+        with pytest.raises(ValueError):
+            await adapter.answer_questions("cx", event.codex_question["request_id"], [])
+    finally:
+        await stream.aclose()
+
+
+async def test_falha_na_resposta_async_mantem_pergunta(conectado, monkeypatch):
+    from unittest.mock import AsyncMock
+    from tests.test_codex_async_questions import question
+    client, _ = conectado
+    adapter = CodexAdapter()
+    adapter.attach("cx", client, "thread", subscribed=True)
+    state = adapter._sessions["cx"]["async_questions"]
+    state.observe(question())
+    request_id = state.pending()["request_id"]
+    monkeypatch.setattr(client, "request", AsyncMock(side_effect=ConnectionError("sem conexão")))
+    with pytest.raises(ConnectionError):
+        await adapter.answer_questions("cx", request_id, [{"question_id": "answer", "kind": "text", "value": "Azul"}])
+    assert state.count == 2
+    assert state.pending()["request_id"] == request_id
 
 
 @pytest.mark.parametrize("answers", [[], [{"kind": "text", "question_id": "outra", "value": "x"}],

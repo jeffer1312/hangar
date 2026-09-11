@@ -69,6 +69,18 @@ beforeEach(() => {
 });
 
 describe('SessionTabs — a marca alterna Abas <-> Trilho', () => {
+  it('mostra perguntas pendentes mesmo com a sessão trabalhando', async () => {
+    fixtureByServer.splice(0, fixtureByServer.length, {
+      server: { id: 'srv-a', label: 'A' }, loaded: true, error: null,
+      sessions: [{ name: 'sess-1', serverId: 'srv-a', state: 'working', pending_questions: 2 }],
+    });
+    const t = montar();
+    try {
+      await tick();
+      expect(t.el.querySelector('.tab-questions')?.textContent).toBe('? 2');
+      expect(t.el.querySelector('.tab')?.getAttribute('aria-label')).toContain('2');
+    } finally { await unmount(t.comp); }
+  });
   // A marca ficou sem função quando a barra virou permanente ("expandir barra lateral" não quer
   // dizer nada no modo abas, onde a lateral está escondida de propósito), então virou o alternador
   // — pedido do usuário, 10/08/2026.

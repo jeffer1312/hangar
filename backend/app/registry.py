@@ -1331,6 +1331,10 @@ class SessionRegistry:
                     # torna visivel o unico modo de falha deste desenho — calado, a sessao ficaria
                     # eternamente "ociosa" enquanto trabalha.
                     info.problema = "codex_hooks_nao_aprovados"
+                from app.adapters import get_adapter
+                info.pending_questions, info.question = get_adapter("codex").async_question_status(info.name)
+                if info.pending_questions and info.state == "idle":
+                    info.state = "awaiting_input"
                 continue
             aprov = aprovacoes.get(info.name)
             if aprov is not None:

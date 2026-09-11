@@ -24,6 +24,7 @@ from typing import AsyncIterator, Callable, Optional
 
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex.appserver import AppServerClient
+from app.adapters.codex.async_questions import AsyncQuestions
 from app.adapters.codex.lancador import (APPROVAL, CLIENT_INFO, SANDBOX,
                                           comando_do_lancador)
 from app.hook_state import hook_state
@@ -508,6 +509,7 @@ class CodexAdapter:
                 delay = min(delay * 1.5, self.SUBSCRIBE_RETRY_MAX)
                 continue
             sess["subscribed"] = True
+            sess["async_questions"].hydrate(result.get("thread") or {})
             sess.pop("subscribe_error", None)
             # O resume tambem devolve o default da THREAD -> alimenta o display (pill/statusline).
             # `or` e nao setdefault: o attach() ja criou as chaves com None, entao setdefault nunca
@@ -516,8 +518,8 @@ class CodexAdapter:
             sess["default_effort"] = _effort_da_thread(result)
             if revision == sess.get("state_revision", 0):
                 self._restore_turn(sess, result.get("thread") or {})
-                for fila in sess.get("ouvintes", []):
-                    fila.put_nowait(self._question_state(name, sess))
+            for fila in sess.get("ouvintes", []):
+                fila.put_nowait(self._question_state(name, sess))
             _log.info("codex assinado: thread=%s name=%s", sess["thread_id"], name)
             return
 
@@ -564,8 +566,10 @@ class CodexAdapter:
                 "state": "idle", "in_progress": False,
                 "model": model, "effort": effort,
                 "default_model": default_model, "default_effort": default_effort,
-                "subscribed": subscribed, "ouvintes": []}
+                "subscribed": subscribed, "ouvintes": [], "async_questions": AsyncQuestions(thread_id)}
         self._sessions[name] = sess
+        if subscribed:
+            sess["async_questions"].hydrate({})
         self._start_bomba(name, sess)
         if watch_tmux:
             self._start_tmux_watcher(name)
@@ -709,21 +713,34 @@ class CodexAdapter:
             self.attach(name, client, thread_id, model=meta.get("model"), effort=meta.get("effort"),
                         default_model=result.get("model"), default_effort=_effort_da_thread(result),
                         watch_tmux=True, subscribed=True)
+            self._sessions[name]["async_questions"].hydrate(result.get("thread") or {})
             self._restore_turn(self._sessions[name], result.get("thread") or {})
             _log.info("codex ensure_running: resumed thread=%s name=%s", thread_id, name)
             return client
 
     async def warm_sessions(self) -> None:
         """Reconecta sidecars Codex em série, sem atrasar a subida do backend."""
-        for meta in codex_sessions.list_all():
+        for meta in await asyncio.to_thread(codex_sessions.list_all):
             name = meta.get("name")
             if not name:
+                continue
+            sess = self._sessions.get(name)
+            if sess and sess["thread_id"] == meta.get("thread_id") and not sess["client"].closed:
                 continue
             try:
                 await self.ensure_running(name)
             except Exception:
                 _log.warning("codex: aquecimento falhou name=%s", name, exc_info=True)
             await asyncio.sleep(0)
+
+    async def watch_sessions(self) -> None:
+        # Sessões abertas pelo terminal também precisam publicar perguntas antes de abrir o chat.
+        while True:
+            try:
+                await self.warm_sessions()
+            except Exception:
+                _log.exception("codex: falha ao descobrir sessões; nova tentativa no próximo ciclo")
+            await asyncio.sleep(2)
 
     def close_sync(self, name: str) -> None:
         """Encerramento SINCRONO do client vivo (chamado pelo registry.kill, que e sync). Manda
@@ -818,16 +835,39 @@ class CodexAdapter:
 
     def _question_state(self, name: str, sess: dict) -> StateEvent:
         from .questions import pending
-        question = pending(sess["client"], sess["thread_id"])
-        return StateEvent(session=name, state="awaiting_input" if question else sess["state"],
+        blocking = pending(sess["client"], sess["thread_id"])
+        question = blocking or sess["async_questions"].pending()
+        state = "awaiting_input" if blocking or (question and sess["state"] == "idle") else sess["state"]
+        return StateEvent(session=name, state=state,
                           status_line=self._status_line(sess), codex_mode=sess.get("mode"),
                           codex_question=question)
+
+    def async_question_status(self, name: str) -> tuple[int, str | None]:
+        sess = self._sessions.get(name)
+        if sess is None:
+            return 0, None
+        questions = sess["async_questions"]
+        first = questions.pending()
+        return questions.count, first["questions"][0]["question"] if first else None
 
     async def answer_questions(self, name: str, request_id: int | str | None, answers: list[dict]) -> None:
         from .questions import pending, response
         client = await self.ensure_running(name)
         if client is None:
             raise ValueError("A sessão não está disponível.")
+        if isinstance(request_id, str) and request_id.startswith("async:"):
+            sess = self._sessions[name]
+            async with self.delivery_lock(name):
+                if self._sessions.get(name) is not sess:
+                    raise ValueError("A conversa mudou antes da resposta.")
+                text = sess["async_questions"].response(request_id, answers)
+                # Mesmo envio da TUI: o app-server inicia ou orienta o turno da conversa de origem.
+                await client.request("turn/start", {"threadId": sess["thread_id"],
+                                                   "input": [{"type": "text", "text": text}]})
+                sess["async_questions"].record_answer(request_id, text)
+                for listener in sess.get("ouvintes", []):
+                    listener.put_nowait(self._question_state(name, sess))
+            return
         question = pending(client, self._sessions[name]["thread_id"])
         if question is None or request_id != question["request_id"] or type(request_id) is not type(question["request_id"]):
             raise ValueError("A pergunta já foi respondida ou cancelada.")
@@ -940,6 +980,8 @@ class CodexAdapter:
                 forward(sess, notif)
             mapped = map_state(notif)
             method = notif.get("method")
+            async_updated = method in {"item/started", "item/completed"} and \
+                sess["async_questions"].observe(params.get("item") or {})
             if mapped.state is not None:
                 sess["state_revision"] = sess.get("state_revision", 0) + 1
             settings_updated = method == "thread/settings/updated"
@@ -1007,7 +1049,7 @@ class CodexAdapter:
                 sess["token_usage"] = mapped.token_usage
             if mapped.rate_limits is not None:
                 sess["rate_limits"] = mapped.rate_limits
-            question_updated = method in ("item/tool/requestUserInput", "serverRequest/resolved")
+            question_updated = async_updated or method in ("item/tool/requestUserInput", "serverRequest/resolved")
             if mapped.state is None and mapped.token_usage is None and mapped.rate_limits is None and not settings_updated and not question_updated:
                 # Neutro (method desconhecido) ou so preview_delta: StateEvent nao tem campo de
                 # preview -> nada a emitir aqui (o preview ja foi empurrado acima, fora do

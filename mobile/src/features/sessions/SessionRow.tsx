@@ -66,6 +66,7 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
   const showCwd = !!s.cwd && cwd.base.toLowerCase() !== s.name.toLowerCase();
   const loop = loopBadge(s.loop_status, s.loop_iter, s.loop_max);
   const plan = planBadge(s);
+  const pendingQuestions = s.pending_questions ?? 0;
   const sub = s.question ?? (s.state === 'working' ? s.label : null) ?? null;
 
   const acoes = () => (
@@ -109,7 +110,7 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
           accessibilityRole="button"
           // rótulo composto: um label explícito no pai faz o RN descartar o texto dos filhos, e o
           // estado e a pergunta sumiriam do leitor de tela.
-          accessibilityLabel={`${s.name}, ${rotuloEstado(s.state)}${sub ? `, ${sub}` : ''}`}
+          accessibilityLabel={`${s.name}, ${rotuloEstado(s.state)}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}`}
           accessibilityActions={acoesA11y}
           onAccessibilityAction={({ nativeEvent }) => {
             if (nativeEvent.actionName === 'rename') onRenomear();
@@ -122,6 +123,7 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
           <View style={styles.col}>
             <View style={styles.linha1}>
               <Text style={[styles.nome, { color: theme.tokens.text.primary }]} numberOfLines={1}>{s.name}</Text>
+              {pendingQuestions > 0 ? <Chip tone="warning">{`? ${pendingQuestions}`}</Chip> : null}
               {providerTag(s.provider) ? <Chip>{providerTag(s.provider)!}</Chip> : null}
               {untracked ? <Chip tone="warning">{m.sessao_sem_id()}</Chip> : null}
             </View>

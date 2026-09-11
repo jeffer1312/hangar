@@ -41,7 +41,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // Linha secundária da sidebar: só o sinal acionável. O detalhe longo do spinner (modelo,
   // tokens, tempo) continua no tooltip, mas não vira texto permanente na lista.
   function sidebarStatus(s: AggSession): string | null {
-    if (s.state === 'awaiting_input') return s.question ?? null;
+    if (s.state === 'awaiting_input' || (s.pending_questions ?? 0) > 0) return s.question ?? null;
     if (s.state !== 'working') return null;
     const label = (s.label ?? '').trim();
     if (!label) return null;
@@ -702,6 +702,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         {@const contaChip = chipDaConta(s.conta)}
         {@const srvLabel = servers.find((sv) => sv.id === s.serverId)?.label ?? s.serverId}
         {@const estadoTxt = s.stalled ? m.sessao_pode_travada() : rotuloEstado(s.state)}
+        {@const pendingQuestions = s.pending_questions ?? 0}
+        {@const questionLabel = pendingQuestions > 0 ? `${m.ask_perguntas()}: ${pendingQuestions}` : ''}
         <!-- role=presentation: a row e so o wrapper flex — a semantica toda vive no .sess-main
              (button) e nos botoes irmaos. O hover aqui e decoracao redundante (a resposta ja esta no
              chat), entao nao pede equivalente de teclado. -->
@@ -725,9 +727,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               class:untracked={s.tracked === false}
               class:untracked-open={s.tracked === false && (s.provider === 'kimi' || s.provider === 'codex')}
               aria-pressed={model.selectMode ? model.selected.has(selKey) : undefined}
-              aria-label={!expanded ? `${s.name} · ${srvLabel} · ${estadoTxt}` : undefined}
+              aria-label={!expanded ? `${s.name} · ${srvLabel} · ${estadoTxt}${questionLabel ? ` · ${questionLabel}` : ''}` : undefined}
               title={!expanded
-                ? `${s.name} · ${srvLabel} · ${estadoTxt}${provTag ? ` · ${m.sessao_singular()} ${provTag}` : ''}`
+                ? `${s.name} · ${srvLabel} · ${estadoTxt}${questionLabel ? ` · ${questionLabel}` : ''}${provTag ? ` · ${m.sessao_singular()} ${provTag}` : ''}`
                 : (s.tracked === false ? untrackedReason(s.provider) : m.sessao_toque_renomear())}
               onpointerdown={() => { if (!model.selectMode && !sidebarPin.collapsed) pressStart(rowKey); }}
               onpointerup={pressEnd}
@@ -763,6 +765,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {/if}
                   {@const [l1, l2] = railLabel(s.name, item.label)}
                   <span class="rail-lbl" class:aguardando={s.state === 'awaiting_input' && !s.stalled}><b>{l1}</b><i>{l2}</i></span>
+                  {#if pendingQuestions > 0}
+                    <span class="sess-badge pending-questions rail-questions" title={questionLabel}>? {pendingQuestions}</span>
+                  {/if}
                 {:else if s.state === 'working' && !s.limited}
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarWorking size={18} /></span>
                 {:else}
@@ -789,14 +794,17 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               <span class="row-info">
                   <span class="name-row">
                     <span class="sess-name">{s.name}</span>
+                    {#if pendingQuestions > 0}
+                      <span class="sess-badge pending-questions" title={questionLabel} aria-label={questionLabel}>? {pendingQuestions}</span>
+                    {/if}
                     {#if s.tracked === false}<span class="sess-badge" title={untrackedReason(s.provider)}>{m.sessao_sem_id()}</span>{/if}
                   </span>
                   {#if sub}
                     <span
                       class="status-sub"
-                      class:asking={s.state === 'awaiting_input'}
-                      class:working={s.state === 'working'}
-                      title={s.state === 'awaiting_input' ? s.question : s.label}
+                      class:asking={s.state === 'awaiting_input' || pendingQuestions > 0}
+                      class:working={s.state === 'working' && pendingQuestions === 0}
+                      title={s.state === 'awaiting_input' || pendingQuestions > 0 ? s.question : s.label}
                     >{sub}</span>
                   {/if}
                   <!-- ⧉ = worktree ligada. Fora do bloco da branch de propósito: worktree com HEAD
@@ -1798,6 +1806,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     flex-shrink: 0; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm);
     background: var(--surface-raised); border: 1px solid var(--border-subtle); color: var(--warning); white-space: nowrap;
   }
+  .rail-questions { position: absolute; right: -4px; top: -4px; padding: 0 2px; }
   .sess-edit {
     flex: 1; min-width: 0; height: 38px; padding: 0 var(--space-2);
     background: var(--surface-inset); border: 1px solid var(--accent); border-radius: var(--radius-md);

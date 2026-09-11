@@ -54,6 +54,7 @@ export interface SessionInfo {
   label?: string | null;       // working: texto do spinner
   startup_steps?: string[];    // saída do lançador, em ordem, antes de abrir a conversa
   question?: string | null;    // awaiting_input: a pergunta
+  pending_questions?: number;
   options?: string[] | null;   // awaiting_input: rótulos das opções
   // True quando "working" ha mais de CP_STALL_SECONDS sem avancar (feature #7: watchdog de travada) —
   // so tinge a linha; o backend (stall_watch.py) e quem decide o push.
@@ -332,6 +333,7 @@ export interface AskQuestionItem {
   isSecret?: boolean;
 }
 export interface AskQuestionPayload {
+  is_async?: boolean;
   questions: AskQuestionItem[];
   provider?: 'codex';
   request_id?: string | number;

@@ -35,6 +35,7 @@ import * as m from '../paraglide/messages';
 
 
   const title = $derived(session.name);
+  const pendingQuestions = $derived(session.pending_questions ?? 0);
 
   const cwdPartes = $derived(cwdParts(session.cwd));
 
@@ -289,12 +290,15 @@ import * as m from '../paraglide/messages';
           />
         {:else}
           <span class="session-name">{title}</span>
+          {#if pendingQuestions > 0}
+            <span class="untracked-badge pending-questions" title={`${m.ask_perguntas()}: ${pendingQuestions}`} aria-label={`${m.ask_perguntas()}: ${pendingQuestions}`}>? {pendingQuestions}</span>
+          {/if}
         {/if}
         {#if untracked}
           <span class="untracked-badge" title={untrackedReason(session.provider)}>⚠ {m.sessao_sem_id()}</span>
         {/if}
       </span>
-      {#if session.state === 'awaiting_input' && session.question}
+      {#if (session.state === 'awaiting_input' || pendingQuestions > 0) && session.question}
         <span class="status-sub asking" title={session.question}>{session.question}</span>
       {:else if session.state === 'working' && session.label}
         <span class="status-sub working" title={session.label}>{session.label}</span>
