@@ -40,13 +40,16 @@
     sufixo?: string;
     secao: Props['secao'];
     opcoes?: { value: string; label: string }[];
+    veredito?: string;
+    motivo?: string;
   }
 
   const CAMPOS: Campo[] = [
     { chave: 'upload_retention_days', rotulo: m.config_server_guardar_anexos(), tipo: 'numero', sufixo: m.config_server_dias(), secao: 'anexos',
       ajuda: m.config_server_guardar_ajuda() },
     { chave: 'automations', rotulo: m.config_server_automacoes(), tipo: 'liga', secao: 'avancado',
-      ajuda: m.config_server_automacoes_ajuda() },
+      ajuda: m.config_server_automacoes_ajuda(),
+      veredito: m.config_motores_recomendado_ligado(), motivo: m.config_server_automacoes_porque() },
     // Não mora no runtime-config.json como os outros: escreve `showThinkingSummaries` no
     // settings.json do Claude Code (app/pensamento.py). Vale só pra sessão NOVA.
     { chave: 'mostrar_pensamento', rotulo: m.config_server_pensamento(), tipo: 'liga', secao: 'avancado',
@@ -123,7 +126,7 @@
   {:else}
     <div class="lista">
       {#each visiveis as c (c.chave)}
-        <LinhaConfig campo={c} {store} />
+        <LinhaConfig campo={c} {store} veredito={c.veredito} motivo={c.motivo} />
       {/each}
     </div>
 

@@ -405,6 +405,28 @@
   function texto(i: ItemHarness): string { return (TEXTOS[i.codigo] ?? (() => i.codigo))(i.params); }
   function rotulo(i: ItemHarness): string { return (ROTULOS[i.id] ?? (() => i.id))(); }
 
+  // Veredito + "por quê?" das linhas que hoje só listam nome de arquivo ou contagem. A cobertura é
+  // DECLARADA card a card, nunca herdada de o id coincidir: "Hooks" no Claude e no Kimi são os
+  // avisos que o CLI manda pro app, mas no Codex a mesma linha lista os hooks do próprio usuário
+  // importados — lá as duas frases seriam falsas. Card novo com um id conhecido não herda a
+  // explicação calado: fica sem, até alguém declarar.
+  const PORQUE: Record<string, { vered: () => string; motivo: () => string; harnesses: string[] }> = {
+    credenciais: { vered: m.harness_item_credenciais_vered, motivo: m.harness_item_credenciais_porque,
+                   harnesses: ['codex', 'pi', 'omp', 'kimi'] },
+    extensoes: { vered: m.harness_item_extensoes_vered, motivo: m.harness_item_extensoes_porque,
+                 harnesses: ['pi', 'omp'] },
+    skills: { vered: m.harness_item_skills_vered, motivo: m.harness_item_skills_porque,
+              harnesses: ['pi', 'kimi'] },
+    hooks: { vered: m.harness_item_hooks_vered, motivo: m.harness_item_hooks_porque,
+             harnesses: ['claude', 'kimi'] },
+    contas: { vered: m.harness_item_contas_vered, motivo: m.harness_item_contas_porque,
+              harnesses: ['claude'] },
+  };
+  function porque(item: ItemHarness, harness: string) {
+    const p = PORQUE[item.id];
+    return p?.harnesses.includes(harness) ? p : null;
+  }
+
   const ETAPAS_INST: Record<string, () => string> = {
     comando: m.harness_inst_etapa_comando,
     conferir: m.harness_inst_etapa_conferir,
@@ -457,6 +479,15 @@
                 : (i.ok === false ? m.harness_consertar() : m.harness_refazer())}</button>
           {/if}
         </div>
+        <!-- Fora da linha, não dentro do texto dela: a linha é uma faixa flex com marca, texto e
+             botão na mesma altura, e o motivo aberto é um parágrafo de altura variável. -->
+        {@const pq = porque(i, h.id)}
+        {#if pq}
+          <details class="cfg-porque hs-porque">
+            <summary><span class="cfg-vered">{pq.vered()}</span> <span class="cfg-pq">{m.config_motores_por_que()}<span class="cfg-chev" aria-hidden="true">▾</span></span></summary>
+            <p class="cfg-motivo">{pq.motivo()}</p>
+          </details>
+        {/if}
       {/each}
       {#if h.id === 'claude'}
         {#if campos?.claude_statusline_update}
@@ -543,6 +574,10 @@
               disabled={integracaoOcupada}
               >{integracaoOcupada ? m.harness_codex_executando() : m.harness_codex_reconciliar()}</button>
           </div>
+          <details class="cfg-porque hs-porque">
+            <summary><span class="cfg-vered">{m.harness_codex_reconciliar_vered()}</span> <span class="cfg-pq">{m.config_motores_por_que()}<span class="cfg-chev" aria-hidden="true">▾</span></span></summary>
+            <p class="cfg-motivo">{m.harness_codex_reconciliar_porque()}</p>
+          </details>
           {#if integracao}
             <label class="hs-item hs-automatica">
               <span class="hs-item-txt">
@@ -676,6 +711,9 @@
   .hs-beta { display: inline-block; margin-left: var(--space-1); padding: 1px 6px; border-radius: var(--radius-full);
              background: var(--accent-dim); color: var(--accent); font-size: 10px; font-style: normal; text-transform: uppercase; }
   .hs-ajuda { display: block; font-size: var(--text-xs); color: var(--text-muted); }
+  /* `.cfg-porque` é global (app.css). O recuo alinha o motivo com o texto da linha, e não com a
+     marca ✓/✕ dela (16px da marca + o gap da faixa). */
+  .hs-porque { margin-left: calc(16px + var(--space-2)); }
   .hs-btn { flex-shrink: 0; min-height: 0; height: 26px; padding: 0 var(--space-2);
             font-size: var(--text-xs); border-radius: var(--radius-sm);
             background: var(--surface-raised); border: 1px solid var(--border-subtle); color: var(--text-primary); }

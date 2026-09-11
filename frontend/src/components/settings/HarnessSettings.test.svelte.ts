@@ -243,6 +243,58 @@ describe('integração do Codex em Harnesses', () => {
     expect(caixa.checked).toBe(false);
     expect(chamadasIntegracao()).toHaveLength(2);
   });
+
+  it('o "por quê?" de Reconciliar abre o motivo, e ele nasce recolhido', async () => {
+    const { el } = await montar();
+    const d = [...el.querySelectorAll('details.cfg-porque')].find(
+      (x) => x.querySelector('summary')?.textContent?.includes(m.harness_codex_reconciliar_vered()),
+    ) as HTMLDetailsElement | undefined;
+    expect(d).toBeDefined();
+    expect(d!.open).toBe(false);
+    expect(d!.querySelector('summary')!.textContent).toContain(m.config_motores_por_que());
+    expect(d!.querySelector('.cfg-motivo')!.textContent).toBe(m.harness_codex_reconciliar_porque());
+    // Abrir é do elemento nativo: o teste exercita o atributo, que é o que o clique do navegador
+    // troca — happy-dom não roda o comportamento padrão do <summary>.
+    d!.open = true;
+    expect(d!.open).toBe(true);
+    // E mora no card do Codex, junto do botão que ele explica.
+    expect(d!.closest('.hs-integracao')).not.toBeNull();
+  });
+
+  it('linha de item só ganha o "por quê?" quando a explicação existe pra ela', async () => {
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (String(url).endsWith(ROTA)) return ler(String(url), init);
+      if (String(url).endsWith(ROTA_INST)) return resposta(ociosa);
+      if (String(url).endsWith(ROTA_CONFIG)) return lerConfig(init);
+      if (String(url).endsWith(ROTA_CODEX)) return lerOpcoesCodex(init);
+      // Os DOIS cards que têm o item `hooks`: no Kimi a linha são os avisos que o CLI manda pro
+      // app; no Codex são os hooks do próprio usuário importados, e a mesma frase seria falsa.
+      return resposta([
+        { id: 'kimi', nome: 'Kimi', instalado: true, versao: '1', itens: [
+          { id: 'hooks', codigo: 'hooks_nenhum', ok: false, params: {}, conserto: null },
+          { id: 'mcp', codigo: 'mcp_nenhum', ok: true, params: {}, conserto: null },
+        ] },
+        { id: 'codex', nome: 'Codex', instalado: true, versao: '1', itens: [
+          { id: 'hooks', codigo: 'hooks_codex', ok: true, info: true, params: { n: '17', eventos: 'Stop' }, conserto: null },
+        ] },
+      ]);
+    });
+    const { el } = await montar();
+    /** [card, rótulo da linha, ganhou o bloco?] — o par é o que decide, não o id sozinho. */
+    const explicadas = [...el.querySelectorAll('.hs-card')].flatMap((card) =>
+      [...card.querySelectorAll('.hs-item')].map((linha) => [
+        card.querySelector('.hs-nome')?.textContent,
+        linha.querySelector('b')?.textContent,
+        linha.nextElementSibling?.classList.contains('cfg-porque') ?? false,
+      ]),
+    );
+    expect(explicadas).toContainEqual(['Kimi', m.harness_item_hooks(), true]);
+    // O furo da rodada 1: o mesmo id, no card onde a frase não vale.
+    expect(explicadas).toContainEqual(['Codex', m.harness_item_hooks(), false]);
+    // Controle de "id sem entrada nenhuma".
+    expect(explicadas).toContainEqual(['Kimi', m.harness_item_mcp(), false]);
+    expect(el.textContent).toContain(m.harness_item_hooks_porque());
+  });
 });
 
 // Vinham das folhas "Opções" (uma por harness), que deixaram de existir: o que elas mostravam e

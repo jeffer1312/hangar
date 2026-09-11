@@ -4,6 +4,7 @@
   import { getPushSettings, getPushSettingsForServer, setQuietHours, setQuietHoursForServer } from '@hangar/core';
   import { QuietHoursController, type PushTarget, type QuietState } from '../lib/quietHours';
   import type { Server } from '../lib/auth';
+  import EscopoChip from './settings/EscopoChip.svelte';
   import * as m from '../paraglide/messages';
 
   // Ativação de push + horas silenciosas, com alvo explícito: global (desktop), servidor específico
@@ -73,7 +74,14 @@
   <div class="pq-quiet-head">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
     <span>{m.push_horas_silenciosas()}</span>
+    <!-- A janela de silêncio é gravada no servidor (global ou de um servidor escolhido), não neste
+         aparelho: sem a etiqueta ela se lê como preferência local do navegador. -->
+    <EscopoChip escopo="servidor" />
   </div>
+  <details class="cfg-porque pq-porque">
+    <summary><span class="cfg-vered">{m.push_horas_silenciosas_vered()}</span> <span class="cfg-pq">{m.config_motores_por_que()}<span class="cfg-chev" aria-hidden="true">▾</span></span></summary>
+    <p class="cfg-motivo">{m.push_horas_silenciosas_porque()}</p>
+  </details>
   <div class="pq-quiet-row">
     <input type="time" bind:value={estado.qhStart} aria-label={m.push_inicio_silencio()} disabled={target.mode === 'unavailable' || estado.loading || estado.saving} />
     <span>{m.push_e()}</span>
@@ -99,8 +107,13 @@
   .pq-msg { font-size: var(--text-xs); color: var(--text-muted); padding: 2px var(--space-4) var(--space-1); }
 
   /* Horas silenciosas: cabeçalho (ícone + rótulo) + par de <input type="time"> + Salvar. */
-  .pq-quiet { padding: var(--space-1) var(--space-4) var(--space-2); }
-  .pq-quiet-head { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-secondary); padding: var(--space-1) 0; }
+  /* Container da etiqueta de escopo: quem aperta é a largura DESTE bloco (o popover da conta é
+     estreito; o painel de Notificações, não), nunca a da janela. */
+  .pq-quiet { container-type: inline-size; padding: var(--space-1) var(--space-4) var(--space-2); }
+  /* `wrap`: apertado, a etiqueta desce inteira em vez de espremer o rótulo. */
+  .pq-quiet-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-secondary); padding: var(--space-1) 0; }
+  /* `.cfg-porque` é global (app.css); aqui só o respiro até o par de horários. */
+  .pq-porque { margin-bottom: var(--space-1); }
   .pq-quiet-head svg { flex-shrink: 0; color: var(--text-secondary); }
   .pq-quiet-row { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-secondary); }
   .pq-quiet-row input[type='time'] {

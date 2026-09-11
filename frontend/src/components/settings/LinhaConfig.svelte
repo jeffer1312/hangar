@@ -40,9 +40,9 @@
     {#if veredito && motivo}
       <!-- Elemento nativo de expandir/recolher: teclado e estado saem de graça, sem $state nem
            aria próprio. -->
-      <details class="porque">
-        <summary><span class="vered">{veredito}</span> <span class="pq">{m.config_motores_por_que()}</span></summary>
-        <p class="motivo">{motivo}</p>
+      <details class="cfg-porque">
+        <summary><span class="cfg-vered">{veredito}</span> <span class="cfg-pq">{m.config_motores_por_que()}<span class="cfg-chev" aria-hidden="true">▾</span></span></summary>
+        <p class="cfg-motivo">{motivo}</p>
       </details>
     {/if}
   </div>
@@ -140,23 +140,8 @@
      texto longo o bastante numa tela estreita). */
   .ajuda { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; min-width: 0; }
 
-  /* Veredito + "por quê?": mesma leitura do acordeão do formulário de modelo, com o <details>
-     nativo no lugar do estado próprio. */
-  .porque { font-size: 11px; }
-  /* 24px é o alvo mínimo de toque (WCAG 2.5.8): sem o marcador nativo, o `summary` de 11px ficava
-     com 17px de altura clicável. */
-  .porque summary {
-    display: flex; align-items: center; gap: var(--space-1);
-    min-height: 24px; cursor: pointer; list-style: none;
-  }
-  .porque summary::-webkit-details-marker { display: none; }
-  .vered { color: var(--text-muted); }
-  .pq { color: var(--accent); }
-  .porque summary:hover .pq { text-decoration: underline; }
-  .motivo {
-    margin: var(--space-1) 0 0;
-    font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5; max-width: 62ch;
-  }
+  /* `.cfg-porque` é global (app.css): a mesma leitura aparece nos cards que não usam esta linha
+     (Harnesses, Voz, Orquestração, Horas silenciosas). */
 
   input[type='text'], input[type='number'] {
     height: 40px;

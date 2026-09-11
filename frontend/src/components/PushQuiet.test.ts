@@ -11,6 +11,7 @@ import * as api from '@hangar/core';
 import type { PushTarget } from '../lib/quietHours';
 import type { Server } from '../lib/auth';
 import { overwriteGetLocale } from '../paraglide/runtime';
+import * as m from '../paraglide/messages';
 
 beforeEach(() => overwriteGetLocale(() => 'pt'));
 
@@ -121,6 +122,21 @@ describe('PushQuiet runtime (1 GET por abertura/alvo estável)', () => {
     const t = montar({ mode: 'server', server: srv });
     await tick();
     expect(apiMock.getPushSettingsForServer).toHaveBeenCalledWith(srv);
+    unmount(t.comp as never);
+  });
+
+  // A janela de silêncio grava no servidor: sem a etiqueta ela se lê como preferência do aparelho,
+  // que é a confusão que o chip de escopo existe pra tirar.
+  it('Horas silenciosas diz o escopo e traz o veredito com o "por quê?"', async () => {
+    const t = montar({ mode: 'global' });
+    await tick();
+    const cab = t.el.querySelector('.pq-quiet-head')!;
+    expect(cab.textContent).toContain(m.push_horas_silenciosas());
+    expect(cab.querySelector('.escopo')!.textContent).toBe(m.config_escopo_servidor());
+    const d = t.el.querySelector<HTMLDetailsElement>('details.cfg-porque')!;
+    expect(d.open).toBe(false);
+    expect(d.querySelector('summary')!.textContent).toContain(m.push_horas_silenciosas_vered());
+    expect(d.querySelector('.cfg-motivo')!.textContent).toBe(m.push_horas_silenciosas_porque());
     unmount(t.comp as never);
   });
 });

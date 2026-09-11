@@ -652,6 +652,42 @@ button:active:not(:disabled) {
 .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .switch:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* ── Veredito + "por quê?" ──────────────────────────────────────────── */
+/* Mesmo motivo do `.switch` acima: a mesma leitura aparece na linha genérica de configuração e
+   dentro dos cards (Harnesses, Voz, Orquestração, Horas silenciosas), que não usam aquela linha.
+   O `<details>` nativo carrega teclado e estado; aqui só a aparência.
+   `summary` com 24px de altura porque o texto tem 11px e o alvo mínimo de toque é 24 (WCAG 2.5.8). */
+.cfg-porque {
+  font-size: 11px;
+}
+.cfg-porque > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-height: 24px;
+  cursor: pointer;
+  list-style: none;
+}
+.cfg-porque > summary::-webkit-details-marker { display: none; }
+.cfg-vered { color: var(--text-muted); }
+.cfg-pq { color: var(--accent); }
+.cfg-porque > summary:hover .cfg-pq { text-decoration: underline; }
+/* A seta é a única pista visual de "isto abre e fecha" — o marcador nativo não sobrevive ao
+   `display: flex` do summary, e quem não lê o texto miúdo ficaria sem nenhuma. Mesma seta do
+   acordeão do formulário de modelo. */
+/* `inline-block` não é cosmética: elemento inline ignora `transform`, e a seta ficaria parada. */
+.cfg-chev { display: inline-block; margin-left: 2px; font-size: 8px; transition: transform 160ms var(--ease-out); }
+.cfg-porque[open] .cfg-chev { transform: rotate(180deg); }
+.cfg-porque > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cfg-motivo {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
 /* ── Animations ──────────────────────────────────────────────────────── */
 @keyframes spin {
   from { transform: rotate(0deg); }

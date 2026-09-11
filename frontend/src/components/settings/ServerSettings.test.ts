@@ -286,3 +286,34 @@ describe('ServerSettings — respiro do rodapé', () => {
     alvo.remove();
   });
 });
+
+describe('ServerSettings — veredito de Automações', () => {
+  /** O bloco de veredito que fica ABAIXO de um rótulo: é assim que a pessoa liga um ao outro. */
+  function porQueDe(el: HTMLElement, rotulo: string) {
+    return [...el.querySelectorAll('details.cfg-porque')].find(
+      (d) => d.closest('.linha')?.textContent?.includes(rotulo),
+    ) as HTMLDetailsElement | undefined;
+  }
+
+  it('Automações mostra a recomendação, e o "por quê?" traz o motivo', async () => {
+    const t = montar();
+    await tick();
+    const d = porQueDe(t.el, m.config_server_automacoes());
+    expect(d).toBeDefined();
+    expect(d!.querySelector('summary')!.textContent).toContain(m.config_motores_recomendado_ligado());
+    expect(d!.querySelector('summary')!.textContent).toContain(m.config_motores_por_que());
+    expect(d!.querySelector('.cfg-motivo')!.textContent).toBe(m.config_server_automacoes_porque());
+    // Nasce recolhido: o motivo é o que a pessoa pede, não o que ela recebe de cara.
+    expect(d!.open).toBe(false);
+    unmount(t.comp);
+    t.el.remove();
+  });
+
+  it('linha sem veredito não ganha o bloco', async () => {
+    const t = montar();
+    await tick();
+    expect(porQueDe(t.el, m.config_server_editor())).toBeUndefined();
+    unmount(t.comp);
+    t.el.remove();
+  });
+});

@@ -61,11 +61,17 @@
   // colapsado, e isso deixaria a tela "dizendo" o endpoint do LLM mesmo com o acordeão fechado.
   let avancadoAberto = $state(false);
   let avancadoDecidido = $state(false);
-  const CAMPOS_LLM = [
+  // Tipado à mão porque só uma das linhas tem veredito: sem a anotação, o TypeScript infere a
+  // união dos objetos e ler `c.veredito` nas outras vira erro.
+  const CAMPOS_LLM: {
+    chave: string; tipo: 'texto' | 'segredo' | 'escolha'; rotulo: string; ajuda: string;
+    opcoes?: { value: string; label: string }[]; veredito?: string; motivo?: string;
+  }[] = [
     { chave: 'llm_base_url', tipo: 'texto' as const, rotulo: m.config_server_endpoint_llm(), ajuda: m.config_server_endpoint_llm_ajuda() },
     { chave: 'llm_api_key', tipo: 'segredo' as const, rotulo: m.config_server_chave_llm(), ajuda: m.config_server_chave_llm_ajuda() },
     { chave: 'llm_model', tipo: 'texto' as const, rotulo: m.config_server_modelo_llm(), ajuda: m.config_server_modelo_llm_ajuda() },
     { chave: 'llm_reasoning_effort', tipo: 'escolha' as const, rotulo: m.config_server_raciocinio_llm(), ajuda: m.config_server_raciocinio_llm_ajuda(),
+      veredito: m.config_motores_recomendado_none(), motivo: m.config_server_raciocinio_llm_porque(),
       opcoes: [{ value: '', label: m.config_server_raciocinio_padrao() },
                { value: 'none', label: 'none' }, { value: 'low', label: 'low' },
                { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }] },
@@ -233,7 +239,7 @@
         {#if avancadoAberto}
           <div class="detalhes-corpo">
             {#each CAMPOS_LLM as c (c.chave)}
-              <LinhaConfig campo={c} {store} />
+              <LinhaConfig campo={c} {store} veredito={c.veredito} motivo={c.motivo} />
             {/each}
           </div>
         {/if}
@@ -312,7 +318,8 @@
         </div>
       {/if}
       <LinhaConfig campo={CAMPO_MAX_CHARS} {store} />
-      <LinhaConfig campo={CAMPO_CMD_LOCAL} {store} />
+      <LinhaConfig campo={CAMPO_CMD_LOCAL} {store}
+        veredito={m.config_server_comando_voz_vered()} motivo={m.config_server_comando_voz_porque()} />
     </section>
   {/if}
 
