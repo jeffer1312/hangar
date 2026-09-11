@@ -36,8 +36,13 @@
   let contaSelecionada = $derived(contasCodex.find((conta) => conta.id === contaCodex) ?? null);
   let erroIntegracao = $state('');
   let reconciliando = $state(false);
-  let integracaoOcupada = $derived(reconciliando || (contaCodex === 'default'
-    ? integracao?.estado === 'executando' : syncConta?.status === 'running'));
+  // O `!erroIntegracao` é o que destrava o botão quando a conexão cai NO MEIO do polling: ali o
+  // último estado lido continua sendo `executando`, mas ninguém mais vai perguntar (o catch não
+  // reagenda), então o card ficava preso em "Executando…" com o botão desabilitado para sempre.
+  // Erro significa que não se sabe mais se está rodando — e quem não sabe tem que poder tentar.
+  // Apertar o botão limpa o erro na entrada de `consultarIntegracao`, então o ciclo se rearma.
+  let integracaoOcupada = $derived(reconciliando || (!erroIntegracao && (contaCodex === 'default'
+    ? integracao?.estado === 'executando' : syncConta?.status === 'running')));
   interface ConsultaIntegracao {
     alvo: Server | null;
     controle: AbortController;

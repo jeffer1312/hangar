@@ -413,7 +413,10 @@ async def test_status_is_read_only_and_private_state_is_restricted(isolated, fak
 
     status = sync.preparation_status(account)
 
-    assert set(status) == {"status", "trust_pending", "issues"}
+    # Conjunto EXATO, e continua exato: a trava existe pra barrar estado interno vazando no status
+    # público. `etapa` e `herdado` entram porque são contrato com a tela — ela mostra em que passo a
+    # herança está e quanto a conta recebeu de cada tipo. Campo novo aqui exige decidir se é público.
+    assert set(status) == {"status", "trust_pending", "issues", "etapa", "herdado"}
     assert status["status"] == "ready"
     assert len(fake_writer) == before
     state = sync._state_path(account)

@@ -103,7 +103,14 @@ async def test_lifespan_nao_reconcilia_sozinho_e_fecha_a_integracao(tmp_path, mo
     async def nada(*args):
         pass
 
-    servico = SimpleNamespace(fechar=fechar, iniciar=Mock(side_effect=AssertionError("não devia iniciar")))
+    # `atualizar_e_aguardar` entra aqui porque o lifespan LÊ o atributo pra passar ao
+    # CodexContasLogin (api.py). Ler não é chamar, e o side_effect prova isso: se a subida
+    # reconciliar sozinha, o teste quebra dizendo por quê — mesma receita do `iniciar`.
+    servico = SimpleNamespace(
+        fechar=fechar,
+        iniciar=Mock(side_effect=AssertionError("não devia iniciar")),
+        atualizar_e_aguardar=Mock(side_effect=AssertionError("não devia reconciliar")),
+    )
     monkeypatch.setattr(codex_integracao, "SERVICO", servico)
     monkeypatch.setattr(api, "list_config_dirs", lambda: [])
     monkeypatch.setattr(api, "_backend_config_base", lambda: tmp_path)

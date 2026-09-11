@@ -35,8 +35,21 @@ def _pegar(cliente, arquivo, **kw):
                        headers={"Authorization": "Bearer secret", **kw.pop("headers", {})}, **kw)
 
 
+# A trava da rota e `citation_cwds`, que devolve caminho citado -> cwds que o citaram. Dublar a
+# antiga `path_in_transcript` nao move nada: ela nao e mais chamada, e os tres testes de sucesso
+# batiam no 403 do caminho real. O caso NEGATIVO passava por acidente pelo mesmo motivo — dicionario
+# vazio ali e o que faz a prova valer de verdade. Lista de cwds vazia = so o cwd da sessao serve de
+# base, que e o que estes testes querem.
+def _citado(monkeypatch):
+    monkeypatch.setattr(transcript, "citation_cwds", lambda jsonl, needles: {n: [] for n in needles})
+
+
+def _nao_citado(monkeypatch):
+    monkeypatch.setattr(transcript, "citation_cwds", lambda jsonl, needles: {})
+
+
 def test_anexo_volta_com_cache_e_etag(cliente, sessao, monkeypatch):
-    monkeypatch.setattr(transcript, "path_in_transcript", lambda *a: True)
+    _citado(monkeypatch)
     (sessao / "foto.png").write_bytes(b"\x89PNG-um")
 
     r = _pegar(cliente, "foto.png")
@@ -47,7 +60,7 @@ def test_anexo_volta_com_cache_e_etag(cliente, sessao, monkeypatch):
 
 
 def test_mesmo_etag_volta_304_sem_corpo(cliente, sessao, monkeypatch):
-    monkeypatch.setattr(transcript, "path_in_transcript", lambda *a: True)
+    _citado(monkeypatch)
     (sessao / "foto.png").write_bytes(b"\x89PNG-um")
 
     etag = _pegar(cliente, "foto.png").headers["etag"]
@@ -60,7 +73,7 @@ def test_mesmo_etag_volta_304_sem_corpo(cliente, sessao, monkeypatch):
 def test_arquivo_reescrito_invalida_o_etag(cliente, sessao, monkeypatch):
     """O ETag carrega mtime+tamanho: reescrever no MESMO caminho tem que voltar a mandar o corpo,
     senao um mock regenerado ficaria preso na versao velha ate o navegador desistir sozinho."""
-    monkeypatch.setattr(transcript, "path_in_transcript", lambda *a: True)
+    _citado(monkeypatch)
     alvo = sessao / "mock.html"
     alvo.write_text("<p>um</p>", encoding="utf-8")
     etag_velho = _pegar(cliente, "mock.html").headers["etag"]
@@ -77,7 +90,7 @@ def test_arquivo_reescrito_invalida_o_etag(cliente, sessao, monkeypatch):
 def test_304_nao_fura_a_trava_do_transcript(cliente, sessao, monkeypatch):
     """304 e resposta SOBRE um arquivo: quem nao pode ve-lo tambem nao pode saber que ele mudou.
     Sem esta ordem, um If-None-Match viraria oraculo de existencia/mtime de qualquer caminho."""
-    monkeypatch.setattr(transcript, "path_in_transcript", lambda *a: False)
+    _nao_citado(monkeypatch)
     (sessao / "segredo.png").write_bytes(b"x")
 
     r = _pegar(cliente, "segredo.png", headers={"If-None-Match": '"qualquer"'})
