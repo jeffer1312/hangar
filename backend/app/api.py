@@ -191,10 +191,6 @@ def _codex_require_idle_preparation(account, service) -> None:
         raise HTTPException(503, detail=erro("codex_account_service_unavailable",
                                              "serviço de contas Codex indisponível"))
     status = service.preparation_status(account)
-    if status.get("status") == "running":
-        raise HTTPException(409, detail=erro("codex_account_preparing",
-                                             "a preparação da conta Codex está em andamento",
-                                             account_id=account.id))
     if status.get("status") != "ready":
         _log.warning("conta Codex %s com sincronização %s; pendências: %s",
                      account.id, status.get("status"),
@@ -220,6 +216,29 @@ def _codex_account_in_use(account) -> bool:
             if owner is not None and owner.id == account.id:
                 return True
     return False
+
+
+def _start_codex_preparation(account, service) -> None:
+    if account is None or account.is_default or service is None:
+        return
+    task = asyncio.create_task(service.prepare(account), name=f"codex-prepare-{account.id}")
+    tasks = getattr(app.state, "codex_creation_tasks", None)
+    if tasks is None:
+        tasks = set()
+        app.state.codex_creation_tasks = tasks
+    tasks.add(task)
+
+    def finished(done: asyncio.Task) -> None:
+        tasks.discard(done)
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            _log.warning("sincronização automática da conta Codex %s falhou", account.id,
+                         exc_info=True)
+
+    task.add_done_callback(finished)
 
 
 class _BodyTooLarge(Exception):
@@ -1830,6 +1849,7 @@ async def create_session(body: CreateBody):
                 raise
             _hold_codex_lease(info.name, codex_lease)
             codex_lease = None
+            _start_codex_preparation(codex_account_obj, codex_service)
             raise
         except BaseException:
             codex_lease.release()
@@ -1837,6 +1857,7 @@ async def create_session(body: CreateBody):
             raise
         _hold_codex_lease(info.name, codex_lease)
         codex_lease = None
+        _start_codex_preparation(codex_account_obj, codex_service)
         return info
 
     # Reconciliar e criar a sessão sob a MESMA trava (ciclo_conta), só no caminho que consome o

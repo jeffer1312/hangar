@@ -50,14 +50,14 @@ describe('contas e servidor explícito', () => {
     await getCredentialsForServer(server, true);
     await getCodexAccountsForServer(server);
     await createCodexAccountForServer(server, 'work');
-    await prepareCodexAccountForServer(server, 'work /');
+    await prepareCodexAccountForServer(server, 'work /', true);
     await getCodexPreparationForServer(server, 'work /');
     await startCodexAccountLoginForServer(server, 'work /');
     await getCodexAccountLoginForServer(server, 'work /');
     await cancelCodexAccountLoginForServer(server, 'work /', 'attempt /?');
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       'https://b.test/api/credenciais?forcar=true', 'https://b.test/api/codex-contas',
-      'https://b.test/api/codex-contas', 'https://b.test/api/codex-contas/work%20%2F/prepare',
+      'https://b.test/api/codex-contas', 'https://b.test/api/codex-contas/work%20%2F/prepare?forcar=true',
       'https://b.test/api/codex-contas/work%20%2F/prepare', 'https://b.test/api/codex-contas/work%20%2F/login',
       'https://b.test/api/codex-contas/work%20%2F/login',
       'https://b.test/api/codex-contas/work%20%2F/login?attempt_id=attempt%20%2F%3F',

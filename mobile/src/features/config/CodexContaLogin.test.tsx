@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexContaLogin } from './CodexContaLogin';
 
 const calls = vi.hoisted(() => ({
-  create: vi.fn(), prepare: vi.fn(), start: vi.fn(), read: vi.fn(), cancel: vi.fn(), accounts: vi.fn(),
+  create: vi.fn(), prepare: vi.fn(), preparation: vi.fn(), start: vi.fn(), read: vi.fn(), cancel: vi.fn(), accounts: vi.fn(),
   open: vi.fn(), copy: vi.fn(), foreground: undefined as undefined | ((state: string) => void),
 }));
 const server = { id: 'b', label: 'B', baseUrl: 'https://b.local', token: 'test' };
@@ -29,6 +29,7 @@ vi.mock('@hangar/core', async original => ({
   ...await original<typeof import('@hangar/core')>(),
   createCodexAccountForServer: calls.create,
   prepareCodexAccountForServer: calls.prepare,
+  getCodexPreparationForServer: calls.preparation,
   startCodexAccountLoginForServer: calls.start,
   getCodexAccountLoginForServer: calls.read,
   cancelCodexAccountLoginForServer: calls.cancel,
@@ -36,10 +37,12 @@ vi.mock('@hangar/core', async original => ({
 }));
 
 beforeEach(() => {
-  for (const call of [calls.create, calls.prepare, calls.start, calls.read, calls.cancel, calls.accounts, calls.open, calls.copy]) call.mockReset();
+  for (const call of [calls.create, calls.prepare, calls.preparation, calls.start, calls.read, calls.cancel, calls.accounts,
+    calls.open, calls.copy]) call.mockReset();
   calls.foreground = undefined;
   calls.accounts.mockResolvedValue([]);
   calls.prepare.mockResolvedValue(ready);
+  calls.preparation.mockResolvedValue(ready);
   calls.read.mockResolvedValue(null);
   calls.open.mockResolvedValue(true);
   calls.copy.mockResolvedValue(true);
@@ -53,7 +56,8 @@ function click(container: HTMLElement, text: string) {
         || (text === 'Entrar' && button.getAttribute('aria-label') === 'Sign in')
         || (text === 'Copiar código' && button.getAttribute('aria-label') === 'Copy code')
         || (text === 'Abrir link' && button.getAttribute('aria-label') === '↗ Open link in browser')
-        || (text === 'Cancelar login' && button.getAttribute('aria-label') === 'Cancel sign-in'))!
+        || (text === 'Cancelar login' && button.getAttribute('aria-label') === 'Cancel sign-in')
+        || (text === 'Reconciliar agora' && button.getAttribute('aria-label') === 'Reconcile now'))!
       .click();
   });
 }
@@ -65,6 +69,16 @@ function render(accountId?: string) {
 }
 
 describe('CodexContaLogin', () => {
+  it('reconcilia manualmente a conta escolhida sem iniciar outro login', async () => {
+    const { container, root } = render('work');
+    try {
+      await act(async () => root.render(createElement(CodexContaLogin, { server, accountId: 'work', onComplete: vi.fn() })));
+      await click(container, 'Reconciliar agora');
+      expect(calls.prepare).toHaveBeenCalledWith(server, 'work', true);
+      expect(calls.start).not.toHaveBeenCalled();
+    } finally { await act(async () => root.unmount()); }
+  });
+
   it('mantém servidor/conta/tentativa ao copiar, voltar do navegador e cancelar', async () => {
     const { container, root } = render('work');
     calls.start.mockResolvedValue(attempt);

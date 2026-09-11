@@ -740,8 +740,9 @@ export function deleteCodexAccountForServer(server: Server, id: string): Promise
 function codexAccountPath(id: string, action: string): string {
   return `/api/codex-contas/${encodeURIComponent(id)}/${action}`;
 }
-export function prepareCodexAccountForServer(server: Server, id: string): Promise<CodexAccount['sync']> {
-  return apiFetchForServer(server, codexAccountPath(id, 'prepare'), { method: 'POST' });
+export function prepareCodexAccountForServer(server: Server, id: string, force = false): Promise<CodexAccount['sync']> {
+  const query = force ? '?forcar=true' : '';
+  return apiFetchForServer(server, `${codexAccountPath(id, 'prepare')}${query}`, { method: 'POST' });
 }
 export function getCodexPreparationForServer(server: Server, id: string, signal?: AbortSignal): Promise<CodexAccount['sync']> {
   return apiFetchForServer(server, codexAccountPath(id, 'prepare'), { signal: comTeto(signal, 8000) });

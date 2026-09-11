@@ -150,6 +150,7 @@ class IntegracaoCodex:
         self._home, self._codex_home = home, codex_home
         self.nativo, self.binario = nativo, binario
         self._task: asyncio.Task | None = None
+        self._task_forcada = False
         self._estado: dict | None = None
         self._plugins_confirmados: set[str] = set()
 
@@ -205,11 +206,14 @@ class IntegracaoCodex:
     async def iniciar(self, motivo: str = "manual", forcar: bool = True) -> dict:
         if self._task is None or self._task.done():
             self._estado = {**self.status(), "estado": "executando", "etapa": msg("etapa_aguardando")}
+            self._task_forcada = forcar
             self._task = asyncio.create_task(self.reconciliar(motivo, forcar))
         return self.status()
 
     async def atualizar_e_aguardar(self, forcar: bool = False) -> dict:
         """Atualiza a conta principal e compartilha a rodada que já estiver em andamento."""
+        anterior = self._task if self._task is not None and not self._task.done() else None
+        anterior_forcada = self._task_forcada
         if forcar:
             await self.iniciar("manual", True)
         else:
@@ -217,6 +221,10 @@ class IntegracaoCodex:
         task = self._task
         if task is not None and not task.done():
             await asyncio.shield(task)
+        if forcar and anterior is task and not anterior_forcada:
+            await self.iniciar("manual", True)
+            if self._task is not None:
+                await asyncio.shield(self._task)
         return self.status()
 
     async def fechar(self) -> None:

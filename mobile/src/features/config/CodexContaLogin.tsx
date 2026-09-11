@@ -76,10 +76,23 @@ export function CodexContaLogin({ server, accountId, onComplete }: {
         if (g !== generation.current) return;
         id = created.id; setAccount(id);
       }
-      let prepared = await prepareCodexAccountForServer(s, id);
+      const prepared = await prepareAccount(s, id, g, signal);
+      if (!prepared || g !== generation.current) return;
+      if (prepared.status !== 'ready') return;
+      const next = await startCodexAccountLoginForServer(s, id);
       if (g !== generation.current) return;
-      setSync(prepared);
-      while (prepared.status === 'running') {
+      show(next);
+      if (next.status === 'waiting') timer.current = setTimeout(() => void read(s, id, g, signal), 1000);
+    } catch (e) { if (g === generation.current) setError(fail(e)); }
+    finally { if (g === generation.current) setBusy(false); }
+  }
+  async function prepareAccount(s: Server, id: string, g: number, signal: AbortSignal, force = false) {
+    let prepared = force
+      ? await prepareCodexAccountForServer(s, id, true)
+      : await prepareCodexAccountForServer(s, id);
+    if (g !== generation.current) return null;
+    setSync(prepared);
+    while (prepared.status === 'running') {
         await new Promise<void>(resolve => {
           const done = () => { clearTimeout(t); signal.removeEventListener('abort', done); resolve(); };
           const t = setTimeout(done, 1000); signal.addEventListener('abort', done, { once: true });
@@ -88,12 +101,18 @@ export function CodexContaLogin({ server, accountId, onComplete }: {
         prepared = await getCodexPreparationForServer(s, id, signal);
         if (g !== generation.current) return;
         setSync(prepared);
+    }
+    return prepared;
+  }
+  async function reconcile() {
+    if (!account || busy) return;
+    const s = server, id = account, g = stop(), signal = controller.current.signal;
+    setBusy(true); setError('');
+    try {
+      const prepared = await prepareAccount(s, id, g, signal, true);
+      if (prepared && prepared.status !== 'ready') {
+        setError(prepared.issues.map(codexAccountMessage).join('\n') || m.codex_ui_prepare_error());
       }
-      if (prepared.status !== 'ready') return;
-      const next = await startCodexAccountLoginForServer(s, id);
-      if (g !== generation.current) return;
-      show(next);
-      if (next.status === 'waiting') timer.current = setTimeout(() => void read(s, id, g, signal), 1000);
     } catch (e) { if (g === generation.current) setError(fail(e)); }
     finally { if (g === generation.current) setBusy(false); }
   }
@@ -137,6 +156,7 @@ export function CodexContaLogin({ server, accountId, onComplete }: {
       {attempt?.error ? <Text accessibilityRole="alert" style={styles.error}>{codexAccountMessage(attempt.error)}</Text> : null}
       {attempt?.status === 'cancelled' ? <Text style={styles.text}>{m.codex_ui_cancelled()}</Text> : null}
       {button(busy ? m.codex_ui_preparing() : m.contas_entrar(), () => void start(), busy || (!account && !name.trim()))}
+      {accountId && account !== 'default' ? button(m.harness_codex_reconciliar(), () => void reconcile()) : null}
     </>}
     {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
   </View>;

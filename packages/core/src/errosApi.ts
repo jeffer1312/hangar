@@ -94,6 +94,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   codex_account_plugin_update_failed: () => m.codex_account_plugin_update_failed(),
   codex_account_plugin_version_conflict: () => m.codex_account_plugin_version_conflict(),
   codex_account_source_destination_conflict: () => m.codex_account_source_destination_conflict(),
+  codex_account_source_sync_incomplete: () => m.codex_account_source_sync_incomplete(),
   codex_account_changed_during_prepare: () => m.codex_account_changed_during_prepare(),
   codex_account_destination_invalid: () => m.codex_account_destination_invalid(),
   codex_account_local_change: () => m.codex_account_local_change(),

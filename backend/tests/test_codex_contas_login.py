@@ -143,6 +143,61 @@ async def test_preparo_atualiza_a_principal_antes_de_herdar_para_adicional(
     assert ordem == [("principal", forcar), ("work", forcar)]
 
 
+async def test_falha_da_principal_permanece_visivel_na_conta_adicional(contas, monkeypatch):
+    _, work = contas
+
+    async def atualizar_principal(_forcar):
+        return {"estado": "erro"}
+
+    async def herdar(_account):
+        return {"status": "ready", "trust_pending": False, "issues": []}
+
+    monkeypatch.setattr("app.codex_contas_login.codex_contas_sync.prepare_account", herdar)
+    checker = CodexContasLogin(native=FakeNative, atualizar_principal=atualizar_principal)
+    await checker.prepare(work)
+    result = await checker._preparations[checker._key(work)]
+
+    assert result["status"] == "partial"
+    assert result["issues"] == [{
+        "code": "codex_account_source_sync_incomplete", "params": {"status": "erro"},
+    }]
+    assert checker.preparation_status(work) == result
+
+
+
+async def test_pedido_manual_em_preparo_automatico_dispara_rodada_forcada(contas, monkeypatch):
+    _, work = contas
+    iniciou = asyncio.Event()
+    liberar = asyncio.Event()
+    chamadas = []
+
+    async def atualizar_principal(forcar):
+        chamadas.append(("principal", forcar))
+        if not forcar:
+            iniciou.set()
+            await liberar.wait()
+        return {"estado": "ok"}
+
+    async def herdar(_account, force=False):
+        chamadas.append(("adicional", force))
+        return {"status": "ready", "trust_pending": False, "issues": []}
+
+    monkeypatch.setattr("app.codex_contas_login.codex_contas_sync.prepare_account", herdar)
+    checker = CodexContasLogin(native=FakeNative, atualizar_principal=atualizar_principal)
+    await checker.prepare(work)
+    await iniciou.wait()
+    await checker.prepare(work, forcar=True)
+    liberar.set()
+
+    result = await checker._preparations[checker._key(work)]
+    assert result["status"] == "ready"
+    assert chamadas == [
+        ("principal", False), ("adicional", False),
+        ("principal", True), ("adicional", True),
+    ]
+
+
+
 
 async def test_login_aceita_confirmacao_sem_login_id_permitida_pelo_schema(
         contas, service, monkeypatch):

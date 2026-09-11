@@ -276,4 +276,31 @@ describe('HarnessSettings — conta da integração Codex', () => {
     await unmount(u.comp);
     montados = montados.filter((comp) => comp !== u.comp);
   });
+
+  it('retoma o polling da conta lembrada que ainda está sincronizando', async () => {
+    localStorage.setItem('cp_harness_codex_account:active', 'work');
+    c.codexIntegracaoEstado.mockResolvedValueOnce({
+      estado: 'ok', etapa: null, ultima_execucao: null, proxima_atualizacao: null,
+      plugins: [], avisos: [], erros: [], confianca_pendente: false, automatica: true,
+    });
+    c.listarContasCodex.mockResolvedValueOnce([
+      { id: 'default', name: 'default', is_default: true, home: '/default', credential_id: 'codex:/default',
+        auth: { method: 'oauth', status: 'connected', email: 'principal@x', plan: 'pro' },
+        sync: { status: 'ready', trust_pending: false, issues: [] } },
+      { id: 'work', name: 'work', is_default: false, home: '/work', credential_id: 'codex:/work',
+        auth: { method: 'oauth', status: 'connected', email: 'work@x', plan: 'plus' },
+        sync: { status: 'running', trust_pending: false, issues: [] } },
+    ]);
+    c.estadoContaCodex.mockResolvedValueOnce({ status: 'ready', trust_pending: false, issues: [] });
+    const t = await montar([
+      { id: 'codex', nome: 'Codex', instalado: true, versao: '0.154.0', itens: [] },
+    ], estado());
+
+    await vi.waitFor(() => expect(c.estadoContaCodex).toHaveBeenCalledWith(
+      null, 'work', expect.anything(),
+    ));
+    await vi.waitFor(() => expect(t.el.textContent).toContain('work@x'));
+    await unmount(t.comp);
+    montados = montados.filter((comp) => comp !== t.comp);
+  });
 });

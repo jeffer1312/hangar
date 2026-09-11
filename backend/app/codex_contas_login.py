@@ -107,10 +107,13 @@ class CodexContasLogin:
         self._attempts: dict[str, _Attempt] = {}
         self._reservations: dict[str, list[_Reservation]] = {}
         self._preparations: dict[str, asyncio.Task] = {}
+        self._preparation_force: set[str] = set()
+        self._preparation_results: dict[str, dict] = {}
         self._auth_cache: dict[str, tuple[tuple, int, float, dict]] = {}
         self._auth_generation: dict[str, int] = {}
         self._indisponivel: dict[str, tuple[tuple, float]] = {}
         self._lock = threading.RLock()
+
 
     @staticmethod
     def _key(account: accounts.Account) -> str:
@@ -405,34 +408,63 @@ class CodexContasLogin:
         key = self._key(account)
         with self._lock:
             task = self._preparations.get(key)
-            if task is None or task.done():
+            if task is not None and not task.done():
+                if forcar:
+                    self._preparation_force.add(key)
+            else:
                 reservation = self._reserve(account, "prepare")
                 task = asyncio.create_task(self._prepare_one(account, reservation, forcar))
                 self._preparations[key] = task
+                self._preparation_results.pop(key, None)
         return self.preparation_status(account) if not task.done() else task.result()
+
 
     async def _prepare_one(self, account: accounts.Account, reservation: _Reservation,
                            forcar: bool) -> dict:
+        key = self._key(account)
         try:
-            if self.atualizar_principal is not None:
-                await self.atualizar_principal(forcar)
-            if forcar:
-                return await codex_contas_sync.prepare_account(account, force=True)
-            return await codex_contas_sync.prepare_account(account)
+            while True:
+                principal = await self.atualizar_principal(forcar) \
+                    if self.atualizar_principal is not None else None
+                if forcar:
+                    result = await codex_contas_sync.prepare_account(account, force=True)
+                else:
+                    result = await codex_contas_sync.prepare_account(account)
+                if isinstance(principal, dict) and principal.get("estado") not in (None, "ok", "ocioso"):
+                    result = copy.deepcopy(result)
+                    if result.get("status") == "ready":
+                        result["status"] = "partial"
+                    result.setdefault("issues", []).insert(0, {
+                        "code": "codex_account_source_sync_incomplete",
+                        "params": {"status": str(principal.get("estado"))},
+                    })
+                with self._lock:
+                    repetir = key in self._preparation_force and not forcar
+                    self._preparation_force.discard(key)
+                if not repetir:
+                    self._preparation_results[key] = copy.deepcopy(result)
+                    return result
+                forcar = True
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - estado público não pode expor caminho/segredo
-            return {"status": "error", "trust_pending": False,
-                    "issues": [{"code": "codex_account_prepare_failed",
-                                "params": {"error": type(exc).__name__}}]}
+            result = {"status": "error", "trust_pending": False,
+                      "issues": [{"code": "codex_account_prepare_failed",
+                                  "params": {"error": type(exc).__name__}}]}
+            self._preparation_results[key] = copy.deepcopy(result)
+            return result
         finally:
             reservation.release()
 
+
     def preparation_status(self, account: accounts.Account) -> dict:
-        task = self._preparations.get(self._key(account))
+        key = self._key(account)
+        task = self._preparations.get(key)
         if task is not None and not task.done():
             return {"status": "running", "trust_pending": False, "issues": []}
-        return codex_contas_sync.preparation_status(account)
+        gravado = codex_contas_sync.preparation_status(account)
+        return copy.deepcopy(self._preparation_results.get(key, gravado))
+
 
     async def delete_account(self, account: accounts.Account) -> None:
         # Mesma trava do login: conta com sessao viva, login ou preparo em andamento nao sai.
@@ -443,8 +475,11 @@ class CodexContasLogin:
             with self._lock:
                 self._auth_cache.pop(key, None)
                 self._preparations.pop(key, None)
+                self._preparation_force.discard(key)
+                self._preparation_results.pop(key, None)
         finally:
             reservation.release()
+
 
     async def create_account(self, name: str) -> dict:
         account = await asyncio.to_thread(accounts.create_account, name)

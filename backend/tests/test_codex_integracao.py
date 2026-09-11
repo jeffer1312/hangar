@@ -69,6 +69,30 @@ async def test_atualizar_e_aguardar_compartilha_a_reconciliacao(tmp_path, monkey
     assert chamadas == [("manual", True)]
 
 
+async def test_pedido_manual_durante_rodada_automatica_forca_segunda_rodada(tmp_path, monkeypatch):
+    service = IntegracaoCodex(tmp_path, tmp_path / ".codex")
+    iniciou = asyncio.Event()
+    liberar = asyncio.Event()
+    chamadas = []
+
+    async def rodada(motivo, forcar):
+        chamadas.append((motivo, forcar))
+        if not forcar:
+            iniciou.set()
+            await liberar.wait()
+        service._estado = {**service.status(), "estado": "ok"}
+        return service.status()
+
+    monkeypatch.setattr(service, "reconciliar", rodada)
+    await service.iniciar("sessao", False)
+    await iniciou.wait()
+    manual = asyncio.create_task(service.atualizar_e_aguardar(forcar=True))
+    liberar.set()
+
+    assert (await manual)["estado"] == "ok"
+    assert chamadas == [("sessao", False), ("manual", True)]
+
+
 async def test_settings_invalidos_nao_desabilitam_plugin(tmp_path):
     home = _home(tmp_path)
     (home / ".claude/settings.json").write_text('{"enabledPlugins": []}')

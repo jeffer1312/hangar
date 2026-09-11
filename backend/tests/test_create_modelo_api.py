@@ -95,21 +95,31 @@ def test_conta_codex_desconhecida_falha_antes_do_tmux(monkeypatch):
     cr.assert_not_called()
 
 
-def test_preparacao_codex_em_andamento_nao_cria_pane(monkeypatch, tmp_path):
+def test_preparacao_codex_em_andamento_nao_impede_sessao(monkeypatch, tmp_path):
     account = codex_accounts.Account("work", tmp_path / ".codex-work", False)
     monkeypatch.setattr(codex_accounts, "resolve_account", lambda _: account)
 
     class Service:
+        def __init__(self):
+            self.preparou = threading.Event()
         def preparation_status(self, _account):
             return {"status": "running", "issues": []}
+        def reserve_creation(self, _account):
+            return Mock(mark_live=Mock(), release=Mock())
+        async def prepare(self, _account):
+            self.preparou.set()
+            return {"status": "running", "issues": []}
 
-    monkeypatch.setattr(app.state, "codex_contas_login", Service(), raising=False)
-    with patch("app.api.registry.create") as cr:
+    service = Service()
+    monkeypatch.setattr(app.state, "codex_contas_login", service, raising=False)
+    monkeypatch.setattr(api.tmux, "has_session", lambda _name: False)
+    with patch("app.api.registry.create", return_value=SessionInfo(
+            name="x", cwd="/tmp", provider="codex")) as cr:
         r = TestClient(app).post("/api/sessions", headers=AUTH, json={
             "name": "x", "cwd": "/tmp", "provider": "codex", "codex_account": "work"})
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "codex_account_preparing"
-    cr.assert_not_called()
+    assert r.status_code == 200
+    assert service.preparou.wait(1)
+    cr.assert_called_once()
 
 
 @pytest.mark.parametrize("status", ["partial", "error", "idle"])
@@ -122,6 +132,7 @@ def test_sync_incompleta_nao_bloqueia_sessao_nem_modelos(monkeypatch, tmp_path, 
     ]}
     service = Mock()
     service.preparation_status.return_value = snapshot
+    service.prepare = AsyncMock(return_value={"status": "running", "issues": []})
     monkeypatch.setattr(app.state, "codex_contas_login", service, raising=False)
     monkeypatch.setattr(api.tmux, "has_session", lambda _: False)
     with patch("app.api.registry.create", return_value=SessionInfo(
@@ -131,6 +142,7 @@ def test_sync_incompleta_nao_bloqueia_sessao_nem_modelos(monkeypatch, tmp_path, 
         response = client.post("/api/sessions", headers=AUTH, json={
             "name": "cx-pending", "cwd": "/tmp", "provider": "codex", "codex_account": "work"})
         assert response.status_code == 200, response.text
+        service.prepare.assert_awaited_once_with(account)
         response = client.get("/api/model-options?provider=codex&codex_account=work", headers=AUTH)
         assert response.status_code == 200, response.text
     assert create.call_args.kwargs["codex_account"] == "work"
@@ -329,6 +341,8 @@ async def test_cancelamento_espera_worker_de_criacao_antes_de_liberar_lease(monk
             return {"status": "ready", "issues": []}
         def reserve_creation(self, _account):
             return lease
+        async def prepare(self, _account):
+            return {"status": "ready", "issues": []}
 
     monkeypatch.setattr(app.state, "codex_contas_login", Service(), raising=False)
     monkeypatch.setattr(api.tmux, "has_session", lambda _name: False)

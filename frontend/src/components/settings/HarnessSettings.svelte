@@ -179,6 +179,7 @@
       if (lembrada && contas.some((conta) => conta.id === lembrada)) contaCodex = lembrada;
       else if (!contas.some((conta) => conta.id === contaCodex)) contaCodex = 'default';
       syncConta = contas.find((conta) => conta.id === contaCodex)?.sync ?? null;
+      if (contaCodex !== 'default' && syncConta?.status === 'running') void consultarConta(ctx);
     } catch (e) {
       if (!ctx.controle.signal.aborted) erroIntegracao = e instanceof Error ? e.message : String(e);
     }

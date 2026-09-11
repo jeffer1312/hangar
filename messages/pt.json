@@ -71,6 +71,7 @@
   "codex_account_plugin_update_failed": "Não foi possível atualizar o plugin.",
   "codex_account_plugin_version_conflict": "A versão do plugin difere da versão esperada.",
   "codex_account_source_destination_conflict": "A origem e o destino da conta entram em conflito.",
+  "codex_account_source_sync_incomplete": "A atualização da conta padrão terminou com pendências; esta conta pode ter herdado uma versão anterior.",
   "codex_account_changed_during_prepare": "A conta mudou durante a preparação. Tente novamente.",
   "codex_account_destination_invalid": "O diretório de destino da conta é inválido.",
   "codex_account_local_change": "Uma alteração local da conta foi preservada.",

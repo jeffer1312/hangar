@@ -12,10 +12,15 @@ const calls = vi.hoisted(() => ({
   archives: vi.fn(),
   resume: vi.fn(),
   replace: vi.fn(),
+  alert: vi.fn(),
 }));
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
 
 vi.mock('expo-router', () => ({ useRouter: () => ({ replace: calls.replace }) }));
+vi.mock('react-native', async (original) => ({
+  ...await original<typeof import('react-native')>(),
+  Alert: { alert: calls.alert },
+}));
 vi.mock('../../stores/servers', () => ({
   useServers: Object.assign(
     (selector: (state: { active: () => typeof server; servers: typeof server[] }) => unknown) => selector({ active: () => server, servers: [server] }),
@@ -88,6 +93,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.archives.mockReset().mockResolvedValue([]);
     calls.resume.mockReset().mockResolvedValue({ name: 'retomada', state: 'idle' });
     calls.replace.mockReset();
+    calls.alert.mockReset();
     localStorage.clear();
   });
 
@@ -120,6 +126,7 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => create.click());
     expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ codex_account: 'work' }));
     expect(calls.replace).toHaveBeenCalledWith('/s/server-b/nova');
+    expect(calls.alert).toHaveBeenCalledWith('codex_ui_prepare_error');
     root.unmount();
   });
 
