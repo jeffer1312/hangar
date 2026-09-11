@@ -190,15 +190,18 @@
     const fimInner = inner.getBoundingClientRect().bottom - topo;
     const alem = Array.from(listEl.querySelectorAll<HTMLElement>('*'))
       .map((e) => ({ e, base: e.getBoundingClientRect().bottom - topo }))
-      .filter(({ base }) => base > fimInner + 8)
+      .filter(({ base }) => base > fimInner + 64)
       .sort((a, b) => b.base - a.base)
       .slice(0, 5)
       .map(({ e, base }) => {
         const cs = getComputedStyle(e);
-        return `${e.tagName.toLowerCase()}.${e.classList[0] ?? '-'}@${Math.round(base)}/${cs.position}/${cs.transform === 'none' ? '-' : 't'}`;
+        // `language-<x>` de cerca de código carrega texto da conversa: só classe nossa entra.
+        const cls = e.classList[0] ?? '-';
+        const nome = /^language-/.test(cls) ? 'code' : cls;
+        return `${e.tagName.toLowerCase()}.${nome}@${Math.round(base)}/${cs.position}/${cs.transform === 'none' ? '-' : 't'}`;
       }).join(' ');
     diag.registrar({ evento: 'chat.vazio_no_fim', nivel: 'aviso', tela: 'chat', sessao: sessionName,
-                     detalhe: `sobra=${Math.round(sobra)} pad=${Math.round(pad)} sh=${listEl.scrollHeight} inner=${Math.round(inner.getBoundingClientRect().height)} fimInner=${Math.round(fimInner)} ${cauda} | alem: ${alem || 'nenhum'}` });
+                     detalhe: `sobra=${Math.round(sobra)} pad=${Math.round(pad)} sh=${listEl.scrollHeight} inner=${Math.round(inner.getBoundingClientRect().height)} fimInner=${Math.round(fimInner)} ${cauda} | alem: ${alem || 'nenhum-com-caixa (margem/padding/overflow sem elemento proprio)'}` });
   }
 
   // Janela curta demais pra rolar (rajada de tool calls colapsada em linhas de grupo) -> revela
