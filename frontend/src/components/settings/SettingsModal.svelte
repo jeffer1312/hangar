@@ -57,11 +57,12 @@
   // (App.svelte, alvoConfig), então null aqui é só "alvo que não resolveu" — e nesse caso nem
   // tela de servidor abre (telaEfetiva cai na Aparencia).
   const servidorAtualId = $derived(resolvedServer?.id ?? '');
-  // Com UM servidor não há escolha a fazer — o rótulo estático de sempre fica. Sem onPickServer
-  // (quem monta sem a porta) também não faz sentido oferecer troca. E sem resolvedServer (um
-  // ?srv= que não resolveu) o select abriria em BRANCO — nenhuma option casa com '' —, então a
-  // condição exige o alvo resolvido (a tela em si já caiu na Aparencia nesse caso).
-  const mostrarSeletor = $derived(servidores.length > 1 && !!onPickServer && !!resolvedServer);
+  // O seletor EXISTE sempre que dá pra trocar. Com uma máquina só ele fica apagado com o motivo à
+  // vista (o próprio ServidorSeletor cuida disso) — antes ele sumia, e sumir escondia que a escolha
+  // existe. Os dois gates que ficam são de "dá pra trocar", não de contagem: sem onPickServer (quem
+  // monta sem a porta) não há para onde trocar, e sem resolvedServer (um ?srv= que não resolveu) o
+  // select abriria em BRANCO — nenhuma option casa com ''.
+  const mostrarSeletor = $derived(!!onPickServer && !!resolvedServer);
   function trocarServidor(id: string) { onPickServer?.(id); }
 
   // Na tela Máquinas o store fica EM SILENCIO (zero GET /api/config) e a operacao pendente é
@@ -270,7 +271,7 @@
             <!-- O rótulo do grupo vira o TROCADOR de alvo: "Servidor" + select com a máquina
                  sendo configurada. Antes dizia "Servidor · X" e trocar exigia ir à tela
                  Servidores e voltar (pedido recorrente do usuário). -->
-            <div class="st-secao st-secao-sel">
+            <div class="st-secao st-secao-sel" class:so-uma={servidores.length <= 1}>
               <span>{m.lista_agrupar_servidor()}</span>
               <ServidorSeletor {servidores} atualId={servidorAtualId} onTrocar={trocarServidor} />
             </div>
@@ -300,18 +301,20 @@
       <!-- tabindex=-1: alvo do foco na troca de tela, sem entrar na ordem do Tab. -->
       <h2 class="st-titulo" bind:this={tituloEl} tabindex="-1">{TITULO[tela]}</h2>
       <span class="st-icone st-vazio" aria-hidden="true"></span>
-      {#if TELAS_DE_SERVIDOR.includes(telaAtual) && nomeAlvo}
+      {#if TELAS_DE_SERVIDOR.includes(telaAtual) && (mostrarSeletor || nomeAlvo)}
         <!-- Sem isto nao da pra saber em que maquina se esta mexendo: o app roda no front de um
-             servidor e a lista e agregada, entao a config aberta pode ser de outra maquina. Com
-             mais de um servidor o texto vira o TROCADOR (select) — dizer sem deixar trocar foi o
-             pedido recorrente do usuário. -->
-        <p class="st-sub">
+             servidor e a lista e agregada, entao a config aberta pode ser de outra maquina. O
+             texto vira o TROCADOR (select) — dizer sem deixar trocar foi o pedido recorrente do
+             usuário; com uma máquina só ele aparece apagado, com o motivo. -->
+        <!-- `div`, não `p`: agora ele carrega um controle de formulário (o select) e um texto de
+             motivo, não uma frase. O CSS casa pela classe. -->
+        <div class="st-sub">
           {#if mostrarSeletor}
             <ServidorSeletor {servidores} atualId={servidorAtualId} onTrocar={trocarServidor} />
-          {:else}
+          {:else if nomeAlvo}
             {m.config_modal_em({ nome: nomeAlvo })}
           {/if}
-        </p>
+        </div>
       {/if}
     </header>
     {#key telaAtual}<div in:animarTela={{ x: telaAtual === 'root' ? -18 : 18 }}>{@render corpo()}</div>{/key}
@@ -320,10 +323,16 @@
 {/if}
 
 {#snippet corpo()}
+  <!-- Legenda do grupo Servidor, UMA vez pra todas as telas dele: antes só Notificações, Anexos e
+       Avançado a mostravam (as três que passam pelo ServerSettings), e Contas/Harnesses/Voz/
+       Orquestração não diziam nada. Aqui ela vale pro grupo inteiro e não se repete tela a tela. -->
+  {#if TELAS_DE_SERVIDOR.includes(telaAtual)}
+    <p class="st-valem">{m.config_server_valem()}</p>
+  {/if}
   {#if telaAtual === 'root'}
     {#each SECOES as secao (secao)}
       {#if secao === 'servidor' && mostrarSeletor}
-        <div class="st-secao st-secao-sel">
+        <div class="st-secao st-secao-sel" class:so-uma={servidores.length <= 1}>
           <span>{m.lista_agrupar_servidor()}</span>
           <ServidorSeletor {servidores} atualId={servidorAtualId} onTrocar={trocarServidor} />
         </div>
@@ -374,6 +383,10 @@
     font-size: var(--text-base); font-weight: 600; color: var(--text-primary);
   }
   .st-sub { grid-column: 2; margin: 0; text-align: center; font-size: var(--text-xs); color: var(--text-muted); }
+  .st-valem { margin: 0 0 var(--space-3); font-size: var(--text-xs); color: var(--text-muted); }
+  /* No sub-cabeçalho do celular tudo é centralizado; o seletor ocupa a linha inteira por causa do
+     motivo do apagado, então sem isto o select ficava encostado à esquerda dele. */
+  .st-sub :global(.srv-wrap) { justify-content: center; }
   .st-titulo:focus { outline: none; }   /* alvo programatico: o anel aqui so confundiria */
   .st-icone {
     width: 32px; height: 32px; border-radius: var(--radius-full);
@@ -391,7 +404,15 @@
   }
   /* Versão com o seletor de alvo: o rótulo "Servidor" e o select na mesma linha. O select fica
      minúsculo de propósito — o nome da máquina é dado, não título de seção. */
-  .st-secao-sel { display: flex; align-items: center; gap: var(--space-2); }
+  /* `baseline`, não `center`: com o motivo do apagado o bloco do seletor tem duas linhas, e
+     centralizar deixava o rótulo "SERVIDOR" boiando no meio delas. A baseline o prende à linha do
+     select, valendo igual com uma ou duas linhas.
+     O `nowrap` é o estado normal (podendo trocar): na coluna de 228px da navegação, deixar quebrar
+     joga o select pra linha de baixo esticado na largura toda — o desenho é rótulo e select LADO A
+     LADO, com o select do tamanho do nome. Só o apagado quebra, porque ali a segunda linha é o
+     motivo. */
+  .st-secao-sel { display: flex; align-items: baseline; flex-wrap: nowrap; gap: var(--space-2); }
+  .st-secao-sel.so-uma { flex-wrap: wrap; }
   /* Cartao arredondado com as linhas dentro, no formato do iOS. `--surface-card` entra no veu do
      papel de parede junto com o resto (CLAUDE.md, "Transparencia"). */
   .st-cartao {

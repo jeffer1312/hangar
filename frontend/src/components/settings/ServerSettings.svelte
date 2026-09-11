@@ -112,7 +112,6 @@
 <div class="cfg" class:com-rodape={rodapeVisivel && secao !== 'notificacoes'}>
   <header class="cfg-head">
     <h2>{TITULOS[secao]}</h2>
-    <p class="sub">{m.config_server_valem()}</p>
   </header>
 
   {#if store.carregando}
@@ -219,7 +218,6 @@
      veio do bloco de campos acima dele. */
   .push { padding-top: 0; }
   .cfg-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
-  .cfg-head .sub { margin: 2px 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted); }
 
   .lista { display: flex; flex-direction: column; }
   /* "editado" = veio de override, não do .env — sem isso não dá pra saber de onde o valor vem.

@@ -176,7 +176,6 @@
 <div class="voz" class:com-rodape={rodapeVisivel}>
   <header class="cfg-head">
     <h2>{m.voz_titulo()}</h2>
-    <p class="sub">{m.config_server_valem()}</p>
   </header>
 
   {#if store.carregando}
@@ -334,7 +333,6 @@
 
   /* Mesmo par h2+sub das telas irmãs (ServerSettings.svelte) — a Voz também é config de servidor. */
   .cfg-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
-  .cfg-head .sub { margin: 2px 0 0; font-size: var(--text-xs); color: var(--text-muted); }
 
   /* O título da etapa tem que pesar MAIS que o rótulo do campo — com os dois em `sm`/600 a
      hierarquia se invertia e a tela virava uma lista sem começo. */
