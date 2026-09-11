@@ -46,6 +46,7 @@ class UsageRow:
     account_id: str | None = None
     codex_long_context: bool = False
     cache_write_1h: int = 0
+    fast: bool = False        # modo rápido do Claude: a mesma resposta custa o dobro
 
 
 def _ler_jsonl(path: Path) -> Iterator[dict]:
@@ -118,6 +119,7 @@ def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
             cache_write=u.cache_write, cache_read=u.cache_read,
             cache_write_1h=u.cache_write_1h,
             subagente=u.subagente,
+            fast=u.fast,
         ))
     return out
 

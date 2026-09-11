@@ -23,12 +23,27 @@ PERIODOS = {"7d": 7, "30d": 30, "90d": 90}
 # costs_sources, então manter a função aqui fecharia um ciclo.
 
 
-def _custo_da_linha(r: UsageRow) -> dict[str, float] | None:
+def _tarifa_da_linha(r: UsageRow) -> pricing.Rate | None:
+    """A tarifa que ESTA linha pagou, com os ajustes por modo (contexto longo, modo rápido).
+
+    Existe porque o cálculo é feito em dois lugares — o custo e o "preço cheio" que mede a
+    economia de cache —, e quando cada um escolhia a tarifa por conta o segundo esqueceu um
+    ajuste: a economia de cache aparecia NEGATIVA, porque o cheio saía por metade do cobrado.
+    """
     rate = pricing.rate_for(r.model)
     if rate is None:
         return None
     if r.source == "codex":
         rate = pricing.rate_codex(rate, r.model, r.codex_long_context)
+    if r.fast:
+        rate = pricing.rate_fast(rate, r.model)
+    return rate
+
+
+def _custo_da_linha(r: UsageRow) -> dict[str, float] | None:
+    rate = _tarifa_da_linha(r)
+    if rate is None:
+        return None
     custo = pricing.custo(rate, r.input, r.output, r.cache_write, r.cache_read)
     if rate.provider == "anthropic" and rate.origin != "override":
         custo["cache_write"] += r.cache_write_1h / 1e6 * (rate.input * 2 - rate.cache_write)
@@ -142,8 +157,7 @@ def montar(linhas: list[UsageRow], period: str = "all",
             if canon not in pricing.IGNORADOS:
                 sem_tarifa.add(canon)
             continue
-        efetiva = (pricing.rate_codex(rate, r.model, r.codex_long_context)
-                   if r.source == "codex" else rate)
+        efetiva = _tarifa_da_linha(r) or rate
         # Preço cheio: os mesmos tokens se NENHUM fosse cache.
         cheio = ((r.input + r.cache_write + r.cache_read) / 1e6 * efetiva.input
                  + r.output / 1e6 * efetiva.output)

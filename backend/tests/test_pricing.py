@@ -253,3 +253,49 @@ def test_contexto_longo_nao_inventa_regra_para_outro_modelo():
 def test_contexto_longo_preserva_tarifa_manual():
     rate = pricing.Rate(1, 2, 0.1, 1.25, "openai", "override", False)
     assert pricing.rate_codex(rate, "gpt-6-astra", True) == rate
+
+
+def test_openai_anterior_ao_5_6_nao_cobra_escrita_de_cache():
+    # A OpenAI só cobra escrita de cache do GPT-5.6 em diante, e nesses o catálogo publica o
+    # preço. Cobrar como input nos anteriores inventava uma linha que a fatura não tem.
+    r = pricing.rate_for("gpt-5.5")
+    assert r.cache_write == 0.0
+    assert r.cache_estimado is False, "zero aqui é preço publicado, não estimativa"
+    novo = pricing.rate_for("gpt-6-astra")
+    assert novo.cache_write == novo.input * 1.25
+
+
+def test_escrita_gratis_e_so_da_openai():
+    # Em outro provedor, cache sem preço publicado continua cobrado como input e MARCADO.
+    r = pricing.rate_for("kimi-k3")
+    assert r.cache_write == r.input
+    assert r.cache_estimado is True
+
+
+@pytest.mark.parametrize("crudo", ["apikey/k3", "kimi-code/k3"])
+def test_credencial_do_kimi_no_id_nao_apaga_a_tarifa(crudo):
+    assert pricing.canonizar(crudo) == "kimi-k3"
+    assert pricing.rate_for(crudo) is not None
+
+
+def test_caixa_do_log_nao_parte_o_modelo_em_duas_linhas():
+    # O Pi grava 'DeepSeek-V4-Flash'; o catálogo registra 'deepseek-v4-flash'.
+    assert pricing.canonizar("DeepSeek-V4-Flash") == "deepseek-v4-flash"
+    assert pricing.rate_for("DeepSeek-V4-Flash") == pricing.rate_for("deepseek-v4-flash")
+
+
+def test_modo_rapido_dobra_a_tabela_inteira():
+    # Opus 5 em fast custa 10/50 no lugar de 5/25, e os multiplicadores de cache incidem sobre
+    # esse preço — por isso as quatro colunas dobram juntas.
+    r = pricing.rate_for("claude-opus-5")
+    f = pricing.rate_fast(r, "claude-opus-5")
+    assert (f.input, f.output, f.cache_read, f.cache_write) == (
+        r.input * 2, r.output * 2, r.cache_read * 2, r.cache_write * 2)
+
+
+def test_modo_rapido_nao_toca_modelo_que_nao_oferece_o_modo():
+    # Opus 4.6 roda em velocidade padrão e cobra padrão mesmo com o pedido de fast.
+    for modelo in ("claude-sonnet-5", "claude-opus-4-6", "gpt-6-astra"):
+        r = pricing.rate_for(modelo)
+        if r is not None:
+            assert pricing.rate_fast(r, modelo) == r

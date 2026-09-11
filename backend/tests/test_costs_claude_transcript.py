@@ -230,6 +230,19 @@ def test_dias_modelos_e_blocos_da_mesma_resposta_sobrevivem_ao_cache(tmp_path, m
     assert sum(u.output for u in depois) == 5
 
 
+def test_modo_rapido_nao_se_mistura_com_o_padrao_no_mesmo_dia(tmp_path):
+    # As duas custam tarifas diferentes; somadas num grupo só, metade sairia pelo preço errado.
+    normal = _turno("claude-opus-5", 10, 2, 0, 0, "2026-09-10T12:00:00Z")
+    normal["message"]["id"] = "r1"
+    normal["message"]["usage"]["speed"] = "standard"
+    rapida = _turno("claude-opus-5", 30, 4, 0, 0, "2026-09-10T13:00:00Z")
+    rapida["message"]["id"] = "r2"
+    rapida["message"]["usage"]["speed"] = "fast"
+    _escrever(tmp_path / "s.jsonl", [normal, rapida])
+    usos = ct.ler_transcript(tmp_path / "s.jsonl")
+    assert sorted((u.fast, u.input) for u in usos) == [(False, 10), (True, 30)]
+
+
 def test_resposta_atualizada_substitui_usage_parcial(tmp_path):
     parcial = _turno("claude-opus-5", 10, 2, 0, 0, "2026-09-10T12:00:00Z")
     parcial["message"]["id"] = "mesma-resposta"

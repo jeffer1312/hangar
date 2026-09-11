@@ -82,14 +82,19 @@ def slim(bruto: dict) -> dict[str, dict]:
 def _rate(d: dict, origin: str) -> Rate:
     entrada = float(d["input"])
     cr, cw = d.get("cache_read"), d.get("cache_write")
-    estimado = cr is None or cw is None
+    prov = d.get("provider", "?")
+    # A OpenAI só cobra ESCRITA de cache do GPT-5.6 em diante, e para esses o catálogo publica o
+    # preço; nos anteriores gravar a cache no prompt é grátis. Cobrar como input ali era inventar
+    # uma linha que a fatura não tem — e aqui zero é fato publicado, não "não sei o preço".
+    escrita_gratis = cw is None and prov == "openai"
+    estimado = cr is None or (cw is None and not escrita_gratis)
     return Rate(
         input=entrada,
         output=float(d["output"]),
         # Sem preço publicado, cache conta como input — e a linha vai MARCADA.
         cache_read=float(cr) if cr is not None else entrada,
-        cache_write=float(cw) if cw is not None else entrada,
-        provider=d.get("provider", "?"),
+        cache_write=float(cw) if cw is not None else (0.0 if escrita_gratis else entrada),
+        provider=prov,
         origin=origin,
         cache_estimado=estimado,
     )
@@ -106,6 +111,10 @@ _TTL = 24 * 3600
 _PREFIXOS = (
     "anthropic/", "openai/", "moonshot/", "moonshotai/", "deepseek/",
     "cline-pass/", "clinepass/", "openrouter/", "zhipuai/", "google/", "cx/",
+    # Como o Kimi Code nomeia a própria credencial no log ('apikey/k3', 'kimi-code/k3'). Sem
+    # estes dois o id nunca chega no apelido `k3` e o modelo aparece como SEM TARIFA tendo
+    # preço no catálogo.
+    "apikey/", "kimi-code/",
 )
 # Apelido -> id do models.dev. O log grava o nome do MOTOR, o catálogo conhece o do MODELO.
 # Os três últimos são ids ANTIGOS/alterados que o histórico ainda grava (claude-haiku-4.5 com
@@ -157,13 +166,15 @@ def canonizar_provedor(provedor: str) -> str:
 _lock = threading.Lock()
 _cat: dict[str, Rate] | None = None
 _overrides: dict[str, dict] | None = None
+_minusculas: dict[str, str] | None = None
 
 
 def invalidar_cache() -> None:
-    global _cat, _overrides
+    global _cat, _overrides, _minusculas
     with _lock:
         _cat = None
         _overrides = None
+        _minusculas = None
 
 
 def catalogo_de_bruto(bruto: dict) -> dict[str, Rate]:
@@ -199,6 +210,20 @@ def _carregar() -> dict[str, Rate]:
             snap = _ler_json(SNAPSHOT) or {"modelos": {}}
             _cat = {k: _rate(v, "snapshot") for k, v in (snap.get("modelos") or {}).items()}
         return _cat
+
+
+def _sem_caixa() -> dict[str, str]:
+    """id em minúsculas -> chave real do catálogo. Reconstruído junto com o catálogo."""
+    global _minusculas
+    if _minusculas is None:
+        cat = _carregar()
+        with _lock:
+            if _minusculas is None:
+                indice: dict[str, str] = {}
+                for k in cat:
+                    indice.setdefault(k.lower(), k)
+                _minusculas = indice
+    return _minusculas
 
 
 def _carregar_overrides() -> dict[str, dict]:
@@ -257,7 +282,13 @@ def canonizar(model: str) -> str:
     # contém barra (não prefixo de gateway) e está registrado assim mesmo no catálogo.
     if m in _carregar():
         return m
-    return _APELIDOS.get(base, base)
+    alias = _APELIDOS.get(base)
+    if alias:
+        return alias
+    # Caixa é do LOG, não do modelo: o Pi grava 'DeepSeek-V4-Flash' e o catálogo registra
+    # 'deepseek-v4-flash'. Sem esta volta o mesmo modelo vira duas linhas no painel — uma com
+    # tarifa e outra em "sem tarifa" — e o volume dela sai do total em dólar.
+    return _sem_caixa().get(base.lower()) or _APELIDOS.get(base.lower(), base)
 
 
 def rate_for(model: str) -> Rate | None:
@@ -282,6 +313,20 @@ def custo(rate: Rate, entrada: int, saida: int, cw: int, cr: int) -> dict[str, f
         "cache_write": cw / 1e6 * rate.cache_write,
         "cache_read": cr / 1e6 * rate.cache_read,
     }
+
+
+# Modelos com modo rápido: a Anthropic cobra 10/50 por MTok no lugar de 5/25, e os
+# multiplicadores de cache incidem sobre esse preço — ou seja, a tabela inteira dobra.
+_FAST = frozenset({"claude-opus-5", "claude-opus-4-8"})
+
+
+def rate_fast(rate: Rate, model: str) -> Rate:
+    """Tarifa do modo rápido. Modelo que não oferece o modo roda e cobra padrão, então a marca
+    do transcript sozinha não autoriza dobrar nada."""
+    if rate.origin == "override" or rate.provider != "anthropic" or canonizar(model) not in _FAST:
+        return rate
+    return replace(rate, input=rate.input * 2, output=rate.output * 2,
+                   cache_read=rate.cache_read * 2, cache_write=rate.cache_write * 2)
 
 
 def rate_codex(rate: Rate, model: str, long_context: bool) -> Rate:

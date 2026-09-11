@@ -325,3 +325,33 @@ def test_claude_cache_uma_hora_usa_tarifa_propria():
     assert r.equivalente_cobrado == 1_550_000
     assert r.combos[0].equivalente_cobrado == 1_550_000
     assert r.custo_sem_cache == 5
+
+
+def test_modo_rapido_cobra_o_dobro_da_mesma_resposta():
+    # Opus 5 em fast é 10/50 no lugar de 5/25, com os multiplicadores de cache por cima.
+    normal = costs.montar([_linha()])
+    rapida = costs.montar([_linha(fast=True)])
+    assert rapida.totals.cost == pytest.approx(normal.totals.cost * 2)
+    assert rapida.totals.cost_input == pytest.approx(10.0)
+    assert rapida.totals.cost_output == pytest.approx(50.0)
+
+
+def test_modo_rapido_da_uma_hora_de_cache_segue_a_tarifa_dobrada():
+    # A escrita de 1h é 2x a entrada BASE, e no modo rápido a entrada base é que dobrou.
+    r = costs.montar([_linha(input=0, output=0, cache_write=1_000_000,
+                             cache_write_1h=1_000_000, cache_read=0, fast=True)])
+    assert r.totals.cost_cache_write == pytest.approx(20.0)
+
+
+def test_modo_rapido_nao_inverte_a_economia_de_cache():
+    # O "preço cheio" é medido com a MESMA tarifa que a linha pagou. Calculado com a tarifa
+    # padrão enquanto o custo saía dobrado, a economia de cache virava negativa.
+    r = costs.montar([_linha(fast=True)])
+    assert r.custo_sem_cache >= r.totals.cost
+    assert r.custo_sem_cache == pytest.approx(3 * 10.0 + 50.0)
+
+
+def test_modo_rapido_nao_muda_modelo_sem_o_modo():
+    normal = costs.montar([_linha(model="claude-sonnet-5")])
+    marcada = costs.montar([_linha(model="claude-sonnet-5", fast=True)])
+    assert marcada.totals.cost == pytest.approx(normal.totals.cost)

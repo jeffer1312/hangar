@@ -39,7 +39,7 @@ _log = logging.getLogger(__name__)
 LOCAL = timezone(timedelta(hours=-3))
 
 # Suba isto ao mudar o formato do resumo, senão o cache velho é servido pra sempre.
-CACHE_VERSAO = 2
+CACHE_VERSAO = 3
 
 # Marcador do subagente. O caminho é `<projeto>/<sessionId>/subagents/agent-*.jsonl`.
 # Medido em 01/08/2026: 2.714 arquivos assim, contra 446 de conversa — cresce toda semana.
@@ -62,6 +62,7 @@ class UsoSessao:
     cache_write: int
     cache_read: int
     cache_write_1h: int = 0
+    fast: bool = False     # `usage.speed == "fast"`: a Anthropic cobra o dobro nesse modo.
 
 
 def raiz_projetos(config_dir: Path | None = None) -> Path:
@@ -128,10 +129,13 @@ def ler_transcript(path: Path) -> list[UsoSessao]:
                 input=_int(u.get("input_tokens")), output=_int(u.get("output_tokens")),
                 cache_write=_int(u.get("cache_creation_input_tokens")),
                 cache_read=_int(u.get("cache_read_input_tokens")),
-                cache_write_1h=min(max(0, cache_1h), max(0, _int(u.get("cache_creation_input_tokens")))))
+                cache_write_1h=min(max(0, cache_1h), max(0, _int(u.get("cache_creation_input_tokens")))),
+                fast=u.get("speed") == "fast")
     grupos: dict[tuple, UsoSessao] = {}
     for uso in respostas.values():
-        key = (uso.ts.date(), uso.model, uso.cwd)
+        # `fast` entra na chave porque é o que decide a TARIFA: somado com o padrão, o grupo
+        # inteiro seria cobrado por uma das duas e a outra metade sairia errada.
+        key = (uso.ts.date(), uso.model, uso.cwd, uso.fast)
         antes = grupos.get(key)
         grupos[key] = uso if antes is None else replace(
             antes, input=antes.input + uso.input, output=antes.output + uso.output,
@@ -197,7 +201,7 @@ def _serializar(u: UsoSessao) -> dict:
     return {"ts": u.ts.isoformat(), "model": u.model, "cwd": u.cwd,
             "subagente": u.subagente, "input": u.input, "output": u.output,
             "cache_write": u.cache_write, "cache_read": u.cache_read,
-            "cache_write_1h": u.cache_write_1h}
+            "cache_write_1h": u.cache_write_1h, "fast": u.fast}
 
 
 def _desserializar(d: dict) -> UsoSessao | None:
@@ -207,7 +211,8 @@ def _desserializar(d: dict) -> UsoSessao | None:
                          subagente=bool(d.get("subagente")),
                          input=int(d["input"]), output=int(d["output"]),
                          cache_write=int(d["cache_write"]), cache_read=int(d["cache_read"]),
-                         cache_write_1h=int(d.get("cache_write_1h", 0)))
+                         cache_write_1h=int(d.get("cache_write_1h", 0)),
+                         fast=bool(d.get("fast")))
     except (KeyError, TypeError, ValueError):
         return None
 
