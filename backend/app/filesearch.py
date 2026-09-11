@@ -68,7 +68,7 @@ def _arquivos_do_repo(cwd: str) -> list[str]:
     return out
 
 
-def resolver(cwd: str, caminhos: list[str]) -> dict:
+def resolver(cwd: str, caminhos: list[str], *, suffix: bool = True) -> dict:
     """Quais caminhos citados na conversa EXISTEM, e onde — pra visão "citados" só listar o que
     abre. Relativo que não existe no cwd (`tests/x.py` de um `cd backend &&`) é procurado pelo
     sufixo mais longo na lista do repo; absoluto (ou `~`) só é conferido — de propósito sem o
@@ -99,6 +99,9 @@ def resolver(cwd: str, caminhos: list[str]) -> dict:
         rel = rel[2:] if rel.startswith("./") else rel
         if ".." not in rel.split("/") and os.path.lexists(os.path.join(cwd, rel)):
             ok[cru] = {"relativo": rel, "real": os.path.realpath(os.path.join(cwd, rel))}
+            continue
+        if not suffix:
+            faltam.append(cru)
             continue
         if lista is None:
             lista = _arquivos_do_repo(cwd)

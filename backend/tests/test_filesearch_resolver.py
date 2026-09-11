@@ -57,3 +57,9 @@ def test_fora_de_repo_so_confere_existencia(tmp_path):
     r = filesearch.resolver(str(tmp_path), ["a.txt", "b.txt", "sub/a.txt"])
     assert list(r["ok"]) == ["a.txt"] and r["ok"]["a.txt"]["relativo"] == "a.txt"
     assert r["faltam"] == ["b.txt", "sub/a.txt"]
+
+
+def test_sem_sufixo_nao_escolhe_homonimo_de_outro_caminho(tmp_path):
+    cwd = _repo(tmp_path)
+    r = filesearch.resolver(cwd, ["outro/x.py"], suffix=False)
+    assert r == {"ok": {}, "faltam": ["outro/x.py"]}

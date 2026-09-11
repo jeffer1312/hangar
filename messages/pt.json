@@ -2676,7 +2676,6 @@
   "voz_estilo": "Estilo",
   "voz_estilo_ajuda": "Quanto o modelo pode mexer no que você falou: só pontuar, reorganizar em prosa, ou virar documento com seções.",
   "arq_sem_resultados": "Nada encontrado",
-  "arq_citado_ambiguo": "Há mais de um arquivo chamado {nome}. Use uma referência com o caminho completo.",
   "chat_servidor_removido": "Este servidor não existe mais. Volte à lista para escolher outro.",
   "composer_desfazer_limpeza": "desfazer limpeza",
   "composer_ditado_limpo": "Ditado limpo.",

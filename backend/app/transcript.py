@@ -477,6 +477,36 @@ def path_in_transcript(jsonl: str | Path, needle: str) -> bool:
     return False
 
 
+def citation_cwds(jsonl: str | Path, needles: list[str]) -> dict[str, list[str]]:
+    """Caminho citado -> cwd das linhas que o citaram, do mais recente ao mais antigo."""
+    wanted = {needle for needle in needles if needle}
+    if not wanted:
+        return {}
+    pattern = re.compile("(?=(" + "|".join(re.escape(x) for x in sorted(wanted, key=len, reverse=True)) + "))")
+    seen: set[str] = set()
+    cwds: dict[str, list[str]] = {}
+    try:
+        with open(jsonl, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                matched = {m.group(1) for m in pattern.finditer(line)}
+                if not matched:
+                    continue
+                seen.update(matched)
+                try:
+                    cwd = json.loads(line).get("cwd")
+                except (json.JSONDecodeError, AttributeError):
+                    continue
+                if isinstance(cwd, str) and cwd:
+                    for needle in matched:
+                        values = cwds.setdefault(needle, [])
+                        if cwd in values:
+                            values.remove(cwd)
+                        values.append(cwd)
+    except OSError:
+        return {}
+    return {needle: list(reversed(cwds.get(needle, []))) for needle in seen}
+
+
 def last_assistant_text(jsonl: str | Path) -> Optional[str]:
     """Texto do ULTIMO evento de assistant do transcript (modo done_claimed do loop procura
     'LOOP_DONE' aqui). Streaming linha a linha (padrao path_in_transcript); None se ausente."""

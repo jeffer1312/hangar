@@ -5213,7 +5213,29 @@ def files_resolver(name: str, body: ResolverBody):
     """Visão "citados": confere de uma vez quais caminhos citados existem (e resolve os relativos
     a outra pasta pelo sufixo). Quem não existe não entra na lista."""
     try:
-        return filesearch.resolver(_session_cwd(name), body.caminhos)
+        info = _cached_info_sync(name)
+        if info is None or not info.cwd:
+            raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+        from app.transcript import citation_cwds
+        cited = citation_cwds(info.jsonl, body.caminhos) if info.jsonl else {}
+        found: dict[str, dict] = {}
+        for path in body.caminhos:
+            bases = list(dict.fromkeys([*(cited.get(path) or []), info.cwd]))
+            for suffix in (False, True):
+                for base in bases:
+                    result = filesearch.resolver(base, [path], suffix=suffix)
+                    target = result["ok"].get(path)
+                    if target is None:
+                        continue
+                    if os.path.realpath(base) != os.path.realpath(info.cwd):
+                        # O FilesStore lê relativos pelo cwd de nascimento. Outro cwd usa /file.
+                        target["relativo"] = None
+                    found[path] = target
+                    break
+                if path in found:
+                    break
+        return {"ok": {path: found[path] for path in body.caminhos if path in found},
+                "faltam": [path for path in body.caminhos if path not in found]}
     except SearchError as e:
         raise _erro_arq(e)
 
@@ -5621,8 +5643,9 @@ def serve_file(name: str, path: str, request: Request):
     info = _cached_info_sync(name)
     if info is None or not info.jsonl:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    from app.transcript import path_in_transcript
-    if not path_in_transcript(info.jsonl, path):
+    from app.transcript import citation_cwds
+    cited = citation_cwds(info.jsonl, [path])
+    if path not in cited:
         raise HTTPException(403, detail=erro("erro_arquivo_nao_citado", "file not referenced in this conversation"))
     expanded = os.path.expanduser(path)
     if os.path.isabs(expanded):
@@ -5630,10 +5653,20 @@ def serve_file(name: str, path: str, request: Request):
     else:
         if not info.cwd:
             raise HTTPException(409, detail=erro("erro_cwd_indisponivel", "cwd da sessao indisponivel"))
-        base = os.path.realpath(info.cwd)
-        real = os.path.realpath(os.path.join(base, expanded))
-        if real != base and not real.startswith(base + os.sep):
+        if ".." in path.replace("\\", "/").split("/"):
             raise HTTPException(403, detail=erro("erro_caminho_fora_cwd", "path escapes session cwd"))
+        bases = list(dict.fromkeys([*cited[path], info.cwd]))
+        real = ""
+        for raw_base in bases:
+            base = os.path.realpath(raw_base)
+            candidate = os.path.realpath(os.path.join(base, expanded))
+            if candidate != base and not candidate.startswith(base + os.sep):
+                continue
+            if os.path.isfile(candidate):
+                real = candidate
+                break
+        if not real:
+            raise HTTPException(404, detail=erro("erro_arquivo_nao_encontrado", "file not found"))
     if not os.path.isfile(real):
         raise HTTPException(404, detail=erro("erro_arquivo_nao_encontrado", "file not found"))
     media = mimetypes.guess_type(real)[0] or "application/octet-stream"

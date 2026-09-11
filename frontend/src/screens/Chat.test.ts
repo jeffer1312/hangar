@@ -12,6 +12,7 @@ import { chamadasFocus } from './ComposerStub.svelte';
 import { filesStores } from '../lib/filesStore.svelte';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
+import * as m from '../paraglide/messages';
 import GitTabs from '../components/git/GitTabs.svelte';
 import { createGitStore } from '../lib/gitStore.svelte';
 import { renderMarkdown } from '../lib/markdown';
@@ -287,6 +288,7 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     const target = document.createElement('div');
     document.body.append(target);
     const git = createGitStore('sess');
+    git.error = 'fatal: not a git repository';
     const comp = mount(GitTabs, { target, props: {
       git, desktop: false, filesInContext: false, initialTab: 'files', onClose: vi.fn(),
     } });
@@ -325,7 +327,7 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     }
   });
 
-  it('não abre um homônimo arbitrário quando a conversa cita arquivos diferentes', async () => {
+  it('nome repetido abre o primeiro caminho citado em vez de virar erro de sessão', async () => {
     const api = await import('@hangar/core');
     const nome = 'guard.sh';
     vi.mocked(api.getHistoryDesde).mockResolvedValueOnce({ eventos: [
@@ -338,7 +340,7 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
         '/home/b/guard.sh': { relativo: null, real: '/home/b/guard.sh' },
       }, faltam: [] });
     const store = filesStores.retain('srv-test::sess', 'sess');
-    const abrir = vi.spyOn(store, 'abrirExterno');
+    const abrir = vi.spyOn(store, 'abrirExterno').mockResolvedValue(true);
     const t = montar();
     try {
       await tick();
@@ -347,12 +349,32 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
       texto.innerHTML = renderMarkdown(`Veja \`${nome}\`.`, { fileLinks: true });
       t.el.querySelector('.chat-underlay')!.append(texto);
       texto.querySelector('button')!.click();
-      await vi.waitFor(() => expect(t.el.textContent).toContain('Há mais de um arquivo chamado guard.sh'));
-      expect(abrir).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(abrir).toHaveBeenCalledWith('/home/a/guard.sh', expect.any(String), null));
+      expect(t.el.querySelector('.chat-error')).toBeNull();
     } finally {
       abrir.mockRestore();
       await unmount(t.comp);
       filesStores.release('srv-test::sess');
+    }
+  });
+
+  it('arquivo inexistente não substitui a conversa por erro de sessão', async () => {
+    const api = await import('@hangar/core');
+    vi.mocked(api.resolverCitados).mockResolvedValueOnce({ ok: {}, faltam: ['ausente.ts'] });
+    const t = montar();
+    try {
+      await tick();
+      const texto = document.createElement('div');
+      texto.innerHTML = renderMarkdown('Veja `ausente.ts`.', { fileLinks: true });
+      t.el.querySelector('.chat-underlay')!.append(texto);
+      texto.querySelector('button')!.click();
+      const store = filesStores.retain('srv-test::sess', 'sess');
+      await vi.waitFor(() => expect(store.erro).toBe(m.erro_arq_inexistente()));
+      filesStores.release('srv-test::sess');
+      expect(t.el.querySelector('.chat-error')).toBeNull();
+      expect(t.el.querySelector('.chat-underlay')).not.toBeNull();
+    } finally {
+      await unmount(t.comp);
     }
   });
 

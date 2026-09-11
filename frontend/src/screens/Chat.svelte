@@ -412,7 +412,6 @@
   async function abrirArquivoCitado(path: string, linha: number | null) {
     const pedido = ++aberturaCitada;
     const geracao = histGen;
-    error = '';
     try {
       let resposta = await resolverCitados(sessionName, [path]);
       if (pedido !== aberturaCitada || geracao !== histGen) return;
@@ -422,26 +421,36 @@
         if (!candidatos.length && (temMaisNoServidor || histGap)) {
           await loadOlderInBackground(geracao);
           if (pedido !== aberturaCitada || geracao !== histGen) return;
-          if (histGap === 'failed') { error = m.chat_erro_carregar_historico(); return; }
+          if (histGap === 'failed') {
+            filesStore.erro = m.chat_erro_carregar_historico();
+            if (!filesInContext) { gitInitialTab = 'files'; gitOpen = true; }
+            return;
+          }
           candidatos = caminhosCitadosPorNome(events, path);
         }
         if (candidatos.length) {
           resposta = await resolverCitados(sessionName, candidatos);
           if (pedido !== aberturaCitada || geracao !== histGen) return;
           const distintos = new Map(Object.entries(resposta.ok).map(([cru, alvo]) => [alvo.real, { cru, alvo }]));
-          if (distintos.size > 1) { error = m.arq_citado_ambiguo({ nome: path }); return; }
           const encontrado = distintos.values().next().value;
           if (encontrado) { path = encontrado.cru; resolvido = encontrado.alvo; }
         }
       }
-      if (!resolvido) { error = m.erro_arq_inexistente(); return; }
+      if (!resolvido) {
+        filesStore.erro = m.erro_arq_inexistente();
+        if (!filesInContext) { gitInitialTab = 'files'; gitOpen = true; }
+        return;
+      }
       const abertura = resolvido.relativo === null
         ? filesStore.abrirExterno(path, fileUrl(sessionName, path), linha)
         : filesStore.abrir(resolvido.relativo, linha);
       if (!filesInContext) { gitInitialTab = 'files'; gitOpen = true; }
-      if (!(await abertura) && pedido === aberturaCitada && geracao === histGen) error = filesStore.erro ?? m.erro_arq_inexistente();
+      await abertura;
     } catch (e) {
-      if (pedido === aberturaCitada && geracao === histGen) error = formataErro(e) ?? m.erro_arq_inexistente();
+      if (pedido === aberturaCitada && geracao === histGen) {
+        filesStore.erro = formataErro(e) ?? m.erro_arq_inexistente();
+        if (!filesInContext) { gitInitialTab = 'files'; gitOpen = true; }
+      }
     }
   }
   onDestroy(() => { aberturaCitada++; });

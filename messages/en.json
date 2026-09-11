@@ -2676,7 +2676,6 @@
   "voz_estilo": "Style",
   "voz_estilo_ajuda": "How much the model may change what you said: punctuate only, reorganise into prose, or turn it into a document with sections.",
   "arq_sem_resultados": "Nothing found",
-  "arq_citado_ambiguo": "More than one file is named {nome}. Use a reference with the full path.",
   "chat_servidor_removido": "This server no longer exists. Go back to the list to choose another.",
   "composer_desfazer_limpeza": "undo cleanup",
   "composer_ditado_limpo": "Dictation cleaned.",

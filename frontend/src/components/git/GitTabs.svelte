@@ -163,7 +163,7 @@
   }
 </script>
 
-{#if naoEhRepo}
+{#if naoEhRepo && nav.tab !== 'files'}
   <p class="gt-muted gt-vazio">{m.git_nao_repo()}</p>
 {:else}
   <div class="gt" class:gt-desktop={desktop}>
