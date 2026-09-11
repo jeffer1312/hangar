@@ -907,6 +907,51 @@ def reiniciar_agora() -> dict:
     return {"ok": True, "pid": proc.pid}
 
 
+_DIST_URL = "https://github.com/jeffer1312/hangar/releases/download/dist-latest"
+
+
+def _atualizar_dist() -> str | None:
+    """Troca o `frontend/dist` pelo build que o CI publicou. Devolve o aviso quando não deu.
+
+    Espelha o `baixar_dist` do `install.sh`: um reinício sem isto sobe o backend novo servindo a
+    tela velha — repo == processo, a tela diz "em dia", e o navegador continua no bundle de antes.
+    As mesmas regras de lá: árvore com edição em `frontend`/`packages` fica intacta, e commit
+    diferente do CI não cancela, só avisa. Nunca compila local.
+    """
+    import tarfile
+    import tempfile
+    import urllib.request
+    p = _git("status", "--porcelain", "--", "frontend", "packages", timeout=30)
+    if p.returncode != 0 or p.stdout.strip():
+        return "tela não atualizada: frontend/ ou packages/ tem mudança local"
+    sha_local = _git("rev-parse", "HEAD", timeout=30).stdout.strip()
+    tmp = Path(tempfile.mkdtemp(prefix=".dist-baixado.", dir=REPO / "frontend"))
+    try:
+        with urllib.request.urlopen(f"{_DIST_URL}/frontend-dist.sha", timeout=15) as r:
+            sha_remoto = r.read().decode("ascii", "replace").strip()
+        with urllib.request.urlopen(f"{_DIST_URL}/frontend-dist.tar.gz", timeout=180) as r, \
+                tarfile.open(fileobj=r, mode="r|gz") as tar:
+            tar.extractall(tmp, filter="data")
+        if not (tmp / "index.html").is_file():
+            return "tela não atualizada: o dist do CI veio incompleto"
+        # O dist velho só sai DEPOIS de o novo estar no lugar: um rename que falha no meio não
+        # pode deixar a máquina sem tela nenhuma.
+        dist = REPO / "frontend" / "dist"
+        velho = dist.with_name(".dist-velho")
+        shutil.rmtree(velho, ignore_errors=True)
+        if dist.exists():
+            dist.rename(velho)
+        tmp.rename(dist)
+        shutil.rmtree(velho, ignore_errors=True)
+    except (OSError, tarfile.TarError) as e:
+        return f"tela não atualizada: não consegui baixar o dist do CI ({e})"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if sha_remoto != sha_local:
+        return f"a tela é do commit {sha_remoto[:8]}; este checkout está em {sha_local[:8]}"
+    return None
+
+
 def executar_reinicio() -> None:
     """O reinício em si, já dentro do processo destacado.
 
@@ -917,6 +962,8 @@ def executar_reinicio() -> None:
     a este processo, e é dele que a tela lê.
     """
     try:
+        aviso = _atualizar_dist()
+        _escrever(avisos=[aviso] if aviso else [])
         _avisar_sessoes()
         _reiniciar(_topologia())
     except Exception as e:                           # noqa: BLE001 — ver docstring

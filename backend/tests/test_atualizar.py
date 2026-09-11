@@ -758,11 +758,55 @@ def test_reinicio_que_falha_deixa_rastro_no_estado(repo, monkeypatch):
     nenhum. Sem gravar no estado, um `systemctl` que falha some por completo e a tela fica esperando
     um servidor que nunca cai."""
     monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
+    monkeypatch.setattr(atualizar, "_atualizar_dist", lambda: None)
     monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
     monkeypatch.setattr(atualizar, "_reiniciar",
                         lambda topo: (_ for _ in ()).throw(RuntimeError("systemctl explodiu")))
     atualizar.executar_reinicio()
     assert "systemctl explodiu" in atualizar.estado()["reinicio_erro"]
+
+
+def _dist_do_ci(repo, monkeypatch, sha: str, index: bool = True):
+    """Dublê do release `dist-latest`: um `.sha` e um tar.gz com (ou sem) index.html."""
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        if index:
+            dado = b"<html>novo</html>"
+            info = tarfile.TarInfo("index.html")
+            info.size = len(dado)
+            tar.addfile(info, io.BytesIO(dado))
+    corpo = {"frontend-dist.sha": sha.encode(), "frontend-dist.tar.gz": buf.getvalue()}
+
+    class _Resp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda url, timeout=0: _Resp(corpo[url.rsplit("/", 1)[1]]))
+
+
+def test_reinicio_troca_o_dist_pelo_do_ci(repo, monkeypatch):
+    """Reiniciar com o disco à frente do processo subia o backend novo servindo a tela velha:
+    repo == processo, a tela dizia "em dia", e o navegador seguia no bundle de antes."""
+    (repo / "frontend" / "dist").mkdir(parents=True)
+    (repo / "frontend" / "dist" / "index.html").write_text("velho", encoding="utf-8")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "dist")
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    _dist_do_ci(repo, monkeypatch, head)
+    assert atualizar._atualizar_dist() is None
+    assert (repo / "frontend" / "dist" / "index.html").read_text() == "<html>novo</html>"
+    assert not list((repo / "frontend").glob(".dist-baixado.*"))
+
+
+def test_reinicio_nao_apaga_edicao_local_da_tela(repo, monkeypatch):
+    (repo / "packages" / "core").mkdir(parents=True)
+    (repo / "packages" / "core" / "x.ts").write_text("edit", encoding="utf-8")
+    aviso = atualizar._atualizar_dist()
+    assert aviso and "mudança local" in aviso
 
 
 def test_reiniciar_agora_limpa_a_falha_anterior(repo, monkeypatch):
