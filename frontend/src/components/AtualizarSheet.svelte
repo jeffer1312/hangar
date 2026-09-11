@@ -18,6 +18,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import { getAtualizacao, iniciarAtualizacao, reiniciarServidor } from '@hangar/core';
   import * as diag from '../lib/diag';
+  import { aguardarSwNovo, esvaziarCaches } from '../lib/swNovo';
   import { renderMarkdown } from '../lib/markdown';
   import type { Atualizacao } from '@hangar/core';
 
@@ -166,24 +167,21 @@
   /** Terminou bem: recarrega a página para sair do bundle antigo (o do build anterior, em cache). */
   async function concluir() {
     try {
-      // COM TETO DE TEMPO. `reg.update()` vai à rede buscar o service worker novo, e o servidor
-      // acabou de reiniciar — a promessa pode ficar pendurada indefinidamente. Sem o teto, o
-      // `reload()` abaixo nunca executava e a tela ficava parada na última etapa, sem erro nenhum,
-      // parecendo travada. Medido em 25/08/2026, na primeira atualização feita de fora daqui.
+      // Espera o service worker NOVO ficar ativo antes de recarregar — `reg.update()` resolve com
+      // ele ainda instalando, e recarregar nesse instante voltava servido pelo SW velho: a tela
+      // dizia "atualizado" com o bundle de antes (10/09/2026, Atualizar pelo app). COM TETO: o
+      // servidor acabou de reiniciar e a busca do sw.js pode ficar pendurada; sem o teto o reload
+      // nunca executava (25/08/2026). Teto de 15s, não 3s: instalar é baixar o precache inteiro.
       const trocou = await Promise.race([
-        (async () => {
-          const reg = await navigator.serviceWorker?.getRegistration();
-          await reg?.update();
-          reg?.waiting?.postMessage({ type: 'SKIP_WAITING' });
-          return true;
-        })(),
-        new Promise<boolean>((r) => setTimeout(() => r(false), 3000)),
+        navigator.serviceWorker?.getRegistration().then(aguardarSwNovo) ?? Promise.resolve(true),
+        new Promise<boolean>((r) => setTimeout(() => r(false), 15000)),
       ]);
       if (!trocou) {
-        // O teto venceu: a página vai recarregar do mesmo jeito (melhor que travar), mas pode
-        // voltar servida pelo service worker ANTIGO — e aí a tela diria "atualizado" mostrando o
-        // bundle de antes, sem nada denunciando. Fica no diário pra essa suspeita ser verificável.
-        diag.registrar({ evento: 'atualizacao.sw_timeout', nivel: 'aviso' });
+        // Plano B: sem cache, o SW velho busca da rede e o index novo puxa os pedaços novos. Sem
+        // desregistrar — isso mataria a inscrição de push do celular. Diário: a suspeita fica
+        // verificável.
+        const n = await esvaziarCaches();
+        diag.registrar({ evento: 'atualizacao.sw_timeout', nivel: 'aviso', detalhe: `caches esvaziados: ${n}` });
       }
     } catch {
       // Sem service worker (aba comum, navegador antigo) o reload sozinho já basta.
