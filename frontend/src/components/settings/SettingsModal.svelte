@@ -323,6 +323,10 @@
 {/if}
 
 {#snippet corpo()}
+  <!-- A regra do escopo dita UMA vez, nas duas larguras: etiqueta ao lado do rótulo diz onde grava;
+       sem etiqueta, grava neste aparelho. Sem esta linha a ausência de etiqueta não significa nada,
+       e etiquetar toda linha do modal seria ruído. -->
+  <p class="st-sem-etiqueta">{m.config_escopo_sem_etiqueta()}</p>
   <!-- Legenda do grupo Servidor, UMA vez pra todas as telas dele: antes só Notificações, Anexos e
        Avançado a mostravam (as três que passam pelo ServerSettings), e Contas/Harnesses/Voz/
        Orquestração não diziam nada. Aqui ela vale pro grupo inteiro e não se repete tela a tela. -->
@@ -365,7 +369,10 @@
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
   {:else if telaAtual === 'harnesses'}
-    <HarnessSettings apiTarget={alvo} />
+    <!-- A configuração vai JÁ CARREGADA: o store desta folha é quem lê o `/api/config`, e a tela de
+         Harnesses lia o dela por fora (3 leituras por abertura, contra 1). Gravar continua sendo
+         chamada direta dela. -->
+    <HarnessSettings apiTarget={alvo} {store} />
   {:else if telaAtual === 'voz'}
     <VozSettings {store} />
   {:else}
@@ -384,6 +391,7 @@
   }
   .st-sub { grid-column: 2; margin: 0; text-align: center; font-size: var(--text-xs); color: var(--text-muted); }
   .st-valem { margin: 0 0 var(--space-3); font-size: var(--text-xs); color: var(--text-muted); }
+  .st-sem-etiqueta { margin: 0 0 var(--space-2); font-size: var(--text-xs); color: var(--text-muted); }
   /* No sub-cabeçalho do celular tudo é centralizado; o seletor ocupa a linha inteira por causa do
      motivo do apagado, então sem isto o select ficava encostado à esquerda dele. */
   .st-sub :global(.srv-wrap) { justify-content: center; }

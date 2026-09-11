@@ -5,6 +5,7 @@
   // Configurações → Orquestração mostra a mesma tela sem precisar de grupo.
   import * as m from '../paraglide/messages';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
+  import EscopoChip from './settings/EscopoChip.svelte';
   import { providerName } from '@hangar/core';
   import { getOrqPolitica, putOrqConta } from '@hangar/core';
   import { iniciais, politicaDe, type ContaInventario, type ModeloInventario, type OrqPolitica, type Papel, type Provider } from '@hangar/core';
@@ -121,7 +122,9 @@
 </script>
 
 {#snippet listaContas()}
-  <p class="oc-intro">{m.orqcfg_contas_intro()}</p>
+  <!-- A política é um arquivo DA MÁQUINA (~/.hangar/orquestracao-contas.md): a etiqueta diz isso
+       uma vez, no topo, em vez de repetir por conta. -->
+  <p class="oc-intro"><EscopoChip escopo="servidor" /> {m.orqcfg_contas_intro()}</p>
   {#if conflito}
     <p class="oc-erro" role="alert">{m.orqcfg_arquivo_mudou()} <button type="button" class="oc-link" onclick={recarregar}>{m.orqcfg_recarregar()}</button></p>
   {/if}

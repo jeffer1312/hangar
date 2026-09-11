@@ -38,8 +38,34 @@ let lerOpcoesCodex: (init?: RequestInit) => Promise<Response>;
 let componentes: ReturnType<typeof mount>[];
 
 async function estabilizar() { for (let i = 0; i < 8; i++) await tick(); }
-async function montar(alvo: Server | null = B) {
-  const props = $state({ apiTarget: alvo });
+// A configuração vem do modal (o store), não de um GET desta tela: o dublê entrega o que o store
+// já leu. `campos: {}` com `carregando: false` é o servidor que NÃO conhece a chave — é essa a
+// diferença que faz o card avisar "opção indisponível" em vez de ficar mudo.
+function dubleStore(campos: Record<string, unknown> = config(true).campos,
+                    extra: { carregando?: boolean; erro?: string } = {}) {
+  return {
+    get campos() { return campos; }, get leitura() { return {}; },
+    get carregando() { return extra.carregando ?? false; }, get salvando() { return false; },
+    get erro() { return extra.erro ?? ''; }, get salvo() { return false; }, get temMudanca() { return false; },
+    valorAtual: () => '', rascunhoDe: () => '', setRascunho: () => {},
+    carregar: async () => {}, salvar: async () => {}, invalidar: () => {},
+  } as never;
+}
+// Dublê REATIVO: o ↻ precisa ser observável (quantas vezes pediu leitura ao modal) e o dado do
+// servidor precisa poder mudar por fora, que é o caso que o ↻ existe pra trazer.
+function dubleStoreVivo(campos: Record<string, unknown> = config(true).campos, erro = '') {
+  const st = $state({ campos, erro, cargas: 0 });
+  const store = {
+    get campos() { return st.campos; }, get leitura() { return {}; },
+    get carregando() { return false; }, get salvando() { return false; },
+    get erro() { return st.erro; }, get salvo() { return false; }, get temMudanca() { return false; },
+    valorAtual: () => '', rascunhoDe: () => '', setRascunho: () => {},
+    carregar: async () => { st.cargas++; st.erro = ''; }, salvar: async () => {}, invalidar: () => {},
+  } as never;
+  return { st, store };
+}
+async function montar(alvo: Server | null = B, store: unknown = dubleStore()) {
+  const props = $state({ apiTarget: alvo, store: store as never });
   const el = document.createElement('div');
   document.body.appendChild(el);
   const comp = mount(HarnessSettings, { target: el, props });
@@ -262,10 +288,51 @@ describe('opções dentro do card', () => {
   });
 
   it('servidor que não conhece a chave do Claude diz que a opção está indisponível, sem interruptor', async () => {
-    lerConfig = async () => resposta({ campos: {}, somente_leitura: {} });
-    const { el } = await montar();
+    const { el } = await montar(B, dubleStore({}));
     expect(el.textContent).toContain(m.harness_opcoes_indisponiveis());
     expect(claude()).toBeNull();
+  });
+
+  it('configuração ainda carregando não vira "indisponível" — nem interruptor, nem aviso', async () => {
+    const { el } = await montar(B, dubleStore({}, { carregando: true }));
+    expect(el.textContent).not.toContain(m.harness_opcoes_indisponiveis());
+    expect(claude()).toBeNull();
+  });
+
+  it('leitura de configuração que falhou aparece como erro, não como opção indisponível', async () => {
+    const { el } = await montar(B, dubleStore({}, { erro: 'Falha de conexão' }));
+    expect(el.textContent).toContain('Falha de conexão');
+    expect(el.textContent).not.toContain(m.harness_opcoes_indisponiveis());
+  });
+
+  it('o ↻ é a saída de uma leitura de configuração que falhou: pede a releitura ao modal', async () => {
+    const { st, store } = dubleStoreVivo(config(true).campos, 'Falha de leitura');
+    const { el } = await montar(B, store);
+    expect(el.textContent).toContain('Falha de leitura');
+    expect(claude()).toBeNull();
+    el.querySelector<HTMLButtonElement>('.hs-refresh')!.click(); await estabilizar();
+    expect(st.cargas).toBe(1);
+    expect(el.textContent).not.toContain('Falha de leitura');
+    expect(claude().checked).toBe(true);
+  });
+
+  it('depois de gravar, o ↻ mostra o que o servidor tem agora, não a última pintura da gravação', async () => {
+    lerConfig = async (init) => resposta(config(init?.method !== 'POST'));
+    const { st, store } = dubleStoreVivo();
+    await montar(B, store);
+    claude().click(); await estabilizar();
+    expect(claude().checked).toBe(false);
+    // Mudou por fora (outra aba, o terminal): o modal releria isso, a pintura da gravação não.
+    st.campos = config(true).campos;
+    document.querySelector<HTMLButtonElement>('.hs-refresh')!.click(); await estabilizar();
+    expect(claude().checked).toBe(true);
+  });
+
+  it('a tela NÃO lê a configuração por conta própria: só o que o modal já leu', async () => {
+    await montar();
+    expect(vi.mocked(fetch).mock.calls.filter(([url, init]) =>
+      String(url).endsWith(ROTA_CONFIG) && init?.method !== 'POST')).toHaveLength(0);
+    expect(claude().checked).toBe(true);
   });
 
   it('contexto estendido e voz beta gravam na hora pelo endpoint do Codex, avisando o chat', async () => {
@@ -338,38 +405,28 @@ describe('opções dentro do card', () => {
     expect(contexto().checked).toBe(true);
   });
 
-  it('resposta atrasada do servidor anterior não sobrescreve o novo alvo', async () => {
-    let terminar!: (r: Response) => void;
-    lerConfig = async (init) => init?.method === 'POST' ? resposta(config(true))
-      : new Promise((resolve) => { terminar = resolve; });
+  // As duas abaixo guardavam a corrida entre a leitura PRÓPRIA desta tela e a gravação. A leitura
+  // saiu (vem do modal); o que sobra guardar é a gravação atravessando a troca de alvo.
+  it('trocar de servidor descarta o que a gravação pintou e volta ao dado do modal', async () => {
+    lerConfig = async (init) => resposta(config(init?.method !== 'POST'));
     const { props } = await montar();
-    lerConfig = async () => resposta(config(false));
-    props.apiTarget = A; await estabilizar();
-    terminar(resposta(config(true))); await estabilizar();
-    expect(claude().checked).toBe(false);
-  });
-
-  it('leitura disparada antes da gravação não repõe o valor velho quando responde depois', async () => {
-    let soltarLeitura!: (r: Response) => void;
-    let valor = true;
-    lerConfig = async (init) => {
-      if (init?.method === 'POST') { valor = JSON.parse(String(init.body)).claude_statusline_update; return resposta(config(valor)); }
-      return resposta(config(valor));
-    };
-    const { el } = await montar();
-    // ↻ dispara a leitura, que fica em voo; o clique grava e responde antes dela.
-    lerConfig = async (init) => init?.method === 'POST'
-      ? (valor = JSON.parse(String(init.body)).claude_statusline_update, resposta(config(valor)))
-      : new Promise((resolve) => { soltarLeitura = resolve; });
-    const gets = () => vi.mocked(fetch).mock.calls
-      .filter(([url, init]) => String(url).endsWith(ROTA_CONFIG) && init?.method !== 'POST').length;
-    const antes = gets();
-    el.querySelector<HTMLButtonElement>('.hs-refresh')!.click(); await estabilizar();
-    expect(gets()).toBe(antes + 1);
+    expect(claude().checked).toBe(true);
     claude().click(); await estabilizar();
     expect(claude().checked).toBe(false);
-    soltarLeitura(resposta(config(true))); await estabilizar();
-    expect(claude().checked).toBe(false);
+    props.apiTarget = A; await estabilizar();
+    expect(claude().checked).toBe(true);
+  });
+
+  it('gravação atrasada do servidor anterior não pinta o alvo novo', async () => {
+    let terminar!: (r: Response) => void;
+    lerConfig = async (init) => init?.method === 'POST'
+      ? new Promise((resolve) => { terminar = resolve; })
+      : resposta(config(true));
+    const { props } = await montar();
+    claude().click(); await estabilizar();
+    props.apiTarget = A; await estabilizar();
+    terminar(resposta(config(false))); await estabilizar();
+    expect(claude().checked).toBe(true);
   });
 
   it('resposta atrasada do Codex não pinta o servidor novo', async () => {

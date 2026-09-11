@@ -360,3 +360,22 @@ describe('SettingsModal — seletor de servidor do grupo', () => {
     unmount(t.comp);
   });
 });
+
+describe('SettingsModal — a regra do escopo dita uma vez', () => {
+  it('a linha "Sem etiqueta: vale só neste aparelho" aparece nas duas larguras', async () => {
+    stubDesktop();
+    const desktop = montar('voz', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+    await tick(); await tick();
+    expect(document.querySelectorAll('.st-sem-etiqueta')).toHaveLength(1);
+    expect(document.body.textContent).toContain(m.config_escopo_sem_etiqueta());
+    unmount(desktop.comp);
+    document.body.innerHTML = '';
+
+    stubMobile();
+    const celular = montar('voz', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+    await tick(); await tick();
+    expect(document.querySelectorAll('.st-sem-etiqueta')).toHaveLength(1);
+    expect(document.body.textContent).toContain(m.config_escopo_sem_etiqueta());
+    unmount(celular.comp);
+  });
+});

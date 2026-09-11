@@ -12,6 +12,7 @@
   import ListaMaquinas from './ListaMaquinas.svelte';
   import ServerEditSheet from '../ServerEditSheet.svelte';
   import LinhaConfig from './LinhaConfig.svelte';
+  import EscopoChip from './EscopoChip.svelte';
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
   import type { RemovalSnapshot, Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
@@ -433,7 +434,7 @@
     <p class="id-aviso">{m.peers_aviso_nao_definido()}</p>
   {/if}
   <div class="id-linha">
-    <span class="id-rot">{m.peers_identificador()}
+    <span class="id-rot">{m.peers_identificador()} <EscopoChip escopo="env" />
       {#if identificador}
         <small>{m.peers_identificador_definido({ nome: identificador })}</small>
       {:else}

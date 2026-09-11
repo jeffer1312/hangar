@@ -199,9 +199,33 @@ describe('ServerSettings — somente leitura', () => {
     await tick();
     expect(alvo.textContent).toContain(m.config_server_painel_terminal());
     expect(alvo.textContent).toContain('abc');
+    // Cada linha só-leitura diz que só o .env a muda; as editáveis dizem "Este servidor".
+    for (const linha of alvo.querySelectorAll('.ro-linha')) {
+      expect(linha.textContent).toContain(m.config_escopo_env());
+    }
+    expect(alvo.querySelector('.linha .escopo')!.textContent).toBe(m.config_escopo_servidor());
     expect(alvo.textContent).not.toContain('8765');
     expect(alvo.textContent).not.toContain('0.0.0.0');
     expect(alvo.textContent).not.toContain('casa');
+    unmount(app);
+    alvo.remove();
+  });
+
+  it('"Pastas mapeadas" diz que grava no servidor, como as linhas vizinhas', async () => {
+    const store = {
+      get campos() { return {}; }, get leitura() { return {}; },
+      get carregando() { return false; }, get salvando() { return false; },
+      get erro() { return ''; }, get salvo() { return false; }, get temMudanca() { return false; },
+      valorAtual: () => '/a', rascunhoDe: () => '', setRascunho: vi.fn(),
+      carregar: vi.fn(), salvar: vi.fn(), invalidar: vi.fn(),
+    } as unknown as ConfigServidorStore;
+    const alvo = document.createElement('div');
+    document.body.appendChild(alvo);
+    const app = mount(ServerSettings, { target: alvo, props: { store, secao: 'avancado' } });
+    await tick();
+    const titulo = alvo.querySelector('.raizes h3')!;
+    expect(titulo.textContent).toContain(m.config_server_raizes());
+    expect(titulo.textContent).toContain(m.config_escopo_servidor());
     unmount(app);
     alvo.remove();
   });

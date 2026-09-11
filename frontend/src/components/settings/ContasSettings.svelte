@@ -27,6 +27,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
   import { createQuery } from '@tanstack/svelte-query';
   import { clienteQuery, credenciais, motores as qMotoresDef } from '../../lib/queries';
   import MotorForm from './MotorForm.svelte';
+  import EscopoChip from './EscopoChip.svelte';
   import * as m from '../../paraglide/messages';
 
   // Contrato do apiTarget (o mesmo de ServidoresSettings): null = servidor ATIVO (API global com
@@ -489,7 +490,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
        (referência Cloudscape/AWS: refresh no cabeçalho, timestamp ao lado, lista visível
        durante a busca). O ícone é SVG traçado 2, como o lápis. -->
   <div class="ct-cab">
-    <p class="st-secao ct-topo">{m.contas_secao_lista()}</p>
+    <p class="st-secao ct-topo">{m.contas_secao_lista()} <EscopoChip escopo="servidor" /></p>
     {#if atualizadoEm != null}
       <span class="ct-atualizado" aria-live="polite">{m.contas_atualizado_ha({ n: idadeAtualizacao })}</span>
     {/if}

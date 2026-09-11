@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
   import Select from '../Select.svelte';
+  import EscopoChip from './EscopoChip.svelte';
   import * as m from '../../paraglide/messages';
 
   interface Campo {
@@ -15,8 +16,16 @@
   interface Props {
     campo: Campo;
     store: ConfigServidorStore;
+    /** Onde este campo grava. Padrão "servidor": quem usa esta linha é o store de servidor.
+     *  `null` = vale só neste aparelho, e aí a etiqueta não existe (a regra está dita uma vez na
+     *  linha fixa do topo do modal). */
+    escopo?: 'servidor' | 'env' | null;
+    /** Veredito + motivo da linha vaga ("Recomendado: ligado" + o "por quê?" que expande). Os dois
+     *  juntos, ou nenhum: veredito sem motivo é o mesmo texto vago que isto veio resolver. */
+    veredito?: string;
+    motivo?: string;
   }
-  let { campo: c, store }: Props = $props();
+  let { campo: c, store, escopo = 'servidor', veredito, motivo }: Props = $props();
   const estado = $derived(store.campos[c.chave]);
 </script>
 
@@ -24,9 +33,18 @@
   <div class="txt">
     <label class="rot" for={`cfg-${c.chave}`}>
       {c.rotulo}
+      {#if escopo}<EscopoChip {escopo} />{/if}
       {#if estado?.origem === 'app'}<span class="tag">{m.config_server_editado()}</span>{/if}
     </label>
     <span class="ajuda">{c.ajuda}</span>
+    {#if veredito && motivo}
+      <!-- Elemento nativo de expandir/recolher: teclado e estado saem de graça, sem $state nem
+           aria próprio. -->
+      <details class="porque">
+        <summary><span class="vered">{veredito}</span> <span class="pq">{m.config_motores_por_que()}</span></summary>
+        <p class="motivo">{motivo}</p>
+      </details>
+    {/if}
   </div>
 
   {#if c.tipo === 'liga'}
@@ -90,6 +108,9 @@
 
 <style>
   .linha {
+    /* Container da etiqueta de escopo: é a LARGURA DESTA LINHA que decide se ela cabe ao lado do
+       rótulo, não a da janela (no dock do desktop a janela é larga e a linha tem ~530px). */
+    container-type: inline-size;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
@@ -100,8 +121,10 @@
   .linha.liga { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-4); }
 
   .txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  /* `wrap`: apertado, a etiqueta de escopo desce inteira pra linha de baixo — sem isso ela rouba a
+     largura do rótulo e o texto quebra em uma palavra por linha. */
   .rot {
-    display: flex; align-items: center; gap: var(--space-2);
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
     font-size: var(--text-base); font-weight: 600; color: var(--text-primary);
   }
   /* "editado" = veio de override, não do .env — sem isso não dá pra saber de onde o valor vem. */
@@ -116,6 +139,24 @@
      Vale pra toda ajuda do arquivo (o bug ja existia antes dos sliders, so nao tinha aparecido com
      texto longo o bastante numa tela estreita). */
   .ajuda { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; min-width: 0; }
+
+  /* Veredito + "por quê?": mesma leitura do acordeão do formulário de modelo, com o <details>
+     nativo no lugar do estado próprio. */
+  .porque { font-size: 11px; }
+  /* 24px é o alvo mínimo de toque (WCAG 2.5.8): sem o marcador nativo, o `summary` de 11px ficava
+     com 17px de altura clicável. */
+  .porque summary {
+    display: flex; align-items: center; gap: var(--space-1);
+    min-height: 24px; cursor: pointer; list-style: none;
+  }
+  .porque summary::-webkit-details-marker { display: none; }
+  .vered { color: var(--text-muted); }
+  .pq { color: var(--accent); }
+  .porque summary:hover .pq { text-decoration: underline; }
+  .motivo {
+    margin: var(--space-1) 0 0;
+    font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5; max-width: 62ch;
+  }
 
   input[type='text'], input[type='number'] {
     height: 40px;

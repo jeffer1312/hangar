@@ -10,15 +10,30 @@
     type Harness, type ItemHarness, type IntegracaoCodex, type MensagemCodex, type Instalacao,
     type CodexOpcoes,
   } from '../../lib/credenciais';
-  import { patchConfig, patchConfigForServer, getConfig, getConfigForServer, type CampoConfig } from '@hangar/core';
+  import { patchConfig, patchConfigForServer, type CampoConfig } from '@hangar/core';
   import * as m from '../../paraglide/messages';
   import { getLocale } from '../../paraglide/runtime';
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
+  import EscopoChip from './EscopoChip.svelte';
   import type { Server } from '../../lib/auth';
+  import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
 
-  interface Props { apiTarget: Server | null }
-  let { apiTarget }: Props = $props();
+  interface Props {
+    apiTarget: Server | null;
+    /** Configuração do servidor JÁ LIDA pelo modal. Esta tela não faz o `GET /api/config` dela —
+     *  eram 3 leituras por abertura contra 1. Vem o store inteiro, e não só os campos, porque
+     *  "carregando" e "não deu pra ler" precisam ser distinguíveis de "o backend não conhece a
+     *  chave": só o terceiro é que vira o aviso de opção indisponível. */
+    store: ConfigServidorStore;
+  }
+  let { apiTarget, store }: Props = $props();
+
+  // O que a gravação devolve vence o que veio do modal: o POST responde com os campos já novos, e
+  // é essa releitura que muda a tela (o store do modal só recarrega na troca de alvo).
+  let camposGravados = $state<Record<string, CampoConfig> | null>(null);
+  const campos = $derived(camposGravados
+    ?? (store.carregando || store.erro ? null : store.campos));
 
   let lista = $state<Harness[]>([]);
   let carregando = $state(false);
@@ -28,7 +43,6 @@
   // Preferência do Claude (barra de status) e opções do Codex vivem DENTRO do card, sem folha e sem
   // Salvar: o `checked` é o dado do servidor, o `onchange` repõe o dado e grava, e é a releitura que
   // muda a tela — o mesmo caminho de "Sincronização automática", logo abaixo.
-  let campos = $state<Record<string, CampoConfig> | null>(null);
   let erroConfig = $state('');
   let trocandoStatusline = $state(false);
   let opcoesDoCodex = $state<CodexOpcoes | null>(null);
@@ -146,21 +160,6 @@
     }
   }
 
-  // Uma leitura de configuração por abertura da tela, sem store: quem grava é a mesma chamada direta
-  // que "Sincronização automática" já usa, e a resposta do POST já traz os campos de volta.
-  async function consultarConfig(ctx: ConsultaIntegracao) {
-    const requisicao = ++ctx.reqConfig;
-    erroConfig = '';
-    try {
-      const cfg = await (ctx.alvo ? getConfigForServer(ctx.alvo) : getConfig());
-      if (ctx.controle.signal.aborted || requisicao !== ctx.reqConfig) return;
-      campos = cfg.campos ?? {};
-    } catch (e) {
-      if (ctx.controle.signal.aborted || requisicao !== ctx.reqConfig) return;
-      erroConfig = e instanceof Error ? e.message : String(e);
-    }
-  }
-
   async function trocarStatusline(ev: Event) {
     const alvo = ev.currentTarget as HTMLInputElement;
     const querido = alvo.checked;
@@ -175,7 +174,7 @@
     try {
       const r = await (ctx.alvo ? patchConfigForServer(ctx.alvo, { claude_statusline_update: querido })
                                 : patchConfig({ claude_statusline_update: querido }));
-      if (consulta === ctx && requisicao === ctx.reqConfig) campos = r.campos ?? campos;
+      if (consulta === ctx && requisicao === ctx.reqConfig) camposGravados = r.campos ?? camposGravados;
     } catch (e) {
       if (consulta === ctx) erroConfig = e instanceof Error ? e.message : String(e);
     } finally {
@@ -242,9 +241,12 @@
 
   function atualizar() {
     void carregar();
-    // O ↻ é a saída de uma leitura que falhou: não há botão "tentar de novo" por opção. As opções do
-    // Codex saem pelo `carregar()` acima, nos dois ramos dele.
-    if (consulta) void consultarConfig(consulta);
+    // O ↻ é a saída de uma leitura que falhou — inclusive a da CONFIGURAÇÃO, que agora vem do modal:
+    // quem relê é o store dele. `camposGravados` cai junto, senão a pintura da última gravação
+    // venceria o dado recém-lido e o que mudou por fora (outra aba, o terminal) nunca apareceria.
+    camposGravados = null; erroConfig = '';
+    void store.carregar();
+    // As opções do Codex saem pelo `carregar()` acima, nos dois ramos dele.
     if (consulta && !reconciliando) void consultarIntegracao(consulta);
     // Sem guard de "instalando": `consultarInstalacao` já limpa o timer e incrementa a geração no
     // topo, então reentrar é seguro — e o guard trancava justamente a saída manual de uma tela
@@ -318,12 +320,11 @@
     };
     consulta = ctx;
     lista = []; feito = ''; consertando = null;
-    campos = null; erroConfig = ''; trocandoStatusline = false;
+    camposGravados = null; erroConfig = ''; trocandoStatusline = false;
     opcoesDoCodex = null; erroOpcoesCodex = ''; trocandoOpcoesCodex = false;
     integracao = null; erroIntegracao = ''; reconciliando = false;
     inst = null; erroInst = ''; confirmar = null;
     void carregar();
-    void consultarConfig(ctx);
     void consultarIntegracao(ctx);
     // Também na montagem: é desta resposta que sai a lista de quem dá pra instalar por botão nesta
     // máquina, e sem ela nenhum card ausente saberia o que oferecer.
@@ -426,7 +427,7 @@
 
 <div class="hs">
   <div class="hs-cab">
-    <p class="st-secao hs-titulo">{m.harness_titulo()}</p>
+    <p class="st-secao hs-titulo">{m.harness_titulo()} <EscopoChip escopo="servidor" /></p>
     <button type="button" class="hs-refresh" onclick={atualizar} disabled={carregando || consertando !== null}
       ><span aria-hidden="true">{carregando ? '…' : '↻'}</span>{m.arq_recarregar()}</button>
   </div>
@@ -476,7 +477,11 @@
                justamente a opção que sumiu. -->
           <p class="hs-aviso" role="status">{m.harness_opcoes_indisponiveis()}</p>
         {/if}
-        {#if erroConfig}<p class="hs-aviso erro" role="alert">{erroConfig}</p>{/if}
+        <!-- Erro de GRAVAR daqui, ou de LER do store do modal: sem o segundo, uma leitura que
+             falhou deixaria o card sem interruptor e sem explicação. -->
+        {#if erroConfig || store.erro}
+          <p class="hs-aviso erro" role="alert">{erroConfig || store.erro}</p>
+        {/if}
       {/if}
       {#if !h.instalado}
         <div class="hs-item">

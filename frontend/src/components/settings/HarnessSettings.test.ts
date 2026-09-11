@@ -49,7 +49,16 @@ async function montar(cards: Harness[], inst: Instalacao) {
   c.instalacaoEstado.mockResolvedValue(inst);
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const comp = mount(HarnessSettings, { target: el, props: { apiTarget: null } });
+  // A configuração vem do modal (store), não de um GET desta tela — aqui ela nem importa: o caso é
+  // o card do CLI ausente.
+  const store = {
+    get campos() { return {}; }, get leitura() { return {}; },
+    get carregando() { return false; }, get salvando() { return false; },
+    get erro() { return ''; }, get salvo() { return false; }, get temMudanca() { return false; },
+    valorAtual: () => '', rascunhoDe: () => '', setRascunho: vi.fn(),
+    carregar: vi.fn(), salvar: vi.fn(), invalidar: vi.fn(),
+  } as never;
+  const comp = mount(HarnessSettings, { target: el, props: { apiTarget: null, store } });
   montados.push(comp);
   await tick(); await Promise.resolve(); await Promise.resolve(); await tick();
   return { el, comp: comp as never };

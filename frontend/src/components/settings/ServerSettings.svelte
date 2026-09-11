@@ -2,6 +2,7 @@
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
   import { criarSeletorNativo } from '../../lib/pastaNativa.svelte';
   import LinhaConfig from './LinhaConfig.svelte';
+  import EscopoChip from './EscopoChip.svelte';
   import type { Server } from '../../lib/auth';
   import PushQuiet from '../PushQuiet.svelte';
   import { pushSupported } from '../../lib/push';
@@ -130,6 +131,7 @@
       <div class="raizes">
         <h3>
           {m.config_server_raizes()}
+          <EscopoChip escopo="servidor" />
           {#if store.campos['scan_roots']?.origem === 'app'}<span class="tag">{m.config_server_editado()}</span>{/if}
         </h3>
         <p class="ajuda">{m.config_server_raizes_ajuda()}</p>
@@ -170,7 +172,7 @@
           </p>
           {#each leituraVisivel as [k, v] (k)}
             <div class="ro-linha">
-              <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
+              <span class="ro-rot">{ROTULO_LEITURA[k] ?? k} <EscopoChip escopo="env" /></span>
               <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? m.config_server_sim() : m.config_server_nao()) : v}</span>
             </div>
           {/each}
@@ -250,9 +252,11 @@
   }
   input:focus { border-color: var(--accent); }
 
-  .raizes { margin-top: var(--space-5); }
+  /* Container da etiqueta de escopo do <h3> abaixo: sem ele a container query do chip cairia num
+     ancestral mais largo e a etiqueta nunca desceria de linha no celular. */
+  .raizes { container-type: inline-size; margin-top: var(--space-5); }
   .raizes h3 {
-    display: flex; align-items: center; gap: var(--space-2);
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0;
     margin: 0 0 4px; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
   }
   .raiz-linha {
@@ -279,10 +283,16 @@
     margin: 0 0 4px; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
   }
   .ro-linha {
+    /* Container da etiqueta de escopo: quem aperta esta linha é a largura do PAINEL. */
+    container-type: inline-size;
     display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4);
     padding: var(--space-2) 0; border-bottom: 1px solid var(--border-subtle);
   }
-  .ro-rot { font-size: var(--text-sm); color: var(--text-secondary); }
+  /* `flex` + `wrap`: apertado, a etiqueta desce em vez de espremer o rótulo. */
+  .ro-rot {
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
+    font-size: var(--text-sm); color: var(--text-secondary); min-width: 0;
+  }
   .ro-val {
     font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%;
