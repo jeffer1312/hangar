@@ -21,6 +21,7 @@ _log = logging.getLogger("hangar.preview")
 
 _ASSISTANT_GLYPH = "●"
 _USER_PROMPT_RE = re.compile(r"^\s*❯")
+_BANNER_RE = re.compile(r"^[\s▐▛█▝▜▀]*Claude Code v\d")
 
 
 def _norm(s: str) -> str:
@@ -322,6 +323,10 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
     inicio = max((i + 1 for i, ln in enumerate(lines[:fim])
                   if _USER_PROMPT_RE.match(ln) and not (i and _RULE_RE.match(lines[i - 1]))),
                  default=0)
+    # Banner de largada à vista e nenhuma mensagem do usuário: a sessão nunca foi acionada, então
+    # não há prosa em voo — só o aviso de largada, que voltaria como prévia.
+    if inicio == 0 and any(_BANNER_RE.match(ln) for ln in lines[:fim]):
+        return ""
     start = -1
     for i, ln in enumerate(lines[inicio:fim], inicio):  # sem régua, fim == len(lines)
         s = ln.lstrip()

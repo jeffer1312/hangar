@@ -333,6 +333,23 @@ def test_aviso_de_largada_nao_vira_previa():
     assert extract_assistant_text(PANE_AVISO_DE_LARGADA) == ""
 
 
+def test_aviso_de_largada_antes_da_primeira_mensagem_nao_vira_previa():
+    # Sessao recem-aberta, ainda sem NENHUM ❯ do usuario: o corte pela ultima mensagem nao tem onde
+    # cortar e voltava a varrer tudo -- o aviso aparecia no chat vazio (medido no celular, 11/09).
+    pane = (
+        " ▐▛███▛█   Claude Code v2.1.268\n"
+        "▝▜██████▀  Fable 5.1 with low effort · Claude Max\n"
+        "\n"
+        "⚠ CLAUDE.md is over the 150.0k-char limit (191.0k chars)\n"
+        '● ecc: hooks.json: unknown keys "$schema", "description" in hooks.PreToolUse[0]\n'
+        "  ignored\n"
+        + "─" * 40 + "\n"
+        "❯ \n"
+        + "─" * 40 + "\n"
+    )
+    assert extract_assistant_text(pane) == ""
+
+
 def test_prosa_depois_da_mensagem_do_usuario_continua_sendo_previa():
     # O corte nao pode zerar o caso normal: o ❯ da caixa de digitar (regua/❯/regua) nao conta.
     pane = PANE_AVISO_DE_LARGADA.replace(
