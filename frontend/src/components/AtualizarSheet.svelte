@@ -382,7 +382,17 @@
         {#if reabrirFalhou}<li>{m.atualizar_reabrir_falhou()}</li>{/if}
         {#each avisos as aviso (aviso)}<li>{aviso}</li>{/each}
       </ul>
+      <!-- Um aviso gravado não pode esconder os botões de sempre: o aviso do reinício fica no
+           estado até o próximo, e a folha virava um beco só com "Fechar" (11/09). -->
       <div class="acoes">
+        <button class="bt secundario" onclick={() => carregar(false, true)} disabled={carregando}>
+          {m.atualizar_procurar()}
+        </button>
+        {#if podeReiniciar}
+          <button class="bt" onclick={reiniciar} disabled={reiniciando}>
+            {reiniciando ? m.atualizar_reiniciando() : m.atualizar_reiniciar_botao()}
+          </button>
+        {/if}
         {#if shellMudou && podeReabrir}
           <button class="bt primario" onclick={reabrir}>{m.atualizar_reabrir_agora()}</button>
           <button class="bt" onclick={onClose}>{m.atualizar_fechar()}</button>

@@ -895,9 +895,9 @@ def reiniciar_agora() -> dict:
     topologia = _topologia()
     if topologia != "systemd":
         return {"ok": False, "erro": "topologia", "topologia": topologia}
-    # Limpa a falha do reinício ANTERIOR: sem isso a tela mostraria pra sempre o erro de uma
-    # tentativa que já passou, inclusive depois de um reinício que deu certo.
-    _escrever(reinicio_erro=None)
+    # Limpa a falha e os avisos do reinício ANTERIOR: sem isso a tela mostraria pra sempre o erro
+    # de uma tentativa que já passou, inclusive depois de um reinício que deu certo.
+    _escrever(reinicio_erro=None, avisos=[])
     proc = subprocess.Popen(
         tmux._scope_prefix() + [sys.executable, "-m", "app.atualizar", "--reiniciar"],
         cwd=str(REPO / "backend"),
