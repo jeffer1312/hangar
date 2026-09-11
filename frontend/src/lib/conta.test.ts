@@ -18,9 +18,14 @@ describe('chipDaConta', () => {
     expect(chipDaConta('claude:/home/x/.claude')?.label).not.toBe('.claude');
   });
 
-  it('motor, codex e ausência não viram chip (já têm o seu)', () => {
+  it('a conta do Codex vira chip igual à do Claude', () => {
+    expect(chipDaConta('codex:/home/x/.codex')?.label).toBe(m.conta_padrao());
+    expect(chipDaConta('codex:/home/x/.codex-google')?.label).toBe('google');
+    expect(chipDaConta('codex:/home/x/.codex-google')?.nome).toBe('google');
+  });
+
+  it('motor e ausência não viram chip (o motor já tem o ⚙)', () => {
     expect(chipDaConta('chave:deepseek')).toBeNull();
-    expect(chipDaConta('codex:/home/x/.codex')).toBeNull();
     expect(chipDaConta(null)).toBeNull();
   });
 });

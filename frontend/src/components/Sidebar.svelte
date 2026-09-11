@@ -3,6 +3,7 @@
 import * as m from '../paraglide/messages';
   import HangarMark from './icons/HangarMark.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
+  import IconFolder from './icons/IconFolder.svelte';
   import { createSession, gitAction, checkoutBranch, getHistoryTailForServer } from '@hangar/core';
   import { getActiveId, serverColor, withServer } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
@@ -813,29 +814,40 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {#if s.worktree}
                     <span class="wt" title={m.sessao_worktree()}>worktree</span>
                   {/if}
-                  {#if showCwd && s.cwd}
-                    {@const cp = cwdParts(s.cwd)}
-                    <span class="cwd" title={showBranch(s.branch) ? `${s.cwd} · branch ${s.branch}` : s.cwd}>
-                      <span class="cwd-prefix">{cp.prefix}</span><span class="cwd-base">{cp.base}</span>
-                      {#if showBranch(s.branch)}<span class="branch-inline">⎇ {s.branch}</span>{/if}
+                  <!-- Pasta, branch e "+128 −24" numa linha só: com o caminho reduzido à última
+                       pasta sobra largura, e os três dizem a mesma coisa (onde e como está o repo).
+                       Em coluna eram três linhas de meta por sessão. -->
+                  {#if (showCwd && s.cwd) || showBranch(s.branch) || s.git_added || s.git_removed}
+                    <span class="cwd-line">
+                      {#if showCwd && s.cwd}
+                        {@const cp = cwdParts(s.cwd)}
+                        <!-- Ícone no lugar do caminho ATÉ a última pasta: o prefixo comia a largura e
+                             truncava justo o nome que identifica o projeto ("/home/jef…/Área de traba…/
+                             Assinado…"). O caminho inteiro segue no title. Custo assumido: dois
+                             checkouts do mesmo repo em pastas diferentes leem igual na lista. -->
+                        <span class="cwd" title={showBranch(s.branch) ? `${s.cwd} · branch ${s.branch}` : s.cwd}>
+                          <span class="cwd-icone"><IconFolder size={11} /></span><span class="cwd-base">{cp.base}</span>
+                          {#if showBranch(s.branch)}<span class="branch-inline">⎇ {s.branch}</span>{/if}
+                        </span>
+                      {:else if showBranch(s.branch)}
+                        <span class="branch" title={m.sessao_branch_git_atual()}>⎇ {s.branch}</span>
+                      {/if}
+                      {#if s.git_added || s.git_removed}
+                        <span class="diff-stats" aria-hidden="true">{#if s.git_added}<span class="diff-add">+{s.git_added}</span>{/if}{#if s.git_removed}<span class="diff-del">−{s.git_removed}</span>{/if}</span>
+                      {/if}
                     </span>
-                  {:else if showBranch(s.branch)}
-                    <span class="branch" title={m.sessao_branch_git_atual()}>⎇ {s.branch}</span>
-                  {/if}
-                  <!-- "+128 −24" do working tree, colado à branch/cwd (paridade com o SessionCard
-                       mobile; referência: cards do super.engineering). -->
-                  {#if s.git_added || s.git_removed}
-                    <span class="diff-stats" aria-hidden="true">{#if s.git_added}<span class="diff-add">+{s.git_added}</span>{/if}{#if s.git_removed}<span class="diff-del">−{s.git_removed}</span>{/if}</span>
                   {/if}
                   {#if model.showProviderTags || provTag || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name || contaChip}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
                     <span class="badges-line">
                       {#if model.showProviderTags}
-                        <!-- Glifo pra TODOS quando a lista mistura providers (pedido do usuário);
-                             o TEXTO continua só nas não-Claude — o default se reconhece pela marca.
+                        <!-- Glifo pra TODOS quando a lista mistura providers (pedido do usuário), e
+                             SÓ o glifo: cada provider tem marca própria (o ⬡ da OpenAI, o Ω do omp),
+                             então o nome escrito ao lado repetia o desenho e roubava a largura do
+                             chip da conta. O nome continua no title e no leitor de tela.
                              provider ausente = Claude (o campo só viaja quando não é Claude). -->
-                        <span class="prov-chip" class:prov-chip--so-icone={!provTag} title={`${m.sessao_grupo()} ${provTag ?? 'Claude'}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span><ProviderGlyph provider={s.provider} size={12} />{#if provTag}{provTag}{/if}</span>
+                        <span class="prov-chip prov-chip--so-icone" title={`${m.sessao_grupo()} ${provTag ?? 'Claude'}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;{provTag ?? 'Claude'}</span><ProviderGlyph provider={s.provider} size={12} /></span>
                       {/if}
                       {#if s.then_target}
                         <span class="chain-chip" title={m.sessao_chain_envia({ n: s.then_target })}>🔗&nbsp;{s.then_target}</span>
@@ -864,7 +876,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {/if}
                       {#if contaChip}
                         <!-- Conta Anthropic da sessão (paridade com o SessionCard do celular). -->
-                        <span class="conta-chip" style="color: {contaChip.cor}; border-color: {contaChip.cor};" title={m.sessao_conta({ n: contaChip.nome })}>{contaChip.label}</span>
+                        <span class="conta-chip" style="--conta-cor: {contaChip.cor};" title={m.sessao_conta({ n: contaChip.nome })}>{contaChip.label}</span>
                       {/if}
                     </span>
                   {/if}
@@ -1430,6 +1442,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .fold-label { display: none; }
   .row-mark { display: inline-flex; }
   .side-mark { display: flex; align-items: center; color: var(--accent); flex: 0 0 auto; }
+  /* Colada na borda e recolhida, a marca do trilho fica logo abaixo da marca da barra de abas
+     (SessionTabs), na mesma coluna: duas iguais empilhadas. Em caixa solta a margem separa. */
+  :global(html[data-panels='edge']) .sidebar.collapsed .side-mark { display: none; }
   .side-brand { flex: 1; min-width: 0; font-size: var(--text-base); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* Toggle do modo de seleção: mesma caixa de 36px dos outros controles do header. */
   .select-toggle-btn {
@@ -1642,8 +1657,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .status-sub.asking { color: var(--warning); font-weight: 600; }
   .status-sub.working { color: var(--text-secondary); font-style: italic; }
+  /* Pasta + branch + diff numa linha. O `.cwd` cede a largura (shrink) e o diff nunca encolhe:
+     o número é curto e é o que some primeiro se ele puder encolher. */
+  .cwd-line { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
   .cwd { display: flex; min-width: 0; font-family: var(--font-mono); font-size: 10px; }
-  .cwd-prefix { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+  .cwd-icone { flex: 0 0 auto; display: flex; align-items: center; margin-right: 3px; color: var(--text-muted); }
   .cwd-base {
     /* encolhe COM ellipsis (era 0 0 auto e vazava por baixo dos chips em sidebar estreita) */
     flex: 0 1 auto; min-width: 3ch; overflow: hidden; text-overflow: ellipsis;
@@ -1690,13 +1708,21 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     outline: 1px solid var(--warning); outline-offset: -1px;
   }
   /* Rate-limit radar (feature #8): chip proprio, mesma familia visual do stalled (âmbar, calmo). */
-  /* Conta Anthropic da sessão: contorno na cor da conta, fundo transparente (rótulo de identidade,
-     como o prov-chip). */
+  /* Conta da sessão (Anthropic ou Codex): chip neutro com um ponto na cor da conta. O contorno e o
+     texto na cor cheia pintavam a pílula inteira — identidade competindo com estado numa lista que
+     já tem pílula de estado, chip de plano e diff coloridos. O ponto de 5px distingue as contas de
+     relance sem virar mais uma cor gritando na linha. */
   .conta-chip {
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
-    padding: 0 6px; border: 1px solid; border-radius: var(--radius-full); white-space: nowrap;
-    background: transparent;
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: var(--fw-medium); letter-spacing: 0.02em;
+    padding: 1px 6px; border-radius: var(--radius-full); white-space: nowrap;
+    background: var(--fill-subtle); color: var(--text-secondary);
+  }
+  .conta-chip::before {
+    content: ''; flex: 0 0 auto;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--conta-cor, currentColor);
   }
   /* Feature #12: indicador do vinculo 'then' — mesmo formato do limited-chip, cor neutra (accent). */
   .chain-chip {

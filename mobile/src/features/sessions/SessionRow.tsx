@@ -146,9 +146,14 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
                 </Text>
               ) : null}
               {showCwd ? (
-                <Text style={[styles.metaTxt, styles.mono, { color: theme.tokens.text.secondary, flexShrink: 1 }]} numberOfLines={1}>
-                  {cwd.prefix}{cwd.base}
-                </Text>
+                // Ícone no lugar do prefixo: ele truncava justo a última pasta, que é o que
+                // identifica o projeto. O caminho inteiro segue no menu da linha.
+                <View style={styles.cwd}>
+                  <Icon name="Folder" size={11} color={theme.tokens.text.muted} />
+                  <Text style={[styles.metaTxt, styles.mono, { color: theme.tokens.text.secondary, flexShrink: 1 }]} numberOfLines={1}>
+                    {cwd.base}
+                  </Text>
+                </View>
               ) : null}
               <Text style={[styles.metaTxt, { color: theme.tokens.text.muted, marginLeft: 'auto' }]}>{relativeTime(s.last_activity)}</Text>
             </View>
@@ -189,6 +194,7 @@ const styles = StyleSheet.create((theme) => ({
   meta: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'nowrap' },
   metaTxt: { fontSize: theme.base.text.xxs },
   mono: { fontFamily: theme.base.fontMono },
+  cwd: { flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 1, minWidth: 0 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 },
   resume: { marginTop: 2 },
   acoes: { flexDirection: 'row' },

@@ -8,15 +8,18 @@
     onPick: (v: T) => void;
     /** id do texto que descreve o grupo (ex: nota de consequencia do pick) — anunciado junto pelo leitor de tela. */
     describedBy?: string;
+    /** Escolha que existe mas nao vale agora (outra preferencia manda) — fica visivel, sem clique. */
+    disabled?: boolean;
   }
-  let { value, options, ariaLabel, onPick, describedBy }: Props = $props();
+  let { value, options, ariaLabel, onPick, describedBy, disabled = false }: Props = $props();
 </script>
 
-<div class="seg" role="group" aria-label={ariaLabel} aria-describedby={describedBy}>
+<div class="seg" class:disabled role="group" aria-label={ariaLabel} aria-describedby={describedBy}>
   {#each options as o (o.v)}
     <button
       class="seg-opt"
       class:active={value === o.v}
+      {disabled}
       onclick={() => onPick(o.v)}
       aria-pressed={value === o.v}
       aria-label={o.aria}
@@ -46,6 +49,8 @@
     transition: background 160ms var(--ease-out), color 160ms var(--ease-out);
   }
   .seg-opt:hover { color: var(--text-primary); }
+  .seg.disabled { opacity: 0.5; }
+  .seg.disabled .seg-opt { cursor: default; }
   .seg-opt.active {
     background: var(--bg-elevated);
     color: var(--text-primary);

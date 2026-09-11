@@ -411,16 +411,17 @@ function aplicarLeitura(): void {
 export type PanelStyle = 'card' | 'edge';
 const PANEL_KEY = 'cp_panels';
 
+// Sem escolha gravada, o Neutro nasce colado na borda (é o par que faz a tela flat); o clássico
+// segue em caixa solta, como sempre foi.
 export function getPanelStyle(): PanelStyle {
   const v = typeof localStorage !== 'undefined' ? localStorage.getItem(PANEL_KEY) : null;
-  return v === 'edge' ? 'edge' : 'card';
+  if (v === 'edge' || v === 'card') return v;
+  return getPalette() === 'neutro' ? 'edge' : 'card';
 }
 
 export function setPanelStyle(s: PanelStyle): void {
-  try {
-    if (s === 'card') localStorage.removeItem(PANEL_KEY);
-    else localStorage.setItem(PANEL_KEY, s);
-  } catch { /* modo privado */ }
+  // Grava os dois valores: 'card' ausente cairia no padrão da paleta, que no Neutro é 'edge'.
+  try { localStorage.setItem(PANEL_KEY, s); } catch { /* modo privado */ }
   aplicarPaineis();
 }
 
@@ -428,6 +429,45 @@ function aplicarPaineis(): void {
   if (typeof document === 'undefined') return;
   if (getPanelStyle() === 'edge') document.documentElement.dataset.panels = 'edge';
   else delete document.documentElement.dataset.panels;
+}
+
+// PALETA: 'neutro' = cinza sem saturação e um destaque só (app.css, [data-palette="neutro"]) ·
+// 'classico' = a "Índigo Quente" de sempre. Padrão só pra instalação ZERADA: quem já tem qualquer
+// preferência `cp_*` gravada fica no clássico, e a primeira leitura grava isso pra não depender
+// de reavaliar a cada carga (uma preferência nova depois não pode virar troca de paleta).
+export type Palette = 'neutro' | 'classico';
+const PALETTE_KEY = 'cp_palette';
+
+function temPreferenciaGravada(): boolean {
+  try {
+    const n = localStorage.length ?? 0;
+    for (let i = 0; i < n; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('cp_') && k !== PALETTE_KEY) return true;
+    }
+  } catch { /* storage sem key()/length (stub) ou modo privado */ }
+  return false;
+}
+
+export function getPalette(): Palette {
+  if (typeof localStorage === 'undefined') return 'classico';
+  const v = localStorage.getItem(PALETTE_KEY);
+  if (v === 'neutro' || v === 'classico') return v;
+  const p: Palette = temPreferenciaGravada() ? 'classico' : 'neutro';
+  try { localStorage.setItem(PALETTE_KEY, p); } catch { /* modo privado */ }
+  return p;
+}
+
+export function setPalette(p: Palette): void {
+  try { localStorage.setItem(PALETTE_KEY, p); } catch { /* modo privado */ }
+  aplicarPaleta();
+  aplicarPaineis();
+}
+
+function aplicarPaleta(): void {
+  if (typeof document === 'undefined') return;
+  if (getPalette() === 'neutro') document.documentElement.dataset.palette = 'neutro';
+  else delete document.documentElement.dataset.palette;
 }
 
 // DESFOQUE DO FUNDO (wallpaper): quanto o conteúdo ATRÁS da conversa fica embaçado.
@@ -545,6 +585,7 @@ function aplicarTexto(over?: Partial<Record<MedidaTexto, number>>): void {
 // Chamado no boot junto com applyBg: sem isto as escolhas só valeriam depois de mexer nelas.
 export function applyAppearance(): void {
   aplicarLeitura();
+  aplicarPaleta();
   aplicarPaineis();
   aplicarFonte();
   aplicarTexto();

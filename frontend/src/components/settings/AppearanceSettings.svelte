@@ -10,8 +10,10 @@
     getSurfaceSolid, setSurfaceSolid,
     getBackdropBlur, setBackdropBlur,
     getBgPref, getDesktopGlass, setDesktopGlass,
+    getPalette, setPalette,
     READ_ALPHA_PADRAO, TEXT_BOOST_PADRAO, SURFACE_SOLID_PADRAO,
     type ReadMode, type PanelStyle, type FontPref, type MedidaTexto, type BackdropBlurPref, type BgPref,
+    type Palette,
   } from '../../lib/background';
   import { getThemePref, getTextoDoDesktop, setTextoDoDesktop, type ThemePref } from '../../lib/theme';
   import { buscarPaleta, aplicarPaleta, paletaEmCache } from '../../lib/desktopTheme';
@@ -36,6 +38,11 @@
 
   let leitura = $state<ReadMode>(getReadMode());
   let paineis = $state<PanelStyle>(getPanelStyle());
+  let paleta = $state<Palette>(getPalette());
+  const opcoesPaleta: { v: Palette; label: string; aria: string }[] = [
+    { v: 'neutro', label: m.config_aparencia_paleta_neutro(), aria: m.config_aparencia_paleta_neutro_aria() },
+    { v: 'classico', label: m.config_aparencia_paleta_classico(), aria: m.config_aparencia_paleta_classico_aria() },
+  ];
   let solidez = $state(getReadAlpha());
   let contraste = $state(getTextBoost());
   let fonte = $state<FontPref>(getFontPref());
@@ -188,6 +195,18 @@
       <span>{m.config_aparencia_tema_desc()}</span>
     </div>
     <ThemeToggle onEscolha={(p) => (tema = p)} />
+  </div>
+
+  <!-- No tema Desktop a paleta Material You do papel de parede é a dona das cores: o seletor fica
+       à vista, desabilitado, com a descrição dizendo o porquê — escondido parecia sumido. -->
+  <div class="ap-row">
+    <div class="ap-label">
+      <strong>{m.config_aparencia_paleta()}</strong>
+      <span>{tema === 'desktop' ? m.config_aparencia_paleta_desktop() : m.config_aparencia_paleta_desc()}</span>
+    </div>
+    <SegmentedPicker value={paleta} options={opcoesPaleta} ariaLabel={m.config_aparencia_paleta()}
+                     disabled={tema === 'desktop'}
+                     onPick={(v) => { paleta = v; setPalette(v); paineis = getPanelStyle(); }} />
   </div>
 
   <!-- Cor manual do tema (destaque + tinta de fundo), referência do "Customize Theme" do

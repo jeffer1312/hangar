@@ -12,6 +12,8 @@ let falhaAoGravar = false;
     store.set(k, String(v));
   },
   removeItem: (k: string) => store.delete(k),
+  key: (i: number) => [...store.keys()][i] ?? null,
+  get length() { return store.size; },
 };
 
 // O <html> só existe no jsdom; nos testes de node basta um objeto que guarde o que foi setado.
@@ -34,7 +36,7 @@ const ouvintes = new Map<string, () => void>();
   addEventListener: (ev: string, fn: () => void) => ouvintes.set(`window:${ev}`, fn),
 };
 
-const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto, getBackdropBlur, setBackdropBlur, applyBg, applyAppearance, getBgPref, isShell, getDesktopGlass, setDesktopGlass } = await import('./background');
+const { getBgScrim, getReadAlpha, getTextBoost, getFontPref, setFontPref, getSurfaceSolid, setSurfaceSolid, setBgScrim, getMedidaTexto, setMedidaTexto, getBackdropBlur, setBackdropBlur, applyBg, applyAppearance, getBgPref, isShell, getDesktopGlass, setDesktopGlass, getPalette, setPalette, getPanelStyle, setPanelStyle } = await import('./background');
 
 // Fonte: 'system' é o padrão e NÃO grava chave (mesma convenção do tema/painéis — só o desvio do
 // padrão persiste). Lixo na chave cai em 'system' em vez de deixar o app numa fonte que não existe.
@@ -346,5 +348,51 @@ describe('rebuscar wallpaper ao focar não pisca com a mesma foto', () => {
     expect(mesmosBytes(new Uint8Array([1, 2]), a)).toBe(false);
     // null = nenhuma foto aplicada ainda: primeiro carregamento sempre pinta.
     expect(mesmosBytes(null, a)).toBe(false);
+  });
+});
+
+// Paleta: o Neutro é o padrão SÓ de instalação zerada. Quem já gravou qualquer `cp_*` (fundo,
+// fonte, servidores pareados) segue no clássico — e a decisão fica gravada na primeira leitura,
+// senão uma preferência gravada depois viraria troca de paleta na carga seguinte.
+describe('paleta', () => {
+  beforeEach(() => {
+    store.clear();
+    varsCss.clear();
+    delete (document.documentElement.dataset as Record<string, string>).palette;
+    delete (document.documentElement.dataset as Record<string, string>).panels;
+  });
+
+  it('instalação zerada nasce no neutro e grava a escolha', () => {
+    expect(getPalette()).toBe('neutro');
+    expect(store.get('cp_palette')).toBe('neutro');
+  });
+
+  it('quem já tem preferência gravada fica no clássico', () => {
+    store.set('cp_bg', 'image');
+    expect(getPalette()).toBe('classico');
+    expect(store.get('cp_palette')).toBe('classico');
+  });
+
+  it('a decisão gravada vence uma preferência que chegou depois', () => {
+    expect(getPalette()).toBe('neutro');
+    store.set('cp_font', 'mono');
+    expect(getPalette()).toBe('neutro');
+  });
+
+  it('neutro marca o html e nasce colado na borda; clássico tira a marca', () => {
+    applyAppearance();
+    expect(document.documentElement.dataset.palette).toBe('neutro');
+    expect(document.documentElement.dataset.panels).toBe('edge');
+    setPalette('classico');
+    expect(document.documentElement.dataset.palette).toBeUndefined();
+    expect(document.documentElement.dataset.panels).toBeUndefined();
+  });
+
+  it('painel escolhido à mão vence o padrão da paleta, nos dois sentidos', () => {
+    setPanelStyle('card');
+    expect(getPanelStyle()).toBe('card');
+    setPalette('classico');
+    setPanelStyle('edge');
+    expect(getPanelStyle()).toBe('edge');
   });
 });

@@ -688,8 +688,10 @@
   /* Tela grande tem espaço sobrando: a coluna cresce em degraus em vez de ficar presa nos 920 e
      deixar duas faixas vazias. Não vira largura livre de propósito — linha muito longa faz o olho
      perder a volta —, mas 1080/1200 ainda é confortável no tamanho de fonte daqui. */
-  @media (min-width: 1600px) { .messages-inner { max-width: min(calc(min(1080px, 100%) * var(--cp-width-scale, 1)), 82vw); } }
-  @media (min-width: 1900px) { .messages-inner { max-width: min(calc(min(1200px, 100%) * var(--cp-width-scale, 1)), 76vw); } }
+  /* Os degraus são tokens porque a paleta Neutro os zera (app.css): lá a coluna para nos 920px em
+     qualquer tela, como no MonoCode (896px fixos). O slider de largura continua por cima dos dois. */
+  @media (min-width: 1600px) { .messages-inner { max-width: min(calc(min(var(--read-1600, 1080px), 100%) * var(--cp-width-scale, 1)), 82vw); } }
+  @media (min-width: 1900px) { .messages-inner { max-width: min(calc(min(var(--read-1900, 1200px), 100%) * var(--cp-width-scale, 1)), 76vw); } }
 
   /* Leitura SÓLIDA (Aparência → Leitura; `auto` liga sozinho quando o fundo é uma imagem): a coluna
      da conversa vira uma folha quase opaca e a foto passa a viver no cromo e nas margens, em vez de

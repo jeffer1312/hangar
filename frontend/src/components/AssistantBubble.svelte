@@ -270,8 +270,13 @@
   .msg-copy.copied { color: var(--accent); opacity: 1; }
   .msg-copy.copied::before { content: '✓'; }
 
+  /* O horário entra na mesma regra de hover dos botões: visível em toda mensagem ele vira uma linha
+     de meta a cada bloco ("10:14 / 10:15 / 10:15"), e no mouse quem quer saber a hora passa por
+     cima. No toque não há hover, então lá ele continua sempre à vista. A faixa já tem a altura dos
+     botões, então esconder o texto não mexe no layout. */
   @media (hover: hover) and (pointer: fine) {
-    .msg-copy, .msg-fwd, .msg-tts { opacity: 0; }
+    .msg-copy, .msg-fwd, .msg-tts, .ts { opacity: 0; }
+    .assistant-msg:hover .ts { opacity: 1; }
     .assistant-msg:hover .msg-copy, .assistant-msg:hover .msg-fwd, .assistant-msg:hover .msg-tts { opacity: 0.55; }
     .msg-copy:hover, .msg-fwd:hover, .msg-tts:hover { opacity: 1 !important; background: var(--bg-hover); color: var(--text-primary); }
   }
@@ -457,6 +462,7 @@
     font-size: var(--text-xs);
     color: var(--text-muted);
     margin-right: var(--space-1);
+    transition: opacity 120ms var(--ease-out);
   }
 
   /* Preview plano: preserva quebras de linha do pane (sem markdown -> sem blocos). */

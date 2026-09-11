@@ -155,6 +155,55 @@
   }
 }
 
+/* ── Paleta "Neutro" (data-palette="neutro") ──────────────────────────────
+   Cinza sem saturação: fundo e texto numa escala só, e todo o resto (borda, texto secundário,
+   tinta) é o texto com alfa — um número por degrau, nada de hex avulso. É o que deixa a tela
+   "profissional" sem chamar atenção: sem tinta rosada nos neutros e um destaque só. O papel de
+   parede, o vidro e os sliders continuam valendo: aqui só mudam as cores dos tokens. O bloco
+   claro fica logo abaixo do [data-theme="light"], porque precisa vencer os dois. */
+:root[data-palette="neutro"] {
+  --bg-base:      #171717;
+  --bg-surface:   #1c1c1c;
+  --bg-elevated:  #222222;
+  --bg-hover:     #272727;
+  --veu-rgb: 23 23 23;
+
+  --border-subtle:  rgba(235,235,235,0.06);
+  --border-default: rgba(235,235,235,0.10);
+  --border-strong:  rgba(235,235,235,0.18);
+  --fill-subtle:    rgba(235,235,235,0.05);
+
+  --text-primary:   #ebebeb;
+  --text-secondary: rgba(235,235,235,0.65);
+  --text-muted:     rgba(235,235,235,0.45);
+  --text-inverse:   #171717;
+  --text-primary-base:   #ebebeb;
+  --text-secondary-base: rgba(235,235,235,0.65);
+  --text-muted-base:     rgba(235,235,235,0.45);
+
+  --accent:         #459bf7;
+  --accent-dim:     rgba(69,155,247,0.16);
+  --accent-press:   #2f8cf0;
+
+  --bubble-user:    #262626;
+
+  --glass-panel-rgb: 23 23 23;
+  --glass-rgb:       28 28 28;
+  --glass-solid-rgb: 23 23 23;
+  --glass-border:    rgba(255,255,255,0.08);
+  --glass-highlight: rgba(255,255,255,0.10);
+  --glass-specular:  rgba(255,255,255,0.18);
+
+  --pill-working-bg:  rgba(69,155,247,0.16);
+  --pill-working-fg:  #8cc0fa;
+
+  /* Coluna da conversa para nos 920px em qualquer tela (MessageList.svelte): acima de 1600px e
+     1900px o clássico a leva a 1080/1200px, e num monitor largo isso vira ~145 caracteres por
+     linha — o olho perde a volta. O slider "Largura da coluna" segue valendo por cima. */
+  --read-1600: 920px;
+  --read-1900: 920px;
+}
+
 :root[data-theme="light"] {
   color-scheme: light;
 
@@ -245,6 +294,41 @@
   --pill-input-fg:    #7a5408;
   --pill-limite-bg:   rgba(140,80,200,0.14);
   --pill-limite-fg:   #5c2d91;
+}
+
+:root[data-theme="light"][data-palette="neutro"] {
+  --bg-base:      #f7f7f7;
+  --bg-surface:   #ffffff;
+  --bg-elevated:  #efefef;
+  --bg-hover:     #e8e8e8;
+  --veu-rgb: 247 247 247;
+
+  --border-subtle:  rgba(43,43,43,0.08);
+  --border-default: rgba(43,43,43,0.14);
+  --border-strong:  rgba(43,43,43,0.22);
+  --fill-subtle:    rgba(43,43,43,0.05);
+
+  --text-primary:   #2b2b2b;
+  --text-secondary: rgba(43,43,43,0.68);
+  --text-muted:     rgba(43,43,43,0.52);
+  --text-inverse:   #ffffff;
+  --text-primary-base:   #2b2b2b;
+  --text-secondary-base: rgba(43,43,43,0.68);
+  --text-muted-base:     rgba(43,43,43,0.52);
+
+  --accent:         #0863c4;
+  --accent-dim:     rgba(8,99,196,0.12);
+  --accent-press:   #0757ad;
+
+  --bubble-user:    #ececec;
+
+  --glass-panel-rgb: 255 255 255;
+  --glass-rgb:       255 255 255;
+  --glass-solid-rgb: 250 250 250;
+  --glass-border:    rgba(0,0,0,0.08);
+
+  --pill-working-bg:  rgba(8,99,196,0.12);
+  --pill-working-fg:  #0757ad;
 }
 
 /* ── Custom Properties (estruturais, comuns aos temas) ───────────────────── */
