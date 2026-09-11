@@ -430,6 +430,13 @@ function anexarNaJanela(win, view) {
 
 function devolverFoco(win, view) {
   if (!viewVivo(win, view) || view.getVisible()) return;
+  // Com a janela em segundo plano, `focus()` vira pedido de ativação (xdg-activation) e um
+  // compositor com focus_on_activate traz o app pra frente — devolver o teclado não pode roubar a
+  // tela de quem está noutro aplicativo. Espera a volta do usuário; focar já focado não ativa nada.
+  if (!win.isFocused()) {
+    win.once('focus', () => { if (!win.isDestroyed()) win.webContents.focus(); });
+    return;
+  }
   win.webContents.focus();
 }
 

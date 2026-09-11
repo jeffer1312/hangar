@@ -90,9 +90,10 @@ require.cache[electronPath] = {
 
 require('./main.cjs');
 
-function novaJanela() {
+function novaJanela({ focada = true } = {}) {
   const webContents = { focos: 0, focus() { this.focos++; } }; // identidade distinta: o remetente do IPC desta janela
   const children = [];
+  const emFoco = [];
   const win = {
     contentView: {
       children,
@@ -100,6 +101,10 @@ function novaJanela() {
       removeChildView(v) { const i = children.indexOf(v); if (i >= 0) children.splice(i, 1); },
     },
     webContents, isDestroyed: () => false,
+    isFocused: () => focada,
+    once(ev, fn) { if (ev === 'focus') emFoco.push(fn); },
+    // O usuário volta pro app: a janela ganha foco e os pendentes disparam uma vez só.
+    ganharFoco() { focada = true; const fns = emFoco.splice(0); for (const fn of fns) fn(); },
   };
   winMap.set(webContents, win);
   return { ev: { sender: webContents }, win };
@@ -160,6 +165,24 @@ test('open oculto cria o view escondido e ja dirigivel; view visivel nao e tocad
   assert.equal(r3.ok, true);
   assert.equal(view.visivel, true, 'view visível fica como está');
   assert.equal(criadas.length, antes + 1, 'sem controlador novo');
+});
+
+test('com o app em segundo plano o view escondido nao puxa a tela: o teclado volta quando a janela e focada', async () => {
+  const a = novaJanela({ focada: false });
+  const abrir = handlers.get('hangar:nav-open');
+
+  await abrir(a.ev, { chave: 'srv::longe', url: 'https://z.test', bounds: {}, oculto: true });
+  const view = viewsFalsos.at(-1);
+  view.webContents.dispararLoad();
+  // `focus()` numa janela de fundo é pedido de ativação: com focus_on_activate o compositor
+  // traz o app pra frente e rouba a tela de quem está noutro aplicativo.
+  assert.equal(a.win.webContents.focos, 0, 'janela em segundo plano nao e ativada');
+
+  a.win.ganharFoco();
+  assert.equal(a.win.webContents.focos, 2, 'o teclado volta pro front (nascimento e load) quando o usuario volta');
+
+  a.win.ganharFoco();
+  assert.equal(a.win.webContents.focos, 2, 'pendencia so dispara uma vez');
 });
 
 test('o controlador so e avisado do view escondido DEPOIS de a pagina carregar (senao, SIGSEGV)', async () => {
