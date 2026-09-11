@@ -49,6 +49,7 @@ function criarWebContentsFalso() {
     close: () => {}, isDestroyed: () => false,
     on: (ev, cb) => { if (ev === 'did-finish-load') estado.ouvintesLoad.push(cb); },
     once: (ev, cb) => { if (ev === 'did-finish-load') estado.ouvintesLoad.push(cb); },
+    removeListener: () => {},
     dispararLoad: () => { estado.url = 'https://z.test/'; estado.ouvintesLoad.splice(0).forEach((cb) => cb()); },
     debugger: dbg,
   };
