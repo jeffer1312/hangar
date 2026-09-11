@@ -2,7 +2,7 @@
 # hangar-send — mensagem entre sessões Claude via hangar.
 #
 #   hangar-send --list                 lista sessões vivas (nome, estado, cwd) — locais e remotas
-#   hangar-send <sessao> <mensagem...> manda prompt pra sessão (fila durável se ocupada)
+#   hangar-send <sessao> <mensagem...> orienta o turno atual quando suportado; senão, mantém na fila
 #                                  RECUSA (código 3) quando o caminho NATIVO do Claude Code alcança
 #                                  os dois lados — ver "Caminho nativo" abaixo. --tmux força este.
 #   hangar-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
@@ -451,12 +451,14 @@ if [[ "$target" == *::* ]]; then
 fi
 text="[de: $sender] $*"
 
-body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$text")
+body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "steer": True}))' "$text")
 resp=$(api POST "/api/sessions/$sess/input" "$body")
 # delivered=True -> digitou agora na TUI; False -> fila durável (entrega quando a sessão ficar idle).
 # Sessão inexistente nem chega aqui (o backend responde 404 e o api() já mostrou o detail).
-if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("delivered") else 1)' "$resp"; then
-    echo "entregue -> $target"
+if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("steered") else 1)' "$resp"; then
+    echo "entregue agora -> $target"
+elif python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("delivered") else 1)' "$resp"; then
+    echo "entregue -> $target (não orientado no turno atual)"
 else
-    echo "na fila -> $target (sessão ocupada; entrega no próximo idle)"
+    echo "na fila -> $target (não orientado; entrega no próximo idle)"
 fi

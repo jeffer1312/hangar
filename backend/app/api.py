@@ -1473,11 +1473,7 @@ def push_quiet_hours(body: PushQuietHoursBody):
 
 class InputBody(_StrictBody):
     text: str
-    # ACEITO E IGNORADO. Existiu por ~40min em 14/08/2026 (o steer ia junto do envio; virou uma tecla
-    # avulsa, POST /steer). O corpo e estrito, entao tirar o campo fez a PAGINA ABERTA — que e um PWA
-    # com service worker e pode ficar versoes atras — receber 422 em TODO envio: "Extra inputs are
-    # not permitted". Cliente velho nao pode quebrar por causa de campo que o servidor deixou de
-    # usar; fica aqui como tolerancia, sem efeito nenhum.
+    # Recados 1:1 pedem orientação imediata; envios comuns conservam a fila normal.
     steer: bool = False
 
 
@@ -2645,7 +2641,7 @@ def _erro_texto(e) -> str:
     return e if isinstance(e, str) else (e.get("msg") if isinstance(e, dict) else str(e))
 
 
-def _send_one(name: str, text: str) -> dict:
+def _send_one(name: str, text: str, track_entry: bool = False) -> dict:
     """Sequencia UNICA de envio de prompt: send_prompt + registro na fila duravel + confirmacao/drain.
     Usada pelo /input (uma sessao) e pelo /broadcast (loop por N sessoes) — o broadcast NAO reimplementa
     entrega, so repete esta mesma sequencia por nome. Nunca levanta (devolve ok/error) pra o broadcast
@@ -2799,7 +2795,7 @@ def _send_one(name: str, text: str) -> dict:
         # entrada fica pendente pro drain entregar quando o overlay fechar. Falha ao gravar a fila nao
         # quebra o envio.
         try:
-            PromptQueue(name).append(text, delivered=(result == "sent"), ts=t0)
+            entry = PromptQueue(name).append(text, delivered=(result == "sent"), ts=t0)
         except OSError as e:
             if result != "sent":
                 # NAO digitado na TUI (overlay/picker aberto) + sidecar nao gravou = a msg nao esta em
@@ -2822,7 +2818,8 @@ def _send_one(name: str, text: str) -> dict:
             # entrada (e sem SSE aberto nao havia gatilho nenhum). O drain re-checa deliverable.
             threading.Thread(target=_drain_session, args=(name,), daemon=True).start()
     # delivered: digitou AGORA na TUI ("sent"); False = ficou na fila durável (sessão ocupada/overlay).
-    return {"ok": True, "error": None, "delivered": result == "sent"}
+    return {"ok": True, "error": None, "delivered": result == "sent",
+            **({"entry_id": entry["id"]} if track_entry and entry is not None else {})}
 
 
 def _provider_of(name: str) -> str:
@@ -2858,17 +2855,17 @@ def _pane_info(name: str) -> tuple[str, str | None]:
     return agentpane.pane_info(name)
 
 
-async def _send_one_codex(name: str, text: str) -> dict:
+async def _send_one_codex(name: str, text: str, *, track_entry: bool = False) -> dict:
     source = await asyncio.to_thread(codex_sessions.load, name)
     async with get_adapter("codex").delivery_lock(name):
         current = await asyncio.to_thread(codex_sessions.load, name)
         changed = source is not None and (current or {}).get("thread_id") != source.get("thread_id")
         if changed or not await asyncio.to_thread(_session_exists, name):
             return {"ok": False, "error": erro("erro_sessao_inexistente", "sessao nao encontrada")}
-        return await _send_one_codex_locked(name, text)
+        return await _send_one_codex_locked(name, text, track_entry=track_entry)
 
 
-async def _send_one_codex_locked(name: str, text: str) -> dict:
+async def _send_one_codex_locked(name: str, text: str, *, track_entry: bool = False) -> dict:
     """Envio de prompt pra sessao Codex pela TUI no tmux. Registra na fila duravel
     (aparece como user_msg em ordem e persiste no reload; o
     merge dedup-a contra o rollout do Codex) e entrega pela TUI no tmux SE a sessao esta idle;
@@ -2906,7 +2903,8 @@ async def _send_one_codex_locked(name: str, text: str) -> dict:
         entry = None
     if not deliverable:
         # turno em andamento -> fica pendente na fila; o drain-on-complete entrega no proximo idle.
-        return {"ok": True, "error": None, "delivered": False}
+        return {"ok": True, "error": None, "delivered": False,
+                **({"entry_id": entry["id"]} if track_entry else {})}
     try:
         result = await adapter.send_prompt(name, text)
     except Exception as e:
@@ -2930,7 +2928,8 @@ async def _send_one_codex_locked(name: str, text: str) -> dict:
         return {"ok": False, "error": erro("erro_fila_nao_entregue",
                                                    "fila indisponivel e o turno nao aceitou o prompt: nao foi entregue")}
     # "deferred" COM entrada na fila: fica pendente (delivered ja e False) -> drain-on-complete entrega.
-    return {"ok": True, "error": None, "delivered": result == "sent"}
+    return {"ok": True, "error": None, "delivered": result == "sent",
+            **({"entry_id": entry["id"]} if track_entry and entry is not None else {})}
 
 
 def _session_exists(name: str) -> bool:
@@ -2951,14 +2950,34 @@ async def input_prompt(name: str, body: InputBody):
     # o POST /input. Ver _send_thread.
     if not await _send_thread(_session_exists, name):
         raise HTTPException(404, detail=erro("erro_sessao_recado_nao_enfileirado", "sessão não encontrada — recado NÃO enfileirado"))
-    if _provider_of(name) == "codex":
-        res = await _send_one_codex(name, body.text)
+    provider = _provider_of(name)
+    tracking = {"track_entry": True} if body.steer else {}
+    if provider == "codex":
+        res = await _send_one_codex(name, body.text, **tracking)
     else:
-        res = await _send_thread(_send_one, name, body.text)
+        res = await _send_thread(_send_one, name, body.text, True) if body.steer else await _send_thread(_send_one, name, body.text)
     if not res["ok"]:
         raise HTTPException(400, res["error"])
-    # delivered: True = digitou agora na TUI; False = na fila durável (entrega no próximo idle).
-    return {"ok": True, "delivered": res.get("delivered", False)}
+    steered = False
+    entry_id = res.get("entry_id")
+    if body.steer and entry_id:
+        try:
+            if provider == "codex" and not res.get("delivered"):
+                # steer_queue disputa a mesma trava do envio; só pode rodar depois dele.
+                sent = await get_adapter("codex").steer_queue(name)
+                steered = entry_id in sent
+            elif provider != "codex":
+                provider, _ = await _send_thread(_pane_info, name)
+                q = PromptQueue(name)
+                if provider == "kimi" and await _send_thread(q.entry_delivered, entry_id):
+                    if await _send_thread(terminal_input.steer_now, name) is True:
+                        steered = True
+                        await _send_thread(q.confirm_delivered)
+        except Exception:
+            # O recado já existe na fila. Falha de orientação nunca faz outro append/envio.
+            _log.exception("falha apos persistir recado name=%s entry=%s steered=%s", name, entry_id, steered)
+    # A orientação confirmada também conta como entrega, sem redigitar o recado na TUI.
+    return {"ok": True, "delivered": res.get("delivered", False) or steered, "steered": steered}
 
 
 @app.post("/api/sessions/{name}/steer", dependencies=[Depends(require_auth)])
