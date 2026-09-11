@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { AccessibilityInfo, Platform, ScrollView, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -66,6 +66,14 @@ export default function ChatScreen() {
 
   const events = chat.use((s) => s.events);
   const stateEvent = chat.use((s) => s.stateEvent);
+  const bufferingAnnounced = useRef(false);
+  useEffect(() => {
+    const buffering = !!stateEvent?.codex_buffering;
+    if (buffering && !bufferingAnnounced.current && Platform.OS === 'ios') {
+      AccessibilityInfo.announceForAccessibilityWithOptions(m.chat_codex_buffering(), { queue: true });
+    }
+    bufferingAnnounced.current = buffering;
+  }, [stateEvent?.codex_buffering]);
   const preview = chat.use((s) => s.preview);
   const previewMd = chat.use((s) => s.previewMd);
   const previewFull = chat.use((s) => s.previewFull);
