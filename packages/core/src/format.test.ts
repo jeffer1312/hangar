@@ -8,6 +8,7 @@ import {
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
   rotuloEstado,
   splitTodoBlock, parseImageMessage, parseCanal, parseRealtimeDelegation, parsePeerMessage, basename,
+  parseFilePaths,
 } from './format';
 import type { ChatEvent, State } from './types';
 import { overwriteGetLocale } from './paraglide/runtime';
@@ -993,5 +994,13 @@ describe('parseCanal', () => {
   it('colchete no meio da frase e rótulo longo demais não viram etiqueta', () => {
     expect(parseCanal('olha isso [um aparte] aqui')).toBeNull();
     expect(parseCanal('[rotulo-comprido-demais-pra-etiqueta] x')).toBeNull();
+  });
+});
+
+describe('parseFilePaths', () => {
+  it('crase fecha o caminho — dois nomes em código numa frase não viram um path só', () => {
+    const t = 'Li `/proc/smaps_rollup`, e nada mudou; `.scratch/` e `t2-cat-detalhe.png` já estavam.';
+    expect(parseFilePaths(t)).toEqual([]);
+    expect(parseFilePaths('veja `/tmp/a b.png` aqui').map((r) => r.path)).toEqual(['/tmp/a b.png']);
   });
 });

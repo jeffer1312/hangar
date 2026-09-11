@@ -39,7 +39,31 @@ export function planTitle(text: string): string | null {
   return null;
 }
 
+// Bloco de citação da memória do Codex (`memories = true`): o prompt manda o modelo fechar a
+// resposta com ele pra TUI parsear; aqui ele sai inteiro — o conteúdo é id de rollout, não prosa.
+function memCitation(text: string): { start: number; end: number } | null {
+  let offset = 0;
+  let fence = '';
+  let start = -1;
+  for (const line of text.split('\n')) {
+    const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (delimiter) {
+      const value = delimiter[1];
+      if (!fence) fence = value;
+      else if (value[0] === fence[0] && value.length >= fence.length) fence = '';
+    } else if (!fence && start < 0 && /^\s*<oai-mem-citation>\s*$/.test(line)) {
+      start = offset;
+    } else if (!fence && start >= 0 && /^\s*<\/oai-mem-citation>\s*$/.test(line)) {
+      return { start, end: offset + line.length };
+    }
+    offset += line.length + 1;
+  }
+  return null;
+}
+
 export function planDisplayText(text: string): string {
+  const cite = memCitation(text);
+  if (cite) text = text.slice(0, cite.start) + text.slice(cite.end);
   for (const marker of markers(text).reverse()) {
     text = text.slice(0, marker.start) + text.slice(marker.end);
   }

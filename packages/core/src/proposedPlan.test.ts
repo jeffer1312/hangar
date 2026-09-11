@@ -23,6 +23,13 @@ describe('plano proposto pelo Codex', () => {
     expect(proposedPlan(example)).toBeNull();
     expect(planDisplayText(example)).toBe(example);
   });
+  it('tira o bloco de citação da memória inteiro, fora de cercas', () => {
+    const cite = '<oai-mem-citation>\n<citation_entries>\nMEMORY.md:32-36|note=[x]\n</citation_entries>\n</oai-mem-citation>';
+    expect(planDisplayText(`Resposta.\n\n${cite}`)).toBe('Resposta.\n\n');
+    const example = '```\n' + cite + '\n```';
+    expect(planDisplayText(example)).toBe(example);
+    expect(planDisplayText('<oai-mem-citation>\nincompleto')).toBe('<oai-mem-citation>\nincompleto');
+  });
   it('reconhece a tag final sem abertura no trecho recebido', () => {
     expect(proposedPlan('# Plano\n\nEtapas.\n</proposed_plan>')).toBe('# Plano\n\nEtapas.');
   });

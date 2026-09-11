@@ -343,7 +343,8 @@ const _EXTS = Object.keys(EXT_KIND).join('|');
 // de URL ("https://…") ou logo apos "." (o "/" do "./rel.png" e do REL, nao deste). Global + ci.
 // O lookahead inclui `*`: path citado em **negrito** ("**/tmp/x.jpg**") parava de casar e a imagem
 // nunca era servida (bug real de 2026-08-03 — o path existia, o endpoint 200, e nada renderizava).
-const _PATH_RE = new RegExp(`(?<![\\w.~:/*])(~?/[^\\n]*?\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,*])`, 'gi');
+// Crase fecha o path: sem isso "`/proc/x`, … e `foto.png`" vira UM caminho da frase inteira.
+const _PATH_RE = new RegExp(`(?<![\\w.~:/*])(~?/[^\\n\`]*?\\.(${_EXTS}))(?=$|[\\s)\\]"'\`,*])`, 'gi');
 // Caminho RELATIVO com DIRETORIO (./x.png, ../a/x.png, sub/dir/x.png) — jeito comum do Claude citar
 // arquivo que criou no cwd. Exige >=1 segmento "dir/" -> NAO casa nome puro "x.png" (ruido de prosa).
 // O backend resolve contra o cwd da sessao. Lookbehind tira word/`/`/~/./:/- (nao pega pedaco de path
