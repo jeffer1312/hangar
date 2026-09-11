@@ -420,6 +420,11 @@ function avisarOculto(chave, view, oculto) {
 
 // View escondido não pode ficar com o teclado: o Chromium foca o WebContents que acabou de nascer
 // ou de carregar, a janela segue ativa pro compositor e todo atalho do front morre em silêncio.
+function anexarNaJanela(win, view) {
+  if (win.isDestroyed() || view.webContents.isDestroyed()) return;
+  if (!win.contentView.children.includes(view)) win.contentView.addChildView(view);
+}
+
 function devolverFoco(win, view) {
   if (win.isDestroyed() || view.webContents.isDestroyed() || view.getVisible()) return;
   win.webContents.focus();
@@ -565,11 +570,15 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}
       if (/^https?:/i.test(alvo)) shell.openExternal(alvo);
       return { action: 'deny' };
     });
-    win.contentView.addChildView(view);
+    const wc = view.webContents;
+    // Escondido, o view carrega SOLTO e só entra na janela com a página pronta: é o primeiro load
+    // de um view anexado que leva o teclado (anexar depois não leva). Solto ele não tem quadro,
+    // por isso a anexação vem antes da emulação que o `avisarOculto` liga no mesmo evento.
+    if (oculto) wc.once('did-finish-load', () => anexarNaJanela(win, view));
+    else anexarNaJanela(win, view);
     views.set(chave, view);
     // Estado de navegação pro painel (barra de carregamento, ✕/↻, voltar/avançar, endereço que
     // acompanha os cliques). O view não tem DOM no cockpit — sem isto a página carrega em silêncio.
-    const wc = view.webContents;
     const publicar = () => {
       if (win.isDestroyed() || wc.isDestroyed()) return;
       win.webContents.send('hangar:nav-estado', {
@@ -640,6 +649,7 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}
     // ignora o campo, cria o view visível com bounds zero e devolve só {ok} — o front não confirma.
     return { ok: true, oculto: true };
   }
+  anexarNaJanela(win, view);
   view.setVisible(true);
   view.setBounds(normalizaBounds(bounds));
   avisarOculto(chave, view, false);

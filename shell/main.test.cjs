@@ -91,7 +91,15 @@ require('./main.cjs');
 
 function novaJanela() {
   const webContents = { focos: 0, focus() { this.focos++; } }; // identidade distinta: o remetente do IPC desta janela
-  const win = { contentView: { addChildView() {}, removeChildView() {} }, webContents, isDestroyed: () => false };
+  const children = [];
+  const win = {
+    contentView: {
+      children,
+      addChildView(v) { children.push(v); },
+      removeChildView(v) { const i = children.indexOf(v); if (i >= 0) children.splice(i, 1); },
+    },
+    webContents, isDestroyed: () => false,
+  };
   winMap.set(webContents, win);
   return { ev: { sender: webContents }, win };
 }
@@ -133,10 +141,13 @@ test('open oculto cria o view escondido e ja dirigivel; view visivel nao e tocad
   assert.equal(criadas.length, antes + 1, 'controlador criado mesmo escondido (o agente dirige via CDP)');
   const view = viewsFalsos.at(-1);
   assert.equal(view.visivel, false, 'nasce escondido');
-  // O view novo leva o teclado com ele; escondido, ninguém o tem e todo atalho do front morre.
+  // É o primeiro load de um view JÁ na janela que leva o teclado (medido: anexar depois não leva).
+  // Escondido, ele carrega solto e só entra na janela com a página pronta.
+  assert.ok(!a.win.contentView.children.includes(view), 'escondido carrega FORA da janela');
   assert.equal(a.win.webContents.focos, 1, 'o foco volta pro front logo que o view escondido nasce');
   view.webContents.dispararLoad();
-  assert.equal(a.win.webContents.focos, 2, 'e de novo quando a página carrega (o load também rouba)');
+  assert.ok(a.win.contentView.children.includes(view), 'com a página pronta entra na janela (sem isso não há print)');
+  assert.equal(a.win.webContents.focos, 2, 'e o foco volta de novo no load (navegação cross-site ainda rouba)');
 
   // O usuário abre a sessão: o painel reexibe sem url, como sempre.
   const r2 = await abrir(a.ev, { chave, url: undefined, bounds: { x: 1, y: 1, width: 10, height: 10 } });
