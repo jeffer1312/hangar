@@ -77,6 +77,48 @@ describe('appendTail', () => {
 });
 
 describe('mergeHistoryWithLive', () => {
+  it('insere mensagens faltantes entre o cache e o SSE', () => {
+    expect(ids(mergeHistoryWithLive(['a', 'b', 'c'].map(ev), ['a', 'c', 'd'].map(ev))))
+      .toEqual(['a', 'b', 'c', 'd']);
+    expect(ids(mergeHistoryWithLive(['a', 'b'].map(ev), ['a', 'c'].map(ev))))
+      .toEqual(['a', 'b', 'c']);
+  });
+
+  it('mantém o histórico antigo antes da cauda REST quando só o fim é comum', () => {
+    expect(ids(mergeHistoryWithLive(['b', 'c'].map(ev), ['a', 'c'].map(ev))))
+      .toEqual(['a', 'b', 'c']);
+    expect(ids(mergeHistoryWithLive(['c', 'd'].map(ev), ['a', 'b', 'd'].map(ev))))
+      .toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('eco recebido durante a carga fica depois do prefixo histórico', () => {
+    expect(ids(mergeHistoryWithLive(['a', 'b', 'c'].map(ev), ['queued-q', 'c'].map(ev), {
+      cachedEvents: new Set(),
+    }))).toEqual(['a', 'b', 'queued-q', 'c']);
+  });
+
+  it('retira ecos confirmados tanto do cache quanto do REST', () => {
+    const removedIds = new Set(['queued-q']);
+    expect(ids(mergeHistoryWithLive(['a', 'queued-q', 'b'].map(ev), ['a', 'queued-q', 'c'].map(ev), { removedIds })))
+      .toEqual(['a', 'b', 'c']);
+  });
+
+  it('retira eco confirmado do cache preservando a mensagem real', () => {
+    const q = { ...ev('queued-q'), text: 'pode continuar agr' };
+    const real = { ...ev('real'), text: q.text };
+    const removedIds = new Set([q.id]);
+    expect(ids(mergeHistoryWithLive([ev('a'), real, ev('b')], [ev('a'), q], { removedIds })))
+      .toEqual(['a', 'real', 'b']);
+  });
+
+  it('uma mensagem real não apaga duas entradas iguais da fila', () => {
+    const q = { ...ev('queued-q'), text: 'ok' };
+    const other = { ...q, id: 'queued-other' };
+    const real = { ...ev('real'), text: 'ok' };
+    expect(ids(mergeHistoryWithLive([ev('a'), real], [ev('a'), q, other], { removedIds: new Set([q.id]) })))
+      .toEqual(['a', 'real', 'queued-other']);
+  });
+
   it('insere o prefixo antigo antes da cauda viva', () => {
     expect(ids(mergeHistoryWithLive(['a', 'b', 'c'].map(ev), ['c'].map(ev))))
       .toEqual(['a', 'b', 'c']);

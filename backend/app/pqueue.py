@@ -314,7 +314,7 @@ def fila_interna_pendente(jsonl: str, provider: str = "claude") -> set[str]:
     """
     if provider != "claude":
         return set()
-    pendente: dict[str, int] = {}
+    pendente: list[str] = []
     try:
         with open(jsonl, encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -322,15 +322,18 @@ def fila_interna_pendente(jsonl: str, provider: str = "claude") -> set[str]:
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                if obj.get("type") != "queue-operation" or not isinstance(obj.get("content"), str):
+                if obj.get("type") != "queue-operation":
+                    continue
+                if not isinstance(obj.get("content"), str):
+                    # Sem texto, sai a primeira entrada, inclusive quando há pedidos repetidos.
+                    if obj.get("operation") == "dequeue" and pendente:
+                        pendente.pop(0)
                     continue
                 c = obj["content"].strip()
                 if obj.get("operation") == "enqueue":
-                    pendente[c] = pendente.get(c, 0) + 1
+                    pendente.append(c)
                 elif c in pendente:
-                    pendente[c] -= 1
-                    if pendente[c] <= 0:
-                        del pendente[c]
+                    pendente.remove(c)
     except OSError:
         return set()
     out: set[str] = set()

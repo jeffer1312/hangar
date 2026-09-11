@@ -1061,6 +1061,86 @@ async def test_rename_sync_rearma_bomba_no_loop_do_backend():
     await adapter._sessions["novo"]["bomba"]
 
 
+@pytest.mark.parametrize("blocked_method,fail", [("skills/list", False), ("turn/start", False), ("skills/list", True)])
+async def test_rename_espera_a_entrega_reivindicada(tmp_path, monkeypatch, blocked_method, fail):
+    from app import api, pqueue
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Client(_LiveQueueClient):
+        async def request(self, method, params, timeout=30.0):
+            result = await super().request(method, params, timeout)
+            if method == blocked_method:
+                entered.set()
+                await release.wait()
+                if fail:
+                    raise RuntimeError("falha antes do envio")
+            return result
+
+    client = Client()
+    adapter = CodexAdapter()
+    adapter.attach("velho", client, "thread-1", subscribed=True)
+    monkeypatch.setattr(api, "get_adapter", lambda _provider: adapter)
+    renamed = []
+
+    def rename(name, body):
+        renamed.append(name)
+        adapter.rename(name, body.new)
+        pqueue.PromptQueue(name).rename(body.new)
+        return {"ok": True}
+
+    monkeypatch.setattr(api, "_rename_session", rename)
+    pqueue.PromptQueue("velho").append("/review investigar bug")
+    await client._q.put({"method": "turn/completed", "params": {"threadId": "thread-1"}})
+    async with asyncio.timeout(3):
+        await entered.wait()
+        task = asyncio.create_task(api.rename_session("velho", api.RenameBody(new="novo")))
+        await asyncio.sleep(0)
+        assert renamed == []
+        assert pqueue.PromptQueue("velho").load()[0]["delivered"] is True
+        release.set()
+        await task
+    assert len([method for method, _ in client.requests if method == "turn/start"]) == (0 if fail else 1)
+    assert pqueue.PromptQueue("novo").load()[0]["delivered"] is (not fail)
+    assert pqueue.PromptQueue("velho").load() == []
+    await client._q.put(None)
+    await adapter._sessions["novo"]["bomba"]
+
+
+async def test_rename_protege_fila_do_destino_e_permite_voltar(tmp_path, monkeypatch):
+    import threading
+    from app import api, pqueue
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    adapter = CodexAdapter()
+    monkeypatch.setattr(api, "get_adapter", lambda _provider: adapter)
+    monkeypatch.setattr(api, "_session_exists", lambda _name: True)
+    monkeypatch.setattr(adapter, "deliverable", lambda _name: asyncio.sleep(0, result=False))
+    entered, release = threading.Event(), threading.Event()
+
+    def rename(name, body):
+        entered.set()
+        assert release.wait(3)
+        pqueue.PromptQueue(name).rename(body.new)
+        adapter.rename(name, body.new)
+        return {"ok": True}
+
+    monkeypatch.setattr(api, "_rename_session", rename)
+    pqueue.PromptQueue("velho").append("pedido anterior")
+    async with asyncio.timeout(5):
+        task = asyncio.create_task(api.rename_session("velho", api.RenameBody(new="novo")))
+        assert await asyncio.to_thread(entered.wait, 3)
+        send = asyncio.create_task(api._send_one_codex("novo", "pedido durante a renomeação"))
+        await asyncio.sleep(0)
+        assert not send.done()
+        release.set()
+        await task
+        assert (await send)["ok"]
+        assert [e["text"] for e in pqueue.PromptQueue("novo").load()] == [
+            "pedido anterior", "pedido durante a renomeação"]
+        await api.rename_session("novo", api.RenameBody(new="velho"))
+        assert len(pqueue.PromptQueue("velho").load()) == 2
+
+
 async def test_deliverable_libera_turno_preso_em_sessao_nao_assinada():
     # Sem assinatura nao chega turn/completed -> in_progress nunca seria limpo e TODO envio virava
     # "deferred" pra sempre, em silencio. Expira por tempo (com log) em vez de bloquear.

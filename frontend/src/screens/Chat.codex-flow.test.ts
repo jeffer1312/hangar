@@ -62,6 +62,7 @@ vi.mock('@hangar/core', async (original) => ({
 }));
 vi.mock('../lib/sessionsStore.svelte', () => ({
   sessionsStore: {
+    sessionsForServer() { return this.rows; },
     get rows() {
       return [{
         name: 'codex-flow', provider: harness.provider, tracked: true, state: 'working', cwd: '/teste',
@@ -83,10 +84,10 @@ function bolhas(text: string) {
   return [...document.querySelectorAll('.bubble-text')].filter(el => el.textContent === text);
 }
 function orientar() { return document.querySelector<HTMLButtonElement>('button.fila-chip'); }
-async function montar() {
+async function montar(desktop = true) {
   const target = document.createElement('div'); document.body.appendChild(target);
   components.push(mount(Chat, { target, props: {
-    sessionName: 'codex-flow', desktop: true, showContextPanel: false,
+    sessionName: 'codex-flow', desktop, showContextPanel: false,
     onBack: vi.fn(), onNavigateToChat: vi.fn(),
   } }));
   await flush(); await flush();
@@ -296,6 +297,38 @@ it('jsonl tardio descarta o cache antigo sem apagar o SSE que chegou durante o R
   expect(textos.some((texto) => texto?.includes('cache antigo'))).toBe(false);
   expect(textos.map((texto) => texto?.includes('histórico novo') ? 'novo' : 'atual'))
     .toEqual(['novo', 'atual']);
+});
+
+it('voltar do segundo plano preserva o SSE posterior ao histórico recebido', async () => {
+  const a = { id: 'a', kind: 'assistant_msg', text: 'mensagem A' } as const;
+  const b = { id: 'b', kind: 'assistant_msg', text: 'mensagem B' } as const;
+  const c = { id: 'c', kind: 'assistant_msg', text: 'mensagem C' } as const;
+  await montar();
+  await emit('message', a);
+  let resolveTail!: (events: api.ChatEvent[]) => void;
+  vi.mocked(api.getHistory).mockReturnValueOnce(new Promise(resolve => { resolveTail = resolve; }));
+  vi.mocked(api.getHistory).mockResolvedValueOnce([a, b, c]);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  document.dispatchEvent(new Event('visibilitychange'));
+  await flush();
+  await emit('message', c);
+  resolveTail([b]);
+  await flush(); await flush();
+  expect([...document.querySelectorAll('.assistant-msg:not(.preview)')]
+    .map(el => el.textContent?.match(/mensagem [ABC]/)?.[0])).toEqual(['mensagem A', 'mensagem B', 'mensagem C']);
+});
+
+it.each([true, false])('REST atrasado não ressuscita eco confirmado, desktop=%s', async desktop => {
+  let resolveHistory!: (value: Awaited<ReturnType<typeof api.getHistoryDesde>>) => void;
+  vi.mocked(api.getHistoryDesde).mockReturnValueOnce(new Promise(resolve => { resolveHistory = resolve; }));
+  await montar(desktop);
+  const queued = { id: 'queued-antiga', kind: 'user_msg', text: 'pode continuar agr' } as const;
+  await emit('message', queued);
+  await emit('queue_confirmed', { ...queued, queued_confirmed: true });
+  resolveHistory({ eventos: [queued, { id: 'real', kind: 'user_msg', text: queued.text }], etag: null });
+  await flush();
+  expect(bolhas(queued.text)).toHaveLength(1);
+  expect(document.querySelector('.queued-row')).toBeNull();
 });
 
 it('falha do histórico não esconde mensagem que já chegou pelo SSE', async () => {

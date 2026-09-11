@@ -163,6 +163,22 @@ def test_select_corrige_tecla_engolida(sem_espera, monkeypatch):
     ]
 
 
+def test_select_codex_le_o_cursor_antes_de_confirmar(sem_espera, monkeypatch):
+    telas = iter([_picker(3).replace("❯", "›"), _picker(1).replace("❯", "›")])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cx", 1, require_cursor=True)
+    assert sk.call_args_list == [call("cx", "Up"), call("cx", "Up"), call("cx", "Enter")]
+
+
+def test_select_codex_ilegivel_nao_confirma(sem_espera, monkeypatch):
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: "tela sem cursor")
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().select("cx", 1, require_cursor=True)
+    sk.assert_not_called()
+
+
 def test_select_ilegivel_no_meio_da_correcao_nao_manda_enter(sem_espera, monkeypatch):
     # Achado da revisão: a 1a leitura dá um número, a 2a vem ilegível (pane piscou, `❯ N.` sumiu).
     # Tratar isso como convergência mandava o Enter às CEGAS — exatamente o "opção errada calada"

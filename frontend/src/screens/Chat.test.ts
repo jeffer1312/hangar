@@ -115,6 +115,7 @@ vi.mock('../lib/auth', () => ({
 }));
 vi.mock('../lib/sessionsStore.svelte', () => ({
   sessionsStore: {
+    sessionsForServer(id: string) { return (sessionsStoreCtl.rows as AggSession[]).filter(s => s.serverId === id); },
     get rows() { return sessionsStoreCtl.rows; },
     get byServer() { return sessionsStoreCtl.byServer; },
   },

@@ -80,6 +80,26 @@ async def test_sse_data_is_json_string(monkeypatch):
         break
 
 
+async def test_claude_emite_baixa_da_fila_ao_reabrir(monkeypatch, tmp_path):
+    from app import pqueue
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    monkeypatch.setattr("app.sse.get_adapter", lambda provider: _StubAdapterOne())
+    queue = pqueue.PromptQueue("confirmada")
+    entry = queue.append("pode continuar agr", delivered=True, ts=1)
+    queue.reconcile_delivered({entry["text"]}, 0, 10, confirm_only=True)
+    stream = merged_events("confirmada", str(tmp_path / "transcript.jsonl"))
+    try:
+        async with asyncio.timeout(3):
+            async for event in stream:
+                if event["event"] == "queue_confirmed":
+                    payload = json.loads(event["data"])
+                    assert payload["id"] == f"queued-{entry['id']}"
+                    assert payload["queued_confirmed"] is True
+                    break
+    finally:
+        await stream.aclose()
+
+
 async def _seq_states():
     # overlay aberto (nao-entregavel) -> idle (entregavel): a transicao dispara o drain UMA vez.
     yield StateEvent(session="cc", state="awaiting_input", overlay=True)

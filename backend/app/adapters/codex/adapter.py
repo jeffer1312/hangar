@@ -382,6 +382,7 @@ class CodexAdapter:
         # is None`, ambos spawnar+resume, e o 2o attach() sobrescrever o 1o AppServerClient no dict
         # -- o 1o (subprocess + reader task) ficava orfao, nunca fechado.
         self._locks: dict[str, asyncio.Lock] = {}
+        self._delivery_locks: dict[str, asyncio.Lock] = {}
         # Backend-owned watcher: se a TUI tmux morre (inclusive terminal fechado com o helper junto),
         # remove o sidecar e encerra o app-server. O cleanup nao pode depender do processo wrapper.
         self._tmux_watchers: dict[str, asyncio.Task] = {}
@@ -748,6 +749,9 @@ class CodexAdapter:
         term = getattr(sess["client"], "terminate", None)
         if callable(term):
             term()
+
+    def delivery_lock(self, name: str) -> asyncio.Lock:
+        return self._delivery_locks.setdefault(name, asyncio.Lock())
 
     def rename(self, old: str, new: str) -> None:
         def rearmar() -> None:
@@ -1133,6 +1137,13 @@ class CodexAdapter:
         return False
 
     async def drain(self, name: str, path: str) -> int:
+        sess = self._sessions.get(name)
+        async with self.delivery_lock(name):
+            if self._sessions.get(name) is not sess:
+                return 0
+            return await self._drain(name, path)
+
+    async def _drain(self, name: str, path: str) -> int:
         """Entrega a fila duravel (PromptQueue keyed por nome) via send_prompt (TUI no tmux). Sem
         tty/overlay como no Claude: claim-1-envia-1, para no primeiro `deferred` (turno em curso).
         Retorna quantas entregou. `path` (rollout) mantido por assinatura do Protocol; nao usado.
@@ -1325,6 +1336,13 @@ class CodexAdapter:
         })
 
     async def steer_queue(self, name: str) -> list[str]:
+        sess = self._sessions.get(name)
+        async with self.delivery_lock(name):
+            if self._sessions.get(name) is not sess:
+                raise RuntimeError("A sessão mudou antes de orientar a fila")
+            return await self._steer_queue(name)
+
+    async def _steer_queue(self, name: str) -> list[str]:
         await self.ensure_running(name)
         sess = self._sessions.get(name) or {}
         turn_id = await self._active_turn_id(name)

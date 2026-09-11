@@ -62,7 +62,7 @@
     descartarDaFila,
   } from '@hangar/core';
   import { formataErro } from '@hangar/core';
-  import { appendTail, hasSeam, mergeHistoryWithLive, prependOlder } from '@hangar/core';
+  import { hasSeam, mergeHistoryWithLive } from '@hangar/core';
   import { especificidade, donoDaLinha } from '@hangar/core';
   import { parseStatusLine, queuedMessages } from '@hangar/core';
   import { listServers, getActiveId } from '../lib/auth';
@@ -459,7 +459,7 @@
   let polledSessions = $state<SessionInfo[]>([]);
   const allSessions = $derived<SessionInfo[]>(
     desktop
-      ? sessionsStore.rows.filter((s) => s.serverId === servidorDaCauda)
+      ? sessionsStore.sessionsForServer(servidorDaCauda)
       : polledSessions,
   );
   // Servidores fora do ar, só pra folha de "Nova sessão" não oferecer máquina desligada. LÊ o store
@@ -1437,16 +1437,11 @@
     getHistory(sessionName, undefined, histAbort?.signal)
       .then((full) => {
         if (g !== histGen || !alive) return;   // resposta velha/pós-destroy: NÃO aplica
-        // prependOlder só ACRESCENTA o que é mais antigo que a nossa primeira bolha: o que o SSE
-        // entregou durante o fetch fica intacto, e nada que o dedup removeu volta.
-        const merged = prependOlder(full, events);
-        if (!merged) {
-          // null tem dois motivos e só um é problema: sem ponto de costura a conversa segue
-          // truncada (avisa); "já temos desde o começo" é o caso feliz (silêncio).
-          histGap = hasSeam(full, events) ? '' : 'unjoinable';
+        if (!hasSeam(full, events)) {
+          histGap = 'unjoinable';
           return;
         }
-        events = merged;
+        events = mergeHistoryWithLive(full, events, { removedIds: retiredQueuedIds });
         rebuildIndex();
         reseedDerived();
         histGap = '';
@@ -1533,6 +1528,7 @@
       if (e.lastEventId) lastEventId = e.lastEventId;
       try {
         const ev = JSON.parse(e.data) as ChatEvent;
+        if (retiredQueuedIds.has(ev.id)) return;
         if (ev.queued_confirmed && ev.id.startsWith('queued-')) {
           retiredQueuedIds.add(ev.id);
           events = events.filter((x) => x.id !== ev.id);
@@ -1778,18 +1774,20 @@
     connectSSE();
     const signal = newHistLoad();   // aborta a carga de fundo que ficou pendurada no background
     const g = histGen;
+    const before = new Set(events);
     try {
       // So a CAUDA: o buraco do background e no FIM da conversa, e o historico antigo ja esta em
       // memoria — re-baixar o jsonl inteiro a cada volta pro foreground era o custo que sobrava.
       const fresh = await getHistory(sessionName, TAIL_FIRST, signal);
       if (g !== histGen || !alive) return;   // resposta velha/pos-destroy: NAO sobrescreve nem conecta
-      const head = events[0]?.id;
-      events = appendTail(fresh, events);
+      const gap = !hasSeam(fresh, events);
+      events = mergeHistoryWithLive(fresh, events, {
+        cachedEvents: before, removedIds: retiredQueuedIds,
+      });
       rebuildIndex();
       reseedDerived();
-      // Sem sobreposicao a appendTail re-ancorou na cauda (background longo demais): o historico
-      // antigo saiu da lista e volta em segundo plano, como na abertura.
-      if (events[0]?.id !== head) loadOlderInBackground(g);
+      // Sem sobreposição, recupera também o histórico anterior à nova cauda.
+      if (gap) loadOlderInBackground(g);
     } catch (err) {
       // Com bolha na tela, seguir calado está certo: é um blip, e o SSE re-sincroniza.
       // Com a lista VAZIA, não: o `connectSSE` abaixo retoma pelo `lastEventId`, e quando um

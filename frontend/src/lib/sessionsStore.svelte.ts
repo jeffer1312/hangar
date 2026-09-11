@@ -243,6 +243,10 @@ function createSessionsStore() {
   }
 
   return {
+    sessionsForServer(serverId: string) {
+      void agg; // A publicação da lista também invalida a leitura do slot original.
+      return slots.get(serverId)?.sessions ?? [];
+    },
     get rows() { return agg.rows; },
     get byServer() { return agg.byServer; },
     get latencias() { return latencias; },

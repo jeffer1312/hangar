@@ -729,7 +729,7 @@ Press enter to confirm or esc to go back
          patch("app.api.terminal.select") as sel:
         r = api_client.post("/api/sessions/cx/codex/plan/implement", headers=_h())
     assert r.status_code == 200
-    sel.assert_called_once_with("cx", 1)
+    sel.assert_called_once_with("cx", 1, require_cursor=True)
 
 
 def test_implement_codex_plan_refuses_another_picker(api_client):

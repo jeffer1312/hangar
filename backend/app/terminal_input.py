@@ -808,7 +808,7 @@ class DriveError(RuntimeError):
 
 # Linha destacada do picker: "❯ 3. OPT-TWO" -> 3 (1-based). Numerico de proposito: robusto a label
 # longo/quebrado em multiplas linhas, que um match por texto erraria.
-_CURSOR_ROW = re.compile(r"❯\s*(\d+)\.")
+_CURSOR_ROW = re.compile(r"[❯›]\s*(\d+)\.")
 
 
 def _cursor_row(screen: str) -> int | None:
@@ -1759,7 +1759,7 @@ class TerminalInput:
     # atingido; a 4a e folga barata (uma captura de pane).
     _SELECT_TENTATIVAS = 4
 
-    def select(self, name: str, option: int) -> None:
+    def select(self, name: str, option: int, *, require_cursor: bool = False) -> None:
         """Escolhe a opcao `option` (1-based) do picker cru, em MALHA FECHADA.
 
         As cegas (Down*(n-1) + Enter) partia de duas suposicoes falsas, as duas medidas em
@@ -1781,6 +1781,8 @@ class TerminalInput:
                 return ""  # pane ilegivel -> _cursor_row None -> caminho aberto, como antes
 
         antes = tela()
+        if require_cursor and _cursor_row(antes) is None:
+            raise DriveError("cursor ilegível — opção NÃO confirmada")
 
         # Caminho CURTO: a tecla do numero. Medido na TUI em 28/08/2026, com o picker vivo:
         #   - escolha unica  -> o digito MARCA E SUBMETE, numa tecla so (nem Enter precisa);

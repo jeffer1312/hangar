@@ -14,7 +14,7 @@ import time
 import urllib.request
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Literal, Optional
@@ -1939,7 +1939,21 @@ class RenameBody(_StrictBody):
 
 
 @app.post("/api/sessions/{name}/rename", dependencies=[Depends(require_auth)])
-def rename_session(name: str, body: RenameBody):
+async def rename_session(name: str, body: RenameBody):
+    # Claim, envio e compensação precisam terminar antes de mover a fila e cancelar a bomba.
+    async with AsyncExitStack() as stack:
+        adapter = get_adapter("codex")
+        for key in sorted({name, sanitize_session_name(body.new)}):
+            await stack.enter_async_context(adapter.delivery_lock(key))
+        task = asyncio.create_task(asyncio.to_thread(_rename_session, name, body))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+
+
+def _rename_session(name: str, body: RenameBody):
     from app import tmux
     # tmux nao aceita espaco/./: no nome -> sanitiza. O transcript NAO depende do nome (resolve por
     # /proc), entao renomear nao quebra o historico. Migra so o sidecar da fila (keyed por nome).
@@ -2845,6 +2859,16 @@ def _pane_info(name: str) -> tuple[str, str | None]:
 
 
 async def _send_one_codex(name: str, text: str) -> dict:
+    source = await asyncio.to_thread(codex_sessions.load, name)
+    async with get_adapter("codex").delivery_lock(name):
+        current = await asyncio.to_thread(codex_sessions.load, name)
+        changed = source is not None and (current or {}).get("thread_id") != source.get("thread_id")
+        if changed or not await asyncio.to_thread(_session_exists, name):
+            return {"ok": False, "error": erro("erro_sessao_inexistente", "sessao nao encontrada")}
+        return await _send_one_codex_locked(name, text)
+
+
+async def _send_one_codex_locked(name: str, text: str) -> dict:
     """Envio de prompt pra sessao Codex pela TUI no tmux. Registra na fila duravel
     (aparece como user_msg em ordem e persiste no reload; o
     merge dedup-a contra o rollout do Codex) e entrega pela TUI no tmux SE a sessao esta idle;
@@ -4050,7 +4074,7 @@ def implementar_plano_codex(name: str):
         time.sleep(0.05)
 
     try:
-        terminal.select(name, 1)
+        terminal.select(name, 1, require_cursor=True)
     except terminal_input.DriveError as exc:
         diag.registrar("plano_codex.nao_convergiu", "erro", sessao=name, detalhe=str(exc))
         raise HTTPException(409, detail=erro(

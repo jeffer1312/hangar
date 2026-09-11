@@ -61,17 +61,38 @@ export function mergeHistoryWithLive(
     cachedEvents?: ReadonlySet<ChatEvent>;
   } = {},
 ): ChatEvent[] {
-  const clean = options.removedIds?.size
-    ? history.filter((e) => !options.removedIds!.has(e.id))
-    : history;
-  if (!current.length) return clean;
+  const removed = options.removedIds ?? new Set<string>();
+  const clean = history.filter(e => !removed.has(e.id));
+  current = current.filter(e => !removed.has(e.id));
+  let merged: ChatEvent[];
   if (!hasSeam(clean, current)) {
     const live = options.preserveNoSeam
       ? current
       : options.cachedEvents
         ? current.filter((e) => !options.cachedEvents!.has(e))
         : [];
-    return live.length ? [...clean, ...live] : clean;
+    merged = [...clean, ...live];
+  } else {
+    const historyIds = new Set(clean.map(e => e.id));
+    const positions = new Map(current.map((e, i) => [e.id, i]));
+    const first = current.findIndex(e => historyIds.has(e.id));
+    // A fila também chega por SSE; um eco novo não é parte do histórico anterior à cauda.
+    merged = current.slice(0, Math.max(first, 0))
+      .filter(e => !e.id.startsWith('queued-') || options.cachedEvents?.has(e));
+    const precedingIds = new Set(merged.map(e => e.id));
+    let cursor = 0;
+    for (const event of clean) {
+      const position = positions.get(event.id);
+      if (position !== undefined) {
+        while (cursor < position) {
+          const preceding = current[cursor++];
+          if (!historyIds.has(preceding.id) && !precedingIds.has(preceding.id)) merged.push(preceding);
+        }
+        cursor = Math.max(cursor, position + 1);
+      }
+      merged.push(position === undefined ? event : current[position]);
+    }
+    merged.push(...current.slice(cursor).filter(e => !historyIds.has(e.id)));
   }
-  return appendTail(clean, prependOlder(clean, current) ?? current);
+  return merged.filter(e => !removed.has(e.id));
 }
