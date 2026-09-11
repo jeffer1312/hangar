@@ -23,16 +23,15 @@ PERIODOS = {"7d": 7, "30d": 30, "90d": 90}
 # costs_sources, então manter a função aqui fecharia um ciclo.
 
 
-def _tarifa_da_linha(r: UsageRow) -> pricing.Rate | None:
-    """A tarifa que ESTA linha pagou, com os ajustes por modo (contexto longo, modo rápido).
+def _ajustar(r: UsageRow, rate: pricing.Rate) -> pricing.Rate:
+    """Aplica na tarifa do catálogo os ajustes por MODO daquela resposta: contexto longo do
+    Codex e modo rápido do Claude.
 
-    Existe porque o cálculo é feito em dois lugares — o custo e o "preço cheio" que mede a
-    economia de cache —, e quando cada um escolhia a tarifa por conta o segundo esqueceu um
-    ajuste: a economia de cache aparecia NEGATIVA, porque o cheio saía por metade do cobrado.
+    Recebe a tarifa em vez de buscá-la porque o mesmo cálculo é feito em dois lugares — o custo
+    e o "preço cheio" que mede a economia de cache. Quando cada um escolhia a tarifa por conta,
+    o segundo esqueceu um ajuste e a economia aparecia NEGATIVA; e quando cada um BUSCAVA a sua,
+    um recarregamento do catálogo no meio da conta deixava os dois discordando em silêncio.
     """
-    rate = pricing.rate_for(r.model)
-    if rate is None:
-        return None
     if r.source == "codex":
         rate = pricing.rate_codex(rate, r.model, r.codex_long_context)
     if r.fast:
@@ -41,9 +40,10 @@ def _tarifa_da_linha(r: UsageRow) -> pricing.Rate | None:
 
 
 def _custo_da_linha(r: UsageRow) -> dict[str, float] | None:
-    rate = _tarifa_da_linha(r)
-    if rate is None:
+    base = pricing.rate_for(r.model)
+    if base is None:
         return None
+    rate = _ajustar(r, base)
     custo = pricing.custo(rate, r.input, r.output, r.cache_write, r.cache_read)
     if rate.provider == "anthropic" and rate.origin != "override":
         custo["cache_write"] += r.cache_write_1h / 1e6 * (rate.input * 2 - rate.cache_write)
@@ -157,7 +157,7 @@ def montar(linhas: list[UsageRow], period: str = "all",
             if canon not in pricing.IGNORADOS:
                 sem_tarifa.add(canon)
             continue
-        efetiva = _tarifa_da_linha(r) or rate
+        efetiva = _ajustar(r, rate)
         # Preço cheio: os mesmos tokens se NENHUM fosse cache.
         cheio = ((r.input + r.cache_write + r.cache_read) / 1e6 * efetiva.input
                  + r.output / 1e6 * efetiva.output)
