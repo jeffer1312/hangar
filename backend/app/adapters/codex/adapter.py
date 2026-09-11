@@ -416,6 +416,9 @@ class CodexAdapter:
             sub = self._subscribers.pop(name, None)
             if sub is not None:
                 sub.cancel()
+            bomba = sess.get("bomba")
+            if bomba is not None:
+                bomba.cancel()
             # Antes do delete: o pid do app-server mora no sidecar. Normalmente o lancador ja o
             # derrubou ao ver a TUI sair; isto cobre o pane morto de SIGKILL.
             matar_app_server(name)
@@ -515,6 +518,20 @@ class CodexAdapter:
             _log.info("codex assinado: thread=%s name=%s", sess["thread_id"], name)
             return
 
+    def _start_bomba(self, name: str, sess: dict) -> asyncio.Task | None:
+        bomba = sess.get("bomba")
+        if bomba is not None:
+            return bomba
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        bomba = loop.create_task(
+            self._bombear(name, sess["client"], sess), name=f"codex-pump-{name}"
+        )
+        sess["bomba"] = bomba
+        return bomba
+
     def attach(self, name: str, client: AppServerClient, thread_id: str,
                model: Optional[str] = None, effort: Optional[str] = None,
                default_model: Optional[str] = None, default_effort: Optional[str] = None,
@@ -532,11 +549,16 @@ class CodexAdapter:
 
         subscribed=True quando quem chama JA fez o thread/resume (caminho ensure_running); o
         create_codex passa False e dispara start_subscription, que retenta ate o rollout existir."""
-        self._sessions[name] = {"client": client, "thread_id": thread_id,
-                                 "state": "idle", "in_progress": False,
-                                 "model": model, "effort": effort,
-                                 "default_model": default_model, "default_effort": default_effort,
-                                 "subscribed": subscribed}
+        anterior = self._sessions.get(name)
+        if anterior is not None and anterior.get("bomba") is not None:
+            anterior["bomba"].cancel()
+        sess = {"client": client, "thread_id": thread_id,
+                "state": "idle", "in_progress": False,
+                "model": model, "effort": effort,
+                "default_model": default_model, "default_effort": default_effort,
+                "subscribed": subscribed, "ouvintes": []}
+        self._sessions[name] = sess
+        self._start_bomba(name, sess)
         if watch_tmux:
             self._start_tmux_watcher(name)
 
@@ -700,6 +722,9 @@ class CodexAdapter:
             sub.cancel()
         if sess is None:
             return
+        bomba = sess.get("bomba")
+        if bomba is not None:
+            bomba.cancel()
         term = getattr(sess["client"], "terminate", None)
         if callable(term):
             term()
@@ -713,12 +738,19 @@ class CodexAdapter:
             sub.cancel()
         sess = self._sessions.pop(old, None)
         if sess is not None:
+            bomba = sess.pop("bomba", None)
+            if bomba is not None:
+                bomba.cancel()
+            for fila in sess.get("ouvintes", []):
+                fila.put_nowait(None)
+            sess["ouvintes"] = []
             self._sessions[new] = sess
         lock = self._locks.pop(old, None)
         if lock is not None:
             self._locks[new] = lock
         if sess is not None:
             self._start_tmux_watcher(new)
+            self._start_bomba(new, sess)
             # RE-ARMA a assinatura sob o nome novo. Cancelar acima e parar por aí deixava a sessao
             # SURDA pra sempre: renomear antes do 1o turno terminar (janela normal — o retry roda de
             # 1s a 10s ate o rollout existir) migrava `subscribed: False` pro nome novo com a task
@@ -784,9 +816,7 @@ class CodexAdapter:
         fila: asyncio.Queue = asyncio.Queue()
         ouvintes: list[asyncio.Queue] = sess.setdefault("ouvintes", [])
         ouvintes.append(fila)
-        bomba = sess.get("bomba")
-        if bomba is None or bomba.done():
-            sess["bomba"] = asyncio.create_task(self._bombear(name, client))
+        bomba = self._start_bomba(name, sess)
         try:
             # Retrato do que ja se sabe: quem reabre o chat no meio de um turno nao espera a
             # proxima notification pra ver estado, contexto e limites.
@@ -796,6 +826,11 @@ class CodexAdapter:
             except Exception:
                 _log.warning("codex: não foi possível atualizar os controles de %s", name)
             yield self._question_state(name, sess)
+            if bomba is not None and bomba.done():
+                erro = sess.get("bomba_error")
+                if erro is not None:
+                    raise erro
+                return
             while True:
                 ev = await fila.get()
                 if ev is None:
@@ -806,12 +841,6 @@ class CodexAdapter:
         finally:
             if fila in ouvintes:
                 ouvintes.remove(fila)
-            if not ouvintes and sess.get("bomba") is not None:
-                # `cancel()` so agenda: a task segue `not done()` ate a proxima volta do loop. O
-                # slot e a lista saem AGORA, senao um ouvinte que chega nessa janela herda a bomba
-                # que esta morrendo (e o sentinela final dela).
-                sess.pop("bomba").cancel()
-                sess["ouvintes"] = []
 
     @staticmethod
     def _status_line(sess: dict) -> Optional[str]:
@@ -823,14 +852,13 @@ class CodexAdapter:
             sess.get("token_usage"), sess.get("rate_limits"),
         )
 
-    async def _bombear(self, name: str, client: AppServerClient) -> None:
+    async def _bombear(self, name: str, client: AppServerClient, sess: dict) -> None:
         """Le a fila do app-server, aplica o efeito de cada notification na sessao (estado, previa,
         drain-on-complete) e espalha os StateEvents pros ouvintes do chat ou da chamada de voz.
 
         Roda numa task propria, entao uma excecao aqui nao sobe sozinha: ela e repassada aos
         ouvintes (que a levantam no SSE) e o sentinela final sai SEMPRE — sem isso cada ouvinte
         ficava em `fila.get()` pra sempre, com a tela "conectada" e muda."""
-        sess = self._sessions[name]
         ouvintes = sess["ouvintes"]   # a lista DESTA bomba: a sucessora ganha outra (ver _state_stream)
 
         def espalhar(ev) -> None:
@@ -842,6 +870,7 @@ class CodexAdapter:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            sess["bomba_error"] = exc
             _log.exception("codex bomba quebrou name=%s", name)
             espalhar(exc)
         finally:

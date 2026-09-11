@@ -37,6 +37,7 @@ vi.mock('../lib/auth', () => ({
 
 const sse = vi.hoisted(() => ({ handlers: new Map<string, (event: MessageEvent) => void>() }));
 const harness = vi.hoisted(() => ({ provider: 'codex' as 'claude' | 'codex' }));
+const sessionsStoreCtl = vi.hoisted(() => ({ pairPeers: null as string[] | null }));
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof api>(),
   getHistory: vi.fn().mockResolvedValue([]),
@@ -51,12 +52,23 @@ vi.mock('@hangar/core', async (original) => ({
   sendInput: vi.fn().mockResolvedValue({ ok: true, queued: true }),
   steerSession: vi.fn().mockResolvedValue({ ok: true, promoted: true }),
   broadcast: vi.fn().mockResolvedValue({}),
-  setCodexMode: vi.fn().mockResolvedValue({ model: 'gpt-6-astra', effort: 'high', mode: 'default' }),
+  implementCodexPlan: vi.fn().mockResolvedValue(undefined),
   answerQuestions: vi.fn().mockResolvedValue({ ok: true }),
   openEventStream: vi.fn(() => ({
     onmessage: null, onerror: null, close: vi.fn(), readyState: 1,
     addEventListener: (type: string, handler: (event: MessageEvent) => void) => sse.handlers.set(type, handler),
   })),
+}));
+vi.mock('../lib/sessionsStore.svelte', () => ({
+  sessionsStore: {
+    get rows() {
+      return [{
+        name: 'codex-flow', provider: harness.provider, tracked: true, state: 'working', cwd: '/teste',
+        serverId: 'codex-flow', serverLabel: 'Teste', serverColor: '#fff', pair_peers: sessionsStoreCtl.pairPeers,
+      }];
+    },
+    get byServer() { return []; },
+  },
 }));
 
 let components: ReturnType<typeof mount>[] = [];
@@ -105,6 +117,7 @@ async function enfileirar(text: string) {
 beforeEach(() => {
   vi.clearAllMocks(); sse.handlers.clear();
   harness.provider = 'codex';
+  sessionsStoreCtl.pairPeers = null;
   const storage = new Map<string, string>();
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -190,15 +203,13 @@ it('envia respostas de várias perguntas pelo request_id e conserva o formulári
 });
 
 it('aprovar o plano envia uma única vez à sessão atual mesmo com mandar pros dois ligado', async () => {
-  const sessions = await api.getSessions();
-  vi.mocked(api.getSessions).mockResolvedValueOnce(sessions.map(session => ({ ...session, pair_peers: ['par'] })));
-  type Mode = Awaited<ReturnType<typeof api.setCodexMode>>;
-  let resolveMode!: (value: Mode) => void;
-  const mode = {
-    promise: new Promise<Mode>(resolve => { resolveMode = resolve; }),
-    resolve: (value: Mode) => resolveMode(value),
+  sessionsStoreCtl.pairPeers = ['par'];
+  let resolvePlan!: () => void;
+  const plan = {
+    promise: new Promise<void>(resolve => { resolvePlan = resolve; }),
+    resolve: () => resolvePlan(),
   };
-  vi.mocked(api.setCodexMode).mockReturnValueOnce(mode.promise);
+  vi.mocked(api.implementCodexPlan).mockReturnValueOnce(plan.promise);
   await montar();
   const both = document.querySelector<HTMLButtonElement>('button.both-chip')!;
   expect(both).not.toBeNull();
@@ -216,11 +227,11 @@ it('aprovar o plano envia uma única vez à sessão atual mesmo com mandar pros 
   expect(implement.disabled).toBe(false);
   // Dois cliques no mesmo quadro precisam compartilhar o envio ainda em curso.
   implement.click(); implement.click(); await flush();
-  expect(api.setCodexMode).toHaveBeenCalledExactlyOnceWith('codex-flow', 'default');
+  expect(api.implementCodexPlan).toHaveBeenCalledExactlyOnceWith('codex-flow');
   expect(api.sendInput).not.toHaveBeenCalled();
-  mode.resolve({ model: 'gpt-6-astra', effort: 'high', mode: 'default' });
+  plan.resolve();
   await flush();
-  expect(api.sendInput).toHaveBeenCalledExactlyOnceWith('codex-flow', m.chat_plan_pedido());
+  expect(api.sendInput).not.toHaveBeenCalled();
   expect(api.broadcast).not.toHaveBeenCalled();
   expect(both.getAttribute('aria-pressed')).toBe('true');
 });

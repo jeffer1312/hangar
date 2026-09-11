@@ -22,6 +22,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSock
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
 from app import (agentes_sync, atomico, atualizacoes, atualizar, diag, harness_api,
@@ -63,7 +64,7 @@ from app.terminal_input import TerminalInput, drain
 from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import merged_events, nav_confirmar, nav_pendente
-from app.state import corrige_ocioso_kimi
+from app.state import corrige_ocioso_kimi, menu_codex
 from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, UploadError, MAX_BYTES
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
@@ -504,6 +505,8 @@ app.add_middleware(
     # If-None-Match e cairia calado no download inteiro, em toda entrada.
     expose_headers=["ETag"],
 )
+# JSON e assets grandes cruzam LAN/VPN; o Starlette exclui `text/event-stream`, sem segurar o SSE.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 if settings.sync:
     app.include_router(sync_router)
 app.include_router(deploy_router)
@@ -4016,6 +4019,49 @@ async def set_codex_mode(name: str, body: CodexModeBody):
         raise HTTPException(409, detail=erro("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente.")) from None
 
 
+def _menu_de_implementar_plano(pane: str) -> bool:
+    menu = menu_codex(pane)
+    return bool(menu and menu[0] == "Implement this plan?"
+                and menu[1][0].startswith("Yes, implement this plan"))
+
+
+@app.post("/api/sessions/{name}/codex/plan/implement", dependencies=[Depends(require_auth)])
+def implementar_plano_codex(name: str):
+    if not _session_exists(name):
+        raise HTTPException(404, detail=erro(
+            "erro_sessao_opcao_nao_enviada", "sessão não encontrada — plano NÃO iniciado"))
+    if _provider_of(name) != "codex":
+        raise HTTPException(400, detail=erro(
+            "erro_model_so_codex", "esta ação só existe para sessões Codex"))
+
+    fim = time.monotonic() + 2.0
+    while True:
+        pane = tmux.capture_pane(name)
+        if _menu_de_implementar_plano(pane):
+            break
+        if menu_codex(pane) is not None or time.monotonic() >= fim:
+            raise HTTPException(409, detail=erro(
+                "erro_codex_controle", "O seletor de implementação não está aberto na sessão."))
+        time.sleep(0.05)
+
+    try:
+        terminal.select(name, 1)
+    except terminal_input.DriveError as exc:
+        diag.registrar("plano_codex.nao_convergiu", "erro", sessao=name, detalhe=str(exc))
+        raise HTTPException(409, detail=erro(
+            "erro_opcao_nao_convergiu", "não consegui iniciar o plano pelo terminal",
+            detalhe=str(exc))) from None
+
+    fim = time.monotonic() + 2.0
+    while time.monotonic() < fim:
+        pane = tmux.capture_pane(name)
+        if pane and not _menu_de_implementar_plano(pane):
+            return {"ok": True}
+        time.sleep(0.05)
+    raise HTTPException(409, detail=erro(
+        "erro_codex_controle", "O Codex não fechou o seletor de implementação."))
+
+
 @app.get("/api/sessions/{name}/pane", dependencies=[Depends(require_auth)])
 def pane(name: str, lines: int = 200):
     # Pane CRU (texto ja composto pelo tmux: sem ANSI/cursor-move). O espelho do pane (TerminalMirror)
@@ -6618,6 +6664,8 @@ class _UIStatic(StaticFiles):
         resp = super().file_response(full_path, *args, **kwargs)
         if str(full_path).endswith(".html"):
             resp.headers["cache-control"] = "no-cache"
+        elif Path(full_path).parent.name == "assets":
+            resp.headers["cache-control"] = "public, max-age=31536000, immutable"
         return resp
 
 

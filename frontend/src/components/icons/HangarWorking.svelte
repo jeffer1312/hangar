@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+
   /**
    * Indicador de "trabalhando". Coreografia em três camadas, cada uma resolvendo um problema:
    *
@@ -22,6 +24,27 @@
    * spans aninhados em vez de rotate+transform no mesmo elemento.
    */
   let { size = 20 }: { size?: number } = $props();
+  let mark: HTMLSpanElement;
+  let visible = $state(true);
+
+  onMount(() => {
+    let intersecting = true;
+    const update = () => {
+      visible = intersecting && document.visibilityState === 'visible';
+    };
+    const observer = typeof IntersectionObserver === 'undefined' ? null
+      : new IntersectionObserver(([entry]) => {
+          intersecting = entry.isIntersecting;
+          update();
+        });
+    observer?.observe(mark);
+    document.addEventListener('visibilitychange', update);
+    update();
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener('visibilitychange', update);
+    };
+  });
 
   const CICLO = 3.2;
   const ARCOS = [
@@ -47,7 +70,7 @@
   });
 </script>
 
-<span class="mark" style="--ciclo: {CICLO}s; --size: {size}px" aria-hidden="true">
+<span bind:this={mark} class="mark" class:paused={!visible} style="--ciclo: {CICLO}s; --size: {size}px" aria-hidden="true">
   {#each caminhos as c}
     <span class="espiral">
       <span class="arco" style="--giro: {c.atrasoGiro}">
@@ -90,6 +113,11 @@
     display: inline-grid;
     animation: hangar-gira var(--ciclo, 3.2s) var(--ease-out) var(--giro, 0.9s) infinite;
   }
+
+  .mark.paused,
+  .mark.paused .espiral,
+  .mark.paused .arco,
+  .mark.paused .traco { animation-play-state: paused; }
 
   svg { display: block; }
 

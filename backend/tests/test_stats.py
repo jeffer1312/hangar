@@ -94,6 +94,36 @@ def test_linha_parcial_fica_pro_proximo_collect(tmp_path):
     assert acc.collect()["steps"] == 2
 
 
+def test_collect_processa_linhas_sem_leitura_integral(tmp_path, monkeypatch):
+    p = tmp_path / "s.jsonl"
+    _w(p, [_claude_user("2026-08-17T12:00:00Z"),
+           _claude_assistant("2026-08-17T12:00:02Z", "m1")])
+    original = Path.open
+
+    class _SomenteLinhas:
+        def __init__(self, arquivo):
+            self._arquivo = arquivo
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._arquivo.__exit__(*args)
+
+        def __getattr__(self, nome):
+            return getattr(self._arquivo, nome)
+
+        def read(self, *_args, **_kwargs):
+            raise AssertionError("collect nao deve carregar o trecho inteiro")
+
+    def abrir(self, *args, **kwargs):
+        arquivo = original(self, *args, **kwargs)
+        return _SomenteLinhas(arquivo) if self == p else arquivo
+
+    monkeypatch.setattr(Path, "open", abrir)
+    assert Accumulator("claude", str(p)).collect()["steps"] == 1
+
+
 # -- Kimi ---------------------------------------------------------------------
 
 def test_kimi_usage_llm_e_tool(tmp_path):

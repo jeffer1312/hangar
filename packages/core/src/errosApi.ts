@@ -118,6 +118,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   codex_login_attempt_mismatch: () => m.codex_login_attempt_mismatch(),
   erro_codex_resposta_invalida: () => m.erro_codex_resposta_invalida(),
   erro_codex_resposta_envio: () => m.erro_codex_resposta_envio(),
+  erro_codex_controle: () => m.erro_codex_controle(),
   erro_plano_removido: () => m.chat_plan_ausente(),
   erro_plano_ilegivel: () => m.chat_plan_erro(),
   // /api/claude-configs — apagar conta recusado por alguma condicao da maquina

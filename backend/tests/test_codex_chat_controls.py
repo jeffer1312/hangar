@@ -358,17 +358,28 @@ async def test_controles_no_codex_real_sem_inferencia(tmp_path, monkeypatch):
     client = AppServerClient()
     reconnected = AppServerClient()
     adapter = CodexAdapter()
+    settings_updates: asyncio.Queue = asyncio.Queue()
     try:
         await client.start_shared()
         await client.request("initialize", {"clientInfo": {"name": "hangar-test", "version": "1"},
                                             "capabilities": {"experimentalApi": True}})
         result = await client.request("thread/start", {"cwd": str(tmp_path), "model": "gpt-6-astra", "ephemeral": True})
+        notifications = client.notifications
+
+        async def observar_notifications():
+            async for notification in notifications():
+                if notification.get("method") == "thread/settings/updated":
+                    settings_updates.put_nowait(notification)
+                yield notification
+
+        client.notifications = observar_notifications
         adapter.attach("native", client, result["thread"]["id"], subscribed=True)
         await adapter.set_model("native", "gpt-6-astra", "high")
         assert (await adapter.read_settings("native"))["effort"] == "high"
         await adapter.set_mode("native", "plan")
         async with asyncio.timeout(10):
-            async for notification in client.notifications():
+            while True:
+                notification = await settings_updates.get()
                 if notification.get("method") == "thread/settings/updated":
                     settings = notification["params"]["threadSettings"]
                     if settings["collaborationMode"]["mode"] == "plan":

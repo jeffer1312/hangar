@@ -2154,6 +2154,12 @@ export function setCodexMode(name: string, mode: 'default' | 'plan'): Promise<Co
   });
 }
 
+export function implementCodexPlan(name: string): Promise<void> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/codex/plan/implement`, {
+    method: 'POST',
+  });
+}
+
 // Atualiza as configurações nativas compartilhadas pelo chat e pelo terminal.
 export function setCodexModel(name: string, model: string, effort?: string | null): Promise<void> {
   _invalidarCatalogo(name);

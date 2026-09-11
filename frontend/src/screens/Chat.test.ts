@@ -14,6 +14,7 @@ import { ctxPanel } from '../lib/ctxPanel.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 import GitTabs from '../components/git/GitTabs.svelte';
 import { createGitStore } from '../lib/gitStore.svelte';
+import type { AggSession, SessionInfo } from '@hangar/core';
 
 // Stub de componente Svelte 5: createRawSnippet é o padrão do DesktopShell.test.ts — uma classe
 // com $destroy (padrão Svelte 4) quebra no mount do Svelte 5 com "cannot be invoked without new".
@@ -59,6 +60,7 @@ const sseCtl = vi.hoisted(() => {
     },
   };
 });
+const sessionsStoreCtl = vi.hoisted(() => ({ rows: [] as unknown[], byServer: [] as unknown[] }));
 
 // API: só o que o mount do Chat toca precisa responder; o resto nunca chega a ser chamado
 // com os filhos stubados.
@@ -111,6 +113,12 @@ vi.mock('../lib/auth', () => ({
   listServers: vi.fn(() => [{ id: 'srv-test', label: 'T', baseUrl: 'http://x', token: 't' }]),
   getActiveId: vi.fn(() => 'srv-test'),
 }));
+vi.mock('../lib/sessionsStore.svelte', () => ({
+  sessionsStore: {
+    get rows() { return sessionsStoreCtl.rows; },
+    get byServer() { return sessionsStoreCtl.byServer; },
+  },
+}));
 vi.mock('../lib/ttsPlayer.svelte', () => ({ ttsPlayer: { active: false, loading: false } }));
 vi.mock('../lib/ouvir', () => ({ ouvirTexto: vi.fn() }));
 vi.mock('../lib/speakable', () => ({ textoFalavelComCodigo: vi.fn(() => '') }));
@@ -140,6 +148,8 @@ beforeEach(() => {
   overwriteGetLocale(() => 'pt');
   ctxPanel.recolhido = false;   // vive no módulo e persiste entre testes
   ctxPanel.aba = 'contexto';
+  sessionsStoreCtl.rows = [];
+  sessionsStoreCtl.byServer = [];
   document.body.innerHTML = '';
   // o registry do FilesStore vive no modulo e persiste entre testes: zera a selecao da chave
   // usada (o GitTabs e o Chat compartilham serverId::sessionName nos testes integrados)
@@ -150,11 +160,15 @@ beforeEach(() => {
 
 it.each([true, false])('mostra a preparação do Codex sem conversa antiga (desktop=%s)', async (desktop) => {
   const api = await import('@hangar/core');
-  vi.mocked(api.getSessions).mockResolvedValue([{
+  const sessao = {
     name: 'sess', provider: 'codex', tracked: false, jsonl: null, state: 'working',
     label: 'integração Codex: conferindo plugins',
     startup_steps: ['preparando as instruções do Codex', 'integração Codex: conferindo plugins'],
-  }]);
+  } satisfies SessionInfo;
+  if (desktop) sessionsStoreCtl.rows = [{
+    ...sessao, serverId: 'srv-test', serverLabel: 'T', serverColor: '#fff',
+  } satisfies AggSession];
+  else vi.mocked(api.getSessions).mockResolvedValue([sessao]);
   vi.mocked(api.getHistoryDesde).mockRejectedValue(Object.assign(new Error('404'), { status: 404 }));
   const t = montar(desktop);
   try {
@@ -168,6 +182,22 @@ it.each([true, false])('mostra a preparação do Codex sem conversa antiga (desk
     await unmount(t.comp);
     vi.mocked(api.getSessions).mockResolvedValue([]);
     vi.mocked(api.getHistoryDesde).mockResolvedValue({ eventos: [], etag: null });
+  }
+});
+
+it('desktop reutiliza o stream da lista sem polling REST', async () => {
+  vi.useFakeTimers();
+  const api = await import('@hangar/core');
+  vi.mocked(api.getSessions).mockClear();
+  sessionsStoreCtl.rows = [{ name: 'sess', state: 'idle', serverId: 'srv-test' }];
+  const t = montar(true);
+  try {
+    await tick();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(api.getSessions).not.toHaveBeenCalled();
+  } finally {
+    await unmount(t.comp);
+    vi.useRealTimers();
   }
 });
 

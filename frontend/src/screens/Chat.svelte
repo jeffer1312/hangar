@@ -15,7 +15,7 @@
   import AskQuestionCard from '../components/AskQuestionCard.svelte';
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
   import { proposedPlan } from '@hangar/core';
-  import { setCodexMode } from '@hangar/core';
+  import { implementCodexPlan as requestCodexPlanImplementation } from '@hangar/core';
   import RunSheet from '../components/RunSheet.svelte';
   import MoreSheet from '../components/MoreSheet.svelte';
   import AttachmentsSheet from '../components/AttachmentsSheet.svelte';
@@ -418,10 +418,7 @@
 
   async function implementCodexPlan(plan: string) {
     if (currentState !== 'idle' || plan !== codexPlan) throw new Error(m.chat_plan_indisponivel());
-    const confirmed = await setCodexMode(sessionName, 'default');
-    if (confirmed.mode !== 'default') throw new Error(m.chat_plan_indisponivel());
-    if (stateEvent) stateEvent = { ...stateEvent, codex_mode: 'default' };
-    await handleSend(m.chat_plan_pedido(), false, true);
+    await requestCodexPlanImplementation(sessionName);
   }
   // Pergunta nativa sintetizada do transcript (Pi: tool `question`; Kimi: `AskUserQuestion`): qual
   // tool_use_id abriu o sheet e qual o usuario ja DISPENSOU sem responder (fechou o sheet -> nao
@@ -458,7 +455,12 @@
       window.removeEventListener('resize', onResize);
     };
   });
-  let allSessions = $state<SessionInfo[]>([]);
+  let polledSessions = $state<SessionInfo[]>([]);
+  const allSessions = $derived<SessionInfo[]>(
+    desktop
+      ? sessionsStore.rows.filter((s) => s.serverId === servidorDaCauda)
+      : polledSessions,
+  );
   // Servidores fora do ar, só pra folha de "Nova sessão" não oferecer máquina desligada. LÊ o store
   // sem `retain`: leitura não abre stream nenhum, então a regra do comentário abaixo continua de pé.
   // Consequência assumida: no celular nenhuma view de lista fica montada junto com o Chat, então o
@@ -468,8 +470,8 @@
     new Set(sessionsStore.byServer.filter((b) => b.error).map((b) => b.server.id)),
   );
   // Detalhe do plano (Task 5b): NÃO usa o sessionsStore (mesmo motivo do loopChip acima — reter o
-  // store aqui abria 1 stream de lista por servidor no celular). `allSessions` já é populada por
-  // getSessions() (loadSessionsForNav, a cada 5s nas DUAS views) — reusa ela pra achar plan_name.
+  // store aqui abriria 1 stream de lista por servidor no celular). No desktop a Sidebar já retém
+  // esse store; no celular `allSessions` continua vindo do poll local.
   const planSession = $derived(allSessions.find((s) => s.name === sessionName) ?? null);
   let planDetail = $state<PlanDetail | null>(null);
   let planLoading = $state(false);
@@ -478,8 +480,8 @@
   // pra comparar dentro do efeito — se fosse reativo, o efeito leria e escreveria a mesma coisa.
   let planDetailKey: string | null = null;
   // Nome do plano como PRIMITIVO, não o objeto `planSession` — mesmo bug do `pairPeersKey` umas
-  // linhas abaixo: `allSessions` troca de referência a CADA poll de 5s (getSessions), então um
-  // $effect que lê `planSession?.plan_name` direto re-executava em TODO poll, mesmo com o mesmo
+  // linhas abaixo: `allSessions` troca de referência a cada atualização da lista, então um
+  // $effect que lê `planSession?.plan_name` direto re-executava mesmo com o mesmo
   // plano (medido: 4 fetches em 4 polls idênticos). O /plan devolve o markdown inteiro (66 KB
   // neste repo) e passa pelo mesmo scan de tmux+/proc do registry que o poll da lista — refazer
   // isso a cada 5s dobrava a taxa de scan e ~47 MB/h de tráfego à toa no celular via Tailscale.
@@ -545,8 +547,8 @@
   // Grupo de trabalho: os OUTROS membros (null = sem grupo). Estado vivo só quando o grupo tem 1
   // par (bolinha de 1 sessão faz sentido; de N vira ruído).
   const pairPeers = $derived(allSessions.find((s) => s.name === sessionName)?.pair_peers ?? null);
-  // Chave PRIMITIVA do grupo: pair_peers é um array NOVO por referência a cada poll de 5s do
-  // getSessions — efeitos que dependessem do array re-rodavam sem o grupo ter mudado (toggle se
+  // Chave PRIMITIVA do grupo: pair_peers é um array NOVO por referência a cada atualização —
+  // efeitos que dependessem do array re-rodavam sem o grupo ter mudado (toggle se
   // autodesligava, sheet resetava). String igual não re-notifica.
   const pairPeersKey = $derived(pairPeers?.join(',') ?? '');
   const pairedState = $derived(pairPeers?.length === 1
@@ -554,11 +556,7 @@
 
   async function openSwitcher() {
     switcherOpen = true;
-    try {
-      allSessions = await getSessions();
-    } catch {
-      // sem lista -> o sheet ainda oferece "Nova sessão"
-    }
+    await loadSessionsForNav();
   }
 
   function pickSession(name: string) {
@@ -604,21 +602,18 @@
     }
   }
 
-  // Lista pra navegar sessao com Ctrl/Cmd+setas (desktop) e pra pilula "N aguardando" (mobile,
-  // feature #4). Carregada no mount nos dois; no mobile reconsulta a cada 5s pra o contador da
-  // pilula refletir sessoes que entram/saem de awaiting_input enquanto o usuario fica parado aqui
-  // (esta tela nao tem SSE agregado de sessoes — reusa o mesmo REST de sempre, so com poll).
+  // No desktop, a Sidebar já mantém esta lista viva por SSE. No celular, onde ela não fica montada
+  // junto com o Chat, o poll de 5s alimenta navegação e a pílula "N aguardando".
   let navInFlight = false;   // socket pendurado empilhava 1 fetch por tick de 5s ate esgotar o host
   async function loadSessionsForNav() {
-    if (navInFlight) return;
+    if (desktop || navInFlight) return;
     navInFlight = true;
-    try { allSessions = await getSessions(); } catch { /* sem lista -> setas/pilula viram no-op */ }
+    try { polledSessions = await getSessions(); } catch { /* sem lista -> setas/pilula viram no-op */ }
     finally { navInFlight = false; }
   }
   onMount(() => {
+    if (desktop) return;
     loadSessionsForNav();
-    // Poll nos DOIS views (era só mobile): o chip 🤝 mostra o estado vivo do PAR — sem reconsultar,
-    // a bolinha congelava no desktop. Mesmo REST leve de sempre, a cada 5s.
     const id = setInterval(loadSessionsForNav, 5000);
     return () => clearInterval(id);
   });

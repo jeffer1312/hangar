@@ -1056,6 +1056,42 @@ class _QueueClient:
         return {}
 
 
+class _LiveQueueClient:
+    closed = False
+
+    def __init__(self):
+        self._q: asyncio.Queue = asyncio.Queue()
+        self.aberturas = 0
+        self.requests: list[tuple[str, dict]] = []
+
+    async def notifications(self):
+        self.aberturas += 1
+        while (item := await self._q.get()) is not None:
+            yield item
+
+    async def request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
+        self.requests.append((method, params))
+        return {}
+
+
+async def test_bomba_continua_consumindo_sem_sse_aberto():
+    adapter = CodexAdapter()
+    client = _LiveQueueClient()
+    adapter.attach("viva", client, "t")
+    monitor = adapter.state_monitor("viva", lambda: "viva")
+    await monitor.__anext__()
+    await monitor.aclose()
+
+    await client._q.put({"method": "turn/started", "params": {"threadId": "t"}})
+    async with asyncio.timeout(1):
+        while adapter._sessions["viva"]["state"] != "working":
+            await asyncio.sleep(0)
+
+    bomba = adapter._sessions["viva"]["bomba"]
+    await client._q.put(None)
+    await bomba
+
+
 async def test_dois_sse_na_mesma_sessao_recebem_a_resposta_inteira():
     # Desktop + celular no mesmo chat: cada SSE abre um state_monitor. Com um consumidor por SSE
     # os deltas eram DIVIDIDOS entre eles (cada um ficava com metade da frase) e os dois empurravam
@@ -1080,23 +1116,24 @@ async def test_dois_sse_na_mesma_sessao_recebem_a_resposta_inteira():
     assert CodexPreviewSource.get("dois").text == "Faria em mudancas pequenas"
 
 
-async def test_ouvinte_que_chega_na_janela_do_cancel_ganha_bomba_nova():
-    # `Task.cancel()` so agenda; a task continua `not done()` ate a proxima volta do loop. Um
-    # ouvinte que entra nessa janela (celular reconectando) nao pode herdar a bomba que esta
-    # morrendo — ela nunca mais espalha nada, e ele ficaria mudo.
+async def test_ouvinte_novo_reusa_a_bomba_permanente():
     adapter = CodexAdapter()
-    client = _QueueClient([{"method": "turn/started", "params": {}}] * 6)
+    client = _LiveQueueClient()
     adapter.attach("janela", client, "t")
     primeiro = adapter.state_monitor("janela", lambda: "janela")
-    await primeiro.__anext__()                 # retrato
-    await primeiro.__anext__()                 # 1o evento da bomba
-    await primeiro.aclose()                    # ultimo ouvinte sai -> cancel() agendado
-    vistos = []
-    async with asyncio.timeout(5):
-        async for ev in adapter.state_monitor("janela", lambda: "janela"):
-            vistos.append(ev.state)
-    assert client.aberturas == 2, "o 2o ouvinte precisa de uma bomba nova, nao da que morre"
-    assert len(vistos) >= 2                    # retrato + pelo menos um evento vivo
+    await primeiro.__anext__()
+    await primeiro.aclose()
+
+    segundo = adapter.state_monitor("janela", lambda: "janela")
+    await segundo.__anext__()
+    await client._q.put({"method": "turn/started", "params": {"threadId": "t"}})
+    assert (await segundo.__anext__()).state == "working"
+    assert client.aberturas == 1
+
+    await segundo.aclose()
+    bomba = adapter._sessions["janela"]["bomba"]
+    await client._q.put(None)
+    await bomba
 
 
 async def test_excecao_na_bomba_chega_no_ouvinte_em_vez_de_pendurar():

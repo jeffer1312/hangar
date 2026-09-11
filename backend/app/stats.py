@@ -429,15 +429,23 @@ class Accumulator:
             self._resto = b""
             self._invalid_lines = 0
         if size > self._offset:
+            restantes = size - self._offset
             with self._path.open("rb") as f:
                 f.seek(self._offset)
-                data = self._resto + f.read(size - self._offset)
-            self._offset = size
-            # Última linha pode estar pela metade: guarda pro próximo collect.
-            corte = data.rfind(b"\n")
-            self._resto = data[corte + 1:] if corte >= 0 else data
-            if corte >= 0:
-                for raw in data[:corte].split(b"\n"):
+                pendente, self._resto = self._resto, b""
+                while restantes:
+                    raw = f.readline(restantes)
+                    if not raw:
+                        break
+                    lidos = len(raw)
+                    self._offset += lidos
+                    restantes -= lidos
+                    if pendente:
+                        raw, pendente = pendente + raw, b""
+                    if not raw.endswith(b"\n"):
+                        pendente = raw
+                        continue
+                    raw = raw[:-1]
                     if not raw.strip():
                         continue
                     try:
@@ -449,6 +457,8 @@ class Accumulator:
                         self._fold.feed(obj)
                     else:
                         self._invalid_lines += 1
+                # Escrita em andamento: completa no próximo collect sem reler os bytes.
+                self._resto = pendente
         return self._fold.snapshot()
 
 

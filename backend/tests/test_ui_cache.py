@@ -29,10 +29,10 @@ def test_index_revalida(tmp_path):
     assert "no-store" not in r.headers["cache-control"]
 
 
-def test_asset_com_hash_nao_ganha_no_cache(tmp_path):
+def test_asset_com_hash_e_imutavel(tmp_path):
     r = _cli(tmp_path).get("/assets/index-abc123.css")
     assert r.status_code == 200
-    assert "cache-control" not in r.headers
+    assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
 def test_index_ainda_responde_304(tmp_path):
