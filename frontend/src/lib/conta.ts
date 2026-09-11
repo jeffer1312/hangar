@@ -20,7 +20,9 @@ export function chipDaConta(conta: string | null | undefined): ContaChip | null 
   if (!conta || !harness) return null;
   const base = conta.slice(harness.length + 1).replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
   const nome = base === `.${harness}` ? '' : base.replace(new RegExp(`^\\.${harness}-`), '');
-  const label = nome.replace(/^claude-(?=.)/, '') || m.conta_padrao();
+  // O corte do prefixo repetido segue o HARNESS, não a palavra "claude": uma pasta
+  // `.codex-claude-algo` perderia um pedaço do nome por uma regra que não é dela.
+  const label = nome.replace(new RegExp(`^${harness}-(?=.)`), '') || m.conta_padrao();
   let h = 0;
   for (const ch of base) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return { label, nome: nome || m.conta_padrao(), cor: CORES[h % CORES.length] };

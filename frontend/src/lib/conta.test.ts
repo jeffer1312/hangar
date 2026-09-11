@@ -22,6 +22,9 @@ describe('chipDaConta', () => {
     expect(chipDaConta('codex:/home/x/.codex')?.label).toBe(m.conta_padrao());
     expect(chipDaConta('codex:/home/x/.codex-google')?.label).toBe('google');
     expect(chipDaConta('codex:/home/x/.codex-google')?.nome).toBe('google');
+    // O corte do prefixo repetido é do harness: numa conta Codex a palavra "claude" é nome, não prefixo.
+    expect(chipDaConta('codex:/home/x/.codex-claude-x')?.label).toBe('claude-x');
+    expect(chipDaConta('codex:/home/x/.codex-codex-x')?.label).toBe('x');
   });
 
   it('motor e ausência não viram chip (o motor já tem o ⚙)', () => {

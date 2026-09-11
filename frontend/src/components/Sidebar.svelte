@@ -826,7 +826,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                              Assinado…"). O caminho inteiro segue no title. Custo assumido: dois
                              checkouts do mesmo repo em pastas diferentes leem igual na lista. -->
                         <span class="cwd" title={showBranch(s.branch) ? `${s.cwd} · branch ${s.branch}` : s.cwd}>
-                          <span class="cwd-icone"><IconFolder size={11} /></span><span class="cwd-base">{cp.base}</span>
+                          <!-- O caminho inteiro também no sr-only: o `title` de um span não é lido de
+                               forma confiável, e sem isto quem usa leitor de tela ficaria só com a
+                               última pasta — que é o que a TELA mostra, não o que identifica. -->
+                          <span class="sr-only">{s.cwd}</span>
+                          <span class="cwd-icone" aria-hidden="true"><IconFolder size={11} /></span><span class="cwd-base" aria-hidden="true">{cp.base}</span>
                           {#if showBranch(s.branch)}<span class="branch-inline">⎇ {s.branch}</span>{/if}
                         </span>
                       {:else if showBranch(s.branch)}

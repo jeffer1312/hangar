@@ -222,8 +222,9 @@ import * as m from '../paraglide/messages';
   /* Mesma regra do AssistantBubble: no mouse o horário aparece no hover; no toque fica sempre. */
   @media (hover: hover) and (pointer: fine) {
     .msg-fwd, .ts { opacity: 0; }
-    .bubble-wrap:hover .ts { opacity: 1; }
-    .bubble-wrap:hover .msg-fwd { opacity: 0.55; }
+    /* :focus-within junto do :hover — o porquê está no AssistantBubble, mesma regra. */
+    .bubble-wrap:hover .ts, .bubble-wrap:focus-within .ts { opacity: 1; }
+    .bubble-wrap:hover .msg-fwd, .bubble-wrap:focus-within .msg-fwd { opacity: 0.55; }
     .msg-fwd:hover { opacity: 1 !important; background: var(--bg-hover); color: var(--text-primary); }
   }
 

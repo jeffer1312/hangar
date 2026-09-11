@@ -3,6 +3,7 @@
 import * as m from '../paraglide/messages';
 import GroupGlyph from './icons/GroupGlyph.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
+  import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import {
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
     uploadFileForServer, transcribeFileForServer,
@@ -417,7 +418,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
       {#if provTag}
         <!-- Identidade da sessão, não estado: primeiro chip, tinta neutra — o card já usa cor pro
              servidor, pro estado e pro grupo pareado. -->
-        <span class="prov-chip" title={`${m.sessao_grupo()} ${provTag}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span>{provTag}</span>
+        <span class="prov-chip" title={`${m.sessao_grupo()} ${provTag}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;{provTag}</span><ProviderGlyph provider={session.provider} size={12} /></span>
       {/if}
       {#if session.branch}<span class="bc-branch">⎇ {session.branch}</span>{/if}
       {#if session.engine}
@@ -672,12 +673,14 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   .plan-chip { background: var(--accent-dim); color: var(--accent); }
   .plan-chip--done { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
   /* Provider da sessão (Codex/Pi): rótulo neutro, mesma caixa do engine-chip sem a tinta accent. */
+  /* Só o glifo, como na Sidebar e no SessionCard: cada agente tem marca própria, e o nome escrito
+     ao lado repetia o desenho. O nome fica no title e no leitor de tela. */
   .prov-chip {
-    font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    display: inline-flex; align-items: center;
     color: var(--text-muted); background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
-    padding: 1px 6px; border-radius: var(--radius-full);
-    white-space: nowrap; flex-shrink: 0;
+    padding: 1px 3px; border-radius: var(--radius-full);
+    flex-shrink: 0;
   }
   /* Motor de modelo (Task 5): sessao rodando fora da conta Anthropic. */
   .engine-chip {

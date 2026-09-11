@@ -435,6 +435,9 @@ function aplicarPaineis(): void {
 // 'classico' = a "Índigo Quente" de sempre. Padrão só pra instalação ZERADA: quem já tem qualquer
 // preferência `cp_*` gravada fica no clássico, e a primeira leitura grava isso pra não depender
 // de reavaliar a cada carga (uma preferência nova depois não pode virar troca de paleta).
+// Com a gravação falhando (aba anônima, cota estourada) a trava não existe e cada leitura reavalia:
+// parear no meio da sessão pode virar clássico sem recarregar. Degradação aceita — ali o storage
+// inteiro é volátil, e um cache em memória custaria uma costura de teste pra zerar entre casos.
 export type Palette = 'neutro' | 'classico';
 const PALETTE_KEY = 'cp_palette';
 

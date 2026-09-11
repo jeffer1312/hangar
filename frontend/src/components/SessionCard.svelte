@@ -331,7 +331,8 @@ import * as m from '../paraglide/messages';
           {#if showCwd}
             <!-- Só a última pasta, com ícone no lugar do prefixo (mesma razão da Sidebar: o
                  prefixo truncava o nome que identifica). Caminho inteiro no title. -->
-            <span class="cwd" title={session.cwd}><span class="cwd-icone"><IconFolder size={11} /></span><span class="cwd-base">{cwdPartes.base}</span></span>
+            <!-- sr-only com o caminho inteiro: mesma razão da Sidebar, onde está o comentário. -->
+            <span class="cwd" title={session.cwd}><span class="sr-only">{session.cwd}</span><span class="cwd-icone" aria-hidden="true"><IconFolder size={11} /></span><span class="cwd-base" aria-hidden="true">{cwdPartes.base}</span></span>
           {/if}
           {#if agoLabel}
             {#if serverBadge || session.branch || showCwd}<span class="meta-sep" aria-hidden="true">·</span>{/if}

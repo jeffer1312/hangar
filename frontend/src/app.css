@@ -174,12 +174,16 @@
   --fill-subtle:    rgba(235,235,235,0.05);
 
   --text-primary:   #ebebeb;
+  /* A escala é alfa sobre o mesmo cinza, e não três hexes calibrados à mão como no Clássico: é o
+     que dá a hierarquia sem tinta. O piso de cada degrau é o contraste no PIOR fundo do tema
+     (--bg-hover), medido com a caixa de --fill-subtle por baixo — 54% e 65% dão 4,7:1 e 5,9:1. O
+     Clássico usa 4,6:1 no apagado, então descer daqui seria regredir. */
   --text-secondary: rgba(235,235,235,0.65);
-  --text-muted:     rgba(235,235,235,0.45);
+  --text-muted:     rgba(235,235,235,0.54);
   --text-inverse:   #171717;
   --text-primary-base:   #ebebeb;
   --text-secondary-base: rgba(235,235,235,0.65);
-  --text-muted-base:     rgba(235,235,235,0.45);
+  --text-muted-base:     rgba(235,235,235,0.54);
 
   --accent:         #459bf7;
   --accent-dim:     rgba(69,155,247,0.16);
@@ -309,12 +313,16 @@
   --fill-subtle:    rgba(43,43,43,0.05);
 
   --text-primary:   #2b2b2b;
-  --text-secondary: rgba(43,43,43,0.68);
-  --text-muted:     rgba(43,43,43,0.52);
+  /* 76% e não 68%: o texto secundário costuma cair sobre uma caixa de --fill-subtle (chip de conta,
+     pílula), que já clareia o fundo. Medido nesse empilhamento sobre --bg-elevated, 68% dava
+     4,5:1 — em cima do piso AA, perto demais pra deixar. A 76% sobe pra 5,7:1. No escuro o mesmo
+     empilhamento já dá 5,9:1, então lá os 65% ficam. */
+  --text-secondary: rgba(43,43,43,0.76);
+  --text-muted:     rgba(43,43,43,0.68);
   --text-inverse:   #ffffff;
   --text-primary-base:   #2b2b2b;
-  --text-secondary-base: rgba(43,43,43,0.68);
-  --text-muted-base:     rgba(43,43,43,0.52);
+  --text-secondary-base: rgba(43,43,43,0.76);
+  --text-muted-base:     rgba(43,43,43,0.68);
 
   --accent:         #0863c4;
   --accent-dim:     rgba(8,99,196,0.12);

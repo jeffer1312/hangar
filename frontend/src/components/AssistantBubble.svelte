@@ -276,8 +276,12 @@
      botões, então esconder o texto não mexe no layout. */
   @media (hover: hover) and (pointer: fine) {
     .msg-copy, .msg-fwd, .msg-tts, .ts { opacity: 0; }
-    .assistant-msg:hover .ts { opacity: 1; }
-    .assistant-msg:hover .msg-copy, .assistant-msg:hover .msg-fwd, .assistant-msg:hover .msg-tts { opacity: 0.55; }
+    /* O :focus-within anda junto do :hover porque estes são BOTÕES: sem ele, chegar neles por Tab
+       foca um alvo invisível (o foco existe, o olho não acha). Vale pro horário pela mesma razão —
+       quem navega por teclado não tem como passar o mouse pra ler a hora. */
+    .assistant-msg:hover .ts, .assistant-msg:focus-within .ts { opacity: 1; }
+    .assistant-msg:hover .msg-copy, .assistant-msg:hover .msg-fwd, .assistant-msg:hover .msg-tts,
+    .assistant-msg:focus-within .msg-copy, .assistant-msg:focus-within .msg-fwd, .assistant-msg:focus-within .msg-tts { opacity: 0.55; }
     .msg-copy:hover, .msg-fwd:hover, .msg-tts:hover { opacity: 1 !important; background: var(--bg-hover); color: var(--text-primary); }
   }
 
