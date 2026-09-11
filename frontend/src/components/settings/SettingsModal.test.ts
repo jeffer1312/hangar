@@ -87,7 +87,10 @@ beforeEach(() => { vi.clearAllMocks(); clienteQuery.clear(); });   // contagens 
 // Os stubs de matchMedia são globais (desktop/mobile por teste); sem restaurar, o último stub
 // vazaria pra qualquer describe futuro adicionado depois (achado da revisão).
 const matchMediaOriginal = window.matchMedia;
-afterEach(() => { window.matchMedia = matchMediaOriginal; });
+// O BottomSheet teleporta pro <body> e o `el` de cada montagem fica lá: sem limpar, um teste que
+// CONTA elementos soma os das montagens anteriores, e um que espera `null` acha o resíduo do
+// vizinho. `unmount` tira o componente, não os nós que o teste criou.
+afterEach(() => { window.matchMedia = matchMediaOriginal; document.body.innerHTML = ''; });
 
 function montar(tela: TelaConfig, alvo: Server | null = null, identidade = alvo ? `id:${alvo.id}` : 'global',
                 extra: { servidores?: Server[]; resolvedServer?: Server | null;
@@ -244,7 +247,15 @@ describe('SettingsModal — seletor de servidor do grupo', () => {
     expect(sel).not.toBeNull();
     expect(sel!.value).toBe('srv-a');
     // O rótulo do grupo continua dizendo O QUE é ("Servidor"), o select diz QUAL.
-    expect(sel!.parentElement!.textContent).toContain(m.lista_agrupar_servidor());
+    expect(sel!.closest('.st-secao-sel')!.textContent).toContain(m.lista_agrupar_servidor());
+    // Com duas máquinas não há motivo nenhum na tela: o apagado é o outro caso.
+    expect(sel!.disabled).toBe(false);
+    expect(document.body.textContent).not.toContain(m.config_modal_uma_maquina());
+    // O estado habilitado é rótulo e select LADO A LADO. O que os separa é a classe: `so-uma`
+    // liga a quebra de linha, que só o apagado quer (a segunda linha dele é o motivo). Sem esta
+    // asserção, ligar a quebra para todo mundo — foi o que a rodada 1 fez — passa despercebido:
+    // o jsdom não tem geometria pra flagrar o select descendo de linha.
+    expect(sel!.closest('.st-secao-sel')!.classList.contains('so-uma')).toBe(false);
 
     sel!.value = 'srv-b';
     sel!.dispatchEvent(new Event('change', { bubbles: true }));
@@ -252,13 +263,49 @@ describe('SettingsModal — seletor de servidor do grupo', () => {
     unmount(t.comp);
   });
 
-  it('com UM servidor não há escolha a fazer — fica o rótulo estático de sempre', async () => {
+  it('desktop, UMA máquina: o seletor continua na tela, apagado e com o motivo à vista', async () => {
     stubDesktop();
     const t = montar('contas', SRV as Server, 'id:srv-a',
       { servidores: [SRV as Server], resolvedServer: SRV as Server, onPickServer: vi.fn() });
     await tick(); await tick();
+    const sel = document.querySelector<HTMLSelectElement>('.st-secao-sel .srv-sel');
+    expect(sel).not.toBeNull();
+    expect(sel!.disabled).toBe(true);
+    // O motivo é TEXTO visível ao lado, nunca title/tooltip: toque não tem hover.
+    expect(sel!.closest('.st-secao-sel')!.textContent).toContain(m.config_modal_uma_maquina());
+    // É este estado — e só ele — que quebra a linha para caber o motivo.
+    expect(sel!.closest('.st-secao-sel')!.classList.contains('so-uma')).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('celular, sub-cabeçalho e raiz com UMA máquina: seletor apagado com o motivo nos dois pontos', async () => {
+    stubMobile();
+    const um = { servidores: [SRV as Server], resolvedServer: SRV as Server,
+                 nomeAlvo: 'A', onPickServer: vi.fn() };
+    const sub = montar('contas', SRV as Server, 'id:srv-a', um);
+    await tick(); await tick();
+    const noSub = document.querySelector<HTMLSelectElement>('.st-sub .srv-sel');
+    expect(noSub).not.toBeNull();
+    expect(noSub!.disabled).toBe(true);
+    expect(document.querySelector('.st-sub')!.textContent).toContain(m.config_modal_uma_maquina());
+    unmount(sub.comp);
+    document.body.innerHTML = '';
+
+    const raiz = montar('root', SRV as Server, 'id:srv-a', um);
+    await tick(); await tick();
+    const naRaiz = document.querySelector<HTMLSelectElement>('.st-secao-sel .srv-sel');
+    expect(naRaiz).not.toBeNull();
+    expect(naRaiz!.disabled).toBe(true);
+    expect(document.querySelector('.st-secao-sel')!.textContent).toContain(m.config_modal_uma_maquina());
+    unmount(raiz.comp);
+  });
+
+  it('sem porta de troca (onPickServer ausente) o seletor não existe — não há para onde trocar', async () => {
+    stubDesktop();
+    const t = montar('contas', SRV as Server, 'id:srv-a',
+      { servidores: DOIS, resolvedServer: SRV as Server });
+    await tick(); await tick();
     expect(document.querySelector('.srv-sel')).toBeNull();
-    expect(document.querySelector('.st-secao-sel')).toBeNull();
     unmount(t.comp);
   });
 
@@ -273,6 +320,35 @@ describe('SettingsModal — seletor de servidor do grupo', () => {
     expect(sub!.querySelector('.srv-sel')).not.toBeNull();
     expect((sub!.querySelector('.srv-sel') as HTMLSelectElement).value).toBe('srv-a');
     unmount(t.comp);
+  });
+
+  it('a legenda do grupo Servidor é do MODAL: aparece uma vez nas telas do grupo, some nas do app', async () => {
+    stubDesktop();
+    // Contas nunca mostrou a legenda (ela morava no ServerSettings, que só serve Notificações,
+    // Anexos e Avançado) — e é o caso que prova que ela passou a ser do grupo inteiro.
+    const contas = montar('contas', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+    await tick(); await tick();
+    expect(document.body.textContent).toContain(m.config_server_valem());
+    unmount(contas.comp);
+    document.body.innerHTML = '';
+
+    // Anexos passa pelo ServerSettings e Voz pelo VozSettings — os dois mostravam a legenda no
+    // próprio cabeçalho. Se a linha tivesse ficado lá, apareceria DUAS vezes.
+    for (const tela of ['anexos', 'voz'] as TelaConfig[]) {
+      const t = montar(tela, SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+      await tick(); await tick();
+      const quantas = [...document.querySelectorAll('p')]
+        .filter((p) => p.textContent?.trim() === m.config_server_valem()).length;
+      expect(quantas, tela).toBe(1);
+      unmount(t.comp);
+      document.body.innerHTML = '';
+    }
+
+    // Geral é do aparelho, não de uma máquina: a legenda seria mentira ali.
+    const geral = montar('geral', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+    await tick(); await tick();
+    expect(document.body.textContent).not.toContain(m.config_server_valem());
+    unmount(geral.comp);
   });
 
   it('celular, raiz: o rótulo do grupo do servidor também vira select', async () => {
