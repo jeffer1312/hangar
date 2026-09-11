@@ -511,7 +511,8 @@ class PromptQueue:
             self._write_atomic(rows)
         return entry
 
-    def claim_undelivered(self, min_ts: float = 0.0, limit: int | None = None) -> list[dict]:
+    def claim_undelivered(self, min_ts: float = 0.0, limit: int | None = None,
+                          *, entry_id: str | None = None) -> list[dict]:
         """Reivindica (atomicamente) entradas ainda nao entregues: vira delivered=True e devolve as
         reivindicadas. Sob _append_lock -> com N drains concorrentes so UM pega cada entrada (os
         outros pegam []) = single-flight, sem double-send. `is False` ESTRITO: legada (sem a chave) ou
@@ -520,6 +521,8 @@ class PromptQueue:
             rows = self.load()
             claimed = []
             for r in rows:
+                if entry_id is not None and str(r.get("id")) != entry_id:
+                    continue
                 if r.get("delivered") is False and _da_sessao_atual(r, min_ts):
                     r["delivered"] = True
                     claimed.append(dict(r))
@@ -529,7 +532,7 @@ class PromptQueue:
                 self._write_atomic(rows)
             return claimed
 
-    def set_delivered(self, entry_id: str, value: bool) -> None:
+    def set_delivered(self, entry_id: str, value: bool, *, steered: bool = False) -> None:
         """Marca UMA entrada (por id) como delivered=value e reescreve atomico. Usado pra reverter um
         claim quando o envio nao chegou a tocar a TUI (provadamente pre-envio)."""
         with _append_lock:
@@ -537,6 +540,10 @@ class PromptQueue:
             for r in rows:
                 if str(r.get("id")) == entry_id:
                     r["delivered"] = value
+                    if value and steered:
+                        r["steered"] = True
+                    elif not value:
+                        r.pop("steered", None)
                     break
             else:
                 return
@@ -695,7 +702,8 @@ class PromptQueue:
                 if not text_raw or cons:
                     disponiveis -= cons            # as linhas casadas confirmam UMA entrada so
                     r["confirmed"] = True
-                elif confirm_only:
+                elif confirm_only or r.get("steered") is True:
+                    # RPC confirmado não é uma tecla possivelmente engolida: não redigitar.
                     # Meio do turno sem prova: nao decide. Entrada segue entregue/nao-confirmada e
                     # o caller reagenda — quando a sessao ficar ociosa, o caminho normal desiste ou
                     # re-enfileira com tentativa contada.

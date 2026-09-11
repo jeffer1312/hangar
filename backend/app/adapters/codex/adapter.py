@@ -1377,14 +1377,14 @@ class CodexAdapter:
             "input": await self._user_input(name, text),
         })
 
-    async def steer_queue(self, name: str) -> list[str]:
+    async def steer_queue(self, name: str, *, entry_id: str | None = None) -> list[str]:
         sess = self._sessions.get(name)
         async with self.delivery_lock(name):
             if self._sessions.get(name) is not sess:
                 raise RuntimeError("A sessão mudou antes de orientar a fila")
-            return await self._steer_queue(name)
+            return await self._steer_queue(name, entry_id=entry_id)
 
-    async def _steer_queue(self, name: str) -> list[str]:
+    async def _steer_queue(self, name: str, *, entry_id: str | None = None) -> list[str]:
         await self.ensure_running(name)
         sess = self._sessions.get(name) or {}
         turn_id = await self._active_turn_id(name)
@@ -1392,7 +1392,7 @@ class CodexAdapter:
             raise RuntimeError("Não há turno em andamento para orientar")
         q = PromptQueue(name)
         sent: list[str] = []
-        while claimed := await asyncio.to_thread(q.claim_undelivered, limit=1):
+        while claimed := await asyncio.to_thread(q.claim_undelivered, limit=1, entry_id=entry_id):
             entry = claimed[0]
             try:
                 await self.steer(name, entry["text"], turn_id=turn_id)
@@ -1400,6 +1400,12 @@ class CodexAdapter:
                 await asyncio.to_thread(q.set_delivered, entry["id"], False)
                 raise
             sent.append(entry["id"])
+            # Fora do rollback: uma falha de gravação não desfaz o RPC já aceito.
+            try:
+                await asyncio.to_thread(q.set_delivered, entry["id"], True, steered=True)
+            except OSError:
+                _log.exception("orientacao aceita, mas recibo indisponivel name=%s entry=%s", name, entry["id"])
+                return sent
         return sent
 
     async def _active_turn_id(self, name: str) -> str | None:

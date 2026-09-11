@@ -37,6 +37,10 @@ class Rpc:
             raise RuntimeError("turno encerrado")
         return {}
 
+    async def notifications(self):
+        await asyncio.Event().wait()
+        yield {}
+
 
 def attach(monkeypatch, reject=False):
     adapter = CodexAdapter()
@@ -82,6 +86,105 @@ async def test_codex_sem_steer_preserva_composer(isolated, monkeypatch):
     assert len(pqueue.PromptQueue("dest").load()) == 1
 
 
+async def test_auto_steer_nao_antecipa_pedido_do_composer(isolated, monkeypatch):
+    adapter, rpc = attach(monkeypatch)
+    await api.input_prompt("dest", api.InputBody(text="pedido normal"))
+    result = await api.input_prompt("dest", api.InputBody(text="recado", steer=True))
+    assert result["steered"] is True
+    assert [params["input"][0]["text"] for method, params in rpc.calls if method == "turn/steer"] == ["recado"]
+    rows = pqueue.PromptQueue("dest").load()
+    assert [(row["text"], row["delivered"]) for row in rows] == [("pedido normal", False), ("recado", True)]
+    adapter._sessions["dest"]["in_progress"] = False
+    send = AsyncMock(return_value="sent")
+    monkeypatch.setattr(adapter, "send_prompt", send)
+    assert await adapter.drain("dest", "unused") == 1
+    send.assert_awaited_once_with("dest", "pedido normal")
+
+
+async def test_recados_concorrentes_confirmam_seus_proprios_ids(isolated, monkeypatch):
+    _, rpc = attach(monkeypatch)
+    original = api._send_one_codex
+    ready = asyncio.Event()
+    count = 0
+
+    async def persist_both(*args, **kwargs):
+        nonlocal count
+        result = await original(*args, **kwargs)
+        count += 1
+        if count == 2:
+            ready.set()
+        await ready.wait()
+        return result
+
+    monkeypatch.setattr(api, "_send_one_codex", persist_both)
+    results = await asyncio.wait_for(asyncio.gather(*[
+        api.input_prompt("dest", api.InputBody(text=text, steer=True)) for text in ("A", "B")
+    ]), 2)
+    assert results == [{"ok": True, "delivered": True, "steered": True}] * 2
+    assert sorted(params["input"][0]["text"] for method, params in rpc.calls if method == "turn/steer") == ["A", "B"]
+
+
+async def test_orientacao_confirmada_sobrevive_a_falha_posterior_do_lote(isolated, monkeypatch):
+    adapter, rpc = attach(monkeypatch)
+    queue = pqueue.PromptQueue("dest")
+    original_send = api._send_one_codex
+    original_request = rpc.request
+
+    async def fail_second(method, params):
+        if method == "turn/steer" and params["input"][0]["text"] == "B":
+            raise RuntimeError("turno encerrou")
+        return await original_request(method, params)
+
+    async def manual_steer_wins(*args, **kwargs):
+        result = await original_send(*args, **kwargs)
+        queue.append("B")
+        with pytest.raises(RuntimeError, match="turno encerrou"):
+            await adapter.steer_queue("dest")
+        return result
+
+    monkeypatch.setattr(rpc, "request", fail_second)
+    monkeypatch.setattr(api, "_send_one_codex", manual_steer_wins)
+    result = await api.input_prompt("dest", api.InputBody(text="A", steer=True))
+    assert result == {"ok": True, "delivered": True, "steered": True}
+    assert [params["input"][0]["text"] for method, params in rpc.calls if method == "turn/steer"] == ["A"]
+    reloaded = pqueue.PromptQueue("dest")
+    assert [(row["text"], row["delivered"]) for row in reloaded.load()] == [("A", True), ("B", False)]
+    assert reloaded.reconcile_delivered(set(), 0, time.time() + 100) == []
+    assert reloaded.load()[0]["delivered"] is True
+
+
+async def test_falha_ao_gravar_recibo_preserva_orientacao_aceita(isolated, monkeypatch, caplog):
+    _, rpc = attach(monkeypatch)
+    original = pqueue.PromptQueue.set_delivered
+
+    def fail_receipt(self, entry_id, value, **kwargs):
+        if kwargs.get("steered"):
+            raise OSError("disco indisponível")
+        return original(self, entry_id, value, **kwargs)
+
+    monkeypatch.setattr(pqueue.PromptQueue, "set_delivered", fail_receipt)
+    result = await api.input_prompt("dest", api.InputBody(text="A", steer=True))
+    assert result == {"ok": True, "delivered": True, "steered": True}
+    assert len([method for method, _ in rpc.calls if method == "turn/steer"]) == 1
+    assert pqueue.PromptQueue("dest").load()[0]["delivered"] is True
+    assert "recibo indisponivel" in caplog.text
+
+
+async def test_falha_ao_reler_recibo_preserva_orientacao_aceita(isolated, monkeypatch, caplog):
+    adapter, _ = attach(monkeypatch)
+    original = adapter.steer_queue
+
+    async def fail_read_after_accept(*args, **kwargs):
+        sent = await original(*args, **kwargs)
+        monkeypatch.setattr(pqueue.PromptQueue, "load", Mock(side_effect=PermissionError("sem leitura")))
+        return sent
+
+    monkeypatch.setattr(adapter, "steer_queue", fail_read_after_accept)
+    result = await api.input_prompt("dest", api.InputBody(text="A", steer=True))
+    assert result == {"ok": True, "delivered": True, "steered": True}
+    assert "recibo ilegivel" in caplog.text
+
+
 async def test_codex_confere_id_do_recado_e_nao_sucesso_de_outra_entrada(isolated, monkeypatch):
     adapter, _ = attach(monkeypatch)
     monkeypatch.setattr(adapter, "steer_queue", AsyncMock(return_value=["outro-id"]))
@@ -96,15 +199,16 @@ async def test_codex_drain_que_vence_corrida_nao_gera_segundo_envio(isolated, mo
     send = AsyncMock(return_value="sent")
     monkeypatch.setattr(adapter, "send_prompt", send)
 
-    async def completed_before_steer(name):
+    async def completed_before_steer(name, **kwargs):
         adapter._sessions[name]["in_progress"] = False
         await adapter.drain(name, "unused")
-        return await original(name)
+        return await original(name, **kwargs)
 
     monkeypatch.setattr(adapter, "steer_queue", completed_before_steer)
     result = await api.input_prompt("dest", api.InputBody(text="recado", steer=True))
     assert result["steered"] is False
     assert send.await_count == 1
+    assert result["delivered"] is True
     assert not any(method == "turn/steer" for method, _ in rpc.calls)
     assert len(pqueue.PromptQueue("dest").load()) == 1
     assert await adapter.drain("dest", "unused") == 0

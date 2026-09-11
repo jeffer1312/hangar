@@ -2964,7 +2964,7 @@ async def input_prompt(name: str, body: InputBody):
         try:
             if provider == "codex" and not res.get("delivered"):
                 # steer_queue disputa a mesma trava do envio; só pode rodar depois dele.
-                sent = await get_adapter("codex").steer_queue(name)
+                sent = await get_adapter("codex").steer_queue(name, entry_id=entry_id)
                 steered = entry_id in sent
             elif provider != "codex":
                 provider, _ = await _send_thread(_pane_info, name)
@@ -2976,6 +2976,16 @@ async def input_prompt(name: str, body: InputBody):
         except Exception:
             # O recado já existe na fila. Falha de orientação nunca faz outro append/envio.
             _log.exception("falha apos persistir recado name=%s entry=%s steered=%s", name, entry_id, steered)
+        if provider == "codex":
+            # Outra promoção ou o drain pode ter concluído a entrega enquanto esperávamos.
+            try:
+                rows = await _send_thread(PromptQueue(name).load)
+                receipt = next((row for row in rows if row.get("id") == entry_id), None)
+                if receipt is not None:
+                    steered = steered or receipt.get("steered") is True
+                    res["delivered"] = res.get("delivered", False) or receipt.get("delivered") is True
+            except OSError:
+                _log.exception("recibo ilegivel apos orientacao name=%s entry=%s steered=%s", name, entry_id, steered)
     # A orientação confirmada também conta como entrega, sem redigitar o recado na TUI.
     return {"ok": True, "delivered": res.get("delivered", False) or steered, "steered": steered}
 
