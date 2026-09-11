@@ -418,6 +418,13 @@ function avisarOculto(chave, view, oculto) {
   else aplicar();
 }
 
+// View escondido não pode ficar com o teclado: o Chromium foca o WebContents que acabou de nascer
+// ou de carregar, a janela segue ativa pro compositor e todo atalho do front morre em silêncio.
+function devolverFoco(win, view) {
+  if (win.isDestroyed() || view.webContents.isDestroyed() || view.getVisible()) return;
+  win.webContents.focus();
+}
+
 function fecharNavegador(win, chave) {
   const m = navegadores.get(win);
   const view = m && m.get(chave);
@@ -571,6 +578,7 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}
       });
     };
     for (const ev of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page']) wc.on(ev, publicar);
+    wc.on('did-finish-load', () => devolverFoco(win, view));
     // Preenchimento de login com as senhas salvas do Chrome do usuário, ao terminar de carregar
     // uma página cujo domínio tem senha salva. Uma vez por URL (o `dom-ready` repete em SPA).
     let ultimoPreenchido = '';
@@ -627,6 +635,7 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}
     // Escondido, a página fica em 0x0 e sem quadro: quem devolve viewport de desktop e print é a
     // emulação de tamanho, e ela SÓ pode entrar com a página carregada (antes disso, SIGSEGV).
     avisarOculto(chave, view, true);
+    devolverFoco(win, view);
     // `oculto: true` na resposta é a prova de que este shell entendeu o pedido: um shell antigo
     // ignora o campo, cria o view visível com bounds zero e devolve só {ok} — o front não confirma.
     return { ok: true, oculto: true };
@@ -638,12 +647,14 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}
 });
 
 ipcMain.on('hangar:nav-hide', (ev, { chave } = {}) => {
+  const win = BrowserWindow.fromWebContents(ev.sender);
   const view = viewDe(ev, chave);
   if (!view) return;
   view.setVisible(false);
   // Sair da tela é o mesmo estado do view que nasceu escondido: sem a emulação, o agente que
   // continuar dirigindo esta sessão passa a ler uma página de 0x0.
   avisarOculto(chave, view, true);
+  devolverFoco(win, view);
 });
 
 ipcMain.on('hangar:nav-bounds', (ev, { chave, bounds } = {}) => {

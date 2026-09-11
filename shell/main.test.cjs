@@ -47,7 +47,7 @@ function criarWebContentsFalso() {
     setWindowOpenHandler: () => {}, loadURL: async () => {}, getURL: () => estado.url,
     capturePage: async () => ({ isEmpty: () => false, toPNG: () => Buffer.alloc(0) }),
     close: () => {}, isDestroyed: () => false,
-    on: () => {},
+    on: (ev, cb) => { if (ev === 'did-finish-load') estado.ouvintesLoad.push(cb); },
     once: (ev, cb) => { if (ev === 'did-finish-load') estado.ouvintesLoad.push(cb); },
     dispararLoad: () => { estado.url = 'https://z.test/'; estado.ouvintesLoad.splice(0).forEach((cb) => cb()); },
     debugger: dbg,
@@ -90,10 +90,10 @@ require.cache[electronPath] = {
 require('./main.cjs');
 
 function novaJanela() {
-  const win = { contentView: { addChildView() {}, removeChildView() {} } };
-  const webContents = {}; // identidade distinta representando o remetente do IPC desta janela
+  const webContents = { focos: 0, focus() { this.focos++; } }; // identidade distinta: o remetente do IPC desta janela
+  const win = { contentView: { addChildView() {}, removeChildView() {} }, webContents, isDestroyed: () => false };
   winMap.set(webContents, win);
-  return { ev: { sender: webContents } };
+  return { ev: { sender: webContents }, win };
 }
 
 test('fechar o painel de uma janela nao mata o controlador vivo da MESMA sessao aberta noutra janela', async () => {
@@ -133,6 +133,10 @@ test('open oculto cria o view escondido e ja dirigivel; view visivel nao e tocad
   assert.equal(criadas.length, antes + 1, 'controlador criado mesmo escondido (o agente dirige via CDP)');
   const view = viewsFalsos.at(-1);
   assert.equal(view.visivel, false, 'nasce escondido');
+  // O view novo leva o teclado com ele; escondido, ninguém o tem e todo atalho do front morre.
+  assert.equal(a.win.webContents.focos, 1, 'o foco volta pro front logo que o view escondido nasce');
+  view.webContents.dispararLoad();
+  assert.equal(a.win.webContents.focos, 2, 'e de novo quando a página carrega (o load também rouba)');
 
   // O usuário abre a sessão: o painel reexibe sem url, como sempre.
   const r2 = await abrir(a.ev, { chave, url: undefined, bounds: { x: 1, y: 1, width: 10, height: 10 } });
