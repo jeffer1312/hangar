@@ -474,6 +474,22 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   guarda); nada no navegador o persiste. Casar pela URL viraria duas linhas (IP da LAN no celular,
   Tailscale no servidor). O interruptor nunca muda sozinho: `checked` é o dado, o `onchange` repõe
   o dado e chama a ação, e a ação confirmada é quem muda a lista.
+- **Bloco rolável dentro da conversa é `position: relative`, ou o `.sr-only` dele vaza pra lista**
+  (`EditDiff.svelte`, 10/09/2026). Sintoma relatado por dois usuários e nunca reproduzido à mão:
+  "espaço vazio no fim do chat que rola sem acabar", às vezes, em sessão trabalhando — e, pior, a
+  partir daí mensagem nova não entrava (chegava no terminal, não no app); sair e voltar resolvia.
+  Causa, medida por CDP na janela do app no momento do bug: o diff de um Write de 68 linhas tem um
+  `<pre>` de 2284px dentro do `.ed-split` de 46vh com `overflow: hidden`; cada linha carrega um
+  `<span class="sr-only">` (`position: absolute`, `app.css`), e absoluto só é cortado pelo overflow
+  do seu **bloco de contenção** — o `.ed-split` era `static`, então o bloco de contenção ficava
+  fora dele e os 200 spans das linhas escondidas contavam na área rolável da CONVERSA:
+  `scrollHeight` = base do último `sr-only`, 1464px além do fim do `.messages-inner`, com todos
+  os filhos visíveis e de altura normal. A segunda metade do sintoma é consequência: com o fim
+  nunca alcançável, `atBottom` (folga < 64px) ficava falso, a janela de eventos congelava e o
+  chat parava de mostrar o que chegava. Prova: `position: relative` aplicado ao vivo no
+  `.ed-split` da janela do usuário zerou a sobra; reverter trouxe de volta. O mesmo vale pra
+  qualquer bloco com overflow próprio que abrigue um `.sr-only` (o `.ed-uni` levou junto). A
+  sonda `chat.vazio_no_fim` (`MessageList.svelte`) fica: é o que apontou o elemento.
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.
 - **Queue/pending dedup.** Messages sent while Claude is `working` echo as `pending` / `queued-` bubbles and

@@ -207,7 +207,15 @@
      HORIZONTAL: linha comprida QUEBRA e fica inteira dentro da largura visivel. Arrastar pro lado
      pra ler e voltar pra continuar e pior que a linha ocupar duas alturas — e no lado a lado e
      duas vezes pior, porque as duas metades rolavam separadas e saiam de sincronia. */
+  /* `position: relative` nos DOIS blocos roláveis (aqui e no .ed-uni) é o que faz o overflow deles
+     valer para o `.sr-only` de cada linha. O sr-only é `position: absolute`, e absoluto só é
+     cortado pelo overflow do seu bloco de contenção — sem isto o dele era um ancestral lá fora, e
+     as linhas escondidas abaixo dos 46vh continuavam contando na área rolável da CONVERSA: o chat
+     ganhava um vazio do tamanho do diff no fim, e como o fim nunca era alcançado, a janela de
+     mensagens congelava e mensagem nova não entrava. Medido na janela do app com um Write de 68
+     linhas: 1464px de sobra, zerada só com esta linha. */
   .ed-split {
+    position: relative;
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
     background: var(--surface-inset);
@@ -231,6 +239,7 @@
   /* Unificado (celular / coluna estreita): mesma regra — rola so na vertical, linha comprida quebra.
      Aqui a linha nao tem coluna de numero, so o prefixo +/-, entao basta a quebra no proprio bloco. */
   .ed-uni {
+    position: relative;   /* mesmo motivo do .ed-split: contém o .sr-only absoluto de cada linha */
     margin: 0; padding: var(--space-2); border-radius: var(--radius-md);
     background: var(--surface-inset); border: 1px solid var(--border-subtle);
     max-height: 46vh; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
