@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatEvent } from './types';
-import { appendTail, hasSeam, prependOlder, queuedMessages } from './history';
+import { appendTail, hasSeam, mergeHistoryWithLive, prependOlder, queuedMessages } from './history';
 
 const ev = (id: string): ChatEvent => ({ kind: 'user_msg', id, text: id });
 const ids = (evs: ChatEvent[] | null) => (evs ?? []).map((e) => e.id);
@@ -73,5 +73,48 @@ describe('appendTail', () => {
     expect(appendTail([], cur)).toBe(cur);
     expect(appendTail(['a', 'b'].map(ev), cur)).toBe(cur);
     expect(ids(appendTail(['a'].map(ev), []))).toEqual(['a']);
+  });
+});
+
+describe('mergeHistoryWithLive', () => {
+  it('insere o prefixo antigo antes da cauda viva', () => {
+    expect(ids(mergeHistoryWithLive(['a', 'b', 'c'].map(ev), ['c'].map(ev))))
+      .toEqual(['a', 'b', 'c']);
+  });
+
+  it('acrescenta o sufixo novo que veio no REST', () => {
+    expect(ids(mergeHistoryWithLive(['a', 'b', 'c'].map(ev), ['a', 'b'].map(ev))))
+      .toEqual(['a', 'b', 'c']);
+  });
+
+  it('mantem eventos ao vivo posteriores quando ainda nao ha ponto comum', () => {
+    expect(ids(mergeHistoryWithLive(
+      ['a', 'b'].map(ev), ['c'].map(ev), { preserveNoSeam: true },
+    )))
+      .toEqual(['a', 'b', 'c']);
+  });
+
+  it('sem ponto comum descarta cache de outro transcript por padrão', () => {
+    expect(ids(mergeHistoryWithLive(['novo'].map(ev), ['antigo'].map(ev))))
+      .toEqual(['novo']);
+  });
+
+  it('preserva a posição de fila já visível', () => {
+    expect(ids(mergeHistoryWithLive(['a', 'b'].map(ev), ['a', 'queued-q', 'b'].map(ev))))
+      .toEqual(['a', 'queued-q', 'b']);
+  });
+
+  it('não ressuscita fila removida enquanto o REST estava em voo', () => {
+    expect(ids(mergeHistoryWithLive(
+      ['a', 'queued-q'].map(ev), ['a'].map(ev), { removedIds: new Set(['queued-q']) },
+    ))).toEqual(['a']);
+  });
+
+  it('descarta só o cache incompatível e preserva evento que chegou durante o REST', () => {
+    const cached = ev('antigo');
+    const live = ev('queued-atual');
+    expect(ids(mergeHistoryWithLive(
+      ['novo'].map(ev), [cached, live], { cachedEvents: new Set([cached]) },
+    ))).toEqual(['novo', 'queued-atual']);
   });
 });

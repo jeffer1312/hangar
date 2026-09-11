@@ -312,6 +312,23 @@ async def test_send_prompt_deferred_when_not_attached():
     assert await adapter.send_prompt("ghost", "oi") == "deferred"
 
 
+async def test_warm_sessions_reconnects_all_sidecars_without_stopping_on_error(monkeypatch):
+    adapter = CodexAdapter()
+    monkeypatch.setattr(codex_sessions, "list_all", lambda: [
+        {"name": "um"}, {"name": "dois"}, {"sem_nome": True},
+    ])
+    seen = []
+
+    async def ensure(name):
+        seen.append(name)
+        if name == "um":
+            raise RuntimeError("fora")
+
+    monkeypatch.setattr(adapter, "ensure_running", ensure)
+    await adapter.warm_sessions()
+    assert seen == ["um", "dois"]
+
+
 async def test_send_prompt_uses_turn_start_not_tmux(monkeypatch):
     # O prompt vai por turn/start no app-server, NAO digitado no pane. Medido (probe contra
     # codex-cli 0.144.6): a TUI `codex --remote` renderiza turno iniciado por outro cliente, entao
@@ -382,6 +399,25 @@ async def test_interrupt_noop_when_no_turn_in_flight():
     adapter.attach("sess", client, "thread-1")
     assert await adapter.interrupt("sess") is False
     assert client.requests == []
+
+
+async def test_interrupt_reconnects_cold_session_before_reading_turn(monkeypatch):
+    adapter = CodexAdapter()
+    client = _FakeClient([])
+    calls = []
+
+    async def ensure(name):
+        calls.append(name)
+        adapter._sessions[name] = {
+            "client": client, "thread_id": "thread-1", "in_progress": True,
+            "turn_id": "turn-1", "state": "working",
+        }
+        return client
+
+    monkeypatch.setattr(adapter, "ensure_running", ensure)
+    assert await adapter.interrupt("fria") is True
+    assert calls == ["fria"]
+    assert ("turn/interrupt", {"threadId": "thread-1", "turnId": "turn-1"}) in client.requests
 
 
 # --- CodexAdapter drain-on-complete (P2) ----------------------------------------------------
@@ -1005,6 +1041,26 @@ async def test_rename_nao_reassina_sessao_ja_assinada():
     assert "novo" not in adapter._subscribers
 
 
+async def test_rename_sync_rearma_bomba_no_loop_do_backend():
+    codex_sessions.save("novo", "thread-1", "/rollout.jsonl", "/tmp/proj")
+    adapter = _fast_subscribe(CodexAdapter())
+    client = _LiveQueueClient()
+    adapter.attach("velho", client, "thread-1", subscribed=True)
+    antiga = adapter._sessions["velho"]["bomba"]
+
+    await asyncio.to_thread(adapter.rename, "velho", "novo")
+    async with asyncio.timeout(1):
+        while adapter._sessions["novo"].get("bomba") is antiga:
+            await asyncio.sleep(0)
+        while not antiga.done():
+            await asyncio.sleep(0)
+
+    assert antiga.cancelled()
+    assert client.aberturas == 2
+    await client._q.put(None)
+    await adapter._sessions["novo"]["bomba"]
+
+
 async def test_deliverable_libera_turno_preso_em_sessao_nao_assinada():
     # Sem assinatura nao chega turn/completed -> in_progress nunca seria limpo e TODO envio virava
     # "deferred" pra sempre, em silencio. Expira por tempo (com log) em vez de bloquear.
@@ -1116,6 +1172,34 @@ async def test_bomba_publica_na_fonte_recriada_depois_que_sse_fecha():
     bomba = adapter._sessions["volta"]["bomba"]
     await client._q.put(None)
     await bomba
+
+
+async def test_bomba_encerrada_reinicia_na_proxima_abertura():
+    class _FalhaUmaVez(_LiveQueueClient):
+        async def notifications(self):
+            self.aberturas += 1
+            if self.aberturas == 1:
+                raise RuntimeError("falha transitória")
+            while (item := await self._q.get()) is not None:
+                yield item
+
+    adapter = CodexAdapter()
+    client = _FalhaUmaVez()
+    adapter.attach("reinicia", client, "t")
+    primeira = adapter._sessions["reinicia"]["bomba"]
+    async with asyncio.timeout(1):
+        while not primeira.done():
+            await asyncio.sleep(0)
+
+    stream = adapter.state_monitor("reinicia", lambda: "reinicia")
+    await stream.__anext__()
+    await client._q.put({"method": "turn/started", "params": {"threadId": "t"}})
+    assert (await stream.__anext__()).state == "working"
+    assert client.aberturas == 2
+    assert "bomba_error" not in adapter._sessions["reinicia"]
+    await stream.aclose()
+    await client._q.put(None)
+    await adapter._sessions["reinicia"]["bomba"]
 
 
 async def test_dois_sse_na_mesma_sessao_recebem_a_resposta_inteira():

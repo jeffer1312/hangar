@@ -385,6 +385,7 @@ async def _lifespan(app: FastAPI):
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
     _loop_servidor = asyncio.get_running_loop()
+    codex_warm_task = asyncio.create_task(get_adapter("codex").warm_sessions())
     codex_contas_login = CodexContasLogin(account_in_use=_codex_account_in_use)
     app.state.codex_contas_login = codex_contas_login
     cotas.registrar_codex_auth_cache(codex_contas_login.cached_auth)
@@ -401,6 +402,8 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
+        codex_warm_task.cancel()
+        await asyncio.gather(codex_warm_task, return_exceptions=True)
         creation_tasks = list(getattr(app.state, "codex_creation_tasks", ()))
         for creation_task in creation_tasks:
             creation_task.cancel()
@@ -3876,7 +3879,9 @@ def select_submit(name: str):
 async def interrupt(name: str, clear: bool = False):
     # Codex: interrompe a propria TUI pelo tmux, mantendo celular e terminal no mesmo controlador.
     if _provider_of(name) == "codex":
-        await get_adapter("codex").interrupt(name)
+        if not await get_adapter("codex").interrupt(name):
+            raise HTTPException(409, detail=erro(
+                "erro_codex_controle", "Não há turno Codex ativo para interromper."))
         return {"ok": True}
     # clear=True: alem de interromper, limpa o input (2o Esc). So o front com msg pendente passa isso —
     # garante input nao-vazio, evitando que o Esc-Esc abra o menu de rewind num input ja vazio.

@@ -68,5 +68,5 @@ class CodexPreviewSource:
             # Limpeza sincrona (sem await entre as linhas), mesmo motivo do PreviewBroker: um
             # CancelledError no acquire do lock nao pode deixar _subs sem decrementar.
             self._subs -= 1
-            if self._subs <= 0:
+            if self._subs <= 0 and self._sources.get(self.name) is self:
                 self._sources.pop(self.name, None)

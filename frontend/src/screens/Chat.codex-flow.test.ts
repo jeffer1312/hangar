@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createRawSnippet, mount, tick, unmount } from 'svelte';
 import Chat from './Chat.svelte';
 import * as api from '@hangar/core';
+import { guardarCaudaChat } from '../lib/queries';
 import * as m from '../paraglide/messages';
 import { overwriteGetLocale } from '../paraglide/runtime';
 
@@ -253,6 +254,63 @@ it('histórico que chega depois do SSE mantém mensagens antigas antes das atuai
   expect([...document.querySelectorAll('.assistant-msg:not(.preview)')]
     .map((el) => el.textContent?.includes('mensagem antiga') ? 'antiga' : 'atual'))
     .toEqual(['antiga', 'atual']);
+});
+
+it('jsonl tardio descarta o cache antigo sem apagar o SSE que chegou durante o REST', async () => {
+  let resolverSessoes!: (value: Awaited<ReturnType<typeof api.getSessions>>) => void;
+  let resolverHistorico!: (value: Awaited<ReturnType<typeof api.getHistoryDesde>>) => void;
+  vi.mocked(api.getSessions).mockReturnValueOnce(new Promise((resolve) => {
+    resolverSessoes = resolve;
+  }));
+  vi.mocked(api.getHistoryDesde).mockReturnValueOnce(new Promise((resolve) => {
+    resolverHistorico = resolve;
+  }));
+  guardarCaudaChat('codex-flow', '/tmp/jsonl-tardio.jsonl', {
+    eventos: [{ id: 'cache-antigo', kind: 'assistant_msg', ts: 1, text: 'cache antigo' }],
+    etag: 'cache-v1',
+  });
+
+  const target = document.createElement('div');
+  document.body.appendChild(target);
+  components.push(mount(Chat, { target, props: {
+    sessionName: 'codex-flow', desktop: false, showContextPanel: false,
+    onBack: vi.fn(), onNavigateToChat: vi.fn(),
+  } }));
+  await flush();
+  resolverSessoes([{
+    name: 'codex-flow', provider: 'codex', tracked: true, state: 'working', cwd: '/teste',
+    jsonl: '/tmp/jsonl-tardio.jsonl',
+  }]);
+  await vi.waitFor(() => expect(document.body.textContent).toContain('cache antigo'));
+  await emit('message', {
+    id: 'sse-atual', kind: 'assistant_msg', ts: 2, text: 'mensagem SSE atual',
+  });
+  resolverHistorico({
+    eventos: [{ id: 'historico-novo', kind: 'assistant_msg', ts: 3, text: 'histórico novo' }],
+    etag: 'history-v2',
+  });
+  await flush();
+
+  const textos = [...document.querySelectorAll('.assistant-msg:not(.preview)')]
+    .map((el) => el.textContent?.trim());
+  expect(textos.some((texto) => texto?.includes('cache antigo'))).toBe(false);
+  expect(textos.map((texto) => texto?.includes('histórico novo') ? 'novo' : 'atual'))
+    .toEqual(['novo', 'atual']);
+});
+
+it('falha do histórico não esconde mensagem que já chegou pelo SSE', async () => {
+  let rejeitarHistorico!: (error: Error) => void;
+  vi.mocked(api.getHistoryDesde).mockReturnValueOnce(new Promise((_resolve, reject) => {
+    rejeitarHistorico = reject;
+  }));
+  await montar();
+  await emit('message', {
+    id: 'viva', kind: 'assistant_msg', ts: 1, text: 'mensagem viva',
+  });
+  rejeitarHistorico(new Error('histórico indisponível'));
+  await flush();
+  expect(document.body.textContent).toContain('mensagem viva');
+  expect(document.querySelector('.chat-error')).toBeNull();
 });
 
 it('Claude redescobre no fim de cada turno e ancora o cartão no plano novo', async () => {

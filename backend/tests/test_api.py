@@ -553,6 +553,7 @@ def test_broadcast_codex_uses_adapter(api_client):
 
 def test_interrupt_codex_calls_adapter(api_client):
     fake = _fake_codex_adapter()
+    fake.interrupt = AsyncMock(return_value=True)
     with patch("app.api._provider_of", return_value="codex"), \
          patch("app.api.get_adapter", return_value=fake), \
          patch("app.api.terminal.interrupt") as term_int:
@@ -560,6 +561,16 @@ def test_interrupt_codex_calls_adapter(api_client):
     assert r.status_code == 200
     fake.interrupt.assert_awaited_once_with("cx")
     term_int.assert_not_called()
+
+
+def test_interrupt_codex_reports_when_no_turn_is_active(api_client):
+    fake = _fake_codex_adapter()
+    fake.interrupt = AsyncMock(return_value=False)
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake):
+        r = api_client.post("/api/sessions/cx/interrupt", headers=_h())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_codex_controle"
 
 
 def test_interrupt_claude_uses_terminal(api_client):

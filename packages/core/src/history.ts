@@ -50,3 +50,28 @@ export function appendTail(tail: ChatEvent[], current: ChatEvent[]): ChatEvent[]
   if (fresh.length === tail.length) return tail;
   return fresh.length ? [...current, ...fresh] : current;
 }
+
+/** Junta a cauda REST com eventos que o SSE já colocou na tela durante a mesma carga. */
+export function mergeHistoryWithLive(
+  history: ChatEvent[],
+  current: ChatEvent[],
+  options: {
+    preserveNoSeam?: boolean;
+    removedIds?: ReadonlySet<string>;
+    cachedEvents?: ReadonlySet<ChatEvent>;
+  } = {},
+): ChatEvent[] {
+  const clean = options.removedIds?.size
+    ? history.filter((e) => !options.removedIds!.has(e.id))
+    : history;
+  if (!current.length) return clean;
+  if (!hasSeam(clean, current)) {
+    const live = options.preserveNoSeam
+      ? current
+      : options.cachedEvents
+        ? current.filter((e) => !options.cachedEvents!.has(e))
+        : [];
+    return live.length ? [...clean, ...live] : clean;
+  }
+  return appendTail(clean, prependOlder(clean, current) ?? current);
+}

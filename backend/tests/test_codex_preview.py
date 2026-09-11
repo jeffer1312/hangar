@@ -74,3 +74,17 @@ async def test_last_subscriber_leaving_drops_the_instance():
     await agen.__anext__()  # entra no generator (roda o try, incrementa _subs)
     await agen.aclose()     # dispara o finally -> _subs volta a 0 -> registry limpa
     assert name not in CodexPreviewSource._sources
+
+
+@pytest.mark.asyncio
+async def test_old_subscriber_does_not_drop_recreated_instance():
+    name = "push-recreated"
+    old = CodexPreviewSource.get(name)
+    agen = old.subscribe()
+    await agen.__anext__()
+    CodexPreviewSource._sources.pop(name)
+    new = CodexPreviewSource.get(name)
+
+    await agen.aclose()
+
+    assert CodexPreviewSource.get(name) is new

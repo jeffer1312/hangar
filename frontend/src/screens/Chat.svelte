@@ -62,7 +62,7 @@
     descartarDaFila,
   } from '@hangar/core';
   import { formataErro } from '@hangar/core';
-  import { appendTail, hasSeam, prependOlder } from '@hangar/core';
+  import { appendTail, hasSeam, mergeHistoryWithLive, prependOlder } from '@hangar/core';
   import { especificidade, donoDaLinha } from '@hangar/core';
   import { parseStatusLine, queuedMessages } from '@hangar/core';
   import { listServers, getActiveId } from '../lib/auth';
@@ -148,6 +148,7 @@
   segurarAquecimento(sessaoDoPortao);
 
   let events = $state<ChatEvent[]>([]);
+  const retiredQueuedIds = new Set<string>();
   // Sobe a cada CARGA de histórico (pintar do cache, chegar a cauda, trocar de transcript). A
   // MessageList re-ancora a janela na cauda a cada mudança — sem isso, uma carga que chega com a
   // lista já montada pode ficar fora da fatia visível e a conversa para na mensagem anterior.
@@ -1263,6 +1264,7 @@
   // /clear no meio deixava vários /history completos disputando a rede — no celular, justamente o
   // caso que a carga em dois tempos existe pra resolver.
   let histAbort: AbortController | null = null;
+  let cacheDaCarga: Set<ChatEvent> | null = null;
   function newHistLoad(): AbortSignal {
     histGen++;
     histAbort?.abort();
@@ -1308,6 +1310,7 @@
     const cache = lerCaudaChat(servidorDaCauda, sessionJsonl);
     if (!cache?.eventos.length) return false;
     events = cache.eventos;
+    for (const event of events) cacheDaCarga?.add(event);
     etagCauda = cache.etag;
     rebuildIndex();
     reseedDerived();
@@ -1322,11 +1325,11 @@
   // da rede que o cache existe pra evitar. Só pinta enquanto a rede não respondeu (tela ainda
   // vazia); chegando depois disso, quem manda é a resposta do servidor.
   $effect(() => {
-    if (!sessionJsonl || !loading || events.length) return;
+    if (!sessionJsonl || !cacheDaCarga || !loading || events.length) return;
     pintarDoCache();
   });
 
-  async function loadHistory() {
+  async function loadHistory(useCache = true) {
     const signal = newHistLoad();
     const g = histGen;
     histGap = '';
@@ -1339,7 +1342,9 @@
     // celular e leva `events` junto. Pintar cedo já existiu e foi revertido (b9db4367) porque a
     // janela da MessageList não re-ancorava numa carga que chegasse com a lista montada — quem
     // conserta isso é a `ancora`, e ela sobe aqui e a cada resposta do servidor.
-    const pintouDoCache = pintarDoCache();
+    const registroCache = useCache ? new Set<ChatEvent>() : null;
+    cacheDaCarga = registroCache;
+    const pintouDoCache = useCache && pintarDoCache();
     try {
       const r = await tailComRetentativa(signal, g, pintouDoCache ? etagCauda : null);
       if (g !== histGen) return;   // outra carga assumiu no meio do voo: esta resposta é velha
@@ -1349,10 +1354,12 @@
         // ~200 bytes em vez de 313 KB.
         temMaisNoServidor = events.length >= TAIL_FIRST;
       } else {
-        // O SSE abre antes desta carga e pode ter posto eventos novos na tela. O histórico traz
-        // o que veio ANTES deles, então entra no começo — nunca no fim como se fosse mensagem nova.
-        const comAntigos = events.length ? prependOlder(r.eventos, events) : null;
-        events = comAntigos ?? (events.length && hasSeam(r.eventos, events) ? events : r.eventos);
+        // O SSE abre antes desta carga: a costura preserva prefixo antigo, sufixo novo e fila local.
+        events = mergeHistoryWithLive(r.eventos, events, {
+          preserveNoSeam: !registroCache?.size,
+          removedIds: retiredQueuedIds,
+          cachedEvents: registroCache ?? undefined,
+        });
         etagCauda = r.etag;
         rebuildIndex();
         reseedDerived();
@@ -1391,8 +1398,14 @@
         kimiSemTranscript = sessionProvider === 'kimi';
         return;
       }
-      error = msg;
+      if (events.length) {
+        error = '';
+        histGap = 'failed';
+      } else {
+        error = msg;
+      }
     } finally {
+      if (cacheDaCarga === registroCache) cacheDaCarga = null;
       if (g === histGen) loading = false;
       // Conversa na tela (ou desistimos dela): o trabalho especulativo pode correr. Vale também no
       // ramo de ERRO — histórico que falhou não é motivo pra a pílula de modelo ficar sem catálogo.
@@ -1521,6 +1534,7 @@
       try {
         const ev = JSON.parse(e.data) as ChatEvent;
         if (ev.queued_confirmed && ev.id.startsWith('queued-')) {
+          retiredQueuedIds.add(ev.id);
           events = events.filter((x) => x.id !== ev.id);
           rebuildIndex();
           return;
@@ -1558,6 +1572,7 @@
             const dono = donoDaLinha(ev.text, filas.map((f) => f.text));
             if (dono >= 0) {
               const qi = filas[dono].i;
+              retiredQueuedIds.add(events[qi].id);
               events = [...events.slice(0, qi), ...events.slice(qi + 1)];
               rebuildIndex();
             }
@@ -1717,13 +1732,14 @@
       // `jsonl`, e o /clear abre outro. Não há o que apagar aqui.
       etagCauda = null;
       events = [];
+      retiredQueuedIds.clear();
       idIndex.clear();
       reseedDerived();          // zera activity/asstCount junto (loadHistory re-semeia com o novo)
       cancelPreviewDrop();
       previewText = '';
       stateEvent = null;
       statsEvent = null;      // transcript novo -> a faixa zera junto (o backend recomeça o fold)
-      loadHistory();
+      loadHistory(false);
     });
 
     es.onerror = () => {
@@ -2403,7 +2419,7 @@
         <p class="chat-error-hint">{error}</p>
       {/if}
       <div class="chat-error-actions">
-        <button class="retry-btn" onclick={loadHistory}>{m.lista_tentar_novamente()}</button>
+        <button class="retry-btn" onclick={() => loadHistory()}>{m.lista_tentar_novamente()}</button>
         <button class="back-btn-inline" onclick={onBack}>{m.chat_voltar_sessoes()}</button>
       </div>
     </div>
