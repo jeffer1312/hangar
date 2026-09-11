@@ -22,12 +22,14 @@
 
   interface Props {
     git: GitStore; desktop: boolean; filesInContext: boolean; onClose: () => void;
+    initialTab?: GitTabId;
     // Só quando o modal é aberto pelo Chat: eventos pra visão "Citados" da aba Arquivos.
     events?: ChatEvent[] | null; histGap?: string; cwd?: string | null;
   }
-  let { git, desktop, filesInContext, onClose, events = null, histGap = '', cwd = null }: Props = $props();
+  let { git, desktop, filesInContext, onClose, initialTab = 'changes', events = null, histGap = '', cwd = null }: Props = $props();
 
-  let nav = $state<GitNav>(initialNav());
+  // svelte-ignore state_referenced_locally
+  let nav = $state<GitNav>(selectTab(initialNav(), initialTab));
   let repoMenu = $state(false);
   let menuAberto = $state(false);   // CommitMenu aberto na aba Historico -> a faixa cala o erro
   // O commit escolhido mora aqui pelo mesmo motivo que o nivel: trocar de aba destroi o componente
@@ -99,7 +101,7 @@
       // O foco so pode ir depois do flush (o visor monta no mesmo flush); o Fechar do
       // FileViewer e o primeiro controle do conteudo novo — fallback o proprio visor.
       void tick().then(() => {
-        (document.querySelector<HTMLElement>('.gt-body .visor .fechar')
+        (document.querySelector<HTMLElement>('.gt-body .visor button')
           ?? document.querySelector<HTMLElement>('.gt-body .visor'))?.focus();
       });
     }
@@ -208,6 +210,7 @@
         {#if currentLevel(nav) >= 1 && arquivoAberto}
           <FileViewer
             path={arquivoAberto}
+            linha={filesStore?.linha ?? null}
             diff={filesStore?.diff ?? null}
             conteudo={filesStore?.conteudo ?? null}
             loading={filesStore?.loading ?? false}

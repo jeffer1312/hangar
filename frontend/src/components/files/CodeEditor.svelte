@@ -6,6 +6,7 @@
   interface Props {
     texto: string;
     path: string;
+    linha?: number | null;
     editavel: boolean;
     // Texto da base. Com ele o editor desenha o DIFF por dentro (unifiedMergeView): arquivo
     // inteiro, mudanças embutidas, trechos iguais dobrados. `null` = mostra só o arquivo.
@@ -14,10 +15,10 @@
     // Ctrl/Cmd+S dentro do editor: salvar é do hospedeiro, a tecla é daqui.
     onSalvar?: () => void;
   }
-  let { texto, path, editavel, original = null, onChange, onSalvar }: Props = $props();
+  let { texto, path, linha = null, editavel, original = null, onChange, onSalvar }: Props = $props();
 
   let caixa = $state<HTMLDivElement | null>(null);
-  let view: EditorView | null = null;
+  let view: EditorView | null = $state.raw(null);
   // Qual texto ESTE componente colocou no editor por último. Sem isso, cada tecla digitada
   // dispara o onChange, o hospedeiro reatribui `texto`, e o efeito de sincronia devolveria o
   // documento inteiro — cursor no começo, digitação impossível.
@@ -264,6 +265,13 @@
   $effect(() => {
     const podeEditar = editavel;
     view?.contentDOM.setAttribute('contenteditable', podeEditar ? 'true' : 'false');
+  });
+
+  $effect(() => {
+    const v = view;
+    if (!v || linha === null || !Number.isSafeInteger(linha) || linha < 1) return;
+    const alvo = v.state.doc.line(Math.min(linha, v.state.doc.lines));
+    v.dispatch({ selection: { anchor: alvo.from, head: alvo.to }, scrollIntoView: true });
   });
 
   onDestroy(() => { view?.destroy(); view = null; });

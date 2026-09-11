@@ -6,6 +6,7 @@
   import GitTabs from './git/GitTabs.svelte';
   import { createGitStore } from '../lib/gitStore.svelte';
   import type { ChatEvent } from '@hangar/core';
+  import type { GitTabId } from '../lib/gitTabs';
 
   // `desktop` por PROP, nao matchMedia proprio: o GitSheet era a terceira copia da mesma media
   // query (App.svelte, BottomSheet.svelte) e a primeira pintura saia mobile.
@@ -14,10 +15,11 @@
   // 1279px o painel de contexto e display:none e a aba do Git e a unica casa possivel.
   interface Props {
     open: boolean; sessionName: string; desktop: boolean; filesInContext: boolean; onClose: () => void;
+    initialTab?: GitTabId;
     // Só quando aberto pelo Chat: eventos pra visão "Citados" da aba Arquivos (Sidebar não tem).
     events?: ChatEvent[] | null; histGap?: string; cwd?: string | null;
   }
-  let { open, sessionName, desktop, filesInContext, onClose, events = null, histGap = '', cwd = null }: Props = $props();
+  let { open, sessionName, desktop, filesInContext, onClose, initialTab = 'changes', events = null, histGap = '', cwd = null }: Props = $props();
 
   // Dono do store — era do GitSheet, COM o guard que evita recriar a cada render. Sem ele, trocar de
   // sessao com o modal aberto mostraria o git da anterior.
@@ -33,5 +35,5 @@
      o modal de Configuracoes usa. Nao usar ModalDialog: a folha fica em z 100, e o 110/120 do CommitMenu
      segue correto. -->
 <BottomSheet {open} {onClose} ariaLabel="Git" wide={desktop} centered={desktop}>
-  <GitTabs {git} {desktop} {filesInContext} {onClose} {events} {histGap} {cwd} />
+  <GitTabs {git} {desktop} {filesInContext} {onClose} {initialTab} {events} {histGap} {cwd} />
 </BottomSheet>

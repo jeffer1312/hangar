@@ -5,6 +5,7 @@
  */
 
 import * as m from '../paraglide/messages';
+import { parseCodeReferences, svgIcone } from '@hangar/core';
 
 function escapeHtml(str: string): string {
   return str
@@ -14,9 +15,50 @@ function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-// Inline: recebe texto JÁ ESCAPADO (escapeHtml não toca em * ` [ ] ( ) — sobrevivem pros regex).
-function renderInline(escaped: string): string {
-  let text = escaped;
+// Escapa o texto antes do HTML; fragmentos de citação são gerados separadamente.
+function renderInline(input: string, opts: MarkdownOptions): string {
+  const fragments: string[] = [];
+  const keep = (html: string) => `\u0000${fragments.push(html) - 1}\u0000`;
+  const chip = (path: string, line: number | null) => {
+    const name = path.split('/').pop() ?? path;
+    const label = path + (line ? `:${line}` : '');
+    const icon = svgIcone(name, false);
+    return keep(`<button type="button" class="file-citation" data-file-path="${escapeHtml(path)}"${line ? ` data-file-line="${line}"` : ''} title="${escapeHtml(m.arquivo_abrir({ nome: label }))}"><span class="file-citation-icon" aria-hidden="true">${icon}</span><span class="file-citation-name">${escapeHtml(name)}</span>${line ? `<span class="file-citation-line">:${line}</span>` : ''}</button>`);
+  };
+  let source = input.replace(/\u0000/g, '\ufffd');
+  if (opts.fileLinks) {
+    const reference = (value: string, link = false) => {
+      const path = value.startsWith('<') && value.endsWith('>') ? value.slice(1, -1) : value;
+      if (/^\.[^./:]+(?::\d+(?::\d+)?)?$/.test(path) && path !== '.env') return null;
+      if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/:\d+(?::\d+)?$/.test(path)) return null;
+      if (!link && /\s/.test(path) && !path.startsWith('/') && !path.startsWith('~/')) return null;
+      const prefix = path.startsWith('/') || path.startsWith('~/') ? '' : '/';
+      const candidate = prefix + path.replace(/ /g, '%20');
+      const refs = parseCodeReferences(candidate);
+      const ref = refs[0];
+      // O destino de um link já declara um caminho, inclusive para executáveis sem extensão.
+      if (link && path && !path.startsWith('#') && !path.startsWith('?') && !path.includes('://')) {
+        const suffix = /:(\d+)(?::\d+)?$/.exec(path);
+        const line = suffix ? Number(suffix[1]) : null;
+        return { path: suffix ? path.slice(0, suffix.index) : path,
+          line: line && Number.isSafeInteger(line) ? line : null };
+      }
+      return ref && ref.start === 0 && ref.end === candidate.length
+        ? { path: path.slice(0, path.length - (ref.end - ref.path.length)), line: ref.line } : null;
+    };
+    // Protege links e código antes de procurar caminhos soltos, sem tocar em atributos HTML.
+    source = source.replace(/`([^`]+)`|\[([^\]]+)\]\((<[^>]+>|[^)]+)\)|(https?:\/\/[^\s<]+)/g,
+      (whole, code: string | undefined, label: string | undefined, target: string | undefined) => {
+        const ref = reference(code ?? target ?? '', target !== undefined);
+        if (ref) return chip(ref.path, ref.line);
+        return keep(code !== undefined ? `<code>${escapeHtml(code)}</code>` : renderInline(whole, {}));
+      });
+    const refs = parseCodeReferences(source);
+    for (const ref of refs.reverse()) {
+      source = source.slice(0, ref.start) + chip(ref.path, ref.line) + source.slice(ref.end);
+    }
+  }
+  let text = escapeHtml(source);
   // inline code primeiro (pra não interpretar ** dentro de código)
   text = text.replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`);
   text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -36,7 +78,7 @@ function renderInline(escaped: string): string {
     const t = trail ? trail[0] : '';
     return `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>${t}`;
   });
-  return text;
+  return text.replace(/\u0000(\d+)\u0000/g, (_, i) => fragments[Number(i)]);
 }
 
 const _SEP_RE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/;   // linha separadora |---|---|
@@ -53,7 +95,7 @@ function _cells(line: string): string[] {
 // errado pro arquivo — o paragrafo sai picado no meio da frase. Com a opcao ligada, linhas
 // consecutivas de texto sao juntadas, como manda o CommonMark. Blocos (lista, heading, cerca,
 // tabela, citacao, regra) nunca sao juntados.
-export interface MarkdownOptions { joinWrapped?: boolean }
+export interface MarkdownOptions { joinWrapped?: boolean; fileLinks?: boolean }
 
 function joinSoftWraps(input: string): string {
   const src = input.split('\n');
@@ -128,8 +170,8 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
         body.push(_cells(lines[i]));
         i++;
       }
-      const th = head.map((c) => `<th>${renderInline(escapeHtml(c))}</th>`).join('');
-      const rows = body.map((r) => `<tr>${r.map((c) => `<td>${renderInline(escapeHtml(c))}</td>`).join('')}</tr>`).join('');
+      const th = head.map((c) => `<th>${renderInline(c, opts)}</th>`).join('');
+      const rows = body.map((r) => `<tr>${r.map((c) => `<td>${renderInline(c, opts)}</td>`).join('')}</tr>`).join('');
       // Wrapper rolavel: a tabela mantem a largura natural e rola DENTRO da propria box (a pagina
       // continua sem scroll horizontal). Sem isto a tabela espremia e o texto quebrava letra a letra.
       // (Header+caixa estilo code-block foi testado aqui e REPROVADO pelo usuario 2026-08-03: sobre
@@ -143,7 +185,7 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
     if (h) {
       parabreak = false;
       const n = h[1].length;
-      out.push(`<h${n}>${renderInline(escapeHtml(h[2]))}</h${n}>`);
+      out.push(`<h${n}>${renderInline(h[2], opts)}</h${n}>`);
       i++;
       continue;
     }
@@ -158,7 +200,7 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
       while (i < lines.length) {
         const match = ordered ? lines[i].match(/^\s*\d+[.)]\s+(.+)$/) : lines[i].match(/^\s*[-*+]\s+(.+)$/);
         if (!match) break;
-        items.push(`<li>${renderInline(escapeHtml(match[1]))}</li>`);
+        items.push(`<li>${renderInline(match[1], opts)}</li>`);
         i++;
       }
       const tag = ordered ? 'ol' : 'ul';
@@ -170,7 +212,7 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
     const bq = line.match(/^\s*>\s?(.*)$/);
     if (bq) {
       parabreak = false;
-      out.push(`<blockquote>${renderInline(escapeHtml(bq[1]))}</blockquote>`);
+      out.push(`<blockquote>${renderInline(bq[1], opts)}</blockquote>`);
       i++;
       continue;
     }
@@ -179,7 +221,7 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
     if (line.trim() === '') {
       parabreak = true;
     } else {
-      out.push(`<p${parabreak ? ' class="para"' : ''}>${renderInline(escapeHtml(line))}</p>`);
+      out.push(`<p${parabreak ? ' class="para"' : ''}>${renderInline(line, opts)}</p>`);
       parabreak = false;
     }
     i++;

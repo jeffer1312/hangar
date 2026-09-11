@@ -548,7 +548,7 @@
     {/if}
 
     {#if preview}
-      <AssistantBubble text={codex ? planDisplayText(preview) : preview} ts={undefined} preview md={previewMd} full={previewFull} />
+      <AssistantBubble text={codex ? planDisplayText(preview) : preview} ts={undefined} {sessionName} preview md={previewMd} full={previewFull} />
     {/if}
 
     {#if stateEvent?.state === 'working'}

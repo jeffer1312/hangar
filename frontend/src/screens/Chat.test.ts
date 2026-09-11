@@ -14,6 +14,7 @@ import { ctxPanel } from '../lib/ctxPanel.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 import GitTabs from '../components/git/GitTabs.svelte';
 import { createGitStore } from '../lib/gitStore.svelte';
+import { renderMarkdown } from '../lib/markdown';
 import type { AggSession, SessionInfo } from '@hangar/core';
 
 // Stub de componente Svelte 5: createRawSnippet é o padrão do DesktopShell.test.ts — uma classe
@@ -84,6 +85,8 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   })),
   readFile: vi.fn(async () => ({ path: 'a.txt', text: 'A', size: 1, truncated: false })),
   searchFiles: vi.fn(async () => ({ hits: [], truncated: false, mode: 'names' })),
+  resolverCitados: vi.fn(async () => ({ ok: { '/repo/a.txt': { relativo: 'a.txt', real: '/repo/a.txt' } }, faltam: [] })),
+  fileUrl: vi.fn((name: string, path: string) => `/api/sessions/${name}/file?path=${encodeURIComponent(path)}`),
   pathDiff: vi.fn(async () => ({
     path: 'a.txt', diff: '', truncated: false,
     escopo_pedido: 'branch', escopo_usado: 'branch', base: null, motivo: null,
@@ -255,6 +258,102 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     mq = stubMatchMedia();
     mq.set('(min-width: 768px)', true);
     mq.set('(min-width: 1280px)', true);   // o visor so existe em desktop largo (B5)
+  });
+
+  it.each(['txt', 'sh'])('clique no arquivo .%s abre o visor sem criar sessão', async (ext) => {
+    const api = await import('@hangar/core');
+    const path = `/repo/a.${ext}`;
+    vi.mocked(api.resolverCitados).mockResolvedValueOnce({ ok: { [path]: { relativo: `a.${ext}`, real: path } }, faltam: [] });
+    vi.mocked(api.createSession).mockClear();
+    const t = montar();
+    await tick();
+    const texto = document.createElement('div');
+    texto.innerHTML = renderMarkdown(`Veja [a.${ext}:2](${path}:2) aqui.`, { fileLinks: true });
+    t.el.querySelector('.chat-underlay')!.append(texto);
+    texto.querySelector('button')!.click();
+    await vi.waitFor(() => expect(t.el.querySelector('.arq-visor .visor')).not.toBeNull());
+    expect(api.resolverCitados).toHaveBeenCalledWith('sess', [path]);
+    expect(api.readFile).toHaveBeenCalledWith('sess', `a.${ext}`);
+    expect(api.createSession).not.toHaveBeenCalled();
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    expect(store.linha).toBe(2);
+    filesStores.release('srv-test::sess');
+    await unmount(t.comp);
+  });
+
+  it('aba inicial Arquivos abre o mesmo visor no web estreito', async () => {
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    await store.abrir('a.txt', 2);
+    const target = document.createElement('div');
+    document.body.append(target);
+    const git = createGitStore('sess');
+    const comp = mount(GitTabs, { target, props: {
+      git, desktop: false, filesInContext: false, initialTab: 'files', onClose: vi.fn(),
+    } });
+    await vi.waitFor(() => expect(target.querySelector('.gt-body .visor')).not.toBeNull());
+    expect(target.querySelector('[role=tab][aria-selected=true]')?.textContent).toMatch(/Files|Arquivos/);
+    await unmount(comp);
+    filesStores.release('srv-test::sess');
+  });
+
+  it('nome de script fora do repo abre pelo caminho citado no resultado da ferramenta', async () => {
+    const api = await import('@hangar/core');
+    const nome = 'ecc-review-reminder.sh';
+    const path = `/home/user/.codex/hooks/${nome}`;
+    vi.mocked(api.getHistoryDesde).mockResolvedValueOnce({ eventos: [
+      { kind: 'tool_result', id: 'arquivo-externo', result: `Encontrado: ${path}` },
+    ], etag: null });
+    vi.mocked(api.resolverCitados)
+      .mockResolvedValueOnce({ ok: {}, faltam: [nome] })
+      .mockResolvedValueOnce({ ok: { [path]: { relativo: null, real: path } }, faltam: [] });
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    const abrir = vi.spyOn(store, 'abrirExterno').mockResolvedValue(true);
+    const t = montar();
+    try {
+      await tick();
+      await tick();
+      const texto = document.createElement('div');
+      texto.innerHTML = renderMarkdown(`Veja \`${nome}:12\`.`, { fileLinks: true });
+      t.el.querySelector('.chat-underlay')!.append(texto);
+      texto.querySelector('button')!.click();
+      await vi.waitFor(() => expect(abrir).toHaveBeenCalledWith(path, expect.any(String), 12));
+      expect(api.resolverCitados).toHaveBeenLastCalledWith('sess', [path]);
+    } finally {
+      abrir.mockRestore();
+      await unmount(t.comp);
+      filesStores.release('srv-test::sess');
+    }
+  });
+
+  it('não abre um homônimo arbitrário quando a conversa cita arquivos diferentes', async () => {
+    const api = await import('@hangar/core');
+    const nome = 'guard.sh';
+    vi.mocked(api.getHistoryDesde).mockResolvedValueOnce({ eventos: [
+      { kind: 'tool_result', id: 'homonimos', result: '/home/a/guard.sh\n/home/b/guard.sh' },
+    ], etag: null });
+    vi.mocked(api.resolverCitados)
+      .mockResolvedValueOnce({ ok: {}, faltam: [nome] })
+      .mockResolvedValueOnce({ ok: {
+        '/home/a/guard.sh': { relativo: null, real: '/home/a/guard.sh' },
+        '/home/b/guard.sh': { relativo: null, real: '/home/b/guard.sh' },
+      }, faltam: [] });
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    const abrir = vi.spyOn(store, 'abrirExterno');
+    const t = montar();
+    try {
+      await tick();
+      await tick();
+      const texto = document.createElement('div');
+      texto.innerHTML = renderMarkdown(`Veja \`${nome}\`.`, { fileLinks: true });
+      t.el.querySelector('.chat-underlay')!.append(texto);
+      texto.querySelector('button')!.click();
+      await vi.waitFor(() => expect(t.el.textContent).toContain('Há mais de um arquivo chamado guard.sh'));
+      expect(abrir).not.toHaveBeenCalled();
+    } finally {
+      abrir.mockRestore();
+      await unmount(t.comp);
+      filesStores.release('srv-test::sess');
+    }
   });
 
   it('underlay da conversa fica inert com o visor aberto e volta sem ele', async () => {

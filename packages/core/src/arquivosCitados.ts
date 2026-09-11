@@ -8,9 +8,9 @@ import type { ChatEvent } from './types';
 const _EXTS = 'svelte|tsx|ts|jsx|js|mjs|cjs|py|pas|dfm|cs|dart|md|json|yaml|yml|toml|scss|css|html|sql|sh|fish|ps1|env|lock|txt|csv|xml|ini|cfg|conf';
 const _ESPECIAIS = 'Dockerfile|Makefile';
 // Absoluto (/ ou ~/): não exige pasta. Lookbehind tira o "/" de dentro de URL e o "./" do relativo.
-const _ABS_RE = new RegExp(`(?<![\\w.~:/*])(~?/[^\\s"'\`)\\]]*?(?:\\.(?:${_EXTS})|/(?:${_ESPECIAIS})))(?=$|[\\s)\\]"'\`,;:*])`, 'g');
+const _ABS_RE = new RegExp(`(?<![\\w.~:/*])(~?/[^\\s"'\`)\\]]*?(?:\\.(?:${_EXTS})|/(?:${_ESPECIAIS})))(?=$|\\.(?=\\s|$)|[\\s)\\]"'\`,;:*])`, 'g');
 // Relativo: exige `dir/nome.ext` (mesma regra do _REL_RE do format.ts) — `app.main` não casa.
-const _REL_RE = new RegExp(`(?<![\\w/~.:*-])((?:[\\w.-]+/)+(?:[\\w.-]+\\.(?:${_EXTS})|(?:${_ESPECIAIS})))(?=$|[\\s)\\]"'\`,;:*])`, 'g');
+const _REL_RE = new RegExp(`(?<![\\w/~.:*-])((?:[\\w.-]+/)+(?:[\\w.-]+\\.(?:${_EXTS})|(?:${_ESPECIAIS})))(?=$|\\.(?=\\s|$)|[\\s)\\]"'\`,;:*])`, 'g');
 
 export function parseCodePaths(texto: string): string[] {
   const out: string[] = [];
@@ -24,6 +24,33 @@ export function parseCodePaths(texto: string): string[] {
     }
   }
   return out;
+}
+
+export interface CodeReference {
+  path: string;
+  line: number | null;
+  start: number;
+  end: number;
+}
+
+// Preserva as ocorrências e posições: a mesma citação pode aparecer duas vezes na frase.
+export function parseCodeReferences(text: string): CodeReference[] {
+  const paths = new Set(parseCodePaths(text));
+  const refs: CodeReference[] = [];
+  for (const re of [_ABS_RE, _REL_RE]) {
+    for (const match of text.matchAll(re)) {
+      const path = match[1];
+      if (!paths.has(path)) continue;
+      const start = match.index;
+      const end = start + path.length;
+      const suffix = /^:(\d+)(?::\d+)?/.exec(text.slice(end));
+      const line = suffix ? Number(suffix[1]) : null;
+      refs.push({ path, line: line && Number.isSafeInteger(line) ? line : null,
+        start, end: end + (suffix?.[0].length ?? 0) });
+    }
+  }
+  return refs.sort((a, b) => a.start - b.start)
+    .filter((ref, i, all) => i === 0 || ref.start >= all[i - 1].end);
 }
 
 export type Origem = 'Read' | 'Edit' | 'Write' | 'MultiEdit' | 'NotebookEdit' | 'Bash' | 'tool' | 'voce' | 'citado';
@@ -51,6 +78,18 @@ function* strings(v: unknown): Generator<string> {
   if (typeof v === 'string') yield v;
   else if (Array.isArray(v)) for (const x of v) yield* strings(x);
   else if (v && typeof v === 'object') for (const x of Object.values(v as Record<string, unknown>)) yield* strings(x);
+}
+
+export function caminhosCitadosPorNome(eventos: ChatEvent[], nome: string): string[] {
+  const caminhos = new Set<string>();
+  for (const ev of eventos) {
+    for (const texto of strings([ev.text, ev.tool_input, ev.result])) {
+      for (const path of parseCodePaths(texto)) {
+        if (path.endsWith('/' + nome)) caminhos.add(path);
+      }
+    }
+  }
+  return [...caminhos];
 }
 
 const _HOME = '/home/';

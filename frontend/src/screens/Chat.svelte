@@ -35,6 +35,8 @@
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
+  import { caminhosCitadosPorNome, fileUrl, resolverCitados } from '@hangar/core';
+  import type { GitTabId } from '../lib/gitTabs';
   import { navegadorPanel, marcarNavAberto, atualizarNavUrl } from '../lib/navegadorPanel.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
   import {
@@ -233,7 +235,7 @@
     void tick().then(() => {
       if (!visorAberto || visorFocou) return;   // fechou/trocou no meio do tick
       visorFocou = true;
-      (screenEl?.querySelector<HTMLElement>('.arq-visor .fechar'))?.focus();
+      (screenEl?.querySelector<HTMLElement>('.arq-visor button'))?.focus();
     });
   });
 
@@ -387,6 +389,62 @@
   let createOpen = $state(false);
   let usageOpen = $state(false);
   let gitOpen = $state(false);
+  let gitInitialTab = $state<GitTabId>('changes');
+
+  // O listener pertence a este Chat, inclusive em split view e conversa de um par.
+  $effect(() => {
+    const el = screenEl;
+    if (!el) return;
+    const abrir = (event: MouseEvent) => {
+      const chip = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>('button.file-citation') : null;
+      if (!chip || chip.closest('.chat-screen') !== el) return;
+      const path = chip.dataset.filePath;
+      if (!path) return;
+      event.preventDefault();
+      void abrirArquivoCitado(path, Number(chip.dataset.fileLine) || null);
+    };
+    el.addEventListener('click', abrir);
+    return () => el.removeEventListener('click', abrir);
+  });
+
+  let aberturaCitada = 0;
+  async function abrirArquivoCitado(path: string, linha: number | null) {
+    const pedido = ++aberturaCitada;
+    const geracao = histGen;
+    error = '';
+    try {
+      let resposta = await resolverCitados(sessionName, [path]);
+      if (pedido !== aberturaCitada || geracao !== histGen) return;
+      let resolvido = resposta.ok[path];
+      if (!resolvido && !path.includes('/')) {
+        let candidatos = caminhosCitadosPorNome(events, path);
+        if (!candidatos.length && (temMaisNoServidor || histGap)) {
+          await loadOlderInBackground(geracao);
+          if (pedido !== aberturaCitada || geracao !== histGen) return;
+          if (histGap === 'failed') { error = m.chat_erro_carregar_historico(); return; }
+          candidatos = caminhosCitadosPorNome(events, path);
+        }
+        if (candidatos.length) {
+          resposta = await resolverCitados(sessionName, candidatos);
+          if (pedido !== aberturaCitada || geracao !== histGen) return;
+          const distintos = new Map(Object.entries(resposta.ok).map(([cru, alvo]) => [alvo.real, { cru, alvo }]));
+          if (distintos.size > 1) { error = m.arq_citado_ambiguo({ nome: path }); return; }
+          const encontrado = distintos.values().next().value;
+          if (encontrado) { path = encontrado.cru; resolvido = encontrado.alvo; }
+        }
+      }
+      if (!resolvido) { error = m.erro_arq_inexistente(); return; }
+      const abertura = resolvido.relativo === null
+        ? filesStore.abrirExterno(path, fileUrl(sessionName, path), linha)
+        : filesStore.abrir(resolvido.relativo, linha);
+      if (!filesInContext) { gitInitialTab = 'files'; gitOpen = true; }
+      if (!(await abertura) && pedido === aberturaCitada && geracao === histGen) error = filesStore.erro ?? m.erro_arq_inexistente();
+    } catch (e) {
+      if (pedido === aberturaCitada && geracao === histGen) error = formataErro(e) ?? m.erro_arq_inexistente();
+    }
+  }
+  onDestroy(() => { aberturaCitada++; });
   let runOpen = $state(false);
   let runRunning = $state(false);
   // Só acende o indicador do botão Rodar — nada na tela depende dele pra abrir. Espera a conversa.
@@ -1418,6 +1476,7 @@
   // fase 2 já trouxe tudo — sem isso, cada rolagem até o topo repetiria a busca do arquivo inteiro.
   let temMaisNoServidor = false;
   let buscandoAntigos = false;
+  let cargaAntigos: Promise<void> | null = null;
 
   // Chamado pela MessageList quando a rolagem chega ao topo do que há em memória.
   function pedirMaisAntigos() {
@@ -1425,16 +1484,14 @@
     loadOlderInBackground(histGen);
   }
 
-  // Fase 2: o histórico ANTERIOR à cauda, sob demanda. Não devolve promise de propósito —
-  // ninguém espera por ela, a tela já está utilizável. Anda junto com a carga da geração `g`: usa o
-  // MESMO controller (não cria um novo), então quem invalida a geração aborta as duas fases.
+  // Rolagem e abertura de citação compartilham a mesma carga, cancelada com a geração do chat.
   function loadOlderInBackground(g: number) {
     // A trava mora AQUI, não em quem chama: os outros dois caminhos — a pílula de "tentar de novo"
     // e a retomada do segundo plano — chamam esta função direto, e dois toques rápidos na pílula
     // (que não desabilita durante a busca) disparavam dois downloads do arquivo inteiro.
-    if (buscandoAntigos) return;
+    if (buscandoAntigos) return cargaAntigos;
     buscandoAntigos = true;
-    getHistory(sessionName, undefined, histAbort?.signal)
+    cargaAntigos = getHistory(sessionName, undefined, histAbort?.signal)
       .then((full) => {
         if (g !== histGen || !alive) return;   // resposta velha/pós-destroy: NÃO aplica
         if (!hasSeam(full, events)) {
@@ -1457,8 +1514,10 @@
         // repetiria o download completo. Falha some daqui de propósito: quem avisa é o `histGap`,
         // e o toque nele é que tenta de novo.
         buscandoAntigos = false;
+        cargaAntigos = null;
         temMaisNoServidor = false;
       });
+    return cargaAntigos;
   }
 
   // Watchdog de liveness: o backend manda um evento 'ping' a cada 10s. 25s sem NADA (msg/state/ping)
@@ -2335,6 +2394,7 @@
     <div class="arq-visor" data-arq-visor>
       <FileViewer
         path={arquivoAberto}
+        linha={filesStore.linha}
         diff={filesStore.diff}
         conteudo={filesStore.conteudo}
         loading={filesStore.loading}
@@ -2609,7 +2669,7 @@
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
-  <Git open={gitOpen} {sessionName} {desktop} {filesInContext} onClose={() => (gitOpen = false)}
+  <Git open={gitOpen} {sessionName} {desktop} {filesInContext} initialTab={gitInitialTab} onClose={() => { gitOpen = false; gitInitialTab = 'changes'; }}
        {events} {histGap} cwd={planSession?.cwd ?? null} />
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />

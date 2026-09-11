@@ -23,6 +23,27 @@ function montar(props: Record<string, unknown>) {
 describe('FileViewer', () => {
   beforeEach(() => overwriteGetLocale(() => 'pt'));
 
+  it('citação abre o arquivo inteiro e seleciona a linha no CodeMirror', async () => {
+    const text = Array.from({ length: 340 }, (_, i) => `value_${i + 1} = ${i + 1}`).join('\n');
+    const { el, comp } = montar({
+      linha: 324,
+      conteudo: { path: 'a.py', text, size: text.length, truncated: false, digest: 'abc' },
+      diff: { path: 'a.py', original: text + '\nold = 1', diff: '-old = 1',
+        truncated: false, escopo_pedido: 'branch', escopo_usado: 'branch', base: 'abc', motivo: null },
+    });
+    try {
+      const { EditorView } = await import('@codemirror/view');
+      await vi.waitFor(() => {
+        const editor = el.querySelector<HTMLElement>('.cm-editor');
+        expect(editor).not.toBeNull();
+        const view = EditorView.findFromDOM(editor!);
+        expect(view?.state.doc.lineAt(view.state.selection.main.from).number).toBe(324);
+        expect(view?.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe('value_324 = 324');
+        expect(el.querySelector('.cm-collapsedLines')).toBeNull();
+      });
+    } finally { await unmount(comp); }
+  });
+
   it('sem mudanca, monta o editor com o arquivo', () => {
     // O conteúdo agora é desenhado pelo CodeMirror (import dinâmico), então o que este nível
     // decide — e o que cabe afirmar aqui — é montar a caixa do editor em vez do <pre>.

@@ -19,6 +19,7 @@ export class FilesStore {
   abertos = new SvelteSet<string>();
   // Arquivo selecionado na arvore (caminho absoluto).
   selecionado = $state<string | null>(null);
+  linha = $state<number | null>(null);
   // Aberto de FORA do cwd (citado na conversa, servido pelo /file): so leitura, e nao vai pro
   // localStorage — no reload o readFile do cwd daria 404 num caminho que nunca foi da arvore.
   externo = $state(false);
@@ -172,8 +173,9 @@ export class FilesStore {
   // Arquivo de fora do cwd, pelo endpoint /file (so serve o que esta no transcript): texto no
   // MESMO visor da arvore, sem diff e sem editar (digest nulo). Midia continua no navegador.
   // Devolve se ESTA abertura deu certo (abertura mais nova por cima conta como "nao falhou").
-  async abrirExterno(cru: string, url: string): Promise<boolean> {
+  async abrirExterno(cru: string, url: string, linha: number | null = null): Promise<boolean> {
     this.selecionado = cru;
+    this.linha = linha;
     this.externo = true;
     this.erro = null;
     this.loading = true;
@@ -206,8 +208,9 @@ export class FilesStore {
     }
   }
 
-  async abrir(path: string): Promise<boolean> {
+  async abrir(path: string, linha: number | null = null): Promise<boolean> {
     this.selecionado = path;
+    this.linha = linha;
     this.externo = false;
     this._persistir();
     this.erro = null;

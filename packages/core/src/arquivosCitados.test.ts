@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { acumularCitados, estadoVazio, parseCodePaths } from './arquivosCitados';
+import { acumularCitados, caminhosCitadosPorNome, estadoVazio, parseCodePaths } from './arquivosCitados';
 import type { ChatEvent } from './types';
 
 const CWD = '/home/jefferson/Projetos/hangar';
 const ev = (kind: ChatEvent['kind'], extra: Partial<ChatEvent>, ts: number): ChatEvent =>
   ({ kind, id: `${kind}-${ts}`, ts, ...extra });
+
+it('recupera o caminho pelo nome em ferramentas, resultados e mensagens sem misturar homônimos', () => {
+  const nome = 'ecc-review-reminder.sh';
+  const path = `/home/usuario/.codex/hooks/${nome}`;
+  const eventos = [
+    ev('tool_use', { tool_input: { args: [{ file: path }] } }, 1),
+    ev('tool_result', { result: `arquivo: ${path}\n/tmp/${nome}\n/tmp/outro-${nome}` }, 2),
+    ev('assistant_msg', { text: `Confira ${path}:12` }, 3),
+  ];
+  expect(caminhosCitadosPorNome(eventos, nome)).toEqual([path, `/tmp/${nome}`]);
+});
 
 describe('parseCodePaths', () => {
   it('absoluto e ~ casam sem pasta; relativo exige dir/; prosa e URL não casam', () => {

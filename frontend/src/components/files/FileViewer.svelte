@@ -9,6 +9,7 @@
 
   interface Props {
     path: string;
+    linha?: number | null;
     diff: PathDiff | null;
     conteudo: FileContent | null;
     loading: boolean;
@@ -26,7 +27,7 @@
     // acontece na aba de commit, onde o arquivo mostrado é o de um commit passado, não o do disco.
     onSalvar?: ((texto: string) => Promise<string | null>) | null;
   }
-  let { path, diff, conteudo, loading, onEscopo, onFechar, rotuloVoltar = m.arq_voltar_conversa(), erro = null, onSalvar = null }: Props = $props();
+  let { path, linha = null, diff, conteudo, loading, onEscopo, onFechar, rotuloVoltar = m.arq_voltar_conversa(), erro = null, onSalvar = null }: Props = $props();
 
   // Linhas do diff já destacadas. highlightDiff é assíncrona (import dinâmico do Shiki).
   // A flag `valida` do $effect descarta resposta velha — escopo trocado, diff novo ou o
@@ -174,7 +175,7 @@
   // Alterações × arquivo inteiro. Estado LOCAL: é escolha de leitura, não de dados — o backend
   // manda os dois (o texto atual e o da base) na mesma resposta.
   let verArquivo = $state(false);
-  $effect(() => { void path; verArquivo = false; });
+  $effect(() => { void path; verArquivo = linha !== null; });
 
   // ── edição ────────────────────────────────────────────────────────────────────────────────
   let editando = $state(false);
@@ -325,7 +326,7 @@
            `diff --git`/`@@` cru por arquivo inteiro, numeração real e trechos iguais dobrados. -->
       <!-- Base IGUAL ao texto (arquivo sem mudança no escopo) não vira diff: o merge view dobrava
            o arquivo inteiro em "327 linhas sem mudança" e a tela ficava vazia (medido 26/08). -->
-      <CodeEditor texto={doArquivo.text} path={path} editavel={false}
+      <CodeEditor texto={doArquivo.text} path={path} editavel={false} {linha}
                   original={verArquivo || baseDoDiff === doArquivo.text ? null : baseDoDiff} />
     {:else if temDiff && diffDoArquivo}
       {@const d = diffDoArquivo}

@@ -29,6 +29,15 @@ const erro404 = () =>
 describe('FilesStore', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('guarda a linha citada e limpa ao abrir pela árvore', async () => {
+    vi.mocked(readFile).mockResolvedValue({ path: 'a.py', text: 'a\nb', size: 3, truncated: false, digest: 'abc' });
+    const store = new FilesStore('sessao');
+    await store.abrir('a.py', 2);
+    expect(store.linha).toBe(2);
+    await store.abrir('a.py');
+    expect(store.linha).toBeNull();
+  });
+
   it('resposta atrasada de um alvo abandonado e descartada', async () => {
     let libera: (v: unknown) => void = () => {};
     vi.mocked(readFile)
