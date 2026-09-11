@@ -915,15 +915,23 @@ def _atualizar_dist() -> str | None:
 
     Espelha o `baixar_dist` do `install.sh`: um reinício sem isto sobe o backend novo servindo a
     tela velha — repo == processo, a tela diz "em dia", e o navegador continua no bundle de antes.
-    As mesmas regras de lá: árvore com edição em `frontend`/`packages` fica intacta, e commit
-    diferente do CI não cancela, só avisa. Nunca compila local.
+    As mesmas regras de lá: commit diferente do CI não cancela, só avisa. Árvore com edição em
+    `frontend`/`packages` é quem está desenvolvendo e quer o SEU código na tela: aí compila local,
+    como o `install.sh` interativo — recusar deixava a máquina de desenvolvimento sem jeito de
+    atualizar a tela pelo app, porque a árvore dela está sempre suja.
     """
     import tarfile
     import tempfile
     import urllib.request
     p = _git("status", "--porcelain", "--", "frontend", "packages", timeout=30)
     if p.returncode != 0 or p.stdout.strip():
-        return "tela não atualizada: frontend/ ou packages/ tem mudança local"
+        npm = shutil.which("npm")
+        if not npm:
+            return "tela não atualizada: frontend/ tem mudança local e não achei o npm pra compilar"
+        b = _rodar([npm, "--prefix", "frontend", "run", "build"], cwd=REPO, timeout=600)
+        if b.returncode != 0 or not (REPO / "frontend" / "dist" / "index.html").is_file():
+            return f"tela não atualizada: o build local do frontend falhou: {_cauda(b, 4)}"
+        return None
     sha_local = _git("rev-parse", "HEAD", timeout=30).stdout.strip()
     tmp = Path(tempfile.mkdtemp(prefix=".dist-baixado.", dir=REPO / "frontend"))
     try:
