@@ -10,6 +10,9 @@ export default defineConfig({
     conditions: ['browser'],
   },
   test: {
+    // Um fork por núcleo (o padrão do vitest) com mais de uma suíte rodando ao mesmo tempo
+    // enche a RAM e joga a máquina em swap. Dois bastam pro tamanho desta suíte.
+    maxWorkers: 2,
     environment: 'node', // pure-function + WebCrypto units; no DOM needed
     // Teste que formata data (cota.test.ts) fixa o instante em -03:00 e espera a hora de
     // Brasília. Quem formata é o Intl, na timezone da máquina: o runner do GitHub roda em UTC

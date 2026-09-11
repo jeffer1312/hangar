@@ -7,6 +7,7 @@
     "frontend",
     "mobile"
   ],
+  "_comentario_trava": "O check e o test de cada workspace rodam sob um flock no mesmo /tmp/hangar-verificacao.lock, e os vitest.config.ts limitam o pool a 2 forks. Motivo: várias sessões de agente trabalham no mesmo repo ao mesmo tempo; sem isso cada npm test abre um fork por núcleo e dois runs simultâneos enchem a RAM da máquina e a jogam em swap. A trava fica nos workspaces e NÃO nos scripts da raiz de propósito: a raiz encadeia os três, e um flock aninhado no mesmo arquivo travaria pra sempre. Depende do flock (util-linux), então esses scripts não rodam no Windows — o job de Windows do CI roda só node --test.",
   "_comentario_scripts": "check e test cobrem as TRÊS interfaces (core, front web, app nativo). O app entra por scripts/verificar-app.mjs, que confere se as dependências dele estão instaladas e FALHA se não estiverem, em vez de pular calado — o `npm ci` do CI e dos instaladores é seletivo e não as instala.",
   "scripts": {
     "test": "npm run test -w @hangar/core && npm run test -w frontend && npm run test:app",

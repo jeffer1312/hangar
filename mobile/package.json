@@ -68,8 +68,8 @@
     "i18n:compile:core": "paraglide-js compile --project ../project.inlang --outdir ../packages/core/src/paraglide --strategy baseLocale",
     "web": "expo start --web",
     "pretypecheck": "npm run i18n:compile",
-    "typecheck": "tsc --noEmit",
-    "test": "npm run i18n:compile && vitest run",
+    "typecheck": "flock -w 900 /tmp/hangar-verificacao.lock tsc --noEmit",
+    "test": "npm run i18n:compile && flock -w 900 /tmp/hangar-verificacao.lock vitest run",
     "i18n:compile": "paraglide-js compile --project ../project.inlang --outdir ./src/paraglide --strategy baseLocale",
     "prebuild": "expo prebuild --platform android"
   },
