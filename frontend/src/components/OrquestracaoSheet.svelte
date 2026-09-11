@@ -607,7 +607,9 @@
   .os-col { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .os-corpo { flex: 1; min-height: 0; }
   .os-split { display: grid; grid-template-columns: minmax(340px, 5fr) 6fr; grid-template-rows: minmax(0, 1fr); height: 100%; }
-  .os-pane { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+  /* relative: o .sr-only de cada item é absoluto, e só o overflow do bloco de contenção o corta
+     (mesma regra do .ed-split em EditDiff.svelte). */
+  .os-pane { position: relative; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
   .os-pane > :global(*) { flex: none; }
   .os-esq { padding-right: var(--space-5); border-right: 1px solid var(--border-subtle); }
   .os-dir { padding-left: var(--space-5); }
