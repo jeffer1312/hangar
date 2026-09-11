@@ -6,17 +6,16 @@
   // no meio do trabalho.
   import {
     listarHarnesses, consertarHarness, codexIntegracaoEstado, codexIntegracaoReconciliar,
-    instalacaoEstado, instalarHarness,
+    instalacaoEstado, instalarHarness, codexOpcoes,
     type Harness, type ItemHarness, type IntegracaoCodex, type MensagemCodex, type Instalacao,
+    type CodexOpcoes,
   } from '../../lib/credenciais';
-  import { patchConfig, patchConfigForServer } from '@hangar/core';
+  import { patchConfig, patchConfigForServer, getConfig, getConfigForServer, type CampoConfig } from '@hangar/core';
   import * as m from '../../paraglide/messages';
   import { getLocale } from '../../paraglide/runtime';
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import type { Server } from '../../lib/auth';
-  import HarnessOpcoes from './HarnessOpcoes.svelte';
-  import CodexOpcoes from './CodexOpcoes.svelte';
 
   interface Props { apiTarget: Server | null }
   let { apiTarget }: Props = $props();
@@ -26,8 +25,15 @@
   let erro = $state('');
   let consertando = $state<string | null>(null);
   let feito = $state('');
-  let opcoesClaude = $state<string | null>(null);
-  let opcoesCodex = $state<string | null>(null);
+  // Preferência do Claude (barra de status) e opções do Codex vivem DENTRO do card, sem folha e sem
+  // Salvar: o `checked` é o dado do servidor, o `onchange` repõe o dado e grava, e é a releitura que
+  // muda a tela — o mesmo caminho de "Sincronização automática", logo abaixo.
+  let campos = $state<Record<string, CampoConfig> | null>(null);
+  let erroConfig = $state('');
+  let trocandoStatusline = $state(false);
+  let opcoesDoCodex = $state<CodexOpcoes | null>(null);
+  let erroOpcoesCodex = $state('');
+  let trocandoOpcoesCodex = $state(false);
   let integracao = $state<IntegracaoCodex | null>(null);
   let erroIntegracao = $state('');
   let reconciliando = $state(false);
@@ -39,6 +45,8 @@
     requisicao: number;
     timerInst?: ReturnType<typeof setTimeout>;
     reqInst: number;
+    reqConfig: number;
+    reqCodex: number;
   }
   let consulta: ConsultaIntegracao | null = null;
 
@@ -138,6 +146,76 @@
     }
   }
 
+  // Uma leitura de configuração por abertura da tela, sem store: quem grava é a mesma chamada direta
+  // que "Sincronização automática" já usa, e a resposta do POST já traz os campos de volta.
+  async function consultarConfig(ctx: ConsultaIntegracao) {
+    const requisicao = ++ctx.reqConfig;
+    erroConfig = '';
+    try {
+      const cfg = await (ctx.alvo ? getConfigForServer(ctx.alvo) : getConfig());
+      if (ctx.controle.signal.aborted || requisicao !== ctx.reqConfig) return;
+      campos = cfg.campos ?? {};
+    } catch (e) {
+      if (ctx.controle.signal.aborted || requisicao !== ctx.reqConfig) return;
+      erroConfig = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function trocarStatusline(ev: Event) {
+    const alvo = ev.currentTarget as HTMLInputElement;
+    const querido = alvo.checked;
+    alvo.checked = !querido;
+    const ctx = consulta;
+    if (!ctx || trocandoStatusline) return;
+    trocandoStatusline = true;
+    erroConfig = '';
+    // A gravação entra na MESMA fila das leituras: sem isso um ↻ disparado antes dela respondia
+    // depois e repunha o valor velho na tela, calado — parecia gravação que não pegou.
+    const requisicao = ++ctx.reqConfig;
+    try {
+      const r = await (ctx.alvo ? patchConfigForServer(ctx.alvo, { claude_statusline_update: querido })
+                                : patchConfig({ claude_statusline_update: querido }));
+      if (consulta === ctx && requisicao === ctx.reqConfig) campos = r.campos ?? campos;
+    } catch (e) {
+      if (consulta === ctx) erroConfig = e instanceof Error ? e.message : String(e);
+    } finally {
+      // Só a trava DESTE contexto: uma resposta atrasada do servidor anterior soltaria a trava de
+      // uma gravação que ainda está em voo no servidor novo, liberando um segundo clique.
+      if (consulta === ctx) trocandoStatusline = false;
+    }
+  }
+
+  // Só depois de saber que o Codex está instalado: a tela de hoje também só oferecia estas opções
+  // no card de um Codex presente.
+  async function consultarOpcoesCodex(ctx: ConsultaIntegracao, mudancas?: Pick<CodexOpcoes, 'contexto_estendido' | 'codex_voice_beta'>) {
+    const requisicao = ++ctx.reqCodex;
+    erroOpcoesCodex = '';
+    try {
+      const r = await codexOpcoes(ctx.alvo, ctx.controle.signal, mudancas);
+      if (ctx.controle.signal.aborted || requisicao !== ctx.reqCodex) return;
+      opcoesDoCodex = r;
+      if (mudancas) window.dispatchEvent(new CustomEvent('hangar:codex-voice-config', {
+        detail: { serverId: ctx.alvo?.id ?? null, enabled: r.codex_voice_beta },
+      }));
+    } catch (e) {
+      if (ctx.controle.signal.aborted || requisicao !== ctx.reqCodex) return;
+      erroOpcoesCodex = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function trocarOpcaoCodex(ev: Event, chave: 'contexto_estendido' | 'codex_voice_beta') {
+    const alvo = ev.currentTarget as HTMLInputElement;
+    const querido = alvo.checked;
+    alvo.checked = !querido;
+    const ctx = consulta;
+    const atual = opcoesDoCodex;
+    if (!ctx || !atual || trocandoOpcoesCodex) return;
+    trocandoOpcoesCodex = true;
+    void consultarOpcoesCodex(ctx, {
+      contexto_estendido: atual.contexto_estendido, codex_voice_beta: atual.codex_voice_beta, [chave]: querido,
+    }).finally(() => { if (consulta === ctx) trocandoOpcoesCodex = false; });
+  }
+
   let trocandoAutomatica = $state(false);
   // O interruptor nunca muda sozinho: `checked` é o dado do servidor; o onchange repõe o dado,
   // grava, e a releitura é quem muda a tela (regra das Máquinas, CLAUDE.md).
@@ -158,12 +236,15 @@
     } catch (e) {
       if (consulta === ctx) erroIntegracao = e instanceof Error ? e.message : String(e);
     } finally {
-      trocandoAutomatica = false;
+      if (consulta === ctx) trocandoAutomatica = false;
     }
   }
 
   function atualizar() {
     void carregar();
+    // O ↻ é a saída de uma leitura que falhou: não há botão "tentar de novo" por opção. As opções do
+    // Codex saem pelo `carregar()` acima, nos dois ramos dele.
+    if (consulta) void consultarConfig(consulta);
     if (consulta && !reconciliando) void consultarIntegracao(consulta);
     // Sem guard de "instalando": `consultarInstalacao` já limpa o timer e incrementa a geração no
     // topo, então reentrar é seguro — e o guard trancava justamente a saída manual de uma tela
@@ -202,8 +283,18 @@
     carregando = true; erro = '';
     try {
       const r = await listarHarnesses(alvo);
-      if (g === ger) lista = r;
-    } catch (e) { if (g === ger) erro = e instanceof Error ? e.message : String(e); }
+      if (g !== ger) return;
+      lista = r;
+      const ctx = consulta;
+      if (ctx && r.some((h) => h.id === 'codex' && h.instalado)) void consultarOpcoesCodex(ctx);
+    } catch (e) {
+      if (g !== ger) return;
+      erro = e instanceof Error ? e.message : String(e);
+      // A lista cair não pode trancar um endpoint que não é o dela: `lista` sobrevive ao erro (só é
+      // reatribuída no sucesso), então os cards continuam na tela e as opções seguem relegíveis.
+      const ctx = consulta;
+      if (ctx && lista.some((h) => h.id === 'codex' && h.instalado)) void consultarOpcoesCodex(ctx);
+    }
     finally { if (g === ger) carregando = false; }
   }
 
@@ -223,14 +314,16 @@
 
   $effect(() => {
     const ctx: ConsultaIntegracao = {
-      alvo: apiTarget, controle: new AbortController(), requisicao: 0, reqInst: 0,
+      alvo: apiTarget, controle: new AbortController(), requisicao: 0, reqInst: 0, reqConfig: 0, reqCodex: 0,
     };
     consulta = ctx;
-    lista = []; feito = ''; consertando = null; opcoesClaude = null;
-    opcoesCodex = null;
+    lista = []; feito = ''; consertando = null;
+    campos = null; erroConfig = ''; trocandoStatusline = false;
+    opcoesDoCodex = null; erroOpcoesCodex = ''; trocandoOpcoesCodex = false;
     integracao = null; erroIntegracao = ''; reconciliando = false;
     inst = null; erroInst = ''; confirmar = null;
     void carregar();
+    void consultarConfig(ctx);
     void consultarIntegracao(ctx);
     // Também na montagem: é desta resposta que sai a lista de quem dá pra instalar por botão nesta
     // máquina, e sem ela nenhum card ausente saberia o que oferecer.
@@ -239,6 +332,8 @@
       // Nem uma resposta atrasada nem o próximo poll podem atravessar a troca de servidor.
       ++ger;
       ++ctx.reqInst;
+      ++ctx.reqConfig;
+      ++ctx.reqCodex;
       ctx.controle.abort();
       if (ctx.timer) clearTimeout(ctx.timer);
       if (ctx.timerInst) clearTimeout(ctx.timerInst);
@@ -333,7 +428,7 @@
   <div class="hs-cab">
     <p class="st-secao hs-titulo">{m.harness_titulo()}</p>
     <button type="button" class="hs-refresh" onclick={atualizar} disabled={carregando || consertando !== null}
-      aria-label={m.arq_recarregar()}>{carregando ? '…' : '↻'}</button>
+      ><span aria-hidden="true">{carregando ? '…' : '↻'}</span>{m.arq_recarregar()}</button>
   </div>
   <p class="hs-leg">{m.harness_legenda()}</p>
 
@@ -347,13 +442,6 @@
           iniciais={h.id === 'omp' ? 'ω' : h.id === 'pi' ? 'π' : h.id === 'tmux' ? '⌗' : h.nome.slice(0, 2).toUpperCase()} size={22} />
         <span class="hs-nome">{h.nome}</span>
         <span class="hs-versao">{h.instalado ? (h.versao || m.harness_instalado()) : m.harness_nao_instalado()}</span>
-        {#if h.id === 'claude'}
-          <button type="button" class="hs-btn hs-opcoes" aria-label={m.sessao_aria_opcoes({ n: h.nome })}
-            onclick={() => { opcoesClaude = h.nome; }}>{m.sessao_opcoes()}</button>
-        {:else if h.id === 'codex' && h.instalado}
-          <button type="button" class="hs-btn hs-opcoes" aria-label={m.sessao_aria_opcoes({ n: h.nome })}
-            onclick={() => { opcoesCodex = h.nome; }}>{m.sessao_opcoes()}</button>
-        {/if}
       </div>
       {#each h.itens as i (i.id)}
         <div class="hs-item">
@@ -369,6 +457,27 @@
           {/if}
         </div>
       {/each}
+      {#if h.id === 'claude'}
+        {#if campos?.claude_statusline_update}
+          <label class="hs-item hs-opcao">
+            <span class="hs-item-txt">
+              <b>{m.harness_claude_statusline_atualizar()}</b>
+              <!-- Descrição, não nome: dentro do nome o leitor de tela repete a frase inteira a cada
+                   foco antes de dizer se está ligado. -->
+              <span class="hs-ajuda" id="claude-statusline-ajuda">{m.harness_claude_statusline_ajuda()}</span>
+            </span>
+            <input id="claude-statusline-update" type="checkbox" class="switch"
+              aria-label={m.harness_claude_statusline_atualizar()} aria-describedby="claude-statusline-ajuda"
+              checked={!!campos.claude_statusline_update.valor}
+              disabled={trocandoStatusline} onchange={trocarStatusline} />
+          </label>
+        {:else if campos}
+          <!-- Backend que não conhece a chave diz o porquê, como a folha dizia: ficar mudo esconde
+               justamente a opção que sumiu. -->
+          <p class="hs-aviso" role="status">{m.harness_opcoes_indisponiveis()}</p>
+        {/if}
+        {#if erroConfig}<p class="hs-aviso erro" role="alert">{erroConfig}</p>{/if}
+      {/if}
       {#if !h.instalado}
         <div class="hs-item">
           <span class="hs-marca" aria-hidden="true">·</span>
@@ -463,6 +572,42 @@
             {#each integracao.avisos as aviso}<p class="hs-aviso">{textoDe(aviso)}</p>{/each}
             {#each integracao.erros as falha}<p class="hs-aviso erro" role="alert">{textoDe(falha)}</p>{/each}
           {/if}
+          {#if opcoesDoCodex}
+            {@const dado = opcoesDoCodex}
+            <label class="hs-item hs-opcao">
+              <span class="hs-item-txt">
+                <b>{m.codex_contexto_titulo()}</b>
+                <span class="hs-ajuda" id="codex-contexto-ajuda">{m.codex_contexto_ajuda()}</span>
+              </span>
+              <input id="codex-contexto-estendido" type="checkbox" class="switch"
+                aria-label={m.codex_contexto_titulo()} aria-describedby="codex-contexto-ajuda"
+                checked={dado.contexto_estendido} disabled={trocandoOpcoesCodex}
+                onchange={(ev) => trocarOpcaoCodex(ev, 'contexto_estendido')} />
+            </label>
+            <label class="hs-item hs-opcao">
+              <span class="hs-item-txt">
+                <b>{m.codex_voice_config_title()} <i class="hs-beta">{m.comum_beta()}</i></b>
+                <span class="hs-ajuda" id="codex-voz-ajuda">{m.codex_voice_config_help()}</span>
+              </span>
+              <input id="codex-voice-beta" type="checkbox" class="switch"
+                aria-label="{m.codex_voice_config_title()} {m.comum_beta()}" aria-describedby="codex-voz-ajuda"
+                checked={dado.codex_voice_beta} disabled={trocandoOpcoesCodex}
+                onchange={(ev) => trocarOpcaoCodex(ev, 'codex_voice_beta')} />
+            </label>
+            <p class="hs-aviso">{m.codex_contexto_novas()}</p>
+            {#if dado.modelos.length}
+              <p class="hs-aviso">{m.codex_contexto_limites()}</p>
+              <ul class="hs-plugins">
+                {#each dado.modelos as modelo (modelo.model)}<li>{modelo.model}: {modelo.max.toLocaleString()}</li>{/each}
+              </ul>
+            {:else}
+              <p class="hs-aviso">{m.codex_contexto_sem_catalogo()}</p>
+            {/if}
+            {#if dado.compactacao}
+              <p class="hs-aviso">{m.codex_contexto_compactacao({ n: dado.compactacao.toLocaleString() })}</p>
+            {/if}
+          {/if}
+          {#if erroOpcoesCodex}<p class="hs-aviso erro" role="alert">{erroOpcoesCodex}</p>{/if}
           {#if erroIntegracao}<p class="hs-aviso erro" role="alert">{erroIntegracao}</p>{/if}
         </div>
       {/if}
@@ -497,20 +642,14 @@
   </ConfirmDialog>
 {/if}
 
-{#if opcoesClaude}
-  <HarnessOpcoes {apiTarget} nome={opcoesClaude} onClose={() => { opcoesClaude = null; }} />
-{/if}
-{#if opcoesCodex}
-  <CodexOpcoes {apiTarget} nome={opcoesCodex} onClose={() => { opcoesCodex = null; }} />
-{/if}
-
 <style>
   .hs { container-type: inline-size; padding: var(--space-2) var(--space-3) var(--space-5); }
   .hs-cab { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-1); }
   .hs-titulo { flex: 1; margin: 0; }
-  .hs-refresh { width: 28px; height: 28px; min-height: 0; min-width: 0; display: grid; place-items: center;
+  /* Ícone com texto ao lado, nas duas larguras: no toque não há dica de ferramenta que explique o ↻. */
+  .hs-refresh { min-height: 28px; padding: 0 var(--space-2); display: inline-flex; align-items: center; gap: 6px;
                 border-radius: var(--radius-full); background: transparent; border: 1px solid var(--border-subtle);
-                color: var(--text-secondary); }
+                color: var(--text-secondary); font-size: var(--text-xs); }
   .hs-leg { margin: 0 0 var(--space-3); font-size: var(--text-xs); color: var(--text-muted); }
   .hs-card { padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2);
              border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
@@ -528,15 +667,17 @@
   .hs-marca.ruim { color: var(--error); }
   .hs-item-txt { flex: 1; min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
   .hs-item-txt b { color: var(--text-primary); font-weight: 600; }
-  .hs-automatica { cursor: pointer; }
+  .hs-automatica, .hs-opcao { cursor: pointer; }
+  .hs-beta { display: inline-block; margin-left: var(--space-1); padding: 1px 6px; border-radius: var(--radius-full);
+             background: var(--accent-dim); color: var(--accent); font-size: 10px; font-style: normal; text-transform: uppercase; }
   .hs-ajuda { display: block; font-size: var(--text-xs); color: var(--text-muted); }
   .hs-btn { flex-shrink: 0; min-height: 0; height: 26px; padding: 0 var(--space-2);
             font-size: var(--text-xs); border-radius: var(--radius-sm);
             background: var(--surface-raised); border: 1px solid var(--border-subtle); color: var(--text-primary); }
-  .hs-opcoes { min-height: 36px; }
   @container (max-width: 400px) {
     .hs-topo { flex-wrap: wrap; }
-    .hs-opcoes { min-height: 44px; }
+    /* Alvo de toque: no celular o ↻ é o único jeito de reler a tela (não há "tentar de novo"). */
+    .hs-refresh { min-height: 44px; }
   }
   .hs-aviso { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--text-secondary); }
   .hs-aviso.erro { color: var(--error); }
