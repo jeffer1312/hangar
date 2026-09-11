@@ -428,13 +428,32 @@ function anexarNaJanela(win, view) {
   if (!win.contentView.children.includes(view)) win.contentView.addChildView(view);
 }
 
+const algumViewVisivel = (win) => {
+  const m = navegadores.get(win);
+  if (!m) return false;
+  for (const v of m.values()) if (viewVivo(win, v) && v.getVisible()) return true;
+  return false;
+};
+
+// Uma pendência por janela: o `did-finish-load` de um view dirigido por CDP repete a cada
+// navegação, e um `once` por load empilharia listeners e chamadas redundantes de foco.
+const focoPendente = new WeakSet();
+
 function devolverFoco(win, view) {
   if (!viewVivo(win, view) || view.getVisible()) return;
   // Com a janela em segundo plano, `focus()` vira pedido de ativação (xdg-activation) e um
   // compositor com focus_on_activate traz o app pra frente — devolver o teclado não pode roubar a
   // tela de quem está noutro aplicativo. Espera a volta do usuário; focar já focado não ativa nada.
   if (!win.isFocused()) {
-    win.once('focus', () => { if (!win.isDestroyed()) win.webContents.focus(); });
+    if (focoPendente.has(win)) return;
+    focoPendente.add(win);
+    win.once('focus', () => {
+      focoPendente.delete(win);
+      // Enquanto o usuário esteve fora ele pode ter aberto o painel: o teclado é de quem está na
+      // tela, e arrancá-lo do navegador visível seria o mesmo roubo, ao contrário.
+      if (win.isDestroyed() || algumViewVisivel(win)) return;
+      win.webContents.focus();
+    });
     return;
   }
   win.webContents.focus();

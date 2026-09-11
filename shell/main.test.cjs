@@ -103,6 +103,7 @@ function novaJanela({ focada = true } = {}) {
     webContents, isDestroyed: () => false,
     isFocused: () => focada,
     once(ev, fn) { if (ev === 'focus') emFoco.push(fn); },
+    pendencias: () => emFoco.length,
     // O usuário volta pro app: a janela ganha foco e os pendentes disparam uma vez só.
     ganharFoco() { focada = true; const fns = emFoco.splice(0); for (const fn of fns) fn(); },
   };
@@ -177,12 +178,31 @@ test('com o app em segundo plano o view escondido nao puxa a tela: o teclado vol
   // `focus()` numa janela de fundo é pedido de ativação: com focus_on_activate o compositor
   // traz o app pra frente e rouba a tela de quem está noutro aplicativo.
   assert.equal(a.win.webContents.focos, 0, 'janela em segundo plano nao e ativada');
+  // Nascimento e load pediram o teclado; o view dirigido por CDP navega muitas vezes antes de o
+  // usuário voltar, e uma pendência por pedido empilharia listeners.
+  assert.equal(a.win.pendencias(), 1, 'uma pendencia por janela, nao uma por pedido');
 
   a.win.ganharFoco();
-  assert.equal(a.win.webContents.focos, 2, 'o teclado volta pro front (nascimento e load) quando o usuario volta');
+  assert.equal(a.win.webContents.focos, 1, 'o teclado volta pro front quando o usuario volta');
 
   a.win.ganharFoco();
-  assert.equal(a.win.webContents.focos, 2, 'pendencia so dispara uma vez');
+  assert.equal(a.win.webContents.focos, 1, 'pendencia so dispara uma vez');
+});
+
+test('pendencia nao arranca o teclado do painel que o usuario abriu enquanto esteve fora', async () => {
+  const a = novaJanela({ focada: false });
+  const abrir = handlers.get('hangar:nav-open');
+  const chave = 'srv::abriu-depois';
+
+  await abrir(a.ev, { chave, url: 'https://w.test', bounds: {}, oculto: true });
+  const view = viewsFalsos.at(-1);
+  // O painel dessa sessão é montado com a janela ainda em segundo plano (o IPC vem do renderer,
+  // não exige foco): o view vira visível com a pendência já agendada.
+  await abrir(a.ev, { chave, url: undefined, bounds: { x: 0, y: 0, width: 10, height: 10 } });
+  assert.equal(view.getVisible(), true, 'painel montado');
+
+  a.win.ganharFoco();
+  assert.equal(a.win.webContents.focos, 0, 'o teclado fica com o navegador que esta na tela');
 });
 
 test('o controlador so e avisado do view escondido DEPOIS de a pagina carregar (senao, SIGSEGV)', async () => {
