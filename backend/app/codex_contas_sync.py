@@ -10,8 +10,11 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import tomllib
 from pathlib import Path
+
+from app import atomico
 
 from app.codex_arquivos import (
     AlteradoExternamente,
@@ -587,7 +590,11 @@ def _snapshot(root: Path, relative_paths: set[str], previous: dict | None = None
                     digest = hash_bytes(path.read_bytes())
                 except OSError:
                     pass
-            files[relative] = {"kind": "symlink", "target": target, "hash": digest}
+            entry = {"kind": "symlink", "target": target, "hash": digest}
+            if not safe_destination and path.is_file():
+                entry["resolved"] = str(path.resolve())
+                entry["executable"] = bool(path.stat().st_mode & 0o100)
+            files[relative] = entry
             continue
         if not path.is_file():
             files[relative] = {"kind": "other", "hash": ""}
@@ -599,12 +606,15 @@ def _snapshot(root: Path, relative_paths: set[str], previous: dict | None = None
             digest = old["hash"]
         else:
             digest = hash_bytes(path.read_bytes())
-        files[relative] = {"kind": "file", "meta": meta, "hash": digest}
+        files[relative] = {"kind": "file", "meta": meta, "hash": digest,
+                           "executable": bool(stat.st_mode & 0o100)}
     digest = hashlib.sha256()
     for relative, data in files.items():
         digest.update(relative.encode())
         digest.update(data["kind"].encode())
         digest.update(data["hash"].encode())
+        digest.update(json_bytes({key: data[key] for key in ("target", "resolved", "executable")
+                                  if key in data}))
     return digest.hexdigest(), {"files": files}
 
 
@@ -669,7 +679,7 @@ def _edits(current: dict, target: dict, managed: set[str]) -> list[dict]:
     return edits
 
 
-def _safe_destination(root: Path, relative: str) -> Path:
+def _safe_destination(root: Path, relative: str, *, allow_leaf_link: bool = False) -> Path:
     if not _safe_relative(relative):
         raise ValueError("caminho relativo inválido")
     path = root / relative
@@ -680,27 +690,78 @@ def _safe_destination(root: Path, relative: str) -> Path:
             break
         if parent.is_symlink():
             raise ValueError(f"ancestral é um link: {parent}")
-    if path.is_symlink():
+    if path.is_symlink() and not allow_leaf_link:
         raise ValueError(f"destino é um link: {path}")
     return path
 
 
+def _resource_link(source: Path, relative: str, data: bytes, entry: dict) -> str | None:
+    # Copiar um hook externo rompe auxiliares localizados a partir do arquivo real.
+    target = entry.get("resolved")
+    if (Path(relative).parts[0] in {"hooks", ".hangar-hooks"} and
+            entry.get("kind") == "symlink" and isinstance(target, str) and
+            not Path(target).is_relative_to(source.resolve()) and
+            entry.get("hash") == hash_bytes(data)):
+        return target
+    return None
+
+
+def _write_hook_resource(path: Path, target: str | None, data: bytes,
+                         current: bytes | None, backups: Path) -> None:
+    old_target = os.readlink(path) if path.is_symlink() else None
+    if target is not None and old_target == target:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".hook-", dir=path.parent) as folder:
+        temporary = Path(folder) / path.name
+        if target is None:
+            gravar(temporary, data, None)
+        else:
+            temporary.symlink_to(target)
+        if current is not None or old_target is not None:
+            backup(path, current or b"", backups)
+        if ((old_target is None and ler(path) != current) or
+                (os.readlink(path) if path.is_symlink() else None) != old_target):
+            raise AlteradoExternamente(f"hook alterado durante a preparação: {path.name}")
+        atomico.substituir(temporary, path)
+
+
 def _sync_resources(source_files: dict[str, bytes], destination: Path, previous: dict,
-                    backups: Path, issues: list[dict], *, allow_removals: bool = True) -> dict:
+                    backups: Path, issues: list[dict], *, source: Path, source_snapshot: dict,
+                    allow_removals: bool = True) -> dict:
     old = previous if isinstance(previous, dict) else {}
     result = {}
     for relative, data in sorted(source_files.items()):
         try:
-            path = _safe_destination(destination, relative)
-            atual = ler(path)
+            path = _safe_destination(destination, relative, allow_leaf_link=True)
             anterior = old.get(relative, {}) if isinstance(old.get(relative), dict) else {}
+            if path.is_symlink() and os.readlink(path) != anterior.get("target"):
+                raise ValueError("link pessoal no destino")
+            atual = None if path.is_symlink() else ler(path)
             esperado = anterior.get("hash")
             if atual is not None and esperado is None and atual != data:
                 issues.append(_issue("codex_account_resource_conflict", path=relative))
                 continue
-            if atual != data:
+            entry = source_snapshot["files"][relative]
+            target = _resource_link(source, relative, data, entry)
+            if target is not None:
+                if (atual is not None and not path.is_symlink() and
+                        (esperado is None or hash_bytes(atual) != esperado)):
+                    raise ValueError("cópia do hook alterada localmente")
+                _write_hook_resource(path, target, data, atual, backups)
+                result[relative] = {"hash": hash_bytes(data), "target": target}
+                continue
+            if path.is_symlink():
+                _write_hook_resource(path, None, data, atual, backups)
+            elif atual != data:
                 gravar(path, data, atual, backups)
-            result[relative] = {"hash": hash_bytes(data)}
+            executable = entry.get("executable", False)
+            if os.name != "nt":
+                mode = path.stat().st_mode & 0o777
+                wanted = (mode & ~0o100) | (0o100 if executable else 0)
+                if wanted != mode:
+                    os.chmod(path, wanted)
+            result[relative] = {"hash": hash_bytes(data), "executable": executable}
         except (OSError, ValueError, AlteradoExternamente) as exc:
             issues.append(_issue("codex_account_path_conflict", path=relative, error=type(exc).__name__))
             if relative in old:
@@ -714,7 +775,15 @@ def _sync_resources(source_files: dict[str, bytes], destination: Path, previous:
         if relative in source_files or not isinstance(anterior, dict):
             continue
         try:
-            path = _safe_destination(destination, relative)
+            path = _safe_destination(destination, relative, allow_leaf_link=True)
+            if path.is_symlink():
+                if os.readlink(path) != anterior.get("target"):
+                    raise ValueError("link pessoal no destino")
+                backup(path, b"", backups)
+                if os.readlink(path) != anterior.get("target"):
+                    raise AlteradoExternamente("link alterado durante a retirada")
+                path.unlink()
+                continue
             atual = ler(path)
             if atual is None:
                 continue
@@ -759,9 +828,16 @@ def _verify_resources(destination: Path, resources: dict, snapshot: dict) -> Non
     files = snapshot.get("files", {}) if isinstance(snapshot, dict) else {}
     for relative, manifest in resources.items():
         entry = files.get(relative, {})
+        if isinstance(manifest, dict) and manifest.get("target"):
+            if entry.get("kind") != "symlink" or entry.get("target") != manifest["target"]:
+                raise _PreparationChanged(f"link do hook não materializado: {relative}")
+            continue
         if (not isinstance(manifest, dict) or entry.get("kind") != "file" or
                 entry.get("hash") != manifest.get("hash")):
             raise _PreparationChanged(f"recurso não materializado: {relative}")
+        if (os.name != "nt" and "executable" in manifest and
+                entry.get("executable") != manifest["executable"]):
+            raise _PreparationChanged(f"permissão de execução não preservada: {relative}")
 
 
 def _restriction_target(current: dict, source: dict, previous: dict, issues: list[dict]) -> dict:
@@ -1012,6 +1088,7 @@ async def _prepare_locked(account: Account, force: bool, state: dict) -> dict:
             issues.append(_issue("codex_account_path_conflict", path=relative, error=type(exc).__name__))
             profile_results[relative] = copy.deepcopy(old_profile)
     resources = _sync_resources(source_files, destination, state.get("resources", {}), backups, issues,
+                                 source=source, source_snapshot=source_snapshot,
                                  allow_removals=not source_issues)
     await _apply_toml_overrides(
         {relative: desired for relative, desired in toml_overrides.items() if relative in resources},

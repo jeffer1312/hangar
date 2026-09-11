@@ -7,6 +7,8 @@ import asyncio
 import json
 import re
 import shutil
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -95,6 +97,109 @@ def fake_writer(monkeypatch):
 def _config(path: Path, **values):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_dump_toml(values))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="permissão de execução POSIX")
+async def test_resource_execution_survives_copy_and_mode_only_changes(isolated, fake_writer):
+    _, source, account = isolated
+    hook = source / "hooks/probe.sh"
+    hook.parent.mkdir()
+    hook.write_text("#!/bin/sh\nprintf 'ok'\n")
+    hook.chmod(0o755)
+    target = account.home / "hooks/probe.sh"
+
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert subprocess.check_output([str(target)], text=True) == "ok"
+    target.chmod(0o600)
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert subprocess.check_output([str(target)], text=True) == "ok"
+    hook.chmod(0o644)
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert not target.stat().st_mode & 0o100
+
+
+@pytest.mark.skipif(os.name == "nt", reason="sonda shell POSIX")
+async def test_external_hook_keeps_helper_and_repairs_legacy_copy(isolated, fake_writer):
+    root, source, account = isolated
+    script = '#!/bin/sh\nbash "$(dirname "$(readlink -f "$0")")/helper.sh"\n'
+    originals = []
+    for name in ("first", "second"):
+        folder = root / name
+        folder.mkdir()
+        original = folder / "probe.sh"
+        original.write_text(script)
+        original.chmod(0o755)
+        (folder / "helper.sh").write_text(f"printf '{name}'\n")
+        originals.append(original)
+    hook = source / "hooks/probe.sh"
+    hook.parent.mkdir()
+    hook.symlink_to(originals[0])
+    target = account.home / "hooks/probe.sh"
+    target.parent.mkdir()
+    target.write_text(script)
+    target.chmod(0o600)
+    sync._write_state(account, {"public": {"status": "ready"}, "resources": {
+        "hooks/probe.sh": {"hash": sync.hash_bytes(script.encode())},
+    }})
+
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert target.is_symlink()
+    assert subprocess.check_output([str(target)], text=True) == "first"
+    hook.unlink()
+    hook.symlink_to(originals[1])
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert subprocess.check_output([str(target)], text=True) == "second"
+    hook.unlink()
+    hook.write_text(script)
+    hook.chmod(0o755)
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert not target.is_symlink()
+    assert target.read_text() == script
+    assert originals[1].stat().st_mode & 0o777 == 0o755
+    hook.unlink()
+    hook.symlink_to(originals[1])
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    hook.unlink()
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert not target.is_symlink()
+    assert all(path.read_text() == script for path in originals)
+
+
+async def test_external_hook_link_failure_is_not_ready(isolated, fake_writer, monkeypatch):
+    root, source, account = isolated
+    original = root / "probe.sh"
+    original.write_text("exit 0\n")
+    hook = source / "hooks/probe.sh"
+    hook.parent.mkdir()
+    hook.symlink_to(original)
+
+    def denied(*args, **kwargs):
+        raise PermissionError("symlinks indisponíveis")
+
+    monkeypatch.setattr(Path, "symlink_to", denied)
+    result = await sync.prepare_account(account)
+    assert result["status"] == "partial"
+    assert not (account.home / "hooks/probe.sh").exists()
+    assert result["issues"]
+
+
+async def test_hook_repair_preserves_personal_destination_link(isolated, fake_writer):
+    root, source, account = isolated
+    original = root / "probe.py"
+    original.write_text("print('source')\n")
+    personal = root / "personal.py"
+    personal.write_text("print('personal')\n")
+    hook = source / "hooks/probe.py"
+    hook.parent.mkdir()
+    hook.symlink_to(original)
+    target = account.home / "hooks/probe.py"
+    target.parent.mkdir()
+    target.symlink_to(personal)
+
+    result = await sync.prepare_account(account)
+    assert result["status"] == "partial"
+    assert target.resolve() == personal
+    assert personal.read_text() == "print('personal')\n"
 
 
 def test_project_preferences_excludes_identity_and_runtime_state():
