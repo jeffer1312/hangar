@@ -146,11 +146,23 @@ describe('ListaMaquinas', () => {
     unmount(b.comp);
   });
 
-  it('✕ em toda linha menos "esta máquina", e devolve a linha inteira', () => {
+  it('Remover em toda linha menos "esta máquina", e devolve a linha inteira', () => {
     const t = montar([A, B, C]);
     expect(t.linha('srv:srv-a').querySelector('.mq-remover')).toBeNull();
     t.linha('peer:vps').querySelector<HTMLButtonElement>('.mq-remover')!.click();
     expect(t.cbs.onRemover).toHaveBeenCalledWith(C);
+    unmount(t.comp);
+  });
+
+  it('Editar e Remover trazem o rótulo ao lado do ícone (o title não existe no toque)', () => {
+    const t = montar([A, B, C]);
+    const linha = t.linha('peer:vps');
+    expect(linha.querySelector('.mq-remover')!.textContent).toContain(m.lista_remover());
+    // A linha com navegador é a que tem o ✎.
+    const comEditar = [...t.el.querySelectorAll<HTMLElement>('.mq-linha')]
+      .find((l) => l.querySelector('.mq-editar:not(.mq-remover)'))!;
+    expect(comEditar.querySelector('.mq-editar:not(.mq-remover)')!.textContent)
+      .toContain(m.config_motores_editar());
     unmount(t.comp);
   });
 
