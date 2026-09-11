@@ -16,10 +16,14 @@ vi.mock('../../lib/credenciais', () => ({
   codexIntegracaoReconciliar: vi.fn(() => new Promise(() => {})),
   instalacaoEstado: vi.fn(),
   instalarHarness: vi.fn(),
+  codexOpcoes: vi.fn(() => new Promise(() => {})),
 }));
 vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
   patchConfig: vi.fn(), patchConfigForServer: vi.fn(),
+  // Este arquivo cobre o botão "Instalar": a leitura de configuração do card do Claude não pode
+  // sair pra rede aqui, nem resolver e repintar no meio de um caso.
+  getConfig: vi.fn(() => new Promise(() => {})), getConfigForServer: vi.fn(() => new Promise(() => {})),
 }));
 
 const c = vi.mocked(cred);

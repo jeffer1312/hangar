@@ -127,7 +127,7 @@
   "erro_codex_controle": "O Codex não aceitou a alteração; atualize a sessão e tente novamente.",
   "erro_codex_opcoes": "Não foi possível salvar as opções do Codex.",
   "harness_claude_statusline_atualizar": "Atualizar barra de status",
-  "harness_claude_statusline_ajuda": "Permitir que as instalações e atualizações do Hangar configurem a barra de status do Claude Code. Desative para preservar sua barra personalizada. Salvar esta opção não altera a barra atual.",
+  "harness_claude_statusline_ajuda": "Permitir que as instalações e atualizações do Hangar configurem a barra de status do Claude Code. Desative para preservar sua barra personalizada. Trocar esta opção não altera a barra atual.",
   "harness_opcoes_indisponiveis": "Atualize o Hangar neste servidor para configurar estas opções.",
   "arq_meta_arquivo_um": "{tam} · 1 linha",
   "config_geral_titulo": "Geral",
