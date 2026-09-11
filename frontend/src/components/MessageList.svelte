@@ -182,8 +182,23 @@
       const cs = getComputedStyle(f);
       return `${f.classList[0] ?? f.tagName}:${Math.round(f.getBoundingClientRect().height)}/${cs.opacity}/${cs.visibility}`;
     }).join(' ');
+    // Primeira captura (10/09/2026): os filhos do inner estavam todos visíveis e o inner acabava
+    // onde devia — o que esticava a rolagem ficava FORA da caixa dele. Então lista quem, dentro
+    // da lista, tem a base abaixo do fim do inner (transform e posição incluídos, que são os dois
+    // jeitos de um descendente estender a área rolável sem mudar a altura do pai).
+    const topo = listEl.getBoundingClientRect().top - listEl.scrollTop;
+    const fimInner = inner.getBoundingClientRect().bottom - topo;
+    const alem = Array.from(listEl.querySelectorAll<HTMLElement>('*'))
+      .map((e) => ({ e, base: e.getBoundingClientRect().bottom - topo }))
+      .filter(({ base }) => base > fimInner + 8)
+      .sort((a, b) => b.base - a.base)
+      .slice(0, 5)
+      .map(({ e, base }) => {
+        const cs = getComputedStyle(e);
+        return `${e.tagName.toLowerCase()}.${e.classList[0] ?? '-'}@${Math.round(base)}/${cs.position}/${cs.transform === 'none' ? '-' : 't'}`;
+      }).join(' ');
     diag.registrar({ evento: 'chat.vazio_no_fim', nivel: 'aviso', tela: 'chat', sessao: sessionName,
-                     detalhe: `sobra=${Math.round(sobra)} pad=${Math.round(pad)} sh=${listEl.scrollHeight} inner=${Math.round(inner.getBoundingClientRect().height)} ${cauda}` });
+                     detalhe: `sobra=${Math.round(sobra)} pad=${Math.round(pad)} sh=${listEl.scrollHeight} inner=${Math.round(inner.getBoundingClientRect().height)} fimInner=${Math.round(fimInner)} ${cauda} | alem: ${alem || 'nenhum'}` });
   }
 
   // Janela curta demais pra rolar (rajada de tool calls colapsada em linhas de grupo) -> revela
