@@ -159,6 +159,7 @@ export interface ChatEvent {
 }
 
 export interface StateEvent {
+  codex_buffering?: boolean;
   codex_mode?: 'default' | 'plan' | null;
   claude_permission_mode?: string | null;
   claude_previous_non_plan?: string | null;

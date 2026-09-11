@@ -2126,6 +2126,14 @@ Limites nativos medidos: “Pular” só altera a memória da TUI, sem evento/hi
 outro cliente não fecha o widget já aberto no terminal. O Hangar reconhece respostas do terminal
 pelo histórico, mas não inventa confirmação de descarte.
 
+**Aviso de espera do Codex (11/09/2026, CLI 0.154.0):** o popup “Giving this request a little
+extra thought” vem de `model/safetyBuffering/updated`, não de uma pergunta ou temporizador local.
+`showBufferingUi` alimenta `codex_buffering` no estado compartilhado, exibido como aviso informativo
+no web e no app nativo. O turno continua trabalhando; delta não vazio, mensagem completada, fim do
+turno ou sinal `false` retiram o aviso. Eventos de outra thread/turno não o alteram. Reabrir o chat
+preserva o estado no backend. Limite medido com CLI real e provedor local: um cliente novo não
+recupera buffering por `thread/read`/`thread/resume`; reiniciar o backend perde o aviso já emitido.
+
 ## tmux + Claude Code truecolor
 
 Inside tmux, Claude Code caps color depth to 256 and renders theme colors wrong (teal / pink / washed-out)

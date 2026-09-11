@@ -151,6 +151,7 @@ class MappedState:
     preview_delta: Optional[str] = None
     token_usage: Optional[dict] = None
     rate_limits: Optional[dict] = None
+    buffering: Optional[bool] = None
 
 
 def map_state(notif: dict) -> MappedState:
@@ -158,6 +159,9 @@ def map_state(notif: dict) -> MappedState:
     Method desconhecido (ou shape incompleto) -> MappedState() neutro, nunca levanta."""
     method = notif.get("method")
     params = notif.get("params") or {}
+
+    if method == "model/safetyBuffering/updated" and isinstance(params.get("showBufferingUi"), bool):
+        return MappedState(buffering=params["showBufferingUi"])
 
     if method == "turn/started":
         return MappedState(state="working")
@@ -840,6 +844,7 @@ class CodexAdapter:
         state = "awaiting_input" if blocking or (question and sess["state"] == "idle") else sess["state"]
         return StateEvent(session=name, state=state,
                           status_line=self._status_line(sess), codex_mode=sess.get("mode"),
+                          codex_buffering=sess.get("codex_buffering", False),
                           codex_question=question)
 
     def async_question_status(self, name: str) -> tuple[int, str | None]:
@@ -980,6 +985,24 @@ class CodexAdapter:
                 forward(sess, notif)
             mapped = map_state(notif)
             method = notif.get("method")
+            response_started = bool(mapped.preview_delta) or (
+                method == "item/completed" and (params.get("item") or {}).get("type") == "agentMessage"
+                and bool((params.get("item") or {}).get("text"))
+            )
+            if method == "turn/started" or mapped.state == "idle":
+                sess.pop("codex_response_started", None)
+            elif response_started:
+                sess["codex_response_started"] = True
+            buffering_updated = False
+            if mapped.buffering is not None:
+                if params.get("threadId") != sess["thread_id"] or not sess["in_progress"] or sess.get("codex_response_started"):
+                    continue
+                if sess.get("turn_id") and params.get("turnId") != sess["turn_id"]:
+                    continue
+                buffering_updated = sess.get("codex_buffering", False) != mapped.buffering
+                sess["codex_buffering"] = mapped.buffering
+            elif method == "turn/started" or mapped.state == "idle" or response_started:
+                buffering_updated = bool(sess.pop("codex_buffering", False))
             async_updated = method in {"item/started", "item/completed"} and \
                 sess["async_questions"].observe(params.get("item") or {})
             if mapped.state is not None:
@@ -1050,7 +1073,7 @@ class CodexAdapter:
             if mapped.rate_limits is not None:
                 sess["rate_limits"] = mapped.rate_limits
             question_updated = async_updated or method in ("item/tool/requestUserInput", "serverRequest/resolved")
-            if mapped.state is None and mapped.token_usage is None and mapped.rate_limits is None and not settings_updated and not question_updated:
+            if mapped.state is None and mapped.token_usage is None and mapped.rate_limits is None and not settings_updated and not question_updated and not buffering_updated:
                 # Neutro (method desconhecido) ou so preview_delta: StateEvent nao tem campo de
                 # preview -> nada a emitir aqui (o preview ja foi empurrado acima, fora do
                 # StateEvent -- efeito colateral adicional, nao substitui).
@@ -1303,6 +1326,8 @@ class CodexAdapter:
         sess["in_progress"] = status == "active"
         if status == "idle":
             sess["turn_id"] = None
+            sess.pop("codex_buffering", None)
+            sess.pop("codex_response_started", None)
         elif include_turns:
             sess["turn_id"] = next((t.get("id") for t in reversed(thread.get("turns") or [])
                                     if t.get("status") == "inProgress"), None)

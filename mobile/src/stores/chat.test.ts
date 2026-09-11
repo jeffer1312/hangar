@@ -233,6 +233,20 @@ test('state atualiza statusLine; release fecha o stream', async () => {
   expect(created[0].close).toHaveBeenCalled();
 });
 
+test('aviso do Codex acompanha o estado sem virar pergunta', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'working', codex_buffering: true }));
+  expect(chat.use.getState().stateEvent?.codex_buffering).toBe(true);
+  expect(chat.use.getState().stateEvent?.state).toBe('working');
+  expect(chat.use.getState().askOpen).toBe(false);
+  created[0].trigger('state', JSON.stringify({ session: 'sess', state: 'working', codex_buffering: false }));
+  expect(chat.use.getState().stateEvent?.codex_buffering).toBe(false);
+  chat.release();
+});
+
 test('loadOlder prependa o histórico antigo; sem costura marca unjoinable', async () => {
   historyResponses = [
     [ev({ id: 't:5' }), ev({ id: 't:6' })],

@@ -2418,6 +2418,9 @@
        visor aberto — Tab não alcança controles escondidos sob o arquivo. O painel de contexto
        (árvore viva) e o próprio visor ficam FORA deste wrapper de propósito. -->
   <div class="chat-underlay" inert={visorAberto}>
+  {#if stateEvent?.codex_buffering}
+    <p class="codex-notice" role="status">{m.chat_codex_buffering()}</p>
+  {/if}
   {#if loading}
     <!-- Entrando na sessao: skeleton shimmer (familia Respiracao) enquanto o /history carrega. -->
     <div class="chat-skeleton" aria-label={m.chat_carregando_historico()} aria-busy="true">
@@ -2713,6 +2716,11 @@
 </div>
 
 <style>
+  .codex-notice {
+    margin: 0; padding: var(--space-2) var(--space-4);
+    color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.5;
+    border-bottom: 1px solid var(--border-default);
+  }
   /* Underlay da conversa (B5): envolve MessageList + pills + dock pra ficar `inert` com o
      visor aberto. Repete o flex column do pai — sem isto o skeleton/MessageList (flex:1)
      perderia a altura e a coluna colapsaria. Nenhum estilo proprio: so o percurso de teclado. */

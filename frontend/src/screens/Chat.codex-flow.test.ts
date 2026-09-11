@@ -179,6 +179,16 @@ it.each([true, false])('pergunta assíncrona aparece sem abrir terminal, desktop
   expect(api.answerQuestions).not.toHaveBeenCalled();
 });
 
+it.each([true, false])('aviso de demora aparece sem pedir resposta, desktop=%s', async desktop => {
+  await montar(desktop);
+  await emit('state', { session: 'codex-flow', state: 'working', codex_buffering: true });
+  expect(document.querySelector('.codex-notice')?.textContent).toBe(m.chat_codex_buffering());
+  expect(document.querySelector<HTMLTextAreaElement>('textarea')?.disabled).toBe(false);
+  expect(api.answerQuestions).not.toHaveBeenCalled();
+  await emit('state', { session: 'codex-flow', state: 'working', codex_buffering: false });
+  expect(document.querySelector('.codex-notice')).toBeNull();
+});
+
 it('envia respostas de várias perguntas pelo request_id e conserva o formulário quando a API falha', async () => {
   await montar();
   await emit('ask_question', { provider: 'codex', request_id: 0, questions: [

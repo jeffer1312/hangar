@@ -618,6 +618,7 @@
   "servidores_aviso_token": "O token de {label} não vale mais — o servidor recusou. Pareie de novo para voltar a usar.",
   "chat_carregando_historico": "Carregando histórico",
   "chat_historico_demorando": "Demorando… tentando de novo",
+  "chat_codex_buffering": "O Codex está levando mais tempo para responder. A sessão continua aguardando; nenhuma ação é necessária.",
   "chat_historico_sem_resposta": "O servidor não respondeu a tempo.",
   "chat_aguardando_pill": "{n} aguardando →",
   "chat_aguardando_proxima_1": "{n} sessão aguardando — ir para a próxima",

@@ -218,6 +218,7 @@ class StateEvent(BaseModel):
     state: State
     codex_mode: Optional[Literal["default", "plan"]] = None
     codex_question: dict | None = None
+    codex_buffering: bool = False
     claude_permission_mode: Optional[str] = None
     claude_previous_non_plan: Optional[str] = None
     label: Optional[str] = None         # working: live status text, e.g. "Elucidating…"
