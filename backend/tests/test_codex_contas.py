@@ -28,6 +28,8 @@ def test_account_creation_is_isolated(isolated_home):
         "version": 1,
         "id": "work",
     }
+    # Nasce pronta pro login: credencial em arquivo, dentro da pasta da conta.
+    assert (account.home / "config.toml").read_text() == 'cli_auth_credentials_store = "file"\n'
     assert [a.id for a in accounts.list_accounts()] == ["default", "work"]
 
 

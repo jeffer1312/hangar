@@ -20,6 +20,8 @@ class FakeNative:
     start_delay = 0.0
     close_error = False
     complete_without_login_id = False
+    # Quantas leituras de conta ainda saem vazias depois do `success` (a corrida do Codex real).
+    leituras_vazias = 0
 
     def __init__(self, home, codex_home, binario="codex", *, account=None, **kwargs):
         self.home = Path(home)
@@ -69,6 +71,9 @@ class FakeNative:
         if method == "account/login/cancel":
             return {"status": "canceled"}
         if method == "account/read":
+            if type(self).leituras_vazias > 0:
+                type(self).leituras_vazias -= 1
+                return {"account": None}
             return copy.deepcopy(self.auth_by_home.get(str(self.codex_home), {"account": None}))
         raise AssertionError(method)
 
@@ -93,6 +98,7 @@ def contas(tmp_path, monkeypatch):
     FakeNative.start_delay = 0.0
     FakeNative.close_error = False
     FakeNative.complete_without_login_id = False
+    FakeNative.leituras_vazias = 0
     FakeNative.auth_by_home = {
         str(accounts.default_home()): {"account": {"type": "chatgpt", "email": "a@x", "planType": "plus"}},
         str(work.home): {"account": {"type": "chatgpt", "email": "b@x", "planType": "pro"}},
@@ -164,7 +170,6 @@ async def test_falha_da_principal_permanece_visivel_na_conta_adicional(contas, m
     assert checker.preparation_status(work) == result
 
 
-
 async def test_pedido_manual_em_preparo_automatico_dispara_rodada_forcada(contas, monkeypatch):
     _, work = contas
     iniciou = asyncio.Event()
@@ -195,8 +200,6 @@ async def test_pedido_manual_em_preparo_automatico_dispara_rodada_forcada(contas
         ("principal", False), ("adicional", False),
         ("principal", True), ("adicional", True),
     ]
-
-
 
 
 async def test_login_aceita_confirmacao_sem_login_id_permitida_pelo_schema(
@@ -327,6 +330,8 @@ async def test_cancelamento_antes_do_login_id_ainda_cancela_o_native(contas, ser
     await start
 
     assert cancelled["status"] == "cancelled"
+    # Cancelar é pedido atendido, não falha: com o erro junto a tela dizia as duas coisas.
+    assert "error" not in service.login_status(work)
     assert any(call[0] == "account/login/cancel" for call in FakeNative.instances[0].requests)
     assert FakeNative.instances[0].closed
 
@@ -365,6 +370,61 @@ async def test_apagar_conta_recusa_viva_e_apaga_parada(contas, service, monkeypa
 
     await service.delete_account(work)
     assert not work.home.exists()
+
+
+async def test_conta_que_demora_a_aparecer_nao_vira_login_falhado(contas, service, monkeypatch):
+    """O Codex avisa `success` antes de a credencial ficar legível: esperar é o conserto."""
+    _, work = contas
+    monkeypatch.setattr("app.codex_contas_login._AUTH_APOS_LOGIN_INTERVALO", 0.01)
+    FakeNative.complete_before_response = True
+    FakeNative.leituras_vazias = 3
+
+    await service.start_login(work)
+    await asyncio.gather(*(a.task for a in service._attempts.values() if a.task))
+
+    estado = service.login_status(work)
+    assert estado["status"] == "completed"
+    assert "error" not in estado
+
+
+async def test_conta_que_nunca_aparece_ainda_falha(contas, service, monkeypatch):
+    _, work = contas
+    monkeypatch.setattr("app.codex_contas_login._AUTH_APOS_LOGIN", 0.0)
+    FakeNative.complete_before_response = True
+    FakeNative.auth_by_home = {}
+
+    await service.start_login(work)
+    await asyncio.gather(*(a.task for a in service._attempts.values() if a.task))
+
+    assert service.login_status(work)["error"]["code"] == "codex_account_login_failed"
+
+
+async def test_criar_conta_nao_prepara_e_ja_aceita_login(contas, service, monkeypatch):
+    default, _ = contas
+
+    async def prepare_proibido(account):
+        raise AssertionError("criar conta não pode herdar a padrão antes do login")
+
+    monkeypatch.setattr("app.codex_contas_login.codex_contas_sync.prepare_account", prepare_proibido)
+    created = await service.create_account("nova")
+
+    assert created["sync"]["status"] == "idle"
+    assert created["auth"]["status"] == "disconnected"
+    assert created["has_settings"] is False
+    nova = accounts.resolve_account("nova")
+    FakeNative.auth_by_home[str(nova.home)] = {"account": {"type": "chatgpt", "email": "c@x", "planType": "plus"}}
+    FakeNative.complete_before_response = True
+    await service.start_login(nova)
+    await asyncio.gather(*(a.task for a in service._attempts.values() if a.task))
+    assert service._attempts[service._key(nova)].status == "completed"
+
+
+async def test_has_settings_so_na_padrao_com_conteudo(contas, service):
+    default, work = contas
+    assert service._has_settings(default) is False
+    assert service._has_settings(work) is False
+    (default.home / "config.toml").write_text("model = \"x\"\n", encoding="utf-8")
+    assert service._has_settings(default) is True
 
 
 async def test_preparacao_em_curso_reserva_a_conta(contas, service, monkeypatch):

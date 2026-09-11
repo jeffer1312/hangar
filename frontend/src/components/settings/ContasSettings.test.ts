@@ -1037,10 +1037,21 @@ describe('ContasSettings — as três seções da lista', () => {
   });
 
   it('conta Codex secundária informa herança sem abrir formulário', async () => {
-    const t = montar([CODEX, { ...CODEX, id: 'codex:/work', codex_account: 'work', nome: 'Work', ativa: false }]);
+    const t = montar([CODEX, { ...CODEX, id: 'codex:/work', codex_account: 'work', nome: 'Work', ativa: false, codex_sync: 'ready' }]);
     await tick(); await tick(); await tick();
     expect(cardDe(t.el, 'Work').textContent).toContain(m.codex_ui_inherited());
     expect(t.el.querySelector('.codex-login')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('conta Codex que nunca herdou diz isso, e logada oferece herdar', async () => {
+    const nova = { ...CODEX, id: 'codex:/nova', codex_account: 'nova', nome: 'Nova', ativa: false,
+      codex_sync: 'idle', login: { estado: 'ok', loggedIn: true, email: 'n@x', plano: 'pro' } } satisfies Credencial;
+    const t = montar([CODEX, nova]);
+    await tick(); await tick(); await tick();
+    const card = cardDe(t.el, 'Nova');
+    expect(card.textContent).toContain(m.codex_ui_nao_herdada());
+    expect([...card.querySelectorAll('button')].some((b) => b.textContent === m.codex_ui_herdar_botao())).toBe(true);
     unmount(t.comp);
   });
 
@@ -1048,7 +1059,7 @@ describe('ContasSettings — as três seções da lista', () => {
     const google = {
       ...CODEX,
       id: 'codex:/home/u/.codex-google', codex_account: 'google', nome: 'google', ativa: false,
-      path: '/home/u/.codex-google',
+      path: '/home/u/.codex-google', codex_sync: 'ready',
       login: { estado: 'ok', loggedIn: true, email: 'secondary@example.test', plano: 'plus' },
     } satisfies Credencial;
     const t = montar([google]);

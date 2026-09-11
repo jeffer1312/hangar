@@ -132,7 +132,7 @@ describe('NovaCredencialSheet — o passo "o quê"', () => {
     const t = montar(); await tick();
     conectarDe(m.contas_add_conta()).click(); await tick();
     conectarDe(m.novacred_codex_nome()).click(); await tick();
-    expect(document.body.textContent).toContain(m.codex_ui_oauth());
+    expect(document.body.textContent).toContain(m.codex_ui_intro());
     expect(document.querySelector('input[type="password"]')).toBeNull();
     expect(document.querySelector('input[type="url"]')).toBeNull();
     expect(document.body.textContent).toContain(m.novacred_nome_conta());

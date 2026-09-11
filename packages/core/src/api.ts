@@ -1,6 +1,6 @@
 import { apiEnv, type EventSourceLike } from './apiEnv';
 import type { Server } from './servers';
-import type { CodexAccount, CodexLoginAttempt, Credencial } from './credenciais';
+import type { CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, Credencial } from './credenciais';
 import * as m from './paraglide/messages';
 import { localeAtual } from './i18n';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
@@ -755,6 +755,16 @@ export function getCodexAccountLoginForServer(server: Server, id: string, signal
 }
 export function cancelCodexAccountLoginForServer(server: Server, id: string, attemptId: string): Promise<CodexLoginAttempt> {
   return apiFetchForServer(server, `${codexAccountPath(id, 'login')}?attempt_id=${encodeURIComponent(attemptId)}`, { method: 'DELETE' });
+}
+export function getRootsForServer(server: Server, signal?: AbortSignal): Promise<FsRoot[]> {
+  return apiFetchForServer(server, '/api/fs/roots', { signal: comTeto(signal, 8000) });
+}
+// Importação Claude → Codex da conta padrão (a mesma do "Reconciliar agora" em Harnesses).
+export function getCodexIntegrationForServer(server: Server, signal?: AbortSignal): Promise<CodexIntegracaoEstado> {
+  return apiFetchForServer(server, '/api/harness/codex/integracao', { signal: comTeto(signal, 8000) });
+}
+export function startCodexIntegrationForServer(server: Server): Promise<CodexIntegracaoEstado> {
+  return apiFetchForServer(server, '/api/harness/codex/integracao', { method: 'POST' });
 }
 
 // Cria a pasta da conta Claude no servidor. NÃO loga — o OAuth é interativo e roda dentro da

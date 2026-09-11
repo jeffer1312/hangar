@@ -15,7 +15,6 @@ import tomllib
 from pathlib import Path
 
 from app import atomico
-
 from app.codex_arquivos import (
     AlteradoExternamente,
     backup,
@@ -127,10 +126,28 @@ def _cli_version() -> str:
     return lines[0][:80] if result.returncode == 0 and lines else "indisponível"
 
 
+_ETAPAS = ("configuracoes", "recursos", "plugins")
+
+
 def _status(status: str = "idle", *, issues: list[dict] | None = None,
-            trust_pending: bool = False) -> dict:
+            trust_pending: bool = False, etapa: str | None = None,
+            herdado: dict | None = None) -> dict:
     return {"status": status, "trust_pending": bool(trust_pending),
-            "issues": copy.deepcopy(issues or [])}
+            "issues": copy.deepcopy(issues or []), "etapa": etapa,
+            "herdado": dict(herdado) if herdado else None}
+
+
+def _contar_herdado(resources: dict, plugins: dict, config: dict) -> dict:
+    """O que a conta recebeu, para a tela poder dizer em vez de só "concluído"."""
+    def sob(prefixo: str) -> int:
+        return sum(1 for caminho in resources if str(caminho).startswith(prefixo))
+
+    valores = config.get("values") if isinstance(config.get("values"), dict) else {}
+    mcps = valores.get("mcp_servers") if isinstance(valores.get("mcp_servers"), dict) else {}
+    instalados = plugins.get("plugins") if isinstance(plugins.get("plugins"), dict) else {}
+    hooks = sob("hooks/") + sob(".hangar-hooks/") + (1 if "hooks.json" in resources else 0)
+    return {"skills": sob("skills/"), "hooks": hooks, "agents": sob("agents/"),
+            "plugins": len(instalados), "mcps": len(mcps)}
 
 
 def _has_blocking_issues(issues: list[dict]) -> bool:
@@ -199,7 +216,13 @@ def _public_state(state: dict) -> dict:
         params = ({key: str(value) for key, value in params.items() if isinstance(key, str)}
                   if isinstance(params, dict) else {})
         clean.append({"code": issue["code"], "params": params})
-    return _status(status, issues=clean, trust_pending=value.get("trust_pending", False))
+    etapa = value.get("etapa")
+    herdado = value.get("herdado")
+    herdado = ({chave: int(valor) for chave, valor in herdado.items()
+                if isinstance(chave, str) and isinstance(valor, int)}
+               if isinstance(herdado, dict) else None)
+    return _status(status, issues=clean, trust_pending=value.get("trust_pending", False),
+                   etapa=etapa if etapa in _ETAPAS else None, herdado=herdado)
 
 
 def preparation_status(account: Account) -> dict:
@@ -1046,12 +1069,18 @@ async def _prepare_locked(account: Account, force: bool, state: dict) -> dict:
     state_dir = _private_dir(destination, create=True)
     backups = state_dir / "backups"
     issues = list(source_issues)
-    status_running = {**state, "public": _status(
-                          "running", issues=issues,
-                          trust_pending=_public_state(state).get("trust_pending", False)),
+    herdado = _public_state(state).get("trust_pending", False)
+    status_running = {**state, "public": _status("running", issues=issues, trust_pending=herdado),
                       "source_digest": source_digest, "destination_digest": destination_digest,
                       "cli_version": cli_version}
-    _write_state(account, status_running)
+
+    def etapa(nome: str) -> None:
+        """A preparação leva minutos (só os plugins, 65-103s medidos): sem dizer onde está,
+        a tela fica num "aguarde" que não distingue trabalho de travamento."""
+        status_running["public"] = _status("running", issues=issues, trust_pending=herdado, etapa=nome)
+        _write_state(account, status_running)
+
+    etapa("configuracoes")
     old_config = state.get("config", {}) if isinstance(state.get("config"), dict) else {}
     old_profiles = state.get("profiles", {}) if isinstance(state.get("profiles"), dict) else {}
     resource_paths = set(source_files) | set(source_profiles)
@@ -1087,6 +1116,7 @@ async def _prepare_locked(account: Account, force: bool, state: dict) -> dict:
         except (OSError, ValueError, AlteradoExternamente) as exc:
             issues.append(_issue("codex_account_path_conflict", path=relative, error=type(exc).__name__))
             profile_results[relative] = copy.deepcopy(old_profile)
+    etapa("recursos")
     resources = _sync_resources(source_files, destination, state.get("resources", {}), backups, issues,
                                  source=source, source_snapshot=source_snapshot,
                                  allow_removals=not source_issues)
@@ -1102,6 +1132,7 @@ async def _prepare_locked(account: Account, force: bool, state: dict) -> dict:
         _public_state(state).get("trust_pending", False)
     )
     if plugins_configured:
+        etapa("plugins")
         from app.codex_contas_plugins import sync_plugins
         plugin_result = await sync_plugins(
             Account("default", source, True), account, {"manifest": previous_plugins})
@@ -1132,7 +1163,8 @@ async def _prepare_locked(account: Account, force: bool, state: dict) -> dict:
     _verify_resources(destination, resources, final_destination_snapshot)
     final_status = "partial" if _has_blocking_issues(issues) else "ready"
     result = {
-        "public": _status(final_status, issues=issues, trust_pending=plugin_trust_pending),
+        "public": _status(final_status, issues=issues, trust_pending=plugin_trust_pending,
+                          herdado=_contar_herdado(resources, plugin_manifest, config_result)),
         "source_digest": final_source_digest,
         "destination_digest": final_destination_digest,
         "cli_version": cli_version,

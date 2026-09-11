@@ -150,7 +150,9 @@ def test_post_prepare_pendente_devolve_sync_completo(monkeypatch, tmp_path):
             client.portal.call(asyncio.wait_for, started.wait(), 1)
             assert not release.is_set()
             assert response.status_code == 202
-            assert response.json() == {"status": "running", "trust_pending": False, "issues": []}
+            assert response.json() == {
+                "status": "running", "trust_pending": False, "issues": [], "etapa": None,
+            }
         finally:
             client.portal.call(release.set)
             client.portal.call(service.close)

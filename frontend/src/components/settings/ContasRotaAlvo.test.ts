@@ -60,7 +60,7 @@ function montar(componente: unknown, props?: Record<string, unknown>) {
 }
 
 describe('aba Contas fala com o servidor do ?srv=, não com o ativo', () => {
-  it('login Codex prepara e inicia com token de B enquanto A permanece ativo', async () => {
+  it('login Codex sai com o token de B enquanto A permanece ativo', async () => {
     const calls: [string, RequestInit | undefined][] = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input); calls.push([url, init]);
@@ -79,10 +79,8 @@ describe('aba Contas fala com o servidor do ?srv=, não com o ativo', () => {
     t.el.querySelector<HTMLButtonElement>('.codex-login button')!.click();
     for (let i = 0; i < 15; i++) await tick();
     const posts = calls.filter(([, init]) => init?.method === 'POST');
-    expect(posts.map(([url]) => url)).toEqual([
-      'http://b.local:8765/api/codex-contas/default/prepare',
-      'http://b.local:8765/api/codex-contas/default/login',
-    ]);
+    // Só o login: herdar da padrão é oferecido DEPOIS de entrar, nunca antes.
+    expect(posts.map(([url]) => url)).toEqual(['http://b.local:8765/api/codex-contas/default/login']);
     expect(posts.every(([, init]) => (init?.headers as Record<string, string>).Authorization === 'Bearer t-b')).toBe(true);
     expect(localStorage.getItem('cp_active')).toBe('srv-a');
     await unmount(t.comp);

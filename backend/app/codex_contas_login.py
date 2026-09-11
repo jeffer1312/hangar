@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 import threading
@@ -18,10 +19,17 @@ from app import codex_contas_sync
 from app.codex_importador import CodexNativo, CodexNativoErro
 
 
+_log = logging.getLogger("hangar.codex.contas")
+
 _LOGIN_COMPLETED = "account/login/completed"
 _LOGIN_TIMEOUT = 15 * 60.0
 _REQUEST_TIMEOUT = 30.0
 _AUTH_TTL = 60.0
+# O Codex avisa `success` ANTES de a credencial ficar legível pelo app-server que conduziu o
+# login: medido, o auth.json foi gravado no mesmo segundo em que `account/read` ainda devolvia
+# conta nenhuma, e o login bem-sucedido virava "falhou" na tela.
+_AUTH_APOS_LOGIN = 10.0
+_AUTH_APOS_LOGIN_INTERVALO = 0.5
 # Quanto tempo um "indisponivel" (app-server que nao respondeu) vale sem tentar de novo.
 _INDISPONIVEL_TTL = 20.0
 
@@ -114,7 +122,6 @@ class CodexContasLogin:
         self._indisponivel: dict[str, tuple[tuple, float]] = {}
         self._lock = threading.RLock()
 
-
     @staticmethod
     def _key(account: accounts.Account) -> str:
         return str(account.home.expanduser().resolve(strict=False))
@@ -192,6 +199,22 @@ class CodexContasLogin:
     async def _read_auth_native(self, native) -> dict:
         return self._auth_public(await native.request(
             "account/read", {"refreshToken": False}, timeout=_REQUEST_TIMEOUT))
+
+    async def _conta_apos_login(self, native, account: accounts.Account) -> dict:
+        """Espera a conta aparecer para o app-server do login; esgotado o prazo, pergunta a um
+        app-server novo — se o antigo lembrar de quando não havia credencial, ele nunca veria."""
+        limite = time.monotonic() + _AUTH_APOS_LOGIN
+        while True:
+            auth = await self._read_auth_native(native)
+            if auth.get("method") not in ("none", "unknown"):
+                return auth
+            if time.monotonic() >= limite:
+                break
+            await asyncio.sleep(_AUTH_APOS_LOGIN_INTERVALO)
+        try:
+            return await self.read_auth(account, refresh=True)
+        except (CodexNativoErro, OSError, RuntimeError, ValueError):
+            return auth
 
     def _invalidate_auth(self, key: str) -> None:
         self._auth_generation[key] = self._auth_generation.get(key, 0) + 1
@@ -302,7 +325,7 @@ class CodexContasLogin:
                     continue
                 if not params.get("success"):
                     raise CodexNativoErro("O Codex recusou o login.")
-                auth = await self._read_auth_native(native)
+                auth = await self._conta_apos_login(native, attempt.account)
                 if auth.get("method") in ("none", "unknown"):
                     raise CodexNativoErro("O Codex não confirmou a conta após o login.")
                 attempt.auth = auth
@@ -313,12 +336,19 @@ class CodexContasLogin:
             attempt.cancelled = True
             attempt.status = "cancelled"
             raise
+        # Cancelar fecha o app-server, e o erro que sobe daí é consequência do pedido, não falha:
+        # marcado como erro, a tela mostrava "Login cancelado" e "O login falhou" na mesma frase.
         except TimeoutError:
             attempt.status = "cancelled" if attempt.cancelled else "failed"
-            attempt.error = _error("codex_account_login_timeout")
-        except (CodexNativoErro, OSError, RuntimeError, ValueError):
+            if not attempt.cancelled:
+                attempt.error = _error("codex_account_login_timeout")
+        except (CodexNativoErro, OSError, RuntimeError, ValueError) as exc:
             attempt.status = "cancelled" if attempt.cancelled else "failed"
-            attempt.error = _error("codex_account_login_failed")
+            if not attempt.cancelled:
+                attempt.error = _error("codex_account_login_failed")
+                # A tela só pode dizer "falhou"; sem esta linha a causa não fica em lugar nenhum.
+                _log.warning("login Codex falhou: conta=%s %s: %s",
+                             attempt.account.id, type(exc).__name__, exc)
         finally:
             if attempt.ready is not None and not attempt.ready.done():
                 attempt.ready.set_result(None)
@@ -418,7 +448,6 @@ class CodexContasLogin:
                 self._preparation_results.pop(key, None)
         return self.preparation_status(account) if not task.done() else task.result()
 
-
     async def _prepare_one(self, account: accounts.Account, reservation: _Reservation,
                            forcar: bool) -> dict:
         key = self._key(account)
@@ -456,15 +485,14 @@ class CodexContasLogin:
         finally:
             reservation.release()
 
-
     def preparation_status(self, account: accounts.Account) -> dict:
-        key = self._key(account)
-        task = self._preparations.get(key)
-        if task is not None and not task.done():
-            return {"status": "running", "trust_pending": False, "issues": []}
+        task = self._preparations.get(self._key(account))
         gravado = codex_contas_sync.preparation_status(account)
-        return copy.deepcopy(self._preparation_results.get(key, gravado))
-
+        if task is not None and not task.done():
+            # A task viva decide o status; a etapa vem do disco, que é ela mesma quem atualiza.
+            return {"status": "running", "trust_pending": False, "issues": [],
+                    "etapa": gravado.get("etapa")}
+        return copy.deepcopy(self._preparation_results.get(self._key(account), gravado))
 
     async def delete_account(self, account: accounts.Account) -> None:
         # Mesma trava do login: conta com sessao viva, login ou preparo em andamento nao sai.
@@ -480,11 +508,24 @@ class CodexContasLogin:
         finally:
             reservation.release()
 
-
     async def create_account(self, name: str) -> dict:
+        # Só a pasta: herdar a padrão (plugins, hooks, MCPs) leva minutos e é oferecido depois do login.
         account = await asyncio.to_thread(accounts.create_account, name)
-        await self.prepare(account)
         return await self.account_snapshot(account, read_auth=False)
+
+    @staticmethod
+    def _has_settings(account: accounts.Account) -> bool:
+        """A padrão tem algo que valha herdar? Recém-logada e nunca aberta, não tem."""
+        if not account.is_default:
+            return False
+        home = account.home
+        try:
+            if (home / "config.toml").is_file():
+                return True
+            return any((home / d).is_dir() and any((home / d).iterdir())
+                       for d in ("agents", "skills", "hooks", "plugins"))
+        except OSError:
+            return False
 
     async def account_snapshot(self, account: accounts.Account, *, read_auth: bool = True,
                                sync: dict | None = None) -> dict:
@@ -498,7 +539,8 @@ class CodexContasLogin:
         home = str(account.home.expanduser().resolve(strict=False))
         return {"id": account.id, "credential_id": f"codex:{home}", "name": account.id,
                 "home": home, "is_default": account.is_default, "auth": auth,
-                "sync": self.preparation_status(account)}
+                "sync": self.preparation_status(account),
+                "has_settings": self._has_settings(account)}
 
     async def accounts_snapshot(self) -> list[dict]:
         result = []

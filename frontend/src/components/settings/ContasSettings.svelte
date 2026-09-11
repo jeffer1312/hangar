@@ -39,6 +39,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
   let { apiTarget }: Props = $props();
   const codexServer = $derived(apiTarget ?? listServers().find((s) => s.id === getActiveId()) ?? null);
   let codexLogin = $state<string | null>(null);
+  let codexHerdar = $state<string | null>(null);
 
   // A lista vem do cache compartilhado: reabrir Contas entrega o que já estava lá e revalida por
   // baixo, em vez de esvaziar a tela e esperar a leitura das cotas (medida em ~2,5s com o cache do
@@ -651,7 +652,10 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
               {#if conta.ativa || conta.codex_account || dir}
                 <span class="ct-sub-l ct-codex-meta">
                   {#if conta.ativa}<span class="ct-sub fraco">{m.criar_padrao()}</span>
-                  {:else if conta.codex_account}<span class="ct-sub fraco">{m.codex_ui_inherited()}</span>{/if}
+                  {:else if conta.codex_sync === 'ready'}<span class="ct-sub fraco">{m.codex_ui_inherited()}</span>
+                  {:else if conta.codex_sync === 'running'}<span class="ct-sub fraco">{m.codex_ui_preparing()}</span>
+                  {:else if conta.codex_sync === 'idle'}<span class="ct-sub fraco">{m.codex_ui_nao_herdada()}</span>
+                  {:else if conta.codex_sync}<span class="ct-sub fraco">{m.codex_ui_prepare_error()}</span>{/if}
                   {#if dir}<span class="ct-dir">{conta.ativa || conta.codex_account ? '· ' : ''}{dir}</span>{/if}
                 </span>
               {/if}
@@ -715,7 +719,10 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
           <!-- Um envelope só para as ações: o Entrar é condicional e mora junto do kebab. -->
           <span class="ct-acoes">
             {#if conta.tipo === 'codex' && conta.codex_account && credentialAuth(conta) === 'none'}
-              <button type="button" class="ct-acao primaria" onclick={() => codexLogin = conta.codex_account ?? null}>{m.contas_entrar()}</button>
+              <button type="button" class="ct-acao primaria" onclick={() => { codexHerdar = null; codexLogin = conta.codex_account ?? null; }}>{m.contas_entrar()}</button>
+            {:else if conta.tipo === 'codex' && conta.codex_account && conta.codex_sync === 'idle' && conta.login?.loggedIn}
+              <!-- O "Depois" do login desembarca aqui: herdar da padrão quando quiser. -->
+              <button type="button" class="ct-acao" onclick={() => { codexHerdar = conta.codex_account ?? null; codexLogin = codexHerdar; }}>{m.codex_ui_herdar_botao()}</button>
             {/if}
             <!-- Só a conta adicional (~/.codex-<nome>) sai; a padrão é o ~/.codex da máquina. -->
             {#if conta.tipo === 'codex' && conta.codex_account && !conta.ativa}
@@ -756,8 +763,9 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
           {#if conta.tipo === 'codex' && codexLogin === conta.codex_account && codexServer}
             <div class="ct-form">
               <CodexContaLogin server={codexServer} accountId={conta.codex_account ?? undefined}
-                oncomplete={() => { codexLogin = null; carregar(); }} />
-              <button type="button" class="ct-acao" onclick={() => codexLogin = null}>{m.sessao_fechar()}</button>
+                herdar={codexHerdar === conta.codex_account}
+                oncomplete={() => { codexLogin = null; codexHerdar = null; carregar(); }} />
+              <button type="button" class="ct-acao" onclick={() => { codexLogin = null; codexHerdar = null; }}>{m.sessao_fechar()}</button>
             </div>
           {/if}
 

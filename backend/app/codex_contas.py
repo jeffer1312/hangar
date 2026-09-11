@@ -184,6 +184,8 @@ def create_account(name: str) -> Account:
             json.dumps({"version": _MARKER_VERSION, "id": name}) + "\n",
             encoding="utf-8",
         )
+        # Sem isto o login gravaria a credencial no keyring do sistema, fora da pasta da conta.
+        (target / "config.toml").write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
     except Exception as error:
         _cleanup_new_directory(target)
         raise AccountError(500, "codex_account_marker_failed", {"account_id": name}) from error
