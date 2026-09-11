@@ -1354,6 +1354,21 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   *dev* dependency, because `tests/test_procinfo.py` forces `_TEM_PROC = False` on Linux to exercise
   the Windows/macOS path against real processes. Without that, code that only runs off-Linux would
   never be tested by anyone developing on Linux.
+- **No Windows o backend continua tarefa "no logon, interativa" — subir sem login foi medido e
+  descartado** (10/09/2026, VM WinBoat). Tarefa S4U ("esteja o usuário logado ou não") ou serviço
+  (WinSW) sobem sem ninguém logado, e funcionam: backend na sessão 0 criou psmux, o Claude Code
+  abriu logado, e o envio multi-linha (clipboard + `M-v`) chegou inteiro, porque backend e o psmux
+  que ele cria dividem a área de transferência da sessão 0 (o psmux se encontra por
+  `~/.psmux/<sessão>.{port,key}`, TCP loopback, visível de qualquer sessão do mesmo usuário). O
+  que derruba a ideia é o TOKEN: logon não interativo de conta administradora vem com o token de
+  admin cheio (integridade Alta, `S-1-16-12288`), e `RunLevel Limited` é ignorado — medido nos
+  dois níveis. Backend admin = `install.ps1 -Update` recusado pela trava "terminal como
+  Administrador", tarefas re-registradas com dono Administradores, e todo Claude/Codex do app
+  rodando sem UAC. É a mesma armadilha que o instalador fechou em 10/09 pela manhã, voltando pela
+  porta de trás. Não existe "sem login E sem elevação" pra conta admin no Windows. O que ficou do
+  estudo: `tmux._sessao_windows_de` — o backend só cola pelo clipboard se o psmux do pane está na
+  MESMA sessão do Windows que ele (cada sessão tem a sua área de transferência; um backend subido
+  por SSH ou tarefa e um `claude` do terminal gráfico não dividem), senão cai no linha a linha.
 - **Windows runs on psmux, not tmux** (`marlocarlo.psmux` — native ConPTY multiplexer that publishes a
   `tmux` alias, so `tmux.py` calls it unchanged). Measured on psmux 3.3.7: `new-session -e`, exact
   `=NAME:` targets, `-F` formats incl. `#{?alternate_on,...}`, `capture-pane -S` with Unicode intact,

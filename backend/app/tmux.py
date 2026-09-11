@@ -222,6 +222,22 @@ _CLIP_CMD = [
 ]
 
 
+def _sessao_windows_de(pid: int | None) -> int | None:
+    """Sessao do Windows (0 = servicos/tarefas S4U, 1+ = logon) do processo. None = nao sei."""
+    if pid is None or os.name != "nt":
+        return None
+    try:
+        import ctypes
+        sid = ctypes.c_uint32()
+        if ctypes.windll.kernel32.ProcessIdToSessionId(ctypes.c_uint32(pid), ctypes.byref(sid)):
+            return int(sid.value)
+    except (ImportError, AttributeError, OSError):
+        # ImportError: `import ctypes` le `os.name` na hora e, num teste que o forca pra "nt" no
+        # Linux, morre em `_ctypes.COMError`. Nao sei = clipboard, o caminho medido.
+        pass
+    return None
+
+
 def paste_via_clipboard(name: str, text: str) -> bool:
     """Escreve o texto no clipboard do Windows e manda Alt+V. True = clipboard escrito E tecla
     enviada. False = falhou, e NADA foi digitado no pane (o caller decide o que fazer).
@@ -241,6 +257,16 @@ def paste_via_clipboard(name: str, text: str) -> bool:
     # PowerShell: a variante que tolera escreve um espaco no clipboard, ou seja cola um espaco em vez
     # de nada. Medido na winboat, 08/08/2026.
     if not text:
+        return False
+    # Cada sessao do Windows tem a sua area de transferencia. Backend subido por SSH ou tarefa
+    # (sessao 0) e um psmux criado no terminal grafico do usuario nao dividem a mesma: o M-v
+    # colaria o que estiver na area de transferencia DE LA — a mensagem anterior, ou o que a
+    # pessoa copiou. Sessao diferente = plano B (linha a linha). Sem resposta (pid ausente, API
+    # falhou) segue no clipboard: e o caminho medido.
+    minha, dele = _sessao_windows_de(os.getpid()), _sessao_windows_de(pane_pid(name))
+    if minha is not None and dele is not None and minha != dele:
+        _log.warning("psmux de %r esta na sessao %s do Windows e o backend na %s — clipboard nao e "
+                     "compartilhado, indo linha a linha", name, dele, minha)
         return False
     with _CLIP_LOCK:
         # Custo medido: ~157ms de cold start do PowerShell + ~95ms de trabalho, e o tempo e PLANO em

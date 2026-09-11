@@ -134,6 +134,7 @@ def test_clipboard_falhando_nao_manda_a_tecla(monkeypatch):
     # Se o clipboard nao foi escrito, mandar M-v colaria a mensagem ANTERIOR — conteudo de outra
     # mensagem submetido como se fosse esta. Nada de tecla sem clipboard confirmado.
     monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux, "pane_pid", lambda n: None)   # sessao do psmux desconhecida -> clipboard
     monkeypatch.setattr(tmux, "RUN", lambda args, **kw: _falha())
     enviadas = []
     monkeypatch.setattr(tmux, "send_keys", lambda n, k, **kw: enviadas.append(k) or True)
@@ -147,6 +148,7 @@ def test_clipboard_manda_o_texto_por_stdin_e_uma_tecla_so(monkeypatch):
     # (2) UMA tecla so. Medido: o rodape vira "paste again to expand", entao um segundo M-v EXPANDE
     # em vez de recolar, e o codigo nunca pode mandar dois achando que reforca.
     monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux, "pane_pid", lambda n: None)   # sessao do psmux desconhecida -> clipboard
     vistas = []
     monkeypatch.setattr(tmux, "RUN", lambda args, **kw: vistas.append((args, kw.get("input"))) or _ok())
     teclas = []
@@ -165,6 +167,7 @@ def test_clipboard_serializa_entre_sessoes(monkeypatch):
     # nao ve. Este teste falha se alguem trocar o lock global por um lock por sessao.
     import threading
     monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux, "pane_pid", lambda n: None)   # sessao do psmux desconhecida -> clipboard
     ordem = []
 
     def fake(args, **kw):
@@ -191,9 +194,29 @@ def test_clipboard_recusa_texto_vazio(monkeypatch):
     # e o clipboard fica com o conteudo ANTERIOR. Recusar antes de chamar, pra nao gastar 250ms de
     # PowerShell num caminho que so pode falhar.
     monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux, "pane_pid", lambda n: None)   # sessao do psmux desconhecida -> clipboard
     chamadas = []
     monkeypatch.setattr(tmux, "RUN", lambda args, **kw: chamadas.append(args) or _ok())
     teclas = []
     monkeypatch.setattr(tmux, "send_keys", lambda n, k, **kw: teclas.append(k) or True)
     assert tmux.paste_via_clipboard("cc", "") is False
     assert chamadas == [] and teclas == []
+
+
+def test_clipboard_recusa_psmux_de_outra_sessao_do_windows(monkeypatch):
+    # Backend numa tarefa S4U (sessao 0) e psmux criado no terminal do usuario (sessao grafica):
+    # cada sessao tem a sua area de transferencia, entao o M-v colaria o conteudo DE LA. Sessao
+    # diferente = False sem escrever nem teclar (o caller cai no linha a linha). Sessao igual ou
+    # desconhecida segue no clipboard.
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux, "pane_pid", lambda n: 4321)
+    monkeypatch.setattr(tmux, "_sessao_windows_de", lambda pid: 0 if pid == tmux.os.getpid() else 2)
+    chamadas = []
+    monkeypatch.setattr(tmux, "RUN", lambda args, **kw: chamadas.append(args) or _ok())
+    teclas = []
+    monkeypatch.setattr(tmux, "send_keys", lambda n, k, **kw: teclas.append(k) or True)
+    assert tmux.paste_via_clipboard("cc", "a\nb") is False
+    assert chamadas == [] and teclas == []
+    monkeypatch.setattr(tmux, "_sessao_windows_de", lambda pid: 0)
+    assert tmux.paste_via_clipboard("cc", "a\nb") is True
+    assert teclas == ["M-v"]
