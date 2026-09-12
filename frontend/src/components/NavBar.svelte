@@ -368,6 +368,12 @@
   }
   .navbar-conta {
     flex-shrink: 0;
+    /* Teto obrigatorio: sem ele um nome longo de pasta (`.codex-jefferson-felizardo`) empurra o
+       nome da sessao ate sobrar duas letras, porque quem encolhe na barra e o titulo. */
+    max-width: 9ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
     padding: 0 6px; border: 1px solid; border-radius: var(--radius-full);
   }
