@@ -3,6 +3,20 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Troca de provider durante o SSE
+
+Registro de 21/08/2026, movido do `CLAUDE.md` em 11/09/2026. Uma sessão Pi/Kimi recém-criada
+levava cerca de 15s para publicar o bilhete do pane. Nesse intervalo o registry a classificava
+como `claude`, com um caminho de transcript que nunca existiria. Na captura, o SSE abriu como
+Claude às 16:01:14 e o JSONL do Pi nasceu às 16:01:31 em `~/.pi/agent/sessions/`.
+
+Trocar só o arquivo deixava parser, monitor de estado e prévia no adapter escolhido na abertura:
+o tailer lia o arquivo certo com o parser errado e o chat ficava mudo até sair e voltar.
+O `jsonl_watcher` passou a observar `provider` junto de `jsonl`; `__reprovider__` refaz as quatro
+tarefas dependentes do adapter. Troca de provider não espera os dois polls de confirmação
+exigidos para troca de arquivo: é a identificação inicial da sessão, não uma oscilação.
+O drain resolve o adapter na hora para não enviar teclas à TUI errada.
+
 ## Ponte de skills (`app/skill_bridge.py`): o omp descobre sozinho as skills dos outros CLIs (providers `claude`/`claude-plugins`/`agents`); Pi e Kimi leem as pastas da própria config.
 
 Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro

@@ -71,20 +71,11 @@ Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+. Optional, one per pr
 `pi`, `omp` (oh-my-pi), `kimi`.
 Frontend uses **npm** (has `package-lock.json`).
 
-**O `npm ci` da raiz é SELETIVO, e esquecer os dois `--workspace` baixa o React Native à toa.** O
-comando certo, em todo lugar (CI, `scripts/deploy.sh`, `install.sh`, `install.ps1`) é
-`npm ci --workspace=@hangar/core --workspace=frontend`. O app nativo (`mobile/`) **é** workspace da
-raiz, e precisa ser: o **EAS Build detecta monorepo pelos `workspaces` da raiz**, e sem encontrar
-`mobile` ali ele envia só a pasta do app — aí o `@hangar/core`, que é `file:../packages/core`,
-chega como **link quebrado**, e o pior é que o `npm install` do outro lado **sai 0**: o erro só
-aparece depois, no bundle, como `Cannot find module '@hangar/core'` (reproduzido com
-`git archive HEAD mobile` + `npm install` numa pasta isolada). Ele já ficou de fora dos workspaces
-por causa do peso do React Native, e a lição é que a economia nunca veio dali: com os dois flags são
-**170 pacotes** instalados, contra os 167 de quando o app estava fora. O que dobrou de verdade foi o
-`package-lock.json` (7617 → 14348 linhas), porque o lock cobre todos os workspaces — peso no
-arquivo, não na instalação. Para trabalhar no app é `npm install` dentro de `mobile/` (ele tem
-lockfile próprio); o `metro.config.js` declara `watchFolders`/`nodeModulesPaths` à mão; e o
-`react-dom` dos testes fica pinado na mesma versão do `react`.
+**Instalação web seletiva:** `npm ci --workspace=@hangar/core --workspace=frontend`, inclusive no
+CI e nos instaladores. `mobile/` continua nos workspaces da raiz para o EAS incluir o core.
+Para trabalhar no app, use `npm install` em `mobile/`, que tem lockfile próprio; preserve os
+caminhos de workspace no Metro e `react-dom` dos testes na versão de `react`.
+Ao alterar instalação ou empacotamento, consulte a [evidência em instalacao.md](docs/decisoes/instalacao.md#instalação-seletiva-dos-workspaces).
 
 ```bash
 # Backend — binds http://127.0.0.1:8765 (set CP_LAN_BIND_IP to a LAN IP for phone access)
@@ -109,12 +100,11 @@ subcommands/advanced flags remain raw; `command codex` is the explicit bypass.
 
 ## Sessões-irmãs (hangar-send) + pareamento
 
-Sessões Claude da MESMA máquina se falam via `scripts/hangar-send` (`--list`, `<sessao> "msg"`,
-`--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd] [--engine <motor>] [--provider ...]
-[--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>]` — a sessão já NASCE no
-modelo/esforço/permissão pedidos, validados pelo backend via `app/model_args.py`) — tudo sobre a
-API local do backend (`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`,
-sidecars em `<config>/.hangar-pair/`) + prompt de protocolo injetado nas duas sessões; a UI
+Sessões usam `scripts/hangar-send` para recados, pareamento e criação; consulte `--help` antes
+dessas operações. Recados e pareamento 1:1 alcançam outros servidores por `servidor::sessao`;
+`--group` é local. A sessão nasce no modelo/esforço/permissão pedidos, validados por
+`app/model_args.py`. Pareamento = vínculo simétrico (`app/pair.py`, sidecars em
+`<config>/.hangar-pair/`) + prompt de protocolo injetado nas duas sessões; a UI
 mostra chip 🤝 (Composer), badges nas listas, PairSheet (conversa do par + contrato compartilhado
 `<a>__<b>.md` + split view desktop).
 
@@ -128,20 +118,12 @@ do protocolo que as sessões leem vive no heredoc de `scripts/install-hangar-sen
 `~/.claude/CLAUDE.md` direto é perdido no próximo sync.
 
 Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
-`orquestrar` — esta sessão vira líder de um grupo multi-repo (cria/pareia sessões via
-hangar-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
-`orquestrar` — conduz UM trabalho da ideia ao push: research, spec/plano com
-o usuário, e daí em diante autônomo — um executor, um revisor independente de outra família
-por commit, portão entre as Tasks, e uma sessão fresca revisando a branch no fim. O revisor
-entrega **correção fechada** (causa reproduzida, arquivo/símbolo, inventário de callers,
-passos numerados, comportamento final, prova), não diagnóstico; a próxima Task só abre com
-`APROVA`. Task que mexe em pixel carrega uma **barra** (uma tela nomeada, que dá pra abrir):
-o executor compara o print dela com a barra numa escolha **cega** feita por subagente fresco,
-teto de 2 rodadas, e o revisor refaz a comparação. Um escritor por árvore, e o padrão é
-**serial** — lote paralelo com uma worktree por Task é exceção declarada no plano
-(`references/paralelo-worktree.md`), com merge mecânico do árbitro e verificação completa
-depois de cada merge. `SKILL.md` é roteador: cada sessão lê só a página do seu papel em
-`references/`.
+[`orquestrar`](skills/orquestrar/SKILL.md) conduz um trabalho em um ou vários repositórios,
+quando o usuário pedir o fluxo ou o kick-off mandar invocá-lo com `Role:`. Após o planejamento
+aprovado, executor e revisor independente trabalham com portão entre Tasks e revisão final da
+branch. Push depende de autorização do usuário. Um escritor por árvore, execução serial por
+padrão; cada sessão lê só a referência do seu papel. Contrato visual, exceções de paralelismo e
+demais etapas ficam na skill.
 
 **Instalar/atualizar numa máquina** (após `git pull`):
 
@@ -155,12 +137,13 @@ npm --prefix frontend run build                          # só se o front for se
 ```
 
 Sessões Claude já abertas não releem o CLAUDE.md global — só as novas conhecem o hangar-send.
-Escopo: pareamento e `--group` só dentro da mesma máquina. Recado 1:1 e `--list` alcançam OUTROS
-servidores via endereço `servidor::sessao`: `backend/peers.json` (id → base_url+token, gitignored;
+Escopo: `--group` é local; recados, pareamento 1:1 e `--list` alcançam OUTROS servidores via
+endereço `servidor::sessao`: `backend/peers.json` (id → base_url+token, gitignored;
 ver `peers.json.example`) + `CP_SERVER_ID` no `backend/.env`. Peer com `"enabled": false` sai da
 VARREDURA (painel e `--list`) mas segue endereçável por `servidor::sessao` — é pra máquina que
 você sabe que está desligada, senão cada poll paga o timeout de 4s esperando ela (id desta máquina, endereço de
-resposta do `[de: id::sessao]`). Só o hangar-send muda — o backend nem sabe da feature.
+resposta do `[de: id::sessao]`). Recados usam o script; o pareamento remoto passa pelo backend
+local e por `/pair-remote` no destino.
 
 ## SSE event model
 
@@ -171,19 +154,10 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 - `preview` — live in-flight assistant text (full-replace; dropped when the real block commits).
 - `ask_question` — opens the native AskUserQuestion sheet.
 - `ping` — liveness heartbeat; resets a 25s watchdog that reconnects on half-open connections.
-- `reset` — transcript swapped (e.g. `/clear`) → wipe and reload history. **Também** quando o
-  *provider* da sessão muda debaixo de um stream já aberto: uma sessão Pi/Kimi recém-criada leva
-  ~15s até a extensão publicar o bilhete do pane, e nesse intervalo o registry a classifica como
-  `claude` e resolve um caminho no layout do Claude, que nunca vai existir (medido 21/08/2026:
-  `sse: abriu name=hangar provider=claude jsonl=a05ee4a8-….jsonl` às 16:01:14, com o `.jsonl` do Pi
-  nascendo às 16:01:31 em `~/.pi/agent/sessions/`). Rebindar só o arquivo não bastava — o adapter
-  (parser do transcript, monitor de estado, fonte da prévia) era escolhido **uma vez**, na abertura,
-  então o tailer lia o arquivo certo com o parser errado e o chat ficava mudo até sair e voltar.
-  Hoje o `jsonl_watcher` vigia `provider` junto do `jsonl` e emite `__reprovider__`, que refaz as
-  quatro tarefas dependentes de adapter. Duas regras: a troca de provider **não** espera os 2 polls
-  de confirmação que a troca de arquivo exige (ela não oscila — é a sessão terminando de se
-  identificar), e o `drain` da fila passou a resolver o adapter na hora, porque drenar pela TUI
-  errada digita teclas que aquela TUI não espera.
+- `reset` — transcript swapped (e.g. `/clear`) → wipe and reload history. Troca de provider
+  também refaz parser, monitor e prévia via `__reprovider__`, sem esperar os polls de troca de
+  arquivo. O drain resolve o adapter na hora. Ao mexer nesse fluxo, leia a
+  [evidência de troca de provider](docs/decisoes/harnesses.md#troca-de-provider-durante-o-sse).
 
 ## Regras
 
@@ -355,14 +329,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 
 ## tmux + Claude Code truecolor
 
-Inside tmux, Claude Code caps color depth to 256 and renders theme colors wrong (teal / pink / washed-out)
-while rendering correctly outside tmux. Fix: `COLORTERM=truecolor` + `CLAUDE_CODE_TMUX_TRUECOLOR=1` in the
-environment before `claude` starts (settings.json env is unreliable here). The installer covers this: the
-`claude` wrapper sets both on every path, the backend passes them via `tmux new-session -e`, and the managed
-`~/.tmux.conf` block (with `default-terminal "xterm-256color"`, not `tmux-256color`) sets them for hand-made
-sessions. Only a `command claude` outside the wrapper still needs the exports in the shell rc. Full
-explanation, reference config, and verify steps: [`docs/tmux-truecolor-setup.md`](docs/tmux-truecolor-setup.md)
-and [`docs/tmux.conf.example`](docs/tmux.conf.example).
+Preserve `COLORTERM=truecolor` e `CLAUDE_CODE_TMUX_TRUECOLOR=1` antes de iniciar o Claude;
+`settings.json` não basta. Ao alterar wrappers/tmux ou diagnosticar cores, consulte
+[`docs/tmux-truecolor-setup.md`](docs/tmux-truecolor-setup.md) e
+[`docs/tmux.conf.example`](docs/tmux.conf.example).
 
 ## Agent skills
 

@@ -1,11 +1,18 @@
 ---
 name: orquestrar
 description: |
-  Do NOT pick this skill on your own because a task looks large, risky, multi-step or about to become an MR/push - planning, implementing and reviewing on your own, however big, is NOT this skill. It is invoked in exactly two situations - (1) the user asks for the pipeline by name or in their own words - "orquestra", "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "abre uma sessao pra revisar", "arbitro/executor/revisor" - or (2) a kick-off message literally says to invoke the `orquestrar` skill and carries a `Role:` line (executor, reviewer, branch review, retrospective, arbiter). Nothing else triggers it. What it does - one large piece of work with independent review per commit, a gate between Tasks and little interaction from the user after planning; one repo or several, plan in any format or none. Not for a small task one session can solve, nor for a one-off review of a diff (dispatch a review subagent directly).
+  Orquestre um trabalho com revisão independente por commit quando o usuário pedir esse
+  fluxo ou um kick-off mandar invocar orquestrar com uma linha Role:. Tamanho ou risco da
+  tarefa, execução comum de plano e revisão avulsa não ativam este fluxo.
 allowed-tools: Bash(hangar-send:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git show:*), Bash(git branch:*), Bash(git grep:*), Bash(tmux display:*), Bash(date:*)
 ---
 
 # Pipeline: research → plan → autonomous execution with a gate
+
+Pedidos do fluxo podem vir pelo nome ou em palavras como "monta o time e toca" e
+"quero revisão independente por commit". Um pedido genérico para executar um plano não
+basta: ele precisa indicar a orquestração. O fluxo aceita um ou vários repositórios e
+plano em qualquer formato; uma revisão avulsa de diff usa um revisor, sem abrir o pipeline.
 
 > **Before anything else: were you told to invoke this skill by name?** Either the user asked for
 > the pipeline (by name or in their own words) or a kick-off message says "invoke the `orquestrar`

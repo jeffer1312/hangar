@@ -9,6 +9,21 @@ No `--reload` (it holds SSE + watchfiles). `pkill -f app.main` can match your
   own shell; SIGTERM can hang on an open SSE connection. Kill `-9` the pid bound to the port and relaunch
   detached (`setsid`).
 
+## Instalação seletiva dos workspaces
+
+Registro trazido do `CLAUDE.md` em 11/09/2026. O comando web, no CI e nos instaladores, é
+`npm ci --workspace=@hangar/core --workspace=frontend`. O EAS Build detecta o monorepo pelos
+`workspaces` da raiz; retirar `mobile` fazia o envio conter só o app, deixando
+`@hangar/core` (`file:../packages/core`) como link quebrado. Reproduzido com
+`git archive HEAD mobile` e `npm install` em pasta isolada: a instalação saía 0, mas o bundle
+falhava com `Cannot find module '@hangar/core'`.
+
+Na medição registrada, a instalação seletiva incluiu 170 pacotes, contra 167 quando o app
+estava fora dos workspaces. O lock da raiz passou de 7617 para 14348 linhas porque descreve
+todos os workspaces; isso não significa instalar React Native no caminho web. Para desenvolver
+o app, `npm install` dentro de `mobile/` usa seu lock próprio. O `metro.config.js` declara
+`watchFolders`/`nodeModulesPaths`, e o `react-dom` dos testes acompanha a versão de `react`.
+
 ## Quem serve a interface é o BACKEND, e o `frontend/dist` chega pronto do CI.
 
 Duas mudanças de
