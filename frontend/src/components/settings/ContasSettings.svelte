@@ -11,11 +11,12 @@
   // Nome exibido é `nome` (o apelido, quando existe); TUDO que vai pra rota usa `nome_natural`,
   // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
   // existe assim que a pessoa renomear a primeira.
-  import { onDestroy, untrack } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
 import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
-  import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
+  import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin, type ResultadoLogin } from '../../lib/loginConta';
+  import { copyText } from '../../lib/clipboard';
   import { initials } from '@hangar/core';
   import { nivelDePct, VELHA_APOS_S, motivoParado, motivoSessaoViva } from '../../lib/cota';
   import NovaCredencialSheet from './NovaCredencialSheet.svelte';
@@ -231,6 +232,8 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
     // batendo no servidor antigo pra sempre.
     pararPoll();
     loginDe = null; loginCodigo = ''; loginPasso = { etapa: 'idle' };
+    loginConta = null; loginSucesso = null; loginCopiado = false; loginConsultaErro = false; loginFalhou = false;
+    ultimaContaConectada = null;
     loginErro = ''; loginEnviando = false; loginIniciando = false; loginParado = false;
     aviso = ''; avisoErro = false;
     confirmando = null; menuDe = null;
@@ -347,6 +350,13 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
   // chave estável do fluxo). Uma tentativa por conta; o botão Entrar de outra conta fica
   // desabilitado enquanto uma está em voo (uma janela escondida por vez).
   let loginDe = $state<string | null>(null);
+  let loginConta = $state.raw<Credencial | null>(null);
+  let loginSucesso = $state<ResultadoLogin | null>(null);
+  let loginCopiado = $state(false);
+  let loginConsultaErro = $state(false);
+  let loginFalhou = $state(false);
+  let ultimaContaConectada = $state<string | null>(null);
+  let superficie: HTMLDivElement;
   let loginPasso = $state<PassoLogin>({ etapa: 'idle' });
   let loginCodigo = $state('');
   let loginEnviando = $state(false);
@@ -363,6 +373,15 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
 
   async function iniciarEntrar(conta: Credencial) {
     if (loginDe || loginIniciando) return;
+    const tentativa = { ...conta };
+    loginConta = tentativa;
+    loginSucesso = null;
+    loginCopiado = false;
+    loginConsultaErro = false;
+    loginFalhou = false;
+    ultimaContaConectada = null;
+    aviso = ''; avisoErro = false;
+    menuDe = null;
     // Alvo desta tentativa, capturado AGORA: se o ?srv= trocar no meio do voo, este é o alvo
     // ANTIGO — o cancelamento do efeito de geração e o ramo `g !== geracao` abaixo usam o
     // capturado, nunca o apiTarget corrente.
@@ -374,7 +393,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
     loginPasso = { etapa: 'idle' };
     try {
       await iniciarLogin(alvo, conta.nome_natural);
-      if (destruido || g !== geracao) {
+      if (destruido || g !== geracao || loginConta !== tentativa) {
         // Desmontou ou o alvo trocou ENTRE o clique e a resposta: sem tela onde mostrar erro
         // (o mesmo ramo silencioso do onDestroy), mas a janela do servidor — a máquina ANTIGA —
         // precisa morrer de qualquer forma.
@@ -385,21 +404,22 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
       // Primeira leitura do passo logo de cara (a URL pode já estar no pane), depois o poll.
       // O poll só começa depois do login confirmado no servidor: um 409/404 no iniciar NÃO
       // deixa intervalo órfão rodando.
-      try {
-        loginPasso = await passoLogin(alvo, conta.nome_natural);
-      } catch {
-        // Poll silencioso: o erro de rede aparece na ação (confirmar/cancelar), não no loop.
-      }
-      loginPoll = setInterval(async () => {
-        if (loginDe) {
-          try {
-            loginPasso = await passoLogin(alvo, loginDe);
-          } catch {
-            // Silencioso: o erro aparece nas ações, não no loop.
-          }
-        }
-      }, 2000);
+      let lendo = false;
+      const atual = () => !destruido && g === geracao && loginConta === tentativa && loginDe === conta.nome_natural;
+      const consultar = async () => {
+        if (!atual() || lendo) return;
+        lendo = true;
+        try {
+          const passo = await passoLogin(alvo, conta.nome_natural);
+          if (atual()) { loginPasso = passo; loginConsultaErro = false; }
+        } catch {
+          if (atual()) loginConsultaErro = true;
+        } finally { lendo = false; }
+      };
+      await consultar();
+      if (atual()) loginPoll = setInterval(consultar, 2000);
     } catch (e) {
+      if (destruido || g !== geracao || loginConta !== tentativa) return;
       // O que chega: 401 com token (sessao_expirada), o texto do envelope do backend
       // traduzido (mensagemDeErro) ou erro de rede. 'Failed to fetch' cru (fetch abortado,
       // sem resposta) NAO vai pra tela — vira falha de conexao generica. Erro com status
@@ -409,7 +429,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
         ? e.message
         : m.falha_conexao();
     } finally {
-      loginIniciando = false;
+      if (loginConta === tentativa) loginIniciando = false;
     }
   }
 
@@ -422,7 +442,9 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
 
   async function confirmarEntrar() {
     const conta = loginDe;
-    if (!conta || loginEnviando) return;
+    const tentativa = loginConta;
+    const alvo = apiTarget;
+    if (!conta || !tentativa || loginEnviando || loginParado || loginFalhou || !loginCodigo.trim()) return;
     // Geração desta tentativa: a resposta de um alvo que saiu da tela não escreve aviso/erro nela
     // (o molde é o iniciarEntrar, 60 linhas acima). O teto do confirmar (310s) deixa o voo aberto
     // por minutos — justo a janela em que o usuário espera o OAuth e pode trocar o ?srv=
@@ -431,45 +453,104 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
     loginEnviando = true;
     loginErro = '';
     try {
-      const r = await confirmarLogin(apiTarget, conta, loginCodigo);
-      if (g !== geracao) return;
+      const r = await confirmarLogin(alvo, conta, loginCodigo);
+      if (destruido || g !== geracao || loginConta !== tentativa) return;
+      if (!r.ok) throw new Error(m.contas_login_nao_confirmado());
       pararPoll();
+      await clienteQuery.cancelQueries({ queryKey: credenciais(alvo).queryKey });
+      if (destruido || g !== geracao || loginConta !== tentativa) return;
       loginDe = null;
       loginCodigo = '';
       loginPasso = { etapa: 'idle' };
-      // Aviso de sucesso: o e-mail e o plano que o servidor RELÊU da conta (a confirmação
-      // por releitura, não pela aparência da tela).
-      aviso = m.contas_login_ok({ email: r.email ?? '', plano: r.plano ?? '' });
-      avisoErro = false;
-      await carregar(geracao);
+      loginSucesso = r;
+      ultimaContaConectada = tentativa.id;
+      // A confirmação já releu a credencial; a cota anterior não pode pedir outro login.
+      clienteQuery.setQueryData<Credencial[]>(credenciais(alvo).queryKey, lista => lista?.map<Credencial>(c =>
+        c.id === tentativa.id ? { ...c, login: { estado: 'ok', loggedIn: true, email: r.email, plano: r.plano }, cota: null } : c));
+      void listarCredenciais(alvo, true).then(lista => {
+        if (!destruido && g === geracao && ultimaContaConectada === tentativa.id) clienteQuery.setQueryData(credenciais(alvo).queryKey, lista);
+      }).catch(() => {
+        if (!destruido && g === geracao && ultimaContaConectada === tentativa.id) { aviso = m.contas_login_atualizar_erro(); avisoErro = true; }
+      });
     } catch (e) {
-      if (g !== geracao) return;
+      if (destruido || g !== geracao || loginConta !== tentativa) return;
+      pararPoll();
+      loginFalhou = true;
+      loginPasso = { etapa: 'idle' };
       loginErro = e instanceof Error && e.message ? e.message : m.falha_conexao();
       // O erro NÃO prova que o login falhou: o teto pode ter cortado com o backend SEGUINDO
       // (a conta acaba logada de verdade). Recarregar a lista para de mentir sozinha — a tela
       // mostra a conta como o servidor a vê (parecer da rodada 1, passo 4).
       await carregar(geracao);
     } finally {
-      loginEnviando = false;
+      if (loginConta === tentativa) loginEnviando = false;
     }
+  }
+
+  function focarLogin(node: HTMLElement) {
+    node.focus({ preventScroll: true });
+    node.scrollIntoView?.({ block: 'start' });
+  }
+
+  async function copiarLinkLogin() {
+    if (!loginPasso.url) return;
+    const tentativa = loginConta;
+    try {
+      await copyText(loginPasso.url);
+      if (loginConta === tentativa) loginCopiado = true;
+    } catch {
+      if (loginConta === tentativa) loginErro = m.contas_login_copiar_erro();
+    }
+  }
+
+  async function voltarContas() {
+    const id = loginConta?.id;
+    loginConta = null; loginSucesso = null; loginCodigo = ''; loginErro = '';
+    loginConsultaErro = false; loginCopiado = false; loginFalhou = false;
+    loginEnviando = false; loginIniciando = false;
+    await tick();
+    const cartao = [...(superficie?.querySelectorAll<HTMLElement>('[data-conta-id]') ?? [])]
+      .find(node => node.dataset.contaId === id);
+    cartao?.focus({ preventScroll: true });
+    cartao?.scrollIntoView?.({ block: 'nearest' });
   }
 
   async function cancelarEntrar() {
     const conta = loginDe;
-    if (!conta) return;
+    const tentativa = loginConta;
+    if (!conta) { await voltarContas(); return; }
     loginParado = true;
     loginErro = '';
     try {
       await cancelarLogin(apiTarget, conta);
-    } catch {
-      // O servidor pode não ter janela pra matar (já morreu); a tentativa local morre igual.
-    } finally {
+      if (destruido || loginConta !== tentativa) return;
       pararPoll();
       loginDe = null;
-      loginCodigo = '';
       loginPasso = { etapa: 'idle' };
-      loginParado = false;
+      await voltarContas();
+    } catch (e) {
+      if (!destruido && loginConta === tentativa) loginErro = e instanceof Error ? e.message : m.falha_conexao();
+    } finally {
+      if (!destruido && (loginConta === tentativa || !loginConta)) loginParado = false;
     }
+  }
+
+  async function recomecarEntrar() {
+    const tentativa = loginConta;
+    if (!tentativa || loginIniciando || loginEnviando || loginParado) return;
+    if (loginDe) {
+      loginParado = true;
+      try {
+        // Falha de rede não comprova que o backend encerrou a tentativa anterior.
+        await cancelarLogin(apiTarget, loginDe);
+        if (destruido || loginConta !== tentativa) return;
+        loginDe = null;
+      } catch (e) {
+        if (!destruido && loginConta === tentativa) loginErro = e instanceof Error ? e.message : m.falha_conexao();
+        return;
+      } finally { if (loginConta === tentativa) loginParado = false; }
+    }
+    await iniciarEntrar(tentativa);
   }
 
   // B8 — o poll e a tentativa em voo NÃO podem sobreviver à desmontagem do componente.
@@ -487,7 +568,78 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
   });
 </script>
 
-<div class="ct-superficie">
+<div class="ct-superficie" bind:this={superficie}>
+  {#if loginConta}
+    <section class="ct-login" aria-labelledby="contas-login-titulo">
+      <div class="ct-login-identidade">
+        <ProvedorIcone tipo="claude" iniciais={initials(loginConta.nome)} size={30} />
+        <span>{codexServer?.label ? m.contas_login_servidor({ nome: codexServer.label }) : m.contas_login_servidor_atual()}</span>
+      </div>
+      {#if loginSucesso}
+        <div class="ct-login-sucesso" role="status">
+          <span class="ct-login-check" aria-hidden="true">✓</span>
+          <h2 id="contas-login-titulo" tabindex="-1" use:focarLogin>{m.contas_login_conectada()}</h2>
+          <p class="ct-login-conta">{loginConta.nome}</p>
+          <p class="ct-login-descricao">{m.contas_login_pronta()}</p>
+          <dl class="ct-login-dados">
+            {#if loginSucesso.email}<div><dt>{m.contas_login_email()}</dt><dd>{loginSucesso.email}</dd></div>{/if}
+            {#if loginSucesso.plano}<div><dt>{m.contas_login_plano()}</dt><dd>{loginSucesso.plano}</dd></div>{/if}
+          </dl>
+        </div>
+        {#if avisoErro}<p class="ct-aviso erro" role="alert">{aviso}</p>{/if}
+        <button type="button" class="ct-btn primario ct-login-concluir" onclick={voltarContas}>{m.contas_login_concluir()}</button>
+      {:else}
+        <h2 id="contas-login-titulo" tabindex="-1" use:focarLogin>{m.contas_login_titulo({ nome: loginConta.nome })}</h2>
+        {#if loginErro}<p class="ct-aviso erro" role="alert">{loginErro}</p>{/if}
+        {#if loginConsultaErro}<p class="ct-aviso erro" role="alert">{m.falha_conexao()}</p>{/if}
+        {#if loginIniciando || (loginDe && !loginPasso.url && !loginFalhou)}
+          <p class="ct-login-progresso" role="status"><span class="ct-login-spinner" aria-hidden="true"></span>{m.contas_login_preparando()}</p>
+        {:else if loginDe && !loginFalhou}
+          <form onsubmit={(e) => { e.preventDefault(); confirmarEntrar(); }}>
+            <div class="ct-passo">
+              <span class="ct-num" aria-hidden="true">1</span>
+              <div class="ct-passo-txt">
+                <b>{m.contas_login_autorizar()}</b>
+                <p>{m.contas_login_autorizar_ajuda()}</p>
+                <div class="ct-login-links">
+                  <a class="ct-link ct-btn primario" href={loginEnviando || loginParado ? undefined : loginPasso.url ?? undefined}
+                    aria-disabled={loginEnviando || loginParado} target="_blank" rel="noopener noreferrer">{m.contas_login_abrir()}</a>
+                  <button type="button" class="ct-btn" onclick={copiarLinkLogin} disabled={loginEnviando || loginParado}>
+                    {loginCopiado ? m.toast_copiado() : m.contas_login_copiar_link()}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="ct-passo">
+              <span class="ct-num" aria-hidden="true">2</span>
+              <div class="ct-passo-txt">
+                <label for="contas-login-codigo">{m.contas_login_codigo()}</label>
+                <p>{m.contas_passo3()}</p>
+                <input id="contas-login-codigo" class="ct-campo-cod" type="text" autocomplete="one-time-code"
+                  autocapitalize="none" spellcheck={false} placeholder={m.contas_codigo_placeholder()}
+                  bind:value={loginCodigo} disabled={loginEnviando || loginParado} />
+              </div>
+            </div>
+            {#if loginEnviando}
+              <p class="ct-login-progresso" role="status"><span class="ct-login-spinner" aria-hidden="true"></span>{m.contas_login_confirmando()}</p>
+            {/if}
+            <div class="ct-rodape login">
+              <button type="button" class="ct-btn" onclick={cancelarEntrar} disabled={loginParado}>{m.comum_cancelar()}</button>
+              <button type="submit" class="ct-btn primario" disabled={loginEnviando || loginParado || !loginCodigo.trim()}>{m.contas_confirmar_codigo()}</button>
+            </div>
+          </form>
+        {/if}
+        {#if !loginDe || !loginPasso.url || loginFalhou}
+          <div class="ct-rodape login">
+            <button type="button" class="ct-btn" onclick={cancelarEntrar} disabled={loginIniciando || loginParado}>{m.comum_voltar()}</button>
+            {#if !loginIniciando && (!loginDe || loginFalhou)}
+              <button type="button" class="ct-btn primario" onclick={recomecarEntrar} disabled={loginParado}>{m.lista_tentar_novamente()}</button>
+            {/if}
+          </div>
+        {/if}
+      {/if}
+    </section>
+  {:else}
   <!-- Cabeçalho da coleção: título + "atualizado há X" + botão de atualizar na mesma linha
        (referência Cloudscape/AWS: refresh no cabeçalho, timestamp ao lado, lista visível
        durante a busca). O ícone é SVG traçado 2, como o lápis e o kebab. -->
@@ -592,7 +744,9 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
             })()}
         {@const motor = motorDe(conta)}
         {@const motorEmEdicao = motorAberto === conta.id}
-        <div class="ct-card" class:fora={conta.login?.estado === 'ok' && !conta.login.loggedIn}>
+        <div class="ct-card" tabindex="-1" data-conta-id={conta.id}
+          class:recem-conectada={ultimaContaConectada === conta.id}
+          class:fora={conta.login?.estado === 'ok' && !conta.login.loggedIn}>
           <div class="ct-top">
           <span class="ct-ico">
             <ProvedorIcone tipo={conta.tipo} baseUrl={conta.base_url} iniciais={initials(conta.nome)}
@@ -629,6 +783,9 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
                      Etiqueta só pra chave de API (a exceção), na ponta da linha. "em uso" é
                      pontinho verde, não pílula — um selo a menos disputando o nome. -->
                 {#if conta.ativa}<span class="ct-emuso">{m.contas_em_uso()}</span>{/if}
+                {#if conta.tipo === 'claude' && conta.login?.estado === 'ok' && conta.login.loggedIn && conta.cota?.estado !== 'expirada'}
+                  <span class="ct-conectada">{m.contas_conectada()}</span>
+                {/if}
               {/if}
             </span>
             {#if conta.tipo === 'codex'}
@@ -878,59 +1035,6 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
     <p class="ct-aviso" class:erro={avisoErro} role={avisoErro ? 'alert' : 'status'} aria-live="polite">{aviso}</p>
   {/if}
 
-  {#if loginDe}
-    <!-- Passo a passo do login remoto (mock estado 2): o link de autorização, o campo do
-         código e a confirmação por RELEITURA do estado da conta (o passo 4 não se completa
-         pela aparência — só quando o servidor relê logada e devolve e-mail e plano). -->
-    <div class="ct-login">
-      <p class="st-secao ct-topo">{m.contas_entrar_titulo({ nome: loginDe })}</p>
-
-      <div class="ct-passo feito">
-        <span class="ct-num" aria-hidden="true">✓</span>
-        <span class="ct-passo-txt">{m.contas_passo1()}</span>
-      </div>
-
-      <div class="ct-passo" class:espera={!loginPasso.url}>
-        <span class="ct-num" aria-hidden="true">2</span>
-        <span class="ct-passo-txt">
-          <b>{m.contas_passo2()}</b>
-          {#if loginPasso.url}
-            <a class="ct-link" href={loginPasso.url} target="_blank" rel="noopener noreferrer">{loginPasso.url}</a>
-          {/if}
-        </span>
-      </div>
-
-      <div class="ct-passo">
-        <span class="ct-num" aria-hidden="true">3</span>
-        <span class="ct-passo-txt">
-          <b>{m.contas_passo3()}</b>
-          <input class="ct-campo-cod" type="text" autocomplete="one-time-code"
-            placeholder={m.contas_codigo_placeholder()} aria-label={m.contas_codigo_placeholder()}
-            bind:value={loginCodigo} disabled={loginEnviando}
-            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmarEntrar(); } }} />
-        </span>
-      </div>
-
-      <div class="ct-passo espera">
-        <span class="ct-num" aria-hidden="true">4</span>
-        <span class="ct-passo-txt">{m.contas_passo4()}</span>
-      </div>
-    </div>
-
-    <div class="ct-rodape login">
-      <button type="button" class="ct-btn" onclick={cancelarEntrar}
-        disabled={loginParado}>{loginParado ? '…' : m.comum_cancelar()}</button>
-      <button type="button" class="ct-btn primario" onclick={confirmarEntrar}
-        disabled={loginEnviando || !loginCodigo.trim()}>{loginEnviando ? '…' : m.contas_confirmar_codigo()}</button>
-    </div>
-  {/if}
-
-  {#if loginErro}
-    <!-- Fora do {#if loginDe} de proposito: quando o INICIO falha (409/404), o loginDe
-         nunca é setado e o aviso de erro não poderia aparecer dentro do bloco. -->
-    <p class="ct-aviso erro" role="alert">{loginErro}</p>
-  {/if}
-
   <div class="ct-sep"></div>
 
   <p class="st-secao ct-topo">{m.contas_herda_titulo()}</p>
@@ -938,6 +1042,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
     <p>{m.contas_herda_igual()}</p>
     <p>{m.contas_herda_so({ arquivo: '.credentials.json', pasta: 'projects/' })}</p>
   </div>
+  {/if}
 </div>
 
 <style>
@@ -1152,26 +1257,54 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
                 line-height: 1.45; }
   .ct-herda p:last-child { margin-bottom: 0; }
 
-  /* Passo a passo do login remoto (mock estado 2) — mesmas medidas do mock, tokens reais. */
-  .ct-login { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4);
-              background: var(--surface-card); border: 1px solid var(--border-subtle);
-              border-radius: var(--radius-md); }
+  .ct-login { display: flex; flex-direction: column; gap: var(--space-5); box-sizing: border-box;
+              width: 100%; max-width: 560px; margin: 0 auto; padding: var(--space-6) var(--space-3);
+              background: transparent; }
+  .ct-login-identidade { display: flex; align-items: center; justify-content: center;
+                         gap: var(--space-2); color: var(--text-muted); font-size: var(--text-xs); }
+  .ct-login h2 { margin: 0; text-align: center; font-size: var(--text-xl); line-height: 1.3; }
+  .ct-login form { min-width: 0; }
   .ct-passo { display: flex; gap: var(--space-3); align-items: flex-start; }
-  .ct-num { flex-shrink: 0; width: 20px; height: 20px; border-radius: var(--radius-full);
-            background: var(--accent-dim); color: var(--accent); font-size: 11px; font-weight: 600;
+  .ct-passo + .ct-passo { margin-top: var(--space-6); }
+  .ct-num { flex-shrink: 0; width: 28px; height: 28px; border-radius: var(--radius-full);
+            background: var(--accent-dim); color: var(--accent); font-size: var(--text-sm); font-weight: 600;
             display: grid; place-items: center; margin-top: 1px; }
-  .ct-passo.feito .ct-num { background: rgba(52, 199, 89, 0.16); color: var(--success); }
-  .ct-passo.espera .ct-num { background: var(--bg-elevated); color: var(--text-muted); }
-  .ct-passo-txt { font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5;
-                  min-width: 0; }
-  .ct-passo-txt b { color: var(--text-primary); font-weight: 600; }
-  .ct-link { display: inline-block; margin-top: var(--space-1); font-family: var(--font-mono);
-             font-size: 11px; color: var(--accent); word-break: break-all; }
-  .ct-campo-cod { width: 100%; height: 38px; margin-top: var(--space-2); padding: 0 var(--space-3);
+  .ct-passo-txt { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; }
+  .ct-passo-txt b, .ct-passo-txt label { color: var(--text-primary); font-weight: 600; }
+  .ct-passo-txt p { margin: var(--space-1) 0 0; }
+  .ct-login-links { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+  .ct-login .ct-btn { display: inline-flex; align-items: center; justify-content: center;
+                     min-height: 44px; height: auto; padding: var(--space-2) var(--space-3); }
+  .ct-link { text-decoration: none; }
+  .ct-link[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+  .ct-campo-cod { width: 100%; height: 44px; margin-top: var(--space-2); padding: 0 var(--space-3);
               background: var(--surface-inset); border: 1px solid var(--border-default);
               border-radius: var(--radius-sm); color: var(--text-primary);
               font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; }
-  .ct-btn.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ct-btn.primario { background: var(--accent); border-color: var(--accent); color: var(--text-inverse); }
+  .ct-login-progresso { display: flex; align-items: center; justify-content: center; gap: var(--space-2);
+                       margin: var(--space-4) 0; color: var(--text-secondary); font-size: var(--text-sm); }
+  .ct-login-spinner { width: 16px; height: 16px; border: 2px solid var(--border-default);
+                      border-top-color: var(--accent); border-radius: var(--radius-full); animation: spin .8s linear infinite; }
+  .ct-login-sucesso { text-align: center; }
+  .ct-login-check { display: grid; place-items: center; width: 64px; height: 64px;
+                    margin: 0 auto var(--space-4); border-radius: var(--radius-full); font-size: 32px;
+                    color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+  .ct-login-conta { font-weight: 600; margin: var(--space-3) 0 var(--space-1); }
+  .ct-login-descricao { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); }
+  .ct-login-dados { display: grid; gap: var(--space-3); margin: var(--space-5) 0 0;
+                    padding: var(--space-4) 0; border-top: 1px solid var(--border-subtle); }
+  .ct-login-dados div { display: grid; grid-template-columns: 70px 1fr; gap: var(--space-3); text-align: left; }
+  .ct-login-dados dt { color: var(--text-muted); font-size: var(--text-sm); }
+  .ct-login-dados dd { margin: 0; overflow-wrap: anywhere; font-size: var(--text-sm); }
+  .ct-conectada { color: var(--success); font-size: var(--text-2xs); font-weight: 500; }
+  .ct-card.recem-conectada { border-color: var(--success); }
+  .ct-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @container (max-width: 420px) {
+    .ct-login { padding: var(--space-4) 0; }
+    .ct-login-links { flex-direction: column; }
+    .ct-login-links .ct-btn { width: 100%; box-sizing: border-box; }
+  }
 
   /* Teclado: quem chega no Tab tem de VER onde está. Sem isto o lápis e o kebab (fundo
      transparente / sutil) só mostravam o anel padrão do navegador, que some no fundo escuro. */

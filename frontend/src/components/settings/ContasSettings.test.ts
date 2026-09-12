@@ -320,7 +320,7 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
 });
 
 describe('ContasSettings — o botão Entrar (Task 7)', () => {
-  it('mostra os quatro passos do mock estado 2 quando começa o login', async () => {
+  it('substitui a lista por login focado, sem URL crua nem sucesso antecipado', async () => {
     const t = montar([DESLOGADA]);
     await tick(); await tick();
     t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
@@ -328,19 +328,18 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, 'testes');
     expect(t.el.querySelector('.ct-login')).not.toBeNull();
     const passos = [...t.el.querySelectorAll<HTMLElement>('.ct-passo')];
-    expect(passos.length).toBe(4);
-    expect(passos[0].textContent).toContain(m.contas_passo1());
-    expect(passos[1].textContent).toContain(m.contas_passo2());
-    expect(passos[2].textContent).toContain(m.contas_passo3());
-    expect(passos[3].textContent).toContain(m.contas_passo4());
+    expect(passos.length).toBe(2);
+    expect(t.el.querySelector('.ct-lista')).toBeNull();
+    expect(t.el.querySelector('.ct-passo.feito')).toBeNull();
     // O link de autorização (quando o poll devolve a URL) é um <a> de verdade.
     const link = t.el.querySelector<HTMLAnchorElement>('.ct-link')!;
     expect(link).not.toBeNull();
     expect(link.getAttribute('href')).toContain('https://claude.com/cai/oauth/authorize');
+    expect(link.textContent).not.toContain('https://');
     unmount(t.comp);
   });
 
-  it('confirmar o código chama confirmarLogin e recarrega a lista', async () => {
+  it('mantém o sucesso confirmado até Concluir e volta à conta conectada', async () => {
     const t = montar([DESLOGADA]);
     await tick(); await tick();
     t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
@@ -349,14 +348,76 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     input.value = 'CODE-123';
     input.dispatchEvent(new Event('input'));
     await tick();
+    credMock.listarCredenciais.mockResolvedValue([claude({ ...DESLOGADA,
+      login: { estado: 'ok', loggedIn: true, email: 'u@exemplo.com', plano: 'max' }, cota: null })]);
     // O rodapé do login é o único que sobrou (o da lista virou o botão do cabeçalho).
     const rodapeLogin = t.el.querySelector<HTMLElement>('.ct-rodape.login')!;
     rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
-    await tick(); await tick();
+    await vi.waitFor(() => expect(t.el.querySelector('.ct-login-sucesso')).not.toBeNull());
     expect(loginMock.confirmarLogin).toHaveBeenCalledWith(ALVO, 'testes', 'CODE-123');
     // O pós-login recarrega a lista (o poll do passo não a recarrega — só o /passo).
     expect(credMock.listarCredenciais.mock.calls.length).toBe(2);
+    expect(t.el.querySelector('.ct-login-sucesso')?.textContent).toContain('u@exemplo.com');
+    expect(t.el.querySelector('.ct-login-sucesso')?.textContent).toContain('max');
+    expect(t.el.querySelector('.ct-lista')).toBeNull();
+    t.el.querySelector<HTMLButtonElement>('.ct-login-concluir')!.click();
+    await tick(); await tick();
+    expect(t.el.querySelector('.ct-login')).toBeNull();
+    expect(t.el.querySelector('.ct-conectada')).not.toBeNull();
+    expect(t.el.querySelector('.ct-acao.primaria')).toBeNull();
     unmount(t.comp);
+  });
+
+  it('mostra confirmação em andamento e oferece nova tentativa se falhar', async () => {
+    let rejeitar!: (erro: Error) => void;
+    loginMock.confirmarLogin.mockReturnValueOnce(new Promise((_resolve, reject) => { rejeitar = reject; }));
+    const t = montar([DESLOGADA]);
+    try {
+      await tick(); await tick();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      await tick(); await tick(); await tick(); await tick();
+      const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
+      input.value = 'codigo-invalido'; input.dispatchEvent(new Event('input'));
+      await tick();
+      t.el.querySelector<HTMLButtonElement>('.ct-rodape.login .primario')!.click();
+      await tick();
+      expect(t.el.querySelector('.ct-login-progresso')).not.toBeNull();
+      expect(t.el.querySelector('.ct-login-sucesso')).toBeNull();
+      rejeitar(new Error('Código inválido'));
+      await tick(); await tick();
+      expect(t.el.querySelector('.ct-login [role="alert"]')?.textContent).toContain('Código inválido');
+      expect(t.el.querySelector('.ct-login-sucesso')).toBeNull();
+      expect(t.el.querySelector('.ct-rodape.login .primario')?.textContent).toBe(m.lista_tentar_novamente());
+    } finally { await unmount(t.comp); }
+  });
+
+  it('só reinicia após cancelar a tentativa anterior, mesmo se a rede falhar', async () => {
+    loginMock.confirmarLogin.mockRejectedValueOnce(new Error('Falha de rede'));
+    loginMock.cancelarLogin.mockRejectedValueOnce(new Error('Cancelamento sem conexão'));
+    const t = montar([DESLOGADA]);
+    try {
+      await tick(); await tick();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      await tick(); await tick(); await tick(); await tick();
+      const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
+      input.value = 'codigo'; input.dispatchEvent(new Event('input'));
+      await tick();
+      t.el.querySelector<HTMLButtonElement>('.ct-rodape.login .primario')!.click();
+      await vi.waitFor(() => expect(t.el.querySelector('[role="alert"]')?.textContent).toContain('Falha de rede'));
+      t.el.querySelector<HTMLButtonElement>('.ct-rodape.login .primario')!.click();
+      await vi.waitFor(() => expect(t.el.querySelector('[role="alert"]')?.textContent).toContain('Cancelamento sem conexão'));
+      expect(loginMock.iniciarLogin).toHaveBeenCalledTimes(1);
+      let concluirCancelamento!: () => void;
+      loginMock.cancelarLogin.mockReturnValueOnce(new Promise(resolve => {
+        concluirCancelamento = () => resolve({ ok: true });
+      }));
+      t.el.querySelector<HTMLButtonElement>('.ct-rodape.login .primario')!.click();
+      await tick(); await tick();
+      expect(loginMock.cancelarLogin).toHaveBeenCalledWith(ALVO, 'testes');
+      expect(loginMock.iniciarLogin).toHaveBeenCalledTimes(1);
+      concluirCancelamento();
+      await vi.waitFor(() => expect(loginMock.iniciarLogin).toHaveBeenCalledTimes(2));
+    } finally { await unmount(t.comp); }
   });
 
   it('desmontar durante o login cancela a tentativa e para o poll (B8)', async () => {
@@ -612,7 +673,8 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     await tick(); await tick();
     t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
-    expect(t.el.querySelector('.ct-login')).toBeNull();
+    expect(t.el.querySelector('.ct-login')).not.toBeNull();
+    expect(t.el.querySelector('.ct-lista')).toBeNull();
     expect(t.el.querySelector<HTMLElement>('.ct-aviso.erro')!.textContent)
       .toContain(m.erro_login_ja_em_curso());
     unmount(t.comp);
