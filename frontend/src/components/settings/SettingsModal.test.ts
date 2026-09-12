@@ -330,7 +330,7 @@ describe('SettingsModal — seletor de servidor do grupo', () => {
     // Anexos e Avançado) — e é o caso que prova que ela passou a ser do grupo inteiro.
     const contas = montar('contas', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
     await tick(); await tick();
-    expect(document.body.textContent).toContain(m.config_server_valem());
+    expect(document.body.textContent).toContain(m.config_server_valem({ etiqueta: m.config_escopo_servidor() }));
     unmount(contas.comp);
     document.body.innerHTML = '';
 
@@ -340,7 +340,7 @@ describe('SettingsModal — seletor de servidor do grupo', () => {
       const t = montar(tela, SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
       await tick(); await tick();
       const quantas = [...document.querySelectorAll('p')]
-        .filter((p) => p.textContent?.trim() === m.config_server_valem()).length;
+        .filter((p) => p.textContent?.trim() === m.config_server_valem({ etiqueta: m.config_escopo_servidor() })).length;
       expect(quantas, tela).toBe(1);
       unmount(t.comp);
       document.body.innerHTML = '';
@@ -349,7 +349,7 @@ describe('SettingsModal — seletor de servidor do grupo', () => {
     // Geral é do aparelho, não de uma máquina: a legenda seria mentira ali.
     const geral = montar('geral', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
     await tick(); await tick();
-    expect(document.body.textContent).not.toContain(m.config_server_valem());
+    expect(document.body.textContent).not.toContain(m.config_server_valem({ etiqueta: m.config_escopo_servidor() }));
     unmount(geral.comp);
   });
 
@@ -454,20 +454,40 @@ describe('SettingsModal — a busca', () => {
 });
 
 describe('SettingsModal — a regra do escopo dita uma vez', () => {
-  it('a linha "Sem etiqueta: vale só neste aparelho" aparece nas duas larguras', async () => {
-    stubDesktop();
-    const desktop = montar('voz', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
-    await tick(); await tick();
-    expect(document.querySelectorAll('.st-sem-etiqueta')).toHaveLength(1);
-    expect(document.body.textContent).toContain(m.config_escopo_sem_etiqueta());
-    unmount(desktop.comp);
-    document.body.innerHTML = '';
+  // UMA frase por tela, nas duas larguras, e uma frase DIFERENTE por tipo de tela. Duas legendas
+  // coladas davam conta de dois tipos e mentiam no terceiro: em Máquinas a frase do aparelho ficava
+  // sozinha sobre uma lista em que o ✕ apaga o peer no SERVIDOR.
+  const CASOS: [TelaConfig, 'aparelho' | 'servidor' | 'mista'][] = [
+    ['geral', 'aparelho'],
+    ['voz', 'servidor'],
+    ['maquinas', 'mista'],
+  ];
 
-    stubMobile();
-    const celular = montar('voz', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
-    await tick(); await tick();
-    expect(document.querySelectorAll('.st-sem-etiqueta')).toHaveLength(1);
-    expect(document.body.textContent).toContain(m.config_escopo_sem_etiqueta());
-    unmount(celular.comp);
-  });
+  for (const [tela, tipo] of CASOS) {
+    it(`${tela}: uma única legenda de escopo, a do tipo "${tipo}", nas duas larguras`, async () => {
+      for (const largura of ['desktop', 'celular'] as const) {
+        if (largura === 'desktop') stubDesktop(); else stubMobile();
+        const t = montar(tela, SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+        await tick(); await tick();
+
+        const legendas = document.querySelectorAll('.st-sem-etiqueta, .st-valem');
+        expect(legendas.length, `${tela}/${largura}`).toBe(1);
+        const texto = legendas[0].textContent?.trim();
+
+        if (tipo === 'aparelho') {
+          expect(texto, `${tela}/${largura}`).toBe(m.config_escopo_sem_etiqueta());
+        } else if (tipo === 'servidor') {
+          expect(texto, `${tela}/${largura}`).toBe(m.config_server_valem({ etiqueta: m.config_escopo_servidor() }));
+        } else {
+          // A frase da tela mista nomeia a etiqueta e diz o que a etiqueta faz aqui: vai para o
+          // servidor. Sem isto, "sem etiqueta vale só neste aparelho" cobriria o ✕ que remove o peer.
+          expect(texto, `${tela}/${largura}`).toBe(m.config_escopo_mista({ etiqueta: m.config_escopo_servidor() }));
+          expect(texto, `${tela}/${largura}`).toContain(m.config_escopo_servidor());
+        }
+
+        unmount(t.comp);
+        document.body.innerHTML = '';
+      }
+    });
+  }
 });

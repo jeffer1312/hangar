@@ -189,7 +189,7 @@ describe('ServerSettings — notificações', () => {
 describe('ServerSettings — somente leitura', () => {
   it('o Avançado não repete o que mora em Máquinas', async () => {
     const store = {
-      get campos() { return {}; }, get leitura() { return { port: 8765, lan_bind_ip: '0.0.0.0', server_id: 'casa', public_url: '', terminal_panel: true, versao: 'abc' }; },
+      get campos() { return {}; }, get leitura() { return { port: 8765, lan_bind_ip: '0.0.0.0', server_id: 'casa', public_url: '', terminal_panel: true, traducao_pensamento: true, versao: 'abc' }; },
       get variaveisEnv() { return []; },
       get carregando() { return false; }, get salvando() { return false; },
       get erro() { return ''; }, get salvo() { return false; }, get temMudanca() { return false; },
@@ -202,10 +202,18 @@ describe('ServerSettings — somente leitura', () => {
     await tick();
     expect(alvo.textContent).toContain(m.config_server_painel_terminal());
     expect(alvo.textContent).toContain('abc');
-    // Cada linha só-leitura diz que só o .env a muda; as editáveis dizem "Este servidor".
-    for (const linha of alvo.querySelectorAll('.ro-linha')) {
-      expect(linha.textContent).toContain(m.config_escopo_env());
+    // Nenhuma linha só-leitura afirma vir do .env, porque nenhuma vem: painel de terminal é sonda
+    // de capacidade, versão é o que está rodando, e a tradução do raciocínio segue a chave de LLM
+    // que a tela de Voz edita no mesmo modal, com efeito imediato.
+    const roLinhas = [...alvo.querySelectorAll('.ro-linha')];
+    expect(roLinhas.length).toBe(3);
+    for (const linha of roLinhas) {
+      expect(linha.textContent).not.toContain(m.config_escopo_env());
     }
+    // A linha que mais dói existe, e é ela que não pode dizer ".env".
+    const traducao = roLinhas.find((l) => l.textContent?.includes(m.config_server_traducao_pensamento()));
+    expect(traducao).toBeDefined();
+    expect(traducao!.textContent).not.toContain(m.config_escopo_env());
     expect(alvo.querySelector('.linha .escopo')!.textContent).toBe(m.config_escopo_servidor());
     expect(alvo.textContent).not.toContain('8765');
     expect(alvo.textContent).not.toContain('0.0.0.0');
@@ -230,6 +238,9 @@ describe('ServerSettings — somente leitura', () => {
     const titulo = alvo.querySelector('.raizes h3')!;
     expect(titulo.textContent).toContain(m.config_server_raizes());
     expect(titulo.textContent).toContain(m.config_escopo_servidor());
+    // O ✕ da pasta traz o rótulo ao lado, como o ✕ de ListaMaquinas: no toque não há hover pra
+    // ler um title, e o glifo sozinho só se explicava pelo aria-label.
+    expect(alvo.querySelector('.raiz-x')!.textContent).toContain(m.lista_remover());
     unmount(app);
     alvo.remove();
   });

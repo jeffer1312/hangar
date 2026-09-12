@@ -166,6 +166,43 @@ describe('ListaMaquinas', () => {
     unmount(t.comp);
   });
 
+  it('a etiqueta "Este servidor" fica no lado do servidor, e só nele', () => {
+    const t = montar([B]);
+    const linha = t.linha('srv:srv-b');
+    const caixas = [...linha.querySelectorAll<HTMLElement>('.mq-caixa')];
+
+    // A caixa do navegador grava no localStorage deste aparelho: sem etiqueta, é o que a legenda
+    // do topo do modal descreve.
+    const doNavegador = caixas.find((c) => c.querySelector('.mq-acompanhar'))!;
+    expect(doNavegador.querySelector('.escopo')).toBeNull();
+
+    // A caixa de "os servidores se falam" grava no peers.json DO SERVIDOR.
+    const doServidor = caixas.find((c) => c.querySelector('.mq-falar'))!;
+    expect(doServidor.querySelector('.escopo')!.textContent).toBe(m.config_escopo_servidor());
+
+    // Remover apaga o peer no servidor antes de mexer no navegador — é a ação remota e destrutiva
+    // que a legenda cobria como se fosse deste aparelho.
+    expect(linha.querySelector('.mq-remover .escopo')!.textContent).toBe(m.config_escopo_servidor());
+
+    // Editar abre a entrada do NAVEGADOR (`emEdicao = l.navegador`): etiqueta ali seria falso.
+    expect(linha.querySelector('.mq-editar:not(.mq-remover) .escopo')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('linha só do navegador: o ✕ existe e NÃO diz "Este servidor" — ali ele não alcança o servidor', () => {
+    // `D` é navegador sem peer. `removerLinhaConfirmado` só chama `removerPeer` sob `if (linha.peer)`;
+    // sem peer a remoção é `removeServer(...)`, localStorage deste navegador. A etiqueta segue o
+    // MESMO dado que a ação usa para decidir, senão as duas voltam a divergir.
+    const t = montar([D, B]);
+    const soNavegador = t.linha('srv:srv-d');
+    expect(soNavegador.querySelector('.mq-remover')).not.toBeNull();
+    expect(soNavegador.querySelector('.mq-remover .escopo')).toBeNull();
+    // E a linha que TEM peer continua dizendo.
+    expect(t.linha('srv:srv-b').querySelector('.mq-remover .escopo')!.textContent)
+      .toBe(m.config_escopo_servidor());
+    unmount(t.comp);
+  });
+
   it('peer desligado no servidor: farol cinza e dica própria, mesmo com estado de falha', () => {
     const G: LinhaMaquina = { ...C, chave: 'peer:mac', identificador: 'mac', peer: { id: 'mac', base_url: 'https://mac', token: '••', enabled: false } };
     const t = montar([G], { estados: { mac: { ok: false, lados: [{ lado: 'ida', estado: 'falhou', motivo: 'timeout' }] } } });

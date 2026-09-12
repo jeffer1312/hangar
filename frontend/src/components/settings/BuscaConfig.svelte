@@ -114,7 +114,7 @@
     { tela: 'avancado', rotulo: m.config_server_pensamento, descricao: m.config_server_pensamento_ajuda },
     { tela: 'avancado', rotulo: m.config_server_editor, descricao: m.config_server_editor_ajuda },
     { tela: 'avancado', rotulo: m.config_server_raizes, descricao: m.config_server_raizes_ajuda },
-    { tela: 'avancado', rotulo: m.config_server_so_servidor, descricao: m.config_server_so_servidor_2 },
+    { tela: 'avancado', rotulo: m.config_server_so_servidor, descricao: m.config_server_so_servidor_ajuda },
     { tela: 'avancado', rotulo: m.config_server_env_titulo, descricao: m.config_server_env_ajuda },
 
     { tela: 'orquestracao', rotulo: m.orqcfg_pode_usar, descricao: m.orqcfg_pode_usar_desc },

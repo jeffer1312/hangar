@@ -169,7 +169,9 @@
         {#each raizes as r (r)}
           <div class="raiz-linha">
             <span class="raiz-caminho">{r}</span>
-            <button class="raiz-x" onclick={() => raizRemover(r)} aria-label={m.config_server_raiz_remover({ p: r })}>✕</button>
+            <!-- Ícone com o rótulo ao lado, como em ListaMaquinas: no toque não existe hover, e o
+                 ✕ sozinho só se explicava pelo aria-label. -->
+            <button class="raiz-x" onclick={() => raizRemover(r)} aria-label={m.config_server_raiz_remover({ p: r })}><span aria-hidden="true">✕</span> <span class="raiz-x-txt">{m.lista_remover()}</span></button>
           </div>
         {/each}
         <form class="raiz-add" onsubmit={(e) => { e.preventDefault(); if (raizAdicionar(novaRaiz)) novaRaiz = ''; }}>
@@ -195,12 +197,14 @@
       {#if leituraVisivel.length}
         <div class="somente-leitura">
           <h3>{m.config_server_so_servidor()}</h3>
-          <p class="ajuda">
-            {m.config_server_so_servidor_1()} <code>.env</code>{m.config_server_so_servidor_2()}
-          </p>
+          <!-- Sem etiqueta de escopo, e é o ponto do bloco: estas linhas não são configuração, são
+               leitura do que a máquina consegue fazer agora. A etiqueta ".env" que estava aqui dizia
+               o falso nas três — a tradução do raciocínio depende da chave de LLM que a tela de Voz
+               edita, no mesmo modal, com efeito imediato. -->
+          <p class="ajuda">{m.config_server_so_servidor_ajuda()}</p>
           {#each leituraVisivel as [k, v] (k)}
             <div class="ro-linha">
-              <span class="ro-rot">{ROTULO_LEITURA[k] ?? k} <EscopoChip escopo="env" /></span>
+              <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
               <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? m.config_server_sim() : m.config_server_nao()) : v}</span>
             </div>
           {/each}
@@ -323,9 +327,11 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
   }
   .raiz-x {
-    flex-shrink: 0; background: none; border: none; padding: 2px 6px;
+    flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
+    background: none; border: none; padding: 2px 6px;
     color: var(--text-muted); font-size: var(--text-sm);
   }
+  .raiz-x-txt { font-size: var(--text-xs); white-space: nowrap; }
   .raiz-x:hover { color: var(--error); }
   /* Com o botão do seletor nativo a linha tem TRÊS itens, e ela vale nas duas views: no celular e
      no modal estreito o campo espremeria os dois botões até virar um traço. Quebra em vez de

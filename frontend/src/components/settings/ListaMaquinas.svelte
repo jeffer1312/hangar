@@ -2,6 +2,7 @@
   // Só desenha: recebe linhas + estado, devolve ações por callback. Quem grava é MaquinasSettings
   // (Task 4) — é o que permite testar a lista sem rede.
   import * as m from '../../paraglide/messages';
+  import EscopoChip from './EscopoChip.svelte';
   import type { LinhaMaquina } from '../../lib/maquinas';
   import type { LadoState } from '../../lib/registrarPeerDoisLados';
 
@@ -94,6 +95,9 @@
                  onchange={(e) => { const alvo = e.currentTarget; const ligar = alvo.checked; alvo.checked = !ligar; onAcompanhar(linha, ligar); }} />
           {m.maquinas_acompanhar()}
         </label>
+        <!-- A caixa de cima é do navegador (localStorage), esta é do `peers.json` DO SERVIDOR — daí
+             a etiqueta só neste lado. É o que torna verdadeira a legenda do topo do modal: a linha
+             tem as duas metades, e sem a etiqueta as duas pareceriam do aparelho. -->
         <label class="mq-caixa">
           {#if linha.estaMaquina}
             <span class="mq-tag">{m.maquinas_esta()}</span>
@@ -101,18 +105,22 @@
             <input type="checkbox" class="switch mq-falar" checked={!!linha.peer}
                    disabled={!meuIdentificador || !linha.identificador}
                    onchange={(e) => { const alvo = e.currentTarget; const ligar = alvo.checked; alvo.checked = !ligar; onFalar(linha, ligar); }} />
-            {m.maquinas_falar()}
+            {m.maquinas_falar()} <EscopoChip escopo="servidor" />
           {/if}
         </label>
       </span>
       <!-- Ícone com o rótulo ao lado, nas duas larguras: o ✎ e o ✕ só se explicavam pelo
            aria-label e por um `title`, e no toque não existe hover pra ler o `title`. -->
+      <!-- Editar fica SEM etiqueta de propósito: ele abre `linha.navegador`, a entrada deste
+           navegador. O ✕ alcança os lados que AQUELA linha tem — com peer, apaga no servidor antes
+           de mexer no navegador; sem peer, só sai deste navegador. Por isso a etiqueta dele segue
+           `linha.peer`, a mesma condição que `removerLinhaConfirmado` usa para decidir. -->
       {#if linha.navegador}
         <button class="mq-editar" aria-label={m.servidor_editar_aria({ nome: linha.nome })} onclick={() => onEditar(linha)}><span aria-hidden="true">✎</span> <span class="mq-btn-txt">{m.config_motores_editar()}</span></button>
       {/if}
       <!-- Esta máquina sai só pelo Sair: removê-la daqui é deslogar o aparelho. -->
       {#if !linha.estaMaquina}
-        <button class="mq-editar mq-remover" aria-label={m.maquinas_remover_aria({ nome: linha.nome })} onclick={() => onRemover(linha)}><span aria-hidden="true">✕</span> <span class="mq-btn-txt">{m.lista_remover()}</span></button>
+        <button class="mq-editar mq-remover" aria-label={m.maquinas_remover_aria({ nome: linha.nome })} onclick={() => onRemover(linha)}><span aria-hidden="true">✕</span> <span class="mq-btn-txt">{m.lista_remover()}</span>{#if linha.peer}<EscopoChip escopo="servidor" />{/if}</button>
       {/if}
       {#if corrige?.id === linha.identificador}
         <div class="corrige">

@@ -328,13 +328,17 @@
 {#snippet corpo()}
   <!-- A regra do escopo dita UMA vez, nas duas larguras: etiqueta ao lado do rótulo diz onde grava;
        sem etiqueta, grava neste aparelho. Sem esta linha a ausência de etiqueta não significa nada,
-       e etiquetar toda linha do modal seria ruído. -->
-  <p class="st-sem-etiqueta">{m.config_escopo_sem_etiqueta()}</p>
-  <!-- Legenda do grupo Servidor, UMA vez pra todas as telas dele: antes só Notificações, Anexos e
-       Avançado a mostravam (as três que passam pelo ServerSettings), e Contas/Harnesses/Voz/
-       Orquestração não diziam nada. Aqui ela vale pro grupo inteiro e não se repete tela a tela. -->
-  {#if TELAS_DE_SERVIDOR.includes(telaAtual)}
-    <p class="st-valem">{m.config_server_valem()}</p>
+       e etiquetar toda linha do modal seria ruído.
+       UMA frase por tela, nunca duas coladas: as telas são de TRÊS tipos, e duas legendas globais
+       davam conta de dois. Máquinas é o terceiro — uma linha por máquina com uma caixa do navegador
+       e uma do servidor —, e ali a frase "sem etiqueta vale só neste aparelho", sozinha, prometia
+       aparelho para o que apaga o peer no servidor. -->
+  {#if telaAtual === 'maquinas'}
+    <p class="st-sem-etiqueta">{m.config_escopo_mista({ etiqueta: m.config_escopo_servidor() })}</p>
+  {:else if TELAS_DE_SERVIDOR.includes(telaAtual)}
+    <p class="st-valem">{m.config_server_valem({ etiqueta: m.config_escopo_servidor() })}</p>
+  {:else}
+    <p class="st-sem-etiqueta">{m.config_escopo_sem_etiqueta()}</p>
   {/if}
   {#if telaAtual === 'root'}
     <BuscaConfig onIrPara={irPelaBusca} {semServidor} />
