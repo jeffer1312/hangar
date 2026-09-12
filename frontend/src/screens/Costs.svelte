@@ -1150,7 +1150,11 @@
         <table class="data">
           <thead>
             <tr>
-              <th>{m.custos_dim_modelo()}</th><th class="n">in</th><th class="n">out</th><th class="n">cache R</th>
+              <!-- `entrada` soma os três tipos de entrada porque provedor sem cache escrito conta
+                   o trecho novo de cada turno como entrada crua: comparar só o `in` dos dois
+                   lados lê como se o GPT consumisse mais que o Claude. -->
+              <th>{m.custos_dim_modelo()}</th><th class="n" title={m.custos_col_entrada_ajuda()}>{m.custos_col_entrada()}</th>
+              <th class="n">out</th><th class="n">cache R</th>
               <th class="n">{m.custos_tarifa_in_out()}</th><th class="n">{m.custos_origem()}</th><th class="n">{m.custos_col_pct_conta()}</th>
               <th class="n">{m.custos_custo()}</th><th></th>
             </tr>
@@ -1172,7 +1176,11 @@
                 onclick={() => alternar('model', b.key)}>
                 <td>{b.key}{#if !comPreco}<span class="tag">{isFree(b.key) ? m.custos_gratis() : m.custos_sem_tarifa()}</span>{:else if parcial}<span
                   class="tag" title={m.custos_servidor_malha()}>{m.custos_preco_parcial()}</span>{/if}</td>
-                <td class="n">{tok(b.input)}</td>
+                <!-- Marca curta, não chip: o rótulo por extenso em toda linha empurrava a coluna
+                     de custo pra fora em 1280px, e no celular o `title` do chip nunca abre. A
+                     nota abaixo da tabela é o que explica, e ela é legível sem hover. -->
+                <td class="n">{tok(b.input + b.cache_write + b.cache_read)}<span class="dim">/{tok(b.input)}</span
+                  >{#if b.cache_write === 0 && b.cache_read > 0}<span class="marca">*</span>{/if}</td>
                 <td class="n">{tok(b.output)}</td>
                 <td class="n">{tok(b.cache_read)}</td>
                 <td class="n dim">{t ? `${dec(t.input, 2)}/${dec(t.output, 2)}` : '—'}</td>
@@ -1193,6 +1201,9 @@
           </tbody>
         </table>
       </div>
+      {#if modelos.some((b) => b.cache_write === 0 && b.cache_read > 0)}
+        <p class="hint nota">{m.custos_sem_cache_escrito_ajuda()}</p>
+      {/if}
     </div>
 
     <div class="card">
@@ -1610,6 +1621,8 @@
   table.data th.n, table.data td.n { text-align: right; font-variant-numeric: tabular-nums; }
   table.data td.c { font-weight: 650; color: var(--accent); text-align: right; font-variant-numeric: tabular-nums; }
   table.data td.c .tracinho { color: var(--text-muted); font-weight: 400; }
+  table.data td.n .marca { color: var(--text-muted); margin-left: 2px; }
+  .card > .hint.nota { margin: var(--space-2) 0 0; }
   table.data tr.click { cursor: pointer; }
   table.data tr.click:hover td { background: var(--bg-hover); }
   table.data tr[aria-selected='true'] td { background: var(--accent-dim); }
