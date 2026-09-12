@@ -2361,6 +2361,8 @@
   "harness_codex_m_aviso_historico_indisponivel": "Native history unavailable; existing collisions will be kept.",
   "harness_codex_m_aviso_ignorados": "Not recognized by Codex and skipped in {pasta}/: {arquivos}",
   "harness_codex_m_aviso_memoria_fora": "Memories left out (no transcript beside them, or unreadable): {projetos}",
+  "harness_codex_m_aviso_memoria_sem_fonte": "No Claude memories found to import.",
+  "harness_codex_m_aviso_memoria_incompleta": "Codex refused {n} memory item(s); the rest of the integration was applied.",
   "harness_codex_m_aviso_artefato_sem_proveniencia": "Artifact without provenance kept: {path}",
   "harness_codex_m_aviso_artefato_falha": "Artifact {path} kept after failure: {erro}",
   "harness_codex_m_aviso_artefato_obsoleto_alterado": "Obsolete artifact with local changes kept: {path}",

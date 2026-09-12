@@ -79,6 +79,8 @@ def copiar_memorias(origem: Path, destino: Path) -> list[str]:
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
             shutil.copy2(transcritos[0], projeto / transcritos[0].name)
         except OSError:
+            # A causa real (disco cheio, E/S) não cabe no aviso da tela, mas some sem o log.
+            _log.warning("memória de %s ficou de fora", memoria.parent.name, exc_info=True)
             shutil.rmtree(projeto, ignore_errors=True)
             fora.append(memoria.parent.name)
     return fora
@@ -751,7 +753,12 @@ class IntegracaoCodex:
                 if origem.is_dir():
                     shutil.copytree(origem, cc / nome, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
             if memoria:
-                fora = copiar_memorias(self.home / ".claude" / "projects", cc / "projects")
+                projetos = self.home / ".claude" / "projects"
+                if not projetos.is_dir():
+                    # Opção ligada e nada a importar é um estado que precisa aparecer: calado, a
+                    # reconciliação termina "ok" e a pessoa espera uma memória que nunca vai existir.
+                    self._estado["avisos"].append(msg("aviso_memoria_sem_fonte"))
+                fora = copiar_memorias(projetos, cc / "projects")
                 if fora:
                     self._estado["avisos"].append(msg("aviso_memoria_fora", projetos=", ".join(fora)))
             source_mcp = self.home / ".claude.json"
@@ -782,10 +789,23 @@ class IntegracaoCodex:
                         self._estado["avisos"].append(msg(
                             "aviso_ignorados", pasta=pasta,
                             arquivos=", ".join(str(md.relative_to(cc / pasta)) for md in ignorados)))
-                if itens:
-                    result = await importer.importar(itens)
+                # A memória vai numa chamada à parte: falha dela é aviso, não derruba hooks, skills
+                # e MCP, que não dependem dela. As demais continuam abortando a etapa.
+                essenciais = [i for i in itens if i.get("itemType") != "MEMORY"]
+                memorias = [i for i in itens if i.get("itemType") == "MEMORY"]
+                if essenciais:
+                    result = await importer.importar(essenciais)
                     if any(r.get("failures") for r in result.get("itemTypeResults", [])):
                         raise CodexNativoErro("Importação de fragmentos incompleta")
+                if memorias:
+                    try:
+                        result = await importer.importar(memorias)
+                        falhas = [f for r in result.get("itemTypeResults", []) for f in (r.get("failures") or [])]
+                    except CodexNativoErro as erro:
+                        falhas = [str(erro)]
+                    if falhas:
+                        _log.warning("importação de memórias incompleta: %s", falhas)
+                        self._estado["avisos"].append(msg("aviso_memoria_incompleta", n=len(falhas)))
             def remap(value):
                 # CODEX_HOME personalizado não precisa ser filho do HOME real.
                 return remapear(remapear(value, cx, self.codex_home), stage, self.home)

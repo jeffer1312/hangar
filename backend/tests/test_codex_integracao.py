@@ -45,6 +45,50 @@ def test_memoria_leva_um_transcrito_por_projeto(tmp_path):
     assert not (destino / "-orfao").exists()
 
 
+async def test_memoria_recusada_nao_derruba_o_resto_da_integracao(tmp_path, monkeypatch):
+    """A memória vai numa chamada à parte justamente para isso: o Codex recusando uma memória não
+    pode custar hooks, skills e MCP, que não dependem dela."""
+    from unittest.mock import AsyncMock
+    from app import codex_integracao
+    from app.codex_importador import CodexNativoErro
+    home = _home(tmp_path)
+    (home / ".claude/settings.json").write_text('{"enabledPlugins": {}, "hooks": {}, "env": {}}')
+    projeto = home / ".claude/projects/-um-repo"
+    (projeto / "memory").mkdir(parents=True)
+    (projeto / "memory/MEMORY.md").write_text("indice")
+    (projeto / "sessao.jsonl").write_text("x")
+    monkeypatch.setattr(codex_integracao, "memoria_ligada", lambda: True)
+
+    lotes = []
+
+    class Importer:
+        def __init__(self, stage, cx, binario, **kwargs):
+            self.stage, self.cx = stage, cx
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def detectar(self):
+            return [{"itemType": "HOOKS", "details": {}}, {"itemType": "MEMORY", "details": {}}]
+        async def importar(self, itens):
+            lotes.append(sorted({i["itemType"] for i in itens}))
+            if any(i["itemType"] == "MEMORY" for i in itens):
+                raise CodexNativoErro("o Codex recusou a memória")
+            (self.cx / "hooks.json").write_text('{"hooks": {}}')
+            return {"itemTypeResults": []}
+        async def historicos_importacao(self):
+            raise CodexNativoErro("sem histórico")
+
+    service = IntegracaoCodex(home, home / ".codex", nativo=Importer)
+    service._estado = codex_integracao._snapshot()
+    service.raiz.mkdir(parents=True)
+    monkeypatch.setattr(service, "_config", AsyncMock())
+
+    await service._fragmentos(Importer(None, None, None), {}, {})
+
+    assert lotes == [["HOOKS"], ["MEMORY"]], "a memória tem que ir num lote separado"
+    assert any("memória" in a.lower() or "memoria" in a.lower() for a in service._estado["avisos"])
+    service._config.assert_awaited()  # o resto da integração seguiu
+
+
 def test_memoria_ilegivel_nao_derruba_os_outros_projetos(tmp_path, monkeypatch):
     from app import codex_integracao
     origem = tmp_path / "projects"

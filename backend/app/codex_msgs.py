@@ -34,6 +34,8 @@ CATALOGO: dict[str, str] = {
     "aviso_historico_indisponivel": "Histórico nativo indisponível; colisões existentes serão preservadas.",
     "aviso_ignorados": "Não reconhecidos pelo Codex e ignorados em {pasta}/: {arquivos}",
     "aviso_memoria_fora": "Memórias que ficaram de fora (sem transcrito ao lado, ou ilegíveis): {projetos}",
+    "aviso_memoria_sem_fonte": "Nenhuma memória do Claude encontrada para importar.",
+    "aviso_memoria_incompleta": "O Codex recusou {n} memória(s); o resto da integração foi aplicado.",
     "aviso_artefato_sem_proveniencia": "Artefato sem proveniência preservado: {path}",
     "aviso_artefato_falha": "Artefato {path} preservado após falha: {erro}",
     "aviso_artefato_obsoleto_alterado": "Artefato obsoleto com alteração local preservado: {path}",

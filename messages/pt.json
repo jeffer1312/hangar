@@ -2361,6 +2361,8 @@
   "harness_codex_m_aviso_historico_indisponivel": "Histórico nativo indisponível; colisões existentes serão preservadas.",
   "harness_codex_m_aviso_ignorados": "Não reconhecidos pelo Codex e ignorados em {pasta}/: {arquivos}",
   "harness_codex_m_aviso_memoria_fora": "Memórias que ficaram de fora (sem transcrito ao lado, ou ilegíveis): {projetos}",
+  "harness_codex_m_aviso_memoria_sem_fonte": "Nenhuma memória do Claude encontrada para importar.",
+  "harness_codex_m_aviso_memoria_incompleta": "O Codex recusou {n} memória(s); o resto da integração foi aplicado.",
   "harness_codex_m_aviso_artefato_sem_proveniencia": "Artefato sem proveniência preservado: {path}",
   "harness_codex_m_aviso_artefato_falha": "Artefato {path} preservado após falha: {erro}",
   "harness_codex_m_aviso_artefato_obsoleto_alterado": "Artefato obsoleto com alteração local preservado: {path}",
