@@ -112,15 +112,19 @@
       <!-- Ícone com o rótulo ao lado, nas duas larguras: o ✎ e o ✕ só se explicavam pelo
            aria-label e por um `title`, e no toque não existe hover pra ler o `title`. -->
       <!-- Editar fica SEM etiqueta de propósito: ele abre `linha.navegador`, a entrada deste
-           navegador. O ✕ alcança os lados que AQUELA linha tem — com peer, apaga no servidor antes
-           de mexer no navegador; sem peer, só sai deste navegador. Por isso a etiqueta dele segue
-           `linha.peer`, a mesma condição que `removerLinhaConfirmado` usa para decidir. -->
+           navegador. O ✕ alcança os lados que AQUELA linha tem, e são os DOIS campos que decidem:
+           `peer` diz se o registro deste servidor sai, `navegador` diz se há entrada aqui para
+           sair E se o lado de lá é alcançável (sem ela, `removerPeerDoisLados` para no
+           `if (!remoto)` sem tocar o outro servidor). São os mesmos campos que
+           `removerLinhaConfirmado` lê para decidir.
+           O `aria-label` segue as mesmas condições porque ele SUBSTITUI o nome acessível: o chip
+           dentro do botão nunca é anunciado, então a verdade tem de estar no rótulo. -->
       {#if linha.navegador}
         <button class="mq-editar" aria-label={m.servidor_editar_aria({ nome: linha.nome })} onclick={() => onEditar(linha)}><span aria-hidden="true">✎</span> <span class="mq-btn-txt">{m.config_motores_editar()}</span></button>
       {/if}
       <!-- Esta máquina sai só pelo Sair: removê-la daqui é deslogar o aparelho. -->
       {#if !linha.estaMaquina}
-        <button class="mq-editar mq-remover" aria-label={m.maquinas_remover_aria({ nome: linha.nome })} onclick={() => onRemover(linha)}><span aria-hidden="true">✕</span> <span class="mq-btn-txt">{m.lista_remover()}</span>{#if linha.peer}<EscopoChip escopo="servidor" />{/if}</button>
+        <button class="mq-editar mq-remover" aria-label={!linha.peer ? m.maquinas_remover_aria_local({ nome: linha.nome }) : linha.navegador ? m.maquinas_remover_aria({ nome: linha.nome }) : m.maquinas_remover_aria_servidor({ nome: linha.nome })} onclick={() => onRemover(linha)}><span aria-hidden="true">✕</span> <span class="mq-btn-txt">{m.lista_remover()}</span>{#if linha.peer}<EscopoChip escopo="servidor" />{/if}</button>
       {/if}
       {#if corrige?.id === linha.identificador}
         <div class="corrige">

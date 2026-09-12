@@ -527,7 +527,11 @@
       { label: m.comum_cancelar(), onClick: () => (removerLinha = null) },
       { label: m.lista_remover(), kind: 'danger', onClick: () => void removerLinhaConfirmado() },
     ]}>
-    <p class="ss-dialog-copy">{m.maquinas_remover_linha()}</p>
+    <!-- Os mesmos dois campos que a ação lê, e esta é a última tela antes de apagar: sem peer a
+         remoção nem chega ao servidor; sem navegador ela não sai daqui e o lado de lá nem é
+         tentado (`removerPeerDoisLados` para no `if (!remoto)`), que é a mesma razão do ternário
+         do diálogo irmão, logo acima. -->
+    <p class="ss-dialog-copy">{!removerLinha.peer ? m.maquinas_remover_linha_local() : removerLinha.navegador ? m.maquinas_remover_linha() : m.maquinas_remover_peer_so_aqui()}</p>
   </ConfirmDialog>
 {/if}
 

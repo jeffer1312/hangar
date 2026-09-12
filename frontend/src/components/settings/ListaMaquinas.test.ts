@@ -200,6 +200,29 @@ describe('ListaMaquinas', () => {
     // E a linha que TEM peer continua dizendo.
     expect(t.linha('srv:srv-b').querySelector('.mq-remover .escopo')!.textContent)
       .toBe(m.config_escopo_servidor());
+
+    // O `aria-label` SUBSTITUI o nome acessível, então o chip acima nunca é anunciado: quem ouve
+    // só tem este rótulo, e ele tem de seguir a mesma condição.
+    expect(soNavegador.querySelector('.mq-remover')!.getAttribute('aria-label'))
+      .toBe(m.maquinas_remover_aria_local({ nome: D.nome }));
+    expect(t.linha('srv:srv-b').querySelector('.mq-remover')!.getAttribute('aria-label'))
+      .toBe(m.maquinas_remover_aria({ nome: B.nome }));
+    unmount(t.comp);
+  });
+
+  it('linha só do servidor: o ✕ diz que sai do registro DESTE servidor, e não do aparelho', () => {
+    // `C` é peer sem navegador (`unirMaquinas` cria a chave `peer:<id>` com `navegador: null`).
+    // Aí `removerLinhaConfirmado` não tem o que apagar neste aparelho, e `removerPeerDoisLados`
+    // para no `if (!remoto)` sem tocar o outro servidor: prometer "deste aparelho" ou "de lá"
+    // seriam duas promessas que a ação não cumpre.
+    const t = montar([C, B, D]);
+    expect(t.linha('peer:vps').querySelector('.mq-remover')!.getAttribute('aria-label'))
+      .toBe(m.maquinas_remover_aria_servidor({ nome: C.nome }));
+    // As outras duas formas continuam cada uma com a sua.
+    expect(t.linha('srv:srv-b').querySelector('.mq-remover')!.getAttribute('aria-label'))
+      .toBe(m.maquinas_remover_aria({ nome: B.nome }));
+    expect(t.linha('srv:srv-d').querySelector('.mq-remover')!.getAttribute('aria-label'))
+      .toBe(m.maquinas_remover_aria_local({ nome: D.nome }));
     unmount(t.comp);
   });
 

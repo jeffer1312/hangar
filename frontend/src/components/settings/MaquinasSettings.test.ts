@@ -377,6 +377,50 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     unmount(comp);
   });
 
+  it('o ✕ de uma linha SEM peer não promete o servidor na confirmação', async () => {
+    // `removerLinhaConfirmado` só chama `removerPeer` sob `if (linha.peer)`. Esta é a última tela
+    // antes de apagar: prometer o registro do servidor numa linha que o servidor não conhece é a
+    // etiqueta divergindo da ação.
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    const { el, comp } = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    el.querySelector<HTMLButtonElement>('.mq-linha[data-chave="srv:srv-b"] .mq-remover')!.click();
+    await tick();
+    expect(document.body.textContent).toContain(m.maquinas_remover_linha_local());
+    expect(document.body.textContent).not.toContain(m.maquinas_remover_linha());
+    unmount(comp);
+  });
+
+  it('o ✕ de uma linha SÓ do servidor promete o registro daqui, não o aparelho nem o lado de lá', async () => {
+    // Peer sem entrada em `cp_servers` → linha `peer:<id>`, `navegador: null`. Sem `remoto`,
+    // `removerPeerDoisLados` sai no `if (!remoto) return null` e o outro servidor nem é chamado;
+    // e `removeServer` não roda, porque não há entrada deste aparelho para apagar.
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([{ id: 'vps', base_url: 'https://vps', token: '••' }]);
+    const { el, comp } = montar();
+    await esperarCarga();
+    el.querySelector<HTMLButtonElement>('.mq-linha[data-chave="peer:vps"] .mq-remover')!.click();
+    await tick();
+    expect(document.body.textContent).toContain(m.maquinas_remover_peer_so_aqui());
+    expect(document.body.textContent).not.toContain(m.maquinas_remover_linha());
+    expect(document.body.textContent).not.toContain(m.maquinas_remover_linha_local());
+    unmount(comp);
+  });
+
+  it('o ✕ de uma linha COM peer continua dizendo que sai dos dois lados', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockResolvedValue([{ id: 'nb', base_url: 'http://b', token: '••' }]);
+    const { el, comp } = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    el.querySelector<HTMLButtonElement>('.mq-linha[data-chave="srv:srv-b"] .mq-remover')!.click();
+    await tick();
+    expect(document.body.textContent).toContain(m.maquinas_remover_linha());
+    unmount(comp);
+  });
+
   it('remover peer com o lado de lá falhando mostra o aviso específico', async () => {
     peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
     peersMock.listarPeers.mockResolvedValue([{ id: 'vps', base_url: 'https://vps', token: '••' }]);
