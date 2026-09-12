@@ -35,6 +35,9 @@ import json, os, sys, time
 
 args = sys.argv[1:]
 if args[:1] == ["app-server"]:
+    if os.environ.get("FAKE_SERVER_OUT"):
+        with open(os.environ["FAKE_SERVER_OUT"], "w") as fh:
+            json.dump(args, fh)
     if os.environ.get("FAKE_SERVIDOR_MORRE"):
         if os.environ.get("FAKE_ERRO_PRIVADO"):
             print(os.environ["FAKE_ERRO_PRIVADO"], file=sys.stderr)
@@ -326,20 +329,26 @@ def test_lancador_retoma_a_conversa_pedida(tmp_path):
     cwd.mkdir()
     env = _ambiente(tmp_path, cwd)
     env["FAKE_TUI_SLEEP"] = "0.3"
+    env["FAKE_SERVER_OUT"] = str(tmp_path / "server-argv.json")
     proc = subprocess.Popen(
         [sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd),
          "--resume", "01a052d1-3e59-7441-9ed3-6bbd9e2704fc"],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     proc.wait(timeout=30)
+    assert proc.returncode == 0
     argv = (tmp_path / "tui-argv.txt").read_text().split("\n")
     assert argv[0] == "resume"
     assert argv[-1] == "01a052d1-3e59-7441-9ed3-6bbd9e2704fc"
     assert "-C" not in argv
-    # A politica de sandbox/aprovacao vale na conversa retomada tambem: sem ela a TUI pode parar
-    # num pedido de aprovacao que ninguem responde, e o app fica olhando uma sessao muda.
-    assert argv[argv.index("--sandbox") + 1] == "danger-full-access"
-    assert argv[argv.index("--ask-for-approval") + 1] == "never"
+    # O resume remoto recusa overrides na TUI; as politicas pertencem ao app-server.
+    assert "--remote" in argv
+    assert "--sandbox" not in argv
+    assert "--ask-for-approval" not in argv
+    server_argv = json.loads((tmp_path / "server-argv.json").read_text())
+    configs = [server_argv[i + 1] for i, arg in enumerate(server_argv[:-1]) if arg == "-c"]
+    assert 'sandbox_mode="danger-full-access"' in configs
+    assert 'approval_policy="never"' in configs
 
 
 @pytest.mark.parametrize("resume", [False, True])

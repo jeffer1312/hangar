@@ -444,11 +444,8 @@ describe('deu erro', () => {
     Object.defineProperty(navigator, 'userAgent', {
       value: 'Mozilla/5.0 Chrome/150.0 Electron/43.3.0', configurable: true, writable: true,
     });
-    const reload = vi.fn();
-    const locationOriginal = window.location;
-    Object.defineProperty(window, 'location', {
-      value: { ...locationOriginal, reload }, configurable: true, writable: true,
-    });
+    // Espalhar Location perde getters como origin, usados pelo diagnóstico.
+    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
     vi.useFakeTimers();
     try {
       const spy = vi.spyOn(api, 'getAtualizacao');
@@ -462,7 +459,7 @@ describe('deu erro', () => {
       expect(reload).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
-      Object.defineProperty(window, 'location', { value: locationOriginal, configurable: true, writable: true });
+      reload.mockRestore();
       Object.defineProperty(navigator, 'userAgent', { value: uaOriginal, configurable: true, writable: true });
     }
   });
