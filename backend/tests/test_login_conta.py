@@ -9,6 +9,7 @@ NUNCA vem da aparência da tela — o login só é confirmado relendo o estado d
 """
 import threading
 import time
+import json
 from pathlib import Path
 
 import pytest
@@ -235,6 +236,24 @@ def test_confirmar_digita_o_codigo_e_confirma_pela_releitura(bateia):
     assert bateia.enters == ["term-login-conta-a", "term-login-conta-a"]
     # A janela só sai no fim (limpeza garantida em qualquer caminho) — e o alvo é o
     # REAL (term-<chave>), não a chave pedida (B2).
+    assert bateia.matadas == ["term-login-conta-a"]
+
+
+def test_confirmar_espera_token_novo_quando_cli_ainda_diz_logada(bateia, monkeypatch, tmp_path):
+    credencial = tmp_path / ".credentials.json"
+    credencial.write_text(json.dumps({"claudeAiOauth": {"expiresAt": 1}}))
+    monkeypatch.setattr(conta_estado, "_auth_status", lambda _: {"loggedIn": True})
+    esperas = []
+
+    def renovar(_):
+        assert bateia.matadas == []
+        esperas.append(True)
+        credencial.write_text(json.dumps({"claudeAiOauth": {"expiresAt": (time.time() + 3600) * 1000}}))
+
+    monkeypatch.setattr(login_conta.time, "sleep", renovar)
+    login_conta.iniciar("conta-a", str(tmp_path))
+    assert login_conta.confirmar("conta-a", "CODE-123")["ok"] is True
+    assert esperas == [True]
     assert bateia.matadas == ["term-login-conta-a"]
 
 

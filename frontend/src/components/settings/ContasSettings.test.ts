@@ -189,6 +189,23 @@ describe('ContasSettings — a lista', () => {
     unmount(t.comp);
   });
 
+  it.each(['sessao-viva', 'login-necessario', 'renovacao-falhou'])('permite entrar com token expirado mesmo se a CLI diz logada (%s)', async (motivo) => {
+    const conta = claude({ ativa: false,
+      cota: { estado: 'expirada', janelas: [], motivo } });
+    const t = montar([conta]);
+    try {
+      await tick(); await tick();
+      const entrar = t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria');
+      expect(entrar?.textContent).toBe(m.contas_entrar());
+      expect(loginMock.iniciarLogin).not.toHaveBeenCalled();
+      entrar!.click();
+      await tick(); await tick();
+      expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, conta.nome_natural);
+    } finally {
+      unmount(t.comp);
+    }
+  });
+
   it('renovacao-falhou continua mandando abrir uma sessão (é o gesto que renova)', async () => {
     const t = montar([claude({ ativa: false,
       cota: { estado: 'expirada', janelas: [], motivo: 'renovacao-falhou' } })]);

@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from app import conta_estado, tmux
+from app import conta_estado, renova_token, tmux
 
 _log = logging.getLogger("hangar.login_conta")
 
@@ -215,7 +215,9 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
             # via a conta logada (medido). O path absoluto é o mesmo que o `iniciar` já
             # usou no `-e CLAUDE_CONFIG_DIR`.
             estado = ler_estado(tentativa.dir_conta)
-            if estado.estado == "ok" and estado.loggedIn:
+            # A CLI ainda diz loggedIn enquanto o token antigo está vencido.
+            _, vencimento = renova_token._assinatura(Path(tentativa.dir_conta))
+            if estado.estado == "ok" and estado.loggedIn and (vencimento is None or vencimento > time.time()):
                 return {
                     "ok": True,
                     "email": estado.email,

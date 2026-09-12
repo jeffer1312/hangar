@@ -729,7 +729,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
               <button type="button" class="ct-acao"
                 onclick={() => { menuDe = null; confirmando = conta.id; }}>{m.lista_remover()}</button>
             {/if}
-            {#if conta.tipo === 'claude' && conta.login?.estado === 'ok' && !conta.login.loggedIn}
+            {#if conta.tipo === 'claude' && ((conta.login?.estado === 'ok' && !conta.login.loggedIn) || conta.cota?.estado === 'expirada')}
               <button type="button" class="ct-acao primaria"
                 aria-label={m.contas_entrar_titulo({ nome: conta.nome })}
                 disabled={!!loginDe || loginIniciando}
