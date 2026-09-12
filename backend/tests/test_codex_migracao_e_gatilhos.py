@@ -297,7 +297,7 @@ async def test_md_solto_em_agents_e_ignorado_com_aviso_sem_derrubar_a_etapa(tmp_
     (home / ".claude/settings.json").write_text('{"enabledPlugins": {}, "hooks": {}, "env": {}}')
 
     class Importer:
-        def __init__(self, stage, cx, binario):
+        def __init__(self, stage, cx, binario, **kwargs):
             self.stage, self.cx = stage, cx
         async def __aenter__(self): return self
         async def __aexit__(self, *a): pass

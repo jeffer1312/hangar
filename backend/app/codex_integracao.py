@@ -54,23 +54,34 @@ def memoria_ligada() -> bool:
     return bool(runtime_config.get("codex_memory_import"))
 
 
-def copiar_memorias(origem: Path, destino: Path) -> None:
-    """Memórias do Claude para o stage da importação.
+def copiar_memorias(origem: Path, destino: Path) -> list[str]:
+    """Memórias do Claude para o stage da importação; devolve os projetos que ficarão de fora.
 
     A pasta `memory/` sozinha NÃO é detectada: o Codex só trata como projeto o diretório que tem
     transcrito ao lado dela. Por isso vai junto o MENOR `.jsonl` de cada um — todos custariam a
-    ordem de gigabytes por reconciliação, e o segundo em diante não muda a detecção."""
+    ordem de gigabytes por reconciliação, e o segundo em diante não muda a detecção.
+
+    Um projeto que falhe (permissão, link pendurado, arquivo que o Claude girou entre listar e
+    copiar) sai da lista sem derrubar os outros nem o resto da reconciliação, que não é de memória."""
+    fora = []
     if not origem.is_dir():
-        return
+        return fora
     for memoria in sorted(origem.glob("*/memory")):
         if not memoria.is_dir():
             continue
         projeto = destino / memoria.parent.name
-        shutil.copytree(memoria, projeto / "memory",
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
-        transcritos = sorted(memoria.parent.glob("*.jsonl"), key=lambda f: f.stat().st_size)
-        if transcritos:
+        try:
+            transcritos = sorted(memoria.parent.glob("*.jsonl"), key=lambda f: f.stat().st_size)
+            if not transcritos:
+                fora.append(memoria.parent.name)
+                continue
+            shutil.copytree(memoria, projeto / "memory",
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
             shutil.copy2(transcritos[0], projeto / transcritos[0].name)
+        except OSError:
+            shutil.rmtree(projeto, ignore_errors=True)
+            fora.append(memoria.parent.name)
+    return fora
 
 
 def _e_hook_do_app(command: object) -> bool:
@@ -740,7 +751,9 @@ class IntegracaoCodex:
                 if origem.is_dir():
                     shutil.copytree(origem, cc / nome, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
             if memoria:
-                copiar_memorias(self.home / ".claude" / "projects", cc / "projects")
+                fora = copiar_memorias(self.home / ".claude" / "projects", cc / "projects")
+                if fora:
+                    self._estado["avisos"].append(msg("aviso_memoria_fora", projetos=", ".join(fora)))
             source_mcp = self.home / ".claude.json"
             mcp_raw = ler(source_mcp)
             if mcp_raw is not None:
