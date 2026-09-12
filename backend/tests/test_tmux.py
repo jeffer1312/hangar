@@ -50,6 +50,16 @@ def test_list_sessions_parses_output():
     assert args[:2] == ["tmux", "list-sessions"]
 
 
+def test_provider_de_nascimento_vai_no_terminal_e_volta_na_listagem(monkeypatch):
+    monkeypatch.setattr(tmux, "_scope_prefix", lambda: [])
+    fake = MagicMock(stdout="cx\t1\t123\t/tmp\t%9\t\tcodex\n", returncode=0)
+    with patch.object(tmux, "RUN", return_value=fake) as run:
+        assert tmux.new_session("cx", "/tmp", "sleep 30", provider="codex")
+        assert "CP_PROVIDER=codex" in run.call_args[0][0]
+        assert tmux.list_panes_all()["cx"][0]["provider"] == "codex"
+        assert "#{CP_PROVIDER}" in run.call_args[0][0][-1]
+
+
 def test_list_sessions_empty_when_no_server():
     fake = MagicMock(stdout="", returncode=1, stderr="no server running")
     with patch.object(tmux, "RUN", return_value=fake):

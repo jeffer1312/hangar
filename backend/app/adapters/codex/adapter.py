@@ -134,7 +134,7 @@ def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
                                   and key.upper() not in {"HOME", "USERPROFILE"}))]
             command = shlex.join(["cmd.exe", "/d", "/s", "/c",
                                   " && ".join(parts + [command])])
-    if not tmux.new_session(name, cwd, command):
+    if not tmux.new_session(name, cwd, command, provider="codex"):
         raise RuntimeError(f"nao foi possivel criar a TUI Codex no tmux: {name}")
 
 

@@ -892,6 +892,23 @@ toda abertura porque o "auto-upgrade was in flight" do marketplace `ecc` contava
 0.154.0: o seletor de hooks passou a desenhar SEM número (`›    Review hooks`), e `menu_codex`
 exige `N.` — captura real do widget antes de mexer.
 
+## Identidade durante a abertura do Codex (12/09/2026)
+
+O provider escolhido na criação entra no ambiente do terminal como `CP_PROVIDER`, lido junto
+dos panes. Enquanto nenhum processo de agente é reconhecido, essa escolha prevalece; depois,
+o processo reconhecido permite a troca normal de provider. O registro não depende do backend
+continuar vivo. A criação também descarta o snapshot anterior e retorna `tracked=false` enquanto
+não há transcript.
+
+O journal mostrou `hangar-2` aberta como Claude às 09:20:08 e reconhecida como Codex apenas às
+09:20:12: o fallback chegou a servir um JSONL antigo. Em `hangar-3`, o primeiro histórico e SSE
+receberam 404; a primeira lista já trazia a thread pronta e não disparava recuperação. O Chat
+agora recupera esse 404 uma vez por transcript disponível, sem depender de observar a fase sem id.
+
+Na integração sem mudanças, o teste com cliente simulado passou de três inventários e uma
+detecção para um inventário e nenhuma detecção. Importação e atualização ainda renovam o
+inventário. Isso mede chamadas evitadas, não ganho de tempo da abertura real.
+
 ## Instruções nativas (07/09/2026, PR #3)
 
 `codex_instrucoes.py` prepara `AGENTS.override.md`

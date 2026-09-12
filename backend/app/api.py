@@ -1854,11 +1854,16 @@ async def create_session(body: CreateBody):
     async def _create_registry(kwargs: dict):
         """A criação é bloqueante; se o request morrer, o worker ainda precisa terminar."""
         nonlocal codex_lease
+        def create():
+            info = registry.create(body.name, body.cwd, body.config_dir, **kwargs)
+            # O mesmo nome pode estar no snapshot com o transcript da sessão encerrada.
+            with _list_lock:
+                _list_snap["snap"] = None
+            return info
+
         if codex_lease is None:
-            return await asyncio.to_thread(registry.create, body.name, body.cwd,
-                                           body.config_dir, **kwargs)
-        worker = asyncio.create_task(asyncio.to_thread(
-            registry.create, body.name, body.cwd, body.config_dir, **kwargs))
+            return await asyncio.to_thread(create)
+        worker = asyncio.create_task(asyncio.to_thread(create))
         try:
             info = await asyncio.shield(worker)
         except asyncio.CancelledError:

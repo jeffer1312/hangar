@@ -238,6 +238,30 @@ it.each([true, false])('mostra a preparação do Codex sem conversa antiga (desk
   }
 });
 
+it('recupera a abertura recusada quando a primeira lista já traz o Codex pronto', async () => {
+  const api = await import('@hangar/core');
+  let publicar!: (rows: SessionInfo[]) => void;
+  vi.mocked(api.getSessions).mockReturnValueOnce(new Promise(resolve => { publicar = resolve; }));
+  vi.mocked(api.getHistoryDesde).mockRejectedValueOnce(Object.assign(new Error('sessão não encontrada'), { status: 404 }));
+  vi.mocked(api.getHistoryDesde).mockClear();
+  vi.mocked(api.openEventStream).mockClear();
+  const t = montar(false);
+  try {
+    await vi.waitFor(() => expect(t.el.textContent).toContain('sessão não encontrada'));
+    const stream = vi.mocked(api.openEventStream).mock.results[0].value;
+    Object.defineProperty(stream, 'readyState', { value: 2 });
+    stream.onerror(new Event('error'));
+    await tick();
+    publicar([{ name: 'sess', provider: 'codex', tracked: true, jsonl: '/codex/nova.jsonl', state: 'idle' }]);
+    await vi.waitFor(() => expect(api.getHistoryDesde).toHaveBeenCalledTimes(2));
+    expect(api.openEventStream).toHaveBeenCalledTimes(2);
+    expect(t.el.textContent).not.toContain('sessão não encontrada');
+    expect(t.el.textContent).not.toContain(m.chat_sse_recusado());
+  } finally {
+    await unmount(t.comp);
+  }
+});
+
 it('desktop reutiliza o stream da lista sem polling REST', async () => {
   vi.useFakeTimers();
   const api = await import('@hangar/core');

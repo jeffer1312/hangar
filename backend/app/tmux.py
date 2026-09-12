@@ -393,7 +393,7 @@ def list_panes_all() -> dict[str, list[dict]]:
     # o formato de 6 campos.
     cp = _run(["tmux", "list-panes", "-a", "-F",
                "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
-               "\t#{@cp_hidden}"])
+               "\t#{@cp_hidden}\t#{CP_PROVIDER}"])
     _exige_resposta(cp)
     if cp.returncode != 0:
         return {}
@@ -404,9 +404,11 @@ def list_panes_all() -> dict[str, list[dict]]:
             continue
         name, active, pid, cwd, pane_id = parts[:5]
         hidden = parts[5] if len(parts) > 5 else ""
+        provider = parts[6] if len(parts) > 6 else ""
         out.setdefault(name, []).append({
             "name": name, "pid": int(pid) if pid.isdigit() else None, "cwd": cwd,
             "pane_id": pane_id, "active": active == "1", "hidden": hidden == "1",
+            "provider": provider if provider in {"claude", "codex", "pi", "omp", "kimi"} else None,
         })
     return out
 
@@ -645,7 +647,8 @@ def claude_json_de(config_dir: str | None) -> Path:
     return Path(cfg) / ".claude.json"
 
 
-def new_session(name: str, cwd: str, command: str, config_dir: str | None = None) -> bool:
+def new_session(name: str, cwd: str, command: str, config_dir: str | None = None,
+                *, provider: str | None = None) -> bool:
     # -e: cores corretas do Claude Code DENTRO do tmux (o claude e spawnado via `exec`, virando o
     # processo do pane sem shell intermediario). COLORTERM=24-bit + CLAUDE_CODE_TMUX_TRUECOLOR curto-circuita o downgrade pra 256
     # (gate pink). O TERM nao-tmux (gate teal) vem do default-terminal no ~/.tmux.conf.
@@ -686,6 +689,8 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
         # scroll proprio e composer fixo. Var KIMI_* — claude/pi/codex ignoram.
         "-e", "KIMI_CODE_TUI_FULL_SCREEN=1",
         "-e", f"CP_SESSION_NAME={name}",
+        # Nasce junto do pane; vazio impede herdar o provider de quem subiu o servidor tmux.
+        "-e", f"CP_PROVIDER={provider or ''}",
     ]
     wl = _wayland_display()
     if wl:

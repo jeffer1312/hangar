@@ -478,6 +478,60 @@ async def test_falha_marketplace_permanece_visivel_ate_nova_tentativa(tmp_path, 
     assert chamadas == ['mercado']
 
 
+@pytest.mark.parametrize("cenario, inventarios, deteccoes, instalacoes", [
+    ("estavel", 1, 0, 0),
+    ("ausente", 2, 1, 0),
+    ("atualizacao", 2, 0, 1),
+    ("versao_externa", 1, 0, 1),
+])
+async def test_plugins_consultam_nativo_so_quando_necessario(
+        tmp_path, monkeypatch, cenario, inventarios, deteccoes, instalacoes):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    home = _home(tmp_path)
+    plugin = home / '.codex/plugins/cache/mercado/plugin/1'
+    plugin.mkdir(parents=True)
+    (home / '.claude/settings.json').write_text('{"enabledPlugins":{"plugin@mercado":true}}')
+    (home / '.claude/plugins').mkdir()
+    (home / '.claude/plugins/known_marketplaces.json').write_text(json.dumps({
+        'mercado': {'source': {'source': 'github', 'repo': 'exemplo/mercado'}},
+    }))
+    (home / '.codex/config.toml').write_text(
+        '[marketplaces.mercado]\nsource_type="git"\nsource="https://github.com/exemplo/mercado.git"\n')
+    service = IntegracaoCodex(home, home / '.codex')
+    service._estado = {**service.status(), 'estado': 'executando'}
+    registro = {'marketplaces_em': time.time(), 'plugins': {'plugin@mercado': {
+        'path': str(plugin), 'versao': '1', 'origem': 'mercado', 'id_codex': 'plugin@mercado',
+    }}}
+    atual = [{'pluginId': 'plugin@mercado', 'version': '2' if cenario == 'versao_externa' else '1'}]
+    native = SimpleNamespace(
+        detectar=AsyncMock(return_value=[{'itemType': 'PLUGINS', 'details': {'plugins': [
+            {'marketplaceName': 'mercado', 'pluginNames': ['plugin']},
+        ]}}]),
+        plugins_instalados=AsyncMock(return_value=atual),
+        importar=AsyncMock(return_value={'itemTypeResults': []}),
+        atualizar_marketplace=AsyncMock(return_value={}),
+        instalar_plugin=AsyncMock(return_value={'installedPath': str(plugin), 'version': atual[0]['version']}),
+    )
+    if cenario == 'ausente':
+        native.plugins_instalados.side_effect = [[], atual, atual]
+    monkeypatch.setattr(service, '_habilitar_plugins', AsyncMock())
+    monkeypatch.setattr(service, '_hooks_plugin', lambda path: None)
+    monkeypatch.setattr(service, '_checkpoint', lambda state: None)
+
+    await service._plugins(native, {'plugin@mercado'}, registro, cenario == 'atualizacao')
+
+    assert service._estado['erros'] == []
+    assert native.plugins_instalados.await_count == inventarios
+    assert native.detectar.await_count == deteccoes
+    assert native.importar.await_count == (cenario == 'ausente')
+    assert native.atualizar_marketplace.await_count == (cenario == 'atualizacao')
+    assert native.instalar_plugin.await_count == instalacoes
+    assert registro['plugins']['plugin@mercado']['versao'] == atual[0]['version']
+    service._habilitar_plugins.assert_awaited_once_with(native, {'plugin@mercado': True})
+
+
 def test_persona_antiga_continua_ligada_a_fonte_nativa(tmp_path):
     home = _home(tmp_path)
     source = home / '.claude/CLAUDE.md'

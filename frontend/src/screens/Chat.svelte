@@ -963,11 +963,17 @@
   // traz tracked=true, e sem isto a conversa so aparecia saindo da sessao e voltando — a tela diz
   // "responda e a conversa aparece aqui", e essa promessa e este efeito que cumpre.
   let estavaSemId = false;
+  let historicoAusente = $state(false);
+  let recuperadoJsonl: string | null = null;
   $effect(() => {
     const semId = kimiPreNascimento || codexPreThread;
     const nasceu = !semId && (sessionProvider === 'kimi' || sessionProvider === 'codex')
       && sessionTracked === true;
-    if (estavaSemId && nasceu) {
+    // A primeira lista pode chegar depois do 404 e já trazer a thread pronta.
+    const recuperar = historicoAusente && sessionJsonl && sessionJsonl !== recuperadoJsonl;
+    if ((estavaSemId || recuperar) && nasceu) {
+      recuperadoJsonl = sessionJsonl;
+      historicoAusente = false;
       kimiSemTranscript = false;
       // O SSE pode ter sido recusado enquanto nao havia transcript (/events 404 -> CLOSED); sem
       // limpar, a faixa de "servidor recusou" sobrevive a chegada do transcript.
@@ -1441,8 +1447,10 @@
       }
       error = '';
       kimiSemTranscript = false;   // transcript existe -> sai do modo "kimi pre-1o-prompt"
+      historicoAusente = false;
     } catch (err) {
       if (isAbortError(err) || g !== histGen) return;   // cancelado ≠ falhou: nada na tela
+      historicoAusente = (err as { status?: number } | null)?.status === 404;
       // Teto estourado vira frase traduzida: o texto que o navegador poe no TimeoutError e
       // "signal timed out", que nao diz nada pra quem le a tela (mesma troca que o
       // apiFetchForServer ja faz em lib/api.ts).

@@ -601,14 +601,15 @@ class IntegracaoCodex:
         # Elas seguem pela atualização abaixo, sem recadastrar a origem do marketplace.
         # Recorta a seleção nativa pela identidade completa, inclusive em marketplaces homônimos.
         itens = []
-        for item in await codex.detectar():
+        faltantes = candidatos - ja_instalados
+        for item in await codex.detectar() if faltantes else []:
             if item.get("itemType") != "PLUGINS":
                 continue
             item = copy.deepcopy(item)
             grupos = []
             for grupo in item.get("details", {}).get("plugins", []):
                 nomes = [n for n in grupo.get("pluginNames", [])
-                         if f"{n}@{grupo.get('marketplaceName')}" in candidatos - ja_instalados]
+                         if f"{n}@{grupo.get('marketplaceName')}" in faltantes]
                 if nomes:
                     grupos.append({**grupo, "pluginNames": nomes})
             if grupos:
@@ -619,8 +620,8 @@ class IntegracaoCodex:
             for tipo in result.get("itemTypeResults", []):
                 if tipo.get("failures"):
                     self._erro(msg("erro_plugins_incompletos"))
-        mercados = _toml(cfg_path).get("marketplaces", {})
-        inventario = {p["pluginId"]: p for p in await codex.plugins_instalados()}
+            mercados = _toml(cfg_path).get("marketplaces", {})
+            inventario = {p["pluginId"]: p for p in await codex.plugins_instalados()}
         identidades = {}
         for id_ in sorted(candidatos):
             try:
@@ -652,10 +653,10 @@ class IntegracaoCodex:
             registro["marketplaces_pendentes"] = sorted(falhas)
             if not falhas:
                 registro["marketplaces_em"] = agora
+            inventario = {p["pluginId"]: p for p in await codex.plugins_instalados()}
         else:
             for marketplace in sorted(falhas_anteriores):
                 self._erro(msg("erro_marketplace_pendente", marketplace=marketplace))
-        inventario = {p["pluginId"]: p for p in await codex.plugins_instalados()}
         plugins_pendentes = set(registro.get("plugins_pendentes", [])) & desejados
         plugins = {p: anteriores[p] for p in bloqueados if p in anteriores}
         for id_ in sorted(candidatos):

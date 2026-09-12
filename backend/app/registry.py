@@ -1107,6 +1107,9 @@ class SessionRegistry:
             # cairia no fallback newest-by-mtime, que pegaria o transcript do CLAUDE do mesmo cwd (a
             # regressao mais cara desta task). Resolve pelo bilhete da extensao / env do wrapper.
             prov, pid_agente = agente_do_pane(p["pid"], children)
+            # Durante o boot só há shell: a escolha da criação já identifica o dono.
+            if pid_agente is None and p.get("provider"):
+                prov = p["provider"]
             # Quem declara conta e motor e o processo do agente, nao o pane: numa sessao aberta a mao
             # o pane e o shell, e o shell nao tem CLAUDE_CONFIG_DIR nem CP_ENGINE.
             pid_env = pid_agente or p["pid"]
@@ -1782,7 +1785,8 @@ class SessionRegistry:
         if protected_prefix:
             cmd = tmux.join_cmd([*protected_prefix, "/bin/sh", "-c", cmd])
         diag.registrar("sessao.criar_etapa", sessao=name, provider=provider, etapa="criar_terminal")
-        if not tmux.new_session(name, cwd, cmd, config_dir):
+        self._forget(name)
+        if not tmux.new_session(name, cwd, cmd, config_dir, provider=provider):
             diag.registrar("sessao.criar_recusada", "erro", sessao=name, provider=provider,
                            detalhe="terminal_nao_criado")
             raise ValueError("falha ao criar sessao no tmux")
@@ -1805,7 +1809,8 @@ class SessionRegistry:
         if jsonl is not None:
             self._jsonl_cache[name] = jsonl
         diag.registrar("sessao.criada", sessao=name, provider=provider, etapa="terminal_criado")
-        return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider, engine=engine,
+        return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, tracked=jsonl is not None,
+                           provider=provider, engine=engine,
                            codex_home=codex_home)
 
     def rename(self, old: str, new: str) -> None:

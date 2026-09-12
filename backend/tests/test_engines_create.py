@@ -52,7 +52,7 @@ def _motor():
 
 
 def _reg(tmp_path, monkeypatch, visto):
-    def _fake_new(name, cwd, command, config_dir=None):
+    def _fake_new(name, cwd, command, config_dir=None, *, provider="claude"):
         visto["command"] = command
         return True
 
@@ -117,7 +117,7 @@ def _prep_resume(tmp_path, monkeypatch, visto, motor):
     proj.mkdir(parents=True)
     (proj / f"{sid}.jsonl").write_text("", encoding="utf-8")
 
-    def _fake_new(name, cwd, command, config_dir=None):
+    def _fake_new(name, cwd, command, config_dir=None, *, provider="claude"):
         visto["command"] = command
         return True
 

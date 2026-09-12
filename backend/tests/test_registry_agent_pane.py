@@ -143,7 +143,7 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
         # cresceria com o numero de sessoes/panes (aqui: 2 sessoes, 3 panes).
         assert chamadas_run == [["tmux", "list-panes", "-a", "-F",
                                  "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
-                                 "\t#{@cp_hidden}"]]
+                                 "\t#{@cp_hidden}\t#{CP_PROVIDER}"]]
         assert chamadas_of == []                # nenhuma chamada por-sessao durante list()
     finally:
         # Sessoes primeiro, servidor depois. O `matar_servidor` carrega a proibicao que este

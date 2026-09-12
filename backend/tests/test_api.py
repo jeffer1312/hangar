@@ -981,6 +981,19 @@ def test_create_codex_provider_routes_to_create_normal(api_client):
                                model=None, effort=None, context_window=None)
 
 
+def test_create_codex_descarta_snapshot_da_sessao_anterior(api_client, monkeypatch):
+    from app import api as api_mod
+    old = SessionInfo(name="cx", provider="claude", jsonl="/antiga.jsonl")
+    new = SessionInfo(name="cx", provider="codex", tracked=False, jsonl=None)
+    monkeypatch.setattr(api_mod, "_list_snap", {"snap": (api_mod.time.monotonic(), [old])})
+    with patch.object(api_mod.registry, "create", return_value=new), \
+         patch.object(api_mod.registry, "list", return_value=[new]):
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "cx", "cwd": "/tmp", "provider": "codex"})
+        assert r.status_code == 200
+        assert api_mod._cached_info_sync("cx").provider == "codex"
+
+
 def test_create_codex_forwards_wrapper_initial_prompt(api_client):
     # O prompt inicial vai no COMANDO do pane (a TUI e quem abre a thread), entao ele precisa
     # atravessar ate o create.

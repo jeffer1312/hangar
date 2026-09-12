@@ -94,6 +94,8 @@ def test_create_codex_usa_o_lancador_e_nao_pre_semeia_transcript(tmp_path):
     # O rollout so nasce quando a TUI abre a thread: um path do layout do Claude aqui envenenaria o
     # _jsonl_cache, que e de classe e compartilhado com o SSE.
     assert info.jsonl is None
+    assert info.tracked is False
+    assert new_sess.call_args.kwargs["provider"] == "codex"
     assert "mysess" not in SessionRegistry._jsonl_cache
     comando = new_sess.call_args[0][2]
     assert "hangar-codex-tui" in comando
@@ -429,6 +431,23 @@ def test_pane_codex_sem_sidecar_nao_vira_sessao_claude(tmp_path):
         out = reg.list()
     resolve.assert_not_called()   # nem chega a procurar transcript do Claude
     assert [(s.name, s.provider, s.jsonl, s.tracked) for s in out] == [("cx", "codex", None, False)]
+
+
+@pytest.mark.parametrize("detected", [("claude", None), ("kimi", 111)])
+def test_provider_de_nascimento_cobre_o_shell_sem_impedir_troca(tmp_path, monkeypatch, detected):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    reg._jsonl_cache["cx"] = str(tmp_path / "claude-antigo.jsonl")
+    panes = {"cx": [{"name": "cx", "cwd": str(tmp_path), "pid": 321,
+                     "pane_id": "%3", "active": True, "provider": "codex"}]}
+    monkeypatch.setattr(registry.tmux, "list_panes_all", lambda: panes)
+    monkeypatch.setattr(registry, "_proc_children_map", lambda: {})
+    monkeypatch.setattr(registry, "agente_do_pane", lambda *args: detected)
+    monkeypatch.setattr(registry, "kimi_session_file", lambda *args: None)
+    with patch.object(SessionRegistry, "resolve_tracked", return_value=(reg._jsonl_cache["cx"], True)) as resolve:
+        out = reg.list()
+    resolve.assert_not_called()
+    assert [(s.provider, s.jsonl, s.tracked) for s in out] == [
+        ("codex" if detected[1] is None else "kimi", None, False)]
 
 
 @pytest.mark.parametrize("argv", [
