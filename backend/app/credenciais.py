@@ -177,7 +177,8 @@ def listar(forcar: bool = False, *, codex_snapshots: list[dict] | tuple = ()) ->
             auth_method=auth.get("method", "unknown"), usos=["codex_cli"], cota=cota.get(cid),
             login=EstadoLogin(estado="indisponivel" if status == "unavailable" else "ok",
                              loggedIn=None if status == "unavailable" else status == "connected",
-                             email=auth.get("email"), plano=auth.get("plan")),
+                             email=auth.get("email"), plano=auth.get("plan"),
+                             motivo="cli-ausente" if auth.get("reason") == "cli_missing" else None),
         ))
 
     # Cota sem cadastro continua visível, mas não comprova autenticação do Codex.

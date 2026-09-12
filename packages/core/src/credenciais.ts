@@ -9,7 +9,9 @@ export interface CodexAccount {
   name: string;
   home: string;
   is_default: boolean;
-  auth: { method: AuthMethod; status: 'connected' | 'disconnected' | 'unavailable'; email: string | null; plan: string | null };
+  auth: { method: AuthMethod; status: 'connected' | 'disconnected' | 'unavailable'; email: string | null; plan: string | null;
+    /** `cli_missing` = o Codex não está instalado no servidor: não há login possível. */
+    reason?: 'cli_missing' | null };
   sync: { status: CodexSyncStatus; trust_pending: boolean; issues: { code: string; params: Record<string, string> }[];
     /** Em que ponto a herança está: `principal`, `configuracoes`, `recursos` ou `plugins`. */
     etapa?: string | null;
@@ -57,6 +59,11 @@ export interface Credencial {
 
 export function credentialAuth(c: Credencial): AuthMethod {
   return c.auth_method ?? (c.tipo === 'claude' ? 'oauth' : 'unknown');
+}
+/** Codex ausente no servidor. A tela não oferece Entrar nem manda "entrar": o login roda pelo CLI. */
+export function codexCliAusente(c: Credencial | CodexAccount): boolean {
+  return 'auth' in c && c.auth ? c.auth.reason === 'cli_missing'
+    : (c as Credencial).login?.motivo === 'cli-ausente';
 }
 export function credentialGroup(c: Credencial): 'subscription' | 'claude_engine' | 'api_key' | 'unknown' {
   const auth = credentialAuth(c);

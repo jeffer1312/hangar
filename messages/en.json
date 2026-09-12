@@ -2791,6 +2791,7 @@
   "codex_ui_cancelled": "Sign-in cancelled",
   "codex_ui_account": "Codex account",
   "codex_ui_unknown": "Authentication unavailable",
+  "codex_ui_cli_ausente": "Codex is not installed on this machine",
   "codex_ui_intro": "You'll get a code to type on the ChatGPT website. It takes under a minute.",
   "codex_ui_nome_dica": "A short nickname, like \"work\". The account lives in ~/.codex-{id}",
   "codex_ui_criando": "Creating the account…",

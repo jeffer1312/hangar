@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { credentialAuth, credentialGroup, deleteCodexAccountForServer, getCodexAccountsForServer,
+import { codexCliAusente, credentialAuth, credentialGroup, deleteCodexAccountForServer, getCodexAccountsForServer,
   getCredentialsForServer, type CodexAccount, type Credencial } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { Linha } from '../../src/features/config/Linha';
@@ -73,14 +73,15 @@ export default function Contas() {
     const auth = account.auth;
     return auth.status === 'connected'
       ? (auth.email && auth.plan ? m.contas_email_plano({ email: auth.email, max: auth.plan }) : auth.email ?? m.codex_ui_account())
-      : auth.status === 'disconnected' ? m.contas_nao_conectada() : m.codex_ui_unknown();
+      : auth.status === 'disconnected' ? m.contas_nao_conectada()
+      : codexCliAusente(account) ? m.codex_ui_cli_ausente() : m.codex_ui_unknown();
   };
   const groupForAccount = (account: CodexAccount): CredentialGroup => (
     account.auth.method === 'oauth' ? 'subscription' : account.auth.method === 'api_key' ? 'api_key' : 'unknown'
   );
   const credentialStatus = (credential: Credencial) => {
     const auth = credentialAuth(credential);
-    if (auth === 'unknown') return m.codex_ui_unknown();
+    if (auth === 'unknown') return codexCliAusente(credential) ? m.codex_ui_cli_ausente() : m.codex_ui_unknown();
     if (auth === 'none' || credential.login?.loggedIn === false) return m.contas_nao_conectada();
     if (auth === 'api_key') return m.contas_tipo_chave();
     if (credential.login?.email && credential.login.plano) {
@@ -142,7 +143,7 @@ export default function Contas() {
       descricao={identity.description}
       direita={identity.account ? (
         <View style={styles.actions}>
-          {identity.account.auth.status !== 'connected' ? (
+          {identity.account.auth.status !== 'connected' && !codexCliAusente(identity.account) ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={m.contas_entrar()}

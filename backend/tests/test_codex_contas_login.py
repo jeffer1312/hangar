@@ -448,7 +448,10 @@ async def test_diario_codex_ausente_nao_e_falha(contas, monkeypatch, tmp_path):
             raise CodexAusente("Codex CLI não encontrado")
 
     service = CodexContasLogin(native=SemCodex)
-    assert (await service.read_auth(work))["status"] == "unavailable"
+    auth = await service.read_auth(work)
+    assert (auth["status"], auth["reason"]) == ("unavailable", "cli_missing")
+    # A lembranca do fracasso guarda o MOTIVO: a tela diz "Codex nao instalado" tambem no cache.
+    assert (await service.read_auth(work))["reason"] == "cli_missing"
     eventos = [json.loads(l) for l in diag.caminho_do_dia().read_text(encoding="utf-8").splitlines()]
     assert not [e for e in eventos if e["evento"] == "conta.auth.falhou"]
     aviso = next(e for e in eventos if e["evento"] == "conta.auth.indisponivel")

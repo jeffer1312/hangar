@@ -146,6 +146,17 @@ def test_credencial_do_codex_tambem_aparece(casa, monkeypatch, method, status, w
         assert (row.login.email, row.login.plano) == ("user@example.test", "pro")
 
 
+def test_codex_nao_instalado_vira_motivo_nomeado(casa, monkeypatch):
+    # Sem o motivo, a tela dizia "Autenticacao indisponivel — precisa entrar" numa maquina onde
+    # entrar e impossivel: o login roda pelo proprio Codex.
+    _monta(monkeypatch)
+    monkeypatch.setattr(codex_contas, "list_accounts", lambda: [codex_contas.Account("default", casa / ".codex", True)])
+    snapshots = [{"id": "default", "auth": {"method": "unknown", "status": "unavailable",
+                                            "email": None, "plan": None, "reason": "cli_missing"}}]
+    row = credenciais.listar(codex_snapshots=snapshots)[0]
+    assert (row.login.estado, row.login.motivo) == ("indisponivel", "cli-ausente")
+
+
 def test_codex_sem_snapshot_nao_inventa_autenticacao(casa, monkeypatch):
     _monta(monkeypatch)
     monkeypatch.setattr(codex_contas, "list_accounts", lambda: [codex_contas.Account("default", casa / ".codex", True)])

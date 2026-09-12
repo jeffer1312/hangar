@@ -21,7 +21,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
   import { nivelDePct, VELHA_APOS_S, motivoParado, motivoSessaoViva } from '../../lib/cota';
   import NovaCredencialSheet from './NovaCredencialSheet.svelte';
   import CodexContaLogin from './CodexContaLogin.svelte';
-  import { credentialAuth, credentialGroup } from '@hangar/core';
+  import { credentialAuth, credentialGroup, codexCliAusente } from '@hangar/core';
   import { listServers, getActiveId } from '../../lib/auth';
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import { serverIdentidade, type Server } from '../../lib/auth';
@@ -794,6 +794,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
                   {#if credentialAuth(conta) !== 'none'}
                     <span class="ct-sub">{credentialAuth(conta) === 'oauth' ? m.codex_ui_oauth()
                       : credentialAuth(conta) === 'api_key' ? m.contas_tipo_chave()
+                      : codexCliAusente(conta) ? m.codex_ui_cli_ausente()
                       : m.codex_ui_unknown()}</span>
                   {/if}
                   {#if conta.login?.loggedIn && conta.login.plano}
@@ -947,7 +948,9 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
               {/if}
             </span>
           {:else if !(conta.cota && conta.cota.estado === 'lida' && conta.cota.janelas.length)}
-            {#if conta.cota && (conta.cota.estado === 'expirada' || conta.cota.estado === 'sem_credencial')}
+            {#if conta.tipo === 'codex' && codexCliAusente(conta)}
+              <!-- Sem o CLI não há login possível: "precisa entrar" mandaria fazer o impossível. -->
+            {:else if conta.cota && (conta.cota.estado === 'expirada' || conta.cota.estado === 'sem_credencial')}
               <!-- sessao-viva NÃO é "abra uma sessão" — a sessão já está aberta (foi como o
                    usuário leu a frase estando dentro dela, 19/08). Quem renova é o CLI dela. -->
               <span class="ct-semleitura"

@@ -120,7 +120,7 @@ class CodexContasLogin:
         self._preparation_results: dict[str, dict] = {}
         self._auth_cache: dict[str, tuple[tuple, int, float, dict]] = {}
         self._auth_generation: dict[str, int] = {}
-        self._indisponivel: dict[str, tuple[tuple, float]] = {}
+        self._indisponivel: dict[str, tuple[tuple, float, dict]] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -259,15 +259,17 @@ class CodexContasLogin:
         indisponivel = self._indisponivel.get(key)
         if not refresh and indisponivel and indisponivel[0] == signature \
                 and time.monotonic() - indisponivel[1] <= _INDISPONIVEL_TTL:
-            return {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
+            return copy.deepcopy(indisponivel[2])
         codigo = "sem_resposta_valida"
         try:
             async with self.native(Path.home(), account.home, account=account) as native:
                 result = await self._read_auth_native(native)
         except CodexAusente:
-            # Sem Codex instalado nao ha o que consultar: e estado da maquina, nao falha.
+            # Sem Codex instalado nao ha o que consultar: e estado da maquina, nao falha. O motivo
+            # vai pra tela, que senao mandaria "entrar" onde entrar e impossivel.
             codigo = "cli_ausente"
-            result = {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
+            result = {"method": "unknown", "status": "unavailable", "email": None, "plan": None,
+                      "reason": "cli_missing"}
         except (CodexNativoErro, OSError, RuntimeError, ValueError) as exc:
             diag.registrar("conta.auth.falhou", "erro", provider="codex", etapa="consultar_auth",
                            conta_id=diag.conta_id(key), **diag.erro_campos(exc))
@@ -278,7 +280,7 @@ class CodexContasLogin:
                            conta_id=diag.conta_id(key), codigo=codigo)
             # Tambem se lembra do fracasso: sem isto cada listagem de credenciais subia um
             # app-server por conta e esperava o teto de 3s de cada um (medido: 6,4s no Windows).
-            self._indisponivel[key] = (current_signature, time.monotonic())
+            self._indisponivel[key] = (current_signature, time.monotonic(), copy.deepcopy(result))
         elif self._auth_generation.get(key, 0) == generation and current_signature == signature:
             self._auth_cache[key] = (signature, generation, time.monotonic(), copy.deepcopy(result))
         return result

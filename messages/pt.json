@@ -2791,6 +2791,7 @@
   "codex_ui_cancelled": "Login cancelado",
   "codex_ui_account": "Conta do Codex",
   "codex_ui_unknown": "Autenticação indisponível",
+  "codex_ui_cli_ausente": "Codex não está instalado nesta máquina",
   "codex_ui_intro": "Você vai receber um código pra digitar no site do ChatGPT. Leva menos de um minuto.",
   "codex_ui_nome_dica": "Um apelido curto, tipo \"trabalho\". A conta fica em ~/.codex-{id}",
   "codex_ui_criando": "Criando a conta…",

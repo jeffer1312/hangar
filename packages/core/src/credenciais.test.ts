@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
-import { credentialAuth, credentialGroup, codexAccountMessage, contaCodexParaEntrar,
+import { credentialAuth, credentialGroup, codexAccountMessage, contaCodexParaEntrar, codexCliAusente,
   type Credencial, type CodexAccount } from './credenciais';
 import { configureApi } from './apiEnv';
 import { configureLocale } from './i18n';
@@ -21,6 +21,15 @@ beforeEach(() => {
   configureLocale({ getLocale: () => 'pt' });
 });
 afterEach(() => vi.restoreAllMocks());
+
+describe('Codex não instalado', () => {
+  it('é lido da credencial e da conta, que chegam por rotas diferentes', () => {
+    expect(codexCliAusente({ tipo: 'codex', login: { estado: 'indisponivel', motivo: 'cli-ausente' } } as Credencial)).toBe(true);
+    expect(codexCliAusente({ tipo: 'codex', login: { estado: 'indisponivel' } } as Credencial)).toBe(false);
+    expect(codexCliAusente({ auth: { method: 'unknown', status: 'unavailable', email: null, plan: null, reason: 'cli_missing' } } as CodexAccount)).toBe(true);
+    expect(codexCliAusente({ auth: { method: 'none', status: 'disconnected', email: null, plan: null } } as CodexAccount)).toBe(false);
+  });
+});
 
 describe('autenticação explícita', () => {
   it('separa autenticação de provedor', () => {

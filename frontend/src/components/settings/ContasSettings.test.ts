@@ -235,6 +235,22 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     unmount(t.comp);
   });
 
+  it('Codex não instalado diz isso, sem "precisa entrar" nem Entrar', async () => {
+    // Entrar roda pelo próprio Codex: sem o CLI, mandar entrar é pedir o impossível.
+    const padrao = chave({ tipo: 'codex', auth_method: 'unknown', codex_account: 'default', ativa: true,
+      id: 'codex:/h/.codex', nome: 'default', nome_natural: 'default', usos: [],
+      login: { estado: 'indisponivel', loggedIn: null, motivo: 'cli-ausente' },
+      cota: { estado: 'sem_credencial', janelas: [] } });
+    const t = montar([padrao]);
+    await tick(); await tick();
+    const card = t.el.querySelector<HTMLElement>('.ct-card')!;
+    expect(card.textContent).toContain(m.codex_ui_cli_ausente());
+    expect(card.textContent).not.toContain(m.codex_ui_unknown());
+    expect(card.textContent).not.toContain(m.cota_precisa_entrar());
+    expect([...card.querySelectorAll('.ct-acao')].map((b) => b.textContent)).not.toContain(m.contas_entrar());
+    unmount(t.comp);
+  });
+
   it('conta Codex adicional tem Remover; a padrão (ativa) não', async () => {
     const padrao = chave({ tipo: 'codex', auth_method: 'none', codex_account: 'default', ativa: true,
       id: 'codex:/h/.codex', nome: 'default', nome_natural: 'default', usos: [] });
