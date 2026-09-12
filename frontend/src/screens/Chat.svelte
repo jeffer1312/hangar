@@ -1544,6 +1544,9 @@
   const SSE_RETRY_MIN = 3000;
   const SSE_RETRY_MAX = 30000;
   let sseRetryDelay = SSE_RETRY_MIN;
+  // CLOSED seguidos com a sessao viva na lista: o teto que impede o laco que a faixa existe pra cortar.
+  const SSE_RECUSAS_MAX = 3;
+  let sseRecusasSeguidas = 0;
   // Servidor recusou o stream de vez (readyState CLOSED no onerror). Mostra a faixa com
   // "tentar de novo" em vez de reconectar em laço.
   let sseRecusado = $state(false);
@@ -1581,6 +1584,7 @@
           req, ms: Date.now() - inicio }, destino);
       }
       sseRetryDelay = SSE_RETRY_MIN;
+      sseRecusasSeguidas = 0;
       armWatchdog();
     }
     clearTimeout(reconnectTimer);
@@ -1841,11 +1845,31 @@
       // CLOSED = recusa definitiva (404/401): insistir a cada 30s não muda a resposta — medido
       // 2h14 de laço, duas madrugadas seguidas, numa sessão que o servidor dizia não existir.
       // Para, e deixa a pessoa tentar de novo (ou o onVisible, quando a aba voltar).
-      if (estadoSSE === 2) { sseRecusado = true; return; }
-      clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(connectSSE, sseRetryDelay);
-      sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_RETRY_MAX);
+      if (estadoSSE === 2) { void avaliarRecusa(); return; }
+      reagendarSSE();
     };
+  }
+
+  function reagendarSSE() {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectSSE, sseRetryDelay);
+    sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_RETRY_MAX);
+  }
+
+  // CLOSED nao distingue "sessao nao existe" de "proxy sem backend": o `tailscale serve` responde
+  // 502 na hora durante um reinicio e o EventSource fecha igual a um 404. A lista desempata.
+  async function avaliarRecusa() {
+    let recusa: boolean;
+    try {
+      const rows = await getSessions();
+      recusa = !rows.some((s) => s.name === sessionName) || ++sseRecusasSeguidas >= SSE_RECUSAS_MAX;
+    } catch (e) {
+      const status = (e as Error & { status?: number }).status;
+      recusa = status === 401 || status === 403;
+    }
+    if (!alive || es || currentState === 'dead') return;
+    if (recusa) sseRecusado = true;
+    else reagendarSSE();
   }
 
   // App voltou pro foreground (mobile suspende a conexão no background). Reconecta primeiro para o

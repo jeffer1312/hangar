@@ -625,3 +625,73 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     unmount(t.comp);
   });
 });
+
+// --- SSE fechado nao e sempre recusa (medido 12/09/2026) ---
+// Atras do `tailscale serve`, backend reiniciando responde 502 em ~24ms: o EventSource vai pra
+// CLOSED igual a um 404 e a faixa "o servidor recusou" ficava parada sobre uma sessao viva. Antes de
+// desistir o Chat pergunta a lista: sem backend e soluco (tenta de novo); sessao fora da lista e
+// recusa de verdade.
+async function fecharStream(api: typeof import('@hangar/core'), indice = 0) {
+  const stream = vi.mocked(api.openEventStream).mock.results[indice].value;
+  Object.defineProperty(stream, 'readyState', { value: 2 });
+  stream.onerror(new Event('error'));
+}
+
+it('SSE fechado com o backend fora do ar tenta de novo, sem faixa de recusa', async () => {
+  vi.useFakeTimers();
+  const api = await import('@hangar/core');
+  vi.mocked(api.openEventStream).mockClear();
+  vi.mocked(api.getSessions).mockRejectedValue(Object.assign(new Error('Bad Gateway'), { status: 502 }));
+  const t = montar(false);
+  try {
+    await vi.advanceTimersByTimeAsync(10);
+    await fecharStream(api);
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(t.el.textContent).not.toContain(m.chat_sse_recusado());
+    expect(api.openEventStream).toHaveBeenCalledTimes(2);
+  } finally {
+    await unmount(t.comp);
+    vi.mocked(api.getSessions).mockResolvedValue([]);
+    vi.useRealTimers();
+  }
+});
+
+it('SSE fechado com a sessao fora da lista mostra a faixa e para', async () => {
+  vi.useFakeTimers();
+  const api = await import('@hangar/core');
+  vi.mocked(api.openEventStream).mockClear();
+  vi.mocked(api.getSessions).mockResolvedValue([]);
+  const t = montar(false);
+  try {
+    await vi.advanceTimersByTimeAsync(10);
+    await fecharStream(api);
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(t.el.textContent).toContain(m.chat_sse_recusado());
+    expect(api.openEventStream).toHaveBeenCalledTimes(1);
+  } finally {
+    await unmount(t.comp);
+    vi.useRealTimers();
+  }
+});
+
+it('SSE que fecha seguido com a sessao viva desiste no terceiro', async () => {
+  // O laco de 2h14 que a faixa existe pra cortar: /events recusando com a sessao na lista.
+  vi.useFakeTimers();
+  const api = await import('@hangar/core');
+  vi.mocked(api.openEventStream).mockClear();
+  vi.mocked(api.getSessions).mockResolvedValue([{ name: 'sess', state: 'idle' }] as never);
+  const t = montar(false);
+  try {
+    await vi.advanceTimersByTimeAsync(10);
+    for (let i = 0; i < 3; i++) {
+      await fecharStream(api, i);
+      await vi.advanceTimersByTimeAsync(7_000);   // backoff de 3s e 6s, antes do watchdog de 25s
+    }
+    expect(t.el.textContent).toContain(m.chat_sse_recusado());
+    expect(api.openEventStream).toHaveBeenCalledTimes(3);
+  } finally {
+    await unmount(t.comp);
+    vi.mocked(api.getSessions).mockResolvedValue([]);
+    vi.useRealTimers();
+  }
+});
