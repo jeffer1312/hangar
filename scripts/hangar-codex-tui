@@ -425,13 +425,13 @@ def main() -> int:
         flags_da_escolha += ["-c", f'model_reasoning_effort="{args.effort}"']
 
     if args.resume:
-        # Sandbox e politica de aprovacao valem AQUI TAMBEM (`codex resume --help` lista as duas):
-        # sem elas a conversa retomada roda no padrao do Codex e pode parar num pedido de aprovacao
-        # que ninguem vai responder — a TUI trava e o app fica olhando uma sessao muda.
+        # Sem `--sandbox`/`--ask-for-approval` aqui: com `--remote`, o resume os RECUSA ("Permission
+        # overrides are not supported when resuming a remote task") e a TUI morre na hora. Quem
+        # carrega os dois e o app-server, que sobe com `-c sandbox_mode=`/`-c approval_policy=` —
+        # e a thread retomada corre dentro dele.
         # `-C` fica de fora porque o pane ja nasce no cwd certo (`tmux new-session -c`) e a conversa
         # carrega o dela; o id vai no fim, onde o subcomando o espera.
         argv = [_codex(), "resume", "--remote", endpoint, "--no-alt-screen",
-                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL,
                 *flags_da_escolha, args.resume]
     else:
         argv = [_codex(), "--remote", endpoint, "--no-alt-screen", "-C", cwd,
