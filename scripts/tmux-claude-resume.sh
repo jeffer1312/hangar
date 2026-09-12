@@ -131,8 +131,22 @@ ticket_field() {  # <kimi|pi> <pane id> <agent pid> <json key>
 # Ceiling: nome com acento/espaco e sanitizado pelo app antes de virar arquivo; aqui casamos o nome
 # do tmux cru, que na pratica ja vem sanitizado (foi o app que criou a sessao).
 codex_field() {  # <session name> <json key>
-  sed -n "s/.*\"$2\" *: *\"\([^\"]*\)\".*/\1/p" "$HOME/.hangar/codex-sessions/$1.json" 2>/dev/null \
-    | head -1
+  python3 - "$HOME/.hangar/codex-sessions/$1.json" "$2" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        data = json.load(source)
+    value = data.get(sys.argv[2], "")
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        raise ValueError("campo não textual")
+    print(value)
+except (OSError, ValueError, AttributeError):
+    sys.exit(1)
+PY
 }
 
 save() {
@@ -154,7 +168,10 @@ save() {
       pi)     id=$(ticket_field pi "$pane" "$AGENT_PID" id) || id="" ;;
       # Thread do sidecar, nao do `--resume` do cmdline: sessao Codex nasce SEM thread nenhum na
       # linha de comando (o id sai do app-server) e trocar de conversa na TUI atualiza o sidecar.
-      codex)  id=$(codex_field "$name" thread_id) ;;
+      codex)  if ! id=$(codex_field "$name" thread_id) || [ -z "$id" ]; then
+                echo "  $name: codex sem thread no sidecar legivel — save ignorado" >> "$LOG"
+                continue
+              fi ;;
     esac
     [ -n "$id" ] || continue
     # `|| cfg=""`: o processo pode morrer ENTRE o scan_pane e esta leitura — e o instante mais
@@ -218,13 +235,13 @@ restore() {
       # cwd/conta saem do sidecar (o MAP guarda so o thread): sao os mesmos campos que o app grava,
       # uma fonte so. Sidecar apagado = sem como retomar; some do restore com log em vez de abrir
       # conversa nova calada.
-      codex)  cwd=$(codex_field "$name" cwd)
-              if [ -z "$cwd" ]; then
-                echo "  $name: codex sem sidecar (sem cwd) — nao retomado" >> "$LOG"; continue
+      codex)  if ! cwd=$(codex_field "$name" cwd) || [ -z "$cwd" ]; then
+                echo "  $name: codex sem cwd no sidecar legivel — nao retomado" >> "$LOG"; continue
               fi
               cmd="hangar-codex-tui --name $(printf '%q' "$name") --cwd $(printf '%q' "$cwd")"
-              home=$(codex_field "$name" codex_home)
-              conta=$(codex_field "$name" codex_account)
+              if ! home=$(codex_field "$name" codex_home) || ! conta=$(codex_field "$name" codex_account); then
+                echo "  $name: sidecar Codex ilegivel durante leitura da conta — nao retomado" >> "$LOG"; continue
+              fi
               if [ -n "$home" ]; then cmd="$cmd --codex-home $(printf '%q' "$home")"; fi
               if [ -n "$conta" ]; then cmd="$cmd --codex-account $(printf '%q' "$conta")"; fi
               cmd="$cmd --resume $id" ;;
