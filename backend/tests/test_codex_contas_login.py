@@ -435,6 +435,26 @@ async def test_diario_auth_nao_repete_falha_do_cache(contas, monkeypatch, tmp_pa
     assert "SEGREDO-CLI" not in primeiro
 
 
+async def test_diario_codex_ausente_nao_e_falha(contas, monkeypatch, tmp_path):
+    # Maquina sem Codex instalado: cada listagem de credenciais gravava `conta.auth.falhou` nivel
+    # erro. Ausencia de CLI e estado, nao defeito — vira aviso nomeado.
+    from app import diag
+    from app.codex_importador import CodexAusente
+    _, work = contas
+    monkeypatch.setattr(diag, "_base", lambda: tmp_path / "logs")
+
+    class SemCodex(FakeNative):
+        async def __aenter__(self):
+            raise CodexAusente("Codex CLI não encontrado")
+
+    service = CodexContasLogin(native=SemCodex)
+    assert (await service.read_auth(work))["status"] == "unavailable"
+    eventos = [json.loads(l) for l in diag.caminho_do_dia().read_text(encoding="utf-8").splitlines()]
+    assert not [e for e in eventos if e["evento"] == "conta.auth.falhou"]
+    aviso = next(e for e in eventos if e["evento"] == "conta.auth.indisponivel")
+    assert aviso["codigo"] == "cli_ausente"
+
+
 async def test_conta_viva_recusa_login_antes_do_process(contas, monkeypatch):
     _, work = contas
     monkeypatch.setattr("app.codex_contas_login.CodexNativo", FakeNative)

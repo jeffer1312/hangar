@@ -38,6 +38,10 @@ class CodexNativoErro(RuntimeError):
         self.data = data
 
 
+class CodexAusente(CodexNativoErro):
+    """O executável do Codex não existe nesta máquina — estado, não falha do processo."""
+
+
 class CodexNativo:
     def __init__(
         self, home: Path, codex_home: Path, binario: str = "codex", *,
@@ -87,7 +91,7 @@ class CodexNativo:
     def _comando(self) -> list[str]:
         caminho = shutil.which(self.binario)
         if not caminho:
-            raise CodexNativoErro("Codex CLI não encontrado; instale ou configure o executável.")
+            raise CodexAusente("Codex CLI não encontrado; instale ou configure o executável.")
         if os.name != "nt" or Path(caminho).suffix.lower() not in {".cmd", ".bat"}:
             return [caminho]
         # O shim npm exige cmd.exe; chamar seu JS por Node evita interpretação de argumentos.

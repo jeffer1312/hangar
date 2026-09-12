@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 
 from app import codex_contas as accounts
 from app import codex_contas_sync, diag
-from app.codex_importador import CodexNativo, CodexNativoErro
+from app.codex_importador import CodexAusente, CodexNativo, CodexNativoErro
 
 
 _log = logging.getLogger("hangar.codex.contas")
@@ -260,9 +260,14 @@ class CodexContasLogin:
         if not refresh and indisponivel and indisponivel[0] == signature \
                 and time.monotonic() - indisponivel[1] <= _INDISPONIVEL_TTL:
             return {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
+        codigo = "sem_resposta_valida"
         try:
             async with self.native(Path.home(), account.home, account=account) as native:
                 result = await self._read_auth_native(native)
+        except CodexAusente:
+            # Sem Codex instalado nao ha o que consultar: e estado da maquina, nao falha.
+            codigo = "cli_ausente"
+            result = {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
         except (CodexNativoErro, OSError, RuntimeError, ValueError) as exc:
             diag.registrar("conta.auth.falhou", "erro", provider="codex", etapa="consultar_auth",
                            conta_id=diag.conta_id(key), **diag.erro_campos(exc))
@@ -270,7 +275,7 @@ class CodexContasLogin:
         current_signature = self._auth_signature(account)
         if result["status"] == "unavailable":
             diag.registrar("conta.auth.indisponivel", "aviso", provider="codex", etapa="consultar_auth",
-                           conta_id=diag.conta_id(key), codigo="sem_resposta_valida")
+                           conta_id=diag.conta_id(key), codigo=codigo)
             # Tambem se lembra do fracasso: sem isto cada listagem de credenciais subia um
             # app-server por conta e esperava o teto de 3s de cada um (medido: 6,4s no Windows).
             self._indisponivel[key] = (current_signature, time.monotonic())
