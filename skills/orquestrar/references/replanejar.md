@@ -49,7 +49,7 @@ The replanner reads, in this order:
 - **It covers ONLY the remaining work.** Merged Tasks become a `## Base (previous phase)`
   section — facts, with hashes — and **are not renumbered**: the progress bar and the old
   reports cite the old numbers.
-- **It is born in the contract's method** (default `superpowers`) — whole. If the replanning is a
+- **It is born in the contract's method** — whole. If the replanning is a
   method switch, the new plan is born 100% in the new method; a mixed format is the defect the
   `Method:` line exists to prevent. Contract with `Method: none` → what is born anew is the
   **orchestration plan** (`planejamento.md`), pointing at the user's plan as always.

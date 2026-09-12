@@ -6,12 +6,12 @@ open a new session midway (rotation, replacement).
 
 Return to `arbitro.md` as soon as the team is standing.
 
-## The `Method:` and `Domain skill:` lines are yours to write
+## The `Method:`, `Executes with:` and `Domain skill:` lines are yours to write
 
-Both are mandatory in `regras-<gid>.md`, written at launch, before the first session — and **every
-kick-off repeats them**, because the contract is read once and a kick-off arrives fresh. A contract
-without the `Method:` line means `superpowers`, this skill's default: write the line before
-proceeding instead of leaving it implicit. A plan born in one method and executed in another reads
+All three are mandatory in `regras-<gid>.md`, written at launch, before the first session — and
+**every kick-off repeats them**, because the contract is read once and a kick-off arrives fresh. A
+contract without the `Method:` line has no default to fall back on: **ask the user** and write the
+line (with its `Executes with:`) before proceeding. A plan born in one method and executed in another reads
 the work in a format it doesn't have (Task with steps on one side, ticket with criteria on the
 other), so nobody switches midway — a switch the user asks for is `replanejar.md`.
 

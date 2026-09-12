@@ -19,16 +19,10 @@ set -uo pipefail
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 PONTE_PI="$HOME/.pi/agent/skills-bridge"
 
-# O conjunto que a skill orquestrar usa de ponta a ponta.
+# Sem argumentos confere so a propria orquestrar: as skills do METODO vem do contrato do trabalho
+# (linhas Method:/Executes with:) e o arbitro as passa por argumento — a skill nao nomeia metodo.
 PADRAO=(
   orquestrar
-  writing-plans
-  executing-plans
-  subagent-driven-development
-  test-driven-development
-  using-git-worktrees
-  verification-before-completion
-  systematic-debugging
 )
 
 ALVOS=("$@")

@@ -7,24 +7,25 @@ the plan is approved you become the arbiter — and from then on you write no mo
 ## Before phase 0: which METHOD you are using
 
 This skill orchestrates; the *method* is what plans and executes, and there is more than one. It is
-**the user's decision** — ask at the start, don't deduce, and the answer goes into the contract's
+**the user's decision** — ask at the start, don't deduce, and **this skill names no method and
+has no default**: the answer is whatever they name, or `none`. It goes into the contract's
 `Method:` line, which you write in phase 2 and which **every kick-off repeats**.
 
-- `superpowers` → you use `superpowers:brainstorming` and then `superpowers:writing-plans`; the
-  executor uses `superpowers:executing-plans`. **It is the default and the recommendation** (the
-  user's decision).
-- `mattpocock` → you use `/grill-me` (or `/grill-with-docs`) → `/to-spec` → `/to-tickets`; the
-  executor uses `/implement`. **Only on the user's explicit request, and only after checking that
-  `/implement` is installed in the account that will execute** — a method run without its
-  executing half leaves the arbiter improvising, and an install is a fact of a machine, not of
-  the skill: check it in the executing account, every time. The executor's kick-off **starts**
-  with the `/implement` line (both skills carry `disable-model-invocation: true`, so the session
-  won't auto-invoke them — but the kick-off arrives as typing in the pane). Whatever the method,
-  the **phase 1 exit gate** (section at the end of this page) holds the same: an artifact the
-  method doesn't produce, you produce by hand — and items 2, 3 and 4 are your audit, with a
-  command, not something you wait to arrive written. `to-tickets` delivers blocking edges
-  (order), not estimates nor disjointness; that doesn't disqualify it, it only says which part of
+What this skill demands of a method, whatever its name, is **two halves**:
+
+- **The planning half** — what you use in phase 1 to write the spec and the plan. Whatever it
+  produces, the **phase 1 exit gate** (section at the end of this page) holds the same: an
+  artifact the method doesn't produce, you produce by hand — and items 2, 3 and 4 are your audit,
+  with a command, not something you wait to arrive written. A method that delivers blocking edges
+  (order) but not estimates nor disjointness is not disqualified; that only says which part of
   the gate is left to you.
+- **The executing half** — what the executor invokes to run one Task. Its command goes into the
+  contract's `Executes with:` line (`none` when the method has no command), and the executor's
+  kick-off **starts** with that line — a skill that won't auto-invoke still runs when the
+  kick-off arrives as typing in the pane. **Check it is installed in the account that will
+  execute** — a method run without its executing half leaves the arbiter improvising, and an
+  install is a fact of a machine, not of the skill: check it in the executing account, every time
+  (`checar-skills.sh` takes the names as arguments; pass the contract's).
 
 - `none` → **the plan already exists and belongs to no method**: the user wrote it by hand, it came
   from another ticket, or there is no written plan. A legitimate and frequent case — see the next
@@ -72,8 +73,8 @@ work** decided before Task 1 — that is the exit gate at the end of this page, 
 itself method-agnostic. Nothing there asks who wrote the plan; everything asks whether the Tasks
 collide, whether each has proof, who owns each wait, what is untouchable.
 
-So the rule is this, and it holds for all four cases (`superpowers` plan, plan from another method,
-hand-written plan by the user, **no plan**):
+So the rule is this, and it holds for all three cases (plan from a method, hand-written plan by
+the user, **no plan**):
 
 **You do NOT rewrite, convert or copy the user's plan.** It stays theirs, in their format, in their
 file — and it stays the source. A copy diverges from the original on the first tweak, and then two
@@ -172,7 +173,7 @@ workaround became standard), and the community usually pays more because it repo
 workaround together. What the sweep does **not** do is become a kick-off rule: nothing untested
 becomes a rule until a run confirms it.
 
-Beyond what `writing-plans` already asks, the plan carries:
+Beyond what the method's planning half already asks, the plan carries:
 
 - **Task order** and which don't parallelize, with the reason. The default is **serial**: one Task
   at a time, the gate closing each one. Large work with genuinely independent Tasks becomes a
@@ -618,7 +619,7 @@ already decided (a spec and ready tickets, for example):
   is yours. The user's stays untouched.
 
 Item 1 is mixed: **audit** when the material already carries files and verification per Task,
-**produce** when it doesn't — which is `to-tickets`' declared case, whose template says to avoid
+**produce** when it doesn't — the declared case of a ticket method whose template says to avoid
 file paths.
 
 1. **AUDIT/PRODUCE — Every Task has a name, a set of files and a verification** — in the user's
@@ -800,7 +801,7 @@ whoever reads later:
 > Arbiter's journal. Group rules (what the team reads): <path to regras-<gid>.md>.
 > Lessons: <path to licoes.md>. User's plan: <path>.
 > Orchestration plan: <path | this very file>.
-> Method: <superpowers | mattpocock | none>. Domain skill: <name | none>.
+> Method: <name | none>. Executes with: <command | none>. Domain skill: <name | none>.
 > Branch: <branch>. Starting HEAD: <hash>.
 
 ## Quem é quem

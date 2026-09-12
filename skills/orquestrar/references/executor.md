@@ -3,8 +3,8 @@
 You are the only session that writes in this tree. One Task at a time, and only the one the
 arbiter released.
 
-**The sub-skill you use to execute comes from the contract**, on the `Method:` line — and the
-kick-off repeats it. `superpowers` → `superpowers:executing-plans`; `mattpocock` → `/implement`.
+**What you invoke to execute comes from the contract**, on the `Executes with:` line — and the
+kick-off repeats it as its first line (a command, or `none`).
 **Don't choose, and don't switch:** the plan was written by that same method, and switching here
 is reading the plan in a format it doesn't have. Contract without the line, or a method you don't
 know → ask the arbiter **before** the first Edit.

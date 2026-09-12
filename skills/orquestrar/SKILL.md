@@ -121,13 +121,17 @@ plans nor executes.** Two other things do, and both are declared in `regras-<gid
 each, written at launch and repeated in every kick-off:
 
 ```markdown
-Method: superpowers          # which skill family plans and executes (superpowers | mattpocock | none)
-Domain skill: portar-tela    # the step-by-step of this kind of work, when one exists (name | none)
+Method: <name | none>            # what plans and executes — the user names it; `none` = the plan is theirs
+Executes with: <command | none>  # the method's executing half; the executor's kick-off starts with it
+Domain skill: portar-tela        # the step-by-step of this kind of work, when one exists (name | none)
 ```
 
-- The **method** is who plans and who executes — `superpowers` (the default, the user's decision),
-  `mattpocock`, or `none` when the plan is the user's own. A *method* is not an *engine*: the engine
-  is the model provider (`--engine`, `engines.json`); a session has both, decided separately.
+- The **method** is who plans and who executes — whatever the user names, or `none` when the plan
+  is the user's own. **This skill names no method and has no default**: what it demands of any
+  method is two halves, one that plans and one that executes, both installed and tested in the
+  account that executes (`planejamento.md`, "Before phase 0"). `Executes with:` carries the
+  executing half's command, or `none`. A *method* is not an *engine*: the engine is the model
+  provider (`--engine`, `engines.json`); a session has both, decided separately.
 - The **domain skill** describes *the work itself*, step by step, because someone has done it dozens
   of times (porting a screen, creating a module). When one exists, the plan does not repeat it: it
   **instantiates** it, each Task citing the skill step it executes, and the executor re-reads the
@@ -144,15 +148,15 @@ the two domain-skill checks before Task 1, and what the arbiter writes at launch
 The work has two layers, and this skill talks about both all the time. They belong to no method:
 
 - **Task** — the unit of work: it has a name, a set of files, a verification and whatever blocks
-  it. It is what the gate opens and closes, and what becomes **one** commit. In `superpowers` it's
-  a Task; in `mattpocock` it's a ticket; in a hand-written plan it's an item.
-- **step** — the smallest **checkable** thing inside a Task. In `superpowers` it's a Step; in
-  `mattpocock` it's an acceptance criterion (its template already uses `- [ ]`); in a hand-written
-  plan it's whatever the planner writes in the orchestration plan.
+  it. It is what the gate opens and closes, and what becomes **one** commit. A method may call it
+  a Task, a ticket or an item — the name is the method's, the unit is this skill's.
+- **step** — the smallest **checkable** thing inside a Task. A method may call it an acceptance
+  criterion, a checkbox or a numbered item; in a hand-written plan it's whatever the planner writes in
+  the orchestration plan.
 
 Everything this skill hangs on the step — tracking progress, predicting the context-rotation
 point, requiring a smoke test, declaring owned preconditions, splitting parallel arms, triggering
-the reviewer's mutation test — works the same in all three forms. **The single exception is
+the reviewer's mutation test — works the same whatever the method calls them. **The single exception is
 literal and isolated:** the phone's progress bar matches the word `Step` by regex
 (`planejamento.md`, "The app's progress bar"), and the bar is optional.
 
@@ -167,7 +171,7 @@ there, by name. The kick-off is an address, not a manual.
 ```
 Invoke the orquestrar skill and read your role's page.
 Role: <executor | reviewer | branch review>.
-Method: <superpowers | mattpocock | none — the plan is the user's>.
+Method: <name | none — the plan is the user's>.   Executes with: <command | none>.
 Domain skill: <name | none>.
 Repo/branch: <path> / <branch>.   Expected HEAD: <hash>.
 Group rules: <path to regras-<gid>.md>.
@@ -242,10 +246,10 @@ First line of the rules file, so an amnesiac session can re-anchor itself:
 ```markdown
 > Sessions of this group: invoke the `orquestrar` skill and read your role's page.
 > Branch: <branch> · Repo: <path>
-> Method: <superpowers | mattpocock | none> · Domain skill: <name | none>
+> Method: <name | none> · Executes with: <command | none> · Domain skill: <name | none>
 ```
 
-The `Method:` and `Domain skill:` lines are mandatory (see "Method and domain skill come from the
+The `Method:`, `Executes with:` and `Domain skill:` lines are mandatory (see "Method and domain skill come from the
 contract", above) and never change midway.
 
 **What changes per Task goes in no file at all**: which Task is released, what the hash is, who
@@ -261,8 +265,8 @@ reviews one. How that is done depends on the material's format:
   of a whole plan.
 - **One file per unit** (tickets) → **point at the user's file**, without copying. Copies go
   stale: the executor checks the criteria off in the original and the copy starts lying about
-  what's done. The work context the ticket doesn't carry — because `to-tickets` says to write only
-  the slice — goes **pasted** into the kick-off, three or four lines, as is already done with the
+  what's done. The work context the ticket doesn't carry — a ticket method writes only the
+  slice — goes **pasted** into the kick-off, three or four lines, as is already done with the
   lessons.
 
 **Who belongs to the group comes from the contract, never from `hangar-send --list`.** A live
