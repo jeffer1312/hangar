@@ -2845,5 +2845,7 @@
   "custos_input_sem_cache": "uncached input",
   "custos_output_total": "output",
   "custos_metodo_codex": "In Codex, input includes cache: reused tokens are separated before applying rates. Reasoning is already part of output and is not counted twice.",
-  "custos_equivalente_metodo": "Weights token types by each model’s input rate. This does not measure subscription quota."
+  "custos_equivalente_metodo": "Weights token types by each model’s input rate. This does not measure subscription quota.",
+  "term_liberar_origem_btn": "allow this origin",
+  "term_liberar_origem_erro": "Couldn't allow the origin: {msg}"
 }

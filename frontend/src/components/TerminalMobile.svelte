@@ -14,7 +14,7 @@
   import { TermSocket, termUrlForServer, sessionExistsOnServer } from '../lib/term';
   import { novoTerminal, temaDe } from '../lib/xterm';
   import { listServers, getActiveId } from '../lib/auth';
-  import { motivoDeOrigemRecusada } from '../lib/termOrigem';
+  import { motivoDeOrigemRecusada, liberarOrigemDesteApp } from '../lib/termOrigem';
   import type { Terminal } from '@xterm/xterm';
   import type { FitAddon } from '@xterm/addon-fit';
   import * as m from '../paraglide/messages';
@@ -33,6 +33,11 @@
   let pronto = $state(false);
   let motivo = $state<string | null>(null);
   let erro = $state<string | null>(null);
+  // Foi a ORIGEM que o servidor recusou (e nao queda de rede): habilita o botao que grava a origem.
+  // Sai do proprio motivoDeOrigemRecusada, que so devolve texto NESSE caso - conferir de novo aqui
+  // seria um segundo GET pra responder uma pergunta ja respondida.
+  let origemRecusada = $state(false);
+  let liberando = $state(false);
   let geracao = $state(0);          // incrementar reconecta de verdade
   let sock: TermSocket | null = null;
   let term: Terminal | null = null;
@@ -93,6 +98,24 @@
     return listServers().find((s) => s.id === id) ?? null;
   }
 
+  // Um toque: grava a origem e reconecta. Reconectar e metade do conserto - sem isso a tela fica
+  // com o mesmo aviso na cara depois de gravar, e a pessoa nao tem como saber que ja resolveu.
+  async function liberarOrigem() {
+    if (liberando) return;
+    liberando = true;
+    try {
+      await liberarOrigemDesteApp(servidorAtivo());
+      origemRecusada = false;
+      geracao++;
+    } catch (e) {
+      // Gravou nada: NAO reconecta. Repetir o handshake so traria o mesmo 403 e apagaria este erro
+      // da tela junto - a pessoa veria o aviso de origem de novo, sem sinal de que o Salvar falhou.
+      motivo = m.term_liberar_origem_erro({ msg: e instanceof Error ? e.message : String(e) });
+    } finally {
+      liberando = false;
+    }
+  }
+
   $effect(() => {
     const alvo = sessionName;
     void geracao;
@@ -102,6 +125,7 @@
     caiu = false;
     motivo = null;
     erro = null;
+    origemRecusada = false;
 
     (async () => {
       const srv = servidorAtivo();
@@ -157,7 +181,9 @@
           // Fechou MUDO: pode ser a origem recusada no handshake (403 antes do accept, que o
           // navegador não deixa ler). Pergunta por HTTP e, se for isso, troca "desconectado" pela
           // frase que diz o que fazer.
-          if (!motivo) void motivoDeOrigemRecusada(srv).then((r) => { if (vivo && r) motivo = r; });
+          if (!motivo) void motivoDeOrigemRecusada(srv).then((r) => {
+            if (vivo && r) { motivo = r; origemRecusada = true; }
+          });
         },
       });
       // Digitar e DIRETO no xterm: tocar na tela ja levanta o teclado do sistema (o xterm foca
@@ -314,6 +340,14 @@
     {#if caiu}
       <div class="tx-caiu" role="alert">
         <span>⚠ {erro ?? motivo ?? m.term_desconectado()}</span>
+        {#if origemRecusada}
+          <!-- Ao lado do reconectar, nao no lugar: reconectar continua valendo (a recusa pode ter
+               sido resolvida no outro aparelho) e trocar o botao de baixo do dedo da pessoa e a
+               receita pra ela gravar origem sem querer. -->
+          <button class="tx-key" onclick={liberarOrigem} disabled={liberando}>
+            {liberando ? m.comum_carregando() : m.term_liberar_origem_btn()}
+          </button>
+        {/if}
         {#if !erro}
           <button class="tx-key" onclick={() => geracao++}>{m.term_reconectar_btn()}</button>
         {/if}

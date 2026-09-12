@@ -2845,5 +2845,7 @@
   "custos_input_sem_cache": "entrada sem cache",
   "custos_output_total": "saída",
   "custos_metodo_codex": "No Codex, a entrada inclui o cache: separamos os tokens reutilizados antes de aplicar a tarifa. Raciocínio já faz parte da saída e não é somado de novo.",
-  "custos_equivalente_metodo": "Pondera os tipos de token pela tarifa de entrada de cada modelo. Não mede a cota da assinatura."
+  "custos_equivalente_metodo": "Pondera os tipos de token pela tarifa de entrada de cada modelo. Não mede a cota da assinatura.",
+  "term_liberar_origem_btn": "liberar esta origem",
+  "term_liberar_origem_erro": "Não deu pra liberar a origem: {msg}"
 }
