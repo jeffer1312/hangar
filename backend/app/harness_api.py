@@ -54,7 +54,8 @@ async def codex_opcoes_salvar(body: CodexOpcoesBody) -> dict:
 
 def _com_interruptor(estado: dict) -> dict:
     from app import runtime_config
-    return {**estado, "automatica": bool(runtime_config.get("codex_sync"))}
+    return {**estado, "automatica": bool(runtime_config.get("codex_sync")),
+            "memoria": bool(runtime_config.get("codex_memory_import"))}
 
 
 @harness_router.get("/codex/integracao", dependencies=[Depends(require_auth)])

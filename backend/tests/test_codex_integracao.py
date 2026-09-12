@@ -19,6 +19,27 @@ def _home(tmp_path):
     return tmp_path
 
 
+def test_memoria_leva_um_transcrito_por_projeto(tmp_path):
+    from app.codex_integracao import copiar_memorias
+    origem = tmp_path / "projects"
+    projeto = origem / "-home-alguem-repo"
+    (projeto / "memory").mkdir(parents=True)
+    (projeto / "memory" / "MEMORY.md").write_text("indice")
+    (projeto / "grande.jsonl").write_text("x" * 5000)
+    (projeto / "menor.jsonl").write_text("y")
+    (origem / "-sem-memoria").mkdir()
+    (origem / "-sem-memoria" / "sessao.jsonl").write_text("z")
+
+    destino = tmp_path / "stage"
+    copiar_memorias(origem, destino)
+
+    # Sem transcrito ao lado o detector não vê o projeto: a ausência dele é a falha silenciosa.
+    assert (destino / "-home-alguem-repo" / "menor.jsonl").exists()
+    assert not (destino / "-home-alguem-repo" / "grande.jsonl").exists()
+    assert (destino / "-home-alguem-repo" / "memory" / "MEMORY.md").read_text() == "indice"
+    assert not (destino / "-sem-memoria").exists()
+
+
 def test_status_nao_cria_arquivos_nem_roda_binario(tmp_path):
     service = IntegracaoCodex(tmp_path, tmp_path / ".codex", binario="nao-existe")
     assert service.status()["estado"] == "ocioso"

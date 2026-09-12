@@ -49,6 +49,7 @@ def test_consulta_nao_inicia_operacao(painel):
     assert resposta.status_code == 200
     dados = resposta.json()
     assert isinstance(dados.pop("automatica"), bool)
+    assert isinstance(dados.pop("memoria"), bool)
     assert dados == snapshot
     servico.status.assert_called_once_with()
     servico.iniciar.assert_not_called()
@@ -60,6 +61,7 @@ def test_gatilho_de_sessao_e_operacao_propria(painel):
     assert resposta.status_code == 202
     dados = resposta.json()
     assert isinstance(dados.pop("automatica"), bool)
+    assert isinstance(dados.pop("memoria"), bool)
     assert dados == snapshot
     servico.sessao.assert_awaited_once_with()
     servico.iniciar.assert_not_called()
@@ -71,6 +73,7 @@ def test_reconciliacao_retorna_202_com_snapshot(painel):
     assert resposta.status_code == 202
     dados = resposta.json()
     assert isinstance(dados.pop("automatica"), bool)
+    assert isinstance(dados.pop("memoria"), bool)
     assert dados == snapshot
     servico.iniciar.assert_awaited_once_with(motivo="manual", forcar=True)
     servico.status.assert_not_called()

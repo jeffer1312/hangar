@@ -171,6 +171,7 @@ export interface IntegracaoCodex {
   avisos: MensagemCodex[];
   confianca_pendente: boolean;
   automatica: boolean;
+  memoria: boolean;
   skills?: { ponte: number; nativas: number };
 }
 

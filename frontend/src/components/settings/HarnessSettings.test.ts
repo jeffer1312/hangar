@@ -243,7 +243,7 @@ describe('HarnessSettings — conta da integração Codex', () => {
   it('seleciona uma conta adicional e reconcilia a cadeia dela', async () => {
     c.codexIntegracaoEstado.mockResolvedValue({
       estado: 'ok', etapa: null, ultima_execucao: null, proxima_atualizacao: null,
-      plugins: [], avisos: [], erros: [], confianca_pendente: false, automatica: true,
+      plugins: [], avisos: [], erros: [], confianca_pendente: false, automatica: true, memoria: false,
     });
     const t = await montar([
       { id: 'codex', nome: 'Codex', instalado: true, versao: '0.154.0', itens: [] },
@@ -281,7 +281,7 @@ describe('HarnessSettings — conta da integração Codex', () => {
     localStorage.setItem('cp_harness_codex_account:active', 'work');
     c.codexIntegracaoEstado.mockResolvedValueOnce({
       estado: 'ok', etapa: null, ultima_execucao: null, proxima_atualizacao: null,
-      plugins: [], avisos: [], erros: [], confianca_pendente: false, automatica: true,
+      plugins: [], avisos: [], erros: [], confianca_pendente: false, automatica: true, memoria: false,
     });
     c.listarContasCodex.mockResolvedValueOnce([
       { id: 'default', name: 'default', is_default: true, home: '/default', credential_id: 'codex:/default',

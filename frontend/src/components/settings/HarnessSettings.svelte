@@ -206,6 +206,7 @@
   }
 
   let trocandoAutomatica = $state(false);
+  let trocandoMemoria = $state(false);
   // O interruptor nunca muda sozinho: `checked` é o dado do servidor; o onchange repõe o dado,
   // grava, e a releitura é quem muda a tela (regra das Máquinas, CLAUDE.md).
   async function trocarAutomatica(ev: Event) {
@@ -226,6 +227,25 @@
       if (consulta === ctx) erroIntegracao = e instanceof Error ? e.message : String(e);
     } finally {
       trocandoAutomatica = false;
+    }
+  }
+
+  async function trocarMemoria(ev: Event) {
+    const alvo = ev.currentTarget as HTMLInputElement;
+    const querido = alvo.checked;
+    alvo.checked = !querido;
+    const ctx = consulta;
+    if (!ctx || trocandoMemoria) return;
+    trocandoMemoria = true;
+    erroIntegracao = '';
+    try {
+      await (ctx.alvo ? patchConfigForServer(ctx.alvo, { codex_memory_import: querido })
+                      : patchConfig({ codex_memory_import: querido }));
+      if (consulta === ctx) await consultarIntegracao(ctx);
+    } catch (e) {
+      if (consulta === ctx) erroIntegracao = e instanceof Error ? e.message : String(e);
+    } finally {
+      trocandoMemoria = false;
     }
   }
 
@@ -526,6 +546,17 @@
               <input type="checkbox" class="switch" checked={integracao.automatica}
                 disabled={trocandoAutomatica} onchange={trocarAutomatica} />
             </label>
+            <label class="hs-item hs-automatica">
+              <span class="hs-item-txt">
+                <b>{m.harness_codex_memoria()}</b>
+                <span class="hs-ajuda">{m.harness_codex_memoria_ajuda()}</span>
+              </span>
+              <input type="checkbox" class="switch" checked={integracao.memoria}
+                disabled={trocandoMemoria} onchange={trocarMemoria} />
+            </label>
+            {#if integracao.memoria}
+              <p class="hs-aviso" role="status">{m.harness_codex_memoria_prazo()}</p>
+            {/if}
             {#if contaCodex === 'default'}
               <p class="hs-aviso" role="status">
                 {ESTADOS_INTEGRACAO[integracao.estado]?.() ?? integracao.estado}

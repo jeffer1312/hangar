@@ -47,6 +47,32 @@ def sincronizacao_ligada() -> bool:
     return bool(runtime_config.get("codex_sync")) and automations_enabled()
 
 
+def memoria_ligada() -> bool:
+    """Memórias do Claude no Codex. Fica de fora por padrão porque é o único item importado que
+    gasta cota: o Codex consolida os arquivos num índice por um modelo, na abertura de sessão."""
+    from app import runtime_config
+    return bool(runtime_config.get("codex_memory_import"))
+
+
+def copiar_memorias(origem: Path, destino: Path) -> None:
+    """Memórias do Claude para o stage da importação.
+
+    A pasta `memory/` sozinha NÃO é detectada: o Codex só trata como projeto o diretório que tem
+    transcrito ao lado dela. Por isso vai junto o MENOR `.jsonl` de cada um — todos custariam a
+    ordem de gigabytes por reconciliação, e o segundo em diante não muda a detecção."""
+    if not origem.is_dir():
+        return
+    for memoria in sorted(origem.glob("*/memory")):
+        if not memoria.is_dir():
+            continue
+        projeto = destino / memoria.parent.name
+        shutil.copytree(memoria, projeto / "memory",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
+        transcritos = sorted(memoria.parent.glob("*.jsonl"), key=lambda f: f.stat().st_size)
+        if transcritos:
+            shutil.copy2(transcritos[0], projeto / transcritos[0].name)
+
+
 def _e_hook_do_app(command: object) -> bool:
     """Hook do próprio Hangar (backend/hooks/): cada harness recebe o seu pelo instalador dele
     (codex_hook_installer aqui), então ele não atravessa pelo importador do Codex."""
@@ -434,7 +460,7 @@ class IntegracaoCodex:
         await editar_config(self.codex_home / "config.toml", self.backups, self.raiz,
                             self.nativo, preparar, binario=self.binario)
 
-    async def _config(self, codex, mcp: dict, agentes: dict, *, hooks: bool = False,
+    async def _config(self, codex, mcp: dict, agentes: dict, *, hooks: bool = False, memoria: bool = False,
                       registro: dict | None = None, historico: dict | None = None,
                       env: dict | None = None) -> None:
         from app.codex_fragmentos import mesclar_config
@@ -454,6 +480,11 @@ class IntegracaoCodex:
                 edits.append({"keyPath": "project_doc_fallback_filenames", "value": nomes, "mergeStrategy": "replace"})
             if hooks and atual.get("features", {}).get("hooks") is not True:
                 edits.append({"keyPath": "features.hooks", "value": True, "mergeStrategy": "replace"})
+            # Sem esta flag o detect nem oferece o item MEMORY; desligar a opção não a remove,
+            # porque o que já está importado continua servindo à memória já consolidada.
+            if memoria and atual.get("features", {}).get("external_agent_memory_import") is not True:
+                edits.append({"keyPath": "features.external_agent_memory_import", "value": True,
+                              "mergeStrategy": "replace"})
             manifestos, avisos = {}, []
             if registro is not None:
                 for secao, valores in (("mcp_servers", mcp), ("agents", agentes)):
@@ -682,6 +713,7 @@ class IntegracaoCodex:
 
     async def _importar_fragmentos(self, codex, registro: dict) -> None:
         from app.codex_fragmentos import reconciliar_arquivos
+        memoria = memoria_ligada()
         historico = await self._historico(codex)
         inicio = self.fingerprint(fontes=True)
         settings_raw = ler(self.home / ".claude" / "settings.json")
@@ -707,6 +739,8 @@ class IntegracaoCodex:
                 origem = self.home / ".claude" / nome
                 if origem.is_dir():
                     shutil.copytree(origem, cc / nome, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
+            if memoria:
+                copiar_memorias(self.home / ".claude" / "projects", cc / "projects")
             source_mcp = self.home / ".claude.json"
             mcp_raw = ler(source_mcp)
             if mcp_raw is not None:
@@ -720,8 +754,9 @@ class IntegracaoCodex:
                         raise ValueError("Entrada MCP inválida; servidores existentes preservados")
                 gravar(stage / ".claude.json", json_bytes({"mcpServers": mcp}), None)
             congelados: set[str] = set()
-            async with self.nativo(stage, cx, self.binario) as importer:
-                itens = [i for i in await importer.detectar() if i.get("itemType") in _IMPORTAVEIS]
+            async with self.nativo(stage, cx, self.binario, memoria=memoria) as importer:
+                aceitos = _IMPORTAVEIS | {"MEMORY"} if memoria else _IMPORTAVEIS
+                itens = [i for i in await importer.detectar() if i.get("itemType") in aceitos]
                 for pasta, tipo, detalhe in (("agents", "SUBAGENTS", "subagents"), ("commands", "COMMANDS", "commands")):
                     nomes = {e.get("name", "") for i in itens if i.get("itemType") == tipo
                              for e in i.get("details", {}).get(detalhe, []) if isinstance(e, dict)}
@@ -751,8 +786,15 @@ class IntegracaoCodex:
             if self.fingerprint(fontes=True) != inicio:
                 raise AlteradoExternamente("Fontes do Claude mudaram durante a importação")
             desejados, confiaveis = {}, set()
-            for src_root, dst_root in ((cx / "agents", self.codex_home / "agents"),
-                                       (stage / ".agents" / "skills", self.home / ".agents" / "skills")):
+            raizes = [(cx / "agents", self.codex_home / "agents"),
+                      (stage / ".agents" / "skills", self.home / ".agents" / "skills")]
+            if memoria:
+                # Só a pasta da extensão, nunca `memories/` inteira: MEMORY.md, memory_summary.md e
+                # rollout_summaries/ são escritos pela consolidação do Codex, e entrar no manifesto
+                # faria a reconciliação seguinte apagá-los por não virem do stage.
+                extensao = Path("memories") / "extensions" / "external_agent_import"
+                raizes.append((cx / extensao, self.codex_home / extensao))
+            for src_root, dst_root in raizes:
                 if not src_root.is_dir():
                     continue
                 for src in sorted(src_root.rglob("*")):
@@ -768,7 +810,7 @@ class IntegracaoCodex:
                     if src_root == cx / "agents":
                         if src.stem in historico["agents"]:
                             confiaveis.add(dst)
-                    elif src.relative_to(src_root).parts[0] in historico["commands"]:
+                    elif src_root == stage / ".agents" / "skills" and src.relative_to(src_root).parts[0] in historico["commands"]:
                         confiaveis.add(dst)
             anteriores = registro.get("artefatos", {})
             guardados = {k: v for k, v in anteriores.items() if Path(k).stem in congelados}
@@ -786,7 +828,7 @@ class IntegracaoCodex:
             agentes = {n: v for n, v in agentes.items() if not isinstance(v, dict) or
                        not v.get("config_file") or str(v["config_file"]) in manifesto}
             await self._config(codex, native_cfg.get("mcp_servers", {}), agentes,
-                               hooks=native_cfg.get("features", {}).get("hooks") is True,
+                               hooks=native_cfg.get("features", {}).get("hooks") is True, memoria=memoria,
                                registro=registro, historico=historico, env=native_env)
 
     def _skills(self, registro: dict) -> None:

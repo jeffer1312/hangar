@@ -377,6 +377,14 @@ async def test_inventario_invalido_e_recusado(cliente):
         await cliente("invalid_inventory").plugins_instalados()
 
 
+def test_memoria_entra_por_linha_de_comando_e_so_quando_pedida(tmp_path):
+    # O config.toml do stage é lido de volta como resultado da importação nativa: a flag tem de
+    # viajar no argv, senão vira uma diferença nossa a conciliar.
+    assert CodexNativo(tmp_path, tmp_path / ".codex")._config_memoria() == ()
+    assert CodexNativo(tmp_path, tmp_path / ".codex", memoria=True)._config_memoria() == (
+        "-c", "features.external_agent_memory_import=true")
+
+
 @pytest.mark.parametrize("campo", ["sourceErrors", "errors", "warnings"])
 async def test_detectar_nao_interpreta_falha_de_fonte_como_lista_vazia(cliente, campo):
     async with cliente("detect_problem_" + campo) as obj:

@@ -19,7 +19,7 @@ const ociosa = {
 };
 const estado = (dados: Partial<IntegracaoCodex> = {}): IntegracaoCodex => ({
   estado: 'ocioso', etapa: '', ultima_execucao: null, proxima_atualizacao: null,
-  plugins: [], erros: [], avisos: [], confianca_pendente: false, automatica: true, ...dados,
+  plugins: [], erros: [], avisos: [], confianca_pendente: false, automatica: true, memoria: false, ...dados,
 });
 const resposta = (dados: unknown) => ({ ok: true, status: 200, json: async () => dados }) as Response;
 const harnesses = ['codex', 'claude'].map((id) => ({ id, nome: id, instalado: true, versao: '1', itens: [] }));
@@ -199,5 +199,27 @@ describe('integração do Codex em Harnesses', () => {
     expect(JSON.parse(String(gravacao?.[1]?.body))).toEqual({ codex_sync: false });
     expect(caixa.checked).toBe(false);
     expect(chamadasIntegracao()).toHaveLength(2);
+  });
+
+  it('o interruptor de memória grava codex_memory_import e o prazo só aparece com ele ligado', async () => {
+    let memoria = false;
+    ler = async () => resposta(estado({ memoria }));
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/api/config')) {
+        memoria = JSON.parse(String(init?.body)).codex_memory_import;
+        return resposta({ campos: {} });
+      }
+      return String(url).endsWith(ROTA) ? ler(String(url), init) : resposta(harnesses);
+    });
+    const { el } = await montar();
+    // O aviso do prazo é a razão de a opção existir: sem ele a pessoa liga e acha que já vale.
+    expect(el.textContent).not.toContain(m.harness_codex_memoria_prazo());
+    const caixa = el.querySelectorAll<HTMLInputElement>('input.switch')[1]!;
+    expect(caixa.checked).toBe(false);
+    caixa.click(); await estabilizar();
+    const gravacao = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith('/api/config'));
+    expect(JSON.parse(String(gravacao?.[1]?.body))).toEqual({ codex_memory_import: true });
+    expect(caixa.checked).toBe(true);
+    expect(el.textContent).toContain(m.harness_codex_memoria_prazo());
   });
 });

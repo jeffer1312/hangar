@@ -41,10 +41,13 @@ class CodexNativo:
     def __init__(
         self, home: Path, codex_home: Path, binario: str = "codex", *,
         timeout: float = 120.0, close_timeout: float = 3.0,
-        account: "Account | None" = None,
+        account: "Account | None" = None, memoria: bool = False,
     ) -> None:
         self.home = home.absolute()
         self.codex_home = codex_home.absolute()
+        # Por linha de comando, não no config.toml do stage: o arquivo é lido de volta como
+        # resultado da importação nativa, e uma chave nossa ali viraria diferença a conciliar.
+        self.memoria = memoria
         self.account = account
         self.binario = binario
         self.timeout = timeout
@@ -75,6 +78,11 @@ class CodexNativo:
             })
         return env
 
+    def _config_memoria(self) -> tuple[str, ...]:
+        if not self.memoria:
+            return ()
+        return ("-c", "features.external_agent_memory_import=true")
+
     def _comando(self) -> list[str]:
         caminho = shutil.which(self.binario)
         if not caminho:
@@ -99,7 +107,7 @@ class CodexNativo:
             # Administração da conta não deve carregar configuração de nenhum projeto.
             self._work_dir = tempfile.TemporaryDirectory(prefix="hangar-codex-admin-")
             self._proc = await asyncio.create_subprocess_exec(
-                *self._comando(), *_ADMIN_CONFIG, "app-server", "--stdio",
+                *self._comando(), *_ADMIN_CONFIG, *self._config_memoria(), "app-server", "--stdio",
                 cwd=self._work_dir.name, env=self._env(),
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, limit=_READ_LIMIT,
