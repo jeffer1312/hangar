@@ -182,6 +182,7 @@ async function criarJanela() {
 
   const win = new BrowserWindow({
     ...geo,
+    icon: path.join(__dirname, 'build', 'icon.png'),
     transparent: fundo.transparente,
     // Fallback opaco: onde a transparência não vale, a janela precisa de cor própria, senão
     // aparece preta. O front também não recebe a marca de fundo nesse caso (ver abaixo).

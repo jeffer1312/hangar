@@ -102,13 +102,14 @@ Creating a session wraps `tmux` in
     `git pull` + reiniciar, e ninguém garante que o botão foi usado.
   - **Quem reinicia o serviço é diferente em cada sistema, e no Windows já é o installer.** No
     Linux é `systemctl --user restart`; no Windows o `install.ps1 -Update` — chamado na etapa
-    anterior — já derruba a instância velha (`Pare-Servico`) e chama `Start-ScheduledTask`, e esse
+    anterior — já derruba a instância velha (`Restart-HangarTask`) e chama `Start-ScheduledTask`, e esse
     bloco NÃO é pulado no modo `-Update` (o que ele pula é firewall/Tailscale e o hook). Há ainda
-    a tarefa `hangar-vigia`, que sobe a tarefa de novo se a porta não estiver escutando. Por isso
+    a tarefa `hangar-vigia`, que confirma falha HTTP e recupera a instância identificada. Por isso
     `_reiniciar` não faz nada no ramo Windows: marcar "falta reiniciar" ali fazia a tela pedir um
     passo que já tinha sido dado. Medido em 25/08/2026 naquela máquina: três tarefas
     (`hangar-backend`, `hangar-frontend`, `hangar-vigia`), backend como cadeia de três processos,
-    e todas em `Ready` mesmo com o servidor vivo — o `.vbs` não espera.
+    e todas em `Ready` mesmo com o servidor vivo — o `.vbs` não esperava. Esse lançador foi
+    substituído pelo acompanhamento descrito abaixo.
   - **O installer matava a própria atualização, e a proteção é por COMANDO, não por linhagem.** O
     `Pare-Servico` derruba a "instância anterior" casando o caminho do checkout mais `uv|python`, e
     o motor roda como `<repo>\backend\.venv\Scripts\python.exe -m app.atualizar` — casa nos dois.
@@ -140,19 +141,64 @@ Creating a session wraps `tmux` in
   mexer nas chamadas), spinner nos comandos longos do sh (`gira` — sem TTY ou `--update`, passa
   direto com saída ao vivo), caixa RESUMO no fim (token só com TTY, mesma regra do passo 3/8).
 
-## O instalador do Windows NUNCA roda elevado, e admin é UAC pontual
+## A tarefa Windows acompanha o processo até ele terminar
 
-(`install.ps1`,
-  `Eleva-E-Roda`/`Espere-Ate`, 10/09/2026). Tudo que ele registra (tarefas agendadas, hooks,
-  config) nasce com o dono do processo, e o Atualizar do app roda como usuário: instalar elevado
-  deixava `hangar-backend`/`-frontend`/`-vigia` com dono Administradores e todo `-Update`
-  seguinte batia em "Acesso negado" no `Register-ScheduledTask -Force` — a vigia nem tinha o
-  fallback de reaproveitar, e a tela dizia "NAO terminou: vigia" com tudo no ar (relato de
-  10/09). Hoje: `EhAdmin` no começo → `Pare` (menos `-SoChecar`); firewall e Modo Desenvolvedor
-  saem por `Start-Process -Verb RunAs` de UM comando; tarefa de dono admin é reparada com
-  `Unregister` elevado + re-registro como usuário (só interativo — no `-Update` não há quem
-  confirme o UAC, então reaproveita). Junto: com Tailscale publicado o firewall nem é
-  perguntado (o `serve` entrega em localhost, o firewall não vê porta); o HTTPS do tailnet
+(12/09/2026). O `.vbs` usa `Run(..., 0, True)` e devolve o código do filho com `WScript.Quit`.
+Backend e frontend legado usam `MultipleInstances=IgnoreNew`, `RestartCount=3` e intervalo de
+um minuto; permanecem no logon interativo, com o nível de permissão escolhido na instalação.
+A vigia também aguarda seu PowerShell, impede sobreposição e limita cada execução a dois minutos.
+
+`scripts/windows-tasks.ps1` compartilha a recuperação entre instalador e vigia. A vigia faz
+duas tentativas HTTP de três segundos, separadas por dois segundos; aceita respostas abaixo de
+500, inclusive 404 sem o dist, e respeita dez minutos desde o início da tarefa/processo.
+Não é uma verificação funcional de todas as rotas. WMI indisponível, PID não identificado,
+porta de outro processo ou processo que não encerra impedem a criação de outra instância.
+
+`Restart-HangarTask` desliga temporariamente o reinício automático, encerra só os processos do
+serviço identificados pelo checkout/lançador, confere nascimento do PID (tolerância inferior a
+um milissegundo entre WMI e GetProcessTimes), aguarda a tarefa sair de `Running` e a porta ficar
+livre, e só então inicia novamente. Não usa `Stop-ScheduledTask` nem mata toda a árvore: psmux
+e `app.atualizar` não são alvos. As configurações de recuperação são restauradas em `finally`.
+
+O instalador segura `Local\HangarInstall` e pausa os reinícios automáticos existentes enquanto
+altera dependências. A vigia usa a mesma exclusão e também reconhece processos vivos de
+instalação/atualização. A exclusão por tarefa serializa reinícios concorrentes; não há PID ou
+arquivo de manutenção permanente que possa ficar preso após um crash.
+
+Verificação no Linux com PowerShell 7: `scripts/test-windows-tasks.ps1` exercita seleção,
+identidade, ordem de parada/início, recusa de duplicação, falhas, exclusão entre processos e
+restauração após erro. A sonda HTTP foi executada contra servidor local com 200, 404, 500 e
+conexão sem resposta. A prova de UAC/Agendador e de sobrevivência real do atualizador/psmux no
+Windows ainda é necessária; os testes locais usam comandos de processo/tarefa simulados.
+Referência: [configurações nativas do Agendador](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset?view=windowsserver2025-ps).
+
+## Instalação Windows mantém o nível de permissão
+
+(12/09/2026). `install.ps1` aceita execução comum ou elevada. O processo escolhe `Limited` ou
+`Highest` para backend, frontend quando necessário e vigia, sempre com `LogonType Interactive`.
+O atualizador é filho do backend e herda sua permissão. O instalador confere nível e logon após
+registrar; falha no modo elevado não pode reutilizar silenciosamente uma tarefa comum.
+
+Os atalhos no Menu Iniciar e na Área de Trabalho usam `shell/build/icon.ico`, convertido do
+`frontend/public/icons/icon-512.png`, e o flag `RunAsUser` acompanha o nível da instalação.
+`shell/build/icon.png` usa a mesma imagem na janela Electron e no empacotamento. A Área de
+Trabalho vem de `GetFolderPath`, inclusive quando redirecionada. O Electron já aberto precisa
+ser fechado pelo usuário para a próxima abertura assumir a elevação.
+
+`Get-InstallRunLevel` consulta a tarefa do backend antes de alterar a instalação: se ela está
+em `Highest`, uma chamada comum para com orientação para atualizar pelo app ou usar PowerShell
+elevado. Isso preserva a escolha sem configuração adicional. No modo comum, firewall e Modo
+Desenvolvedor continuam usando UAC pontual; o reparo de tarefas antigas com dono Administradores
+permanece. A antiga proibição está em [superado.md](superado.md).
+
+Verificação: `scripts/test-install-elevation.ps1` exercita os dois níveis, os quatro pontos de
+registro com comandos simulados e os bytes de elevação do atalho. Executado com PowerShell 7 no
+Linux; UAC, Agendador, atalhos e reinício precisam de validação na máquina Windows.
+Referências: [principal das tarefas](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskprincipal)
+e [flags do atalho](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/ae350202-3ba9-4790-9e9e-98935f4ee5af).
+
+Outras correções medidas em 10/09: com Tailscale publicado o firewall nem é perguntado
+(`serve` entrega em localhost, o firewall não vê porta); o HTTPS do tailnet
   desligado abre `login.tailscale.com/admin/dns` e ESPERA Enter pra tentar de novo (um usuário
   ficou parado ali sem saber onde ir); o symlink sem admin é conferido no 1/8 (`Symlink-Funciona`)
   e, faltando, o instalador liga o Modo Desenvolvedor por UAC ou abre `ms-settings:developers` e

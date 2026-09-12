@@ -125,8 +125,10 @@ irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
 
 O instalador faz duas perguntas no começo (a senha do celular e se você vai usar fora de
 casa) e depois segue sozinho; só pede a senha de administrador avisando antes. No fim ele
-mostra um QR: leia com a câmera do celular. No Windows, não abra o PowerShell como
-administrador: o instalador recusa rodar elevado (o que precisar de admin pede a senha na hora).
+mostra um QR: leia com a câmera do celular. No Windows, o instalador aceita PowerShell comum
+ou como administrador. Quando elevado, configura o backend, a atualização e os atalhos do app
+para usar administrador; no modo comum, pede UAC só para o que precisar. Cria atalhos no Menu
+Iniciar e na Área de Trabalho com o ícone do PWA.
 Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps1 -Avancado`
 (o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
 Algo não abriu? `hangar-doctor` diz o que falta e como consertar.

@@ -292,8 +292,12 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   Separe "comando não existe" de "comando falhou"; stderr vem na codepage do console.
 - **Encoding é por interpretador**: `.cmd` em OEM, `.vbs` em UTF-16LE com BOM, `.sh` em UTF-8 sem
   BOM, `.env`/`settings.json` sem BOM, perfil do PowerShell com BOM.
-- **O instalador NUNCA roda elevado** — admin é UAC pontual. Instalar elevado deixa as tarefas
-  com dono Administradores e quebra todo `-Update` seguinte.
+- **Instalação Windows mantém o nível de permissão**: iniciada como admin, registra tarefas
+  interativas elevadas e atalhos elevados do Electron; comum, usa UAC pontual. Atualização
+  manual sem elevação não pode rebaixar uma instalação elevada.
+- **A tarefa Windows acompanha o processo até ele terminar.** Reinício controlado não encerra
+  a árvore inteira: sessões e atualizador sobrevivem. A vigia confirma falha HTTP, respeita
+  instalação/atualização e só inicia outra instância após confirmar a parada da anterior.
 - **`ln -sf` do Git Bash COPIA e devolve 0**; confira com `test -L` depois. Script sem extensão é
   invisível para o PowerShell, e a falha é muda.
 - **O navegador embutido precisa da sessão gráfica ATIVA**: com a janela ocluída o teclado entrega

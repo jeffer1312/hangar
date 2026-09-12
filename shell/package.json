@@ -21,6 +21,7 @@
     "productName": "Hangar",
     "artifactName": "hangar-${version}-${arch}.${ext}",
     "files": [
+      "build/icon.png",
       "main.cjs",
       "preload.cjs",
       "navegador.cjs",

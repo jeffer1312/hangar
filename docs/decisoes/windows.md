@@ -28,12 +28,12 @@ Nine functions
   abriu logado, e o envio multi-linha (clipboard + `M-v`) chegou inteiro, porque backend e o psmux
   que ele cria dividem a área de transferência da sessão 0 (o psmux se encontra por
   `~/.psmux/<sessão>.{port,key}`, TCP loopback, visível de qualquer sessão do mesmo usuário). O
-  que derruba a ideia é o TOKEN: logon não interativo de conta administradora vem com o token de
-  admin cheio (integridade Alta, `S-1-16-12288`), e `RunLevel Limited` é ignorado — medido nos
-  dois níveis. Backend admin = `install.ps1 -Update` recusado pela trava "terminal como
-  Administrador", tarefas re-registradas com dono Administradores, e todo Claude/Codex do app
-  rodando sem UAC. É a mesma armadilha que o instalador fechou em 10/09 pela manhã, voltando pela
-  porta de trás. Não existe "sem login E sem elevação" pra conta admin no Windows. O que ficou do
+  que levou a descartar esse modo naquele teste foi o TOKEN: o logon não interativo da conta
+  administradora usada veio com integridade Alta (`S-1-16-12288`), mesmo com `RunLevel Limited`.
+  Na época, o instalador recusava execução elevada e a atualização falhava; as sessões também
+  herdavam admin. Hoje a instalação elevada mantém as tarefas e atalhos elevados (ver
+  [instalacao.md](instalacao.md#instalação-windows-mantém-o-nível-de-permissão)), mas o gatilho
+  continua sendo logon interativo; execução sem login não foi adotada. O que ficou do
   estudo: `tmux._sessao_windows_de` — o backend só cola pelo clipboard se o psmux do pane está na
   MESMA sessão do Windows que ele (cada sessão tem a sua área de transferência; um backend subido
   por SSH ou tarefa e um `claude` do terminal gráfico não dividem), senão cai no linha a linha.

@@ -24,6 +24,16 @@ if ($Update) { $Sim = $true }
 
 $ErrorActionPreference = 'Stop'
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$raiz\scripts\windows-tasks.ps1"
+$installMutex = $null
+$installLocked = $false
+$pausedRecovery = @{}
+try {
+if (-not $SoChecar) {
+    $installMutex = New-Object Threading.Mutex($false, 'Local\HangarInstall')
+    try { $installLocked = $installMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $installLocked = $true }
+    if (-not $installLocked) { throw 'Outra instalacao ou recuperacao do Hangar esta em andamento; tente novamente ao terminar' }
+}
 $pendencias = @()
 
 # Log da instalacao. NUNCA no -Update (roda pelo hook post-merge, e um `git pull` nao pode abrir
@@ -77,12 +87,12 @@ function Pare($mensagem, $dicas) {
 # alternativa seria P/Invoke de CreateFile dentro de um instalador.
 $script:Interativo = -not [Console]::IsInputRedirected
 
-# Um comando elevado, UAC na hora, e o instalador segue SEM elevacao. E a unica forma de admin
-# que existe aqui: rodar o instalador inteiro elevado deixa as tarefas agendadas com dono
-# Administradores, e dai todo Atualizar (que roda como usuario) leva "Acesso negado" pra sempre.
+# Na instalacao comum, pede UAC apenas para o comando que precisa de admin.
 function Eleva-E-Roda($descricao, $comando) {
-    if (-not $script:Interativo) { Nota "$descricao - precisa de UAC, e nao ha terminal pra confirmar"; return $false }
-    Nota "vai pedir a senha de administrador (UAC) so pra: $descricao"
+    if (-not (EhAdmin)) {
+        if (-not $script:Interativo) { Nota "$descricao - precisa de UAC, e nao ha terminal pra confirmar"; return $false }
+        Nota "vai pedir a senha de administrador (UAC) so pra: $descricao"
+    }
     try {
         $p = Start-Process powershell -Verb RunAs -Wait -PassThru `
             -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', $comando
@@ -348,6 +358,28 @@ function EhAdmin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Get-InstallRunLevel {
+    $elevated = EhAdmin
+    $existing = Get-ScheduledTask -TaskName 'hangar-backend' -ErrorAction SilentlyContinue
+    if (-not $elevated -and $existing.Principal.RunLevel -eq 'Highest') {
+        throw 'O Hangar foi instalado como administrador. Execute este instalador em um PowerShell como administrador ou atualize pelo app.'
+    }
+    if ($elevated) { return 'Highest' }
+    return 'Limited'
+}
+
+function Set-ShortcutElevation([string]$shortcutPath, [bool]$elevated) {
+    $bytes = [IO.File]::ReadAllBytes($shortcutPath)
+    if ($bytes.Length -lt 76 -or [BitConverter]::ToUInt32($bytes, 0) -ne 0x4c) {
+        throw "Atalho invalido: $shortcutPath"
+    }
+    # Flag RunAsUser do formato .lnk: preserva o destino, argumentos e demais opcoes.
+    $bytes[0x15] = if ($elevated) { $bytes[0x15] -bor 0x20 } else { $bytes[0x15] -band 0xdf }
+    [IO.File]::WriteAllBytes($shortcutPath, $bytes)
+    $saved = [IO.File]::ReadAllBytes($shortcutPath)
+    if ((($saved[0x15] -band 0x20) -ne 0) -ne $elevated) { throw "Elevacao do atalho nao foi salva: $shortcutPath" }
+}
+
 function Instale($rotulo, $cmd, $id, $porque) {
     if (Tem $cmd) { Ok $rotulo; return $true }
     if ($SoChecar) { Falta "$rotulo - $porque"; $script:pendencias += $rotulo; return $false }
@@ -508,13 +540,22 @@ function Token-Do-Env {
 # -- 0/8 Antes de comecar ----------------------------------------------------
 # As duas unicas perguntas da instalacao ficam AQUI, juntas: token e "vai usar fora de casa?".
 # Depois daqui o instalador vai ate o fim sozinho.
-# Elevado NAO: tudo o que o instalador registra (tarefas, hooks, config) nasce com o dono do
-# processo, e o Atualizar do app roda como usuario. Instalar de um jeito e atualizar de outro e
-# o que dava "Acesso negado" na vigia. O firewall e o Modo Desenvolvedor pedem UAC sozinhos.
-if ((-not $SoChecar) -and (EhAdmin)) {
-    Pare 'este terminal esta como Administrador - feche e rode o instalador num PowerShell comum' @(
-        'Nao precisa de admin: o que exigir (firewall, Modo Desenvolvedor) pede a senha na hora, so pra aquilo.',
-        'Instalado como admin, o botao Atualizar do app (que roda como usuario) falha com "Acesso negado".')
+if (-not $SoChecar) {
+    try { $script:installRunLevel = Get-InstallRunLevel }
+    catch { Pare $_.Exception.Message @('A instalacao e a atualizacao precisam usar o mesmo nivel de permissao.') }
+    # A recuperacao automatica nao pode relancar processos enquanto suas dependencias mudam.
+    foreach ($taskName in @('hangar-backend', 'hangar-frontend')) {
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($existingTask -and $existingTask.Settings.RestartCount -gt 0) {
+            $pausedRecovery[$taskName] = $existingTask.Settings.RestartCount
+            $existingTask.Settings.RestartCount = 0
+            Set-ScheduledTask -TaskName $taskName -Settings $existingTask.Settings -ErrorAction Stop | Out-Null
+        }
+    }
+    if ($script:installRunLevel -eq 'Highest') {
+        Nota 'Instalacao como administrador: backend, atualizacao e atalhos do app usarao elevacao.'
+        Nota 'Se o Hangar ja estiver aberto, feche e reabra pelo atalho ao terminar para aplicar a elevacao.'
+    }
 }
 if (-not $SoChecar -and -not $Update) {
 Titulo '0/8 Antes de comecar'
@@ -1193,25 +1234,30 @@ if (Test-Path "$shellDir\package.json") {
     } else {
         Ok 'janela nativa ja com as dependencias em dia'
     }
-    # Atalho no Menu Iniciar: sem ele o app so abre por `npm start` e ninguem descobre que a
-    # janela existe. Reescrito sempre (o caminho do checkout pode mudar). O icone vem do proprio
-    # electron.exe: o .lnk nao aceita PNG, e o build\icon.png so serve ao empacotador.
+    # Reescreve os atalhos porque o checkout e o nivel de permissao podem mudar.
     $electronExe = "$shellDir\node_modules\electron\dist\electron.exe"
     if (Test-Path $electronExe) {
-        $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Hangar.lnk'
-        try {
-            $ws = New-Object -ComObject WScript.Shell
-            $atalho = $ws.CreateShortcut($lnk)
-            $atalho.TargetPath = $electronExe
-            $atalho.Arguments = 'main.cjs'
-            $atalho.WorkingDirectory = $shellDir
-            $atalho.IconLocation = "$electronExe,0"
-            $atalho.Description = 'Hangar'
-            $atalho.Save()
-        } catch { }
-        # Prova, nao anuncio: o Save() do COM falha calado com caminho estranho.
-        if (Test-Path $lnk) { Ok "Hangar no Menu Iniciar ($lnk)" }
-        else { Falta 'nao consegui criar o atalho Hangar.lnk no Menu Iniciar (abra com: cd shell ; npm start)' }
+        $shortcutPaths = @(
+            (Join-Path ([Environment]::GetFolderPath('Programs')) 'Hangar.lnk'),
+            (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Hangar.lnk')
+        )
+        foreach ($lnk in $shortcutPaths) {
+            try {
+                $ws = New-Object -ComObject WScript.Shell
+                $atalho = $ws.CreateShortcut($lnk)
+                $atalho.TargetPath = $electronExe
+                $atalho.Arguments = 'main.cjs'
+                $atalho.WorkingDirectory = $shellDir
+                $atalho.IconLocation = "$shellDir\build\icon.ico,0"
+                $atalho.Description = 'Hangar'
+                $atalho.Save()
+                Set-ShortcutElevation $lnk ($script:installRunLevel -eq 'Highest')
+                Ok "atalho Hangar criado ($lnk)"
+            } catch {
+                Falta "nao consegui criar o atalho Hangar ($lnk): $_"
+                $script:pendencias += "atalho Hangar ($lnk)"
+            }
+        }
     } else {
         Falta "electron.exe nao encontrado em $electronExe - atalho do Menu Iniciar nao criado"
     }
@@ -1699,8 +1745,7 @@ if (Tem 'tailscale') {
 }
 
 # -- 7/8 Subir sozinho no logon ----------------------------------------------
-# Equivalente possivel dos servicos systemd do Linux. Nao e servico do Windows (isso exigiria
-# admin e rodaria fora da sua sessao, sem acesso ao seu ~\.claude): e tarefa agendada no logon.
+# A tarefa fica no logon interativo para compartilhar o desktop com os terminais.
 Titulo '7/8 Subir junto com o Windows'
 # Portas: o Pare-Servico abaixo precisa saber QUEM segurar pra derrubar, e matar por porta ERRADA
 # derruba processo alheio. As duas saem do .env (mesma fonte que o backend usa), com o default do
@@ -1748,22 +1793,7 @@ if ($temTarefaFront) {
                    Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend"); ExeProc = 'node|npm|vite' }
 }
 
-# Derruba a instancia VELHA antes de subir a nova.
-#
-# Sem isto o `-Update` saia dizendo "ok" com o processo ANTIGO ainda no ar, servindo codigo
-# antigo. O encadeamento: o .vbs roda `Run(..., 0, False)` - nao espera -, entao a TAREFA
-# termina na largada e fica `State=Ready` mesmo com o servidor vivo e desgarrado. Nesse estado
-# o `Start-ScheduledTask` nao e ignorado (a tarefa nao esta rodando): ele sobe uma SEGUNDA
-# instancia, que colide na porta e morre, enquanto a velha sobrevive. Medido nesta maquina: um
-# -Update deixou o backend servindo codigo de 26 minutos antes, e as correcoes ja no disco
-# pareciam nao ter efeito - so valeram depois de matar os processos na mao.
-# Vale pros DOIS agora: o frontend serve o build (`npm run preview`), entao mudanca em .svelte
-# so aparece depois de `npm run build` + reinicio da tarefa - nao ha mais HMR pra disfarcar. O
-# backend nunca teve, porque CP_RELOAD e off por padrao (config.py).
-# Ja registrado -> RE-REGISTRA sem perguntar, em vez de pular. A tarefa guarda o caminho do
-# executavel e o diretorio DENTRO dela; um `git pull` que mova o repo, ou um uv que mude de
-# lugar, deixa a tarefa apontando pro nada - e "ja registrada" esconderia isso. Register-...
-# -Force sobrescreve.
+# Reaplica caminhos e configuracao; o reinicio preserva sessoes e o atualizador.
 $jaAgendado = Get-ScheduledTask -TaskName $tarefas[0].Nome -ErrorAction SilentlyContinue
 $registrou = $jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu logon?')
 # As duas nascem FORA do try de proposito. `$subiu` e lido la embaixo (install.ps1:1842) pra
@@ -1776,6 +1806,7 @@ $subiu = $false
 $iniciou = $false
 if ($registrou) {
     try {
+        $taskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel $script:installRunLevel
         foreach ($t in $tarefas) {
             # -Exe pelo caminho completo: a tarefa nasce com o PATH do sistema, nao com o do
             # seu shell - `uv` instalado em ~\.local\bin nao seria encontrado.
@@ -1793,19 +1824,11 @@ if ($registrou) {
             # (nao cresce sem limite; o que interessa e sempre a execucao atual).
             $log = Join-Path $env:LOCALAPPDATA "hangar\logs\privado\$($t.Nome).log"
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
-            # Por que um .vbs e nao `powershell -WindowStyle Hidden` direto: esse parametro nao
-            # impede a janela de EXISTIR - o console e criado e so depois escondido, e lancado pelo
-            # Agendador ele fica na barra de tarefas. Medido: duas janelas abertas e paradas.
-            # O wscript nao tem console proprio, e o Run(..., 0, False) inicia ja oculto e nao
-            # espera. Alternativa seria rodar a tarefa "esteja o usuario logado ou nao", mas ai ela
-            # cai na sessao 0 e o servidor do multiplexador nasceria fora da sessao do usuario.
-            # O redirecionamento e do cmd, nao de um `| Out-File` do PowerShell: no pipeline cada
-            # linha de log virava objeto num powershell que ficava entre o Agendador e o servidor
-            # (um processo a mais pra morrer, e o vigia ja registrou OutOfMemory num desses).
+            # WScript oculta a janela e acompanha o processo ate o fim para o Agendador.
             # Aspas dobradas dentro da string VBS; `> log 2>&1` sobrescreve a cada subida.
             $vbs = Join-Path $env:LOCALAPPDATA "hangar\$($t.Nome).vbs"
             $cmdLinha = "cmd /c """"$exe"" $($t.Args) > ""$log"" 2>&1"""
-            $linhaVbs = 'CreateObject("WScript.Shell").Run "' + $cmdLinha.Replace('"', '""') + '", 0, False'
+            $linhaVbs = 'WScript.Quit CreateObject("WScript.Shell").Run("' + $cmdLinha.Replace('"', '""') + '", 0, True)'
             # O .vbs carrega o caminho do LOG, que fica em %LOCALAPPDATA% — ou seja, no perfil do
             # usuario, que pode ter acento no nome. Ver Escrever-Lancador.
             Escrever-Lancador $vbs ($linhaVbs + "`r`n") 'vbs' | Out-Null
@@ -1813,32 +1836,23 @@ if ($registrou) {
                 -Argument "`"$vbs`"" -WorkingDirectory $t.Dir
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
-                        -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
-            # Register em try PROPRIO, e o unico ponto deste passo que precisa de permissao de
-            # ESCRITA. O XML em C:\Windows\System32\Tasks\<nome> pertence a quem registrou: um
-            # install.ps1 rodado ELEVADO deixa as tres tarefas com dono BUILTIN\Administradores, e
-            # o usuario fica so com Read+Synchronize. O botao Atualizar do app roda NAO elevado,
-            # entao o `-Force` volta Acesso negado. Medido em 26/08/2026: essa unica excecao pulava
-            # o Pare-Servico, o Start-ScheduledTask e a checagem de porta DE UMA VEZ - o backend
-            # seguia no ar com 4 commits e ~8h de atraso (o pior estado que o CLAUDE.md descreve:
-            # codigo novo no disco, processo velho no ar) enquanto a tela dizia so "nao deu pra
-            # registrar as tarefas".
-            # Tarefa que JA existe nao precisa de registro pra ser reiniciada: parar e iniciar sao
-            # permitidos sem elevacao (medido na hangar-vigia: Start-ScheduledTask OK, LastRunTime
-            # avancou). Entao o registro vira RESSALVA e o restart continua. Se a tarefa NAO existe
-            # nao ha o que reaproveitar - rethrow, que e o caso que o catch de fora ja cobria.
+                        -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
+                        -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+            # Instalacoes comuns antigas podem ter tarefas com dono Administradores.
+            # So elas admitem reparo/reuso; no modo elevado, falha de registro interrompe.
             $reaproveitou = $false
             try {
                 Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
-                    -Settings $cfg -Force | Out-Null
+                    -Settings $cfg -Principal $taskPrincipal -Force | Out-Null
             } catch {
+                if ($script:installRunLevel -eq 'Highest') { throw }
                 if (-not (Get-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue)) { throw }
                 # Reparo, uma vez: a tarefa e de quando alguem rodou o instalador como admin. Um
                 # Unregister elevado (UAC) tira a tarefa velha e o registro volta a ser do usuario.
                 # So interativo - no -Update pelo app nao ha quem confirme o UAC.
                 if (-not $Update -and (Reparar-DonoTarefa $t.Nome)) {
                     Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
-                        -Settings $cfg -Force | Out-Null
+                        -Settings $cfg -Principal $taskPrincipal -Force | Out-Null
                     Ok "tarefa $($t.Nome) recriada como sua (antes era do Administrador)"
                     $reaproveitou = $false
                 } else {
@@ -1853,19 +1867,24 @@ if ($registrou) {
                 Nota '  e depois rode este instalador de novo SEM elevacao (ele recria a tarefa com o seu usuario como dono)'
                 }
             }
+            $registered = Get-ScheduledTask -TaskName $t.Nome
+            if ($registered.Principal.RunLevel -ne $script:installRunLevel -or $registered.Principal.LogonType -ne 'Interactive') {
+                throw "A tarefa $($t.Nome) nao manteve a permissao $script:installRunLevel e o logon interativo"
+            }
+            if ($registered.Settings.MultipleInstances -ne 'IgnoreNew' -or $registered.Settings.RestartCount -ne 3) {
+                throw "A tarefa $($t.Nome) nao manteve a protecao contra duplicacao e os reinicios automaticos"
+            }
             # Registrar NAO inicia: o gatilho e "no logon", entao sem isto nada sobe ate o
             # proximo login e a pessoa abre o navegador numa porta morta logo apos instalar.
             # O equivalente no Linux (`systemctl --user enable --now`) liga na hora - o `--now`
             # e justamente esta metade, e ela tinha ficado de fora aqui.
-            $mortos = Pare-Servico -Nome $t.Nome -Porta $t.Porta -Padrao $t.Padrao -Exe $t.ExeProc
-            if ($mortos -gt 0) { Nota "  instancia anterior derrubada ($mortos processo(s)) antes de subir" }
-            Start-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue
+            Restart-HangarTask $t.Nome $t.Porta $t.Dir
             $iniciou = $true
             if ($reaproveitou) { Ok "tarefa $($t.Nome) reaproveitada e reiniciada" } else { Ok "tarefa $($t.Nome) registrada e iniciada" }
         }
     } catch {
         Falta "nao deu pra registrar as tarefas: $_"
-        Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
+        $script:pendencias += 'tarefas agendadas'
     }
 
     # Iniciar nao e subir: a tarefa ja morreu na largada por bug de codificacao, e o instalador
@@ -1897,10 +1916,7 @@ if ($registrou) {
         # http://0.0.0.0:8765` no log). Como isso vira pendencia, o instalador terminava em erro
         # por causa de alguns segundos de atraso — o mesmo estrago que ja tinha levado o teto de
         # 15s pra 40s.
-        # Quem diz se ainda esta subindo e o LOG, nunca o estado da tarefa: as tres tarefas ficam
-        # em `Ready` mesmo com o servidor vivo (o .vbs nao espera), entao ali nao ha resposta.
-        # Enquanto o arquivo crescer, espera; parou de crescer por $ociosoMax segundos, desiste
-        # — um backend morto nao paga o teto inteiro.
+        # Running comprova processo vivo, nao prontidao: acompanha o log enquanto a porta nao abre.
         if (-not $subiu) {
             $logBack = Join-Path $env:LOCALAPPDATA 'hangar\logs\privado\hangar-backend.log'
             $ociosoMax = 30
@@ -1945,101 +1961,28 @@ if ($registrou) {
     # "nao deu pra registrar as tarefas: ..." mesmo com backend E frontend ja registrados e ja
     # respondendo (Ok impresso linhas acima) - e como nada disto entrava em $pendencias, o script
     # ainda fechava em "Pronto". A vigia falhar e real (menos grave que o backend nao subir, mas
-    # ainda assim: sem ela, um crash so reergue no proximo logon) e tem que aparecer como o que e.
+    # ainda assim: sem ela, travamentos deixam de ser recuperados) e tem que aparecer como o que e.
     try {
-    # Vigia: a tarefa dos servicos dispara no LOGON, e suspensao mata o processo sem passar por
-    # logoff/logon - nada reergue, e o dono descobre pelo 502 no celular, longe do PC (foi o que
-    # aconteceu em 08/08/2026). NAO trocamos o gatilho por conta de servico: isso tiraria o backend
-    # da sessao interativa, que e o que lhe da o clipboard - o caminho de envio do Windows
-    # (backend/app/tmux.py, paste_via_clipboard). Consertaria o boot e quebraria o envio.
-    #
-    # Pelo wscript, igual as outras tarefas, e NAO por `powershell -WindowStyle Hidden`: aquele
-    # parametro nao impede o console de EXISTIR (medido acima: duas janelas paradas na barra).
-    # Numa tarefa que roda a cada 5 minutos, isso seria uma piscada de janela pra sempre.
-    #
-    # A vigia so pode disparar `Start-ScheduledTask` se NENHUM backend deste checkout ja estiver
-    # subindo - sem isto ela pode criar uma SEGUNDA instancia colidindo na porta: o .vbs usa
-    # Run(...,0,False), que nao espera, entao a tarefa termina na largada e fica `State=Ready`
-    # muito antes do `uv run python -m app.main` abrir a porta. Um boot lento (disco, antivirus,
-    # primeira sincronizacao do uv) passando dos 5 min do tick seguinte via a porta ainda fechada
-    # e chama `Start-ScheduledTask` de novo.
-    #
-    # UNIAO dos dois criterios, nao intersecao - medido na maquina real em 09/08/2026: a arvore
-    # do backend e uv.exe -> python.exe (.venv\Scripts, cita o caminho do checkout) -> python.exe
-    # (interpretador do uv em AppData\Roaming\uv\..., NUNCA cita o checkout). So o uv.exe do topo
-    # e o NETO que segura a porta citam `-m app.main`; so o do MEIO cita o caminho. Filtrar por
-    # um so dos dois criterios perde o processo que importa (o neto que segura o socket, ou o
-    # pai). E o filtro de NOME (-Name -match 'uv|python') fica pra nao contar espectador nenhum -
-    # terminal/editor/grep que so MENCIONE "app.main" ou o caminho numa linha de comando alheia -
-    # o mesmo cuidado que Pare-Servico ja tem com -Exe (nunca so caminho, sempre caminho + nome).
-    $vigiaPadraoAppMain = [regex]::Escape('app.main')
-    # .Replace("'","''") no CAMINHO e no LOG: os dois entram crus dentro de literais de aspas
-    # SIMPLES do template abaixo, e os dois vem do sistema de arquivos (o segundo via
-    # $env:LOCALAPPDATA) - um perfil com apostrofo no nome (C:\Users\O'Brien\...) fecharia a
-    # aspa simples cedo e quebraria o script da vigia. '' e o escape de aspa simples do
-    # PowerShell dentro de string de aspas simples.
-    $vigiaPadraoCaminho = $tarefas[0].Padrao.Replace("'", "''")   # regex do checkout, ja escapado (acima)
-    $vigiaExeProc = $tarefas[0].ExeProc        # 'uv|python'
-    # O front nao tem o par de criterios do backend (nao ha um `-m app.main` equivalente): o que
-    # identifica o processo dele e o caminho do checkout. Mesmo `.Replace("'","''")` do de cima,
-    # pelo mesmo motivo — o caminho entra CRU dentro de um literal de aspas simples, e um perfil
-    # com apostrofo (C:\Users\O'Brien\...) fecharia a aspa cedo e quebraria a vigia inteira.
-    # Guarda de $temTarefaFront: sem tarefa do front, $tarefas[1] e $null e ler .Padrao/.ExeProc dele quebra em "expressao de valor nulo" — instalacao nova nao registra mais a tarefa do front, entao $tarefas[1] nao existe.
-    $vigiaPadraoFront = if ($temTarefaFront) { $tarefas[1].Padrao.Replace("'", "''") } else { '' }
-    $vigiaExeFront = if ($temTarefaFront) { $tarefas[1].ExeProc } else { '' }        # 'node|npm|vite'
-    $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\logs\privado\hangar-vigia.log").Replace("'", "''")   # mesmo lugar dos outros .log
-    # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_`/`$candidatos`/etc
-    # sobrevivem literais sem precisar de crase nenhuma - o script so vira real quando o
-    # `.Replace()` abaixo troca os tokens, e `.Replace()` e substituicao LITERAL (nao regex),
-    # entao as barras invertidas de $vigiaPadraoCaminho (saida de [regex]::Escape) nao viram
-    # sequencia de escape de ninguem.
-    #
-    # IDADE, nao so existencia: processo do checkout vivo NAO E garantia de que esta subindo -
-    # no Windows nao existe zumbi, e um `uv`/`python` deste checkout PRESO (trava de rede num
-    # `uv sync`, deadlock, I/O pendurado) fica no Get-CimInstance pra sempre, casa o criterio, e
-    # a vigia original (so existencia) nunca mais chamaria Start-ScheduledTask - silenciosamente
-    # pior que a versao agressiva demais de antes, porque e o caso que ninguem percebe. Um
-    # processo so poupa o restart se nasceu ha MENOS de 10 min (bem acima do boot medido, ~15s;
-    # bem abaixo de "pendurado"). CreationDate e o mesmo campo que Pare-Servico ja usa pra
-    # comparar nascimento de processo (install.ps1, $nascMapa). Passado o limite, dispara MESMO
-    # ASSIM e registra no log que havia processo velho sem porta aberta - o problema tem que
-    # aparecer, nao sumir.
-    # O FRONT tambem entra na vigia. Ate aqui ela so olhava a porta do backend e so reerguia o
-    # `hangar-backend`; o `hangar-frontend` ficava sem rede nenhuma - `RestartCount` e 0 nas tres
-    # tarefas (conferido com Get-ScheduledTask), entao o vite morto so voltava no proximo logon,
-    # e quem acessa pelo Tailscale ve a PAGINA fora do ar com a API respondendo. Mesmo criterio
-    # do backend, inclusive a heuristica de idade: processo do checkout vivo NAO prova que subiu.
-    # A funcao existe pra os dois nao virarem duas copias que divergem no proximo conserto.
+    # A vigia confirma falha HTTP e recupera somente os processos desta tarefa.
+    $vigiaHelper = (Join-Path $raiz 'scripts\windows-tasks.ps1').Replace("'", "''")
+    $vigiaDirectory = "$raiz\backend".Replace("'", "''")
+    $vigiaFrontDirectory = "$raiz\frontend".Replace("'", "''")
+    $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\logs\privado\hangar-vigia.log").Replace("'", "''")
     $vigiaTemplate = @'
+$ErrorActionPreference = 'Stop'
 & {
-    function Reergue($porta, $padrao, $exe, $tarefa) {
-        if (Get-NetTCPConnection -State Listen -LocalPort $porta -ErrorAction SilentlyContinue) { return }
-        $candidatos = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -match $padrao -and $_.Name -match $exe })
-        $limite = (Get-Date).AddMinutes(-10)
-        $recentes = @($candidatos | Where-Object { $_.CreationDate -and $_.CreationDate -gt $limite })
-        if ($recentes.Count -gt 0) { return }
-        if ($candidatos.Count -gt 0) { Write-Output "$(Get-Date -Format 's') vigia: processo(s) de $tarefa vivo(s) ha mais de 10 min sem a porta aberta - pode estar pendurado; reiniciando mesmo assim" }
-        Start-ScheduledTask -TaskName $tarefa
-    }
-    Reergue __PORTA__ '(__APPMAIN__|__CAMINHO__)' '__EXE__' 'hangar-backend'
-__LINHAFRONT__
+    . '__HELPER__'
+    Repair-HangarTask 'hangar-backend' __PORTA__ '__BACKEND__'
+__FRONT__
 } *>&1 | Out-File -FilePath '__LOG__' -Append -Encoding utf8
 '@
-    # A linha do front so entra quando a tarefa existe: `Start-ScheduledTask` de tarefa inexistente
-    # levanta, e como a vigia roda a cada 5 min, isso encheria o log dela de erro pra sempre —
-    # justamente no arquivo que se olha quando algo NAO subiu.
-    $vigiaLinhaFront = if ($temTarefaFront) { "    Reergue __PORTAFRONT__ '__CAMINHOFRONT__' '__EXEFRONT__' 'hangar-frontend'" } else { '' }
-    $vigiaTemplate = $vigiaTemplate.Replace('__LINHAFRONT__', $vigiaLinhaFront)
-    # Numa linha so, sem quebra: um `.Replace(...)` iniciando a linha seguinte arrisca ser lido
-    # como dot-sourcing pelo parser (mesmo com crase antes), e nenhuma das duas formas de quebra
-    # de linha do resto do arquivo (crase, ou deixar parentese/vírgula aberto) cobre encadeamento
-    # de metodo com seguranca - a mais simples e nao quebrar.
-    $vigiaPs = $vigiaTemplate.Replace('__APPMAIN__', $vigiaPadraoAppMain).Replace('__CAMINHO__', $vigiaPadraoCaminho).Replace('__EXE__', $vigiaExeProc).Replace('__PORTA__', "$portaBack").Replace('__CAMINHOFRONT__', $vigiaPadraoFront).Replace('__EXEFRONT__', $vigiaExeFront).Replace('__PORTAFRONT__', "$portaFront").Replace('__LOG__', $vigiaLog)
+    $vigiaFront = if ($temTarefaFront) { "    Repair-HangarTask 'hangar-frontend' $portaFront '$vigiaFrontDirectory'" } else { '' }
+    $vigiaPs = $vigiaTemplate.Replace('__HELPER__', $vigiaHelper).Replace('__PORTA__', "$portaBack").Replace('__BACKEND__', $vigiaDirectory).Replace('__FRONT__', $vigiaFront).Replace('__LOG__', $vigiaLog)
     $vigiaEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($vigiaPs))
     $vigiaVbs = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.vbs"   # mesmo lugar dos outros .vbs
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $vigiaVbs) | Out-Null
     Escrever-Lancador $vigiaVbs @"
-CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $vigiaEnc", 0, False
+WScript.Quit CreateObject("WScript.Shell").Run("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $vigiaEnc", 0, True)
 "@ 'vbs' | Out-Null
     # NAO e -AtLogOn puro (era a versao anterior) - MEDIDO na maquina real em 09/08/2026 que a
     # Repetition so comeca a CONTAR a partir do disparo do gatilho, e registrar a tarefa nao
@@ -2065,28 +2008,33 @@ CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass
     # -Settings com bateria: o default e DisallowStartIfOnBatteries=$true, e a maquina que suspende
     # e justamente o notebook - a vigia ficaria morta exatamente quando e necessaria, e o teste na
     # tomada passaria. As tarefas existentes ja passam estes dois (acima).
-    $vigiaSet = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    # Mesma ressalva das tarefas dos servicos (acima): instalador rodado ELEVADO uma vez deixa a
-    # tarefa com dono Administradores, e o -Force do Atualizar (nao elevado) volta "Acesso negado".
-    # Aqui reaproveitar e inteiro: a tarefa aponta pro MESMO .vbs em %LOCALAPPDATA%, que acabou de
-    # ser reescrito. Sem isto o -Update fechava em "NAO terminou: vigia" com tudo no ar, e a
-    # pessoa rodava o instalador como admin pra "consertar" - perpetuando o dono errado.
+    $vigiaSet = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+    # O reparo de dono continua disponivel para instalacoes comuns antigas.
     try {
         Register-ScheduledTask -TaskName 'hangar-vigia' `
             -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
             -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
-            -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
+            -Principal $taskPrincipal -Force | Out-Null
     } catch {
+        if ($script:installRunLevel -eq 'Highest') { throw }
         if (-not (Get-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue)) { throw }
         if (-not $Update -and (Reparar-DonoTarefa 'hangar-vigia')) {
             Register-ScheduledTask -TaskName 'hangar-vigia' `
                 -Action (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vigiaVbs`"") `
                 -Trigger $vigiaOnce, $vigiaLogon -Settings $vigiaSet `
-                -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force | Out-Null
+                -Principal $taskPrincipal -Force | Out-Null
             Ok 'vigia recriada como sua (antes era do Administrador)'
         } else {
             Nota "sem permissao pra re-registrar hangar-vigia - reaproveitando a existente (o .vbs dela foi atualizado)"
         }
+    }
+    $registered = Get-ScheduledTask -TaskName 'hangar-vigia'
+    if ($registered.Principal.RunLevel -ne $script:installRunLevel -or $registered.Principal.LogonType -ne 'Interactive') {
+        throw "A vigia nao manteve a permissao $script:installRunLevel e o logon interativo"
+    }
+    if ($registered.Settings.MultipleInstances -ne 'IgnoreNew') {
+        throw 'A vigia nao manteve a protecao contra execucoes sobrepostas'
     }
     # CONFERE o NextRunTime, nao anuncia so por ter registrado - achado IMPORTANTE da revisao final:
     # este exato ponto ja mediu ERRADO 2x nesta maquina (o gatilho antigo -AtLogOn puro deixava
@@ -2100,12 +2048,11 @@ CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass
         Falta 'vigia registrada mas NextRunTime veio vazio - ela pode nao disparar sozinha'
         $script:pendencias += 'vigia'
     }
-    # Dispara AGORA, uma vez: com o backend ja no ar isso e inofensivo (a vigia so reage se a porta
-    # estiver fechada), e prova de graca que o .vbs e o base64 realmente executam.
+    # Dispara agora para conferir o lancador; a recuperacao espera o instalador terminar.
     Start-ScheduledTask -TaskName 'hangar-vigia' -ErrorAction SilentlyContinue
     } catch {
         Falta "nao deu pra registrar a vigia: $_"
-        Nota 'Sem ela, um crash do backend so reergue no proximo logon (nao a cada 5 min).'
+        Nota 'Sem ela, os reinicios por falha continuam, mas travamentos deixam de ser recuperados.'
         $script:pendencias += 'vigia'
     }
 } else {
@@ -2636,3 +2583,17 @@ if ($script:Interativo -and -not $Update) {
     Read-Host '  Enter pra fechar' | Out-Null
 }
 Pausa-Log
+} finally {
+    try {
+        foreach ($taskName in $pausedRecovery.Keys) {
+            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            if ($existingTask.Settings.RestartCount -eq 0) {
+                $existingTask.Settings.RestartCount = $pausedRecovery[$taskName]
+                Set-ScheduledTask -TaskName $taskName -Settings $existingTask.Settings -ErrorAction Stop | Out-Null
+            }
+        }
+    } finally {
+        if ($installLocked) { $installMutex.ReleaseMutex() }
+        if ($installMutex) { $installMutex.Dispose() }
+    }
+}

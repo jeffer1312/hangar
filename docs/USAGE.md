@@ -66,10 +66,16 @@ está listado em "O que o Windows ainda não tem", mais abaixo.
 O instalador faz duas perguntas no começo (a senha do celular e se você vai usar fora de
 casa) e depois segue sozinho; só pede a senha de administrador avisando antes. No fim ele
 mostra um QR: leia com a câmera do celular.
-No Windows, **não abra o PowerShell como administrador**: o instalador recusa rodar elevado. O que
-precisar de admin (liberar porta no firewall, ligar o Modo Desenvolvedor) pede a senha na hora,
-só pra aquilo, e ele continua. Instalado como admin, o botão Atualizar do app (que roda como
-usuário) falha com "Acesso negado" nas tarefas agendadas.
+No Windows, pode usar PowerShell comum ou **Executar como administrador**. A instalação elevada
+configura backend, atualização e atalhos do app para usar administrador. A comum pede UAC só
+para o que precisar (firewall, Modo Desenvolvedor). Os atalhos no Menu Iniciar e na Área de
+Trabalho usam o ícone do PWA; no modo elevado, pedem UAC ao abrir. Se o app já estava aberto,
+feche e reabra pelo atalho para aplicar a elevação. Uma instalação elevada também exige
+PowerShell elevado para atualizar manualmente; o botão Atualizar já herda a permissão do backend.
+O backend continua no Agendador, sem serviço do Windows: a tarefa acompanha o Python e tenta
+reiniciar até três vezes, com intervalo de um minuto, quando ele encerra com erro. A vigia
+verifica a resposta HTTP a cada cinco minutos e recupera travamentos, respeitando a instalação
+e a atualização. Fechar o Electron não encerra o backend; ainda é necessário estar logado.
 Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps1 -Avancado`
 (o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
 Algo não abriu? `hangar-doctor` diz o que falta e como consertar.

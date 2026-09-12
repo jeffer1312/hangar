@@ -26,3 +26,20 @@ aponta a decisão que o substituiu. Não leia daqui para decidir implementação
   - **`earliest_refresh_at` na resposta do token**: o servidor diz quando o próximo refresh é aceito
     (~9 dias, com o access valendo 10). Não é erro, é o ritmo dele.
   O `codex login` (0.153.1) não tem `--device-auth` visível no `--help`; o app não depende dele.
+
+## Proibição de instalar o Windows como administrador
+
+Em 10/09/2026, o instalador passou a recusar execução elevada: tarefas criadas com dono
+Administradores impediam que a atualização comum usasse `Register-ScheduledTask -Force`.
+Em 12/09/2026, a proibição foi substituída por níveis coerentes: uma instalação elevada
+registra tarefas interativas `Highest` e atalhos elevados; a atualização herda o backend.
+O problema medido era misturar permissões, não uma incapacidade do psmux elevado de colar.
+Regra atual em [instalacao.md](instalacao.md#instalação-windows-mantém-o-nível-de-permissão).
+
+## Lançador Windows sem acompanhamento e vigia baseada só em porta
+
+O `.vbs` usava `Run(..., 0, False)`: a tarefa terminava enquanto o Python continuava vivo.
+A vigia consultava porta TCP e idade dos processos; após dez minutos sem porta, iniciava
+outra instância sem encerrar a anterior. Em 12/09/2026, esse fluxo foi substituído por tarefa
+que aguarda o filho, recuperação nativa e vigia HTTP com parada seletiva. Evidência e limites
+da validação em [instalacao.md](instalacao.md#a-tarefa-windows-acompanha-o-processo-até-ele-terminar).
