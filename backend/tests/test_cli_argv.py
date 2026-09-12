@@ -26,17 +26,20 @@ _APP = Path(pi_catalog.__file__).parent
 #     pi        -> …\\AppData\\Roaming\\npm\\pi.CMD      <- npm, e o unico .CMD -> era o defeito
 #     tmux      -> …\\WinGet\\Links\\tmux.EXE
 #     git       -> C:\\Program Files\\Git\\mingw64\\bin\\git.EXE
-#     claude    -> …\\.local\\bin\\claude.EXE
 #     tailscale -> C:\\Program Files\\Tailscale\\tailscale.EXE
 #     systemctl -> None (nao existe no Windows; o caminho que o chama e POSIX-only)
 #
-# Os cinco de baixo ficam liberados COM essa medida, nao por concessao — e cada um deles falha alto
+# Os quatro de baixo ficam liberados COM essa medida, nao por concessao — e cada um deles falha alto
 # se sumir (sem tmux o app nem sobe; sem git a aba de repo morre inteira), diferente do `pi`, que
 # derrubava UMA tela com um erro que culpava o comando errado. O `tmux._run` ainda tem o agravante
 # de ser o caminho mais quente do backend (roda por poll, por sessao): um `which` ali se paga em
 # nada. A trava existe pro PROXIMO nome — `kimi`, `codex`, `npm` e qualquer coisa vinda de npm
 # entram como `.CMD` e precisam ser resolvidas.
-_LIBERADOS = {"tmux", "git", "claude", "tailscale", "systemctl"}
+#
+# `claude` saiu da lista: pelo npm ele e `npm\claude.CMD` (medido 12/09/2026) e o
+# `claude auth status` da tela de Contas falhava com WinError 2 em toda listagem. O instalador
+# nativo da `.EXE`; nao da pra contar com qual dos dois a maquina tem.
+_LIBERADOS = {"tmux", "git", "tailscale", "systemctl"}
 
 
 def _nome_cru_em(arquivo: Path) -> list[tuple[int, str]]:

@@ -26,7 +26,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app import contas, diag, login_conta
+from app import contas, diag, login_conta, renova_token
 from app.auth import require_auth
 from app.config import list_config_dirs
 from app.mensagens import erro
@@ -100,9 +100,15 @@ def _auth_status(dir_conta: Path) -> dict | None:
     campos = {"provider": "claude", "conta_id": diag.conta_id(str(dir_conta)), "etapa": "consultar_auth"}
     env = dict(os.environ)
     env["CLAUDE_CONFIG_DIR"] = str(dir_conta)
+    # Caminho resolvido, nunca o nome cru: o `claude` do npm no Windows e um `.CMD`, que o
+    # `CreateProcess` nao completa (ver tests/test_cli_argv.py).
+    exe = renova_token._bin_claude()
+    if exe is None:
+        diag.registrar("conta.auth.falhou", "erro", **campos, codigo="cli_ausente")
+        return None
     try:
         r = subprocess.run(
-            ["claude", "auth", "status", "--json"],
+            [exe, "auth", "status", "--json"],
             # `encoding` explicito: sem ele o `text=True` usa o locale, que no Windows e cp1252.
             # Aqui sai e-mail e nome de plano — o campo mais provavel de ter acento na tela de
             # Contas —, e cp1252 nao so embaralha como pode ESTOURAR (tem bytes indefinidos).

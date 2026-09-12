@@ -4,6 +4,7 @@ mesmo padrao do chain/pqueue. Um loop por sessao; loop novo sobrescreve o anteri
 Spec: docs/superpowers/specs/2026-07-22-loop-runner-design.md"""
 import json
 import shlex
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -253,9 +254,13 @@ def _claude_p(prompt: str) -> str:
     """Roda um claude -p efemero (sonnet) com o prompt por STDIN, tools de efeito colateral negadas,
     cwd neutro (tempdir), argv sem shell, timeout 60s. Devolve o stdout (strip). Levanta ClaudePError
     em qualquer falha (CLI ausente/timeout/exit≠0/vazio) — o endpoint mapeia pra 502."""
+    # Caminho resolvido: no Windows o `claude` do npm e um `.CMD` (ver tests/test_cli_argv.py).
+    exe = shutil.which("claude")
+    if exe is None:
+        raise ClaudePError("claude CLI não encontrado")
     try:
         p = subprocess.run(
-            ["claude", "-p", "--model", "sonnet", "--disallowedTools", *_REFINE_DISALLOWED],
+            [exe, "-p", "--model", "sonnet", "--disallowedTools", *_REFINE_DISALLOWED],
             input=prompt, cwd=tempfile.gettempdir(), capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=_REFINE_TIMEOUT,
         )
