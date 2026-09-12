@@ -25,7 +25,7 @@ import itertools
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app import conta_estado, renova_token, tmux
@@ -107,6 +107,7 @@ class Tentativa:
     alvo: str
     dir_conta: str
     inicio: float
+    token_anterior: str | None = field(default=None, repr=False)
 
 _tentativas: dict[str, Tentativa] = {}
 _proximo_id = itertools.count(1)
@@ -159,7 +160,8 @@ def iniciar(conta: str, cwd: str) -> dict:
     # Registra ANTES de digitar: um erro de digitação cai no caminho de erro e a limpeza
     # sabe qual janela matar.
     tentativa = Tentativa(id=next(_proximo_id), alvo=alvo, dir_conta=cwd,
-                          inicio=time.monotonic())
+                          inicio=time.monotonic(),
+                          token_anterior=(renova_token._oauth(Path(cwd)) or {}).get("accessToken"))
     _tentativas[conta] = tentativa
     try:
         _shell_submeter(alvo, "claude auth login --claudeai")
@@ -215,9 +217,13 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
             # via a conta logada (medido). O path absoluto é o mesmo que o `iniciar` já
             # usou no `-e CLAUDE_CONFIG_DIR`.
             estado = ler_estado(tentativa.dir_conta)
-            # A CLI ainda diz loggedIn enquanto o token antigo está vencido.
-            _, vencimento = renova_token._assinatura(Path(tentativa.dir_conta))
-            if estado.estado == "ok" and estado.loggedIn and (vencimento is None or vencimento > time.time()):
+            # A CLI ainda diz loggedIn para token vencido ou revogado: espere a troca.
+            oauth = renova_token._oauth(Path(tentativa.dir_conta))
+            vencimento = renova_token._epoch(oauth, "expiresAt")
+            token = (oauth or {}).get("accessToken")
+            token_novo = tentativa.token_anterior is None or bool(token and token != tentativa.token_anterior)
+            if (estado.estado == "ok" and estado.loggedIn and token_novo
+                    and (vencimento is None or vencimento > time.time())):
                 return {
                     "ok": True,
                     "email": estado.email,

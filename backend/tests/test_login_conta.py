@@ -239,16 +239,18 @@ def test_confirmar_digita_o_codigo_e_confirma_pela_releitura(bateia):
     assert bateia.matadas == ["term-login-conta-a"]
 
 
-def test_confirmar_espera_token_novo_quando_cli_ainda_diz_logada(bateia, monkeypatch, tmp_path):
+@pytest.mark.parametrize("prazo", [-3600, 3600])
+def test_confirmar_espera_token_novo_quando_cli_ainda_diz_logada(bateia, monkeypatch, tmp_path, prazo):
     credencial = tmp_path / ".credentials.json"
-    credencial.write_text(json.dumps({"claudeAiOauth": {"expiresAt": 1}}))
+    vencimento = (time.time() + prazo) * 1000
+    credencial.write_text(json.dumps({"claudeAiOauth": {"accessToken": "antigo", "expiresAt": vencimento}}))
     monkeypatch.setattr(conta_estado, "_auth_status", lambda _: {"loggedIn": True})
     esperas = []
 
     def renovar(_):
         assert bateia.matadas == []
         esperas.append(True)
-        credencial.write_text(json.dumps({"claudeAiOauth": {"expiresAt": (time.time() + 3600) * 1000}}))
+        credencial.write_text(json.dumps({"claudeAiOauth": {"accessToken": "novo", "expiresAt": (time.time() + 3600) * 1000}}))
 
     monkeypatch.setattr(login_conta.time, "sleep", renovar)
     login_conta.iniciar("conta-a", str(tmp_path))
