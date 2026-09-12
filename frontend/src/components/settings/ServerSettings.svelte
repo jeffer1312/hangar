@@ -4,6 +4,7 @@
   import LinhaConfig from './LinhaConfig.svelte';
   import EscopoChip from './EscopoChip.svelte';
   import type { Server } from '../../lib/auth';
+  import type { VariavelEnv } from '@hangar/core';
   import PushQuiet from '../PushQuiet.svelte';
   import { pushSupported } from '../../lib/push';
   import type { PushTarget } from '../../lib/quietHours';
@@ -76,8 +77,32 @@
   const LEITURA_EM_MAQUINAS = new Set(['port', 'lan_bind_ip', 'server_id', 'public_url', 'terminal_origem_ok']);
   const ROTULO_LEITURA: Record<string, string> = {
     terminal_panel: m.config_server_painel_terminal(),
+    traducao_pensamento: m.config_server_traducao_pensamento(),
+    versao: m.config_server_versao(),
   };
   const leituraVisivel = $derived(Object.entries(store.leitura).filter(([k]) => !LEITURA_EM_MAQUINAS.has(k)));
+
+  // Variáveis do .env: o backend manda um CÓDIGO e a tela traduz. Código que não está neste mapa
+  // não vira texto nenhum — a linha fica só com o nome cru, nunca com o identificador da mensagem.
+  const DESCRICAO_ENV: Record<string, string> = {
+    terminal: m.config_server_env_terminal(),
+    pricing_offline: m.config_server_env_pricing_offline(),
+    claude_config_dirs: m.config_server_env_claude_config_dirs(),
+    engines_file: m.config_server_env_engines_file(),
+    codex_sync_enabled: m.config_server_env_codex_sync_enabled(),
+    auto_resume: m.config_server_env_auto_resume(),
+    omp_plugin_sync: m.config_server_env_omp_plugin_sync(),
+    omp_claude_context: m.config_server_env_omp_claude_context(),
+  };
+  const ALERTA_ENV: Record<string, string> = {
+    codex_sync_desligado: m.config_server_env_alerta_codex_sync(),
+  };
+  /** Segredo NÃO tem valor aqui (o backend nunca o manda): a linha diz só se está definida. */
+  function valorEnv(v: VariavelEnv): string {
+    if (v.segredo) return v.definida ? m.config_server_env_definida() : m.config_server_env_nao_definida();
+    if (typeof v.valor === 'boolean') return v.valor ? m.config_server_sim() : m.config_server_nao();
+    return v.valor === '' || v.valor === null ? '—' : String(v.valor);
+  }
 
   // Pastas mapeadas do seletor de pasta (scan_roots): o valor no runtime_config é a string "a,b"
   // (mesmo formato do CP_SCAN_ROOTS); a tela edita como lista de linhas.
@@ -179,6 +204,33 @@
               <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? m.config_server_sim() : m.config_server_nao()) : v}</span>
             </div>
           {/each}
+        </div>
+      {/if}
+
+      {#if store.variaveisEnv.length}
+        <div class="env">
+          <h3>{m.config_server_env_titulo()} <EscopoChip escopo="env" /></h3>
+          <p class="ajuda">{m.config_server_env_ajuda()}</p>
+          <!-- Lista de definição, não <div>s soltas: sem ela um leitor de tela anuncia nome, valor
+               e descrição como três pedaços sem vínculo. O <div> por linha é o agrupamento que o
+               HTML permite dentro de um <dl>. -->
+          <dl class="env-lista">
+            {#each store.variaveisEnv as v (v.nome)}
+              <div class="env-linha">
+                <dt class="env-nome"
+                    aria-describedby={v.alerta && ALERTA_ENV[v.alerta] ? `env-alerta-${v.nome}` : undefined}>
+                  <code>{v.nome}</code>
+                </dt>
+                <dd class="env-val" class:vazio={!v.definida}>{valorEnv(v)}</dd>
+                {#if v.descricao && DESCRICAO_ENV[v.descricao]}
+                  <dd class="env-desc">{DESCRICAO_ENV[v.descricao]}</dd>
+                {/if}
+                {#if v.alerta && ALERTA_ENV[v.alerta]}
+                  <dd class="env-alerta" role="note" id="env-alerta-{v.nome}">{ALERTA_ENV[v.alerta]}</dd>
+                {/if}
+              </div>
+            {/each}
+          </dl>
         </div>
       {/if}
     {/if}
@@ -288,18 +340,60 @@
   .ro-linha {
     /* Container da etiqueta de escopo: quem aperta esta linha é a largura do PAINEL. */
     container-type: inline-size;
-    display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4);
-    padding: var(--space-2) 0; border-bottom: 1px solid var(--border-subtle);
+    display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+    gap: var(--space-4); padding: var(--space-2) 0; border-bottom: 1px solid var(--border-subtle);
   }
   /* `flex` + `wrap`: apertado, a etiqueta desce em vez de espremer o rótulo. */
   .ro-rot {
     display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
     font-size: var(--text-sm); color: var(--text-secondary); min-width: 0;
   }
+  /* Quebra em vez de cortar, mesma razão da `.env-val`: com os rótulos longos que estas chaves
+     ganharam ("Tradução do raciocínio disponível"), o corte comia o valor até virar "s…".
+     A base de 12ch é o que faz o valor DESCER pra linha de baixo em vez de espremer: sem ela, o
+     `overflow-wrap` deixa o flex encolher o item até uma letra por linha, e "sim" virava "si/m".
+     E o `grow` é o que o mantém colado na direita quando desce: com base fixa ele ficava pendurado
+     no meio da linha, longe do rótulo e longe da borda. */
   .ro-val {
     font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%;
+    flex: 1 0 12ch; text-align: right; overflow-wrap: anywhere;
   }
+
+  /* Container da etiqueta de escopo do <h3>, como em `.raizes`: sem ele a container query do chip
+     cairia num ancestral mais largo e a etiqueta nunca desceria de linha no celular. */
+  .env { container-type: inline-size; margin-top: var(--space-5); }
+  .env h3 {
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0;
+    margin: 0 0 4px; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
+  }
+  .env-lista { margin: 0; }
+  /* Nome e valor na MESMA linha quando cabem; a descrição e o aviso ficam embaixo, ocupando a
+     largura toda (`flex-basis: 100%`) — são frases, e espremidas ao lado do nome virariam uma
+     palavra por linha. */
+  .env-linha {
+    display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+    gap: var(--space-4); padding: var(--space-2) 0; border-bottom: 1px solid var(--border-subtle);
+  }
+  /* `dd` nasce com recuo do navegador; aqui quem posiciona é o flex. */
+  .env-linha dd { margin: 0; }
+  .env-nome {
+    font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary);
+    min-width: 0; overflow-wrap: anywhere;
+  }
+  /* QUEBRA em vez de cortar com reticências, ao contrário do `.ro-val` vizinho: aqui os valores
+     são caminho de arquivo e lista de pastas, e no celular o corte escondia o fim sem nenhum jeito
+     de ver o resto (não há hover pra um `title`). Alinhado à direita pra manter a coluna quando
+     ocupa mais de uma linha. */
+  .env-val {
+    font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted);
+    flex: 1 0 12ch; text-align: right; overflow-wrap: anywhere;
+  }
+  .env-val.vazio { font-style: italic; }
+  .env-desc, .env-alerta {
+    flex-basis: 100%; margin: 4px 0 0; font-size: var(--text-xs); line-height: 1.45;
+  }
+  .env-desc { color: var(--text-muted); }
+  .env-alerta { color: var(--warning); }
 
   .aviso { font-size: var(--text-sm); color: var(--text-muted); margin: var(--space-3) 0; }
   .aviso.erro { color: var(--error); }

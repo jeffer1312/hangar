@@ -68,7 +68,7 @@ from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, Up
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
 from app.config import (list_config_dirs, ConfigDirInfo, _backend_config_base, settings,
-                        automations_enabled, resolve_bind_ip)
+                        automations_enabled, resolve_bind_ip, variaveis_env)
 from app import runtime_config
 from app import tts
 from app.tts_text import preparar as tts_preparar
@@ -4316,6 +4316,10 @@ def get_config(request: Request):
             # `diag.VERSAO_EM_EXECUCAO` corrigiu em f4013343).
             "versao": diag.VERSAO_EM_EXECUCAO,
         },
+        # IRMÃ do `somente_leitura`, nunca dentro dele: aquele bloco é um mapa chave -> valor
+        # simples, tipado assim no core e desenhado linha a linha pela tela. Uma lista lá dentro
+        # quebraria o tipo e desenharia "[object Object]".
+        "variaveis_env": variaveis_env(),
     }
 
 

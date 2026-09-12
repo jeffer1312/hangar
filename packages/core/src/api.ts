@@ -1214,10 +1214,32 @@ export interface CampoConfig {
   definido: boolean;
   origem: 'app' | 'env';
 }
+/**
+ * Uma variável do `.env` mostrada em Avançado, só leitura.
+ *
+ * `valor` é `null` quando `segredo` — o backend nunca o devolve, nem mascarado, e `definida` é a
+ * única coisa que a tela sabe sobre ele. `descricao` e `alerta` são CÓDIGOS que a tela traduz
+ * (padrão do repo); código desconhecido não vira texto nenhum, e a linha mostra só o nome cru —
+ * nunca o identificador da mensagem.
+ */
+export interface VariavelEnv {
+  nome: string;
+  valor: string | number | boolean | null;
+  definida: boolean;
+  segredo: boolean;
+  descricao: string | null;
+  alerta: string | null;
+}
 export interface ConfigServidor {
   campos: Record<string, CampoConfig>;
   // `terminal_panel` (Task 6, Step 8) e o unico booleano aqui -- `pty` e POSIX-only.
   somente_leitura: Record<string, string | number | boolean>;
+  /**
+   * IRMÃ do `somente_leitura`, nunca dentro dele: aquele é um mapa chave -> valor simples,
+   * desenhado linha a linha. Opcional porque é ACRÉSCIMO — o app nativo continua lendo o que lia,
+   * e um backend mais antigo responde sem a chave.
+   */
+  variaveis_env?: VariavelEnv[];
 }
 
 export function getConfig(): Promise<ConfigServidor> {

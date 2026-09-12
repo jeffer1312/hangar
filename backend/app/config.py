@@ -270,6 +270,116 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+# ── Variáveis do .env mostradas em Avançado (só leitura) ─────────────────────────────────────
+# Variáveis lidas direto do ambiente, FORA do Settings: nome da variável -> código de descrição.
+# O backend manda o código e a tela traduz, que é o padrão do repo — assim texto de interface não
+# nasce em português dentro do backend.
+#
+# É `os.environ` de propósito, não o `.env`: pydantic-settings lê o arquivo pra dentro do Settings
+# sem exportar nada, então quem lê estas cinco (api.py, codex_integracao, engines, pricing) só
+# enxerga o ambiente do processo. Mostrar o arquivo aqui afirmaria um valor que o código não usa.
+VARIAVEIS_DO_AMBIENTE: dict[str, str] = {
+    "CP_TERMINAL": "terminal",
+    "CP_PRICING_OFFLINE": "pricing_offline",
+    "CP_CLAUDE_CONFIG_DIRS": "claude_config_dirs",
+    "CP_ENGINES_FILE": "engines_file",
+    "CP_CODEX_SYNC_ENABLED": "codex_sync_enabled",
+}
+
+# Campos do Settings cujo efeito aparece na tela, e só eles ganham descrição traduzida: o resto
+# (porta, IP, VAPID, sync, proxy) se explica pelo nome. Decisão do usuário, pra não criar dezenas
+# de entradas de i18n numa seção que ninguém edita.
+DESCRICAO_DE_CAMPO: dict[str, str] = {
+    "auto_resume": "auto_resume",
+    "omp_plugin_sync_enabled": "omp_plugin_sync",
+    "omp_claude_context_enabled": "omp_claude_context",
+}
+
+# Aqui o valor NUNCA sai, nem mascarado — só `definida`. É a diferença desta lista pro `campos` do
+# runtime_config, onde o mascarado existe pra conferir QUAL chave está lá e trocá-la: estas cinco
+# a tela não edita, então mostrar pedaço delas seria vazamento sem nenhum uso em troca.
+SEGREDOS_DO_ENV = frozenset({
+    "auth_token", "vapid_private", "sync_bootstrap", "sync_session_secret", "deploy_secret",
+})
+
+# Rede por baixo da lista acima: campo NOVO com cara de segredo já nasce escondido, sem depender de
+# alguém lembrar de cadastrá-lo. A lista explícita continua porque nem todo segredo se denuncia pelo
+# nome (`vapid_private`, `sync_bootstrap` não casam aqui) — vale a UNIÃO das duas.
+_PALAVRAS_DE_SEGREDO = ("secret", "token", "password", "senha", "_key", "apikey", "private")
+
+# Mesma leitura de "desligado" do codex_integracao._sincronizacao_ligada.
+_DESLIGADO = ("0", "false", "no")
+
+
+def _e_segredo(campo: str) -> bool:
+    return campo in SEGREDOS_DO_ENV or any(p in campo.lower() for p in _PALAVRAS_DE_SEGREDO)
+
+
+def _nome_da_variavel(campo: str, modelo: type["Settings"]) -> str:
+    """O nome que a pessoa vai procurar no `.env`.
+
+    Remontar `CP_<CAMPO>` na mão erra em campo com `validation_alias` (o `groq_api_key` já usa
+    `AliasChoices`): mostraríamos um nome que, editado no arquivo, não faz efeito nenhum."""
+    alias = modelo.model_fields[campo].validation_alias
+    if isinstance(alias, str):
+        return alias
+    escolhas = getattr(alias, "choices", None)
+    if escolhas:
+        primeira = escolhas[0]
+        if isinstance(primeira, str):
+            return primeira
+    prefixo = modelo.model_config.get("env_prefix", "")
+    return f"{prefixo}{campo}".upper()
+
+
+def _valor_para_cliente(v: object) -> str | int | float | bool | None:
+    return str(v) if isinstance(v, Path) else v
+
+
+def variaveis_env(s: "Settings | None" = None) -> list[dict]:
+    """Variáveis do `.env` que a tela mostra em Avançado, só leitura.
+
+    Entra o que a tela NÃO edita: campo do Settings sem override em `runtime_config.EDITAVEIS`,
+    mais as lidas direto do ambiente. Campo editável ficar de fora é o ponto: com ele aqui, a
+    mesma configuração apareceria duas vezes na tela, uma delas dizendo que exige reiniciar.
+
+    Import local pelo mesmo motivo de `automations_enabled`: o runtime_config importa este módulo.
+    """
+    from app import runtime_config
+    s = s or settings
+    fora: list[dict] = []
+    for campo in type(s).model_fields:
+        if campo in runtime_config.EDITAVEIS:
+            continue
+        bruto = getattr(s, campo)
+        segredo = _e_segredo(campo)
+        fora.append({
+            "nome": _nome_da_variavel(campo, type(s)),
+            "valor": None if segredo else _valor_para_cliente(bruto),
+            # "tem valor", não "veio do arquivo" — de dentro do Settings não dá pra separar um
+            # valor escrito no `.env` do padrão do código. `False` e `0` são valores, não ausências.
+            "definida": bruto is not None and bruto != "",
+            "segredo": segredo,
+            "descricao": DESCRICAO_DE_CAMPO.get(campo),
+            "alerta": None,
+        })
+    for nome, codigo in VARIAVEIS_DO_AMBIENTE.items():
+        bruto = os.environ.get(nome, "")
+        fora.append({
+            "nome": nome,
+            "valor": bruto,
+            "definida": bool(bruto),
+            "segredo": False,
+            "descricao": codigo,
+            # Desligado, o kill-switch ANULA o toggle "Sincronização automática" de Harnesses —
+            # sem este aviso o toggle parece quebrado, que é a queixa que originou a linha.
+            "alerta": ("codex_sync_desligado"
+                       if nome == "CP_CODEX_SYNC_ENABLED" and bruto.lower() in _DESLIGADO
+                       else None),
+        })
+    return fora
+
+
 def automations_enabled() -> bool:
     """Kill-switch mestre: True = automacoes desatendidas (encadeamento de sessao, auto-resume) podem
     disparar. Cada feature ainda mantem seu proprio flag por cima (ex: auto_resume exige ESTE + CP_AUTO_RESUME).

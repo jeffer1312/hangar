@@ -4,7 +4,8 @@
 // dois — e rascunho unico foi a decisao explicita do usuario.
 import * as m from '../paraglide/messages';
 import {
-  getConfig, getConfigForServer, patchConfig, patchConfigForServer, type CampoConfig,
+  getConfig, getConfigForServer, patchConfig, patchConfigForServer,
+  type CampoConfig, type VariavelEnv,
 } from '@hangar/core';
 import { getActiveId, serverIdentidade, type Server } from './auth';
 import { segredos } from './segredos.svelte';
@@ -24,6 +25,7 @@ export function criarConfigServidor(alvo: () => Server | null, identidade?: () =
   let timerSalvo: ReturnType<typeof setTimeout> | null = null;
   let campos = $state<Record<string, CampoConfig>>({});
   let leitura = $state<Record<string, string | number | boolean>>({});
+  let variaveisEnv = $state<VariavelEnv[]>([]);
   let rascunho = $state<Record<string, ValorCampo>>({});
   let carregando = $state(false);
   let salvando = $state(false);
@@ -46,6 +48,7 @@ export function criarConfigServidor(alvo: () => Server | null, identidade?: () =
     if (trocouDono) rascunho = {};
     campos = {};
     leitura = {};
+    variaveisEnv = [];
     erro = '';
     salvo = false;
     salvando = false;
@@ -57,6 +60,8 @@ export function criarConfigServidor(alvo: () => Server | null, identidade?: () =
       if (mine !== geracao || donoDe() !== dono) return;   // alvo mudou no meio: resposta A não pinta B
       campos = c.campos;
       leitura = c.somente_leitura;
+      // Ausente num servidor mais antigo: a seção some, em vez de a tela quebrar.
+      variaveisEnv = c.variaveis_env ?? [];
     } catch (e) {
       if (mine !== geracao || donoDe() !== dono) return;
       erro = e instanceof Error ? e.message : m.config_motores_erro_carregar();
@@ -126,6 +131,7 @@ export function criarConfigServidor(alvo: () => Server | null, identidade?: () =
   return {
     get campos() { return campos; },
     get leitura() { return leitura; },
+    get variaveisEnv() { return variaveisEnv; },
     get carregando() { return carregando; },
     get salvando() { return salvando; },
     get erro() { return erro; },
