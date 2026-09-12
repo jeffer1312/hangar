@@ -594,6 +594,28 @@ Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
   pane. Note `/reload` drops and re-raises the line — a command fired inside that ~5s window falls to
   plan B and can still 409.
 
+## Antes de digitar no composer do Claude, ESVAZIE ele
+
+(`terminal_input._esvaziar_composer_claude`, 12/09/2026). Caso real: o transcript da sessão
+  `Lhais` gravou `pq eu quero ele atualizado/modelmodelmodelmodelTá travado aí` como **uma**
+  mensagem às 14:07:50. Um rascunho anterior e restos de `/model` estavam parados no composer, o
+  prompt foi digitado em cima, o Enter mandou tudo grudado (e cortado), e o reconcile, sem achar
+  `Tá travado aí não?` exato, reentregou a cópia limpa às 14:08:00 — `REQUEUE … mais parecida no
+  transcript=''`. A guarda anti-colagem só existia pro Pi (que adia), e o Claude ficava sem nenhuma
+  porque a docstring do Pi supunha que o composer vazio do Claude "desenha glifo/placeholder" e não
+  dá pra distinguir. **Medido no pane** (psmux 3.3.8, Windows 10, sessão trabalhando): vazio é só o
+  `❯` entre as réguas (`\x1b[0;38;2;153;153;153m❯`), então tirar o glifo basta pra dizer "vazio".
+
+  Decisão do dono: **apagar**, não adiar. Adiar trava a fila quando o resto é lixo; apagar custa o
+  rascunho que ele esteja escrevendo no terminal, e ele escolheu isso sabendo. Três regras: sem texto
+  além do glifo, nenhuma tecla (o caso normal não paga nada); `C-u` só se repete enquanto o conteúdo
+  **diminui** — uma tecla sem efeito é moldura ou placeholder, porque texto digitado sempre sai com
+  `C-u`, e aí desiste sem gastar o teto (`_LIMPEZA_MAX_TECLAS`), o que também cobre um ocioso que
+  desenhe placeholder; composer ilegível não é tocado. Roda **antes** da foto dos placeholders de
+  paste, pra um `[Pasted text #N]` velho sair junto e não virar prova falsa de entrega.
+  `_limpar_composer` (envio parcial, só apaga o que é NOSSO) mantém a regra antiga: são caminhos
+  diferentes.
+
 ## Contas Codex adicionais têm origem própria
 
 (`app/codex_contas*.py`, 10/09/2026): a padrão usa

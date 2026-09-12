@@ -1421,6 +1421,52 @@ _PARTIAL_MAX_TENTATIVAS = 2
 # chama send_prompt na MESMA thread, sincronamente, entao so ela ve o que ela mesma escreveu.
 _ULTIMA_LIMPEZA = threading.local()
 
+# Glifo do prompt que o Claude Code desenha no composer vazio — e tudo o que aparece entre as reguas
+# quando nao ha texto (medido no pane).
+_GLIFO_COMPOSER_CLAUDE = "❯"
+
+
+def _texto_composer_claude(name: str) -> str | None:
+    """O que esta escrito no composer do Claude, sem glifo e sem espaco. "" = vazio, None = ilegivel."""
+    regiao = _composer_regiao(_capture(name), name)
+    if regiao is None:
+        return None
+    miolo = "\n".join(regiao.split("\n")[1:-1])          # tira as duas reguas das pontas
+    return _sem_espaco(miolo.replace(_GLIFO_COMPOSER_CLAUDE, ""))
+
+
+def _esvaziar_composer_claude(name: str) -> bool:
+    """Apaga o que estiver parado no composer do Claude antes de digitar. True = confirmado vazio.
+
+    Digitar por cima de texto parado faz o Enter mandar tudo numa mensagem so, e o reconcile, sem
+    achar o prompt exato no transcript, reentrega — a duplicata. No Pi a guarda ADIA
+    (`_composer_ocupado_pi`); no Claude a decisao foi APAGAR, sabendo que um rascunho sendo escrito
+    no terminal some junto. Nao confundir com `_limpar_composer`: aquele e o caminho do envio parcial
+    e so apaga o que e NOSSO — la a regra continua valendo.
+
+    C-u apaga uma linha, entao repete enquanto o conteudo DIMINUI. Se uma tecla nao muda nada, o que
+    sobrou e moldura ou placeholder (texto digitado sempre sai com C-u): desiste sem gastar o teto e
+    deixa o envio seguir. Ilegivel -> nao aperta nada.
+    """
+    atual = _texto_composer_claude(name)
+    if not atual:
+        return atual is not None
+    for _ in range(_LIMPEZA_MAX_TECLAS):
+        send_keys(name, "C-u")
+        depois = _texto_composer_claude(name)
+        if depois is None:
+            return False
+        if not depois:
+            return True
+        if len(depois) >= len(atual):
+            _log.warning("composer de %r nao esvaziou com C-u (%d caracteres resistiram) — segue o "
+                         "envio: o que resiste ao C-u nao e texto digitado", name, len(depois))
+            return False
+        atual = depois
+    _log.warning("composer de %r nao esvaziou apos %d x C-u — segue o envio", name,
+                 _LIMPEZA_MAX_TECLAS)
+    return False
+
 
 def _limpar_composer(name: str, texto: str, pastes_antes: set[str] | None) -> bool:
     """Tira do composer o texto que NOS digitamos e nao conseguimos submeter.
@@ -1617,6 +1663,11 @@ class TerminalInput:
                                 _OCUPADO_DEFER_COUNT, _diag_composer(_capture(name), text, name, None))
                 return "deferred"
             _limpa_deferred(name, _OCUPADO_WARNED, _OCUPADO_DEFER_COUNT)
+            # Claude: apaga o que estiver parado no composer ANTES de digitar — por cima, o Enter
+            # manda tudo grudado e o reconcile reentrega. ANTES da foto dos placeholders abaixo, pra
+            # um `[Pasted text #N]` velho sair junto e nao confundir a prova de entrega.
+            if provider == "claude":
+                _esvaziar_composer_claude(name)
             if "\n" in text or _exige_clipboard(text, provider):
                 # Foto dos placeholders de paste ANTES do nosso: so um numero NOVO conta como
                 # evidencia de entrega (ver _composer_residuo — paste alheio nao pode virar prova).

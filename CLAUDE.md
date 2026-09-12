@@ -219,6 +219,9 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **A lista de modelos NUNCA é constante.** Conta Anthropic lê o picker ao vivo (cache de 1h,
   porque ler dirige o terminal); sessão de motor usa `/v1/models` do provedor. `/model <id>`
   grava default global — reponha o valor anterior.
+- **Antes de digitar no composer do Claude, ESVAZIE ele** (`C-u` enquanto o conteúdo diminui):
+  digitar por cima gruda as mensagens num Enter só e o reconcile reentrega. No Claude a decisão é
+  apagar, não adiar como no Pi — rascunho sendo escrito no terminal some junto.
 - **Antes de digitar no composer do Pi, PERGUNTE a ele** (`getEditorText`): a tela não distingue
   aviso de extensão de rascunho da pessoa, e comparar duas capturas não resolve.
 - **Statusline e prévia vêm de sidecar do agente, não do pane.** O pane corta na largura da
