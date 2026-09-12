@@ -984,6 +984,37 @@ recupera buffering por `thread/read`/`thread/resume`; reiniciar o backend perde 
   ao carregar a config. O bloco fica lá como promessa vazia; testar Codex noutro modelo hoje só
   com provedor que fale Responses API (a OpenCode fala, mas a conta estava sem saldo).
 
+## Memórias do Claude no Codex (11/09/2026, CLI 0.154.0)
+
+**A memória do Claude só é detectada com uma CONVERSA ao lado dela, e não basta o arquivo existir.**
+O `externalAgentConfig/detect` lê `~/.claude/projects/<pasta>/memory/`, mas ignora o projeto que não
+tenha um `.jsonl` irmão. Medido no stage, mesmo projeto, um candidato por vez: só `memory/` →
+`tipos=[HOOKS]`, memória 0; `memory/` + um `.jsonl` de 11 linhas contendo apenas `mode`, `attachment`
+e `system` → memória 0; o mesmo com um de 27 linhas contendo `user` e `assistant` → reconhecido. Por
+isso `copiar_memorias` leva o menor transcrito que tenha `"type":"user"`, e não o menor arquivo: o
+menor era justamente o mais provável de ser uma sessão que abriu e nunca conversou. O caso real foi
+o próprio `hangar`, 57 memórias copiadas e descartadas em silêncio, com a reconciliação terminando
+`ok`. Esse silêncio é o risco permanente daqui, porque o critério do detector não é documentado:
+por isso a importação compara o que copiou com o que `details.memory` devolveu (confirmado contra o
+CLI: lista de strings com a chave de pasta sanitizada) e avisa a diferença, seja qual for a causa.
+Transcrito todo do projeto seria 1.179 MB; um por projeto, escolhido por tamanho, 35 MB; escolhido
+por ter conversa, 11,6 MB.
+
+**A consolidação não roda abaixo de 25% de cota, e decide antes de gastar.**
+`codex_memories_write::guard`: `skipping memories startup because Codex rate limits are below the
+configured threshold min_remaining_percent=25`. A conta padrão desta máquina passou o dia em 12% e
+nunca consolidou, o que parece defeito e é proteção. `account/rateLimits/read` lê a cota sem custo e
+diz de antemão se vai rodar. O worker só sobe com a TUI; `codex exec` não o dispara.
+
+**A memória só vale a partir da SEGUNDA sessão.** O `memory_summary.md` é injetado na abertura, então
+a sessão que manda consolidar não enxerga o próprio resultado — duas verificações deram falso
+negativo por isso antes de a sessão seguinte responder certo. A tela diz isso ao lado do interruptor.
+
+**O índice injetado é truncado em 5.000 tokens.** É o teto que faz importar todos os projetos não
+inchar o contexto: o corpo (`MEMORY.md`, `rollout_summaries/`, os resources importados) fica fora e
+é lido por busca, com orçamento de 4-6 passos declarado no próprio prompt. Medido: sem memória, o
+bloco não é injetado; com a memória desta máquina, 8.657 tokens contra 4.835 no mesmo prompt.
+
 ## Voz Codex no web
 
 (`codex_voice.py`, `CodexVoice.svelte`, `lib/codexVoice.ts`, 10/09/2026):

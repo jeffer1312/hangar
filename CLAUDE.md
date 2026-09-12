@@ -230,6 +230,13 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   para autoaprovar hooks. Fonte inválida nunca significa remoção.
 - **Contas Codex adicionais têm `CODEX_HOME` próprio**; a identidade é `credential_id=codex:<home>`,
   nunca a chave. Sem migração, rotação ou troca automática por cota.
+- **A memória do Claude só é vista pelo Codex com uma CONVERSA ao lado dela** — e não basta o
+  `.jsonl` existir: sessão que abriu e nunca conversou é descartada igual. Copiar só a `memory/`
+  faz a reconciliação terminar `ok` sem trazer nada. Como o critério do detector não é documentado,
+  o que foi copiado é conferido contra o que ele reconheceu, e a diferença vira aviso.
+- **A consolidação da memória é o único item que gasta cota**: por isso é opt-in, não roda abaixo de
+  25% de cota (decide antes de gastar), só sobe com a TUI, e vale a partir da SEGUNDA sessão — o
+  índice entra na abertura, então quem manda consolidar não vê o próprio resultado.
 - **Instruções nativas do Codex entram por `AGENTS.override.md`** apontando para o `CLAUDE.md`.
   Override pessoal nunca é sobrescrito; onde existe `AGENTS.md` de verdade, ele deixa de ser lido.
 - **A ponte de skills é a ÚNICA dona das pastas de ponte**, é stdlib-only, e só mexe em symlink
