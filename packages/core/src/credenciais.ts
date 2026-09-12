@@ -11,7 +11,7 @@ export interface CodexAccount {
   is_default: boolean;
   auth: { method: AuthMethod; status: 'connected' | 'disconnected' | 'unavailable'; email: string | null; plan: string | null };
   sync: { status: CodexSyncStatus; trust_pending: boolean; issues: { code: string; params: Record<string, string> }[];
-    /** Em que ponto a herança está: `configuracoes`, `recursos` ou `plugins`. */
+    /** Em que ponto a herança está: `principal`, `configuracoes`, `recursos` ou `plugins`. */
     etapa?: string | null;
     /** O que a conta recebeu, por tipo, quando a herança terminou. */
     herdado?: Record<string, number> | null };
@@ -110,4 +110,12 @@ export function importacaoAposLoginCodex(accounts: CodexAccount[] | undefined, i
 
 export function codexAccountMessage(issue: { code: string; params?: Record<string, string> }): string {
   return mensagemDeErro(issue.code, issue.params) ?? m.codex_account_error_unknown();
+}
+
+export function codexPreparationMessage(stage?: string | null): string {
+  if (stage === 'principal') return m.codex_etapa_principal();
+  if (stage === 'configuracoes') return m.codex_etapa_configuracoes();
+  if (stage === 'recursos') return m.codex_etapa_recursos();
+  if (stage === 'plugins') return m.codex_etapa_plugins();
+  return m.codex_ui_preparing();
 }

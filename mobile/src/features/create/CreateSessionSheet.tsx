@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { createSession, createSessionForServer, getArchivePorCwd, getCodexAccountsForServer,
   getCodexPreparationForServer, getEngines, getSessions, listClaudeConfigs, listarCotasResumo,
   modelOptions, modelOptionsForServer, prepareCodexAccountForServer, resumeArchivedConversation,
-  codexAccountMessage } from '@hangar/core';
+  codexAccountMessage, codexPreparationMessage } from '@hangar/core';
 import { basename, providerName, cotaDaConta, cotaParada, resumoCota } from '@hangar/core';
 import type { ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo } from '@hangar/core';
 import { MenuView } from '@react-native-menu/menu';
@@ -91,6 +91,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
   const [codexAccount, setCodexAccount] = useState('');
   const [codexLoading, setCodexLoading] = useState(false);
   const [codexError, setCodexError] = useState('');
+  const [codexProgress, setCodexProgress] = useState('');
   const codexGeneration = useRef(0);
   const codexController = useRef<AbortController | null>(null);
   const operationController = useRef<AbortController | null>(null);
@@ -145,6 +146,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
     setCodexAccounts([]);
     setCodexAccount('');
     setCodexError('');
+    setCodexProgress('');
     setLoading(false);
     setRetomando(false);
     if (provider !== 'codex' || !active) {
@@ -284,19 +286,25 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
 
   const canCreate = !!picked && !!name.trim() && codexReady && !loading && !contextBusy && !retomando && !retomavel;
   const clearCreateLoading = (generation: number) => {
-    if (mounted.current && generation === codexGeneration.current) setLoading(false);
+    if (mounted.current && generation === codexGeneration.current) {
+      setLoading(false);
+      setCodexProgress('');
+    }
   };
 
   async function prepareCodex(target: NonNullable<typeof active>, account: string, generation: number) {
     const controller = new AbortController();
     operationController.current?.abort();
     operationController.current = controller;
+    setCodexProgress(codexPreparationMessage());
     let sync = await prepareCodexAccountForServer(target, account);
     if (!mounted.current || generation !== codexGeneration.current || controller.signal.aborted) return null;
     while (sync.status === 'running') {
+      setCodexProgress(codexPreparationMessage(sync.etapa));
       await new Promise((resolve) => setTimeout(resolve, 1000));
       if (!mounted.current || generation !== codexGeneration.current || controller.signal.aborted) return null;
       sync = await getCodexPreparationForServer(target, account, controller.signal);
+      if (!mounted.current || generation !== codexGeneration.current || controller.signal.aborted) return null;
     }
     return mounted.current && generation === codexGeneration.current && !controller.signal.aborted ? sync : null;
   }
@@ -314,6 +322,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
       if (!sync || !mounted.current || generation !== archiveGeneration.current || codexGenerationAtStart !== codexGeneration.current) return;
       showSyncWarning(sync);
       setCodexAccounts((items) => items.map((item) => item.id === (entry.codex_account ?? codexAccount) ? { ...item, sync } : item));
+      setCodexProgress(m.codex_ui_abrindo_sessao());
       const session = await resumeArchivedConversation(entry.project, entry.session_id, null, null,
         'codex', entry.codex_account ?? codexAccount, target);
       if (!mounted.current || generation !== archiveGeneration.current || codexGenerationAtStart !== codexGeneration.current) return;
@@ -323,7 +332,10 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
         setError(cause instanceof Error ? cause.message : m.criar_sessao_erro());
       }
     } finally {
-      if (mounted.current && generation === archiveGeneration.current && codexGenerationAtStart === codexGeneration.current) setRetomando(false);
+      if (mounted.current && generation === archiveGeneration.current && codexGenerationAtStart === codexGeneration.current) {
+        setRetomando(false);
+        setCodexProgress('');
+      }
     }
   };
 
@@ -342,6 +354,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
         if (!sync || !mounted.current || generation !== codexGeneration.current) return;
         showSyncWarning(sync);
         setCodexAccounts((items) => items.map((item) => item.id === account ? { ...item, sync } : item));
+        setCodexProgress(m.codex_ui_abrindo_sessao());
         const s = await createSessionForServer(target, {
           name: name.trim(), cwd: picked, provider: 'codex', model: modelo || null,
           effort: esforco || null, codex_account: account,
@@ -471,6 +484,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
                     setRetomando(false);
                     setRetomavel('');
                     setError('');
+                    setCodexProgress('');
                     setCodexAccount(value);
                   }}
                 />
@@ -565,6 +579,13 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
                 >
                   <Text style={styles.ghostTxt}>{retomando ? m.criar_criando() : m.criar_retomar_acao()}</Text>
                 </Pressable>
+              </View>
+            ) : null}
+
+            {provider === 'codex' && (loading || retomando) && codexProgress ? (
+              <View style={styles.rowCenter}>
+                <ActivityIndicator />
+                <Text style={[styles.hint, { flex: 1 }]} accessibilityLiveRegion="polite">{codexProgress}</Text>
               </View>
             ) : null}
 

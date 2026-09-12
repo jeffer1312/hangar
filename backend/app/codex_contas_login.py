@@ -116,6 +116,7 @@ class CodexContasLogin:
         self._reservations: dict[str, list[_Reservation]] = {}
         self._preparations: dict[str, asyncio.Task] = {}
         self._preparation_force: set[str] = set()
+        self._preparing_source: set[str] = set()
         self._preparation_results: dict[str, dict] = {}
         self._auth_cache: dict[str, tuple[tuple, int, float, dict]] = {}
         self._auth_generation: dict[str, int] = {}
@@ -443,6 +444,8 @@ class CodexContasLogin:
                     self._preparation_force.add(key)
             else:
                 reservation = self._reserve(account, "prepare")
+                if self.atualizar_principal is not None:
+                    self._preparing_source.add(key)
                 task = asyncio.create_task(self._prepare_one(account, reservation, forcar))
                 self._preparations[key] = task
                 self._preparation_results.pop(key, None)
@@ -453,8 +456,13 @@ class CodexContasLogin:
         key = self._key(account)
         try:
             while True:
-                principal = await self.atualizar_principal(forcar) \
-                    if self.atualizar_principal is not None else None
+                principal = None
+                if self.atualizar_principal is not None:
+                    self._preparing_source.add(key)
+                    try:
+                        principal = await self.atualizar_principal(forcar)
+                    finally:
+                        self._preparing_source.discard(key)
                 if forcar:
                     result = await codex_contas_sync.prepare_account(account, force=True)
                 else:
@@ -483,6 +491,7 @@ class CodexContasLogin:
             self._preparation_results[key] = copy.deepcopy(result)
             return result
         finally:
+            self._preparing_source.discard(key)
             reservation.release()
 
     def preparation_status(self, account: accounts.Account) -> dict:
@@ -491,7 +500,7 @@ class CodexContasLogin:
         if task is not None and not task.done():
             # A task viva decide o status; a etapa vem do disco, que é ela mesma quem atualiza.
             return {"status": "running", "trust_pending": False, "issues": [],
-                    "etapa": gravado.get("etapa")}
+                    "etapa": "principal" if self._key(account) in self._preparing_source else gravado.get("etapa")}
         return copy.deepcopy(self._preparation_results.get(self._key(account), gravado))
 
     async def delete_account(self, account: accounts.Account) -> None:

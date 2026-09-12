@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement, StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls = vi.hoisted(() => ({
   accounts: vi.fn(),
@@ -28,7 +28,10 @@ vi.mock('../../stores/servers', () => ({
   ),
 }));
 vi.mock('./CwdPicker', () => ({ CwdPicker: ({ onPick }: { onPick: (path: string) => void }) => createElement('button', { onClick: () => onPick('/repo') }, 'Pasta') }));
-vi.mock('./ProviderPicker', () => ({ ProviderPicker: ({ onChange }: { onChange: (provider: string) => void }) => createElement('button', { onClick: () => onChange('codex') }, 'Codex') }));
+vi.mock('./ProviderPicker', () => ({ ProviderPicker: ({ onChange }: { onChange: (provider: string) => void }) => createElement('div', null,
+  createElement('button', { onClick: () => onChange('codex') }, 'Codex'),
+  createElement('button', { onClick: () => onChange('claude') }, 'Claude'),
+) }));
 vi.mock('./CodexContextControl', () => ({ CodexContextControl: () => null }));
 vi.mock('@react-native-menu/menu', () => ({
   MenuView: ({ actions, onPressAction, children }: { actions: { id: string; title: string }[]; onPressAction: (event: { nativeEvent: { event: string } }) => void; children: ReactNode }) => createElement('div', null,
@@ -54,6 +57,7 @@ vi.mock('@hangar/core', async (original) => ({
 vi.mock('../../paraglide/messages', () => ({
   codex_ui_account: () => 'codex_ui_account', codex_ui_login_error: () => 'codex_ui_login_error',
   codex_ui_prepare_error: () => 'codex_ui_prepare_error', codex_ui_unknown: () => 'codex_ui_unknown',
+  codex_ui_abrindo_sessao: () => 'codex_ui_abrindo_sessao',
   composer_esforco: () => 'composer_esforco', composer_modelo: () => 'composer_modelo',
   comum_carregando: () => 'comum_carregando', comum_conta_claude: () => 'comum_conta_claude',
   comum_motor: () => 'comum_motor', comum_nome: () => 'comum_nome', comum_provider: () => 'comum_provider',
@@ -72,6 +76,7 @@ vi.mock('../../paraglide/messages', () => ({
 }));
 
 import { CreateSessionSheet } from './CreateSessionSheet';
+import { codexPreparationMessage } from '@hangar/core';
 
 const connected = { id: 'work', credential_id: 'codex:/work', name: 'Trabalho', home: '/work', is_default: false, auth: { method: 'oauth', status: 'connected', email: 'work@example.com', plan: 'Plus' }, sync: { status: 'ready', trust_pending: false, issues: [] } };
 const defaultAccount = { id: 'default', credential_id: 'codex:/default', name: 'Padrão', home: '/default', is_default: true, auth: { method: 'oauth', status: 'connected', email: 'default@example.com', plan: 'Plus' }, sync: { status: 'ready', trust_pending: false, issues: [] } };
@@ -84,6 +89,7 @@ function deferred<T>() {
 }
 
 describe('CreateSessionSheet Codex', () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     calls.accounts.mockReset().mockResolvedValue([connected]);
     calls.models.mockReset().mockResolvedValue({ models: [], reduced: false });
@@ -117,6 +123,53 @@ describe('CreateSessionSheet Codex', () => {
     expect(calls.prepare).toHaveBeenCalledWith(server, 'work');
     expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({ provider: 'codex', codex_account: 'work' }));
     root.unmount();
+  });
+
+  it.each(['create', 'resume'] as const)('mostra etapas do preparo e abertura durante %s', async (operation) => {
+    vi.useFakeTimers();
+    calls.archives.mockResolvedValue(operation === 'resume' ? [archived] : []);
+    calls.prepare.mockResolvedValue({ status: 'running', etapa: 'principal' });
+    calls.preparation
+      .mockResolvedValueOnce({ status: 'running', etapa: 'plugins' })
+      .mockResolvedValueOnce({ status: 'ready', issues: [], trust_pending: false });
+    const pending = deferred<{ name: string; state: 'idle' }>();
+    calls[operation].mockReturnValue(pending.promise);
+    const { container, root } = await renderSheet();
+    if (operation === 'resume') {
+      await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'última mensagem')!.click());
+    }
+    await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === (operation === 'create' ? 'sessao_nova' : 'criar_retomar_acao'))!.click());
+    expect(container.textContent).toContain(codexPreparationMessage('principal'));
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(container.textContent).toContain(codexPreparationMessage('plugins'));
+    expect(calls[operation]).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(container.textContent).toContain('codex_ui_abrindo_sessao');
+    await act(async () => pending.resolve({ name: 'nova', state: 'idle' }));
+    expect(container.textContent).not.toContain('codex_ui_abrindo_sessao');
+    root.unmount();
+  });
+
+  it.each(['provider', 'unmount'])('descarta atualização do polling após %s', async (change) => {
+    vi.useFakeTimers();
+    calls.prepare.mockResolvedValue({ status: 'running', etapa: 'principal' });
+    const pending = deferred<{ status: 'running'; etapa: string }>();
+    calls.preparation.mockReturnValue(pending.promise);
+    const { container, root } = await renderSheet();
+    await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'sessao_nova')!.click());
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    if (change === 'provider') {
+      await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Claude')!.click());
+    } else {
+      root.unmount();
+    }
+    await act(async () => pending.resolve({ status: 'running', etapa: 'plugins' }));
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(container.textContent).not.toContain(codexPreparationMessage('plugins'));
+    expect(calls.preparation).toHaveBeenCalledTimes(1);
+    expect(calls.create).not.toHaveBeenCalled();
+    expect(calls.replace).not.toHaveBeenCalled();
+    if (change === 'provider') root.unmount();
   });
 
   it.each(['partial', 'error'])('abre a conta escolhida mesmo com sincronização %s', async (status) => {

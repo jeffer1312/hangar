@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from app.codex_importador import CodexNativo
 
 
 _log = logging.getLogger("hangar.codex.contas_sync")
+_PLUGIN_CACHE_SECONDS = 300
 
 PREFERENCE_KEYS = frozenset({
     "model",
@@ -1058,12 +1060,19 @@ async def _prepare_locked(account: Account, force: bool, state: dict) -> dict:
     plugins_configured = bool(previous_plugins) or any(
         isinstance(source_config.get(key), dict) for key in ("marketplaces", "plugins")
     )
+    public = _public_state(state)
+    checked_at = state.get("plugins_checked_at")
+    # ponytail: estado nativo fora dos hashes só invalida por prazo; force confere imediatamente.
+    plugins_recent = (isinstance(checked_at, (int, float)) and
+                      0 <= time.time() - checked_at < _PLUGIN_CACHE_SECONDS and
+                      not _has_blocking_issues(public.get("issues", [])) and
+                      not public.get("trust_pending"))
     if (not force and state.get("source_digest") == source_digest and
             state.get("destination_digest") == destination_digest and
             state.get("cli_version") == cli_version and
             _public_state(state).get("status") == "ready" and
             not _has_blocking_issues(source_issues) and
-            not plugins_configured):
+            (not plugins_configured or plugins_recent)):
         return _public_state(state)
 
     state_dir = _private_dir(destination, create=True)
@@ -1174,6 +1183,8 @@ async def _prepare_locked(account: Account, force: bool, state: dict) -> dict:
         "profiles": profile_results,
         "resources": resources,
         "plugins": plugin_manifest,
+        "plugins_checked_at": (time.time() if plugins_configured and final_status == "ready"
+                               and not _has_blocking_issues(issues) and not plugin_trust_pending else None),
     }
     _write_state(account, result)
     return _public_state(result)

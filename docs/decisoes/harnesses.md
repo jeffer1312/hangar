@@ -616,6 +616,19 @@ Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
   respondendo `OK`. O rollout nasceu em `~/.codex-google`, apareceu no Arquivo após fechar e foi
   retomado pela mesma conta. AVD e Windows continuam sem verificação.
 
+  Abertura da adicional (12/09/2026): o log registrou 51s entre pedir a preparação e criar a
+  sessão; numa abertura posterior foram 3s. Esses intervalos não medem cada etapa. O formulário
+  descartava as etapas do polling e mostrava apenas “Preparando conta”. Web e app nativo agora
+  mostram a atualização da principal, configurações, recursos, plugins e abertura da sessão.
+  A conferência nativa dos plugins pode ser reutilizada por até 5min, com hashes de origem e
+  destino e versão do CLI iguais. Falha, confiança pendente, relógio regressivo ou pedido manual
+  forçado exigem nova conferência; avisos de credenciais excluídas continuam visíveis e não
+  impedem o cache. Mudança nativa fora dos arquivos rastreados só aparece na próxima abertura
+  depois do prazo, ou imediatamente ao reconciliar manualmente. A primeira conferência continua
+  necessária; o cache não promete abertura imediata após o prazo.
+  Após a alteração, duas preparações reais consecutivas da adicional levaram 2,55s e 0,51s,
+  medidas do POST até `ready`, com consultas a cada 0,5s; não inclui a abertura da conversa.
+
 ## Painel de saúde dos harnesses
 
 (`app/harness_saude.py` + `harness_api.py` +

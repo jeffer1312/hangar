@@ -10,6 +10,7 @@ import shutil
 import os
 import subprocess
 import tomllib
+import time
 from pathlib import Path
 
 import pytest
@@ -97,6 +98,86 @@ def fake_writer(monkeypatch):
 def _config(path: Path, **values):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_dump_toml(values))
+
+
+@pytest.mark.parametrize("invalidate", ["expiry", "force", "source", "destination", "cli", "clock"])
+async def test_plugin_preparation_cache_is_short_and_invalidated(isolated, fake_writer, monkeypatch, invalidate):
+    from app import codex_contas_plugins as plugins
+
+    _, source, account = isolated
+    _config(source / "config.toml", plugins={"sample@market": {"enabled": True}})
+    now = [1000.0]
+    monkeypatch.setattr(time, "time", lambda: now[0])
+    monkeypatch.setattr(sync, "_cli_version", lambda: "test")
+    calls = []
+
+    async def synchronize(*args):
+        calls.append(args)
+        return {"manifest": {"plugins": {}}, "issues": [], "trust_pending": False}
+
+    monkeypatch.setattr(plugins, "sync_plugins", synchronize)
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    now[0] += 1
+    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert len(calls) == 1
+
+    if invalidate == "expiry":
+        now[0] = 1300.0
+    elif invalidate == "clock":
+        now[0] = 999.0
+    elif invalidate in ("source", "destination"):
+        root = source if invalidate == "source" else account.home
+        with (root / "config.toml").open("a") as config:
+            config.write("\n# alteração externa\n")
+    elif invalidate == "cli":
+        monkeypatch.setattr(sync, "_cli_version", lambda: "updated")
+    await sync.prepare_account(account, force=invalidate == "force")
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("issue,trust", [(True, False), (False, True)])
+async def test_plugin_preparation_does_not_cache_pending_results(isolated, fake_writer, monkeypatch, issue, trust):
+    from app import codex_contas_plugins as plugins
+
+    _, source, account = isolated
+    _config(source / "config.toml", plugins={"sample@market": {"enabled": True}})
+    monkeypatch.setattr(sync, "_cli_version", lambda: "test")
+    calls = []
+
+    async def synchronize(*args):
+        calls.append(args)
+        return {"manifest": {"plugins": {}}, "trust_pending": trust,
+                "issues": [{"code": "codex_account_plugin_inventory_failed"}] if issue else []}
+
+    monkeypatch.setattr(plugins, "sync_plugins", synchronize)
+    await sync.prepare_account(account)
+    await sync.prepare_account(account)
+    assert len(calls) == 2
+
+
+async def test_plugin_cache_preserves_informational_mcp_exclusions(isolated, fake_writer, monkeypatch):
+    from app import codex_contas_plugins as plugins
+
+    _, source, account = isolated
+    _config(source / "config.toml", plugins={"sample@market": {"enabled": True}},
+            mcp_servers={"probe": {"command": "probe", "env": {
+                "CODEX_HOME": str(source), "OPENAI_API_KEY": "secret",
+            }}})
+    monkeypatch.setattr(sync, "_cli_version", lambda: "test")
+    calls = []
+
+    async def synchronize(*args):
+        calls.append(args)
+        return {"manifest": {"plugins": {}}, "issues": [], "trust_pending": False}
+
+    monkeypatch.setattr(plugins, "sync_plugins", synchronize)
+    first = await sync.prepare_account(account)
+    assert first["status"] == "ready"
+    assert {issue["code"] for issue in first["issues"]} == {
+        "codex_account_mcp_runtime_excluded", "codex_account_mcp_auth_excluded",
+    }
+    assert await sync.prepare_account(account) == first
+    assert len(calls) == 1
 
 
 @pytest.mark.skipif(os.name == "nt", reason="permissão de execução POSIX")

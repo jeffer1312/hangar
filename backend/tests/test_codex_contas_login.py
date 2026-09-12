@@ -149,6 +149,37 @@ async def test_preparo_atualiza_a_principal_antes_de_herdar_para_adicional(
     assert ordem == [("principal", forcar), ("work", forcar)]
 
 
+async def test_preparo_mostra_principal_enquanto_aguarda_sincronizacao(contas, monkeypatch):
+    _, work = contas
+    liberar_principal = asyncio.Event()
+    iniciou_heranca = asyncio.Event()
+    liberar_heranca = asyncio.Event()
+
+    async def atualizar_principal(_forcar):
+        await liberar_principal.wait()
+        return {"estado": "ok"}
+
+    async def herdar(_account):
+        iniciou_heranca.set()
+        await liberar_heranca.wait()
+        return {"status": "ready", "trust_pending": False, "issues": []}
+
+    monkeypatch.setattr("app.codex_contas_login.codex_contas_sync.prepare_account", herdar)
+    monkeypatch.setattr("app.codex_contas_login.codex_contas_sync.preparation_status",
+                        lambda _: {"status": "running", "etapa": "plugins"})
+    checker = CodexContasLogin(native=FakeNative, atualizar_principal=atualizar_principal)
+    try:
+        assert (await checker.prepare(work))["etapa"] == "principal"
+        liberar_principal.set()
+        await iniciou_heranca.wait()
+        assert checker.preparation_status(work)["etapa"] == "plugins"
+    finally:
+        liberar_principal.set()
+        liberar_heranca.set()
+        await checker._preparations[checker._key(work)]
+    assert checker.preparation_status(work)["status"] == "ready"
+
+
 async def test_falha_da_principal_permanece_visivel_na_conta_adicional(contas, monkeypatch):
     _, work = contas
 

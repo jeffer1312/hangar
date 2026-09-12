@@ -6,7 +6,7 @@
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import CodexContextControl from './CodexContextControl.svelte';
   import { getCodexAccountsForServer, prepareCodexAccountForServer, getCodexPreparationForServer,
-    createSessionForServer, codexAccountMessage, type CodexAccount } from '@hangar/core';
+    createSessionForServer, codexAccountMessage, codexPreparationMessage, type CodexAccount } from '@hangar/core';
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
            getArchivePorCwd, resumeArchivedConversation, getArchiveHistory, getBastao, passarBastao,
@@ -64,6 +64,7 @@
   let codexAccount = $state('');
   let codexError = $state('');
   let codexLoading = $state(false);
+  let codexProgress = $state('');
   let codexGeneration = 0;
   let codexController = new AbortController();
   const selectedCodex = $derived(codexAccounts.find((a) => a.id === codexAccount));
@@ -73,7 +74,7 @@
     const s = untrack(() => codexServer), enabled = open && provider === 'codex';
     const g = ++codexGeneration;
     codexController.abort(); codexController = new AbortController();
-    codexAccounts = []; codexAccount = ''; codexError = ''; codexLoading = false;
+    codexAccounts = []; codexAccount = ''; codexError = ''; codexLoading = false; codexProgress = '';
     if (enabled && s) {
       codexLoading = true;
       getCodexAccountsForServer(s, codexController.signal).then((accounts) => {
@@ -786,14 +787,19 @@
       else localStorage.removeItem(chaveMemoria() + ':effort');
       if (body.provider === 'codex') {
         if (!server || !account) return;
+        codexProgress = m.codex_ui_preparing();
         let sync = await prepareCodexAccountForServer(server, account);
+        if (g !== codexGeneration || !open || codexAccount !== account) return;
         while (sync.status === 'running') {
+          codexProgress = codexPreparationMessage(sync.etapa);
           await new Promise((resolve) => setTimeout(resolve, 1000));
           if (g !== codexGeneration || !open || codexAccount !== account) return;
           sync = await getCodexPreparationForServer(server, account, codexController.signal);
+          if (g !== codexGeneration || !open || codexAccount !== account) return;
         }
         if (g !== codexGeneration || !open || codexAccount !== account) return;
         codexAccounts = codexAccounts.map((item) => item.id === account ? { ...item, sync } : item);
+        codexProgress = m.codex_ui_abrindo_sessao();
         if (!baton) {
           const result = await createSessionForServer(server, body);
           if (g !== codexGeneration || !open || codexAccount !== account) return;
@@ -1035,7 +1041,7 @@
             <p class={selectedCodex?.sync.status === 'ready' ? 'hint' : 'error-msg'}
               role={selectedCodex?.sync.status === 'ready' ? 'status' : 'alert'}>{codexAccountMessage(issue)}</p>
           {/each}
-          {#if loading}<p role="status">{m.codex_ui_preparing()}</p>{/if}
+          {#if loading}<p role="status" aria-atomic="true">{codexProgress || m.codex_ui_preparing()}</p>{/if}
         </div>
       {/if}
       {#if provider === 'claude'}

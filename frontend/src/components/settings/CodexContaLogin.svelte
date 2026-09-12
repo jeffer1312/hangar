@@ -6,7 +6,7 @@
     getCodexAccountLoginForServer, cancelCodexAccountLoginForServer, getCodexAccountsForServer,
     getCodexIntegrationForServer, startCodexIntegrationForServer,
     getRootsForServer, createSessionForServer, mensagemDeErro, textoEtapaCodex,
-    codexAccountMessage, contaCodexParaEntrar, importacaoAposLoginCodex, idContaCodex,
+    codexAccountMessage, codexPreparationMessage, contaCodexParaEntrar, importacaoAposLoginCodex, idContaCodex,
     type Server, type CodexLoginAttempt, type CodexAccount } from '@hangar/core';
   import { copyText } from '../../lib/clipboard';
   import * as m from '../../paraglide/messages';
@@ -74,13 +74,6 @@
     if (g === generation) oncomplete();
   }
 
-  function nomeEtapa(codigo: string | null | undefined): string {
-    if (codigo === 'configuracoes') return m.codex_etapa_configuracoes();
-    if (codigo === 'recursos') return m.codex_etapa_recursos();
-    if (codigo === 'plugins') return m.codex_etapa_plugins();
-    return '';
-  }
-
   /** Quem aprova hook é o Codex, nunca o app: o botão só abre a sessão onde ele pergunta. */
   async function abrirSessaoCodex() {
     if (abrindoSessao || !account) return;
@@ -114,7 +107,7 @@
       if (tipo === 'heranca') {
         let sync = await prepareCodexAccountForServer(s, idc);
         while (sync.status === 'running') {
-          etapa = nomeEtapa(sync.etapa);
+          etapa = codexPreparationMessage(sync.etapa);
           await espera(1000, signal);
           if (g !== generation) return;
           sync = await getCodexPreparationForServer(s, idc, signal);
