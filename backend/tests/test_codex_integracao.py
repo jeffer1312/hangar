@@ -25,10 +25,12 @@ def test_memoria_leva_um_transcrito_por_projeto(tmp_path):
     projeto = origem / "-home-alguem-repo"
     (projeto / "memory").mkdir(parents=True)
     (projeto / "memory" / "MEMORY.md").write_text("indice")
-    (projeto / "grande.jsonl").write_text("x" * 5000)
-    (projeto / "menor.jsonl").write_text("y")
+    # O menor de todos não tem conversa: o detector ignoraria o projeto, então ele não serve.
+    (projeto / "so-metadado.jsonl").write_text('{"type":"mode"}\n')
+    (projeto / "menor.jsonl").write_text('{"type":"user"}\n' + "x" * 200)
+    (projeto / "grande.jsonl").write_text('{"type":"user"}\n' + "x" * 5000)
     (origem / "-sem-memoria").mkdir()
-    (origem / "-sem-memoria" / "sessao.jsonl").write_text("z")
+    (origem / "-sem-memoria" / "sessao.jsonl").write_text('{"type":"user"}\n')
 
     # Memória cuja conversa o Claude já apagou: o Codex não reconheceria o projeto. Fica de fora
     # calada — é regra dele, acontece o tempo todo, e não há o que a pessoa faça a respeito.
@@ -41,10 +43,50 @@ def test_memoria_leva_um_transcrito_por_projeto(tmp_path):
 
     assert (destino / "-home-alguem-repo" / "menor.jsonl").exists()
     assert not (destino / "-home-alguem-repo" / "grande.jsonl").exists()
+    assert not (destino / "-home-alguem-repo" / "so-metadado.jsonl").exists()
     assert (destino / "-home-alguem-repo" / "memory" / "MEMORY.md").read_text() == "indice"
     assert not (destino / "-sem-memoria").exists()
     assert erros == [], "só erro de leitura vira aviso"
     assert not (destino / "-orfao").exists()
+
+
+async def test_memoria_copiada_que_o_codex_nao_reconhece_vira_aviso(tmp_path, monkeypatch):
+    """Copiar não é ser reconhecido. O detector exige uma conversa ao lado da memória e não diz o
+    quanto — sem esta conferência, a memória some da importação sem nenhum sinal."""
+    from unittest.mock import AsyncMock
+    from app import codex_integracao
+    from app.codex_importador import CodexNativoErro
+    home = _home(tmp_path)
+    (home / ".claude/settings.json").write_text('{"enabledPlugins": {}, "hooks": {}, "env": {}}')
+    for nome in ("-visto", "-ignorado"):
+        (home / f".claude/projects/{nome}/memory").mkdir(parents=True)
+        (home / f".claude/projects/{nome}/memory/MEMORY.md").write_text("indice")
+        (home / f".claude/projects/{nome}/sessao.jsonl").write_text('{"type":"user"}\n')
+    monkeypatch.setattr(codex_integracao, "memoria_ligada", lambda: True)
+
+    class Importer:
+        def __init__(self, stage, cx, binario, **kwargs):
+            self.stage, self.cx = stage, cx
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def detectar(self):
+            # O Codex enxergou só um dos dois projetos copiados.
+            return [{"itemType": "MEMORY", "details": {"memory": ["-visto"]}}]
+        async def importar(self, itens):
+            (self.cx / "hooks.json").write_text('{"hooks": {}}')
+            return {"itemTypeResults": []}
+        async def historicos_importacao(self):
+            raise CodexNativoErro("sem histórico")
+
+    service = IntegracaoCodex(home, home / ".codex", nativo=Importer)
+    service._estado = codex_integracao._snapshot()
+    service.raiz.mkdir(parents=True)
+    monkeypatch.setattr(service, "_config", AsyncMock())
+
+    await service._fragmentos(Importer(None, None, None), {}, {})
+
+    avisos = " ".join(service._estado["avisos"])
+    assert "-ignorado" in avisos and "-visto" not in avisos
 
 
 async def test_memoria_recusada_nao_derruba_o_resto_da_integracao(tmp_path, monkeypatch):
@@ -58,7 +100,7 @@ async def test_memoria_recusada_nao_derruba_o_resto_da_integracao(tmp_path, monk
     projeto = home / ".claude/projects/-um-repo"
     (projeto / "memory").mkdir(parents=True)
     (projeto / "memory/MEMORY.md").write_text("indice")
-    (projeto / "sessao.jsonl").write_text("x")
+    (projeto / "sessao.jsonl").write_text('{"type":"user"}\n')
     monkeypatch.setattr(codex_integracao, "memoria_ligada", lambda: True)
 
     lotes = []
@@ -97,7 +139,7 @@ def test_memoria_ilegivel_nao_derruba_os_outros_projetos(tmp_path, monkeypatch):
     for nome in ("-a-quebrado", "-b-bom"):
         (origem / nome / "memory").mkdir(parents=True)
         (origem / nome / "memory" / "MEMORY.md").write_text(nome)
-        (origem / nome / "sessao.jsonl").write_text("x")
+        (origem / nome / "sessao.jsonl").write_text('{"type":"user"}\n')
 
     original = codex_integracao.shutil.copytree
 

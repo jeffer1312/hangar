@@ -54,6 +54,19 @@ def memoria_ligada() -> bool:
     return bool(runtime_config.get("codex_memory_import"))
 
 
+def _tem_conversa(transcrito: Path) -> bool:
+    """Sessão que abriu e nunca conversou não serve de prova de projeto para o Codex: o arquivo
+    existe e só tem metadados (`mode`, `attachment`, `system`), e o detector a ignora."""
+    try:
+        with transcrito.open(encoding="utf-8", errors="replace") as arquivo:
+            for linha in arquivo:
+                if '"type":"user"' in linha or '"type": "user"' in linha:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def copiar_memorias(origem: Path, destino: Path) -> list[str]:
     """Memórias do Claude para o stage da importação; devolve os projetos que deram ERRO de leitura.
 
@@ -73,12 +86,16 @@ def copiar_memorias(origem: Path, destino: Path) -> list[str]:
             continue
         projeto = destino / memoria.parent.name
         try:
-            transcritos = sorted(memoria.parent.glob("*.jsonl"), key=lambda f: f.stat().st_size)
-            if not transcritos or not any(memoria.glob("*.md")):
+            if not any(memoria.glob("*.md")):
+                continue
+            transcrito = next((f for f in sorted(memoria.parent.glob("*.jsonl"),
+                                                 key=lambda f: f.stat().st_size)
+                               if _tem_conversa(f)), None)
+            if transcrito is None:
                 continue
             shutil.copytree(memoria, projeto / "memory",
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
-            shutil.copy2(transcritos[0], projeto / transcritos[0].name)
+            shutil.copy2(transcrito, projeto / transcrito.name)
         except OSError:
             # A causa real (disco cheio, E/S) não cabe no aviso da tela, mas some sem o log.
             _log.warning("memória de %s não pôde ser lida", memoria.parent.name, exc_info=True)
@@ -795,6 +812,17 @@ class IntegracaoCodex:
                 # e MCP, que não dependem dela. As demais continuam abortando a etapa.
                 essenciais = [i for i in itens if i.get("itemType") != "MEMORY"]
                 memorias = [i for i in itens if i.get("itemType") == "MEMORY"]
+                if memoria:
+                    # Copiar não é ser reconhecido: o que o detector exige da conversa ao lado não é
+                    # documentado, e um transcrito curto demais faria a memória sumir sem aviso —
+                    # a falha que este caminho já teve. Aqui a diferença aparece, seja qual for a causa.
+                    vistos = {p for i in memorias for p in i.get("details", {}).get("memory", [])
+                              if isinstance(p, str)}
+                    copiados = {d.name for d in (cc / "projects").glob("*") if d.is_dir()}
+                    if ignorados_mem := sorted(copiados - vistos):
+                        self._estado["avisos"].append(msg(
+                            "aviso_memoria_nao_reconhecida", n=len(ignorados_mem),
+                            exemplos=", ".join(ignorados_mem[:3])))
                 if essenciais:
                     result = await importer.importar(essenciais)
                     if any(r.get("failures") for r in result.get("itemTypeResults", [])):
