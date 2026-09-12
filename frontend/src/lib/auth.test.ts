@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as m from '../paraglide/messages';
 import type { Server } from './auth';
+import { configureDiag } from '@hangar/core';
 
 // auth.ts toca localStorage no load (migrate()). vitest env=node nao tem -> stub minimo ANTES do
 // import dinamico (top-level await roda apos o stub). migrate() so faz getItem -> null, sai cedo.
@@ -27,6 +28,20 @@ const { mergeServers, validarPareamento, onServersChanged, removeServer,
         addServerWithRollback } = await import('./auth');
 
 const S = (id: string, baseUrl: string, token = 't') => ({ id, label: id, baseUrl, token });
+
+it('diário registra falha e restauração no servidor tentado sem credenciais', async () => {
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'login' });
+  try {
+    const erro = Object.assign(new Error('token secreto url privada'), { status: 401 });
+    await expect(addServerWithRollback('https://novo.test', 'segredo', async () => { throw erro; })).rejects.toBe(erro);
+    expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'login.falhou', codigo: '401' }), 'https://novo.test');
+    expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'login.restaurado' }), 'https://novo.test');
+    expect(JSON.stringify(registrar.mock.calls.map(([e]) => e))).not.toMatch(/segredo|secreto|privada|https:/);
+  } finally {
+    configureDiag({ registrar: () => {}, novoReq: () => '' });
+  }
+});
 
 describe('mergeServers', () => {
   it('vault vazio -> sobe a lista local inteira', () => {

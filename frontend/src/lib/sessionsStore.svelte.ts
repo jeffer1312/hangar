@@ -7,7 +7,7 @@
 // consumidor ficar permanentemente montado, considerar um keep-alive com delay no release.
 import * as m from '../paraglide/messages';
 import type { EventSourceLike } from '@hangar/core';
-import { openSessionsStream } from '@hangar/core';
+import { openSessionsStream, registrarDiag, novoReqDiag } from '@hangar/core';
 import { listServers, onServersChanged, type Server } from './auth';
 import { navPelaLista } from './navPelaLista';
 import { podarNavMortos } from './navegadorPanel.svelte';
@@ -44,11 +44,16 @@ function createSessionsStore() {
   const RETRY_MAX_MS = 60_000;
   const retryDelays = new Map<string, number>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const quedas = new Map<string, number>();
+  const tentativas = new Map<string, number>();
   // Agenda a re-tentativa de UM servidor com backoff. Usado pelo onerror E pelo watchdog — o
   // watchdog reconectando na hora deixava servidor PENDURADO (tailscale pra nó morto não recusa,
   // trava o socket) ciclando 25s/25s pra sempre e afogando os sockets do servidor bom no iOS.
   function scheduleRetry(id: string) {
     const delay = retryDelays.get(id) ?? RETRY_MIN_MS;
+    const servidor = servers.find((s) => s.id === id);
+    if (servidor) registrarDiag({ evento: 'lista.retentativa', tela: 'lista',
+      espera_ms: delay, tentativa: tentativas.get(id) ?? 1 }, servidor.baseUrl);
     retryDelays.set(id, Math.min(delay * 2, RETRY_MAX_MS));
     clearTimeout(retryTimers.get(id));
     retryTimers.set(id, setTimeout(() => {
@@ -86,15 +91,27 @@ function createSessionsStore() {
         clearTimeout(watchdogs.get(id)); watchdogs.delete(id);
         clearTimeout(primeiros.get(id)); primeiros.delete(id);
         clearTimeout(retryTimers.get(id)); retryTimers.delete(id); retryDelays.delete(id);
+        quedas.delete(id); tentativas.delete(id);
         if (latencias.has(id)) { latencias = new Map(latencias); latencias.delete(id); }
       }
     }
     for (const s of list) {
       if (streams.has(s.id)) continue;
       const es = openSessionsStream(s);
+      const req = novoReqDiag();
+      const tentativa = (tentativas.get(s.id) ?? 0) + 1;
+      tentativas.set(s.id, tentativa);
+      registrarDiag({ evento: 'lista.abrir', tela: 'lista', req, tentativa }, s.baseUrl);
+      let primeiroValido = true;
+      const falhou = (codigo: string, espera_ms?: number) => {
+        if (!quedas.has(s.id)) quedas.set(s.id, Date.now());
+        registrarDiag({ evento: 'lista.falhou', nivel: 'aviso', tela: 'lista', req,
+          codigo, tentativa, espera_ms }, s.baseUrl);
+      };
       const arm = () => {
         clearTimeout(watchdogs.get(s.id));
         watchdogs.set(s.id, setTimeout(() => {
+          falhou('silencio', WATCHDOG_MS);
           // es.close() num stream já fechado é noop; connect() reabre só este servidor (os outros
           // seguem em streams). O arm() do stream novo substitui este timer no mesmo id.
           es.close();
@@ -121,6 +138,7 @@ function createSessionsStore() {
       // (mesmo tratamento do watchdog): "offline com dado velho" é diferente de "nunca respondeu",
       // e o banner de erro depende dessa distinção.
       const tPrimeiro = setTimeout(() => {
+        falhou('primeiro_quadro_timeout', PRIMEIRO_QUADRO_MS);
         if (primeiros.get(s.id) === tPrimeiro) primeiros.delete(s.id);
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
         recompute();
@@ -167,7 +185,17 @@ function createSessionsStore() {
         retryDelays.delete(s.id);   // sinal de vida: proximo erro recomeca do backoff minimo
         try {
           slots.set(s.id, { sessions: JSON.parse(e.data), error: null });
+          const caiuEm = quedas.get(s.id);
+          if (primeiroValido || caiuEm !== undefined) {
+            registrarDiag({ evento: caiuEm === undefined ? 'lista.conectou' : 'lista.voltou',
+              tela: 'lista', req, tentativa,
+              ms: caiuEm === undefined ? Math.round(performance.now() - abriuEm) : Date.now() - caiuEm }, s.baseUrl);
+            primeiroValido = false;
+            quedas.delete(s.id);
+            tentativas.delete(s.id);
+          }
         } catch {
+          falhou('json_invalido');
           // Frame malformado: sem isto o throw sobe no dispatch do EventSource e o slot congela em
           // silêncio (onerror não dispara pra erro de parse). Mantém a última lista boa e avisa.
           slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
@@ -183,11 +211,13 @@ function createSessionsStore() {
       // Refresher do backend falhou (achado do hunter): sem isto, lista vazia por erro interno era
       // indistinguível de zero sessões. Mantém a última lista boa; o erro aparece distinto de offline.
       es.addEventListener('list_error', () => {
+        falhou('produtor_falhou');
         arm();   // conexão está viva — só o produtor de dados falhou
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor() });
         recompute();
       });
       es.onerror = () => {
+        falhou(es.readyState === 2 ? 'stream_fechado' : 'stream_interrompido');
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
         recompute();
         // Assume o controle do retry (o nativo martela): fecha e reagenda com backoff.
@@ -206,6 +236,8 @@ function createSessionsStore() {
   // HORA — sem isto, o retry agendado pre-sleep deixava a lista "offline" por ate 60s com rede boa.
   function onVisibleKick() {
     if (document.visibilityState !== 'visible' || refs === 0) return;
+    for (const s of servers) if (!streams.has(s.id)) registrarDiag({
+      evento: 'lista.reconectar', tela: 'lista', codigo: 'app_visivel' }, s.baseUrl);
     retryDelays.clear();
     for (const t of retryTimers.values()) clearTimeout(t);
     retryTimers.clear();
@@ -236,6 +268,7 @@ function createSessionsStore() {
     for (const es of streams.values()) es.close();
     streams.clear();
     slots.clear();
+    quedas.clear(); tentativas.clear();
     // Parar não é sumiço: sem isto, o próximo retain() (o próprio DesktopShell, ao remontar)
     // veria todo nome "voltar" e subiria a época de todas as sessões — remontando chats vivos.
     epocas = { vistas: new Map(), sumidas: new Map(), epochs: epocas.epochs };
@@ -263,6 +296,8 @@ function createSessionsStore() {
       // refs=0 => ninguém consome o store (ex: Configurações aberta sobre Archive/Costs, onde a
       // lista não está montada): reconectar abriria SSE órfão — não faz nada.
       if (refs === 0) return;
+      for (const s of servers) registrarDiag({ evento: 'lista.reconectar',
+        tela: 'lista', codigo: 'manual' }, s.baseUrl);
       for (const es of streams.values()) es.close();
       streams.clear();
       connect(servers);

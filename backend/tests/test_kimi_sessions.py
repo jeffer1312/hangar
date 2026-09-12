@@ -153,7 +153,9 @@ def _roda_hook(payload: dict, env_extra: dict) -> None:
     import subprocess
     import sys as _sys
     hook = Path(__file__).resolve().parents[1] / "hooks" / "kimi_state_hook.py"
-    env = {**os.environ, **env_extra}
+    home = os.path.join(env_extra["CLAUDE_CONFIG_DIR"], "home")
+    env = {**os.environ, "HOME": home, "USERPROFILE": home,
+           "LOCALAPPDATA": os.path.join(home, "AppData", "Local"), **env_extra}
     env.pop("PSMUX_SESSION", None)
     env.update(env_extra)          # env_extra manda, mesmo pra apagar
     subprocess.run([_sys.executable, str(hook)],

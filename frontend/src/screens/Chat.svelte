@@ -67,7 +67,7 @@
   import { hasSeam, mergeHistoryWithLive } from '@hangar/core';
   import { especificidade, donoDaLinha } from '@hangar/core';
   import { parseStatusLine, queuedMessages } from '@hangar/core';
-  import { listServers, getActiveId } from '../lib/auth';
+  import { listServers, getActiveId, getBaseUrl } from '../lib/auth';
   import { createActivityFolder } from '@hangar/core';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
@@ -1531,24 +1531,6 @@
 
   // Watchdog de liveness: o backend manda um evento 'ping' a cada 10s. 25s sem NADA (msg/state/ping)
   // = conexao morta sem aviso (half-open: mobile trocou de rede / app no background / backend caiu).
-  // O EventSource.onerror NAO dispara em half-open -> sem isto o front congela no ultimo estado.
-  function armWatchdog() {
-    clearTimeout(watchdog);
-    // Mesmo guard do onerror: sessao 'dead' nao ganha reconexao infinita de 25s (o estado final
-    // ja chegou; reviver e acao do usuario via resume, nao do watchdog).
-    watchdog = setTimeout(() => {
-      // Conexão MEIO-ABERTA: 25s sem um único evento, nem o ping de 10s do backend. É o caso que
-      // não dispara `onerror` e que, sem registro, some sem deixar rastro.
-      diag.registrar({ evento: 'sse.mudo', nivel: 'aviso', tela: 'chat', sessao: sessionName,
-                       ms: 25000 });
-      if (currentState !== 'dead') connectSSE();
-    }, 25000);
-  }
-  // Qualquer evento recebido = conexao viva: rearma o watchdog E zera o backoff do onerror.
-  function noteAlive() {
-    sseRetryDelay = SSE_RETRY_MIN;
-    armWatchdog();
-  }
   // Backoff do reconnect por erro (3s -> 30s). Auditoria: sem isto, com a VPN caida, o retry
   // nativo do EventSource + o setTimeout de 3s martelavam ~2 conexoes a cada 3s pra sempre.
   const SSE_RETRY_MIN = 3000;
@@ -1569,6 +1551,30 @@
     // Codex junto: sem thread o /events 404a igual, e o EventSource fecha em CLOSED — a faixa
     // "o servidor recusou" aparecia sobre uma sessao que so ainda nao comecou.
     if (kimiPreNascimento || codexPreThread) return;
+    const destino = getBaseUrl();
+    const inicio = Date.now();
+    const req = diag.novoReq();
+    let primeiroQuadro = true;
+    const quadroFalhou = (codigo: string) => diag.registrar({ evento: 'sse.quadro_falhou',
+      nivel: 'erro', tela: 'chat', sessao: sessionName, req, codigo }, destino);
+    // O callback mantém o destino da conexão mesmo se o usuário trocar de servidor.
+    function armWatchdog() {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        diag.registrar({ evento: 'sse.mudo', nivel: 'aviso', tela: 'chat', sessao: sessionName,
+          req, ms: 25000 }, destino);
+        if (currentState !== 'dead') connectSSE();
+      }, 25000);
+    }
+    function noteAlive() {
+      if (primeiroQuadro) {
+        primeiroQuadro = false;
+        diag.registrar({ evento: 'sse.conectou', tela: 'chat', sessao: sessionName,
+          req, ms: Date.now() - inicio }, destino);
+      }
+      sseRetryDelay = SSE_RETRY_MIN;
+      armWatchdog();
+    }
     clearTimeout(reconnectTimer);
     if (es) { es.close(); es = null; }
     sseRecusado = false;
@@ -1578,7 +1584,7 @@
     // e "as sessões sumiram": sem isto não dá pra distinguir queda de rede, reconexão em laço e
     // conexão viva com a lista congelada, e a análise vira chute.
     diag.registrar({ evento: 'sse.abrir', tela: 'chat', sessao: sessionName,
-                     provider: sessionProvider });
+                     provider: sessionProvider, req }, destino);
     armWatchdog();
 
     const onMessage = (e: { data: string; lastEventId?: string }) => {
@@ -1672,7 +1678,7 @@
             }
           }
         }
-      } catch {}
+      } catch { quadroFalhou('message'); }
     };
     es.addEventListener('message', onMessage);
     es.addEventListener('queue_confirmed', onMessage);
@@ -1695,6 +1701,7 @@
         // regra -> so o caso do Claude, que abre pelo evento SSE.
         if (askOpen && !askPiId && askPayload?.provider !== 'codex' && stateEvent?.state !== 'awaiting_input') askOpen = false;
       } catch (err) {
+        quadroFalhou('state');
         // Mesmo motivo do handler de `preview` logo abaixo: engolir aqui congela a prévia na tela
         // (este handler virou o OUTRO dono dela) e ainda deixa o `stateEvent` preso no valor
         // antigo. O erro não pode derrubar o SSE, mas tem que dar pra ver no dev.
@@ -1704,7 +1711,7 @@
 
     // Faixa de estatísticas da sessão (app/stats.py). Full-replace; ausência de evento = sem faixa.
     es.addEventListener('stats', (e) => {
-      try { statsEvent = JSON.parse(e.data) as StatsEvent; } catch {}
+      try { statsEvent = JSON.parse(e.data) as StatsEvent; } catch { quadroFalhou('stats'); }
     });
 
     // Heartbeat do backend: so prova de vida (reseta o watchdog numa conexao ociosa, sem msgs).
@@ -1720,7 +1727,7 @@
             && next.request_id === askPayload.request_id) return;
         askPayload = next;
         askOpen = true;
-      } catch {}
+      } catch { quadroFalhou('ask_question'); }
     });
 
     // O agente abriu/empurrou o navegador embutido desta sessão (POST /api/sessions/<nome>/nav,
@@ -1736,6 +1743,7 @@
         ctxPanel.recolhido = false;
         ctxPanel.aba = 'navegador';
       } catch (err) {
+        quadroFalhou('nav');
         // Mesmo motivo dos handlers ao lado: engolir calado esconderia um evento 'nav' malformado.
         if (import.meta.env.DEV) console.debug('nav: evento ilegivel', err);
       }
@@ -1777,6 +1785,7 @@
         previewMd = !!ev.md;
         previewFull = !!ev.full;
       } catch (err) {
+        quadroFalhou('preview');
         // Engolir aqui congela a previa (texto E flag) no ultimo frame bom, sem rastro nenhum. O
         // erro nao pode derrubar o handler do SSE, mas tem que dar pra ver no dev.
         if (import.meta.env.DEV) console.debug('preview: evento ilegivel', err);
@@ -1790,7 +1799,7 @@
       // No diário também, não só no journal do servidor: o journal só existe no Linux, e este
       // evento é o único que APAGA a conversa da tela — sem ele registrado, "ficou vazio" e "nunca
       // carregou" são indistinguíveis no arquivo que a pessoa manda.
-      diag.registrar({ evento: 'chat.reset', tela: 'chat', sessao: sessionName });
+      diag.registrar({ evento: 'chat.reset', tela: 'chat', sessao: sessionName, req }, destino);
       lastEventId = null;   // transcript trocado (/clear): id do arquivo antigo não vale mais
       // A cauda do transcript antigo fica sob a chave dele e nunca mais é lida — a chave é o
       // `jsonl`, e o /clear abre outro. Não há o que apagar aqui.
@@ -1818,7 +1827,8 @@
       // parava aí.
       const motivo = estadoSSE === 0 ? 'reconectando (rede/servidor)' : 'fechado pelo servidor';
       diag.registrar({ evento: 'sse.caiu', nivel: 'erro', tela: 'chat', sessao: sessionName,
-                       codigo: String(estadoSSE), ms: sseRetryDelay, detalhe: motivo });
+                       codigo: String(estadoSSE), ms: Date.now() - inicio,
+                       espera_ms: sseRetryDelay, detalhe: motivo, req }, destino);
       if (currentState === 'dead' || !alive) return;
       // CLOSED = recusa definitiva (404/401): insistir a cada 30s não muda a resposta — medido
       // 2h14 de laço, duas madrugadas seguidas, numa sessão que o servidor dizia não existir.

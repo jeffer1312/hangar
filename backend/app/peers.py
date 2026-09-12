@@ -12,11 +12,12 @@ import logging
 import os
 import re
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from app import atomico
+from app import atomico, diag
 
 try:
     import fcntl
@@ -248,23 +249,31 @@ def peer_cfg(server_id: str) -> tuple[str, str] | None:
     return p["base_url"].rstrip("/"), p["token"]
 
 
+@diag.rastrear("peer.chamar")
 def call(server_id: str, method: str, path: str, body: dict | None = None, timeout: int = 8):
     """POST/DELETE num backend peer. Devolve (status, json|None). Levanta PeerError em qualquer
     falha (peer desconhecido, inacessível, ou !2xx) com o detail real do backend remoto — sem isto,
     quem chama (o iniciador) não teria como reportar por que o pareamento não fechou."""
+    inicio = time.monotonic()
+    etapa = method if method in {"GET", "POST", "PUT", "PATCH", "DELETE"} else "outro"
     cfg = peer_cfg(server_id)
     if not cfg:
+        diag.registrar("peer.recusado", "erro", etapa=etapa, detalhe="configuracao_ausente_ou_incompleta")
         raise PeerError(f"servidor '{server_id}' não está em peers.json (ou sem base_url/token)")
     base, token = cfg
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        base + path, data=data, method=method,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if correlation := diag.req_atual.get():
+        headers["X-Hangar-Req"] = correlation
+    req = urllib.request.Request(base + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             status = r.status
             raw = r.read().decode()
     except urllib.error.HTTPError as e:
+        diag.registrar("peer.falhou", "erro", etapa=etapa, codigo=str(e.code),
+                       detalhe="http_recusado", erro_tipo=type(e).__name__,
+                       ms=int((time.monotonic() - inicio) * 1000))
         # Peer respondeu !2xx — rejeitou de forma limpa, NÃO comitou. transport=False.
         raw = e.read().decode(errors="replace")
         try:
@@ -273,12 +282,23 @@ def call(server_id: str, method: str, path: str, body: dict | None = None, timeo
             detail = raw
         raise PeerError(f"{server_id} respondeu HTTP {e.code}: {detail}", transport=False)
     except (urllib.error.URLError, http.client.IncompleteRead, OSError, TimeoutError) as e:
+        causa = e.reason if isinstance(e, urllib.error.URLError) and isinstance(e.reason, BaseException) else e
+        diag.registrar("peer.falhou", "erro", etapa=etapa, detalhe="transporte_resultado_incerto",
+                       erro_tipo=type(causa).__name__, errno=getattr(causa, "errno", None),
+                       winerror=getattr(causa, "winerror", None),
+                       ms=int((time.monotonic() - inicio) * 1000))
         # Falha de rede/leitura truncada — pode ter chegado no peer. Estado remoto INCERTO.
         raise PeerError(f"{server_id} inacessível: {e}", transport=True)
     try:
-        return status, (json.loads(raw) if raw.strip() else None)
+        resultado = json.loads(raw) if raw.strip() else None
     except (json.JSONDecodeError, ValueError) as e:
+        diag.registrar("peer.falhou", "erro", etapa=etapa, codigo=str(status),
+                       detalhe="resposta_json_ilegivel", erro_tipo=type(e).__name__,
+                       ms=int((time.monotonic() - inicio) * 1000))
         # 2xx com corpo ilegível (proxy retornando HTML em 200, leitura truncada): sem este catch a
         # exceção escapava crua, não virava PeerError, e o rollback do caller (que só pega PeerError)
         # NUNCA rodava — sidecar local comitava com estado remoto incerto. transport=True.
         raise PeerError(f"{server_id} respondeu corpo ilegível: {e}", transport=True)
+    diag.registrar("peer.respondeu", etapa=etapa, codigo=str(status),
+                   ms=int((time.monotonic() - inicio) * 1000))
+    return status, resultado

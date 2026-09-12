@@ -980,6 +980,8 @@ def executar_reinicio() -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    from app import diag_logging
+    diag_logging.instalar("atualizacao.log")
     if len(sys.argv) > 1 and sys.argv[1] == "--reiniciar":
         executar_reinicio()
     else:

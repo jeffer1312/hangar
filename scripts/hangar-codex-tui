@@ -153,12 +153,48 @@ def _porta_livre() -> str:
     return f"ws://127.0.0.1:{porta}"
 
 
-def _avisar_servidor_morto(endpoint: str, servidor, erros) -> None:
-    """O stderr DELE e a unica pista de por que nao abriu a porta."""
-    erros.seek(0)
-    cauda = erros.read()[-_ERRO_MAX:].decode(errors="replace").strip()
+def _cauda_erros(erros) -> bytes:
+    tamanho = erros.seek(0, os.SEEK_END)
+    erros.seek(max(0, tamanho - _ERRO_MAX))
+    cauda = erros.read(_ERRO_MAX)
     # O mesmo arquivo e o stderr do proximo servidor: sem voltar ao fim, ele sobrescreve daqui.
     erros.seek(0, os.SEEK_END)
+    return cauda
+
+
+def _registrar_falha_servidor(erros, codigo: str, *, retorno=None, exc=None,
+                             etapa="abrir_app_server", limite_ms=None) -> bytes:
+    from app import atomico, diag, log_paths
+
+    campos = {"sessao": os.environ.get("CP_SESSION_NAME", ""), "provider": "codex",
+              "codigo": codigo, "etapa": etapa, "retorno": retorno, "limite_ms": limite_ms}
+    diag.registrar("codex.app_server.falhou", **campos, nivel="erro",
+                   **(diag.erro_campos(exc) if exc is not None else {}))
+    cauda = b""
+    try:
+        cauda = _cauda_erros(erros)
+        pasta = log_paths.base() / "privado"
+        pasta.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destino = pasta / f"codex-app-server-{diag.conta_id(campos['sessao'])}.log"
+        temporario = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=pasta, prefix=".codex-app-server-", delete=False) as arquivo:
+                temporario = Path(arquivo.name)
+                arquivo.write(cauda)
+            atomico.substituir(temporario, destino)
+        finally:
+            if temporario is not None:
+                temporario.unlink(missing_ok=True)
+    except OSError as erro:
+        diag.registrar("codex.app_server.log_falhou", "aviso", **{
+            **campos, "codigo": "gravar_cauda", **diag.erro_campos(erro)})
+    return cauda
+
+
+def _avisar_servidor_morto(endpoint: str, servidor, erros, *, etapa="abrir_app_server") -> None:
+    """O stderr DELE e a unica pista de por que nao abriu a porta."""
+    cauda = _registrar_falha_servidor(erros, "processo_encerrou",
+                                      retorno=servidor.returncode, etapa=etapa).decode(errors="replace").strip()
     print(f"hangar-codex-tui: o app-server saiu com codigo {servidor.returncode} antes de "
           f"abrir {endpoint}" + (f":\n{cauda}" if cauda else ""), file=sys.stderr)
 
@@ -179,6 +215,7 @@ def _esperar_porta(endpoint: str, servidor, erros, teto: float) -> bool:
         except OSError:
             time.sleep(0.05)
     print(f"hangar-codex-tui: app-server nao respondeu em {endpoint}", file=sys.stderr)
+    _registrar_falha_servidor(erros, "timeout", retorno=servidor.poll(), limite_ms=int(teto * 1000))
     return False
 
 
@@ -245,6 +282,7 @@ def main() -> int:
     if not args.name:
         print("hangar-codex-tui: --name (ou CP_SESSION_NAME) e obrigatorio", file=sys.stderr)
         return 2
+    os.environ["CP_SESSION_NAME"] = args.name
     cwd = os.path.abspath(args.cwd or os.getcwd())
     selected_home = (Path(args.codex_home).expanduser().absolute()
                      if args.codex_home else Path(os.environ.get("CODEX_HOME") or
@@ -312,13 +350,17 @@ def main() -> int:
     erros = tempfile.TemporaryFile()
 
     def subir_servidor() -> subprocess.Popen:
-        return subprocess.Popen(
-            # Sandbox e aprovacao tambem no SERVIDOR: o thread/resume que a TUI faz ao reconectar
-            # nao repassa as flags dela, e a conversa caia em `Workspace` com aprovacao.
-            [_codex(), "app-server", "--listen", endpoint, "-c", f"project_doc_max_bytes={limite}",
-             "-c", f'sandbox_mode="{SANDBOX}"', "-c", f'approval_policy="{APPROVAL}"'],
-            stdout=subprocess.DEVNULL, stderr=erros,
-        )
+        try:
+            return subprocess.Popen(
+                # Sandbox e aprovacao tambem no SERVIDOR: o thread/resume que a TUI faz ao reconectar
+                # nao repassa as flags dela, e a conversa caia em `Workspace` com aprovacao.
+                [_codex(), "app-server", "--listen", endpoint, "-c", f"project_doc_max_bytes={limite}",
+                 "-c", f'sandbox_mode="{SANDBOX}"', "-c", f'approval_policy="{APPROVAL}"'],
+                stdout=subprocess.DEVNULL, stderr=erros,
+            )
+        except (OSError, SystemExit) as exc:
+            _registrar_falha_servidor(erros, "criar_processo", exc=exc)
+            raise
 
     servidor = subir_servidor()
 
@@ -419,7 +461,7 @@ def main() -> int:
                           file=sys.stderr)
                     desisti = True
                     continue
-                _avisar_servidor_morto(endpoint, servidor, erros)
+                _avisar_servidor_morto(endpoint, servidor, erros, etapa="executar_app_server")
                 servidor = subir_servidor()
                 if not _esperar_porta(endpoint, servidor, erros, _ESPERA_THREAD):
                     # Vivo sem porta enganaria o `poll()` acima; morto, conta como queda.

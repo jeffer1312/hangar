@@ -8,7 +8,8 @@
 // **Nunca entra conteúdo de conversa aqui.** Nem o texto enviado, nem a resposta do agente, nem
 // chave, nem caminho de arquivo do projeto. Entra o VERBO e o DESFECHO. O backend descarta campo
 // que não conheça, mas a trava de verdade é esta: não chame `registrar` com texto de ninguém.
-import { getBaseUrl, getToken } from './auth';
+import { getBaseUrl, getToken, listServers, onServersChanged } from './auth';
+import { criarTransporteDiag } from '@hangar/core';
 
 export type Nivel = 'ok' | 'aviso' | 'erro';
 
@@ -21,6 +22,10 @@ export interface Evento {
   codigo?: string;
   detalhe?: string;
   ms?: number;
+  operacao?: string;
+  tentativa?: number;
+  espera_ms?: number;
+  quantidade?: number;
   /** Id do pedido HTTP — o MESMO valor aparece na linha que o servidor gravou. */
   req?: string;
   /** Primeiras molduras do stack, em erro de JS. */
@@ -52,11 +57,13 @@ export function novoReq(): string {
 // cruzar o horário do erro com o `tela.ver` anterior era trabalho manual em cima do arquivo.
 let telaCorrente = '';
 
-const FILA: Record<string, unknown>[] = [];
-const TETO_FILA = 200;        // pico de erro em laço não pode virar consumo de memória
-const ESPERA_MS = 4000;       // agrupa; o diário não é tempo real
-let timer: ReturnType<typeof setTimeout> | undefined;
 let ligado = false;
+const normalizarDestino = (base: string) => (base || window.location.origin).replace(/\/+$/, '');
+const transporte = criarTransporteDiag((destino) => {
+  const servidor = listServers().find((s) => normalizarDestino(s.baseUrl) === destino);
+  if (servidor) return servidor.token;
+  return normalizarDestino(getBaseUrl()) === destino ? getToken() : null;
+});
 
 /** Sistema operacional legível a partir do user-agent. Suficiente pra separar os casos reais. */
 function detectarSO(ua: string): string {
@@ -114,33 +121,20 @@ export function ehRuidoDoNavegador(msg: string | undefined): boolean {
 export function molduras(erro: unknown, n = 3): string | undefined {
   const stack = erro instanceof Error ? erro.stack : undefined;
   if (!stack) return undefined;
-  return stack.split('\n').slice(1, 1 + n).map((l) => l.trim()).join(' <- ') || undefined;
+  return stack.split('\n').slice(1, 1 + n).map((l) => l.trim()
+    .replace(/(?:https?|file):\/\/[^\s)]+/g, (url) => {
+      try { return new URL(url).pathname.split('/').pop() || 'script'; } catch { return 'script'; }
+    })).join(' <- ') || undefined;
 }
 
 async function enviar(): Promise<void> {
-  timer = undefined;
-  if (!FILA.length) return;
-  const lote = FILA.splice(0, FILA.length);
-  const token = getToken();
-  if (!token) return;   // deslogado: o diário não é motivo pra bater numa API sem credencial
-  try {
-    await fetch(`${getBaseUrl()}/api/diag`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ eventos: lote }),
-      keepalive: true,   // o lote do `pagehide` precisa sobreviver à página fechando
-    });
-  } catch {
-    // Diário que estoura na cara de quem usa é pior que diário nenhum. Perder o lote é aceitável:
-    // o que interessa neste arquivo é padrão ao longo de dias, não uma linha específica.
-  }
+  await transporte.enviar();
 }
 
 /** Registra um evento. Nunca levanta, nunca espera. */
-export function registrar(e: Evento): void {
-  if (!ligado) return;
-  if (FILA.length >= TETO_FILA) return;
-  // Horário do EVENTO, não do envio. O lote sai até ESPERA_MS depois e o backend carimbava um
+export function registrar(e: Evento, destino = getBaseUrl()): void {
+  if (typeof window === 'undefined') return;
+  // Horário do EVENTO, não do envio. O lote sai segundos depois e o backend carimbava um
   // único instante no lote inteiro: eventos separados por segundos apareciam colados, e a ordem —
   // que é tudo quando se investiga corrida entre remontagem, recarga e reconexão — sumia do
   // arquivo (medido 26/08/2026: 4s de diferença entre o diário e o log do servidor pro MESMO
@@ -148,11 +142,10 @@ export function registrar(e: Evento): void {
   // `ts` DEPOIS do `...e`, junto de `cli`/`seq`: são os campos do transporte, e nenhum evento pode
   // sobrescrevê-los. `tela` é o oposto — vem antes de propósito, pra quem sabe onde está poder
   // dizer. Um `ts` vindo de dentro de um evento traria de volta exatamente o defeito acima.
-  FILA.push({ tela: telaCorrente || undefined, ...e, nivel: e.nivel ?? 'ok',
+  transporte.registrar(normalizarDestino(destino), { tela: telaCorrente || undefined, ...e, nivel: e.nivel ?? 'ok',
               ts: new Date().toISOString(), cli: CLI, seq: ++seq });
   // Erro vai na hora: se a página estiver prestes a quebrar, um lote de 4s depois não sai.
-  if (e.nivel === 'erro') { clearTimeout(timer); void enviar(); return; }
-  if (timer === undefined) timer = setTimeout(() => void enviar(), ESPERA_MS);
+  if (e.nivel === 'erro') void enviar();
 }
 
 /**
@@ -164,6 +157,16 @@ export function registrar(e: Evento): void {
 export function iniciar(versao: string, vista: 'desktop' | 'celular'): void {
   if (ligado || typeof window === 'undefined') return;
   ligado = true;
+  onServersChanged(() => { void enviar(); });
+  window.addEventListener('online', () => {
+    registrar({ evento: 'rede.voltou' });
+    void enviar();
+  });
+  window.addEventListener('offline', () => registrar({ evento: 'rede.offline', nivel: 'aviso' }));
+  document.addEventListener('visibilitychange', () => {
+    registrar({ evento: document.visibilityState === 'visible' ? 'app.visivel' : 'app.oculto' });
+    if (document.visibilityState === 'visible') void enviar();
+  });
   const ua = navigator.userAgent;
   registrar({
     evento: 'app.abriu',
@@ -176,19 +179,17 @@ export function iniciar(versao: string, vista: 'desktop' | 'celular'): void {
 
   window.addEventListener('error', (ev) => {
     if (ehRuidoDoNavegador(ev.message)) return;
-    registrar({ evento: 'js.erro', nivel: 'erro',
-                detalhe: `${ev.message} @ ${ev.filename ?? '?'}:${ev.lineno ?? 0}:${ev.colno ?? 0}`,
+    registrar({ evento: 'js.erro', nivel: 'erro', codigo: 'javascript',
                 pilha: molduras(ev.error) });
   });
   window.addEventListener('unhandledrejection', (ev) => {
     const r = ev.reason;
-    registrar({ evento: 'js.promessa', nivel: 'erro',
-                detalhe: r instanceof Error ? `${r.name}: ${r.message}` : String(r),
+    registrar({ evento: 'js.promessa', nivel: 'erro', codigo: 'promessa_rejeitada',
                 pilha: molduras(r) });
   });
   // `pagehide`, não `beforeunload`: no iOS o segundo não dispara ao trocar de app, e é justamente
   // o fim de sessão do celular que interessa registrar.
-  window.addEventListener('pagehide', () => { clearTimeout(timer); void enviar(); });
+  window.addEventListener('pagehide', () => { void enviar(); });
 }
 
 /** Qual tela está à vista. É o "onde foi usado" — e o carimbo de ONDE de tudo que vier depois. */
@@ -202,19 +203,18 @@ export async function comRegistro<T>(
   evento: string, contexto: Omit<Evento, 'evento' | 'nivel' | 'ms'>, acao: () => Promise<T>,
 ): Promise<T> {
   const t0 = Date.now();
+  const destino = getBaseUrl();
   try {
     const r = await acao();
-    registrar({ ...contexto, evento, nivel: 'ok', ms: Date.now() - t0 });
+    registrar({ ...contexto, evento, nivel: 'ok', ms: Date.now() - t0 }, destino);
     return r;
   } catch (e) {
     const status = (e as { status?: number })?.status;
     registrar({
       ...contexto, evento, nivel: 'erro', ms: Date.now() - t0,
       codigo: status ? String(status) : undefined,
-      // A mensagem do backend é diagnóstico (código + motivo), não conteúdo de conversa. Cortada
-      // curta pelo mesmo motivo que o backend corta: o arquivo tem de continuar mandável.
-      detalhe: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
-    });
+      detalhe: 'acao_falhou',
+    }, destino);
     throw e;
   }
 }

@@ -213,7 +213,8 @@ async def test_marketplace_em_auto_upgrade_do_codex_nao_e_falha(cliente, caplog)
     obj = cliente("cli_auto_upgrade")
     result = await obj.atualizar_marketplace("market")
     assert result == {"selectedMarketplaces": ["market"], "upgradedRoots": [], "errors": []}
-    assert not (obj.codex_home / ".hangar-diagnosticos").exists()
+    from app import diag, log_paths
+    assert not (log_paths.base() / "privado" / "codex" / diag.conta_id(obj.codex_home)).exists()
     assert "CLI Codex" not in caplog.text
     with pytest.raises(CodexNativoErro, match="código 7"):
         await cliente("cli_error").atualizar_marketplace("market")
@@ -236,7 +237,8 @@ async def test_cli_guarda_diagnostico_privado_sem_tokens_no_log(cliente, scenari
         await obj.cli(["plugin", "marketplace", "upgrade", "market", "--json"])
     except CodexNativoErro:
         pass
-    arquivos = list((obj.codex_home / ".hangar-diagnosticos").glob("*.log"))
+    from app import diag, log_paths
+    arquivos = list((log_paths.base() / "privado" / "codex" / diag.conta_id(obj.codex_home)).glob("*.log"))
     assert len(arquivos) == 1
     assert "secret-token" in arquivos[0].read_text()
     assert "secret-token" not in caplog.text

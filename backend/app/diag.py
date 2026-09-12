@@ -6,7 +6,7 @@ respondia, as sessões sumindo — foram todos relatados de uma máquina Windows
 nenhum deixou rastro que o autor pudesse ler. O `journalctl` só existe no Linux; do lado do
 navegador não havia absolutamente nada.
 
-O que é: um JSONL por DIA, uma linha por evento, em `<config>/.hangar-diag/`, alimentado pelas duas
+O que é: um JSONL por DIA, uma linha por evento, na pasta `logs/diario` do Hangar, alimentado pelas duas
 pontas — a tela manda o que a pessoa fez e o que aconteceu, o backend acrescenta o que só ele vê (o
 tmux que não respondeu, a opção que não convergiu). Sai da máquina só quando a pessoa aperta
 "Baixar diagnóstico" e manda o arquivo; nada é enviado a lugar nenhum sozinho.
@@ -25,16 +25,26 @@ cada dia é um arquivo, guardam-se sete, e o mais velho sai sozinho. O teto POR 
 existindo como rede contra laço maluco — ele para de gravar aquele dia em vez de encher o disco.
 """
 import contextvars
+import hashlib
+import inspect
 import json
 import logging
 import os
+import platform
 import re
+import secrets
 import subprocess
 import sys
 import threading
+import time
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
+from functools import wraps
+from itertools import groupby
 from pathlib import Path
 from typing import Any
+
+from app import atomico, log_paths
 
 _log = logging.getLogger("hangar.diag")
 
@@ -44,6 +54,7 @@ _log = logging.getLogger("hangar.diag")
 # que causou o quê depende de adivinhar por horário, que empata quando há duas telas abertas.
 # contextvar, não parâmetro: `registrar` é chamado no fundo de handlers que não têm o request.
 req_atual: contextvars.ContextVar[str] = contextvars.ContextVar("hangar_req", default="")
+_operacao_atual: contextvars.ContextVar[str] = contextvars.ContextVar("hangar_operacao", default="")
 
 DIAS_GUARDADOS = 7
 # Teto por DIA. Não é pra economizar disco — é pra o arquivo continuar mandável por chat, que é o
@@ -74,7 +85,93 @@ _CAMPOS: dict[str, type] = {
     "versao": str,      # versão do app (__HANGAR_VERSION__)
     "vista": str,       # desktop | celular — os dois caminhos de UI que costumam divergir
     "tela_px": str,     # 1920x1032 — quase todo defeito de layout precisa disto
+    "backend": str,     # versão que PRODUZIU o evento, mesmo depois de atualizar
+    "inicio_backend": str,
+    "pid_backend": int,
+    "comando": str,     # operação conhecida, nunca argv, stdin ou saída do processo
+    "erro_tipo": str,
+    "causa_tipo": str,
+    "errno": int,
+    "winerror": int,
+    "retorno": int,
+    "limite_ms": int,
+    "simultaneos": int, # comandos em execução ao iniciar este, incluindo ele
+    "etapa": str,
+    "caracteres": int,
+    "linhas": int,
+    "composer_legivel": bool,
+    "reguas": int,
+    "altura_composer": int,
+    "fundo_composer": int,
+    "pastes_antes": int, # -1 significa que não foi possível observar
+    "pastes_depois": int,
+    "limpou": bool,
+    "sessao_windows_backend": int,
+    "sessao_windows_pane": int,
+    "threads_backend": int,
+    "memoria_total_mb": int,
+    "memoria_disponivel_mb": int,
+    "recursos_erro": str,
+    "operacao": str,    # identificador gerado pelo Hangar, nunca código de autorização
+    "conta_id": str,    # hash local; sem email, nome da conta ou caminho
+    "tentativa": int,
+    "quantidade": int,
+    "espera_ms": int,
 }
+
+
+def conta_id(valor: str | Path) -> str:
+    return hashlib.sha256(str(valor).encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def erro_campos(exc: BaseException) -> dict[str, Any]:
+    fields = {"erro_tipo": type(exc).__name__, "errno": getattr(exc, "errno", None),
+              "winerror": getattr(exc, "winerror", None)}
+    cause = exc.__cause__ or exc.__context__
+    for _ in range(5):
+        if cause is None or cause is exc:
+            break
+        fields.update(causa_tipo=type(cause).__name__,
+                      errno=fields["errno"] if fields["errno"] is not None else getattr(cause, "errno", None),
+                      winerror=fields["winerror"] if fields["winerror"] is not None else getattr(cause, "winerror", None))
+        cause = cause.__cause__ or cause.__context__
+    return fields
+
+
+@contextmanager
+def operacao(evento: str, **campos: Any):
+    token = _operacao_atual.set(secrets.token_hex(8))
+    started = time.monotonic()
+    result: dict[str, Any] = {"codigo": "retornou"}
+    registrar(f"{evento}.inicio", **campos)
+    try:
+        yield
+    except BaseException as exc:
+        result = {"codigo": "cancelado" if type(exc).__name__ == "CancelledError" else "excecao",
+                  **erro_campos(exc)}
+        raise
+    finally:
+        registrar(f"{evento}.fim", "erro" if result["codigo"] == "excecao" else "ok",
+                  **{**campos, **result, "ms": int((time.monotonic() - started) * 1000)})
+        _operacao_atual.reset(token)
+
+
+def rastrear(evento: str, **campos: Any):
+    """Marca fronteiras da operação sem inspecionar argumentos nem valor de retorno."""
+    def decorate(fn):
+        if inspect.iscoroutinefunction(fn):
+            @wraps(fn)
+            async def async_run(*args, **kwargs):
+                with operacao(evento, **campos):
+                    return await fn(*args, **kwargs)
+            return async_run
+
+        @wraps(fn)
+        def run(*args, **kwargs):
+            with operacao(evento, **campos):
+                return fn(*args, **kwargs)
+        return run
+    return decorate
 
 def _git_describe() -> str:
     try:
@@ -84,9 +181,9 @@ def _git_describe() -> str:
             # commits diferentes (o rodando e o baixado) sairiam com o mesmo nome.
             ["git", "describe", "--tags", "--match", "dist-latest", "--long", "--always", "--dirty"],
             cwd=Path(__file__).resolve().parents[2], capture_output=True,
-            text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip()
+            text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip() or "indisponivel"
     except Exception:                                # noqa: BLE001 — versão nunca derruba nada
-        return ""
+        return "indisponivel"
 
 
 # Commit do backend EM EXECUÇÃO, resolvido na importação (ou seja, quando o processo subiu) e nunca
@@ -96,6 +193,7 @@ def _git_describe() -> str:
 # qual versão veio isto?") sairia com a resposta errada, justamente na janela em que a máquina está
 # meio atualizada, que é quando o defeito estranho aparece.
 VERSAO_EM_EXECUCAO = _git_describe()
+INICIO_EM_EXECUCAO = datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 _NIVEIS = ("ok", "aviso", "erro")
 _TETO_DETALHE = 300
@@ -110,11 +208,66 @@ _LOCK = threading.Lock()
 
 
 def _base() -> Path:
-    # Pasta NOVA — nunca existiu com o nome antigo, então não passa pela ponte de compatibilidade
-    # do `migracao_sidecars`. O diário é do APARELHO, não de uma conta: fica no config dir em uso,
-    # como os outros marcadores (`.hangar-status`, `.hangar-preview`).
-    raiz = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
-    return raiz / ".hangar-diag"
+    return log_paths.base() / "diario"
+
+
+def _pastas_legadas() -> list[Path]:
+    from app.config import list_config_dirs
+    roots = {Path.home() / ".claude", Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))}
+    roots.update(Path(c.path) for c in list_config_dirs())
+    return sorted({(root / ".hangar-diag").resolve() for root in roots})
+
+
+def _logs_legados() -> set[Path]:
+    roots = {Path.home() / ".hangar"}
+    if os.environ.get("LOCALAPPDATA"):
+        roots.add(Path(os.environ["LOCALAPPDATA"]) / "hangar")
+    return roots
+
+
+def migrar_legados(*, privados: bool = False) -> None:
+    """Copia por origem, sem mesclar dias nem apagar arquivos usados por versões anteriores."""
+    try:
+        old_diaries = _pastas_legadas()
+        sources = [(p, _base() / "legado" / conta_id(p), "uso-*.jsonl") for p in old_diaries]
+        if privados:
+            sources.extend((p, log_paths.base() / "privado" / "legado" / conta_id(p), "*.log") for p in _logs_legados())
+            for diary in old_diaries:
+                for name in ("guard_tmux-falhas.log", "kimi_hook_error.log"):
+                    sources.append((diary.parent, log_paths.base() / "privado" / "legado" / conta_id(diary.parent), name))
+        oldest = (date.today() - timedelta(days=DIAS_GUARDADOS - 1)).isoformat()
+        for source, target, pattern in sources:
+            for original in source.glob(pattern):
+                if original.is_symlink():
+                    registrar("diag.migracao", "aviso", codigo="link_ignorado", conta_id=conta_id(source))
+                    continue
+                if pattern == "uso-*.jsonl":
+                    match = _NOME.fullmatch(original.name)
+                    if not match or not oldest <= match.group(1) <= date.today().isoformat():
+                        continue
+                destination = target / original.name
+                try:
+                    info = original.stat()
+                    size = min(info.st_size, _TETO_DIA) if pattern != "uso-*.jsonl" else info.st_size
+                    if destination.exists() and destination.stat().st_size == size and destination.stat().st_mtime_ns == info.st_mtime_ns:
+                        continue
+                    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    temporary = target / f".{original.name}.{secrets.token_hex(8)}.tmp"
+                    try:
+                        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as out:
+                            with original.open("rb") as inp:
+                                if size < info.st_size:
+                                    inp.seek(info.st_size - size)
+                                import shutil
+                                shutil.copyfileobj(inp, out)
+                        os.utime(temporary, ns=(info.st_atime_ns, info.st_mtime_ns))
+                        atomico.substituir(temporary, destination)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                except OSError as exc:
+                    registrar("diag.migracao", "aviso", etapa="copiar", conta_id=conta_id(source), **erro_campos(exc))
+    except Exception as exc:
+        registrar("diag.migracao", "aviso", etapa="descobrir", **erro_campos(exc))
 
 
 def caminho_do_dia(quando: date | None = None) -> Path:
@@ -124,8 +277,8 @@ def caminho_do_dia(quando: date | None = None) -> Path:
 def arquivos() -> list[Path]:
     """Os diários existentes, do mais ANTIGO pro mais novo."""
     try:
-        achados = [(m.group(1), p) for p in _base().iterdir()
-                   if (m := _NOME.match(p.name))]
+        achados = [(m.group(1), p) for p in _base().rglob("uso-*.jsonl")
+                   if (m := _NOME.match(p.name)) and not p.is_symlink() and p.is_file()]
     except OSError:
         return []
     return [p for _, p in sorted(achados)]
@@ -211,7 +364,9 @@ def registrar(evento: str, nivel: str = "ok", **campos: Any) -> None:
     diário nenhum.
     """
     try:
-        linha = _limpar({**campos, "evento": evento, "nivel": nivel,
+        linha = _limpar({"operacao": _operacao_atual.get(), **campos, "evento": evento, "nivel": nivel,
+                         "backend": VERSAO_EM_EXECUCAO, "pid_backend": os.getpid(),
+                         "inicio_backend": INICIO_EM_EXECUCAO,
                          "req": req_atual.get()})
         if linha:
             linha["origem"] = "servidor"
@@ -268,6 +423,41 @@ def anotar_da_tela(lote: Any) -> int:
     return _escrever(limpas)
 
 
+def _versao_mux() -> str:
+    try:
+        cp = subprocess.run(["tmux", "-V"], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=2)
+        if cp.returncode:
+            return f"retorno:{cp.returncode}"
+        version = cp.stdout.strip()
+        if re.fullmatch(r"(?:psmux|tmux|pmux) [0-9][0-9A-Za-z.+_-]*", version):
+            return version
+        return "resposta_nao_reconhecida"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return type(exc).__name__
+
+
+def recursos() -> dict[str, Any]:
+    """Foto barata no erro/download; não dispara processo nem espera amostra de CPU."""
+    result: dict[str, Any] = {"threads_backend": threading.active_count()}
+    try:
+        if sys.platform == "linux":
+            with open("/proc/meminfo", encoding="ascii") as f:
+                values = {key: int(value.split()[0]) for line in f
+                          for key, value in [line.split(":", 1)]
+                          if key in ("MemTotal", "MemAvailable")}
+            result.update(memoria_total_mb=values["MemTotal"] // 1024,
+                          memoria_disponivel_mb=values["MemAvailable"] // 1024)
+        else:
+            import psutil
+            memory = psutil.virtual_memory()
+            result.update(memoria_total_mb=memory.total // (1024 * 1024),
+                          memoria_disponivel_mb=memory.available // (1024 * 1024))
+    except Exception as exc:
+        result["recursos_erro"] = type(exc).__name__
+    return result
+
+
 def _cabecalho() -> str:
     """Primeira linha do download: o que o REPOSITÓRIO não pode contar.
 
@@ -284,8 +474,18 @@ def _cabecalho() -> str:
         "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
         "backend": v,
         "so_servidor": f"{os.name}/{sys.platform}",
+        "formato": 2,
+        "python": platform.python_version(),
+        "sistema": f"{platform.system()} {platform.release()} {platform.version()}",
+        "arquitetura": platform.machine(),
+        "cpus": os.cpu_count(),
+        "mux": _versao_mux(),
+        "mux_fonte": "tmux -V no momento do download (versão do CLI)",
+        "inicio_backend": INICIO_EM_EXECUCAO,
+        "pid_backend": os.getpid(),
+        "recursos_no_download": recursos(),
         "dias_guardados": DIAS_GUARDADOS,
-        "ordem": "mais antigo primeiro",
+        "ordem": "por dia; use ts e seq para ordenar eventos de origens distintas",
         "campos_documentados_em": "backend/app/diag.py (_CAMPOS) e frontend/src/lib/diag.ts",
         "nao_contem": "conversa, prompt, resposta do agente, chave de API, conteúdo de arquivo",
     }, ensure_ascii=False)
@@ -293,6 +493,7 @@ def _cabecalho() -> str:
 
 def ler_tudo() -> str:
     """Os sete dias concatenados, mais antigo primeiro — o corpo do download."""
+    migrar_legados()
     partes = [_cabecalho() + "\n"]
     for p in arquivos():
         try:
@@ -311,22 +512,28 @@ def ultimas(n: int = 60) -> list[dict[str, Any]]:
     dias inteiros pra mostrar sessenta linhas é trabalho jogado fora.
     """
     fora: list[dict[str, Any]] = []
-    for p in reversed(arquivos()):
-        try:
-            linhas = p.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        for bruto in reversed(linhas):
-            if not bruto.strip():
-                continue
+    for _, day_files in groupby(reversed(arquivos()), key=lambda p: p.name):
+        day: list[dict[str, Any]] = []
+        for p in day_files:
             try:
-                obj = json.loads(bruto)
-            except (json.JSONDecodeError, ValueError):
-                continue   # linha truncada por queda no meio do append: pula, não derruba a tela
-            if isinstance(obj, dict):
-                fora.append(obj)
-            if len(fora) >= n:
-                return fora
+                linhas = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            collected = 0
+            for bruto in reversed(linhas):
+                try:
+                    obj = json.loads(bruto)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(obj, dict):
+                    day.append(obj)
+                    collected += 1
+                if collected >= n:
+                    break
+        day.sort(key=lambda row: (str(row.get("ts", "")), row.get("seq", 0)), reverse=True)
+        fora.extend(day)
+        if len(fora) >= n:
+            return fora[:n]
     return fora
 
 
@@ -339,5 +546,5 @@ def resumo() -> dict[str, Any]:
         except OSError:
             continue
     nomes = [p.name for p in arquivos()]
-    return {"dias": len(nomes), "bytes": total, "arquivos": nomes,
+    return {"dias": len(set(nomes)), "bytes": total, "arquivos": nomes,
             "dias_guardados": DIAS_GUARDADOS}

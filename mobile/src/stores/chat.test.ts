@@ -1,7 +1,10 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { configureApi } from '@hangar/core';
+import { configureApi, configureDiag } from '@hangar/core';
 import type { ChatEvent } from '@hangar/core';
 import { chatStore, _resetChatsForTests, filaCount } from './chat';
+vi.mock('./servers', () => ({ useServers: { getState: () => ({
+  servers: [{ id: 'srv1', baseUrl: 'http://10.0.0.1:8765' }],
+}) } }));
 
 // EventSource falso injetado via configureApi (mesmo padrão de sessions.test.ts)
 type FakeES = {
@@ -85,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  configureDiag({ registrar: () => {}, novoReq: () => '' });
   _resetChatsForTests();
   vi.unstubAllGlobals();
 });
@@ -322,6 +326,8 @@ test('(f) filaCount conta pending + queued-* e zera quando o real chega', async 
 
 test('onerror fecha e reconecta com backoff crescente', async () => {
   vi.useFakeTimers();
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'chat-teste' });
   try {
     historyResponses = [[]];
     const chat = chatStore('srv1', 'sess');
@@ -330,6 +336,7 @@ test('onerror fecha e reconecta com backoff crescente', async () => {
 
     expect(created).toHaveLength(1);
     created[0].fail(); // erro real: fecha
+    expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'sse.retentativa', espera_ms: 3000 }), 'http://10.0.0.1:8765');
     expect(created[0].close).toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(3_000); // primeiro backoff

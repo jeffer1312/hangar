@@ -11,10 +11,12 @@ import {
   donoDaLinha,
   sendInput,
   queuedMessages,
+  registrarDiag,
 } from '@hangar/core';
 import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { reconcilePending, type PendingMsg } from '../chat/pending';
+import { useServers } from './servers';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
 // para zustand. Histórico janelado (cauda primeiro), merge SSE com dedup por id, preview ao
@@ -184,6 +186,11 @@ function criarChatStore(serverId: string, name: string): ChatApi {
 
   function connectSSE(): void {
     if (!alive) return;
+    const destino = useServers.getState().servers.find((s) => s.id === serverId)?.baseUrl;
+    const quadroFalhou = (codigo: string) => {
+      if (destino !== undefined) registrarDiag({ evento: 'sse.quadro_falhou', nivel: 'erro',
+        tela: 'chat', codigo }, destino);
+    };
     clearTimeout(retryTimer);
     es?.close();
 
@@ -263,6 +270,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           useChatStore.setState({ preview: '', previewMd: false, previewFull: false });
         }
       } catch {
+        quadroFalhou('message');
         // evento ilegível não derruba o stream
       }
     };
@@ -293,6 +301,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           ...solidPatch,
         });
       } catch {
+        quadroFalhou('state');
         // engolir aqui congela estado/linha de status no valor antigo; stream segue vivo
       }
     });
@@ -321,6 +330,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         previewFull = !!ev.full;
         useChatStore.setState({ preview: t, previewMd: !!ev.md, previewFull: !!ev.full });
       } catch {
+        quadroFalhou('preview');
         // frame ilegível: mantém o último bom
       }
     });
@@ -329,6 +339,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       try {
         useChatStore.setState({ stats: JSON.parse(e.data as string) as StatsEvent });
       } catch {
+        quadroFalhou('stats');
         // faixa ilegível: mantém a última boa
       }
     });
@@ -347,6 +358,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
             && payload.request_id === current.request_id) return;
         useChatStore.setState({ askPayload: payload, askOpen: true, askPiId: null });
       } catch {
+        quadroFalhou('ask_question');
         // payload ilegível: o OptionButtons cru segue como saída
       }
     });
@@ -395,6 +407,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         return;
       }
       retryTimer = setTimeout(connectSSE, retryDelay);
+      if (destino !== undefined) registrarDiag({ evento: 'sse.retentativa', tela: 'chat',
+        espera_ms: retryDelay }, destino);
       retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
     };
   }

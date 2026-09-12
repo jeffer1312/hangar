@@ -7,6 +7,7 @@ import * as api from '@hangar/core';
 import { guardarCaudaChat } from '../lib/queries';
 import * as m from '../paraglide/messages';
 import { overwriteGetLocale } from '../paraglide/runtime';
+vi.mock('../lib/diag', () => ({ registrar: vi.fn(), novoReq: () => 'stream-teste' }));
 
 function vazio() { return { default: createRawSnippet(() => ({ render: () => '<div />' })) }; }
 vi.mock('../components/NavBar.svelte', vazio);
@@ -34,6 +35,7 @@ vi.mock('../lib/ttsPlayer.svelte', () => ({ ttsPlayer: { active: false, loading:
 vi.mock('../lib/auth', () => ({
   listServers: () => [{ id: 'codex-flow', label: 'Teste', baseUrl: 'http://teste', token: 'teste' }],
   getActiveId: () => 'codex-flow',
+  getBaseUrl: () => 'http://teste',
 }));
 
 const sse = vi.hoisted(() => ({ handlers: new Map<string, (event: MessageEvent) => void>() }));

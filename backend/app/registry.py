@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
-from app import atomico, tmux
+from app import atomico, diag, tmux
 from app import agentpane
 from app.config import settings
 from app import runtime_config
@@ -1565,6 +1565,7 @@ class SessionRegistry:
             _decorate_loop(info)
         return infos
 
+    @diag.rastrear("sessao.criar")
     def create(self, name: str, cwd: str, config_dir: str | None = None,
                resume_session_id: str | None = None, provider: str = "claude",
                engine: str | None = None, model: str | None = None,
@@ -1577,6 +1578,7 @@ class SessionRegistry:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
+        diag.registrar("sessao.criar_etapa", sessao=name, provider=provider, etapa="validar")
         if not name:
             raise ValueError("nome invalido")
         codex_home = None
@@ -1647,7 +1649,10 @@ class SessionRegistry:
         # nome) e o kill(name) cairia no branch Codex (checado 1o) -> fecharia o client Codex sem
         # matar o pane tmux (pane orfao inkillavel).
         if tmux.has_session(name) or codex_sessions.exists(name):
+            diag.registrar("sessao.criar_recusada", "aviso", sessao=name, provider=provider,
+                           detalhe="nome_ja_em_uso")
             raise ValueError("ja existe uma sessao com esse nome")
+        diag.registrar("sessao.criar_etapa", sessao=name, provider=provider, etapa="preparar_comando")
         # resume_session_id (retomar conversa MORTA do Arquivo): reusa o uuid existente e sobe com
         # `--resume` em vez de `--session-id` -> o claude CONTINUA aquele jsonl (nao comeca um novo).
         # Mesmo uuid ja validado no endpoint, mas revalida aqui tambem (vai direto pro comando do shell).
@@ -1766,6 +1771,7 @@ class SessionRegistry:
         # Codex tem trust PROPRIO tambem (medido: pasta nova trava no "Do you trust the contents of
         # this directory?" da TUI, e ali a sessao nem abre a thread -> nasce sem sidecar, invisivel
         # no app que a criou) -> pre-confia no formato dele, nao no do Claude.
+        diag.registrar("sessao.criar_etapa", sessao=name, provider=provider, etapa="confiar_pasta")
         if provider == "kimi":
             from app.adapters.kimi import sessions as kimi_sessions
             kimi_sessions.pretrust_cwd(cwd)
@@ -1775,8 +1781,12 @@ class SessionRegistry:
             _pretrust_cwd(cwd, config_dir)
         if protected_prefix:
             cmd = tmux.join_cmd([*protected_prefix, "/bin/sh", "-c", cmd])
+        diag.registrar("sessao.criar_etapa", sessao=name, provider=provider, etapa="criar_terminal")
         if not tmux.new_session(name, cwd, cmd, config_dir):
+            diag.registrar("sessao.criar_recusada", "erro", sessao=name, provider=provider,
+                           detalhe="terminal_nao_criado")
             raise ValueError("falha ao criar sessao no tmux")
+        diag.registrar("sessao.criar_etapa", sessao=name, provider=provider, etapa="limpar_estado_anterior")
         # Sessao NOVA = sid novo = transcript fresco. A fila duravel e keyed pelo NOME (sobrevive ao
         # fim da sessao antiga), entao entradas remanescentes de uma sessao morta de mesmo nome
         # fantasmariam aqui via merged_history. Limpa igual o /clear faz. Seguro: a sessao nova ainda
@@ -1794,6 +1804,7 @@ class SessionRegistry:
         # Pi (jsonl=None) nao entra no cache — nao ha path a fixar, e a resolucao dele nem passa por aqui.
         if jsonl is not None:
             self._jsonl_cache[name] = jsonl
+        diag.registrar("sessao.criada", sessao=name, provider=provider, etapa="terminal_criado")
         return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider, engine=engine,
                            codex_home=codex_home)
 

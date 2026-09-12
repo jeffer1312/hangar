@@ -22,10 +22,14 @@ export interface Evento {
   /** Id do pedido HTTP — o MESMO valor aparece na linha que o servidor gravou. */
   req?: string;
   pilha?: string;
+  operacao?: string;
+  tentativa?: number;
+  espera_ms?: number;
+  quantidade?: number;
 }
 
 export interface DiagSink {
-  registrar(ev: Evento): void;
+  registrar(ev: Evento, destino?: string): void;
   /** Id curto do pedido. Vem do hospedeiro pra os ids não divergirem entre os dois lados. */
   novoReq(): string;
 }
@@ -34,10 +38,14 @@ let _sink: DiagSink | null = null;
 export function configureDiag(sink: DiagSink): void { _sink = sink; }
 
 /** Sem diário registrado, some — o core não depende de haver um. */
-export function registrar(ev: Evento): void { _sink?.registrar(ev); }
+export function registrar(ev: Evento, destino?: string): void {
+  try { _sink?.registrar(ev, destino); } catch { /* Diário não interrompe a operação. */ }
+}
 
 /** Sem diário registrado, devolve '' — o cabeçalho `X-Hangar-Req` sai vazio e nada quebra. */
-export function novoReq(): string { return _sink?.novoReq() ?? ''; }
+export function novoReq(): string {
+  try { return _sink?.novoReq() ?? ''; } catch { return ''; }
+}
 
 // só para testes — permite isolar o "sem configurar"
 export function _resetDiagForTests(): void { _sink = null; }

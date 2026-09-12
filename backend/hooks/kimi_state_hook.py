@@ -106,7 +106,13 @@ except Exception:
     # bilhete pane->sessao. Falhando calado, a sessao fica congelada em "ociosa/sem transcript" pra
     # sempre e nao ha onde olhar. Deixa UMA linha em disco, best-effort, sem depender de logging.
     try:
-        with open(os.path.join(base, "kimi_hook_error.log"), "a", encoding="utf-8") as _fh:
+        root = (os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local"), "hangar")
+                if os.name == "nt" else os.path.expanduser("~/.hangar"))
+        log_dir = os.path.join(root, "logs", "privado")
+        os.makedirs(log_dir, exist_ok=True, mode=0o700)
+        fd = os.open(os.path.join(log_dir, "kimi_hook_error.log"),
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as _fh:
             _fh.write("%s %s\n" % (time.time(), traceback.format_exc().replace("\n", " | ")))
     except Exception:
         pass

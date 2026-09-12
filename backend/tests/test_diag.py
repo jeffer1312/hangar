@@ -1,6 +1,6 @@
 """diag: o diário de uso que a pessoa baixa e manda pra quem mantém o app.
 
-Tudo contra um CLAUDE_CONFIG_DIR falso — nenhum caso aqui pode escrever no ~/.claude de verdade.
+Tudo contra a pasta temporária dos testes — nenhum caso escreve nos logs reais da máquina.
 """
 import json
 from datetime import date, datetime, timedelta, timezone
@@ -86,7 +86,7 @@ def test_registrar_nunca_levanta(monkeypatch):
 
 
 def test_guarda_uma_semana_e_apaga_o_mais_velho(config_falso):
-    base = config_falso / ".hangar-diag"
+    base = diag._base()
     base.mkdir(parents=True)
     hoje = date.today()
     velho = hoje - timedelta(days=diag.DIAS_GUARDADOS)      # fora da janela

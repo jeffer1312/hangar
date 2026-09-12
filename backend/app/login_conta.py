@@ -25,10 +25,11 @@ import itertools
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app import conta_estado, renova_token, tmux
+from app import conta_estado, diag, renova_token, tmux
 
 _log = logging.getLogger("hangar.login_conta")
 
@@ -108,6 +109,8 @@ class Tentativa:
     dir_conta: str
     inicio: float
     token_anterior: str | None = field(default=None, repr=False)
+    operacao: str = field(default_factory=lambda: uuid.uuid4().hex)
+    url_registrada: bool = False
 
 _tentativas: dict[str, Tentativa] = {}
 _proximo_id = itertools.count(1)
@@ -129,7 +132,9 @@ def _limpar(conta: str, t: Tentativa | None = None) -> None:
         _tentativas.pop(conta, None)
         try:
             _shell_matar(_chave_janela(conta))
-        except Exception:
+        except Exception as exc:
+            diag.registrar("conta.login.limpeza_falhou", "aviso", provider="claude",
+                           etapa="limpar_janela", **diag.erro_campos(exc))
             _log.debug("login: matar janela de %s falhou", conta, exc_info=True)
         return
     if _tentativas.get(conta) is not t:
@@ -137,7 +142,9 @@ def _limpar(conta: str, t: Tentativa | None = None) -> None:
     _tentativas.pop(conta, None)
     try:
         _shell_matar(t.alvo)
-    except Exception:
+    except Exception as exc:
+        diag.registrar("conta.login.limpeza_falhou", "aviso", provider="claude",
+                       operacao=t.operacao, etapa="limpar_janela", **diag.erro_campos(exc))
         # Matar janela que não existe é sucesso (kill_session é idempotente); falha de
         # tmux aqui não pode mascarar o resultado do fluxo.
         _log.debug("login: matar janela de %s falhou", conta, exc_info=True)
@@ -147,28 +154,47 @@ def iniciar(conta: str, cwd: str) -> dict:
     """Abre a janela escondida e digita o comando de login. Recusa se já há uma tentativa."""
     if _em_curso(conta):
         raise RuntimeError(f"login já em andamento para a conta {conta}")
-    oauth = renova_token._oauth(Path(cwd), estrito=True)
+    operacao = uuid.uuid4().hex
+    campos = {"provider": "claude", "conta_id": diag.conta_id(cwd), "operacao": operacao}
+    inicio = time.monotonic()
+    diag.registrar("conta.login.iniciou", etapa="ler_credencial", **campos)
+    try:
+        oauth = renova_token._oauth(Path(cwd), estrito=True)
+    except Exception as exc:
+        diag.registrar("conta.login.falhou", "erro", etapa="ler_credencial",
+                       **campos, **diag.erro_campos(exc))
+        raise
     chave = _chave_janela(conta)
     # B3 — um backend que caiu no meio de uma tentativa deixa a janela VIVA no servidor
     # do tmux (a sessao sobrevive ao processo; o comentario antigo do módulo prometia o
     # contrario). Reatar traria um `claude auth login` parado no prompt do codigo; a
     # tentativa nova comeca numa janela NOVA. Idempotente por contrato: sobra que nao
     # existe, nada a matar (kill_session de sessao ausente e sucesso).
-    _shell_matar(f"term-{chave}")
-    alvo = _shell_criar(chave, cwd, config_dir=cwd)
-    if alvo is None:
-        raise RuntimeError(f"não consegui abrir a janela escondida para {conta}")
+    etapa = "limpar_janela_anterior"
+    try:
+        _shell_matar(f"term-{chave}")
+        etapa = "criar_janela"
+        alvo = _shell_criar(chave, cwd, config_dir=cwd)
+        if alvo is None:
+            raise RuntimeError(f"não consegui abrir a janela escondida para {conta}")
+    except Exception as exc:
+        diag.registrar("conta.login.falhou", "erro", etapa=etapa,
+                       ms=int((time.monotonic() - inicio) * 1000), **campos, **diag.erro_campos(exc))
+        raise
     # Registra ANTES de digitar: um erro de digitação cai no caminho de erro e a limpeza
     # sabe qual janela matar.
     tentativa = Tentativa(id=next(_proximo_id), alvo=alvo, dir_conta=cwd,
                           inicio=time.monotonic(),
-                          token_anterior=(oauth or {}).get("accessToken"))
+                          token_anterior=(oauth or {}).get("accessToken"), operacao=operacao)
     _tentativas[conta] = tentativa
     try:
         _shell_submeter(alvo, "claude auth login --claudeai")
-    except Exception:
+    except Exception as exc:
+        diag.registrar("conta.login.falhou", "erro", etapa="enviar_comando",
+                       **campos, **diag.erro_campos(exc))
         _limpar(conta, tentativa)
         raise
+    diag.registrar("conta.login.aguardando", etapa="aguardar_autorizacao", **campos)
     return {"ok": True}
 
 
@@ -184,6 +210,10 @@ def passo(conta: str) -> dict:
     texto = _shell_ler(t.alvo)
     m_url = _URL_RE.search(texto)
     url = m_url.group(1) if m_url else None
+    if url and not t.url_registrada:
+        t.url_registrada = True
+        diag.registrar("conta.login.autorizacao_disponivel", provider="claude",
+                       operacao=t.operacao, etapa="aguardar_autorizacao")
     if url and _PROMPT_RE.search(texto):
         return {"etapa": "aguardando", "url": url}
     return {"etapa": "aguardando", "url": url}
@@ -202,29 +232,39 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
     if not _em_curso(conta):
         raise RuntimeError(f"nenhuma tentativa de login em voo para a conta {conta}")
     tentativa = _tentativas[conta]
+    campos = {"provider": "claude", "conta_id": diag.conta_id(tentativa.dir_conta),
+              "operacao": tentativa.operacao}
+    diag.registrar("conta.login.confirmando", etapa="enviar_codigo", **campos)
     try:
         _shell_submeter(tentativa.alvo, codigo)
-    except Exception:
+    except Exception as exc:
+        diag.registrar("conta.login.falhou", "erro", etapa="enviar_codigo",
+                       **campos, **diag.erro_campos(exc))
         _limpar(conta, tentativa)
         raise
 
     ler_estado = estado_fake or (lambda d: conta_estado._estado_login(
         conta_estado._auth_status(Path(d))))
     inicio = time.monotonic()
+    etapa = "reler_auth"
     try:
         while True:
             # B1 — o CAMINHO da conta (dir_conta), nunca o rótulo: com um caminho relativo
             # a CLI criava backend/<rotulo>/ dentro da árvore do repo e a releitura nunca
             # via a conta logada (medido). O path absoluto é o mesmo que o `iniciar` já
             # usou no `-e CLAUDE_CONFIG_DIR`.
+            etapa = "reler_auth"
             estado = ler_estado(tentativa.dir_conta)
             # A CLI ainda diz loggedIn para token vencido ou revogado: espere a troca.
+            etapa = "aguardar_token_novo"
             oauth = renova_token._oauth(Path(tentativa.dir_conta), estrito=True)
             vencimento = renova_token._epoch(oauth, "expiresAt")
             token = (oauth or {}).get("accessToken")
             token_novo = isinstance(token, str) and bool(token) and token != tentativa.token_anterior
             if (estado.estado == "ok" and estado.loggedIn and token_novo
                     and (vencimento is None or vencimento > time.time())):
+                diag.registrar("conta.login.concluiu", etapa="confirmar_credencial",
+                               ms=int((time.monotonic() - tentativa.inicio) * 1000), **campos)
                 return {
                     "ok": True,
                     "email": estado.email,
@@ -235,11 +275,20 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
                 # janela é de outra pessoa agora — sai sem tocar em nada (B5).
                 raise RuntimeError(f"login da conta {conta} cancelado")
             if estado.estado != "ok":
+                etapa = "reler_auth"
                 raise RuntimeError(f"não consegui reler o estado da conta {conta}: "
                                    f"{estado.motivo or 'indisponivel'}")
             if time.monotonic() - inicio >= timeout_s:
                 raise TimeoutError(f"a conta {conta} não apareceu logada em {timeout_s:.0f}s")
             time.sleep(_POLL_S)
+    except Exception as exc:
+        cancelado = _tentativas.get(conta) is not tentativa
+        diag.registrar("conta.login.cancelou" if cancelado else "conta.login.falhou",
+                       "aviso" if cancelado else "erro", etapa=etapa,
+                       codigo="cancelado" if cancelado else "timeout" if isinstance(exc, TimeoutError) else "confirmacao_falhou",
+                       ms=int((time.monotonic() - tentativa.inicio) * 1000),
+                       **campos, **diag.erro_campos(exc))
+        raise
     finally:
         # Já cancelada: `_limpar` não remata (a janela morreu no cancelar). A identidade
         # garante que uma tentativa velha nunca mata a janela de uma nova (B5).
@@ -250,5 +299,8 @@ def cancelar(conta: str) -> dict:
     """Cancela a tentativa em voo e mata a janela escondida. No-op sem tentativa."""
     if not _em_curso(conta):
         return {"ok": True}
-    _limpar(conta, _tentativas[conta])
+    t = _tentativas[conta]
+    diag.registrar("conta.login.cancelou", "aviso", provider="claude", operacao=t.operacao,
+                   etapa="cancelar", ms=int((time.monotonic() - t.inicio) * 1000))
+    _limpar(conta, t)
     return {"ok": True}

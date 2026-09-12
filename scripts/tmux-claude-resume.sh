@@ -36,7 +36,15 @@
 set -euo pipefail
 
 MAP="${TMUX_RESURRECT_DIR:-$HOME/.local/share/tmux/resurrect}/claude-sessions.tsv"
-LOG="${TMUX_RESURRECT_DIR:-$HOME/.local/share/tmux/resurrect}/claude-resume.log"
+LOG="$HOME/.hangar/logs/privado/claude-resume.log"
+if [[ ${OS:-} == Windows_NT ]]; then
+  LOG="${LOCALAPPDATA:-${USERPROFILE:-$HOME}/AppData/Local}/hangar/logs/privado/claude-resume.log"
+fi
+(
+  umask 077
+  mkdir -p "$(dirname "$LOG")"
+  touch "$LOG"
+)
 # session-id (uuid) on claude's command line: --session-id <uuid> / --resume <uuid> (= the .jsonl).
 SID_RE='--(session-id|resume)[ =]([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
 

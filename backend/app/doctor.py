@@ -56,8 +56,8 @@ def _lan_responde(s) -> bool:
 
 def _conserto_backend() -> str:
     if _WIN:
-        return "Start-ScheduledTask hangar-backend  (log: %LOCALAPPDATA%\\hangar\\hangar-backend.log)"
-    return "systemctl --user restart hangar-backend  (log: journalctl --user -u hangar-backend -n 50)"
+        return "Start-ScheduledTask hangar-backend  (log: %LOCALAPPDATA%\\hangar\\logs\\privado\\backend.log)"
+    return "systemctl --user restart hangar-backend  (log: ~/.hangar/logs/privado/backend.log; journalctl --user -u hangar-backend -n 50)"
 
 
 def diagnosticar(s) -> list[Linha]:

@@ -335,6 +335,9 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   entrada e saída; raciocínio no modelo de limpeza piora e não é calibragem. Quem manda no estilo
   é a pill que a pessoa leu antes de falar, não a config.
 - **Revisão de código:** neste repositório, revisão local e as verificações do projeto.
+- **Logs pertencem ao Hangar, não à conta.** Use `log_paths.base()`; diário exportável registra
+  etapas, códigos e origem da falha. Texto de conversa, credenciais e saídas brutas ficam fora
+  dele. Detalhes e compatibilidade em [plataforma.md](docs/decisoes/plataforma.md#diário-de-uso-causa-e-contexto-no-arquivo-exportado).
 
 ## tmux + Claude Code truecolor
 

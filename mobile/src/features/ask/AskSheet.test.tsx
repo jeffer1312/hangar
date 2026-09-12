@@ -6,6 +6,9 @@ import { configureApi } from '@hangar/core';
 import type { AskQuestionPayload } from '@hangar/core';
 import { chatStore, _resetChatsForTests } from '../../stores/chat';
 import * as m from '../../paraglide/messages';
+vi.mock('../../stores/servers', () => ({ useServers: { getState: () => ({
+  servers: [{ id: 'srv', baseUrl: 'http://teste' }],
+}) } }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mocks = vi.hoisted(() => ({ back: vi.fn(), replace: vi.fn() }));

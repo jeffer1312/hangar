@@ -13,7 +13,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from app import atomico
+from app import atomico, diag
+from app.auth import registrar_acesso
 
 from app.config import settings, _LOOPBACK
 from app.mensagens import erro
@@ -125,9 +126,14 @@ def _set_session_cookie(response: Response, user: str, request: Request) -> None
 
 
 def require_session(request: Request, response: Response) -> str:
-    user = verify_session(request.cookies.get(COOKIE_NAME))
+    cookie = request.cookies.get(COOKIE_NAME)
+    user = verify_session(cookie)
+    ip = request.client.host if request.client else "?"
     if not user:
+        registrar_acesso(ip, "cookie", "sessao_invalida_ou_expirada" if cookie else "cookie_ausente",
+                         dominio="sync.sessao")
         raise HTTPException(status_code=401, detail=erro("erro_nao_autorizado", "unauthorized"))
+    registrar_acesso(ip, "cookie", None, dominio="sync.sessao")
     _set_session_cookie(response, user, request)  # sliding: renova o prazo a cada request autenticado
     return user
 
@@ -168,11 +174,14 @@ def status() -> dict:
 
 
 @sync_router.post("/register")
+@diag.rastrear("sync.cadastrar")
 def register(body: RegisterBody) -> dict:
     if not settings.sync_bootstrap or not hmac.compare_digest(body.bootstrap, settings.sync_bootstrap):
+        diag.registrar("sync.cadastro_recusado", "aviso", detalhe="bootstrap_invalido", codigo="403")
         raise HTTPException(status_code=403, detail=erro("erro_bootstrap_invalido", "bad bootstrap"))
     with _vault_lock:
         if is_registered():
+            diag.registrar("sync.cadastro_recusado", "aviso", detalhe="ja_cadastrado", codigo="403")
             raise HTTPException(status_code=403, detail=erro("erro_ja_registrado", "already registered"))
         vsalt = secrets.token_bytes(16)
         save_vault({
@@ -183,6 +192,7 @@ def register(body: RegisterBody) -> dict:
             "enc_blob": None,
             "rev": 0,
         })
+    diag.registrar("sync.cadastrado")
     return {"ok": True}
 
 
@@ -206,20 +216,26 @@ def prelogin(user: str) -> dict:
 
 
 @sync_router.post("/login")
+@diag.rastrear("sync.login")
 def login(body: LoginBody, request: Request, response: Response) -> dict:
     ip = request.client.host if request.client else "?"
     if rate_limited(ip):
+        registrar_acesso(ip, "senha", "bloqueio_temporario", dominio="sync.login")
         raise HTTPException(status_code=429, detail=erro("erro_muitas_tentativas", "too many attempts"))
     if not verify_credentials(body.user, body.auth_hash):
+        registrar_acesso(ip, "senha", "credenciais_invalidas", dominio="sync.login")
         record_fail(ip)
         raise HTTPException(status_code=401, detail=erro("erro_nao_autorizado", "unauthorized"))
     _set_session_cookie(response, body.user, request)
+    registrar_acesso(ip, "senha", None, dominio="sync.login")
+    diag.registrar("sync.login_concluido")
     return {"ok": True}
 
 
 @sync_router.post("/logout")
 def logout(response: Response) -> dict:
     response.delete_cookie(COOKIE_NAME, path="/")
+    diag.registrar("sync.logout")
     return {"ok": True}
 
 
@@ -230,14 +246,18 @@ def get_vault(user: str = Depends(require_session)) -> dict:
 
 
 @sync_router.put("/vault")
+@diag.rastrear("sync.gravar")
 def put_vault(body: VaultPutBody, user: str = Depends(require_session)) -> dict:
     with _vault_lock:
         v = load_vault()
         if not v:
+            diag.registrar("sync.gravacao_recusada", "aviso", detalhe="cadastro_ausente", codigo="409")
             raise HTTPException(status_code=409, detail={"enc_blob": None, "rev": 0})
         if body.base_rev != v["rev"]:
+            diag.registrar("sync.gravacao_recusada", "aviso", detalhe="revisao_desatualizada", codigo="409")
             raise HTTPException(status_code=409, detail={"enc_blob": v["enc_blob"], "rev": v["rev"]})
         v["enc_blob"] = body.enc_blob
         v["rev"] += 1
         save_vault(v)
+        diag.registrar("sync.gravado")
         return {"rev": v["rev"]}

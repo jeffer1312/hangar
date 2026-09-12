@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+from app import diag
+
 RUN = subprocess.run
 
 
@@ -115,6 +117,15 @@ _log = logging.getLogger("hangar.tmux")
 # sessoes, porque ali confundi-los significa dizer "voce nao tem sessao nenhuma" quando a verdade e
 # "nao sei". Ver MuxIndisponivel.
 RC_INDISPONIVEL = 240
+_RUN_LOCK = threading.Lock()
+_running = 0
+_DIAG_COMMANDS = frozenset({
+    "list-sessions", "list-panes", "has-session", "show-options", "display-message",
+    "display", "new-session", "new-window", "set-option", "kill-session", "rename-session",
+    "send-keys", "capture-pane", "set-buffer", "show-buffer", "delete-buffer", "load-buffer",
+    "paste-buffer", "resize-window",
+})
+_ABSENCE_OK = frozenset({"list-sessions", "list-panes", "has-session", "show-options"})
 
 
 class MuxIndisponivel(RuntimeError):
@@ -134,35 +145,52 @@ class MuxIndisponivel(RuntimeError):
 
 
 def _run(args: list[str], input: bytes | None = None) -> subprocess.CompletedProcess:
-    # timeout: tmux travado nao pode prender o event loop / worker do threadpool pra sempre. Estouro ->
-    # trata como falha (RC_INDISPONIVEL, que tambem e != 0); os callers ja checam returncode != 0.
-    #
-    # `input=` existe pro `load-buffer -`: o texto vai pela STDIN e escapa do teto de 16344 bytes do
-    # COMANDO (medido 07/08/2026: `set-buffer -- <texto>` acima disso devolve rc=1 "command too
-    # long"). `text=True` e `input=bytes` sao incompativeis, entao o modo texto sai quando ha stdin e
-    # a saida e decodificada aqui — o retorno continua sendo `str` pra todos os chamadores de hoje.
-    if input is not None:
-        try:
-            # RUN, nao subprocess.run direto: RUN e a UNICA costura de mock do modulo (~50 usos em 5
-            # arquivos de teste); um caminho que a furasse seria o unico comando de tmux que um
-            # `patch.object(tmux, "RUN", ...)` nao intercepta, e bateria no tmux de verdade calado.
+    global _running
+    started = time.monotonic()
+    with _RUN_LOCK:
+        _running += 1
+        simultaneous = _running
+    failure = None
+    cp = None
+    try:
+        # RUN é a costura dos testes; bytes de stdin exigem decode explícito na saída.
+        if input is not None:
             cp = RUN(args, capture_output=True, timeout=5, input=input)
-            # sem text=True, capture_output devolve bytes sempre — decodifica pro retorno continuar
-            # sendo str, igual ao modo texto abaixo.
-            return subprocess.CompletedProcess(
+            cp = subprocess.CompletedProcess(
                 args, cp.returncode,
                 cp.stdout.decode("utf-8", "replace"), cp.stderr.decode("utf-8", "replace"))
-        except (subprocess.TimeoutExpired, OSError) as e:
-            _log.warning("tmux nao respondeu (%s): %s", args[1:3], e)
-            return subprocess.CompletedProcess(args, RC_INDISPONIVEL, stdout="", stderr=str(e))
-    try:
-        return RUN(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                   timeout=5)
-    except (subprocess.TimeoutExpired, OSError) as e:
-        # OSError = tmux ausente (FileNotFoundError) / sem permissao; timeout = travado. Trata como
-        # falha (RC_INDISPONIVEL) em vez de 500 com traceback — os callers ja checam returncode != 0.
-        _log.warning("tmux nao respondeu (%s): %s", args[1:3], e)
-        return subprocess.CompletedProcess(args, RC_INDISPONIVEL, stdout="", stderr=str(e))
+        else:
+            cp = RUN(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                     timeout=5)
+        return cp
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        failure = exc
+        _log.warning("tmux nao respondeu (%s): %s", args[1:3], exc)
+        cp = subprocess.CompletedProcess(args, RC_INDISPONIVEL, stdout="", stderr=str(exc))
+        return cp
+    finally:
+        elapsed = int((time.monotonic() - started) * 1000)
+        with _RUN_LOCK:
+            _running -= 1
+        # Nem argv nem stderr: ambos podem conter a mensagem ou credenciais do processo criado.
+        command = args[1] if len(args) > 1 and args[0] == "tmux" and args[1] in _DIAG_COMMANDS else "outro"
+        if args == _CLIP_CMD:
+            command = "clipboard"
+        elif args[:len(_SCOPE)] == _SCOPE:
+            command = "systemd-scope"
+        failed = cp is not None and cp.returncode != 0
+        stderr = cp.stderr if cp is not None and isinstance(cp.stderr, str) else ""
+        absent = stderr.startswith(("no server", "no sessions", "can't find session", "no such session",
+                                    "invalid option: @cp_hidden")) or (
+            stderr.startswith("error connecting to ") and stderr.rstrip().endswith("(No such file or directory)"))
+        expected = failure is None and cp is not None and cp.returncode == 1 and command in _ABSENCE_OK and absent
+        if failure is not None or (failed and not expected) or elapsed >= 1000:
+            diag.registrar("mux.comando", "erro" if failed and not expected else "aviso",
+                           comando=command, ms=elapsed, limite_ms=5000,
+                           simultaneos=simultaneous, retorno=cp.returncode if cp is not None else None,
+                           erro_tipo=type(failure).__name__ if failure is not None else ("retorno" if failed else ""),
+                           errno=getattr(failure, "errno", None), winerror=getattr(failure, "winerror", None),
+                           **diag.recursos())
 
 
 def _exige_resposta(cp: subprocess.CompletedProcess) -> None:
@@ -265,6 +293,8 @@ def paste_via_clipboard(name: str, text: str) -> bool:
     # falhou) segue no clipboard: e o caminho medido.
     minha, dele = _sessao_windows_de(os.getpid()), _sessao_windows_de(pane_pid(name))
     if minha is not None and dele is not None and minha != dele:
+        diag.registrar("envio.clipboard", "erro", sessao=name, etapa="sessao_windows",
+                       sessao_windows_backend=minha, sessao_windows_pane=dele)
         _log.warning("psmux de %r esta na sessao %s do Windows e o backend na %s — clipboard nao e "
                      "compartilhado, indo linha a linha", name, dele, minha)
         return False
@@ -277,6 +307,8 @@ def paste_via_clipboard(name: str, text: str) -> bool:
         # que se mede primeiro: a prova de entrega ve que ALGO colou, nunca o que.
         cp = _run(_CLIP_CMD, input=text.encode("utf-8"))
         if cp.returncode != 0:
+            diag.registrar("envio.clipboard", "erro", sessao=name, etapa="escrita",
+                           retorno=cp.returncode)
             # Sair AQUI e obrigatorio, nao defensivo: quando a escrita falha o clipboard fica com o
             # conteudo ANTERIOR intacto, entao um M-v mandado assim mesmo colaria a mensagem PASSADA
             # inteira — e ela parece legitima no composer. E a mesma familia do bug que este caminho
@@ -293,6 +325,7 @@ def paste_via_clipboard(name: str, text: str) -> bool:
         # UMA vez so: depois da primeira colagem o rodape vira "paste again to expand", entao um
         # segundo M-v EXPANDE o bloco em vez de recolar.
         if not send_keys(name, "M-v"):
+            diag.registrar("envio.clipboard", "erro", sessao=name, etapa="tecla_colar")
             # Falha DIFERENTE da de cima, e o log tem que dizer qual: aqui o clipboard JA tem o texto
             # novo (rc=0 na escrita), so a tecla que nao saiu. Reportar "clipboard nao escrito" nos
             # dois casos mandaria quem for investigar olhar pro PowerShell quando o problema e o

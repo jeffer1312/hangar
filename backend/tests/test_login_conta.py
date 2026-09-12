@@ -153,6 +153,40 @@ def test_iniciar_falhou_na_criacao_nao_digita_e_devolve_erro(bateia):
     assert bateia.matadas == []
 
 
+def test_diario_login_registra_etapa_sem_credencial(bateia, monkeypatch, tmp_path):
+    from app import diag
+    monkeypatch.setattr(diag, "_base", lambda: tmp_path / "logs")
+    monkeypatch.setattr(login_conta.renova_token, "_oauth", lambda *a, **kw: None)
+    bateia.falhar_criacao = True
+    with pytest.raises(RuntimeError):
+        login_conta.iniciar("conta-secreta", "/privado/conta-secreta")
+    texto = diag.caminho_do_dia().read_text(encoding="utf-8")
+    eventos = [json.loads(linha) for linha in texto.splitlines()]
+    falha = next(e for e in eventos if e["evento"] == "conta.login.falhou")
+    assert falha["etapa"] == "criar_janela"
+    assert falha["erro_tipo"] == "RuntimeError"
+    assert falha["operacao"]
+    assert "conta-secreta" not in texto
+
+
+def test_diario_confirmacao_timeout_nao_exporta_codigo(bateia, monkeypatch, tmp_path):
+    from app import diag
+    monkeypatch.setattr(diag, "_base", lambda: tmp_path / "logs")
+    monkeypatch.setattr(login_conta.renova_token, "_oauth", lambda *a, **kw: None)
+    login_conta.iniciar("conta-a", "/privado/conta-a")
+    with pytest.raises(TimeoutError):
+        login_conta.confirmar("conta-a", "CODIGO-OAUTH-SECRETO", timeout_s=0,
+                              estado_fake=lambda d: conta_estado._estado_login({"loggedIn": False}))
+    texto = diag.caminho_do_dia().read_text(encoding="utf-8")
+    eventos = [json.loads(linha) for linha in texto.splitlines()]
+    inicio = next(e for e in eventos if e["evento"] == "conta.login.iniciou")
+    falha = next(e for e in eventos if e["evento"] == "conta.login.falhou")
+    assert inicio["operacao"] == falha["operacao"]
+    assert falha["codigo"] == "timeout"
+    assert "CODIGO-OAUTH-SECRETO" not in texto
+    assert not bateia.vivas
+
+
 def test_iniciar_ja_em_andamento_nao_duplica_janela(bateia):
     login_conta.iniciar("conta-a", "/home/u")
     with pytest.raises(RuntimeError):

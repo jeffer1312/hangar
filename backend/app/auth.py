@@ -1,10 +1,12 @@
 import logging
 import secrets
+import threading
 import time
 
 from fastapi import Request, HTTPException
 from app.config import settings
 from app.mensagens import erro
+from app import diag
 
 _log = logging.getLogger(__name__)
 
@@ -39,6 +41,29 @@ _MAX_ORIGINS = 512
 
 # ponytail: dict por processo, zera no restart. Nao e limitador distribuido — e um backend so.
 _fails: dict[str, list[float]] = {}
+_diag_recusas: dict[tuple[str, str], tuple[str, str]] = {}
+_diag_lock = threading.Lock()
+
+
+def registrar_acesso(ip: str, mecanismo: str, motivo: str | None, *, dominio: str = "auth") -> None:
+    # A origem só limita repetição em memória; IP e credenciais nunca vão ao diário.
+    chave = (dominio, ip)
+    with _diag_lock:
+        anterior = _diag_recusas.get(chave)
+        if motivo is None:
+            if anterior is None:
+                return
+            _diag_recusas.pop(chave)
+        else:
+            if anterior == (mecanismo, motivo):
+                return
+            if chave not in _diag_recusas and len(_diag_recusas) >= _MAX_ORIGINS:
+                _diag_recusas.pop(next(iter(_diag_recusas)))
+            _diag_recusas[chave] = (mecanismo, motivo)
+        diag.registrar(f"{dominio}.recusado" if motivo else f"{dominio}.recuperado",
+                       "aviso" if motivo else "ok", etapa=mecanismo,
+                       codigo="429" if motivo == "bloqueio_temporario" else "401" if motivo else "200",
+                       detalhe=motivo or "acesso_restabelecido")
 
 # Loopback e o proprio dono na maquina: hangar-send, hangar-panel e os scripts locais batem aqui o tempo
 # todo, e quem esta logado ali le o backend/.env sem esforco nenhum — o token nao defende disso.
@@ -82,21 +107,27 @@ def _record_fail(ip: str, now: float) -> None:
 def reset_backoff() -> None:
     """Zera o estado do backoff (usado pelos testes pra nao vazar contagem entre casos)."""
     _fails.clear()
+    with _diag_lock:
+        _diag_recusas.clear()
 
 
 def require_auth(request: Request) -> None:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
+        mecanismo = "bearer"
     else:
         # A SSE (EventSource) nao consegue mandar header Authorization; cross-origin (multi-PC) o
         # cookie tb nao vai (SameSite) -> sobra o ?token= na URL. Aceitar a query e o que faltava
         # (era 401 em /events?token=...). Ordem: header -> query -> cookie (same-origin).
         token = request.query_params.get("token") or request.cookies.get("cp_token")
+        mecanismo = ("query" if request.query_params.get("token") else
+                     "cookie" if request.cookies.get("cp_token") else "ausente")
     ip = request.client.host if request.client else "?"
     local = ip in _LOOPBACK
     now = time.time()
     if not local and _blocked(ip, now):
+        registrar_acesso(ip, mecanismo, "bloqueio_temporario")
         # 429, nunca 401: o front trata 401 como "token expirou", apaga a credencial salva e
         # recarrega pro login (`ensureOk`). Se o bloqueio respondesse 401, a tentativa de OUTRO
         # aparelho na mesma origem deslogaria o dono. 429 sobe como erro comum, sem mexer no token.
@@ -105,10 +136,12 @@ def require_auth(request: Request) -> None:
     # compare_digest em bytes: `!=` de string sai fora na primeira letra diferente (canal lateral de
     # tempo) e o encode ainda evita o TypeError do compare_digest com string nao-ASCII.
     if not secrets.compare_digest((token or "").encode(), settings.auth_token.encode()):
+        registrar_acesso(ip, mecanismo, "token_invalido" if token else "token_ausente")
         if not local:
             _record_fail(ip, now)
         raise HTTPException(status_code=401, detail=erro("erro_nao_autorizado", "unauthorized"))
     _fails.pop(ip, None)  # acerto limpa a origem na hora
+    registrar_acesso(ip, mecanismo, None)
 
 
 def require_loopback(request: Request) -> None:

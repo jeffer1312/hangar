@@ -30,7 +30,7 @@ $pendencias = @()
 # transcript) nem no -SoChecar, que por contrato nao escreve NADA no disco - nem a pasta do log.
 # O transcript captura Read-Host E Write-Host, entao todo trecho que mostra o token roda entre
 # Pausa-Log e Retoma-Log - senao a credencial fica em texto puro no arquivo.
-$logInstall = Join-Path $env:LOCALAPPDATA 'hangar\install.log'
+$logInstall = Join-Path $env:LOCALAPPDATA 'hangar\logs\privado\install.log'
 $script:temLog = (-not $Update) -and (-not $SoChecar)
 if ($script:temLog) {
     New-Item -ItemType Directory -Force -Path (Split-Path $logInstall) | Out-Null
@@ -1791,7 +1791,7 @@ if ($registrou) {
             # A saida NAO pode simplesmente sumir junto: e nela que sai o QR de pareamento e
             # qualquer erro de subida. Vai pra arquivo, um por servico, sobrescrito a cada start
             # (nao cresce sem limite; o que interessa e sempre a execucao atual).
-            $log = Join-Path $env:LOCALAPPDATA "hangar\$($t.Nome).log"
+            $log = Join-Path $env:LOCALAPPDATA "hangar\logs\privado\$($t.Nome).log"
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
             # Por que um .vbs e nao `powershell -WindowStyle Hidden` direto: esse parametro nao
             # impede a janela de EXISTIR - o console e criado e so depois escondido, e lancado pelo
@@ -1803,7 +1803,7 @@ if ($registrou) {
             # linha de log virava objeto num powershell que ficava entre o Agendador e o servidor
             # (um processo a mais pra morrer, e o vigia ja registrou OutOfMemory num desses).
             # Aspas dobradas dentro da string VBS; `> log 2>&1` sobrescreve a cada subida.
-            $vbs = Join-Path (Split-Path -Parent $log) "$($t.Nome).vbs"
+            $vbs = Join-Path $env:LOCALAPPDATA "hangar\$($t.Nome).vbs"
             $cmdLinha = "cmd /c """"$exe"" $($t.Args) > ""$log"" 2>&1"""
             $linhaVbs = 'CreateObject("WScript.Shell").Run "' + $cmdLinha.Replace('"', '""') + '", 0, False'
             # O .vbs carrega o caminho do LOG, que fica em %LOCALAPPDATA% — ou seja, no perfil do
@@ -1902,7 +1902,7 @@ if ($registrou) {
         # Enquanto o arquivo crescer, espera; parou de crescer por $ociosoMax segundos, desiste
         # — um backend morto nao paga o teto inteiro.
         if (-not $subiu) {
-            $logBack = Join-Path $env:LOCALAPPDATA 'hangar\hangar-backend.log'
+            $logBack = Join-Path $env:LOCALAPPDATA 'hangar\logs\privado\hangar-backend.log'
             $ociosoMax = 30
             $extraMax = 180
             $tamAnt = if (Test-Path $logBack) { (Get-Item $logBack).Length } else { -1 }
@@ -1927,7 +1927,7 @@ if ($registrou) {
             Ok "backend respondendo em 127.0.0.1:$portaBack"
         } else {
             Falta "o backend NAO subiu em ${esperou}s (o log parou de crescer) - o app nao vai conectar"
-            Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\hangar-backend.log`" -Tail 30"
+            Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\logs\privado\hangar-backend.log`" -Tail 30"
         }
     } else {
         # Nao chegou nem a iniciar (o catch acima disparou antes do Start-ScheduledTask). Nao se
@@ -1937,7 +1937,7 @@ if ($registrou) {
         Falta 'nenhuma tarefa chegou a ser iniciada - o que estiver na porta e a instancia ANTIGA'
     }
     Nota 'Log (inclui o QR de pareamento):'
-    Nota "  $env:LOCALAPPDATA\hangar\hangar-backend.log"
+    Nota "  $env:LOCALAPPDATA\hangar\logs\privado\hangar-backend.log"
     Nota 'Remover depois: Unregister-ScheduledTask -TaskName hangar-backend'
 
     # Vigia registrada em try/catch PROPRIO, separado do de cima: achado IMPORTANTE da revisao
@@ -1987,7 +1987,7 @@ if ($registrou) {
     # Guarda de $temTarefaFront: sem tarefa do front, $tarefas[1] e $null e ler .Padrao/.ExeProc dele quebra em "expressao de valor nulo" — instalacao nova nao registra mais a tarefa do front, entao $tarefas[1] nao existe.
     $vigiaPadraoFront = if ($temTarefaFront) { $tarefas[1].Padrao.Replace("'", "''") } else { '' }
     $vigiaExeFront = if ($temTarefaFront) { $tarefas[1].ExeProc } else { '' }        # 'node|npm|vite'
-    $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.log").Replace("'", "''")   # mesmo lugar dos outros .log
+    $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\logs\privado\hangar-vigia.log").Replace("'", "''")   # mesmo lugar dos outros .log
     # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_`/`$candidatos`/etc
     # sobrevivem literais sem precisar de crase nenhuma - o script so vira real quando o
     # `.Replace()` abaixo troca os tokens, e `.Replace()` e substituicao LITERAL (nao regex),

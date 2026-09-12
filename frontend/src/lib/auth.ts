@@ -4,7 +4,7 @@
 
 import { normalizeBaseUrl } from './url';
 import * as m from '../paraglide/messages';
-import { type Server, serverColor } from '@hangar/core';
+import { type Server, serverColor, registrarDiag } from '@hangar/core';
 export { serverColor };
 export type { Server };
 
@@ -242,7 +242,12 @@ async function runAddServerWithRollback(
   // mutam storage nem navegam.
   const cru = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
   const pareamento = validarPareamento(cru);
-  if (!pareamento) return { id: '', succeeded: false };
+  if (!pareamento) {
+    registrarDiag({ evento: 'login.validacao', nivel: 'aviso', codigo: 'pareamento_invalido' });
+    return { id: '', succeeded: false };
+  }
+  const inicio = Date.now();
+  registrarDiag({ evento: 'login.iniciado', tela: 'login' }, pareamento.base);
   // Pré-estado da entrada que o add vai tocar (mesma baseUrl normalizada do addServer): null = era
   // NOVA. Só ela é revertida na falha do probe — o snapshot antigo regravava a LISTA INTEIRA e
   // revertia calado mutações concorrentes em outras entradas (remoção/troca de token durante o
@@ -250,15 +255,27 @@ async function runAddServerWithRollback(
   const norm = (u: string) => u.replace(/\/+$/, '');
   const prev = listServers().find((s) => norm(s.baseUrl) === norm(pareamento.base)) ?? null;
   const prevActive = getActiveId();
-  const { id } = addServer(pareamento.base, pareamento.token, label);
+  let id: string;
+  try {
+    id = addServer(pareamento.base, pareamento.token, label).id;
+  } catch (e) {
+    registrarDiag({ evento: 'login.falhou', nivel: 'erro', tela: 'login',
+      codigo: 'persistencia', ms: Date.now() - inicio }, pareamento.base);
+    throw e;
+  }
   // Estado EXATAMENTE como esta transação o deixou: o rollback só desfaz se a entrada ainda for
   // este escrito — uma rotação/edição CONCORRENTE na própria entrada vence (round 2).
   const escrito = listServers().find((s) => s.id === id) ?? null;
   try {
     await probe();
+    registrarDiag({ evento: 'login.concluido', tela: 'login', ms: Date.now() - inicio }, pareamento.base);
     return { id, succeeded: true };
   } catch (e) {
+    const status = (e as { status?: number })?.status;
+    registrarDiag({ evento: 'login.falhou', nivel: 'erro', tela: 'login', ms: Date.now() - inicio,
+      codigo: status ? String(status) : 'probe_falhou' }, pareamento.base);
     rollbackAddEntry(id, prev, escrito, prevActive);
+    registrarDiag({ evento: 'login.restaurado', tela: 'login' }, pareamento.base);
     throw e;
   }
 }

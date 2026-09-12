@@ -1,5 +1,5 @@
 import * as m from '../paraglide/messages';
-import { errorDetail } from '@hangar/core';
+import { errorDetail, registrarDiag, novoReqDiag } from '@hangar/core';
 import type { Server } from './auth';
 
 // Zero-knowledge: the password never leaves the browser. From PBKDF2(masterKey) we split two HKDF
@@ -73,7 +73,21 @@ export async function decryptList(encKey: CryptoKey, blob: { iv: string; data: s
 
 // ── API client (same-origin; the front's reverse proxy forwards /api to the co-located backend) ──
 async function jf(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(path, { credentials: 'include', headers: { 'Content-Type': 'application/json' }, ...init });
+  const inicio = Date.now();
+  const req = novoReqDiag();
+  const detalhe = `${init?.method ?? 'GET'} ${path.split('?')[0]}`;
+  const destino = window.location.origin;
+  try {
+    const resposta = await fetch(path, { credentials: 'include', ...init,
+      headers: { 'Content-Type': 'application/json', 'X-Hangar-Req': req, ...init?.headers } });
+    if (init?.method || !resposta.ok) registrarDiag({ evento: 'sync.pedido', req, detalhe,
+      nivel: resposta.ok ? 'ok' : 'aviso', codigo: String(resposta.status), ms: Date.now() - inicio }, destino);
+    return resposta;
+  } catch (e) {
+    registrarDiag({ evento: 'sync.falhou', nivel: 'erro', req, detalhe, codigo: 'rede',
+      ms: Date.now() - inicio }, destino);
+    throw e;
+  }
 }
 
 export async function syncStatus(): Promise<{ enabled: boolean; registered: boolean } | null> {

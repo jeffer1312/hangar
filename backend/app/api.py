@@ -1,5 +1,6 @@
 import anyio.to_thread
 import asyncio
+import contextvars
 import json
 import logging
 import mimetypes
@@ -295,6 +296,9 @@ class _BodySizeLimitMiddleware:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    from app import diag_logging
+    diag_logging.instalar()
+    diag.registrar("backend.inicio", **diag.recursos())
     # Uma vez na subida, nunca por request. O Starlette roda cada rota `def` (sao 65 aqui) num
     # anyio.to_thread, cujo limiter default e de 40 tokens — e cada conexao de chat ainda segura
     # DOIS deles PERMANENTEMENTE, num awatch parado (transcript.py:408 e pqueue.py:366). Com ~20
@@ -423,6 +427,7 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
+        diag.registrar("backend.encerrando")
         codex_warm_task.cancel()
         await asyncio.gather(codex_warm_task, return_exceptions=True)
         creation_tasks = list(getattr(app.state, "codex_creation_tasks", ()))
@@ -505,9 +510,25 @@ async def _correlaciona_diag(request: Request, call_next):
     toque só.
     """
     token = diag.req_atual.set(request.headers.get("x-hangar-req", "")[:32])
+    started = time.monotonic()
+    response = None
+    failure = ""
     try:
-        return await call_next(request)
+        response = await call_next(request)
+        return response
+    except Exception as exc:
+        failure = type(exc).__name__
+        raise
     finally:
+        elapsed = int((time.monotonic() - started) * 1000)
+        status = response.status_code if response is not None else 500
+        # O template da rota não contém query, caminho de arquivo nem corpo do pedido.
+        route = getattr(request.scope.get("route"), "path", "(rota desconhecida)")
+        if (response is not None or failure) and not request.url.path.startswith("/api/diag") and (
+                failure or status >= 400 or elapsed >= 1000 or request.method in ("POST", "PUT", "PATCH", "DELETE")):
+            diag.registrar("api.servidor", "erro" if status >= 500 else "aviso" if status >= 400 else "ok",
+                           detalhe=f"{request.method} {route}", codigo=str(status), ms=elapsed,
+                           etapa="cabecalhos", sessao=request.path_params.get("name"), erro_tipo=failure)
         diag.req_atual.reset(token)
 
 
@@ -2651,7 +2672,9 @@ _send_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hangar-se
 
 def _send_thread(fn, *args):
     """Roda `fn(*args)` no pool DEDICADO de envio (nao no executor default, saturavel pela decoracao)."""
-    return asyncio.get_running_loop().run_in_executor(_send_executor, fn, *args)
+    # run_in_executor não leva sozinho o id do pedido até os eventos de envio.
+    return asyncio.get_running_loop().run_in_executor(
+        _send_executor, contextvars.copy_context().run, fn, *args)
 
 
 def _erro_texto(e) -> str:

@@ -96,6 +96,9 @@ def _setup_diag_logging() -> None:
         cp.addHandler(h)
         cp.setLevel(logging.INFO)
         cp.propagate = False
+    from app import diag, diag_logging
+    diag.migrar_legados(privados=True)
+    diag_logging.instalar()
 
 
 def _passos_pendentes_da_versao() -> None:

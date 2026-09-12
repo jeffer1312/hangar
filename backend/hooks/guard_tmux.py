@@ -210,8 +210,13 @@ def _registrar(motivo: str) -> None:
     valer olhando pra tela. Mesmo raciocinio do log em disco do kimi_state_hook. Best-effort:
     se nem logar der, engole — o comando do usuario nao paga por isso."""
     try:
-        base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-        with open(os.path.join(base, "guard_tmux-falhas.log"), "a", encoding="utf-8") as fh:
+        root = (os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local"), "hangar")
+                if os.name == "nt" else os.path.expanduser("~/.hangar"))
+        base = os.path.join(root, "logs", "privado")
+        os.makedirs(base, exist_ok=True, mode=0o700)
+        fd = os.open(os.path.join(base, "guard_tmux-falhas.log"),
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {motivo}\n")
     except Exception:
         pass

@@ -464,6 +464,8 @@ class _ListRefresher:
                 continue
             # sucesso: emite se a sig mudou OU se estava em erro (pra o front LIMPAR o list_error).
             if sig != self.sig or self.errored:
+                if self.errored:
+                    diag.registrar("lista.recuperada", quantidade=len(infos))
                 async with self._cond:
                     self.errored = False
                     self.sig = sig
@@ -617,6 +619,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 event = "queue_confirmed" if kind == "message" and item.queued_confirmed else kind
                 await queue.put((event, item.model_dump_json()))
         except Exception as exc:  # surface, never swallow
+            diag.registrar("sse.pump_falhou", "erro", sessao=name, provider=current_provider,
+                           etapa=kind, erro_tipo=type(exc).__name__)
             await queue.put(("__error__", exc))
 
     async def ping_loop():
@@ -683,6 +687,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         except asyncio.CancelledError:
             raise  # rebind do watcher cancela este task de proposito -> nao reportar como erro
         except Exception as exc:  # surface, never swallow
+            diag.registrar("sse.pump_falhou", "erro", sessao=name, provider=current_provider,
+                           etapa="transcript", erro_tipo=type(exc).__name__)
             await queue.put(("__error__", exc))
 
     async def stats_pump(path: str):
@@ -726,12 +732,21 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         current_prov = provider
         pending = None       # candidato a nova resolucao, aguardando confirmar persistencia
         pending_n = 0
+        falhou = False
         while True:
             await asyncio.sleep(2)
             try:
                 viva = next((s for s in await _cached_list() if s.name == name), None)
-            except Exception:
+            except Exception as exc:
+                if not falhou:
+                    diag.registrar("sse.resolucao_falhou", "erro", sessao=name,
+                                   provider=current_prov, erro_tipo=type(exc).__name__)
+                falhou = True
                 viva = None
+            else:
+                if falhou:
+                    diag.registrar("sse.resolucao_recuperada", sessao=name, provider=current_prov)
+                falhou = False
             live = viva.jsonl if viva else None
             live_prov = (viva.provider if viva else None) or current_prov
             if live and live_prov != current_prov:
@@ -770,6 +785,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             async for text, md, full in fonte.subscribe():
                 _enqueue_preview("" if _already_committed(text) else text, md, full)
         except Exception as exc:  # surface, never swallow
+            diag.registrar("sse.pump_falhou", "erro", sessao=name, provider=current_provider,
+                           etapa="previa", erro_tipo=type(exc).__name__)
             await queue.put(("__error__", exc))
 
     ask_q_emitted = False          # impede reemissao enquanto o mesmo prompt permanece na tela
@@ -779,6 +796,12 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     prev_deliverable = False     # init False -> 1o estado entregavel pos-(re)connect tambem dispara 1
                                  # drain (recovery de restart/reconexao com pendencia)
     drain_tasks: set = set()     # drains fire-and-forget; NAO entram em `tasks` (nao cancelar no disconnect)
+
+    def drain_done(task):
+        drain_tasks.discard(task)
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            diag.registrar("sse.fila_falhou", "erro", sessao=name, provider=current_provider,
+                           erro_tipo=type(exc).__name__)
 
     # start_offset so vale pro tail INICIAL (veio do Last-Event-ID desta conexao). O rebind do
     # /clear abaixo recria sem ele: o transcript e outro arquivo, o offset antigo nao significa nada.
@@ -812,8 +835,11 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     _t0 = time.monotonic()
     _sent = {"message": 0, "state": 0, "preview": 0, "ping": 0, "other": 0}
     _why = "cliente desconectou"
+    motivo_diag = "cliente_desconectou"
     _last_ctx_warn = {"sl": None}
     _log.info("sse: abriu name=%s provider=%s jsonl=%s", name, provider, Path(jsonl).name if jsonl else None)
+    diag.registrar("sse.abriu", sessao=name, provider=provider,
+                   etapa="retomada" if start_offset is not None else "inicio")
     try:
         while True:
             # Só o tail_pump enfileira o 3o item (o offset -> `id:` do SSE); os demais produtores
@@ -823,6 +849,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             ev_id = item[2] if len(item) > 2 else None
             if event == "__error__":
                 _why = f"erro no pump: {type(data).__name__}: {data}"
+                motivo_diag = "falha_pump"
                 raise data
             if event == "__reprovider__":
                 # A sessao terminou de se identificar (ex: nasceu como "claude" e e Pi). Refaz TUDO
@@ -831,6 +858,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 # estava no arquivo antes desta troca nunca apareceria: o tailer novo entra pelo
                 # TAIL, e o history que o front leu foi lido do provider errado.
                 novo_prov, novo_jsonl = data
+                diag.registrar("sse.reiniciou", sessao=name, provider=novo_prov, etapa="troca_provider")
                 _log.info("sse: provider mudou name=%s %s -> %s jsonl=%s",
                           name, current_provider, novo_prov,
                           Path(novo_jsonl).name if novo_jsonl else None)
@@ -852,6 +880,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 yield {"event": "reset", "data": "{}"}
                 continue
             if event == "__reset__":
+                diag.registrar("sse.reiniciou", sessao=name, provider=current_provider,
+                               etapa="troca_transcript")
                 # Troca de transcript (ex: /clear). Re-binda o tailer no jsonl novo, zera o estado de
                 # suppress/preview, e manda 'reset' pro front recarregar o history do zero.
                 #
@@ -943,7 +973,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                     # pelo adapter errado digitaria no terminal de um jeito que aquela TUI nao espera.
                     dt = asyncio.create_task(get_adapter(current_provider).drain(name, current_jsonl))
                     drain_tasks.add(dt)
-                    dt.add_done_callback(drain_tasks.discard)
+                    dt.add_done_callback(drain_done)
                 prev_deliverable = deliverable_now
             _sent[event if event in _sent else "other"] += 1
             out = {"event": event, "data": data}
@@ -954,8 +984,18 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # Fechamento NORMAL: o cliente sumiu e o starlette cancela o gerador. Distinguir isso de
         # um erro é o ponto — os dois terminavam o stream do mesmo jeito silencioso.
         _why = "cancelado (cliente sumiu / servidor encerrando)"
+        motivo_diag = "cancelado"
+        raise
+    except Exception as exc:
+        if motivo_diag != "falha_pump":
+            motivo_diag = "falha_stream"
+            diag.registrar("sse.falhou", "erro", sessao=name, provider=current_provider,
+                           erro_tipo=type(exc).__name__)
         raise
     finally:
+        diag.registrar("sse.fechou", "erro" if motivo_diag.startswith("falha_") else "ok",
+                       sessao=name, provider=current_provider, detalhe=motivo_diag,
+                       ms=int((time.monotonic() - _t0) * 1000), quantidade=sum(_sent.values()))
         _log.info(
             "sse: fechou name=%s dur=%.1fs motivo=%s enviados=msg:%d state:%d preview:%d ping:%d",
             name, time.monotonic() - _t0, _why,

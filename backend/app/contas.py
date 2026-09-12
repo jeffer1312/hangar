@@ -36,7 +36,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from app import atomico
+from app import atomico, diag
 
 try:
     import fcntl
@@ -485,6 +485,7 @@ def _conferir_plugins(dir_conta: Path) -> list[str]:
     return avisos
 
 
+@diag.rastrear("conta.reconciliar", provider="claude")
 def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
     """Corpo da reconciliação, SEM as travas — quem chama (reconciliar público ou o ciclo da
     conta) já as segura. Validar o projeto aqui também protege o caminho do ciclo, que recebe
@@ -495,6 +496,8 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
         # registry.sanitize_cwd produz, e nada além.
         raise ContaError(400, "projeto inválido")
     avisos: list[str] = []
+    diag.registrar("conta.reconciliar.etapa", provider="claude", etapa="ligar_arquivos",
+                   conta_id=diag.conta_id(str(dir_conta)))
     for alvo in sorted(compartilhado().iterdir()):
         destino = dir_conta / alvo.name
         if alvo.name in _NAO_LIGAR:
@@ -510,10 +513,13 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
             if aviso:
                 avisos.append(aviso)
         _ligar(destino, alvo)
+    diag.registrar("conta.reconciliar.etapa", provider="claude", etapa="espelhar_settings")
     aviso = _semear_settings(dir_conta)
     if aviso:
         avisos.append(aviso)
+    diag.registrar("conta.reconciliar.etapa", provider="claude", etapa="conferir_plugins")
     avisos.extend(_conferir_plugins(dir_conta))
+    diag.registrar("conta.reconciliar.etapa", provider="claude", etapa="espelhar_config")
     aviso = _espelhar_claude_json(dir_conta)
     if aviso:
         avisos.append(aviso)
@@ -521,7 +527,10 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
         # Atalho apontando pra coisa que sumiu do compartilhado.
         if p.is_symlink() and not p.exists():
             p.unlink()
+    diag.registrar("conta.reconciliar.etapa", provider="claude", etapa="ligar_memoria")
     avisos.extend(_ligar_memoria(dir_conta, projeto))
+    diag.registrar("conta.reconciliar.concluiu", "aviso" if avisos else "ok",
+                   provider="claude", quantidade=len(avisos), codigo="com_avisos" if avisos else "ok")
     return avisos
 
 
@@ -599,9 +608,12 @@ def _semear_claude_json(dir_conta: Path) -> None:
     (dir_conta / ".claude.json").write_text(json.dumps(dados, indent=2), encoding="utf-8")
 
 
+@diag.rastrear("conta.criar", provider="claude")
 def criar(nome: str) -> Path:
     """Cria a pasta pronta pro `/login`. NÃO loga — o OAuth abre navegador e é interativo."""
     dir_conta = caminho(nome)
+    diag.registrar("conta.criar.etapa", provider="claude", etapa="validar_destino",
+                   conta_id=diag.conta_id(str(dir_conta)))
     if dir_conta.is_symlink() or dir_conta.exists():
         # is_symlink cobre o link QUEBRADO: `exists()` o segue e mente, e o mkdir em cima
         # estouraria FileExistsError bruto em vez do 409 de "já existe".
@@ -611,8 +623,10 @@ def criar(nome: str) -> Path:
     compartilhado().mkdir(parents=True, exist_ok=True)
     ok = False
     try:
+        diag.registrar("conta.criar.etapa", provider="claude", etapa="criar_pasta")
         dir_conta.mkdir(parents=True)
         (dir_conta / MARCADOR).write_text("", encoding="utf-8")
+        diag.registrar("conta.criar.etapa", provider="claude", etapa="semear_config")
         _semear_claude_json(dir_conta)
         (dir_conta / "projects").mkdir()
         reconciliar(nome)
@@ -622,12 +636,22 @@ def criar(nome: str) -> Path:
         # Rollback: falhou no meio (symlink recusado no Windows, ~/.claude.json ilegível) e a
         # conta parcial não pode sobrar carimbada.
         if not ok and dir_conta.is_dir() and not dir_conta.is_symlink():
-            shutil.rmtree(dir_conta)
+            diag.registrar("conta.criar.rollback", "aviso", provider="claude", etapa="remover_pasta_parcial")
+            try:
+                shutil.rmtree(dir_conta)
+            except Exception as exc:
+                diag.registrar("conta.criar.rollback_falhou", "erro", provider="claude",
+                               etapa="remover_pasta_parcial", **diag.erro_campos(exc))
+                raise
+            diag.registrar("conta.criar.rollback_concluiu", provider="claude", etapa="remover_pasta_parcial")
 
 
+@diag.rastrear("conta.apagar", provider="claude")
 def _apagar(dir_conta: Path) -> None:
     """rmtree sob a trava — quem chama (apagar público ou o ciclo da conta) já validou e já
     segura as travas."""
+    diag.registrar("conta.apagar.etapa", provider="claude", etapa="remover_pasta",
+                   conta_id=diag.conta_id(str(dir_conta)))
     shutil.rmtree(dir_conta)
 
 

@@ -17,6 +17,9 @@ import GitTabs from '../components/git/GitTabs.svelte';
 import { createGitStore } from '../lib/gitStore.svelte';
 import { renderMarkdown } from '../lib/markdown';
 import type { AggSession, SessionInfo } from '@hangar/core';
+import * as diag from '../lib/diag';
+import { getBaseUrl } from '../lib/auth';
+vi.mock('../lib/diag', () => ({ registrar: vi.fn(), novoReq: () => 'stream-teste' }));
 
 // Stub de componente Svelte 5: createRawSnippet é o padrão do DesktopShell.test.ts — uma classe
 // com $destroy (padrão Svelte 4) quebra no mount do Svelte 5 com "cannot be invoked without new".
@@ -116,6 +119,7 @@ vi.mock('@hangar/core', async (importOriginal) => ({
 vi.mock('../lib/auth', () => ({
   listServers: vi.fn(() => [{ id: 'srv-test', label: 'T', baseUrl: 'http://x', token: 't' }]),
   getActiveId: vi.fn(() => 'srv-test'),
+  getBaseUrl: vi.fn(() => 'http://x'),
 }));
 vi.mock('../lib/sessionsStore.svelte', () => ({
   sessionsStore: {
@@ -150,6 +154,8 @@ function montar(desktop = true) {
 }
 
 beforeEach(() => {
+  vi.mocked(getBaseUrl).mockReturnValue('http://x');
+  vi.mocked(diag.registrar).mockClear();
   overwriteGetLocale(() => 'pt');
   ctxPanel.recolhido = false;   // vive no módulo e persiste entre testes
   ctxPanel.aba = 'contexto';
@@ -161,6 +167,23 @@ beforeEach(() => {
   const s = filesStores.retain('srv-test::sess', 'sess');
   s.selecionado = null;
   filesStores.release('srv-test::sess');
+});
+
+it('eventos do stream mantêm servidor de origem após trocar o ativo', async () => {
+  const t = montar();
+  try {
+    await tick();
+    vi.mocked(getBaseUrl).mockReturnValue('http://outro');
+    sseCtl.handlers.get('preview')?.({ data: 'conteudo privado token' } as MessageEvent);
+    sseCtl.handlers.get('ping')?.({ data: '{}' } as MessageEvent);
+    expect(diag.registrar).toHaveBeenCalledWith(expect.objectContaining({
+      evento: 'sse.quadro_falhou', codigo: 'preview', req: 'stream-teste',
+    }), 'http://x');
+    expect(vi.mocked(diag.registrar).mock.calls.every(([, destino]) => destino === 'http://x')).toBe(true);
+    expect(JSON.stringify(vi.mocked(diag.registrar).mock.calls.map(([e]) => e))).not.toContain('conteudo privado');
+  } finally {
+    await unmount(t.comp);
+  }
 });
 
 it('abre o SSE sem esperar a primeira carga do histórico', async () => {

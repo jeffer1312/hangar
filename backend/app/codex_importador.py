@@ -13,6 +13,7 @@ import tempfile
 from typing import TYPE_CHECKING
 
 from app.atomico import substituir
+from app import diag, log_paths
 
 if TYPE_CHECKING:
     from app.codex_contas import Account
@@ -314,7 +315,7 @@ class CodexNativo:
         """Guarda a última falha por comando; saída bruta pode conter credenciais."""
         temporario = None
         try:
-            pasta = self.codex_home / ".hangar-diagnosticos"
+            pasta = log_paths.base() / "privado" / "codex" / diag.conta_id(self.codex_home)
             pasta.mkdir(mode=0o700, parents=True, exist_ok=True)
             chave = hashlib.sha256(json.dumps(args).encode()).hexdigest()[:16]
             destino = pasta / f"cli-{chave}.log"

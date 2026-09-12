@@ -8,6 +8,57 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 neste repositório GitHub, usar revisão local e as verificações
   do projeto. A instalação local do CodeRabbit pertence a outros repositórios.
 
+## Diário de uso: causa e contexto no arquivo exportado
+
+Em 12/09/2026, um diário Windows de 06–12/09 tinha 19 registros de `mux.indisponivel`,
+24 de falha da listagem e três envios incompletos. Contagem por evento do JSONL, não por
+incidente: o mesmo problema pode aparecer em mais de uma camada. Os motivos detalhados
+estavam só no log local, que não acompanha o download.
+
+`tmux._run` registra falhas e comandos que demoram pelo menos um segundo: operação conhecida,
+retorno, classe/errno/winerror, prazo, duração, comandos simultâneos ao iniciar e memória
+total/disponível naquele instante. Ausência normal de sessão não vira erro. `envio.parcial`
+acrescenta etapa, tamanho/linhas, geometria do campo, contagem de colagens e resultado da limpeza;
+`envio.clipboard` distingue sessão Windows incompatível, escrita e tecla de colagem.
+
+`api.servidor` mede até os cabeçalhos da resposta, não a duração de streams: ações, erros e
+leituras lentas. Usa o template da rota, sem query nem corpo. O pool dedicado de envio propaga
+o `req` com `copy_context`, ligando tela, resposta e comando. Cada evento do backend identifica
+versão, PID e início do processo; o cabeçalho traz ambiente e versão do CLI consultados no download.
+Isso não reconstrói informações ausentes de diários antigos nem identifica a versão de um
+servidor psmux já aberto antes de trocar o binário.
+
+Nunca copiar argv, stdout, stderr ou `_diag_composer` para esses eventos: podem conter conversas
+e credenciais. Os testes em `test_diag_runtime.py` conferem o JSONL exportado, incluindo ausência
+de conteúdo sensível, concorrência, correlação e falhas Windows simuladas.
+
+A ampliação no mesmo dia cobre login/autorização Claude e Codex, cadastro, exclusão,
+reconciliação e preparação de contas em segundo plano, autenticação do app, sync, peers,
+criação de sessões e ciclo do SSE. `req` liga requests; `operacao` liga etapas, inclusive
+entre pedidos de uma tentativa de login. `@diag.rastrear` registra início e término sem ler
+argumentos/retorno: `retornou` significa que a função terminou, não que um resultado parcial
+virou sucesso. Erros encadeados preservam classe/errno/winerror sem copiar suas mensagens.
+
+Logs ficam sob `%LOCALAPPDATA%/hangar/logs` no Windows e `~/.hangar/logs` no Linux/macOS.
+`diario/` contém somente o JSONL exportável; `privado/` recebe backend, instalador, vigia,
+hooks, restauração de terminais e diagnósticos do CLI. O backend usa rotação de 4 MiB com
+três backups. Os avisos/erros de `hangar`, `app`, `uvicorn.error` e `asyncio` acrescentam ao
+diário apenas arquivo/função/linha e tipo da exceção. O setup roda também no lifespan, pois
+a configuração do uvicorn substitui seus handlers depois do início do processo principal.
+O atualizador destacado usa `atualizacao.log`, para não disputar a rotação do backend.
+
+Os diários antigos são copiados por origem para `diario/legado`, sem juntar arquivos de
+mesmo nome nem apagar originais; o download atualiza a cópia se uma versão antiga ainda
+escreveu lá. Logs privados antigos conhecidos têm a cauda de até 4 MiB copiada na subida;
+o original completo permanece. Instaladores atualizam os destinos dos lançadores; reiniciar
+só o Python não muda o redirecionamento de stdout de um lançador Windows antigo.
+
+Web e Expo usam o transporte de diagnóstico do core. A fila limitada fica em memória,
+separada por destino, e remove o lote somente após resposta HTTP de sucesso. As reconexões
+registram motivo, espera e recuperação; respostas/códigos e falhas de parse não incluem
+payload. Fechar/recarregar o app antes da entrega ainda perde a fila local; ela não é um
+armazenamento persistente. O servidor registra por conta própria as recusas que recebeu.
+
 ## Comentário explica o PORQUÊ, e é curto. A história medida mora AQUI, não no código.
 
 Este

@@ -145,20 +145,33 @@ _CONFIG_DIR_HERDADO = os.environ.get("CLAUDE_CONFIG_DIR")
 
 @pytest.fixture(autouse=True)
 def _diario_isolado():
-    # `diag._base()` lê CLAUDE_CONFIG_DIR/~/.claude e a suíte escrevia no diário REAL da máquina:
+    # O diário e os logs privados precisam ficar fora dos arquivos reais da máquina:
     # 361 `pergunta.fallback_texto` da sessão `s1` (test_api.py) numa semana de uso exportada,
     # indistinguíveis de picker preso de verdade. Sem `monkeypatch`/`tmp_path` na assinatura —
     # ver a armadilha de ordem de fixtures documentada em `_instalar_home_do_windows`.
-    from app import diag
-    original = diag._base
-    # `test_diag.py` isola pelo próprio CLAUDE_CONFIG_DIR (um por teste): só o fallback `~/.claude`
-    # é trocado, senão aquela suíte inteira passaria a compartilhar um diário só.
+    import logging
+    from app import diag, log_paths
+    original = log_paths.base
+    old_sources = diag._pastas_legadas
+    old_logs = diag._logs_legados
+    loggers = [logging.getLogger(name) for name in ("hangar", "app", "uvicorn.error", "asyncio")]
+    handlers = {logger: set(logger.handlers) for logger in loggers}
+    levels = {logger: logger.level for logger in loggers}
     def _base_de_teste() -> Path:
         v = os.environ.get("CLAUDE_CONFIG_DIR")
-        return Path(v) / ".hangar-diag" if v and v != _CONFIG_DIR_HERDADO else _DIARIO_DE_TESTE
-    diag._base = _base_de_teste
+        return Path(v) / "logs" if v and v != _CONFIG_DIR_HERDADO else _DIARIO_DE_TESTE
+    log_paths.base = _base_de_teste
+    diag._pastas_legadas = lambda: []
+    diag._logs_legados = lambda: set()
     yield
-    diag._base = original
+    for logger in loggers:
+        logger.setLevel(levels[logger])
+        for handler in set(logger.handlers) - handlers[logger]:
+            logger.removeHandler(handler)
+            handler.close()
+    log_paths.base = original
+    diag._pastas_legadas = old_sources
+    diag._logs_legados = old_logs
 
 
 @pytest.fixture(autouse=True)

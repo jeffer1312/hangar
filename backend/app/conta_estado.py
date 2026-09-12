@@ -26,7 +26,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app import contas, login_conta
+from app import contas, diag, login_conta
 from app.auth import require_auth
 from app.config import list_config_dirs
 from app.mensagens import erro
@@ -96,6 +96,8 @@ def _auth_status(dir_conta: Path) -> dict | None:
     uma leitura de estado (o backend é multiprocesso? não, mas o env do subprocess já nasce
     isolado — o ponto é não depender do env do processo pai pra apontar a conta certa).
     """
+    inicio = time.monotonic()
+    campos = {"provider": "claude", "conta_id": diag.conta_id(str(dir_conta)), "etapa": "consultar_auth"}
     env = dict(os.environ)
     env["CLAUDE_CONFIG_DIR"] = str(dir_conta)
     try:
@@ -108,6 +110,8 @@ def _auth_status(dir_conta: Path) -> dict | None:
             timeout=_CLI_TIMEOUT,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
+        diag.registrar("conta.auth.falhou", "erro", **campos, **diag.erro_campos(e),
+                       ms=int((time.monotonic() - inicio) * 1000), limite_ms=int(_CLI_TIMEOUT * 1000))
         # FileNotFoundError (claude fora do PATH) é subclasse de OSError: cai aqui junto.
         _log.debug("auth status falhou para %s: %r", dir_conta, e)
         return None
@@ -119,6 +123,8 @@ def _auth_status(dir_conta: Path) -> dict | None:
     # quando o parse falha (CLI ausente ou formato novo, que aí sim é `indisponivel`).
     bruto = _parse_auth_status(r.stdout)
     if bruto is None:
+        diag.registrar("conta.auth.falhou", "erro", **campos, codigo="resposta_invalida",
+                       retorno=r.returncode, ms=int((time.monotonic() - inicio) * 1000))
         _log.debug("auth status rc=%s para %s: %s", r.returncode, dir_conta, r.stderr[:200])
     return bruto
 

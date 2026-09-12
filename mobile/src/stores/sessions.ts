@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden } from '@hangar/core';
+import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag } from '@hangar/core';
 import type { SessionInfo, Server, AggSession } from '@hangar/core';
 import { sortSessions } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
@@ -47,6 +47,8 @@ const RETRY_MAX_MS = 60_000;
 
 function scheduleRetry(id: string, get: () => SessionsState, set: (p: Partial<SessionsState>) => void) {
   const delay = retryDelays.get(id) ?? RETRY_MIN_MS;
+  const servidor = serversCache.find((s) => s.id === id);
+  if (servidor) registrarDiag({ evento: 'lista.retentativa', tela: 'lista', espera_ms: delay }, servidor.baseUrl);
   retryDelays.set(id, Math.min(delay * 2, RETRY_MAX_MS));
   clearTimeout(retryTimers.get(id));
   retryTimers.set(
@@ -90,6 +92,7 @@ function connect(list: Server[], get: () => SessionsState, set: (p: Partial<Sess
     if (streams.has(s.id)) continue;
     if (retryTimers.has(s.id)) continue;
     const es = openSessionsStream(s);
+    let falhaDados = false;
     // ping mantém o watchdog do adapter vivo (wrap rearma). Sem listener,
     // ping não rearma e o adapter fecharia stream saudável.
     es.addEventListener('ping', () => {});
@@ -97,12 +100,18 @@ function connect(list: Server[], get: () => SessionsState, set: (p: Partial<Sess
       retryDelays.delete(s.id);
       try {
         slots.set(s.id, { sessions: JSON.parse(e.data) as SessionInfo[], error: null });
+        if (falhaDados) registrarDiag({ evento: 'lista.voltou', tela: 'lista' }, s.baseUrl);
+        falhaDados = false;
       } catch {
+        falhaDados = true;
+        registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'json_invalido' }, s.baseUrl);
         slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
       }
       recompute(set);
     });
     es.addEventListener('list_error', () => {
+      falhaDados = true;
+      registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'produtor_falhou' }, s.baseUrl);
       // resposta viva, só list falhou — mantém última lista boa, marca erro distinto
       // mas também consideramos como sinal de vida para não derrubar por watchdog
       // (o adapter já rearmou via wrap)

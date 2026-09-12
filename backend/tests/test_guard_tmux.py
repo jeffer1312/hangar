@@ -14,6 +14,13 @@ import pytest
 HOOK = str((Path(__file__).parent.parent / "hooks" / "guard_tmux.py").resolve())
 
 
+@pytest.fixture(autouse=True)
+def _logs_isolados(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+
+
 def roda(comando: str, tool: str = "Bash") -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, HOOK],
@@ -114,5 +121,7 @@ def test_falha_deixa_rastro_em_disco(tmp_path):
     r = subprocess.run([sys.executable, HOOK], input=entrada, capture_output=True, text=True,
                        env={**os.environ, "CLAUDE_CONFIG_DIR": str(tmp_path)})
     assert r.returncode == 0  # nunca trava a sessao
-    log = (tmp_path / "guard_tmux-falhas.log").read_text()
+    root = tmp_path / "local" / "hangar" if os.name == "nt" else tmp_path / "home" / ".hangar"
+    log = (root / "logs" / "privado" / "guard_tmux-falhas.log").read_text()
     assert "nao e string" in log or "dict" in log
+    assert not (tmp_path / "guard_tmux-falhas.log").exists()

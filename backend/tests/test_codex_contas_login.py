@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -376,6 +377,62 @@ async def test_timeout_fecha_o_processo_e_marca_falha(contas, service, monkeypat
 
     assert service.login_status(work)["status"] == "failed"
     assert FakeNative.instances[0].closed
+
+
+async def test_diario_login_timeout_nao_exporta_dados_oauth(contas, service, monkeypatch, tmp_path):
+    from app import diag
+    _, work = contas
+    monkeypatch.setattr(diag, "_base", lambda: tmp_path / "logs")
+    monkeypatch.setattr("app.codex_contas_login._LOGIN_TIMEOUT", 0.01)
+    await service.start_login(work)
+    await service._attempts[service._key(work)].task
+    texto = diag.caminho_do_dia().read_text(encoding="utf-8")
+    eventos = [json.loads(linha) for linha in texto.splitlines()]
+    fim = next(e for e in eventos if e["evento"] == "conta.login.terminou")
+    assert fim["codigo"] == "codex_account_login_timeout"
+    assert fim["etapa"] == "aguardar_autorizacao"
+    assert fim["operacao"] == service.login_status(work)["attempt_id"]
+    for segredo in ("ABCD-EFGH", "native-login", "https://auth.openai.com", "b@x", str(work.home)):
+        assert segredo not in texto
+
+
+async def test_diario_preparo_background_registra_falha_sem_texto(contas, monkeypatch, tmp_path):
+    from app import diag
+    _, work = contas
+    monkeypatch.setattr(diag, "_base", lambda: tmp_path / "logs")
+
+    async def falhar(*args, **kwargs):
+        raise PermissionError(13, "token=SEGREDO-CLI")
+
+    monkeypatch.setattr("app.codex_contas_sync.prepare_account", falhar)
+    service = CodexContasLogin(native=FakeNative, account_in_use=lambda account: False)
+    await service.prepare(work)
+    await service._preparations[service._key(work)]
+    texto = diag.caminho_do_dia().read_text(encoding="utf-8")
+    eventos = [json.loads(linha) for linha in texto.splitlines()]
+    falha = next(e for e in eventos if e["evento"] == "conta.preparar.falhou")
+    assert falha["etapa"] == "herdar_configuracao"
+    assert falha["errno"] == 13
+    assert service.preparation_status(work)["status"] == "error"
+    assert "SEGREDO-CLI" not in texto
+
+
+async def test_diario_auth_nao_repete_falha_do_cache(contas, monkeypatch, tmp_path):
+    from app import diag
+    _, work = contas
+    monkeypatch.setattr(diag, "_base", lambda: tmp_path / "logs")
+
+    class FalhaAuth(FakeNative):
+        async def __aenter__(self):
+            raise RuntimeError("token=SEGREDO-CLI")
+
+    service = CodexContasLogin(native=FalhaAuth)
+    assert (await service.read_auth(work))["status"] == "unavailable"
+    primeiro = diag.caminho_do_dia().read_text(encoding="utf-8")
+    assert (await service.read_auth(work))["status"] == "unavailable"
+    assert diag.caminho_do_dia().read_text(encoding="utf-8") == primeiro
+    assert "conta.auth.falhou" in primeiro
+    assert "SEGREDO-CLI" not in primeiro
 
 
 async def test_conta_viva_recusa_login_antes_do_process(contas, monkeypatch):

@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { configureApi } from '@hangar/core';
+import { configureApi, configureDiag } from '@hangar/core';
 import { useServers } from './servers';
 import { useSessions, _resetSessionsForTests } from './sessions';
 
@@ -73,6 +73,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  configureDiag({ registrar: () => {}, novoReq: () => '' });
   _resetSessionsForTests();
 });
 
@@ -118,11 +119,14 @@ test('mensagem malformada mantém lista anterior e marca offline sem quebrar', (
 });
 
 test('backoff respeitado: mudança de activeId não reabre stream em retry; add de servidor abre só o novo', () => {
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'lista-teste' });
   const rel = useSessions.getState().retain();
   expect(created.length).toBe(1);
   const es = created[0] as unknown as FakeES & { trigger: (t: string, d: string) => void; onerror: ((e: unknown) => void) | null };
   // simula queda: dispara onerror → store fecha stream e agenda retry 5s
   (es as unknown as { onerror: (e: unknown) => void }).onerror?.({});
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.retentativa', espera_ms: 5000 }), 'http://10.0.0.1:8765');
   expect(created[0].close).toHaveBeenCalled();
   // em backoff, streams foi removido, mas retryTimer pendente
   expect(created.length).toBe(1);

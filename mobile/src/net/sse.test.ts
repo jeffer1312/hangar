@@ -1,4 +1,5 @@
 import { test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { configureDiag } from '@hangar/core';
 
 let ultimo: {
   url: string;
@@ -34,7 +35,51 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  configureDiag({ registrar: () => {}, novoReq: () => '' });
+  vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+test('registra queda, reconexão e primeiro quadro no destino original sem payload ou token', () => {
+  vi.useFakeTimers();
+  const registrar = vi.fn();
+  let contador = 0;
+  configureDiag({ registrar, novoReq: () => `req-${++contador}` });
+  const endereco = 'https://privado.test/hangar/api/sessions/nome-privado/events';
+  const primeiro = createEventSource(`${endereco}?token=segredo`, { withCredentials: false });
+  primeiro.addEventListener('ping', () => {});
+  let mock = ultimo!;
+  mock.listeners.open[0]({});
+  mock.listeners.ping[0]({ data: 'corpo privado' });
+  mock.listeners.ping[0]({ data: 'corpo privado' });
+  expect(registrar.mock.calls.filter(([e]) => e.evento === 'sse.conectou')).toHaveLength(1);
+  mock.listeners.error[0]({ xhrStatus: 503, message: 'segredo https://privado.test' });
+  primeiro.close();
+  vi.advanceTimersByTime(1000);
+  const segundo = createEventSource(`${endereco}?token=novo`, { withCredentials: false });
+  segundo.addEventListener('ping', () => {});
+  mock = ultimo!;
+  mock.listeners.ping[0]({ data: 'corpo privado' });
+  mock.listeners.ping[0]({ data: 'corpo privado' });
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'sse.caiu', codigo: '503' }), 'https://privado.test/hangar');
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'sse.reconectando', tentativa: 2 }), 'https://privado.test/hangar');
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'sse.voltou', ms: 1000 }), 'https://privado.test/hangar');
+  expect(registrar.mock.calls.filter(([e]) => e.evento === 'sse.voltou')).toHaveLength(1);
+  expect(JSON.stringify(registrar.mock.calls.map(([e]) => e))).not.toMatch(/segredo|novo|privado|https:/);
+  segundo.close();
+});
+
+test('registra silêncio de 25s sem tratar fechamento voluntário como falha', () => {
+  vi.useFakeTimers();
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'req-timeout' });
+  const es = createEventSource('https://silencio.test/api/sessions/events?token=segredo', { withCredentials: false });
+  ultimo!.listeners.open[0]({});
+  vi.advanceTimersByTime(25000);
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'sse.caiu', codigo: 'silencio', ms: 25000 }), 'https://silencio.test');
+  registrar.mockClear();
+  es.close();
+  expect(registrar).not.toHaveBeenCalled();
 });
 
 test('repassa data e lastEventId ao listener e não manda timeout de teto', () => {

@@ -91,7 +91,7 @@ if { exec 3</dev/tty; } 2>/dev/null; then TEM_TTY=1; else TEM_TTY=0; fi
 # Log em arquivo, nunca no --update: o app lê a saída CRUA pra pegar ##HANGAR-AVISO##,
 # e o `tee` quebraria esse parse. E nunca no --check: ele promete não escrever nada no disco,
 # e criar o próprio log já era escrita.
-LOG="$HOME/.hangar/install.log"
+LOG="$HOME/.hangar/logs/privado/install.log"
 if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
   mkdir -p "$(dirname "$LOG")"
   printf '\n===== %s  %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$0 $*" >> "$LOG"

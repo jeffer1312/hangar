@@ -664,6 +664,20 @@ CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_SYNC=1 CP_SYNC_BOOTSTRAP=$(openssl rand
 
 ## 7. Problemas comuns
 
+### Onde ficam os logs
+
+- **Windows:** `%LOCALAPPDATA%\hangar\logs\`.
+- **Linux/macOS:** `~/.hangar/logs/`.
+
+O botão **Baixar diagnóstico** exporta o diário de `diario/`, com etapas de login, contas,
+conexões, sessões e falhas internas. Os sete dias mais recentes ajudam a ligar o que aconteceu
+na tela ao motivo registrado pelo servidor. Diários do local antigo continuam no download.
+
+`privado/` contém os logs técnicos completos, incluindo `backend.log` e os logs da instalação
+e dos hooks. Esses arquivos podem conter dados sensíveis e não entram no download do diário.
+O log do backend conserva até três arquivos anteriores por rotação. No Windows, atualizar
+o instalador ajusta também os logs dos lançadores e da vigia para essa pasta.
+
 | Sintoma | Causa / fix |
 |---|---|
 | Recusa subir ("Refusing to start") | token ainda é `change-me` + bind não-loopback. Gere `CP_AUTH_TOKEN`. |

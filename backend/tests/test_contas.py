@@ -59,6 +59,26 @@ def test_criar_deixa_a_conta_com_marcador(casa):
     assert (p / contas.MARCADOR).is_file()
 
 
+def test_diario_criacao_registra_rollback_sem_excecao_crua(casa, monkeypatch, tmp_path):
+    from app import diag
+    monkeypatch.setattr(diag, "_base", lambda: tmp_path / "logs")
+
+    def falhar(*args):
+        raise PermissionError(13, "senha=SEGREDO-DO-ARQUIVO")
+
+    monkeypatch.setattr(contas, "_semear_claude_json", falhar)
+    with pytest.raises(PermissionError):
+        contas.criar("conta2")
+    texto = diag.caminho_do_dia().read_text(encoding="utf-8")
+    eventos = [json.loads(linha) for linha in texto.splitlines()]
+    assert any(e["evento"] == "conta.criar.rollback_concluiu" for e in eventos)
+    fim = next(e for e in eventos if e["evento"] == "conta.criar.fim")
+    assert fim["codigo"] == "excecao"
+    assert fim["errno"] == 13
+    assert "SEGREDO-DO-ARQUIVO" not in texto
+    assert not (casa / ".claude-conta2").exists()
+
+
 def test_criar_semeia_claude_json_sem_a_conta_de_origem(casa):
     """O oauthAccount é o único campo que PRECISA ser diferente. O resto é copiado de propósito:
     as permissões já aceitas por diretório e os MCP de escopo usuário moram nesse arquivo."""
@@ -581,11 +601,11 @@ def test_modulo_e_stdlib_pura():
     # `app` saiu do bloqueio em bloco e virou allowlist, pelo mesmo motivo do test_engines: o
     # `app.atomico` e stdlib puro e existe pra nao duplicar a retentativa do `os.replace` que o
     # Windows exige. Quem prova de verdade e o import com `-S` la em cima — ele carregou
-    # `app.contas` inteiro sem site-packages, `atomico` junto. A allowlist so mantem o
+    # `app.contas` inteiro sem site-packages, `atomico` e `diag` junto. A allowlist so mantem o
     # diagnostico rapido honesto: nome novo aqui tem que ser stdlib puro tambem.
     de_app = {a.name for n in ast.walk(arvore)
               if isinstance(n, ast.ImportFrom) and n.module == "app" for a in n.names}
-    assert de_app <= {"atomico"}
+    assert de_app <= {"atomico", "diag"}
 
 
 def test_drift_poda_por_nome_e_nao_pela_gaveta_inteira(casa):

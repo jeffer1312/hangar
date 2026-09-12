@@ -1,5 +1,6 @@
 """Instalar um harness pelo botão (app/harness_install.py)."""
 import asyncio
+import json
 import subprocess
 
 import pytest
@@ -35,6 +36,20 @@ def test_comando_que_falha_para_ali_e_guarda_a_saida(inst, monkeypatch):
     assert e["fase"] == "pronto" and e["ok"] is False
     assert e["etapa"] == "comando" and "saiu com 1" in e["erro"]
     assert "npm ERR! 404 Not Found" in e["log"]
+
+
+def test_instalacao_em_background_registra_desfecho_sem_saida_bruta(inst, monkeypatch, tmp_path):
+    from app import diag
+    monkeypatch.setattr(diag, "_base", lambda: tmp_path)
+    monkeypatch.setattr(hi.atualizar, "_rodar", lambda argv, **kw: (
+        kw["log"]("segredo-token") or subprocess.CompletedProcess(argv, 9, "", "")))
+    assert _rodar(inst, "codex")["ok"] is False
+    raw = diag.caminho_do_dia().read_text()
+    events = [json.loads(line) for line in raw.splitlines()]
+    result = next(e for e in events if e["evento"] == "harness.instalacao")
+    assert result["codigo"] == "falhou" and result["etapa"] == "comando"
+    assert result["provider"] == "codex" and result["operacao"]
+    assert "segredo-token" not in raw
 
 
 def test_rc_zero_nao_prova_instalacao(inst, monkeypatch):
