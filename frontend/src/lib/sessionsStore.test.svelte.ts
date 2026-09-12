@@ -4,6 +4,7 @@ import { sessionsStore } from './sessionsStore.svelte';
 import { configureDiag } from '@hangar/core';
 
 const streams = vi.hoisted(() => new Map<string, Map<string, (event: { data: string }) => void>>());
+const connectionIds = vi.hoisted(() => new Map<string, string | undefined>());
 vi.mock('./auth', () => ({
   listServers: () => ['lan', 'vpn'].map(id => ({ id, label: id, baseUrl: `http://${id}`, token: 'test' })),
   onServersChanged: () => () => {},
@@ -12,14 +13,27 @@ vi.mock('./navPelaLista', () => ({ navPelaLista: vi.fn() }));
 vi.mock('./navegadorPanel.svelte', () => ({ podarNavMortos: vi.fn() }));
 vi.mock('@hangar/core', async original => ({
   ...await original<typeof import('@hangar/core')>(),
-  openSessionsStream: (server: { id: string }) => {
+  openSessionsStream: (server: { id: string }, req?: string) => {
+    connectionIds.set(server.id, req);
     const handlers = new Map();
     streams.set(server.id, handlers);
     return { close: vi.fn(), addEventListener: (name: string, fn: unknown) => handlers.set(name, fn) };
   },
 }));
-afterEach(() => { sessionsStore.release(); streams.clear(); vi.clearAllTimers(); vi.useRealTimers();
+afterEach(() => { sessionsStore.release(); streams.clear(); connectionIds.clear(); vi.clearAllTimers(); vi.useRealTimers();
   configureDiag({ registrar: () => {}, novoReq: () => '' }); });
+
+it('passa à abertura da lista o mesmo ID registrado em cada servidor', () => {
+  vi.useFakeTimers();
+  const registrar = vi.fn();
+  let sequence = 0;
+  configureDiag({ registrar, novoReq: () => `lista-${++sequence}` });
+  sessionsStore.retain();
+  expect(new Set(connectionIds.values()).size).toBe(2);
+  for (const [server, req] of connectionIds) {
+    expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'lista.abrir', req }), `http://${server}`);
+  }
+});
 
 it('preserva a sessão da VPN quando a LAN assume a duplicata na lista visual', () => {
   sessionsStore.retain();

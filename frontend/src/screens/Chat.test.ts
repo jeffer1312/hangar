@@ -173,6 +173,8 @@ it('eventos do stream mantêm servidor de origem após trocar o ativo', async ()
   const t = montar();
   try {
     await tick();
+    const api = await import('@hangar/core');
+    expect(vi.mocked(api.openEventStream).mock.calls.at(-1)?.[2]).toBe('stream-teste');
     vi.mocked(getBaseUrl).mockReturnValue('http://outro');
     sseCtl.handlers.get('preview')?.({ data: 'conteudo privado token' } as MessageEvent);
     sseCtl.handlers.get('ping')?.({ data: '{}' } as MessageEvent);

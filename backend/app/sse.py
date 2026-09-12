@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -426,7 +427,10 @@ class _ListRefresher:
             self.version = 0
             self.errored = False
             self._refs = 0
-            self._task = asyncio.create_task(self._run())
+            # O produtor atende todas as conexões, não pertence ao primeiro assinante.
+            context = contextvars.copy_context()
+            context.run(diag.req_atual.set, "")
+            self._task = asyncio.create_task(self._run(), context=context)
 
     async def _run(self):
         while True:
@@ -497,6 +501,8 @@ async def list_events(ping_secs: float = 8.0):
     segue e o front ve a lista velha (stale > desconectado)."""
     queue: asyncio.Queue = asyncio.Queue()
     cond = _list_refresher.acquire()
+    started = time.monotonic()
+    diag.registrar("sse.lista_abriu")
 
     async def reader():
         last_version = -1
@@ -539,6 +545,7 @@ async def list_events(ping_secs: float = 8.0):
         for t in tasks:
             t.cancel()
         _list_refresher.release()
+        diag.registrar("sse.lista_fechou", ms=int((time.monotonic() - started) * 1000))
 
 
 def _confirm_codex_queue(name: str, jsonl: str) -> None:

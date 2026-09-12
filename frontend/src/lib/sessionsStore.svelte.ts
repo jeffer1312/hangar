@@ -97,8 +97,8 @@ function createSessionsStore() {
     }
     for (const s of list) {
       if (streams.has(s.id)) continue;
-      const es = openSessionsStream(s);
       const req = novoReqDiag();
+      const es = openSessionsStream(s, req);
       const tentativa = (tentativas.get(s.id) ?? 0) + 1;
       tentativas.set(s.id, tentativa);
       registrarDiag({ evento: 'lista.abrir', tela: 'lista', req, tentativa }, s.baseUrl);

@@ -2001,7 +2001,7 @@ export async function narrarSelecao(
 // cria um novo (para o auto-retry nativo não virar uma 2ª máquina de retry em paralelo), e o
 // watchdog de 25s faz o mesmo. Objeto novo nasce sem memória de id, então sem este param a retomada
 // exata jamais dispararia no uso real, e toda queda voltaria a custar o backfill cego de 200 linhas.
-export function openEventStream(name: string, lastEventId?: string | null): EventSourceLike {
+export function openEventStream(name: string, lastEventId?: string | null, req = novoReq()): EventSourceLike {
   const base = apiEnv().getBaseUrl();
   const token = apiEnv().getToken();
   const path = `/api/sessions/${encodeURIComponent(name)}/events`;
@@ -2012,6 +2012,7 @@ export function openEventStream(name: string, lastEventId?: string | null): Even
   const params = new URLSearchParams();
   if (!isSameOrigin) params.set('token', token ?? '');
   if (lastEventId) params.set('last_event_id', lastEventId);
+  if (req) params.set('diag_req', req);
   const qs = params.toString();
   const url = `${base}${path}${qs ? `?${qs}` : ''}`;
 
@@ -2021,12 +2022,14 @@ export function openEventStream(name: string, lastEventId?: string | null): Even
 // EventSource da LISTA de UM servidor (baseUrl/token explícitos). ?token cross-origin (EventSource
 // não manda header e cross-origin não leva cookie); withCredentials same-origin. Por-servidor:
 // cada um tem o seu, falha isolada.
-export function openSessionsStream(s: Server): EventSourceLike {
+export function openSessionsStream(s: Server, req = novoReq()): EventSourceLike {
   const o = apiEnv().origin;
   const isSameOrigin = !!o && (!s.baseUrl || s.baseUrl === o);
-  const url = isSameOrigin
-    ? `${s.baseUrl}/api/sessions/events`
-    : `${s.baseUrl}/api/sessions/events?token=${encodeURIComponent(s.token)}`;
+  const params = new URLSearchParams();
+  if (!isSameOrigin) params.set('token', s.token);
+  if (req) params.set('diag_req', req);
+  const qs = params.toString();
+  const url = `${s.baseUrl}/api/sessions/events${qs ? `?${qs}` : ''}`;
   return apiEnv().createEventSource(url, { withCredentials: isSameOrigin });
 }
 
@@ -2034,13 +2037,15 @@ export function openSessionsStream(s: Server): EventSourceLike {
 // ativo) — usado pela grade de comparação (feature #11), que pode misturar sessões de servidores
 // diferentes no mesmo relance. Mesma convenção de openSessionsStream (?token cross-origin,
 // withCredentials same-origin).
-export function openEventStreamForServer(s: Server, name: string): EventSourceLike {
+export function openEventStreamForServer(s: Server, name: string, req = novoReq()): EventSourceLike {
   const path = `/api/sessions/${encodeURIComponent(name)}/events`;
   const o = apiEnv().origin;
   const isSameOrigin = !!o && (!s.baseUrl || s.baseUrl === o);
-  const url = isSameOrigin
-    ? `${s.baseUrl}${path}`
-    : `${s.baseUrl}${path}?token=${encodeURIComponent(s.token)}`;
+  const params = new URLSearchParams();
+  if (!isSameOrigin) params.set('token', s.token);
+  if (req) params.set('diag_req', req);
+  const qs = params.toString();
+  const url = `${s.baseUrl}${path}${qs ? `?${qs}` : ''}`;
   return apiEnv().createEventSource(url, { withCredentials: isSameOrigin });
 }
 

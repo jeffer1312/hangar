@@ -502,14 +502,21 @@ async def _mux_indisponivel(request: Request, exc: tmux.MuxIndisponivel):
 
 @app.middleware("http")
 async def _correlaciona_diag(request: Request, call_next):
-    """Põe o `X-Hangar-Req` do front no contexto, pra o diário poder LIGAR as duas pontas.
+    """Põe o id do front no contexto, pra o diário poder LIGAR as duas pontas.
 
     Sem isto, a linha da tela ("POST /select devolveu 409") e a do servidor ("o cursor do picker não
     convergiu") ficam soltas no arquivo, e amarrar uma na outra depende de comparar horário — que
     empata assim que há duas telas abertas. Com o id, quem analisa segue a cadeia inteira de um
     toque só.
     """
-    token = diag.req_atual.set(request.headers.get("x-hangar-req", "")[:32])
+    req = request.headers.get("x-hangar-req", "")[:32]
+    path = request.url.path.removeprefix(request.scope.get("root_path", ""))
+    if not req and re.fullmatch(r"/api/sessions/(?:[^/]+/)?events", path):
+        # EventSource nativo não permite acrescentar o header de correlação.
+        candidate = request.query_params.get("diag_req", "")
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", candidate):
+            req = candidate
+    token = diag.req_atual.set(req)
     started = time.monotonic()
     response = None
     failure = ""

@@ -7,7 +7,9 @@ ouvinte ficaria mudo ate a proxima) e copia de cada evento seguinte. A fonte mor
 ouvinte e renasce no proximo. Excecao da fonte chega em cada ouvinte, pra quem consome tratar
 como falha, nao como fim silencioso."""
 import asyncio
+import contextvars
 from typing import AsyncIterator, Callable, Hashable
+from app import diag
 
 _FIM = object()
 
@@ -38,7 +40,10 @@ class Difusor:
         if fonte is None:
             fonte = _Fonte(fabrica())
             self._fontes[chave] = fonte
-            fonte.tarefa = asyncio.create_task(self._bombear(chave, fonte))
+            # A fonte pertence a todos os ouvintes, não ao pedido que chegou primeiro.
+            context = contextvars.copy_context()
+            context.run(diag.req_atual.set, "")
+            fonte.tarefa = asyncio.create_task(self._bombear(chave, fonte), context=context)
         fila: asyncio.Queue = asyncio.Queue()
         fonte.ouvintes.append(fila)
         if fonte.ultimo is not None:

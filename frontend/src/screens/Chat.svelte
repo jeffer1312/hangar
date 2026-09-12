@@ -1587,7 +1587,7 @@
     if (es) { es.close(); es = null; }
     sseRecusado = false;
 
-    es = openEventStream(sessionName, lastEventId);
+    es = openEventStream(sessionName, lastEventId, req);
     // Ciclo de vida da conexão no diário de uso. É o que faltava nos relatos de "a conversa parou"
     // e "as sessões sumiram": sem isto não dá pra distinguir queda de rede, reconexão em laço e
     // conexão viva com a lista congelada, e a análise vira chute.

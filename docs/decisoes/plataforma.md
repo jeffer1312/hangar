@@ -39,6 +39,12 @@ entre pedidos de uma tentativa de login. `@diag.rastrear` registra início e té
 argumentos/retorno: `retornou` significa que a função terminou, não que um resultado parcial
 virou sucesso. Erros encadeados preservam classe/errno/winerror sem copiar suas mensagens.
 
+Conexões SSE levam o mesmo `req` da tela na query `diag_req`, validada só nas rotas de eventos;
+o header continua tendo prioridade. Web, comparação e mobile preservam autenticação e posição
+de retomada. A lista registra abertura/fechamento por conexão. O refresher da lista e as fontes
+do `Difusor` limpam o `req` herdado para não atribuir trabalho compartilhado ao primeiro ouvinte.
+Os testes focados cobrem duas conexões simultâneas com IDs distintos e produtores sem esse ID.
+
 Logs ficam sob `%LOCALAPPDATA%/hangar/logs` no Windows e `~/.hangar/logs` no Linux/macOS.
 `diario/` contém somente o JSONL exportável; `privado/` recebe backend, instalador, vigia,
 hooks, restauração de terminais e diagnósticos do CLI. O backend usa rotação de 4 MiB com

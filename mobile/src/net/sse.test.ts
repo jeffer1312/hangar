@@ -1,5 +1,5 @@
 import { test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { configureDiag } from '@hangar/core';
+import { configureApi, configureDiag, openEventStream } from '@hangar/core';
 
 let ultimo: {
   url: string;
@@ -38,6 +38,35 @@ afterEach(() => {
   configureDiag({ registrar: () => {}, novoReq: () => '' });
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+test('reutiliza o ID do core na conexão e nos eventos sem gerar outro', () => {
+  vi.useFakeTimers();
+  const registrar = vi.fn();
+  const novoReq = vi.fn(() => 'core-mobile-1');
+  configureDiag({ registrar, novoReq });
+  configureApi({ getBaseUrl: () => 'https://correlation.test', getToken: () => 'token-privado',
+    origin: null, onUnauthorized() {}, createEventSource });
+  const es = openEventStream('sess', 'thread:42');
+  const url = new URL(ultimo!.url);
+  expect(novoReq).toHaveBeenCalledTimes(1);
+  expect(url.searchParams.get('diag_req')).toBe('core-mobile-1');
+  expect(url.searchParams.get('last_event_id')).toBe('thread:42');
+  expect(url.searchParams.get('token')).toBe('token-privado');
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'sse.abrir', req: 'core-mobile-1' }), 'https://correlation.test');
+  es.close();
+});
+
+test('fallback inclui o ID na URL e preserva os headers recebidos', () => {
+  vi.useFakeTimers();
+  const registrar = vi.fn();
+  configureDiag({ registrar, novoReq: () => 'mobile-fallback' });
+  const headers = { Authorization: 'Bearer privado' };
+  const es = createEventSource('https://fallback.test/api/sessions/events', { withCredentials: false, headers });
+  expect(new URL(ultimo!.url).searchParams.get('diag_req')).toBe('mobile-fallback');
+  expect(ultimo!.opts.headers).toBe(headers);
+  expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ req: 'mobile-fallback' }), 'https://fallback.test');
+  es.close();
 });
 
 test('registra queda, reconexão e primeiro quadro no destino original sem payload ou token', () => {

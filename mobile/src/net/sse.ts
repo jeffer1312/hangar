@@ -16,12 +16,18 @@ export function createEventSource(
   opts: { withCredentials: boolean; headers?: Record<string, string> },
 ): EventSourceLike {
   const inicio = Date.now();
-  const req = novoReqDiag();
+  let req = '';
   let destino = '';
   let chave = '';
   let rota = '';
   try {
     const endereco = new URL(url);
+    const headerReq = Object.entries(opts.headers ?? {}).find(([key]) => key.toLowerCase() === 'x-hangar-req')?.[1];
+    req = headerReq || endereco.searchParams.get('diag_req') || novoReqDiag();
+    if (req) {
+      endereco.searchParams.set('diag_req', req);
+      url = endereco.toString();
+    }
     const api = endereco.pathname.indexOf('/api/');
     if (api >= 0) {
       destino = endereco.origin + endereco.pathname.slice(0, api);

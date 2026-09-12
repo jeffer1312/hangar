@@ -48,8 +48,8 @@ from app import atomico, log_paths
 
 _log = logging.getLogger("hangar.diag")
 
-# Id do pedido HTTP em curso, posto pelo middleware a partir do cabeçalho `X-Hangar-Req` que o
-# front manda. É o que LIGA a linha da tela ("mandei POST /select e voltou 409") à linha do servidor
+# Id do pedido HTTP em curso, vindo do header `X-Hangar-Req` ou da query `diag_req` no SSE.
+# É o que LIGA a linha da tela ("mandei POST /select e voltou 409") à linha do servidor
 # ("o cursor do picker não convergiu") — sem ele as duas ficam soltas no arquivo, e reconstruir o
 # que causou o quê depende de adivinhar por horário, que empata quando há duas telas abertas.
 # contextvar, não parâmetro: `registrar` é chamado no fundo de handlers que não têm o request.
