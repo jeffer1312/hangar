@@ -452,6 +452,32 @@ def test_paste_do_pi_alheio_nao_conta_como_entrega():
     assert r is not True
 
 
+# --- imagem anexada: o Claude Code troca o CAMINHO colado por "[Image #N]" (medido 12/09/2026) ---
+# O app manda "<texto> — 📎 imagem: <caminho>.png". A cauda procurada e o caminho, que nunca e
+# desenhado; em mensagem CURTA o comeco (40 caracteres) alcanca o "C:" do caminho, que tambem some.
+# Virava "colagem sem prova", o Enter nao ia e a mensagem nao chegava. Composer copiado do log real.
+_TEXTO_IMAGEM = ("Ai ta colocando até emoji — 📎 imagem: "
+                 r"C:\Users\Lhais\.hangar\uploads\hangar-b510f3\e40d0536\1789233552-ead082.png")
+
+
+def test_imagem_nova_conta_como_entrega():
+    pane = _pane_claude(["❯ [Image #1]Ai ta colocando até emoji — 📎 imagem:"])
+    assert terminal_input._composer_residuo(pane, _TEXTO_IMAGEM, "cc", pastes_antes=set()) is True
+
+
+def test_imagem_alheia_nao_conta_como_entrega():
+    # Mesma trava de identidade: imagem que o dono ja tinha anexado no rascunho nao prova a nossa.
+    pane = _pane_claude(["❯ [Image #1]"])
+    antes = terminal_input._paste_ids(pane)
+    r = terminal_input._composer_residuo(pane, _TEXTO_IMAGEM, "cc", pastes_antes=antes)
+    assert r is not True
+
+
+def test_imagem_e_texto_colado_nao_se_confundem():
+    # `[Image #1]` e `[Pasted text #1]` sao chips diferentes: o numero igual nao pode esconder um novo.
+    assert terminal_input._paste_ids("[Image #1][Pasted text #1 +3 lines]") !=         terminal_input._paste_ids("[Pasted text #1 +3 lines]")
+
+
 def test_paste_ids_le_os_dois_desenhos():
     assert terminal_input._paste_ids("[Pasted text #3 +42 lines]") == {"3"}
     assert terminal_input._paste_ids(" [paste #1 1171 chars]") == {"1"}
@@ -624,6 +650,15 @@ def test_diag_composer_pane_ilegivel_nao_lanca():
     # Sem reguas -> _composer_regiao devolve None; o helper tem que descrever a ausencia, nao explodir.
     diag = terminal_input._diag_composer("tela sem nenhuma regua aqui", "oi", "cc", None)
     assert "ilegivel" in diag
+
+
+def test_diag_composer_ilegivel_traz_o_fim_da_tela():
+    # "ilegivel" sozinho nao diz o que a tela TINHA: dois envios com print se perderam assim em
+    # 12/09/2026 e nao havia como saber qual desenho o detector nao reconheceu.
+    pane = "\n".join(["conversa"] * 30 + ["✽ Inferring… (5m 14s)", "desenho novo do composer", "", ""])
+    diag = terminal_input._diag_composer(pane, "oi", "cc", None)
+    assert "desenho novo do composer" in diag
+    assert "Inferring" in diag
 
 
 def test_diag_composer_degrada_em_string_quando_algo_exploda(monkeypatch):

@@ -377,10 +377,13 @@ def _sem_borda(s: str) -> str:
 # ponytail: e uma lista de desenhos medidos, igual ao _READY_MARKERS_BY_PROVIDER — provider novo que
 # colapse paste entra aqui, com a forma medida no pane, nunca chutada.
 _PASTE_ID_RE = re.compile(r"\[(?:Pasted text|paste) #(\d+)")
+# Imagem: o Claude Code troca o CAMINHO colado por "[Image #N]" e o caminho nunca e desenhado
+# (medido 12/09/2026). Id com prefixo para o `#1` da imagem nao se confundir com o do texto colado.
+_IMAGE_ID_RE = re.compile(r"\[Image #(\d+)\]")
 
 
 def _paste_ids(regiao: str) -> set[str]:
-    return set(_PASTE_ID_RE.findall(regiao))
+    return set(_PASTE_ID_RE.findall(regiao)) | {f"img{n}" for n in _IMAGE_ID_RE.findall(regiao)}
 
 
 def _linhas_uteis(pane: str) -> list[str]:
@@ -477,6 +480,7 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
 # Teto de caracteres da regiao despejada na linha de diagnostico — cauda de log serve pra explicar
 # o PROXIMO caso real (ver _diag_composer), nao pra empilhar a tela inteira no journal.
 _DIAG_MAX = 400
+_DIAG_FIM_LINHAS = 8
 
 
 def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | None) -> str:
@@ -513,8 +517,13 @@ def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | No
         # nome_sessao="" pra este helper so LER a regiao, nunca repetir o aviso-uma-vez de composer
         # ilegivel — esse efeito colateral pertence ao caminho principal, ja disparado la se for o caso.
         regiao = _composer_regiao(pane, "")
-        regiao_txt = ("ilegivel (menos de 2 reguas validas, ou fora de _COMPOSER_FUNDO/_ALTURA)"
-                      if regiao is None else regiao.replace("\n", "\\n")[:_DIAG_MAX])
+        if regiao is None:
+            # O fim da tela e o que diz QUAL desenho o detector nao reconheceu; so "ilegivel" nao da.
+            fim = "\n".join(linhas[-_DIAG_FIM_LINHAS:]).replace("\n", "\\n")[-_DIAG_MAX:]
+            regiao_txt = ("ilegivel (menos de 2 reguas validas, ou fora de _COMPOSER_FUNDO/_ALTURA)"
+                          f" fim_da_tela={fim!r}")
+        else:
+            regiao_txt = regiao.replace("\n", "\\n")[:_DIAG_MAX]
         cauda = texto.strip().split("\n")[-1].strip()[-_RESIDUO_CAUDA:]
         inicio = texto.strip()[:_RESIDUO_INICIO]
         pastes_depois = _paste_ids(regiao or "")
