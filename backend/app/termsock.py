@@ -25,6 +25,7 @@ from typing import Optional
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
+from uvicorn.protocols.utils import ClientDisconnected
 
 from app import tmux
 from app.auth import _LOOPBACK, _blocked, _record_fail
@@ -623,13 +624,7 @@ async def _motor_posix(ws: WebSocket, name: str, cols: int, rows: int) -> None:
         # imprimia o traceback, tarde e feio, mas imprimia) por silencio total — um bug de verdade
         # no escritor ou no leitor sumiria, e o usuario so veria o terminal cair sem nenhuma linha
         # no log dizendo por que. CancelledError fica de fora: e o encerramento normal, nao falha.
-        for tarefa in (tarefa_leitor, tarefa_escritor):
-            try:
-                await tarefa
-            except asyncio.CancelledError:
-                pass
-            except BaseException:
-                _log.exception("termsock: %r — task terminou com excecao", name)
+        await _colher_tarefas(name, tarefa_leitor, tarefa_escritor)
         # So remove reader/writer se ESTA Sessao ainda nao foi desmontada por outro caminho: o
         # `pty.fork()` reusa o MESMO numero de fd, e o caminho de derrubada (acima) ja fez essa
         # remocao e fechou o fd antes de devolver o numero pro SO. Se o handler velho acorda
@@ -904,13 +899,7 @@ async def _motor_windows(ws: WebSocket, name: str, cols: int, rows: int) -> None
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(tarefa_escritor, timeout=1.0)
         tarefa_escritor.cancel()
-        for tarefa in (tarefa_leitor, tarefa_escritor):
-            try:
-                await tarefa
-            except asyncio.CancelledError:
-                pass
-            except BaseException:
-                _log.exception("termsock: %r — task terminou com excecao", name)
+        await _colher_tarefas(name, tarefa_leitor, tarefa_escritor)
         if not s.desmontada:
             s.fechar_transportes()
         # Identidade, nao nome: um `pop(name)` cru removeria a Sessao NOVA de uma reconexao que ja
@@ -923,6 +912,21 @@ async def _motor_windows(ws: WebSocket, name: str, cols: int, rows: int) -> None
         except RuntimeError:
             pass
         _log.info("termsock: %r desanexado", name)
+
+
+async def _colher_tarefas(name: str, *tarefas: asyncio.Future) -> None:
+    """Recupera o resultado das tasks da conexao, logando so o que e falha de verdade.
+
+    Cliente que fecha no meio de um `send_bytes` termina a task com `ClientDisconnected`: e o
+    painel fechando, nao defeito, e virava ERROR com traceback a cada fechamento.
+    """
+    for tarefa in tarefas:
+        try:
+            await tarefa
+        except (asyncio.CancelledError, WebSocketDisconnect, ClientDisconnected):
+            pass
+        except BaseException:
+            _log.exception("termsock: %r — task terminou com excecao", name)
 
 
 def _pipe_handle(h: int):

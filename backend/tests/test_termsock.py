@@ -1117,3 +1117,29 @@ def test_diag_entrada_calado_sem_o_flag(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="app.termsock"):
         ts._diag_entrada("s", b"\x1b[43;4R")
     assert not caplog.records
+
+
+# --- cliente fechando no meio de um envio nao e falha (medido 12/09/2026, Windows) ---
+# O escritor estava no `send_bytes` quando o painel fechou: a task termina com ClientDisconnected
+# (uvicorn) e o log gravava ERROR com traceback inteiro a cada painel fechado — 5 no diario de um
+# dia, todos `ConnectionClosedOK 1005`. Um bug de verdade na task continua saindo como excecao.
+
+async def _task_que_levanta(exc):
+    raise exc
+
+
+async def test_cliente_desconectado_no_envio_nao_vira_erro(caplog):
+    from uvicorn.protocols.utils import ClientDisconnected
+    tarefa = asyncio.ensure_future(_task_que_levanta(ClientDisconnected()))
+    await asyncio.sleep(0)
+    with caplog.at_level(logging.INFO, logger="app.termsock"):
+        await termsock._colher_tarefas("s", tarefa)
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def test_falha_real_da_task_continua_logada(caplog):
+    tarefa = asyncio.ensure_future(_task_que_levanta(ValueError("bug de verdade")))
+    await asyncio.sleep(0)
+    with caplog.at_level(logging.INFO, logger="app.termsock"):
+        await termsock._colher_tarefas("s", tarefa)
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR]
