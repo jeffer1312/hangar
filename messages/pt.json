@@ -1385,7 +1385,7 @@
   "custos_cache_estimado": "cache estimado",
   "custos_col_entrada": "entrada",
   "custos_col_entrada_ajuda": "à esquerda, tudo que entrou no modelo (entrada sem cache + cache escrito + cache lido); à direita, só a parte que não veio do cache",
-  "custos_sem_cache_escrito_ajuda": "* provedor que não cobra escrita de cache: ali o trecho novo de cada turno conta como entrada sem cache, enquanto no Claude o mesmo trecho vira cache escrito. Por isso a entrada sem cache dos modelos GPT parece alta ao lado da do Claude.",
+  "custos_sem_cache_escrito_ajuda": "* nenhum cache escrito neste recorte: o trecho novo de cada turno contou como entrada sem cache. Onde há cache escrito, esse mesmo trecho aparece lá e a entrada sem cache fica perto de zero — por isso o número da direita só é comparável entre linhas marcadas do mesmo jeito.",
   "custos_servidor_malha": "um servidor da malha não conhece a tarifa deste modelo — o volume dele conta, o custo não",
   "custos_comparar_hint": "Duas a {n} entidades da mesma dimensão, lado a lado. Respeita os outros filtros ativos, nunca o da dimensão comparada.",
   "custos_comparar_por": "comparar por",

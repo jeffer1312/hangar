@@ -1385,7 +1385,7 @@
   "custos_cache_estimado": "estimated cache",
   "custos_col_entrada": "input",
   "custos_col_entrada_ajuda": "left, everything fed to the model (uncached input + cache written + cache read); right, only the part that did not come from cache",
-  "custos_sem_cache_escrito_ajuda": "* provider that does not charge for cache writes: there each turn's new prefix counts as uncached input, while on Claude the same prefix becomes cache written. That is why uncached input on GPT models looks high next to Claude's.",
+  "custos_sem_cache_escrito_ajuda": "* no cache writes in this slice: each turn's new prefix counted as uncached input. Where cache writes exist, that same prefix shows up there instead and uncached input stays near zero — so the number on the right only compares between rows marked the same way.",
   "custos_servidor_malha": "one server in the mesh doesn't know this model's rate — its volume counts, its cost doesn't",
   "custos_comparar_hint": "Two to {n} entities of the same dimension, side by side. Respects the other active filters, never the compared dimension.",
   "custos_comparar_por": "compare by",

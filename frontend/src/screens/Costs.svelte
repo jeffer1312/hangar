@@ -1180,7 +1180,9 @@
                      de custo pra fora em 1280px, e no celular o `title` do chip nunca abre. A
                      nota abaixo da tabela é o que explica, e ela é legível sem hover. -->
                 <td class="n">{tok(b.input + b.cache_write + b.cache_read)}<span class="dim">/{tok(b.input)}</span
-                  >{#if b.cache_write === 0 && b.cache_read > 0}<span class="marca">*</span>{/if}</td>
+                  >{#if b.cache_write === 0 && b.cache_read > 0}<span class="marca"
+                    title={m.custos_sem_cache_escrito_ajuda()}
+                    aria-label={m.custos_sem_cache_escrito_ajuda()}>*</span>{/if}</td>
                 <td class="n">{tok(b.output)}</td>
                 <td class="n">{tok(b.cache_read)}</td>
                 <td class="n dim">{t ? `${dec(t.input, 2)}/${dec(t.output, 2)}` : '—'}</td>
