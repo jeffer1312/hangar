@@ -154,22 +154,47 @@ duas tentativas HTTP de três segundos, separadas por dois segundos; aceita resp
 Não é uma verificação funcional de todas as rotas. WMI indisponível, PID não identificado,
 porta de outro processo ou processo que não encerra impedem a criação de outra instância.
 
-`Restart-HangarTask` desliga temporariamente o reinício automático, encerra só os processos do
-serviço identificados pelo checkout/lançador, confere nascimento do PID (tolerância inferior a
-um milissegundo entre WMI e GetProcessTimes), aguarda a tarefa sair de `Running` e a porta ficar
-livre, e só então inicia novamente. Não usa `Stop-ScheduledTask` nem mata toda a árvore: psmux
-e `app.atualizar` não são alvos. As configurações de recuperação são restauradas em `finally`.
+`Restart-HangarTask` encerra só os processos do serviço identificados pelo checkout/lançador,
+confere nascimento do PID (tolerância inferior a um milissegundo entre WMI e GetProcessTimes),
+aguarda a tarefa sair de `Running` e a porta ficar livre, e só então inicia novamente. Não usa
+`Stop-ScheduledTask` nem mata toda a árvore: psmux e `app.atualizar` não são alvos.
 
-O instalador segura `Local\HangarInstall` e pausa os reinícios automáticos existentes enquanto
-altera dependências. A vigia usa a mesma exclusão e também reconhece processos vivos de
-instalação/atualização. A exclusão por tarefa serializa reinícios concorrentes; não há PID ou
-arquivo de manutenção permanente que possa ficar preso após um crash.
+**Não** pausa o reinício automático (12/09/2026): zerar o `RestartCount` por `Set-ScheduledTask`
+gera `<RestartOnFailure>` com `<Interval>` e sem `<Count>`, e o Agendador recusa o XML inteiro —
+`HRESULT 0x80041319`, "Um elemento ou atributo necessário está faltando no XML da tarefa.
+(43,8):Count:". Como as tarefas nascem com `RestartCount=3`, isso falhava em **todas** as
+chamadas: o passo 7/8 morria antes de iniciar a tarefa (pendência "nenhuma tarefa chegou a ser
+iniciada", instalador em exit 1) e a vigia nunca recuperava travamento nenhum. Além de
+impossível, era desnecessário — o reinício por falha só dispara um minuto depois da morte do
+processo, e aí a nova instância já está `Running` e o `MultipleInstances=IgnoreNew` a descarta;
+se a nova instância não subir, o reinício por falha é a rede de segurança que a pausa jogava fora.
+
+O instalador segura `Local\HangarInstall` e, na janela longa dele, pausa os reinícios automáticos
+existentes por **re-registro do XML** (`Suspender-Recuperacao` remove o nó `<RestartOnFailure>`,
+`Restaurar-Recuperacao` o repõe no `finally`). `Set-ScheduledTask` não serve nem recebendo um
+`-Settings` novo sem recuperação: ele funde com o XML existente e o `<Interval>` sobrevive sozinho.
+O re-registro preserva gatilhos, principal, ação, diretório e demais configurações, e **não**
+derruba instância em execução (medido com a tarefa `Running` e o processo filho vivo antes e
+depois). O restore é cirúrgico — repõe o nó no XML **atual**, porque entre a pausa e o `finally` o
+passo 7/8 re-registra a tarefa com caminhos novos e reescrever o XML velho desfaria a instalação
+que acabou de rodar; tarefa que já voltou com recuperação própria sai sem toque. A vigia usa a
+mesma exclusão e também reconhece processos vivos de instalação/atualização. A exclusão por tarefa
+serializa reinícios concorrentes; não há PID ou arquivo de manutenção permanente que possa ficar
+preso após um crash.
 
 Verificação no Linux com PowerShell 7: `scripts/test-windows-tasks.ps1` exercita seleção,
 identidade, ordem de parada/início, recusa de duplicação, falhas, exclusão entre processos e
 restauração após erro. A sonda HTTP foi executada contra servidor local com 200, 404, 500 e
-conexão sem resposta. A prova de UAC/Agendador e de sobrevivência real do atualizador/psmux no
-Windows ainda é necessária; os testes locais usam comandos de processo/tarefa simulados.
+conexão sem resposta.
+
+Verificação no **Windows**, contra o Agendador de verdade: `scripts/test-windows-tasks-reais.ps1`
+(pula fora sozinho onde o módulo `ScheduledTasks` não existe). Registra uma tarefa descartável com
+a forma das reais, põe para rodar e prova pause/restore: recuperação desligada, definição inteira
+preservada, instância viva sobrevivendo ao re-registro, restore cirúrgico depois de um 7/8
+simulado e restore idempotente. Existe porque o teste simulado não reprova XML inválido — foi
+assim que a pausa por `Set-ScheduledTask`, recusada em 100% das chamadas, chegou a produção. A
+prova de UAC e de sobrevivência real do atualizador/psmux no Windows ainda é necessária; os testes
+de processo continuam simulados.
 Referência: [configurações nativas do Agendador](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset?view=windowsserver2025-ps).
 
 ## Instalação Windows mantém o nível de permissão

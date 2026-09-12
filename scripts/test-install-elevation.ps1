@@ -40,7 +40,17 @@ function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel)
     return @{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel }
 }
 function New-ScheduledTaskAction { param($Execute, $Argument) return @{} }
-function Register-ScheduledTask { param($TaskName, $Action, $Trigger, $Settings, $Principal, [switch]$Force)
+function Register-ScheduledTask { param($TaskName, $Action, $Trigger, $Settings, $Principal, $Xml, [switch]$Force, $ErrorAction)
+    if ($Xml -or $PSBoundParameters.ContainsKey('Xml')) {
+        # Registro por XML (Suspender-/Restaurar-Recuperacao): nivel e logon viajam DENTRO do XML
+        # exportado, nao num -Principal - e cada comando aqui e executado isolado do resto da
+        # funcao, entao nao ha documento pra inspecionar. Que o round-trip preserva LogonType e
+        # RunLevel esta provado contra o Agendador real no scripts/test-windows-tasks-reais.ps1.
+        # O que se cobra aqui e o -Force: sem ele o re-registro falha em tarefa existente, que e
+        # o unico caso em que essas duas funcoes rodam.
+        Assert $Force "Registro por XML sem -Force na tarefa $TaskName"
+        return
+    }
     Assert ($Principal.RunLevel -eq $script:installRunLevel) "Nivel errado na tarefa $TaskName"
     Assert ($Principal.LogonType -eq 'Interactive') "Sessao errada na tarefa $TaskName"
 }

@@ -60,7 +60,6 @@ function Test-HangarHttp([int]$port) {
 function Restart-HangarTask([string]$name, [int]$port, [string]$directory) {
     $mutex = New-Object Threading.Mutex($false, "Local\HangarRestart-$name")
     $locked = $false
-    $settings = $null
     try {
         try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
         if (-not $locked) { throw "Outra recuperacao de $name esta em andamento" }
@@ -77,10 +76,21 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory) {
         if ($task.State -eq 'Running' -and -not $candidates.Count) {
             throw "Tarefa $name em execucao sem processo identificado; nao e seguro reiniciar"
         }
-        $settings = $task.Settings
-        $restartCount = $settings.RestartCount
-        $settings.RestartCount = 0
-        Set-ScheduledTask -TaskName $name -Settings $settings -ErrorAction Stop | Out-Null
+        # NAO se pausa o reinicio automatico aqui, por dois motivos medidos (12/09/2026).
+        # 1) Nao da: zerar o RestartCount por Set-ScheduledTask produz um <RestartOnFailure> com
+        #    <Interval> e sem <Count>, e o Agendador recusa o XML INTEIRO - HRESULT 0x80041319,
+        #    "Um elemento ou atributo necessario esta faltando no XML da tarefa. (43,8):Count:".
+        #    Como as duas tarefas nascem com -RestartCount 3, isto falhava em 100% das chamadas:
+        #    o Restart-HangarTask morria ANTES de parar qualquer coisa, o passo 7/8 do instalador
+        #    virava pendencia ("nenhuma tarefa chegou a ser iniciada") e a vigia nunca recuperou
+        #    travamento nenhum. Set-ScheduledTask tambem nao consegue REMOVER o bloco (ele funde
+        #    com o XML existente e o Interval sobrevive sozinho); so re-registrar o XML tira, e
+        #    isso e o que o instalador faz na janela LONGA dele (Suspender-Recuperacao).
+        # 2) Nao precisa: o reinicio por falha do Agendador so dispara um minuto depois da morte
+        #    do processo, e a parada/inicio abaixo leva segundos. Quando ele chegar, a tarefa ja
+        #    esta Running e o MultipleInstances=IgnoreNew descarta a instancia extra. E se a nova
+        #    instancia NAO subir, o reinicio por falha e a rede de seguranca - pausar era jogar
+        #    fora a recuperacao exatamente no unico caso em que ela serve.
         foreach ($candidate in $candidates) {
             $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
             if (-not $process) { continue }
@@ -105,15 +115,8 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory) {
         }
         Start-ScheduledTask -TaskName $name -ErrorAction Stop
     } finally {
-        try {
-            if ($settings) {
-                $settings.RestartCount = $restartCount
-                Set-ScheduledTask -TaskName $name -Settings $settings -ErrorAction Stop | Out-Null
-            }
-        } finally {
-            if ($locked) { $mutex.ReleaseMutex() }
-            $mutex.Dispose()
-        }
+        if ($locked) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
     }
 }
 

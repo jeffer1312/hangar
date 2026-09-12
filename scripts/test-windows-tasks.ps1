@@ -68,7 +68,11 @@ function Test-HangarHttp { param($port) return $script:httpReplies.Dequeue() }
 try {
     Reset-State
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
-    Assert (($script:events -join ',') -eq 'settings:0,stop:10,stop:11,start,settings:3') 'Parada/reinicio fora de ordem ou recuperacao nao restaurada'
+    # Sem 'settings:*' na sequencia: o Restart-HangarTask nao mexe mais no RestartCount (o
+    # Agendador recusa Count=0 e o IgnoreNew ja descarta o reinicio por falha atrasado - ver o
+    # comentario no windows-tasks.ps1 e o scripts/test-windows-tasks-reais.ps1).
+    Assert (($script:events -join ',') -eq 'stop:10,stop:11,start') 'Parada/reinicio fora de ordem'
+    Assert ('settings:0' -notin $script:events) 'Voltou a pausar a recuperacao por Set-ScheduledTask (o Agendador recusa)'
     Reset-State
     $script:live[10].StartTime = $old.AddTicks(5)
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
@@ -146,12 +150,17 @@ try {
     Assert ($cfg.MultipleInstances -eq 'IgnoreNew' -and $cfg.RestartCount -eq 3 -and $cfg.RestartInterval.TotalMinutes -eq 1) 'Agendador perdeu protecao de instancia ou recuperacao'
     $outerTry = $ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] } | Select-Object -First 1
     Reset-State
-    $script:task.Settings.RestartCount = 0
-    $pausedRecovery = @{ 'hangar-backend' = 3 }
+    # O pause/restore de verdade passa por Export-/Register-ScheduledTask e so o Agendador real
+    # reprova a manobra errada - isso vive no scripts/test-windows-tasks-reais.ps1. Aqui a pergunta
+    # e outra: uma instalacao que ESTOURA no meio ainda repoe a recuperacao de cada tarefa pausada?
+    $script:reposto = @{}
+    function Restaurar-Recuperacao([string]$nome, [string]$blocoXml) { $script:reposto[$nome] = $blocoXml }
+    $bloco = '<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>'
+    $pausedRecovery = @{ 'hangar-backend' = $bloco }
     $installLocked = $false; $installMutex = $null
     try { throw 'falha simulada da instalacao' }
     catch { }
     finally { & ([scriptblock]::Create($outerTry.Finally.Extent.Text.TrimStart('{').TrimEnd('}'))) }
-    Assert ($script:task.Settings.RestartCount -eq 3) 'Falha da instalacao deixou recuperacao desativada'
+    Assert ($script:reposto['hangar-backend'] -eq $bloco) 'Falha da instalacao deixou recuperacao desativada'
     Write-Output 'OK: selecao de processos, recuperacao, falhas, espera, atualizacao, vigia e lancador'
 } finally { $env:LOCALAPPDATA = $testLocalData }

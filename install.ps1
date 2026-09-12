@@ -120,6 +120,48 @@ function Reparar-DonoTarefa($nome) {
     return $ok -and -not (Get-ScheduledTask -TaskName $nome -ErrorAction SilentlyContinue)
 }
 
+# Suspende o reinicio automatico (<RestartOnFailure>) de uma tarefa e devolve o bloco REMOVIDO em
+# XML, pra quem chamou repor depois. $null = nao havia o que pausar.
+#
+# Por que XML e nao Set-ScheduledTask (medido 12/09/2026, foi o bug que travou a instalacao):
+# zerar o RestartCount gera um <RestartOnFailure> com <Interval> e sem <Count>, e o Agendador
+# recusa o XML inteiro - HRESULT 0x80041319, "Um elemento ou atributo necessario esta faltando no
+# XML da tarefa. (43,8):Count:". Passar um -Settings NOVO sem recuperacao nenhuma da o MESMO erro:
+# o Set funde com o XML existente e o <Interval> sobrevive sozinho. Re-registrar o XML e o unico
+# caminho que funciona, e ele preserva o resto (gatilhos, principal, acao, diretorio, demais
+# settings) e NAO derruba instancia em execucao - medido com a tarefa Running e o processo filho
+# vivo antes e depois. A posicao do no dentro de <Settings> nao importa no re-registro (testadas
+# as tres: fim, inicio e na original), por isso o Restaurar- simplesmente adiciona de volta.
+function Suspender-Recuperacao([string]$nome) {
+    $doc = [xml](Export-ScheduledTask -TaskName $nome -ErrorAction Stop)
+    $ns = New-Object Xml.XmlNamespaceManager $doc.NameTable
+    $ns.AddNamespace('t', $doc.DocumentElement.NamespaceURI)
+    $no = $doc.SelectSingleNode('//t:Settings/t:RestartOnFailure', $ns)
+    if (-not $no) { return $null }
+    $guardado = $no.OuterXml
+    [void]$no.ParentNode.RemoveChild($no)
+    Register-ScheduledTask -TaskName $nome -Xml $doc.OuterXml -Force -ErrorAction Stop | Out-Null
+    return $guardado
+}
+
+# Repoe o bloco no XML ATUAL da tarefa, nao o XML inteiro de antes: entre o pause e aqui o passo
+# 7/8 re-registra a tarefa com caminhos novos (.vbs, diretorio, executavel do venv), e reescrever o
+# XML velho desfaria justamente a instalacao que acabou de rodar. Tarefa que ja voltou com
+# recuperacao propria (o caso do 7/8) sai sem toque.
+function Restaurar-Recuperacao([string]$nome, [string]$blocoXml) {
+    if (-not $blocoXml) { return }
+    $doc = [xml](Export-ScheduledTask -TaskName $nome -ErrorAction Stop)
+    $ns = New-Object Xml.XmlNamespaceManager $doc.NameTable
+    $ns.AddNamespace('t', $doc.DocumentElement.NamespaceURI)
+    if ($doc.SelectSingleNode('//t:Settings/t:RestartOnFailure', $ns)) { return }
+    $settings = $doc.SelectSingleNode('//t:Settings', $ns)
+    if (-not $settings) { throw "A tarefa $nome voltou sem bloco <Settings>; recuperacao nao reposta" }
+    $fragmento = $doc.CreateDocumentFragment()
+    $fragmento.InnerXml = $blocoXml
+    [void]$settings.AppendChild($fragmento)
+    Register-ScheduledTask -TaskName $nome -Xml $doc.OuterXml -Force -ErrorAction Stop | Out-Null
+}
+
 function Symlink-Funciona {
     # `mklink`, e NAO `New-Item -ItemType SymbolicLink`: no Windows PowerShell 5.1 o New-Item nao
     # pede o flag de criacao sem privilegio, entao falha ("requer privilegio de administrador")
@@ -544,12 +586,11 @@ if (-not $SoChecar) {
     try { $script:installRunLevel = Get-InstallRunLevel }
     catch { Pare $_.Exception.Message @('A instalacao e a atualizacao precisam usar o mesmo nivel de permissao.') }
     # A recuperacao automatica nao pode relancar processos enquanto suas dependencias mudam.
+    # Guarda o bloco <RestartOnFailure> pra repor no finally do fim (Restaurar-Recuperacao).
     foreach ($taskName in @('hangar-backend', 'hangar-frontend')) {
         $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         if ($existingTask -and $existingTask.Settings.RestartCount -gt 0) {
-            $pausedRecovery[$taskName] = $existingTask.Settings.RestartCount
-            $existingTask.Settings.RestartCount = 0
-            Set-ScheduledTask -TaskName $taskName -Settings $existingTask.Settings -ErrorAction Stop | Out-Null
+            $pausedRecovery[$taskName] = Suspender-Recuperacao $taskName
         }
     }
     if ($script:installRunLevel -eq 'Highest') {
@@ -2586,10 +2627,10 @@ Pausa-Log
 } finally {
     try {
         foreach ($taskName in $pausedRecovery.Keys) {
-            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-            if ($existingTask.Settings.RestartCount -eq 0) {
-                $existingTask.Settings.RestartCount = $pausedRecovery[$taskName]
-                Set-ScheduledTask -TaskName $taskName -Settings $existingTask.Settings -ErrorAction Stop | Out-Null
+            # Tarefa que nao existe mais nao tem o que repor (e um erro aqui, no finally de tudo,
+            # mascararia a falha que trouxe a instalacao ate aqui).
+            if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+                Restaurar-Recuperacao $taskName $pausedRecovery[$taskName]
             }
         }
     } finally {
