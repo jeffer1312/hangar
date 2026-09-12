@@ -917,6 +917,7 @@
   "tool_outro_1": "other",
   "tool_outros": "others",
   "config_modal_titulo": "Settings",
+  "config_busca_placeholder": "Search a setting",
   "config_modal_aparencia": "Appearance",
   "config_modal_sobre": "About",
   "config_modal_servidores": "Servers",

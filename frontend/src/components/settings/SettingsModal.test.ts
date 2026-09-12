@@ -9,6 +9,8 @@ import * as auth from '../../lib/auth';
 import * as m from '../../paraglide/messages';
 import type { Server } from '../../lib/auth';
 import type { TelaConfig } from '../../lib/configRoute';
+import { ENTRADAS } from './BuscaConfig.svelte';
+import { criarProps } from './props-reativas.svelte';
 import { clienteQuery } from '../../lib/queries';
 
 vi.mock('@hangar/core', async (importOriginal) => ({
@@ -358,6 +360,96 @@ describe('SettingsModal — seletor de servidor do grupo', () => {
     await tick(); await tick();
     expect(document.querySelector('.st-secao-sel .srv-sel')).not.toBeNull();
     unmount(t.comp);
+  });
+});
+
+describe('SettingsModal — a busca', () => {
+  // A lista de telas NÃO vem de uma constante compartilhada com a busca (isso seria circular): ela
+  // é lida da raiz RENDERIZADA, clicando cada linha pra descobrir a rota. Tirar uma entrada da
+  // busca, ou acrescentar uma tela ao modal sem entrada, derruba este teste.
+  it('toda tela da raiz tem pelo menos uma entrada na busca', async () => {
+    stubMobile();
+    const t = montar('root', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+    await tick(); await tick();
+    const linhas = [...document.querySelectorAll<HTMLButtonElement>('.st-cartao > button')];
+    expect(linhas.length).toBeGreaterThan(0);
+    for (const linha of linhas) linha.click();
+    const telas = t.onIrPara.mock.calls.map((c) => c[0] as TelaConfig);
+    expect(telas.length).toBe(linhas.length);
+    for (const tela of telas) {
+      expect(ENTRADAS.filter((e) => e.tela === tela).length, `tela sem entrada na busca: ${tela}`)
+        .toBeGreaterThan(0);
+    }
+    unmount(t.comp);
+  });
+
+  // Escolher um resultado destrói o botão que tinha o foco. No celular o <h2> recebe o foco; no
+  // desktop não existe <h2>, e sem um alvo o foco cai no <body> (leitor de tela mudo, Tab do zero).
+  it('desktop: a troca de tela deixa o foco no conteúdo, não no body', async () => {
+    stubDesktop();
+    const t = montar('voz', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+    await tick(); await tick();
+    expect(document.activeElement).toBe(document.querySelector('.st-conteudo'));
+    unmount(t.comp);
+  });
+
+  // O caso que o $effect de troca de tela NÃO cobre: o resultado é da tela já aberta, a rota não
+  // muda, e a lista (com o botão focado dentro) é apagada assim mesmo. É o caminho mais comum no
+  // desktop, onde o modal abre na Aparência.
+  it('desktop: escolher um resultado da tela JÁ ABERTA não joga o foco no body', async () => {
+    stubDesktop();
+    // `tela` precisa ser reativo: é o App quem troca a rota, e aqui o teste faz esse papel.
+    const props = criarProps({ tela: 'diario' as TelaConfig });
+    authMock.listServers.mockReturnValue([SRV] as never);
+    authMock.getActiveId.mockReturnValue(SRV.id);
+    apiMock.getConfigForServer.mockResolvedValue({ campos: {}, somente_leitura: {} } as never);
+    apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(SettingsModal, {
+      target: el,
+      props: {
+        get tela() { return props.tela; },
+        alvo: SRV as Server, identidade: 'id:srv-a', nomeAlvo: null, semServidor: false,
+        resolvedServer: SRV as Server,
+        onIrPara: (t: TelaConfig) => { props.tela = t; },
+        onVoltar: vi.fn(), onFechar: vi.fn(),
+      },
+    });
+    await tick(); await tick();
+
+    const campo = document.querySelector('.st-nav .bc input') as HTMLInputElement;
+    campo.value = m.config_diag_baixar();
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    const item = document.querySelector('.bc-item') as HTMLButtonElement;
+    expect(item.getAttribute('aria-label')).toContain(m.config_diag_baixar());
+    item.focus();
+    item.click();
+    await tick(); await tick();
+
+    // A rota não mudou — é exatamente a condição em que o $effect não re-executa.
+    expect(props.tela).toBe('diario');
+    expect(document.activeElement).toBe(document.querySelector('.st-conteudo'));
+    unmount(comp as never);
+  });
+
+  it('o campo aparece no topo da navegação no desktop e no topo da raiz no celular', async () => {
+    stubDesktop();
+    // Tela 'voz' de propósito: a navegação lateral é a mesma em qualquer tela, e montar a Aparência
+    // aqui puxaria o ThemeToggle, que busca a paleta do desktop e exige mais mocks do que este
+    // caso precisa.
+    const desktop = montar('voz', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+    await tick(); await tick();
+    expect(document.querySelector('.st-nav > .bc')).not.toBeNull();
+    unmount(desktop.comp);
+    document.body.innerHTML = '';
+
+    stubMobile();
+    const celular = montar('root', SRV as Server, 'id:srv-a', { resolvedServer: SRV as Server });
+    await tick(); await tick();
+    expect(document.querySelectorAll('.bc')).toHaveLength(1);
+    unmount(celular.comp);
   });
 });
 

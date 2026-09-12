@@ -917,6 +917,7 @@
   "tool_outro_1": "outro",
   "tool_outros": "outros",
   "config_modal_titulo": "Configurações",
+  "config_busca_placeholder": "Buscar um ajuste",
   "config_modal_aparencia": "Aparência",
   "config_modal_sobre": "Sobre",
   "config_modal_servidores": "Servidores",

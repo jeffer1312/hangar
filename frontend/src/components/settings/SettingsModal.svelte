@@ -12,6 +12,7 @@
   import HarnessSettings from './HarnessSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
   import ConfigIcone from './ConfigIcone.svelte';
+  import BuscaConfig, { TITULO_TELA } from './BuscaConfig.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
   import { fly, fade } from 'svelte/transition';
@@ -86,21 +87,12 @@
     else if (veioDeMaquinas) store.carregar();
   });
 
-  const TITULO: Record<TelaConfig, string> = {
-    root: m.config_modal_titulo(),
-    geral: m.config_geral_titulo(),
-    aparencia: m.config_modal_aparencia(),
-    voz: m.voz_titulo(),
-    sobre: m.config_modal_sobre(),
-    diario: m.config_diag_titulo(),
-    maquinas: m.maquinas_titulo(),
-    contas: m.contas_modelos_titulo(),
-    notificacoes: m.config_modal_notificacoes(),
-    anexos: m.config_modal_anexos_curto(),
-    avancado: m.config_modal_avancado(),
-    orquestracao: m.config_modal_orquestracao(),
-    harnesses: m.harness_titulo(),
-  };
+  // Uma fonte só: a busca precisa do mesmo título por tela pra escrever "Tela › Controle", e dois
+  // mapas iguais em arquivos diferentes divergiriam na primeira tela renomeada.
+  const TITULO = ((t) => {
+    for (const [tela, titulo] of Object.entries(TITULO_TELA)) t[tela as TelaConfig] = titulo();
+    return t;
+  })({} as Record<TelaConfig, string>);
 
   // Valores de rotulo vindo de funcao (m.*) dependem do locale: o `as const` nao pode mais
   // existir (valor de funcao nao e literal), mas o `satisfies` fica — e ele que checa a forma.
@@ -144,7 +136,15 @@
   // Trocar de rota destroi a linha que tinha o foco e o activeElement cai no <body>: leitor de tela
   // fica mudo e o Tab recomeca do zero. Mover o foco pro titulo (que muda a cada tela) anuncia a
   // troca e da um ponto de partida.
-  $effect(() => { tela; tituloEl?.focus(); });
+  // No desktop não há <h2>: o título só existe como ariaLabel da folha. Sem um alvo aqui, escolher
+  // um resultado da busca destruía o botão focado e o foco caía no <body>.
+  let conteudoEl = $state<HTMLElement | null>(null);
+  // Quem move o foco pela BUSCA é a ação, não a troca de rota: escolher um resultado apaga a lista
+  // (e com ela o botão focado) mesmo quando o resultado é da tela já aberta, e aí o $effect abaixo
+  // não roda. A navegação pela lateral, o voltar e a rota continuam cobertos pelo $effect.
+  function focarTela() { (tituloEl ?? conteudoEl)?.focus(); }
+  function irPelaBusca(t: TelaConfig) { onIrPara(t); focarTela(); }
+  $effect(() => { tela; focarTela(); });
 
   let isDesktop = $state(false);
   $effect(() => {
@@ -266,6 +266,9 @@
            quem navega por teclado chegar nele antes de percorrer a navegacao e o conteudo inteiros. -->
       <button class="st-fechar" bind:this={fecharEl} onclick={onFechar} aria-label={m.sessao_fechar()}>✕</button>
       <aside class="st-nav">
+        <!-- No desktop a raiz nunca renderiza (cai na Aparência), então o campo mora aqui: é o
+             único lugar que existe nas duas colunas o tempo todo. -->
+        <BuscaConfig onIrPara={irPelaBusca} {semServidor} compacta />
         {#each SECOES as secao (secao)}
           {#if secao === 'servidor' && mostrarSeletor}
             <!-- O rótulo do grupo vira o TROCADOR de alvo: "Servidor" + select com a máquina
@@ -288,7 +291,7 @@
           {/each}
         {/each}
       </aside>
-      <section class="st-conteudo">
+      <section class="st-conteudo" tabindex="-1" bind:this={conteudoEl}>
         <!-- #key por tela: a troca remonta o conteúdo, e o wrapper novo entra voando (a saída do
              antigo é instantânea de propósito — transição de saída aqui brigaria com a nova). -->
         {#key telaAtual}<div in:animarTela={{ x: 18 }}>{@render corpo()}</div>{/key}
@@ -334,6 +337,7 @@
     <p class="st-valem">{m.config_server_valem()}</p>
   {/if}
   {#if telaAtual === 'root'}
+    <BuscaConfig onIrPara={irPelaBusca} {semServidor} />
     {#each SECOES as secao (secao)}
       {#if secao === 'servidor' && mostrarSeletor}
         <div class="st-secao st-secao-sel" class:so-uma={servidores.length <= 1}>
@@ -396,6 +400,7 @@
      motivo do apagado, então sem isto o select ficava encostado à esquerda dele. */
   .st-sub :global(.srv-wrap) { justify-content: center; }
   .st-titulo:focus { outline: none; }   /* alvo programatico: o anel aqui so confundiria */
+  .st-conteudo:focus { outline: none; } /* idem: alvo de foco do desktop, nao um controle */
   .st-icone {
     width: 32px; height: 32px; border-radius: var(--radius-full);
     border: 1px solid var(--border-subtle); background: var(--surface-raised);
