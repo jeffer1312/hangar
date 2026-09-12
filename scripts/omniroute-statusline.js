@@ -365,8 +365,26 @@ process.stdin.on('end', () => {
     ].map(s => s.trim()).filter(Boolean);
 
     const sep = ' │ ';
-    // Largura visível: ignora códigos ANSI ao medir
-    const visLen = s => s.replace(/\x1b\[[0-9;]*m/g, '').length;
+    // Largura visível em COLUNAS DO TERMINAL, ignorando códigos ANSI.
+    //
+    // Não é `.length`: aquilo conta unidades UTF-16, e emoji do BMP (⏱ U+23F1, ⚡ U+26A1,
+    // ⏳ U+23F3, ♻ U+267B) conta 1 e desenha 2. A barra media menos do que ocupava, juntava um
+    // segmento a mais, e quem cortava era o Claude Code — com o "…" que o comentário do sidecar
+    // (mais abaixo) descreve: corte em cima do par de contexto deixa o app sem medir contexto.
+    //
+    // Arredonda PRA CIMA de propósito: pictográfico sem seletor de emoji (♻ ⚠ ⏱) é 1 coluna pela
+    // regra do Unicode e 2 na maioria dos terminais com fonte de emoji, e os dois erros não custam
+    // o mesmo — superestimar quebra a linha um segmento antes (inofensivo), subestimar traz o corte
+    // de volta. Agrupa por grafema porque seletor de variação e ZWJ não ocupam coluna nenhuma.
+    const segmentador = new Intl.Segmenter('pt', { granularity: 'grapheme' });
+    const visLen = s => {
+      const limpo = s.replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, '');
+      let n = 0;
+      for (const { segment } of segmentador.segment(limpo)) {
+        n += /\p{Extended_Pictographic}/u.test(segment) ? 2 : 1;
+      }
+      return n;
+    };
     // COLUMNS setado pelo Claude Code (v2.1.153+); 0 = sem wrap (fallback antigo)
     const cols = parseInt(process.env.COLUMNS, 10) || 0;
 
