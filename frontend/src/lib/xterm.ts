@@ -49,6 +49,16 @@ export function novoTerminal(
     allowTransparency: true,
     theme: temaDe(hostEl),
   });
+  // Cala a RESPOSTA do xterm as perguntas de cor (OSC 4 indexada, 10 frente, 11 fundo, 12 cursor).
+  // Nao e o xterm falando demais: no Windows quem pergunta e o psmux ao anexar um cliente, e ele nao
+  // consome a resposta — ela desce pro pane e a TUI a engole como DIGITACAO (os "434"/"33" que
+  // apareciam na frente do texto no composer sao pedacos de `]4;3;rgb:c4c4/...`). Handler
+  // registrado depois do mount vem antes do embutido e, devolvendo true, a resposta nunca e gerada.
+  // Custo: TUI que pergunte cor recebe silencio e usa o padrao dela — melhor que lixo no composer.
+  // Engolir tambem a DEFINICAO de cor (o mesmo OSC sem `?`) e de brinde: OSC 10/11/12 pintariam por
+  // cima do fundo transparente que o painel de vidro exige. Nao guardamos os IDisposable: quem monta
+  // o terminal so o desfaz com `dispose()`, que leva os handlers junto.
+  for (const osc of [4, 10, 11, 12]) t.parser.registerOscHandler(osc, () => true);
   const f = new FitAddonCls();
   t.loadAddon(f);
   t.open(hostEl);

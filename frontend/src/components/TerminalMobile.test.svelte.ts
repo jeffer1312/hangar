@@ -268,6 +268,20 @@ describe('TerminalMobile', () => {
     unmount(t.comp);
   });
 
+  it('pergunta de cor do terminal morre no xterm, sem virar digitacao no pane', async () => {
+    const t = montar();
+    await socketPronto();
+    // Quem pergunta a paleta e o psmux ao anexar um cliente (OSC 4 por cor, 10 frente, 11 fundo).
+    // No Windows ele nao consome a resposta: ela desce pro pane e o composer da TUI engole os
+    // pedacos ("434", "33" sao substrings de `]4;3;rgb:...`). Responder e que e o bug.
+    doPty(']11;?');
+    doPty(']4;3;?');
+    doPty(']10;?');
+    await quadros(20);
+    expect(enviados()).toEqual([]);
+    unmount(t.comp);
+  });
+
   it('sessao que nao existe no servidor: recusa com texto, sem abrir socket', async () => {
     vi.spyOn(api, 'fetchSessionsForServer').mockResolvedValue([] as never);
     const t = montar();
