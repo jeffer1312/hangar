@@ -206,6 +206,12 @@ Beyond what the method's planning half already asks, the plan carries:
   prior step ("bring the backend up on port X, confirm with curl, THEN capture"). A wait with no
   declared owner becomes infinite polling — an executor checking, hundreds of times, for a thing
   only it could create.
+- **Risk per Task** — a `Risk: low | high` line in the Task's body of the orchestration plan,
+  **only when the executor role selects its row by risk** (`vez` = `low`/`high`, below). The
+  principle: bounded, fully specified, small blast radius → `low`; judgment-heavy, wide blast
+  radius, context-heavy, or touching a public contract, shared state, destination or credential →
+  `high`. Proposed with the team, decided by the user. It only ever rises: the arbiter re-tags a
+  Task `high` when the rounds reveal risk (`arbitro.md`, "Autonomy — triggers"), never `low`.
 - **Untouchables**: paths with parallel changes in the tree, listed one by one.
 - **Verification per Task**: the exact command and what counts as passing. An **orchestration**
   Task (tmux, CLI, process, account, network) carries a **smoke-test step against the real
@@ -366,6 +372,29 @@ yourself shouldn't go on the list just to make three items.
 Without this, the first Tasks pass through a gate that doesn't exist yet, and the price is a
 retroactive audit that reopens approved Tasks — more expensive than writing three lines.
 
+### The ROUTE is decided with the team — and the team is a function of it
+
+Before asking who is on the team, decide **whether there is one**. Two routes, written into the
+contract as `Route:` and repeated in every kick-off:
+
+- **`full`** — the default. Executor and reviewer per Task, gate, branch review, retrospective:
+  the whole pipeline of `SKILL.md`'s table.
+- **`audit`** — **you write the code yourself**, in this session, after the "go ahead"; one Task =
+  one commit, no gate. A fresh read-only session reviews the **whole** diff at the end
+  (`revisao-final.md`), and the retrospective follows. The team table has three rows: `escritor`
+  (this session), `revisão final`, `retrospectiva`.
+
+Propose `audit` only when all of these hold, and say which in the proposal: every Task is bounded
+and fully specified (no open decision left to whoever writes); the blast radius is small (no public
+contract, no shared state, no destination/credential change); and the Tasks are few enough for one
+writer to hold in one context. One of them fails → `full`. The user decides; **no answer → `full`**.
+
+**The route only escalates.** Work that reveals a risk the plan didn't see — a Task that grows an
+open decision, a change that turns out to cross a boundary — goes `audit` → `full` through
+`replanejar.md`, with the reason in the journal. It never comes down: `full` → `audit` midway
+would drop reviews already owed. And there is no `solo`: work that one session delivers without
+an independent review does not invoke this skill at all.
+
 ### The team is an output of planning — but **you PROPOSE, the user chooses**
 
 Who writes and who reviews is decided **here**, because the research and the brainstorming have
@@ -381,7 +410,8 @@ the user made.
 to choose, and stalling the work on an unanswerable question drives users away. Start with this
 one, and proceed on any answer:
 
-> "Do you want to pick the team (account and model per role), or do we go with the default?"
+> "Route `<audit | full>` (because <reason>). Do you want to pick the team (account and model per
+> role), or do we go with the default?"
 
 - **Wants to pick** → this section's full recipe: inventory taken, two or three combinations
   proposed, they decide.
@@ -486,9 +516,15 @@ from his hands there.
   `~/.claude-200-01`); on Kimi, the provider in `~/.kimi-code/config.toml` (`apikey`); on Pi, the
   provider from its catalog (`clinepass`); on Codex, `openai-codex`.
 - `sessão` ending in `*` = a role with one session per Task (`<work>-t*`).
-- A role may occupy **more than one row**, rotating between accounts: add the `vez` column
-  (`| papel | vez | sessão | …`) and number 1, 2, 3. Task N belongs to row `(N-1) % total`. Full
-  rule in `arbitro-lancamento.md`, "A rotating role". Without rotation, the column doesn't
+- A role may occupy **more than one row**, and the `vez` column (`| papel | vez | sessão | …`)
+  says which row a Task lands on. Two selectors, and a role uses **one** of them:
+  - **rotation between accounts** — `vez` numbered 1, 2, 3; Task N belongs to row
+    `(N-1) % total`;
+  - **selection by risk** — `vez` is `low` or `high`, one row each, and Task N belongs to the row
+    named by its `Risk:` line in the orchestration plan. The `high` row is the stronger (or
+    higher-effort) configuration the user approved for judgment-heavy work; `low` is for bounded,
+    fully specified Tasks. Both rows are the user's choice, like any other.
+  Full rule in `arbitro-lancamento.md`, "A rotating role". Without either, the column doesn't
   exist.
 
 **Work in more than one repository**: add to the contract, BEFORE opening the sessions, a section
@@ -661,6 +697,9 @@ file paths.
 13. **AUDIT** — **Domain skill declared** (name or `none`), and its two checks done: no Task
     duplicates a step the skill already does internally, and no skill step was left without an
     owner ("The DOMAIN SKILL", above).
+14. **PRODUCE** — **Route declared** (`audit` or `full`) with its reason, and — when the executor
+    row is selected by risk — a `Risk:` line on every Task ("The ROUTE is decided with the team",
+    above).
 
 And a prudence rule that is not an item but a posture: **one debut at a time.** A new planning
 method, a freshly edited skill and a new provider don't enter the same run together — a run where
@@ -674,6 +713,13 @@ unmeasured claim of "this would error" about a thing that actually works becomes
 comment whose correction has to be carried into the next Task.
 
 ## Phase 2 — Launch (the user's single "go ahead")
+
+**On the `audit` route, phase 2 opens no session.** The pre-flight, the branch question and the
+green baseline below still run, the contract and the journal are still born (the rules with their
+three-row table, the journal with `Route: audit`), and then **you** start writing Task 1 — as the
+`escritor`, in this session, with the executor's discipline for commits (one Task, explicit
+paths, verification pasted in the journal). Phase 4's session is opened when the last Task is
+committed, and phase 5's after the branch is in the user's hands.
 
 ### Pre-flight, before creating any session
 
@@ -801,7 +847,7 @@ whoever reads later:
 > Arbiter's journal. Group rules (what the team reads): <path to regras-<gid>.md>.
 > Lessons: <path to licoes.md>. User's plan: <path>.
 > Orchestration plan: <path | this very file>.
-> Method: <name | none>. Executes with: <command | none>. Domain skill: <name | none>.
+> Method: <name | none>. Executes with: <command | none>. Domain skill: <name | none>. Route: <audit | full>.
 > Branch: <branch>. Starting HEAD: <hash>.
 
 ## Quem é quem

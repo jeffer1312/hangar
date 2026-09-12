@@ -15,12 +15,13 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 RAIZ="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
 cd "$RAIZ" || exit 1
 
-roda_back=1; roda_front=1
+roda_back=1; roda_front=1; roda_skill=1
 if (( $# == 2 )); then
     # --no-renames: um arquivo movido pra fora de backend/ ou frontend/ tem que contar como mudança lá.
     mudados="$(git diff --name-only --no-renames "$1" "$2" -- . 2>/dev/null)" || { echo "ci-gates: intervalo $1..$2 ilegível" >&2; exit 1; }
     grep -q '^backend/' <<< "$mudados" || roda_back=0
     grep -q '^frontend/' <<< "$mudados" || roda_front=0
+    grep -qE '^skills/orquestrar/|^scripts/checar-orquestrar\.sh' <<< "$mudados" || roda_skill=0
     grep -q '^\.github/workflows/' <<< "$mudados" && { roda_back=1; roda_front=1; }
 fi
 
@@ -30,6 +31,12 @@ portao() {
     printf '\n\033[36m── %s\033[0m\n' "$nome"
     if "$@"; then printf '\033[32m   ok %s\033[0m\n' "$nome"; else printf '\033[31m   FALHOU %s\033[0m\n' "$nome"; falhou=1; fi
 }
+
+if (( roda_skill )); then
+    portao "skill orquestrar: checar-orquestrar" bash scripts/checar-orquestrar.sh
+else
+    echo "skill orquestrar: nada em skills/orquestrar/ mudou, pulando"
+fi
 
 if (( roda_back )); then
     # O CI instala ripgrep de propósito: sem `rg`, a busca entre sessões volta zero e os testes falham só lá.

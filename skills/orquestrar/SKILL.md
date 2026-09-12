@@ -1,9 +1,13 @@
 ---
 name: orquestrar
 description: |
-  Orquestre um trabalho com revisão independente por commit quando o usuário pedir esse
-  fluxo ou um kick-off mandar invocar orquestrar com uma linha Role:. Tamanho ou risco da
-  tarefa, execução comum de plano e revisão avulsa não ativam este fluxo.
+  Orquestre um trabalho com revisão independente quando o usuário pedir esse fluxo — por nome
+  ou em palavras ("monta o time", "revisão independente por commit") — ou um kick-off mandar
+  invocar orquestrar com uma linha Role:. A rota (audit: quem planejou escreve e uma revisão
+  fresca fecha; full: time com portão por Task) é decidida DENTRO do fluxo, com o usuário.
+  NÃO ativa por tamanho ou risco da tarefa, por execução comum de plano, por revisão avulsa de
+  diff, nem para trabalho que uma sessão só entrega — a rota solo não existe aqui, e o modelo
+  nunca invoca esta skill para decidir se precisa dela.
 allowed-tools: Bash(hangar-send:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git show:*), Bash(git branch:*), Bash(git grep:*), Bash(tmux display:*), Bash(date:*)
 ---
 
@@ -33,6 +37,15 @@ what the plan left open.
 | 3. Execution | executor + reviewer, **separate sessions** | only the executor | every Task with `APROVA` |
 | 4. Branch review | fresh session that took no part | no | the whole set approved |
 | 5. Retrospective | fresh session that took no part | no | proposed patch for **this skill**, in the user's hands |
+
+**The table is the `full` route. There is a second one, `audit`, decided in phase 1 with the
+team**: whoever planned writes the code in their own session — no arbiter, no executor, no
+per-Task reviewer, no phase 2 or 3 — and the branch goes whole to phase 4, a fresh read-only
+session, then phase 5. It is the route for work whose Tasks are bounded, fully specified and few
+enough for one writer in one context; `full` is the default. The route goes into the contract
+(`Route:`) and only ever escalates — `audit` → `full`, through `references/replanejar.md`, when
+the work reveals a risk the plan didn't see. It never downgrades, and there is no `solo`: work one
+session delivers without independent review does not invoke this skill.
 
 **The work does not end at phase 4.** An approved branch is finished code; phase 5 is what makes
 the next run better than this one. It is short (one session, the work's durable directory and the
@@ -68,6 +81,10 @@ confirming it is a reviewer while it is in the middle of a commit.
 | **reviewer** | `references/revisor.md` (+ 2 per-moment pages, which it lists) | the kick-off says `Role: reviewer` |
 | **final review** | `references/revisao-final.md` | the kick-off says `Role: branch review` |
 | **retrospective** | `references/retrospectiva.md` | the kick-off says `Role: retrospective` |
+
+On the `audit` route the planner is also the **writer**: after the user's "go ahead" they write
+the code themselves, one Task = one commit, reading no arbiter or executor page — the only
+kick-offs they send are phase 4's and phase 5's.
 
 Two pages that are not roles:
 
@@ -124,6 +141,7 @@ each, written at launch and repeated in every kick-off:
 Method: <name | none>            # what plans and executes — the user names it; `none` = the plan is theirs
 Executes with: <command | none>  # the method's executing half; the executor's kick-off starts with it
 Domain skill: portar-tela        # the step-by-step of this kind of work, when one exists (name | none)
+Route: <audit | full>            # who writes and who reviews — decided in phase 1, escalates only
 ```
 
 - The **method** is who plans and who executes — whatever the user names, or `none` when the plan
@@ -172,7 +190,7 @@ there, by name. The kick-off is an address, not a manual.
 Invoke the orquestrar skill and read your role's page.
 Role: <executor | reviewer | branch review>.
 Method: <name | none — the plan is the user's>.   Executes with: <command | none>.
-Domain skill: <name | none>.
+Domain skill: <name | none>.   Route: <audit | full>.
 Repo/branch: <path> / <branch>.   Expected HEAD: <hash>.
 Group rules: <path to regras-<gid>.md>.
 Durable dir: <~/.hangar/orq/<date>-<gid>/ — reports, diffs and screenshots go here, never /tmp>.
@@ -246,10 +264,10 @@ First line of the rules file, so an amnesiac session can re-anchor itself:
 ```markdown
 > Sessions of this group: invoke the `orquestrar` skill and read your role's page.
 > Branch: <branch> · Repo: <path>
-> Method: <name | none> · Executes with: <command | none> · Domain skill: <name | none>
+> Method: <name | none> · Executes with: <command | none> · Domain skill: <name | none> · Route: <audit | full>
 ```
 
-The `Method:`, `Executes with:` and `Domain skill:` lines are mandatory (see "Method and domain skill come from the
+The `Method:`, `Executes with:`, `Domain skill:` and `Route:` lines are mandatory (see "Method and domain skill come from the
 contract", above) and never change midway.
 
 **What changes per Task goes in no file at all**: which Task is released, what the hash is, who

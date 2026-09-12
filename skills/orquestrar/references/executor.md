@@ -149,7 +149,14 @@ git status --short: <pasted output>
 Siblings outside the fix: <list with reason, or "none">   ← correction rounds only
 Visual: <path to the visual report .md>                    ← pixel Tasks only
 Risks: <what you know about what you wrote, or "none">
+Decided alone: <what the Task left open and what you chose, one per line — or "none">
 ```
+
+**`Decided alone:` is not a confession, it is the plan's defect list.** Every line there is a
+place where the Task didn't say and you had to — a name, a default, a fallback, an order of
+calls. The reviewer judges each one; the retrospective sweeps them. A decision that changed an
+interface, a settled decision or the scope was **not yours to make**: stop and ask the arbiter
+instead of writing it here.
 
 To the **arbiter**, after the APROVA and the commit (step 8) — and only then:
 

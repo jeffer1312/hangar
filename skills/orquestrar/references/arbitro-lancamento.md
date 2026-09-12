@@ -6,12 +6,14 @@ open a new session midway (rotation, replacement).
 
 Return to `arbitro.md` as soon as the team is standing.
 
-## The `Method:`, `Executes with:` and `Domain skill:` lines are yours to write
+## The `Method:`, `Executes with:`, `Domain skill:` and `Route:` lines are yours to write
 
-All three are mandatory in `regras-<gid>.md`, written at launch, before the first session — and
+All four are mandatory in `regras-<gid>.md`, written at launch, before the first session — and
 **every kick-off repeats them**, because the contract is read once and a kick-off arrives fresh. A
 contract without the `Method:` line has no default to fall back on: **ask the user** and write the
-line (with its `Executes with:`) before proceeding. A plan born in one method and executed in another reads
+line (with its `Executes with:`) before proceeding. `Route:` was decided in phase 1 and only
+escalates (`audit` → `full`, via `replanejar.md`) — a contract that says `audit` has no arbiter
+and this page is not read at all. A plan born in one method and executed in another reads
 the work in a format it doesn't have (Task with steps on one side, ticket with criteria on the
 other), so nobody switches midway — a switch the user asks for is `replanejar.md`.
 
@@ -85,6 +87,12 @@ same result without coordinating. The two easy mistakes: it is `(N-1)`, not `N` 
 **first** row), and the cycle restarts — with 3 accounts, Task 4 belongs to the first again, not
 to a continuation of 3.
 
+**The other selector is risk**: `vez` = `low` | `high`, one row each, and Task N belongs to the
+row named by its `Risk:` line in the orchestration plan — no arithmetic, no judgment of yours; the
+line was decided in phase 1. A Task whose line **rises** mid-work (`arbitro.md`, "Autonomy —
+triggers") lands on the `high` row from the next session on. A role uses one selector or the
+other, never both.
+
 Rotation is **not** parallelism: within a Task there is **one** session of that role, on the
 turn's account. Running Tasks at the same time is another mechanism — a worktree per Task,
 declared in the PLAN, in `paralelo-worktree.md` — and the "one round, ONE reviewer" rule holds
@@ -147,6 +155,11 @@ in their middle.
    directory keeps one file per id and doesn't delete them when a session dies. Two of those
    three read the sidecar of the dead session that previously occupied the pane, and the value
    came out right by coincidence.
+
+   **A proof belongs to the session that was born, and to nothing else.** A Task that lands on
+   another row of the table is another session and another proof; a proof from the previous
+   session, or from a check made before the row changed, is not carried over. The check costs
+   seconds; a session working on an unproven row is the whole Task on the wrong model.
 
    Para pesquisa, revisão, revisão final e verificação, crie com `--read-only` e comprove a
    proteção de `protecao.md`. Antes do primeiro pedido, registre o snapshot inicial de

@@ -119,9 +119,11 @@ do protocolo que as sessões leem vive no heredoc de `scripts/install-hangar-sen
 
 Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
 [`orquestrar`](skills/orquestrar/SKILL.md) conduz um trabalho em um ou vários repositórios,
-quando o usuário pedir o fluxo ou o kick-off mandar invocá-lo com `Role:`. Após o planejamento
-aprovado, executor e revisor independente trabalham com portão entre Tasks e revisão final da
-branch. Push depende de autorização do usuário. Um escritor por árvore, execução serial por
+quando o usuário pedir o fluxo ou o kick-off mandar invocá-lo com `Role:`. A rota é decidida na
+fase 1 e só escala: `audit` (quem planejou escreve, uma revisão fresca do diff inteiro fecha) ou
+`full` (após o planejamento aprovado, executor e revisor independente trabalham com portão entre
+Tasks e revisão final da branch). A linha do executor na tabela do time pode ser escolhida pelo
+`Risk:` da Task (`vez` = `low`/`high`) em vez de rodízio. Push depende de autorização do usuário. Um escritor por árvore, execução serial por
 padrão; cada sessão lê só a referência do seu papel. Contrato visual, exceções de paralelismo e
 demais etapas ficam na skill.
 

@@ -104,10 +104,12 @@ reality didn't match the plan — and classify:
 | **A batch declared disjoint that wasn't** | a merge conflict; one file in a Task's header **and** in another Task's step |
 | **A defect the plan carried forward** | a finding in a late Task originating in an early one |
 | **A bar demanding what the reused code doesn't do** | mock × existing-component divergence |
+| **A decision the plan left open** | the `Decided alone:` lines of the review reports — each one is a place the Task didn't say; three on the same subject is a plan template hole |
 
-**The six share a single cause: the plan describes code its author never executed.** If that line
-shows up again, the patch is no longer an execution guideline — it is a `planejamento.md`
-guideline.
+**The first six share a single cause: the plan describes code its author never executed.** If
+that line shows up again, the patch is no longer an execution guideline — it is a
+`planejamento.md` guideline. The seventh is the cheapest to find and the one nobody reads:
+collected in the moment it hurt, by the one who had to decide.
 
 ### 4. The model cards
 
@@ -148,6 +150,11 @@ Every proposal carries **four** fields, in this order: **file and section** wher
 text ready to paste** · **the evidence** (*"measured on `<date>`: `<number>`"*) · **what LEAVES
 the skill because of it**. No number, no entry — the skill is made of measured things, not
 impressions.
+
+**Every proposal is written so that `scripts/checar-orquestrar.sh` (in the hangar repo) still
+passes after it is applied** — the script is what keeps the pages from contradicting each other
+across a patch, and a proposal that would fail it says which check and why. Whoever applies the
+patch runs it before committing.
 
 **The fourth field is what keeps the skill from only swelling, and it is the one forgotten.**
 Either the proposal names the guideline that died — stopped holding, became code, was absorbed by

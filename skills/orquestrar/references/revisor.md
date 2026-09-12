@@ -80,8 +80,16 @@ BLOCKER 1: <one line>
 
 NOTED 1: <one line> — not fixed now because <reason>; stays in the contract.
 
+Decided alone: <each line the executor reported, with your judgment — ok | blocker N | not theirs to decide — or "none">
+
 WASTE this round: <what the executor did that became nothing> — would have prevented: <the instruction>.
 ```
+
+**`Decided alone:` is copied from the executor's round report, judged line by line.** `ok` is a
+choice the Task could have left open; `blocker N` is a wrong choice with its recipe below; `not
+theirs to decide` is a choice that changed an interface, a settled decision or the scope — a
+blocker too, and the arbiter's signal that the Task's risk was misjudged. The line lives in your
+report because the report is the file phase 5 reads; the executor's message is not.
 
 **A blocker names its source when there are two authorities.** A Task with a bar has two documents
 that can demand things, and they can disagree: the **excerpt** (what the user asked for) and the

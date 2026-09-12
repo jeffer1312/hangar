@@ -144,7 +144,7 @@ You do **not** choose:
 
 | Don't choose | Where the answer is |
 |---|---|
-| Engine, model, account of any team session | the `## Quem é quem` table in the **rules** (`| papel | sessão | provider | conta | modelo | esforço |`, or 7 columns with `vez` when the role rotates between accounts per Task — see "Opening a session", below) — **and an off-plan Task has no row there: ask** (below) |
+| Engine, model, account of any team session | the `## Quem é quem` table in the **rules** (`| papel | sessão | provider | conta | modelo | esforço |`, or 7 columns with `vez` when the role rotates between accounts or selects its row by the Task's `Risk:` — see "Opening a session", below) — **and an off-plan Task has no row there: ask** (below) |
 | The name of the session you will open | same table — the naming pattern is part of the definition |
 | Who executes, who reviews, who only reads | same table |
 | Whether a Task may start | contract progress + plan |
@@ -459,6 +459,7 @@ After the "go ahead", you decide. These three are **automatic**, waiting for nob
 | Writer above **50% of its own window** | **the writer** measures it, and asks for the swap in its own report (`references/executor.md`). You open the substitute. **The swap comes BEFORE the next round, always.** "At the next milestone" doesn't exist — the milestone may never come, and past half the window each call costs multiples of the first hour's. And swapping redoes no proof: the screenshots live in the durable directory |
 | **Reviewer above 50% of its own window — OR whose `current ctx + measured round cost` crosses the cap** | open the substitute **before** the correction arrives — and **dispatching a round to someone who already said they crossed is forbidden**: it blows the window mid-judgment. **Measure a round's cost on the first Task and ADD it before dispatching**: below-half plus one round can land past the window, so the substitute opens earlier |
 | Same cause rejected 2× | ask the reviewer for a recipe with a new approach — or rotate the reviewer. You don't design recipes. **It is your only door into the loop**, and the reviewer marks it on the `eventos.jsonl` line. |
+| **Risk the plan didn't see** — a `low` Task rejected twice for the same cause, or a `Decided alone:` line the reviewer flagged as a decision the Task shouldn't have left to the executor | re-tag the Task `Risk: high` in the orchestration plan — **upward only, never down** — write the reason in the journal, and the next executor session for it is born on the `high` row (same replacement kick-off as any mid-gate swap: `Frozen round`, dirty tree is theirs). Log it as `sessao_trocada` with an extra `motivo` field — a new event type is forbidden, an extra field is not. Route `audit` has no arbiter: there the same signal is `replanejar.md`, `audit` → `full`. |
 
 ### The two blind windows — who watches, now that you wake less
 

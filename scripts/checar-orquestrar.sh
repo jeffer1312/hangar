@@ -93,6 +93,29 @@ for f in SKILL.md references/planejamento.md references/arbitro-lancamento.md re
     'A linha `Executes with:` (metade executora do metodo) tem de aparecer no contrato e no kick-off.'
 done
 
+# 0c. A rota (audit | full) e decidida na fase 1, vive no contrato e so escala.
+for f in SKILL.md references/planejamento.md references/arbitro-lancamento.md; do
+  obrigatorio "$f" 'Route:' 'A linha `Route:` tem de aparecer no contrato, no kick-off e no lancamento.'
+done
+obrigatorio SKILL.md 'never downgrades' 'A rota so escala (audit -> full); rebaixar nao existe.'
+obrigatorio references/planejamento.md 'no answer → `full`' 'Sem resposta do usuario a rota e `full`.'
+obrigatorio references/revisao-final.md 'audit' 'Na rota audit a revisao final e a UNICA revisao — a pagina tem de dizer o que muda.'
+
+# 0d. Motor por risco: a coluna `vez` aceita `low`/`high` e a Task carrega `Risk:`.
+for f in references/planejamento.md references/arbitro-lancamento.md; do
+  obrigatorio "$f" 'Risk:' 'A linha `Risk:` por Task (seletor de linha por risco) tem de estar no plano e no lancamento.'
+done
+obrigatorio references/arbitro.md 'upward only' 'Escalada de risco e so pra cima; o arbitro nao rebaixa.'
+
+# 0e. `Decided alone:` — relato do executor, julgado pelo revisor, varrido pela retrospectiva.
+for f in references/executor.md references/revisor.md references/retrospectiva.md; do
+  obrigatorio "$f" 'Decided alone:' 'A linha `Decided alone:` liga executor -> revisor -> retrospectiva; sumiu de uma ponta, a cadeia quebra.'
+done
+
+# 0f. Data literal nao entra no texto da skill: a medicao mora no commit e no registro do trabalho.
+proibido '20[0-9][0-9]-[01][0-9]-[0-3][0-9]\|[0-3][0-9]/[01][0-9]/20[0-9][0-9]' \
+  'Skill nao carrega data literal — a evidencia datada vai pra mensagem de commit ou pro registro.'
+
 # 3. "Step" (maiusculo) nao enuncia mecanica em lugar nenhum — a camada de baixo se chama "step".
 proibido 'Step' \
   'A camada de baixo se chama "step" (minusculo). "Step" so vale como formato literal do app.'

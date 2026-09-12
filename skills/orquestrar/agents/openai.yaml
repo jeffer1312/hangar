@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orquestrar"
+  short_description: "Trabalho com revisão independente: rota audit (quem planejou escreve, revisão fresca no fim) ou full (time com portão por Task). Só quando o usuário pedir o fluxo."
+  default_prompt: "Use $orquestrar para conduzir este trabalho: leia a página do papel de planejador, decida a rota (audit | full) e o time comigo antes de qualquer sessão, e só então lance."

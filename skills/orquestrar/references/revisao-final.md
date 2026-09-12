@@ -9,6 +9,12 @@ A abertura deve aplicar a proteção de `protecao.md`. Para executar testes, val
 The per-Task reviewer doesn't replace you: they never saw the commits interacting. You don't
 replace them: don't re-review commit by commit.
 
+**On the `audit` route there was no per-Task reviewer: you are the only review.** The commits
+were written by whoever planned, with no gate. Then the set review below is not enough — review
+each commit against its Task as `revisor.md` would (the recipe's six fields hold), and the whole
+against the plan. A fix made after your verdict **discards the verdict**: the writer corrects,
+and a **new** fresh session reviews — never you again, and never "just the fix".
+
 ## What is yours
 
 ```bash
