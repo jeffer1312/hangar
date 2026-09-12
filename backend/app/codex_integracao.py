@@ -56,15 +56,12 @@ def memoria_ligada() -> bool:
 
 def _tem_conversa(transcrito: Path) -> bool:
     """Sessão que abriu e nunca conversou não serve de prova de projeto para o Codex: o arquivo
-    existe e só tem metadados (`mode`, `attachment`, `system`), e o detector a ignora."""
-    try:
-        with transcrito.open(encoding="utf-8", errors="replace") as arquivo:
-            for linha in arquivo:
-                if '"type":"user"' in linha or '"type": "user"' in linha:
-                    return True
-    except OSError:
-        return False
-    return False
+    existe e só tem metadados (`mode`, `attachment`, `system`), e o detector a ignora.
+
+    Erro de leitura sobe: quem chama distingue "não serve" de "não deu para ler", e só o segundo
+    merece aviso. Tratar os dois como `False` aqui esconderia a falha dentro do caso normal."""
+    with transcrito.open(encoding="utf-8", errors="replace") as arquivo:
+        return any('"type":"user"' in linha or '"type": "user"' in linha for linha in arquivo)
 
 
 def copiar_memorias(origem: Path, destino: Path) -> list[str]:

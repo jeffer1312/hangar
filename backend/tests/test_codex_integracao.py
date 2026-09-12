@@ -133,6 +133,22 @@ async def test_memoria_recusada_nao_derruba_o_resto_da_integracao(tmp_path, monk
     service._config.assert_awaited()  # o resto da integração seguiu
 
 
+def test_transcrito_ilegivel_vira_aviso_e_nao_sumico(tmp_path, monkeypatch):
+    """Não dar para ler é falha, não é o caso normal da memória órfã: os dois acabam fora da
+    importação, mas só um deles a pessoa pode resolver, e por isso só um vira aviso."""
+    from app import codex_integracao
+    origem = tmp_path / "projects"
+    (origem / "-repo" / "memory").mkdir(parents=True)
+    (origem / "-repo" / "memory" / "MEMORY.md").write_text("indice")
+    (origem / "-repo" / "sessao.jsonl").write_text('{"type":"user"}\n')
+
+    def abrir(self, *a, **kw):
+        raise PermissionError("sem acesso")
+
+    monkeypatch.setattr(codex_integracao.Path, "open", abrir)
+    assert codex_integracao.copiar_memorias(origem, tmp_path / "stage") == ["-repo"]
+
+
 def test_memoria_ilegivel_nao_derruba_os_outros_projetos(tmp_path, monkeypatch):
     from app import codex_integracao
     origem = tmp_path / "projects"
