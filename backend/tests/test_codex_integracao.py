@@ -30,18 +30,20 @@ def test_memoria_leva_um_transcrito_por_projeto(tmp_path):
     (origem / "-sem-memoria").mkdir()
     (origem / "-sem-memoria" / "sessao.jsonl").write_text("z")
 
-    # Memória sem transcrito ao lado: o detector não veria o projeto, então ele sai avisado.
+    # Memória cuja conversa o Claude já apagou: o Codex não reconheceria o projeto. Fica de fora
+    # calada — é regra dele, acontece o tempo todo, e não há o que a pessoa faça a respeito.
     (origem / "-orfao" / "memory").mkdir(parents=True)
     (origem / "-orfao" / "memory" / "nota.md").write_text("sem transcrito")
+    (origem / "-vazio" / "memory").mkdir(parents=True)
 
     destino = tmp_path / "stage"
-    fora = copiar_memorias(origem, destino)
+    erros = copiar_memorias(origem, destino)
 
     assert (destino / "-home-alguem-repo" / "menor.jsonl").exists()
     assert not (destino / "-home-alguem-repo" / "grande.jsonl").exists()
     assert (destino / "-home-alguem-repo" / "memory" / "MEMORY.md").read_text() == "indice"
     assert not (destino / "-sem-memoria").exists()
-    assert fora == ["-orfao"]
+    assert erros == [], "só erro de leitura vira aviso"
     assert not (destino / "-orfao").exists()
 
 
@@ -105,10 +107,10 @@ def test_memoria_ilegivel_nao_derruba_os_outros_projetos(tmp_path, monkeypatch):
         return original(src, dst, **kwargs)
 
     monkeypatch.setattr(codex_integracao.shutil, "copytree", copytree)
-    fora = codex_integracao.copiar_memorias(origem, tmp_path / "stage")
+    erros = codex_integracao.copiar_memorias(origem, tmp_path / "stage")
 
     # Memória é opt-in aditivo: um projeto ilegível não pode derrubar a reconciliação inteira.
-    assert fora == ["-a-quebrado"]
+    assert erros == ["-a-quebrado"]
     assert (tmp_path / "stage" / "-b-bom" / "memory" / "MEMORY.md").read_text() == "-b-bom"
 
 

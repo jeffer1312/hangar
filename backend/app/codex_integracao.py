@@ -55,35 +55,36 @@ def memoria_ligada() -> bool:
 
 
 def copiar_memorias(origem: Path, destino: Path) -> list[str]:
-    """Memórias do Claude para o stage da importação; devolve os projetos que ficarão de fora.
+    """Memórias do Claude para o stage da importação; devolve os projetos que deram ERRO de leitura.
 
     A pasta `memory/` sozinha NÃO é detectada: o Codex só trata como projeto o diretório que tem
     transcrito ao lado dela. Por isso vai junto o MENOR `.jsonl` de cada um — todos custariam a
     ordem de gigabytes por reconciliação, e o segundo em diante não muda a detecção.
 
-    Um projeto que falhe (permissão, link pendurado, arquivo que o Claude girou entre listar e
-    copiar) sai da lista sem derrubar os outros nem o resto da reconciliação, que não é de memória."""
-    fora = []
+    Memória sem transcrito ao lado fica de fora em silêncio: o Claude Code apaga conversa antiga e
+    preserva a memória dela, então isso é comum, é regra do Codex, e não há o que a pessoa faça.
+    Já um erro de leitura é falha de verdade — vira aviso, sem derrubar os outros projetos nem o
+    resto da reconciliação, que não depende de memória."""
+    erros = []
     if not origem.is_dir():
-        return fora
+        return erros
     for memoria in sorted(origem.glob("*/memory")):
         if not memoria.is_dir():
             continue
         projeto = destino / memoria.parent.name
         try:
             transcritos = sorted(memoria.parent.glob("*.jsonl"), key=lambda f: f.stat().st_size)
-            if not transcritos:
-                fora.append(memoria.parent.name)
+            if not transcritos or not any(memoria.glob("*.md")):
                 continue
             shutil.copytree(memoria, projeto / "memory",
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"))
             shutil.copy2(transcritos[0], projeto / transcritos[0].name)
         except OSError:
             # A causa real (disco cheio, E/S) não cabe no aviso da tela, mas some sem o log.
-            _log.warning("memória de %s ficou de fora", memoria.parent.name, exc_info=True)
+            _log.warning("memória de %s não pôde ser lida", memoria.parent.name, exc_info=True)
             shutil.rmtree(projeto, ignore_errors=True)
-            fora.append(memoria.parent.name)
-    return fora
+            erros.append(memoria.parent.name)
+    return erros
 
 
 def _e_hook_do_app(command: object) -> bool:
@@ -758,9 +759,10 @@ class IntegracaoCodex:
                     # Opção ligada e nada a importar é um estado que precisa aparecer: calado, a
                     # reconciliação termina "ok" e a pessoa espera uma memória que nunca vai existir.
                     self._estado["avisos"].append(msg("aviso_memoria_sem_fonte"))
-                fora = copiar_memorias(projetos, cc / "projects")
-                if fora:
-                    self._estado["avisos"].append(msg("aviso_memoria_fora", projetos=", ".join(fora)))
+                erros = copiar_memorias(projetos, cc / "projects")
+                if erros:
+                    self._estado["avisos"].append(msg(
+                        "aviso_memoria_erro", n=len(erros), exemplos=", ".join(erros[:3])))
             source_mcp = self.home / ".claude.json"
             mcp_raw = ler(source_mcp)
             if mcp_raw is not None:

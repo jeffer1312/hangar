@@ -2360,7 +2360,7 @@
   "harness_codex_m_aviso_confianca_indisponivel": "Esta versão do Codex não informou a confiança dos hooks.",
   "harness_codex_m_aviso_historico_indisponivel": "Histórico nativo indisponível; colisões existentes serão preservadas.",
   "harness_codex_m_aviso_ignorados": "Não reconhecidos pelo Codex e ignorados em {pasta}/: {arquivos}",
-  "harness_codex_m_aviso_memoria_fora": "Memórias que ficaram de fora (sem transcrito ao lado, ou ilegíveis): {projetos}",
+  "harness_codex_m_aviso_memoria_erro": "Não foi possível ler a memória de {n} projeto(s), entre eles {exemplos}.",
   "harness_codex_m_aviso_memoria_sem_fonte": "Nenhuma memória do Claude encontrada para importar.",
   "harness_codex_m_aviso_memoria_incompleta": "O Codex recusou {n} memória(s); o resto da integração foi aplicado.",
   "harness_codex_m_aviso_artefato_sem_proveniencia": "Artefato sem proveniência preservado: {path}",
