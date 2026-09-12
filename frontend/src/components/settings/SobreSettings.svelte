@@ -69,7 +69,7 @@
     {#if doServidor && versaoServidor !== __HANGAR_VERSION__}
       <!-- Só quando divergem: a tela roda o bundle do build, e o servidor pode estar noutro
            commit. Quando batem, mostrar duas linhas iguais é ruído. -->
-      <span class="version">{m.atualizar_versao_servidor()}: {doServidor.versao}</span>
+      <span class="version">{m.sobre_versao_maquina()}: {doServidor.versao}</span>
     {/if}
   </div>
 </div>

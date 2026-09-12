@@ -107,10 +107,11 @@
            value={scrim}
            disabled={!temFundoDeFoto}
            oninput={(e) => { scrim = +(e.currentTarget as HTMLInputElement).value; setBgScrim(scrim); }}
-           aria-describedby={temFundoDeFoto ? undefined : `${uid}-foto`}
+           aria-describedby={temFundoDeFoto ? `${uid}-transp` : `${uid}-foto`}
            aria-label={m.config_fundo_transparencia_detalhe()} />
     <em>{scrim}</em>
   </label>
+  <p class="bg-desc" id="{uid}-transp">{m.config_fundo_transparencia_desc()}</p>
   <!-- Solidez: a Transparência acima governa o painel; esta governa as CAIXAS de dentro dele
        (chip, campo, card, bloco de saída). Duas camadas, dois controles — no 0 as caixas somem no
        vidro e a tela vira uma superfície só; no 100 voltam a ser recorte chapado sobre a foto. -->
@@ -120,10 +121,11 @@
            value={solidez}
            disabled={!temFundoDeFoto}
            oninput={(e) => { solidez = +(e.currentTarget as HTMLInputElement).value; setSurfaceSolid(solidez); }}
-           aria-describedby={temFundoDeFoto ? undefined : `${uid}-foto`}
+           aria-describedby={temFundoDeFoto ? `${uid}-solidez` : `${uid}-foto`}
            aria-label={m.config_fundo_solidez_detalhe()} />
     <em>{solidez}</em>
   </label>
+  <p class="bg-desc" id="{uid}-solidez">{m.config_fundo_solidez_desc()}</p>
   {#if !temFundoDeFoto}
     <p class="bg-motivo" id="{uid}-foto">{m.config_aparencia_motivo_fundo_imagem()}</p>
   {/if}
@@ -160,6 +162,8 @@
   .bg-scrim.off { opacity: 0.45; }
   .bg-scrim input:disabled { cursor: default; }
   .bg-motivo { margin: 0; max-width: 100%; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; text-align: right; }
+  /* Legenda do slider logo acima; alinhada à direita como o motivo, que ocupa o mesmo lugar. */
+  .bg-desc { margin: -2px 0 var(--space-1); max-width: 100%; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; text-align: right; }
 
   .bg-toggle {
     display: inline-flex;

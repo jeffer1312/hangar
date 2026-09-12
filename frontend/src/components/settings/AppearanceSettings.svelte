@@ -174,18 +174,29 @@
       {#if podeAoVivo}
         <!-- Desktop: a previa embutida e uma amostra; isto revela a conversa DE VERDADE atras,
              encolhendo o painel numa caixinha no canto. -->
-        <button class="ap-padrao" onclick={onVerAoVivo}>{m.config_aparencia_ver_ao_vivo()}</button>
+        <button class="ap-padrao" onclick={onVerAoVivo} title={m.config_aparencia_ver_ao_vivo_desc()}
+          >{m.config_aparencia_ver_ao_vivo()}</button>
       {/if}
-      <button class="ap-padrao" onclick={voltarAoPadrao} disabled={!temAjuste}>
+      <button class="ap-padrao" onclick={voltarAoPadrao} disabled={!temAjuste}
+              title={m.config_aparencia_voltar_padrao_desc()}>
         {m.config_aparencia_voltar_padrao()}
       </button>
     </div>
   </div>
+  <!-- Fora do bloco grudado no topo, de propósito: ele é de vidro, e tudo que rola por baixo dele
+       aparece através. A legenda entra na parte que rola, logo abaixo dos botões que explica.
+       Na caixinha do "ao vivo" o painel é do tamanho de um cartão: lá só o `title` dos botões. -->
+  {#if !semPrevia}
+    <div class="ap-acoes-leg">
+      {#if podeAoVivo}<p>{m.config_aparencia_ver_ao_vivo_desc()}</p>{/if}
+      <p>{m.config_aparencia_voltar_padrao_desc()}</p>
+    </div>
+  {/if}
 
   <div class="ap-row">
     <div class="ap-label">
       <strong>{m.config_tema_curto()}</strong>
-      <span>{m.config_aparencia_tema_desc()}</span>
+      <span>{m.config_aparencia_tema_desc_web()}</span>
     </div>
     <ThemeToggle onEscolha={(p) => (tema = p)} />
   </div>
@@ -380,7 +391,8 @@
              oninput={(e) => { solidez = +(e.currentTarget as HTMLInputElement).value; setReadAlpha(solidez); }} />
       <em>{solidez}</em>
     </label>
-    {#if leitura === 'glass'}<p class="hint" id="ap-motivo-forca">{m.config_aparencia_motivo_leitura()}</p>{/if}
+    {#if leitura === 'glass'}<p class="hint" id="ap-motivo-forca">{m.config_aparencia_motivo_leitura()}</p>
+    {:else}<p class="hint">{m.config_aparencia_forca_leitura_desc()}</p>{/if}
     <!-- Contraste do texto: os tokens do app são propositalmente mais escuros que branco (conforto
          em sessão longa); sobre foto isso não vale, e aqui você escolhe quanto do branco volta. -->
     <label class="ap-slider" class:ap-slider--off={leitura !== 'text' && leitura !== 'auto'}>
@@ -393,6 +405,8 @@
     </label>
     {#if leitura !== 'text' && leitura !== 'auto'}
       <p class="hint" id="ap-motivo-contraste">{m.config_aparencia_motivo_contraste()}</p>
+    {:else}
+      <p class="hint">{m.config_aparencia_contraste_desc()}</p>
     {/if}
   </div>
 
@@ -480,6 +494,8 @@
   }
   .ap-amostra--solta { position: static; background: none; padding-bottom: var(--space-3); }
   .ap-acoes { display: flex; gap: var(--space-2); }
+  .ap-acoes-leg { display: flex; flex-direction: column; gap: 2px; margin-top: var(--space-1); }
+  .ap-acoes-leg p { margin: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
   .ap-padrao {
     flex: 1;
     width: 100%;

@@ -705,7 +705,7 @@ describe('ContasSettings — modelo e opções da chave (Contas e modelos)', () 
   const SEM_MOTORES = { motores: {}, arquivo_corrompido: false, arquivo_caminho: '' };
   const botao = (raiz: Element, rotulo: string) =>
     [...raiz.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === rotulo)!;
-  const abrirMotor = (raiz: Element) => botao(raiz, m.config_motores_editar()).click();
+  const abrirMotor = (raiz: Element) => botao(raiz, m.contas_motor_editar()).click();
   // `vi.clearAllMocks()` do arquivo limpa CONTAGENS, não `mockResolvedValue`/`mockRejectedValue`:
   // sem repor aqui, o caso do arquivo corrompido (e o do erro) vazaria para o seguinte.
   beforeEach(() => {
@@ -725,7 +725,7 @@ describe('ContasSettings — modelo e opções da chave (Contas e modelos)', () 
     // A janela mudou de lugar (virou chip), não sumiu: a linha do modelo é só o id do modelo.
     expect(t.el.querySelector('.ct-modelo')!.textContent).toBe('kimi-k3');
     expect(t.el.textContent).toContain(m.contas_chip_janela({ n: '256k' }));
-    const btn = [...t.el.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === m.config_motores_editar());
+    const btn = [...t.el.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === m.contas_motor_editar());
     expect(btn).toBeDefined();
     unmount(t.comp);
   });
@@ -736,7 +736,7 @@ describe('ContasSettings — modelo e opções da chave (Contas e modelos)', () 
     const t = montar([chave()]);
     await tick(); await tick(); await tick();
     expect(t.el.querySelector('.ct-card')!.textContent).toContain('https://api.kimi.com/coding/v1');
-    [...t.el.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === m.config_motores_editar())!.click();
+    [...t.el.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === m.contas_motor_editar())!.click();
     await tick();
     const card = t.el.querySelector('.ct-card')!;
     expect(card.textContent).toContain(m.config_motores_avancado());
@@ -845,7 +845,7 @@ describe('ContasSettings — modelo e opções da chave (Contas e modelos)', () 
     const t = montar([chave()]);
     await tick(); await tick(); await tick();
     expect(t.el.textContent).toContain('HTTP 500');
-    expect(t.el.textContent).not.toContain(m.config_motores_editar());
+    expect(t.el.textContent).not.toContain(m.contas_motor_editar());
     unmount(t.comp);
   });
 
@@ -886,7 +886,7 @@ describe('ContasSettings — modelo e opções da chave (Contas e modelos)', () 
     apiMock.getEnginesForServer.mockResolvedValue(MOTORES as never);
     const t = montar([LOGADA, chave({ id: 'kimi:/home/u/.kimi-code', nome: 'Kimi CLI', nome_natural: 'Kimi CLI', usos: ['kimi_cli'], base_url: null })]);
     await tick(); await tick(); await tick();
-    expect(t.el.textContent).not.toContain(m.config_motores_editar());
+    expect(t.el.textContent).not.toContain(m.contas_motor_editar());
     expect(t.el.textContent).not.toContain('kimi-k3');
     unmount(t.comp);
   });
@@ -897,7 +897,7 @@ describe('ContasSettings — modelo e opções da chave (Contas e modelos)', () 
     await tick(); await tick(); await tick();
     expect(t.el.textContent).toContain(m.config_motores_nao_consegui_1());
     expect(t.el.textContent).toContain('/home/u/.claude/engines.json');
-    expect(t.el.textContent).not.toContain(m.config_motores_editar());
+    expect(t.el.textContent).not.toContain(m.contas_motor_editar());
     const nova = t.el.querySelector<HTMLButtonElement>(`button[aria-label="${m.contas_add_aria()}"]`)!;
     expect(nova.disabled).toBe(true);
     unmount(t.comp);
@@ -1166,7 +1166,7 @@ describe('ContasSettings — as três seções da lista', () => {
     await tick(); await tick(); await tick();
     const cc = cardDe(t.el, 'Command Code');
     const acoes = [...cc.querySelectorAll<HTMLButtonElement>('.ct-acao')].map((b) => b.textContent?.trim());
-    expect(acoes).toContain(m.config_motores_editar());
+    expect(acoes).toContain(m.contas_motor_editar());
     expect(acoes).toContain(m.lista_remover());
     // Remover cai na MESMA confirmação inline do kebab, com o aviso das sessões abertas.
     [...cc.querySelectorAll<HTMLButtonElement>('.ct-acao')]
@@ -1232,6 +1232,28 @@ describe('ContasSettings — o cookie e os rótulos dos ícones', () => {
     expect(cab.textContent).toContain(m.contas_densidade_compacta());
     expect(cab.textContent).toContain(m.cota_atualizar());
     expect(t.el.querySelector<HTMLElement>('.ct-card')!.textContent).toContain(m.ctx_renomear());
+    unmount(t.comp);
+  });
+
+  // A frase "só muda o nome que você vê aqui" tem que estar NA TELA, não num `title`: no toque não
+  // existe hover. Ela abre junto com o campo, e o campo aponta para ela.
+  it('ao abrir o renomear, a frase de escopo aparece na tela e o campo aponta pra ela', async () => {
+    const t = montar([LOGADA]);
+    await tick(); await tick();
+    const card = t.el.querySelector<HTMLElement>('.ct-card')!;
+    expect(card.textContent).not.toContain(m.contas_renomear_so_aqui());
+
+    [...card.querySelectorAll<HTMLButtonElement>('.ct-lapis')][0].click();
+    await tick();
+
+    const campo = card.querySelector<HTMLInputElement>('.ct-campo-nome')!;
+    expect(campo).not.toBeNull();
+    const id = campo.getAttribute('aria-describedby');
+    expect(id).toBeTruthy();
+    // Busca pela propriedade `id`, não por `#id`: o id carrega o identificador da conta, que pode
+    // ter caracteres que um seletor CSS não aceita.
+    const frase = [...card.querySelectorAll<HTMLElement>('p')].find((p) => p.id === id);
+    expect(frase?.textContent).toBe(m.contas_renomear_so_aqui());
     unmount(t.comp);
   });
 });

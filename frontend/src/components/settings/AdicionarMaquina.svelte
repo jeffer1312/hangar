@@ -109,7 +109,7 @@
 {#if scanning}
   <QrScanner onScan={lerQr} onClose={() => (scanning = false)} />
 {:else}
-  <ConfirmDialog title={m.sessao_adicionar_servidor()} aria={m.sessao_adicionar_servidor()} role="dialog" wide
+  <ConfirmDialog title={m.maquinas_adicionar()} aria={m.maquinas_adicionar()} role="dialog" wide
     {fallbackFocus} initialFocus={enderecoEl}
     onClose={fechar}
     actions={[

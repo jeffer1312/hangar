@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
-import BuscaConfig, { ENTRADAS, filtrar } from './BuscaConfig.svelte';
+import BuscaConfig, { ENTRADAS, TITULO_TELA, filtrar } from './BuscaConfig.svelte';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 import * as m from '../../paraglide/messages';
 
@@ -115,11 +115,58 @@ describe('BuscaConfig — os três termos da spec abrem a tela certa', () => {
     unmount(t.comp);
   });
 
-  it('a lista de resultados vive numa região viva', async () => {
+  // A região viva anuncia a CONTAGEM, não a lista: com os 72 rótulos lá dentro, cada tecla
+  // digitada faz o leitor de tela reler a lista inteira.
+  it('a região viva anuncia só quantos resultados há, e a lista fica fora dela', async () => {
     const t = montar();
     await digitar(t.campo, 'voz');
-    expect(t.el.querySelector('[aria-live="polite"] .bc-lista')).not.toBeNull();
+    const vivo = t.el.querySelector('[aria-live="polite"]') as HTMLElement;
+    expect(vivo.querySelector('.bc-lista')).toBeNull();
+    expect(vivo.textContent?.trim()).toBe(m.config_busca_resultados({ n: filtrar('voz').length }));
     unmount(t.comp);
+  });
+
+  it('sem resultado, a região viva diz que não achou', async () => {
+    const t = montar();
+    await digitar(t.campo, 'zzzznadaaqui');
+    const vivo = t.el.querySelector('[aria-live="polite"]') as HTMLElement;
+    expect(vivo.textContent?.trim()).toBe(m.busca_nenhum_resultado());
+    unmount(t.comp);
+  });
+
+  // A lista aponta para FUNÇÕES de mensagem, nunca para texto: um rótulo escrito à mão aqui (ou
+  // congelado no carregamento) prende a busca no idioma do primeiro acesso e some do i18n. Trocar
+  // UMA entrada por `() => 'Tema'` derruba exatamente esta asserção, nomeando a entrada.
+  it('toda entrada aponta para uma função de mensagem do Paraglide', () => {
+    const doModulo = new Set<unknown>(Object.values(m));
+    for (const e of ENTRADAS) {
+      expect(doModulo.has(e.rotulo), `rótulo fora do i18n em ${e.tela}: ${e.rotulo()}`).toBe(true);
+      if (e.descricao) {
+        expect(doModulo.has(e.descricao), `descrição fora do i18n em ${e.tela}: ${e.rotulo()}`).toBe(true);
+      }
+    }
+  });
+
+  // E o efeito prático disso: a lista responde à troca de idioma.
+  it('os rótulos seguem o idioma vigente, não o do carregamento', () => {
+    expect(filtrar('tema').some((a) => a.entrada.tela === 'aparencia')).toBe(true);
+    overwriteGetLocale(() => 'en');
+    try {
+      expect(filtrar('theme').some((a) => a.entrada.tela === 'aparencia')).toBe(true);
+    } finally {
+      overwriteGetLocale(() => 'pt');
+    }
+  });
+
+  // Costura da spec: nenhuma tela do modal pode ficar inalcançável pela busca.
+  it('toda tela do modal, fora a raiz, tem pelo menos uma entrada', () => {
+    const telas = Object.keys(TITULO_TELA).filter((t) => t !== 'root');
+    for (const tela of telas) {
+      expect(
+        ENTRADAS.some((e) => e.tela === tela),
+        `a tela "${tela}" não tem entrada na busca`,
+      ).toBe(true);
+    }
   });
 
   it('nenhuma entrada aponta para a raiz nem para uma tela repetida com o mesmo rótulo', () => {

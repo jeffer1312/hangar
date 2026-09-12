@@ -271,6 +271,7 @@
                        ...vozes.map((v) => ({ value: v.id, label: v.nome }))]}
               onchange={(v) => store.setRascunho('elevenlabs_voice_id', v)}
             />
+            <span class="ajuda">{m.config_server_voz_ajuda()}</span>
           {:else}
             <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>
               {carregandoVozes ? m.comum_carregando() : m.config_server_carregar_vozes()}
@@ -284,7 +285,11 @@
                 <div class="ajuste-cabeca">
                   <span class="ajuste-rot">{a.rotulo} <em>{valor}</em> <EscopoChip escopo="servidor" /></span>
                   {#if valor !== a.padrao}
-                    <button class="ajuste-reset" onclick={() => ajusteResetar(a)}>{m.config_server_voltar_padrao()}</button>
+                    <!-- São quatro botões iguais na tela, um por ajuste: sem o rótulo do ajuste no
+                         nome acessível, o leitor de tela lê "voltar ao padrão" quatro vezes. -->
+                    <button class="ajuste-reset" onclick={() => ajusteResetar(a)}
+                            aria-label={`${a.rotulo} — ${m.config_server_voltar_padrao()}`}
+                      >{m.config_server_voltar_padrao()}</button>
                   {/if}
                 </div>
                 <span class="ajuda">{a.ajuda}</span>

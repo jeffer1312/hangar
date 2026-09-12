@@ -295,6 +295,35 @@ describe('integração do Codex em Harnesses', () => {
     expect(explicadas).toContainEqual(['Kimi', m.harness_item_mcp(), false]);
     expect(el.textContent).toContain(m.harness_item_hooks_porque());
   });
+
+  // "Copia um login que falta" fala de um botão. Sem o botão, a frase descreve uma ação que não
+  // existe naquele card — era o que aparecia na credencial em dia.
+  it('a credencial em dia não ganha a explicação do Sincronizar; a que falta, sim', async () => {
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (String(url).endsWith(ROTA)) return ler(String(url), init);
+      if (String(url).endsWith(ROTA_INST)) return resposta(ociosa);
+      if (String(url).endsWith(ROTA_CONFIG)) return lerConfig(init);
+      if (String(url).endsWith(ROTA_CODEX)) return lerOpcoesCodex(init);
+      return resposta([
+        { id: 'pi', nome: 'Pi', instalado: true, versao: '1', itens: [
+          { id: 'credenciais', codigo: 'credenciais_ok', ok: true, params: { tem: 'groq' }, conserto: null },
+        ] },
+        { id: 'kimi', nome: 'Kimi', instalado: true, versao: '1', itens: [
+          { id: 'credenciais', codigo: 'credenciais_faltam', ok: false, params: { tem: 'groq', faltam: 'openai' },
+            conserto: 'sync:kimi' },
+        ] },
+      ]);
+    });
+    const { el } = await montar();
+    const bloco = (nomeCard: string) => {
+      const card = [...el.querySelectorAll('.hs-card')]
+        .find((c) => c.querySelector('.hs-nome')?.textContent === nomeCard)!;
+      return card.querySelector('.hs-item')!.nextElementSibling?.classList.contains('cfg-porque') ?? false;
+    };
+    expect(bloco('Pi')).toBe(false);
+    expect(bloco('Kimi')).toBe(true);
+    expect(el.textContent).toContain(m.harness_item_credenciais_porque());
+  });
 });
 
 // Vinham das folhas "Opções" (uma por harness), que deixaram de existir: o que elas mostravam e
@@ -311,6 +340,22 @@ describe('opções dentro do card', () => {
     expect([...el.querySelectorAll('button')].map((b) => b.textContent?.trim()))
       .not.toContain(m.sessao_opcoes());
     expect(el.querySelector('.hs-refresh')!.textContent).toContain(m.arq_recarregar());
+  });
+
+  // O nome acessível dos quatro interruptores do card é o rótulo curto; a frase de ajuda é
+  // descrição. Sem o `aria-label`, o nome vira rótulo + frase inteira a cada foco.
+  it('os quatro interruptores dos cards se anunciam pelo rótulo curto, com a ajuda como descrição', async () => {
+    await montar();
+    const automatica = document.querySelector<HTMLInputElement>('#codex-automatica')!;
+    for (const [alvo, nome, ajuda] of [
+      [claude(), m.harness_claude_statusline_atualizar(), 'claude-statusline-ajuda'],
+      [contexto(), m.codex_contexto_titulo(), 'codex-contexto-ajuda'],
+      [automatica, m.harness_codex_automatica(), 'codex-automatica-ajuda'],
+    ] as [HTMLInputElement, string, string][]) {
+      expect(alvo.getAttribute('aria-label')).toBe(nome);
+      expect(alvo.getAttribute('aria-describedby')).toBe(ajuda);
+      expect(document.getElementById(ajuda)).not.toBeNull();
+    }
   });
 
   it('a barra de status do Claude grava na hora no servidor escolhido e só muda depois da releitura', async () => {

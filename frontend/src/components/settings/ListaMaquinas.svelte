@@ -136,7 +136,7 @@
     {/if}
   {/each}
 </ul>
-<button class="ss-btn mq-add" onclick={onAdicionar}>+ {m.sessao_adicionar_servidor()}</button>
+<button class="ss-btn mq-add" onclick={onAdicionar}>+ {m.maquinas_adicionar()}</button>
 
 <style>
   .mq-lista { list-style: none; margin: 0; padding: 0; background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; container-type: inline-size; }

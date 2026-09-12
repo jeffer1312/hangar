@@ -55,8 +55,10 @@
   // que ainda nao se sabe, e nao se afirma o que ainda nao se sabe.
   const opts = $derived<{ v: ThemePref; label: string; aria: string; off: boolean }[]>([
     { v: 'system', label: m.config_tema_auto(), aria: m.config_idioma_sistema(), off: false },
-    { v: 'light', label: '☀', aria: m.config_tema_claro(), off: false },
-    { v: 'dark', label: '☾', aria: m.config_tema_escuro(), off: false },
+    // Texto, não só o ícone: os vizinhos desta mesma fileira ("Automático", "Desktop") são
+    // palavras, e o sol/lua sozinhos eram os únicos sem nada escrito.
+    { v: 'light', label: m.config_tema_claro(), aria: m.config_tema_claro(), off: false },
+    { v: 'dark', label: m.config_tema_escuro(), aria: m.config_tema_escuro(), off: false },
     { v: 'desktop', label: m.config_aparencia_desktop(), aria: m.config_tema_desktop(), off: sonda !== 'sim' && !emUso },
   ]);
 </script>

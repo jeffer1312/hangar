@@ -60,6 +60,7 @@
 </script>
 
 <div class="ct">
+  <p class="ct-desc ct-desc--topo">{m.config_aparencia_cor_tema_modo_desc()}</p>
   <div class="ct-head">
     <SegmentedPicker
       value={modo}
@@ -103,6 +104,7 @@
       </label>
     </div>
   </div>
+  <p class="ct-desc">{m.config_aparencia_destaque_desc()}</p>
 
   <div class="ct-linha">
     <span class="ct-nome">{m.config_aparencia_tinta()}</span>
@@ -128,6 +130,7 @@
       </label>
     </div>
   </div>
+  <p class="ct-desc">{m.config_aparencia_tinta_desc()}</p>
 
   {#if cor.tinta}
     <label class="ap-slider ct-forca">
@@ -136,6 +139,7 @@
              oninput={(e) => pickForca(+(e.currentTarget as HTMLInputElement).value)} />
       <em>{cor.forca}</em>
     </label>
+    <p class="ct-desc">{m.config_aparencia_forca_cor_desc()}</p>
   {/if}
 </div>
 
@@ -169,4 +173,13 @@
     cursor: pointer; padding: 0; border: none;
   }
   .ct-forca { padding-left: calc(92px + var(--space-3)); }
+  /* A descrição alinha com os swatches, não com a coluna do nome: lida como legenda do controle
+     que está logo acima, e não como um segundo rótulo. O `.ct` já dá o espaço entre os blocos. */
+  .ct-desc {
+    margin: calc(var(--space-3) * -1 + 2px) 0 0;
+    padding-left: calc(92px + var(--space-3));
+    font-size: var(--text-xs); color: var(--text-muted); line-height: 1.4;
+  }
+  /* Esta é legenda do segmentado que vem LOGO ABAIXO, então não puxa a margem negativa. */
+  .ct-desc--topo { padding-left: 0; margin: 0 0 calc(var(--space-3) * -1 + 2px); }
 </style>

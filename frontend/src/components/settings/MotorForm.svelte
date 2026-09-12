@@ -460,6 +460,8 @@
        até abrir outra. Vale na criação também: o bloco continua aberto depois do primeiro Salvar, e
        o Salvar seguinte já é edição. Sem esta linha o efeito parecia não ter acontecido. -->
   <p class="ajuda">{m.config_motores_sessoes_abertas()}</p>
+  <!-- A sincronização com os outros CLIs acontece no Salvar; dizê-la só depois é avisar tarde. -->
+  <p class="ajuda">{m.config_motores_sync_aviso()}</p>
 
   <div class="acoes" class:fixo={celular}>
     <!-- Depois de salvar o botão diz Fechar: a edição já foi, o que resta na tela é o resultado. -->

@@ -40,6 +40,16 @@ function porRotulo(alvo: HTMLElement, aria: string): HTMLButtonElement | null {
   return alvo.querySelector<HTMLButtonElement>(`[aria-label="${aria}"]`);
 }
 
+/** O slider daquele rótulo, achado pelo `<label>` que o embrulha. Falha alto se o rótulo sumir:
+ *  afirmar `disabled` de um elemento que não existe mais passaria calado. */
+function sliderDe(alvo: HTMLElement, rotulo: string): HTMLInputElement {
+  const label = [...alvo.querySelectorAll('label')].find((l) => l.textContent?.includes(rotulo));
+  expect(label, `não achei o slider "${rotulo}" na tela`).not.toBeUndefined();
+  const input = label!.querySelector<HTMLInputElement>('input[type="range"]');
+  expect(input, `o rótulo "${rotulo}" não embrulha um slider`).not.toBeNull();
+  return input!;
+}
+
 describe('AppearanceSettings — controle que não some', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -63,6 +73,17 @@ describe('AppearanceSettings — controle que não some', () => {
     expect(botao).not.toBeNull();
     expect(botao!.disabled).toBe(true);
     expect(alvo.textContent).toContain(m.config_aparencia_motivo_tema_desktop());
+    unmount(app);
+  });
+
+  // A descrição do Tema é a única frase desta tela que fala do "Desktop", e a chave antiga é a
+  // mesma que o app nativo renderiza — lá o segmentado só tem sistema/claro/escuro.
+  it('a descrição do Tema cita o Desktop na web, e a chave que o app nativo renderiza não', async () => {
+    const { alvo, app } = await montar();
+    expect(alvo.textContent).toContain(m.config_aparencia_tema_desc_web());
+    for (const locale of ['pt', 'en'] as const) {
+      expect(m.config_aparencia_tema_desc({}, { locale })).not.toContain('Desktop');
+    }
     unmount(app);
   });
 
@@ -123,22 +144,21 @@ describe('AppearanceSettings — controle que não some', () => {
     const nenhum = porRotulo(alvo, m.config_aparencia_nenhum_aria());
     nenhum!.click();
     await tick();
-    const forca = [...alvo.querySelectorAll('label')].find((l) =>
-      l.textContent?.includes(m.config_aparencia_forca()),
-    );
-    expect(forca).not.toBeUndefined();
-    expect(forca!.querySelector('input')!.disabled).toBe(true);
+    expect(sliderDe(alvo, m.config_aparencia_forca()).disabled).toBe(true);
     expect(alvo.textContent).toContain(m.config_aparencia_motivo_leitura());
-    // Contraste do texto só vale em Leitura = Texto ou Automática.
+    // Contraste do texto só vale em Leitura = Texto ou Automática — e o que prova isso é o
+    // `disabled` do slider DELE, não a frase do motivo: a frase sobrevive ao controle destravado.
+    expect(sliderDe(alvo, m.config_aparencia_contraste()).disabled).toBe(true);
     expect(alvo.textContent).toContain(m.config_aparencia_motivo_contraste());
     unmount(app);
   });
 
   it('em Leitura = Automática (o padrão), Força e Contraste ficam habilitados e sem motivo', async () => {
     const { alvo, app } = await montar();
-    const sliders = [...alvo.querySelectorAll<HTMLInputElement>('input[type="range"]')];
-    const leituraLigada = sliders.filter((i) => !i.disabled);
-    expect(leituraLigada.length).toBeGreaterThan(0);
+    // Nomeados, um a um: contar quantos sliders da tela estão habilitados não prova nada, porque
+    // Tamanho, Entrelinha e Largura da coluna nunca são desabilitados e sozinhos já dão o número.
+    expect(sliderDe(alvo, m.config_aparencia_forca()).disabled).toBe(false);
+    expect(sliderDe(alvo, m.config_aparencia_contraste()).disabled).toBe(false);
     expect(alvo.textContent).not.toContain(m.config_aparencia_motivo_leitura());
     expect(alvo.textContent).not.toContain(m.config_aparencia_motivo_contraste());
     unmount(app);

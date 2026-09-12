@@ -603,9 +603,14 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
           <span class="ct-txt">
             <span class="ct-nome-l">
               {#if renomeando === conta.id}
+                <!-- A frase vive AQUI, não num `title` do lápis: quem precisa saber que o nome é só
+                     local é quem está digitando o nome, e no toque não há hover. Mesmo desenho da
+                     instrução do cookie, que também mora dentro do formulário dela. -->
+                <p class="ct-form-leg ct-renomear-leg" id="rn-como-{conta.id}">{m.contas_renomear_so_aqui()}</p>
                 <!-- svelte-ignore a11y_autofocus -->
                 <input class="ct-campo ct-campo-nome" type="text" autofocus bind:value={apelidoTexto}
-                  aria-label={m.contas_renomear({ nome: conta.nome })} disabled={salvandoApelido}
+                  aria-label={m.contas_renomear({ nome: conta.nome })} aria-describedby="rn-como-{conta.id}"
+                  disabled={salvandoApelido}
                   onkeydown={(e) => {
                     if (e.key === 'Enter') { e.preventDefault(); salvarApelido(conta); }
                     else if (e.key === 'Escape') { renomeando = null; apelidoTexto = ''; }
@@ -622,6 +627,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
                      O rótulo visível ao lado vale nas duas larguras: o aria-label sozinho não
                      chega a quem enxerga, e no toque não há hover pra um `title`. -->
                 <button type="button" class="ct-lapis" aria-label={m.contas_renomear({ nome: conta.nome })}
+                  title={m.contas_renomear_so_aqui()}
                   onclick={() => { renomeando = conta.id; apelidoTexto = conta.apelido ?? ''; }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -743,7 +749,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
                    qual delas ele abria. -->
               <button type="button" class="ct-acao ct-modelo-btn" aria-expanded={motorEmEdicao}
                 onclick={() => (motorAberto = motorEmEdicao ? null : conta.id)}
-                >{motorEmEdicao ? m.sessao_fechar() : m.config_motores_editar()}</button>
+                >{motorEmEdicao ? m.sessao_fechar() : m.contas_motor_editar()}</button>
               <button type="button" class="ct-acao" aria-label={m.contas_remover_aria({ nome: conta.nome })}
                 onclick={() => (confirmando = conta.id)}>{m.lista_remover()}</button>
             {/if}
@@ -817,6 +823,9 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
           {#if cookieDe === conta.id}
             <div class="ct-cookie">
               <p class="ct-form-leg">{m.contas_cookie_legenda()}</p>
+              <!-- O "onde copiar" fica aqui dentro também: a linha do card some quando o formulário
+                   abre, e era justamente ao preencher o campo que a instrução fazia falta. -->
+              <p class="ct-form-leg" id="ck-como-{conta.id}">{m.contas_cookie_como()}</p>
               <div class="ct-form-linha">
                 <label class="ct-campo-l">
                   <span>{m.contas_cookie_ws()}</span>
@@ -827,6 +836,7 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
                 <label class="ct-campo-l larga">
                   <span>{m.contas_cookie_valor()}</span>
                   <input class="ct-campo" type="password" autocomplete="off"
+                    aria-describedby="ck-como-{conta.id}"
                     bind:value={cookieValor} disabled={salvandoCookie} />
                 </label>
               </div>
@@ -1268,6 +1278,8 @@ import { apagarConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, d
     background: var(--surface-inset);
   }
   .ct-form-leg { color: var(--text-muted); font-size: 12px; margin: 0 0 var(--space-3); }
+  /* Linha inteira dentro da faixa flex do nome, senão ela disputa espaço com o campo e os botões. */
+  .ct-renomear-leg { flex-basis: 100%; margin-bottom: 2px; }
   /* Container query, não media query: quem aperta a linha é a largura do PAINEL. */
   .ct-form-linha { display: flex; gap: var(--space-3); }
   @container (max-width: 460px) { .ct-form-linha { flex-direction: column; } }

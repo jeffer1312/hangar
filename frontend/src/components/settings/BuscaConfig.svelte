@@ -30,14 +30,21 @@
   export const ENTRADAS: readonly EntradaBusca[] = [
     { tela: 'geral', rotulo: m.config_idioma_rotulo, descricao: m.config_idioma_nota_reload },
 
-    { tela: 'aparencia', rotulo: m.config_tema_curto, descricao: m.config_aparencia_tema_desc },
+    { tela: 'aparencia', rotulo: m.config_tema_curto, descricao: m.config_aparencia_tema_desc_web },
     { tela: 'aparencia', rotulo: m.config_fundo_curto, descricao: m.config_aparencia_fundo_desc },
     { tela: 'aparencia', rotulo: m.config_aparencia_papel_parede, descricao: m.config_aparencia_papel_parede_desc },
     { tela: 'aparencia', rotulo: m.config_aparencia_cor_tema, descricao: m.config_aparencia_cor_tema_desc },
     { tela: 'aparencia', rotulo: m.config_aparencia_cor_texto, descricao: m.config_aparencia_cor_texto_desc },
     { tela: 'aparencia', rotulo: m.config_aparencia_desfoque, descricao: m.config_aparencia_desfoque_desc },
     { tela: 'aparencia', rotulo: m.config_aparencia_leitura, descricao: m.config_aparencia_leitura_desc },
-    { tela: 'aparencia', rotulo: m.config_aparencia_contraste },
+    { tela: 'aparencia', rotulo: m.config_aparencia_contraste, descricao: m.config_aparencia_contraste_desc },
+    { tela: 'aparencia', rotulo: m.config_fundo_transparencia, descricao: m.config_fundo_transparencia_desc },
+    { tela: 'aparencia', rotulo: m.config_fundo_solidez, descricao: m.config_fundo_solidez_desc },
+    { tela: 'aparencia', rotulo: m.config_aparencia_destaque, descricao: m.config_aparencia_destaque_desc },
+    { tela: 'aparencia', rotulo: m.config_aparencia_tinta, descricao: m.config_aparencia_tinta_desc },
+    { tela: 'aparencia', rotulo: m.config_aparencia_forca, descricao: m.config_aparencia_forca_leitura_desc },
+    { tela: 'aparencia', rotulo: m.config_aparencia_ver_ao_vivo, descricao: m.config_aparencia_ver_ao_vivo_desc },
+    { tela: 'aparencia', rotulo: m.config_aparencia_voltar_padrao, descricao: m.config_aparencia_voltar_padrao_desc },
     { tela: 'aparencia', rotulo: m.config_aparencia_texto_conversa, descricao: m.config_aparencia_texto_conversa_desc },
     { tela: 'aparencia', rotulo: m.config_aparencia_fonte, descricao: m.config_aparencia_fonte_desc },
     { tela: 'aparencia', rotulo: m.config_aparencia_chamadas, descricao: m.config_aparencia_chamadas_desc },
@@ -57,6 +64,7 @@
     { tela: 'maquinas', rotulo: m.peers_identificador, descricao: m.peers_legenda_identificador },
     { tela: 'maquinas', rotulo: m.config_term_origins, descricao: m.config_term_origins_ajuda },
     { tela: 'maquinas', rotulo: m.config_servidores_sair_titulo, descricao: m.maquinas_intro },
+    { tela: 'maquinas', rotulo: m.maquinas_reconectar },
 
     { tela: 'contas', rotulo: m.contas_atualizar, descricao: m.contas_legenda },
     { tela: 'contas', rotulo: m.contas_secao_claude, descricao: m.contas_secao_claude_leg },
@@ -115,8 +123,12 @@
   ];
 
   // Acento não pode separar "voz" de "vôz" nem "cota" de "cotá": a comparação é sempre sem marca.
+  // A faixa é montada a partir de uma string ASCII, e não escrita direto num literal de regex: os
+  // caracteres combinantes U+0300-U+036F são invisíveis no código e somem sem aviso em qualquer
+  // ferramenta que normalize o arquivo para NFC.
+  const SEM_ACENTO = new RegExp('[\\u0300-\\u036f]', 'g');
   function normalizar(s: string): string {
-    return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    return s.normalize('NFD').replace(SEM_ACENTO, '').toLowerCase();
   }
 
   export interface Achado { entrada: EntradaBusca; rotulo: string; tela: string; }
@@ -163,8 +175,12 @@
   <input class="bc-campo" type="search" bind:value={termo}
          placeholder={m.config_busca_placeholder()} aria-label={m.config_busca_placeholder()} />
   <!-- Região viva: a lista aparece e some enquanto se digita, com o foco parado no campo — sem
-       isto um leitor de tela não é avisado de nada (WCAG 4.1.3). -->
-  <div aria-live="polite">
+       isto um leitor de tela não é avisado de nada (WCAG 4.1.3). Só a CONTAGEM é anunciada: com a
+       lista dentro da região viva, cada tecla relia os 72 rótulos em voz alta. -->
+  <p class="sr-only" aria-live="polite">
+    {#if termo.trim()}{achados.length ? m.config_busca_resultados({ n: achados.length }) : m.busca_nenhum_resultado()}{/if}
+  </p>
+  <div>
     {#if termo.trim()}
       {#if achados.length}
         <ul class="bc-lista">

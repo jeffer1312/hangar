@@ -10,9 +10,9 @@
   let { escopo }: Props = $props();
 </script>
 
-<span class="escopo" class:env={escopo === 'env'}
-  >{escopo === 'env' ? m.config_escopo_env() : m.config_escopo_servidor()}</span
->
+<!-- As duas variantes diferem só pelo texto: o desenho é o mesmo de propósito, e não há regra CSS
+     por variante pra uma classe carregar. -->
+<span class="escopo">{escopo === 'env' ? m.config_escopo_env() : m.config_escopo_servidor()}</span>
 
 <style>
   /* Mesma posição e tamanho da etiqueta "editado" da linha genérica; cor discreta porque esta

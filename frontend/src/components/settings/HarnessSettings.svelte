@@ -410,9 +410,15 @@
   // avisos que o CLI manda pro app, mas no Codex a mesma linha lista os hooks do próprio usuário
   // importados — lá as duas frases seriam falsas. Card novo com um id conhecido não herda a
   // explicação calado: fica sem, até alguém declarar.
-  const PORQUE: Record<string, { vered: () => string; motivo: () => string; harnesses: string[] }> = {
+  // `quando`: há linha cuja explicação fala de uma AÇÃO, e a ação nem sempre existe. Sem ele, a
+  // credencial em dia ganhava "Copia um login que falta" num card onde nada falta e sem o botão
+  // Sincronizar ao lado.
+  const PORQUE: Record<string, {
+    vered: () => string; motivo: () => string; harnesses: string[]; quando?: (i: ItemHarness) => boolean;
+  }> = {
     credenciais: { vered: m.harness_item_credenciais_vered, motivo: m.harness_item_credenciais_porque,
-                   harnesses: ['codex', 'pi', 'omp', 'kimi'] },
+                   harnesses: ['codex', 'pi', 'omp', 'kimi'],
+                   quando: (i) => !!i.conserto?.startsWith('sync:') },
     extensoes: { vered: m.harness_item_extensoes_vered, motivo: m.harness_item_extensoes_porque,
                  harnesses: ['pi', 'omp'] },
     skills: { vered: m.harness_item_skills_vered, motivo: m.harness_item_skills_porque,
@@ -424,7 +430,8 @@
   };
   function porque(item: ItemHarness, harness: string) {
     const p = PORQUE[item.id];
-    return p?.harnesses.includes(harness) ? p : null;
+    if (!p || !p.harnesses.includes(harness)) return null;
+    return !p.quando || p.quando(item) ? p : null;
   }
 
   const ETAPAS_INST: Record<string, () => string> = {
@@ -579,12 +586,16 @@
             <p class="cfg-motivo">{m.harness_codex_reconciliar_porque()}</p>
           </details>
           {#if integracao}
-            <label class="hs-item hs-automatica">
+            <label class="hs-item hs-automatica" for="codex-automatica">
               <span class="hs-item-txt">
                 <b>{m.harness_codex_automatica()}</b>
-                <span class="hs-ajuda">{m.harness_codex_automatica_ajuda()}</span>
+                <!-- Descrição, não nome — igual aos três interruptores vizinhos: dentro do nome o
+                     leitor de tela repete a frase inteira a cada foco antes de dizer se está ligado. -->
+                <span class="hs-ajuda" id="codex-automatica-ajuda">{m.harness_codex_automatica_ajuda()}</span>
               </span>
-              <input type="checkbox" class="switch" checked={integracao.automatica}
+              <input type="checkbox" class="switch" id="codex-automatica"
+                aria-label={m.harness_codex_automatica()} aria-describedby="codex-automatica-ajuda"
+                checked={integracao.automatica}
                 disabled={trocandoAutomatica} onchange={trocarAutomatica} />
             </label>
             <p class="hs-aviso" role="status">
