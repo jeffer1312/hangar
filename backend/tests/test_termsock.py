@@ -1091,3 +1091,29 @@ def test_conpty_encerrar_nao_fecha_o_pseudoconsole_com_o_filho_vivo(monkeypatch,
     assert not k.fechou_pseudoconsole
     assert "nao saiu em 3s" in caplog.text
     assert "TerminateProcess" in caplog.text      # o erro de matar vai junto, e util aqui
+
+
+def test_diag_entrada_registra_resposta_do_terminal_e_nao_o_que_a_pessoa_digita(monkeypatch, caplog):
+    # Diagnostico do defeito do Windows: com o painel aberto, caractere que ninguem digitou aparece
+    # no composer da TUI. O log tem que mostrar a RESPOSTA de terminal (o CPR que o cliente manda
+    # quando alguem pergunta a posicao do cursor) e NAO pode virar gravador do que a pessoa tecla —
+    # um log que carrega o texto digitado no terminal e pior que o bug que ele investiga.
+    from app import termsock as ts
+    monkeypatch.setattr(ts.settings, "diag_term_input", True, raising=False)
+    with caplog.at_level(logging.WARNING, logger="app.termsock"):
+        ts._diag_entrada("s", b"\x1b[43;4R")        # resposta a `ESC[6n`
+        ts._diag_entrada("s", b"434")               # o mesmo CPR ja sem o ESC, como chegou no pane
+        ts._diag_entrada("s", b"senha secreta")     # digitacao: fora do log
+        ts._diag_entrada("s", b"\r")
+    registrado = "\n".join(r.getMessage() for r in caplog.records)
+    assert "43;4R" in registrado
+    assert "434" in registrado
+    assert "senha" not in registrado
+
+
+def test_diag_entrada_calado_sem_o_flag(monkeypatch, caplog):
+    from app import termsock as ts
+    monkeypatch.setattr(ts.settings, "diag_term_input", False, raising=False)
+    with caplog.at_level(logging.WARNING, logger="app.termsock"):
+        ts._diag_entrada("s", b"\x1b[43;4R")
+    assert not caplog.records

@@ -14,6 +14,7 @@ import importlib
 import json
 import logging
 import os
+import re
 import secrets
 import signal
 import struct
@@ -132,6 +133,29 @@ def origens_extras() -> list[str]:
             if extra and extra not in vistos:
                 vistos.append(extra)
     return vistos
+
+
+_DIAG_RESPOSTA_RE = re.compile(rb"^[0-9;?$]*[Rcn~y]?$")
+
+
+def _diag_entrada(name: str, b: bytes) -> None:
+    """Registra RESPOSTA de terminal vinda do cliente, nunca o que a pessoa digita.
+
+    Existe para um defeito medido no Windows: com o painel do terminal aberto, caracteres que
+    ninguem digitou aparecem no composer da TUI (ex. "3", "33", "434" na frente do texto). A
+    suspeita e a conversa de capacidades do attach — o cliente RESPONDE a pergunta que o tmux/psmux
+    fez (CPR `ESC[linha;colunaR`, DA, XTVERSION) e a resposta atravessa ate o pane em vez de ser
+    consumida por quem perguntou.
+
+    Filtro deliberado: so passa o que tem ESC ou o que e curto e parece resposta (digitos, `;`, `R`).
+    Tecla e texto de quem digita ficam FORA do log — o diagnostico nao pode virar gravador do
+    terminal. Desligado por padrao: `CP_DIAG_TERM_INPUT=1` no `.env` liga.
+    """
+    if not settings.diag_term_input:
+        return
+    if b"\x1b" not in b and not (len(b) <= 8 and _DIAG_RESPOSTA_RE.match(b)):
+        return
+    _log.warning("termsock: %r entrada do cliente %r (%d bytes)", name, b[:64], len(b))
 
 
 def _origem_aceita(origem: str, host_req: Optional[str]) -> bool:
@@ -495,6 +519,7 @@ async def _motor_posix(ws: WebSocket, name: str, cols: int, rows: int) -> None:
             pass
 
     def escrever_no_pty(b: bytes) -> None:
+        _diag_entrada(name, b)
         # `add_writer`, nao `time.sleep` bloqueante: isto roda DENTRO do laco de eventos (chamado
         # direto de leitor_do_socket) — um `time.sleep` ali travava o backend inteiro (SSE de
         # todas as sessoes, listagem, tudo) enquanto o buffer do pty estivesse cheio (paste
@@ -849,6 +874,7 @@ async def _motor_windows(ws: WebSocket, name: str, cols: int, rows: int) -> None
                     # sobreposto, entao `write()` nunca bloqueia o laco de eventos — que era a
                     # restricao que obrigou aquele desenho la (um `time.sleep` no laco travava o
                     # backend inteiro). Reimplementar a fila aqui seria duas filas.
+                    _diag_entrada(name, b)
                     transporte_escrita.write(b)
                 elif (t := msg.get("text")) is not None:
                     try:

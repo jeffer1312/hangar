@@ -161,6 +161,11 @@ class Settings(BaseSettings):
     # resolve_scan_roots). Mantida como str pra aceitar o formato "a,b" direto do env.
     scan_roots: str = _DEFAULT_SCAN_ROOTS
     reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
+    # CP_DIAG_TERM_INPUT=1: registra no log privado as RESPOSTAS de terminal que o painel manda pro
+    # pty (CPR, DA, XTVERSION) — nunca a digitacao. Existe pro defeito do Windows em que caractere
+    # que ninguem digitou aparece no composer da TUI com o painel aberto (`termsock._diag_entrada`).
+    # Default off: ligado, um terminal movimentado enche o log.
+    diag_term_input: bool = False
     # CP_FRONT_PORT: onde o PWA é servido — entra no QR e no painel de alcance. VAZIO (0) = o
     # próprio backend, que monta o `frontend/dist` na raiz (api.py, `_UIStatic`); é a topologia
     # padrão desde que o serviço separado de front deixou de ser instalado. Só quem mantém o
