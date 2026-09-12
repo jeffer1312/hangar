@@ -110,6 +110,31 @@ def _limpa_estado(monkeypatch):
 # --------------------------------------------------------------------------- chamadas
 
 
+def test_iniciar_recusa_falha_de_leitura_antes_de_tocar_na_janela(bateia, monkeypatch, tmp_path):
+    credencial = tmp_path / ".credentials.json"
+    credencial.write_text(json.dumps({"claudeAiOauth": {"accessToken": "revogado"}}))
+    ler = Path.read_text
+
+    def falhar(p, *args, **kwargs):
+        if p == credencial:
+            raise OSError("leitura indisponível")
+        return ler(p, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", falhar)
+    with pytest.raises(OSError):
+        login_conta.iniciar("conta-a", str(tmp_path))
+    assert bateia.eventos == []
+    assert not login_conta._em_curso("conta-a")
+
+
+@pytest.mark.parametrize("conteudo", ["{", "[]", '{"claudeAiOauth": []}'])
+def test_iniciar_recusa_credencial_malformada(bateia, tmp_path, conteudo):
+    (tmp_path / ".credentials.json").write_text(conteudo)
+    with pytest.raises(ValueError):
+        login_conta.iniciar("conta-a", str(tmp_path))
+    assert bateia.eventos == []
+
+
 def test_iniciar_cria_janela_e_digita_login(bateia):
     login_conta.iniciar("conta-a", "/home/u")
     # A chave pedida ao tmux é `login-conta-a`; o alvo REAL usado em digitar/Enter é o
@@ -214,6 +239,24 @@ def test_sem_tentativa_passo_devolve_idle(bateia):
 # --------------------------------------------------------------------- confirmação
 
 
+def test_confirmar_recusa_credencial_ilegivel(bateia, monkeypatch, tmp_path):
+    credencial = tmp_path / ".credentials.json"
+    login_conta.iniciar("conta-a", str(tmp_path))
+    credencial.write_text("{")
+    monkeypatch.setattr(conta_estado, "_auth_status", lambda _: {"loggedIn": True})
+    with pytest.raises(ValueError):
+        login_conta.confirmar("conta-a", "CODE-INVALIDO")
+    assert bateia.matadas == ["term-login-conta-a"]
+
+
+def test_confirmar_nao_aceita_logged_in_sem_token_no_disco(bateia, monkeypatch, tmp_path):
+    login_conta.iniciar("conta-a", str(tmp_path))
+    monkeypatch.setattr(conta_estado, "_auth_status", lambda _: {"loggedIn": True})
+    with pytest.raises(TimeoutError):
+        login_conta.confirmar("conta-a", "CODE-INVALIDO", timeout_s=0)
+    assert bateia.matadas == ["term-login-conta-a"]
+
+
 def test_confirmar_digita_o_codigo_e_confirma_pela_releitura(bateia):
     # A confirmação é RELER o estado da conta — nunca a aparência da tela (requisito do
     # Step 1). Aqui a tela de mentira NUNCA mostra login; quem decide é o `_estado_login`.
@@ -263,7 +306,7 @@ def test_confirmar_sem_tentativa_devolve_erro(bateia):
     with pytest.raises(RuntimeError):
         login_conta.confirmar("conta-a", "CODE-123")
 
-def test_confirmar_rele_o_estado_pelo_caminho_da_conta_nao_pelo_rotulo(bateia, monkeypatch):
+def test_confirmar_rele_o_estado_pelo_caminho_da_conta_nao_pelo_rotulo(bateia, monkeypatch, tmp_path):
     # B1 — a confirmação relê o estado pelo CAMINHO REAL da conta (dir_conta), nunca pelo
     # RÓTULO: com um rótulo relativo a CLI criava backend/<rotulo>/ dentro da árvore do
     # repo (medido: backend/conta-a/) e a conta nunca relia logada. O teste captura o
@@ -272,18 +315,19 @@ def test_confirmar_rele_o_estado_pelo_caminho_da_conta_nao_pelo_rotulo(bateia, m
 
     def auth_status_captura(dir_conta):
         capturados.append(dir_conta)
+        (dir_conta / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "novo"}}))
         return {"loggedIn": True, "email": "u@exemplo.com", "subscriptionType": "max"}
 
     monkeypatch.setattr(conta_estado, "_auth_status", auth_status_captura)
     monkeypatch_poll(0.001)
-    login_conta.iniciar("conta-a", "/home/u/.claude-conta-a")
+    login_conta.iniciar("conta-a", str(tmp_path))
     resultado = login_conta.confirmar("conta-a", "CODE-123")
     assert resultado["ok"] is True
     assert resultado["email"] == "u@exemplo.com"
-    assert capturados == [Path("/home/u/.claude-conta-a")]
+    assert capturados == [tmp_path]
 
 
-def test_confirmar_espera_ate_a_conta_mostrar_logada(bateia):
+def test_confirmar_espera_ate_a_conta_mostrar_logada(bateia, tmp_path):
     # Depois de digitar o código, o OAuth ainda está processando: a releitura devolve
     # deslogada (com estado ok) algumas vezes e a confirmação espera e relê de novo —
     # até a conta aparecer logada.
@@ -291,12 +335,15 @@ def test_confirmar_espera_ate_a_conta_mostrar_logada(bateia):
                       "email": "u@exemplo.com", "subscriptionType": "max"}])
 
     def estado_fake(dir_conta):
-        return conta_estado._estado_login(next(respostas))
+        resposta = next(respostas)
+        if resposta["loggedIn"]:
+            (Path(dir_conta) / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "novo"}}))
+        return conta_estado._estado_login(resposta)
 
     # Só para o laço: o poll real dorme; aqui o tick é curto.
     monkeypatch_poll(0.001)
 
-    login_conta.iniciar("conta-a", "/home/u")
+    login_conta.iniciar("conta-a", str(tmp_path))
     resultado = login_conta.confirmar("conta-a", "CODE-123", estado_fake=estado_fake)
     assert resultado["ok"] is True
     assert resultado["email"] == "u@exemplo.com"

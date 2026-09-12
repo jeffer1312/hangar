@@ -275,6 +275,9 @@ def iniciar_login(label: str) -> dict:
                                              f"conta {label} não existe", nome=label))
     try:
         return login_conta.iniciar(label, conta.path)
+    except (OSError, ValueError):
+        raise HTTPException(409, detail=erro("erro_login_credencial_ilegivel",
+                                             "Não foi possível ler a credencial da conta. Tente novamente.")) from None
     except RuntimeError as e:
         # Já há tentativa em voo, ou a janela falhou: 409 com o motivo.
         raise HTTPException(409, detail=erro("erro_login_ja_em_curso", str(e))) from None
@@ -290,6 +293,9 @@ def confirmar_login(label: str, body: LoginBody) -> dict:
         raise HTTPException(409, detail=erro("erro_login_sem_tentativa", str(e))) from None
     except TimeoutError as e:
         raise HTTPException(504, detail=erro("erro_login_timeout", str(e))) from None
+    except (OSError, ValueError):
+        raise HTTPException(409, detail=erro("erro_login_credencial_ilegivel",
+                                             "Não foi possível ler a credencial da conta. Tente novamente.")) from None
 
 
 @conta_estado_router.get("/{label}/login/passo", dependencies=[Depends(require_auth)],

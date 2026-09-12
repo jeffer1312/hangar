@@ -130,6 +130,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_conta_inexistente: (p) => m.erro_conta_inexistente({ nome: String(p.nome) }),
   erro_login_ja_em_curso: () => m.erro_login_ja_em_curso(),
   erro_login_sem_tentativa: () => m.erro_login_sem_tentativa(),
+  erro_login_credencial_ilegivel: () => m.erro_login_credencial_ilegivel(),
   erro_login_timeout: () => m.erro_login_timeout(),
   erro_config_dir_sessao: (p) => m.erro_config_dir_sessao({ nome: String(p.nome) }),
   erro_sessao_usa_conta: (p) => m.erro_sessao_usa_conta({ nome: String(p.nome) }),

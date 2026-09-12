@@ -54,21 +54,30 @@ _MOTIVOS_DE_PULO = {"em-uso", "sem-pasta-confiada", "refresh-vencido"}
 # ------------------------------------------------------------------ leitura do .credentials.json
 
 
-def _oauth(dir_conta: Path) -> dict | None:
+def _oauth(dir_conta: Path, *, estrito: bool = False) -> dict | None:
     """O bloco `claudeAiOauth` da conta, ou None quando não dá pra confiar no que está lá.
 
     Arquivo ausente (conta criada e nunca logada), ilegível, JSON inválido ou JSON válido do TIPO
     errado caem todos no mesmo None — precedente do `statusline.read()`: JSON do tipo errado não
     levanta ValueError, e o `.get()` lá na frente é que viraria AttributeError no meio de uma
     varredura de todas as contas.
+    No login, `estrito` propaga falhas de leitura; só ausência continua sendo None.
     """
     try:
         dados = json.loads((dir_conta / ".credentials.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
     except (OSError, ValueError):
+        if estrito:
+            raise
         return None
     if not isinstance(dados, dict):
+        if estrito:
+            raise ValueError("formato inválido da credencial")
         return None
     oauth = dados.get("claudeAiOauth")
+    if estrito and oauth is not None and not isinstance(oauth, dict):
+        raise ValueError("formato inválido da credencial OAuth")
     return oauth if isinstance(oauth, dict) else None
 
 

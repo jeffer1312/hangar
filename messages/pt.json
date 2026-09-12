@@ -2236,6 +2236,7 @@
   "erro_conta_nome_invalido": "nome inválido: use minúsculas, números, '-' ou '_' (até 32 caracteres)",
   "erro_login_ja_em_curso": "já existe um login em andamento para esta conta",
   "erro_login_sem_tentativa": "não há login em andamento para esta conta",
+  "erro_login_credencial_ilegivel": "Não foi possível ler a credencial da conta. Tente novamente.",
   "erro_login_timeout": "o login demorou demais — tente de novo",
   "peers_esta_maquina": "Esta máquina",
   "peers_legenda_identificador": "O nome desta máquina para as outras — é o que uma sessão de lá usa para mandar recado a uma sessão daqui (máquina::sessão). Sem ele, nenhuma outra máquina consegue registrar esta.",

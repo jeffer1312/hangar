@@ -2236,6 +2236,7 @@
   "erro_conta_nome_invalido": "invalid name: use lowercase letters, numbers, '-' or '_' (up to 32 characters)",
   "erro_login_ja_em_curso": "a login is already in progress for this account",
   "erro_login_sem_tentativa": "there is no login in progress for this account",
+  "erro_login_credencial_ilegivel": "Could not read this account's credential. Please try again.",
   "erro_login_timeout": "the login took too long — try again",
   "peers_esta_maquina": "This machine",
   "peers_legenda_identificador": "This machine's name for the others — what a session over there uses to message a session here (machine::session). Without it, no other machine can register this one.",

@@ -147,6 +147,7 @@ def iniciar(conta: str, cwd: str) -> dict:
     """Abre a janela escondida e digita o comando de login. Recusa se já há uma tentativa."""
     if _em_curso(conta):
         raise RuntimeError(f"login já em andamento para a conta {conta}")
+    oauth = renova_token._oauth(Path(cwd), estrito=True)
     chave = _chave_janela(conta)
     # B3 — um backend que caiu no meio de uma tentativa deixa a janela VIVA no servidor
     # do tmux (a sessao sobrevive ao processo; o comentario antigo do módulo prometia o
@@ -161,7 +162,7 @@ def iniciar(conta: str, cwd: str) -> dict:
     # sabe qual janela matar.
     tentativa = Tentativa(id=next(_proximo_id), alvo=alvo, dir_conta=cwd,
                           inicio=time.monotonic(),
-                          token_anterior=(renova_token._oauth(Path(cwd)) or {}).get("accessToken"))
+                          token_anterior=(oauth or {}).get("accessToken"))
     _tentativas[conta] = tentativa
     try:
         _shell_submeter(alvo, "claude auth login --claudeai")
@@ -195,7 +196,7 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
     mesma fonte da Task 4), nunca pela aparência da tela. `estado_fake` é a porta de
     teste (mesma regra do `_auth_status`); sem ele, lê o estado real da conta.
 
-    Nunca levanta por falha de leitura: estado `indisponivel` é recusa com erro claro.
+    Falha ao ler a credencial ou estado `indisponivel` interrompe a confirmação.
     No fim, em QUALQUER caminho, a janela morre.
     """
     if not _em_curso(conta):
@@ -218,10 +219,10 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
             # usou no `-e CLAUDE_CONFIG_DIR`.
             estado = ler_estado(tentativa.dir_conta)
             # A CLI ainda diz loggedIn para token vencido ou revogado: espere a troca.
-            oauth = renova_token._oauth(Path(tentativa.dir_conta))
+            oauth = renova_token._oauth(Path(tentativa.dir_conta), estrito=True)
             vencimento = renova_token._epoch(oauth, "expiresAt")
             token = (oauth or {}).get("accessToken")
-            token_novo = tentativa.token_anterior is None or bool(token and token != tentativa.token_anterior)
+            token_novo = isinstance(token, str) and bool(token) and token != tentativa.token_anterior
             if (estado.estado == "ok" and estado.loggedIn and token_novo
                     and (vencimento is None or vencimento > time.time())):
                 return {

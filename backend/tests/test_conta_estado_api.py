@@ -250,6 +250,21 @@ def test_codigo_sem_tentativa_devolve_erro(cli, login_fake, monkeypatch):
     assert "sem tentativa" in r.json()["detail"]["msg"]
 
 
+@pytest.mark.parametrize("rota,funcao", [("login", "iniciar"), ("login/codigo", "confirmar")])
+@pytest.mark.parametrize("falha", [OSError("leitura falhou"), ValueError("JSON inválido")])
+def test_login_informa_erro_de_leitura_da_credencial(cli, monkeypatch, rota, funcao, falha):
+    monkeypatch.setattr(conta_estado, "list_config_dirs",
+                        lambda: [_cfg("/home/u/.claude-testes", "testes", False)])
+
+    def falhar(*args):
+        raise falha
+
+    monkeypatch.setattr(login_conta, funcao, falhar)
+    r = cli.post(f"/api/conta-estado/testes/{rota}", json={"codigo": "CODE-123"}, headers=AUTH)
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_login_credencial_ilegivel"
+
+
 def test_codigo_401_sem_credencial(cli):
     r = cli.post("/api/conta-estado/testes/login/codigo", json={"codigo": "CODE-123"})
     assert r.status_code == 401
