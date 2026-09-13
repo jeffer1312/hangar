@@ -124,6 +124,7 @@
   "codex_orientar": "Steer",
   "codex_orientar_recebido": "Received by Codex.",
   "codex_orientar_sem_envio": "No messages were forwarded this time.",
+  "headless_orientar_recebido": "Received by Claude.",
   "codex_orientar_ajuda": "Send this message to the active turn",
   "erro_codex_controle": "Codex did not accept the change; refresh the session and try again.",
   "erro_codex_opcoes": "Could not save the Codex options.",

@@ -1698,7 +1698,7 @@
     try {
       const sent = await onSteer();
       if ((isCodex || headless) && isWorking) steerFeedback = sent
-        ? m.codex_orientar_recebido() : m.codex_orientar_sem_envio();
+        ? (isCodex ? m.codex_orientar_recebido() : m.headless_orientar_recebido()) : m.codex_orientar_sem_envio();
     } catch (err) {
       sendError = err instanceof Error ? err.message : m.composer_fila_erro();
     } finally {
@@ -1890,7 +1890,7 @@
             <span class="repo-name">{m.composer_fila_contagem({ n: filaCount })}</span>
             <span class="repo-sep" aria-hidden="true">·</span>
           {/if}
-          <span class="fila-acao">{steeringQueue ? m.askq_enviando() : isCodex ? m.codex_orientar() : m.composer_fila_acao()}</span>
+          <span class="fila-acao">{steeringQueue ? m.askq_enviando() : (isCodex || headless) ? m.codex_orientar() : m.composer_fila_acao()}</span>
         </button>
       {/if}
       {#if shellsRodando > 0 && onOpenActivity}

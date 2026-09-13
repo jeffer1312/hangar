@@ -118,6 +118,7 @@ class ClaudeHeadlessAdapter:
         # processo morre, e o card/chat ainda precisam dizer por quê.
         self._problemas: dict[str, tuple[str, str | None]] = {}
         self._spawn_locks: dict[str, asyncio.Lock] = {}
+        self._tarefas: set[asyncio.Task] = set()
 
     # ── contrato Adapter ────────────────────────────────────────────────────────────────────
 
@@ -194,10 +195,18 @@ class ClaudeHeadlessAdapter:
 
     async def steer(self, name: str, text: str) -> None:
         """Mensagem no MEIO do turno: a CLI aceita `user` com turno em voo e injeta no próximo
-        passo (medido no MonoCode e na sonda). Sem turno em voo é um envio comum."""
-        sess = await self.ensure_running(name)
-        if sess is None:
-            raise RuntimeError("sessão indisponível")
+        passo (medido no MonoCode e na sonda). Sem turno em voo é um envio comum. Sob a mesma
+        trava de entrega do /input e do drain — todo escritor do stdin passa por ela."""
+        async with self.delivery_lock(name):
+            sess = await self.ensure_running(name)
+            if sess is None:
+                raise RuntimeError("sessão indisponível")
+            await self._steer_vivo(sess, text)
+
+    async def _steer_vivo(self, sess: _Sessao, text: str) -> None:
+        # Só no processo que está aí: subir outro "pra orientar" seria começar outra conversa.
+        if not sess.vivo:
+            raise RuntimeError("o processo encerrou antes de receber a mensagem")
         await self._write(sess, {
             "type": "user", "session_id": "", "parent_tool_use_id": None,
             "message": {"role": "user", "content": [{"type": "text", "text": text}]},
@@ -223,7 +232,7 @@ class ClaudeHeadlessAdapter:
             while claimed := await asyncio.to_thread(q.claim_undelivered, limit=1, entry_id=entry_id):
                 entry = claimed[0]
                 try:
-                    await self.steer(name, entry["text"])
+                    await self._steer_vivo(sess, entry["text"])
                 except BaseException:
                     await asyncio.to_thread(q.set_delivered, entry["id"], False)
                     raise
@@ -443,7 +452,7 @@ class ClaudeHeadlessAdapter:
         else:
             self._limpar_problema(sess)
         sess.initialized.set()
-        asyncio.get_running_loop().create_task(self._atualizar_cota(sess))
+        self._agendar_cota(sess)
 
     async def _ler(self, sess: _Sessao) -> None:
         assert sess.proc and sess.proc.stdout
@@ -591,7 +600,7 @@ class ClaudeHeadlessAdapter:
             await CodexPreviewSource.get(sess.name).push("")
             await self._notify(sess)
             if time.time() - sess.janelas_ts > 300:
-                asyncio.get_running_loop().create_task(self._atualizar_cota(sess))
+                self._agendar_cota(sess)
             return
         if t == "rate_limit_event":
             info = ev.get("rate_limit_info") or {}
@@ -720,20 +729,28 @@ class ClaudeHeadlessAdapter:
             parts.append(seg)
         return " │ ".join(parts) or None
 
+    def _agendar_cota(self, sess: _Sessao) -> None:
+        # Referência guardada e falha logada: tarefa solta some com a exceção junto.
+        t = asyncio.get_running_loop().create_task(self._atualizar_cota(sess))
+        self._tarefas.add(t)
+        t.add_done_callback(self._tarefas.discard)
+
     async def _atualizar_cota(self, sess: _Sessao) -> None:
         """Janelas da conta desta sessão, pelo leitor da faixa (cache de 5 min, rede na thread)."""
-        alvo = Path(sess.meta.get("config_dir") or Path.home() / ".claude").resolve()
+        sess.janelas_ts = time.time()   # também sem achar a conta: a cadência é a mesma
         try:
+            alvo = Path(sess.meta.get("config_dir") or Path.home() / ".claude").resolve()
             contas = await asyncio.to_thread(cotas.listar_cotas)
+            for c in contas:
+                if c.provedor != "claude" or ":" not in c.id:
+                    continue
+                if Path(c.id.split(":", 1)[1]).resolve() == alvo:
+                    sess.janelas = [j for j in c.janelas if not j.por_modelo]
+                    await self._notify(sess)
+                    return
+            _log.info("claude headless: conta %s não está na faixa de cotas — sem ⚡/📅 name=%s", alvo, sess.name)
         except Exception:
-            _log.debug("claude headless: leitura de cota falhou name=%s", sess.name, exc_info=True)
-            return
-        for c in contas:
-            if c.provedor == "claude" and Path(c.id.split(":", 1)[1]).resolve() == alvo:
-                sess.janelas = [j for j in c.janelas if not j.por_modelo]
-                sess.janelas_ts = time.time()
-                await self._notify(sess)
-                return
+            _log.warning("claude headless: leitura de cota falhou name=%s", sess.name, exc_info=True)
 
     def _evento(self, sess: _Sessao) -> StateEvent:
         question = options = None

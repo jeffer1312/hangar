@@ -124,6 +124,7 @@
   "codex_orientar": "Orientar",
   "codex_orientar_recebido": "Recebido pelo Codex.",
   "codex_orientar_sem_envio": "Nenhuma mensagem foi encaminhada agora.",
+  "headless_orientar_recebido": "Recebido pelo Claude.",
   "codex_orientar_ajuda": "Enviar esta mensagem ao turno em andamento",
   "erro_codex_controle": "O Codex não aceitou a alteração; atualize a sessão e tente novamente.",
   "erro_codex_opcoes": "Não foi possível salvar as opções do Codex.",

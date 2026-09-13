@@ -3134,6 +3134,9 @@ async def steer_session(name: str, body: InputBody | None = None):
                     "queued_ids": ["queued-" + entry_id for entry_id in sent]}
         except RuntimeError as e:
             raise HTTPException(409, detail=erro("erro_sem_turno", str(e))) from None
+        except OSError as e:
+            # Processo morreu entre a checagem e a escrita: a mensagem continua na fila.
+            raise HTTPException(502, detail=erro("erro_envio_falhou", f"o processo não recebeu: {e}")) from None
     provider, _ = await _send_thread(_pane_info, name)
     if provider != "kimi":
         raise HTTPException(409, "só sessão Kimi tem steer (ctrl-s)")
