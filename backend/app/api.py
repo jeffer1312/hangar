@@ -3078,6 +3078,9 @@ async def input_prompt(name: str, body: InputBody):
                 # steer_queue disputa a mesma trava do envio; só pode rodar depois dele.
                 sent = await get_adapter("codex").steer_queue(name, entry_id=entry_id)
                 steered = entry_id in sent
+            elif _headless(name) and not res.get("delivered"):
+                sent = await get_adapter(CLAUDE_HEADLESS).steer_queue(name, entry_id=entry_id)
+                steered = entry_id in sent
             elif provider != "codex" and not _headless(name):
                 provider, _ = await _send_thread(_pane_info, name)
                 q = PromptQueue(name)
@@ -3119,6 +3122,18 @@ async def steer_session(name: str, body: InputBody | None = None):
                     "queued_ids": ["queued-" + entry_id for entry_id in sent]}
         except (RuntimeError, ValueError):
             raise HTTPException(409, detail=erro("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente.")) from None
+    if _headless(name):
+        # Mesmo desenho do Codex: texto vai direto pro turno em voo; sem texto, promove a fila.
+        adapter = get_adapter(CLAUDE_HEADLESS)
+        try:
+            if body is not None:
+                await adapter.steer(name, body.text)
+                return {"ok": True, "promoted": False}
+            sent = await adapter.steer_queue(name)
+            return {"ok": True, "promoted": False, "confirmed": len(sent),
+                    "queued_ids": ["queued-" + entry_id for entry_id in sent]}
+        except RuntimeError as e:
+            raise HTTPException(409, detail=erro("erro_sem_turno", str(e))) from None
     provider, _ = await _send_thread(_pane_info, name)
     if provider != "kimi":
         raise HTTPException(409, "só sessão Kimi tem steer (ctrl-s)")

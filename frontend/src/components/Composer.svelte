@@ -98,6 +98,8 @@
     stats?: StatsEvent | null;
     // Cada provider consulta o catálogo e os controles da sua própria sessão.
     provider?: Provider;
+    // Claude sem terminal: a fila é do processo (como no Codex), então o chip "mandar agora" existe.
+    headless?: boolean;
     // Motor da sessao (SessionInfo.engine). Numa sessao de motor quem responde nao e o Claude,
     // entao o placeholder usa o modelo real (pill/statusline) em vez de "Claude".
     engine?: string | null;
@@ -119,6 +121,7 @@
     shellsRodando = 0, onOpenActivity,
     inputText = $bindable(''),
     provider = 'claude',
+    headless = false,
     engine = null,
     filaCount = 0,
     codexMode = null,
@@ -177,6 +180,9 @@
   // OMP é o fork do Pi (mesma TUI, mesmo popover de modelo/esforço) — trata igual aqui.
   const isPi = $derived(provider === 'pi' || provider === 'omp');
   const isKimi = $derived(provider === 'kimi');
+  // Quem tem fila promovível: Kimi (ctrl-s), Codex (turn/steer) e Claude sem terminal (mensagem
+  // no meio do turno pelo stdin).
+  const temFilaPromovivel = $derived(isKimi || isCodex || headless);
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -434,7 +440,7 @@
   // par, sem cache. Faixa vazia pendurada é pior que faixa ausente.
   const temAba = $derived(
     !!status?.repo || !!lastCache || status?.ctxPct != null
-    || !!onOpenPair || ((isKimi || isCodex) && isWorking && (filaCount > 0 || steeringQueue) && !!onSteer)
+    || !!onOpenPair || (temFilaPromovivel && isWorking && (filaCount > 0 || steeringQueue) && !!onSteer)
     || (shellsRodando > 0 && !!onOpenActivity),
   );
 
@@ -1691,7 +1697,7 @@
     sendError = '';
     try {
       const sent = await onSteer();
-      if (isCodex && isWorking) steerFeedback = sent
+      if ((isCodex || headless) && isWorking) steerFeedback = sent
         ? m.codex_orientar_recebido() : m.codex_orientar_sem_envio();
     } catch (err) {
       sendError = err instanceof Error ? err.message : m.composer_fila_erro();
@@ -1870,7 +1876,7 @@
           </button>
         {/if}
       {/if}
-      {#if (isKimi || isCodex) && isWorking && (filaCount > 0 || steeringQueue) && onSteer}
+      {#if temFilaPromovivel && isWorking && (filaCount > 0 || steeringQueue) && onSteer}
         <!-- FILA da TUI do Kimi: msg já mandada, esperando o turno atual acabar. O chip existe pra
              DIZER que há fila (antes disso a bolha translúcida era a única pista) e dar a saída:
              tocar manda o `ctrl-s`, que promove a msg pro turno em curso. Não tocar = espera, que
@@ -2317,7 +2323,7 @@
             class:send-btn--disabled={!canSend}
             onclick={() => submit()}
             disabled={!canSend}
-            aria-label={(isKimi || isCodex) && isWorking ? m.composer_enviar_fila_kimi() : m.composer_enviar_mensagem()}
+            aria-label={temFilaPromovivel && isWorking ? m.composer_enviar_fila_kimi() : m.composer_enviar_mensagem()}
           >
             <IconSend size={18} />
           </button>

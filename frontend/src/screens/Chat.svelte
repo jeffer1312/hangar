@@ -2124,7 +2124,7 @@
     const pendingId: string | null = `pending-${pendingSeq++}`;
     pending = [...pending, { id: pendingId, text }];
     try {
-      if (steer && sessionProvider === 'codex') {
+      if (steer && (sessionProvider === 'codex' || sessionHeadless)) {
         await steerSession(sessionName, text);
       } else if (!onlyThisSession && sendToPair && pairPeers?.length && !text.trimStart().startsWith('/')) {
         // Slash-command nunca em broadcast (o backend rejeita; mesmo racional do /api/broadcast).
@@ -2658,7 +2658,8 @@
         {lastCache}
         stats={statsEvent}
         onSend={handleSend}
-        onSteer={sessionProvider === 'kimi' || sessionProvider === 'codex' ? steerAgora : undefined}
+        onSteer={sessionProvider === 'kimi' || sessionProvider === 'codex' || sessionHeadless ? steerAgora : undefined}
+        headless={sessionHeadless}
         codexMode={stateEvent?.codex_mode}
         claudePermissionMode={stateEvent?.claude_permission_mode}
         claudePreviousNonPlan={stateEvent?.claude_previous_non_plan}

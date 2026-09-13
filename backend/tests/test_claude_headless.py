@@ -84,6 +84,51 @@ def test_permissao_vira_awaiting_e_opcao_responde(adapter):
     assert resp["response"]["response"]["behavior"] == "deny"
 
 
+def test_sempre_permitir_so_com_sugestao_e_leva_as_regras(adapter):
+    sess = adapter._sessions["s1"]
+    regras = [{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "curl *"}],
+               "behavior": "allow", "destination": "localSettings"}]
+
+    async def fluxo():
+        sess.in_progress = True
+        await adapter._on_event(sess, {"type": "control_request", "request_id": "r1",
+                                       "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+                                                   "input": {"command": "curl x"}, "permission_suggestions": regras}})
+        assert adapter._evento(sess).options == ["Permitir", "Negar", "Sempre permitir"]
+        assert await adapter.select("s1", 3) is True
+        # Sem sugestão, a 3ª opção não existe e o 3 cai em negar.
+        await adapter._on_event(sess, {"type": "control_request", "request_id": "r2",
+                                       "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {}}})
+        assert adapter._evento(sess).options == ["Permitir", "Negar"]
+        await adapter.select("s1", 3)
+    _run(fluxo())
+    r1, r2 = [e["response"]["response"] for e in adapter.escritos if e["type"] == "control_response"]
+    assert r1["behavior"] == "allow" and r1["updatedPermissions"] == regras
+    assert r2["behavior"] == "deny"
+
+
+def test_steer_queue_so_com_turno_em_voo_e_sem_pendencia(adapter, tmp_path, monkeypatch):
+    from app import pqueue
+    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
+    sess = adapter._sessions["s1"]
+    q = pqueue.PromptQueue("s1"); q.clear()
+    entrada = q.append("agora", delivered=False)
+
+    async def fluxo():
+        with pytest.raises(RuntimeError):
+            await adapter.steer_queue("s1")            # ociosa: nada a orientar
+        sess.in_progress = True
+        sess.pending["r1"] = {"subtype": "can_use_tool", "tool_name": "Bash", "input": {}}
+        with pytest.raises(RuntimeError):
+            await adapter.steer_queue("s1")            # parada em permissão
+        sess.pending.clear()
+        assert await adapter.steer_queue("s1") == [entrada["id"]]
+    _run(fluxo())
+    assert adapter.escritos[-1]["message"]["content"][0]["text"] == "agora"
+    assert all(e.get("delivered") for e in q.load())
+    q.clear()
+
+
 def test_ask_user_question_vira_pergunta_nativa_e_resposta_leva_rotulos(adapter):
     sess = adapter._sessions["s1"]
     perguntas = [{"question": "A ou B?", "header": "Escolha", "multiSelect": False,

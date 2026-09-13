@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
-from app import model_args
+from app import cotas, model_args
 from app.adapters.claude_headless import sessions as hl_sessions
 from app.adapters.codex.adapter import _fmt_tok, _format_reset
 from app.adapters.codex.preview import CodexPreviewSource
@@ -54,6 +54,9 @@ _TETO_CTRL_S = 15.0
 _MARCADOR_PAI = "HANGAR_HEADLESS_PARENT"
 
 OPCOES_PERMISSAO = ["Permitir", "Negar"]
+# 3ª opção só quando a CLI mandou `permission_suggestions` (a regra que a TUI ofereceria como
+# "sempre permitir"); a resposta leva as regras em `updatedPermissions` e a CLI grava no settings.
+OPCAO_SEMPRE = "Sempre permitir"
 
 
 class _Sessao:
@@ -91,6 +94,10 @@ class _Sessao:
         self.linhas_ruins = 0
         self.loop: asyncio.AbstractEventLoop | None = None
         self.encerrando = False    # SIGTERM nosso: sair não é "caiu"
+        # Janelas de cota da CONTA (⚡5h/📅7d), lidas pelo mesmo leitor da faixa de contas — o
+        # stream só diz "allowed" e o reset, não o percentual.
+        self.janelas: list = []
+        self.janelas_ts = 0.0
 
     @property
     def sid(self) -> str:
@@ -185,6 +192,49 @@ class ClaudeHeadlessAdapter:
                     return sent
                 sent += 1
 
+    async def steer(self, name: str, text: str) -> None:
+        """Mensagem no MEIO do turno: a CLI aceita `user` com turno em voo e injeta no próximo
+        passo (medido no MonoCode e na sonda). Sem turno em voo é um envio comum."""
+        sess = await self.ensure_running(name)
+        if sess is None:
+            raise RuntimeError("sessão indisponível")
+        await self._write(sess, {
+            "type": "user", "session_id": "", "parent_tool_use_id": None,
+            "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+        })
+        if not sess.in_progress:
+            sess.in_progress = True
+            sess.state = "working"
+            await self._notify(sess)
+
+    async def steer_queue(self, name: str, *, entry_id: str | None = None) -> list[str]:
+        """Promove a fila durável pro turno em curso (o "mandar agora" do chip). Devolve os ids
+        entregues. Sem turno em voo não há o que promover: o drain normal entrega."""
+        async with self.delivery_lock(name):
+            sess = self._sessions.get(name)
+            if sess is None or not sess.vivo or not sess.in_progress:
+                raise RuntimeError("Não há turno em andamento para orientar")
+            if sess.pending or sess.question:
+                # Parada numa permissão/pergunta a CLI não lê o stdin de mensagens: a fila iria
+                # sumir da tela e ficar invisível até alguém responder. Melhor dizer.
+                raise RuntimeError("Responda a permissão ou pergunta pendente antes de orientar")
+            q = PromptQueue(name)
+            sent: list[str] = []
+            while claimed := await asyncio.to_thread(q.claim_undelivered, limit=1, entry_id=entry_id):
+                entry = claimed[0]
+                try:
+                    await self.steer(name, entry["text"])
+                except BaseException:
+                    await asyncio.to_thread(q.set_delivered, entry["id"], False)
+                    raise
+                sent.append(entry["id"])
+                try:
+                    await asyncio.to_thread(q.set_delivered, entry["id"], True, steered=True)
+                except OSError:
+                    _log.exception("claude headless: orientação aceita, recibo falhou name=%s entry=%s", name, entry["id"])
+                    return sent
+            return sent
+
     # ── controles ───────────────────────────────────────────────────────────────────────────
 
     async def interrupt(self, name: str) -> bool:
@@ -211,8 +261,12 @@ class ClaudeHeadlessAdapter:
         if sess is None or not sess.pending:
             return False
         rid, req = next(iter(sess.pending.items()))
+        sugestoes = _sugestoes_de(req)
         if option == 1:
             resposta = {"behavior": "allow", "updatedInput": req.get("input") or {}}
+        elif option == 3 and sugestoes:
+            resposta = {"behavior": "allow", "updatedInput": req.get("input") or {},
+                        "updatedPermissions": sugestoes}
         else:
             resposta = {"behavior": "deny", "message": "Usuário recusou."}
         await self._responder(sess, rid, resposta)
@@ -389,6 +443,7 @@ class ClaudeHeadlessAdapter:
         else:
             self._limpar_problema(sess)
         sess.initialized.set()
+        asyncio.get_running_loop().create_task(self._atualizar_cota(sess))
 
     async def _ler(self, sess: _Sessao) -> None:
         assert sess.proc and sess.proc.stdout
@@ -535,6 +590,8 @@ class ClaudeHeadlessAdapter:
             self._recalcular_estado(sess)
             await CodexPreviewSource.get(sess.name).push("")
             await self._notify(sess)
+            if time.time() - sess.janelas_ts > 300:
+                asyncio.get_running_loop().create_task(self._atualizar_cota(sess))
             return
         if t == "rate_limit_event":
             info = ev.get("rate_limit_info") or {}
@@ -652,13 +709,38 @@ class ClaudeHeadlessAdapter:
                          f"{_fmt_tok(usado)}/{_fmt_tok(sess.context_window)}")
         if sess.cost is not None:
             parts.append(f"💵 ${sess.cost:.2f}")
+        agora = time.time()
+        for j in sess.janelas:
+            emoji = {"5h": "⚡", "7d": "📅"}.get(j.rotulo)
+            if not emoji:
+                continue
+            seg = f"{emoji}{j.rotulo}:{round(j.pct)}%"
+            if j.reset_ts:
+                seg += f" ↺{_format_reset(j.reset_ts, agora)}"
+            parts.append(seg)
         return " │ ".join(parts) or None
+
+    async def _atualizar_cota(self, sess: _Sessao) -> None:
+        """Janelas da conta desta sessão, pelo leitor da faixa (cache de 5 min, rede na thread)."""
+        alvo = Path(sess.meta.get("config_dir") or Path.home() / ".claude").resolve()
+        try:
+            contas = await asyncio.to_thread(cotas.listar_cotas)
+        except Exception:
+            _log.debug("claude headless: leitura de cota falhou name=%s", sess.name, exc_info=True)
+            return
+        for c in contas:
+            if c.provedor == "claude" and Path(c.id.split(":", 1)[1]).resolve() == alvo:
+                sess.janelas = [j for j in c.janelas if not j.por_modelo]
+                sess.janelas_ts = time.time()
+                await self._notify(sess)
+                return
 
     def _evento(self, sess: _Sessao) -> StateEvent:
         question = options = None
         if sess.pending and not sess.question:
-            question = self._permissao_texto(next(iter(sess.pending.values())))
-            options = list(OPCOES_PERMISSAO)
+            req = next(iter(sess.pending.values()))
+            question = self._permissao_texto(req)
+            options = list(OPCOES_PERMISSAO) + ([OPCAO_SEMPRE] if _sugestoes_de(req) else [])
         return StateEvent(session=sess.name, state=sess.state, label=sess.label,
                           question=question, options=options,
                           status_line=self.status_line(sess),
@@ -767,6 +849,11 @@ class ClaudeHeadlessAdapter:
         lock = self._delivery_locks.pop(old, None)
         if lock is not None:
             self._delivery_locks[new] = lock
+
+
+def _sugestoes_de(req: dict) -> list[dict]:
+    s = req.get("permission_suggestions")
+    return [x for x in s if isinstance(x, dict)] if isinstance(s, list) else []
 
 
 def _hora_local(epoch) -> str | None:
