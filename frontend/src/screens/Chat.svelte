@@ -334,6 +334,7 @@
   let error = $state('');
   let es: EventSourceLike | null = null;
   let watchdog: ReturnType<typeof setTimeout> | undefined;     // liveness: reconecta se a conexao morrer calada
+  let sseAbertoEm = 0;
   // Última posição recebida do transcript; reenviada no reconnect pra retomar exatamente dali.
   let lastEventId: string | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1571,11 +1572,14 @@
     // O callback mantém o destino da conexão mesmo se o usuário trocar de servidor.
     function armWatchdog() {
       clearTimeout(watchdog);
+      // Primeiro quadro com prazo curto: na volta do iOS o pedido às vezes fica preso na rede e
+      // uma nova tentativa passa antes de a pessoa desistir e reabrir o app. Mesmo prazo da lista.
+      const ms = primeiroQuadro ? 10_000 : 25_000;
       watchdog = setTimeout(() => {
         diag.registrar({ evento: 'sse.mudo', nivel: 'aviso', tela: 'chat', sessao: sessionName,
-          req, ms: 25000 }, destino);
+          req, ms, codigo: primeiroQuadro ? 'primeiro_quadro_timeout' : undefined }, destino);
         if (currentState !== 'dead') connectSSE();
-      }, 25000);
+      }, ms);
     }
     function noteAlive() {
       if (primeiroQuadro) {
@@ -1592,6 +1596,7 @@
     sseRecusado = false;
 
     es = openEventStream(sessionName, lastEventId, req);
+    sseAbertoEm = Date.now();
     // Ciclo de vida da conexão no diário de uso. É o que faltava nos relatos de "a conversa parou"
     // e "as sessões sumiram": sem isto não dá pra distinguir queda de rede, reconexão em laço e
     // conexão viva com a lista congelada, e a análise vira chute.
@@ -1878,10 +1883,13 @@
     if (document.visibilityState !== 'visible') return;
     // Segura watchdog/retry DURANTE o re-seed: no wake do iOS o watchdog vencido disparava um
     // connectSSE proprio e o onVisible outro logo atras — 2 reconexoes + replay em toda volta.
-    clearTimeout(watchdog);
-    clearTimeout(reconnectTimer);
+    // O iOS roda o timer vencido ANTES do visibilitychange: aí a conexão acabou de abrir e fica.
     sseRetryDelay = SSE_RETRY_MIN;   // rede provavelmente voltou: reconexao rapida de novo
-    connectSSE();
+    if (Date.now() - sseAbertoEm > 1500) {
+      clearTimeout(watchdog);
+      clearTimeout(reconnectTimer);
+      connectSSE();
+    }
     const signal = newHistLoad();   // aborta a carga de fundo que ficou pendurada no background
     const g = histGen;
     const before = new Set(events);

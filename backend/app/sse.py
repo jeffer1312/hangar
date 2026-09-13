@@ -636,9 +636,11 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # Este vai como evento real 'ping' pra alimentar o watchdog de liveness do front: numa
         # conexao half-open (mobile troca de rede / app no background), sem isto o front congela no
         # ultimo estado pq nada chega e o onerror nao dispara. O ping faz o front detectar e reconectar.
+        # O primeiro sai na hora: o front dá 10s pro primeiro quadro, e esperar o estado ou o
+        # transcript deixaria uma sessão lenta de ler parecendo conexão presa.
         while True:
-            await asyncio.sleep(10)
             await queue.put(("ping", "{}"))
+            await asyncio.sleep(10)
 
     async def nav_pump():
         # Entrega o marcador "abrir navegador" DESTA sessao uma vez por conexao (ver nav_novos).
