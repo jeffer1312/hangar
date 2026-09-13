@@ -29,7 +29,8 @@
     onClose: () => void;
     onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                engine?: string | null, model?: string | null, effort?: string | null,
-               permissionMode?: string | null, ompProfile?: string | null) => Promise<void>;
+               permissionMode?: string | null, ompProfile?: string | null,
+               headless?: boolean) => Promise<void>;
     onOpenSession: (name: string) => void;
     /** Passagem de bastão: a MESMA folha, aberta pra criar a sessão que CONTINUA `bastao.name`.
      *  Não-nulo = modo bastão — servidor travado no da origem, cwd/nome pré-preenchidos, e o
@@ -201,6 +202,9 @@
   // Modos de permissão do Claude Code (--permission-mode), mesma lista do backend (model_args.py).
   const MODOS_PERMISSAO = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
   let permissao = $state('');
+  // Claude sem terminal: processo filho do backend (stream-json), sem tmux. Só no provider claude,
+  // fora do modo bastão e sem retomar conversa (a retomada nasce por outro caminho).
+  let semTerminal = $state(false);
 
   // `targetServer` (acima) é o servidor de destino. Ele entra na chave porque MOTOR É POR SERVIDOR
   // (comentário do loadConfigs): sem isso o app lembraria um modelo de motor que o outro servidor
@@ -829,11 +833,17 @@
         else onOpenSession(r.name);
         return;
       }
-      await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
-                     provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null,
-                     provider === 'claude' ? (permissao || null) : null,
-                     // O 9º argumento só existe pro omp: os outros providers chamam como sempre chamaram.
-                     ...(provider === 'omp' ? [perfilOmp.trim() || null] : []));
+      if (provider === 'claude' && semTerminal) {
+        // Os dois argumentos do fim só existem aqui: perfil (só omp) vazio e a flag sem terminal.
+        await onCreate(name.trim(), picked, selectedConfig, provider, engine || null, modelo || null,
+                       esforco || null, permissao || null, null, true);
+      } else {
+        await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
+                       provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null,
+                       provider === 'claude' ? (permissao || null) : null,
+                       // O 9º argumento só existe pro omp: os outros providers chamam como sempre chamaram.
+                       ...(provider === 'omp' ? [perfilOmp.trim() || null] : []));
+      }
       onClose();
     } catch (err) {
       if (body.provider === 'codex' && g !== codexGeneration) return;
@@ -1249,6 +1259,15 @@
                      ...MODOS_PERMISSAO.map((n) => ({ value: n, label: n }))]} 
             onchange={(v) => (permissao = v)} />
         </div>
+        {#if !bastao}
+          <div class="field">
+            <label class="retomar-check">
+              <input type="checkbox" bind:checked={semTerminal} />
+              <span>{m.criar_sem_terminal()}</span>
+            </label>
+            {#if semTerminal}<p class="hint">{m.criar_sem_terminal_ajuda()}</p>{/if}
+          </div>
+        {/if}
       {/if}
       </div>
 

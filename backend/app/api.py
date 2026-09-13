@@ -62,7 +62,8 @@ from app.renova_token import laco as _renova_token_loop
 from app.chain import ThenLink
 from app import terminal_input
 from app.terminal_input import TerminalInput, drain
-from app.adapters import get_adapter
+from app.adapters import CLAUDE_HEADLESS, get_adapter
+from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import merged_events, nav_confirmar, nav_pendente
 from app.state import corrige_ocioso_kimi, menu_codex
@@ -305,6 +306,15 @@ async def _lifespan(app: FastAPI):
     # abas os 40 acabam e a API inteira congela, sem erro e sem log. Watcher parado nao gasta CPU,
     # so o slot, entao subir o teto e barato.
     anyio.to_thread.current_default_thread_limiter().total_tokens = 200
+    # Claude sem terminal de um backend anterior: o processo filho não morre com o pai (grupo
+    # próprio) e ficaria pendurado sem ninguém lendo o stdout. O marcador de env aponta o pai.
+    try:
+        from app.adapters.claude_headless.adapter import matar_orfaos
+        mortos = await asyncio.to_thread(matar_orfaos)
+        if mortos:
+            _log.info("claude headless: %d processo(s) órfão(s) de backend anterior encerrado(s)", mortos)
+    except Exception:
+        _log.warning("claude headless: varredura de órfãos falhou", exc_info=True)
     _state_dirs =list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
     hook_state.on_awaiting = _on_awaiting  # transicao -> awaiting_input dispara web push
     hook_state.on_transition = _on_hook_transition  # drain server-side + confirmacao de entrega
@@ -428,6 +438,11 @@ async def _lifespan(app: FastAPI):
         yield
     finally:
         diag.registrar("backend.encerrando")
+        # Claude sem terminal morre com o backend (o próximo prompt sobe outro com --resume);
+        # deixar o processo vivo sem leitor no stdout só cria órfão pra próxima subida ceifar.
+        hl = get_adapter(CLAUDE_HEADLESS)
+        for nome in list(hl._sessions):
+            hl.close_sync(nome)
         codex_warm_task.cancel()
         await asyncio.gather(codex_warm_task, return_exceptions=True)
         creation_tasks = list(getattr(app.state, "codex_creation_tasks", ()))
@@ -1440,6 +1455,9 @@ class CreateBody(_StrictBody):
     omp_profile: str | None = None
 
     read_only: bool = Field(default=False, strict=True)
+    # Claude SEM terminal: o `claude` vira processo filho do backend (stream-json), sem tmux.
+    # Só vale com provider claude; o que depende de pane (painel de terminal, espelho) não existe.
+    headless: bool = Field(default=False, strict=True)
 
 
 class TtsBody(_StrictBody):
@@ -1933,6 +1951,8 @@ async def create_session(body: CreateBody):
                             _kw["omp_profile"] = body.omp_profile
                         if body.read_only:
                             _kw["read_only"] = True
+                        if body.headless:
+                            _kw["headless"] = True
                         info = await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw)
                         return info.model_copy(update={"avisos": list(avisos)})
                     except ValueError as e:
@@ -1957,6 +1977,8 @@ async def create_session(body: CreateBody):
             _kw2["codex_account"] = body.codex_account
         if body.read_only:
             _kw2["read_only"] = True
+        if body.headless:
+            _kw2["headless"] = True
         return await _create_registry(_kw2)
     except ValueError as e:
         code = "erro_nome_em_uso" if "ja existe uma sessao" in str(e) else "erro_criacao_sessao"
@@ -2434,7 +2456,7 @@ def _nome_ocupado(nome: str) -> bool:
     """Já existe sessão com esse nome? Mesmas duas fontes que `registry.create` consulta antes de
     levantar `ValueError` — tmux (Claude/Pi/Kimi) e o sidecar do Codex."""
     from app.adapters.codex import sessions as codex_sessions
-    return tmux.has_session(nome) or codex_sessions.exists(nome)
+    return tmux.has_session(nome) or codex_sessions.exists(nome) or headless_sessions.exists(nome)
 
 
 def _bastao_preparar(info: SessionInfo, origem: str, destino: str) -> tuple[str, Path, str]:
@@ -2923,7 +2945,16 @@ async def _send_one_codex(name: str, text: str, *, track_entry: bool = False) ->
         return await _send_one_codex_locked(name, text, track_entry=track_entry)
 
 
-async def _send_one_codex_locked(name: str, text: str, *, track_entry: bool = False) -> dict:
+async def _send_one_headless(name: str, text: str, *, track_entry: bool = False) -> dict:
+    """Mesmo caminho de fila do Codex (adapter em vez de tty), com o adapter do Claude sem terminal."""
+    async with get_adapter(CLAUDE_HEADLESS).delivery_lock(name):
+        if not await asyncio.to_thread(_session_exists, name):
+            return {"ok": False, "error": erro("erro_sessao_inexistente", "sessao nao encontrada")}
+        return await _send_one_codex_locked(name, text, track_entry=track_entry, chave=CLAUDE_HEADLESS)
+
+
+async def _send_one_codex_locked(name: str, text: str, *, track_entry: bool = False,
+                                 chave: str = "codex") -> dict:
     """Envio de prompt pra sessao Codex pela TUI no tmux. Registra na fila duravel
     (aparece como user_msg em ordem e persiste no reload; o
     merge dedup-a contra o rollout do Codex) e entrega pela TUI no tmux SE a sessao esta idle;
@@ -2933,7 +2964,7 @@ async def _send_one_codex_locked(name: str, text: str, *, track_entry: bool = Fa
 
     IMPORTANT 2: PromptQueue.append/set_delivered fazem I/O de arquivo sincrono com lock -- chamados
     direto aqui (corrotina) bloqueariam o event loop. Mesmo padrao de to_thread do drain do Codex."""
-    adapter = get_adapter("codex")
+    adapter = get_adapter(chave)
     try:
         deliverable = await adapter.deliverable(name)
     except Exception:
@@ -2995,7 +3026,13 @@ def _session_exists(name: str) -> bool:
     qualquer nome e enfileirava no VOID: 'ok' pra sessão morta = recado órfão que só seria entregue
     se um dia nascesse outra sessão com o mesmo nome (foi exatamente como um recado 'se perdeu')."""
     from app import tmux
-    return codex_sessions.exists(name) or tmux.has_session(name)
+    return codex_sessions.exists(name) or headless_sessions.exists(name) or tmux.has_session(name)
+
+
+def _headless(name: str) -> bool:
+    """Sessão Claude SEM terminal (sidecar do adapter headless). Provider continua "claude"; só o
+    transporte muda — quem ramifica por isto é a entrada, o interrupt, a opção e a resposta."""
+    return headless_sessions.exists(name)
 
 
 @app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth)])
@@ -3012,6 +3049,8 @@ async def input_prompt(name: str, body: InputBody):
     tracking = {"track_entry": True} if body.steer else {}
     if provider == "codex":
         res = await _send_one_codex(name, body.text, **tracking)
+    elif _headless(name):
+        res = await _send_one_headless(name, body.text, **tracking)
     else:
         res = await _send_thread(_send_one, name, body.text, True) if body.steer else await _send_thread(_send_one, name, body.text)
     if not res["ok"]:
@@ -3024,7 +3063,7 @@ async def input_prompt(name: str, body: InputBody):
                 # steer_queue disputa a mesma trava do envio; só pode rodar depois dele.
                 sent = await get_adapter("codex").steer_queue(name, entry_id=entry_id)
                 steered = entry_id in sent
-            elif provider != "codex":
+            elif provider != "codex" and not _headless(name):
                 provider, _ = await _send_thread(_pane_info, name)
                 q = PromptQueue(name)
                 if provider == "kimi" and await _send_thread(q.entry_delivered, entry_id):
@@ -3956,6 +3995,18 @@ def select(name: str, body: SelectBody):
     info = _cached_info_sync(name)
     if getattr(info, "provider", "claude") == "kimi":
         return _select_aprovacao_kimi(name, info, body.option)
+    if _headless(name):
+        # Opção = resposta ao pedido de permissão em aberto (1 permite, 2 nega), pelo stdin.
+        if _loop_servidor is None or not _loop_servidor.is_running():
+            raise HTTPException(503, detail=erro("erro_opcao_nao_convergiu", "servidor sem loop pra responder"))
+        fut = asyncio.run_coroutine_threadsafe(get_adapter(CLAUDE_HEADLESS).select(name, body.option), _loop_servidor)
+        try:
+            ok = fut.result(timeout=15)
+        except Exception as e:
+            raise HTTPException(503, detail=erro("erro_opcao_nao_convergiu", f"não consegui responder: {e}"))
+        if not ok:
+            raise HTTPException(409, detail=erro("erro_opcao_nao_convergiu", "nenhum pedido de permissão pendente"))
+        return {"ok": True}
     try:
         terminal.select(name, body.option)
     except terminal_input.DriveError as e:
@@ -3993,6 +4044,11 @@ async def interrupt(name: str, clear: bool = False):
         if not await get_adapter("codex").interrupt(name):
             raise HTTPException(409, detail=erro(
                 "erro_codex_controle", "Não há turno Codex ativo para interromper."))
+        return {"ok": True}
+    if _headless(name):
+        # Sem turno em voo não há o que interromper; responder ok seria fingir.
+        if not await get_adapter(CLAUDE_HEADLESS).interrupt(name):
+            raise HTTPException(409, detail=erro("erro_sem_turno", "Não há turno ativo para interromper."))
         return {"ok": True}
     # clear=True: alem de interromper, limpa o input (2o Esc). So o front com msg pendente passa isso —
     # garante input nao-vazio, evitando que o Esc-Esc abra o menu de rewind num input ja vazio.
@@ -5826,6 +5882,20 @@ def answer(name: str, body: AnswerBody):
             _log.warning("Falha ao enviar resposta nativa ao Codex: %s", type(exc).__name__)
             raise HTTPException(503, detail=erro("erro_codex_resposta_envio", "Não foi possível confirmar o envio da resposta ao Codex.")) from exc
         return {"ok": True, "fallback": False}
+    if _headless(name):
+        # AskUserQuestion respondida pelo stdin (`control_response` com `answers`), sem picker.
+        if _loop_servidor is None or not _loop_servidor.is_running():
+            raise HTTPException(503, detail=erro("erro_codex_resposta_envio", "Não foi possível enviar a resposta."))
+        fut = asyncio.run_coroutine_threadsafe(
+            get_adapter(CLAUDE_HEADLESS).answer_questions(name, body.request_id, answers), _loop_servidor)
+        try:
+            fut.result(timeout=15)
+        except ValueError as exc:
+            raise HTTPException(409, detail=erro("erro_codex_resposta_invalida", "A pergunta mudou ou não aceita essas respostas. Confira as opções e tente novamente.")) from exc
+        except Exception as exc:
+            _log.warning("resposta ao Claude sem terminal falhou: %s", type(exc).__name__)
+            raise HTTPException(503, detail=erro("erro_codex_resposta_envio", "Não foi possível enviar a resposta.")) from exc
+        return {"ok": True, "fallback": False}
     _recusa_se_painel_aberto(name)
     jsonl = info.jsonl if info else None
     fallback = False
@@ -6088,6 +6158,13 @@ async def permission_mode_set(name: str, body: PermissionModeBody):
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+    if _headless(name):
+        # `control_request set_permission_mode` no stdin: o processo responde com o modo que ficou.
+        try:
+            ficou = await get_adapter(CLAUDE_HEADLESS).set_permission_mode(name, alvo)
+        except Exception as e:
+            raise HTTPException(409, detail=erro("erro_permissao_leitura", f"não consegui trocar o modo: {e}"))
+        return {"mode": ficou, "current": ficou, "previous_non_plan": None}
     _guard_perm(name, info)
     tracking_key = _tracking_key_perm(name, info)
     try:

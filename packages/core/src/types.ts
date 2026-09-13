@@ -37,6 +37,9 @@ export interface SessionInfo {
   cwd?: string;
   jsonl?: string | null;
   provider?: Provider;
+  // Claude sem terminal: processo filho do backend, sem pane. Painel de terminal, espelho e shell
+  // não existem nessa sessão.
+  headless?: boolean;
   state: State;
   last_activity?: number | null;
   // Vínculo nome<->transcript confiável? false = claude manual sem --session-id (chute mtime) ->

@@ -20,6 +20,7 @@ from app.pqueue import PromptQueue, _sanitize
 from app.chain import ThenLink
 from app import pair, pair_texto
 from app.pair import PairLink, rename_pair, leave as pair_leave
+from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
 from app import codex_contas
 from app.askquestion import clear_pending_askq, pergunta_aberta
@@ -1208,6 +1209,23 @@ class SessionRegistry:
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
                 pair_task=(PairLink(meta["name"]).get() or {}).get("task"),
             ))
+        # Sessões Claude SEM terminal: não há pane; a identidade vem do sidecar e o transcript
+        # é o .jsonl comum do Claude (sid gravado no sidecar, atualizado pelo adapter no /clear).
+        from app.adapters import get_adapter, CLAUDE_HEADLESS
+        hl = get_adapter(CLAUDE_HEADLESS)
+        for meta in headless_sessions.list_all():
+            br, wt = head_info(meta.get("cwd"))
+            cdir = meta.get("config_dir")
+            out.append(SessionInfo(
+                name=meta["name"], cwd=meta.get("cwd"), jsonl=hl.transcript_path_de(meta),
+                provider="claude", headless=True, tracked=True, engine=meta.get("engine"),
+                conta=f"claude:{Path(cdir or Path.home() / '.claude').resolve()}",
+                branch=br, worktree=wt,
+                then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
+                pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
+                pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
+                pair_task=(PairLink(meta["name"]).get() or {}).get("task"),
+            ))
         try:
             self._varrer_pares_mortos({i.name for i in out})
         except Exception as e:
@@ -1220,7 +1238,7 @@ class SessionRegistry:
         exatamente `stalled` —, e so ela paga a captura, uma vez a cada _LIMIT_CACHE_S."""
         # Codex nunca raspa o pane (a TUI dele nao tem o rodape do Claude Code) — fica de fora.
         alvos = [i for i in infos if getattr(i, "stalled", False) and i.name not in raspadas
-                 and getattr(i, "provider", "claude") != "codex"]
+                 and getattr(i, "provider", "claude") != "codex" and not getattr(i, "headless", False)]
         agora = time.monotonic()
         frescos = [i for i in alvos
                    if agora - self._limit_cache.get(i.name, (0.0, None))[0] > self._LIMIT_CACHE_S]
@@ -1296,6 +1314,8 @@ class SessionRegistry:
                 return corr, aprov
 
             corrigidos, aprovacoes = await asyncio.to_thread(_kimi_sweep)
+        from app.adapters import get_adapter, CLAUDE_HEADLESS
+        hl = get_adapter(CLAUDE_HEADLESS)
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         pendente_sem_thread = []  # Codex antes da thread -> raspa o pane SO pra achar menu
         for info in infos:
@@ -1338,6 +1358,23 @@ class SessionRegistry:
                 info.pending_questions, info.question = get_adapter("codex").async_question_status(info.name)
                 if info.pending_questions and info.state == "idle":
                     info.state = "awaiting_input"
+                continue
+            if getattr(info, "headless", False):
+                # Claude sem terminal: NUNCA raspa pane (não há). Processo vivo responde pelo
+                # estado (permissão/pergunta pendente inclusive); parado, vale o marcador do hook,
+                # e sem marcador é ocioso.
+                info.last_activity = _jsonl_mtime(info.jsonl)
+                snap = hl.snapshot(info.name)
+                if snap is not None:
+                    info.state, info.label = snap.state, snap.label
+                    info.question, info.options = snap.question, snap.options
+                    info.status_line = snap.status_line
+                    if snap.codex_question:
+                        info.state = "awaiting_input"
+                        info.question = snap.codex_question["questions"][0]["question"]
+                else:
+                    marker = hook_state.get_state(_sid(info.jsonl))
+                    info.state = marker[0] if marker and marker[0] in ("working", "idle") else "idle"
                 continue
             aprov = aprovacoes.get(info.name)
             if aprov is not None:
@@ -1431,7 +1468,8 @@ class SessionRegistry:
         # quem manda e o pane. Em thread e em lote, como as capturas: le disco, e isto e awaitado
         # direto no event loop (mesma regra do git status em _decorate_git).
         sem_menu = [i for i in infos
-                    if i.state != "awaiting_input" and not getattr(i, "options", None) and i.jsonl]
+                    if i.state != "awaiting_input" and not getattr(i, "options", None) and i.jsonl
+                    and not getattr(i, "headless", False)]   # pergunta dessa vem do processo, não do sidecar
         if sem_menu:
             # return_exceptions: sidecar e conveniencia e nao pode derrubar a lista INTEIRA de
             # sessoes — mesma regra do git status em _decorate_git (incidente de 2026-07-23).
@@ -1457,7 +1495,7 @@ class SessionRegistry:
         now_m = time.monotonic()
         stale = [
             i for i in infos
-            if getattr(i, "provider", "claude") != "codex"
+            if getattr(i, "provider", "claude") != "codex" and not getattr(i, "headless", False)
             and all(i is not p for p in pending)
             and now_m - self._status_cache.get(i.name, (0.0, None))[0] > _STATUS_TTL
         ]
@@ -1513,6 +1551,9 @@ class SessionRegistry:
         for info in infos:
             if getattr(info, "provider", "claude") == "codex":
                 info.status_line = self._status_cache.get(info.name, (0.0, None))[1]
+            elif getattr(info, "headless", False):
+                # Já veio do adapter (processo vivo) ou do sidecar do hook; nunca do pane.
+                info.status_line = info.status_line or _sidecar_status(_sid(info.jsonl))
             else:
                 # Sidecar antes do pane: a captura traz a linha ja CORTADA na largura da janela
                 # (quem renderiza trunca antes de imprimir, ver app/statusline.py). Ler o arquivo e
@@ -1577,13 +1618,21 @@ class SessionRegistry:
                initial_prompt: str | None = None,
                omp_profile: str | None = None,
                codex_account: str | None = None,
-               read_only: bool = False) -> SessionInfo:
+               read_only: bool = False,
+               headless: bool = False) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
         diag.registrar("sessao.criar_etapa", sessao=name, provider=provider, etapa="validar")
         if not name:
             raise ValueError("nome invalido")
+        if headless:
+            if provider != "claude":
+                raise ValueError("sessao sem terminal so vale para provider claude")
+            if read_only or initial_prompt:
+                raise ValueError("sessao sem terminal nao aceita read_only nem prompt inicial")
+            return self._create_headless(name, cwd, config_dir, resume_session_id, engine, model,
+                                         effort, context_window, permission_mode)
         codex_home = None
         if provider == "codex":
             try:
@@ -1651,7 +1700,7 @@ class SessionRegistry:
         # Codex reusado aqui geraria DOIS SessionInfo com o mesmo name no list() (front keyed por
         # nome) e o kill(name) cairia no branch Codex (checado 1o) -> fecharia o client Codex sem
         # matar o pane tmux (pane orfao inkillavel).
-        if tmux.has_session(name) or codex_sessions.exists(name):
+        if tmux.has_session(name) or codex_sessions.exists(name) or headless_sessions.exists(name):
             diag.registrar("sessao.criar_recusada", "aviso", sessao=name, provider=provider,
                            detalhe="nome_ja_em_uso")
             raise ValueError("ja existe uma sessao com esse nome")
@@ -1813,7 +1862,62 @@ class SessionRegistry:
                            provider=provider, engine=engine,
                            codex_home=codex_home)
 
+    def _create_headless(self, name: str, cwd: str, config_dir: str | None,
+                         resume_session_id: str | None, engine: str | None, model: str | None,
+                         effort: str | None, context_window: int | None,
+                         permission_mode: str | None) -> SessionInfo:
+        """Sessão Claude SEM terminal: criar é gravar o sidecar. O processo `claude` sobe no
+        primeiro prompt (e de novo, com --resume, depois de um restart do backend) — abrir a
+        sessão não custa um processo, e nada aqui depende de tmux."""
+        from app.adapters import get_adapter, CLAUDE_HEADLESS
+        if engine:
+            from app import engines
+            if engine not in engines.listar():
+                raise ValueError(f"motor '{engine}' nao existe")
+            _exigir_cp_engine()
+        if tmux.has_session(name) or codex_sessions.exists(name) or headless_sessions.exists(name):
+            diag.registrar("sessao.criar_recusada", "aviso", sessao=name, provider="claude",
+                           detalhe="nome_ja_em_uso")
+            raise ValueError("ja existe uma sessao com esse nome")
+        if resume_session_id is not None:
+            try:
+                uuid.UUID(resume_session_id)
+            except (ValueError, AttributeError, TypeError):
+                raise ValueError("session_id invalido")
+            sid = resume_session_id
+        else:
+            sid = str(uuid.uuid4())
+        model_args.validar("claude", model, effort, permission_mode)
+        diag.registrar("sessao.criar_etapa", sessao=name, provider="claude", etapa="confiar_pasta")
+        _pretrust_cwd(cwd, config_dir)
+        self._forget(name)
+        meta = headless_sessions.save(name, cwd, sid, config_dir=config_dir, engine=engine,
+                                      model=model, effort=effort, context_window=context_window,
+                                      permission_mode=permission_mode)
+        PromptQueue(name).clear()
+        ThenLink(name).clear()
+        self._clear_pair(name)
+        jsonl = get_adapter(CLAUDE_HEADLESS).transcript_path_de(meta)
+        self._jsonl_cache[name] = jsonl
+        diag.registrar("sessao.criada", sessao=name, provider="claude", etapa="sidecar_gravado")
+        return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, tracked=True, provider="claude",
+                           headless=True, engine=engine)
+
     def rename(self, old: str, new: str) -> None:
+        if headless_sessions.exists(old):
+            from app.adapters import get_adapter, CLAUDE_HEADLESS
+            new = sanitize_session_name(new)
+            if not new or new == old:
+                return
+            if tmux.has_session(new) or codex_sessions.exists(new) or headless_sessions.exists(new):
+                raise ValueError("ja existe uma sessao com esse nome")
+            headless_sessions.rename(old, new)
+            get_adapter(CLAUDE_HEADLESS).rename(old, new)
+            self._jsonl_cache.pop(old, None)
+            PromptQueue(old).rename(new)
+            ThenLink(old).rename(new)
+            rename_pair(old, new)
+            return
         if codex_sessions.exists(old):
             from app.adapters import get_adapter
             codex_sessions.rename(old, new)
@@ -1889,6 +1993,16 @@ class SessionRegistry:
         # pareamento se desfazia, a rota respondia {"ok": true} — e a sessao reaparecia na varredura
         # seguinte, sem fila e sem par, parecendo um bug sem relacao com o "encerrar" de minutos antes.
         # Pesa mais no Windows, onde o kill-session do psmux nao derruba a sessao (medido).
+        if headless_sessions.exists(name):
+            # Claude sem terminal: SIGTERM no processo (se vivo), sidecar fora, estado durável limpo.
+            from app.adapters import get_adapter, CLAUDE_HEADLESS
+            get_adapter(CLAUDE_HEADLESS).close_sync(name)
+            headless_sessions.delete(name)
+            self._forget(name)
+            PromptQueue(name).clear()
+            ThenLink(name).clear()
+            self._clear_pair(name)
+            return
         if codex_sessions.exists(name):
             # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
             from app.adapters import get_adapter

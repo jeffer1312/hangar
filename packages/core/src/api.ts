@@ -525,6 +525,8 @@ export interface CreateSessionBody {
   permission_mode?: string | null;
   omp_profile?: string | null;
   codex_account?: string | null;
+  // Claude sem terminal (processo filho do backend, sem tmux). Só com provider claude.
+  headless?: boolean;
 }
 
 export function buildCreateSessionBody(body: CreateSessionBody): CreateSessionBody {
@@ -547,6 +549,7 @@ export function createSession(
   permissionMode?: string | null,
   ompProfile?: string | null,
   codexAccount?: string | null,
+  headless?: boolean,
 ): Promise<SessionInfo> {
   // `model`/`effort`/`permissionMode`/`ompProfile` no FIM de propósito: chamador antigo com 5 argumentos continua válido e abre
   // no padrão, byte por byte (o backend valida None = comportamento de hoje).
@@ -554,6 +557,7 @@ export function createSession(
                            model: model ?? null, effort: effort ?? null, codex_account: codexAccount };
   if (permissionMode) body.permission_mode = permissionMode;
   if (ompProfile) body.omp_profile = ompProfile;
+  if (headless && provider === 'claude') body.headless = true;
   return apiFetch<SessionInfo>('/api/sessions', {
     method: 'POST',
     body: JSON.stringify(buildCreateSessionBody(body)),

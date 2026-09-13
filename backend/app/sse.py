@@ -9,7 +9,7 @@ import time
 import traceback
 from pathlib import Path
 from app import atomico, diag
-from app.adapters import get_adapter
+from app.adapters import CLAUDE_HEADLESS, chave_de, get_adapter
 from app.adapters.codex.preview import CodexPreviewSource
 from app.difusor import Difusor
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
@@ -563,6 +563,9 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                         start_offset: int | None = None):
     # provider: default "claude" preserva o comportamento de hoje pros callers que ainda nao passam
     # (api.py so passa quando uma tarefa futura ligar o seletor de provider no endpoint).
+    # Sessão Claude sem terminal: provider continua "claude" pro front, mas o adapter (monitor,
+    # prévia, entrada) é outro — a chave interna resolve pelo sidecar.
+    provider = chave_de(name, provider)
     current_provider = provider    # atualizado no __reprovider__ (ver jsonl_watcher)
     current_jsonl = jsonl          # atualizado no __reset__ (ex: /clear abre novo transcript)
     # Ancora de hook do estado: o monitor le o marcador do sid VIVO (a closure acompanha o rebind
@@ -593,7 +596,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # so a extensao do Pi). Fecha sobre `current_jsonl` pelo mesmo motivo do monitor: o /clear troca
     # o transcript, e um stem congelado leria o marcador da sessao anterior.
     def _broker_de(prov):
-        return (CodexPreviewSource.get(name) if prov == "codex"
+        return (CodexPreviewSource.get(name) if prov in ("codex", CLAUDE_HEADLESS)
                 else PreviewBroker.get(name, prov,
                                        lambda: session_key(current_jsonl) if current_jsonl else None))
 
@@ -755,7 +758,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                     diag.registrar("sse.resolucao_recuperada", sessao=name, provider=current_prov)
                 falhou = False
             live = viva.jsonl if viva else None
-            live_prov = (viva.provider if viva else None) or current_prov
+            live_prov = chave_de(name, viva.provider) if viva and viva.provider else current_prov
             if live and live_prov != current_prov:
                 # Troca de provider NAO espera os 2 polls do jsonl: ela nao oscila como a resolucao
                 # por mtime — e a sessao terminando de se identificar. Segurar aqui e deixar o chat
@@ -952,7 +955,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 if _sl and context_pairs(_sl) < 2 and _sl != _last_ctx_warn["sl"]:
                     _last_ctx_warn["sl"] = _sl
                     _log.info("sse: sem métrica de contexto name=%s statusline=%r", name, _sl)
-                if current_provider == "codex":
+                if current_provider in ("codex", CLAUDE_HEADLESS):
                     question_data = json.dumps(parsed_state.get("codex_question"), ensure_ascii=False)
                     if question_data != codex_question_emitted:
                         codex_question_emitted = question_data

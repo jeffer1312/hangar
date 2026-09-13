@@ -648,8 +648,9 @@
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
                               engine?: string | null, model?: string | null, effort?: string | null,
-                              permissionMode?: string | null, ompProfile?: string | null) {
-    await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode, ompProfile);
+                              permissionMode?: string | null, ompProfile?: string | null,
+                              headless?: boolean) {
+    await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode, ompProfile, null, headless);
     onNavigateToChat(name);
   }
 
@@ -809,6 +810,8 @@
   // "claude" e o caso comum e some do header; os demais ganham badge (providerBadge abaixo) e o
   // "codex" alem disso esconde controles Claude-only.
   const sessionProvider = $derived(allSessions.find((s) => s.name === sessionName)?.provider);
+  // Claude sem terminal: não há pane, então nada de painel de terminal, espelho ou shell.
+  const sessionHeadless = $derived(allSessions.find((s) => s.name === sessionName)?.headless === true);
   // Motor da sessão (null = conta Anthropic) — o Composer usa no placeholder ("Mensagem para …").
   const sessionEngine = $derived(allSessions.find((s) => s.name === sessionName)?.engine ?? null);
   // Transcript desta sessão: a chave da cauda em cache (ver queries.ts). Nulo enquanto a lista não
@@ -1216,7 +1219,7 @@
       action('loop', m.chat_loop(), () => (loopSheetOpen = true)),
       action('pair', m.chat_parear_sessao(), () => (pairOpen = true)),
       action('run', m.chat_executar_workflow(), () => (runOpen = true)),
-      action('terminal', m.ctx_terminal(), abrirTerminalReal),
+      ...(sessionHeadless ? [] : [action('terminal', m.ctx_terminal(), abrirTerminalReal)]),
       action('navegador', m.ctx_navegador(), alternarNavegador),
     ]);
     // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
@@ -2385,7 +2388,7 @@
   {/if}
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={sessionHeadless ? undefined : abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {/if}
   </div>
 
@@ -2407,7 +2410,7 @@
       serverId={getActiveId() ?? ''}
       {sessionName}
       {events} {histGap} cwd={planSession?.cwd ?? null}
-      onOpenTerminal={abrirTerminalReal}
+      onOpenTerminal={sessionHeadless ? undefined : abrirTerminalReal}
       onOpenNavegador={alternarNavegador}
       terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}

@@ -1717,6 +1717,8 @@
   "criar_padrao": "Padrão",
   "criar_permissao": "Permissão",
   "criar_permissao_padrao": "padrão (como está na conta)",
+  "criar_sem_terminal": "Sem terminal",
+  "criar_sem_terminal_ajuda": "O Claude roda como processo do Hangar, sem tmux: permissão e perguntas chegam direto no chat. Não tem painel de terminal nem espelho de tela; o histórico continua no .jsonl do Claude.",
   "criar_lista_reduzida": "Lista reduzida — abra uma sessão nesta conta uma vez para o app aprender os modelos dela.",
   "criar_abre_padrao": "{erro} — a sessão abre no padrão.",
   "criar_raciocinio": "Raciocínio",

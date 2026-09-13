@@ -1717,6 +1717,8 @@
   "criar_padrao": "Default",
   "criar_permissao": "Permission",
   "criar_permissao_padrao": "default (account setting)",
+  "criar_sem_terminal": "No terminal",
+  "criar_sem_terminal_ajuda": "Claude runs as a Hangar child process, no tmux: permissions and questions land right in the chat. No terminal panel or screen mirror; history stays in Claude's .jsonl.",
   "criar_lista_reduzida": "Shortened list — open a session on this account once for the app to learn its models.",
   "criar_abre_padrao": "{erro} — the session opens with the default.",
   "criar_raciocinio": "Reasoning",

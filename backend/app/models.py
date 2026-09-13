@@ -75,6 +75,9 @@ class SessionInfo(BaseModel):
     # Qual Adapter dirige esta sessao (app.adapters.get_adapter). "claude" cobre TODA sessao de hoje
     # (o unico provider registrado); futuros providers (ex: "codex") setam no create().
     provider: str = "claude"
+    # Claude SEM terminal: o `claude` é processo filho do backend (stream-json), não há pane.
+    # Tudo que depende de tmux (painel de terminal, espelho, shell) não existe nessa sessão.
+    headless: bool = False
     # Motor de modelo desta sessao (nome no engines.json). None = conta Anthropic. Lido do
     # /proc/<pid>/environ (CP_ENGINE) — ver registry._engine_of.
     engine: Optional[str] = None
