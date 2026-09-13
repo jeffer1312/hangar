@@ -511,6 +511,9 @@ def test_sidecar_velho_com_sessao_trabalhando_segue_valendo(tmp_path, monkeypatc
     assert read_sidecar(stem) == "antigo"
     monkeypatch.setitem(hook_state._map, stem, ("idle", _t.time()))
     assert read_sidecar(stem) is None
+    # Marcador "working" velho = agente morreu no meio do turno: não pode congelar a prévia.
+    monkeypatch.setitem(hook_state._map, stem, ("working", _t.time() - 10_000))
+    assert read_sidecar(stem) is None
 
 
 def test_sidecar_de_tipo_errado_nao_derruba_nada(tmp_path, monkeypatch):

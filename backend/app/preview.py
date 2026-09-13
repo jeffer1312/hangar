@@ -420,9 +420,14 @@ def read_sidecar(stem: Optional[str]) -> Optional[str]:
             continue
         if isinstance(ts, (int, float)) and time.time() - ts > _PREVIEW_MAX_AGE:
             estado = hook_state.get_state(stem)
-            if text and estado is not None and estado[0] == "working":
+            if (text and estado is not None and estado[0] == "working"
+                    and time.time() - estado[1] <= _PREVIEW_MAX_AGE):
                 # Turno longo só de ferramentas não publica texto novo e não é publicador morto:
                 # cair no pane aqui mostrava como mensagem a linha que a TUI desenha ao lado do spinner.
+                # O marcador também tem que ser recente: cada ferramenta o renova, e um agente que
+                # morreu no meio do turno o deixa preso em "working" para sempre.
+                _log.debug("preview: sidecar velho mantido, sessao trabalhando path=%s idade=%.0fs",
+                           f, time.time() - ts)
                 return text
             if text:
                 # Este e o descarte que importa operacionalmente: "a extensao morreu no meio do
