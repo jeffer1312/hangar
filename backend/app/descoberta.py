@@ -45,7 +45,14 @@ def _e_hangar(url: str) -> bool:
         return False
     if status == 200:
         return isinstance(corpo, dict) and corpo.get("hangar") is True
-    # Hangar anterior ao /ping: o 401 nomeado do auth ainda identifica (custa uma tentativa errada lá).
+    if status != 404:
+        return False
+    # Hangar anterior ao /ping responde 404 ali; o 401 nomeado do auth na rota antiga ainda
+    # identifica (custa uma tentativa errada lá — só nessas máquinas, até atualizarem).
+    try:
+        status, corpo = peers_check._bater(url)
+    except Exception:
+        return False
     return status == 401 and isinstance(corpo, dict) and isinstance(corpo.get("detail"), dict) \
         and corpo["detail"].get("code") == _CODIGO_HANGAR
 

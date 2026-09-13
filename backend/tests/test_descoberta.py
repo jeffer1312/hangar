@@ -28,13 +28,13 @@ def test_so_hangar_online_entra(monkeypatch):
     caminhos = set()
 
     def bater(url, path="/api/peers/identificador", token=None):
-        caminhos.add(path)
+        caminhos.add((url, path))
         if url.startswith("http://100.64.0.2:"):
             return 200, {"hangar": True}
         if url == "https://vps.tail1.ts.net":       # só pelo tailscale serve; a porta crua não abre
             return 200, {"hangar": True}
-        if url.startswith("http://100.64.0.6:"):    # Hangar sem /ping ainda: o 401 nomeado identifica
-            return 401, NAO_AUTORIZADO
+        if url.startswith("http://100.64.0.6:"):    # Hangar sem /ping: 404 lá, e o 401 nomeado na rota antiga identifica
+            return (404, {"detail": "Not Found"}) if path == "/api/peers/ping" else (401, NAO_AUTORIZADO)
         if url.startswith("http://100.64.0.4:"):
             return 401, {"error": "nginx"}          # outra coisa respondendo 401 não é Hangar
         raise ConnectionRefusedError
@@ -45,7 +45,8 @@ def test_so_hangar_online_entra(monkeypatch):
         {"nome": "notebook", "base_url": "http://100.64.0.2:8765", "hosts": ["100.64.0.2", "notebook.tail1.ts.net"]},
         {"nome": "vps", "base_url": "https://vps.tail1.ts.net", "hosts": ["100.64.0.5", "vps.tail1.ts.net"]},
     ]
-    assert caminhos == {"/api/peers/ping"}   # nunca a rota autenticada: sem token ela conta tentativa errada lá
+    # A rota autenticada (que conta tentativa errada lá) só é batida em quem respondeu 404 no /ping.
+    assert {u for u, p in caminhos if p != "/api/peers/ping"} == {"http://100.64.0.6:8765"}
 
 
 def test_sem_tailscale_e_erro_nomeado_nao_lista_vazia(monkeypatch):
