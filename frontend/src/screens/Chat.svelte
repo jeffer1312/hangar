@@ -334,7 +334,7 @@
   let error = $state('');
   let es: EventSourceLike | null = null;
   let watchdog: ReturnType<typeof setTimeout> | undefined;     // liveness: reconecta se a conexao morrer calada
-  let sseAbertoEm = 0;
+  let reabertoPeloWatchdogEm = 0;
   // Última posição recebida do transcript; reenviada no reconnect pra retomar exatamente dali.
   let lastEventId: string | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1578,7 +1578,15 @@
       watchdog = setTimeout(() => {
         diag.registrar({ evento: 'sse.mudo', nivel: 'aviso', tela: 'chat', sessao: sessionName,
           req, ms, codigo: primeiroQuadro ? 'primeiro_quadro_timeout' : undefined }, destino);
-        if (currentState !== 'dead') connectSSE();
+        if (currentState === 'dead') return;
+        if (primeiroQuadro) {
+          // Com backoff: servidor lento pra responder viraria um laço de reabertura a cada 10s.
+          es?.close(); es = null;
+          reagendarSSE();
+          return;
+        }
+        reabertoPeloWatchdogEm = Date.now();
+        connectSSE();
       }, ms);
     }
     function noteAlive() {
@@ -1596,7 +1604,6 @@
     sseRecusado = false;
 
     es = openEventStream(sessionName, lastEventId, req);
-    sseAbertoEm = Date.now();
     // Ciclo de vida da conexão no diário de uso. É o que faltava nos relatos de "a conversa parou"
     // e "as sessões sumiram": sem isto não dá pra distinguir queda de rede, reconexão em laço e
     // conexão viva com a lista congelada, e a análise vira chute.
@@ -1883,9 +1890,10 @@
     if (document.visibilityState !== 'visible') return;
     // Segura watchdog/retry DURANTE o re-seed: no wake do iOS o watchdog vencido disparava um
     // connectSSE proprio e o onVisible outro logo atras — 2 reconexoes + replay em toda volta.
-    // O iOS roda o timer vencido ANTES do visibilitychange: aí a conexão acabou de abrir e fica.
+    // O iOS roda o watchdog vencido ANTES do visibilitychange: a conexão que ele acabou de abrir
+    // fica. Só essa — uma aberta pelo backoff pode ser a mesma tentativa presa na rede que caiu.
     sseRetryDelay = SSE_RETRY_MIN;   // rede provavelmente voltou: reconexao rapida de novo
-    if (Date.now() - sseAbertoEm > 1500) {
+    if (!es || Date.now() - reabertoPeloWatchdogEm > 1500) {
       clearTimeout(watchdog);
       clearTimeout(reconnectTimer);
       connectSSE();
