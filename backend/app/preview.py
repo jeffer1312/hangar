@@ -6,6 +6,7 @@ import time
 from typing import AsyncIterator, Callable, Optional
 
 from app import tmux
+from app.hook_state import hook_state
 from app.state import _RULE_RE, _is_boundary, _live_spinner
 # _dirs: MESMO cache de diretorios de config que a statusline usa, e pelo mesmo motivo (roda por
 # sessao, a cada poll). Reusado em vez de copiado — sao os mesmos diretorios e a mesma chave (o stem
@@ -418,6 +419,11 @@ def read_sidecar(stem: Optional[str]) -> Optional[str]:
         if not isinstance(text, str):
             continue
         if isinstance(ts, (int, float)) and time.time() - ts > _PREVIEW_MAX_AGE:
+            estado = hook_state.get_state(stem)
+            if text and estado is not None and estado[0] == "working":
+                # Turno longo só de ferramentas não publica texto novo e não é publicador morto:
+                # cair no pane aqui mostrava como mensagem a linha que a TUI desenha ao lado do spinner.
+                return text
             if text:
                 # Este e o descarte que importa operacionalmente: "a extensao morreu no meio do
                 # turno". Sem o log, quem for entender por que a previa ficou parada ate cair no

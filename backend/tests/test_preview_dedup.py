@@ -500,6 +500,19 @@ def test_sidecar_ausente_ou_velho_cai_no_pane(tmp_path, monkeypatch):
                                  {"text": "", "ts": _t.time() - 10_000})) == ""
 
 
+def test_sidecar_velho_com_sessao_trabalhando_segue_valendo(tmp_path, monkeypatch):
+    # Turno longo só de ferramentas não publica texto novo: cair no pane mostrava como mensagem a
+    # linha que a TUI desenha ao lado do spinner. Parada, a sessão velha continua caindo no pane.
+    import time as _t
+    from app.hook_state import hook_state
+    from app.preview import read_sidecar
+    stem = _sidecar(tmp_path, monkeypatch, {"text": "antigo", "ts": _t.time() - 10_000})
+    monkeypatch.setitem(hook_state._map, stem, ("working", _t.time()))
+    assert read_sidecar(stem) == "antigo"
+    monkeypatch.setitem(hook_state._map, stem, ("idle", _t.time()))
+    assert read_sidecar(stem) is None
+
+
 def test_sidecar_de_tipo_errado_nao_derruba_nada(tmp_path, monkeypatch):
     # JSON valido do tipo errado nao levanta ValueError: sem o guard o .get() explodia dentro do
     # loop do broker (mesmo acidente que ja derrubou a resolucao de estado pela statusline).
