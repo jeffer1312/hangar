@@ -2034,11 +2034,26 @@ def _rename_session(name: str, body: RenameBody):
     new = sanitize_session_name(body.new)
     if not new:
         raise HTTPException(400, detail=erro("erro_nome_invalido", "nome invalido"))
+    if _headless(name):
+        # Sem pane: é só o sidecar (e o que é keyed por nome) que muda. `registry.rename` já
+        # recusa nome ocupado (tmux, Codex ou outra sem terminal).
+        if new == name:
+            return {"ok": True, "name": name}
+        try:
+            registry.rename(name, new)
+        except ValueError as e:
+            raise HTTPException(409, detail=erro("erro_nome_em_uso", str(e)))
+        od, nd = bastao_mod.caminho(name), bastao_mod.caminho(new)
+        if od.exists():
+            atomico.substituir(od, nd)
+        with _list_lock:
+            _list_snap["snap"] = None
+        return {"ok": True, "name": new}
     if not tmux.has_session(name):
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if new == name:
         return {"ok": True, "name": name}
-    if tmux.has_session(new):
+    if tmux.has_session(new) or headless_sessions.exists(new):
         raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
     # Atualiza a reserva antes do rename do tmux: durante o boot o sidecar ainda pode não existir.
     if registry_mod.apos_renomear_codex:
@@ -6020,6 +6035,22 @@ def answer(name: str, body: AnswerBody):
 def model_effort(name: str, body: ModelEffortBody):
     # Dirige o picker interativo do /model pra aplicar modelo/esforco SO na sessao (scope
     # 'session') ou como default ('default'). PickerError -> 409/422; entrada invalida -> 422.
+    if _headless(name):
+        # Sem terminal: `set_model` no stdin; esforço reabre o processo com `--resume`. Sempre
+        # escopo de sessão — o processo não grava default global (e é isso que se quer).
+        if _loop_servidor is None or not _loop_servidor.is_running():
+            raise HTTPException(503, detail=erro("erro_modelo_indisponivel", "servidor sem loop pra aplicar"))
+        try:
+            model_args.validar("claude", body.model, body.effort, None)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        fut = asyncio.run_coroutine_threadsafe(
+            get_adapter(CLAUDE_HEADLESS).set_model(name, body.model, body.effort), _loop_servidor)
+        try:
+            fut.result(timeout=40)
+        except Exception as e:
+            raise HTTPException(409, detail=erro("erro_modelo_indisponivel", f"não consegui trocar: {e}"))
+        return {"ok": True, "scope": "session", "result": None}
     _recusa_se_painel_aberto(name)
     try:
         return terminal.set_model_effort(name, body.model, body.effort, body.scope)
@@ -6085,6 +6116,14 @@ async def permission_modes(name: str, sondar: bool = False):
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+    if _headless(name):
+        # Sem rodapé pra ler: o modo é o que o processo confirmou (ou o do sidecar, parada), e a
+        # lista é a fechada da CLI — `set_permission_mode` aceita qualquer um, sem sondar.
+        hl = get_adapter(CLAUDE_HEADLESS)
+        vivo = hl._sessions.get(name)
+        atual = (vivo.permission_mode if vivo and vivo.vivo else None) or (headless_sessions.load(name) or {}).get("permission_mode")
+        return {"current": atual, "modes": list(model_args.MODOS_PERMISSAO_CLAUDE), "sondavel": False,
+                "previous_non_plan": None}
     _guard_perm(name, info)
     key = _cache_key_perm(name, info)
     # leitura do atual sem tecla (bloqueador 1)
@@ -6305,6 +6344,22 @@ async def model_options(name: str):
         return {"kind": "engine", "engine": info.engine,
                 "models": [{"id": m["id"], "context_length": m.get("context_length"),
                             "vision": m.get("vision")} for m in modelos]}
+    if _headless(name):
+        # Sem terminal: a lista vem do `control_request list_models` do próprio processo — sem
+        # picker, sem rastro no scrollback e sem cache de 1h.
+        hl = get_adapter(CLAUDE_HEADLESS)
+        try:
+            modelos = await hl.list_models(name)
+        except Exception as e:
+            raise HTTPException(503, detail=erro("erro_modelos_indisponiveis", f"não consegui listar os modelos: {e}"))
+        meta = headless_sessions.load(name) or {}
+        atual = (hl._sessions.get(name).model if hl._sessions.get(name) else None) or meta.get("model")
+        return {"kind": "claude", "engine": None, "effort": meta.get("effort"),
+                "models": [{"id": m.get("value"), "name": m.get("displayName") or m.get("value"),
+                            "desc": m.get("description") or "",
+                            # Sem escolha gravada, a CLI usa o "default" dela.
+                            "active": (atual in (m.get("value"), m.get("resolvedModel"))) if atual else m.get("value") == "default"}
+                           for m in modelos if m.get("value")]}
     # Conta Anthropic: le o picker de verdade. Abre e fecha um overlay — nao vai pro scrollback,
     # nao entra no transcript e nao gasta token.
     _recusa_se_painel_aberto(name)

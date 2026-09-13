@@ -1375,6 +1375,9 @@ class SessionRegistry:
                 else:
                     marker = hook_state.get_state(_sid(info.jsonl))
                     info.state = marker[0] if marker and marker[0] in ("working", "idle") else "idle"
+                prob = hl.problema_de(info.name)
+                if prob:
+                    info.problema = prob[0]
                 continue
             aprov = aprovacoes.get(info.name)
             if aprov is not None:
@@ -1996,8 +1999,9 @@ class SessionRegistry:
         if headless_sessions.exists(name):
             # Claude sem terminal: SIGTERM no processo (se vivo), sidecar fora, estado durável limpo.
             from app.adapters import get_adapter, CLAUDE_HEADLESS
-            get_adapter(CLAUDE_HEADLESS).close_sync(name)
+            # Sidecar PRIMEIRO: sem ele, um drain que chegue no meio não sobe outro processo.
             headless_sessions.delete(name)
+            get_adapter(CLAUDE_HEADLESS).close_sync(name)
             self._forget(name)
             PromptQueue(name).clear()
             ThenLink(name).clear()

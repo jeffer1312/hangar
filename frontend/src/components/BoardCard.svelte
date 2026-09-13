@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from 'svelte';
 import * as m from '../paraglide/messages';
+import { textoProblema } from '../lib/problema';
 import GroupGlyph from './icons/GroupGlyph.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
@@ -379,7 +380,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   const provTag = $derived(providerTag(session.provider));
   // Código -> texto, igual ao SessionCard: código desconhecido some em vez de virar id cru na tela.
   const problema = $derived(
-    session.problema === 'codex_hooks_nao_aprovados' ? m.problema_codex_hooks() : null,
+    textoProblema(session.problema),
   );
 </script>
 

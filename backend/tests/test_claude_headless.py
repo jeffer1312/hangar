@@ -158,3 +158,85 @@ def test_registry_cria_lista_e_mata_sem_tmux(tmp_path, monkeypatch):
     assert len(listadas) == 1 and listadas[0].headless and listadas[0].tracked
     reg.kill("hl")
     assert not S.exists("hl")
+
+
+def test_turno_com_erro_vira_problema_e_sucesso_limpa(adapter):
+    sess = adapter._sessions["s1"]
+
+    async def fluxo():
+        sess.in_progress = True
+        await adapter._on_event(sess, {"type": "result", "subtype": "error_max_turns", "is_error": True,
+                                       "result": "Reached max turns", "usage": {}})
+        ev = adapter._evento(sess)
+        assert ev.state == "idle" and ev.problema == "headless_turno_erro"
+        assert "Reached max turns" in (ev.problema_detalhe or "")
+        assert adapter.problema_de("s1") == (ev.problema, ev.problema_detalhe)
+        # Interrupt não é erro: nada muda.
+        sess.in_progress = True
+        await adapter._on_event(sess, {"type": "result", "subtype": "error_during_execution", "usage": {}})
+        assert adapter._evento(sess).problema == "headless_turno_erro"
+        sess.in_progress = True
+        await adapter._on_event(sess, {"type": "result", "subtype": "success", "usage": {"input_tokens": 1}})
+        assert adapter._evento(sess).problema is None and adapter.problema_de("s1") is None
+    _run(fluxo())
+
+
+def test_processo_caindo_registra_problema_com_stderr(adapter, sidecar):
+    sess = adapter._sessions["s1"]
+    sess.stderr_tail.append("Error: not logged in")
+
+    class _Fim:
+        async def readline(self):
+            return b""
+
+    class _Morto:
+        returncode = 3
+        pid = 4242
+        stdout = _Fim()
+
+        async def wait(self):
+            return 3
+
+    sess.proc = _Morto()   # type: ignore[assignment]
+
+    async def fluxo():
+        await adapter._ler(sess)   # stdout no EOF: é o caminho da morte do processo
+        assert sess.state == "dead"
+        assert adapter.problema_de("s1")[0] == "headless_processo_caiu"
+        assert "not logged in" in adapter.problema_de("s1")[1]
+        # Parada, a sessão publica o problema da última vida.
+        adapter._sessions.pop("s1")
+        gen = adapter.state_monitor("s1", lambda: None)
+        ev = await gen.__anext__()
+        assert ev.state == "idle" and ev.problema == "headless_processo_caiu"
+        await gen.aclose()
+    _run(fluxo())
+
+
+def test_ensure_running_nao_sobe_dois_processos(sidecar, monkeypatch):
+    ad = ClaudeHeadlessAdapter()
+    subidas = []
+
+    async def spawn_falso(sess):
+        subidas.append(sess.sid)
+        await asyncio.sleep(0.05)
+        sess.proc = _Proc()
+    monkeypatch.setattr(ad, "_spawn", spawn_falso)
+
+    async def fluxo():
+        a, b = await asyncio.gather(ad.ensure_running("s1"), ad.ensure_running("s1"))
+        assert a is b and len(subidas) == 1
+    _run(fluxo())
+
+
+def test_registry_renomeia_sem_tmux(tmp_path, monkeypatch):
+    from app import registry as R
+    monkeypatch.setattr(S, "_dir", lambda: tmp_path / "hl")
+    monkeypatch.setattr(R.tmux, "has_session", lambda n: False)
+    monkeypatch.setattr(R.tmux, "list_panes_all", lambda: {})
+    monkeypatch.setattr(R, "_pretrust_cwd", lambda cwd, cfg: None)
+    reg = R.SessionRegistry(str(tmp_path / "projects"))
+    reg.create("hl", str(tmp_path), provider="claude", headless=True)
+    reg.rename("hl", "hl2")
+    assert not S.exists("hl") and S.load("hl2")["name"] == "hl2"
+    reg.kill("hl2")

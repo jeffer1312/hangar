@@ -245,6 +245,11 @@ class StateEvent(BaseModel):
     loop_status: Optional[str] = None
     loop_iter: Optional[int] = None
     loop_max: Optional[int] = None
+    # Código de problema da sessão (o mesmo `problema` do SessionInfo): o front traduz. Hoje só o
+    # Claude sem terminal publica (turno com erro, processo caiu, sem resposta) — sem isto a
+    # sessão voltava a "ociosa" como se nada tivesse acontecido.
+    problema: Optional[str] = None
+    problema_detalhe: Optional[str] = None
 
 
 class PreviewEvent(BaseModel):

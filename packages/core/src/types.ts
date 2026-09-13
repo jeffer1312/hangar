@@ -184,6 +184,10 @@ export interface StateEvent {
   loop_status?: LoopState['status'] | null;
   loop_iter?: number | null;
   loop_max?: number | null;
+  // Código de problema (mesmo vocabulário do SessionInfo.problema) + detalhe cru do processo.
+  // Hoje só a sessão Claude sem terminal publica.
+  problema?: string | null;
+  problema_detalhe?: string | null;
 }
 
 // Evento SSE `preview` (app/preview.py): texto em voo, full-replace. md = veio do sidecar do

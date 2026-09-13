@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte';
   import type { SessionInfo } from '@hangar/core';
 import * as m from '../paraglide/messages';
+import { textoProblema } from '../lib/problema';
   import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '@hangar/core';
   import { chipDaConta } from '../lib/conta';
   import { loopBadge, LOOP_TONE_COLOR } from '@hangar/core';
@@ -69,9 +70,7 @@ import * as m from '../paraglide/messages';
   const stalled = $derived(session.stalled === true);
   // Código -> texto: o backend manda só o código (regra de i18n). Código desconhecido some em vez
   // de virar um id cru na tela.
-  const problema = $derived(
-    session.problema === 'codex_hooks_nao_aprovados' ? m.problema_codex_hooks() : null,
-  );
+  const problema = $derived(textoProblema(session.problema));
 
   // Radar de limite (feature #8): parada esperando o limite voltar. O state-chip vira "limite ·
   // volta HH:MM" e o ícone para de animar — a sessão está `working` pro hook, não pra pessoa.

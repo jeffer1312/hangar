@@ -576,7 +576,7 @@
       // anterior sobrevive à reabertura quando o fetch de contas falha — o reset de carregarModelos
       // fica atrás dele e não roda. Escolha de Pi indo pro create do Claude é pane no ar e erro no
       // primeiro turno, calado.
-      modelo = ''; esforco = ''; permissao = '';
+      modelo = ''; esforco = ''; permissao = ''; semTerminal = false;
       modelos = []; listaReduzida = false; erroModelos = '';
       // Mesmo motivo do bloco acima, pro atalho de retomar: um `retomando` que sobreviveu a um
       // fechamento durante a chamada deixa o seletor E o botao travados na reabertura, com o botao
@@ -1259,17 +1259,23 @@
                      ...MODOS_PERMISSAO.map((n) => ({ value: n, label: n }))]} 
             onchange={(v) => (permissao = v)} />
         </div>
-        {#if !bastao}
-          <div class="field">
-            <label class="retomar-check">
-              <input type="checkbox" bind:checked={semTerminal} />
-              <span>{m.criar_sem_terminal()}</span>
-            </label>
-            {#if semTerminal}<p class="hint">{m.criar_sem_terminal_ajuda()}</p>{/if}
-          </div>
-        {/if}
       {/if}
       </div>
+
+      {#if !conversaAlvo && provider === 'claude' && !bastao}
+        <!-- Onde a sessão roda. Fora da grade de duas colunas, porque a explicação da opção
+             escolhida fica SEMPRE à vista: a diferença (pane no tmux × processo do Hangar) é o que
+             decide se vai existir painel de terminal, e ninguém adivinha isso por um nome. -->
+        <div class="field">
+          <label class="field-label" for="modo-exec-pick">{m.criar_modo_exec()}</label>
+          <Select id="modo-exec-pick" class="field-input" ariaLabel={m.criar_modo_exec()}
+            value={semTerminal ? 'headless' : 'tmux'}
+            opcoes={[{ value: 'tmux', label: m.criar_modo_exec_tmux() },
+                     { value: 'headless', label: m.criar_modo_exec_headless() }]}
+            onchange={(v) => (semTerminal = v === 'headless')} />
+          <p class="hint">{semTerminal ? m.criar_modo_exec_headless_ajuda() : m.criar_modo_exec_tmux_ajuda()}</p>
+        </div>
+      {/if}
 
       {#if bastao}
         {@const bt = bastao}

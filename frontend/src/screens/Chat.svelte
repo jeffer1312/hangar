@@ -25,6 +25,7 @@
   import OrquestracaoSheet from '../components/OrquestracaoSheet.svelte';
   import { prefetchOrq, lerCaudaChat, guardarCaudaChat } from '../lib/queries';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { textoProblema } from '../lib/problema';
   import { aoAquecer, segurarAquecimento, soltarAquecimento } from '../lib/aquecimento';
   import { capacidades } from '../lib/capacidades.svelte';
   // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
@@ -1129,6 +1130,7 @@
   // a capacidade (Windows: `pty` e POSIX-only, o painel abriria morto). NAO reusar isto no onFallback
   // do AskUserQuestion: o fallback existe pra destravar picker, e o painel bloqueia o /answer (Task 3).
   function abrirTerminalReal() {
+    if (sessionHeadless) return;   // sem pane não há terminal, painel nem espelho a abrir
     if (desktop && onOpenTerminalPanel && terminalPanelDisponivel) onOpenTerminalPanel();
     else if (!desktop && terminalCapazMobile) xtermOpen = true;
     else mirrorOpen = true;
@@ -1715,6 +1717,14 @@
         // `pendingPiQuestion`, que fecha pelo tool_result) e o estado do pane dela nao segue essa
         // regra -> so o caso do Claude, que abre pelo evento SSE.
         if (askOpen && !askPiId && askPayload?.provider !== 'codex' && stateEvent?.state !== 'awaiting_input') askOpen = false;
+        // Problema publicado pelo backend (processo caiu, turno com erro, sem resposta): uma vez
+        // por código, no aviso que já existe — senão a sessão só "volta a ociosa" sem explicar.
+        const prob = stateEvent?.problema ?? null;
+        if (prob !== problemaAvisado) {
+          problemaAvisado = prob;
+          const texto = textoProblema(prob);
+          if (texto) mostrarAviso(stateEvent?.problema_detalhe ? `${texto} — ${stateEvent.problema_detalhe.split('\n')[0].slice(0, 160)}` : texto);
+        }
       } catch (err) {
         quadroFalhou('state');
         // Mesmo motivo do handler de `preview` logo abaixo: engolir aqui congela a prévia na tela
@@ -2250,6 +2260,7 @@
   // por aqui"). Some sozinho depois de 8s, ou no toque — não é estado, é aviso.
   let avisoErr = $state('');
   let avisoErrTimer: ReturnType<typeof setTimeout> | undefined;
+  let problemaAvisado: string | null = null;   // último código de problema já mostrado
 
   function mostrarAviso(err: unknown) {
     clearTimeout(avisoErrTimer);
@@ -2591,7 +2602,7 @@
     {/if}
   {/if}
 
-  {#if tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
+  {#if tuiOverlay && !sessionHeadless && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
     <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
          tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
     <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={abrirTerminalReal} aria-label={needsLogin ? m.chat_abrir_terminal_login() : m.chat_abrir_terminal_interagir()}>

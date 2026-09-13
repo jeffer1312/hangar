@@ -20,6 +20,7 @@ precisa sobreviver está no sidecar (sessions.py).
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -82,6 +83,14 @@ class _Sessao:
         self.waiters: dict[str, asyncio.Future] = {}
         self.n_req = 0
         self.initialized = asyncio.Event()
+        # Código + detalhe do último problema (turno com erro, processo caiu, sem resposta):
+        # vai pro StateEvent e pro card. Limpa quando um turno fecha bem.
+        self.problema: str | None = None
+        self.problema_detalhe: str | None = None
+        self.stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
+        self.linhas_ruins = 0
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.encerrando = False    # SIGTERM nosso: sair não é "caiu"
 
     @property
     def sid(self) -> str:
@@ -98,6 +107,10 @@ class ClaudeHeadlessAdapter:
     def __init__(self) -> None:
         self._sessions: dict[str, _Sessao] = {}
         self._delivery_locks: dict[str, asyncio.Lock] = {}
+        # Problema da última vida do processo, por nome: a sessão sai de `_sessions` quando o
+        # processo morre, e o card/chat ainda precisam dizer por quê.
+        self._problemas: dict[str, tuple[str, str | None]] = {}
+        self._spawn_locks: dict[str, asyncio.Lock] = {}
 
     # ── contrato Adapter ────────────────────────────────────────────────────────────────────
 
@@ -249,18 +262,30 @@ class ClaudeHeadlessAdapter:
         await self._notify(sess)
         return sess.permission_mode
 
-    async def set_model(self, name: str, model: str | None, effort: str | None) -> None:
+    async def set_model(self, name: str, model: str | None, effort: str | None) -> bool:
+        """Troca modelo em voo (`set_model`). Esforço não tem controle em voo na CLI: fica no
+        sidecar e, com a sessão ociosa, o processo é reaberto com `--resume` e a flag nova.
+        Devolve se o esforço já vale (False = só no próximo processo, porque havia turno em voo)."""
         sess = await self.ensure_running(name)
         if sess is None:
             raise ValueError("sessão indisponível")
         if model:
             await self._ctrl(sess, "set_model", model=model)
             sess.model = model
-        if effort:
-            # A CLI não tem controle de esforço em voo: fica no sidecar e vale no próximo processo.
+        esforco_ja_vale = True
+        reabrir = bool(effort) and effort != sess.effort
+        if reabrir:
             sess.effort = effort
+        # Sidecar ANTES de reabrir: o processo novo nasce do que está gravado.
         hl_sessions.update(name, model=sess.model, effort=sess.effort)
+        if reabrir:
+            if await self.deliverable(name):
+                await self._reabrir(sess)
+            else:
+                esforco_ja_vale = False
+        sess = self._sessions.get(name, sess)
         await self._notify(sess)
+        return esforco_ja_vale
 
     async def list_models(self, name: str) -> list[dict]:
         sess = await self.ensure_running(name)
@@ -269,24 +294,54 @@ class ClaudeHeadlessAdapter:
         r = await self._ctrl(sess, "list_models")
         return list((r or {}).get("models") or [])
 
+    async def _reabrir(self, sess: _Sessao) -> None:
+        """Mata o processo e sobe outro com `--resume` (mesma conversa, flags novas)."""
+        self.close_sync(sess.name)
+        if sess.leitor is not None:
+            try:
+                await asyncio.wait_for(sess.leitor, 5)
+            except (asyncio.TimeoutError, Exception):
+                pass
+        await self.ensure_running(sess.name)
+
     # ── processo ────────────────────────────────────────────────────────────────────────────
 
     async def ensure_running(self, name: str) -> _Sessao | None:
-        sess = self._sessions.get(name)
-        if sess is not None and sess.vivo:
+        # Um spawn por nome de cada vez: prompt e troca de modelo chegando juntos numa sessão
+        # parada subiriam dois `claude` no mesmo .jsonl.
+        async with self._spawn_locks.setdefault(name, asyncio.Lock()):
+            sess = self._sessions.get(name)
+            if sess is not None and sess.vivo:
+                return sess
+            meta = hl_sessions.load(name)
+            if meta is None:
+                return None
+            sess = _Sessao(name, meta)
+            sess.loop = asyncio.get_running_loop()
+            self._sessions[name] = sess
+            try:
+                await self._spawn(sess)
+            except Exception as e:
+                _log.exception("claude headless: não subiu name=%s", name)
+                if self._sessions.get(name) is sess:
+                    self._sessions.pop(name, None)
+                self._matar(sess)
+                self._problemas[name] = ("headless_nao_subiu", str(e)[:300])
+                raise
             return sess
-        meta = hl_sessions.load(name)
-        if meta is None:
-            return None
-        sess = _Sessao(name, meta)
-        self._sessions[name] = sess
+
+    @staticmethod
+    def _matar(sess: _Sessao) -> None:
+        """SIGTERM no grupo do processo (idempotente). O leitor vê o EOF e fecha o resto."""
+        if sess.proc is None or sess.proc.returncode is not None:
+            return
+        sess.encerrando = True
         try:
-            await self._spawn(sess)
-        except Exception:
-            _log.exception("claude headless: não subiu name=%s", name)
-            self._sessions.pop(name, None)
-            raise
-        return sess
+            os.killpg(os.getpgid(sess.proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            _log.warning("claude headless: SIGTERM falhou name=%s pid=%s", sess.name, sess.proc.pid, exc_info=True)
 
     def _argv(self, sid: str, *, resume: bool, model=None, effort=None, permission_mode=None) -> list[str]:
         base = ["claude", "-p", "--output-format", "stream-json", "--input-format", "stream-json",
@@ -327,7 +382,12 @@ class ClaudeHeadlessAdapter:
         try:
             await asyncio.wait_for(self._ctrl(sess, "initialize"), _TETO_INIT_S)
         except asyncio.TimeoutError:
+            # Normalmente é a CLI parada numa pergunta que só o terminal responderia (confiança
+            # na pasta, login). Segue vivo, mas o problema fica à vista.
             _log.warning("claude headless: initialize sem resposta em %.0fs name=%s", _TETO_INIT_S, sess.name)
+            self._registrar_problema(sess, "headless_sem_resposta", "\n".join(sess.stderr_tail) or None)
+        else:
+            self._limpar_problema(sess)
         sess.initialized.set()
 
     async def _ler(self, sess: _Sessao) -> None:
@@ -340,6 +400,9 @@ class ClaudeHeadlessAdapter:
                 try:
                     ev = json.loads(linha)
                 except ValueError:
+                    sess.linhas_ruins += 1
+                    if sess.linhas_ruins <= 3:
+                        _log.warning("claude headless: linha não-JSON no stdout name=%s: %r", sess.name, linha[:200])
                     continue
                 try:
                     await self._on_event(sess, ev)
@@ -348,6 +411,11 @@ class ClaudeHeadlessAdapter:
         finally:
             rc = await sess.proc.wait() if sess.proc else None
             _log.info("claude headless: processo saiu name=%s rc=%s", sess.name, rc)
+            # A CLI apanha o SIGTERM e sai com 143 (128+15), não com -15 — só o nosso encerramento
+            # marca `encerrando`; qualquer outra saída não-zero é queda.
+            if not sess.encerrando and rc not in (0, None, -signal.SIGTERM, -signal.SIGKILL):
+                self._registrar_problema(sess, "headless_processo_caiu",
+                                         f"rc={rc}\n" + "\n".join(sess.stderr_tail))
             for fut in sess.waiters.values():
                 if not fut.done():
                     fut.set_exception(RuntimeError("processo encerrou"))
@@ -365,7 +433,9 @@ class ClaudeHeadlessAdapter:
             linha = await sess.proc.stderr.readline()
             if not linha:
                 return
-            _log.debug("claude headless stderr name=%s: %s", sess.name, linha.decode(errors="replace").rstrip())
+            texto = linha.decode(errors="replace").rstrip()
+            sess.stderr_tail.append(texto)
+            _log.debug("claude headless stderr name=%s: %s", sess.name, texto)
 
     async def _write(self, sess: _Sessao, obj: dict) -> None:
         if not sess.vivo or sess.proc is None or sess.proc.stdin is None:
@@ -380,11 +450,11 @@ class ClaudeHeadlessAdapter:
         if esperar:
             fut = asyncio.get_running_loop().create_future()
             sess.waiters[rid] = fut
-        await self._write(sess, {"type": "control_request", "request_id": rid,
-                                 "request": {"subtype": subtype, **req}})
-        if fut is None:
-            return None
         try:
+            await self._write(sess, {"type": "control_request", "request_id": rid,
+                                     "request": {"subtype": subtype, **req}})
+            if fut is None:
+                return None
             return await asyncio.wait_for(fut, _TETO_CTRL_S if subtype != "initialize" else _TETO_INIT_S)
         finally:
             sess.waiters.pop(rid, None)
@@ -444,6 +514,13 @@ class ClaudeHeadlessAdapter:
             sess.question = None
             sess.label = None
             sess.previa = ""
+            sub = ev.get("subtype") or ""
+            if ev.get("is_error") or (sub.startswith("error") and sub != "error_during_execution"):
+                # `error_during_execution` é o interrupt (medido); o resto é falha de verdade
+                # (limite de turnos, credencial, API) e some calado se não for dito aqui.
+                self._registrar_problema(sess, "headless_turno_erro", f"{sub}: {str(ev.get('result') or '')[:300]}")
+            elif sub == "success":
+                self._limpar_problema(sess)
             if isinstance(ev.get("total_cost_usd"), (int, float)):
                 sess.cost = float(ev["total_cost_usd"])
             u = ev.get("usage")
@@ -465,6 +542,8 @@ class ClaudeHeadlessAdapter:
             sess.limit_reset = _hora_local(info.get("resetsAt")) if sess.limited else None
             await self._notify(sess)
             return
+        if t not in ("keep_alive", "conversation_reset", "tool_progress"):
+            _log.debug("claude headless: evento não tratado name=%s tipo=%s", sess.name, t)
 
     async def _on_system(self, sess: _Sessao, ev: dict) -> None:
         sub = ev.get("subtype")
@@ -585,7 +664,23 @@ class ClaudeHeadlessAdapter:
                           status_line=self.status_line(sess),
                           claude_permission_mode=sess.permission_mode,
                           limited=sess.limited, limit_reset=sess.limit_reset,
-                          codex_question=sess.question)
+                          codex_question=sess.question,
+                          problema=sess.problema, problema_detalhe=sess.problema_detalhe)
+
+    def problema_de(self, name: str) -> tuple[str, str | None] | None:
+        sess = self._sessions.get(name)
+        if sess is not None and sess.problema:
+            return sess.problema, sess.problema_detalhe
+        return self._problemas.get(name)
+
+    def _registrar_problema(self, sess: _Sessao, codigo: str, detalhe: str | None) -> None:
+        sess.problema, sess.problema_detalhe = codigo, (detalhe or None)
+        self._problemas[sess.name] = (codigo, detalhe or None)
+        _log.warning("claude headless: %s name=%s %s", codigo, sess.name, (detalhe or "")[:200])
+
+    def _limpar_problema(self, sess: _Sessao) -> None:
+        sess.problema = sess.problema_detalhe = None
+        self._problemas.pop(sess.name, None)
 
     def snapshot(self, name: str) -> StateEvent | None:
         """Estado atual sem abrir stream (lista/board). None = sem processo vivo (sessão parada)."""
@@ -604,9 +699,12 @@ class ClaudeHeadlessAdapter:
                 # Sessão parada (o processo morre com o backend): ociosa até o próximo prompt
                 # subir outro. Não sobe aqui — abrir o chat não deve custar um processo.
                 meta = hl_sessions.load(name) or {}
+                prob = self._problemas.get(name)
                 yield StateEvent(session=name, state="idle",
                                  claude_permission_mode=meta.get("permission_mode"),
-                                 status_line=(f"🤖 {meta['model']}" if meta.get("model") else None))
+                                 status_line=(f"🤖 {meta['model']}" if meta.get("model") else None),
+                                 problema=prob[0] if prob else None,
+                                 problema_detalhe=prob[1] if prob else None)
                 while True:
                     await asyncio.sleep(1.0)
                     sess = self._sessions.get(name)
@@ -632,16 +730,33 @@ class ClaudeHeadlessAdapter:
     # ── encerramento ───────────────────────────────────────────────────────────────────────
 
     def close_sync(self, name: str) -> None:
-        """SIGTERM no grupo do processo (chamado do registry.kill, sync). O leitor vê o EOF e
-        fecha o resto; o sidecar é apagado por quem chamou."""
-        sess = self._sessions.pop(name, None)
-        CodexPreviewSource._sources.pop(name, None)
-        if sess is None or sess.proc is None or sess.proc.returncode is not None:
+        """SIGTERM no grupo do processo (chamado do registry.kill, numa thread). O leitor vê o
+        EOF e fecha o resto; o sidecar é apagado por quem chamou — ANTES de chamar aqui, senão
+        um drain no meio acha o sidecar e sobe outro processo.
+
+        Os dicionários são do event loop: mexer neles daqui é corrida. A retirada vai pro loop
+        por `call_soon_threadsafe`; o sinal pode sair já, é só `os.kill`."""
+        sess = self._sessions.get(name)
+        if sess is None:
+            CodexPreviewSource._sources.pop(name, None)
             return
+
+        def _retirar() -> None:
+            if self._sessions.get(name) is sess:
+                self._sessions.pop(name, None)
+            CodexPreviewSource._sources.pop(name, None)
+            self._problemas.pop(name, None)
+
+        loop = sess.loop
         try:
-            os.killpg(os.getpgid(sess.proc.pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+            no_loop = loop is not None and loop.is_running() and asyncio.get_running_loop() is loop
+        except RuntimeError:
+            no_loop = False
+        if no_loop or loop is None or not loop.is_running():
+            _retirar()
+        else:
+            loop.call_soon_threadsafe(_retirar)
+        self._matar(sess)
 
     def rename(self, old: str, new: str) -> None:
         sess = self._sessions.pop(old, None)
@@ -667,11 +782,18 @@ def matar_orfaos() -> int:
     proc = Path("/proc")
     if not proc.exists():
         return 0
+    meu_uid = os.getuid()
+    sem_permissao = 0
     for p in proc.iterdir():
         if not p.name.isdigit():
             continue
         try:
+            if p.stat().st_uid != meu_uid:
+                continue      # processo de outro usuário: não é meu e o environ nem seria legível
             env = (p / "environ").read_bytes()
+        except PermissionError:
+            sem_permissao += 1
+            continue
         except OSError:
             continue
         marca = f"{_MARCADOR_PAI}=".encode()
@@ -683,6 +805,8 @@ def matar_orfaos() -> int:
                         os.kill(int(p.name), signal.SIGTERM)
                         mortos += 1
                     except OSError:
-                        pass
+                        _log.warning("claude headless: órfão pid=%s não morreu", p.name, exc_info=True)
                 break
+    if sem_permissao:
+        _log.info("claude headless: varredura de órfãos sem permissão em %d processo(s) meus", sem_permissao)
     return mortos
