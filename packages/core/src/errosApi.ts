@@ -210,6 +210,9 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   alcance_endereco_desconhecido: () => m.erro_alcance_endereco_desconhecido(),
   alcance_sem_credencial: () => m.erro_alcance_sem_credencial(),
 
+  // /api/peers/descobrir — tailscale ausente, deslogado ou parado (não é "ninguém achado")
+  descoberta_sem_tailscale: () => m.erro_descoberta_sem_tailscale(),
+
   // require_auth / require_loopback — 429 do backoff, 403 do loopback
   erro_so_loopback: () => m.erro_so_loopback(),
 

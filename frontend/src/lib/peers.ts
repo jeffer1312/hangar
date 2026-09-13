@@ -70,6 +70,14 @@ export function removerPeer(alvo: Server | null, id: string): Promise<PeerView[]
   return em<PeerView[]>(alvo, `/api/peers/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+/** Máquina online na tailnet que respondeu como Hangar; `nome` é o do Tailscale (sem credencial não
+ *  há identificador) e `hosts` são os IPs e o nome pelos quais ela pode já estar registrada. */
+export interface MaquinaDescoberta { nome: string; base_url: string; hosts: string[] }
+
+export function descobrirMaquinas(alvo: Server | null): Promise<MaquinaDescoberta[]> {
+  return em<MaquinaDescoberta[]>(alvo, '/api/peers/descobrir');
+}
+
 export function getIdentificador(alvo: Server | null): Promise<{ identificador: string }> {
   return em<{ identificador: string }>(alvo, '/api/peers/identificador');
 }

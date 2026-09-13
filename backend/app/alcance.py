@@ -85,9 +85,17 @@ def _detectar_lan() -> str:
 
 
 def _nome_tailscale() -> str:
-    """Nome DNS do Tailscale (`hangar.tailXXXX.ts.net`), vazio quando indisponível.
-    Com teto de espera — a dívida registrada em docs/polish-backlog.md:204-205 é
-    justamente UMA chamada ao Tailscale sem timeout; não criar a segunda.
+    """Nome DNS do Tailscale (`hangar.tailXXXX.ts.net`), vazio quando indisponível."""
+    try:
+        return _status_tailscale()["Self"]["DNSName"].rstrip(".")
+    except Exception:
+        return ""
+
+
+def _status_tailscale() -> dict:
+    """JSON de `tailscale status`, `{}` quando indisponível. Com teto de espera — a dívida
+    registrada em docs/polish-backlog.md:204-205 é justamente UMA chamada ao Tailscale sem
+    timeout; não criar a segunda.
     """
     try:
         r = subprocess.run(
@@ -102,9 +110,10 @@ def _nome_tailscale() -> str:
             errors="replace",
             timeout=_TETO_TAILSCALE_S,
         )
-        return json.loads(r.stdout)["Self"]["DNSName"].rstrip(".")
+        dados = json.loads(r.stdout)
+        return dados if isinstance(dados, dict) else {}
     except Exception:
-        return ""
+        return {}
 
 
 def _motivo(e: BaseException) -> str:

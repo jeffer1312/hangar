@@ -1,8 +1,8 @@
 <script lang="ts">
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
            onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
-  import { checkPeer, getIdentificador, setIdentificador, listarPeers, removerPeerDoisLados,
-           type PeerView } from '../../lib/peers';
+  import { checkPeer, descobrirMaquinas, getIdentificador, setIdentificador, listarPeers, removerPeerDoisLados,
+           type MaquinaDescoberta, type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
   import { unirMaquinas, type LinhaMaquina } from '../../lib/maquinas';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
@@ -179,6 +179,7 @@
     idSalvando = false;
     // Estados de checagem pertencem ao alvo que saiu da tela (Task 8).
     estados = {};
+    descobertas = null; descobrindo = false; descobertasErro = '';
     if (!resolvedServer) {
       // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção
       // lia o servidor ATIVO com a aba dizendo que o escolhido não existe.
@@ -364,6 +365,36 @@
     corrigeUrl = '';
   }
 
+  // Busca no Tailscale, sob demanda (decisão do usuário: botão, não na abertura da tela — cada
+  // busca bate em todos os peers online). null = nunca buscou; [] = buscou e não achou.
+  let descobertas = $state<MaquinaDescoberta[] | null>(null);
+  let descobrindo = $state(false);
+  let descobertasErro = $state('');   // slot próprio: não apaga nem é apagado pelo erro dos peers
+  const hostnameDe = (u: string) => { try { return new URL(u).hostname.toLowerCase(); } catch { return u.trim().toLowerCase(); } };
+  // Máquina que já tem linha (neste aparelho ou no servidor) não é "nova". Casa por QUALQUER
+  // nome dela (IP ou nome do Tailscale): registrada pelo nome e achada pelo IP é a mesma máquina.
+  const novasDescobertas = $derived.by(() => {
+    const conhecidas = new Set(linhas.flatMap((l) => [l.navegador?.baseUrl, l.peer?.base_url].filter((u): u is string => !!u).map(hostnameDe)));
+    return (descobertas ?? []).filter((d) => ![hostnameDe(d.base_url), ...d.hosts.map((h) => h.toLowerCase())].some((h) => conhecidas.has(h)));
+  });
+  async function buscarNoTailscale() {
+    if (descobrindo) return;
+    const meu = geracao;
+    descobrindo = true;
+    descobertasErro = '';
+    try {
+      const lista = await descobrirMaquinas(apiTarget);
+      if (meu !== geracao) return;
+      descobertas = lista;
+    } catch (e) {
+      if (meu !== geracao) return;
+      descobertas = null;   // resultado da busca anterior não fica à vista como se fosse desta
+      descobertasErro = msgErro(e);
+    } finally {
+      if (meu === geracao) descobrindo = false;
+    }
+  }
+
   let removerPeerId = $state<string | null>(null);
   function removerPeerConfirmado() { const id = removerPeerId; removerPeerId = null; if (id) void removerPeer(id); }
 
@@ -492,6 +523,30 @@
   onTestarDeNovo={testarDeNovo}
   onRemover={(l) => (removerLinha = l)}
   onAdicionar={() => { addEndereco = ''; showAdd = true; }} />
+{#if resolvedServer}
+  <button class="ss-btn mq-buscar" onclick={buscarNoTailscale} disabled={descobrindo}>
+    {descobrindo ? m.maquinas_buscando() : m.maquinas_buscar_tailscale()}
+  </button>
+  {#if descobertasErro}<p class="id-erro" role="status">{descobertasErro}</p>{/if}
+  {#if descobertas !== null && !descobrindo}
+    {#if novasDescobertas.length === 0}
+      <p class="ss-legenda" role="status">{m.maquinas_buscar_nada()}</p>
+    {:else}
+      <p class="ss-legenda">{m.maquinas_buscar_achou()}</p>
+      <ul class="mq-achadas">
+        {#each novasDescobertas as d (d.base_url)}
+          <li class="mq-achada">
+            <span class="mq-achada-txt">
+              <span class="mq-achada-nome">{d.nome}</span>
+              <span class="mq-achada-url">{d.base_url}</span>
+            </span>
+            <button class="ss-btn" onclick={() => { addEndereco = d.base_url; showAdd = true; }}>+ {m.sessao_adicionar_servidor()}</button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  {/if}
+{/if}
 {#if peersErro}<p class="id-erro" role="status">{peersErro}</p>{/if}
 {#if removerLadoDeLaFalhou}<p class="ss-aviso" role="status">{m.maquinas_remover_peer_lado_de_la_falhou()}</p>{/if}
 <div class="ss-acoes">
@@ -581,6 +636,14 @@
     transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   }
   .ss-btn:hover { background: var(--bg-hover); }
+  .mq-buscar { margin-top: var(--space-1); }
+  .mq-achadas { list-style: none; margin: 0 0 var(--space-2); padding: 0; background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+  .mq-achada { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); }
+  .mq-achada + .mq-achada { border-top: 1px solid var(--border-subtle); }
+  .mq-achada-txt { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .mq-achada-nome { font-size: var(--text-sm); color: var(--text-primary); }
+  .mq-achada-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); word-break: break-all; }
+  .mq-achada .ss-btn { width: auto; min-height: 36px; border-radius: var(--radius-sm); }
   .ss-danger { color: var(--error); }
   .ss-danger:hover { background: rgba(255, 69, 58, 0.1); }
 

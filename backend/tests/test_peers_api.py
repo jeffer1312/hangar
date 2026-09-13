@@ -306,3 +306,27 @@ def test_gravar_identificador_espera_a_trava_de_outro_escritor(env_tmp):
     texto = env_tmp.read_text(encoding="utf-8")
     assert "CP_SERVER_ID=casa" in texto
     assert "CP_AUTH_TOKEN=abc" in texto
+
+
+# ── Descoberta na tailnet: /ping é público de propósito; sem tailscale é 503 nomeado ─────
+
+
+def test_ping_e_publico_e_nao_conta_tentativa_errada(cli):
+    from app import auth
+    auth.reset_backoff()
+    r = cli.get("/api/peers/ping")
+    assert r.status_code == 200
+    assert r.json() == {"hangar": True}
+    assert not auth._fails
+
+
+def test_descobrir_sem_credencial_e_401(cli):
+    assert cli.get("/api/peers/descobrir").status_code == 401
+
+
+def test_descobrir_sem_tailscale_e_503_nomeado(cli, monkeypatch):
+    from app import alcance
+    monkeypatch.setattr(alcance, "_status_tailscale", lambda: {})
+    r = cli.get("/api/peers/descobrir", headers=AUTH)
+    assert r.status_code == 503
+    assert r.json()["detail"]["code"] == "descoberta_sem_tailscale"

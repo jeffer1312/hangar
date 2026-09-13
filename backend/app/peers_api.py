@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app import atomico, peers, peers_check, runtime_config
+from app import atomico, descoberta, peers, peers_check, runtime_config
 from app.auth import require_auth
 from app.config import settings
 from app.mensagens import erro
@@ -91,6 +91,24 @@ def checar_peer(url: str = "", id: str = "") -> dict:
     if not id:
         raise HTTPException(400, detail=erro("peers_check_id_obrigatorio", "id obrigatório"))
     return peers_check.checar_peer(url, id)
+
+
+@peers_router.get("/ping")
+def ping() -> dict:
+    """Sem auth de propósito: é o que a descoberta de outra máquina bate pra saber se aqui tem
+    Hangar. Passar pelo `require_auth` sem token contaria como tentativa errada e bloqueava o
+    IP de quem só perguntou. Não diz nada além de "sou Hangar"."""
+    return {"hangar": True}
+
+
+@peers_router.get("/descobrir", dependencies=[Depends(require_auth)])
+def descobrir_maquinas() -> list[dict]:
+    """Máquinas online na tailnet que respondem como Hangar. Sob demanda (botão), nunca na
+    abertura da tela: cada chamada bate em todos os peers online."""
+    try:
+        return descoberta.descobrir()
+    except descoberta.SemTailscale as e:
+        raise HTTPException(503, detail=erro("descoberta_sem_tailscale", "tailscale não respondeu")) from e
 
 
 @peers_router.get("/identificador", dependencies=[Depends(require_auth)])
