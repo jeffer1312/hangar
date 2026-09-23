@@ -15,7 +15,7 @@ from app.hook_installer import (
     ensure_subagent_hook_installed,
     ensure_state_hooks_installed,
 )
-from app import accept_resiliente, migracao_sidecars, orq_politica
+from app import migracao_sidecars, orq_politica, resilient_accept
 from app.hook_state import hook_state
 from app.pi_inbox import escrever_endpoint
 
@@ -168,7 +168,7 @@ def main():
     hook_state.load_existing(_state_dirs)
     print_pairing(settings)
     # Windows: cliente que aborta no meio do accept nao pode fechar o listener (ver o modulo).
-    accept_resiliente.instalar()
+    resilient_accept.install()
     # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de
     # um processo. Multi-worker daria cache frio por worker -> transcript errado em requests roteados
     # pra outro worker. Multi-worker exigiria mover o cache pra um backend compartilhado.
