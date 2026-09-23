@@ -14,7 +14,7 @@ const TEM_ESQUEMA = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 interface EnderecoNormalizado {
-  base: string;                 // origem: http(s)://host[:porta], sem barra final
+  base: string;                 // http(s)://host[:porta][/prefixo], sem barra final
   token: string | null;         // o ?token= de um link de pareamento colado inteiro
   alternativa: string | null;   // segunda origem a testar quando o esquema foi deduzido
 }
@@ -52,5 +52,7 @@ export function normalizarEndereco(cru: string): EnderecoNormalizado | null {
       url.protocol = 'https:';
     }
   }
-  return { base: url.origin, token, alternativa };
+  // O caminho fica: backend atrás de proxy com prefixo (`https://vps/delphi`) só responde nele.
+  const caminho = url.pathname.replace(/\/+$/, '');
+  return { base: url.origin + caminho, token, alternativa: alternativa && alternativa + caminho };
 }

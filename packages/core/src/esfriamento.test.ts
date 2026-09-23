@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   definirArmazem, definirProtegido, estaDesligado, esquecerServidor, registrarFalha, registrarSucesso, retentarAgora,
   _limparEsfriamentoParaTestes,
-  onServerRecovered, respondeuRecentemente, retryAfterMs,
+  onServerRecovered, respondeuRecentemente, retryAfterMs, SERVIDOR_CANDIDATO,
 } from './esfriamento';
 
 beforeEach(() => { _limparEsfriamentoParaTestes(); definirProtegido(() => false); });
@@ -15,6 +15,20 @@ describe('servidor desligado', () => {
     registrarFalha('outro');
     expect(estaDesligado('ativo')).toBe(false);
     expect(estaDesligado('outro')).toBe(true);
+  });
+
+  it('o teste de "Testar e adicionar" nunca é barrado nem deixa marca, nem com marca antiga gravada', () => {
+    const dados = new Map([['hangar_servidores_desligados',
+      JSON.stringify({ [SERVIDOR_CANDIDATO]: { failures: 9, retryAt: Date.now() + 1_800_000 } })]]);
+    definirArmazem({ getItem: (k) => dados.get(k) ?? null, setItem: (k, v) => { dados.set(k, v); }, removeItem: (k) => { dados.delete(k); } });
+    try {
+      expect(retryAfterMs(SERVIDOR_CANDIDATO)).toBe(0);
+      expect(dados.has('hangar_servidores_desligados')).toBe(false);
+      registrarFalha(SERVIDOR_CANDIDATO);
+      expect(estaDesligado(SERVIDOR_CANDIDATO)).toBe(false);
+    } finally {
+      definirArmazem(null);
+    }
   });
 
   it('uma falha de rede já marca; ninguém mais procura por ele', () => {

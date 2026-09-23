@@ -38,7 +38,11 @@ describe('normalizarEndereco', () => {
     expect(normalizarEndereco('http://casa.ts.net')).toEqual({ base: 'http://casa.ts.net', token: null, alternativa: null });
     expect(normalizarEndereco('https://casa.ts.net:8443/')).toEqual({ base: 'https://casa.ts.net:8443', token: null, alternativa: null });
   });
-  it('link de pareamento inteiro separa o token e descarta o caminho', () => {
+  it('prefixo de proxy fica no endereço', () => {
+    expect(normalizarEndereco('https://pocket.omniwise.com.br/delphi')).toEqual({ base: 'https://pocket.omniwise.com.br/delphi', token: null, alternativa: null });
+    expect(normalizarEndereco('vps.com/delphi/?token=abc')).toEqual({ base: 'https://vps.com/delphi', token: 'abc', alternativa: 'http://vps.com:8765/delphi' });
+  });
+  it('link de pareamento inteiro separa o token e descarta a barra final', () => {
     expect(normalizarEndereco('http://192.168.0.10:8765/?token=abc123')).toEqual({ base: 'http://192.168.0.10:8765', token: 'abc123', alternativa: null });
   });
   it('token duplicado, vazio ou com espaço recusa o endereço', () => {

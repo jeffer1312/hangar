@@ -13,6 +13,9 @@ const RETRY_DELAYS_MS = [2_000, 5_000, 30_000, 60_000, 120_000, 240_000, 300_000
 const RESPONDEU_RECENTE_MS = 24 * 60 * 60_000;
 const TETO_RECENTE = RETRY_DELAYS_MS.indexOf(30_000) + 1;
 
+/** Id do teste de "Testar e adicionar": alvo digitado na hora, nunca herda nem deixa marca. */
+export const SERVIDOR_CANDIDATO = 'candidato';
+
 const estados = new Map<string, Estado>();
 const respostas = new Map<string, number>();
 let carregado = false;
@@ -112,6 +115,8 @@ function carregar(): void {
         if ((estados.get(id)?.retryAt ?? 0) <= value.retryAt) estados.set(id, value);
       }
     }
+    // Marca do teste de adicionar gravada por versão anterior: apaga, não só ignora.
+    if (estados.delete(SERVIDOR_CANDIDATO)) gravar();
   } catch (e) {
     // Conteúdo estragado não pode impedir o app de subir: começa limpo — mas fica no diário,
     // senão "voltou a procurar todo mundo" não tem explicação.
@@ -160,6 +165,7 @@ export function respondeuRecentemente(id: string): boolean {
 
 /** Falhas simultâneas não renovam o prazo; nova tentativa frustrada aumenta a espera. */
 export function registrarFalha(id: string): void {
+  if (id === SERVIDOR_CANDIDATO) return;
   carregar();
   if (protegido(id) || retryAfterMs(id) > 0) return;
   const teto = respondeuRecentemente(id) ? TETO_RECENTE : RETRY_DELAYS_MS.length;
@@ -170,6 +176,7 @@ export function registrarFalha(id: string): void {
 
 /** Respondeu: está de pé. */
 export function registrarSucesso(id: string): void {
+  if (id === SERVIDOR_CANDIDATO) return;
   carregar();
   // Toda resposta passa por aqui, inclusive o ping de 8 s: grava no máximo uma vez por minuto.
   const agora = Date.now();

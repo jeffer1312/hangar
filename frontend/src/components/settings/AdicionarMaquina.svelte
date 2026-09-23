@@ -7,7 +7,7 @@
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import QrScanner from '../QrScanner.svelte';
   import { normalizarEndereco } from '../../lib/url';
-  import { getConfigForServer } from '@hangar/core';
+  import { getConfigForServer, registrarSucesso, SERVIDOR_CANDIDATO } from '@hangar/core';
   import { addServer } from '../../lib/auth';
   import { getIdentificador, type MaquinaDescoberta } from '../../lib/peers';
   import { registrarPeerDoisLados } from '../../lib/registrarPeerDoisLados';
@@ -79,7 +79,7 @@
     // a primeira conexão passa de 8 s.
     const PRAZO_MS = 20000;
     try {
-      await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok }, PRAZO_MS);
+      await getConfigForServer({ id: SERVIDOR_CANDIDATO, label: base, baseUrl: base, token: tok }, PRAZO_MS);
     } catch (e) {
       const msg1 = e instanceof Error ? e.message : String(e);
       const respostaHttp = e instanceof Error && /^\d{3}:/.test(e.message);
@@ -90,7 +90,7 @@
       }
       base = n.alternativa;
       try {
-        await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok }, PRAZO_MS);
+        await getConfigForServer({ id: SERVIDOR_CANDIDATO, label: base, baseUrl: base, token: tok }, PRAZO_MS);
       } catch (e2) {
         const msg2 = e2 instanceof Error ? e2.message : String(e2);
         erro = `${m.falha_conexao()}: ${msg1} · ${msg2}`;
@@ -104,7 +104,7 @@
     // e a lista mostra o estado do registro quando voltar. Falha aqui não é motivo para não acompanhar.
     if (podeFalar && falar) {
       try {
-        const { identificador } = await getIdentificador({ id: 'candidato', label: base, baseUrl: base, token: tok });
+        const { identificador } = await getIdentificador({ id: SERVIDOR_CANDIDATO, label: base, baseUrl: base, token: tok });
         if (!identificador) throw new Error(m.maquinas_add_erro_sem_identificador());
         await registrarPeerDoisLados(apiTarget, { id: identificador, base_url: base, token: tok });
       } catch (e) {
@@ -117,7 +117,8 @@
     // página matava esse envio no meio — ao voltar, o hub (sem a máquina nova) mandava e ela
     // sumia. Quem precisa reagir escuta `onServersChanged`; a tela de máquinas recarrega por
     // `onAdicionada`.
-    if (!soRecado) addServer(base, tok, undefined, { ativar: false });
+    // Endereço que já estava na lista marcado como desligado: o teste acabou de provar que responde.
+    if (!soRecado) registrarSucesso(addServer(base, tok, undefined, { ativar: false }).id);
     ocupado = false;
     onAdicionada?.();
     onFechar();
