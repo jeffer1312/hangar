@@ -97,6 +97,7 @@ Done when the file is on disk with every field filled.
   `"reincide": true`; the commit hash is a field, never a line. Run
   `~/.claude/skills/orquestrar/scripts/orq-valida-eventos.py <file>` right after.
 - Messages: form and transport rungs in `hangar-send --help`; the rung used goes in the report.
+- The APROVA and the final commit message are one message; a message arriving after it does not change the commit.
 
 Done when the message is delivered and the validator exits 0.
 

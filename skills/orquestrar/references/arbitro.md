@@ -41,10 +41,10 @@ Handoff checklist — before every handoff, in order:
 3. `entregue` read → check engagement: ctx left zero within 1 min. Kick-off only.
 4. Watchdog re-armed (`arbitro-vigia.md`); whoever takes the ball rewrites it.
 5. Journal: JSON line, then paragraph, before the next action.
-6. Sending someone to check a set → the command that discovers the list (`run \`git grep -n
-   <sym> -- src/\` and check ALL that show up`), never the list; no command possible → the
-   question ("who else calls this?"), never the answer. Recipes, kick-offs, directed questions
-   alike.
+6. A set is named by the command that discovers it (`run \`git grep -n <sym> -- src/\` and
+   check ALL that show up`), never by the list — in recipes, kick-offs, directed questions, and
+   in whatever you are about to act on yourself; no command possible → the question ("who else
+   calls this?"), never the answer. An irreversible act runs that command first.
 
 Done when the kick-off is delivered and engaged, the watchdog lists `<executor> <arbiter>`,
 the journal carries the release.
@@ -155,10 +155,8 @@ logged, the watchdog disarmed.
 
 ## Locks
 
-- Stage by explicit path; never `git add -A` / `git add .`. No `--amend`/rebase/squash; a correction is a new commit.
-- Write first, notify after: file in the durable dir, message carries the path. Long text: `hangar-send <s> "$(cat <<'EOF' … EOF)"`.
-- Delivery is not a reply: `entregue`/`success` = entered the queue. The idleness signal is `arbitro-vigia.md`'s ("Idleness").
 - Model, account, subagents and outside tools: `arbitro-lancamento.md`, "Locks on model and tools".
 - Time comes from `date -Iseconds`, never from memory. Authorship comes from a transcript, never from time correlation (`arbitro-vigia.md`, "A vanished session").
 - Every number carries its scope: what entered the count, from where.
 - Talk little with the user: what and when, `arbitro-vigia.md`, "Deciding vs waking the user". Demand the same short reports from the sessions.
+- A record with more than one writer keeps the order its lines arrived in and is corrected one line at a time, from a read taken at the moment of the correction; sorting it by a field each writer fills in on its own is a reading, never a result to save.

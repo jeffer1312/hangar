@@ -110,7 +110,7 @@ or more becomes a short checklist or its own file, never fatter.
   fails without it; it holds in another repository and language. Failed one: it changes
   address (the plan, the project's `CLAUDE.md`, a domain skill, the work's lessons). The test
   applies to text already in the skill too: a rule that fails it leaves.
-- Size ceiling per file: `SKILL.md` 8,000 characters; every page in `references/` 13,000.
+- Size ceiling per file: `SKILL.md` 8,000 characters; every page in `references/` 13,000. A character is a UTF-8 code point with line endings counted as LF.
   A proposal that adds text to a file at its ceiling names the text it shortens or merges in
   the same file. Repetition between two pages: keep one, point from the other.
 - Each role page stays self-sufficient: executor, reviewer, branch review and retrospective

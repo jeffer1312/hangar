@@ -85,7 +85,7 @@ Outside tool (skill, subagent, command), three questions: exists under that name
 
 ## Locks on model and tools
 
-- The model is the user's decision. The contract carries the account↔model table per role; a model outside it is not used even to test; the model comes from the ROLE, including bug worktrees and one-off tasks. Need one outside the table → stop and ask.
+- The model comes from the ROLE, including bug worktrees and one-off tasks.
 - Before creating any session: re-read its row and state in the message which engine/model you use and where it came from.
 - A new session is born on the harness default → switch, read the model back, only then send work.
 - Subagents: same account always; a model switch inside it only where the contract allows; an agent frontmatter `model:` overrides yours.
@@ -112,9 +112,9 @@ Outside tool (skill, subagent, command), three questions: exists under that name
 
    Research, review, final review, verification: add `--read-only` and prove the protection (`protecao.md`). Record the initial `consumo.md` snapshot before the first request and the final one at close or replacement — also for the executor and for your own period.
 
-2. Prove what was born (below). Diverged → delete and recreate.
+2. Prove what was born (below). Diverged → delete and recreate. A relaunch after a failed birth names the condition that failed and what was read again in it.
 3. Write the request in a file; deliver with `hangar-send <name> "$(cat <file>)"`.
-4. Check the return: `entregue -> <name>` is delivery; anything else → resend. Then check engagement: ctx left zero within a minute. On a resend, point only at the kick-off's path.
+4. Check the return: `entregue -> <name>` is delivery; anything else → resend. Then check engagement: ctx left zero within a minute, and treat the session as started only when it answers with the account, model and effort read from its own live state. On a resend, point only at the kick-off's path.
 5. Only then the turn closes.
 
 Done when the proof is taken, the kick-off engaged, and the row's model read back from the live session.
@@ -134,6 +134,7 @@ The real engine, model and harness, never the request:
 ```
 Read ~/.claude/skills/orquestrar/references/<executor|revisor|revisao-final|retrospectiva>.md — your role's page, plus the sibling pages it names; nothing else of that skill.
 Role: <executor | reviewer | branch review | retrospective>.
+First act: answer with the account, model and effort you read from your own live session.
 Method: <name | none — the plan is the user's>.   Executes with: <command | none>.
 Domain skill: <name | none>.   Route: <audit | full>.
 Repo/branch: <path> / <branch>.   Expected HEAD: <hash>.

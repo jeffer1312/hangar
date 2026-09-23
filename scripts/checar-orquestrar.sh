@@ -176,7 +176,7 @@ done
 teto_skill=8000
 teto_pagina=13000
 for f in "${arquivos[@]}"; do
-  tam=$(wc -m < "$f")   # caracteres, nao bytes: a regra e em caracteres e o texto tem acento
+  tam=$(python3 -c 'import sys;b=open(sys.argv[1],"rb").read();print(len(b.decode("utf-8").replace("\r\n","\n")))' "$f")   # pontos de codigo, fim de linha como LF
   teto=$teto_pagina
   [ "$f" = SKILL.md ] && teto=$teto_skill
   if [ "$tam" -gt "$teto" ]; then

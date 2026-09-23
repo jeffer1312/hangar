@@ -11,6 +11,9 @@ completam o contrato:
   - `veredito.resultado` ∈ aprova|reprova|devolvido (o MESMO vocabulário do parecer); leva `sessao`
     e, opcionais, `motivo` (str, a razão curta) e `reincide` (bool: segunda reprovação da mesma
     causa — a porta do árbitro no laço). `entrega` leva o hash da rodada (stash) no campo `commit`.
+  - `veredito` julga UMA rodada de uma Task (`task` e `rodada`, os dois números) OU uma faixa de
+    commits (`faixa`, o texto `<base>..<tip>`), nunca os dois e nunca nenhum: a revisão final não
+    julga Task nenhuma, e sem isto o veredito que fecha o trabalho não entra no registro.
   - Campo extra pode; tipo novo NÃO — o app agrega por esses seis.
 
 Exemplo, no fecho de uma rodada:
@@ -24,7 +27,7 @@ TIPOS = {
     "execucao_inicio": {"plano", "branch", "gid"},
     "task_inicio": {"task", "titulo", "executor", "par"},
     "entrega": {"task", "rodada"},
-    "veredito": {"task", "rodada", "resultado", "sessao"},
+    "veredito": {"resultado", "sessao"},
     "sessao_trocada": {"de", "para"},
     "execucao_fim": {"resultado"},
 }
@@ -62,11 +65,20 @@ def _valida_linhas(path: str, linhas) -> int:
             # `bool` é subclasse de int: sem a exclusão, `"rodada": true` passava aqui e o parser
             # real (orq._int_ou_none) o descartava como rodada desconhecida — validador dando
             # confiança falsa justo no campo que alimenta o KPI de "aprovada de primeira".
-            if (campo in ev and campo in TIPOS[tipo]
+            # Vale onde o campo APARECE, não só onde ele é obrigatório: o `veredito` de faixa não
+            # os exige, e um `"task": "faixa"` ali passaria calado.
+            if (campo in ev
                     and (isinstance(ev[campo], bool) or not isinstance(ev[campo], int))):
                 print(f"{path}:{i}: {campo} nao e numero ({ev[campo]!r})"); erros += 1
         if tipo == "veredito" and ev.get("resultado") not in RESULTADOS:
             print(f"{path}:{i}: resultado {ev.get('resultado')!r} fora de {sorted(RESULTADOS)}"); erros += 1
+        if tipo == "veredito":
+            por_task = "task" in ev and "rodada" in ev
+            por_faixa = "faixa" in ev
+            if por_task == por_faixa:
+                print(f"{path}:{i}: veredito leva `task`+`rodada` OU `faixa`, nunca os dois nem nenhum"); erros += 1
+            elif por_faixa and not (isinstance(ev["faixa"], str) and ".." in ev["faixa"]):
+                print(f"{path}:{i}: faixa {ev['faixa']!r} nao e o texto `<base>..<tip>`"); erros += 1
         if "reincide" in ev and not isinstance(ev["reincide"], bool):
             print(f"{path}:{i}: reincide nao e bool ({ev['reincide']!r})"); erros += 1
     return erros

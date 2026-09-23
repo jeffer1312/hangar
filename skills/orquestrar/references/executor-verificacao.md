@@ -27,6 +27,7 @@ Before pasting a proof, say what would make it fail. Then:
   exists; undo the fix and watch it go red. Same for a finding an automatic reviewer raised.
 - Mutation runs in a detached worktree: `git worktree add --detach <tmp>/mut-<x> <object>` →
   apply → run → `git worktree remove --force`. The tree you commit stays intact.
+- A report that asserts states carries one row per assertion with the command that checked it beside it; an assertion whose row has no command is not made.
 
 ## The proof stage
 
