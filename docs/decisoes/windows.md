@@ -46,6 +46,23 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Recado repetido no Windows não é o par insistindo** — é o oráculo de entrega: o argv entre
   Python e psmux come uma contrabarra quando o argumento vai entre aspas, a comparação falha e o
   reconcile redigita. Olhe `REQUEUE` no log antes de responder.
+- **Conexão abortada no accept não pode fechar o listener**: no ProactorEventLoop o
+  `_start_serving` do asyncio fecha o listener em QUALQUER OSError do accept. `resilient_accept`
+  refaz o AcceptEx nos códigos da conexão (64, 1236, 10053, 10054), e o cancelamento dele é
+  síncrono, porque o `_stop_serving` fecha o socket na mesma pilha do `cancel()`.
+
+## Listener do backend morria com cliente abortando o accept
+
+(19/09/2026 14:19:22 e 23/09/2026 09:17:57, PR #13.) O app Electron abriu com o backend lento, os
+pedidos estouraram o timeout de 8–10 s e um cliente desistiu bem no meio do accept: o `f.result()`
+levantou `OSError [WinError 64] The specified network name is no longer available`, o asyncio
+logou "Accept failed on a socket" e fechou o socket da 8765. O processo seguiu vivo, sem ninguém
+escutando a porta, até a vigia reiniciar a tarefa. O embrulho em `IocpProactor.accept`
+(`backend/app/resilient_accept.py`) refaz o AcceptEx nos erros da conexão e deixa o resto seguir
+pro asyncio. A primeira versão cancelava o AcceptEx interno por callback: o CancelIoEx rodava no
+ciclo seguinte do loop, depois de o `_stop_serving` já ter fechado o socket. O teste ponta a ponta
+(`test_proactor_server_keeps_listening_after_winerror_64`) só roda no Windows, e o CI não tem
+pytest no Windows.
 
 ## PATH da máquina com `%SYSTEMROOT%` cru: o `Atualiza-Path` apagava o próprio `powershell.exe`
 
