@@ -242,3 +242,53 @@ def test_alvo_do_kill_e_o_da_plataforma(monkeypatch):
     slug = runner._slug("/home/u/myproj")
     assert kill[-1] == tmux.alvo_de_kill(slug)
     assert kill[-1] == (f"={slug}" if os.name == "posix" else slug)
+
+
+def test_custom_commands_roundtrip_alongside_remembered(tmp_path, monkeypatch):
+    from app import runner
+    from app.config import settings
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path / "projects"))
+    cwd = "/proj/a"
+    assert runner.custom_commands(cwd) == []
+    runner.set_custom_commands(cwd, [{"label": "api", "command": "uv run uvicorn app:app"},
+                                     {"label": "docs", "command": "mkdocs serve"}])
+    got = runner.custom_commands(cwd)
+    assert [(r.label, r.command, r.source) for r in got] == [
+        ("api", "uv run uvicorn app:app", "custom"), ("docs", "mkdocs serve", "custom")]
+    # remembered convive no MESMO registro do cwd, sem apagar os personalizados
+    runner.remember(cwd, "uv run uvicorn app:app")
+    assert runner.remembered(cwd) == "uv run uvicorn app:app"
+    assert len(runner.custom_commands(cwd)) == 2
+    # gravar a lista vazia remove todos e preserva o remembered
+    runner.set_custom_commands(cwd, [])
+    assert runner.custom_commands(cwd) == []
+    assert runner.remembered(cwd) == "uv run uvicorn app:app"
+
+
+def test_prefs_old_string_format_is_still_read(tmp_path, monkeypatch):
+    # Arquivo da versao anterior: {cwd: "comando"}. Ler tolera; gravar migra pro dict.
+    import json as _json
+    from app import runner
+    from app.config import settings
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path / "projects"))
+    p = runner._prefs_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps({"/proj/velho": "npm run dev"}), encoding="utf-8")
+    assert runner.remembered("/proj/velho") == "npm run dev"
+    assert runner.custom_commands("/proj/velho") == []
+    runner.set_custom_commands("/proj/velho", [{"label": "x", "command": "make x"}])
+    assert runner.remembered("/proj/velho") == "npm run dev"   # migrou sem perder
+    assert runner.custom_commands("/proj/velho")[0].command == "make x"
+
+
+def test_custom_commands_drops_malformed_items(tmp_path, monkeypatch):
+    import json as _json
+    from app import runner
+    from app.config import settings
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path / "projects"))
+    p = runner._prefs_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps({"/p": {"remembered": None, "custom": [
+        {"label": "ok", "command": "make ok"}, {"label": " ", "command": "x"},
+        {"command": "sem-label"}, "string-solta"]}}), encoding="utf-8")
+    assert [r.label for r in runner.custom_commands("/p")] == ["ok"]

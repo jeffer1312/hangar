@@ -25,8 +25,9 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   import FilesPanel from './files/FilesPanel.svelte';
   import StateChip from './StateChip.svelte';
   import type { Provider, State, SessionInfo, PlanDetail, ChatEvent, Activity, ShellVivo } from '@hangar/core';
-  import type { StatusFields } from '@hangar/core';
-  import { comTeto, ctxWindow, getSessionCostForServer, providerName, type SessionCostEstimate } from '@hangar/core';
+  import type { StatusFields, Shortcut, ShortcutSendText, ShortcutShell } from '@hangar/core';
+  import { comTeto, ctxWindow, defaultShortcuts, getSessionCostForServer, providerName, type SessionCostEstimate } from '@hangar/core';
+  import ShortcutIcon from './icons/ShortcutIcon.svelte';
   import { listServers } from '../lib/auth';
   import { money2 } from '../lib/fmt';
   import { moeda } from '../lib/moeda.svelte';
@@ -69,6 +70,12 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     onOpenRun?: () => void;
     runRunning?: boolean;
     onOpenAttachments?: () => void;
+    // Fileira configurável: a ORDEM e a presença dos botões vêm daqui (lib/shortcuts.svelte.ts,
+    // via Chat); ausente = conjunto nativo. Interno sem handler continua sem botão — a lista
+    // manda na ordem, os gates de headless/estado continuam mandando na existência.
+    shortcuts?: Shortcut[];
+    onShortcut?: (s: ShortcutSendText | ShortcutShell) => void;
+    onEditShortcuts?: () => void;
     onOpenActivity?: () => void;
     // Atividade como ABA daqui (desktop): é estado ao vivo, como o Navegador, e no modal central
     // ela nascia espremida — o conteúdo é do celular, onde a caixa é a tela toda.
@@ -130,6 +137,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     onOpenNavegador = undefined,
     onOpenRun = undefined, runRunning = false,
     onOpenAttachments = undefined,
+    shortcuts = undefined, onShortcut = undefined, onEditShortcuts = undefined,
     onOpenActivity = undefined,
     activity = null, processos = [], abrirAgente = null,
     onExpandUsage = undefined, limited = false, limitReset = null,
@@ -143,7 +151,19 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     toggleExterno = false,
   }: Props = $props();
 
-  const hasActions = $derived(onOpenTerminal || onTrocarModo || onOpenNavegador || onOpenRun || onOpenAttachments);
+  // Só o que dá pra renderizar: interno cujo handler o Chat não passou (headless sem terminal,
+  // por exemplo) sai da lista — a config diz a ordem, o gate diz a existência.
+  const visibleShortcuts = $derived((shortcuts ?? defaultShortcuts()).filter((s) => {
+    if (s.type !== 'internal') return true;
+    switch (s.action) {
+      case 'terminal': return !!onOpenTerminal;
+      case 'modo': return !!onTrocarModo;
+      case 'navegador': return !!onOpenNavegador;
+      case 'anexos': return !!onOpenAttachments;
+      case 'rodar': return !!onOpenRun;
+    }
+  }));
+  const hasActions = $derived(visibleShortcuts.length > 0);
   const navChave = $derived(workspaceSessionKey({ serverId, name: sessionName }));
   // A aba Navegador só existe na tab bar quando a sessão TEM navegador aberto (quem cria é o
   // botão da fileira ou o agente via hangar-preview open).
@@ -435,64 +455,74 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
        Com a aba Navegador ativa a fileira SOME: quem ta ali ta mexendo no browser, e o browser
        ganha a altura. O Navegador nao e mais acao — e a aba ao lado. -->
   {#if hasActions && ctxPanel.aba !== 'navegador'}
-    <div class="ctx-actions" role="toolbar" aria-label={m.ctx_painel_titulo()}>
-      {#if onOpenTerminal}
-        <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
-          <span class="animated-icon" aria-hidden="true">
+    <!-- Clique-direito abre o editor de atalhos: a fileira é configurável e o caminho de edição
+         mora na config — este é o acesso rápido de quem já está olhando pra ela. -->
+    <!-- tabindex -1: o contextmenu torna a toolbar "interativa" pro linter a11y, mas o foco de
+         teclado pertence aos botões dela — a toolbar em si não é parada de Tab. -->
+    <div class="ctx-actions" role="toolbar" aria-label={m.ctx_painel_titulo()} tabindex="-1"
+         oncontextmenu={onEditShortcuts ? (e) => { e.preventDefault(); onEditShortcuts(); } : undefined}>
+      {#each visibleShortcuts as s (s.id)}
+        {#if s.type === 'internal' && s.action === 'terminal'}
+          <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
+            <span class="animated-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2.5" y="4" width="19" height="16" rx="2"/>
+                <path d="M6.5 9l3 3-3 3"/>
+                <line x1="12.5" y1="15" x2="17" y2="15"/>
+              </svg>
+            </span>
+            <span>{m.ctx_terminal()}</span>
+          </button>
+        {:else if s.type === 'internal' && s.action === 'modo'}
+          {@const rotulo = modoDestinoTerminal ? m.modo_abrir_no_terminal() : m.modo_continuar_sem_terminal()}
+          <button class="ctx-action" onclick={onTrocarModo} disabled={modoBloqueado} aria-label={rotulo}
+                  title={modoBloqueado ? m.modo_so_ociosa() : modoDestinoTerminal ? m.modo_abrir_no_terminal_detalhe() : m.modo_continuar_sem_terminal_detalhe()}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="2.5" y="4" width="19" height="16" rx="2"/>
-              <path d="M6.5 9l3 3-3 3"/>
-              <line x1="12.5" y1="15" x2="17" y2="15"/>
+              <path d="M4 8h13l-3-3"/>
+              <path d="M20 16H7l3 3"/>
             </svg>
-          </span>
-          <span>{m.ctx_terminal()}</span>
-        </button>
-      {/if}
-      {#if onTrocarModo}
-        {@const rotulo = modoDestinoTerminal ? m.modo_abrir_no_terminal() : m.modo_continuar_sem_terminal()}
-        <button class="ctx-action" onclick={onTrocarModo} disabled={modoBloqueado} aria-label={rotulo}
-                title={modoBloqueado ? m.modo_so_ociosa() : modoDestinoTerminal ? m.modo_abrir_no_terminal_detalhe() : m.modo_continuar_sem_terminal_detalhe()}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M4 8h13l-3-3"/>
-            <path d="M20 16H7l3 3"/>
-          </svg>
-          <span>{rotulo}</span>
-        </button>
-      {/if}
-      {#if onOpenNavegador}
-        <button class="ctx-action" onclick={onOpenNavegador} aria-label={m.ctx_navegador()}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="9"/>
-            <path d="M3 12h18"/>
-            <path d="M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9s1.4-6.4 3.9-9z"/>
-          </svg>
-          <span>{m.ctx_navegador()}</span>
-        </button>
-      {/if}
-      {#if onOpenAttachments}
-        <button class="ctx-action" onclick={onOpenAttachments} aria-label={m.ctx_anexos_da_sessao()}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L16 6"/>
-          </svg>
-          <span>{m.ctx_anexos()}</span>
-        </button>
-      {/if}
-      <!-- Rodar por ÚLTIMO e atrás de um divisor: os outros abrem um painel, este dispara um
-           processo no projeto. Na fileira plana ele tinha o mesmo peso de "Anexos". -->
-      {#if onOpenRun}
-        <span class="acao-divisor" aria-hidden="true"></span>
-        <button class="ctx-action run-btn" class:running={runRunning} onclick={onOpenRun}
-                aria-label={runRunning ? m.ctx_rodando_abrir() : m.ctx_rodar_projeto()}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            {#if runRunning}
-              <rect x="6" y="6" width="12" height="12" rx="2" />
-            {:else}
-              <path d="M8 5v14l11-7z" />
-            {/if}
-          </svg>
-          <span>{runRunning ? m.ctx_rodando() : m.ctx_rodar()}</span>
-        </button>
-      {/if}
+            <span>{rotulo}</span>
+          </button>
+        {:else if s.type === 'internal' && s.action === 'navegador'}
+          <button class="ctx-action" onclick={onOpenNavegador} aria-label={m.ctx_navegador()}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"/>
+              <path d="M3 12h18"/>
+              <path d="M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9s1.4-6.4 3.9-9z"/>
+            </svg>
+            <span>{m.ctx_navegador()}</span>
+          </button>
+        {:else if s.type === 'internal' && s.action === 'anexos'}
+          <button class="ctx-action" onclick={onOpenAttachments} aria-label={m.ctx_anexos_da_sessao()}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L16 6"/>
+            </svg>
+            <span>{m.ctx_anexos()}</span>
+          </button>
+        {:else if s.type === 'internal' && s.action === 'rodar'}
+          <!-- Rodar atrás de um divisor: os outros abrem um painel, este dispara um processo no
+               projeto. Só quando não é o primeiro — divisor abrindo a fileira é ruído. -->
+          {#if visibleShortcuts[0] !== s}
+            <span class="acao-divisor" aria-hidden="true"></span>
+          {/if}
+          <button class="ctx-action run-btn" class:running={runRunning} onclick={onOpenRun}
+                  aria-label={runRunning ? m.ctx_rodando_abrir() : m.ctx_rodar_projeto()}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              {#if runRunning}
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              {:else}
+                <path d="M8 5v14l11-7z" />
+              {/if}
+            </svg>
+            <span>{runRunning ? m.ctx_rodando() : m.ctx_rodar()}</span>
+          </button>
+        {:else if s.type === 'send_text' || s.type === 'shell'}
+          <button class="ctx-action" onclick={() => onShortcut?.(s)} aria-label={s.label} title={s.type === 'shell' ? s.command : s.text}>
+            <ShortcutIcon icon={s.icon} />
+            <span>{s.label}</span>
+          </button>
+        {/if}
+      {/each}
     </div>
   {/if}
 
@@ -979,6 +1009,9 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
      (o Atividade so existe as vezes): auto-fit divide a linha por igual. */
   /* Flex, não grid de colunas iguais: o divisor antes do Rodar é um item de 1px, e num
      `repeat(auto-fit, 1fr)` ele ganharia a largura de um botão. */
+  /* A lista é configurável e sem teto: quando não cabe, a fileira ROLA na horizontal (decisão da
+     sessão de grilling — sem limite artificial, sem menu "mais"). Com poucas, cada botão cresce e
+     divide a linha como antes. */
   .ctx-actions {
     display: flex;
     align-items: stretch;
@@ -988,8 +1021,12 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-inset);
+    overflow-x: auto;
+    scrollbar-width: thin;
   }
-  .ctx-actions > .ctx-action { flex: 1 1 0; min-width: 0; }
+  /* min-width é o PISO: poucas ações dividem a linha por igual (ellipsis no rótulo, como sempre);
+     muitas param de encolher no piso e a fileira rola. */
+  .ctx-actions > .ctx-action { flex: 1 1 0; min-width: 44px; }
   .acao-divisor {
     flex: 0 0 1px;
     align-self: center;

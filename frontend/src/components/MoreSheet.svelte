@@ -1,7 +1,9 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
+  import ShortcutIcon from './icons/ShortcutIcon.svelte';
   import { desktop } from '../lib/desktop.svelte';
+  import type { ShortcutSendText, ShortcutShell } from '@hangar/core';
 
   // Acoes que saíram da NavBar do CELULAR pro menu "⋯". Elas custavam 80px fixos da barra e sao de
   // uso raro; o nome da sessao, que e a informacao mais disputada ali, chegava a "clau…". No desktop
@@ -9,6 +11,10 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    // Atalhos CUSTOMIZADOS da fileira configurável: na barra estreita eles moram aqui (decisão da
+    // sessão de grilling — a barra fica estável e o "⋯" já é o lugar do resto das ações).
+    shortcuts?: (ShortcutSendText | ShortcutShell)[];
+    onShortcut?: (s: ShortcutSendText | ShortcutShell) => void;
     onRun: () => void;
     runRunning?: boolean;
     onActivity?: () => void;      // ausente = sessao sem atividade pra mostrar
@@ -28,6 +34,7 @@
   }
   let {
     open, onClose, onRun, runRunning = false,
+    shortcuts = [], onShortcut = undefined,
     onActivity, activityRunning = false, activityBadge = 0, onAttachments, onBastao,
     onTrocarModo, modoDestinoTerminal = false, modoBloqueado = false,
     onRecarregar, recarregarBloqueado = false,
@@ -42,6 +49,18 @@
 <BottomSheet {open} {onClose} ariaLabel={m.navbar_mais_acoes()} centered={desktop.atual}>
   <div class="more">
     <h2 class="more-title">{m.navbar_mais_acoes()}</h2>
+
+    {#each shortcuts as s (s.id)}
+      <button class="item" onclick={() => onShortcut && pick(() => onShortcut(s))}>
+        <span class="ico" aria-hidden="true"><ShortcutIcon icon={s.icon} size={20} /></span>
+        <span class="txt">
+          <span class="label">{s.label}</span>
+          <!-- O conteúdo é a melhor legenda: diz exatamente o que o toque dispara. -->
+          <span class="sub">{s.type === 'shell' ? s.command : s.text}</span>
+        </span>
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
+    {/each}
 
     <button class="item" onclick={() => pick(onRun)}>
       <span class="ico" class:on={runRunning} aria-hidden="true">

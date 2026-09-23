@@ -18,6 +18,7 @@ export * from './toolGroups';
 export * from './pensamento';
 export * from './arquivosCitados';
 export * from './fileIcons';
+export * from './shortcuts';
 export * from './editdiff';
 export * from './detectarLinguagem';
 export * from './peek';

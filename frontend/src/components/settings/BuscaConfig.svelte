@@ -14,6 +14,7 @@
     contas: m.contas_modelos_titulo,
     notificacoes: m.config_modal_notificacoes,
     anexos: m.config_modal_anexos_curto,
+    atalhos: m.lista_atalhos,
     avancado: m.config_modal_avancado,
     orquestracao: m.config_modal_orquestracao,
     harnesses: m.harness_titulo,
@@ -70,6 +71,9 @@
     { tela: 'maquinas', rotulo: m.config_servidores_sair_titulo, descricao: m.maquinas_intro },
     { tela: 'maquinas', rotulo: m.maquinas_reconectar },
     { tela: 'maquinas', rotulo: m.maquinas_buscar_tailscale, descricao: m.maquinas_buscar_ajuda },
+
+    { tela: 'atalhos', rotulo: m.atalhos_add, descricao: m.atalhos_sub },
+    { tela: 'atalhos', rotulo: m.atalhos_restaurar, descricao: m.atalhos_restaurar_ajuda },
 
     { tela: 'contas', rotulo: m.contas_atualizar, descricao: m.contas_legenda },
     { tela: 'contas', rotulo: m.contas_secao_claude, descricao: m.contas_secao_claude_leg },

@@ -506,7 +506,7 @@ export interface CostReport {
 export interface Runner {
   label: string;
   command: string;
-  source: 'npm' | 'make' | 'stack';
+  source: 'npm' | 'make' | 'stack' | 'custom';
   is_dev_guess: boolean;
 }
 
@@ -517,6 +517,8 @@ export interface RunInfo {
 
 export interface RunnersResponse {
   detected: Runner[];
+  // Ausente num servidor mais antigo: a seção some, em vez de a tela quebrar.
+  custom?: Runner[];
   remembered: string | null;
   running: RunInfo | null;
 }

@@ -136,19 +136,61 @@ def _load_prefs() -> dict:
         return {}
 
 
-def remembered(cwd: str) -> Optional[str]:
+# O valor por cwd tem DUAS formas no disco: a antiga (string = comando lembrado) e a nova
+# (dict {"remembered", "custom"}), que nasceu com os comandos personalizados. Ler tolera as
+# duas pra sempre — o arquivo e compartilhado entre versoes e uma migracao em massa nao vale
+# o risco; gravar normaliza pro dict.
+def _entry(cwd: str) -> dict:
     v = _load_prefs().get(cwd)
-    return v if isinstance(v, str) else None
+    if isinstance(v, str):
+        return {"remembered": v, "custom": []}
+    if isinstance(v, dict):
+        rem = v.get("remembered")
+        custom = v.get("custom")
+        return {"remembered": rem if isinstance(rem, str) else None,
+                "custom": custom if isinstance(custom, list) else []}
+    return {"remembered": None, "custom": []}
 
 
-def remember(cwd: str, command: str) -> None:
+def _save_entry(cwd: str, entry: dict) -> None:
     p = _prefs_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     d = _load_prefs()
-    d[cwd] = command
+    d[cwd] = entry
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(d), encoding="utf-8")
     atomico.substituir(tmp, p)  # escrita atomica
+
+
+def remembered(cwd: str) -> Optional[str]:
+    return _entry(cwd)["remembered"]
+
+
+def remember(cwd: str, command: str) -> None:
+    e = _entry(cwd)
+    e["remembered"] = command
+    _save_entry(cwd, e)
+
+
+def custom_commands(cwd: str) -> list[Runner]:
+    """Comandos personalizados do projeto, na ordem gravada. Item malformado (edicao manual do
+    arquivo) e descartado com aviso no log — a lista nao pode derrubar o GET /runners inteiro."""
+    out = []
+    for i, item in enumerate(_entry(cwd)["custom"]):
+        if (isinstance(item, dict)
+                and isinstance(item.get("label"), str) and item["label"].strip()
+                and isinstance(item.get("command"), str) and item["command"].strip()):
+            out.append(Runner(label=item["label"], command=item["command"], source="custom"))
+        else:
+            _log.warning("runner: comando personalizado %d malformado em %s, descartado", i, cwd)
+    return out
+
+
+def set_custom_commands(cwd: str, commands: list[dict]) -> None:
+    """Grava a lista INTEIRA (adicionar/editar/remover sao a mesma operacao pra tela)."""
+    e = _entry(cwd)
+    e["custom"] = [{"label": c["label"], "command": c["command"]} for c in commands]
+    _save_entry(cwd, e)
 
 
 _log = logging.getLogger(__name__)

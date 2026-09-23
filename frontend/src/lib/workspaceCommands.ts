@@ -55,6 +55,7 @@ function actionGroupOrder(): WorkspaceActionGroup[] {
     m.nav_navegacao(),
     m.sessao_grupo(),
     m.lista_ferramentas(),
+    m.lista_atalhos(),
     m.lista_colaboracao(),
   ];
 }

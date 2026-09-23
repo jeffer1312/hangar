@@ -30,6 +30,7 @@ import type {
   ResumeResult,
   RunnersResponse,
   RunInfo,
+  Runner,
   SessionLimits,
   CodexModelsResponse,
   PiModelsResponse,
@@ -2412,8 +2413,28 @@ export function stopRun(name: string): Promise<{ ok: boolean }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/run/stop`, { method: 'POST' });
 }
 
+/** Grava a lista INTEIRA de comandos personalizados do projeto (add/editar/remover são a mesma
+ * operação). Devolve a lista como o servidor a leu. */
+export function setCustomRunners(
+  name: string, commands: { label: string; command: string }[],
+): Promise<Runner[]> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/runners/custom`, {
+    method: 'POST',
+    body: JSON.stringify({ commands }),
+  });
+}
+
 export function getRunPane(name: string): Promise<{ pane: string }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/run/pane`);
+}
+
+/** Atalho "shell" da fileira: dispara-e-esquece no cwd da sessão. O 202 só diz que o processo
+ * nasceu — falha depois disso não volta por aqui (comando com saída que interessa vai no run). */
+export function runShortcutShell(name: string, command: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/shortcut-shell`, {
+    method: 'POST',
+    body: JSON.stringify({ command }),
+  });
 }
 
 // Limites de uso da conta Codex (Task B) — so sessoes Codex; o back devolve 400 pra Claude.

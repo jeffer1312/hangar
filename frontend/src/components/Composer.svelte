@@ -1037,6 +1037,21 @@ import { cachePrazo } from '../lib/cachePrazo';
     textareaEl?.focus();
   }
 
+  // Texto COMPLETO vindo de um atalho da fileira com "enviar direto" desligado: chega aqui pra
+  // pessoa completar antes de mandar. Mesma proteção de rascunho do preencherComando — o clique
+  // vem de fora e não pode apagar uma mensagem já escrita sem perguntar.
+  export async function prefillText(text: string): Promise<boolean> {
+    if (inputText.trim() && !confirm(m.composer_trocar_rascunho({ cmd: text }))) {
+      textareaEl?.focus();
+      return false;
+    }
+    inputText = text.endsWith(' ') ? text : text + ' ';
+    await tick();
+    autoGrow();
+    textareaEl?.focus();
+    return true;
+  }
+
   // Envia o comando e limpa o textarea (zero-arg ou apos confirmacao).
   function runCommand(cmd: string) {
     inputText = '';

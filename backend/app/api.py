@@ -52,7 +52,8 @@ from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, UsoReport, RunnersResponse, RunBody,
-                        RunInfo, ProjectStatus, session_key)
+                        RunInfo, Runner, CustomRunnersBody, ProjectStatus, ShortcutShellBody,
+                        session_key)
 from app import uso_report
 from app.planprog import (plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir,
                           PlanPinError, PIN_NONE, marcar_step, arquivar, caminho_do_plano,
@@ -6116,9 +6117,26 @@ def list_runners(name: str):
     cwd = _session_cwd(name)
     return RunnersResponse(
         detected=runner.detect_runners(cwd),
+        custom=runner.custom_commands(cwd),
         remembered=runner.remembered(cwd),
         running=runner.run_status(cwd),
     )
+
+
+# POST, nao PUT/PATCH: mesmo motivo do /api/config — proxy na frente do backend ja barrou
+# metodo fora do par GET/POST.
+@app.post("/api/sessions/{name}/runners/custom", dependencies=[Depends(require_auth)],
+          response_model=list[Runner])
+def set_custom_runners(name: str, body: CustomRunnersBody):
+    # A lista vai INTEIRA (add/editar/remover sao a mesma gravacao). Item vazio e recusado aqui,
+    # apontando qual: gravado, ele viraria linha morta descartada calada no proximo GET.
+    cwd = _session_cwd(name)
+    for i, c in enumerate(body.commands, start=1):
+        if not c.label.strip() or not c.command.strip():
+            raise HTTPException(400, detail=erro(
+                "erro_runner_custom", f"comando personalizado {i}: rotulo e comando sao obrigatorios"))
+    runner.set_custom_commands(cwd, [c.model_dump() for c in body.commands])
+    return runner.custom_commands(cwd)
 
 
 @app.post("/api/sessions/{name}/run", dependencies=[Depends(require_auth)],
@@ -6145,6 +6163,31 @@ def stop_runner(name: str):
 @app.get("/api/sessions/{name}/run/pane", dependencies=[Depends(require_auth)])
 def runner_pane(name: str):
     return {"pane": runner.run_pane(_session_cwd(name))}
+
+
+@app.post("/api/sessions/{name}/shortcut-shell", dependencies=[Depends(require_auth)],
+          status_code=202)
+def shortcut_shell(name: str, body: ShortcutShellBody):
+    # Atalho "abrir programa" da fileira: dispara-e-esquece no cwd da sessao. Sem pane, sem
+    # captura de saida — comando cuja saida interessa tem casa melhor (o run ou o terminal).
+    # Filho desprendido pra matar/reiniciar o backend nao levar o programa junto. start_new_session
+    # so existe no POSIX (no Windows e ignorado calado); la vale grupo proprio e sem console,
+    # em valor literal porque subprocess.CREATE_* so existe no Windows.
+    cwd = _session_cwd(name)
+    command = body.command.strip()
+    if not command:
+        raise HTTPException(400, detail=erro("erro_shortcut_vazio", "comando vazio"))
+    detach = ({"creationflags": 0x00000200 | 0x08000000} if os.name == "nt"
+              else {"start_new_session": True})
+    try:
+        proc = subprocess.Popen(command, shell=True, cwd=cwd,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, **detach)
+    except OSError as e:
+        raise HTTPException(500, detail=erro("erro_shortcut_shell", str(e)))
+    # Sem o texto do comando: ele pode carregar credencial.
+    _log.info("shortcut-shell: sessao=%s pid=%s", name, proc.pid)
+    return {"ok": True}
 
 
 # --- launcher de projetos (standalone, chaveado pelo projects.json — nao por sessao viva) ----
