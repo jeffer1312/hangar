@@ -40,6 +40,7 @@ enum Payload {
     // Miniatura já decodificada fora da thread da janela; `None` = bytes que não são imagem legível.
     Media(SessionKey, Source, Result<Option<Arc<RenderImage>>, Failure>),
     Saved(SessionKey, bool, Result<PathBuf, String>),
+    ConnectionNotSaved(String),
     // Resposta amarrada à sessão e ao pedido capturados no gesto, não ao que está na tela na volta.
     Reply(SessionKey, Reply, Result<Value, Failure>),
     Config(Result<Value, Failure>),
@@ -407,6 +408,12 @@ impl Hangar {
                 cx.notify();
                 return;
             }
+            Payload::ConnectionNotSaved(error) => {
+                eprintln!("conexão não gravada: {error}");
+                self.list_error = Some(tr("connection_not_saved").replace("{error}", &error));
+                cx.notify();
+                return;
+            }
             Payload::Interrupted(key, result) => {
                 self.receive_interrupted(key, result);
                 cx.notify();
@@ -434,10 +441,15 @@ impl Hangar {
         match payload {
             Payload::Sessions(Ok(sessions)) => {
                 self.list_error = None;
-                if let Some((address, token)) = self.unsaved_connection.take()
-                    && let Err(error) = save_connection(&address, &token) {
-                    eprintln!("conexão não gravada: {error}");
-                    self.list_error = Some(tr("connection_not_saved").replace("{error}", &error.to_string()));
+                if let Some((address, token)) = self.unsaved_connection.take() {
+                    // Disco fora da thread da janela; só a falha volta.
+                    let (connection, tx) = (self.connection, self.tx.clone());
+                    self.runtime.spawn(async move {
+                        let saved = tokio::task::spawn_blocking(move || save_connection(&address, &token).map_err(|e| e.to_string())).await;
+                        if let Err(error) = saved.map_err(|e| e.to_string()).and_then(|r| r) {
+                            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::ConnectionNotSaved(error) }).await;
+                        }
+                    });
                 }
                 self.replace_sessions(sessions, window, cx);
             }
@@ -534,7 +546,7 @@ impl Hangar {
             }
             Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
-                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..) => unreachable!(),
+                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..) => unreachable!(),
         }
         self.sync_rows(cx);
         cx.notify();
@@ -1117,8 +1129,9 @@ impl Hangar {
                 let result = async {
                     let bytes = api.fetch(&key.name, &source).await.map_err(|error| format!("{safe}: {}", Self::fetch_failure(&error)))?;
                     let path = match target { Some(path) => path, None => private_copy(&safe).map_err(|_| tr("save_failed"))? };
-                    std::fs::write(&path, bytes).map_err(|_| tr("save_failed"))?;
-                    Ok(path)
+                    // Até 100 MiB: a escrita não pode ocupar uma das duas threads do runtime.
+                    tokio::task::spawn_blocking(move || std::fs::write(&path, bytes).map(|()| path)).await
+                        .ok().and_then(Result::ok).ok_or_else(|| tr("save_failed"))
                 }.await;
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Saved(key, open, result) }).await;
             });
@@ -1128,8 +1141,17 @@ impl Hangar {
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Downloads")).filter(|p| p.is_dir()))
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_else(std::env::temp_dir);
         let prompt = cx.prompt_for_new_path(&folder, Some(&composer::safe_name(&name)));
-        cx.spawn(async move |_, _| {
-            if let Ok(Ok(Some(path))) = prompt.await { write(Some(path)); }
+        let fail_key = self.selected_key();
+        cx.spawn(async move |this, cx| {
+            match prompt.await {
+                Ok(Ok(Some(path))) => write(Some(path)),
+                Ok(Ok(None)) => {}
+                // O diálogo do sistema falhou: dizer, não parecer que Salvar não fez nada.
+                _ => { let _ = this.update(cx, |this, cx| {
+                    if let Some(key) = fail_key { this.action_feedback.insert(key, (tr("save_failed"), true)); }
+                    cx.notify();
+                }); }
+            }
         }).detach();
     }
 
