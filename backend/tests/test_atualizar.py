@@ -261,7 +261,6 @@ def test_mesmo_pid_na_porta_depois_do_restart_vai_pro_rollback(repo, monkeypatch
     for nome in ("_puxar", "_preparar", "_reiniciar"):
         monkeypatch.setattr(atualizar, nome, lambda *a, **k: None)
     monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
     monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
     monkeypatch.setattr(atualizar, "_pid_do_servidor", lambda topologia, porta: 4242)
     voltou = []
@@ -275,7 +274,6 @@ def test_pid_diferente_depois_do_restart_e_pronto(repo, monkeypatch):
     for nome in ("_puxar", "_preparar", "_reiniciar"):
         monkeypatch.setattr(atualizar, nome, lambda *a, **k: None)
     monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
     monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
     pids = iter([100, 200])
     monkeypatch.setattr(atualizar, "_pid_do_servidor", lambda topologia, porta: next(pids))
@@ -328,46 +326,6 @@ def test_estado_do_lancamento_e_json_valido(repo, monkeypatch):
 
 
 # ─── Sessões vivas e o sistema ─────────────────────────────────────────────────────────────────
-
-def test_avisa_as_sessoes_antes_de_reiniciar(repo, monkeypatch):
-    ordem = []
-    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
-    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
-    monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: None)
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: ordem.append("avisou"))
-    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: ordem.append("reiniciou"))
-    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
-    atualizar.executar()
-    assert ordem == ["avisou", "reiniciou"]
-
-
-def test_hangar_send_ausente_nao_derruba_a_atualizacao(repo, monkeypatch):
-    """Aviso é cortesia: máquina sem `hangar-send` não pode ficar sem atualizar por causa dele."""
-    def _sem_binario(*a, **kw):
-        raise OSError("hangar-send: not found")
-    monkeypatch.delenv("PYTEST_CURRENT_TEST")     # sem isto o aviso nem é tentado — ver abaixo
-    monkeypatch.setattr(atualizar, "_rodar", _sem_binario)
-    atualizar._avisar_sessoes()   # não levanta
-
-
-def test_a_suite_nunca_manda_recado_pras_sessoes_vivas(repo, monkeypatch):
-    """Medido em 30/08/2026: três testes do fluxo inteiro chamavam `_avisar_sessoes` sem substituí-la
-    e o `hangar-send` saía de verdade — três avisos falsos de restart por `pytest -q`, na tela de
-    quem estava trabalhando. A trava é da função, não de cada teste."""
-    chamadas = []
-
-    def _espia(args, **kw):
-        chamadas.append(args)
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(atualizar, "_rodar", _espia)
-    atualizar._avisar_sessoes()
-    assert chamadas == []
-
-    monkeypatch.delenv("PYTEST_CURRENT_TEST")     # fora do pytest o aviso sai como sempre
-    atualizar._avisar_sessoes()
-    assert chamadas and chamadas[0][:2] == ["hangar-send", "--group"]
-
 
 def test_falhou_mede_se_o_servidor_esta_no_ar(repo, monkeypatch):
     """Supor "no ar" é mentira no Windows: lá o installer já derrubou o backend antes de falhar.
@@ -502,19 +460,6 @@ def test_sem_marca_nao_inventa_aviso(repo, monkeypatch):
     assert not atualizar.estado().get("avisos")
 
 
-def test_avisa_as_sessoes_antes_do_instalador(repo, monkeypatch):
-    """No Windows quem reinicia é o próprio installer — avisar depois dele é avisar tarde."""
-    ordem = []
-    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
-    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: ordem.append("avisou"))
-    monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: ordem.append("instalou"))
-    monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: ordem.append("reiniciou"))
-    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
-    atualizar.executar()
-    assert ordem == ["avisou", "instalou", "reiniciou"]
-
-
 def test_windows_reinicia_as_tarefas_pelo_helper_sem_instalador(repo, monkeypatch):
     """O restart do Windows é o `Restart-HangarTasks` do `windows-tasks.ps1` (o mesmo da vigia),
     não o `install.ps1 -Update` inteiro. E não pede reinício manual."""
@@ -553,7 +498,6 @@ def test_sem_restart_nao_cobra_prova_de_vida(repo, monkeypatch):
     monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
     monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
     monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: None)
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
     monkeypatch.setattr(atualizar, "_reiniciar", lambda t, *a, **k: atualizar._escrever(reiniciar_manual=True))
     def _nunca(*a, **kw):
         raise AssertionError("_subiu nao devia ser chamado sem restart")
@@ -735,7 +679,6 @@ def test_restart_que_falha_vai_pro_rollback(repo, monkeypatch):
     monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
     monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
     monkeypatch.setattr(atualizar, "_preparar", lambda t, *a, **k: None)
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
     def _quebra(t, *a, **k):
         raise RuntimeError("systemctl nao subiu")
     monkeypatch.setattr(atualizar, "_reiniciar", _quebra)
@@ -897,7 +840,6 @@ def test_reiniciar_agora_lanca_destacado_e_no_escopo(repo, monkeypatch):
 def test_reinicio_avulso_mostra_progresso_e_termina_pronto(repo, monkeypatch):
     """O botão "Reiniciar" dizia só "Reiniciando…": o reinício avulso passa a gravar as mesmas
     etapas que a atualização (barra, texto, log) e fecha em `pronto`."""
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
     monkeypatch.setattr(atualizar, "_atualizar_dist", lambda: None)
     monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
     vistos = []
@@ -913,7 +855,6 @@ def test_reinicio_avulso_mostra_progresso_e_termina_pronto(repo, monkeypatch):
 
 def test_reinicio_avulso_sem_servidor_de_volta_nao_diz_ok(repo, monkeypatch):
     """A tela recarrega ao ver `ok`; sem a prova de vida recarregava antes do servidor novo subir."""
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
     monkeypatch.setattr(atualizar, "_atualizar_dist", lambda: None)
     monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
     monkeypatch.setattr(atualizar, "_reiniciar", lambda topo, *a, **k: None)
@@ -938,7 +879,6 @@ def test_reinicio_que_falha_deixa_rastro_no_estado(repo, monkeypatch):
     """O processo do reinício é destacado e tem o stderr no /dev/null: exceção aqui não vai pra log
     nenhum. Sem gravar no estado, um `systemctl` que falha some por completo e a tela fica esperando
     um servidor que nunca cai."""
-    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
     monkeypatch.setattr(atualizar, "_atualizar_dist", lambda: None)
     monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
     monkeypatch.setattr(atualizar, "_reiniciar",

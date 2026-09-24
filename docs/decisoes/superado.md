@@ -4,6 +4,16 @@ Estes trechos descrevem como algo **funcionava antes**. Ficam registrados porque
 medição continua valendo como história, mas não descrevem o código de hoje: cada um
 aponta a decisão que o substituiu. Não leia daqui para decidir implementação.
 
+## Aviso de reinício do atualizador às sessões
+
+(`atualizar._avisar_sessoes`, 25/08/2026 → removido em 24/09/2026). Antes de reiniciar, o botão
+Atualizar rodava `hangar-send --group "[hangar] o backend vai reiniciar…"` para "as sessões vivas".
+O atualizador não é uma sessão: o `hangar-send` caía na sessão do cliente tmux anexado. Com ela
+fora de grupo o log mostrava `404 erro_sessao_sem_grupo`; com ela num grupo, o aviso ia só para
+aquele grupo, assinado como se ela tivesse mandado. Nunca chegou a todas as sessões. As sessões
+seguem vivas pelo reinício e o app reconecta sozinho, então o aviso saiu em vez de virar um
+broadcast que custaria uma resposta de cada sessão por atualização.
+
 ## Login do ChatGPT (Codex) é UM login pra três CLIs, e quem faz é o app
 
 (`app/oauth_codex.py` +

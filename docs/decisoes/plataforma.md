@@ -346,8 +346,7 @@ Anthropic responder 429 pras 5 contas Claude, e a aba Contas mostrou "não infor
 conectado. Duas regras: o cache vai pra `~/.hangar/cotas-cache.json` (pasta do Hangar, não da
 conta) e o que está dentro do TTL volta do disco na subida; e fonte que levou 429 só vence de novo
 depois de `_ESPERA_429_S` (10 min) — insistir no próximo poll só renova o 429. Sob pytest o disco
-fica fora, pelo mesmo motivo do `_avisar_sessoes`: a suíte gravaria fontes de mentira no arquivo
-real da máquina.
+fica fora: a suíte gravaria fontes de mentira no arquivo real da máquina.
 
 ## Redefinições guardadas do Codex respeitam a janela semanal
 

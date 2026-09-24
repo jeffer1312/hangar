@@ -611,34 +611,6 @@ def _reaplicar(topologia: str) -> None:
         _log.warning("a instalacao terminou com avisos: %s", "; ".join(avisos))
 
 
-def _avisar_sessoes() -> None:
-    """Recado pras sessões vivas de que o backend vai reiniciar.
-
-    Elas não morrem — rodam em tmux, fora do backend (medido 25/08/2026: as sessões seguiram vivas
-    pelo restart). O que cai é o SSE, o WebSocket do terminal e os app-servers do Codex. Custa quase
-    nada avisar, e uma sessão avisada pode se preparar em vez de estranhar a conexão sumindo.
-
-    Fail-soft de ponta a ponta: máquina sem `hangar-send` instalado não pode ter a atualização
-    barrada por causa de um aviso.
-    """
-    # Sob pytest o aviso NÃO sai. `_rodar` chama o `hangar-send` de VERDADE, e um teste do fluxo
-    # inteiro que esqueça de substituir esta função manda recado às sessões vivas de quem está
-    # rodando a suíte: medido em 30/08/2026, três avisos falsos de restart por execução do
-    # `pytest -q`, vindos de três testes, e o usuário os viu na tela. A trava mora aqui, e não em
-    # cada teste, porque teste novo nasce com o mesmo furo aberto.
-    if "PYTEST_CURRENT_TEST" in os.environ:
-        _log.debug("sob pytest: aviso de restart suprimido")
-        return
-    aviso = ("[hangar] o backend vai reiniciar agora por causa de uma atualização. "
-             "Sua sessão continua viva; o app reconecta sozinho.")
-    try:
-        p = _rodar(["hangar-send", "--group", aviso], timeout=30)
-        if p.returncode != 0:
-            _log.debug("aviso de restart nao saiu: %s", _cauda(p, 3))
-    except (OSError, subprocess.TimeoutExpired) as e:
-        _log.debug("hangar-send indisponivel: %s", e)
-
-
 def _porta_do_front() -> int:
     """`CP_FRONT_PORT` do `backend/.env`; 0 quando não há tarefa do front."""
     try:
@@ -748,7 +720,6 @@ def _executar(porta: int) -> dict:
         _aplicar_passos()
 
         _etapa("instalar")
-        _avisar_sessoes()
         _preparar(pre["topologia"])
 
     except Exception as e:                           # noqa: BLE001 — ver abaixo: é deliberado
@@ -1131,7 +1102,6 @@ def executar_reinicio(porta: int = 8765) -> None:
         _etapa("tela", lista=ETAPAS_REINICIO)
         aviso = _atualizar_dist()
         _escrever(avisos=[aviso] if aviso else [])
-        _avisar_sessoes()
         _etapa("reiniciar", lista=ETAPAS_REINICIO)
         _reiniciar(_topologia(), porta)
         # `ok=True` só com o servidor respondendo: a tela recarrega ao ver `ok`, e sem a prova

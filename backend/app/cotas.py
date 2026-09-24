@@ -727,8 +727,8 @@ _cache_carregado = False
 
 
 def _arquivo_cache() -> Path | None:
-    # Sob pytest o cache de disco fica fora, pelo motivo do `_avisar_sessoes` do atualizar: a
-    # suíte gravaria fontes de mentira no arquivo REAL da máquina. Teste do próprio cache
+    # Sob pytest o cache de disco fica fora: a suíte gravaria fontes de mentira no arquivo REAL
+    # da máquina. Teste do próprio cache
     # substitui esta função por um caminho em tmp.
     if "PYTEST_CURRENT_TEST" in os.environ:
         return None
