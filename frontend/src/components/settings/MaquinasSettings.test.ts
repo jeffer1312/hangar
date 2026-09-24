@@ -17,15 +17,21 @@ let mudouCb: (() => void) | null = null;
 // (mutadores/leitores de localStorage) fica mockado.
 vi.mock('../../lib/auth', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/auth')>();
+  // A tela lê a lista INTEIRA (desligadas também): as duas leituras são o mesmo mock, e os testes
+  // configuram por `listServers`.
+  const listServers = vi.fn();
   return {
     ...real,
     serverColor: () => '#fff',
-    listServers: vi.fn(),
+    listServers,
+    listAllServers: listServers,
     getActiveId: vi.fn(),
     selectServer: vi.fn(),
     renameServer: vi.fn(),
     updateServer: vi.fn(() => true),
     removeServer: vi.fn(),
+    addServer: vi.fn(() => ({ id: 'srv-novo', existed: false })),
+    setServerDisabled: vi.fn(() => true),
     onServersChanged: vi.fn((cb: () => void) => { mudouCb = cb; return () => {}; }),
   };
 });
@@ -52,6 +58,9 @@ vi.mock('../../lib/peers', () => ({
   removerPeer: vi.fn(async () => []),
   removerPeerDoisLados: vi.fn(async () => true),
   checkPeer: vi.fn(async () => ({ estado: 'ok' })),
+  tokenDoPeer: vi.fn(async () => ({ token: 'tok-do-servidor' })),
+  setPeerEnabled: vi.fn(async () => []),
+  descobrirMaquinas: vi.fn(async () => []),
 }));
 vi.mock('../../lib/alcance', () => ({
   alcanceDoServidor: vi.fn(() => new Promise(() => {})),
@@ -86,7 +95,8 @@ function montar(over: { onLogout?: () => Promise<void>; servers?: Server[] } = {
 }
 
 // Janela de um teste que falhou antes do unmount fica no <body> e seria achada pelo seguinte.
-beforeEach(() => { vi.clearAllMocks(); onLogoutResolve = null; mudouCb = null; document.body.innerHTML = ''; });
+// localStorage também: ids lembrados e resultados salvos de um teste abririam o seguinte.
+beforeEach(() => { vi.clearAllMocks(); onLogoutResolve = null; mudouCb = null; document.body.innerHTML = ''; localStorage.clear(); });
 
 // Os detalhes vivem em portais no <body>: abrem pelo cartão ou pela linha e se buscam no document.
 // O tick antes do clique deixa o $effect da montagem rodar: ele fecha as janelas do alvo anterior.
@@ -366,7 +376,7 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     cb.click();   // segundo clique com o primeiro ainda em voo
     await tick();
     expect(peersMock.gravarPeer).toHaveBeenCalledTimes(1);
-    expect(document.querySelector('.mq-linha[data-chave="srv:srv-b"]')!.textContent).toContain(m.peers_estado_testando());
+    expect(document.querySelector('.mq-linha[data-chave="srv:srv-b"] .sd-testado')!.textContent).toBe(m.acesso_testando());
     unmount(comp);
   });
 
@@ -404,7 +414,8 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     // antes de apagar: prometer o registro do servidor numa linha que o servidor não conhece é a
     // etiqueta divergindo da ação.
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
-    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    // identificadores diferentes: o mesmo agruparia B com o servidor escolhido numa linha só
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
     peersMock.listarPeers.mockResolvedValue([]);
     const { el, comp } = montar({ servers: [SRV, B] });
     await esperarCarga();
@@ -702,10 +713,27 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     await esperarCarga();
   }
 
-  it('B2 — sucesso com os dois lados ok não mostra ✗ em nenhum selo; falha real mostra só na volta', async () => {
+  const cartao = () => document.querySelector<HTMLElement>('.mq-linha[data-chave="srv:srv-b"] .sd-res[role="status"]');
+  const botaoEm = (raiz: Element, texto: string) =>
+    [...raiz.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === texto)!;
+  // "Outro" na escolha do endereço: digita a URL e clica "Usar e testar".
+  async function usarOutro(url: string) {
+    const c = cartao()!;
+    c.querySelectorAll<HTMLInputElement>('input[type="radio"]')[c.querySelectorAll('input[type="radio"]').length - 1].click();
+    const inp = c.querySelector<HTMLInputElement>(`input[aria-label="${m.servidores_rec_outro()}"]`)!;
+    inp.value = url; inp.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+    botaoEm(c, m.servidores_rec_usar()).click();
+  }
+
+  it('B2 — sucesso com os dois lados ok mostra o cartão ok; volta falhando pede o endereço da volta', async () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'notebook' : 'casa' }));
-    peersMock.listarPeers.mockResolvedValue([]);
+    // montagem sem peer; depois do gesto a listagem já traz o peer registrado
+    peersMock.listarPeers.mockResolvedValueOnce([]);
+    peersMock.listarPeers.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
     peersMock.gravarPeer.mockImplementation(async () => [
       { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
     ] as never);
@@ -714,10 +742,11 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     const t = montar({ servers: [SRV, B] });
     await esperarCarga();
     await marcarFalar('srv:srv-b', t);
-    expect(document.querySelectorAll('.pr-lado')).toHaveLength(0);
+    expect(cartao()!.classList.contains('ok')).toBe(true);
+    expect(cartao()!.textContent).toContain(m.servidores_rec_ok());
     unmount(t.comp);
 
-    // falha real (não é recusa de token): ✗ só no selo da volta, ✓ no da ida. Montagem com lista
+    // falha real (não é recusa de token): ida ok, volta falhou → escolher o endereço da volta. Montagem com lista
     // VAZIA (nenhuma checagem pré-gesto consome os drives do check), e o gesto re-lista com o peer.
     peersMock.listarPeers.mockResolvedValueOnce([]);
     peersMock.listarPeers.mockImplementation(async () => [
@@ -728,16 +757,13 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     const t2 = montar({ servers: [SRV, B] });
     await esperarCarga();
     await marcarFalar('srv:srv-b', t2);
-    const l2 = [...document.querySelectorAll<HTMLElement>('.pr-lado')];
-    expect(l2).toHaveLength(2);
-    expect(l2[0].textContent).toContain('✓');
-    expect(l2[0].textContent).not.toContain('✗');
-    expect(l2[1].textContent).toContain('✗');
-    expect(l2[1].textContent).not.toContain('✓');
+    expect(cartao()!.textContent).toContain(m.servidores_rec_so_um_lado({ este: 'A', nome: 'Notebook' }));
+    expect(cartao()!.textContent).not.toContain(m.servidores_rec_ok());
+    expect(cartao()!.querySelectorAll('input[type="radio"]').length).toBeGreaterThan(0);
     unmount(t2.comp);
   });
 
-  it('B2b — volta recusada por token (credencial) ganha dica própria, sem pr-lados', async () => {
+  it('B2b — volta recusada por token (credencial) ganha cartão próprio, não o de endereço', async () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'notebook' : 'casa' }));
     peersMock.gravarPeer.mockImplementation(async () => [
@@ -752,10 +778,8 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     const t = montar({ servers: [SRV, B] });
     await esperarCarga();
     await marcarFalar('srv:srv-b', t);
-    expect(document.querySelectorAll('.pr-lado')).toHaveLength(0);
-    const linha = document.querySelector('.mq-linha[data-chave="srv:srv-b"]')!;
-    expect(linha.textContent).toContain(m.maquinas_volta_token_recusado());
-    expect(linha.textContent).not.toContain(m.peers_estado_parcial());
+    expect(cartao()!.textContent).toContain(m.servidores_rec_token_recusado({ nome: 'Notebook' }));
+    expect(cartao()!.textContent).not.toContain(m.servidores_rec_so_um_lado({ este: 'A', nome: 'Notebook' }));
     unmount(t.comp);
   });
 
@@ -784,7 +808,7 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     unmount(t.comp);
   });
 
-  it('B4 — "Testar de novo" grava o ENDEREÇO DIGITADO como o DESTA máquina, no peer', async () => {
+  it('B4 — "Usar e testar" grava o ENDEREÇO ESCOLHIDO como o DESTA máquina, no peer', async () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://192.168.0.77:8765', token: 'segredo' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'notebook' : 'casa' }));
     peersMock.gravarPeer.mockImplementation(async () => [
@@ -798,17 +822,14 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     ] as never);
     const t = montar({ servers: [SRV, B] });
     await esperarCarga();
-    // gesto com a volta recusando: o bloco de correção abre
+    // gesto com a volta falhando: a escolha do endereço da volta aparece
     peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });
-    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'recusou', motivo: 'credencial' });
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'falhou' });
     await marcarFalar('srv:srv-b', t);
-    const campo = document.querySelector<HTMLInputElement>('.corrige-input');
-    expect(campo).not.toBeNull();   // bloco aberto
-    // o usuário digita o endereço CERTO e clica em "Testar de novo"
-    campo!.value = 'http://novo:9999';
-    campo!.dispatchEvent(new Event('input', { bubbles: true }));
-    await tick();
-    document.querySelector<HTMLButtonElement>('.corrige .btn.primaria')!.click();
+    expect(cartao()!.textContent).toContain(m.servidores_rec_so_um_lado({ este: 'A', nome: 'Notebook' }));
+    // o usuário escolhe "Outro", digita o endereço CERTO e clica em "Usar e testar"
+    peersMock.checkPeer.mockResolvedValue({ estado: 'ok' });
+    await usarOutro('http://novo:9999');
     await esperarCarga();
     // A pergunta do bloco é "qual endereço o X deve usar para chegar aqui?": o que se digita é o
     // endereço DESTA máquina, para gravar LÁ. Isto era assertado como `base_url` do próprio peer
@@ -823,8 +844,8 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
       null,
       expect.objectContaining({ id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' }),
     );
-    // o bloco só fecha quando o par fecha (o r.ok do segundo giro, com o mock default ok)
-    expect(document.querySelector('.corrige')).toBeNull();
+    // com os dois lados ok o cartão vira o de sucesso
+    expect(cartao()!.textContent).toContain(m.servidores_rec_ok());
     unmount(t.comp);
   });
 
@@ -837,12 +858,13 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     });
     const t = montar({ servers: [SRV, B] });
     await esperarCarga();
-    const linha = (await abrir(t.el, 'srv:srv-b'));
-    expect(linha.textContent).toContain(m.maquinas_volta_sem_registro());
+    await abrir(t.el, 'srv:srv-b');
+    await esperarCarga();   // abrir o detalhe mede de novo
+    expect(cartao()!.textContent).toContain(m.servidores_rec_sem_registro({ este: 'A', nome: 'Notebook' }));
     unmount(t.comp);
   });
 
-  it('volta na montagem: volta falhou abre a correção com o endereço de lá', async () => {
+  it('volta na montagem: volta falhou mostra o endereço que o lado de lá tentou e a escolha', async () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
     peersMock.listarPeers.mockImplementation(async (alvo: Server | null) => {
@@ -852,9 +874,10 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     peersMock.checkPeer.mockImplementation(async (alvo: Server | null) => (alvo === B ? { estado: 'falhou' } : { estado: 'ok' }));
     const t = montar({ servers: [SRV, B] });
     await esperarCarga();
-    const campo = (await abrir(t.el, 'srv:srv-b')).querySelector<HTMLInputElement>('.corrige-input');
-    expect(campo).not.toBeNull();
-    expect(campo!.value).toBe('https://casa.ts.net');
+    await abrir(t.el, 'srv:srv-b');
+    await esperarCarga();
+    expect(cartao()!.textContent).toContain(m.servidores_rec_tentou({ endereco: 'https://casa.ts.net' }));
+    expect(botaoEm(cartao()!, m.servidores_rec_usar())).toBeDefined();
     unmount(t.comp);
   });
 
@@ -862,16 +885,21 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
     peersMock.listarPeers.mockResolvedValue([{ id: 'nb', base_url: 'http://b', token: '••' }]);
-    peersMock.checkPeer.mockRejectedValueOnce(new Error('fetch failed'));
+    // a ida (daqui, alvo null) rejeita sempre — também na nova medição que abrir o detalhe dispara
+    peersMock.checkPeer.mockImplementation(async (alvo: Server | null) => {
+      if (alvo === null) throw new Error('fetch failed');
+      return { estado: 'ok' };
+    });
     const t = montar({ servers: [SRV, B] });
     await esperarCarga();
-    const linha = await abrir(t.el, 'srv:srv-b');
-    expect(linha.textContent).not.toContain(m.peers_estado_testando());
-    expect(linha.textContent).toContain(m.peers_estado_parcial());
+    await abrir(t.el, 'srv:srv-b');
+    await esperarCarga();
+    expect(cartao()!.textContent).not.toContain(m.peers_estado_testando());
+    expect(cartao()!.textContent).toContain(m.servidores_rec_ida_falhou({ este: 'A', nome: 'Notebook' }));
     unmount(t.comp);
   });
 
-  it('remover peer limpa estados[id] e fecha a correção; catch também zera removerLadoDeLaFalhou', async () => {
+  it('remover peer limpa estados[id] e o cartão de resultado sai', async () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
     peersMock.listarPeers.mockImplementation(async (alvo: Server | null) => {
@@ -881,20 +909,22 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     peersMock.checkPeer.mockImplementation(async (alvo: Server | null) => (alvo === B ? { estado: 'falhou' } : { estado: 'ok' }));
     const t = montar({ servers: [SRV, B] });
     await esperarCarga();
-    // corrige abriu na montagem (volta falhou de verdade); estados['nb'] tem farol vermelho
-    expect((await abrir(t.el, 'srv:srv-b')).querySelector('.corrige')).not.toBeNull();
+    // volta falhou de verdade: o cartão pede o endereço da volta
+    const linha = await abrir(t.el, 'srv:srv-b');
+    await esperarCarga();
+    expect(cartao()!.textContent).toContain(m.servidores_rec_so_um_lado({ este: 'A', nome: 'Notebook' }));
     peersMock.listarPeers.mockResolvedValue([]);   // depois de remover, o servidor não conhece mais o peer
-    (await abrir(t.el, 'srv:srv-b')).querySelector<HTMLInputElement>('.mq-falar')!.click();
+    linha.querySelector<HTMLInputElement>('.mq-falar')!.click();
     await tick();
     [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === m.peers_remover())!.click();
     await esperarCarga();
-    const linha = document.querySelector('.mq-linha[data-chave="srv:srv-b"]')!;
-    expect(linha.querySelector('.pr-lado')).toBeNull();
-    expect(linha.querySelector('.corrige')).toBeNull();
+    // sem peer não há resultado de recados: sem cartão, e a legenda diz que estão desligados
+    expect(cartao()).toBeNull();
+    expect(document.querySelector('.mq-linha[data-chave="srv:srv-b"]')!.textContent).toContain(m.servidores_rec_desligado({ este: 'A', nome: 'Notebook' }));
     unmount(t.comp);
   });
 
-  it('testarDeNovo não sobrescreve peers com o resultado atrasado de um alvo trocado (guard de geração)', async () => {
+  it('usarEndereco não sobrescreve peers com o resultado atrasado de um alvo trocado (guard de geração)', async () => {
     const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' } as Server;
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
     const C: Server = { id: 'srv-c', label: 'C', baseUrl: 'http://c', token: 'tc' } as Server;
@@ -924,12 +954,15 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     const passos = async () => { for (let i = 0; i < 30; i++) { await Promise.resolve(); await tick(); } };
     await passos();
 
-    // volta falhou na montagem: correção já aberta para o peer de B
-    expect((await abrir(el, 'srv:srv-b')).querySelector('.corrige-input')).not.toBeNull();
+    // volta falhou: o detalhe de B pede o endereço da volta
+    await abrir(el, 'srv:srv-b');
+    await passos();
+    expect(cartao()!.textContent).toContain(m.servidores_rec_so_um_lado({ este: 'A', nome: 'Notebook' }));
     let resolverGravar!: (v: unknown) => void;
     peersMock.gravarPeer.mockImplementation(() => new Promise((r) => { resolverGravar = r; }) as never);
-    document.querySelector<HTMLButtonElement>('.mq-linha[data-chave="srv:srv-b"] .corrige .btn.primaria')!.click();
+    await usarOutro('http://novo:1');
     await passos();
+    expect(peersMock.gravarPeer).toHaveBeenCalled();
 
     props.resolvedServer = C; props.apiTarget = C;   // troca de alvo com o testarDeNovo em voo
     await passos();   // carga fresca de C (1ª chamada de listarPeers(C))
@@ -944,13 +977,103 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
   });
 });
 
+describe('MaquinasSettings — neste aparelho', () => {
+  const esperar = async () => { const { settled } = await import('svelte'); await settled(); await Promise.resolve(); await tick(); };
+  const VPS = { id: 'vps', base_url: 'https://vps', token: '••' };
+
+  it('ligar as sessões de quem só o servidor conhece usa o token que o servidor guarda', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([VPS]);
+    peersMock.tokenDoPeer.mockResolvedValue({ token: 'tok-do-servidor' });
+    const { el, comp } = montar();
+    await esperar();
+    (await abrir(el, 'peer:vps')).querySelector<HTMLInputElement>('.mq-acompanhar')!.click();
+    await esperar();
+    expect(peersMock.tokenDoPeer).toHaveBeenCalledWith(null, 'vps');
+    expect(peersMock.getIdentificador).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://vps', token: 'tok-do-servidor' }));
+    expect(authMock.addServer).toHaveBeenCalledWith('https://vps', 'tok-do-servidor', 'vps', { ativar: false });
+    unmount(comp);
+  });
+
+  it('sem o token do servidor, o erro aparece e o token digitado é o que se testa', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([VPS]);
+    peersMock.tokenDoPeer.mockRejectedValueOnce(new Error('404: sem token'));
+    const { el, comp } = montar();
+    await esperar();
+    const d = await abrir(el, 'peer:vps');
+    d.querySelector<HTMLInputElement>('.mq-acompanhar')!.click();
+    await esperar();
+    expect(d.textContent).toContain('404: sem token');
+    expect(authMock.addServer).not.toHaveBeenCalled();
+    const inp = d.querySelector<HTMLInputElement>(`input[aria-label="${m.sessao_token()}"]`)!;
+    inp.value = 'digitado'; inp.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await esperar();
+    expect(peersMock.tokenDoPeer).toHaveBeenCalledTimes(1);
+    expect(authMock.addServer).toHaveBeenCalledWith('https://vps', 'digitado', 'vps', { ativar: false });
+    unmount(comp);
+  });
+
+  it('desligar "Mostrar as sessões dele" desliga as entradas, não remove', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockResolvedValue([]);
+    const { el, comp } = montar({ servers: [SRV, B] });
+    await esperar();
+    (await abrir(el, 'srv:srv-b')).querySelector<HTMLInputElement>('.mq-acompanhar')!.click();
+    expect(authMock.setServerDisabled).toHaveBeenCalledWith('srv-b', true);
+    expect(authMock.removeServer).not.toHaveBeenCalled();
+    unmount(comp);
+  });
+
+  it('o servidor escolhido guardado duas vezes: o cartão avisa e o detalhe tira o endereço que sobra', async () => {
+    const A2: Server = { id: 'srv-a2', label: 'A (Tailscale)', baseUrl: 'https://a.ts.net', token: 'x2' } as Server;
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    const { el, comp } = montar({ servers: [SRV, A2] });
+    await esperar();
+    expect(el.querySelector('.sv-este')!.textContent).toContain(m.servidores_guardado_vezes({ n: 2 }));
+    // a mesma máquina não vira uma segunda linha na lista de baixo
+    expect(el.querySelectorAll('.sv-linha')).toHaveLength(0);
+    const este = await abrirEste(el);
+    expect(este.textContent).toContain(m.servidores_guardado_explica({ n: 2 }));
+    expect(este.textContent).toContain('https://a.ts.net');
+    este.querySelector<HTMLButtonElement>(`.sv-dup button[aria-label="${m.servidores_tirar_aria({ nome: A2.label })}"]`)!.click();
+    await tick();
+    document.querySelector<HTMLElement>('.confirm-card')!.querySelector<HTMLButtonElement>('.c-danger')!.click();
+    await tick();
+    expect(authMock.removeServer).toHaveBeenCalledWith('srv-a2');
+    unmount(comp);
+  });
+
+  it('o resultado medido fica salvo: a próxima abertura já mostra, sem esperar medir de novo', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([VPS]);
+    peersMock.checkPeer.mockResolvedValue({ estado: 'ok' });
+    const a = montar();
+    await esperar();
+    expect(peersMock.checkPeer).toHaveBeenCalledWith(null, 'https://vps', 'vps');
+    expect(a.el.querySelector('.sv-linha[data-chave="peer:vps"]')!.textContent).toContain(m.servidores_sessoes_sem_token());
+    unmount(a.comp);
+    // segunda abertura: a medição nova não volta, e mesmo assim a linha não fica em "Testando…"
+    peersMock.checkPeer.mockReturnValue(new Promise(() => {}) as never);
+    const b = montar();
+    await esperar();
+    expect(b.el.querySelector('.sv-linha[data-chave="peer:vps"]')!.textContent).toContain(m.servidores_sessoes_sem_token());
+    unmount(b.comp);
+    peersMock.checkPeer.mockImplementation(async () => ({ estado: 'ok' }));
+  });
+});
+
 describe('MaquinasSettings — ordem dos blocos', () => {
   it('o cartão deste servidor vem antes da lista dos outros', async () => {
     const { el, comp } = montar();
     await tick();
     const texto = el.textContent ?? '';
     const esta = texto.indexOf(m.peers_esta_maquina());
-    const secao = texto.indexOf(m.maquinas_secao());
+    const secao = texto.indexOf(m.servidores_secao_maquinas());
     expect(esta).toBeGreaterThanOrEqual(0);
     expect(esta).toBeLessThan(secao);
     unmount(comp);
@@ -980,7 +1103,7 @@ describe('MaquinasSettings — ordem dos blocos', () => {
     const comp = mount(MaquinasSettings, { target: el, props: { resolvedServer: null, apiTarget: null, onLogout: vi.fn(async () => {}) } });
     await tick();
     expect(el.textContent).not.toContain(m.peers_esta_maquina());
-    expect(el.textContent).toContain(m.maquinas_secao());
+    expect(el.textContent).toContain(m.servidores_secao_maquinas());
     unmount(comp as never);
   });
 });

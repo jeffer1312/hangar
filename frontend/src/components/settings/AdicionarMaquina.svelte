@@ -8,7 +8,7 @@
   import QrScanner from '../QrScanner.svelte';
   import { normalizarEndereco } from '../../lib/url';
   import { getConfigForServer, registrarSucesso, SERVIDOR_CANDIDATO } from '@hangar/core';
-  import { addServer } from '../../lib/auth';
+  import { addServer, renameServer, setServerDisabled, updateServer } from '../../lib/auth';
   import { getIdentificador, type MaquinaDescoberta } from '../../lib/peers';
   import { registrarPeerDoisLados } from '../../lib/registrarPeerDoisLados';
   import type { Server } from '../../lib/auth';
@@ -26,22 +26,35 @@
     onAdicionada?: () => void;
     apiTarget?: Server | null;
     podeFalar?: boolean;
-    enderecoInicial?: string;
     busca?: Busca;
+    // Nome do servidor escolhido: é nele (e na máquina nova) que o recado grava.
+    esteNome?: string;
+    // Com a sincronização ligada a lista vale em todos os aparelhos da conta; sem ela, só aqui.
+    sincronizada?: boolean;
+    // Máquinas que este aparelho já tem, pelo identificador: o mesmo servidor por outro endereço
+    // troca o endereço dele em vez de virar uma segunda linha.
+    conhecidas?: { identificador: string; server: Server }[];
   }
-  let { fallbackFocus = null, onFechar, onAdicionada, apiTarget = null, podeFalar = false, enderecoInicial = '', busca }: Props = $props();
+  let { fallbackFocus = null, onFechar, onAdicionada, apiTarget = null, podeFalar = false, busca,
+        esteNome = '', sincronizada = false, conhecidas = [] }: Props = $props();
   let tokenEl = $state<HTMLInputElement | null>(null);
 
   function usarAchado(d: MaquinaDescoberta) {
     endereco = d.base_url;
     token = '';   // o token digitado era de outro servidor
     erro = '';
+    achado = null;
     tokenEl?.focus();
   }
 
-  let endereco = $state(enderecoInicial);
+  let endereco = $state('');
   let token = $state('');
   let erro = $state('');
+  // Resultado do teste: quem respondeu nesse endereço. Adicionar só aparece depois dele, porque
+  // o nome sugerido e a checagem de máquina repetida dependem do identificador que ela deu.
+  let achado = $state<{ base: string; tok: string; identificador: string; idFalha: string } | null>(null);
+  let nome = $state('');
+  const repetida = $derived(achado?.identificador ? conhecidas.find((c) => c.identificador === achado!.identificador) ?? null : null);
   let ocupado = $state(false);
   let scanning = $state(false);
   let enderecoEl = $state<HTMLInputElement | null>(null);
@@ -61,7 +74,7 @@
   // nome em http na porta padrão é a segunda e última tentativa (FQDN de rede local) — só quando a
   // 1ª falha foi de REDE: uma resposta HTTP (401 etc) já veio de alguém, tentar a alternativa
   // trocaria essa mensagem por um "fetch failed" da porta que ninguém abriu.
-  async function testarEAdicionar() {
+  async function testar() {
     if (ocupado) return;
     const n = normalizarEndereco(endereco);
     if (!n) {
@@ -70,8 +83,6 @@
     }
     const tok = (n.token ?? token).trim();
     if (!tok || /\s/.test(tok)) { erro = m.maquinas_add_erro_token(); return; }
-    const soRecado = podeFalar && falar && !acompanhar;
-    if (podeFalar && !falar && !acompanhar) { erro = m.maquinas_add_erro_nenhum(); return; }
     ocupado = true;
     erro = '';
     let base = n.base;
@@ -98,13 +109,49 @@
         return;
       }
     }
-    // Fora do try/catch acima: erro daqui pra baixo não é do probe, e rotulá-lo de "falha na
-    // conexão" mentiria sobre a causa.
-    // Registrar o peer antes de gravar no navegador: o reload que vem a seguir apaga este componente,
-    // e a lista mostra o estado do registro quando voltar. Falha aqui não é motivo para não acompanhar.
+    // Respondeu: pergunta quem é. Sem identificador ainda dá pra acompanhar; o nome sai do endereço.
+    let identificador = '';
+    // Falha aqui não é "sem identificador": sem o nome não dá pra saber se é máquina repetida, e a
+    // tela diz isso em vez de oferecer uma linha nova calada.
+    let idFalha = '';
+    try {
+      identificador = (await getIdentificador({ id: SERVIDOR_CANDIDATO, label: base, baseUrl: base, token: tok })).identificador ?? '';
+    } catch (e) { identificador = ''; idFalha = e instanceof Error ? e.message : String(e); }
+    achado = { base, tok, identificador, idFalha };
+    nome = conhecidas.find((c) => c.identificador === identificador)?.server.label || identificador || hostDe(base);
+    ocupado = false;
+  }
+
+  // IP fica inteiro: o primeiro pedaço de 192.168.0.10 seria "192".
+  const hostDe = (u: string) => {
+    try {
+      const h = new URL(u).hostname;
+      return /^[\d.]+$|:/.test(h) ? h : h.split('.')[0];
+    } catch { return u; }
+  };
+
+  async function adicionar() {
+    if (ocupado || !achado) return;
+    const { base, tok, identificador } = achado;
+    const rotulo = nome.trim() || identificador || hostDe(base);
+    // Mesma máquina por outro endereço: troca o endereço (e o token) da entrada que já existe.
+    if (repetida) {
+      updateServer(repetida.server.id, { baseUrl: base, token: tok });
+      // Adicionar de novo é pedir para ver: uma entrada desligada volta a mostrar as sessões.
+      if (repetida.server.disabled) setServerDisabled(repetida.server.id, false);
+      if (rotulo !== repetida.server.label) renameServer(repetida.server.id, rotulo);
+      registrarSucesso(repetida.server.id);
+      onAdicionada?.();
+      onFechar();
+      return;
+    }
+    const soRecado = podeFalar && falar && !acompanhar;
+    if (podeFalar && !falar && !acompanhar) { erro = m.maquinas_add_erro_nenhum(); return; }
+    ocupado = true;
+    erro = '';
+    // Registrar o peer antes de gravar no navegador. Falha aqui não é motivo para não acompanhar.
     if (podeFalar && falar) {
       try {
-        const { identificador } = await getIdentificador({ id: SERVIDOR_CANDIDATO, label: base, baseUrl: base, token: tok });
         if (!identificador) throw new Error(m.maquinas_add_erro_sem_identificador());
         await registrarPeerDoisLados(apiTarget, { id: identificador, base_url: base, token: tok });
       } catch (e) {
@@ -118,7 +165,7 @@
     // sumia. Quem precisa reagir escuta `onServersChanged`; a tela de máquinas recarrega por
     // `onAdicionada`.
     // Endereço que já estava na lista marcado como desligado: o teste acabou de provar que responde.
-    if (!soRecado) registrarSucesso(addServer(base, tok, undefined, { ativar: false }).id);
+    if (!soRecado) registrarSucesso(addServer(base, tok, rotulo, { ativar: false }).id);
     ocupado = false;
     onAdicionada?.();
     onFechar();
@@ -128,7 +175,7 @@
     scanning = false;
     endereco = texto.trim();
     separarToken();
-    void testarEAdicionar();
+    void testar();
   }
 
   // Fechar com o teste em voo é recusado: o diálogo é o único lugar onde o erro tardio aparece,
@@ -143,15 +190,21 @@
 {#if scanning}
   <QrScanner onScan={lerQr} onClose={() => (scanning = false)} />
 {:else}
-  <ConfirmDialog title={m.maquinas_adicionar()} aria={m.maquinas_adicionar()} role="dialog" wide
+  {@const titulo = sincronizada ? m.servidores_adicionar_lista() : m.servidores_adicionar_aparelho()}
+  <ConfirmDialog title={titulo} aria={titulo} role="dialog" wide
     {fallbackFocus} initialFocus={enderecoEl}
     onClose={fechar}
     actions={[
       // Cancelar explícito: no celular o card cobre a tela quase inteira e não sobra fundo pra tocar.
       { label: m.comum_cancelar(), disabled: ocupado, onClick: fechar },
       { label: m.sessao_escanear_qr(), disabled: ocupado, onClick: () => (scanning = true) },
-      { label: m.maquinas_add_testar(), kind: 'primary', disabled: !podeTestar, onClick: testarEAdicionar },
+      achado
+        ? { label: repetida ? m.servidores_add_usar_endereco() : m.servidores_add_adicionar(), kind: 'primary', disabled: ocupado, onClick: adicionar }
+        : { label: m.servidores_add_testar(), kind: 'primary', disabled: !podeTestar, onClick: testar },
     ]}>
+    <!-- Adicionar grava no APARELHO, não no servidor: sem esta faixa parecia que a máquina passava
+         a aparecer para todo mundo que usa o servidor. -->
+    <p class="am-faixa">{sincronizada ? m.servidores_add_faixa_sync() : m.servidores_add_faixa({ este: esteNome || '—' })}</p>
     {#if busca}
       <!-- Sob demanda: cada busca bate em todos os peers online, então não roda ao abrir. -->
       <div class="am-busca">
@@ -187,8 +240,8 @@
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
              disabled={ocupado}
              onblur={separarToken}
-             oninput={() => (erro = '')}
-             onkeydown={(e) => { if (e.key === 'Enter') { separarToken(); void testarEAdicionar(); } }} />
+             oninput={() => { erro = ''; achado = null; }}
+             onkeydown={(e) => { if (e.key === 'Enter') { separarToken(); void (achado ? adicionar() : testar()); } }} />
       <span class="am-ajuda">{m.maquinas_add_endereco_ajuda()}</span>
     </label>
     <label class="am-campo">
@@ -198,11 +251,24 @@
              aria-invalid={!!erro} aria-describedby={erro ? 'am-erro' : undefined}
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
              disabled={ocupado}
-             oninput={() => (erro = '')}
-             onkeydown={(e) => { if (e.key === 'Enter') void testarEAdicionar(); }} />
+             oninput={() => { erro = ''; achado = null; }}
+             onkeydown={(e) => { if (e.key === 'Enter') void (achado ? adicionar() : testar()); }} />
       <span class="am-ajuda">{m.maquinas_add_token_ajuda({ variavel: 'CP_AUTH_TOKEN' })}</span>
     </label>
-    {#if podeFalar}
+    {#if achado}
+      <div class="am-achou" role="status">
+        <span class="am-achou-frase">✓ {achado.identificador ? m.servidores_add_respondeu({ id: achado.identificador }) : m.servidores_add_respondeu_sem_id()}</span>
+        {#if achado.idFalha}<span class="am-erro">{m.servidores_add_id_falhou({ erro: achado.idFalha })}</span>{/if}
+        {#if repetida}<span class="am-ajuda">{m.servidores_add_repetida({ nome: repetida.server.label, endereco: repetida.server.baseUrl })}</span>{/if}
+      </div>
+      <label class="am-campo">
+        <span class="am-rot">{m.servidores_add_nome()}</span>
+        <input class="am-input" value={nome} aria-label={m.servidores_add_nome()} disabled={ocupado}
+               oninput={(e) => (nome = e.currentTarget.value)} />
+        <span class="am-ajuda">{m.servidores_add_nome_ajuda()}</span>
+      </label>
+    {/if}
+    {#if podeFalar && !repetida}
       <label class="am-falar-linha">
         <input class="switch am-acompanhar" type="checkbox" bind:checked={acompanhar} disabled={ocupado} onchange={() => (erro = '')} />
         <span class="am-falar-txt">
@@ -213,8 +279,8 @@
       <label class="am-falar-linha">
         <input class="switch am-falar" type="checkbox" bind:checked={falar} disabled={ocupado} onchange={() => (erro = '')} />
         <span class="am-falar-txt">
-          <span>{m.maquinas_add_falar()}</span>
-          <span class="am-ajuda">{m.maquinas_add_falar_ajuda()}</span>
+          <span>{m.servidores_rec_titulo({ este: esteNome, nome: achado?.identificador || m.servidores_esta_maquina() })}</span>
+          <span class="am-ajuda">{m.servidores_add_falar_grava({ este: esteNome, nome: achado?.identificador || m.servidores_esta_maquina() })}</span>
         </span>
       </label>
     {/if}
@@ -224,6 +290,11 @@
 {/if}
 
 <style>
+  .am-faixa { margin: 0 0 var(--space-4); padding: var(--space-3); font-size: 0.85rem; line-height: 1.45; color: var(--text-secondary);
+              background: var(--surface-inset); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); }
+  .am-achou { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-3); padding: var(--space-2) var(--space-3);
+              border-left: 3px solid var(--success); background: var(--surface-inset); border-radius: var(--radius-sm); }
+  .am-achou-frase { font-size: 0.9rem; font-weight: 600; color: var(--success); }
   .am-busca { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-4); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border-subtle); }
   .am-busca-cab { display: flex; align-items: center; gap: var(--space-3); }
   .am-busca-txt { flex: 1; font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; }

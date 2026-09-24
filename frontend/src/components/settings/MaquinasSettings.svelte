@@ -1,16 +1,18 @@
 <script lang="ts">
-  import { listServers, getActiveId, renameServer, updateServer, removeServer,
+  import { listAllServers, getActiveId, renameServer, updateServer, removeServer, addServer, setServerDisabled,
            onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
-  import { checkPeer, descobrirMaquinas, getIdentificador, setIdentificador, listarPeers, removerPeerDoisLados,
+  import { checkPeer, descobrirMaquinas, getIdentificador, setIdentificador, listarPeers, removerPeerDoisLados, tokenDoPeer,
            setPeerEnabled, type MaquinaDescoberta, type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
-  import { unirMaquinas, type LinhaMaquina, type MotivoSemId } from '../../lib/maquinas';
+  import { rememberedIds, rememberIds, saveMotivos, savePeerStates, savedMotivos, savedPeerStates, unirMaquinas,
+           type EstadoPeer, type LinhaMaquina, type MotivoSemId } from '../../lib/maquinas';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import ModalDialog from '../ModalDialog.svelte';
   import { alcanceDoServidor, type AlcanceDoServidor, type TipoEndereco } from '../../lib/alcance';
+  import { cachedSyncStatus } from '../../lib/sync';
   import { onDestroy } from 'svelte';
-  import { getAtualizacaoEm, reiniciarServidorEm } from '@hangar/core';
+  import { getAtualizacaoEm, reiniciarServidorEm, registrarSucesso, SERVIDOR_CANDIDATO } from '@hangar/core';
   import AdicionarMaquina from './AdicionarMaquina.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
   import ListaMaquinas from './ListaMaquinas.svelte';
@@ -53,13 +55,13 @@
     store?.leitura?.terminal_origem_ok === false ? window.location.origin : '',
   );
 
-  // lista reativa local: listServers() lê localStorage e não é reativo; o contador sobe pelo mesmo
+  // lista reativa local: listAllServers() lê localStorage e não é reativo; o contador sobe pelo mesmo
   // onServersChanged que o App usa (o sync cross-aparelho também passa por ele).
   let serverVersion = $state(0);
   $effect(() => onServersChanged(() => serverVersion++));
   const servers = $derived.by(() => {
-    serverVersion;   // dependência explícita do contador (listServers não é reativo)
-    return listServers();
+    serverVersion;   // dependência explícita do contador (listAllServers não é reativo)
+    return listAllServers();
   });
   function rename(id: string, label: string) {
     renameServer(id, label);
@@ -78,8 +80,6 @@
   // O que se escolhe aqui é o ALVO das telas de config de servidor, e só.
 
   let showAdd = $state(false);
-  let addEndereco = $state('');   // enderecoInicial do AdicionarMaquina, pré-preenchido por Acompanhar
-
   // Remoção com confirmação REAL (ConfirmDialog). O ÚLTIMO servidor é removível de propósito:
   // remover tudo dispara o logout global (única saída pra deslogar o aparelho) — por isso o
   // diálogo ganha o aviso extra quando é o último.
@@ -100,13 +100,13 @@
     // OU reintroduzido este servidor entre o diálogo e o clique — ou a lista inteira ter mudado
     // (removido noutro aparelho, ativo trocado). Remover calado uma entidade que mudou é mentira:
     // mostra o motivo (role=status) e não faz nada.
-    const motivo = removalStillMatches(snap, listServers(), serverVersion);
+    const motivo = removalStillMatches(snap, listAllServers(), serverVersion);
     if (motivo) { avisoRemocao = motivo; return; }
     avisoRemocao = '';
     esteAberto = false;
     const wasActive = snap.id === getActiveId();
     removeServer(snap.id);   // auth notifica onServersChanged -> contador local e store reagem
-    if (listServers().length === 0) { void logout(); return; }
+    if (listAllServers().length === 0) { void logout(); return; }
     if (wasActive) { window.location.reload(); return; }
     sessionsStore.refreshServers();
   }
@@ -160,14 +160,19 @@
   // máquina. Não depende do alvo escolhido: sobrevive à troca de servidor no cabeçalho, só
   // máquina nova (ou token trocado) volta a ser perguntada.
   const cacheIds = new Map<string, string | null>();
-  let idsNavegador = $state<Record<string, string | null>>({});   // Server.id → identificador
+  // Nasce com o último visto: a lista abre já agrupada, e cada resposta nova atualiza a linha.
+  let idsNavegador = $state<Record<string, string | null>>(rememberedIds());   // Server.id → identificador
   // POR QUE faltou, quando faltou. "Não responde" e "responde sem identificador" pedem ações
   // opostas (esperar a máquina voltar / preencher um campo) e saíam na mesma frase ambígua.
-  let motivosId = $state<Record<string, MotivoSemId>>({});
+  let motivosId = $state<Record<string, MotivoSemId>>(savedMotivos());
   let idsCarregando = $state(false);
   let emEdicao = $state<Server | null>(null);        // ServerEditSheet
   let removerLadoDeLaFalhou = $state(false);         // aviso depois de remover peer
   const linhas = $derived(unirMaquinas(servers, idsNavegador, peers, resolvedServer?.id ?? null, motivosId));
+  // Outras entradas deste aparelho que são o MESMO servidor escolhido (Notebook + notebook-jefferson).
+  const esteDup = $derived(linhas.find((l) => l.estaMaquina)?.navegadores.filter((s) => s.id !== resolvedServer?.id) ?? []);
+  // Adicionar grava só neste aparelho — ou na lista sincronizada, quando a sincronização está ligada.
+  const sincronizada = cachedSyncStatus()?.enabled === true;
 
   // Geração da carga em voo: a resposta de um alvo que a aba já não mostra não escreve na
   // tela. Sem isto, trocar de servidor com uma chamada pendente deixa o dado do anterior
@@ -186,7 +191,7 @@
     // pertencem à máquina que saiu da tela. idsNavegador NÃO zera — o cache é por máquina do
     // navegador, não por alvo escolhido.
     idErro = ''; peersErro = ''; removerPeerId = null;
-    corrigeId = null; corrigeUrl = '';
+    tokenErro = {}; tokenSalvando = '';
     removerLadoDeLaFalhou = false;
     emEdicao = null; avisoRemocao = ''; logoutMsg = '';
     idRemotoErro = {}; idRemotoSalvando = '';
@@ -198,7 +203,7 @@
     // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
     idSalvando = false;
     // Estados de checagem pertencem ao alvo que saiu da tela (Task 8).
-    estados = {};
+    estados = resolvedServer ? savedPeerStates(resolvedServer.id) : {};
     descobertas = null; descobrindo = false; descobertasErro = '';
     esteAberto = false; parearAberto = false;
     resumo = null; resumoErro = '';
@@ -206,7 +211,10 @@
       // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção
       // lia o servidor ATIVO com a aba dizendo que o escolhido não existe.
       peers = []; identificador = ''; idOriginal = '';
-      peersCarregando = false; idsCarregando = false; idCarregado = true;
+      peersCarregando = false; idCarregado = true;
+      // As entradas deste aparelho não dependem do servidor escolhido: sem perguntar a elas, a
+      // lista ficava em "Testando…" para sempre.
+      void carregarIdsNavegador(meu);
       return;
     }
     const alvoResumo = resolvedServer;
@@ -255,6 +263,7 @@
 
   async function carregarIdsNavegador(meu: number) {
     idsCarregando = true;
+    const lembrados = rememberedIds();
     const pares = await Promise.all(servers.map(async (s) => {
       const k = `${s.id}:${s.token}`;
       if (cacheIds.has(k)) return [s.id, cacheIds.get(k)!, 'vazio' as MotivoSemId] as const;
@@ -269,11 +278,20 @@
         motivo = (e as Error & { status?: number }).status === 401 ? 'token' : 'sem_resposta';
       }
       if (id) cacheIds.set(k, id);   // só sucesso entra no cache — fracasso não trava sem identificador pra sempre
+      // Fora do ar ela não diz o nome: vale o último que respondeu, pra continuar uma linha só.
+      if (!id && motivo !== 'vazio') id = lembrados[s.id] ?? null;
+      // Cada máquina atualiza a linha dela assim que responde: uma lenta não segura as outras.
+      if (meu === geracao) {
+        idsNavegador = { ...idsNavegador, [s.id]: id };
+        motivosId = { ...motivosId, [s.id]: motivo };
+      }
       return [s.id, id, motivo] as const;
     }));
     if (meu !== geracao) return;
+    rememberIds(Object.fromEntries(pares.filter(([, id]) => !!id).map(([sid, id]) => [sid, id!])));
     idsNavegador = Object.fromEntries(pares.map(([id, valor]) => [id, valor]));
     motivosId = Object.fromEntries(pares.map(([id, , motivo]) => [id, motivo]));
+    saveMotivos(motivosId);
     idsCarregando = false;
   }
 
@@ -312,43 +330,45 @@
   // LADO DE LÁ guardou para esta máquina (decisão 3 da spec: aqui é LAN, lá pode ser Tailscale —
   // medir a volta pelo endereço deste navegador daria `falhou` num par que funciona).
   async function checarLista(meu: number) {
-    const meuId = identificador;
     // Peer desligado no servidor é máquina que a pessoa sabe estar fora: medir só pinta vermelho.
-    await Promise.all(peers.filter((p) => p.enabled !== false).map(async (p) => {
-      const linha = linhas.find((l) => l.peer?.id === p.id);
-      const idaP = checkPeer(apiTarget, p.base_url, p.id)
-        .then((r) => ({ lado: 'ida', ...r }) as LadoState)
-        .catch((e) => ({ lado: 'ida', estado: 'falhou', motivo: e instanceof Error ? e.message : String(e) } as LadoState));
-      let voltaP: Promise<LadoState>;
-      if (!linha?.navegador || !meuId) {
-        voltaP = Promise.resolve({ lado: 'volta', estado: 'nao_configurado', motivo: 'token' } as LadoState);
-      } else {
-        const nav = linha.navegador;
-        voltaP = listarPeers(nav)
-          .then((deLa) => {
-            const eu = deLa.find((x) => x.id === meuId);
-            if (!eu) return { lado: 'volta', estado: 'nao_configurado', motivo: 'registro' } as LadoState;
-            return checkPeer(nav, eu.base_url, meuId).then((r) => ({ lado: 'volta', ...r, url: eu.base_url }) as LadoState);
-          })
-          .catch((e) => {
-            // 401 é o token DESTE aparelho para aquela máquina recusado, não a máquina fora do ar —
-            // não é o mesmo caso de "falhou" que abre a correção de endereço.
-            const st = (e as Error & { status?: number }).status;
-            return { lado: 'volta', estado: st === 401 ? 'recusou' : 'falhou', motivo: st === 401 ? 'credencial' : (e instanceof Error ? e.message : String(e)) } as LadoState;
-          });
-      }
-      const [ida, volta] = await Promise.all([idaP, voltaP]);
-      if (meu !== geracao) return;
-      estados[p.id] = { lados: [ida, volta], ok: ida.estado === 'ok' && volta.estado === 'ok' };
-      // Decisão 5 da spec: a correção de endereço abre também na montagem, quando a volta falhou
-      // de verdade e este navegador tem o token para re-registrar.
-      // `estranho` entra junto de `falhou`: o endereço guardado lá responde como OUTRA máquina,
-      // e é exatamente o caso que este bloco conserta — sem isto ele só dizia "só de ida".
-      if ((volta.estado === 'falhou' || volta.estado === 'estranho') && linha?.navegador && !corrigeId) {
-        corrigeId = p.id;
-        corrigeUrl = volta.url ?? p.base_url;
-      }
-    }));
+    await Promise.all(peers.filter((p) => p.enabled !== false).map((p) => checarUm(meu, p)));
+  }
+
+  // Abrir o detalhe ou "Testar de novo": mede UMA máquina de novo, mostrando "Testando…" no lugar
+  // do resultado anterior — o que estava à vista era de outra hora.
+  function testarUm(linha: LinhaMaquina) {
+    const p = linha.peer;
+    if (!p || estados[p.id]?.testando) return;
+    estados[p.id] = { lados: estados[p.id]?.lados ?? [], ok: false, testando: true };
+    void checarUm(geracao, p);
+  }
+
+  async function checarUm(meu: number, p: PeerView) {
+    const meuId = identificador;
+    const linha = linhas.find((l) => l.peer?.id === p.id);
+    const idaP = checkPeer(apiTarget, p.base_url, p.id)
+      .then((r) => ({ lado: 'ida', ...r }) as LadoState)
+      .catch((e) => ({ lado: 'ida', estado: 'falhou', motivo: e instanceof Error ? e.message : String(e) } as LadoState));
+    let voltaP: Promise<LadoState>;
+    if (!linha?.navegador || !meuId) {
+      voltaP = Promise.resolve({ lado: 'volta', estado: 'nao_configurado', motivo: 'token' } as LadoState);
+    } else {
+      const nav = linha.navegador;
+      voltaP = listarPeers(nav)
+        .then((deLa) => {
+          const eu = deLa.find((x) => x.id === meuId);
+          if (!eu) return { lado: 'volta', estado: 'nao_configurado', motivo: 'registro' } as LadoState;
+          return checkPeer(nav, eu.base_url, meuId).then((r) => ({ lado: 'volta', ...r, url: eu.base_url }) as LadoState);
+        })
+        .catch((e) => {
+          // 401 é o token DESTE aparelho para aquela máquina recusado, não a máquina fora do ar.
+          const st = (e as Error & { status?: number }).status;
+          return { lado: 'volta', estado: st === 401 ? 'recusou' : 'falhou', motivo: st === 401 ? 'credencial' : (e instanceof Error ? e.message : String(e)) } as LadoState;
+        });
+    }
+    const [ida, volta] = await Promise.all([idaP, voltaP]);
+    if (meu !== geracao) return;
+    guardarEstado(p.id, [ida, volta]);
   }
 
   // Salvar é um BOTÃO, não o blur: este campo grava o CP_SERVER_ID no .env, e o nome é o que as
@@ -478,15 +498,44 @@
 
   // Estados de checagem por peer: id -> {lados, ok, testando?} — testando é o gesto de registrar
   // em voo (farol cinza + "Testando…" em ListaMaquinas, e trava clique duplo em onFalar).
-  let estados = $state<Record<string, { lados: LadoState[]; ok: boolean; testando?: boolean }>>({});
-  let corrigeId = $state<string | null>(null);
-  let corrigeUrl = $state('');       // endereço digitado no bloco de correção (bind:value)
+  let estados = $state<Record<string, EstadoPeer>>({});
+  // Medição concluída: vira o estado da linha e o resultado salvo para a próxima abertura.
+  function guardarEstado(id: string, lados: LadoState[]) {
+    estados[id] = { lados, ok: lados.length === 2 && lados.every((l) => l.estado === 'ok'), em: Date.now() };
+    if (resolvedServer) savePeerStates(resolvedServer.id, estados);
+  }
 
-  // Ações da lista unificada: Acompanhar reusa a remoção/adição de servidor de hoje;
-  // Servidores se falam registra ou remove os dois lados de uma vez.
+  // Desligar "Mostrar as sessões dele" só esconde: a entrada e o token ficam neste aparelho, e
+  // religar volta na hora. Tirar de vez é "Remover esta máquina". Ligar sem entrada aqui vai por
+  // onInformarToken.
   function onAcompanhar(linha: LinhaMaquina, ligar: boolean) {
-    if (!ligar && linha.navegador) { abrirRemocao(linha.navegador.id); return; }   // confirmação de hoje
-    if (ligar && linha.peer) { addEndereco = linha.peer.base_url; showAdd = true; } // pede só o token
+    for (const s of linha.navegadores) setServerDisabled(s.id, !ligar);
+  }
+
+  // Máquina que só o servidor conhecia: sem token digitado, usa o que o servidor guarda para os
+  // recados. Testa com ele e, respondendo, entra neste aparelho com o nome que o servidor já usa.
+  let tokenSalvando = $state('');
+  let tokenErro = $state<Record<string, string>>({});
+  async function informarToken(linha: LinhaMaquina, digitado: string) {
+    const peer = linha.peer;
+    if (!peer || tokenSalvando) return;
+    const meu = geracao;
+    tokenSalvando = linha.chave;
+    tokenErro = { ...tokenErro, [linha.chave]: '' };
+    try {
+      const token = digitado || (await tokenDoPeer(apiTarget, peer.id)).token;
+      if (meu !== geracao) return;
+      await getIdentificador({ id: SERVIDOR_CANDIDATO, label: peer.id, baseUrl: peer.base_url, token });
+      if (meu !== geracao) return;
+      registrarSucesso(addServer(peer.base_url, token, linha.nome, { ativar: false }).id);
+      sessionsStore.refreshServers();
+    } catch (e) {
+      if (meu !== geracao) return;
+      const st = (e as Error & { status?: number }).status;
+      tokenErro = { ...tokenErro, [linha.chave]: st === 401 ? m.servidores_curto_token_recusado() : msgErro(e) };
+    } finally {
+      if (meu === geracao) tokenSalvando = '';
+    }
   }
 
   async function onToggleScan(linha: LinhaMaquina, ligar: boolean) {
@@ -515,9 +564,7 @@
       const lista = await listarPeers(apiTarget);
       if (meu !== geracao) return;
       peers = lista;
-      estados[r.id] = { lados: r.lados, ok: r.ok };
-      // O bloco edita o endereço DESTA máquina (o que a volta bate), não o do peer.
-      if (!r.ok) { corrigeId = r.id; corrigeUrl = r.meu_endereco; }
+      guardarEstado(r.id, r.lados);
     } catch (e) {
       if (meu !== geracao) return;
       estados[id] = { lados: [], ok: false };   // sai do "testando": a listagem que falhou não deixa estado preso
@@ -525,35 +572,29 @@
     }
   }
 
-  // "Testar de novo": re-registra e re-testa com o ENDEREÇO DIGITADO no lugar certo. A pergunta
-  // do bloco é "qual endereço o X deve usar para chegar aqui?", então o que se digita é o
-  // endereço DESTA máquina, para gravar LÁ — era passado como base_url do PEER, e o botão mexia
-  // no lado oposto ao que a frase promete. Só fecha quando o par fecha; senão o estado novo fica
-  // à vista. O token vem do NAVEGADOR: só há bloco de correção em linha com navegador.
-  async function testarDeNovo(linha: LinhaMaquina) {
+  // "Usar e testar": re-registra com o endereço escolhido no lugar certo. A pergunta é "por onde o
+  // X chega no servidor escolhido?", então o endereço é DESTA máquina, gravado LÁ — não o base_url
+  // do peer. O token vem do NAVEGADOR: a escolha só aparece em linha com entrada aqui.
+  async function usarEndereco(linha: LinhaMaquina, url: string) {
+    const id = linha.identificador;
+    if (!id || !linha.navegador) return;
+    if (!/^https?:\/\//.test(url.trim())) { peersErro = m.url_invalida(); return; }
     const meu = geracao;
-    const url = corrigeUrl.trim();
-    if (!/^https?:\/\//.test(url)) { peersErro = m.url_invalida(); return; }
     peersErro = '';
+    estados[id] = { lados: estados[id]?.lados ?? [], ok: false, testando: true };
     try {
-      const alvo = { id: linha.identificador!, base_url: linha.peer?.base_url ?? linha.navegador!.baseUrl, token: linha.navegador!.token };
-      const r = await registrarPeerDoisLados(apiTarget, alvo, url);
+      const alvo = { id, base_url: linha.peer?.base_url ?? linha.navegador.baseUrl, token: linha.navegador.token };
+      const r = await registrarPeerDoisLados(apiTarget, alvo, url.trim());
       if (meu !== geracao) return;
       const lista = await listarPeers(apiTarget);
       if (meu !== geracao) return;
       peers = lista;
-      estados[r.id] = { lados: r.lados, ok: r.ok };
-      if (r.ok) { corrigeId = null; corrigeUrl = ''; }
+      guardarEstado(r.id, r.lados);
     } catch (e) {
       if (meu !== geracao) return;
+      estados[id] = { lados: [], ok: false };
       peersErro = msgErro(e);
     }
-  }
-
-  // Fecha o bloco de correção (o usuário escolheu "deixar só de ida" — aceita o estado parcial).
-  function fecharCorrige() {
-    corrigeId = null;
-    corrigeUrl = '';
   }
 
   // Busca no Tailscale, sob demanda (decisão do usuário: botão, não na abertura da tela — cada
@@ -625,8 +666,8 @@
     // que permite tentar de novo. Apagar os dois com o peer ainda lá deixaria a máquina sem
     // linha pra remover e sem como refazer.
     if (linha.peer && !(await removerPeer(linha.peer.id))) return;
-    if (linha.navegador && !linha.estaMaquina) {
-      removeServer(linha.navegador.id);
+    if (linha.navegadores.length && !linha.estaMaquina) {
+      for (const s of linha.navegadores) removeServer(s.id);
       sessionsStore.refreshServers();
     }
   }
@@ -648,7 +689,6 @@
       // Peer que saiu não pode deixar farol/estado ou correção presos a um id que não existe mais.
       const { [id]: _descartado, ...resto } = estados;
       estados = resto;
-      if (corrigeId === id) fecharCorrige();
       return true;
     } catch (e) {
       if (meu !== geracao) return false;
@@ -757,6 +797,20 @@
     {/snippet}
   </AcessoSettings>
 
+  <!-- A mesma máquina guardada com mais de um endereço: cada um vira uma linha para tirar os que
+       sobram. O endereço aberto agora não sai por aqui — sai pelo "Remover deste aparelho". -->
+  {#if esteDup.length}
+    <p class="ss-secao">{m.servidores_grupo_aparelho()}</p>
+    <p class="ss-legenda aviso">{m.servidores_guardado_explica({ n: esteDup.length + 1 })}</p>
+    <ul class="sv-dup">
+      {#each esteDup as s (s.id)}
+        <li><span class="sv-txt"><span>{s.label}</span><span class="sv-dup-url">{s.baseUrl}</span></span>
+          <button type="button" class="sv-remover-este" aria-label={m.servidores_tirar_aria({ nome: s.label })}
+                  onclick={() => abrirRemocao(s.id)} disabled={logoutInFlight}>{m.servidores_tirar()}</button></li>
+      {/each}
+    </ul>
+  {/if}
+
   <!-- Tirar o servidor escolhido deste aparelho é a mesma remoção de sempre; sendo o último, o
        diálogo avisa que isso desloga — e é o ÚNICO caminho pra tirar a última máquina. -->
   {#if esteNoAparelho}
@@ -769,7 +823,7 @@
 {/snippet}
 
 <div class="sv-topo">
-  <button type="button" class="sv-btn" onclick={() => { addEndereco = ''; showAdd = true; }}>+ {m.maquinas_adicionar()}</button>
+  <button type="button" class="sv-btn" onclick={() => (showAdd = true)}>+ {sincronizada ? m.servidores_adicionar_lista() : m.servidores_adicionar_aparelho()}</button>
   <button type="button" class="sv-btn primario" onclick={() => (parearAberto = true)} disabled={!resolvedServer}>{m.servidores_parear()}</button>
 </div>
 {#if avisoRemocao}<p class="ss-aviso" role="status">{avisoRemocao}</p>{/if}
@@ -788,6 +842,7 @@
       <span class="sv-estado">{m.peers_esta_maquina()} · {resumoTexto.texto}</span>
       {#if idCarregado && !identificador && !idErro}<span class="sv-estado aviso">{m.servidores_sem_identificador_curto()}</span>{/if}
       {#if origemRecusada}<span class="sv-estado aviso">{m.servidores_origem_recusada_curto()}</span>{/if}
+      {#if esteDup.length}<span class="sv-estado aviso">{m.servidores_guardado_vezes({ n: esteDup.length + 1 })}</span>{/if}
     </span>
     <span class="sv-chev" aria-hidden="true">›</span>
   </button>
@@ -816,17 +871,21 @@
   </ModalDialog>
 {/if}
 
-<p class="ss-secao">{m.maquinas_secao()}</p>
+<p class="ss-secao">{m.servidores_secao_maquinas()}</p>
 <ListaMaquinas
   linhas={linhas.filter((l) => !l.estaMaquina)} {estados} meuIdentificador={identificador}
+  esteNome={resolvedServer?.label ?? ''} enderecos={resumo?.enderecos ?? []}
   carregando={idsCarregando || peersCarregando}
-  corrige={corrigeId ? { id: corrigeId, url: corrigeUrl } : null}
   {onAcompanhar} {onFalar} {onToggleScan}
   idSalvando={idRemotoSalvando} idErro={idRemotoErro}
+  {tokenSalvando} {tokenErro} erro={peersErro}
   onSalvarIdentificador={(l, v) => void salvarIdentificadorRemoto(l, v)}
-  onEditar={(l) => (emEdicao = l.navegador)}
-  onCorrige={(u) => { if (u === null) fecharCorrige(); else corrigeUrl = u; }}
-  onTestarDeNovo={testarDeNovo}
+  onEditar={(s) => (emEdicao = s)}
+  onTirar={(s) => abrirRemocao(s.id)}
+  onInformarToken={(l, t) => void informarToken(l, t)}
+  onTestar={testarUm}
+  onUsarEndereco={(l, u) => void usarEndereco(l, u)}
+  onAbrirEste={() => (esteAberto = true)}
   onRemover={(l) => (removerLinha = l)} />
 {#if peersErro}<p class="id-erro" role="status">{peersErro}</p>{/if}
 {#if removerLadoDeLaFalhou}<p class="ss-aviso" role="status">{m.maquinas_remover_peer_lado_de_la_falhou()}</p>{/if}
@@ -838,7 +897,8 @@
 <ServerEditSheet open={!!emEdicao} server={emEdicao} onClose={() => (emEdicao = null)} onRename={rename} onUpdateToken={updateToken} />
 {#if showAdd}
   <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)} onAdicionada={() => recarga++}
-    {apiTarget} podeFalar={!!resolvedServer && !!identificador} enderecoInicial={addEndereco}
+    {apiTarget} podeFalar={!!resolvedServer && !!identificador} esteNome={resolvedServer?.label ?? ''} {sincronizada}
+    conhecidas={linhas.filter((l) => l.identificador && l.navegador).map((l) => ({ identificador: l.identificador!, server: l.navegador! }))}
     busca={{ itens: descobertas === null ? null : novasDescobertas, buscando: descobrindo, erro: descobertasErro,
              podeBuscar: !!resolvedServer, onBuscar: buscarNoTailscale }} />
 {/if}
@@ -882,7 +942,7 @@
     ]}>
     <!-- Com peer na linha só o lado deste aparelho sai, e o texto tem de dizer que o recado (e o
          token dele no servidor) fica — senão parece que apagou tudo, ou que não apagou nada. -->
-    <p class="ss-dialog-copy">{linhas.some((l) => l.navegador?.id === pendingRemoval?.id && l.peer) ? m.config_servidores_token_removido_recado_fica() : m.config_servidores_token_removido()}</p>
+    <p class="ss-dialog-copy">{linhas.some((l) => l.peer && l.navegadores.length === 1 && l.navegador?.id === pendingRemoval?.id) ? m.config_servidores_token_removido_recado_fica() : m.config_servidores_token_removido()}</p>
     {#if servers.length === 1}<p class="ss-dialog-copy">{m.config_servidores_voltar()}</p>{/if}
   </ConfirmDialog>
 {/if}
@@ -944,6 +1004,11 @@
   .sv-rodape { display: flex; justify-content: flex-end; margin-top: var(--space-4); }
   .sv-remover-este { min-height: 40px; padding: 0 var(--space-3); border-radius: var(--radius-sm); color: var(--error); font-size: var(--text-sm); }
   .sv-remover-este:hover { background: rgba(255, 69, 58, 0.1); }
+  .ss-legenda.aviso { color: var(--warning); }
+  .sv-dup { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+  .sv-dup li { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
+  .sv-dup li + li { border-top: 1px solid var(--border-subtle); }
+  .sv-dup-url { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); word-break: break-all; }
 
   .ss-acoes { display: flex; justify-content: space-between; gap: var(--space-2); margin-top: var(--space-4); }
   .ss-btn {

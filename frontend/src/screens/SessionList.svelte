@@ -19,7 +19,7 @@ import * as m from '../paraglide/messages';
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { createSession, canPair, type DropResult } from '@hangar/core';
-  import { listServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
+  import { listAllServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, Provider } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
@@ -406,12 +406,12 @@ import * as m from '../paraglide/messages';
     if (!confirmSrv) return;
     const snap = confirmSrv;
     confirmSrv = null;
-    const motivo = removalStillMatches(snap, listServers(), serverVersion);
+    const motivo = removalStillMatches(snap, listAllServers(), serverVersion);
     if (motivo) { showActionMsg(motivo); return; }
     // removeServer() dispara onServersChanged -> o store reconcilia os streams sozinho (fecha o SSE
     // do removido). Só tratamos o caso "zerou" aqui; sem "ativo" pra restaurar.
     removeServer(snap.id);
-    if (listServers().length === 0) { handleLogout(); return; }
+    if (listAllServers().length === 0) { handleLogout(); return; }
   }
 
 </script>

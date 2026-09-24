@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { isAuthenticated, setServers, listServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId, serverIdentidade, type Server } from './lib/auth';
+  import { isAuthenticated, setServers, listServers, listAllServers, mergeServers, onServersChanged, clearCredentials, selectServer, getActiveId, serverIdentidade, type Server } from './lib/auth';
   import { logoutLocal } from './lib/logout';
   import { getVault, decryptList, encryptList, putVault, logout as syncLogout, syncStatus, cachedSyncStatus, isSyncUnauthorized, stashKey, loadKey, clearKey } from './lib/sync';
   import * as m from './paraglide/messages';
@@ -455,11 +455,11 @@
       // de dentro os dois casos são indistinguíveis. Avisa, em vez de sumir calado.
       const norm = (u: string) => u.replace(/\/+$/, '');
       const noHub = new Set(remote.map((s) => norm(s.baseUrl)));
-      const descartados = listServers().filter((s) => !noHub.has(norm(s.baseUrl))).length;
+      const descartados = listAllServers().filter((s) => !noHub.has(norm(s.baseUrl))).length;
       setServers(remote);
       if (descartados > 0) vaultPush.descartou(descartados);
     } else {
-      const merged = mergeServers(remote, listServers());
+      const merged = mergeServers(remote, listAllServers());
       setServers(merged);
       if (merged.length > 0) {
         const seed = await putVault(await encryptList(key, merged), vaultRev);
@@ -474,10 +474,10 @@
       // de TOKEN o silencio significa "os outros aparelhos seguem com a chave velha".
       if (!encKey) { vaultPush.locked(); return; }
       try {
-        let res = await putVault(await encryptList(encKey, listServers()), vaultRev);
+        let res = await putVault(await encryptList(encKey, listAllServers()), vaultRev);
         if ('conflict' in res) {           // rev velha: adota a do hub e tenta de novo uma vez
           vaultRev = res.conflict.rev;
-          res = await putVault(await encryptList(encKey, listServers()), vaultRev);
+          res = await putVault(await encryptList(encKey, listAllServers()), vaultRev);
         }
         if ('rev' in res) vaultRev = res.rev;
         vaultPush.ok();

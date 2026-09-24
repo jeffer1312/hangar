@@ -8,7 +8,7 @@
 // **Nunca entra conteúdo de conversa aqui.** Nem o texto enviado, nem a resposta do agente, nem
 // chave, nem caminho de arquivo do projeto. Entra o VERBO e o DESFECHO. O backend descarta campo
 // que não conheça, mas a trava de verdade é esta: não chame `registrar` com texto de ninguém.
-import { getBaseUrl, getToken, listServers, onServersChanged } from './auth';
+import { getBaseUrl, getToken, listAllServers, onServersChanged } from './auth';
 import { criarTransporteDiag } from '@hangar/core';
 
 export type Nivel = 'ok' | 'aviso' | 'erro';
@@ -60,7 +60,7 @@ let telaCorrente = '';
 let ligado = false;
 const normalizarDestino = (base: string) => (base || window.location.origin).replace(/\/+$/, '');
 const transporte = criarTransporteDiag((destino) => {
-  const servidor = listServers().find((s) => normalizarDestino(s.baseUrl) === destino);
+  const servidor = listAllServers().find((s) => normalizarDestino(s.baseUrl) === destino);
   if (servidor) return servidor.token;
   return normalizarDestino(getBaseUrl()) === destino ? getToken() : null;
 });

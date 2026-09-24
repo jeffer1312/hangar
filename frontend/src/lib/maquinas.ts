@@ -15,9 +15,13 @@ export interface LinhaMaquina {
   chave: string;
   nome: string;
   identificador: string | null;
-  // Só vale quando há `navegador` e falta `identificador`. Ausente = não se perguntou.
+  // Motivo da entrada principal. Ausente = ainda não se perguntou; 'vazio' = respondeu.
   motivoId?: MotivoSemId;
+  // Entrada principal deste aparelho (a que responde, de preferência) e TODAS as entradas que
+  // são a mesma máquina: guardar LAN + Tailscale da mesma máquina é uma linha só.
   navegador: Server | null;
+  navegadores: Server[];
+  motivos: Record<string, MotivoSemId>;
   peer: PeerView | null;
   estaMaquina: boolean;
 }
@@ -31,38 +35,96 @@ export function unirMaquinas(
 ): LinhaMaquina[] {
   const porId = new Map(peers.map((p) => [p.id, p]));
   const porHost = new Map(peers.map((p) => [hostDe(p.base_url), p]));
+  // Chave da máquina: o identificador que ela respondeu (ou o último lembrado). Sem nenhum, o
+  // endereço igual ao de um peer é a única pista; sem ela a entrada fica sozinha.
+  const grupos = new Map<string, Server[]>();
+  for (const s of servidores) {
+    const chave = ids[s.id] ?? porHost.get(hostDe(s.baseUrl))?.id ?? `srv:${s.id}`;
+    grupos.set(chave, [...(grupos.get(chave) ?? []), s]);
+  }
   const usados = new Set<string>();
-  // Dois servidores do navegador (LAN + Tailscale da mesma máquina) podem ter o MESMO
-  // identificador: o segundo a casar fica sem peer, senão duas linhas renderizam o mesmo `corrige`.
-  const idsCasados = new Set<string>();
-  const linhas: LinhaMaquina[] = servidores.map((s) => {
-    let identificador = ids[s.id] ?? null;
-    let peer = identificador && !idsCasados.has(identificador) ? porId.get(identificador) ?? null : null;
-    // Sem identificador a máquina está fora do ar (é ela quem o informa). Aí o endereço igual é a
-    // única pista, e sem ele a mesma máquina desligada virava duas linhas.
-    if (!identificador) {
-      const porUrl = porHost.get(hostDe(s.baseUrl));
-      if (porUrl && !usados.has(porUrl.id)) { peer = porUrl; identificador = porUrl.id; }
-    }
-    if (peer) { usados.add(peer.id); idsCasados.add(identificador!); }
+  const linhas: LinhaMaquina[] = [...grupos].map(([chave, grupo]) => {
+    const identificador = chave.startsWith('srv:') ? null : chave;
+    const peer = identificador ? porId.get(identificador) ?? null : null;
+    if (peer) usados.add(peer.id);
+    const principal = grupo.find((s) => s.id === escolhidoId)
+      ?? grupo.find((s) => !s.disabled && motivos[s.id] === 'vazio') ?? grupo.find((s) => !s.disabled) ?? grupo[0];
     return {
-      chave: `srv:${s.id}`,
-      nome: s.label,
+      chave: `srv:${principal.id}`,
+      nome: principal.label,
       identificador,
-      motivoId: motivos[s.id] ?? 'vazio',
-      navegador: s,
+      motivoId: motivos[principal.id],
+      navegador: principal,
+      navegadores: grupo,
+      motivos: Object.fromEntries(grupo.filter((s) => motivos[s.id]).map((s) => [s.id, motivos[s.id]])),
       peer,
-      estaMaquina: s.id === escolhidoId,
+      estaMaquina: grupo.some((s) => s.id === escolhidoId),
     };
   });
   for (const p of peers) {
     if (usados.has(p.id)) continue;
-    linhas.push({ chave: `peer:${p.id}`, nome: p.id, identificador: p.id, navegador: null, peer: p, estaMaquina: false });
+    linhas.push({ chave: `peer:${p.id}`, nome: p.id, identificador: p.id, navegador: null, navegadores: [], motivos: {}, peer: p, estaMaquina: false });
   }
   return linhas.sort((a, b) => Number(b.estaMaquina) - Number(a.estaMaquina) || a.nome.localeCompare(b.nome));
 }
 
-export interface EstadoPeer { lados: LadoState[]; ok: boolean; testando?: boolean }
+// Último identificador que cada entrada deste aparelho respondeu. Máquina desligada não responde
+// o nome dela, e sem esta lembrança a mesma máquina fora do ar voltava a ser duas linhas.
+const IDS_LEMBRADOS = 'cp_server_ids';
+export function rememberedIds(): Record<string, string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(IDS_LEMBRADOS) ?? '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch { return {}; }
+}
+export function rememberIds(ids: Record<string, string>): void {
+  try { localStorage.setItem(IDS_LEMBRADOS, JSON.stringify(ids)); } catch { /* vale só nesta abertura */ }
+}
+
+// A linha da lista diz UMA coisa: se as sessões desta máquina aparecem neste aparelho.
+export type SessionsState = 'aparecem' | 'testando' | 'nao_responde' | 'token_recusado' | 'sem_token' | 'desligada' | 'desligada_aqui';
+
+export function sessionsState(linha: LinhaMaquina, st: EstadoPeer | undefined): SessionsState {
+  if (linha.peer?.enabled === false) return 'desligada';
+  if (linha.navegadores.length && linha.navegadores.every((s) => s.disabled)) return 'desligada_aqui';
+  if (linha.navegador) {
+    if (linha.motivoId === undefined) return 'testando';
+    if (linha.motivoId === 'token') return 'token_recusado';
+    return linha.motivoId === 'sem_resposta' ? 'nao_responde' : 'aparecem';
+  }
+  const ida = st?.lados.find((l) => l.lado === 'ida');
+  if (!st || st.testando || !ida) return 'testando';
+  return ida.estado === 'ok' ? 'sem_token' : 'nao_responde';
+}
+
+export const recolhida = (s: SessionsState) => s === 'nao_responde' || s === 'desligada';
+
+// `em` = quando foi medido. Sem ele o resultado salvo passaria por medição de agora.
+export interface EstadoPeer { lados: LadoState[]; ok: boolean; testando?: boolean; em?: number }
+
+// Último resultado de cada máquina, salvo neste aparelho. A tela abre com ele e mede de novo por
+// trás: sem isto ela ficava toda em "Testando…" até a máquina mais lenta responder.
+const RESULTADOS = 'cp_machines_state';
+interface Salvo { motivos: Record<string, MotivoSemId>; peers: Record<string, Record<string, EstadoPeer>> }
+function lerSalvo(): Salvo {
+  try {
+    const v = JSON.parse(localStorage.getItem(RESULTADOS) ?? '{}');
+    return { motivos: v?.motivos ?? {}, peers: v?.peers ?? {} };
+  } catch { return { motivos: {}, peers: {} }; }
+}
+function gravarSalvo(s: Salvo): void {
+  try { localStorage.setItem(RESULTADOS, JSON.stringify(s)); } catch { /* vale só nesta abertura */ }
+}
+export const savedMotivos = (): Record<string, MotivoSemId> => lerSalvo().motivos;
+export const savedPeerStates = (alvo: string): Record<string, EstadoPeer> => lerSalvo().peers[alvo] ?? {};
+export function saveMotivos(motivos: Record<string, MotivoSemId>): void {
+  gravarSalvo({ ...lerSalvo(), motivos });
+}
+export function savePeerStates(alvo: string, estados: Record<string, EstadoPeer>): void {
+  const s = lerSalvo();
+  const medidos = Object.fromEntries(Object.entries(estados).filter(([, e]) => !e.testando && e.lados.length));
+  gravarSalvo({ ...s, peers: { ...s.peers, [alvo]: medidos } });
+}
 
 export type TipoEstado =
   | 'desligada' | 'sem_identificador' | 'nao_responde' | 'token_aparelho_recusado'
@@ -119,6 +181,41 @@ export function estadoDaLinha(linha: LinhaMaquina, st: EstadoPeer | undefined): 
   return { farol, tipo, ida, volta };
 }
 
+// O resultado ÚNICO do interruptor de recados: qual cartão o detalhe mostra, cada um com o botão
+// que resolve. Deriva de estadoDaLinha para a medição ter um dono só.
+export type RecadosCard =
+  | 'desligado' | 'sem_meu_id' | 'sem_id_dele' | 'sem_resposta' | 'token_recusado' | 'testando'
+  | 'ok' | 'endereco_volta' | 'volta_outra' | 'ida_outra' | 'ida_falhou' | 'falta_token'
+  | 'sem_registro' | 'pausada';
+
+export function recadosCard(linha: LinhaMaquina, st: EstadoPeer | undefined, meuIdentificador: string): RecadosCard {
+  if (!linha.peer) {
+    if (!meuIdentificador) return 'sem_meu_id';
+    if (!linha.identificador) {
+      if (linha.motivoId === 'token') return 'token_recusado';
+      return linha.motivoId === 'vazio' ? 'sem_id_dele' : 'sem_resposta';
+    }
+    return 'desligado';
+  }
+  const e = estadoDaLinha(linha, st);
+  switch (e.tipo) {
+    case 'desligada': return 'pausada';
+    case 'ok': return 'ok';
+    case 'token_recusado': return 'token_recusado';
+    case 'volta_outra_maquina': return 'volta_outra';
+    case 'ida_outra_maquina': return 'ida_outra';
+    case 'parcial': return e.ida?.estado === 'ok' ? 'endereco_volta' : 'ida_falhou';
+    case 'volta_sem_medir': return 'falta_token';
+    case 'volta_sem_registro': return 'sem_registro';
+    default: return 'testando';
+  }
+}
+
+// Host E caminho: atrás de um proxy por caminho (pocket.exemplo/casa, pocket.exemplo/notebook)
+// máquinas diferentes dividem o mesmo host.
 function hostDe(url: string): string {
-  try { return new URL(url).host.toLowerCase(); } catch { return url.trim().toLowerCase(); }
+  try {
+    const u = new URL(url);
+    return (u.host + u.pathname.replace(/\/+$/, '')).toLowerCase();
+  } catch { return url.trim().replace(/\/+$/, '').toLowerCase(); }
 }

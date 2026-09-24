@@ -1,7 +1,7 @@
 import * as m from '../paraglide/messages';
 import { errorDetail, registrarDiag, novoReqDiag, comTeto, getSyncSetupForServer, setupSyncForServer, disableSyncForServer } from '@hangar/core';
 import type { SyncSetup } from '@hangar/core';
-import { listServers, type Server } from './auth';
+import { listAllServers, type Server } from './auth';
 
 export type { SyncSetup } from '@hangar/core';
 export const getSyncSetup = getSyncSetupForServer;
@@ -147,7 +147,7 @@ export async function activateSync(server: Server, credentials?: { user: string;
   const { authHash, encKey } = await deriveKeys(credentials.password, salt, PBKDF2_ITERATIONS);
   const result = await setupSyncForServer(server, {
     user: credentials.user.trim(), salt, auth_hash: authHash,
-    enc_blob: await encryptList(encKey, listServers()),
+    enc_blob: await encryptList(encKey, listAllServers()),
   });
   if (sameOrigin(server)) {
     rememberStatus(result);

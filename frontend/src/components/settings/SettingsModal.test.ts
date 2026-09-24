@@ -44,10 +44,14 @@ vi.mock('../../lib/credenciais', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/credenciais')>();
   return { ...real, listarCredenciais: vi.fn(async () => []), definirApelido: vi.fn() };
 });
-vi.mock('../../lib/auth', () => ({
+vi.mock('../../lib/auth', async () => {
+  const listServers = vi.fn();
+  return {
   serverColor: () => '#fff',
   serverIdentidade: vi.fn(() => 'global'),
-  listServers: vi.fn(),
+  listServers,
+  // Sem desligadas nestes testes: a lista inteira é a mesma das ligadas.
+  listAllServers: (...a: unknown[]) => listServers(...a),
   getActiveId: vi.fn(),
   selectServer: vi.fn(),
   renameServer: vi.fn(),
@@ -57,7 +61,8 @@ vi.mock('../../lib/auth', () => ({
   validarPareamento: vi.fn(),
   clearCredentials: vi.fn(),
   onServersChanged: vi.fn(() => () => {}),
-}));
+  };
+});
 vi.mock('../../lib/sessionsStore.svelte', () => ({
   sessionsStore: { refreshServers: vi.fn(), reconnect: vi.fn() },
 }));

@@ -5,7 +5,7 @@ const estado = vi.hoisted(() => ({ base: 'https://a.test', servidores: [] as { b
 vi.mock('./auth', () => ({
   getBaseUrl: () => estado.base,
   getToken: () => estado.servidores.find((s) => s.baseUrl === estado.base)?.token ?? null,
-  listServers: () => estado.servidores,
+  listAllServers: () => estado.servidores,
   onServersChanged: () => () => {},
 }));
 import { registrar, molduras } from './diag';

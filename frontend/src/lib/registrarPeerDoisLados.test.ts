@@ -16,7 +16,7 @@ const store = new Map<string, string>();
 vi.mock('./auth', () => ({
   getBaseUrl: vi.fn(() => 'http://casa:8765'),
   getToken: vi.fn(() => 'tcasa'),
-  listServers: vi.fn(() => []),
+  listAllServers: vi.fn(() => []),
 }));
 
 vi.mock('./peers', () => ({
@@ -112,7 +112,7 @@ describe('registrarPeerDoisLados — os dois lados, sucesso e falha nomeada', ()
 
   it('peer já cadastrado na lista: a volta usa o id da lista, que é o que o esfriamento conhece', async () => {
     const auth = await import('./auth');
-    vi.mocked(auth.listServers).mockReturnValueOnce([
+    vi.mocked(auth.listAllServers).mockReturnValueOnce([
       { id: 'srv-nb', label: 'Notebook', baseUrl: 'http://notebook:8765/', token: 'tnot' } as Server,
     ]);
     peersMock.gravarPeer.mockImplementation(async () => [NOTEBOOK] as never);

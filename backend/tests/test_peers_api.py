@@ -341,3 +341,16 @@ def test_descobrir_sem_tailscale_e_503_nomeado(cli, monkeypatch):
     r = cli.get("/api/peers/descobrir", headers=AUTH)
     assert r.status_code == 503
     assert r.json()["detail"]["code"] == "descoberta_sem_tailscale"
+
+
+def test_token_do_peer_so_com_credencial_e_so_do_pedido(arquivo_peers, cli):
+    arquivo_peers.write_text(json.dumps({
+        "casa": {"base_url": "https://casa", "token": "tok-casa"},
+        "vps": {"base_url": "https://vps", "token": "tok-vps"}}))
+    assert cli.get("/api/peers/casa/token").status_code == 401
+    r = cli.get("/api/peers/casa/token", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json() == {"token": "tok-casa"}
+    r = cli.get("/api/peers/nenhum/token", headers=AUTH)
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "peers_desconhecido"

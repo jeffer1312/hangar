@@ -153,8 +153,27 @@ function activeServer(): Server | null {
   return list.find((s) => s.id === id) ?? list[0] ?? null;
 }
 
+// Só as LIGADAS: máquina desligada na tela de Servidores some de todo o app (sessões, custos,
+// uso, seletores). Quem precisa dela também usa listAllServers.
 export function listServers(): Server[] {
+  return readServers().filter((s) => !s.disabled);
+}
+
+// Todas, desligadas inclusive: a tela de Servidores (para religar), o sync (o cofre não pode
+// perder a entrada) e quem regrava a lista inteira.
+export function listAllServers(): Server[] {
   return readServers();
+}
+
+export function setServerDisabled(id: string, disabled: boolean): boolean {
+  const list = readServers();
+  const i = list.findIndex((s) => s.id === id);
+  if (i < 0) return false;
+  const { disabled: _antes, ...resto } = list[i];
+  list[i] = disabled ? { ...resto, disabled: true } : resto;
+  writeServers(list);
+  notifyChanged();
+  return true;
 }
 
 export function getActiveId(): string | null {
@@ -192,7 +211,9 @@ export function addServer(
   if (i >= 0) {
     id = list[i].id;
     existed = true;
-    list[i] = { ...list[i], token, label: label ?? list[i].label };
+    // Adicionar de novo (login, QR, token informado) é pedir para ver: religa a entrada desligada.
+    const { disabled: _desligada, ...entrada } = list[i];
+    list[i] = { ...entrada, token, label: label ?? list[i].label };
   } else {
     id = makeId();
     existed = false;
@@ -256,7 +277,7 @@ async function runAddServerWithRollback(
   // revertia calado mutações concorrentes em outras entradas (remoção/troca de token durante o
   // probe pendente: outra view, sync do hub).
   const norm = (u: string) => u.replace(/\/+$/, '');
-  const prev = listServers().find((s) => norm(s.baseUrl) === norm(pareamento.base)) ?? null;
+  const prev = readServers().find((s) => norm(s.baseUrl) === norm(pareamento.base)) ?? null;
   const prevActive = getActiveId();
   let id: string;
   try {
@@ -268,7 +289,7 @@ async function runAddServerWithRollback(
   }
   // Estado EXATAMENTE como esta transação o deixou: o rollback só desfaz se a entrada ainda for
   // este escrito — uma rotação/edição CONCORRENTE na própria entrada vence (round 2).
-  const escrito = listServers().find((s) => s.id === id) ?? null;
+  const escrito = readServers().find((s) => s.id === id) ?? null;
   try {
     await probe();
     registrarDiag({ evento: 'login.concluido', tela: 'login', ms: Date.now() - inicio }, pareamento.base);
@@ -295,7 +316,7 @@ function rollbackAddEntry(
   escrito: Server | null,
   prevActive: string | null,
 ): void {
-  const list = listServers();
+  const list = readServers();
   const i = list.findIndex((s) => s.id === id);
   if (prev) {
     // Entrada EXISTENTE atualizada por esta transação: reverte só se ainda estiver como a
