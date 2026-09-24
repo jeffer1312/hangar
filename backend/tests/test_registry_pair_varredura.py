@@ -36,7 +36,7 @@ def test_ausente_por_tempo_e_dois_polls_sai_do_grupo_e_avisa_pela_fila():
     assert pair.PairLink("b").get()["peers"] == ["c"]
     assert sorted(c.args[0] for c in pq.call_args_list) == ["b", "c"]
     for c in pq.return_value.append.call_args_list:
-        assert c.args[0].startswith("[de: hangar] 'a' encerrou fora do app e saiu do grupo de trabalho.")
+        assert c.args[0].startswith("[painel: grupo de trabalho] 'a' encerrou fora do app e saiu do grupo de trabalho.")
         assert c.kwargs.get("delivered") is False
     assert sorted(drenados) == ["b", "c"]
     # 2a varredura do mesmo nome ja limpo (ex: outra instancia do registry rodando o mesmo tick):

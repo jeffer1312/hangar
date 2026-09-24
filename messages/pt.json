@@ -2067,6 +2067,7 @@
   "grupo_drop_titulo_feito": "Grupo formado",
   "grupo_drop_afetadas": "Sessões afetadas",
   "grupo_drop_tarefa": "Tarefa do grupo (opcional): ex. ABC-1234 — tela X + endpoint",
+  "grupo_drop_tarefa_herdada": "Tarefa do grupo: {tarefa}",
   "grupo_drop_confirmar": "Agrupar",
   "grupo_drop_substituir_tarefa": "Substituir a tarefa",
   "grupo_drop_falhou": "Falhou o agrupamento.",

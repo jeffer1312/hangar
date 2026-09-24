@@ -42,6 +42,17 @@
     return [...nomes];
   });
 
+  // Sessão avulsa + grupo que já existe = só entrar, herdando a tarefa do grupo. Campo e "Sugerir"
+  // ficam pra grupo que nasce agora ou dois grupos que se fundem.
+  const grupoExistente = $derived.by((): AggSession | null => {
+    if (pedido?.modo !== 'agrupar' || !origemSessao || !alvoSessao) return null;
+    const emGrupo = (s: AggSession) => (s.pair_peers?.length ?? 0) > 0;
+    if (emGrupo(origemSessao) === emGrupo(alvoSessao)) return null;
+    return emGrupo(alvoSessao) ? alvoSessao : origemSessao;
+  });
+  // Com a chamada em voo o SSE já mostra a entrada feita; a tela fica como estava no clique.
+  let grupoNoClique = $state<AggSession | null>(null);
+
   const quemFica = $derived(pedido?.modo === 'sair' ? (origemSessao?.pair_peers ?? []) : []);
 
   // Recheca canPair contra o dado VIVO — pode ter deixado de valer entre abrir o pedido e
@@ -95,13 +106,15 @@
     const pedidoEmVoo = pedido;
     const o = origemSessao;
     const a = alvoSessao;
+    grupoNoClique = grupoExistente;
+    const herda = grupoExistente !== null;
     if (!o || !a) { erro = mensagemRecusa('dead'); return; }
     const checagem = canPair(o, a);
     if (!checagem.ok) { erro = mensagemRecusa(checagem.reason); return; }
     busy = true;
     erro = null;
     try {
-      const res = await withServer(a.serverId, () => pairSession(a.name, [o.name], tarefa.trim(), substituir));
+      const res = await withServer(a.serverId, () => pairSession(a.name, [o.name], herda ? '' : tarefa.trim(), substituir));
       if (pedido !== pedidoEmVoo) return;
       if (res.warning) {
         conflito = null;
@@ -187,7 +200,12 @@
         </ul>
       </div>
 
-      {#if !avisoFalhou}
+      {@const grupo = busy ? grupoNoClique : grupoExistente}
+      {#if !avisoFalhou && grupo}
+        {#if grupo.pair_task}
+          <p class="gd-label">{m.grupo_drop_tarefa_herdada({ tarefa: grupo.pair_task })}</p>
+        {/if}
+      {:else if !avisoFalhou}
         <div class="gd-tarefa-linha">
           <input
             type="text"
@@ -205,7 +223,7 @@
 
       {#if erro}<p class="gd-erro">{erro}</p>{/if}
       {#if conflito}<p class="gd-erro">{conflito}</p>{/if}
-      {#if bloqueio && !erro && !conflito}<p class="gd-erro">{bloqueio}</p>{/if}
+      {#if bloqueio && !erro && !conflito && !busy}<p class="gd-erro">{bloqueio}</p>{/if}
 
       <div class="gd-acoes">
         {#if avisoFalhou}

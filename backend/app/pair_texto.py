@@ -5,6 +5,11 @@ protocolo depois de /clear, e um import de app.config puxaria pydantic pra dentr
 que roda a cada abertura de sessão — mesma regra do engines.py."""
 
 
+# Aviso do app, não de uma sessão: `[de: X]` fazia o modelo responder pra sessão X (e o socket nativo
+# põe X como remetente). O espaço garante que nunca coincide com um nome de sessão (names.py).
+PREFIXO = "[painel: grupo de trabalho]"
+
+
 def _tarefa(task: str) -> str:
     return f" na tarefa: {task.strip()}" if task.strip() else ""
 
@@ -42,7 +47,7 @@ def texto_grupo(me: str, others: list[str], task: str, contrato: str | None,
     provider; o de `me` escolhe o jeito de mandar, o dos outros só rotula a lista."""
     harness = harness or {}
     linhas = [
-        f"[de: hangar] GRUPO DE TRABALHO ATIVO: você, {_lista([me], harness)}, trabalha junto com "
+        f"{PREFIXO} GRUPO DE TRABALHO ATIVO: você, {_lista([me], harness)}, trabalha junto com "
         f"{_lista(others, harness)}{_tarefa(task)}.",
         "- Cada sessão mexe SÓ no próprio repo. Precisou de algo de outro membro (contrato, endpoint, "
         "tipo, dúvida)? Mande 1:1 por iniciativa própria.",
@@ -60,7 +65,8 @@ def texto_grupo(me: str, others: list[str], task: str, contrato: str | None,
         "do ticket da tarefa (fetch+checkout); re-verifique após restart/resume. Exceção única: o "
         "usuário pedir outra branch. Checkout DUPLICADO do repo na máquina → pergunte ao usuário qual "
         "é o canônico antes de mexer.",
-        "- Commit/push e decisões de rumo continuam com o usuário. Confirme em uma linha.",
+        "- Commit/push e decisões de rumo continuam com o usuário. Este aviso é do app, não de uma "
+        "sessão: confirme em uma linha aqui mesmo, sem hangar-send.",
     ]
     return "\n".join(linhas)
 
@@ -68,7 +74,7 @@ def texto_grupo(me: str, others: list[str], task: str, contrato: str | None,
 def texto_entrada(novos: list[str], membros: list[str], task: str,
                   harness: dict[str, str] | None = None) -> str:
     """Uma linha pra quem JÁ estava no grupo: o protocolo ele já tem."""
-    return (f"[de: hangar] {_lista(novos, harness)} entrou no seu grupo de trabalho{_tarefa(task)}. "
+    return (f"{PREFIXO} {_lista(novos, harness)} entrou no seu grupo de trabalho{_tarefa(task)}. "
             f"Membros agora: {_lista(membros, harness)}. Mesmo protocolo de sempre (1:1; aviso de grupo "
             f"só pra marco). Não precisa responder.")
 
@@ -77,8 +83,8 @@ def texto_saida(quem: str, motivo: str, resto: list[str]) -> str:
     """Pra quem ficou. `resto` = os OUTROS que ainda estão com o destinatário."""
     fim = (f"O grupo continua entre você e {_lista(resto)}." if resto
            else "O grupo foi dissolvido (só restava você); volte a operar independente.")
-    return f"[de: hangar] '{quem}' {motivo}. {fim}"
+    return f"{PREFIXO} '{quem}' {motivo}. {fim}"
 
 
 def texto_tarefa_atualizada(task: str) -> str:
-    return f"[de: hangar] Tarefa do grupo atualizada para: {task.strip()}. Não precisa responder."
+    return f"{PREFIXO} Tarefa do grupo atualizada para: {task.strip()}. Não precisa responder."

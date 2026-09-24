@@ -3199,7 +3199,7 @@ def _ao_recibo_nativo(mid: str, estado: str, detalhe: str) -> None:
                      estado, mid, bool(info), _loop_servidor is not None, detalhe)
         return
     remetente, alvo, inicio = info
-    aviso = (f"[painel: hangar] Seu recado para {alvo} ({inicio!r}) foi {estado}"
+    aviso = (f"[painel: entrega de recado] Seu recado para {alvo} ({inicio!r}) foi {estado}"
              f"{': ' + detalhe if detalhe else ''}. Ele não chegou ao modelo de lá.")
     fut = asyncio.run_coroutine_threadsafe(_enviar(remetente, aviso), _loop_servidor)
 
@@ -3941,7 +3941,7 @@ async def unpair_remote(name: str, body: UnpairRemoteBody):
     ex = await asyncio.to_thread(pair.leave, name)
     warn = None
     if ex:
-        e = await _deliver(name, f"[de: hangar] '{body.peer}' saiu do pareamento. "
+        e = await _deliver(name, f"{pair_texto.PREFIXO} '{body.peer}' saiu do pareamento. "
                                  "Volte a operar independente; use hangar-send só quando o usuário pedir.")
         if e:
             warn = erro("erro_pareamento_aviso_unpair", f"{name}: {_erro_texto(e)}",
@@ -4398,7 +4398,7 @@ async def unpair_session(name: str):
     if not expeers:
         return {"ok": True, "warning": None}
     errs = await _avisar_saida(name, expeers, "saiu do grupo de trabalho")
-    e = await _deliver(name, "[de: hangar] Você saiu do grupo de trabalho "
+    e = await _deliver(name, f"{pair_texto.PREFIXO} Você saiu do grupo de trabalho "
                              f"({', '.join(expeers)}). Volte a operar independente; use hangar-send só "
                              "quando o usuário pedir.")
     if e:

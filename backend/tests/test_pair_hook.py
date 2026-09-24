@@ -43,7 +43,7 @@ def test_com_grupo_devolve_additional_context(tmp_path):
     d = json.loads(out)
     ctx = d["hookSpecificOutput"]["additionalContext"]
     assert d["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert ctx.startswith("[de: hangar] GRUPO DE TRABALHO ATIVO: você, 'api' (Claude Code), trabalha junto com "
+    assert ctx.startswith("[painel: grupo de trabalho] GRUPO DE TRABALHO ATIVO: você, 'api' (Claude Code), trabalha junto com "
                           "'front' na tarefa: PM-9.")
     assert str(tmp_path / "grupo-g1.md") in ctx
 

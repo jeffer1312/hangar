@@ -2067,6 +2067,7 @@
   "grupo_drop_titulo_feito": "Group formed",
   "grupo_drop_afetadas": "Affected sessions",
   "grupo_drop_tarefa": "Group task (optional): e.g. ABC-1234 — screen X + endpoint",
+  "grupo_drop_tarefa_herdada": "Group task: {tarefa}",
   "grupo_drop_confirmar": "Group",
   "grupo_drop_substituir_tarefa": "Replace the task",
   "grupo_drop_falhou": "Grouping failed.",

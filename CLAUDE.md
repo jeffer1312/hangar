@@ -296,7 +296,8 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   evento) leva ponte para o nome antigo enquanto houver sessão viva que o carregou no catálogo,
   e a ponte sai do catálogo para não cobrar contexto de quem abre depois.
 - **Grupo: protocolo reinjetado no `SessionStart`, saída por UMA esteira, anti-loop no backend.**
-  Varredura de sessão morta confirma ausência por TEMPO, nunca por número de polls.
+  Varredura de sessão morta confirma ausência por TEMPO, nunca por número de polls. Aviso do app
+  sai como `[painel: <rótulo com espaço>]`, nunca `[de: …]`: o modelo responde a quem assina.
 - **Plan progress lê o `.md` do plano**, sem arquivo de estado: blocos cercados são removidos
   preservando offsets, e a decoração roda dentro do `to_thread` do git.
 - **Ditado: a transcrição não é o problema, o que vem depois é.** Vocabulário vai para a Whisper

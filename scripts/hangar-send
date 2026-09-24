@@ -74,7 +74,7 @@
 # (socket nativo…)", "entregue", "na fila" ou erro. Não existe "use outra ferramenta": se este
 # comando não entregou, ele diz que não entregou. `--tmux` fica aceito e é ignorado.
 # Retenção ou recusa pelo destino (política crossSessionInbound dele) chega depois como aviso
-# `[painel: hangar]` na sessão remetente. A mensagem é ARGUMENTO, nunca stdin: heredoc cru
+# `[painel: entrega de recado]` na sessão remetente. A mensagem é ARGUMENTO, nunca stdin: heredoc cru
 # (`hangar-send <s> <<'EOF'`) dá erro de uso e nada sai. Texto com crase ou $ vai assim:
 #   hangar-send <sessao> "$(cat <<'EOF'
 #   ...texto livre...
@@ -533,7 +533,7 @@ resp=$(api POST "/api/sessions/$sess/input" "$body")
 # delivered=True -> digitou agora na TUI; False -> fila durável (entrega quando a sessão ficar idle).
 # Sessão inexistente nem chega aqui (o backend responde 404 e o api() já mostrou o detail).
 if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("native") else 1)' "$resp"; then
-    echo "entregue agora -> $target (no socket do Claude dele, entra no meio do turno; retenção ou recusa pela política de lá chega depois como aviso [painel: hangar])"
+    echo "entregue agora -> $target (no socket do Claude dele, entra no meio do turno; retenção ou recusa pela política de lá chega depois como aviso [painel: entrega de recado])"
 elif python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("steered") else 1)' "$resp"; then
     echo "entregue agora -> $target"
 elif python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("delivered") else 1)' "$resp"; then

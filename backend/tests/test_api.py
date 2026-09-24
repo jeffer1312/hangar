@@ -3173,9 +3173,9 @@ def test_pair_protocolo_completo_so_pro_novato(api_client):
          patch("app.api._deliver", side_effect=fake_deliver):
         r = api_client.post("/api/sessions/d/pair", headers=_h(), json={"peers": ["a"], "task": ""})
     assert r.status_code == 200
-    assert entregues["d"].startswith("[de: hangar] GRUPO DE TRABALHO ATIVO")
-    assert entregues["a"].startswith("[de: hangar] 'd' (Claude Code) entrou no seu grupo")
-    assert entregues["b"].startswith("[de: hangar] 'd' (Claude Code) entrou no seu grupo")
+    assert entregues["d"].startswith("[painel: grupo de trabalho] GRUPO DE TRABALHO ATIVO")
+    assert entregues["a"].startswith("[painel: grupo de trabalho] 'd' (Claude Code) entrou no seu grupo")
+    assert entregues["b"].startswith("[painel: grupo de trabalho] 'd' (Claude Code) entrou no seu grupo")
     assert "Membros agora: 'a' (Claude Code), 'b' (Claude Code), 'd' (Claude Code)" in entregues["a"]
 
 
@@ -3339,7 +3339,7 @@ def test_kill_avisa_companheiros_que_ficaram(api_client):
         r = api_client.delete("/api/sessions/a", headers=_h())
     assert r.status_code == 200 and r.json() == {"ok": True, "warning": None}
     kill.assert_called_once_with("a")
-    assert entregues["b"] == "[de: hangar] 'a' encerrou a sessão e saiu do grupo de trabalho. O grupo continua entre você e 'c'."
+    assert entregues["b"] == "[painel: grupo de trabalho] 'a' encerrou a sessão e saiu do grupo de trabalho. O grupo continua entre você e 'c'."
     assert entregues["c"].endswith("O grupo continua entre você e 'b'.")
     assert "a" not in entregues
 
