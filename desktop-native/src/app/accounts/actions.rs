@@ -54,8 +54,9 @@ pub(in crate::app) enum ActionReply {
     Created(String, Result<Value, Failure>),
 }
 
+/// `Catalog(true)`: provedores para um modelo do Claude Code; `Catalog(false)`: para uma chave de outro agente.
 #[derive(Clone, Copy, PartialEq)]
-enum AddStep { Choose, Subscriptions, Claude }
+pub(super) enum AddStep { Choose, Subscriptions, Claude, Catalog(bool) }
 
 /// O diálogo "Adicionar conta…". É uma entidade própria porque o diálogo é desenhado durante o desenho da janela,
 /// quando o estado do `Hangar` não pode ser lido.
@@ -89,7 +90,7 @@ async fn cancel_unseen(api: &Api, label: &str) {
 }
 
 /// Nome da pasta como o servidor aceita (`[a-z0-9][a-z0-9_-]{0,31}`): minúsculas, sem acento, o resto vira hífen.
-fn account_slug(text: &str) -> String {
+pub(super) fn account_slug(text: &str) -> String {
     let mut out = String::new();
     for ch in text.trim().to_lowercase().chars() {
         let ch = match ch {
@@ -102,18 +103,21 @@ fn account_slug(text: &str) -> String {
 }
 
 impl AddAccount {
-    fn new(hangar: WeakEntity<Hangar>, base: Option<(String, String)>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(hangar: WeakEntity<Hangar>, step: AddStep, base: Option<(String, String)>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("accounts_add_name_placeholder")));
         let subscription = cx.subscribe_in(&name, window, |this: &mut AddAccount, input, event: &InputEvent, window, cx| match event {
             InputEvent::Change => { this.slug = account_slug(&input.read(cx).value()); cx.notify(); }
             InputEvent::PressEnter { .. } => this.create(window, cx),
             _ => {}
         });
-        Self { hangar, step: AddStep::Choose, name, slug: String::new(), base, saving: false, error: None, _subscription: subscription }
+        Self { hangar, step, name, slug: String::new(), base, saving: false, error: None, _subscription: subscription }
     }
 
     fn title(&self) -> String {
-        tr(match self.step { AddStep::Choose => "accounts_add_title", AddStep::Subscriptions => "accounts_add_subscription", AddStep::Claude => "accounts_add_claude" })
+        tr(match self.step {
+            AddStep::Choose => "accounts_add_title", AddStep::Subscriptions => "accounts_add_subscription", AddStep::Claude => "accounts_add_claude",
+            AddStep::Catalog(true) => "accounts_add_model_path", AddStep::Catalog(false) => "accounts_add_key_path",
+        })
     }
 
     fn go(&mut self, step: AddStep, window: &mut Window, cx: &mut Context<Self>) {
@@ -159,8 +163,21 @@ impl Render for AddAccount {
                 .child(choice(tr("accounts_add_subscription"), tr("accounts_add_subscription_desc"),
                     Button::new("accounts-add-pick-subscription").outline().small().label(tr("accounts_add_pick"))
                         .on_click(cx.listener(|this, _, window, cx| this.go(AddStep::Subscriptions, window, cx)))))
-                .child(choice(tr("accounts_add_model_path"), tr("accounts_add_model_desc"), soon("accounts-add-pick-model")))
-                .child(choice(tr("accounts_add_key_path"), tr("accounts_add_key_desc"), soon("accounts-add-pick-key"))),
+                .child(choice(tr("accounts_add_model_path"), tr("accounts_add_model_desc"),
+                    Button::new("accounts-add-pick-model").outline().small().label(tr("accounts_add_pick"))
+                        .on_click(cx.listener(|this, _, window, cx| this.go(AddStep::Catalog(true), window, cx)))))
+                .child(choice(tr("accounts_add_key_path"), tr("accounts_add_key_desc"),
+                    Button::new("accounts-add-pick-key").outline().small().label(tr("accounts_add_pick"))
+                        .on_click(cx.listener(|this, _, window, cx| this.go(AddStep::Catalog(false), window, cx))))),
+            AddStep::Catalog(model) => div().flex().flex_col().children(keys::PROVIDERS.iter().map(|provider| {
+                let id = provider.id;
+                keys::provider_choice(provider, Button::new(SharedString::from(format!("accounts-add-provider-{id}"))).outline().small()
+                    .icon(IconName::Plus).label(tr("accounts_add_connect"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        window.close_dialog(cx);
+                        let _ = this.hangar.update(cx, |hangar, cx| { hangar.accounts.add = None; hangar.open_new_key(id, model, window, cx); });
+                    })))
+            })),
             AddStep::Subscriptions => div().flex().flex_col()
                 .child(choice(tr("accounts_add_claude"), tr("accounts_add_claude_desc"),
                     Button::new("accounts-add-pick-claude").outline().small().icon(IconName::Plus).label(tr("accounts_add_connect"))
@@ -198,11 +215,13 @@ impl Render for AddAccount {
 }
 
 impl Hangar {
-    fn find_row(&self, id: &str) -> Option<&Row> { self.accounts.sections.iter().flat_map(|s| &s.rows).find(|r| r.id == id) }
+    pub(super) fn find_row(&self, id: &str) -> Option<&Row> { self.accounts.sections.iter().flat_map(|s| &s.rows).find(|r| r.id == id) }
 
     /// Alguma escrita de conta em voo (login, sair, remover, renomear): as outras esperam.
     pub(super) fn accounts_busy(&self) -> bool {
         self.accounts.sign_in.is_some() || self.accounts.change.is_some() || self.accounts.rename.as_ref().is_some_and(|r| r.saving)
+            || self.accounts.form.as_ref().is_some_and(EngineForm::busy) || self.accounts.cookie.as_ref().is_some_and(|c| c.saving)
+            || self.accounts.cookie_clearing.is_some()
     }
 
     pub(super) fn start_sign_in(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -324,6 +343,8 @@ impl Hangar {
     /// A tentativa perdeu a tela (outra página, página fechada, outro servidor): o estado sai. Parada no meio, fecha
     /// aqui, no servidor atual, na vez da conta. Começando ou com o código em voo, a própria tarefa fecha pela resposta.
     pub(in crate::app) fn accounts_page_left(&mut self) {
+        // O que estava sendo digitado sai com a página; uma gravação em voo termina sozinha e relê as listas.
+        (self.accounts.form, self.accounts.cookie) = (None, None);
         let Some(s) = self.accounts.sign_in.take() else { return };
         let Some(api) = self.api.clone().filter(|_| s.open && !s.starting && !s.sending) else { return };
         let (label, turn) = (s.label.clone(), login_turn(&api, &s.label));
@@ -375,12 +396,14 @@ impl Hangar {
         cx.notify();
     }
 
-    pub(super) fn open_add_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_add_account(&mut self, window: &mut Window, cx: &mut Context<Self>) { self.open_add_account_at(AddStep::Choose, window, cx); }
+
+    pub(super) fn open_add_account_at(&mut self, step: AddStep, window: &mut Window, cx: &mut Context<Self>) {
         if self.accounts_busy() { return; }
         let base = self.accounts.list.ok().and_then(|list| list.iter().find(|c| c.kind == "claude" && c.active && c.logged_in() == Some(false)))
             .map(|c| (c.id.clone(), c.name.clone()));
         let hangar = cx.entity().downgrade();
-        let add = cx.new(|cx| AddAccount::new(hangar.clone(), base, window, cx));
+        let add = cx.new(|cx| AddAccount::new(hangar.clone(), step, base, window, cx));
         self.accounts.outcome = None;
         self.accounts.add = Some(add.clone());
         window.open_dialog(cx, move |dialog, _, cx| {

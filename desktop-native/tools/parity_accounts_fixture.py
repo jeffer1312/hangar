@@ -14,6 +14,13 @@ step=<ok|409|500|auto> (auto: a autorização volta sozinha pelo navegador no 3�
 &code_delay=<s>, cancel=<ok|500|drop>&cancel_delay=<s>, logout=<ok|409|500|drop>&logout_delay=<s>,
 delete=<ok|409|500|drop>&delete_delay=<s>, create=<ok|409|422|drop>&create_delay=<s>, base=<ok|out>
 (out: a conta padrão, pessoal, aparece sem login). Qualquer código serve, menos "errado".
+
+R5c1 (modelos, chaves e cookie), também contra o estado em memória: POST /api/engines/modelos ({nome} ou {base_url, api_key};
+nenhum provedor é chamado: a lista é sintética), PUT /api/engines/{nome} (com a herança do backend: campo ausente ou null
+fica, "" limpa, chave vazia ou mascarada mantém a atual), POST /api/credenciais/sincronizar {id} e PUT /api/credenciais/cookie.
+/control/r5 também aceita probe=<ok|empty|502|drop>&probe_delay=<s>, put=<ok|400|drop>&put_delay=<s>,
+sync=<ok|500|drop>&sync_delay=<s>, cookie=<ok|500|drop>&cookie_delay=<s>. Chave e cookie nunca vão para o registro
+(só o tamanho) e ficam aqui só mascarados.
 """
 
 import json
@@ -26,7 +33,10 @@ LOCK = threading.Lock()
 MODE = {"list": "ok", "list_delay": 0.0, "engines": "ok", "engines_delay": 0.0, "rename": "ok", "rename_delay": 0.0,
         "login": "ok", "login_delay": 0.0, "url_after": 1.0, "step": "ok", "code": "ok", "code_delay": 0.0,
         "cancel": "ok", "cancel_delay": 0.0, "logout": "ok", "logout_delay": 0.0, "delete": "ok", "delete_delay": 0.0,
-        "create": "ok", "create_delay": 0.0, "base": "ok"}
+        "create": "ok", "create_delay": 0.0, "base": "ok", "probe": "ok", "probe_delay": 0.0, "put": "ok", "put_delay": 0.0,
+        "sync": "ok", "sync_delay": 0.0, "cookie": "ok", "cookie_delay": 0.0}
+# Credenciais com o cookie do painel guardado.
+COOKIES = set()
 ALIASES = {}
 READS = {"n": 0}
 # O que a prova já fez: login por rótulo, credenciais removidas, contas criadas.
@@ -85,6 +95,17 @@ ENGINES = {
 def _state(now):
     """A lista sintética com o que a prova já fez: sem as removidas, com as criadas e o login atual de cada uma."""
     rows = [r for r in _accounts(now) if r["id"] not in REMOVED]
+    known = {r["id"] for r in rows}
+    for name, engine in ENGINES.items():
+        if f"chave:{name}" not in known and name not in ENGINES_REMOVED:
+            rows.append({"id": f"chave:{name}", "tipo": "chave", "auth_method": "api_key", "nome_natural": name, "usos": ["claude_code"],
+                         "base_url": engine["base_url"], "chave_mascarada": engine.get("api_key") or None})
+    for row in rows:
+        if row.get("aceita_cookie"):
+            row["cookie_definido"] = row["id"] in COOKIES
+            if row["cookie_definido"]:
+                row["cota"] = {"estado": "lida", "janelas": [{"rotulo": "5h", "pct": 27, "reset_ts": now + 2 * 3600},
+                                                             {"rotulo": "7d", "pct": 44, "reset_ts": now + 4 * 86_400}], "idade_s": 0}
     for name in CREATED:
         rows.append({"id": f"claude:/home/prova/.claude-{name}", "tipo": "claude", "auth_method": "oauth", "nome_natural": name,
                      "path": f"/home/prova/.claude-{name}", "usos": [], "login": {"estado": "ok", "loggedIn": False},
@@ -272,6 +293,10 @@ def handle_post(handler, path, body):
                     drop(handler)
                 else:
                     handler.send_json({"path": f"/home/prova/.claude-{name}", "label": name, "active": False})
+    elif parts == ["api", "engines", "modelos"]:
+        _probe(handler, body or {}, log)
+    elif parts == ["api", "credenciais", "sincronizar"]:
+        _sync(handler, (body or {}).get("id", ""), log)
     else:
         return False
     print("ACCOUNTS", json.dumps(log), flush=True)
@@ -303,7 +328,118 @@ def handle_delete(handler, path):
     return True
 
 
+def _mask(key):
+    return f"{key[:4]}••••{key[-4:]}" if len(key) > 8 else "••••"
+
+
+def _probe(handler, body, log):
+    """Testar e listar: nenhum provedor é chamado. Com `nome`, vale o motor salvo; com endereço e chave, os digitados."""
+    log.update({"nome": body.get("nome"), "base_url": body.get("base_url"), "key_len": len(body.get("api_key") or "")})
+    with LOCK:
+        mode, delay = MODE["probe"], MODE["probe_delay"]
+        saved = ENGINES.get(body.get("nome") or "")
+    time.sleep(delay)
+    if body.get("nome") and (body.get("base_url") or body.get("api_key")):
+        _fail(handler, 400, "nome já usa o motor salvo; não envie base_url/api_key junto")
+    elif body.get("nome") and not saved:
+        _fail(handler, 404, "motor nao encontrado")
+    elif not body.get("nome") and not (body.get("base_url") and body.get("api_key")):
+        _fail(handler, 400, "informe nome de um motor salvo, ou base_url + api_key")
+    elif mode == "drop":
+        drop(handler)
+    elif mode == "502":
+        handler.send_json({"detail": "401 Unauthorized: chave recusada pelo provedor (sintético)"}, 502)
+    else:
+        url = (saved or {}).get("base_url") or body.get("base_url") or ""
+        models = [] if mode == "empty" else (
+            [{"id": "k3-256k", "context_length": 256000, "vision": True}, {"id": "k2.7-turbo", "context_length": 131072, "vision": False},
+             {"id": "k3-mini", "context_length": None, "vision": None}] if "kimi" in url else
+            [{"id": "prova-grande", "context_length": 1000000, "vision": True}, {"id": "prova-rapido", "context_length": 200000, "vision": True},
+             {"id": "prova-texto", "context_length": 64000, "vision": False}])
+        handler.send_json({"modelos": models})
+
+
+def _sync(handler, cred, log):
+    log["id"] = cred
+    with LOCK:
+        mode, delay = MODE["sync"], MODE["sync_delay"]
+        exists = cred.startswith("chave:") and cred[len("chave:"):] in ENGINES and cred[len("chave:"):] not in ENGINES_REMOVED
+    time.sleep(delay)
+    if not exists:
+        _fail(handler, 404, f"credencial {cred} não existe")
+    elif mode == "500":
+        _fail(handler, 500, "o Pi recusou a gravação (sintético)")
+    elif mode == "drop":
+        drop(handler)
+    else:
+        var = "HANGAR_" + cred[len("chave:"):].upper().replace("-", "_") + "_KEY"
+        handler.send_json({"id": cred, "modelos": 3, "resultado": {
+            "pi": {"ok": True, "motivo": ""}, "kimi": {"ok": False, "motivo": "nao-instalado"},
+            "codex": {"ok": True, "motivo": f"exporte {var} no shell para o Codex usar a chave"}}})
+
+
+def _put_engine(handler, name, body, log):
+    log.update({"engine": name, "key_len": len((body or {}).get("api_key") or ""), "fields": sorted((body or {}).keys())})
+    with LOCK:
+        mode, delay = MODE["put"], MODE["put_delay"]
+    time.sleep(delay)
+    if mode == "400":
+        handler.send_json({"detail": "base_url: endereço público precisa ser https (sintético)"}, 400)
+        return
+    if not re.fullmatch(r"[a-z0-9_-]{1,32}", name) or not isinstance(body, dict):
+        handler.send_json({"detail": "nome do motor inválido"}, 400)
+        return
+    with LOCK:
+        current = dict(ENGINES.get(name, {})) if name not in ENGINES_REMOVED else {}
+        sent = body.get("api_key")
+        body = dict(body)
+        if current.get("api_key") and (not isinstance(sent, str) or not sent.strip() or sent.strip() == current["api_key"]):
+            body["api_key"] = current["api_key"]
+        elif isinstance(sent, str) and sent.strip():
+            body["api_key"] = _mask(sent.strip())
+        for field, value in current.items():
+            if field not in body or body[field] is None:
+                body[field] = value
+        saved = {k: v for k, v in body.items() if v != ""}
+        saved["api_key_definida"] = bool(saved.get("api_key"))
+        ENGINES[name] = saved
+        ENGINES_REMOVED.discard(name)
+        REMOVED.discard(f"chave:{name}")
+        engines = {k: v for k, v in ENGINES.items() if k not in ENGINES_REMOVED}
+    if mode == "drop":
+        drop(handler)
+    else:
+        handler.send_json({"motores": engines})
+
+
+def _put_cookie(handler, body, log):
+    cred, ws, cookie = (body or {}).get("id", ""), (body or {}).get("workspace_id", ""), (body or {}).get("auth_cookie", "")
+    log.update({"id": cred, "ws_len": len(ws), "cookie_len": len(cookie)})
+    with LOCK:
+        mode, delay = MODE["cookie"], MODE["cookie_delay"]
+    time.sleep(delay)
+    if mode == "500":
+        _fail(handler, 500, "não consegui gravar o cookie (sintético)")
+        return
+    with LOCK:
+        if ws.strip() and cookie.strip():
+            COOKIES.add(cred)
+        else:
+            COOKIES.discard(cred)
+        kept = cred in COOKIES
+    drop(handler) if mode == "drop" else handler.send_json({"id": cred, "cookie_definido": kept})
+
+
 def handle_put(handler, path, body):
+    parts = [unquote(p) for p in path.strip("/").split("/")]
+    if parts[:2] == ["api", "engines"] and len(parts) == 3 or path == "/api/credenciais/cookie":
+        log = {"put": path}
+        if path == "/api/credenciais/cookie":
+            _put_cookie(handler, body, log)
+        else:
+            _put_engine(handler, parts[2], body, log)
+        print("ACCOUNTS", json.dumps(log), flush=True)
+        return True
     if path != "/api/credenciais/apelido":
         return False
     with LOCK:

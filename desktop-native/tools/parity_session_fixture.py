@@ -239,7 +239,13 @@ def later(seconds, change):
     threading.Thread(target=run, daemon=True).start()
 
 
+SECRETS = ("api_key", "auth_cookie", "workspace_id", "codigo")
+
+
 def record(method, path, body):
+    # Chave, cookie e código nunca vão para o registro, nem sintéticos: só se vieram.
+    if isinstance(body, dict):
+        body = {k: ("…" if k in SECRETS and v else v) for k, v in body.items()}
     entry = {"t": round(time.time(), 3), "method": method, "path": path, "body": body}
     LOG.append(entry)
     print("REQ", json.dumps(entry, ensure_ascii=False), flush=True)

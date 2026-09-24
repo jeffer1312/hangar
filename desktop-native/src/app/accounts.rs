@@ -1,13 +1,15 @@
 //! Contas e modelos: a lista única de credenciais do servidor (`GET /api/credenciais`) em três grupos,
 //! com a cota de cada uma, e os modelos do Claude Code (`GET /api/engines`). O que a tela mostra é
 //! montado na chegada da resposta e a cada meio minuto (o "há X" e os prazos envelhecem); o desenho só lê.
-//! Renomear escreve daqui; entrar, sair, remover e adicionar conta Claude moram em `actions`. Editar modelo, Codex e
-//! o cookie do OpenCode aparecem desligados até chegarem.
+//! Renomear escreve daqui; entrar, sair, remover e adicionar conta Claude moram em `actions`; o formulário do modelo, a
+//! chave de outro agente e o cookie do OpenCode, em `keys`. As ações do Codex aparecem desligadas até chegarem.
 mod actions;
+mod keys;
 
 use super::*;
 use super::device::Remote;
-use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
+use actions::{ActionReply, AddAccount, AddStep, Change, ChangeKind, SignIn};
+use keys::{CookieForm, EngineForm, KeysReply};
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;
@@ -68,13 +70,27 @@ struct QuotaWindow {
 #[derive(Clone, Deserialize)]
 struct ResetCredits { available_count: u64 }
 
-/// O que a lista usa de um modelo do Claude Code (`engines.json`).
-#[derive(Clone, Deserialize)]
+/// Um modelo do Claude Code (`engines.json`): o que a lista mostra e o que o formulário de edição abre. A chave nunca
+/// vem, só se ela existe.
+#[derive(Clone, Default, Deserialize)]
 struct Engine {
+    label: Option<String>,
+    #[serde(default)] base_url: String,
     #[serde(default)] model: String,
     subagent_model: Option<String>,
     context_window: Option<u64>,
+    vision: Option<bool>,
+    bundled_skills: Option<bool>,
+    experimental_betas: Option<bool>,
+    prompt_caching: Option<bool>,
     adaptive_thinking: Option<bool>,
+    tool_search: Option<bool>,
+    gateway_model_discovery: Option<bool>,
+    fine_grained_tool_streaming: Option<bool>,
+    auth_via_api_key: Option<bool>,
+    auto_compact_window: Option<u64>,
+    max_output_tokens: Option<u64>,
+    #[serde(default)] api_key_definida: bool,
 }
 
 pub(super) struct Engines { map: HashMap<String, Engine>, broken_file: Option<String> }
@@ -106,6 +122,10 @@ struct Row {
     quota: QuotaView,
     /// Ações que chegam na próxima versão, mostradas desligadas na linha.
     later: Vec<String>,
+    /// Editar o modelo: `Some(false)` quando os detalhes dele não chegaram (a leitura dos modelos falhou).
+    edit: Option<bool>,
+    /// Cookie do painel do OpenCode: `Some(já guardado)` na credencial que aceita.
+    cookie: Option<bool>,
     /// Entrar ou Renovar login, quando a conta Claude precisa.
     sign_in: Option<String>,
     can_sign_out: bool,
@@ -137,6 +157,13 @@ pub(super) struct Accounts {
     /// Resultado da última saída, remoção ou conta criada; some com a próxima ação ou quando a página reabre.
     outcome: Option<(String, bool)>,
     add: Option<Entity<AddAccount>>,
+    /// Formulário do modelo ou da chave aberto no lugar da lista.
+    form: Option<EngineForm>,
+    /// Cookie do OpenCode sendo digitado (abaixo da linha) e o que está sendo apagado.
+    cookie: Option<CookieForm>,
+    cookie_clearing: Option<String>,
+    /// Número de cada pedido do formulário e do cookie: resposta de outro pedido não mexe no atual.
+    keys_seq: u64,
 }
 
 pub(super) enum AccountsReply {
@@ -144,6 +171,7 @@ pub(super) enum AccountsReply {
     Engines(u64, Result<Value, Failure>),
     Renamed(u64, Result<Value, Failure>),
     Action(ActionReply),
+    Keys(KeysReply),
 }
 
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.) }
@@ -223,6 +251,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     let mut subtitle = Vec::new();
     let mut chips = Vec::new();
     let mut later = Vec::new();
+    let mut edit = None;
     let mut sign_in = None;
     let initial = c.name.chars().find(|ch| ch.is_alphanumeric()).map(|ch| ch.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
     let glyph = match c.kind.as_str() {
@@ -279,7 +308,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
                 chips.extend(engine.context_window.map(|n| format!("{}k", (n as f64 / 1000.).round())));
                 chips.extend(engine.subagent_model.as_deref().filter(|m| !m.is_empty()).map(|m| tr("accounts_chip_subagent").replace("{id}", m)));
                 if engine.adaptive_thinking != Some(false) { chips.push(tr("accounts_chip_thinking_on")); }
-                later.push(tr("accounts_edit"));
+                edit = Some(true);
             }
             None => {
                 subtitle.push(muted(tr("accounts_api_key")));
@@ -287,12 +316,12 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
                 subtitle.extend(c.masked_key.clone().map(muted));
                 if c.cookie_set { subtitle.push(muted(tr("accounts_cookie_set"))); }
                 if c.managed == Some(false) { subtitle.push(muted(tr("accounts_agent_key"))); }
-                // Modelo do Claude Code cujos detalhes não chegaram: continua sendo editável.
-                if c.engine_name().is_some() && c.uses.iter().any(|u| u == "claude_code") { later.push(tr("accounts_edit")); }
+                // Modelo do Claude Code cujos detalhes não chegaram: o Editar fica, desligado dizendo por quê. Abrir o
+                // formulário em branco e salvar apagaria o que o disco tem.
+                if c.engine_name().is_some() && c.uses.iter().any(|u| u == "claude_code") { edit = Some(false); }
             }
         },
     }
-    if c.accepts_cookie { later.push(tr("accounts_cookie")); }
     subtitle.retain(|(text, _)| !text.is_empty());
     let mut line = String::new();
     let mut marks = Vec::new();
@@ -330,7 +359,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     });
     Row {
         id: c.id.clone(), name: c.name.clone(), label: c.natural.clone(), natural: c.natural.clone(), alias: c.alias.clone().unwrap_or_default(),
-        active: c.active, glyph, subtitle, chips, quota, later, sign_in,
+        active: c.active, glyph, subtitle, chips, quota, later, edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
         can_sign_out: c.kind == "claude" && c.managed != Some(false) && logged == Some(true) && !c.expired(),
         remove,
     }
@@ -505,6 +534,7 @@ impl Hangar {
                 self.load_accounts(false, cx);
             }
             AccountsReply::Action(reply) => self.receive_action(reply, window, cx),
+            AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
         }
         self.rebuild_accounts();
         cx.notify();
@@ -522,6 +552,7 @@ impl Hangar {
             return page.child(self.heading("accounts_subscriptions")).child(settings_box().child(note(tr("settings_offline"), theme::muted()))).into_any_element();
         }
         if let Some(panel) = self.render_sign_in(cx) { return page.child(panel).into_any_element(); }
+        if let Some(panel) = self.render_engine_form(cx) { return page.child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {
             (None, _) => return page.child(self.heading("accounts_subscriptions"))
                 .child(settings_box().child(note(tr("accounts_loading"), theme::muted()))).into_any_element(),
@@ -560,7 +591,9 @@ impl Hangar {
                     .child(Button::new("accounts-add-account").outline().small().icon(IconName::Plus).label(tr("accounts_add_account"))
                         .disabled(self.accounts_busy()).on_click(cx.listener(|this, _, window, cx| this.open_add_account(window, cx))))
                     .into_any_element(),
-                Group::Models => soon_button("accounts-add-model", tr("accounts_add_model")).icon(IconName::Plus).into_any_element(),
+                Group::Models => Button::new("accounts-add-model").outline().small().icon(IconName::Plus).label(tr("accounts_add_model"))
+                    .disabled(self.accounts_busy())
+                    .on_click(cx.listener(|this, _, window, cx| this.open_add_account_at(AddStep::Catalog(true), window, cx))).into_any_element(),
                 Group::Others => div().into_any_element(),
             };
             page = page.child(div().flex().items_end().gap(px(12.)).child(div().flex_1().child(self.heading(title))).child(div().mb(px(8.)).child(tools)));
@@ -630,7 +663,7 @@ impl Hangar {
                 QuotaView::Nothing => el,
             });
         let this = cx.entity().downgrade();
-        let (id, sign_out, remove) = (row.id.clone(), row.can_sign_out, row.remove.is_some());
+        let (id, sign_out, remove, cookie_set) = (row.id.clone(), row.can_sign_out, row.remove.is_some(), row.cookie == Some(true));
         // Uma escrita em voo (nome, saída, remoção, login) segura as outras em toda linha.
         let busy = self.accounts_busy();
         let menu = Button::new(SharedString::from(format!("accounts-menu-{}", row.id))).ghost().small().icon(IconName::Ellipsis)
@@ -644,10 +677,24 @@ impl Hangar {
                 };
                 menu.item(item("accounts_rename", |this, id, window, cx| this.start_rename(id, window, cx)))
                     .when(sign_out, |m| m.item(item("accounts_sign_out", |this, id, window, cx| this.confirm_change(id, ChangeKind::SignOut, window, cx))))
+                    .when(cookie_set, |m| m.item(item("accounts_cookie_clear", |this, id, window, cx| this.confirm_clear_cookie(id, window, cx))))
                     .when(remove, |m| m.item(item("accounts_remove", |this, id, window, cx| this.confirm_change(id, ChangeKind::Remove, window, cx))))
             });
         let changing = self.accounts.change.as_ref().filter(|c| c.id == row.id)
-            .map(|c| tr(if c.kind == ChangeKind::SignOut { "accounts_signing_out" } else { "accounts_removing" }));
+            .map(|c| tr(if c.kind == ChangeKind::SignOut { "accounts_signing_out" } else { "accounts_removing" }))
+            .or_else(|| (self.accounts.cookie_clearing.as_deref() == Some(row.id.as_str())).then(|| tr("accounts_cookie_clearing")));
+        let edit = row.edit.filter(|_| changing.is_none()).map(|ready| {
+            let id = row.id.clone();
+            Button::new(SharedString::from(format!("accounts-edit-{}", row.id))).outline().small().label(tr("accounts_edit")).disabled(busy || !ready)
+                .when(!ready, |el| el.tooltip(tr("accounts_edit_needs_models")))
+                .on_click(cx.listener(move |this, _, window, cx| this.open_engine_form(id.clone(), window, cx)))
+        });
+        let cookie_open = self.accounts.cookie.as_ref().is_some_and(|c| c.id == row.id);
+        let cookie = row.cookie.filter(|_| changing.is_none() && !cookie_open).map(|_| {
+            let id = row.id.clone();
+            Button::new(SharedString::from(format!("accounts-cookie-{}", row.id))).outline().small().label(tr("accounts_cookie")).disabled(busy)
+                .on_click(cx.listener(move |this, _, window, cx| this.start_cookie(id.clone(), window, cx)))
+        });
         let sign_in = row.sign_in.clone().filter(|_| changing.is_none()).map(|label| {
             let id = row.id.clone();
             Button::new(SharedString::from(format!("accounts-sign-in-{}", row.id))).outline().small().label(label).disabled(busy)
@@ -656,15 +703,21 @@ impl Hangar {
         let actions = div().w(px(160.)).flex_shrink_0().flex().items_center().justify_end().gap(px(6.))
             .children(changing.map(|text| div().text_size(px(12.5)).text_color(theme::muted()).child(text)))
             .children(sign_in)
+            .children(edit)
+            .children(cookie)
             .children(row.later.iter().enumerate().map(|(n, label)| soon_button(SharedString::from(format!("accounts-later-{}-{n}", row.id)), label.clone())))
             .child(menu);
         let line = div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().items_center().gap(px(12.)).px_4()
             .py(px(if compact { 8. } else { 14. }))
             .child(avatar).child(identity).child(quota).child(actions);
-        match renaming.and_then(|r| r.error.clone()) {
+        let line = match renaming.and_then(|r| r.error.clone()) {
             // A cor mora num filho: a caixa pinta o texto de cinza por cima.
             Some(error) => div().child(line).child(div().px_4().pb(px(12.)).pl(px(16. + size + 12.)).text_size(px(13.))
                 .child(div().text_color(theme::danger()).child(error))),
+            None => line,
+        };
+        match self.accounts.cookie.as_ref().filter(|c| c.id == row.id) {
+            Some(form) => div().child(line).child(self.render_cookie(form, size, cx)),
             None => line,
         }
     }
@@ -741,7 +794,8 @@ mod tests {
         let (list, none) = ([model], HashMap::new());
         let models = model_names(&list, &none);
         assert!(group_of(&list[0], &models) == Some(Group::Models));
-        assert_eq!(build_row(&list[0], &HashMap::new(), false, 0.).later, vec![tr("accounts_edit")]);
+        // Editar continua na linha, desligado: sem os detalhes do disco o formulário sairia em branco.
+        assert_eq!(build_row(&list[0], &HashMap::new(), false, 0.).edit, Some(false));
     }
 
     #[test]
