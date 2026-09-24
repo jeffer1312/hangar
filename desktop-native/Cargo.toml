@@ -1,0 +1,23 @@
+[package]
+name = "hangar-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui-kit = "=0.6.6"
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+reqwest = { version = "=0.13.4", default-features = false, features = ["rustls", "json", "stream"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+futures = "=0.3.34"
+eventsource-stream = "=0.2.3"
+url = "=2.5.8"
+async-channel = "=2.5.0"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+strip = true
