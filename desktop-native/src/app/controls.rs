@@ -524,7 +524,7 @@ impl Hangar {
         let running = self.controls.planning.contains(&key);
         let ready = !running && self.can_send() && !self.delivery.pending(&key) && self.queued_count() == 0;
         let dismiss = id.clone();
-        Some(div().px_6().py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())
+        Some(div().py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())
             .child(div().flex_1().min_w_0().text_sm().child(tr(if running { "plan_implementing" } else { "headless_plan_title" })))
             .child(Button::new("hplan-dismiss").small().ghost().label(tr("codex_plan_dismiss"))
                 .on_click(cx.listener(move |this, _, _, cx| { this.plans_dismissed.insert(dismiss.clone()); cx.notify(); })))
@@ -567,7 +567,7 @@ impl Hangar {
         let meta = match meta? {
             Ok(Value::Null) => return None,
             Ok(meta) => meta,
-            Err(reason) => return Some(div().px_6().py_1().text_xs().text_color(theme::warning()).child(tr("plan_preview_failed").replace("{reason}", &reason)).into_any_element()),
+            Err(reason) => return Some(div().py_1().text_xs().text_color(theme::warning()).child(tr("plan_preview_failed").replace("{reason}", &reason)).into_any_element()),
         };
         let path = text(&meta, "path");
         let marker = format!("{}:{}", text(&meta, "name"), path);
@@ -587,7 +587,7 @@ impl Hangar {
             }
         };
         let done = marker.clone();
-        Some(div().px_6().py_2().flex().flex_col().gap_2().border_t_1().border_color(theme::border())
+        Some(div().py_2().flex().flex_col().gap_2().border_t_1().border_color(theme::border())
             .child(div().flex().items_center().gap_2()
                 .child(div().flex_1().min_w_0().flex().flex_col()
                     .child(div().text_sm().truncate().child(tr("plan_preview_found").replace("{title}", &title)))

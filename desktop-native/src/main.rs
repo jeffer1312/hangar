@@ -1,5 +1,6 @@
 mod api;
 mod app;
+mod appearance;
 mod chat;
 mod composer;
 mod conversation;
@@ -12,7 +13,8 @@ mod theme;
 use gpui_kit::{component::{Root, Theme, ThemeMode}, *};
 use std::{borrow::Cow, sync::Arc};
 
-gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, Paperclip, Plug, SquareSlash]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, Paperclip, Plug, SquareSlash,
+    Activity, Contrast, Droplet, Image, Keyboard, Layers, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
 
@@ -34,19 +36,41 @@ impl AssetSource for AppAssets {
     }
 }
 
+const FONTS: [&[u8]; 5] = [
+    include_bytes!("../assets/fonts/Geist-Regular.ttf"), include_bytes!("../assets/fonts/Geist-Medium.ttf"),
+    include_bytes!("../assets/fonts/Geist-SemiBold.ttf"), include_bytes!("../assets/fonts/Geist-Bold.ttf"),
+    include_bytes!("../assets/fonts/Geist-Italic.ttf"),
+];
+
+/// Só para medir: HANGAR_NATIVE_WINDOW=LxA abre a janela nesse tamanho lógico. Sem a variável, 1180×800.
+fn window_size() -> Size<Pixels> {
+    let parsed = std::env::var("HANGAR_NATIVE_WINDOW").ok().and_then(|v| {
+        let (w, h) = v.split_once('x')?;
+        Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?))
+    }).filter(|(w, h)| *w >= 640. && *h >= 480.);
+    let (w, h) = parsed.unwrap_or((1180., 800.));
+    size(px(w), px(h))
+}
+
 fn main() {
     let runtime = Arc::new(tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("async runtime"));
+    // Lida antes da primeira janela: o tema já nasce na escolha salva. Falha de leitura abre no padrão e aparece na tela.
+    let appearance_error = match appearance::load() { Ok(value) => { appearance::set(value); None } Err(e) => Some(e) };
     gpui_kit::application().with_assets(AppAssets).run(move |cx| {
         gpui_kit::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
+        if let Err(error) = cx.text_system().add_fonts(FONTS.iter().map(|bytes| Cow::Borrowed(*bytes)).collect()) {
+            eprintln!("fonte embutida recusada: {error}");
+        }
+        theme::sync_kit(cx);
         cx.open_window(WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1180.0), px(800.0)), cx))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, window_size(), cx))),
             app_id: Some("com.hangar.native".into()),
             titlebar: Some(TitlebarOptions { title: Some("Hangar Native — Experimental".into()), ..Default::default() }),
             window_background: if cfg!(target_os = "linux") { WindowBackgroundAppearance::Transparent } else { WindowBackgroundAppearance::Opaque },
             ..Default::default()
         }, |window, cx| {
-            let view = cx.new(|cx| app::Hangar::new(runtime.clone(), window, cx));
+            let view = cx.new(|cx| app::Hangar::new(runtime.clone(), appearance_error.clone(), window, cx));
             cx.new(|cx| {
                 let root = Root::new(view, window, cx);
                 if cfg!(target_os = "linux") { root.bg(rgba(0x00000000)) } else { root }

@@ -1,5 +1,5 @@
 use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc, time::{Duration, Instant}};
-use gpui_kit::{component::{button::*, checkbox::Checkbox, radio::Radio, scroll::{Scrollbar, ScrollbarMode},
+use gpui_kit::{component::{button::*, checkbox::Checkbox, radio::Radio, scroll::{Scrollbar, ScrollbarMode}, menu::{ContextMenuExt, PopupMenuItem},
     input::{Escape, IndentInline, Input, InputEvent, InputState, MoveDown, MoveUp, Textarea, TextareaState}, text::{TextView, TextViewState}, *}, *};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::assets::IconName;
@@ -12,14 +12,30 @@ use serde_json::{Value, json};
 mod chrome;
 mod controls;
 mod follow;
+mod settings;
 mod side;
 
-actions!(hangar, [FocusComposer]);
+actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply]);
 
 const LIVE_THINKING: &str = "__thinking__";
 const LIVE_TOOL: &str = "__tool__";
 const PREVIEW: &str = "__preview__";
-const COLUMN: f32 = 820.;
+const COLUMN: f32 = 780.;
+
+/// Largura da coluna da conversa e do compositor: a do mock vezes o ajuste de Aparência.
+fn column_width() -> f32 { COLUMN * crate::appearance::get().column as f32 / 100. }
+
+/// Põe uma faixa na coluna da conversa: mesma margem e mesma largura das mensagens e do compositor.
+fn in_column(el: impl IntoElement) -> Div {
+    div().w_full().flex_shrink_0().px(px(36.)).flex().justify_center().child(div().w_full().max_w(px(column_width())).child(el))
+}
+
+/// Texto da conversa com a fonte, o tamanho e a entrelinha escolhidos em Aparência.
+fn conversation_text(el: Div) -> Div {
+    let a = crate::appearance::get();
+    el.font_family(if a.font == crate::appearance::Font::Mono { theme::MONO } else { theme::SANS })
+        .text_size(px(14. * a.text_size as f32 / 100.)).line_height(relative(1.45 * a.line_height as f32 / 100.))
+}
 const DETAIL_MAX: usize = 20_000;
 const LIVE_THINKING_TAIL: usize = 1_500;
 
@@ -41,6 +57,7 @@ enum Payload {
     Media(SessionKey, Source, Result<Option<Arc<RenderImage>>, Failure>),
     Saved(SessionKey, bool, Result<PathBuf, String>),
     ConnectionNotSaved(String),
+    AppearanceSaved(Result<(), String>),
     // Resposta amarrada à sessão e ao pedido capturados no gesto, não ao que está na tela na volta.
     Reply(SessionKey, Reply, Result<Value, Failure>),
     Config(Result<Value, Failure>),
@@ -169,6 +186,10 @@ pub struct Hangar {
     stats: Option<Stats>,
     side: side::Side,
     controls: controls::Controls,
+    // Página de configurações aberta por cima da janela inteira; `None` é a janela da conversa.
+    settings: Option<settings::Page>,
+    settings_ui: settings::SettingsUi,
+    appearance_note: Option<String>,
 }
 
 impl Drop for Hangar {
@@ -178,7 +199,7 @@ impl Drop for Hangar {
 }
 
 impl Hangar {
-    pub fn new(runtime: Arc<Runtime>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(runtime: Arc<Runtime>, appearance_error: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let saved = load_connection();
         let (saved_address, saved_token) = saved.clone().unwrap_or_else(|| ("http://127.0.0.1:8765".into(), String::new()));
         let address = cx.new(|cx| InputState::new(window, cx).default_value(saved_address).placeholder(tr("server")));
@@ -196,7 +217,9 @@ impl Hangar {
             }
         });
         // Ctrl+L leva ao campo de mensagem; a raiz da janela trata a ação e segura o foco quando nada mais o tem.
-        cx.bind_keys([KeyBinding::new("ctrl-l", FocusComposer, None)]);
+        cx.bind_keys([KeyBinding::new("ctrl-l", FocusComposer, None), KeyBinding::new("ctrl-,", OpenSettings, None),
+            KeyBinding::new("ctrl-shift-c", CopyLastReply, None)]);
+        let settings_ui = settings::SettingsUi::new(window, cx);
         let root_focus = cx.focus_handle();
         let command_search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("commands_search")));
         cx.subscribe(&command_search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
@@ -240,7 +263,21 @@ impl Hangar {
             suggest_pick: 0, suggest_dismissed: None, command_panel: false, command_search, confirm: None,
             terminal_suggestion: String::new(), recent: None, media: MediaCache::new(), stats: None,
             side: side::Side::default(), controls: controls::Controls::default(),
+            settings: None, settings_ui,
+            appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
         }
+    }
+
+    /// Nome curto do servidor conectado (endereço sem o esquema), para a lista e as configurações.
+    fn server_label(&self, cx: &App) -> String {
+        let address = self.address.read(cx).value().to_string();
+        let host = address.trim_start_matches("http://").trim_start_matches("https://").trim_end_matches('/');
+        if host.is_empty() { tr("connection") } else { host.to_owned() }
+    }
+
+    /// Texto da última resposta do agente na conversa aberta, para o atalho de copiar.
+    fn last_reply(&self) -> Option<String> {
+        self.chat.events.iter().rev().find(|e| e.kind == "assistant_msg").map(|e| e.body())
     }
 
     fn failure(error: &Failure) -> String {
@@ -408,6 +445,12 @@ impl Hangar {
                 cx.notify();
                 return;
             }
+            Payload::AppearanceSaved(result) => {
+                // O arquivo é deste computador, não da conexão: vale mesmo depois de trocar de servidor.
+                self.appearance_note = result.err().map(|error| tr("settings_not_saved").replace("{error}", &error));
+                cx.notify();
+                return;
+            }
             Payload::ConnectionNotSaved(error) => {
                 eprintln!("conexão não gravada: {error}");
                 self.list_error = Some(tr("connection_not_saved").replace("{error}", &error));
@@ -546,7 +589,8 @@ impl Hangar {
             }
             Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
-                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..) => unreachable!(),
+                | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
+                | Payload::AppearanceSaved(..) => unreachable!(),
         }
         self.sync_rows(cx);
         cx.notify();
@@ -1454,9 +1498,9 @@ impl Hangar {
             (_, None) => div().into_any_element(),
         };
         let message = id == PREVIEW || matches!(self.items.get(index), Some(Item::Event(_)));
-        div().id(SharedString::from(id)).w_full().px_6().when(message, |el| el.py_3()).when(!message, |el| el.py(px(2.)))
+        div().id(SharedString::from(id)).w_full().px(px(36.)).when(message, |el| el.py(px(8.))).when(!message, |el| el.py(px(2.)))
             .flex().justify_center()
-            .child(div().w_full().max_w(px(COLUMN)).child(inner))
+            .child(div().w_full().max_w(px(column_width())).child(inner))
             .into_any_element()
     }
 
@@ -1781,7 +1825,7 @@ impl Hangar {
         if self.plans_dismissed.contains(&id) || self.chat.ask.is_some() { return None; }
         let ready = self.chat.state.state == "idle" && self.queued_count() == 0;
         let dismiss = id.clone();
-        Some(div().px_6().py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())
+        Some(div().py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())
             .child(div().flex_1().min_w_0().text_sm().child(tr(if ready { "codex_plan_title" } else { "codex_plan_wait" })))
             .child(Button::new("plan-dismiss").small().ghost().label(tr("codex_plan_dismiss"))
                 .on_click(cx.listener(move |this, _, _, cx| { this.plans_dismissed.insert(dismiss.clone()); cx.notify(); })))
@@ -1791,10 +1835,11 @@ impl Hangar {
     }
 
     fn interaction_card(&self, title: String, body: AnyElement, footer: AnyElement) -> AnyElement {
-        div().px_6().py_2().flex().justify_center()
-            .child(div().w_full().max_w(px(COLUMN)).p_4().rounded_lg().border_1().border_color(theme::accent()).bg(theme::surface())
-                .flex().flex_col().gap_3()
-                .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(theme::accent()).child(title))
+        // Pedido que espera você: moldura âmbar suave, como `.ask` do mock.
+        div().px(px(36.)).py_2().flex().justify_center()
+            .child(div().w_full().max_w(px(column_width())).p(px(14.)).rounded(px(14.)).border_1().border_color(theme::warning().opacity(0.35))
+                .bg(theme::warning().opacity(0.06)).flex().flex_col().gap(px(10.))
+                .child(div().font_weight(FontWeight::MEDIUM).child(title))
                 .child(body).child(footer))
             .into_any_element()
     }
@@ -2049,35 +2094,50 @@ impl Hangar {
                 .child("⏳").child(div().font_weight(FontWeight::SEMIBOLD).child(tr("queue_count").replace("{n}", &queued.to_string())))
                 .child("·").child(div().underline().child(tr("queue_send_action"))))
             .on_click(cx.listener(|this, _, _, cx| this.act(Action::Steer, String::new(), cx))));
-        let tab = (repo.is_some() || ctx_pct.is_some() || queue_chip.is_some()).then(|| {
-            let branch = status.as_ref().and_then(|s| s.branch.clone()).unwrap_or_default();
+        // Fila acima do cartão, como a linha "Na fila" do mock.
+        let queue_row = queue_chip.map(|chip| div().mb(px(8.)).px(px(12.)).py(px(4.)).flex().items_center().gap_2().rounded(px(10.))
+            .border_1().border_color(theme::border_strong()).text_size(px(12.5)).text_color(theme::muted())
+            .child(chrome::small_icon(IconName::List, 14., theme::faint())).child(chip));
+        let session = self.selected.clone().filter(|_| readable);
+        let footer = (repo.is_some() || ctx_pct.is_some() || session.is_some()).then(|| {
+            let branch = status.as_ref().and_then(|s| s.branch.clone()).or_else(|| session.as_ref().and_then(|s| s.branch.clone())).unwrap_or_default();
             let dirty = status.as_ref().and_then(|s| s.dirty) == Some(true);
-            div().mx_6().h(px(34.)).px_2().flex().items_center().gap_2().rounded_t(px(12.)).border_1().border_b_0()
-                .border_color(theme::glass_border()).bg(theme::chrome()).text_xs().text_color(theme::faint())
-                .child(div().flex().items_center().gap_1().min_w_0().children(queue_chip))
-                .child(div().flex_1())
-                .when_some(repo, |el, repo| el.child(div().flex().items_center().gap_1().min_w_0()
-                    .child(chrome::small_icon(IconName::Folder, 13., theme::faint()))
-                    .child(div().max_w(px(160.)).truncate().text_color(theme::muted()).child(repo))
-                    .when(!branch.is_empty(), |el| el.child("·").child(div().max_w(px(140.)).truncate().font_family(crate::theme::MONO).child(branch)))
+            let (added, removed) = session.as_ref().map(|s| (s.git_added.filter(|n| *n > 0), s.git_removed.filter(|n| *n > 0))).unwrap_or((None, None));
+            let folder = repo.clone().or_else(|| session.as_ref().and_then(folder_name));
+            let cost = status.as_ref().and_then(|s| s.cost_usd).map(side::money);
+            let stats = self.stats.as_ref().filter(|_| readable).map(side::stats_line);
+            let right = [ctx_pct.map(|p| tr("composer_ctx").replace("{n}", &p.round().to_string())), cost].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            div().pt(px(7.)).px(px(6.)).flex().items_center().gap(px(6.)).text_xs().text_color(theme::faint())
+                .when_some(folder, |el, f| el.child(chrome::small_icon(IconName::Folder, 14., theme::faint())).child(div().max_w(px(200.)).truncate().child(f)))
+                .when(!branch.is_empty(), |el| el.child(div().ml(px(4.)).flex().items_center().gap(px(4.)).min_w_0()
+                    .child(chrome::small_icon(IconName::GitBranch, 14., theme::faint()))
+                    .child(div().max_w(px(160.)).truncate().child(branch))
                     .when(dirty, |el| el.child(div().text_color(theme::warning()).child("*")))))
-                .when(ctx_pct.is_some(), |el| el.child(div().id("composer-ring").tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("ctx_ring")).build(window, cx)).child(chrome::context_ring(ctx_pct))))
+                .when_some(added, |el, a| el.child(div().text_color(theme::success()).child(format!("+{a}"))))
+                .when_some(removed, |el, r| el.child(div().text_color(theme::removed()).child(format!("−{r}"))))
+                .child(div().flex_1())
+                // A linha de estatísticas do turno fica na dica: o rodapé mostra só contexto e custo, como no mock.
+                .when(!right.is_empty(), |el| el.child(div().id("composer-ctx").flex_shrink_0().child(right)
+                    .when_some(stats, |el, line| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(line.clone()).build(window, cx)))))
         });
 
         let send_label = tr(if sending || uploading.is_some() { "sending" } else { "send" });
         let action = if can_stop && !has_input {
             Button::new("stop").custom(ButtonCustomVariant::new(cx).color(theme::elevated()).foreground(theme::danger()).hover(theme::raised()).active(theme::raised()))
-                .bg(theme::elevated()).child(div().size(px(13.)).rounded(px(2.5)).bg(theme::danger())).size(px(44.)).rounded(px(12.))
+                .bg(theme::elevated()).child(div().size(px(10.)).rounded(px(2.)).bg(theme::danger())).size(px(30.)).rounded_full()
                 .tooltip(tr("stop_hint")).accessibility_label(tr("stop")).disabled(stopping)
                 .on_click(cx.listener(|this, _, _, cx| this.request_stop(cx)))
         } else {
             let enabled = !blocked && has_input;
-            Button::new("send").custom(ButtonCustomVariant::new(cx)
-                    .color(if enabled { theme::accent() } else { theme::raised() }).foreground(if enabled { theme::on_accent() } else { theme::faint() })
-                    .hover(theme::accent_press()).active(theme::accent_press()))
-                .bg(if enabled { theme::accent() } else { theme::raised() })
-                .icon(chrome::small_icon(IconName::ArrowUp, 18., if enabled { theme::on_accent() } else { theme::faint() }))
-                .size(px(44.)).rounded(px(12.)).tooltip(tr("send_hint")).accessibility_label(send_label).disabled(!enabled)
+            // Colado: botão claro com a seta na cor do fundo; caixa solta: destaque, como nos mocks.
+            let (fill, ink) = match (enabled, theme::is_floating()) {
+                (false, _) => (theme::raised(), theme::faint()),
+                (true, true) => (theme::accent(), theme::on_accent()),
+                (true, false) => (theme::text(), theme::background()),
+            };
+            Button::new("send").custom(ButtonCustomVariant::new(cx).color(fill).foreground(ink).hover(fill.opacity(0.88)).active(fill.opacity(0.8)))
+                .bg(fill).icon(chrome::small_icon(IconName::ArrowUp, 16., ink))
+                .size(px(30.)).rounded_full().tooltip(tr("send_hint")).accessibility_label(send_label).disabled(!enabled)
                 .on_click(cx.listener(|this, _, window, cx| this.submit(false, false, window, cx)))
         };
         let commands = chrome::icon_button("commands", IconName::SquareSlash, tr("commands"), cx).disabled(!readable).selected(self.command_panel)
@@ -2095,30 +2155,30 @@ impl Hangar {
             .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx)));
         let recent_btn = chrome::icon_button("attach-recent", IconName::RotateCcwClock, tr("attach_recent"), cx).disabled(!readable || uploading.is_some())
             .selected(self.recent.is_some()).on_click(cx.listener(|this, _, _, cx| this.open_recent(cx)));
-        let control_row = div().flex().items_center().gap_2().min_h(px(44.))
-            .child(div().flex().items_center().gap_2().child(commands).children(pills).child(attach).child(recent_btn))
-            .children(mode)
+        let control_row = div().flex().items_center().gap_1()
+            .child(commands).child(attach).child(recent_btn)
             .child(div().flex_1())
-            .when(steer_text, |el| el.child(chrome::pill_button("steer-text", cx).px_3().label(tr("steer_text")).disabled(blocked)
+            .when(steer_text, |el| el.child(chrome::pill_button("steer-text", cx).label(tr("steer_text")).disabled(blocked)
                 .on_click(cx.listener(|this, _, window, cx| this.submit(true, false, window, cx)))))
-            .child(action);
-        let card = div().relative().flex().flex_col().gap_2().p_3().rounded(px(18.)).border_1()
-            .border_color(if focused { theme::accent_focus() } else { theme::glass_border() }).bg(theme::chrome()).shadow(theme::card_shadow())
+            .children(pills)
+            .children(mode)
+            .child(div().ml(px(6.)).child(action));
+        let card = div().relative().flex().flex_col().gap(px(10.)).pt(px(12.)).pr(px(12.)).pb(px(10.)).pl(px(16.)).rounded(px(18.)).border_1()
+            .border_color(if focused { theme::accent_focus() } else { theme::border_strong() }).bg(theme::boxed()).shadow(theme::card_shadow())
             .when_some(tray, |el, tray| el.child(tray))
             .when_some(uploading, |el, (done, total)| el.child(div().text_xs().text_color(theme::accent())
                 .child(tr("attach_progress").replace("{done}", &done.to_string()).replace("{total}", &total.to_string()))))
             .child(field)
             .child(control_row);
-        let stats = self.stats.as_ref().filter(|_| readable).map(side::stats_line);
-        div().id("composer").relative().flex_shrink_0().w_full().px_3().pt_2().pb_5().flex().justify_center()
+        div().id("composer").relative().flex_shrink_0().w_full().px(px(36.)).pb(px(10.)).flex().justify_center()
             .when(readable, |el| el.drag_over::<ExternalPaths>(|style, _, _, _| style.bg(theme::accent_dim()))
                 .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.read_paths(paths.paths().to_vec(), cx))))
-            .child(div().relative().w_full().max_w(px(1400.)).flex().flex_col()
+            .child(div().relative().w_full().max_w(px(column_width())).flex().flex_col()
                 .when(!floating.is_empty(), |el| el.child(div().absolute().left_0().right_0().bottom(relative(1.)).pb_2().flex().flex_col().gap_2()
                     .occlude().children(floating)))
-                .children(tab)
+                .children(queue_row)
                 .child(card)
-                .when_some(stats, |el, line| el.child(div().pt(px(6.)).px_1().text_center().truncate().text_size(px(11.)).text_color(theme::faint()).child(line))))
+                .children(footer))
             .into_any_element()
     }
 
@@ -2194,19 +2254,30 @@ impl Hangar {
         let busy = self.selected_key().is_some_and(|key| self.flight.busy(&key));
         let discard = discard.map(|entry| Button::new(format!("discard-{id}")).small().ghost().label(tr("queue_discard")).disabled(busy)
             .on_click(cx.listener(move |this, _, _, cx| this.act(Action::Discard(entry.clone()), entry.clone(), cx))));
-        div().w_full()
-            .child(div().flex().flex_col().gap_2().p_4().rounded_lg().when(user, |el| el.bg(theme::raised()))
-                .child(div().flex().items_center().justify_between()
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label))
-                    .child(Button::new(format!("copy-{id}")).ghost().small().label(tr("copy"))
-                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone())))))
-                .when(!body.trim().is_empty() || files.is_none(), |el| el.child(TextView::new(&view).selectable(true).scrollable(false).on_link_click(|url, _, _, cx| {
-                    if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); }
-                })))
-                .when_some(files, |el, files| el.child(files))
-                .when_some(note, |el, note| el.child(div().flex().items_center().gap_2()
-                    .child(div().flex_1().min_w_0().text_sm().text_color(theme::warning()).child(note))
-                    .when_some(discard, |el, button| el.child(button)))))
+        // Conversa sem cartões: usuário em bolha à direita, agente em texto corrido. Só o que não é nenhum dos
+        // dois (erro, aviso, formato desconhecido) mantém o rótulo, porque ali o rótulo é informação.
+        let plain = id == PREVIEW || (kind_of(&self.items, index, &self.chat.events) == Some("assistant_msg") && !error);
+        let text = (!body.trim().is_empty() || files.is_none()).then(|| TextView::new(&view).selectable(true).scrollable(false).on_link_click(|url, _, _, cx| {
+            if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); }
+        }));
+        let content = conversation_text(div().flex().flex_col().gap_2())
+            .when(!user && !plain, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label)))
+            .children(text)
+            .when_some(files, |el, files| el.child(files));
+        let copy_label = tr("copy_message");
+        div().id(SharedString::from(format!("message-{id}"))).w_full().flex().flex_col().gap_2()
+            .map(|el| if user {
+                el.items_end().child(div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content))
+            } else { el.child(content) })
+            .when_some(note, |el, note| el.child(div().flex().items_center().gap_2().when(user, |el| el.justify_end())
+                .child(div().min_w_0().text_sm().text_color(theme::warning()).child(note))
+                .when_some(discard, |el, button| el.child(button))))
+            // Copiar sai da vista e mora no menu de contexto (e no Ctrl+Shift+C para a última resposta).
+            .context_menu(move |menu, _, _| {
+                let text = copy_text.clone();
+                menu.item(PopupMenuItem::new(copy_label.clone()).icon(IconName::Copy)
+                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))))
+            })
             .into_any_element()
     }
 }
@@ -2258,48 +2329,103 @@ fn release_image(image: Arc<Image>, window: &mut Window, cx: &mut App) {
 }
 
 impl Hangar {
-    /// Linha da lista como a `.sess-row` do web: marca no estado, nome, linha de estado, pasta e o selo à direita.
-    fn render_session_row(&self, session: SessionInfo, selected: bool, mixed: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// Barra lateral do mock: marca, escopo, seções "Aguardando você" e "Sessões", rodapé com o servidor e a engrenagem.
+    fn render_sidebar(&self, selected_name: Option<&str>, cx: &mut Context<Self>) -> AnyElement {
+        let a = crate::appearance::get();
+        let floating = a.panels == crate::appearance::Panels::Floating;
+        let fit_content = floating && a.sidebar_height == crate::appearance::SidebarHeight::Content;
+        let host = self.server_label(cx);
+        let (waiting, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) = self.sessions.iter().partition(|s| s.state == "awaiting_input");
+        let section = |label: String, count: Option<usize>| div().flex().items_center().justify_between().px(px(8.)).pt(px(12.)).pb(px(6.))
+            .child(chrome::section_label(label))
+            .when_some(count, |el, n| el.child(div().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(n.to_string())));
+        let rows = |list: Vec<&SessionInfo>, cx: &mut Context<Self>| list.into_iter().map(|session| {
+            let selected = selected_name == Some(session.name.as_str());
+            self.render_session_row(session.clone(), selected, &host, cx)
+        }).collect::<Vec<_>>();
+        let waiting_count = waiting.len();
+        let list = div().id("session-list").min_h_0().overflow_y_scroll().px(px(8.)).flex().flex_col().gap(px(2.))
+            .when(!fit_content, |el| el.flex_1())
+            .when(self.sessions.is_empty() && self.list_error.is_none(), |el| el.child(div().p_2().text_xs().text_color(theme::faint())
+                .child(tr(if self.list_online { "empty_sessions" } else { "connecting" }))))
+            .when(waiting_count > 0, |el| el.child(section(tr("sidebar_awaiting"), Some(waiting_count))).children(rows(waiting, cx)))
+            .when(!rest.is_empty(), |el| el.child(section(tr("sessions"), None)).children(rows(rest, cx)));
+        div().w(px(284.)).flex_shrink_0().flex().flex_col().bg(theme::chrome())
+            // A linha da janela estica os filhos; "Só o conteúdo" precisa soltar a barra do fundo.
+            .map(|el| if fit_content { el.max_h_full().self_start() } else { el.h_full() })
+            .map(|el| if floating { el.rounded(px(18.)).border_1().border_color(theme::border()).shadow(theme::panel_shadow()) }
+                else { el.border_r_1().border_color(theme::border()) })
+            .child(div().h(px(44.)).flex_shrink_0().px(px(14.)).flex().items_center().gap_2()
+                .child(chrome::hangar_mark(16., theme::accent()))
+                .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("brand")))
+                .child(div().px_2().py(px(1.)).rounded_full().bg(theme::hover()).text_size(px(10.)).text_color(theme::faint()).child(tr("experimental"))))
+            .child(div().flex_shrink_0().mx(px(8.)).mt(px(4.)).mb(px(8.)).h(px(32.)).px(px(8.)).flex().items_center().gap_2().font_weight(FontWeight::MEDIUM)
+                .child(chrome::small_icon(IconName::Server, 16., theme::muted()))
+                .child(div().flex_1().min_w_0().truncate().child(tr("sidebar_all_sessions")))
+                .child(div().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(self.sessions.len().to_string())))
+            .child(list)
+            .when_some(self.list_error.clone(), |el, text| el.child(div().px_4().py_1().flex().items_center().gap_2().text_xs().text_color(theme::warning())
+                .child(div().flex_1().min_w_0().child(text))
+                .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
+            .child(div().h(px(48.)).flex_shrink_0().px(px(8.)).flex().items_center().gap_1().border_t_1().border_color(theme::border())
+                .child(Button::new("connection").ghost().flex_1().min_w_0().h(px(32.)).px(px(6.))
+                    .tooltip(tr("connection_tip")).accessibility_label(tr("connection"))
+                    .child(div().w_full().min_w_0().flex().items_center().gap_2()
+                        .child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(if self.list_online { theme::success() } else { theme::warning() }))
+                        .child(div().min_w_0().truncate().text_size(px(13.)).text_color(theme::muted()).child(host)))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_connection(window, cx))))
+                .child(Button::new("open-settings").custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
+                        .hover(theme::hover()).active(theme::hover()))
+                    .icon(chrome::small_icon(IconName::Settings, 16., theme::muted())).size(px(28.)).rounded(px(6.))
+                    .accessibility_label(tr("settings")).tooltip_with_action(tr("settings_open"), &OpenSettings, None)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(settings::Page::Appearance, window, cx)))))
+            .into_any_element()
+    }
+
+    /// Linha de 3 níveis do mock: pasta @ servidor e tempo; selo, nome e estado; pergunta pendente ou branch com o diff.
+    fn render_session_row(&self, session: SessionInfo, selected: bool, host: &str, cx: &mut Context<Self>) -> AnyElement {
         let state = session.state.as_str();
         let limited = session.limited == Some(true);
-        let awaiting = state == "awaiting_input";
         let untracked = session.tracked == Some(false);
-        let mark = if limited { theme::limited() } else { theme::status(state) };
         let chip_state = if limited { "limited" } else { state };
         let chip = chrome::state_chip(chip_state, tr(&format!("chip_{chip_state}")), false);
         let sub = match state {
-            "awaiting_input" => session.question.clone().map(|q| (conversation::one_line(&q, 80), theme::warning(), true)),
+            "awaiting_input" => session.question.clone().map(|q| (conversation::one_line(&q, 80), theme::warning(), false)),
             "working" => session.label.clone().filter(|l| !l.trim().is_empty())
-                .map(|l| (conversation::one_line(l.split(" (").next().unwrap_or(&l), 80), theme::muted(), false)),
+                .map(|l| (conversation::one_line(l.split(" (").next().unwrap_or(&l), 80), theme::muted(), true)),
             _ => None,
         };
-        let folder = session.cwd.as_deref().and_then(|cwd| cwd.trim_end_matches('/').rsplit('/').next()).map(str::to_owned);
-        let branch = session.branch.clone().filter(|b| !matches!(b.as_str(), "main" | "master" | ""));
+        let meta = place(&session, host);
+        let when = session.last_activity.map(side::since);
+        let branch = session.branch.clone().filter(|b| !b.is_empty());
         let (added, removed) = (session.git_added.filter(|n| *n > 0), session.git_removed.filter(|n| *n > 0));
         let name = session.name.clone();
-        div().id(SharedString::from(session.name.clone())).flex_shrink_0().flex().items_center().gap_2().min_h(px(48.)).px_2().py(px(6.)).rounded(px(12.))
-            .when(awaiting, |el| el.border_l(px(3.)).border_color(theme::warning()).bg(theme::awaiting_row()))
+        let lane = || div().w(px(18.)).flex_shrink_0();
+        div().id(SharedString::from(session.name.clone())).flex_shrink_0().flex().flex_col().gap(px(1.)).px(px(8.)).py(px(7.)).rounded(px(10.))
             .when(selected, |el| el.bg(theme::selected_row()))
-            .hover(|el| el.bg(theme::raised()))
-            .child(div().relative().w(px(18.)).flex_shrink_0().when(untracked, |el| el.opacity(0.45))
-                .child(chrome::hangar_mark(18., mark))
-                .when(mixed, |el| el.child(chrome::provider_badge(&session.provider))))
-            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.)).when(untracked, |el| el.opacity(0.45))
-                .child(div().flex().items_center().gap_2()
-                    .child(div().min_w_0().text_sm().line_height(px(17.5)).text_color(if selected { theme::text() } else { theme::muted() })
-                        .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD)).child(name))
+            .when(!selected, |el| el.hover(|el| el.bg(theme::hover())))
+            .child(div().flex().items_center().gap(px(8.)).text_size(px(11.5)).text_color(theme::faint())
+                .child(lane())
+                .child(div().flex_1().min_w_0().truncate().child(meta))
+                .when_some(when, |el, w| el.child(div().flex_shrink_0().child(w))))
+            .child(div().flex().items_center().gap(px(8.)).when(untracked, |el| el.opacity(0.45))
+                .child(lane().child(chrome::provider_glyph(&session.provider, 16.)))
+                .child(div().flex_1().min_w_0().flex().items_center().gap_2()
+                    .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name))
                     .when(untracked, |el| el.child(badge(tr("untracked_badge"), theme::faint()))))
-                .when_some(sub, |el, (text, color, strong)| el.child(div().truncate().text_xs().text_color(color)
-                    .when(strong, |el| el.font_weight(FontWeight::SEMIBOLD)).when(state == "working", |el| el.italic()).child(text)))
-                .when(folder.is_some() || branch.is_some() || added.is_some() || removed.is_some(), |el| el.child(div().flex().items_center().gap_2()
-                    .text_size(px(10.)).font_family(crate::theme::MONO).text_color(theme::faint())
-                    .when_some(folder, |el, f| el.child(div().flex().items_center().gap_1().min_w_0()
-                        .child(chrome::small_icon(IconName::Folder, 11., theme::faint()))
-                        .child(div().truncate().text_color(theme::muted()).child(f))))
-                    .when_some(branch, |el, b| el.child(div().flex_shrink_0().max_w(px(90.)).truncate().text_color(if selected { theme::accent() } else { theme::faint() }).child(format!("⎇ {b}"))))
-                    .when_some(added, |el, a| el.child(div().flex_shrink_0().text_color(theme::success()).child(format!("+{a}"))))
-                    .when_some(removed, |el, r| el.child(div().flex_shrink_0().text_color(theme::danger()).child(format!("−{r}")))))))
-            .child(chip)
+                .child(chip))
+            .map(|el| match sub {
+                Some((text, color, working)) => el.child(div().flex().gap(px(8.)).child(lane())
+                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(color).when(working, |el| el.italic()).child(text))),
+                None if branch.is_some() || added.is_some() || removed.is_some() => el.child(div().flex().items_center().gap(px(8.))
+                    .text_size(px(11.5)).text_color(theme::faint()).child(lane())
+                    .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.))
+                        .when_some(branch, |el, b| el.child(chrome::small_icon(IconName::GitBranch, 12., theme::faint()))
+                            .child(div().min_w_0().truncate().child(b)))
+                        .when_some(added, |el, a| el.child(div().flex_shrink_0().text_color(theme::success()).child(format!("+{a}"))))
+                        .when_some(removed, |el, r| el.child(div().flex_shrink_0().text_color(theme::removed()).child(format!("−{r}")))))),
+                None => el,
+            })
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select(session.clone(), window, cx);
                 // Foco só no gesto sobre a lista; troca automática de transcript não tira o foco de ninguém.
@@ -2309,6 +2435,19 @@ impl Hangar {
             }))
             .into_any_element()
     }
+}
+
+fn kind_of<'a>(items: &[Item], index: usize, events: &'a [ChatEvent]) -> Option<&'a str> {
+    match items.get(index) { Some(Item::Event(i)) => events.get(*i).map(|e| e.kind.as_str()), _ => None }
+}
+
+fn folder_name(session: &SessionInfo) -> Option<String> {
+    session.cwd.as_deref().and_then(|cwd| cwd.trim_end_matches('/').rsplit('/').next()).filter(|f| !f.is_empty()).map(str::to_owned)
+}
+
+/// "pasta @ servidor"; sem pasta legível, só o servidor.
+fn place(session: &SessionInfo, host: &str) -> String {
+    folder_name(session).map(|folder| format!("{folder} @ {host}")).unwrap_or_else(|| host.to_owned())
 }
 
 fn badge(text: String, color: Hsla) -> Div {
@@ -2481,35 +2620,8 @@ impl Render for Hangar {
             })
         });
         let stop_note = selected_key.as_ref().and_then(|key| self.stop_feedback.get(key)).cloned();
-        let mixed = self.sessions.iter().any(|s| s.provider != self.sessions[0].provider);
-        let awaiting = self.sessions.iter().filter(|s| s.state == "awaiting_input").count();
-        let sidebar = div().w(px(270.)).h_full().flex_shrink_0().bg(theme::chrome()).border_r_1().border_color(theme::border())
-            .flex().flex_col().gap_2().p_3()
-            .child(div().flex_shrink_0().min_h(px(36.)).px_1().flex().items_center().gap_2()
-                .child(chrome::hangar_mark(20., theme::accent()))
-                .child(div().flex_1().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("brand")))
-                .child(div().px_2().py(px(2.)).rounded_full().bg(theme::raised()).text_size(px(10.)).text_color(theme::faint()).child(tr("experimental"))))
-            .child(div().flex_shrink_0().mt_2().px_2().pt_2().pb_1().flex().items_center().gap_2()
-                .child(div().size(px(7.)).rounded_full().bg(if self.list_online { theme::success() } else { theme::warning() }))
-                .child(chrome::section_label(tr("sessions")))
-                .when(!self.sessions.is_empty(), |el| el.child(div().px(px(6.)).min_w(px(18.)).rounded_full().bg(theme::inset())
-                    .text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::faint()).text_center().child(self.sessions.len().to_string())))
-                .when(awaiting > 0, |el| el.child(div().px(px(6.)).rounded_full().bg(theme::pill("awaiting_input").0)
-                    .text_size(px(11.)).font_weight(FontWeight::BOLD).text_color(theme::warning()).child(awaiting.to_string()))))
-            .child(div().id("session-list").flex_1().min_h_0().overflow_y_scroll().flex().flex_col().gap(px(2.))
-                .when(self.sessions.is_empty() && self.list_error.is_none(), |el| el.child(div().p_2().text_xs().text_color(theme::faint()).child(tr(if self.list_online { "empty_sessions" } else { "connecting" }))))
-                .children(self.sessions.iter().map(|session| {
-                    let session = session.clone();
-                    let selected = selected_name.as_deref() == Some(session.name.as_str());
-                    self.render_session_row(session, selected, mixed, cx)
-                })))
-            .when_some(self.list_error.clone(), |el, text| el.child(div().px_2().flex().items_center().gap_2().text_xs().text_color(theme::warning())
-                .child(div().flex_1().min_w_0().child(text))
-                .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
-            .child(div().flex_shrink_0().mt_1().pt_2().border_t_1().border_color(theme::border()).flex().items_center()
-                .child(Button::new("connection").ghost().h(px(36.)).px_3().rounded_full().gap_1()
-                    .icon(chrome::small_icon(IconName::Plug, 16., theme::muted())).label(tr("connection")).tooltip(tr("connection_tip"))
-                    .on_click(cx.listener(|this, _, window, cx| this.open_connection(window, cx)))));
+        let floating = theme::is_floating();
+        let sidebar = self.render_sidebar(selected_name.as_deref(), cx);
 
         // Sessão sem conversa não tem stream próprio: o estado é o da lista.
         let header_state = if self.chat_online && self.chat.state.state.is_empty() { "loading".to_owned() }
@@ -2517,16 +2629,21 @@ impl Render for Hangar {
             else if let Some(s) = self.selected.as_ref().filter(|s| !s.readable()) { s.state.clone() }
             else if self.selected.is_some() { "reconnecting".to_owned() }
             else if self.list_online { "connected".to_owned() } else { "disconnected".to_owned() };
+        let session_chip = matches!(header_state.as_str(), "working" | "idle" | "awaiting_input" | "dead");
+        let limited_now = self.chat.state.limited.or(self.selected.as_ref().and_then(|s| s.limited)) == Some(true);
+        let chip_state = if limited_now && session_chip { "limited".to_owned() } else { header_state.clone() };
+        let place = self.selected.as_ref().map(|s| place(s, &self.server_label(cx)));
         let mut content = div().flex_1().min_w_0().h_full().flex().flex_col()
-            .child(div().h(px(66.)).px_6().flex_shrink_0().flex().items_center().justify_between().border_b_1().border_color(theme::border())
-                .child(div().flex().flex_col().gap_1()
-                    .child(selected_name.clone().unwrap_or_else(|| tr("title")))
-                    .child(div().text_xs().text_color(theme::muted()).child(self.selected.as_ref().and_then(|s| s.cwd.clone()).unwrap_or_default())))
-                .child(div().flex().items_center().gap_3()
-                    .child(div().text_xs().text_color(theme::status(&header_state)).child(tr(&header_state)))
-                    // Aberto, o botão de recolher mora no próprio painel, como no web.
-                    .when(self.selected.is_some() && !self.side.open, |el| el.child(chrome::icon_button("side-show", IconName::PanelRightOpen, tr("side_show"), cx)
-                        .size(px(36.)).on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx)))))));
+            .child(div().h(px(44.)).pl(px(20.)).pr(px(12.)).flex_shrink_0().flex().items_center().gap(px(10.)).when(floating, |el| el.mx(px(4.)))
+                .when_some(self.selected.as_ref(), |el, s| el.child(chrome::provider_glyph(&s.provider, 18.)))
+                .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).child(selected_name.clone().unwrap_or_else(|| tr("title"))))
+                .when_some(place, |el, place| el.child(div().min_w_0().truncate().text_color(theme::faint()).child(place)))
+                .child(div().flex_1())
+                .child(if session_chip { chrome::state_chip(&chip_state, tr(&format!("chip_{chip_state}")), true) }
+                    else { div().flex_shrink_0().text_xs().text_color(theme::status(&header_state)).child(tr(&header_state)).into_any_element() })
+                .when(self.selected.is_some(), |el| el.child(chrome::icon_button("side-show", IconName::PanelRight,
+                        tr(if self.side.open { "side_hide" } else { "side_show" }), cx)
+                    .selected(self.side.open).on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx))))));
 
         let prethread = self.render_prethread(cx);
         let prethread_open = prethread.is_some();
@@ -2536,13 +2653,13 @@ impl Render for Hangar {
             } else if !selected.readable() {
                 content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr(if selected.tracked == Some(false) { "untracked" } else { "starting" })));
             } else {
-                content = content.child(div().px_6().py_2().flex().gap_2().items_center()
+                content = content.child(in_column(div().py_2().flex().gap_2().items_center()
                     .when(self.has_older, |el| el.child(Button::new("older").small().ghost().label(tr("older")).disabled(self.loading)
                         .on_click(cx.listener(|this, _, _, cx| { this.history_limit = this.history_limit.saturating_add(400); this.etag = None; this.load_history(cx); }))))
                     .when(self.has_older, |el| el.child(div().text_xs().text_color(theme::muted()).child(format!("{} {}", tr("history_window"), self.history_limit))))
                     .when(self.loading, |el| el.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))))
                     .child(div().flex_1())
-                    .child(Button::new("latest").small().ghost().label(tr("latest")).on_click(cx.listener(|this, _, _, cx| this.follow_engage(cx)))));
+                    .child(Button::new("latest").small().ghost().label(tr("latest")).on_click(cx.listener(|this, _, _, cx| this.follow_engage(cx))))));
                 if self.row_ids.is_empty() && !self.loading && self.error.is_none() {
                     content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr("empty_chat")));
                 } else {
@@ -2571,19 +2688,20 @@ impl Render for Hangar {
         let answered = interaction::ask_from_events(&self.chat.events, self.provider().0)
             .and_then(|ask| ask.tool_use_id).is_some_and(|id| self.tool_answered(&id));
         let pending = card.is_none() && !answered && !prethread_open && (self.chat.state.state == "awaiting_input" || self.chat.state.login == Some(true));
+        // Faixas e avisos entre a conversa e o compositor ficam na mesma coluna das mensagens.
         content = content
             .when_some(card, |el, card| el.child(card))
-            .when_some(plan_bar, |el, bar| el.child(bar))
-            .when(pending, |el| el.child(div().px_6().py_2().text_sm().text_color(theme::warning()).child(tr("pending_question"))))
-            .when_some(self.chat.state.question.clone().filter(|_| pending), |el, question| el.child(div().px_6().text_sm().child(question)))
-            .when_some(action_note, |el, (note, warning)| el.child(div().px_6().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note)))
-            .when_some(self.chat.state.problema_detalhe.clone().or_else(|| self.chat.state.problema.clone()), |el, problem| el.child(div().px_6().text_sm().text_color(theme::warning()).child(problem)))
-            .when_some(self.error.clone(), |el, error| el.child(div().px_6().py_2().text_sm().text_color(theme::warning()).child(error)
+            .when_some(plan_bar, |el, bar| el.child(in_column(bar)))
+            .when(pending, |el| el.child(in_column(div().py_2().text_sm().text_color(theme::warning()).child(tr("pending_question")))))
+            .when_some(self.chat.state.question.clone().filter(|_| pending), |el, question| el.child(in_column(div().text_sm().child(question))))
+            .when_some(action_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
+            .when_some(self.chat.state.problema_detalhe.clone().or_else(|| self.chat.state.problema.clone()), |el, problem| el.child(in_column(div().text_sm().text_color(theme::warning()).child(problem))))
+            .when_some(self.error.clone(), |el, error| el.child(in_column(div().py_2().text_sm().text_color(theme::warning()).child(error)
                 .child(Button::new("retry").small().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| {
                     if let Some(session) = this.selected.clone() { this.select(session, window, cx); }
-                })))))
-            .when_some(delivery_note, |el, (note, warning)| el.child(div().px_6().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note)))
-            .when_some(stop_note, |el, (note, warning)| el.child(div().px_6().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note)))
+                }))))))
+            .when_some(delivery_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
+            .when_some(stop_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
             .when(self.selected.is_some(), |el| el.child(self.render_composer(readable, busy, steer, queued, sending, stopping, window, cx)));
 
         let side = self.render_side(window, cx);
@@ -2602,15 +2720,29 @@ impl Render for Hangar {
                 }))))
                 .child(Button::new("connect").primary().label(tr("connect")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx)))));
 
+        let settings_page = self.settings;
         div().id("hangar-root").track_focus(&self.root_focus).relative().size_full().flex().bg(theme::background()).text_color(theme::text()).text_base()
+            .font_family(theme::SANS)
+            .when(floating && settings_page.is_none(), |el| el.p(px(10.)).gap(px(10.)))
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| {
-                if !this.connection_dialog && this.selected.as_ref().is_some_and(|s| s.readable()) {
+                if !this.connection_dialog && this.settings.is_none() && this.selected.as_ref().is_some_and(|s| s.readable()) {
                     this.composer.update(cx, |input, cx| input.focus(window, cx));
                 }
             }))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                if !this.connection_dialog { this.open_settings(settings::Page::Appearance, window, cx); }
+            }))
+            .on_action(cx.listener(|this, _: &CopyLastReply, _, cx| {
+                if let Some(text) = this.last_reply().filter(|_| this.settings.is_none()) { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
+            }))
             // Esc fora do campo fecha o painel aberto sobre o compositor (o clique no botão tira o foco do campo).
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key != "escape" || this.connection_dialog { return; }
+                if this.settings.is_some() {
+                    this.close_settings(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.controls_open() || this.command_panel || this.recent.is_some() {
                     this.close_controls();
                     this.command_panel = false;
@@ -2629,8 +2761,10 @@ impl Render for Hangar {
                     this.drag_side(f32::from(event.position.x), event.pressed_button == Some(MouseButton::Left), cx);
                 }))
                 .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_drag(cx))))
-            .child(sidebar).child(content)
-            .when_some(side, |el, side| el.child(side))
+            .map(|el| match settings_page {
+                Some(page) => el.child(self.render_settings(page, cx)),
+                None => el.child(sidebar).child(content).when_some(side, |el, side| el.child(side)),
+            })
             .when(self.connection_dialog, |el| el.child(div().absolute().inset_0().bg(rgba(0x100e11dd)).flex().items_center().justify_center()
                 .child(dialog.focus_trap("connection-dialog", &self.connection_focus))))
     }

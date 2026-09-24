@@ -1,59 +1,100 @@
-use gpui_kit::*;
+use gpui_kit::{component::Theme, *};
+use crate::appearance::{self, Panels};
 
-// Valores de `frontend/src/app.css` (tema escuro); o nome diz o token do web.
+// Cores dos mocks aprovados (Task 12): o padrão é "Colados", opaco; "Caixa solta" deixa passar o que está
+// atrás da janela nas medidas de Transparência e Solidez. O nome de cada função diz o papel, não a cor.
 /// `--font-mono` do web; sem a fonte instalada, o GPUI cai na padrão.
 pub const MONO: &str = "JetBrainsMono Nerd Font";
-pub fn background() -> Hsla {
-    if cfg!(target_os = "linux") { rgba(0x100e11ed).into() } else { rgb(0x100e11).into() }
+/// Sans embutida no binário (`assets/fonts`), a "Sistema" das configurações.
+pub const SANS: &str = "Geist";
+
+/// Destaques oferecidos em Aparência › Cor; o primeiro é o índigo do Hangar.
+pub const ACCENTS: [u32; 7] = [0x7c87e8, 0x9b7cf0, 0xf08a4b, 0xe9b93f, 0x3fbf6f, 0x3cc4d6, 0xe070b0];
+/// Tintas de fundo; a primeira é "sem tinta" e mostra a cor base.
+pub const TINTS: [u32; 4] = [0x18151a, 0x1d1a2e, 0x2a1a1a, 0x1a2a20];
+
+fn floating() -> bool { appearance::get().panels == Panels::Floating }
+pub fn is_floating() -> bool { floating() }
+
+fn hex(value: u32, alpha: f32) -> Hsla { Hsla::from(rgb(value)).alpha(alpha) }
+
+fn tinted(base: u32, alpha: f32) -> Hsla {
+    let a = appearance::get();
+    let color = match TINTS.get(a.tint).filter(|_| a.tint > 0) {
+        Some(&t) => mix(base, t, a.tint_strength as f32 / 100.),
+        None => base,
+    };
+    hex(color, alpha)
 }
-pub fn surface() -> Hsla { rgba(0x1a171aee).into() }
-/// `--chrome-bg`: fundo da barra lateral, do compositor e do painel de contexto.
-pub fn chrome() -> Hsla { rgba(0x18171cf0).into() }
-pub fn inset() -> Hsla { rgb(0x100e11).into() }
-pub fn elevated() -> Hsla { rgb(0x221d22).into() }
-pub fn raised() -> Hsla { rgb(0x2a242a).into() }
-pub fn text() -> Hsla { rgb(0xeee8e9).into() }
-pub fn muted() -> Hsla { rgb(0xa0989b).into() }
+
+fn mix(a: u32, b: u32, t: f32) -> u32 {
+    let channel = |shift: u32| {
+        let (x, y) = (((a >> shift) & 0xff) as f32, ((b >> shift) & 0xff) as f32);
+        ((x + (y - x) * t).round() as u32) << shift
+    };
+    channel(16) | channel(8) | channel(0)
+}
+
+fn solidity() -> f32 { appearance::get().solidity as f32 / 100. }
+
+/// Fundo da janela. Colados é opaco; na caixa solta a Transparência diz quanto do fundo do sistema aparece.
+pub fn background() -> Hsla {
+    if floating() { tinted(0x0d0c12, 1. - appearance::get().transparency as f32 / 100.) } else { tinted(0x121013, 1.) }
+}
+/// Barra lateral, painel de contexto e navegação das configurações.
+pub fn chrome() -> Hsla { if floating() { tinted(0x1a181d, solidity()) } else { tinted(0x18151a, 1.) } }
+pub fn surface() -> Hsla { chrome() }
+/// Caixas de conteúdo: compositor e grupos de configuração.
+pub fn boxed() -> Hsla { if floating() { hex(0x26242c, solidity() * 0.9) } else { hex(0x1f1b20, 1.) } }
+pub fn inset() -> Hsla { if floating() { hex(0x0e0c10, 0.55) } else { hex(0x0e0c0f, 1.) } }
+/// Popovers e fundos de realce: sempre opacos, ficam sobre qualquer material.
+pub fn elevated() -> Hsla { rgb(0x2c262d).into() }
+pub fn raised() -> Hsla { rgb(0x262127).into() }
+/// Realce de passagem do ponteiro sobre linhas e botões quietos.
+pub fn hover() -> Hsla { if floating() { hex(0xffffff, 0.06) } else { hex(0x262127, 1.) } }
+pub fn user_bubble() -> Hsla { if floating() { hex(0x343038, 0.78) } else { hex(0x2a272c, 1.) } }
+pub fn text() -> Hsla { rgb(0xe6e0e2).into() }
+pub fn muted() -> Hsla { rgb(0xa39a9e).into() }
 /// `--text-muted`: um degrau abaixo do secundário.
-pub fn faint() -> Hsla { rgb(0x8d8489).into() }
-pub fn accent() -> Hsla { rgb(0x7c87e8).into() }
-pub fn accent_dim() -> Hsla { rgba(0x7c87e82e).into() }
-pub fn accent_press() -> Hsla { rgb(0x6e79d6).into() }
-pub fn accent_hover() -> Hsla { rgba(0x7c87e847).into() }
-pub fn accent_focus() -> Hsla { rgba(0x7c87e873).into() }
-/// Faixa do cabeçalho do painel: `--bg-elevated` a 52%.
-pub fn header_band() -> Hsla { rgba(0x221d2285).into() }
-/// `--elev-3`, sombra do painel de contexto.
+pub fn faint() -> Hsla { rgb(0x8a8186).into() }
+pub fn accent() -> Hsla {
+    let n = appearance::get().accent;
+    rgb(ACCENTS.get(n).copied().unwrap_or(ACCENTS[0])).into()
+}
+pub fn accent_dim() -> Hsla { accent().alpha(0.16) }
+pub fn accent_press() -> Hsla { let a = accent(); hsla(a.h, a.s, (a.l - 0.06).max(0.), 1.) }
+pub fn accent_focus() -> Hsla { accent().alpha(0.45) }
+/// Texto sobre fundo de destaque suave (`#c5cbf7` com o índigo).
+pub fn accent_text() -> Hsla { let a = accent(); hsla(a.h, a.s.min(0.8), 0.87, 1.) }
+/// Sombra das caixas soltas; colado não tem sombra, a borda separa.
 pub fn panel_shadow() -> Vec<BoxShadow> {
-    vec![BoxShadow { color: rgba(0x00000057).into(), offset: point(px(0.), px(18.)), blur_radius: px(44.), spread_radius: px(0.), inset: false }]
+    if !floating() { return Vec::new(); }
+    vec![BoxShadow { color: rgba(0x00000059).into(), offset: point(px(0.), px(18.)), blur_radius: px(48.), spread_radius: px(0.), inset: false }]
 }
 /// `--elev-2`: popovers e menus.
 pub fn popover_shadow() -> Vec<BoxShadow> {
     vec![BoxShadow { color: rgba(0x00000066).into(), offset: point(px(0.), px(8.)), blur_radius: px(28.), spread_radius: px(0.), inset: false }]
 }
-/// Sombra do cartão do compositor: `0 12px 40px rgba(0,0,0,.42)`.
-pub fn card_shadow() -> Vec<BoxShadow> {
-    vec![BoxShadow { color: rgba(0x0000006b).into(), offset: point(px(0.), px(12.)), blur_radius: px(40.), spread_radius: px(0.), inset: false }]
-}
-pub fn border() -> Hsla { rgba(0xfff8f412).into() }
-pub fn border_strong() -> Hsla { rgba(0xfff8f41f).into() }
-pub fn glass_border() -> Hsla { rgba(0xffffff1a).into() }
+pub fn card_shadow() -> Vec<BoxShadow> { panel_shadow() }
+pub fn border() -> Hsla { if floating() { hex(0xffffff, 0.09) } else { hex(0xfff8f4, 0.08) } }
+pub fn border_strong() -> Hsla { if floating() { hex(0xffffff, 0.16) } else { hex(0xfff8f4, 0.14) } }
+pub fn glass_border() -> Hsla { border_strong() }
 pub fn success() -> Hsla { rgb(0x34c759).into() }
 pub fn warning() -> Hsla { rgb(0xff9f0a).into() }
 pub fn danger() -> Hsla { rgb(0xff453a).into() }
+/// Vermelho das remoções no diff, mais claro que o de erro para ler em texto pequeno.
+pub fn removed() -> Hsla { rgb(0xff6b61).into() }
 pub fn on_accent() -> Hsla { rgb(0xfdf8f9).into() }
 pub fn limited() -> Hsla { rgb(0xc98cff).into() }
-/// Linha selecionada: accent a 10%.
-pub fn selected_row() -> Hsla { rgba(0x7c87e81a).into() }
-/// Linha aguardando você: warning a 7%.
-pub fn awaiting_row() -> Hsla { rgba(0xff9f0a12).into() }
+/// Linha selecionada: cinza elevado no colado, destaque suave na caixa solta.
+pub fn selected_row() -> Hsla { if floating() { accent_dim() } else { hex(0x2c262d, 1.) } }
 pub fn status(state: &str) -> Hsla {
     match state { "working" => accent(), "awaiting_input" => warning(), "idle" => success(), "dead" => danger(), _ => muted() }
 }
 /// Pílula de estado (`--pill-*`): fundo e texto.
 pub fn pill(state: &str) -> (Hsla, Hsla) {
     match state {
-        "working" => (rgba(0x7c87e829).into(), rgb(0xaab2f3).into()),
+        "working" => (accent_dim(), accent_text()),
         "idle" => (rgba(0x34c7591f).into(), success()),
         "awaiting_input" => (rgba(0xff9f0a1f).into(), warning()),
         "dead" => (rgba(0xff453a1f).into(), danger()),
@@ -70,5 +111,24 @@ pub fn provider(name: &str) -> (Hsla, &'static str) {
         "pi" => (rgb(0x8b5cf6).into(), "π"),
         "omp" => (rgb(0xf59e0b).into(), "Ω"),
         _ => (muted(), "?"),
+    }
+}
+
+/// Leva o destaque e a fonte da aparência para os componentes do gpui-kit (botão primário, anel de foco).
+pub fn sync_kit(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    theme.primary = accent();
+    theme.primary_hover = accent_press();
+    theme.primary_active = accent_press();
+    theme.ring = accent_focus();
+    theme.font_family = SANS.into();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mix_moves_each_channel() {
+        assert_eq!(super::mix(0x000000, 0xff8000, 0.5), 0x804000);
+        assert_eq!(super::mix(0x121013, 0x121013, 0.4), 0x121013);
     }
 }

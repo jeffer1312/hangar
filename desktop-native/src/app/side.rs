@@ -5,7 +5,9 @@ use crate::status::StatusFields;
 
 const MIN_WIDTH: f32 = 240.;
 const MAX_WIDTH: f32 = 480.;
-const SIDEBAR: f32 = 270.;
+const SIDEBAR: f32 = 284.;
+// Caixa solta com o painel aberto: 10 de margem em cada lado da janela e os dois vãos de 10 entre as três caixas.
+const FLOATING_GAPS: f32 = 40.;
 // Largura que a conversa mantém; abaixo disso o painel sai de cena em vez de espremer o texto.
 const CHAT_MIN: f32 = 540.;
 const COST_EVERY: u64 = 30;
@@ -47,7 +49,7 @@ pub(super) struct Side {
 
 impl Default for Side {
     fn default() -> Self {
-        Self { open: true, width: 320., drag: None, shortcuts: None, cost: None, cost_task: None, cost_gen: 0,
+        Self { open: true, width: 300., drag: None, shortcuts: None, cost: None, cost_task: None, cost_gen: 0,
             files: None, diff: None, reloading: HashSet::new() }
     }
 }
@@ -77,8 +79,8 @@ impl Side {
     }
 
     // Largura efetiva: nunca tira da conversa menos que CHAT_MIN; sem espaço, o painel não aparece.
-    fn fitted(&self, viewport: f32) -> Option<f32> {
-        let room = viewport - SIDEBAR - CHAT_MIN;
+    fn fitted(&self, viewport: f32, floating: bool) -> Option<f32> {
+        let room = viewport - SIDEBAR - CHAT_MIN - if floating { FLOATING_GAPS } else { 0. };
         (room >= MIN_WIDTH).then(|| self.width.clamp(MIN_WIDTH, MAX_WIDTH).min(room))
     }
 }
@@ -113,7 +115,7 @@ pub(super) fn tokens(n: f64) -> String {
 
 fn trim_zero(s: String) -> String { s.strip_suffix(".0").map(str::to_owned).unwrap_or(s) }
 
-fn money(usd: f64) -> String { format!("US$ {usd:.2}") }
+pub(super) fn money(usd: f64) -> String { format!("US$ {usd:.2}") }
 
 fn duration(ms: f64) -> String {
     let s = ms / 1000.;
@@ -128,6 +130,15 @@ fn ago(seconds: f64) -> String {
     else if s < 3600. { tr("ago_min").replace("{n}", &(s / 60.).floor().to_string()) }
     else if s < 86_400. { tr("ago_h").replace("{n}", &(s / 3600.).floor().to_string()) }
     else { tr("ago_d").replace("{n}", &(s / 86_400.).floor().to_string()) }
+}
+
+/// Tempo curto da lista ("agora", "2m", "1h", "3d"), a partir do instante da última atividade.
+pub(super) fn since(at: f64) -> String {
+    let s = (now_seconds() - at).max(0.);
+    if s < 60. { tr("since_now") }
+    else if s < 3600. { format!("{}m", (s / 60.).floor()) }
+    else if s < 86_400. { format!("{}h", (s / 3600.).floor()) }
+    else { format!("{}d", (s / 86_400.).floor()) }
 }
 
 fn now_seconds() -> f64 {
@@ -400,25 +411,23 @@ impl Hangar {
             line.push(tr("side_last_turn_line").replace("{in}", &tokens(tin)).replace("{out}", &tokens(tout)));
         }
         if let Some(time) = status.and_then(|s| s.session_time.clone()) { line.push(tr("side_session_time_line").replace("{t}", &time)); }
+        // `.rsec` do mock: número grande e custo na mesma linha, barra, janela em tokens e a nota do custo embaixo.
         let mut body = div().flex().flex_col()
-            .child(div().flex().items_end().justify_between().gap_3()
-                .child(div().flex().flex_col().flex_shrink_0()
-                    .child(div().whitespace_nowrap().text_size(px(44.)).line_height(px(48.)).font_weight(FontWeight::SEMIBOLD).text_color(pct_color)
-                        .child(pct.map(|p| format!("{}%", p.round())).unwrap_or_else(|| "—".into())))
-                    .child(div().flex().gap_1().text_xs().text_color(theme::faint()).child(tr("side_ctx_label"))
-                        .when(!window_text.is_empty(), |el| el.child("·").child(div().font_family(crate::theme::MONO).child(window_text)))))
-                .child(div().flex().flex_col().items_end().min_w_0()
-                    .child(div().whitespace_nowrap().text_sm().font_weight(FontWeight::SEMIBOLD).child(cost.0))
-                    .when_some(cost.1, |el, note| el.child(div().max_w(px(140.)).whitespace_nowrap().truncate().text_right().text_size(px(11.)).text_color(theme::faint()).child(note)))));
+            .child(div().flex().items_baseline().justify_between().gap_3()
+                .child(div().whitespace_nowrap().text_size(px(30.)).font_weight(FontWeight::SEMIBOLD).text_color(pct_color)
+                    .child(pct.map(|p| format!("{}%", p.round())).unwrap_or_else(|| "—".into())))
+                .child(div().whitespace_nowrap().child(cost.0)));
         body = match pct {
-            Some(p) => body.child(div().mt_3().child(chrome::meter(p))),
-            None => body.child(div().mt_3().text_xs().text_color(theme::faint()).child(tr("side_ctx_unknown"))),
+            Some(p) => body.child(div().mt(px(8.)).mb(px(4.)).child(chrome::meter(p))),
+            None => body.child(div().mt(px(8.)).text_xs().text_color(theme::faint()).child(tr("side_ctx_unknown"))),
         };
+        body = body.child(div().mt(px(4.)).flex().justify_between().gap_2().text_size(px(12.5)).text_color(theme::faint())
+            .child(div().flex_shrink_0().font_family(crate::theme::MONO).text_xs().child(if window_text.is_empty() { tr("side_ctx_label") } else { window_text }))
+            .when_some(cost.1, |el, note| el.child(div().min_w_0().truncate().text_right().child(note))));
         if !line.is_empty() {
             body = body.child(div().mt_2().flex().flex_col().gap(px(2.)).text_size(px(11.)).text_color(theme::faint()).font_family(crate::theme::MONO)
                 .children(line.into_iter().map(|l| div().whitespace_nowrap().truncate().child(l))));
         }
-        if let Some(limits) = self.render_limits(status) { body = body.child(limits); }
         let _ = cx;
         body.into_any_element()
     }
@@ -443,18 +452,19 @@ impl Hangar {
             (tr("limit_30d"), s.monthly_pct, s.monthly_reset.clone()),
         ].into_iter().filter_map(|(label, pct, reset)| Some((label, pct?, reset))).collect()).unwrap_or_default();
         if !limited && windows.is_empty() { return None; }
-        // RateChips em barras: legenda e número em cima, barra, "reseta" embaixo; duas colunas.
-        Some(div().mt_4().flex().flex_col().gap_2()
+        // "Cota da conta" do mock: janela e número na linha, barra embaixo, "reseta" em cinza por último.
+        Some(div().flex().flex_col().gap(px(8.))
+            .child(chrome::section_label(tr("side_quota")))
             .when(limited, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::limited())
                 .child(reset.map(|r| tr("side_limited_until").replace("{reset}", &r)).unwrap_or_else(|| tr("side_limited")))))
-            .child(div().flex().flex_wrap().gap_3().children(windows.into_iter().map(|(label, pct, reset)| {
-                div().flex_1().min_w(px(118.)).flex().flex_col().gap_1()
-                    .child(div().flex().justify_between().text_xs()
-                        .child(div().font_family(crate::theme::MONO).text_color(theme::faint()).child(label))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{}%", pct.round()))))
+            .children(windows.into_iter().map(|(label, pct, reset)| {
+                div().flex().flex_col().gap(px(4.))
+                    .child(div().flex().justify_between().text_size(px(12.5))
+                        .child(div().child(label))
+                        .child(div().child(format!("{}%", pct.round()))))
                     .child(chrome::meter(pct))
-                    .when_some(reset, |el, r| el.child(div().text_size(px(11.)).text_color(theme::faint()).truncate().child(tr("side_resets").replace("{reset}", &r))))
-            })))
+                    .when_some(reset, |el, r| el.child(div().text_size(px(12.5)).text_color(theme::faint()).truncate().child(tr("side_resets").replace("{reset}", &r))))
+            }))
             .into_any_element())
     }
 
@@ -463,7 +473,7 @@ impl Hangar {
         let key = self.selected_key()?;
         let repo = status.and_then(|s| s.repo.clone());
         if repo.is_none() && session.git_dirty.is_none() && session.git_added.is_none() { return None; }
-        let mut body = div().flex().flex_col().gap_2().child(chrome::section_label(tr("side_project")));
+        let mut body = div().flex().flex_col().gap_2().child(chrome::section_label(tr("side_repository")));
         if let Some(repo) = repo {
             let branch = status.and_then(|s| s.branch.clone()).unwrap_or_default();
             let dirty = status.and_then(|s| s.dirty) == Some(true);
@@ -532,29 +542,36 @@ impl Hangar {
         let list = match self.side.shortcuts.as_ref()? {
             Ok(list) if list.is_empty() => return None,
             Ok(list) => list.clone(),
-            Err(reason) => return Some(div().mx_4().my_3().child(div().text_xs().text_color(theme::warning())
-                .child(tr("side_shortcuts_failed").replace("{reason}", reason))).into_any_element()),
+            Err(reason) => return Some(div().text_xs().text_color(theme::warning())
+                .child(tr("side_shortcuts_failed").replace("{reason}", reason)).into_any_element()),
         };
         let busy = self.selected_key().is_some_and(|key| self.uploading.contains_key(&key));
-        // `.ctx-actions` do web: faixa embutida, cada atalho com ícone em cima e rótulo embaixo.
-        Some(div().flex_shrink_0().mx_4().my_3().p(px(2.)).flex().flex_wrap().gap(px(2.)).rounded(px(12.)).border_1().border_color(theme::border()).bg(theme::inset())
-            .children(list.into_iter().enumerate().map(|(n, shortcut)| {
-                let icon = match &shortcut { Shortcut::Attach => IconName::Paperclip, Shortcut::Shell { .. } => IconName::SquareTerminal, Shortcut::Send { .. } => IconName::SquareSlash };
-                let label = shortcut.label();
-                Button::new(SharedString::from(format!("shortcut-{n}")))
-                    .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::raised()).active(theme::raised()))
-                    .flex_1().min_w(px(44.)).min_h(px(50.)).rounded(px(9.)).pt(px(6.)).pb(px(5.)).px(px(2.))
-                    .tooltip(label.clone()).accessibility_label(label.clone()).disabled(!readable || busy)
-                    .child(div().flex().flex_col().items_center().gap(px(3.))
-                        .child(chrome::small_icon(icon, 18., theme::muted()))
-                        .child(div().max_w(px(96.)).truncate().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).child(label)))
-                    .on_click(cx.listener(move |this, _, window, cx| this.run_shortcut(shortcut.clone(), false, window, cx)))
-            })).into_any_element())
+        // "Ações" do mock: grade de quatro por linha, cada atalho com borda, ícone em cima e rótulo embaixo.
+        let buttons: Vec<Button> = list.into_iter().enumerate().map(|(n, shortcut)| {
+            let icon = match &shortcut { Shortcut::Attach => IconName::Paperclip, Shortcut::Shell { .. } => IconName::SquareTerminal, Shortcut::Send { .. } => IconName::SquareSlash };
+            let label = shortcut.label();
+            Button::new(SharedString::from(format!("shortcut-{n}")))
+                .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
+                .flex_1().min_w_0().h_auto().py(px(8.)).rounded(px(10.)).border_1().border_color(theme::border())
+                .tooltip(label.clone()).accessibility_label(label.clone()).disabled(!readable || busy)
+                .child(div().w_full().flex().flex_col().items_center().gap(px(4.))
+                    .child(chrome::small_icon(icon, 16., theme::muted()))
+                    .child(div().max_w_full().truncate().text_size(px(11.5)).child(label)))
+                .on_click(cx.listener(move |this, _, window, cx| this.run_shortcut(shortcut.clone(), false, window, cx)))
+        }).collect();
+        let mut grid = div().flex().flex_col().gap(px(6.));
+        let mut rest = buttons.into_iter().peekable();
+        while rest.peek().is_some() {
+            let row: Vec<AnyElement> = rest.by_ref().take(4).map(IntoElement::into_any_element).collect();
+            let pad = 4 - row.len();
+            grid = grid.child(div().flex().gap(px(6.)).children(row).children((0..pad).map(|_| div().flex_1())));
+        }
+        Some(div().flex().flex_col().gap(px(10.)).child(chrome::section_label(tr("side_actions"))).child(grid).into_any_element())
     }
 
     pub(super) fn render_side(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let viewport = f32::from(window.viewport_size().width);
-        let width = self.side.fitted(viewport).filter(|_| self.side.open && self.selected.is_some());
+        let width = self.side.fitted(viewport, theme::is_floating()).filter(|_| self.side.open && self.selected.is_some());
         let readable = self.selected.as_ref().is_some_and(|s| s.readable());
         self.sync_cost(width.is_some() && readable);
         let width = width?;
@@ -562,17 +579,20 @@ impl Hangar {
         let status = self.status();
         let state = if self.chat_online && !self.chat.state.state.is_empty() { self.chat.state.state.clone() } else { session.state.clone() };
         let detail = self.chat.state.label.clone().or(session.label.clone()).filter(|l| !l.trim().is_empty());
-        // Cabeçalho do painel do web: nome em mono, detalhe do estado embaixo, selo de estado à direita.
-        let header = div().flex_shrink_0().relative().min_h(px(64.)).pl_4().pr(px(56.)).py_2().flex().items_center().justify_between().gap_3()
-            .border_b_1().border_color(theme::border()).bg(theme::header_band())
-            .child(div().flex().flex_col().gap(px(2.)).min_w_0()
-                .child(div().truncate().font_family(crate::theme::MONO).text_sm().font_weight(FontWeight::SEMIBOLD).child(session.name.clone()))
-                .when_some(detail, |el, d| el.child(div().truncate().text_xs().text_color(theme::faint()).child(d)))
-                .when_some(self.loop_text(), |el, text| el.child(div().truncate().text_xs().text_color(theme::accent()).child(text))))
-            .child(chrome::state_chip(&state, tr(&format!("chip_{state}")), true))
-            .child(div().absolute().top_2().right_2().child(chrome::icon_button("side-toggle", IconName::PanelRightClose, tr("side_hide"), cx)
-                .size(px(36.)).on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx)))));
+        // Cabeçalho do mock: título "Contexto" e o botão de recolher. Nome e estado já estão no cabeçalho da conversa;
+        // o detalhe do estado e o loop descem para a primeira seção.
+        let _ = state;
+        let header = div().flex_shrink_0().h(px(44.)).pl_4().pr(px(12.)).flex().items_center().justify_between()
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(tr("side_context")))
+            .child(chrome::icon_button("side-toggle", IconName::PanelRight, tr("side_hide"), cx)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx))));
+        let section = |body: AnyElement| div().px_4().py(px(14.)).border_b_1().border_color(theme::border()).child(body);
         let mut content = div().flex().flex_col();
+        if detail.is_some() || self.loop_text().is_some() {
+            content = content.child(div().px_4().pb_2().flex().flex_col().gap(px(2.))
+                .when_some(detail, |el, d| el.child(div().truncate().text_xs().text_color(theme::faint()).child(d)))
+                .when_some(self.loop_text(), |el, text| el.child(div().truncate().text_xs().text_color(theme::accent()).child(text))));
+        }
         if readable {
             let motive = self.chat.state.recarregar_motivo.clone().filter(|_| self.provider().1 && self.provider().0 == "claude");
             let mut notices = Vec::new();
@@ -585,13 +605,12 @@ impl Hangar {
                     .into_any_element());
             }
             notices.extend(self.render_ctx_warning(status.as_ref(), cx));
-            content = content.child(div().mx_4().pt_4().pb_3().child(self.render_context(status.as_ref(), cx)))
-                .when(!notices.is_empty(), |el| el.child(div().mx_4().mb_2().flex().flex_col().gap_2().children(notices)));
-            if let Some(project) = self.render_project(status.as_ref(), cx) {
-                content = content.child(div().mx_4().pt_4().pb_3().border_t_1().border_color(theme::border()).child(project));
-            }
+            content = content.child(section(self.render_context(status.as_ref(), cx)))
+                .when(!notices.is_empty(), |el| el.child(div().px_4().py_3().border_b_1().border_color(theme::border()).flex().flex_col().gap_2().children(notices)));
+            if let Some(limits) = self.render_limits(status.as_ref()) { content = content.child(section(limits)); }
+            if let Some(project) = self.render_project(status.as_ref(), cx) { content = content.child(section(project)); }
+            if let Some(actions) = self.render_shortcuts(readable, cx) { content = content.child(div().px_4().py(px(14.)).child(actions)); }
         }
-        let actions = if readable { self.render_shortcuts(readable, cx) } else { None };
         let queued = if readable { self.queued_count() } else { 0 };
         let handle = div().id("side-resize").absolute().left_0().top_0().bottom_0().w(px(6.)).cursor_col_resize()
             .hover(|el| el.bg(theme::accent_dim()))
@@ -601,11 +620,12 @@ impl Hangar {
                 cx.notify();
             }));
         let server = self.address.read(cx).value().trim_start_matches("http://").trim_start_matches("https://").to_string();
-        Some(div().w(px(width)).h_full().flex_shrink_0().relative().p_3()
-            .child(div().size_full().flex().flex_col().rounded(px(24.)).border_1().border_color(theme::border()).bg(theme::chrome())
-                .shadow(theme::panel_shadow()).overflow_hidden()
+        let floating = theme::is_floating();
+        Some(div().w(px(width)).h_full().flex_shrink_0().relative()
+            .child(div().size_full().flex().flex_col().bg(theme::chrome()).overflow_hidden()
+                .map(|el| if floating { el.rounded(px(18.)).border_1().border_color(theme::border()).shadow(theme::panel_shadow()) }
+                    else { el.border_l_1().border_color(theme::border()) })
                 .child(header)
-                .when_some(actions, |el, actions| el.child(actions))
                 .child(div().id("side-scroll").flex_1().min_h_0().overflow_y_scroll().child(content))
                 .child(div().flex_shrink_0().px_4().py_3().flex().items_center().justify_between().gap_2().border_t_1().border_color(theme::border()).text_size(px(11.))
                     .child(div().min_w_0().truncate().text_color(theme::faint()).child(format!("{} · {server}", agent_label(&session.provider))))
@@ -642,8 +662,11 @@ mod tests {
     #[test]
     fn panel_never_squeezes_the_chat() {
         let side = Side::default();
-        assert_eq!(side.fitted(1180.), Some(320.));
-        assert_eq!(side.fitted(1000.), None);
-        assert_eq!(side.fitted(1060.), Some(250.));
+        assert_eq!(side.fitted(1180., false), Some(300.));
+        assert_eq!(side.fitted(1000., false), None);
+        assert_eq!(side.fitted(1080., false), Some(256.));
+        // Na caixa solta as margens também saem da conversa.
+        assert_eq!(side.fitted(1080., true), None);
+        assert_eq!(side.fitted(1120., true), Some(256.));
     }
 }
