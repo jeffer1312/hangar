@@ -2,7 +2,8 @@
 //! navegação das seções; o conteúdo fica no centro, em linhas com ícone, título e controle à direita.
 //! Nesta versão só a Aparência funciona; as demais páginas dizem que chegam depois, sem fingir.
 use super::*;
-use crate::appearance::{self, Appearance, Background, DesktopText, Font, Hex, Palette, Panels, Reading, SidebarHeight, Swatch, ThemeMode, Wallpaper};
+use crate::appearance::{self, Appearance, Background, DesktopText, Font, Hex, Palette, Panels, Reading, SidebarHeight, Swatch, ThemeMode,
+    ThinkingTools, ToolLook, Wallpaper};
 use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState}, slider::{Slider, SliderEvent, SliderState}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,8 +152,15 @@ impl Hangar {
 
     /// Aplica na hora (o tema lê a cada desenho) e grava fora da thread da janela quando `save`.
     pub(super) fn apply_appearance(&mut self, next: Appearance, save: bool, cx: &mut Context<Self>) {
+        let before = appearance::get();
         appearance::set(next);
         theme::sync_kit(None, cx);
+        // Quem muda as linhas ou o desenho delas refaz a conversa: a lista guarda a altura de cada linha.
+        if (before.tool_look, before.task_list, before.thinking_tools, before.table_chart)
+            != (next.tool_look, next.task_list, next.thinking_tools, next.table_chart) {
+            self.sync_rows(cx);
+            self.list_state.remeasure();
+        }
         if save {
             let (connection, tx) = (self.connection, self.tx.clone());
             self.runtime.spawn(async move {
@@ -484,15 +492,21 @@ impl Hangar {
             .child(self.slider_row(IconName::SlidersHorizontal, tr("settings_line_height"), None, Knob::Line, true, &a, cx))
             .child(self.slider_row(IconName::PanelLeft, tr("settings_column"), None, Knob::Column, true, &a, cx));
 
+        const THINKING: [ThinkingTools; 3] = [ThinkingTools::None, ThinkingTools::Search, ThinkingTools::All];
         let conversation_box = settings_box()
-            .child(self.row(IconName::Keyboard, tr("settings_tool_calls"), Some(next_version.clone()), false,
-                segmented("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips")], 1, false, |_, _, _, _| {}, cx)))
-            .child(self.row(IconName::FileText, tr("settings_task_list"), Some(next_version.clone()), false,
-                segmented("task-list", &[tr("settings_task_list_hide"), tr("settings_task_list_progress")], 1, false, |_, _, _, _| {}, cx)))
-            .child(self.row(IconName::Activity, tr("settings_thinking"), Some(next_version.clone()), false,
-                segmented("thinking", &[tr("settings_thinking_none"), tr("settings_thinking_search"), tr("settings_thinking_all")], 1, false, |_, _, _, _| {}, cx)))
-            .child(self.row(IconName::SlidersHorizontal, tr("settings_table_chart"), Some(next_version.clone()), false,
-                segmented("table-chart", &[tr("settings_table_chart_hide"), tr("settings_table_chart_show")], 0, false, |_, _, _, _| {}, cx)));
+            .child(self.row(IconName::Wrench, tr("settings_tool_calls"), None, true,
+                segmented("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips")], (a.tool_look == ToolLook::Chips) as usize, true,
+                    |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.tool_look = if index == 1 { ToolLook::Chips } else { ToolLook::Classic }; this.apply_appearance(next, true, cx); }, cx)))
+            .child(self.row(IconName::ListChecks, tr("settings_task_list"), None, true,
+                segmented("task-list", &[tr("settings_task_list_hide"), tr("settings_task_list_progress")], a.task_list as usize, true,
+                    |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.task_list = index == 1; this.apply_appearance(next, true, cx); }, cx)))
+            .child(self.row(IconName::Activity, tr("settings_thinking"), None, true,
+                segmented("thinking", &[tr("settings_thinking_none"), tr("settings_thinking_search"), tr("settings_thinking_all")],
+                    THINKING.iter().position(|t| *t == a.thinking_tools).unwrap_or(1), true,
+                    |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.thinking_tools = THINKING[index]; this.apply_appearance(next, true, cx); }, cx)))
+            .child(self.row(IconName::ChartColumn, tr("settings_table_chart"), None, true,
+                segmented("table-chart", &[tr("settings_table_chart_hide"), tr("settings_table_chart_show")], a.table_chart as usize, true,
+                    |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.table_chart = index == 1; this.apply_appearance(next, true, cx); }, cx)));
 
         let height = segmented("sidebar-height", &[tr("settings_sidebar_full"), tr("settings_sidebar_content")],
             if a.sidebar_height == SidebarHeight::Content { 1 } else { 0 }, floating,

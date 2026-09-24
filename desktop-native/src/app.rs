@@ -14,6 +14,7 @@ mod backdrop;
 mod chrome;
 mod controls;
 mod follow;
+mod rows;
 mod settings;
 mod side;
 
@@ -169,6 +170,12 @@ pub struct Hangar {
     row_signatures: Vec<String>,
     items: Vec<Item>,
     expanded: HashSet<String>,
+    // Coluna que o gráfico de cada tabela mostra, pela chave "<linha>#t<n>".
+    table_column: HashMap<String, usize>,
+    // Tabelas que dão gráfico em cada resposta, com a fonte de onde saíram: refeitas só quando a fonte muda.
+    tables: HashMap<String, (String, std::rc::Rc<[crate::tables::Table]>)>,
+    // Chamada → resultado do transcript, refeito junto com as linhas; o desenho só consulta.
+    paired: HashMap<usize, usize>,
     last_message: Option<usize>,
     live_clear_epoch: [u64; 2],
     rich: HashMap<String, RichText>,
@@ -279,7 +286,7 @@ impl Hangar {
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), ask_form: AskForm::default(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             list_state, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), items: Vec::new(), expanded: HashSet::new(),
-            last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), render_tick: 0,
+            table_column: HashMap::new(), tables: HashMap::new(), paired: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), render_tick: 0,
             preview_drop_epoch: 0, preview_drop_scheduled: false,
             visible_preview: Preview::default(), preview_tick_epoch: 0, preview_tick_scheduled: false,
             preview_last_tick: None, preview_deadline: None,
@@ -879,6 +886,8 @@ impl Hangar {
 
     fn reset_details(&mut self) {
         self.expanded.clear();
+        self.table_column.clear();
+        self.tables.clear();
         self.ask_form = AskForm::default();
         for epoch in &mut self.live_clear_epoch { *epoch += 1; }
     }
@@ -910,7 +919,8 @@ impl Hangar {
                 Item::Thinking { parts, .. } => parts.iter().any(|&i| events[i].id == key),
                 _ => false,
             })
-        });
+        // Chave de uma parte da linha ("<linha>#…"): passo da lista de tarefas, tabela da resposta.
+        }).or_else(|| self.row_ids.iter().position(|id| key.strip_prefix(id.as_str()).is_some_and(|rest| rest.starts_with('#'))));
         if let Some(row) = row { self.list_state.remeasure_items(row..row + 1); }
         cx.notify();
     }
@@ -1512,7 +1522,10 @@ impl Hangar {
 
     fn sync_rows(&mut self, cx: &mut Context<Self>) {
         self.follow_content_changed(cx);
-        self.items = conversation::build(&self.chat.events);
+        let a = appearance::get();
+        self.items = conversation::build(&self.chat.events, conversation::View { thinking: a.thinking_tools, tasks: a.task_list });
+        self.paired = conversation::pair_results(&self.chat.events).0;
+        self.sync_tables(a.table_chart);
         let events = &self.chat.events;
         let mut ids: Vec<_> = self.items.iter().map(|item| item.id(events)).collect();
         let mut signatures: Vec<_> = self.items.iter().map(|item| signature(item, events)).collect();
@@ -1559,6 +1572,26 @@ impl Hangar {
         }
     }
 
+    /// Tabelas das respostas gravadas que dão gráfico. Lidas aqui, quando as linhas mudam, e só para a
+    /// resposta cuja fonte mudou; o desenho só consulta. Sem a opção, nada é lido nem guardado.
+    fn sync_tables(&mut self, enabled: bool) {
+        let mut old = std::mem::take(&mut self.tables);
+        if !enabled { return; }
+        let decimal = tr("decimal").chars().next().unwrap_or(',');
+        let events = &self.chat.events;
+        for item in &self.items {
+            let Item::Event(i) = item else { continue };
+            let event = &events[*i];
+            if event.kind != "assistant_msg" || event.is_error == Some(true) { continue; }
+            let source = render_source(event);
+            let tables = match old.remove(&event.id) {
+                Some((seen, tables)) if seen == source => tables,
+                _ => crate::tables::read(&source, decimal).into(),
+            };
+            self.tables.insert(event.id.clone(), (source, tables));
+        }
+    }
+
     fn text_view(&mut self, key: &str, row: &str, source: String, cx: &mut Context<Self>) -> Entity<TextViewState> {
         self.render_tick += 1;
         if let Some(rich) = self.rich.get_mut(key) {
@@ -1592,6 +1625,7 @@ impl Hangar {
             (_, Some(Item::Orphan(result))) => self.render_orphan(result, &id, cx),
             (_, Some(Item::Group { tools, .. })) => self.render_group(&id, &tools, cx),
             (_, Some(Item::Thinking { parts, .. })) => self.render_thinking(&id, &parts, cx),
+            (_, Some(Item::Tasks { tasks, .. })) => self.render_tasks(&id, &tasks, cx),
             (_, None) => div().into_any_element(),
         };
         let message = id == PREVIEW || matches!(self.items.get(index), Some(Item::Event(_)));
@@ -1630,11 +1664,11 @@ impl Hangar {
     }
 
     fn render_tool(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> AnyElement {
+        if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_single_chip(tool, row, cx); }
         let call = &self.chat.events[tool.call];
         let key = call.id.clone();
         let name = call.tool_name.clone().unwrap_or_else(|| tr("tool"));
         let summary = conversation::summarize_input(call.tool_name.as_deref(), call.tool_input.as_ref());
-        let input = conversation::pretty_input(call.tool_input.as_ref());
         let (status, status_color) = self.tool_status(tool);
         let error = tool.result.is_some_and(|i| self.chat.events[i].is_error == Some(true));
         let open = self.expanded.contains(&key);
@@ -1645,18 +1679,25 @@ impl Hangar {
             .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(summary))
             .child(div().flex_shrink_0().max_w(px(320.)).truncate().text_color(status_color).child(status))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
-        let mut body = div().flex().flex_col().gap_2().pl_6().pt_1().pb_2();
-        if open {
-            if !input.is_empty() { body = body.child(self.detail(row, &format!("{key}:input"), tr("tool_input"), tr("copy_input"), input, false, cx)); }
-            match tool.result {
-                Some(i) => {
-                    let result = self.chat.events[i].result.clone().unwrap_or_default();
-                    body = body.child(self.detail(row, &format!("{key}:result"), tr("tool_output"), tr("copy_result"), result, error, cx));
-                }
-                None => body = body.child(div().text_sm().text_color(theme::muted()).child(self.tool_status(tool).0)),
+        let body = open.then(|| self.tool_body(tool, row, cx).pl_6());
+        div().flex().flex_col().child(header).children(body).into_any_element()
+    }
+
+    /// Entrada e resultado da chamada aberta; o mesmo conteúdo no Clássico e nos Chips.
+    fn tool_body(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> Div {
+        let call = &self.chat.events[tool.call];
+        let key = call.id.clone();
+        let input = conversation::pretty_input(call.tool_input.as_ref());
+        let error = tool.result.is_some_and(|i| self.chat.events[i].is_error == Some(true));
+        let mut body = div().flex().flex_col().gap_2().pt_1().pb_2();
+        if !input.is_empty() { body = body.child(self.detail(row, &format!("{key}:input"), tr("tool_input"), tr("copy_input"), input, false, cx)); }
+        match tool.result {
+            Some(i) => {
+                let result = self.chat.events[i].result.clone().unwrap_or_default();
+                body.child(self.detail(row, &format!("{key}:result"), tr("tool_output"), tr("copy_result"), result, error, cx))
             }
+            None => body.child(div().text_sm().text_color(theme::muted()).child(self.tool_status(tool).0)),
         }
-        div().flex().flex_col().child(header).when(open, |el| el.child(body)).into_any_element()
     }
 
     fn detail(&mut self, row: &str, key: &str, label: String, copy_label: String, full: String, error: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -1693,6 +1734,7 @@ impl Hangar {
     }
 
     fn render_group(&mut self, row: &str, tools: &[Tool], cx: &mut Context<Self>) -> AnyElement {
+        if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_chip_group(row, tools, cx); }
         let events = &self.chat.events;
         let names: Vec<String> = tools.iter().map(|t| events[t.call].tool_name.clone().unwrap_or_else(|| tr("tool"))).collect();
         let mut distinct = names.clone();
@@ -1725,21 +1767,32 @@ impl Hangar {
         let thoughts: Vec<&ChatEvent> = parts.iter().map(|&i| &events[i]).filter(|e| e.kind == "thinking").collect();
         let summary = conversation::thought_summary(thoughts.first().and_then(|e| e.text.as_deref()).unwrap_or(""));
         let full = thoughts.iter().filter_map(|e| e.text.as_deref()).collect::<Vec<_>>().join("\n\n");
-        let searches = parts.len() - thoughts.len();
+        // O carregador de ferramentas entra no bloco mas não conta nem aparece, como no web.
+        let calls: Vec<&ChatEvent> = parts.iter().map(|&i| &events[i]).filter(|e| e.kind != "thinking" && e.tool_name.as_deref() != Some("ToolSearch")).collect();
+        let searches_only = calls.iter().all(|e| conversation::is_search(e.tool_name.as_deref()));
+        let count = match (calls.len(), searches_only) {
+            (0, _) => None,
+            (1, true) => Some(tr("thinking_search")),
+            (n, true) => Some(tr("thinking_searches").replace("{n}", &n.to_string())),
+            (1, false) => Some(tr("thinking_call")),
+            (n, false) => Some(tr("thinking_calls").replace("{n}", &n.to_string())),
+        };
+        let has_calls = parts.len() > thoughts.len();
         let open = self.expanded.contains(row);
         let toggle_key = row.to_owned();
         let header = self.disclosure(row, open)
             .accessibility_label(format!("{}: {summary}", tr("thinking")))
             .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(tr("thinking")))
             .child(div().flex_1().min_w_0().truncate().italic().text_color(theme::muted()).child(summary))
-            .when(searches > 0, |el| el.child(div().flex_shrink_0().text_color(theme::muted())
-                .child(if searches == 1 { tr("thinking_search") } else { tr("thinking_searches").replace("{n}", &searches.to_string()) })))
+            .when_some(count, |el, count| el.child(div().flex_shrink_0().text_color(theme::muted()).child(count)))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
         let mut body: Vec<AnyElement> = Vec::new();
         if open {
-            let paired = if searches > 0 { conversation::pair_results(&self.chat.events).0 } else { HashMap::new() };
+            // Só os pares das chamadas deste bloco, tirados do mapa refeito no `sync_rows`.
+            let paired: HashMap<usize, usize> = if has_calls { parts.iter().filter_map(|&i| self.paired.get(&i).map(|&r| (i, r))).collect() } else { HashMap::new() };
             for &i in parts {
                 let event = &self.chat.events[i];
+                if event.tool_name.as_deref() == Some("ToolSearch") { continue; }
                 if event.kind == "thinking" {
                     let key = format!("{}:thought", event.id);
                     let view = self.text_view(&key, row, safe_markdown(event.text.as_deref().unwrap_or("")), cx);
@@ -2342,21 +2395,29 @@ impl Hangar {
             (full, event.body(), label, (!notes.is_empty()).then(|| notes.join(" · ")), event.kind == "user_msg", event.is_error == Some(true))
         };
         let markdown = if id == PREVIEW { preview_source(&self.visible_preview) } else { safe_markdown(&body) };
-        let view = self.text_view(&id, &id, markdown, cx);
+        // Conversa sem cartões: usuário em bolha à direita, agente em texto corrido. Só o que não é nenhum dos
+        // dois (erro, aviso, formato desconhecido) mantém o rótulo, porque ali o rótulo é informação.
+        let plain = id == PREVIEW || (kind_of(&self.items, index, &self.chat.events) == Some("assistant_msg") && !error);
+        // Resposta gravada com tabela numérica: o texto vai em trechos, e cada tabela ganha o botão Gráfico.
+        // Só o retrato do `sync_tables`, e só com a mesma fonte que está sendo desenhada; a prévia nunca tem gráfico.
+        let charted = (plain && id != PREVIEW && appearance::get().table_chart).then(|| self.tables.get(&id)).flatten()
+            .filter(|(source, tables)| *source == markdown && !tables.is_empty()).map(|(_, tables)| tables.clone());
         let refs = match self.items.get(index) {
             Some(Item::Event(i)) if id != PREVIEW => attachment_refs(&self.chat.events[*i]),
             _ => Vec::new(),
         };
         let files = (!refs.is_empty()).then(|| self.render_refs(&id, refs, cx));
+        let text: Vec<AnyElement> = match charted {
+            Some(tables) => self.render_charted(&id, &markdown, &tables, cx),
+            None if !body.trim().is_empty() || files.is_none() => {
+                let view = self.text_view(&id, &id, markdown, cx);
+                vec![TextView::new(&view).selectable(true).scrollable(false).on_link_click(open_web_link).into_any_element()]
+            }
+            None => Vec::new(),
+        };
         let busy = self.selected_key().is_some_and(|key| self.flight.busy(&key));
         let discard = discard.map(|entry| Button::new(format!("discard-{id}")).small().ghost().label(tr("queue_discard")).disabled(busy)
             .on_click(cx.listener(move |this, _, _, cx| this.act(Action::Discard(entry.clone()), entry.clone(), cx))));
-        // Conversa sem cartões: usuário em bolha à direita, agente em texto corrido. Só o que não é nenhum dos
-        // dois (erro, aviso, formato desconhecido) mantém o rótulo, porque ali o rótulo é informação.
-        let plain = id == PREVIEW || (kind_of(&self.items, index, &self.chat.events) == Some("assistant_msg") && !error);
-        let text = (!body.trim().is_empty() || files.is_none()).then(|| TextView::new(&view).selectable(true).scrollable(false).on_link_click(|url, _, _, cx| {
-            if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); }
-        }));
         let content = conversation_text(div().flex().flex_col().gap_2())
             .when(!user && !plain, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label)))
             .children(text)
@@ -2377,6 +2438,10 @@ impl Hangar {
             })
             .into_any_element()
     }
+}
+
+fn open_web_link(url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App) {
+    if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); }
 }
 
 // A barra fica no recuo à direita do conteúdo, sem cobrir controles; o modo Always mostra que há mais abaixo.
@@ -2625,6 +2690,7 @@ fn signature(item: &Item, events: &[ChatEvent]) -> String {
         Item::Tool(t) => tool(t),
         Item::Group { tools, .. } => tools.iter().map(tool).collect::<Vec<_>>().join(","),
         Item::Thinking { parts, .. } => parts.iter().map(|&i| format!("{}:{}", events[i].id, events[i].text.as_deref().map(str::len).unwrap_or(0))).collect::<Vec<_>>().join(","),
+        Item::Tasks { tasks, .. } => format!("{tasks:?}"),
     }
 }
 
@@ -2751,12 +2817,12 @@ impl Render for Hangar {
                 content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr(if selected.tracked == Some(false) { "untracked" } else { "starting" })));
             } else {
                 content = content.child(in_column(div().py_2().flex().gap_2().items_center()
-                    .when(self.has_older, |el| el.child(Button::new("older").small().ghost().label(tr("older")).disabled(self.loading)
+                    .when(self.has_older, |el| el.child(Button::new("older").small().outline().label(tr("older")).disabled(self.loading)
                         .on_click(cx.listener(|this, _, _, cx| { this.history_limit = this.history_limit.saturating_add(400); this.etag = None; this.load_history(cx); }))))
                     .when(self.has_older, |el| el.child(div().text_xs().text_color(theme::muted()).child(format!("{} {}", tr("history_window"), self.history_limit))))
                     .when(self.loading, |el| el.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))))
                     .child(div().flex_1())
-                    .child(Button::new("latest").small().ghost().label(tr("latest")).on_click(cx.listener(|this, _, _, cx| this.follow_engage(cx))))));
+                    .child(Button::new("latest").small().outline().icon(IconName::ArrowDown).label(tr("latest")).on_click(cx.listener(|this, _, _, cx| this.follow_engage(cx))))));
                 if self.row_ids.is_empty() && !self.loading && self.error.is_none() {
                     content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr("empty_chat")));
                 } else {

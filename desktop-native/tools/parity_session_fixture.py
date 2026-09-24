@@ -69,6 +69,64 @@ def state(value="idle", **extra):
 PLAN = "# Plano sintético\n\n1. Ler o módulo.\n2. Trocar a função.\n3. Rodar o check."
 
 
+def call(eid, tid, name, tool_input):
+    return {"kind": "tool_use", "id": eid, "text": None, "tool_name": name, "tool_use_id": tid, "tool_input": tool_input}
+
+
+def result(eid, tid, text, error=False):
+    return {"kind": "tool_result", "id": eid, "text": None, "tool_use_id": tid, "result": text, "is_error": error}
+
+
+# Conversa da Task 12 R3a: ferramentas (soltas e em grupo), pensamento com busca e comando, lista de
+# tarefas incremental (TaskCreate/TaskUpdate) e uma resposta com tabela numérica.
+TOOLS_EVENTS = [
+    msg("user_msg", "t-u1", "Revise o parser e me mostre o custo por conta."),
+    msg("thinking", "t-th1", "Preciso ver a documentação do formato antes de mexer. Depois confiro o parser atual."),
+    call("t-ts", "ts", "ToolSearch", {"query": "select:WebSearch"}), result("t-ts-r", "ts", "WebSearch"),
+    call("t-ws", "ws", "WebSearch", {"query": "formato jsonl claude code transcript"}), result("t-ws-r", "ws", "5 resultados\nformato jsonl"),
+    call("t-grep", "gr", "Grep", {"pattern": "fn parse", "path": "src"}), result("t-grep-r", "gr", "src/parser.rs:12\nsrc/parser.rs:88"),
+    msg("thinking", "t-th2", "O parser está em src/parser.rs. Vou dividir o trabalho em passos."),
+    call("t-c1", "c1", "TaskCreate", {"subject": "Ler o parser atual", "description": "Entender como cada linha do jsonl vira evento.", "activeForm": "Lendo o parser atual"}),
+    result("t-c1-r", "c1", "Task #1 created successfully: Ler o parser atual"),
+    call("t-c2", "c2", "TaskCreate", {"subject": "Trocar a leitura por streaming", "description": "Ler o arquivo em pedaços em vez de carregar tudo.", "activeForm": "Trocando a leitura por streaming"}),
+    result("t-c2-r", "c2", "Task #2 created successfully: Trocar a leitura por streaming"),
+    call("t-c3", "c3", "TaskCreate", {"subject": "Rodar o check", "activeForm": "Rodando o check"}),
+    result("t-c3-r", "c3", "Task #3 created successfully: Rodar o check"),
+    call("t-up1", "up1", "TaskUpdate", {"taskId": "1", "status": "in_progress"}), result("t-up1-r", "up1", "Updated task #1 status"),
+    call("t-r1", "r1", "Read", {"file_path": "/synthetic/hangar/src/parser.rs"}), result("t-r1-r", "r1", "\n".join(f"linha {i}" for i in range(212))),
+    call("t-r2", "r2", "Read", {"file_path": "/synthetic/hangar/src/transcript.rs"}), result("t-r2-r", "r2", "\n".join(f"linha {i}" for i in range(88))),
+    call("t-e1", "e1", "Edit", {"file_path": "/synthetic/hangar/src/parser.rs", "old_string": "let text = read_all(path)?;\nfor line in text.lines() {",
+                                "new_string": "let file = File::open(path)?;\nlet reader = BufReader::new(file);\nfor line in reader.lines() {\n    let line = line?;"}),
+    result("t-e1-r", "e1", "The file /synthetic/hangar/src/parser.rs has been updated."),
+    call("t-b1", "b1", "Bash", {"command": "cargo check -p hangar-desktop", "description": "Checar o crate"}), result("t-b1-r", "b1", "Checking hangar-desktop\nFinished dev profile"),
+    call("t-up2", "up2", "TaskUpdate", {"taskId": "1", "status": "completed"}), result("t-up2-r", "up2", "Updated task #1 status"),
+    call("t-up3", "up3", "TaskUpdate", {"taskId": "2", "status": "in_progress"}), result("t-up3-r", "up3", "Updated task #2 status"),
+    msg("assistant_msg", "t-a1", "Troquei a leitura por streaming no parser. Falta rodar o check completo."),
+    call("t-b2", "b2", "Bash", {"command": "npm run check", "description": "Rodar o check do front"}),
+    result("t-b2-r", "b2", "error TS2339: Property 'pendingGate' does not exist on type 'SessionState'.", True),
+    msg("assistant_msg", "t-a2", "O custo por conta nesta semana:\n\n| Conta | Chamadas | Bruto |\n|---|--:|--:|\n| Kimi Code | 327 | 46,9M |\n| Claude 200 | 120 | 5,3M |\n| Codex | 48 | 1,2M |\n| OpenCode | 12 | 380k |\n\nA Kimi Code concentra a maior parte do volume."),
+    # Tabela sem as bordas externas, com barra escapada no rótulo, porcentagem e milhar pt ("1.234").
+    msg("assistant_msg", "t-a3", "Uso da cota por conta:\n\nConta | Uso | Custo\n--- | ---: | ---:\nKimi Code | 62% | 1.234\nCodex \\| nuvem | 25% | 980\nClaude 200 | 13% | 2.450"),
+]
+
+
+def long_events(rounds=60):
+    """Transcript longo para a prova de rolagem: a conversa de TOOLS_EVENTS repetida, com ids e tarefas únicos por volta."""
+    out = []
+    for r in range(rounds):
+        for ev in TOOLS_EVENTS:
+            ev = dict(ev, id=f"L{r}-{ev['id']}")
+            if ev.get("tool_use_id"):
+                ev["tool_use_id"] = f"L{r}-{ev['tool_use_id']}"
+            if ev.get("tool_name") == "TaskUpdate":
+                ev["tool_input"] = dict(ev["tool_input"], taskId=str(int(ev["tool_input"]["taskId"]) + 3 * r))
+            if ev["kind"] == "tool_result" and (ev.get("result") or "").startswith("Task #"):
+                n = int(ev["result"].split("#")[1].split()[0]) + 3 * r
+                ev["result"] = f"Task #{n} created successfully"
+            out.append(ev)
+    return out
+
+
 def build():
     return {
         "p5-claude": {
@@ -78,6 +136,16 @@ def build():
             "events": [msg("user_msg", "u1", "Planeje a troca do parser."), msg("assistant_msg", "a1", "Escrevi o plano no arquivo.")],
             "stats": {"turns": 4, "steps": 19, "in_tok": 812000, "out_tok": 9400, "llm_ms": 48200, "tool_ms": 12900, "tok_s": 61, "cache_pct": 93, "ttft_ms": 2100},
             "modes": [], "model": "Opus 5.5",
+        },
+        "p5-tools": {
+            "info": info("p5-tools", "claude", git_added=5, git_removed=2, git_dirty=2, branch="main"),
+            "state": state("idle", status_line="🤖 Opus5.5·1M (high✦) │ 📁 hangar [main*] │ 💬 8k/600 110k/1M │ 💵 $1.23", claude_permission_mode="manual"),
+            "events": TOOLS_EVENTS, "stats": None, "modes": [], "model": "Opus 5.5",
+        },
+        "p5-long": {
+            "info": info("p5-long", "claude", branch="main"),
+            "state": state("idle", status_line="🤖 Opus5.5·1M (high✦) │ 📁 hangar [main] │ 💬 8k/600 610k/1M │ 💵 $9.80", claude_permission_mode="manual"),
+            "events": long_events(), "stats": None, "modes": [], "model": "Opus 5.5",
         },
         "p5-headless": {
             "info": info("p5-headless", "claude", headless=True, git_added=0, git_removed=0, git_dirty=0, branch="feature/x"),

@@ -9,12 +9,14 @@ mod i18n;
 mod interaction;
 mod media;
 mod status;
+mod tables;
 mod theme;
 use gpui_kit::{component::{Root, Theme, ThemeMode}, *};
 use std::{borrow::Cow, sync::Arc};
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, Paperclip, Plug, SquareSlash,
-    Activity, Contrast, Droplet, Image, Keyboard, Layers, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users]);
+    Activity, Contrast, Droplet, Image, Keyboard, Layers, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users,
+    SquarePen, FilePlus, Wrench, Circle, CircleDashed, ChartColumn, Table, ListChecks]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
 

@@ -44,6 +44,16 @@ pub enum Wallpaper { Window, Glass }
 #[serde(rename_all = "snake_case")]
 pub enum Reading { Auto, None, Text, Sheet }
 
+/// Como a chamada de ferramenta aparece na conversa: linha com nome e resumo, ou verbo e chip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolLook { Classic, Chips }
+
+/// Que chamadas feitas no meio do raciocínio ficam dentro do bloco do pensamento.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingTools { None, Search, All }
+
 /// Amostra escolhida: índice numa lista fixa ou cor livre, gravada como "#rrggbb".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -111,22 +121,30 @@ pub struct Appearance {
     pub line_height: u16,
     pub column: u16,
     pub sidebar_height: SidebarHeight,
+    pub tool_look: ToolLook,
+    /// Lista de tarefas do agente (TaskCreate/TaskUpdate) como um bloco de progresso na conversa.
+    pub task_list: bool,
+    pub thinking_tools: ThinkingTools,
+    /// Botão Gráfico sobre as tabelas numéricas das respostas.
+    pub table_chart: bool,
 }
 
 const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeMode::Dark, palette: Palette::Classic,
     desktop_text: DesktopText::Desktop, dark: MODE_COLORS, light: MODE_COLORS, transparency: 40, solidity: 70,
     background: Background::Plain, wallpaper: Wallpaper::Window, reading: Reading::Auto, sheet_solidity: 60, text_contrast: 30,
-    font: Font::System, text_size: 100, line_height: 100, column: 100, sidebar_height: SidebarHeight::Full };
+    font: Font::System, text_size: 100, line_height: 100, column: 100, sidebar_height: SidebarHeight::Full,
+    tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, table_chart: false };
 
 impl Default for Appearance {
     fn default() -> Self { DEFAULT }
 }
 
 impl Appearance {
-    /// "Voltar ao padrão" do web: não mexe em tema, fonte, fundo nem painéis.
+    /// "Voltar ao padrão" do web: não mexe em tema, fonte, fundo, painéis nem no jeito da conversa.
     pub fn reset_keeping_choices(self) -> Self {
         Self { panels: self.panels, font: self.font, theme: self.theme, palette: self.palette, desktop_text: self.desktop_text,
-            background: self.background, wallpaper: self.wallpaper, ..Self::default() }
+            background: self.background, wallpaper: self.wallpaper, tool_look: self.tool_look, task_list: self.task_list,
+            thinking_tools: self.thinking_tools, table_chart: self.table_chart, ..Self::default() }
     }
 
     /// Imagem ou área de trabalho atrás do texto: é o que a Leitura Automática resolve.
@@ -244,6 +262,17 @@ mod tests {
         let custom = Appearance { background: Background::Image, wallpaper: Wallpaper::Glass, reading: Reading::Sheet, text_contrast: 90, ..Appearance::default() };
         let reset = custom.reset_keeping_choices();
         assert_eq!((reset.background, reset.wallpaper, reset.reading, reset.text_contrast), (Background::Image, Wallpaper::Glass, Reading::Auto, 30));
+    }
+
+    #[test]
+    fn conversation_choices_default_like_the_web_and_survive_reset() {
+        let a = Appearance::default();
+        assert_eq!((a.tool_look, a.task_list, a.thinking_tools, a.table_chart), (ToolLook::Classic, false, ThinkingTools::Search, false));
+        let custom = Appearance { tool_look: ToolLook::Chips, task_list: true, thinking_tools: ThinkingTools::All, table_chart: true, ..a };
+        let reset = custom.reset_keeping_choices();
+        assert_eq!((reset.tool_look, reset.task_list, reset.thinking_tools, reset.table_chart), (ToolLook::Chips, true, ThinkingTools::All, true));
+        let parsed: Appearance = serde_json::from_str(r#"{"tool_look":"chips","thinking_tools":"none"}"#).unwrap();
+        assert_eq!((parsed.tool_look, parsed.thinking_tools), (ToolLook::Chips, ThinkingTools::None));
     }
 
     #[test]
