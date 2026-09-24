@@ -88,6 +88,7 @@
       erro = null;
       conflito = null;
       avisoFalhou = false;
+      grupoNoClique = null;
     });
   });
 
@@ -106,11 +107,11 @@
     const pedidoEmVoo = pedido;
     const o = origemSessao;
     const a = alvoSessao;
-    grupoNoClique = grupoExistente;
-    const herda = grupoExistente !== null;
     if (!o || !a) { erro = mensagemRecusa('dead'); return; }
     const checagem = canPair(o, a);
     if (!checagem.ok) { erro = mensagemRecusa(checagem.reason); return; }
+    grupoNoClique = grupoExistente;
+    const herda = grupoExistente !== null;
     busy = true;
     erro = null;
     try {

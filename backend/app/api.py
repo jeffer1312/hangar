@@ -3199,6 +3199,10 @@ def _ao_recibo_nativo(mid: str, estado: str, detalhe: str) -> None:
                      estado, mid, bool(info), _loop_servidor is not None, detalhe)
         return
     remetente, alvo, inicio = info
+    if sanitize_session_name(remetente) != remetente:
+        # Aviso do próprio app ([painel: …]): não há sessão remetente a avisar, a recusa fica no log.
+        _log.warning("aviso do app %s por %s: %s (%r)", estado, alvo, detalhe, inicio)
+        return
     aviso = (f"[painel: entrega de recado] Seu recado para {alvo} ({inicio!r}) foi {estado}"
              f"{': ' + detalhe if detalhe else ''}. Ele não chegou ao modelo de lá.")
     fut = asyncio.run_coroutine_threadsafe(_enviar(remetente, aviso), _loop_servidor)
