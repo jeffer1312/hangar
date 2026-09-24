@@ -13,6 +13,8 @@ export type SessaoListada = {
   nome: string;
   estado: string;
   cwd: string;
+  /** `--list`: `provider[:motor]/tmux|headless`. */
+  harness?: string;
   /** Linha da direita quando o `cwd` não é o que interessa (idade da sessão, no ListAgents). */
   extra?: string;
 };
@@ -135,12 +137,13 @@ export function lerComandoHangar(comando: string, saida: string, falhou: boolean
   }
 
   if (/(^|\s)--list(\s|$)/.test(args)) {
-    // `%-24s %-15s %s`: nome, estado, cwd. Linha de aviso (⚠) e cabeçalho ficam de fora.
+    // Colunas: nome, estado, harness, cwd. O harness é opcional (servidor com hangar-send antigo
+    // não imprime) e tem forma fechada, pra não confundir com um cwd. Aviso (⚠) fica de fora.
     const sessoes = out
       .split('\n')
-      .map((l) => l.match(/^(\S+)\s{2,}(\S+)\s{2,}(.+)$/))
+      .map((l) => l.match(/^(\S+)\s{2,}(\S+)\s{2,}(?:([\w?-]+(?::\S+)?\/(?:tmux|headless))\s+)?(.+)$/))
       .filter(Boolean)
-      .map((m) => ({ nome: m![1], estado: m![2], cwd: m![3].trim() }));
+      .map((m) => ({ nome: m![1], estado: m![2], harness: m![3], cwd: m![4].trim() }));
     // Lista lida = o comando funcionou. Peer fora do ar na varredura vira linha `⚠`/`erro:` no
     // stderr, e isso pintava o cartão de "o backend não respondeu" com as sessões todas na tela.
     return { verbo: 'listar', sessoes: sessoes.length ? sessoes : undefined,

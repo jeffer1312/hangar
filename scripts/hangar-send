@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hangar-send — mensagem entre sessões Claude via hangar.
 #
-#   hangar-send --list                 lista sessões vivas (nome, estado, cwd) — locais e remotas
+#   hangar-send --list                 lista sessões vivas (nome, estado, harness, cwd) — locais e remotas
 #   hangar-send <sessao> <mensagem...> orienta o turno atual quando suportado; senão, mantém na fila
 #                                  RECUSA (código 3) quando o caminho NATIVO do Claude Code alcança
 #                                  os dois lados — ver "Caminho nativo" abaixo. --tmux força este.
@@ -148,10 +148,13 @@ api() {
 }
 
 listar() {
+    # Colunas: nome, estado, harness (`provider[:motor]/tmux|headless`), cwd. O cartão do app
+    # (frontend/src/lib/hangarCmd.ts) lê essas colunas; mudou aqui, muda lá.
     api GET /api/sessions | python3 -c '
 import json, sys
 for s in json.load(sys.stdin):
-    print("%-24s %-15s %s%s" % (s["name"], s["state"], s["cwd"], "  (você)" if s["name"] == sys.argv[1] else ""))' "$(me 2>/dev/null)"
+    h = "%s%s/%s" % (s.get("provider") or "?", ":" + s["engine"] if s.get("engine") else "", "headless" if s.get("headless") else "tmux")
+    print("%-23s  %-14s  %-17s  %s%s" % (s["name"], s["state"], h, s["cwd"], "  (você)" if s["name"] == sys.argv[1] else ""))' "$(me 2>/dev/null)"
     # Servidores do peers.json: mesmas colunas, nome prefixado servidor::sessao (é o endereço
     # que o hangar-send de envio aceita). Peer fora do ar não derruba a lista local — vira aviso.
     if [[ -f "$PEERS_FILE" ]]; then
@@ -183,7 +186,8 @@ try:
 except ValueError:  # api() falhou -> stdin vazio; a linha de aviso já saiu no stderr dela
     sys.exit(0)
 for s in sessions:
-    print("%-24s %-15s %s" % (sys.argv[1] + "::" + s["name"], s["state"], s["cwd"]))' "$pid"
+    h = "%s%s/%s" % (s.get("provider") or "?", ":" + s["engine"] if s.get("engine") else "", "headless" if s.get("headless") else "tmux")
+    print("%-23s  %-14s  %-17s  %s" % (sys.argv[1] + "::" + s["name"], s["state"], h, s["cwd"]))' "$pid"
             ) >"$tmpd/$n.out" 2>"$tmpd/$n.err" &
         done <<< "$peers_tsv"
         wait

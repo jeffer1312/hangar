@@ -629,7 +629,7 @@ comando configurado, a leitura usa o motor local automaticamente.
 Sessões Claude da mesma máquina conversam entre si pelo backend via `scripts/hangar-send`:
 
 ```bash
-hangar-send --list                    # sessões vivas (nome, estado, cwd)
+hangar-send --list                    # sessões vivas (nome, estado, harness, cwd)
 hangar-send api-fix "mensagem"        # manda prompt pra outra sessão (fila se ocupada)
 hangar-send --pair api-fix "tarefa"   # pareia ESTA sessão com outra num grupo de trabalho
 hangar-send --group "terminei"        # aviso de marco pro grupo todo (unidirecional)

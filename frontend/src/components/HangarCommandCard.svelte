@@ -130,6 +130,7 @@
             <button class="hc-nome" onclick={() => onAbrirSessao?.(s.nome)}
                     disabled={!onAbrirSessao || !podeAbrir(s.nome)}>{s.nome}</button>
             <span class="hc-estado">{(estadoRotulo[s.estado] ?? (() => s.estado))()}</span>
+            {#if s.harness}<span class="hc-estado">· {s.harness}</span>{/if}
             <span class="hc-cam">{s.extra ?? s.cwd}</span>
           </li>
         {/each}
