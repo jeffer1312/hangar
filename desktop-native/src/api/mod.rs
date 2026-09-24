@@ -206,6 +206,26 @@ impl Api {
         Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
+    /// Foto do papel de parede desta máquina, para o fundo Desktop em Vidro. Mesma regra da paleta: 403 fora
+    /// do loopback, 404 sem papel de parede.
+    pub async fn desktop_wallpaper(&self) -> Result<Vec<u8>, Failure> {
+        let mut url = self.base.clone();
+        url.path_segments_mut().expect("validated HTTP base").pop_if_empty().extend(["api", "desktop", "wallpaper"]);
+        let r = self.client.get(url).timeout(Duration::from_secs(20)).send().await.map_err(|_| Failure::transport(false))?;
+        let r = Self::checked(r, false).await?;
+        let limit = crate::media::BACKDROP_MAX_BYTES;
+        if r.content_length().is_some_and(|n| n > limit) { return Err(Failure::local("backdrop_too_big")); }
+        // Resposta sem tamanho declarado para no teto enquanto chega, sem juntar tudo antes de conferir.
+        let mut body = Vec::new();
+        let mut chunks = std::pin::pin!(r.bytes_stream());
+        use futures::StreamExt;
+        while let Some(chunk) = chunks.next().await {
+            body.extend_from_slice(&chunk.map_err(|_| Failure::transport(false))?);
+            if body.len() as u64 > limit { return Err(Failure::local("backdrop_too_big")); }
+        }
+        Ok(body)
+    }
+
     async fn stream(&self, name: Option<&str>, cursor: &str) -> Result<Response, Failure> {
         let mut req = self.client.get(self.endpoint(name, Some("events"))).header(header::ACCEPT, "text/event-stream");
         if !cursor.is_empty() { req = req.header("Last-Event-ID", cursor); }

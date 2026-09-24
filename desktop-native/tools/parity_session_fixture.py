@@ -6,7 +6,9 @@ GET /control/mode?next=<ok|409|503|drop|slow> changes how the NEXT mutation answ
 takes next=503|409|empty).
 GET /control/set?name=<s>&field=<state field>&value=<json> changes a live state field.
 GET /control/reset restores the initial sessions.
-GET /control/palette?status=<200|403|404>&escuro=<true|false> sets what GET /api/desktop/palette answers.
+GET /control/palette?status=<200|403|404>&escuro=<true|false>&delay=<s> sets what GET /api/desktop/palette answers;
+each request keeps the values it saw on arrival, so a slow old answer can land after a fast new one.
+GET /control/wallpaper?status=<200|403|404>&path=<image file> sets what GET /api/desktop/wallpaper answers.
 """
 
 import json
@@ -23,7 +25,8 @@ LOG = []
 MODE = {"next": "ok", "only": None}
 VERSION = {"n": 0}
 # Paleta Material You sintética, no formato de backend/app/desktop_palette.py.
-PALETTE = {"status": 200, "escuro": True}
+PALETTE = {"status": 200, "escuro": True, "delay": 0.0}
+WALLPAPER = {"status": 404, "path": None}
 PALETTE_DARK = {"background": "#15121b", "surface": "#15121b", "surfaceContainerLow": "#1d1a24", "surfaceContainer": "#221e28",
                 "surfaceContainerHigh": "#2c2833", "onSurface": "#e8e0ec", "onSurfaceVariant": "#cbc3d1", "outline": "#958e9b",
                 "outlineVariant": "#4a4550", "primary": "#d4bbff", "onPrimary": "#3b255f"}
@@ -176,6 +179,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/control/palette":
                 PALETTE["status"] = int(query.get("status", ["200"])[0])
                 PALETTE["escuro"] = query.get("escuro", ["true"])[0] != "false"
+                PALETTE["delay"] = float(query.get("delay", ["0"])[0])
+            elif path == "/control/wallpaper":
+                WALLPAPER["status"] = int(query.get("status", ["200"])[0])
+                WALLPAPER["path"] = query.get("path", [None])[0]
             elif path == "/control/reset":
                 SESSIONS.clear()
                 SESSIONS.update(build())
@@ -198,11 +205,28 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/desktop/palette":
             record("GET", self.path, None)
             with LOCK:
-                status, dark = PALETTE["status"], PALETTE["escuro"]
+                status, dark, delay = PALETTE["status"], PALETTE["escuro"], PALETTE["delay"]
+            time.sleep(delay)
             if status != 200:
                 self.send_json({"detail": {"code": "erro_sem_paleta", "msg": "sem paleta"}}, status)
             else:
                 self.send_json({"escuro": dark, "cores": PALETTE_DARK if dark else PALETTE_LIGHT})
+            return
+        if path == "/api/desktop/wallpaper":
+            record("GET", self.path, None)
+            with LOCK:
+                status, file = WALLPAPER["status"], WALLPAPER["path"]
+            if status != 200 or not file:
+                self.send_json({"detail": {"code": "erro_sem_papel_de_parede", "msg": "sem papel de parede"}}, status if status != 200 else 404)
+                return
+            with open(file, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
             return
         parts = [unquote(p) for p in path.strip("/").split("/")]
         name = parts[2] if len(parts) > 2 else None

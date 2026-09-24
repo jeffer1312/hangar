@@ -10,6 +10,7 @@ use crate::{api::{self, Api, Failure, Source, dto::*, sse::Update}, chat::{Chat,
 use gpui_kit::component::notification::Notification;
 use serde_json::{Value, json};
 
+mod backdrop;
 mod chrome;
 mod controls;
 mod follow;
@@ -59,8 +60,14 @@ enum Payload {
     Saved(SessionKey, bool, Result<PathBuf, String>),
     ConnectionNotSaved(String),
     AppearanceSaved(Result<(), String>),
-    // Paleta do papel de parede pedida à conexão atual (`GET /api/desktop/palette`).
-    DesktopPalette(Result<Value, Failure>),
+    // Paleta do papel de parede pedida à conexão atual (`GET /api/desktop/palette`), com o número do pedido.
+    DesktopPalette(u64, Result<Value, Failure>),
+    // Imagem do fundo já decodificada, com o número do pedido; `None` = a mesma foto que já está na tela.
+    Backdrop(u64, Result<Option<(u64, Arc<RenderImage>)>, Failure>),
+    // Arquivo escolhido para o fundo Imagem, já validado e copiado.
+    BackdropPicked(Result<Arc<RenderImage>, Failure>),
+    // Cópia da imagem de fundo apagada (ou o erro do disco).
+    BackdropRemoved(Result<(), String>),
     // Resposta amarrada à sessão e ao pedido capturados no gesto, não ao que está na tela na volta.
     Reply(SessionKey, Reply, Result<Value, Failure>),
     Config(Result<Value, Failure>),
@@ -195,6 +202,15 @@ pub struct Hangar {
     appearance_note: Option<String>,
     // Por que o tema Desktop não está pintando com o papel de parede; `None` quando pinta ou não foi escolhido.
     desktop_note: Option<String>,
+    // Pedidos numerados: resposta de pedido anterior ao último é descartada.
+    palette_seq: u64,
+    backdrop_seq: u64,
+    // Imagem do fundo na tela (arquivo escolhido ou papel de parede) e a assinatura dos bytes dela.
+    backdrop: Option<(u64, Arc<RenderImage>)>,
+    // Por que o fundo não desenha a imagem escolhida.
+    backdrop_note: Option<String>,
+    backdrop_busy: Option<backdrop::BackdropBusy>,
+    grain: Arc<RenderImage>,
 }
 
 impl Drop for Hangar {
@@ -211,6 +227,8 @@ impl Hangar {
         let address = cx.new(|cx| InputState::new(window, cx).default_value(saved_address).placeholder(tr("server")));
         let token = cx.new(|cx| InputState::new(window, cx).masked(true).default_value(saved_token).placeholder(tr("token")));
         if saved.is_some() { cx.defer_in(window, |this: &mut Self, window, cx| this.connect(window, cx)); }
+        // A imagem escolhida abre sem depender de conexão; o papel de parede em Vidro vem ao conectar.
+        cx.defer_in(window, |this: &mut Self, window, cx| this.refresh_backdrop(window, cx));
         let connection_focus = cx.focus_handle();
         address.update(cx, |input, cx| input.focus(window, cx));
         let composer = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 10).submit_on_enter(true));
@@ -272,6 +290,7 @@ impl Hangar {
             settings: None, settings_ui,
             appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
             desktop_note: None,
+            palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
         }
     }
 
@@ -286,7 +305,11 @@ impl Hangar {
             cx.notify();
         }).detach();
         cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active() { this.refresh_desktop_palette(cx); }
+            if !window.is_window_active() { return; }
+            this.refresh_desktop_palette(cx);
+            // O papel de parede muda fora da janela; a volta do foco é quando repintar importa.
+            let a = appearance::get();
+            if a.background == appearance::Background::Desktop && a.wallpaper == appearance::Wallpaper::Glass { this.refresh_backdrop(window, cx); }
         }).detach();
     }
 
@@ -298,14 +321,17 @@ impl Hangar {
             cx.notify();
             return;
         };
-        let (tx, connection) = (self.tx.clone(), self.connection);
+        self.palette_seq += 1;
+        let (tx, connection, seq) = (self.tx.clone(), self.connection, self.palette_seq);
         self.runtime.spawn(async move {
             let result = api.desktop_palette().await;
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::DesktopPalette(result) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::DesktopPalette(seq, result) }).await;
         });
     }
 
-    fn receive_desktop_palette(&mut self, result: Result<Value, Failure>, window: &mut Window, cx: &mut Context<Self>) {
+    fn receive_desktop_palette(&mut self, seq: u64, result: Result<Value, Failure>, window: &mut Window, cx: &mut Context<Self>) {
+        // Um pedido mais novo já saiu (outro foco, outro clique): esta resposta pintaria a paleta anterior.
+        if seq != self.palette_seq { return; }
         let parsed = result.map_err(|error| match error.status {
             Some(403) => tr("settings_desktop_remote"),
             Some(404) => tr("settings_desktop_missing"),
@@ -421,6 +447,8 @@ impl Hangar {
             });
         }
         self.refresh_desktop_palette(cx);
+        let a = appearance::get();
+        if a.background == appearance::Background::Desktop && a.wallpaper == appearance::Wallpaper::Glass { self.refresh_backdrop(window, cx); }
         cx.notify();
     }
 
@@ -540,6 +568,10 @@ impl Hangar {
                 return;
             }
             Payload::HeadlessPlan(key, outcome) => { self.receive_headless_plan(key, outcome); cx.notify(); return; }
+            // O fundo é deste computador: o número do pedido decide, não a conexão.
+            Payload::Backdrop(seq, result) => { self.receive_backdrop(seq, result, window, cx); return; }
+            Payload::BackdropPicked(result) => { self.receive_picked_backdrop(result, window, cx); return; }
+            Payload::BackdropRemoved(result) => { self.receive_removed_backdrop(result, window, cx); return; }
             payload => payload,
         };
         if envelope.connection != self.connection { return; }
@@ -652,10 +684,10 @@ impl Hangar {
                 if rows > 0 { self.follow_content_changed(cx); self.list_state.remeasure_items(0..rows); }
             }
             Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
-            Payload::DesktopPalette(result) => { self.receive_desktop_palette(result, window, cx); return; }
+            Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
-                | Payload::AppearanceSaved(..) => unreachable!(),
+                | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..) => unreachable!(),
         }
         self.sync_rows(cx);
         cx.notify();
@@ -2729,7 +2761,13 @@ impl Render for Hangar {
                     content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr("empty_chat")));
                 } else {
                     let view = cx.entity().downgrade();
+                    // Leitura Folha: uma folha da largura da coluna atrás das mensagens, com o fundo nas margens.
+                    let sheet = (appearance::get().effective_reading() == appearance::Reading::Sheet).then(|| div().absolute().inset_0()
+                        .px(px(20.)).pt(px(4.)).pb(px(8.)).flex().justify_center()
+                        .child(div().w_full().h_full().max_w(px(column_width() + 32.)).rounded(px(14.)).border_1().border_color(theme::border())
+                            .bg(theme::sheet()).shadow(theme::sheet_shadow())));
                     content = content.child(div().relative().flex_1().min_h_0().flex().flex_col()
+                        .children(sheet)
                         .child(list(self.list_state.clone(), move |i, window, cx| {
                             view.update(cx, |this, cx| this.render_row(i, window, cx)).unwrap_or_else(|_| div().into_any_element())
                         }).flex_1().min_h_0())
@@ -2786,7 +2824,8 @@ impl Render for Hangar {
                 .child(Button::new("connect").primary().label(tr("connect")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx)))));
 
         let settings_page = self.settings;
-        div().id("hangar-root").track_focus(&self.root_focus).relative().size_full().flex().bg(theme::background()).text_color(theme::text()).text_base()
+        div().id("hangar-root").track_focus(&self.root_focus).relative().size_full().flex().bg(theme::window_fill()).text_color(theme::text()).text_base()
+            .children(self.render_backdrop(window))
             .font_family(theme::SANS)
             .when(floating && settings_page.is_none(), |el| el.p(px(10.)).gap(px(10.)))
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| {

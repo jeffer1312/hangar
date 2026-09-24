@@ -1,6 +1,6 @@
 use gpui_kit::{component::{Theme, ThemeMode as KitMode}, *};
 use std::sync::{RwLock, atomic::{AtomicBool, Ordering}};
-use crate::appearance::{self, DesktopText, Palette, Panels, Swatch, ThemeMode};
+use crate::appearance::{self, Background as Backdrop, DesktopText, Palette, Panels, Reading, Swatch, ThemeMode};
 
 // Cores dos mocks aprovados (Task 12): o padrão é "Colados", opaco; "Caixa solta" deixa passar o que está
 // atrás da janela nas medidas de Transparência e Solidez. O nome de cada função diz o papel, não a cor.
@@ -49,6 +49,11 @@ const TINTS_LIGHT: [u32; 4] = [0xf6f3ee, 0xdfe2f7, 0xf6dfdc, 0xdcefe2];
 
 static SYSTEM_DARK: AtomicBool = AtomicBool::new(true);
 static DESKTOP: RwLock<Option<Colors>> = RwLock::new(None);
+
+static BACKDROP_READY: AtomicBool = AtomicBool::new(false);
+
+/// A imagem do fundo (arquivo escolhido ou papel de parede em Vidro) está carregada e pode ser desenhada.
+pub fn set_backdrop_ready(ready: bool) { BACKDROP_READY.store(ready, Ordering::Relaxed); }
 
 /// Preferência clara/escura do sistema, lida da janela (no Wayland vem do portal).
 pub fn set_system_dark(dark: bool) { SYSTEM_DARK.store(dark, Ordering::Relaxed); }
@@ -159,6 +164,55 @@ pub fn background() -> Hsla {
     let c = colors();
     if floating() { tinted(c.float_bg, 1. - appearance::get().transparency as f32 / 100.) } else { tinted(c.bg, 1.) }
 }
+
+/// Pintura da raiz: a cor do Liso, o gradiente da Textura e da Luz, ou nada quando a camada de fundo desenha
+/// imagem ou deixa ver a área de trabalho.
+pub fn window_fill() -> Background {
+    let a = appearance::get();
+    match a.background {
+        // Imagem que não abriu (sumiu, estragou, ainda lendo) cai no Liso, que é sempre legível.
+        Backdrop::Image if !BACKDROP_READY.load(Ordering::Relaxed) => background().into(),
+        Backdrop::Plain => background().into(),
+        Backdrop::Image | Backdrop::Desktop => transparent_black().into(),
+        Backdrop::Texture | Backdrop::Light => {
+            let c = colors();
+            let alpha = if floating() { 1. - a.transparency as f32 / 100. } else { 1. };
+            let base = if floating() { c.float_bg } else { c.bg };
+            // Um degrau mais fundo em cima e um toque do destaque embaixo, como o gradiente da Textura do web.
+            let top = mix(base, if c.dark { 0x000000 } else { 0x6b5f55 }, if c.dark { 0.22 } else { 0.03 });
+            let bottom = mix(base, accent_hex(), if c.dark { 0.05 } else { 0.04 });
+            linear_gradient(180., linear_color_stop(tinted(top, alpha), 0.), linear_color_stop(tinted(bottom, alpha), 1.))
+        }
+    }
+}
+
+/// Véu sobre a imagem ou a área de trabalho: a Transparência diz quanto dela atravessa, sem nunca chegar a crua.
+pub fn veil() -> Hsla {
+    let c = colors();
+    tinted(if floating() { c.float_bg } else { c.bg }, 1. - appearance::get().transparency as f32 / 100. * 0.9)
+}
+
+/// Opacidade do grão: no claro ele aparece muito mais.
+pub fn grain_opacity() -> f32 { if colors().dark { 0.05 } else { 0.03 } }
+
+/// Luz fria da Luz, no alto à esquerda.
+pub fn glow() -> Hsla { accent().alpha(if colors().dark { 0.30 } else { 0.20 }) }
+
+/// Folha atrás da conversa na Leitura Folha: a Solidez diz quanto ela tapa o fundo.
+pub fn sheet() -> Hsla { hex(colors().elevated, appearance::get().sheet_solidity as f32 / 100.) }
+pub fn sheet_shadow() -> Vec<BoxShadow> {
+    let alpha = if colors().dark { 0.28 } else { 0.10 };
+    vec![BoxShadow { color: hsla(0., 0., 0., alpha), offset: point(px(0.), px(10.)), blur_radius: px(30.), spread_radius: px(0.), inset: false }]
+}
+
+/// No modo Texto a conversa volta para o branco (escuro) ou o preto (claro) na medida do Contraste;
+/// o secundário e o apagado sobem num passo menor, como no web.
+fn reading(color: u32, weight: f32) -> Hsla {
+    let a = appearance::get();
+    if a.effective_reading() != Reading::Text { return rgb(color).into(); }
+    let dark = colors().dark;
+    rgb(mix(color, if dark { 0xffffff } else { 0x000000 }, a.text_contrast as f32 / 100. * weight)).into()
+}
 /// Barra lateral, painel de contexto e navegação das configurações.
 pub fn chrome() -> Hsla { let c = colors(); if floating() { tinted(c.float_chrome, solidity()) } else { tinted(c.chrome, 1.) } }
 pub fn surface() -> Hsla { chrome() }
@@ -173,10 +227,10 @@ pub fn hover() -> Hsla { let c = colors(); if floating() { hex(c.line, 0.06) } e
 pub fn user_bubble() -> Hsla { let c = colors(); if floating() { hex(c.float_bubble, 0.78) } else { hex(c.bubble, 1.) } }
 /// Véu atrás de diálogos: a cor da janela quase opaca.
 pub fn scrim() -> Hsla { hex(colors().bg, 0.87) }
-pub fn text() -> Hsla { rgb(colors().text).into() }
-pub fn muted() -> Hsla { rgb(colors().muted).into() }
+pub fn text() -> Hsla { reading(colors().text, 1.) }
+pub fn muted() -> Hsla { reading(colors().muted, 0.7) }
 /// `--text-muted`: um degrau abaixo do secundário.
-pub fn faint() -> Hsla { rgb(colors().faint).into() }
+pub fn faint() -> Hsla { reading(colors().faint, 0.55) }
 
 /// Destaque do modo atual já resolvido, em hexadecimal.
 fn accent_hex() -> u32 {

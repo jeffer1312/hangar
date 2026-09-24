@@ -2,7 +2,7 @@
 //! navegação das seções; o conteúdo fica no centro, em linhas com ícone, título e controle à direita.
 //! Nesta versão só a Aparência funciona; as demais páginas dizem que chegam depois, sem fingir.
 use super::*;
-use crate::appearance::{self, Appearance, DesktopText, Font, Hex, Palette, Panels, SidebarHeight, Swatch, ThemeMode};
+use crate::appearance::{self, Appearance, Background, DesktopText, Font, Hex, Palette, Panels, Reading, SidebarHeight, Swatch, ThemeMode, Wallpaper};
 use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState}, slider::{Slider, SliderEvent, SliderState}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,24 +39,30 @@ impl Page {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Knob { TintStrength, Transparency, Solidity, Size, Line, Column }
+enum Knob { TintStrength, Transparency, Solidity, SheetSolidity, Contrast, Size, Line, Column }
 
 impl Knob {
-    const ALL: [Knob; 6] = [Knob::TintStrength, Knob::Transparency, Knob::Solidity, Knob::Size, Knob::Line, Knob::Column];
+    const ALL: [Knob; 8] = [Knob::TintStrength, Knob::Transparency, Knob::Solidity, Knob::SheetSolidity, Knob::Contrast, Knob::Size, Knob::Line, Knob::Column];
 
     // A força da tinta é do modo que está na tela (escuro ou claro), como a cor.
     fn read(self, a: &Appearance) -> u16 {
         match self { Knob::TintStrength => a.colors(theme::is_dark()).tint_strength, Knob::Transparency => a.transparency, Knob::Solidity => a.solidity,
+            Knob::SheetSolidity => a.sheet_solidity, Knob::Contrast => a.text_contrast,
             Knob::Size => a.text_size, Knob::Line => a.line_height, Knob::Column => a.column }
     }
 
     fn write(self, a: &mut Appearance, value: u16) {
         match self { Knob::TintStrength => a.colors_mut(theme::is_dark()).tint_strength = value, Knob::Transparency => a.transparency = value,
-            Knob::Solidity => a.solidity = value, Knob::Size => a.text_size = value, Knob::Line => a.line_height = value, Knob::Column => a.column = value }
+            Knob::Solidity => a.solidity = value, Knob::SheetSolidity => a.sheet_solidity = value, Knob::Contrast => a.text_contrast = value,
+            Knob::Size => a.text_size = value, Knob::Line => a.line_height = value, Knob::Column => a.column = value }
     }
 
     fn range(self) -> (f32, f32) {
-        match self { Knob::TintStrength => (5., 100.), Knob::Transparency | Knob::Solidity => (0., 100.), _ => (50., 150.) }
+        match self {
+            Knob::TintStrength => (5., 100.),
+            Knob::Transparency | Knob::Solidity | Knob::SheetSolidity | Knob::Contrast => (0., 100.),
+            Knob::Size | Knob::Line | Knob::Column => (50., 150.),
+        }
     }
 }
 
@@ -395,10 +401,10 @@ impl Hangar {
 
         let palette = segmented("palette", &[tr("settings_palette_neutral"), tr("settings_palette_classic")],
             if a.palette == Palette::Neutral { 0 } else { 1 }, !from_wallpaper,
-            |this: &mut Hangar, index, cx| { let mut next = appearance::get(); next.palette = if index == 0 { Palette::Neutral } else { Palette::Classic }; this.apply_appearance(next, true, cx); }, cx);
+            |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.palette = if index == 0 { Palette::Neutral } else { Palette::Classic }; this.apply_appearance(next, true, cx); }, cx);
         let text_color = segmented("text-color", &[tr("settings_text_color_desktop"), tr("settings_text_color_app")],
             if a.desktop_text == DesktopText::App { 1 } else { 0 }, a.theme == ThemeMode::Desktop,
-            |this: &mut Hangar, index, cx| { let mut next = appearance::get(); next.desktop_text = if index == 1 { DesktopText::App } else { DesktopText::Desktop }; this.apply_appearance(next, true, cx); }, cx);
+            |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.desktop_text = if index == 1 { DesktopText::App } else { DesktopText::Desktop }; this.apply_appearance(next, true, cx); }, cx);
         let wallpaper_note = || tr("settings_palette_desc");
         let color_box = settings_box()
             .child(self.row(IconName::Palette, tr("settings_palette"), Some(wallpaper_note()), !from_wallpaper, palette))
@@ -411,23 +417,67 @@ impl Hangar {
                 Knob::TintStrength, !no_tint && !from_wallpaper, &a, cx))
             .child(self.row(IconName::Type, tr("settings_text_color"), Some(tr("settings_text_color_desc")), a.theme == ThemeMode::Desktop, text_color));
 
+        const BACKGROUNDS: [Background; 5] = [Background::Plain, Background::Texture, Background::Light, Background::Image, Background::Desktop];
+        // Escolha, cópia ou remoção da imagem em andamento: o grupo fica travado, mostrando o que está escolhido.
+        let busy = self.backdrop_busy;
+        let background = segments("background", &[tr("settings_bg_plain"), tr("settings_bg_texture"), tr("settings_bg_light"), tr("settings_bg_image"), tr("settings_bg_desktop")],
+            BACKGROUNDS.iter().position(|b| *b == a.background).unwrap_or(0), if busy.is_some() { 0 } else { BACKGROUNDS.len() }, busy.is_some(),
+            |this: &mut Hangar, index, window: &mut Window, cx| {
+                if this.backdrop_busy.is_some() { return; }
+                let choice = BACKGROUNDS[index];
+                // Imagem sem cópia guardada começa pela escolha do arquivo; o fundo só muda quando ela der certo.
+                if choice == Background::Image && !appearance::image_path().is_some_and(|p| p.is_file()) { return this.pick_backdrop(cx); }
+                let mut next = appearance::get();
+                next.background = choice;
+                this.apply_appearance(next, true, cx);
+                this.refresh_backdrop(window, cx);
+            }, cx);
+        let image_actions = div().flex().gap_2()
+            .child(Button::new("background-image-pick").outline().small().label(tr("settings_image_pick")).disabled(busy.is_some())
+                .on_click(cx.listener(|this, _, _, cx| this.pick_backdrop(cx))))
+            .child(Button::new("background-image-remove").outline().small().label(tr("settings_image_remove")).disabled(busy.is_some())
+                .on_click(cx.listener(|this, _, _, cx| this.remove_backdrop(cx))));
+        let desktop_background = a.background == Background::Desktop;
+        let wallpaper = segmented("wallpaper", &[tr("settings_wallpaper_window"), tr("settings_wallpaper_glass")],
+            if a.wallpaper == Wallpaper::Glass { 1 } else { 0 }, desktop_background && busy.is_none(),
+            |this: &mut Hangar, index, window: &mut Window, cx| {
+                let mut next = appearance::get();
+                next.wallpaper = if index == 1 { Wallpaper::Glass } else { Wallpaper::Window };
+                this.apply_appearance(next, true, cx);
+                this.refresh_backdrop(window, cx);
+            }, cx);
+        // Com imagem ou área de trabalho atrás, a Transparência é o véu e vale também nos painéis colados.
+        let see_through = floating || a.busy_background();
         let background_box = settings_box()
-            .child(self.row(IconName::Image, tr("settings_background"), Some(tr("settings_background_desc")), true,
-                segmented_partial("background", &[tr("settings_bg_plain"), tr("settings_bg_texture"), tr("settings_bg_light"), tr("settings_bg_image"), tr("settings_bg_desktop")], 0, 1, cx)))
-            .child(self.slider_row(IconName::Layers, tr("settings_transparency"), Some(tr("settings_transparency_desc")), Knob::Transparency, floating, &a, cx))
+            .child(self.row(IconName::Image, tr("settings_background"), busy.map(|b| b.note()), true, background))
+            .when(a.background == Background::Image, |el| el.child(self.row(IconName::Image, tr("settings_image"),
+                Some(tr("settings_image_desc")), true, image_actions.into_any_element())))
+            .child(self.slider_row(IconName::Layers, tr("settings_transparency"),
+                Some(tr(if see_through { "settings_transparency_desc" } else { "settings_transparency_off" })), Knob::Transparency, see_through, &a, cx))
             .child(self.slider_row(IconName::Layers, tr("settings_solidity"), Some(tr("settings_only_floating")), Knob::Solidity, floating, &a, cx))
-            .child(self.row(IconName::Layers, tr("settings_blur"), Some(tr("settings_blur_desc")), true, div().into_any_element()))
-            .child(self.row(IconName::Monitor, tr("settings_wallpaper"), Some(next_version.clone()), false,
-                segmented("wallpaper", &[tr("settings_wallpaper_window"), tr("settings_wallpaper_glass")], 0, false, |_, _, _| {}, cx)));
+            // Nada a escolher aqui: a linha diz de quem é o desfoque e a dica mostra onde ligar.
+            .child(self.row(IconName::Layers, tr("settings_blur"), Some(tr("settings_blur_desc")), true,
+                div().id("blur-hint").size(px(28.)).flex().items_center().justify_center().rounded(px(6.))
+                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("settings_blur_hint")).build(window, cx))
+                    .child(chrome::small_icon(IconName::Info, 16., theme::muted())).into_any_element()))
+            .child(self.row(IconName::Monitor, tr("settings_wallpaper"),
+                Some(tr(if desktop_background { "settings_wallpaper_desc" } else { "settings_wallpaper_only_desktop" })), desktop_background, wallpaper));
 
+        const READINGS: [Reading; 4] = [Reading::Auto, Reading::None, Reading::Text, Reading::Sheet];
+        let reading = segmented("reading", &[tr("settings_reading_auto"), tr("settings_reading_none"), tr("settings_reading_text"), tr("settings_reading_sheet")],
+            READINGS.iter().position(|r| *r == a.reading).unwrap_or(0), true,
+            |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.reading = READINGS[index]; this.apply_appearance(next, true, cx); }, cx);
+        let sheet_on = a.reading == Reading::Sheet;
+        let text_on = a.effective_reading() == Reading::Text;
         let reading_box = settings_box()
-            .child(self.row(IconName::FileText, tr("settings_reading"), Some(next_version.clone()), false,
-                segmented("reading", &[tr("settings_reading_auto"), tr("settings_reading_none"), tr("settings_reading_text"), tr("settings_reading_sheet")], 0, false, |_, _, _| {}, cx)))
-            .child(self.row(IconName::Layers, tr("settings_sheet_solidity"), Some(next_version.clone()), false, static_slider(60)))
-            .child(self.row(IconName::Contrast, tr("settings_contrast"), Some(next_version.clone()), false, static_slider(30)));
+            .child(self.row(IconName::FileText, tr("settings_reading"), Some(tr("settings_reading_desc")), true, reading))
+            .child(self.slider_row(IconName::Layers, tr("settings_sheet_solidity"), (!sheet_on).then(|| tr("settings_sheet_only")),
+                Knob::SheetSolidity, sheet_on, &a, cx))
+            .child(self.slider_row(IconName::Contrast, tr("settings_contrast"), (!text_on).then(|| tr("settings_contrast_only")),
+                Knob::Contrast, text_on, &a, cx));
 
         let font = segmented("font", &[tr("settings_font_system"), tr("settings_font_mono")], if a.font == Font::Mono { 1 } else { 0 }, true,
-            |this: &mut Hangar, index, cx| { let mut next = appearance::get(); next.font = if index == 1 { Font::Mono } else { Font::System }; this.apply_appearance(next, true, cx); }, cx);
+            |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.font = if index == 1 { Font::Mono } else { Font::System }; this.apply_appearance(next, true, cx); }, cx);
         let text_box = settings_box()
             .child(self.row(IconName::Type, tr("settings_font"), None, true, font))
             .child(self.slider_row(IconName::Type, tr("settings_text_size"), None, Knob::Size, true, &a, cx))
@@ -436,20 +486,20 @@ impl Hangar {
 
         let conversation_box = settings_box()
             .child(self.row(IconName::Keyboard, tr("settings_tool_calls"), Some(next_version.clone()), false,
-                segmented("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips")], 1, false, |_, _, _| {}, cx)))
+                segmented("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips")], 1, false, |_, _, _, _| {}, cx)))
             .child(self.row(IconName::FileText, tr("settings_task_list"), Some(next_version.clone()), false,
-                segmented("task-list", &[tr("settings_task_list_hide"), tr("settings_task_list_progress")], 1, false, |_, _, _| {}, cx)))
+                segmented("task-list", &[tr("settings_task_list_hide"), tr("settings_task_list_progress")], 1, false, |_, _, _, _| {}, cx)))
             .child(self.row(IconName::Activity, tr("settings_thinking"), Some(next_version.clone()), false,
-                segmented("thinking", &[tr("settings_thinking_none"), tr("settings_thinking_search"), tr("settings_thinking_all")], 1, false, |_, _, _| {}, cx)))
+                segmented("thinking", &[tr("settings_thinking_none"), tr("settings_thinking_search"), tr("settings_thinking_all")], 1, false, |_, _, _, _| {}, cx)))
             .child(self.row(IconName::SlidersHorizontal, tr("settings_table_chart"), Some(next_version.clone()), false,
-                segmented("table-chart", &[tr("settings_table_chart_hide"), tr("settings_table_chart_show")], 0, false, |_, _, _| {}, cx)));
+                segmented("table-chart", &[tr("settings_table_chart_hide"), tr("settings_table_chart_show")], 0, false, |_, _, _, _| {}, cx)));
 
         let height = segmented("sidebar-height", &[tr("settings_sidebar_full"), tr("settings_sidebar_content")],
             if a.sidebar_height == SidebarHeight::Content { 1 } else { 0 }, floating,
-            |this: &mut Hangar, index, cx| { let mut next = appearance::get(); next.sidebar_height = if index == 1 { SidebarHeight::Content } else { SidebarHeight::Full }; this.apply_appearance(next, true, cx); }, cx);
+            |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.sidebar_height = if index == 1 { SidebarHeight::Content } else { SidebarHeight::Full }; this.apply_appearance(next, true, cx); }, cx);
         let sidebar_box = settings_box()
             .child(self.row(IconName::PanelLeft, tr("settings_collapsed_nav"), Some(next_version.clone()), false,
-                segmented("collapsed-nav", &[tr("settings_collapsed_sidebar"), tr("settings_collapsed_tabs")], 0, false, |_, _, _| {}, cx)))
+                segmented("collapsed-nav", &[tr("settings_collapsed_sidebar"), tr("settings_collapsed_tabs")], 0, false, |_, _, _, _| {}, cx)))
             .child(self.row(IconName::PanelLeft, tr("settings_sidebar_height"), Some(tr("settings_only_floating")), floating, height));
 
         div().flex().flex_col()
@@ -468,6 +518,7 @@ impl Hangar {
             .child(heading(tr("settings_panels"))).child(panel_cards)
             .child(heading(tr("settings_color"))).child(color_box)
             .child(heading(tr("settings_background_group"))).child(background_box)
+            .when_some(self.backdrop_note.clone(), |el, note| el.child(div().mt_3().text_sm().text_color(theme::warning()).child(note)))
             .child(heading(tr("settings_reading_group"))).child(reading_box)
             .child(heading(tr("settings_text_group"))).child(text_box)
             .child(heading(tr("settings_conversation_group"))).child(conversation_box)
@@ -510,33 +561,21 @@ fn settings_box() -> Div {
     div().flex().flex_col().rounded(px(14.)).border_1().border_color(theme::border()).bg(theme::boxed()).overflow_hidden()
 }
 
-/// Controle inerte de uma opção que ainda não chegou: mostra o valor padrão do web, sem aceitar arrasto.
-fn static_slider(value: u8) -> AnyElement {
-    div().w(px(230.)).flex().items_center().gap(px(10.)).opacity(0.6)
-        .child(div().flex_1().h(px(4.)).rounded_full().bg(theme::hover())
-            .child(div().h_full().rounded_full().bg(theme::accent()).w(relative(value as f32 / 100.))))
-        .child(div().w(px(28.)).text_right().text_size(px(12.5)).text_color(theme::muted()).child(value.to_string()))
-        .into_any_element()
-}
-
 /// Controle segmentado: uma silhueta só, segmento escolhido com fundo de destaque suave.
 fn segmented(id: &'static str, labels: &[String], selected: usize, enabled: bool,
-    pick: impl Fn(&mut Hangar, usize, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>) -> AnyElement {
-    segments(id, labels, selected, if enabled { labels.len() } else { 0 }, pick, cx)
+    pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>) -> AnyElement {
+    segments(id, labels, selected, if enabled { labels.len() } else { 0 }, false, pick, cx)
 }
 
-/// Segmentado em que só os `available` primeiros já funcionam; os outros ficam visíveis e desligados.
-fn segmented_partial(id: &'static str, labels: &[String], selected: usize, available: usize, cx: &mut Context<Hangar>) -> AnyElement {
-    segments(id, labels, selected, available, |_, _, _| {}, cx)
-}
-
-fn segments(id: &'static str, labels: &[String], selected: usize, available: usize,
-    pick: impl Fn(&mut Hangar, usize, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>) -> AnyElement {
+/// `locked`: todos desligados por um instante (operação em andamento), mas a escolha atual continua marcada.
+fn segments(id: &'static str, labels: &[String], selected: usize, available: usize, locked: bool,
+    pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>) -> AnyElement {
     let count = labels.len();
     div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden()
+        .when(locked, |el| el.opacity(0.6))
         .children(labels.iter().enumerate().map(|(n, label)| {
             // Opção que ainda não chegou não mostra escolha nenhuma: o padrão do web pareceria o estado do app.
-            let on = n == selected && available > 0;
+            let on = n == selected && (available > 0 || locked);
             let enabled = n < available;
             let pick = pick.clone();
             Button::new(SharedString::from(format!("{id}-{n}")))
@@ -550,7 +589,7 @@ fn segments(id: &'static str, labels: &[String], selected: usize, available: usi
                 .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
                 .disabled(!enabled).label(label.clone())
                 .when(!enabled && available > 0, |el| el.tooltip(tr("settings_next_version")))
-                .on_click(cx.listener(move |this, _, _, cx| if enabled && !on { pick(this, n, cx) }))
+                .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) }))
         }))
         .into_any_element()
 }

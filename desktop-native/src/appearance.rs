@@ -29,6 +29,21 @@ pub enum Palette { Classic, Neutral }
 #[serde(rename_all = "snake_case")]
 pub enum DesktopText { Desktop, App }
 
+/// O que fica atrás das caixas: Imagem é um arquivo deste computador; Desktop é o que está atrás da janela.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Background { Plain, Texture, Light, Image, Desktop }
+
+/// No fundo Desktop: a janela deixa ver a área de trabalho, ou desenha dentro dela a foto do papel de parede.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Wallpaper { Window, Glass }
+
+/// O que segura o texto da conversa sobre o fundo; Automática liga o Texto só com imagem ou desktop atrás.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reading { Auto, None, Text, Sheet }
+
 /// Amostra escolhida: índice numa lista fixa ou cor livre, gravada como "#rrggbb".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -82,6 +97,13 @@ pub struct Appearance {
     pub transparency: u16,
     /// Opacidade das caixas na caixa solta, 0–100.
     pub solidity: u16,
+    pub background: Background,
+    pub wallpaper: Wallpaper,
+    pub reading: Reading,
+    /// Opacidade da folha atrás da conversa, 0–100.
+    pub sheet_solidity: u16,
+    /// Quanto o texto vai para o branco (escuro) ou o preto (claro) no modo Texto, 0–100.
+    pub text_contrast: u16,
     pub font: Font,
     /// Tamanho, entrelinha e largura da coluna da conversa, em % do padrão (50–150).
     /// `u16` para que um valor fora da escala no arquivo seja limitado, não recusado na leitura.
@@ -93,6 +115,7 @@ pub struct Appearance {
 
 const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeMode::Dark, palette: Palette::Classic,
     desktop_text: DesktopText::Desktop, dark: MODE_COLORS, light: MODE_COLORS, transparency: 40, solidity: 70,
+    background: Background::Plain, wallpaper: Wallpaper::Window, reading: Reading::Auto, sheet_solidity: 60, text_contrast: 30,
     font: Font::System, text_size: 100, line_height: 100, column: 100, sidebar_height: SidebarHeight::Full };
 
 impl Default for Appearance {
@@ -102,7 +125,20 @@ impl Default for Appearance {
 impl Appearance {
     /// "Voltar ao padrão" do web: não mexe em tema, fonte, fundo nem painéis.
     pub fn reset_keeping_choices(self) -> Self {
-        Self { panels: self.panels, font: self.font, theme: self.theme, palette: self.palette, desktop_text: self.desktop_text, ..Self::default() }
+        Self { panels: self.panels, font: self.font, theme: self.theme, palette: self.palette, desktop_text: self.desktop_text,
+            background: self.background, wallpaper: self.wallpaper, ..Self::default() }
+    }
+
+    /// Imagem ou área de trabalho atrás do texto: é o que a Leitura Automática resolve.
+    pub fn busy_background(&self) -> bool { matches!(self.background, Background::Image | Background::Desktop) }
+
+    /// Leitura em vigor: a Automática vira Texto só sobre fundo ocupado.
+    pub fn effective_reading(&self) -> Reading {
+        match self.reading {
+            Reading::Auto if self.busy_background() => Reading::Text,
+            Reading::Auto => Reading::None,
+            other => other,
+        }
     }
 
     pub fn colors(&self, dark: bool) -> &ModeColors { if dark { &self.dark } else { &self.light } }
@@ -112,6 +148,8 @@ impl Appearance {
     fn clamped(mut self) -> Self {
         self.transparency = self.transparency.min(100);
         self.solidity = self.solidity.min(100);
+        self.sheet_solidity = self.sheet_solidity.min(100);
+        self.text_contrast = self.text_contrast.min(100);
         for colors in [&mut self.dark, &mut self.light] { colors.tint_strength = colors.tint_strength.clamp(5, 100); }
         for v in [&mut self.text_size, &mut self.line_height, &mut self.column] { *v = (*v).clamp(50, 150); }
         self
@@ -124,11 +162,16 @@ pub fn get() -> Appearance { *CURRENT.read().unwrap_or_else(|e| e.into_inner()) 
 
 pub fn set(value: Appearance) { *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = value.clamped(); }
 
-fn path() -> Option<PathBuf> {
+fn dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("hangar-native").join("appearance.json"))
+    Some(base.join("hangar-native"))
 }
+
+fn path() -> Option<PathBuf> { Some(dir()?.join("appearance.json")) }
+
+/// Cópia da imagem de fundo escolhida: o original pode sumir ou mudar depois.
+pub fn image_path() -> Option<PathBuf> { Some(dir()?.join("background-image")) }
 
 /// Sem arquivo, ou arquivo ilegível, abre no padrão; o motivo da falha de leitura volta para ser mostrado.
 pub fn load() -> Result<Appearance, String> {
@@ -194,5 +237,24 @@ mod tests {
         let reset = custom.reset_keeping_choices();
         assert_eq!((reset.panels, reset.font, reset.theme, reset.palette), (Panels::Floating, Font::Mono, ThemeMode::Light, Palette::Neutral));
         assert_eq!((reset.dark.accent, reset.column), (Swatch::Preset(0), 100));
+    }
+
+    #[test]
+    fn reset_keeps_background_and_resets_reading() {
+        let custom = Appearance { background: Background::Image, wallpaper: Wallpaper::Glass, reading: Reading::Sheet, text_contrast: 90, ..Appearance::default() };
+        let reset = custom.reset_keeping_choices();
+        assert_eq!((reset.background, reset.wallpaper, reset.reading, reset.text_contrast), (Background::Image, Wallpaper::Glass, Reading::Auto, 30));
+    }
+
+    #[test]
+    fn automatic_reading_turns_text_only_over_busy_background() {
+        let mut a = Appearance::default();
+        assert_eq!(a.effective_reading(), Reading::None);
+        for (background, expected) in [(Background::Texture, Reading::None), (Background::Image, Reading::Text), (Background::Desktop, Reading::Text)] {
+            a.background = background;
+            assert_eq!(a.effective_reading(), expected);
+        }
+        a.reading = Reading::Sheet;
+        assert_eq!(a.effective_reading(), Reading::Sheet);
     }
 }

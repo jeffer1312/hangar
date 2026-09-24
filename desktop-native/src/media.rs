@@ -11,17 +11,25 @@ pub const BUDGET: usize = 32 * 1024 * 1024;
 
 pub enum MediaState { Loading, Image(Arc<RenderImage>), Failed(String) }
 
-/// Decodifica com limite de memória e guarda só a miniatura; o original é buscado de novo em Abrir/Salvar.
+// Fundo de tela: o arquivo escolhido é copiado inteiro até este tamanho e desenhado reduzido a este lado.
+pub const BACKDROP_MAX_BYTES: u64 = 25 * 1024 * 1024;
+const BACKDROP_SIDE: u32 = 2560;
+
 /// Formato só pelo conteúdo real: nome que diz png com bytes de outra coisa não vira imagem.
-pub fn thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> {
-    let format = match bytes {
+fn sniff(bytes: &[u8]) -> Option<ImageFormat> {
+    Some(match bytes {
         [0x89, b'P', b'N', b'G', ..] => ImageFormat::Png,
         [0xFF, 0xD8, 0xFF, ..] => ImageFormat::Jpeg,
         [b'G', b'I', b'F', b'8', ..] => ImageFormat::Gif,
         [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => ImageFormat::WebP,
         [b'B', b'M', ..] => ImageFormat::Bmp,
         _ => return None,
-    };
+    })
+}
+
+/// Decodifica com limite de memória e reduz ao lado pedido; `None` = bytes que não são imagem legível.
+fn decode(bytes: &[u8], w: u32, h: u32) -> Option<Arc<RenderImage>> {
+    let format = sniff(bytes)?;
     let mut limits = Limits::default();
     limits.max_image_width = Some(16_384);
     limits.max_image_height = Some(16_384);
@@ -33,12 +41,51 @@ pub fn thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> {
     let orientation = decoder.orientation().ok()?;
     let mut picture = DynamicImage::from_decoder(decoder).ok()?;
     picture.apply_orientation(orientation);
-    Some(Arc::new(RenderImage::new(vec![Frame::new(fit(picture))])))
+    Some(Arc::new(RenderImage::new(vec![Frame::new(fit(picture, w, h))])))
 }
 
-// Reduz ao teto da miniatura e converte para BGRA, que é o que a GPUI desenha.
-fn fit(picture: DynamicImage) -> RgbaImage {
-    let picture = if picture.width() > THUMB_W || picture.height() > THUMB_H { picture.thumbnail(THUMB_W, THUMB_H) } else { picture };
+/// Guarda só a miniatura; o original é buscado de novo em Abrir/Salvar.
+pub fn thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> { decode(bytes, THUMB_W, THUMB_H) }
+
+/// Imagem de fundo ou papel de parede, reduzida ao tamanho de uma tela grande.
+pub fn backdrop(bytes: &[u8]) -> Option<Arc<RenderImage>> { decode(bytes, BACKDROP_SIDE, BACKDROP_SIDE) }
+
+/// Bloqueante: valida o arquivo escolhido e guarda uma cópia em `dest`, trocando a anterior só se tudo deu certo.
+/// O erro volta como chave de tradução.
+pub fn adopt_backdrop(source: &std::path::Path, dest: &std::path::Path) -> Result<Arc<RenderImage>, &'static str> {
+    let meta = std::fs::metadata(source).map_err(|_| "backdrop_missing")?;
+    if meta.len() > BACKDROP_MAX_BYTES { return Err("backdrop_too_big"); }
+    let bytes = std::fs::read(source).map_err(|_| "backdrop_missing")?;
+    let image = backdrop(&bytes).ok_or("backdrop_invalid")?;
+    let dir = dest.parent().ok_or("backdrop_not_saved")?;
+    std::fs::create_dir_all(dir).map_err(|_| "backdrop_not_saved")?;
+    let tmp = dest.with_extension("tmp");
+    std::fs::write(&tmp, &bytes).and_then(|_| std::fs::rename(&tmp, dest)).map_err(|_| "backdrop_not_saved")?;
+    Ok(image)
+}
+
+/// Bloqueante: relê a cópia guardada. O arquivo pode ter sumido ou estragado desde a escolha.
+pub fn load_backdrop(path: &std::path::Path) -> Result<Arc<RenderImage>, &'static str> {
+    let bytes = std::fs::read(path).map_err(|_| "backdrop_missing")?;
+    if bytes.len() as u64 > BACKDROP_MAX_BYTES { return Err("backdrop_too_big"); }
+    backdrop(&bytes).ok_or("backdrop_invalid")
+}
+
+/// Grão da Textura: ruído cinza opaco, desenhado em ladrilhos com pouca opacidade. Tira o degrau do gradiente escuro.
+pub fn grain() -> Arc<RenderImage> {
+    const SIDE: u32 = 256;
+    let mut state = 0x2545_f491_u32;
+    let pixels = RgbaImage::from_fn(SIDE, SIDE, |_, _| {
+        state ^= state << 13; state ^= state >> 17; state ^= state << 5;
+        let v = (state >> 24) as u8;
+        image::Rgba([v, v, v, 255])
+    });
+    Arc::new(RenderImage::new(vec![Frame::new(pixels)]))
+}
+
+// Reduz ao teto pedido e converte para BGRA, que é o que a GPUI desenha.
+fn fit(picture: DynamicImage, w: u32, h: u32) -> RgbaImage {
+    let picture = if picture.width() > w || picture.height() > h { picture.thumbnail(w, h) } else { picture };
     let mut pixels = picture.into_rgba8();
     for pixel in pixels.chunks_exact_mut(4) { pixel.swap(0, 2); }
     pixels
@@ -140,5 +187,31 @@ mod tests {
         let thumb = thumbnail(&gif).unwrap();
         assert_eq!(thumb.frame_count(), 1);
         assert_eq!((thumb.size(0).width.0, thumb.size(0).height.0), (640, 480));
+    }
+
+    #[test]
+    fn backdrop_copy_is_validated_before_replacing_the_previous_one() {
+        let dir = std::env::temp_dir().join(format!("hangar-backdrop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("background-image");
+        let mut png = Vec::new();
+        DynamicImage::ImageRgb8(image::RgbImage::new(3000, 1500)).write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+        let good = dir.join("good.png");
+        std::fs::write(&good, &png).unwrap();
+        let image = adopt_backdrop(&good, &dest).unwrap();
+        assert_eq!((image.size(0).width.0, image.size(0).height.0), (2560, 1280));
+        assert_eq!(std::fs::read(&dest).unwrap(), png);
+
+        let bad = dir.join("bad.png");
+        std::fs::write(&bad, b"nao e imagem").unwrap();
+        assert_eq!(adopt_backdrop(&bad, &dest).err(), Some("backdrop_invalid"));
+        let huge = dir.join("huge.png");
+        std::fs::File::create(&huge).unwrap().set_len(BACKDROP_MAX_BYTES + 1).unwrap();
+        assert_eq!(adopt_backdrop(&huge, &dest).err(), Some("backdrop_too_big"));
+        assert_eq!(adopt_backdrop(&dir.join("sumiu.png"), &dest).err(), Some("backdrop_missing"));
+        // Recusas não tocam na cópia boa.
+        assert_eq!(std::fs::read(&dest).unwrap(), png);
+        assert!(load_backdrop(&dest).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
