@@ -4132,6 +4132,7 @@ def _recado_arbitro(novos: list[orq_papeis.Papel], gid: str) -> str:
                        + "`, modelo `" + (p.modelo or "-") + "`, esforço `" + (p.esforco or "-") + "`"
                        + (", abertura `" + orq_papeis.abertura_texto(p) + "`"
                           if orq_papeis.abertura_texto(p) else "")
+                       + (", troca aos `" + p.janela + "%` da janela" if p.janela else "")
                        for p in novos)
     return ("[painel: orquestração] A configuração de modelos do grupo mudou no painel: " + linhas
             + ". Releia `" + str(orq_papeis.regras_path(gid))
@@ -4164,6 +4165,9 @@ class PapelItem(_StrictBody):
     motor: str = ""
     jev: bool = False
     subagente: str = ""
+    # % da janela de contexto em que a sessão do papel passa a vez ("" = 50%). O vigia lê daqui.
+    # None = cliente que não conhece o campo: mantém o valor gravado em vez de apagá-lo.
+    janela: str | None = None
 
 
 async def _validar_abertura(p: orq_papeis.Papel) -> None:
@@ -4236,7 +4240,9 @@ async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float,
                                     it.modelo.strip(), it.esforco.strip(), vez,
                                     it.headless, it.permissao.strip(), it.motor.strip(), it.jev,
                                     it.subagente.strip(),
-                                    abertura_extra=atual.abertura_extra if atual else "")
+                                    abertura_extra=atual.abertura_extra if atual else "",
+                                    janela=(atual.janela if atual else "") if it.janela is None
+                                    else it.janela.strip().rstrip("%"))
             motivo = await asyncio.to_thread(orq_politica.permitido, novo.provider, novo.conta, novo.modelo, novo.esforco)
             if motivo:
                 raise HTTPException(400, detail=erro(motivo, "a política de contas não permite esta escolha: " + novo.papel))

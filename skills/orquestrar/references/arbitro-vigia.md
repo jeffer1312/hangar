@@ -40,7 +40,8 @@ proof it works. `active` is not proof; a hand-typed test is not proof.
 
 ## What it does
 
-- Watches everyone on the list, including you. Wakes via `hangar-send --tmux`.
+- Watches everyone on the list, including you, with or without a terminal. Wakes via `hangar-send`.
+- Context: each listed session's window against its row's `janela`, re-read from the contract every cycle. Crossing it asks the session to stop after the current act and request its replacement, and tells you; once per crossing.
 - Fires when the current owner stops, not when everyone stops; `vanished` counts as stopped. Immediate, without waiting for silence: a stuck session (`working`, no event for 10 min) and a session out of quota.
 - To team sessions it ASKS, evidence attached; to you it may be affirmative. Stop orders come from you, after looking, never from the counter.
 - Liveness: journal over one full cycle, `show -p ActiveState -p MainPID`. Work in progress with `ps -eo pid,ppid,cmd | grep vigia.sh` empty, or pointing at a retired pair, is work without a net.
@@ -55,7 +56,7 @@ proof it works. `active` is not proof; a hand-typed test is not proof.
    2. the reply was produced and not sent → read its transcript (`~/.claude*/projects/<sanitized-cwd>/<uuid>.jsonl`, the most recent, messages `type: "assistant"`, the last one);
    3. the session vanished → "A vanished session", below.
 4. Session silent 15 min → `hangar-send --list`; `idle` without a report → read its transcript, then nudge.
-5. Look at the disk before resending. Look at the recipient's pane before blaming the channel: a first-run assistant open there is what the backend reports as "session unavailable".
+5. Look at the disk before resending. Look at the recipient's pane (its transcript, without a terminal) before blaming the channel: a first-run assistant open there is what the backend reports as "session unavailable".
 6. Whole team idle without a Task having closed → something didn't arrive.
 7. The user says you stopped → accept, check the counterpart's state, resume.
 
@@ -87,9 +88,9 @@ Any failing → stop at the current Task's end and wake the user before sleeping
 
 ## A vanished session
 
-Gone from `hangar-send --list` and from tmux without your order → open another and move on; the investigation is skipped.
+Gone from `hangar-send --list` without your order → open another and move on; the investigation is skipped.
 
-1. Read its transcript (most recent jsonl, `assistant` messages) and its pane (`tmux capture-pane -p -t "=<name>:" -S -200`): the report or review may be there, complete.
+1. Read its transcript (most recent jsonl, `assistant` messages) and, if it had a terminal, its pane (`tmux capture-pane -p -t "=<name>:" -S -200`): the report or review may be there, complete.
 2. Open the substitute by the recipe in `arbitro-lancamento.md`, full kick-off.
 3. One line in the contract: which session vanished, what was recovered, who took over.
 
@@ -98,11 +99,11 @@ It becomes a case only if the repo is strange (unexplained dirty tree, unreporte
 ## Rotation
 
 - Executor: one session per Task, retired at the approved milestone.
-- Mid-gate swap, mandatory: the same cause failing round after round; context above half its own window. Swap now, mid-gate, before the gate closes.
-- Writer above 50% of its own window: the writer measures and asks in its report; you open the substitute before the next round, never "at the next milestone".
-- Reviewer above 50%, or `current ctx + measured round cost` crossing the cap: open the substitute before the correction arrives; never dispatch a round to one that said it crossed. Measure a round's cost on Task 1 and add it before dispatching.
+- Mid-gate swap, mandatory: the same cause failing round after round; context past its row's `janela`. Swap now, mid-gate, before the gate closes.
+- Writer past its row's `janela`: the writer asks in its report (the watchdog prompts it); you open the substitute before the next round, never "at the next milestone".
+- Reviewer past its row's `janela`, or `current ctx + measured round cost` crossing it: open the substitute before the correction arrives; never dispatch a round to one that said it crossed. Measure a round's cost on Task 1 and add it before dispatching.
 - Reviewer rotated with a report in flight: the retired report dies, the successor judges from scratch, and the round closes only with the verdict of a reviewer named in the journal. Rotation between accounts never puts two reviewers on one commit.
-- The trigger is a fraction of each session's own window, never an absolute number.
+- The trigger is the row's `janela` (default 50%) of each session's own window, never an absolute number.
 - Screen Task with a short-window reviewer: count one reviewer per round. A wide-window model on the user's machine → suggest it for the plan from round 1; the user chooses; no rule depends on it.
 - Provider drops are not a reason; throughput is: swap when ctx barely moves between drops, or no revival after two nudges.
 - Handover in a file that points: HEAD, `git status`, uncommitted disk, what remains, traps paid, paths of plan, contract and Task excerpt, and every decision made. No line count; never a context copy.

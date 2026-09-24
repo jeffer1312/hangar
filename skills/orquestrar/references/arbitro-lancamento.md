@@ -11,7 +11,7 @@ session is opened or a Task released. Back to `arbitro.md` once the team stands.
    git status --short                  # dirty tree → the paths become untouchables, one by one
    git branch --show-current
    hangar-send --list                  # who else is alive in this cwd
-   tmux display -p '#{session_name}'   # which of those is you
+   echo "$CP_SESSION_NAME"             # which of those is you; renamed → MCP who_am_i
    ```
 
    Another session writing in this checkout → resolve it with that session; unresolved → the
@@ -123,7 +123,7 @@ Done when the proof is taken, the kick-off engaged, and the row's model read bac
 
 The real engine, model and harness, never the request:
 
-- `tmux display -p -t "=<name>:" '#{pane_start_command}'`: the request became a command, and the harness (`claude` × `pi`) plus the API's `provider` match the row.
+- With a terminal, `tmux display -p -t "=<name>:" '#{pane_start_command}'`; without one, its sidecar in `~/.hangar/claude-headless/` or `~/.hangar/codex-sessions/`: the request became a command, and the harness (`claude` × `pi`) plus the API's `provider` match the row.
 - Live proof from the session (statusline or `/cp-think` return) on its first turn, before its first `Edit`. Echoing the kick-off is not proof.
 - The proof comes from the pane and the live session; `/proc/<pid>/cmdline` stays unread. A sidecar proof must match the live session's `session-id`.
 - A proof belongs to the session it was taken from: another row = another session = another proof.

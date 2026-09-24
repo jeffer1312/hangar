@@ -25,6 +25,7 @@ export interface Papel {
   motor?: string;          // '' = conta Anthropic
   jev?: boolean;
   subagente?: string;      // '' = o mesmo da sessão
+  janela?: string;         // % da janela de contexto em que o papel passa a vez; '' = 50
 }
 
 /** Campos de abertura de sessão de um papel, na forma que as rotas de gravação aceitam. */

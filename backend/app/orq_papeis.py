@@ -5,6 +5,7 @@ O árbitro é dono do resto do arquivo; o app troca só a linha do papel (orq_md
 """
 from __future__ import annotations
 
+import itertools
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +23,13 @@ CABECALHO_VEZ = ("papel", "vez", "sessão", "provider", "conta", "modelo", "esfo
 # `abertura` segue a mesma regra da `vez`: a coluna só entra no arquivo quando algum papel usa uma
 # opção de abertura, e vai por último. A célula é o trecho de flags do `hangar-send --new`.
 ABERTURA = "abertura"
-_CABECALHOS = (CABECALHO_VEZ + (ABERTURA,), CABECALHO + (ABERTURA,), CABECALHO_VEZ, CABECALHO)
+# `janela`: % da janela de contexto da própria sessão em que o papel passa a vez (o vigia lê).
+# Mesma regra das outras opcionais; fica antes de `abertura`. Vazio = 50%.
+JANELA = "janela"
+_CABECALHOS = tuple(sorted(
+    ((CABECALHO_VEZ if vez else CABECALHO) + ((JANELA,) if jan else ()) + ((ABERTURA,) if ab else ())
+     for vez, jan, ab in itertools.product((True, False), repeat=3)),
+    key=len, reverse=True))
 SECAO = "Quem é quem"
 ARBITRO = "arbitro"
 # `vez` só assume "1", "2", "3"…: a Task N cabe à conta de índice (N-1) % total, então a ordem é a
@@ -48,6 +55,7 @@ class Papel:
     # Trecho da célula que o painel não edita (ex.: `--read-only` escrito pelo árbitro): volta
     # intacto no fim da célula, senão salvar pelo painel apagaria a proteção sem ninguém ver.
     abertura_extra: str = ""
+    janela: str = ""        # "60" = passa a vez aos 60% da janela; "" = 50%
 
     def e_arbitro(self) -> bool:
         return orq_md.normalizar(self.papel) == ARBITRO
@@ -116,8 +124,15 @@ def ler(texto: str) -> list[Papel]:
     if cab is None:
         return []
     return [Papel(r["papel"], r["sessão"], r["provider"].lower(), r["conta"],
-                  r["modelo"], r["esforço"], r.get("vez", ""), **_ler_abertura(r.get(ABERTURA, "")))
+                  r["modelo"], r["esforço"], r.get("vez", ""), **_ler_abertura(r.get(ABERTURA, "")),
+                  janela=r.get(JANELA, "").rstrip("%").strip())
             for r in orq_md.ler_tabela(texto, cab) if r.get("papel")]
+
+
+def validar_janela(valor: str) -> str:
+    if valor and not (valor.isdigit() and 10 <= int(valor) <= 95):
+        raise ValueError("janela: porcentagem inteira entre 10 e 95")
+    return valor
 
 
 def _com_coluna(texto: str, cab: tuple[str, ...], nome: str, em: int) -> tuple[str, tuple[str, ...]]:
@@ -139,14 +154,18 @@ def escrever_papel(texto: str, p: Papel) -> str:
     abertura = abertura_texto(p)
     for v in (p.papel, p.sessao, p.provider, p.conta, p.modelo, p.esforco, p.vez, abertura):
         orq_md.validar_celula(v)
-    # Contrato que não usa rodízio nem abertura continua byte a byte no formato em que estava.
+    validar_janela(p.janela)
+    # Contrato que não usa rodízio, janela nem abertura continua byte a byte no formato em que estava.
     cab = cabecalho_atual(texto) or CABECALHO
     if p.vez:
         texto, cab = _com_coluna(texto, cab, "vez", 1)
+    if p.janela:
+        texto, cab = _com_coluna(texto, cab, JANELA, cab.index(ABERTURA) if ABERTURA in cab else len(cab))
     if abertura:
         texto, cab = _com_coluna(texto, cab, ABERTURA, len(cab))
     valores = {"papel": p.papel, "vez": p.vez, "sessão": p.sessao, "provider": p.provider,
-               "conta": p.conta, "modelo": p.modelo, "esforço": p.esforco, ABERTURA: abertura}
+               "conta": p.conta, "modelo": p.modelo, "esforço": p.esforco,
+               JANELA: f"{p.janela}%" if p.janela else "", ABERTURA: abertura}
     return orq_md.trocar_linha(texto, cab, chave_da_linha(cab, p.papel, p.vez),
                                {c: valores[c] for c in cab}, SECAO)
 

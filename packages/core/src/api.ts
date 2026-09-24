@@ -766,7 +766,7 @@ export async function getOrqGrupo(name: string): Promise<import('./orquestracao'
 export async function postOrqPapeis(
   name: string,
   // `avisar: false` grava sem acordar o árbitro — é o "salvar e continuar montando o time".
-  body: { papeis: ({ papel: string; sessao?: string; provider: string; conta: string; modelo?: string; esforco?: string; vez?: string }
+  body: { papeis: ({ papel: string; sessao?: string; provider: string; conta: string; modelo?: string; esforco?: string; vez?: string; janela?: string }
     & Partial<import('./orquestracao').AberturaPapel>)[]; mtime: number; avisar?: boolean },
 ): Promise<import('./orquestracao').RespostaPapel> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/papeis`, { method: 'POST', body: JSON.stringify(body) });

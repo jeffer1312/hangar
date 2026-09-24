@@ -81,6 +81,8 @@
   let fMotor = $state('');
   let fJev = $state(false);
   let fSubagente = $state('');
+  let fJanela = $state('');
+  const JANELAS = ['30', '40', '60', '70', '80'];
 
   const qMotores = createQuery(() => ({ ...motores(null), enabled: open }), () => clienteQuery);
   const listaMotores = $derived(qMotores.data?.motores ?? {});
@@ -163,7 +165,7 @@
 
   // Edições pendentes por papel (chave = nome do papel no contrato, ou 'novo'). Trocar de card
   // NÃO descarta o que foi mudado: o usuário edita vários e salva tudo no fim, num recado só.
-  type Rascunho = { papel: string; sessao: string; provider: Provider; conta: string; modelo: string; esforco: string; vez: string } & AberturaPapel;
+  type Rascunho = { papel: string; sessao: string; provider: Provider; conta: string; modelo: string; esforco: string; vez: string; janela: string } & AberturaPapel;
   let rascunhos = $state<Record<string, Rascunho>>({});
   const nRascunhos = $derived(Object.keys(rascunhos).length);
   // Chave papel+vez: num papel que reveza, chavear só pelo nome faria o rascunho da 2ª conta
@@ -176,16 +178,16 @@
     const k = chaveDe(sel);
     const orig = sel === 'novo' ? null : papeis[sel];
     const papelNome = fPapel.trim();
-    const r: Rascunho = { papel: papelNome, sessao: (fSessao.trim() || (papelNome ? sessaoDerivada(papelNome) : '')), provider: fProvider, conta: fConta, modelo: fModelo, esforco: fEsforco, vez: fVez, ...abertura() };
+    const r: Rascunho = { papel: papelNome, sessao: (fSessao.trim() || (papelNome ? sessaoDerivada(papelNome) : '')), provider: fProvider, conta: fConta, modelo: fModelo, esforco: fEsforco, vez: fVez, janela: fJanela, ...abertura() };
     const a = aberturaDe(orig);
     const igual = !!orig && orig.sessao === r.sessao && (orig.provider || 'claude') === r.provider
       && orig.conta === r.conta && orig.modelo === r.modelo && orig.esforco === r.esforco
-      && (orig.vez ?? '') === r.vez
+      && (orig.vez ?? '') === r.vez && (orig.janela ?? '') === r.janela
       && (Object.keys(a) as (keyof AberturaPapel)[]).every((c) => a[c] === r[c]);
     if (igual || (sel === 'novo' && !r.papel)) delete rascunhos[k]; else rascunhos[k] = r;
   }
   $effect(() => {
-    void [fPapel, fSessao, fProvider, fConta, fModelo, fEsforco, fVez, fHeadless, fPermissao, fMotor, fJev, fSubagente, sel];
+    void [fPapel, fSessao, fProvider, fConta, fModelo, fEsforco, fVez, fJanela, fHeadless, fPermissao, fMotor, fJev, fSubagente, sel];
     untrack(guardarRascunho);
   });
 
@@ -201,6 +203,7 @@
     fModelo = r?.modelo ?? p?.modelo ?? '';
     fEsforco = r?.esforco ?? p?.esforco ?? '';
     fVez = r?.vez ?? p?.vez ?? '';
+    fJanela = r?.janela ?? p?.janela ?? '';
     const a = r ?? aberturaDe(p);
     fHeadless = a.headless; fPermissao = a.permissao; fMotor = a.motor; fJev = a.jev; fSubagente = a.subagente;
   }
@@ -245,7 +248,7 @@
   function rascunhoDe(l: Papel, vez: string) {
     rascunhos[`${l.papel}::${l.vez ?? ''}`] = {
       papel: l.papel, sessao: l.sessao, provider: (l.provider || 'claude') as Provider,
-      conta: l.conta, modelo: l.modelo, esforco: l.esforco, vez, ...aberturaDe(l),
+      conta: l.conta, modelo: l.modelo, esforco: l.esforco, vez, janela: l.janela ?? '', ...aberturaDe(l),
     };
   }
 
@@ -261,13 +264,13 @@
     const itens = linhas.map((l, idx) => ({
       papel: l.papel, sessao: l.sessao, provider: l.provider || 'claude',
       conta: l.conta, modelo: l.modelo, esforco: l.esforco, vez: (l.vez ?? '').trim() || String(idx + 1),
-      ...aberturaDe(l),
+      janela: l.janela ?? '', ...aberturaDe(l),
     }));
     const base = linhas[0] ?? null;
     itens.push({
       papel: fPapel.trim() || base?.papel || '', sessao: base?.sessao ?? fSessao,
       provider: (base?.provider || fProvider) as Provider, conta: '', modelo: '', esforco: '',
-      vez: String(Math.max(n, itens.length + 1)), ...aberturaDe(null),
+      vez: String(Math.max(n, itens.length + 1)), janela: base?.janela ?? '', ...aberturaDe(null),
     });
     salvando = true; erro = ''; aviso = '';
     try {
@@ -435,7 +438,7 @@
         <!-- O estado continua no acessível: a bolinha é decorativa, quem lê tela ouve o texto. -->
         <span class="sr-only">{st.viva ? m.orqcfg_viva() : m.orqcfg_nao_aberta()}</span>
         <span class="os-cfg">
-          <span class="os-sess">{viva?.name ?? p.sessao}</span> · {providerName(p.provider || 'claude')} · {p.conta}{p.modelo ? ` · ${p.modelo}` : ''}{p.esforco ? ` · ${p.esforco}` : ''}
+          <span class="os-sess">{viva?.name ?? p.sessao}</span> · {providerName(p.provider || 'claude')} · {p.conta}{p.modelo ? ` · ${p.modelo}` : ''}{p.esforco ? ` · ${p.esforco}` : ''}{p.janela ? ` · ${m.orqcfg_janela_curto({ pct: p.janela })}` : ''}
         </span>
         {#if st.divergente}
           <span class="os-chip os-chip--bad">{m.orqcfg_rodando_em({ v: [st.conta === 'divergente' ? st.contaMedida : null, st.modelo === 'divergente' ? st.modeloMedido : null, st.esforco === 'divergente' ? st.esforcoMedido : null].filter(Boolean).join(' · ') })}</span>
@@ -575,6 +578,13 @@
             onchange={(v) => (fEsforco = v)} />
         </div>
       {/if}
+      <div class="field">
+        <label class="field-label" for="orq-janela">{m.orqcfg_janela()}</label>
+        <Select id="orq-janela" class="field-input" ariaLabel={m.orqcfg_janela()} value={fJanela}
+          opcoes={[{ value: '', label: m.orqcfg_janela_padrao({ pct: '50' }) }, ...JANELAS.map((n) => ({ value: n, label: `${n}%` }))]}
+          onchange={(v) => (fJanela = v)} />
+        <p class="os-hint">{m.orqcfg_janela_ajuda()}</p>
+      </div>
       <div class="field">
         <span class="field-label">{m.orqcfg_cota()}</span>
         <p class="field-input os-cota" class:os-cota--alta={(cotaConta?.pct ?? 0) >= 80}>

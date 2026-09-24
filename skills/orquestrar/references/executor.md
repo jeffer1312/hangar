@@ -159,7 +159,8 @@ Done when your last message is the step-8 report and the tree is clean.
 - A warning disappears when it was wrong; a mark describing a true state stays.
 - An exception in a shared gate (allow, ignore, skip, baseline) comes after changing the data,
   and states its cause.
-- Above 50% of your context window → finish the step, freeze (step 5), request replacement in
+- Past your row's `janela` (default 50%) of your context window, or a `[vigia]` saying so →
+  finish the step, freeze (step 5), request replacement in
   the report with the hash. Swap and compaction are the arbiter's call.
 - Account and model are the contract's row for your role; subagents on the same account, model
   switch inside it only where the contract allows, `model:` in an agent's frontmatter checked.

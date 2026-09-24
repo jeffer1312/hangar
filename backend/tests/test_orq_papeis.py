@@ -89,6 +89,20 @@ def test_abertura_vira_coluna_so_quando_usada_e_volta_igual():
     assert t2.count("## Quem é quem") == 1 and t2.index("## Quem é quem") < t2.index("## Gates")
 
 
+def test_janela_vira_coluna_antes_da_abertura_e_recusa_fora_da_faixa():
+    """`janela` só entra quando algum papel a define, fica antes de `abertura` mesmo quando esta
+    já existe, e é gravada com `%`; valor fora de 10..95 não chega ao arquivo."""
+    assert op.escrever_papel(REGRAS, op.ler(REGRAS)[0]) == REGRAS
+    t = op.escrever_papel(REGRAS, op.Papel("executor", "pm1-t*", "claude", "200-01", "opus", "high", headless=True))
+    t = op.escrever_papel(t, op.Papel("árbitro", "pm1-arbitro", "claude", "claude-200-3", "opus[1m]", "high", janela="60"))
+    assert "| papel | sessão | provider | conta | modelo | esforço | janela | abertura |" in t
+    assert "| high | 60% | - |" in t
+    ps = op.ler(t)
+    assert ps[0].janela == "60" and ps[1].janela == "" and ps[1].headless is True
+    with pytest.raises(ValueError):
+        op.escrever_papel(REGRAS, op.Papel("executor", "pm1-t*", "claude", "200-01", "opus", "high", janela="5"))
+
+
 def test_abertura_escrita_a_mao_sobrevive_ao_salvar_do_painel():
     """Flag que o painel não conhece (o `--read-only` de um revisor, escrito pelo árbitro) volta
     intacta na célula quando o painel salva só o que conhece."""

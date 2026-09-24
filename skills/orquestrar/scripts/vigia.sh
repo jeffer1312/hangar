@@ -9,9 +9,10 @@
 #
 # Two fixes, and both matter:
 #   1. It watches the ARBITER too. A stalled judge is the failure mode nobody was watching.
-#   2. It WAKES via `hangar-send --tmux`, which enters as a prompt and revives a dead turn. The
-#      `--tmux` is MANDATORY: plain `hangar-send` REFUSES to talk to a Claude session on the same
-#      machine (rc=3, "use SendMessage") — and a shell script has no SendMessage.
+#   2. It WAKES via `hangar-send`, which enters as a prompt and revives a dead turn, with or
+#      without a terminal: the backend picks the path. `--tmux` stays for older hangar-send
+#      builds, which refused a same-machine Claude session without it (rc=3); current ones
+#      ignore it.
 #
 # It fires in TWO independent ways, and the second is the one that produces false alarms:
 #   - collectively, when NOBODY on the list has the ball (a deadlocked pipeline);
@@ -202,14 +203,64 @@ except Exception:
 PY
 REP_LIMITE=${CP_VIGIA_REP:-10}
 
+# CONTEXT: each session's own window, read from the status line the app already serves
+# (`💬 <turn in/out> <used>/<window>`, or Pi's `ctx <used>/<window>`), against the `janela` of
+# its row in the arbiter's contract (GET /api/sessions/<arbiter>/orq; empty = 50). Prints
+# `pct/limit/used/window` per session, `-` when the line carries no context.
+CTXDET=$(mktemp /tmp/vigia-ctx-XXXXXX.py)
+ORQF=$(mktemp /tmp/vigia-orq-XXXXXX.json)
+trap 'rm -f "$LEITOR" "$CURLRC" "$LOOPDET" "$CTXDET" "$ORQF"' EXIT
+cat > "$CTXDET" <<'PY'
+import json, os, re, sys
+
+MULT = {"k": 1e3, "m": 1e6}
+PADRAO = os.environ.get("CP_VIGIA_JANELA", "50")   # the smoke test lowers it; nobody else passes it
+PAR = r"([\d.,]+)\s*([kKmM])?\s*/\s*([\d.,]+)\s*([kKmM])?"
+
+def num(v, u):
+    return float(v.replace(",", "")) * MULT.get((u or "").lower(), 1)
+
+def ctx(linha):
+    seg = re.search(r"💬([^│]*)", linha or "")
+    if not seg:
+        return None
+    m = re.search(r"\bctx\s*" + PAR, seg.group(1))
+    if not m:
+        pares = re.findall(PAR, seg.group(1))
+        if len(pares) < 2:    # a lone pair is the turn's in/out, not the context
+            return None
+        m = pares[-1]
+    else:
+        m = m.groups()
+    used, total = num(m[0], m[1]), num(m[2], m[3])
+    return (used, total) if total > 0 else None
+
+sessoes = {s.get("name"): s for s in json.load(sys.stdin)}
+try:
+    papeis = json.load(open(sys.argv[1])).get("papeis") or []
+except Exception:
+    papeis = []
+janela = {p.get("viva"): p.get("janela") for p in papeis if p.get("viva")}
+saida = []
+for nome in sys.argv[2:]:
+    c = ctx((sessoes.get(nome) or {}).get("status_line"))
+    if c is None:
+        saida.append("-")
+        continue
+    lim = janela.get(nome) or PADRAO
+    saida.append("%d/%s/%dk/%dk" % (round(100 * c[0] / c[1]), lim, c[0] // 1000, c[1] // 1000))
+print("|".join(saida))
+PY
+CAVISO=()        # already warned that this session crossed its window? (1 warning per crossing)
+
 # Interval between readings. It exists as a variable only so the smoke test can run the whole
 # loop in seconds; in normal use nobody passes it.
 INTERVALO=${CP_VIGIA_INTERVALO:-60}
 
 for i in $(seq 1 1440); do
   sleep "$INTERVALO"
-  st=$(curl -s --config "$CURLRC" "$BASE/api/sessions" \
-       | python3 "$LEITOR" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
+  lista=$(curl -s --config "$CURLRC" "$BASE/api/sessions")
+  st=$(printf '%s' "$lista" | python3 "$LEITOR" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
   if [ -z "$st" ]; then
     # The API's silence cannot be the watchdog's silence: that is how the hole above hid.
     mudos=$((mudos+1))
@@ -270,7 +321,7 @@ for i in $(seq 1 1440); do
       else
         cutucada=" — already nudged in this stall; it did NOT come back on its own"
       fi
-      msg="[vigia] ${SESSOES[$k]} is stopped (${ESTADOS[$k]:-?}) for ${LIMITE} min${cutucada}. Team: $resumo. Look at its PANE: a provider timeout with retries blown, a dead turn and a report stuck in the queue do not undo themselves."
+      msg="[vigia] ${SESSOES[$k]} is stopped (${ESTADOS[$k]:-?}) for ${LIMITE} min${cutucada}. Team: $resumo. Look at its screen (the pane, or its transcript without a terminal): a provider timeout with retries blown, a dead turn and a report stuck in the queue do not undo themselves."
       echo "$msg"
       hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
       PSEQ[$k]=0
@@ -293,7 +344,7 @@ for i in $(seq 1 1440); do
       fi
       RHASH[$k]=$h
       if [ "${RSEQ[$k]:-0}" -ge "$REP_LIMITE" ] && [ "${RAVISO[$k]:-0}" -eq 0 ]; then
-        msg="[vigia] ${SESSOES[$k]} MAY be looping: it says working but the last command is the SAME for ${RSEQ[$k]} readings (~${RSEQ[$k]} min). Look at the pane before deciding — wait-polling is not work, but long work also repeats commands. You give the stop order, after looking. Team: $resumo"
+        msg="[vigia] ${SESSOES[$k]} MAY be looping: it says working but the last command is the SAME for ${RSEQ[$k]} readings (~${RSEQ[$k]} min). Look at its screen (pane or transcript) before deciding — wait-polling is not work, but long work also repeats commands. You give the stop order, after looking. Team: $resumo"
         echo "$msg"
         # A question, never an order: the watchdog reads two numbers and does not know whether
         # the session is stuck or working — an imperative false alarm has ordered a STOP in the
@@ -305,6 +356,30 @@ for i in $(seq 1 1440); do
     else
       RSEQ[$k]=0; RHASH[$k]=""; RAVISO[$k]=0
     fi
+  done
+
+  # CONTEXT past the row's `janela`: the session stops after what it is doing and asks for its
+  # replacement; the arbiter opens the substitute. Once per crossing — dropping back below
+  # (a compaction) re-arms it.
+  curl -s --config "$CURLRC" "$BASE/api/sessions/$ARB/orq" -o "$ORQF" 2>/dev/null || : > "$ORQF"
+  ct=$(printf '%s' "$lista" | python3 "$CTXDET" "$ORQF" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
+  IFS='|' read -r -a CTXS <<< "$ct"
+  for k in "${!SESSOES[@]}"; do
+    c=${CTXS[$k]:--}
+    [ "$c" = "-" ] && continue
+    IFS='/' read -r pct lim usado total <<< "$c"
+    if [ "$pct" -lt "$lim" ]; then CAVISO[$k]=0; continue; fi
+    [ "${CAVISO[$k]:-0}" -eq 1 ] && continue
+    CAVISO[$k]=1
+    nome=${SESSOES[$k]}
+    if [ "$k" -eq "$ULT" ]; then
+      msg="[vigia] YOUR context is at ${pct}% of your window (${usado}/${total}); your row hands over at ${lim}%. Finish the current act and run your succession (arbitro-encerramento.md, \"Arbiter succession\")."
+    else
+      hangar-send --tmux "$nome" "[vigia] Your context is at ${pct}% of your window (${usado}/${total}); your role's row hands over at ${lim}%. Finish what you are doing now (the current step, or this round's report), start nothing new, and ask the arbiter for your replacement in that report, with HEAD and the hash." >/dev/null 2>&1
+      msg="[vigia] ${nome} is at ${pct}% of its window (${usado}/${total}; its row hands over at ${lim}%). I asked it to stop after the current act and request its replacement. Open the substitute before the next round (arbitro-vigia.md, \"Rotation\")."
+    fi
+    echo "$msg"
+    hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
   done
 
   # Stalled JOURNAL: the arbiter's journal is the retrospective's net; >60min without a write
@@ -334,7 +409,7 @@ for i in $(seq 1 1440); do
   case "$par_estados" in
     *stuck*)
       if [ "$avisou_travado" != "$par_estados" ]; then
-        msg="[vigia] STUCK session: $resumo. It says 'working' but has produced no event for over 10 minutes — the classic case is a picker/AskUserQuestion blocking the firing turn. Look at the pane and unblock it (POST /api/sessions/<name>/select with {\"option\": N})."
+        msg="[vigia] STUCK session: $resumo. It says 'working' but has produced no event for over 10 minutes — the classic case is a picker/AskUserQuestion blocking the firing turn. Look at its screen (pane or transcript) and unblock it (POST /api/sessions/<name>/select with {\"option\": N})."
         echo "$msg"
         hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
         avisou_travado="$par_estados"
