@@ -677,6 +677,7 @@
   "problema_codex_headless_nao_subiu": "The Codex app-server did not start — check that `codex` is installed and logged in; close the session and create it again",
   "problema_codex_sem_conexao": "Codex cannot reach the model provider and keeps retrying — if it does not come back, restart the session",
   "chat_problema_reiniciar": "Restart",
+  "chat_problema_hook_dica": "Common cause: the plugin was updated after the session opened and it still runs the old hook. Restarting makes the session reload its hooks without losing the conversation; then resend the message.",
   "chat_problema_reiniciando": "Restarting…",
   "problema_headless_sem_resposta": "Claude started but never answered — usually a pending login or folder-trust prompt; open `claude` in a terminal in that folder once",
   "problema_headless_processo_caiu": "The Claude process died; the next prompt retries",

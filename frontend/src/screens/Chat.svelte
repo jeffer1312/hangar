@@ -2648,7 +2648,9 @@
     if (!problemaChave || problemaChave === problemaDispensado) return null;
     const texto = textoProblema(stateEvent?.problema ?? null);
     if (!texto) return null;
-    const detalhe = stateEvent?.problema_detalhe?.split('\n')[0].slice(0, 80);
+    // Hook que barrou o prompt: o detalhe (qual hook e por quê) é a informação inteira, não cabe cortar.
+    const detalhe = stateEvent?.problema_detalhe?.split('\n')[0]
+      .slice(0, stateEvent.problema === 'codex_prompt_bloqueado' ? 300 : 80);
     return detalhe ? `${texto} — ${detalhe}` : texto;
   });
 
@@ -3149,9 +3151,13 @@
         </div>
       {/if}
       {#if faixaProblema}
-        <div class="faixa-problema" role="status">
-          <span class="faixa-problema-texto" title={faixaProblema}>{faixaProblema}</span>
-          {#if stateEvent?.problema === 'codex_sem_conexao' && sessionHeadless}
+        {@const bloqueado = stateEvent?.problema === 'codex_prompt_bloqueado'}
+        <div class="faixa-problema" class:alerta={bloqueado} role={bloqueado ? 'alert' : 'status'}>
+          <span class="faixa-problema-texto" title={faixaProblema}>
+            {faixaProblema}
+            {#if bloqueado && sessionHeadless}<span class="faixa-problema-dica">{m.chat_problema_hook_dica()}</span>{/if}
+          </span>
+          {#if (stateEvent?.problema === 'codex_sem_conexao' || bloqueado) && sessionHeadless}
             <button type="button" class="sse-retry" disabled={recarregando} onclick={reiniciarCodex}>
               {recarregando ? m.chat_problema_reiniciando() : m.chat_problema_reiniciar()}
             </button>
@@ -3888,6 +3894,15 @@
     border-radius: var(--radius-md);
   }
   .faixa-problema-texto { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .faixa-problema.alerta {
+    align-items: flex-start;
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+    border-left: 3px solid var(--warning);
+  }
+  .faixa-problema.alerta .faixa-problema-texto { white-space: normal; overflow-wrap: anywhere; }
+  .faixa-problema-dica { display: block; margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-xs); }
   .faixa-problema-fechar {
     background: transparent;
     border: 0;

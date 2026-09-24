@@ -9,6 +9,7 @@ export function textoProblema(codigo: string | null | undefined): string | null 
     case 'headless_nao_subiu': return m.problema_headless_nao_subiu();
     case 'codex_headless_nao_subiu': return m.problema_codex_headless_nao_subiu();
     case 'codex_sem_conexao': return m.problema_codex_sem_conexao();
+    case 'codex_prompt_bloqueado': return m.problema_codex_prompt_bloqueado();
     case 'headless_sem_resposta': return m.problema_headless_sem_resposta();
     case 'headless_processo_caiu': return m.problema_headless_processo_caiu();
     case 'headless_turno_erro': return m.problema_headless_turno_erro();

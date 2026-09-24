@@ -677,6 +677,7 @@
   "problema_codex_headless_nao_subiu": "O app-server do Codex não subiu — confira se o `codex` está instalado e logado; encerre a sessão e crie de novo",
   "problema_codex_sem_conexao": "O Codex não consegue falar com o provedor do modelo e segue tentando — se ele não voltar, reinicie a sessão",
   "chat_problema_reiniciar": "Reiniciar",
+  "chat_problema_hook_dica": "Causa comum: o plugin foi atualizado depois que a sessão abriu e ela ainda usa o hook antigo. Reiniciar faz a sessão ler os hooks de novo, sem perder a conversa; depois reenvie a mensagem.",
   "chat_problema_reiniciando": "Reiniciando…",
   "problema_headless_sem_resposta": "O Claude subiu mas não respondeu — costuma ser login ou confiança na pasta pendente; abra `claude` no terminal nessa pasta uma vez",
   "problema_headless_processo_caiu": "O processo do Claude caiu; o próximo prompt tenta de novo",

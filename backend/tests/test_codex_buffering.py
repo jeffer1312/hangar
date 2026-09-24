@@ -153,3 +153,16 @@ async def test_turno_que_falha_fica_marcado_ate_o_proximo_turno(watching):
     assert (state.state, state.problema) == ("idle", "headless_turno_erro")
     await queue.put({"method": "turn/started", "params": {"threadId": "thread", "turn": {"id": "next"}}})
     assert (await asyncio.wait_for(anext(stream), 1)).problema is None
+
+
+async def test_hook_que_barra_o_prompt_fica_visivel_depois_do_turno_vazio(watching):
+    _, queue, stream = watching
+    await queue.put({"method": "hook/completed", "params": {"threadId": "thread", "turnId": "turn", "run": {
+        "eventName": "userPromptSubmit", "status": "blocked", "source": "plugin",
+        "sourcePath": "/home/u/.codex/plugins/cache/mkt/exemplo/local/hooks/hooks.json",
+        "entries": [{"kind": "stop", "text": "prompt recusado"}]}}})
+    state = await asyncio.wait_for(anext(stream), 1)
+    assert (state.problema, state.problema_detalhe) == ("codex_prompt_bloqueado", "exemplo: prompt recusado")
+    await queue.put({"method": "turn/completed", "params": {"threadId": "thread", "turn": {"id": "turn", "status": "completed"}}})
+    state = await asyncio.wait_for(anext(stream), 1)
+    assert (state.state, state.problema) == ("idle", "codex_prompt_bloqueado")

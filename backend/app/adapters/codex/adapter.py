@@ -206,6 +206,15 @@ def _turn_problem(notif: dict) -> Optional[tuple[str, str]]:
     tentativa, ou turno fechado como `failed`. Sem isto a sessão fica "trabalhando" calada."""
     method = notif.get("method")
     params = notif.get("params") or {}
+    run = params.get("run") or {}
+    if method == "hook/completed" and run.get("eventName") == "userPromptSubmit" \
+            and run.get("status") in ("blocked", "stopped"):
+        # O turno fecha como `completed`, sem erro: o motivo do hook só existe nesta notificação.
+        partes = Path(run.get("sourcePath") or "").parts
+        origem = partes[partes.index("cache") + 2] if "cache" in partes[:-2] else (run.get("sourcePath") or "hook")
+        motivo = next((e.get("text") for e in run.get("entries") or []
+                       if e.get("kind") in ("stop", "feedback", "error") and e.get("text")), "")
+        return "codex_prompt_bloqueado", f"{origem}: {motivo}".strip(": ")[:300]
     if method == "error":
         erro = params.get("error") or {}
         codigo = "codex_sem_conexao" if params.get("willRetry") else "headless_turno_erro"
