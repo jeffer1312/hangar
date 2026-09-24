@@ -148,7 +148,9 @@ async def group(ctx: Context, texto: str, tmux: bool = False) -> dict[str, Any]:
 
 @mcp.tool(description="Pareia esta sessão com outra pra uma tarefa, como `hangar-send --pair <sessao> "
                       "<tarefa>`: registra no app e injeta o protocolo nos dois lados. `alvo` aceita "
-                      "`servidor::sessao`. Só quando o usuário pedir pareamento.")
+                      "`servidor::sessao`. `tarefa` é o título do grupo na lista: chave + assunto "
+                      "numa linha (ex: `ABC-1234 Tela de login`); o combinado vai por `send`. "
+                      "Só quando o usuário pedir pareamento.")
 async def pair(ctx: Context, alvo: str, tarefa: str = "", substituir_tarefa: bool = False) -> dict[str, Any]:
     from app import api
     eu = await _eu(ctx)

@@ -8,8 +8,11 @@
 #   hangar-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
 #   hangar-send --pair <sessao> [tarefa...] [--substituir-tarefa]  pareia ESTA sessão com outra
 #                                        (registra no app: badge 🤝 na UI + protocolo injetado nos
-#                                        dois lados). tarefa diferente da que o grupo já tem é
-#                                        recusada (409) sem o flag; --substituir-tarefa vale em
+#                                        dois lados). tarefa = título do grupo na lista, chave +
+#                                        assunto numa linha ("ABC-1234 Tela de login"); o
+#                                        combinado vai num recado à parte. tarefa diferente da
+#                                        que o grupo já tem é recusada (409) sem o flag;
+#                                        --substituir-tarefa vale em
 #                                        QUALQUER posição entre os tokens de tarefa
 #   hangar-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
 #   hangar-send --group [--tmux] <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei",

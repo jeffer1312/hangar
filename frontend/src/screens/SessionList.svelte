@@ -880,7 +880,11 @@ import * as m from '../paraglide/messages';
   .pair-chev { flex-shrink: 0; font-size: 10px; transition: transform 160ms var(--ease-out); }
   .pair-chev.collapsed { transform: rotate(-90deg); }
   .pair-label { flex: 1; display: inline-flex; align-items: flex-start; gap: 6px; min-width: 0; }
-  .pair-text { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+  /* A tarefa do grupo pode chegar com o combinado inteiro; o cabeçalho não passa de 2 linhas. */
+  .pair-text {
+    min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  }
   .pair-cod { font-weight: 600; }
   .pair-resto {
     font-weight: 400; color: var(--text-muted); font-size: var(--text-xs);

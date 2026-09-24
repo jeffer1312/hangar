@@ -1655,7 +1655,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     border-radius: var(--radius-sm);
   }
   .pair-head-glifo { display: inline-flex; align-items: center; flex-shrink: 0; }
-  .pair-head-label { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+  /* A tarefa do grupo pode chegar com o combinado inteiro; o texto todo fica no title do botão. */
+  .pair-head-label {
+    flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  }
   /* O rótulo é o resumo do ticket inteiro; só a chave fica em accent e o assunto vai em cinza,
      senão a linha inteira do grupo compete com as sessões. */
   .pair-head-resto {
