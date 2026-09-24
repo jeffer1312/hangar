@@ -263,9 +263,11 @@ me() {
     if [[ -n "${CP_SESSION_NAME:-}" ]] && tmux has-session -t "=$CP_SESSION_NAME" 2>/dev/null; then
         echo "$CP_SESSION_NAME"; return
     fi
-    local atual
-    atual=$(tmux display-message -p '#S' 2>/dev/null) || atual=""
+    # Fora do tmux (systemd, cron, sessão sem terminal) o display-message devolve a última sessão
+    # usada por QUALQUER um: o recado sairia assinado por quem não mandou.
+    local atual=""
     if [[ -n "${TMUX:-}" ]]; then
+        atual=$(tmux display-message -p '#S' 2>/dev/null) || atual=""
         echo "aviso: sessão sem CP_SESSION_NAME válido (wrapper antigo ou sessão renomeada) —" \
              "identidade caiu no 'cliente anexado' e pode sair errada ('${atual:-cli}')." \
              "Reabra a sessão pelo wrapper atualizado pra corrigir." >&2
