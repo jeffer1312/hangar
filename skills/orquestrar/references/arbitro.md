@@ -157,6 +157,6 @@ logged, the watchdog disarmed.
 
 - Model, account, subagents and outside tools: `arbitro-lancamento.md`, "Locks on model and tools".
 - Time comes from `date -Iseconds`, never from memory. Authorship comes from a transcript, never from time correlation (`arbitro-vigia.md`, "A vanished session").
-- Every number carries its scope: what entered the count, from where.
+- Every number carries its scope: what entered the count, from which source and which field of it.
 - Talk little with the user: what and when, `arbitro-vigia.md`, "Deciding vs waking the user". Demand the same short reports from the sessions.
 - A record with more than one writer keeps the order its lines arrived in and is corrected one line at a time, from a read taken at the moment of the correction; sorting it by a field each writer fills in on its own is a reading, never a result to save.

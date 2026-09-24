@@ -18,9 +18,9 @@ hangar-send --new <name> <repo> --provider <provider> --model <model> --effort <
   another harness replaces this one only with the same write proof.
 - After updating Hangar, restart the backend before using the flag (an older backend refuses
   the field with HTTP 422).
-- Before reading the diff or running the script, check the pane's real command and prove it
-  inside the session: opening an existing code file for writing must be refused; a temporary
-  file in the artifacts folder must accept writes:
+- Where the machine protects, check the pane's real command and prove it inside the session
+  before reading the diff or running the script: opening an existing code file for writing must
+  be refused; a temporary file in the artifacts folder must accept writes:
 
   ```python
   import errno, os, tempfile
@@ -35,6 +35,10 @@ hangar-send --new <name> <repo> --provider <provider> --model <model> --effort <
       artifact.write(b"ok")
   ```
 
+- Where it does not protect, the first report declares read-only as discipline instead of
+  mechanism and lists in its place what a third party can check: tree empty before and after, no
+  commit, stash, worktree or index, tests run on a disposable copy whose tree id matches the
+  object under review. A check that cannot be refused on this machine is not recorded as proof.
 - Record the proof in the first report; repeat it in every new session. An old session gains
   no protection from new instructions. A research subagent needs inherited protection or a
   checked native restriction, not a role description.

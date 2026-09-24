@@ -174,10 +174,11 @@ PRODUCE = write it in the orchestration plan.
     factual claim in plan, excerpt and kick-off: measured, or written as "I assume", or absent.
     A sentence saying that something is locked or covered enters the plan with the output that
     goes red without it beside it, or does not enter.
-16. PRODUCE — a Task that moves, retires or extracts something lists its consumers: two searches
-    (code symbol, on-screen name) from the repo root minus untouchables minus dated history,
-    covering infra, wrappers, docs, instruction files and mock helpers that point by string; and
-    what the old home did for free: what reset, who owned the value after the await, what was dead
+16. PRODUCE — a Task that moves, retires or extracts something names the EVENT it causes and lists
+    its consumers: two searches sharing no vocabulary, from the repo root minus untouchables minus
+    dated history, one of them run over the text with line breaks undone, covering infra, wrappers,
+    docs, instruction files and mock helpers that point by string; a hit outside the list means the
+    list was incomplete, never that the hit is out of scope; and what the old home did for free: what reset, who owned the value after the await, what was dead
     there and becomes live.
 
 Done when all 16 items are closed and the plan is approved.

@@ -8,12 +8,16 @@ Os seis tipos e seus campos obrigatórios estão em TIPOS abaixo. Regras que o c
 completam o contrato:
   - `ts` sempre presente, ISO-8601 com offset (saída de `date -Iseconds`).
   - `task` e `rodada` são números; `rodada` começa em 1 — rodada desconhecida é OMITIDA, nunca 0.
-  - `veredito.resultado` ∈ aprova|reprova|devolvido (o MESMO vocabulário do parecer); leva `sessao`
+  - `veredito.resultado` ∈ aprova|reprova|devolvido|segue (o MESMO vocabulário do parecer;
+    `segue` é a rodada que não foi julgada e a Task continua aberta); leva `sessao`
     e, opcionais, `motivo` (str, a razão curta) e `reincide` (bool: segunda reprovação da mesma
     causa — a porta do árbitro no laço). `entrega` leva o hash da rodada (stash) no campo `commit`.
   - `veredito` julga UMA rodada de uma Task (`task` e `rodada`, os dois números) OU uma faixa de
     commits (`faixa`, o texto `<base>..<tip>`), nunca os dois e nunca nenhum: a revisão final não
     julga Task nenhuma, e sem isto o veredito que fecha o trabalho não entra no registro.
+  - Estado que o vocabulário não tem NÃO vira valor inventado nem linha apagada: vai para o
+    diário, e o esquema ganha o valor antes da próxima execução. Linha já escrita se corrige,
+    não se remove.
   - Campo extra pode; tipo novo NÃO — o app agrega por esses seis.
 
 Exemplo, no fecho de uma rodada:
@@ -31,7 +35,7 @@ TIPOS = {
     "sessao_trocada": {"de", "para"},
     "execucao_fim": {"resultado"},
 }
-RESULTADOS = {"aprova", "reprova", "devolvido"}
+RESULTADOS = {"aprova", "reprova", "devolvido", "segue"}
 
 
 def valida(path: str) -> int:

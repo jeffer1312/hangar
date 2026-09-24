@@ -104,6 +104,7 @@ User's plan: <absolute path>   (it is in charge; this file only orchestrates)
 
 - Text a Task hands over to be applied verbatim carries the source line for every claim it makes about something outside itself, and checking those lines is a step of that Task.
 - A decision that answers an open question of the source document is written into that document in the same step it is taken, before any Task depends on it.
+- A claim about a state not yet known is written with the event that ends it inside it, so any reader can tell on their own whether it still holds.
 
 ## The bar
 
