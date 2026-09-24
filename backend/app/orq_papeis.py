@@ -45,6 +45,9 @@ class Papel:
     motor: str = ""
     jev: bool = False
     subagente: str = ""
+    # Trecho da célula que o painel não edita (ex.: `--read-only` escrito pelo árbitro): volta
+    # intacto no fim da célula, senão salvar pelo painel apagaria a proteção sem ninguém ver.
+    abertura_extra: str = ""
 
     def e_arbitro(self) -> bool:
         return orq_md.normalizar(self.papel) == ARBITRO
@@ -81,6 +84,8 @@ def abertura_texto(p: Papel) -> str:
             partes += [flag, valor]
     if p.jev:
         partes.append("--jev")
+    if p.abertura_extra:
+        partes.append(p.abertura_extra)
     return " ".join(partes)
 
 
@@ -90,6 +95,7 @@ _FLAGS_COM_VALOR = {"--permissao": "permissao", "--engine": "motor", "--subagent
 def _ler_abertura(celula: str) -> dict:
     campos: dict = {"headless": False, "permissao": "", "motor": "", "jev": False, "subagente": ""}
     toks = [] if celula.strip() in ("", "-") else celula.split()
+    extra: list[str] = []
     i = 0
     while i < len(toks):
         t = toks[i]
@@ -99,10 +105,9 @@ def _ler_abertura(celula: str) -> dict:
             campos[_FLAGS_COM_VALOR[t]] = toks[i + 1]
             i += 1
         else:
-            # Célula editada à mão com algo que o painel não conhece: fica de fora da tela, e o
-            # próximo salvar do papel a reescreve só com o que conhece.
-            _log.warning("abertura: trecho desconhecido ignorado: %r", t)
+            extra.append(t)
         i += 1
+    campos["abertura_extra"] = " ".join(extra)
     return campos
 
 

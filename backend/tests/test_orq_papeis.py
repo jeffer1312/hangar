@@ -89,6 +89,21 @@ def test_abertura_vira_coluna_so_quando_usada_e_volta_igual():
     assert t2.count("## Quem é quem") == 1 and t2.index("## Quem é quem") < t2.index("## Gates")
 
 
+def test_abertura_escrita_a_mao_sobrevive_ao_salvar_do_painel():
+    """Flag que o painel não conhece (o `--read-only` de um revisor, escrito pelo árbitro) volta
+    intacta na célula quando o painel salva só o que conhece."""
+    t = REGRAS.replace("| papel | sessão | provider | conta | modelo | esforço |",
+                       "| papel | sessão | provider | conta | modelo | esforço | abertura |") \
+              .replace("|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|") \
+              .replace("| pm1-t* | Claude | 200-01 | opus[1m] | medium |",
+                       "| pm1-t* | Claude | 200-01 | opus[1m] | medium | --read-only --headless |")
+    ex = op.ler(t)[1]
+    assert ex.headless is True and ex.abertura_extra == "--read-only"
+    salvo = op.escrever_papel(t, op.Papel("executor", "pm1-t*", "claude", "200-01", "opus", "high",
+                                           permissao="plan", abertura_extra=ex.abertura_extra))
+    assert "| --permissao plan --read-only |" in salvo
+
+
 def test_regras_path():
     assert op.regras_path("ab12").name == "regras-ab12.md"
     assert op.regras_path("ab12").parent == pair._pair_dir()

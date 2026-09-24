@@ -4235,7 +4235,8 @@ async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float,
                                     it.provider.strip().lower(), it.conta.strip(),
                                     it.modelo.strip(), it.esforco.strip(), vez,
                                     it.headless, it.permissao.strip(), it.motor.strip(), it.jev,
-                                    it.subagente.strip())
+                                    it.subagente.strip(),
+                                    abertura_extra=atual.abertura_extra if atual else "")
             motivo = await asyncio.to_thread(orq_politica.permitido, novo.provider, novo.conta, novo.modelo, novo.esforco)
             if motivo:
                 raise HTTPException(400, detail=erro(motivo, "a política de contas não permite esta escolha: " + novo.papel))

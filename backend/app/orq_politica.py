@@ -148,12 +148,15 @@ def inventario(catalogo_claude=_modelos_claude_reduzidos) -> list[ContaInventari
             out.append(ContaInventario(prov, "pi", prov, None, tuple(ms)))
     except Exception:  # noqa: BLE001 — pi ausente/quebrado não cega as outras contas
         pass
-    for c in codex_contas.list_visible_accounts():
-        # A padrão mantém o nome `openai-codex`: é o que as políticas já gravadas usam.
-        chave = f"codex:{c.home.expanduser().resolve(strict=False)}"
-        padrao = nomes.get("codex", "OpenAI Codex") if c.is_default else c.id
-        out.append(ContaInventario(CONTA_CODEX if c.is_default else c.id, "codex",
-                                   nomes.get(chave) or padrao, None, ()))
+    try:
+        for c in codex_contas.list_visible_accounts():
+            # A padrão mantém o nome `openai-codex`: é o que as políticas já gravadas usam.
+            chave = f"codex:{c.home.expanduser().resolve(strict=False)}"
+            padrao = nomes.get("codex", "OpenAI Codex") if c.is_default else c.id
+            out.append(ContaInventario(CONTA_CODEX if c.is_default else c.id, "codex",
+                                       nomes.get(chave) or padrao, None, ()))
+    except Exception:  # noqa: BLE001 — pasta de conta Codex ilegível não cega as outras contas
+        _log.warning("contas Codex fora do inventário", exc_info=True)
     return out
 
 

@@ -9,6 +9,7 @@
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import ModalDialog from '../ModalDialog.svelte';
   import { alcanceDoServidor, type AlcanceDoServidor, type TipoEndereco } from '../../lib/alcance';
+  import { onDestroy } from 'svelte';
   import { getAtualizacaoEm, reiniciarServidorEm } from '@hangar/core';
   import AdicionarMaquina from './AdicionarMaquina.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
@@ -172,6 +173,8 @@
   // tela. Sem isto, trocar de servidor com uma chamada pendente deixa o dado do anterior
   // na tela e a remoção clicada nele sai para a máquina errada.
   let geracao = 0;
+  // Sair da tela também invalida o que está em voo (a espera do reinício, principalmente).
+  onDestroy(() => { geracao++; });
 
   // Máquina adicionada sem reload: a carga abaixo roda de novo pra ela entrar com identificador,
   // peer e medição, como se a tela tivesse acabado de abrir.
