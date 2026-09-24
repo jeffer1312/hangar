@@ -324,9 +324,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.authorized():
             return
-        if path in ("/api/credenciais", "/api/engines"):
+        if path in ("/api/credenciais", "/api/engines") or path.startswith("/api/conta-estado/"):
             record("GET", self.path, None)
-            accounts.handle_get(self, path, query)
+            if not accounts.handle_get(self, path, query):
+                self.send_json({"detail": "not found"}, 404)
             return
         if path == "/api/config":
             record("GET", self.path, None)
@@ -554,6 +555,14 @@ class Handler(BaseHTTPRequestHandler):
         if not accounts.handle_put(self, url.path, body):
             self.send_json({"detail": "not found"}, 404)
 
+    def do_DELETE(self):
+        url = urlparse(self.path)
+        record("DELETE", self.path, None)
+        if not self.authorized():
+            return
+        if not accounts.handle_delete(self, url.path):
+            self.send_json({"detail": "not found"}, 404)
+
     def do_POST(self):
         url = urlparse(self.path)
         length = int(self.headers.get("Content-Length") or 0)
@@ -561,8 +570,11 @@ class Handler(BaseHTTPRequestHandler):
         parts = [unquote(p) for p in url.path.strip("/").split("/")]
         action = "/".join(parts[3:])
         body = json.loads(raw) if raw else None
-        record("POST", self.path, body)
+        # O código do login não vai para o registro: só o tamanho, no log da fixture de contas.
+        record("POST", self.path, {"codigo": "…"} if url.path.endswith("/login/codigo") else body)
         if not self.authorized():
+            return
+        if accounts.handle_post(self, url.path, body):
             return
         if url.path == "/api/atualizacao/iniciar":
             with LOCK:

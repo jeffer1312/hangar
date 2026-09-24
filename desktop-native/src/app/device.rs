@@ -155,6 +155,8 @@ impl Hangar {
 
     /// Página aberta: pede o que ela mostra do servidor.
     pub(super) fn settings_opened(&mut self, page: Page, cx: &mut Context<Self>) {
+        // Outra página: a tentativa de login perde a tela (a navegação e a busca passam por aqui).
+        if page != Page::Accounts { self.accounts_page_left(); }
         match page {
             Page::General if !self.device.rate.loading && self.device.rate_value().is_none() => self.load_rate(cx),
             Page::Diary => self.load_diary(cx),

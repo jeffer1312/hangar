@@ -1,10 +1,13 @@
 //! Contas e modelos: a lista única de credenciais do servidor (`GET /api/credenciais`) em três grupos,
 //! com a cota de cada uma, e os modelos do Claude Code (`GET /api/engines`). O que a tela mostra é
 //! montado na chegada da resposta e a cada meio minuto (o "há X" e os prazos envelhecem); o desenho só lê.
-//! Nesta versão só o renomear escreve no servidor; entrar, sair, remover, adicionar e editar aparecem
-//! desligados até chegarem.
+//! Renomear escreve daqui; entrar, sair, remover e adicionar conta Claude moram em `actions`. Editar modelo, Codex e
+//! o cookie do OpenCode aparecem desligados até chegarem.
+mod actions;
+
 use super::*;
 use super::device::Remote;
+use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;
@@ -90,6 +93,8 @@ enum QuotaView { Bars { bars: Vec<Bar>, stale: Option<String> }, Note(String), N
 struct Row {
     id: String,
     name: String,
+    /// Nome no disco (`nome_natural`): é ele que as rotas de login e de saída esperam.
+    label: String,
     natural: String,
     alias: String,
     active: bool,
@@ -101,8 +106,11 @@ struct Row {
     quota: QuotaView,
     /// Ações que chegam na próxima versão, mostradas desligadas na linha.
     later: Vec<String>,
+    /// Entrar ou Renovar login, quando a conta Claude precisa.
+    sign_in: Option<String>,
     can_sign_out: bool,
-    can_remove: bool,
+    /// Rota do DELETE conforme o tipo, o prazo dele e o texto da confirmação.
+    remove: Option<(Vec<String>, u64, &'static str)>,
 }
 
 struct Section { group: Group, rows: Vec<Row>, labels: Vec<String> }
@@ -123,12 +131,19 @@ pub(super) struct Accounts {
     rename: Option<Rename>,
     rename_seq: u64,
     clock: bool,
+    sign_in: Option<SignIn>,
+    login_attempt: u64,
+    change: Option<Change>,
+    /// Resultado da última saída, remoção ou conta criada; some com a próxima ação ou quando a página reabre.
+    outcome: Option<(String, bool)>,
+    add: Option<Entity<AddAccount>>,
 }
 
 pub(super) enum AccountsReply {
     List(u64, Result<Value, Failure>),
     Engines(u64, Result<Value, Failure>),
     Renamed(u64, Result<Value, Failure>),
+    Action(ActionReply),
 }
 
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.) }
@@ -208,6 +223,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     let mut subtitle = Vec::new();
     let mut chips = Vec::new();
     let mut later = Vec::new();
+    let mut sign_in = None;
     let initial = c.name.chars().find(|ch| ch.is_alphanumeric()).map(|ch| ch.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
     let glyph = match c.kind.as_str() {
         "claude" => ("claude", "C".into()),
@@ -226,8 +242,8 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
                 _ => {}
             }
             if let Some(email) = c.login.as_ref().filter(|_| logged == Some(true)).and_then(|l| l.email.clone()) { subtitle.push(muted(email)); }
-            if logged == Some(false) || c.expired() { later.push(tr("accounts_sign_in")); }
-            else if logged == Some(true) && c.login_days(now).is_some_and(|d| d <= RENEW_DAYS) { later.push(tr("accounts_renew")); }
+            if logged == Some(false) || c.expired() { sign_in = Some(tr("accounts_sign_in")); }
+            else if logged == Some(true) && c.login_days(now).is_some_and(|d| d <= RENEW_DAYS) { sign_in = Some(tr("accounts_renew")); }
         }
         "codex" => {
             subtitle.push(muted("Codex".into()));
@@ -303,10 +319,20 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
         _ => QuotaView::Note(tr("accounts_quota_none")),
     };
     let codex_extra = c.kind == "codex" && c.codex_account.is_some() && !c.active;
+    let can_remove = codex_extra || engine.is_some() || (c.kind != "codex" && c.managed != Some(false));
+    // Cada tipo tem a rota de sempre, com o nome no disco (como no web).
+    let remove = can_remove.then(|| match (c.id.strip_prefix("kimi:"), c.kind.as_str()) {
+        (Some(name), _) => (vec!["credenciais".into(), "kimi".into(), name.into()], 30, "accounts_remove_desc_key"),
+        (_, "chave") => (vec!["engines".into(), c.engine_name().unwrap_or(&c.natural).into()], 30,
+            if engine.is_some() { "accounts_remove_desc_model" } else { "accounts_remove_desc_key" }),
+        (_, "codex") => (vec!["codex-contas".into(), c.codex_account.clone().unwrap_or_default()], 120, "accounts_remove_desc_codex"),
+        _ => (vec!["claude-configs".into(), c.natural.clone()], 60, "accounts_remove_desc_claude"),
+    });
     Row {
-        id: c.id.clone(), name: c.name.clone(), natural: c.natural.clone(), alias: c.alias.clone().unwrap_or_default(), active: c.active, glyph, subtitle, chips, quota, later,
+        id: c.id.clone(), name: c.name.clone(), label: c.natural.clone(), natural: c.natural.clone(), alias: c.alias.clone().unwrap_or_default(),
+        active: c.active, glyph, subtitle, chips, quota, later, sign_in,
         can_sign_out: c.kind == "claude" && c.managed != Some(false) && logged == Some(true) && !c.expired(),
-        can_remove: codex_extra || engine.is_some() || (c.kind != "codex" && c.managed != Some(false)),
+        remove,
     }
 }
 
@@ -343,6 +369,7 @@ fn level(pct: f64) -> Hsla { if pct > 90. { theme::danger() } else if pct > 80. 
 impl Hangar {
     /// Página aberta: lê do servidor (a lista anterior fica na tela enquanto chega) e liga o relógio do "há X".
     pub(super) fn accounts_opened(&mut self, cx: &mut Context<Self>) {
+        self.accounts.outcome = None;
         if !self.accounts.list.loading { self.load_accounts(false, cx); }
         if !self.accounts.engines.loading { self.load_engines(cx); }
         if self.accounts.clock { return; }
@@ -441,7 +468,7 @@ impl Hangar {
         let body = json!({"id": rename.id, "apelido": alias});
         let done = self.accounts_send_later();
         self.runtime.spawn(async move {
-            done(AccountsReply::Renamed(seq, api.server_send(reqwest::Method::PUT, &["credenciais", "apelido"], body, 20).await)).await
+            done(AccountsReply::Renamed(seq, api.server_send(reqwest::Method::PUT, &["credenciais", "apelido"], Some(body), 20).await)).await
         });
         cx.notify();
     }
@@ -477,6 +504,7 @@ impl Hangar {
                 // Deu certo, falhou ou ficou incerto: a lista relida mostra o nome que o servidor guardou.
                 self.load_accounts(false, cx);
             }
+            AccountsReply::Action(reply) => self.receive_action(reply, window, cx),
         }
         self.rebuild_accounts();
         cx.notify();
@@ -493,6 +521,7 @@ impl Hangar {
         if self.api.is_none() {
             return page.child(self.heading("accounts_subscriptions")).child(settings_box().child(note(tr("settings_offline"), theme::muted()))).into_any_element();
         }
+        if let Some(panel) = self.render_sign_in(cx) { return page.child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {
             (None, _) => return page.child(self.heading("accounts_subscriptions"))
                 .child(settings_box().child(note(tr("accounts_loading"), theme::muted()))).into_any_element(),
@@ -508,6 +537,10 @@ impl Hangar {
             _ => {}
         }
         let mut page = page;
+        if let Some((text, error)) = &accounts.outcome {
+            page = page.child(div().mt(px(16.)).text_size(px(13.)).whitespace_normal()
+                .child(div().text_color(if *error { theme::danger() } else { theme::success() }).child(text.clone())));
+        }
         let compact = appearance::get().accounts_compact;
         // Arquivo dos modelos ilegível não é "nenhum modelo": pode estar escondendo modelos de verdade.
         let engines_problem = match &accounts.engines.value {
@@ -524,7 +557,9 @@ impl Hangar {
             };
             let tools = match section.group {
                 Group::Subscriptions => div().flex().items_center().gap(px(8.)).child(self.accounts_tools(compact, cx))
-                    .child(soon_button("accounts-add-account", tr("accounts_add_account")).icon(IconName::Plus)).into_any_element(),
+                    .child(Button::new("accounts-add-account").outline().small().icon(IconName::Plus).label(tr("accounts_add_account"))
+                        .disabled(self.accounts_busy()).on_click(cx.listener(|this, _, window, cx| this.open_add_account(window, cx))))
+                    .into_any_element(),
                 Group::Models => soon_button("accounts-add-model", tr("accounts_add_model")).icon(IconName::Plus).into_any_element(),
                 Group::Others => div().into_any_element(),
             };
@@ -595,20 +630,32 @@ impl Hangar {
                 QuotaView::Nothing => el,
             });
         let this = cx.entity().downgrade();
-        let (id, sign_out, remove) = (row.id.clone(), row.can_sign_out, row.can_remove);
-        let busy = self.accounts.rename.as_ref().is_some_and(|r| r.saving);
+        let (id, sign_out, remove) = (row.id.clone(), row.can_sign_out, row.remove.is_some());
+        // Uma escrita em voo (nome, saída, remoção, login) segura as outras em toda linha.
+        let busy = self.accounts_busy();
         let menu = Button::new(SharedString::from(format!("accounts-menu-{}", row.id))).ghost().small().icon(IconName::Ellipsis)
             .accessibility_label(tr("accounts_more").replace("{name}", &row.name))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                let (this, id) = (this.clone(), id.clone());
-                let menu = menu.item(PopupMenuItem::new(tr("accounts_rename")).disabled(busy).on_click(move |_, window, cx| {
-                    let _ = this.update(cx, |this, cx| this.start_rename(id.clone(), window, cx));
-                }));
-                let menu = menu.when(sign_out, |m| m.item(PopupMenuItem::new(tr("accounts_sign_out")).disabled(true)))
-                    .when(remove, |m| m.item(PopupMenuItem::new(tr("accounts_remove")).disabled(true)));
-                menu.when(sign_out || remove, |m| m.separator().label(tr("settings_next_version")))
+                let item = |key: &str, action: fn(&mut Hangar, String, &mut Window, &mut Context<Hangar>)| {
+                    let (this, id) = (this.clone(), id.clone());
+                    PopupMenuItem::new(tr(key)).disabled(busy).on_click(move |_, window, cx| {
+                        let _ = this.update(cx, |this, cx| action(this, id.clone(), window, cx));
+                    })
+                };
+                menu.item(item("accounts_rename", |this, id, window, cx| this.start_rename(id, window, cx)))
+                    .when(sign_out, |m| m.item(item("accounts_sign_out", |this, id, window, cx| this.confirm_change(id, ChangeKind::SignOut, window, cx))))
+                    .when(remove, |m| m.item(item("accounts_remove", |this, id, window, cx| this.confirm_change(id, ChangeKind::Remove, window, cx))))
             });
+        let changing = self.accounts.change.as_ref().filter(|c| c.id == row.id)
+            .map(|c| tr(if c.kind == ChangeKind::SignOut { "accounts_signing_out" } else { "accounts_removing" }));
+        let sign_in = row.sign_in.clone().filter(|_| changing.is_none()).map(|label| {
+            let id = row.id.clone();
+            Button::new(SharedString::from(format!("accounts-sign-in-{}", row.id))).outline().small().label(label).disabled(busy)
+                .on_click(cx.listener(move |this, _, window, cx| this.start_sign_in(id.clone(), window, cx)))
+        });
         let actions = div().w(px(160.)).flex_shrink_0().flex().items_center().justify_end().gap(px(6.))
+            .children(changing.map(|text| div().text_size(px(12.5)).text_color(theme::muted()).child(text)))
+            .children(sign_in)
             .children(row.later.iter().enumerate().map(|(n, label)| soon_button(SharedString::from(format!("accounts-later-{}-{n}", row.id)), label.clone())))
             .child(menu);
         let line = div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().items_center().gap(px(12.)).px_4()
@@ -714,13 +761,14 @@ mod tests {
         let renew = credential(json!({"id": "claude:/a", "tipo": "claude", "nome": "a",
             "login": {"estado": "ok", "loggedIn": true, "refreshExpiresAt": now + 2. * 86_400.}}));
         let row = build_row(&renew, &HashMap::new(), false, now);
-        assert_eq!(row.later, vec![tr("accounts_renew")]);
+        assert_eq!(row.sign_in, Some(tr("accounts_renew")));
+        assert!(row.later.is_empty());
         let (line, marks) = &row.subtitle;
         assert!(marks.iter().any(|(range, tone)| *tone == Tone::Warn && line[range.clone()] == tr("accounts_login_expires").replace("{n}", "2")));
         let expired = credential(json!({"id": "claude:/b", "tipo": "claude", "nome": "b",
             "login": {"estado": "ok", "loggedIn": true}, "cota": {"estado": "expirada", "motivo": "sessao-viva"}}));
         let row = build_row(&expired, &HashMap::new(), false, now);
-        assert_eq!(row.later, vec![tr("accounts_sign_in")]);
+        assert_eq!(row.sign_in, Some(tr("accounts_sign_in")));
         assert!(matches!(row.quota, QuotaView::Note(ref t) if *t == tr("accounts_quota_live_session")));
         assert!(!row.can_sign_out);
     }

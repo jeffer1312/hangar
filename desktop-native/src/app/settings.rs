@@ -252,6 +252,7 @@ impl Hangar {
 
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.take().is_some() {
+            self.accounts_page_left();
             let ui = &mut self.settings_ui;
             (ui.live, ui.hit, ui.drag) = (false, None, None);
             self.root_focus.focus(window, cx);

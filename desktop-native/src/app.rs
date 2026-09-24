@@ -424,6 +424,7 @@ impl Hangar {
         self.selection += 1;
         self.revision += 1;
         for slot in [&mut self.list_task, &mut self.session_task, &mut self.history_task] { if let Some(t) = slot.take() { t.abort(); } }
+        self.leave_accounts();
         self.api = Some(api.clone());
         self.server = Some(api.identity());
         self.selected = None;

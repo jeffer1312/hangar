@@ -233,10 +233,11 @@ impl Api {
         Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
     }
 
-    /// Mutação com corpo JSON (PUT, POST, DELETE), sem retry: queda depois de enviar é incerteza.
-    pub async fn server_send(&self, method: reqwest::Method, path: &[&str], body: Value, seconds: u64) -> Result<Value, Failure> {
-        let r = self.client.request(method, self.server_url(path, &[])).json(&body).timeout(Duration::from_secs(seconds)).send().await
-            .map_err(|_| Failure::transport(true))?;
+    /// Mutação (PUT, POST, DELETE), com ou sem corpo JSON, sem retry: queda depois de enviar é incerteza.
+    pub async fn server_send(&self, method: reqwest::Method, path: &[&str], body: Option<Value>, seconds: u64) -> Result<Value, Failure> {
+        let mut req = self.client.request(method, self.server_url(path, &[]));
+        if let Some(body) = body { req = req.json(&body); }
+        let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(true))?;
         Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
     }
 
