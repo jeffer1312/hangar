@@ -7,21 +7,21 @@ use crate::appearance::{self, Currency, Language};
 use gpui_kit::component::{WindowExt, dialog::DialogButtonProps, progress::Progress};
 
 /// Um pedido ao servidor e o último resultado: carregando, erro, vazio e com dados saem daqui.
-pub(super) struct Remote<T> { value: Option<Result<T, String>>, loading: bool, seq: u64 }
+pub(super) struct Remote<T> { pub(super) value: Option<Result<T, String>>, pub(super) loading: bool, pub(super) seq: u64 }
 
 impl<T> Default for Remote<T> {
     fn default() -> Self { Self { value: None, loading: false, seq: 0 } }
 }
 
 impl<T> Remote<T> {
-    fn start(&mut self) -> u64 { self.seq += 1; self.loading = true; self.seq }
+    pub(super) fn start(&mut self) -> u64 { self.seq += 1; self.loading = true; self.seq }
     /// Guarda o resultado só se ele for do último pedido.
-    fn finish(&mut self, seq: u64, value: Result<T, String>) -> bool {
+    pub(super) fn finish(&mut self, seq: u64, value: Result<T, String>) -> bool {
         if seq != self.seq { return false; }
         (self.loading, self.value) = (false, Some(value));
         true
     }
-    fn ok(&self) -> Option<&T> { self.value.as_ref()?.as_ref().ok() }
+    pub(super) fn ok(&self) -> Option<&T> { self.value.as_ref()?.as_ref().ok() }
     /// Valor que chegou por outro caminho e é mais novo que qualquer pedido em voo: esse pedido passa a ser descartado.
     fn set(&mut self, value: Result<T, String>) { self.seq += 1; (self.loading, self.value) = (false, Some(value)); }
 }
@@ -159,6 +159,7 @@ impl Hangar {
             Page::General if !self.device.rate.loading && self.device.rate_value().is_none() => self.load_rate(cx),
             Page::Diary => self.load_diary(cx),
             Page::About if !self.device.about.loading => self.load_about(false, cx),
+            Page::Accounts => self.accounts_opened(cx),
             _ => {}
         }
     }
@@ -388,18 +389,19 @@ impl Hangar {
         }
         for input in self.ask_form.inputs.clone() { input.update(cx, |input, cx| input.set_placeholder(tr("ask_placeholder"), window, cx)); }
         self.relabel_settings(window, cx);
+        self.rebuild_accounts();
         self.sync_rows(cx);
         self.list_state.remeasure();
         cx.refresh_windows();
     }
 
-    fn page_top(&self, title: &'static str, lead: String) -> Div {
+    pub(super) fn page_top(&self, title: &'static str, lead: String) -> Div {
         div().flex().flex_col()
             .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(tr(title)))
             .child(div().mt(px(6.)).text_color(theme::muted()).child(lead))
     }
 
-    fn heading(&self, key: &'static str) -> Div {
+    pub(super) fn heading(&self, key: &'static str) -> Div {
         self.mark(div().mt(px(28.)).mb(px(10.)).rounded(px(6.)).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(tr(key)), key)
     }
 

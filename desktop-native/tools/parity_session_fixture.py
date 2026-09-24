@@ -13,8 +13,10 @@ GET /control/r4?rate=<n|none>&rate_status=<200|500>&rate_delay=<s>&diag=<ok|empt
 &update=<ok|fail|409|drop>&behind=<n>&about_delay=<s>&diag_file=<200|500> sets the Geral/Diário/Sobre routes (only the given keys change).
 POST /api/atualizacao/iniciar is FAKE: it only walks a synthetic state (5 steps, a 4 s "restart" in which
 GET /api/atualizacao drops the connection, then the outcome). Nothing is updated or restarted anywhere.
+Contas e modelos (Task 12 R5) moram em parity_accounts_fixture.py; GET /control/r5 muda como elas respondem.
 """
 
+import parity_accounts_fixture as accounts
 import json
 import os
 import re
@@ -301,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
                         R4[key] = float(raw)
                     elif key in ("diag", "update"):
                         R4[key] = raw
+            elif path == "/control/r5":
+                accounts.control(query)
             elif path == "/control/remove":
                 # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
                 SESSIONS.pop(query["name"][0], None)
@@ -319,6 +323,10 @@ class Handler(BaseHTTPRequestHandler):
             self.control(path, query)
             return
         if not self.authorized():
+            return
+        if path in ("/api/credenciais", "/api/engines"):
+            record("GET", self.path, None)
+            accounts.handle_get(self, path, query)
             return
         if path == "/api/config":
             record("GET", self.path, None)
@@ -535,6 +543,16 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(0.3)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def do_PUT(self):
+        url = urlparse(self.path)
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length)) if length else None
+        record("PUT", self.path, body)
+        if not self.authorized():
+            return
+        if not accounts.handle_put(self, url.path, body):
+            self.send_json({"detail": "not found"}, 404)
 
     def do_POST(self):
         url = urlparse(self.path)

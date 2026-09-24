@@ -39,6 +39,9 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
         Value::Object(fields) => fields.get("msg").and_then(Value::as_str)
             .filter(|message| !message.is_empty())
             .or_else(|| fields.get("code").and_then(Value::as_str)).map(str::to_owned),
+        // Recusa de validação (422): uma lista de `{msg}`, uma por campo.
+        Value::Array(items) => Some(items.iter().filter_map(|item| item.get("msg").and_then(Value::as_str)).collect::<Vec<_>>().join("; "))
+            .filter(|message| !message.is_empty()),
         _ => None,
     })).unwrap_or_else(|| format!("HTTP {status}"))
 }
@@ -230,6 +233,13 @@ impl Api {
         Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
     }
 
+    /// Mutação com corpo JSON (PUT, POST, DELETE), sem retry: queda depois de enviar é incerteza.
+    pub async fn server_send(&self, method: reqwest::Method, path: &[&str], body: Value, seconds: u64) -> Result<Value, Failure> {
+        let r = self.client.request(method, self.server_url(path, &[])).json(&body).timeout(Duration::from_secs(seconds)).send().await
+            .map_err(|_| Failure::transport(true))?;
+        Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+    }
+
     /// Paleta do papel de parede desta máquina. O backend só responde a pedidos locais: ligado a outro
     /// servidor volta 403, e 404 quer dizer que o desktop não gera paleta.
     pub async fn desktop_palette(&self) -> Result<Value, Failure> {
@@ -283,5 +293,6 @@ mod tests {
         assert_eq!(failure_detail(Some(json!({"detail": "plain rejection"})), 400), "plain rejection");
         assert_eq!(failure_detail(Some(json!({"detail": {"code": "turn_missing", "params": {}, "msg": "Nenhum turno ativo"}})), 409), "Nenhum turno ativo");
         assert_eq!(failure_detail(Some(json!({"detail": {"code": "turn_missing", "params": {}}})), 409), "turn_missing");
+        assert_eq!(failure_detail(Some(json!({"detail": [{"msg": "at most 40 characters"}]})), 422), "at most 40 characters");
     }
 }

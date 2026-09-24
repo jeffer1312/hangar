@@ -2968,6 +2968,7 @@ name = "hangar-native"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "chrono",
  "eventsource-stream",
  "futures",
  "gpui-kit",

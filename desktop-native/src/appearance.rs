@@ -148,6 +148,8 @@ pub struct Appearance {
     /// Geral: também deste computador, no mesmo arquivo; o "Voltar ao padrão" da Aparência não mexe nelas.
     pub language: Language,
     pub currency: Currency,
+    /// Contas e modelos em uma linha por conta, sem barras: escolha deste aparelho, como no web.
+    pub accounts_compact: bool,
 }
 
 const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeMode::Dark, palette: Palette::Classic,
@@ -156,7 +158,7 @@ const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeM
     font: Font::System, text_size: 100, line_height: 100, column: 100, sidebar_height: SidebarHeight::Full,
     navigation: Navigation::Sidebar, live_corner: [16., 16.],
     tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, table_chart: false,
-    language: Language::System, currency: Currency::Usd };
+    language: Language::System, currency: Currency::Usd, accounts_compact: false };
 
 impl Default for Appearance {
     fn default() -> Self { DEFAULT }
@@ -168,7 +170,7 @@ impl Appearance {
         Self { panels: self.panels, font: self.font, theme: self.theme, palette: self.palette, desktop_text: self.desktop_text,
             background: self.background, wallpaper: self.wallpaper, tool_look: self.tool_look, task_list: self.task_list,
             thinking_tools: self.thinking_tools, table_chart: self.table_chart, navigation: self.navigation, live_corner: self.live_corner,
-            language: self.language, currency: self.currency, ..Self::default() }
+            language: self.language, currency: self.currency, accounts_compact: self.accounts_compact, ..Self::default() }
     }
 
     /// Imagem ou área de trabalho atrás do texto: é o que a Leitura Automática resolve.

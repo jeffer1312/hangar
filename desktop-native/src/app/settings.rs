@@ -1,6 +1,6 @@
 //! Configurações do app nativo: página que ocupa a janela, como no Zeron. A barra lateral vira a
 //! navegação das seções; o conteúdo fica no centro, em linhas com ícone, título e controle à direita.
-//! Aparência, Geral, Diário de uso e Sobre funcionam; as demais páginas dizem que chegam depois, sem fingir.
+//! Aparência, Geral, Diário de uso, Sobre e Contas e modelos funcionam; as demais páginas dizem que chegam depois, sem fingir.
 use super::*;
 use std::{cell::Cell, rc::Rc};
 use crate::appearance::{self, Appearance, Background, DesktopText, Font, Hex, Navigation, Palette, Panels, Reading, SidebarHeight, Swatch,
@@ -56,12 +56,14 @@ const APPEARANCE_ROWS: [(&str, Option<&str>); 27] = [
 ];
 
 /// Linhas das outras páginas prontas, no mesmo formato.
-const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 4] = [
+const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 5] = [
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
         ("settings_diary_recent", None)]),
     (Page::About, &[("settings_about_app", None), ("settings_about_server", None), ("settings_about_update", Some("settings_about_update_desc"))]),
+    (Page::Accounts, &[("accounts_subscriptions", Some("accounts_menu_note")), ("accounts_models", None),
+        ("accounts_others", Some("accounts_others_empty")), ("accounts_density", None), ("accounts_refresh", None)]),
 ];
 
 /// Um resultado da busca: a linha de uma página, ou a própria página (`row: None`) quando ela ainda não tem linhas.
@@ -445,6 +447,7 @@ impl Hangar {
             Page::General => self.render_general(cx),
             Page::Diary => self.render_diary(cx),
             Page::About => self.render_about(cx),
+            Page::Accounts => self.render_accounts(cx),
             _ => self.render_page_soon(page, cx),
         };
         let content = div().id("settings-content").flex_1().min_w_0().h_full().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)

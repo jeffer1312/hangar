@@ -11,6 +11,7 @@ use gpui_kit::component::notification::Notification;
 use serde_json::{Value, json};
 
 mod backdrop;
+mod accounts;
 mod chrome;
 mod controls;
 mod device;
@@ -75,6 +76,8 @@ enum Payload {
     Config(Result<Value, Failure>),
     // Cotação, diário e atualização da conexão atual (páginas Geral, Diário de uso e Sobre).
     Device(device::DeviceReply),
+    // Contas e modelos da conexão atual.
+    Accounts(accounts::AccountsReply),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
 }
 
@@ -226,6 +229,7 @@ pub struct Hangar {
     backdrop_busy: Option<backdrop::BackdropBusy>,
     grain: Arc<RenderImage>,
     device: device::Device,
+    accounts: accounts::Accounts,
 }
 
 impl Drop for Hangar {
@@ -306,7 +310,7 @@ impl Hangar {
             appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
-            device: device::Device::default(),
+            device: device::Device::default(), accounts: accounts::Accounts::default(),
         }
     }
 
@@ -455,6 +459,7 @@ impl Hangar {
         self.side.reset_server();
         self.controls = controls::Controls::default();
         self.reset_device(cx);
+        self.accounts = accounts::Accounts::default();
         // Página do servidor aberta na troca: relê do servidor novo.
         if let Some(page) = self.settings { self.settings_opened(page, cx); }
         if let Some(api) = self.api.clone() {
@@ -706,6 +711,7 @@ impl Hangar {
             }
             Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
             Payload::Device(reply) => { self.receive_device(reply, cx); return; }
+            Payload::Accounts(reply) => { self.receive_accounts(reply, window, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
