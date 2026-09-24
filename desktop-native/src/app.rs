@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 mod backdrop;
 mod chrome;
 mod controls;
+mod device;
 mod follow;
 mod rows;
 mod settings;
@@ -72,6 +73,8 @@ enum Payload {
     // Resposta amarrada à sessão e ao pedido capturados no gesto, não ao que está na tela na volta.
     Reply(SessionKey, Reply, Result<Value, Failure>),
     Config(Result<Value, Failure>),
+    // Cotação, diário e atualização da conexão atual (páginas Geral, Diário de uso e Sobre).
+    Device(device::DeviceReply),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
 }
 
@@ -222,6 +225,7 @@ pub struct Hangar {
     backdrop_note: Option<String>,
     backdrop_busy: Option<backdrop::BackdropBusy>,
     grain: Arc<RenderImage>,
+    device: device::Device,
 }
 
 impl Drop for Hangar {
@@ -302,6 +306,7 @@ impl Hangar {
             appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
+            device: device::Device::default(),
         }
     }
 
@@ -449,6 +454,9 @@ impl Hangar {
         }));
         self.side.reset_server();
         self.controls = controls::Controls::default();
+        self.reset_device(cx);
+        // Página do servidor aberta na troca: relê do servidor novo.
+        if let Some(page) = self.settings { self.settings_opened(page, cx); }
         if let Some(api) = self.api.clone() {
             let tx = self.tx.clone();
             // Só leitura: a fileira de atalhos vem da config do servidor.
@@ -697,6 +705,7 @@ impl Hangar {
                 if rows > 0 { self.follow_content_changed(cx); self.list_state.remeasure_items(0..rows); }
             }
             Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
+            Payload::Device(reply) => { self.receive_device(reply, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
@@ -1312,10 +1321,7 @@ impl Hangar {
             });
         };
         if open { write(None); return; }
-        let folder = std::env::var_os("XDG_DOWNLOAD_DIR").map(PathBuf::from).filter(|p| p.is_dir())
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Downloads")).filter(|p| p.is_dir()))
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_else(std::env::temp_dir);
-        let prompt = cx.prompt_for_new_path(&folder, Some(&composer::safe_name(&name)));
+        let prompt = cx.prompt_for_new_path(&downloads_folder(), Some(&composer::safe_name(&name)));
         let fail_key = self.selected_key();
         cx.spawn(async move |this, cx| {
             match prompt.await {
@@ -2278,7 +2284,7 @@ impl Hangar {
             let dirty = status.as_ref().and_then(|s| s.dirty) == Some(true);
             let (added, removed) = session.as_ref().map(|s| (s.git_added.filter(|n| *n > 0), s.git_removed.filter(|n| *n > 0))).unwrap_or((None, None));
             let folder = repo.clone().or_else(|| session.as_ref().and_then(folder_name));
-            let cost = status.as_ref().and_then(|s| s.cost_usd).map(side::money);
+            let cost = status.as_ref().and_then(|s| s.cost_usd).map(|usd| self.money(usd));
             let stats = self.stats.as_ref().filter(|_| readable).map(side::stats_line);
             let right = [ctx_pct.map(|p| tr("composer_ctx").replace("{n}", &p.round().to_string())), cost].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             div().pt(px(7.)).px(px(6.)).flex().items_center().gap(px(6.)).text_xs().text_color(theme::faint())
@@ -2750,6 +2756,13 @@ fn saved_connection_path() -> Option<PathBuf> {
     Some(base.join("hangar-native").join("connection.json"))
 }
 
+/// Onde o diálogo de salvar abre: a pasta de downloads, ou a casa do usuário.
+fn downloads_folder() -> PathBuf {
+    std::env::var_os("XDG_DOWNLOAD_DIR").map(PathBuf::from).filter(|p| p.is_dir())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Downloads")).filter(|p| p.is_dir()))
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_else(std::env::temp_dir)
+}
+
 fn load_connection() -> Option<(String, String)> {
     let value: Value = serde_json::from_slice(&std::fs::read(saved_connection_path()?).ok()?).ok()?;
     let (address, token) = (value.get("address")?.as_str()?, value.get("token")?.as_str()?);
@@ -3019,7 +3032,8 @@ impl Render for Hangar {
             }))
             // Esc fora do campo fecha o painel aberto sobre o compositor (o clique no botão tira o foco do campo).
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key != "escape" || this.connection_dialog || this.search_focused(window, cx) { return; }
+                // Com a confirmação aberta, o Esc é dela: fecha só o diálogo.
+                if event.keystroke.key != "escape" || this.connection_dialog || this.search_focused(window, cx) || window.has_active_dialog(cx) { return; }
                 if this.settings.is_some() {
                     this.close_settings(window, cx);
                     cx.stop_propagation();
@@ -3059,6 +3073,7 @@ impl Render for Hangar {
             .children(live)
             .when(self.connection_dialog, |el| el.child(div().absolute().inset_0().bg(theme::scrim()).flex().items_center().justify_center()
                 .child(dialog.focus_trap("connection-dialog", &self.connection_focus))))
+            .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }
 }

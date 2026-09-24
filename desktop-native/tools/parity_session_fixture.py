@@ -9,6 +9,10 @@ GET /control/reset restores the initial sessions.
 GET /control/palette?status=<200|403|404>&escuro=<true|false>&delay=<s> sets what GET /api/desktop/palette answers;
 each request keeps the values it saw on arrival, so a slow old answer can land after a fast new one.
 GET /control/wallpaper?status=<200|403|404>&path=<image file> sets what GET /api/desktop/wallpaper answers.
+GET /control/r4?rate=<n|none>&rate_status=<200|500>&rate_delay=<s>&diag=<ok|empty|404|500>&diag_delay=<s>
+&update=<ok|fail|409|drop>&behind=<n>&about_delay=<s>&diag_file=<200|500> sets the Geral/Diário/Sobre routes (only the given keys change).
+POST /api/atualizacao/iniciar is FAKE: it only walks a synthetic state (5 steps, a 4 s "restart" in which
+GET /api/atualizacao drops the connection, then the outcome). Nothing is updated or restarted anywhere.
 """
 
 import json
@@ -27,6 +31,40 @@ VERSION = {"n": 0}
 # Paleta Material You sintética, no formato de backend/app/desktop_palette.py.
 PALETTE = {"status": 200, "escuro": True, "delay": 0.0}
 WALLPAPER = {"status": 404, "path": None}
+# Task 12 R4: cotação, diário de uso e atualização, todos sintéticos.
+R4 = {"rate": 5.43, "rate_status": 200, "rate_delay": 0.0, "diag": "ok", "diag_delay": 0.0, "update": "ok", "behind": 3,
+      "about_delay": 0.0, "offline_until": 0.0, "diag_file": 200}
+UPDATE = {"backend": "2026.09.20-abc1234", "repo": "2026.09.20-abc1234",
+          "estado": {"fase": "pronto", "ok": True, "texto": "Atualizado", "ts": "2026-09-20T09:00:00-03:00"}}
+UPDATE_STEPS = ["Guardando o estado", "Baixando o código", "Aplicando os passos", "Instalando dependências", "Reiniciando"]
+DIAG_LINES = [
+    {"ts": "2026-09-24T17:42:10-03:00", "evento": "http", "nivel": "erro", "detalhe": "POST /api/sessions/hangar/input", "codigo": 503, "ms": 812,
+     "tela": "chat", "sessao": "hangar"},
+    {"ts": "2026-09-24T17:41:58-03:00", "evento": "sse.reconectou", "nivel": "aviso", "detalhe": "lista caiu por 4 s e voltou",
+     "so": "Linux", "navegador": "Chromium 140", "vista": "desktop", "tela_px": "1536x864"},
+    {"ts": "2026-09-24T17:40:02-03:00", "evento": "abriu", "detalhe": "app nativo", "tela": "config"},
+    {"ts": "2026-09-23T22:15:47-03:00", "evento": "atualizacao.tique", "detalhe": "fase=rodando 3/5 " + "x" * 120, "ms": 40},
+] + [{"ts": f"2026-09-23T21:{m:02d}:00-03:00", "evento": "http", "detalhe": f"GET /api/sessions/s{m}/history", "codigo": 200, "ms": m}
+     for m in range(59, 43, -1)]
+
+
+def update_walk(fail):
+    """Estado sintético da atualização; o "reinício" derruba as leituras por 4 s."""
+    for n, text in enumerate(UPDATE_STEPS, 1):
+        with LOCK:
+            UPDATE["estado"] = {"fase": "rodando", "passo": n, "total": len(UPDATE_STEPS), "texto": text, "ts": time.strftime("%Y-%m-%dT%H:%M:%S-03:00")}
+        time.sleep(1.2)
+    with LOCK:
+        R4["offline_until"] = time.time() + 4
+    time.sleep(4)
+    with LOCK:
+        now = time.strftime("%Y-%m-%dT%H:%M:%S-03:00")
+        if fail:
+            UPDATE["estado"] = {"fase": "pronto", "ok": False, "erro": "npm ci falhou (sintético)", "voltou": True, "ts": now}
+        else:
+            UPDATE["backend"] = UPDATE["repo"] = "2026.09.24-def5678"
+            R4["behind"] = 0
+            UPDATE["estado"] = {"fase": "pronto", "ok": True, "texto": "Atualizado", "ts": now}
 PALETTE_DARK = {"background": "#15121b", "surface": "#15121b", "surfaceContainerLow": "#1d1a24", "surfaceContainer": "#221e28",
                 "surfaceContainerHigh": "#2c2833", "onSurface": "#e8e0ec", "onSurfaceVariant": "#cbc3d1", "outline": "#958e9b",
                 "outlineVariant": "#4a4550", "primary": "#d4bbff", "onPrimary": "#3b255f"}
@@ -253,6 +291,16 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/control/wallpaper":
                 WALLPAPER["status"] = int(query.get("status", ["200"])[0])
                 WALLPAPER["path"] = query.get("path", [None])[0]
+            elif path == "/control/r4":
+                for key, raw in ((k, v[0]) for k, v in query.items()):
+                    if key == "rate":
+                        R4["rate"] = None if raw == "none" else float(raw)
+                    elif key in ("rate_status", "behind", "diag_file"):
+                        R4[key] = int(raw)
+                    elif key in ("rate_delay", "diag_delay", "about_delay"):
+                        R4[key] = float(raw)
+                    elif key in ("diag", "update"):
+                        R4[key] = raw
             elif path == "/control/remove":
                 # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
                 SESSIONS.pop(query["name"][0], None)
@@ -275,6 +323,62 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             record("GET", self.path, None)
             self.send_json({"campos": {"shortcuts": {"valor": SHORTCUTS}}})
+            return
+        if path == "/api/cotacao":
+            record("GET", self.path, None)
+            with LOCK:
+                rate, status, delay = R4["rate"], R4["rate_status"], R4["rate_delay"]
+            time.sleep(delay)
+            if status != 200:
+                self.send_json(fail("erro_sintetico", "cotação indisponível"), status)
+            else:
+                self.send_json({"usd_brl": rate})
+            return
+        if path == "/api/diag":
+            record("GET", self.path, None)
+            with LOCK:
+                mode, delay = R4["diag"], R4["diag_delay"]
+            time.sleep(delay)
+            if mode in ("404", "500"):
+                self.send_json({"detail": "Not Found" if mode == "404" else "diário ilegível (sintético)"}, int(mode))
+            elif mode == "empty":
+                self.send_json({"dias": 0, "bytes": 0, "arquivos": [], "dias_guardados": 7, "ultimas": []})
+            else:
+                self.send_json({"dias": 2, "bytes": 184_320, "arquivos": ["uso-2026-09-23.jsonl", "uso-2026-09-24.jsonl"],
+                                "dias_guardados": 7, "ultimas": DIAG_LINES})
+            return
+        if path == "/api/diag/arquivo":
+            record("GET", self.path, None)
+            with LOCK:
+                file_status = R4["diag_file"]
+            if file_status != 200:
+                self.send_json(fail("erro_sintetico", "não consegui ler o diário (sintético)"), file_status)
+                return
+            data = ("# diário SINTÉTICO da fixture parity_session_fixture\n"
+                    + "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in reversed(DIAG_LINES))).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Disposition", 'attachment; filename="hangar-uso.jsonl"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if path == "/api/atualizacao":
+            record("GET", self.path, None)
+            with LOCK:
+                offline, delay = time.time() < R4["offline_until"], R4["about_delay"]
+                behind = R4["behind"]
+                body = {"versoes": {"repo": UPDATE["repo"], "backend": UPDATE["backend"]},
+                        "versao_legivel": {"repo": UPDATE["repo"], "backend": UPDATE["backend"], "remoto": "2026.09.24-def5678"},
+                        "atras": behind, "atualizacao_disponivel": behind > 0, "mudancas": [], "passos": [], "pre_voo": {"pode": True},
+                        "estado": dict(UPDATE["estado"])}
+            if offline:
+                # Servidor "reiniciando": a conexão cai sem resposta.
+                self.close_connection = True
+                self.connection.shutdown(2)
+                return
+            time.sleep(delay if "procurar" not in query else max(delay, 1.5))
+            self.send_json(body)
             return
         if path == "/api/desktop/palette":
             record("GET", self.path, None)
@@ -441,6 +545,24 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(raw) if raw else None
         record("POST", self.path, body)
         if not self.authorized():
+            return
+        if url.path == "/api/atualizacao/iniciar":
+            with LOCK:
+                mode = R4["update"]
+                running = UPDATE["estado"].get("fase") == "rodando"
+            if mode == "409" or running:
+                self.send_json(fail("erro_atualizacao_branch", "este checkout esta na branch mobile-expo, nao na main"), 409)
+                return
+            with LOCK:
+                UPDATE["estado"] = {"fase": "rodando", "passo": 0, "total": len(UPDATE_STEPS), "texto": "Preparando",
+                                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S-03:00")}
+            threading.Thread(target=update_walk, args=(mode == "fail",), daemon=True).start()
+            if mode == "drop":
+                # Pedido aceito, resposta perdida: o app não sabe se começou.
+                self.close_connection = True
+                self.connection.shutdown(2)
+                return
+            self.send_json({"ok": True, "pid": 0})
             return
         with LOCK:
             if MODE["only"] and MODE["only"] != action:

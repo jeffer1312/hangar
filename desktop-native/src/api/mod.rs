@@ -197,6 +197,39 @@ impl Api {
         Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
+    /// `/api/<path>` do servidor (fora de uma sessão), com o método pedido.
+    fn server_url(&self, path: &[&str], query: &[(&str, &str)]) -> Url {
+        let mut url = self.base.clone();
+        url.path_segments_mut().expect("validated HTTP base").pop_if_empty().push("api").extend(path);
+        if !query.is_empty() { url.query_pairs_mut().extend_pairs(query); }
+        url
+    }
+
+    /// Leitura do servidor (cotação, diário, estado da atualização): queda é rede, nunca incerteza.
+    pub async fn server_read(&self, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Value, Failure> {
+        let r = self.client.get(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
+            .map_err(|_| Failure::transport(false))?;
+        Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+    }
+
+    /// Arquivo inteiro do servidor (o diário), com o mesmo teto dos anexos.
+    pub async fn server_bytes(&self, path: &[&str], seconds: u64) -> Result<Vec<u8>, Failure> {
+        let r = self.client.get(self.server_url(path, &[])).timeout(Duration::from_secs(seconds)).send().await
+            .map_err(|_| Failure::transport(false))?;
+        let r = Self::checked(r, false).await?;
+        if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
+        let bytes = r.bytes().await.map_err(|_| Failure::transport(false))?;
+        if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
+        Ok(bytes.to_vec())
+    }
+
+    /// Mutação no servidor, sem retry: queda depois de enviar é incerteza.
+    pub async fn server_post(&self, path: &[&str], seconds: u64) -> Result<Value, Failure> {
+        let r = self.client.post(self.server_url(path, &[])).timeout(Duration::from_secs(seconds)).send().await
+            .map_err(|_| Failure::transport(true))?;
+        Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+    }
+
     /// Paleta do papel de parede desta máquina. O backend só responde a pedidos locais: ligado a outro
     /// servidor volta 403, e 404 quer dizer que o desktop não gera paleta.
     pub async fn desktop_palette(&self) -> Result<Value, Failure> {

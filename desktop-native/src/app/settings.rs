@@ -1,6 +1,6 @@
 //! Configurações do app nativo: página que ocupa a janela, como no Zeron. A barra lateral vira a
 //! navegação das seções; o conteúdo fica no centro, em linhas com ícone, título e controle à direita.
-//! Nesta versão só a Aparência funciona; as demais páginas dizem que chegam depois, sem fingir.
+//! Aparência, Geral, Diário de uso e Sobre funcionam; as demais páginas dizem que chegam depois, sem fingir.
 use super::*;
 use std::{cell::Cell, rc::Rc};
 use crate::appearance::{self, Appearance, Background, DesktopText, Font, Hex, Navigation, Palette, Panels, Reading, SidebarHeight, Swatch,
@@ -55,6 +55,15 @@ const APPEARANCE_ROWS: [(&str, Option<&str>); 27] = [
     ("settings_collapsed_nav", None), ("settings_sidebar_height", Some("settings_only_floating")),
 ];
 
+/// Linhas das outras páginas prontas, no mesmo formato.
+const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 4] = [
+    (Page::Appearance, &APPEARANCE_ROWS),
+    (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search"))]),
+    (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
+        ("settings_diary_recent", None)]),
+    (Page::About, &[("settings_about_app", None), ("settings_about_server", None), ("settings_about_update", Some("settings_about_update_desc"))]),
+];
+
 /// Um resultado da busca: a linha de uma página, ou a própria página (`row: None`) quando ela ainda não tem linhas.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Found { page: Page, row: Option<&'static str> }
@@ -81,7 +90,8 @@ fn matching(query: &str, texts: &[(String, String)]) -> Vec<usize> {
 }
 
 fn find(query: &str) -> Vec<Found> {
-    let rows = APPEARANCE_ROWS.iter().map(|&(title, desc)| (Found { page: Page::Appearance, row: Some(title) }, tr(title), desc.map(tr).unwrap_or_default()));
+    let rows = PAGE_ROWS.iter().flat_map(|&(page, rows)| rows.iter()
+        .map(move |&(title, desc)| (Found { page, row: Some(title) }, tr(title), desc.map(tr).unwrap_or_default())));
     // Páginas que ainda não têm linhas continuam achadas pelo nome e abrem no aviso delas.
     let pages = Page::DEVICE.into_iter().chain(Page::SERVER).map(|page| (Found { page, row: None }, page.title(), String::new()));
     let all: Vec<_> = rows.chain(pages).collect();
@@ -229,7 +239,13 @@ impl Hangar {
         self.close_controls();
         self.command_panel = false;
         self.recent = None;
+        self.settings_opened(page, cx);
         cx.notify();
+    }
+
+    /// Idioma trocado: o texto guardado no campo de busca acompanha.
+    pub(super) fn relabel_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_ui.search.update(cx, |input, cx| input.set_placeholder(tr("settings_search"), window, cx));
     }
 
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -261,12 +277,14 @@ impl Hangar {
         let ui = &mut self.settings_ui;
         let Some(&found) = ui.found.get(index.unwrap_or(ui.pick)) else { return };
         if let Some(n) = index { ui.pick = n; }
-        self.settings = Some(found.page);
+        let opened = self.settings != Some(found.page);
         ui.hit = found.row;
         match found.row {
             Some(_) => ui.reveal.set(true),
             None => { ui.reveal.set(false); ui.scroll.set_offset(point(px(0.), px(0.))); }
         }
+        self.settings = Some(found.page);
+        if opened { self.settings_opened(found.page, cx); }
         cx.notify();
     }
 
@@ -422,7 +440,13 @@ impl Hangar {
                         .child(div().flex_1().text_sm().text_color(theme::muted()).child(tr("settings_back")))
                         .child(chrome::kbd("Esc")))
                     .on_click(cx.listener(|this, _, window, cx| this.close_settings(window, cx)))));
-        let body = if page == Page::Appearance { self.render_appearance(cx) } else { self.render_page_soon(page, cx) };
+        let body = match page {
+            Page::Appearance => self.render_appearance(cx),
+            Page::General => self.render_general(cx),
+            Page::Diary => self.render_diary(cx),
+            Page::About => self.render_about(cx),
+            _ => self.render_page_soon(page, cx),
+        };
         let content = div().id("settings-content").flex_1().min_w_0().h_full().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
             .child(div().w_full().flex().justify_center().child(div().w(px(720.)).max_w_full().px_4().pt(px(44.)).pb(px(40.)).child(body)));
         div().size_full().flex().when(floating, |el| el.p(px(10.)).gap(px(10.))).child(nav).child(content).into_any_element()
@@ -447,7 +471,7 @@ impl Hangar {
     }
 
     /// Destaque da linha levada pela busca, e a rolagem até ela quando o desenho já sabe onde ela está.
-    fn mark(&self, el: Div, key: &str) -> Div {
+    pub(super) fn mark(&self, el: Div, key: &str) -> Div {
         if self.settings_ui.hit != Some(key) { return el; }
         let (scroll, reveal) = (self.settings_ui.scroll.clone(), self.settings_ui.reveal.clone());
         el.relative().bg(theme::accent_dim()).child(canvas(move |bounds, window, _| {
@@ -670,7 +694,7 @@ impl Hangar {
         // Escolha, cópia ou remoção da imagem em andamento: o grupo fica travado, mostrando o que está escolhido.
         let busy = self.backdrop_busy;
         let background = segments("background", &[tr("settings_bg_plain"), tr("settings_bg_texture"), tr("settings_bg_light"), tr("settings_bg_image"), tr("settings_bg_desktop")],
-            BACKGROUNDS.iter().position(|b| *b == a.background).unwrap_or(0), if busy.is_some() { 0 } else { BACKGROUNDS.len() }, busy.is_some(),
+            BACKGROUNDS.iter().position(|b| *b == a.background).unwrap_or(0), if busy.is_some() { 0 } else { BACKGROUNDS.len() }, busy.is_some(), tr("settings_next_version"),
             |this: &mut Hangar, index, window: &mut Window, cx| {
                 if this.backdrop_busy.is_some() { return; }
                 let choice = BACKGROUNDS[index];
@@ -799,12 +823,12 @@ impl Hangar {
 
     /// Linha de configuração: ícone numa caixa, título e descrição, controle à direita. `title` é a chave de
     /// tradução, a mesma que a busca usa para destacar a linha.
-    fn row(&self, icon: IconName, title: &'static str, description: Option<String>, enabled: bool, control: AnyElement) -> Div {
+    pub(super) fn row(&self, icon: IconName, title: &'static str, description: Option<String>, enabled: bool, control: AnyElement) -> Div {
         self.row_with(icon, title, description.map_or_else(div, |d| div().child(d)), enabled, control)
     }
 
     /// Linha cuja descrição carrega um controle (o "Copiar do claro" do Destaque).
-    fn row_with(&self, icon: IconName, title: &'static str, description: Div, enabled: bool, control: AnyElement) -> Div {
+    pub(super) fn row_with(&self, icon: IconName, title: &'static str, description: Div, enabled: bool, control: AnyElement) -> Div {
         // Na caixa ao vivo (360px) o controle desce para baixo do título, senão espreme o texto.
         let live = self.settings_ui.live;
         let head = div().flex_1().min_w_0().flex().items_center().gap(px(if live { 10. } else { 14. }))
@@ -835,18 +859,19 @@ impl Hangar {
     }
 }
 
-fn settings_box() -> Div {
+pub(super) fn settings_box() -> Div {
     div().flex().flex_col().rounded(px(14.)).border_1().border_color(theme::border()).bg(theme::boxed()).overflow_hidden()
 }
 
 /// Controle segmentado: uma silhueta só, segmento escolhido com fundo de destaque suave.
 fn segmented(id: &'static str, labels: &[String], selected: usize, enabled: bool,
     pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>) -> AnyElement {
-    segments(id, labels, selected, if enabled { labels.len() } else { 0 }, false, pick, cx)
+    segments(id, labels, selected, if enabled { labels.len() } else { 0 }, false, tr("settings_next_version"), pick, cx)
 }
 
 /// `locked`: todos desligados por um instante (operação em andamento), mas a escolha atual continua marcada.
-fn segments(id: &'static str, labels: &[String], selected: usize, available: usize, locked: bool,
+/// `off_note`: a dica das opções além de `available`, dizendo por que estão desligadas.
+pub(super) fn segments(id: &'static str, labels: &[String], selected: usize, available: usize, locked: bool, off_note: String,
     pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>) -> AnyElement {
     let count = labels.len();
     div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden()
@@ -866,7 +891,7 @@ fn segments(id: &'static str, labels: &[String], selected: usize, available: usi
                 .when(on, |el| el.bg(theme::accent_dim()))
                 .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
                 .disabled(!enabled).label(label.clone())
-                .when(!enabled && available > 0, |el| el.tooltip(tr("settings_next_version")))
+                .when(!enabled && available > 0, |el| el.tooltip(off_note.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) }))
         }))
         .into_any_element()

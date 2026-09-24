@@ -59,6 +59,16 @@ pub enum ToolLook { Classic, Chips }
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingTools { None, Search, All }
 
+/// Idioma da interface: Sistema segue `HANGAR_NATIVE_LANG`/`LANG`; os outros vencem as variáveis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Language { System, Pt, En }
+
+/// Moeda dos custos. Real sem cotação lida mostra dólar: número convertido por taxa que não temos seria inventado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Currency { Usd, Brl }
+
 /// Amostra escolhida: índice numa lista fixa ou cor livre, gravada como "#rrggbb".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -135,6 +145,9 @@ pub struct Appearance {
     pub thinking_tools: ThinkingTools,
     /// Botão Gráfico sobre as tabelas numéricas das respostas.
     pub table_chart: bool,
+    /// Geral: também deste computador, no mesmo arquivo; o "Voltar ao padrão" da Aparência não mexe nelas.
+    pub language: Language,
+    pub currency: Currency,
 }
 
 const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeMode::Dark, palette: Palette::Classic,
@@ -142,7 +155,8 @@ const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeM
     background: Background::Plain, wallpaper: Wallpaper::Window, reading: Reading::Auto, sheet_solidity: 60, text_contrast: 30,
     font: Font::System, text_size: 100, line_height: 100, column: 100, sidebar_height: SidebarHeight::Full,
     navigation: Navigation::Sidebar, live_corner: [16., 16.],
-    tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, table_chart: false };
+    tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, table_chart: false,
+    language: Language::System, currency: Currency::Usd };
 
 impl Default for Appearance {
     fn default() -> Self { DEFAULT }
@@ -154,7 +168,7 @@ impl Appearance {
         Self { panels: self.panels, font: self.font, theme: self.theme, palette: self.palette, desktop_text: self.desktop_text,
             background: self.background, wallpaper: self.wallpaper, tool_look: self.tool_look, task_list: self.task_list,
             thinking_tools: self.thinking_tools, table_chart: self.table_chart, navigation: self.navigation, live_corner: self.live_corner,
-            ..Self::default() }
+            language: self.language, currency: self.currency, ..Self::default() }
     }
 
     /// Imagem ou área de trabalho atrás do texto: é o que a Leitura Automática resolve.
@@ -295,6 +309,15 @@ mod tests {
         assert_eq!((parsed.navigation, parsed.live_corner), (Navigation::Tabs, [300.5, 0.]));
         let reset = parsed.reset_keeping_choices();
         assert_eq!((reset.navigation, reset.live_corner), (Navigation::Tabs, [300.5, 0.]));
+    }
+
+    #[test]
+    fn general_choices_persist_and_survive_reset() {
+        assert_eq!((Appearance::default().language, Appearance::default().currency), (Language::System, Currency::Usd));
+        let parsed: Appearance = serde_json::from_str(r#"{"language":"en","currency":"brl"}"#).unwrap();
+        assert_eq!((parsed.language, parsed.currency), (Language::En, Currency::Brl));
+        let reset = parsed.reset_keeping_choices();
+        assert_eq!((reset.language, reset.currency), (Language::En, Currency::Brl));
     }
 
     #[test]

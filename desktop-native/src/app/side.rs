@@ -116,8 +116,6 @@ pub(super) fn tokens(n: f64) -> String {
 
 fn trim_zero(s: String) -> String { s.strip_suffix(".0").map(str::to_owned).unwrap_or(s) }
 
-pub(super) fn money(usd: f64) -> String { format!("US$ {usd:.2}") }
-
 fn duration(ms: f64) -> String {
     let s = ms / 1000.;
     if s < 10. { format!("{s:.1}s") } else if s < 60. { format!("{}s", s.round()) }
@@ -394,7 +392,7 @@ impl Hangar {
             match owned {
                 None => Some((tr("side_cost_loading"), None)),
                 Some((_, Some(c), error)) => {
-                    let value = match c.usd { Some(usd) => money(usd), None => "—".into() };
+                    let value = match c.usd { Some(usd) => self.money(usd), None => "—".into() };
                     let note = if !c.has_usage { Some(tr("side_cost_no_usage")) }
                         else if !c.missing.is_empty() { Some(tr("side_cost_missing").replace("{models}", &c.missing.join(", "))) }
                         else { Some(tr("side_cost_estimate")) };
@@ -402,7 +400,7 @@ impl Hangar {
                 }
                 Some((_, None, error)) => Some(("—".into(), error.clone())),
             }
-        } else { status.and_then(|s| s.cost_usd).map(|usd| (money(usd), Some(tr("side_cost_session")))) };
+        } else { status.and_then(|s| s.cost_usd).map(|usd| (self.money(usd), Some(tr("side_cost_session")))) };
         let cost = cost.unwrap_or_else(|| ("—".into(), None));
         let mut line = Vec::new();
         if self.chat.state.state != "working" {
