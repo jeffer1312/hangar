@@ -2,8 +2,8 @@
 //! navegação das seções; o conteúdo fica no centro, em linhas com ícone, título e controle à direita.
 //! Nesta versão só a Aparência funciona; as demais páginas dizem que chegam depois, sem fingir.
 use super::*;
-use crate::appearance::{self, Appearance, Font, Panels, SidebarHeight};
-use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
+use crate::appearance::{self, Appearance, DesktopText, Font, Hex, Palette, Panels, SidebarHeight, Swatch, ThemeMode};
+use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState}, slider::{Slider, SliderEvent, SliderState}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
@@ -44,14 +44,15 @@ enum Knob { TintStrength, Transparency, Solidity, Size, Line, Column }
 impl Knob {
     const ALL: [Knob; 6] = [Knob::TintStrength, Knob::Transparency, Knob::Solidity, Knob::Size, Knob::Line, Knob::Column];
 
+    // A força da tinta é do modo que está na tela (escuro ou claro), como a cor.
     fn read(self, a: &Appearance) -> u16 {
-        match self { Knob::TintStrength => a.tint_strength, Knob::Transparency => a.transparency, Knob::Solidity => a.solidity,
+        match self { Knob::TintStrength => a.colors(theme::is_dark()).tint_strength, Knob::Transparency => a.transparency, Knob::Solidity => a.solidity,
             Knob::Size => a.text_size, Knob::Line => a.line_height, Knob::Column => a.column }
     }
 
     fn write(self, a: &mut Appearance, value: u16) {
-        match self { Knob::TintStrength => a.tint_strength = value, Knob::Transparency => a.transparency = value, Knob::Solidity => a.solidity = value,
-            Knob::Size => a.text_size = value, Knob::Line => a.line_height = value, Knob::Column => a.column = value }
+        match self { Knob::TintStrength => a.colors_mut(theme::is_dark()).tint_strength = value, Knob::Transparency => a.transparency = value,
+            Knob::Solidity => a.solidity = value, Knob::Size => a.text_size = value, Knob::Line => a.line_height = value, Knob::Column => a.column = value }
     }
 
     fn range(self) -> (f32, f32) {
@@ -62,7 +63,19 @@ impl Knob {
 /// Estado vivo da página: os controles deslizantes guardam posição e arrasto entre desenhos.
 pub(super) struct SettingsUi {
     sliders: Vec<(Knob, Entity<SliderState>)>,
+    /// Cor livre de Destaque e de Tinta.
+    accent_picker: Entity<ColorPickerState>,
+    tint_picker: Entity<ColorPickerState>,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Copy)]
+enum Custom { Accent, Tint }
+
+fn to_hex(color: Hsla) -> u32 {
+    let c = color.to_rgb();
+    let channel = |v: f32| (v.clamp(0., 1.) * 255.).round() as u32;
+    (channel(c.r) << 16) | (channel(c.g) << 8) | channel(c.b)
 }
 
 impl SettingsUi {
@@ -82,7 +95,27 @@ impl SettingsUi {
             }));
             sliders.push((knob, state));
         }
-        Self { sliders, _subscriptions: subscriptions }
+        let mut picker = |which: Custom, cx: &mut Context<Hangar>| {
+            let colors = *current.colors(theme::is_dark());
+            let saved = match which { Custom::Accent => colors.accent, Custom::Tint => colors.tint };
+            let state = cx.new(|cx| {
+                let mut state = ColorPickerState::new(window, cx);
+                if let Swatch::Custom(Hex(hex)) = saved { state.set_value(rgb(hex), window, cx); }
+                state
+            });
+            subscriptions.push(cx.subscribe_in(&state, window, move |this: &mut Hangar, _, event: &ColorPickerEvent, _, cx| {
+                let ColorPickerEvent::Change(Some(color)) = event else { return };
+                let mut next = appearance::get();
+                let mode = next.colors_mut(theme::is_dark());
+                let swatch = Swatch::Custom(Hex(to_hex(*color)));
+                match which { Custom::Accent => mode.accent = swatch, Custom::Tint => mode.tint = swatch }
+                this.apply_appearance(next, true, cx);
+            }));
+            state
+        };
+        let accent_picker = picker(Custom::Accent, cx);
+        let tint_picker = picker(Custom::Tint, cx);
+        Self { sliders, accent_picker, tint_picker, _subscriptions: subscriptions }
     }
 
     fn slider(&self, knob: Knob) -> &Entity<SliderState> {
@@ -113,12 +146,11 @@ impl Hangar {
     /// Aplica na hora (o tema lê a cada desenho) e grava fora da thread da janela quando `save`.
     pub(super) fn apply_appearance(&mut self, next: Appearance, save: bool, cx: &mut Context<Self>) {
         appearance::set(next);
-        theme::sync_kit(cx);
+        theme::sync_kit(None, cx);
         if save {
             let (connection, tx) = (self.connection, self.tx.clone());
-            let value = appearance::get();
             self.runtime.spawn(async move {
-                let result = tokio::task::spawn_blocking(move || appearance::save(value)).await
+                let result = tokio::task::spawn_blocking(appearance::save).await
                     .map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::AppearanceSaved(result) }).await;
             });
@@ -128,10 +160,46 @@ impl Hangar {
 
     fn reset_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let next = appearance::get().reset_keeping_choices();
-        for (knob, state) in self.settings_ui.sliders.clone() {
-            state.update(cx, |slider, cx| slider.set_value(knob.read(&next) as f32, window, cx));
-        }
         self.apply_appearance(next, true, cx);
+        self.sync_sliders(window, cx);
+    }
+
+    /// Recoloca os controles deslizantes no valor salvo: depois do reset ou quando o modo escuro/claro muda
+    /// (a força da tinta é de cada modo).
+    pub(super) fn sync_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = appearance::get();
+        for (knob, state) in self.settings_ui.sliders.clone() {
+            state.update(cx, |slider, cx| slider.set_value(knob.read(&current) as f32, window, cx));
+        }
+        // Os seletores de cor livre mostram a do modo na tela.
+        let colors = *current.colors(theme::is_dark());
+        for (state, saved) in [(self.settings_ui.accent_picker.clone(), colors.accent), (self.settings_ui.tint_picker.clone(), colors.tint)] {
+            state.update(cx, |picker, cx| match saved {
+                Swatch::Custom(Hex(hex)) => picker.set_value(rgb(hex), window, cx),
+                Swatch::Preset(_) => picker.clear_value(window, cx),
+            });
+        }
+    }
+
+    fn set_theme(&mut self, mode: ThemeMode, window: &mut Window, cx: &mut Context<Self>) {
+        let mut next = appearance::get();
+        next.theme = mode;
+        self.apply_appearance(next, true, cx);
+        self.refresh_desktop_palette(cx);
+        self.sync_sliders(window, cx);
+    }
+
+    /// Clique no fim do trilho: o controle do kit arredonda pela posição e para um passo antes do extremo.
+    fn slider_edge(&self, knob: Knob, max: bool, enabled: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let (min, top) = knob.range();
+        div().id(SharedString::from(format!("slider-edge-{knob:?}-{max}"))).w(px(10.)).h(px(20.)).flex_shrink_0()
+            .when(enabled, |el| el.cursor_pointer().on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                let value = if max { top } else { min };
+                let mut next = appearance::get();
+                knob.write(&mut next, value as u16);
+                this.apply_appearance(next, true, cx);
+                this.sync_sliders(window, cx);
+            })))
     }
 
     pub(super) fn render_settings(&mut self, page: Page, cx: &mut Context<Self>) -> AnyElement {
@@ -205,36 +273,55 @@ impl Hangar {
             .child(div().child(tr("settings_preview_answer")))
             .child(div().font_family(theme::MONO).text_size(px(12.5)).child("npm run check"));
 
-        let themes = [("auto", false), ("light", false), ("dark", true), ("desktop", false)];
-        let theme_cards = div().flex().gap(px(12.)).children(themes.map(|(key, available)| {
-            let (sidebar, main, line): (Hsla, Hsla, Hsla) = match key {
-                "light" | "auto" => (rgb(0xf3eff0).into(), rgb(0xfdfbfb).into(), rgb(0xdddddd).into()),
-                "desktop" => (rgb(0x2a2346).into(), rgba(0x0a080e80).into(), rgba(0xffffff4d).into()),
-                _ => (rgb(0x18151a).into(), rgb(0x0f0d10).into(), rgb(0x3a343b).into()),
-            };
+        // Miniatura: barra lateral à esquerda e conversa à direita, com duas linhas de texto em cada.
+        let mini_window = |(sidebar, main, line): (Hsla, Hsla, Hsla)| {
             let bars = |color: Hsla| div().flex().flex_col().gap(px(5.)).pt(px(4.))
                 .child(div().h(px(4.)).w(relative(0.8)).rounded(px(2.)).bg(color)).child(div().h(px(4.)).w(relative(0.6)).rounded(px(2.)).bg(color));
-            let selected = key == "dark";
-            div().flex_1().flex().flex_col().items_center().gap_2().text_size(px(13.))
-                .text_color(if selected { theme::accent_text() } else { theme::muted() })
-                .when(!available, |el| el.opacity(0.75))
-                .child(div().w_full().h(px(96.)).p(px(8.)).flex().gap(px(6.)).rounded(px(10.)).bg(sidebar).overflow_hidden()
-                    .border_2().border_color(if selected { theme::accent() } else { theme::border_strong() })
-                    .child(div().w(relative(0.3)).child(bars(line)))
-                    .child(div().flex_1().rounded(px(6.)).p(px(8.)).bg(main).child(bars(line))))
-                .child(tr(&format!("settings_theme_{key}")))
-                .when(!available, |el| el.child(div().text_xs().text_color(theme::faint()).child(next_version.clone())))
+            // O GPUI recorta em retângulo: quem pinta o canto arredonda o próprio canto, senão cobre a moldura.
+            div().size_full().p(px(8.)).flex().gap(px(6.)).bg(sidebar).rounded(px(8.))
+                .child(div().w(relative(0.3)).child(bars(line)))
+                .child(div().flex_1().rounded(px(6.)).p(px(8.)).bg(main).child(bars(line)))
+        };
+        let themes = [ThemeMode::Auto, ThemeMode::Light, ThemeMode::Dark, ThemeMode::Desktop];
+        let theme_cards = div().flex().gap(px(12.)).children(themes.map(|mode| {
+            let key = match mode { ThemeMode::Auto => "auto", ThemeMode::Light => "light", ThemeMode::Dark => "dark", ThemeMode::Desktop => "desktop" };
+            let selected = a.theme == mode;
+            let art = match mode {
+                // Automático é metade claro, metade escuro: é o sistema que decide.
+                ThemeMode::Auto => div().size_full().flex()
+                    .child(div().w(relative(0.5)).h_full().child(mini_window(theme::thumbnail(a.palette, false)).rounded_tr(px(0.)).rounded_br(px(0.))))
+                    .child(div().flex_1().h_full().child(mini_window(theme::thumbnail(a.palette, true)).rounded_tl(px(0.)).rounded_bl(px(0.)))),
+                ThemeMode::Light => div().size_full().child(mini_window(theme::thumbnail(a.palette, false))),
+                ThemeMode::Dark => div().size_full().child(mini_window(theme::thumbnail(a.palette, true))),
+                ThemeMode::Desktop => div().size_full().child(mini_window(theme::desktop_thumbnail())),
+            };
+            div().flex_1().flex().flex_col().items_center().gap_2()
+                .child(div().w_full().rounded(px(10.)).border_2().border_color(if selected { theme::accent() } else { theme::border_strong() })
+                    .child(Button::new(SharedString::from(format!("theme-{key}")))
+                        .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+                        .w_full().h(px(92.)).p(px(0.)).rounded(px(8.)).overflow_hidden()
+                        .accessibility_label(tr(&format!("settings_theme_{key}")))
+                        .child(art)
+                        .on_click(cx.listener(move |this, _, window, cx| this.set_theme(mode, window, cx)))))
+                .child(div().text_size(px(13.)).text_color(if selected { theme::text() } else { theme::muted() })
+                    .when(selected, |el| el.font_weight(FontWeight::MEDIUM)).child(tr(&format!("settings_theme_{key}"))))
         }));
+        // Desktop escolhido e sem paleta: diz por quê e com o que está desenhando.
+        let desktop_fallback = (a.theme == ThemeMode::Desktop && !theme::desktop_painting())
+            .then(|| tr("settings_desktop_fallback").replace("{reason}", &self.desktop_note.clone()
+                .unwrap_or_else(|| tr(if self.api.is_none() { "settings_desktop_offline" } else { "settings_desktop_loading" }))));
 
         let panel_card = |value: Panels, cx: &mut Context<Self>| {
             let selected = a.panels == value;
             let key = if value == Panels::Attached { "attached" } else { "floating" };
-            let side = |loose: bool| div().h_full().w(relative(if loose { 0.27 } else { 0.28 }))
-                .bg(if loose { rgba(0x1e1b24b8).into() } else { Hsla::from(rgb(0x1b181d)) })
-                .when(loose, |el| el.rounded(px(7.)).border_1().border_color(rgba(0xffffff1f)));
-            let mini = div().h(px(92.)).w_full().flex().justify_between().rounded(px(8.)).overflow_hidden()
-                .map(|el| if value == Panels::Floating { el.p(px(6.)).bg(rgb(0x241c3e)) } else { el.bg(rgb(0x0f0d10)) })
-                .child(side(value == Panels::Floating)).child(side(value == Panels::Floating));
+            let loose = value == Panels::Floating;
+            let (backdrop, side_bg, side_line) = theme::panels_thumbnail(loose);
+            let side = || div().h_full().w(relative(if loose { 0.27 } else { 0.28 })).bg(side_bg)
+                .map(|el| if loose { el.rounded(px(7.)).border_1().border_color(side_line) } else { el })
+                .when(!loose, |el| el.border_color(side_line));
+            let mini = div().h(px(92.)).w_full().flex().justify_between().rounded(px(8.)).overflow_hidden().bg(backdrop)
+                .when(loose, |el| el.p(px(6.)))
+                .child(side().when(!loose, |el| el.border_r_1().rounded_l(px(8.)))).child(side().when(!loose, |el| el.border_l_1().rounded_r(px(8.))));
             // A moldura mora fora do botão: o hover do botão redefine a cor da própria borda.
             div().flex_1().rounded(px(10.)).border_2().border_color(if selected { theme::accent() } else { theme::border_strong() })
                 .child(Button::new(SharedString::from(format!("panels-{key}")))
@@ -253,39 +340,82 @@ impl Hangar {
         };
         let panel_cards = div().flex().gap(px(12.)).child(panel_card(Panels::Attached, cx)).child(panel_card(Panels::Floating, cx));
 
-        let accents = div().flex().gap(px(6.)).children(theme::ACCENTS.iter().enumerate().map(|(n, &color)| {
-            div().rounded(px(8.)).border_2().border_color(swatch_ring(a.accent == n)).child(Button::new(SharedString::from(format!("accent-{n}")))
+        // Destaque e tinta são do modo na tela; no Desktop as cores vêm do papel de parede.
+        let dark = theme::is_dark();
+        let from_wallpaper = theme::desktop_painting();
+        let colors = *a.colors(dark);
+        let swatch = |id: String, label: String, color: u32, selected: bool, empty: bool, pick: Swatch, tint: bool, cx: &mut Context<Self>| {
+            // No Desktop a cor vem do papel de parede: amostra esmaecida e sem anel de escolha.
+            div().rounded(px(8.)).border_2().border_color(swatch_ring(selected && !from_wallpaper)).when(from_wallpaper, |el| el.opacity(0.5))
+                .child(Button::new(SharedString::from(id))
                 .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
-                .size(px(24.)).p(px(1.)).rounded(px(6.))
-                .accessibility_label(tr("settings_accent_n").replace("{n}", &(n + 1).to_string()))
-                .child(div().size(px(20.)).rounded(px(6.)).bg(rgb(color)))
-                .on_click(cx.listener(move |this, _, _, cx| { let mut next = appearance::get(); next.accent = n; this.apply_appearance(next, true, cx); })))
-        })).child(custom_swatch("accent-custom"));
-        let tints = div().flex().gap(px(6.)).children(theme::TINTS.iter().enumerate().map(|(n, &color)| {
-            div().rounded(px(8.)).border_2().border_color(swatch_ring(a.tint == n)).child(Button::new(SharedString::from(format!("tint-{n}")))
-                .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
-                .size(px(24.)).p(px(1.)).rounded(px(6.))
-                .accessibility_label(tr(if n == 0 { "settings_tint_none" } else { "settings_tint_n" }).replace("{n}", &n.to_string()))
-                .child(div().size(px(20.)).rounded(px(6.)).bg(rgb(color)).when(n == 0, |el| el.border_1().border_color(rgba(0xffffff33))))
-                .on_click(cx.listener(move |this, _, _, cx| { let mut next = appearance::get(); next.tint = n; this.apply_appearance(next, true, cx); })))
-        })).child(custom_swatch("tint-custom"));
+                .size(px(24.)).p(px(1.)).rounded(px(6.)).accessibility_label(label).disabled(from_wallpaper)
+                .child(div().size(px(20.)).rounded(px(6.)).bg(rgb(color)).when(empty, |el| el.border_1().border_color(theme::border_strong())))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let mut next = appearance::get();
+                    let mode = next.colors_mut(theme::is_dark());
+                    if tint { mode.tint = pick } else { mode.accent = pick }
+                    this.apply_appearance(next, true, cx);
+                })))
+        };
+        // O kit não desliga o seletor: no Desktop ele sai e fica só o ícone, esmaecido como as amostras.
+        let picker = |state: &Entity<ColorPickerState>, selected: bool| {
+            div().rounded(px(8.)).border_2().border_color(swatch_ring(selected && !from_wallpaper)).p(px(1.))
+                .map(|el| if from_wallpaper {
+                    el.opacity(0.5).child(div().size(px(24.)).flex().items_center().justify_center()
+                        .child(chrome::small_icon(IconName::Palette, 16., theme::muted())))
+                } else {
+                    // Com cor livre escolhida o gatilho mostra a própria cor; sem ela, o ícone de paleta.
+                    el.child(ColorPicker::new(state).small().accessibility_label(tr("settings_custom_color"))
+                        .when(!selected, |picker| picker.icon(IconName::Palette)))
+                })
+        };
+        let accents = div().flex().items_center().gap(px(6.))
+            .children(theme::accent_swatches(dark).into_iter().enumerate().map(|(n, color)| swatch(format!("accent-{n}"),
+                tr("settings_accent_n").replace("{n}", &(n + 1).to_string()), color, colors.accent == Swatch::Preset(n), false, Swatch::Preset(n), false, cx)))
+            .child(picker(&self.settings_ui.accent_picker,matches!(colors.accent, Swatch::Custom(_))));
+        let tints = div().flex().items_center().gap(px(6.))
+            .children(theme::tint_swatches(dark).into_iter().enumerate().map(|(n, color)| swatch(format!("tint-{n}"),
+                tr(if n == 0 { "settings_tint_none" } else { "settings_tint_n" }).replace("{n}", &n.to_string()), color,
+                colors.tint == Swatch::Preset(n), n == 0, Swatch::Preset(n), true, cx)))
+            .child(picker(&self.settings_ui.tint_picker,matches!(colors.tint, Swatch::Custom(_))));
+        let no_tint = colors.tint == Swatch::Preset(0);
+        // "Vale para o modo escuro. Copiar do claro": copia destaque, tinta e força do outro modo.
+        let mode_note = div().flex().items_center().gap_1()
+            .child(tr(if dark { "settings_colors_for_dark" } else { "settings_colors_for_light" }))
+            .child(Button::new("copy-other-mode").ghost().xsmall().text_color(theme::text())
+                .label(tr(if dark { "settings_copy_from_light" } else { "settings_copy_from_dark" }))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let mut next = appearance::get();
+                    let dark = theme::is_dark();
+                    *next.colors_mut(dark) = *next.colors(!dark);
+                    this.apply_appearance(next, true, cx);
+                    this.sync_sliders(window, cx);
+                })));
 
+        let palette = segmented("palette", &[tr("settings_palette_neutral"), tr("settings_palette_classic")],
+            if a.palette == Palette::Neutral { 0 } else { 1 }, !from_wallpaper,
+            |this: &mut Hangar, index, cx| { let mut next = appearance::get(); next.palette = if index == 0 { Palette::Neutral } else { Palette::Classic }; this.apply_appearance(next, true, cx); }, cx);
+        let text_color = segmented("text-color", &[tr("settings_text_color_desktop"), tr("settings_text_color_app")],
+            if a.desktop_text == DesktopText::App { 1 } else { 0 }, a.theme == ThemeMode::Desktop,
+            |this: &mut Hangar, index, cx| { let mut next = appearance::get(); next.desktop_text = if index == 1 { DesktopText::App } else { DesktopText::Desktop }; this.apply_appearance(next, true, cx); }, cx);
+        let wallpaper_note = || tr("settings_palette_desc");
         let color_box = settings_box()
-            .child(self.row(IconName::Palette, tr("settings_palette"), Some(next_version.clone()), false,
-                segmented("palette", &[tr("settings_palette_neutral"), tr("settings_palette_classic")], 0, false, |_, _, _| {}, cx)))
-            .child(self.row(IconName::Droplet, tr("settings_accent"), Some(tr("settings_accent_desc")), true, accents.into_any_element()))
-            .child(self.row(IconName::Droplet, tr("settings_tint"), Some(tr("settings_tint_desc")), true, tints.into_any_element()))
+            .child(self.row(IconName::Palette, tr("settings_palette"), Some(wallpaper_note()), !from_wallpaper, palette))
+            .child(self.row_with(IconName::Droplet, tr("settings_accent"),
+                if from_wallpaper { div().child(wallpaper_note()) } else { mode_note }, !from_wallpaper, accents.into_any_element()))
+            .child(self.row(IconName::Droplet, tr("settings_tint"), Some(if from_wallpaper { wallpaper_note() } else { tr("settings_tint_desc") }),
+                !from_wallpaper, tints.into_any_element()))
             // Sem tinta a força não muda nada; a linha fica visível e desligada.
-            .child(self.slider_row(IconName::Droplet, tr("settings_tint_strength"), (a.tint == 0).then(|| tr("settings_tint_strength_off")),
-                Knob::TintStrength, a.tint != 0, &a))
-            .child(self.row(IconName::Type, tr("settings_text_color"), Some(next_version.clone()), false,
-                segmented("text-color", &[tr("settings_text_color_desktop"), tr("settings_text_color_app")], 0, false, |_, _, _| {}, cx)));
+            .child(self.slider_row(IconName::Droplet, tr("settings_tint_strength"), no_tint.then(|| tr("settings_tint_strength_off")),
+                Knob::TintStrength, !no_tint && !from_wallpaper, &a, cx))
+            .child(self.row(IconName::Type, tr("settings_text_color"), Some(tr("settings_text_color_desc")), a.theme == ThemeMode::Desktop, text_color));
 
         let background_box = settings_box()
             .child(self.row(IconName::Image, tr("settings_background"), Some(tr("settings_background_desc")), true,
                 segmented_partial("background", &[tr("settings_bg_plain"), tr("settings_bg_texture"), tr("settings_bg_light"), tr("settings_bg_image"), tr("settings_bg_desktop")], 0, 1, cx)))
-            .child(self.slider_row(IconName::Layers, tr("settings_transparency"), Some(tr("settings_transparency_desc")), Knob::Transparency, floating, &a))
-            .child(self.slider_row(IconName::Layers, tr("settings_solidity"), Some(tr("settings_only_floating")), Knob::Solidity, floating, &a))
+            .child(self.slider_row(IconName::Layers, tr("settings_transparency"), Some(tr("settings_transparency_desc")), Knob::Transparency, floating, &a, cx))
+            .child(self.slider_row(IconName::Layers, tr("settings_solidity"), Some(tr("settings_only_floating")), Knob::Solidity, floating, &a, cx))
             .child(self.row(IconName::Layers, tr("settings_blur"), Some(tr("settings_blur_desc")), true, div().into_any_element()))
             .child(self.row(IconName::Monitor, tr("settings_wallpaper"), Some(next_version.clone()), false,
                 segmented("wallpaper", &[tr("settings_wallpaper_window"), tr("settings_wallpaper_glass")], 0, false, |_, _, _| {}, cx)));
@@ -300,9 +430,9 @@ impl Hangar {
             |this: &mut Hangar, index, cx| { let mut next = appearance::get(); next.font = if index == 1 { Font::Mono } else { Font::System }; this.apply_appearance(next, true, cx); }, cx);
         let text_box = settings_box()
             .child(self.row(IconName::Type, tr("settings_font"), None, true, font))
-            .child(self.slider_row(IconName::Type, tr("settings_text_size"), None, Knob::Size, true, &a))
-            .child(self.slider_row(IconName::SlidersHorizontal, tr("settings_line_height"), None, Knob::Line, true, &a))
-            .child(self.slider_row(IconName::PanelLeft, tr("settings_column"), None, Knob::Column, true, &a));
+            .child(self.slider_row(IconName::Type, tr("settings_text_size"), None, Knob::Size, true, &a, cx))
+            .child(self.slider_row(IconName::SlidersHorizontal, tr("settings_line_height"), None, Knob::Line, true, &a, cx))
+            .child(self.slider_row(IconName::PanelLeft, tr("settings_column"), None, Knob::Column, true, &a, cx));
 
         let conversation_box = settings_box()
             .child(self.row(IconName::Keyboard, tr("settings_tool_calls"), Some(next_version.clone()), false,
@@ -334,6 +464,7 @@ impl Hangar {
             .when_some(self.appearance_note.clone(), |el, note| el.child(div().mt_3().text_sm().text_color(theme::warning()).child(note)))
             .child(preview)
             .child(heading(tr("settings_theme"))).child(theme_cards)
+            .when_some(desktop_fallback, |el, note| el.child(div().mt_3().text_sm().text_color(theme::warning()).child(note)))
             .child(heading(tr("settings_panels"))).child(panel_cards)
             .child(heading(tr("settings_color"))).child(color_box)
             .child(heading(tr("settings_background_group"))).child(background_box)
@@ -347,21 +478,29 @@ impl Hangar {
 
     /// Linha de configuração: ícone numa caixa, título e descrição, controle à direita.
     fn row(&self, icon: IconName, title: String, description: Option<String>, enabled: bool, control: AnyElement) -> Div {
+        self.row_with(icon, title, description.map_or_else(div, |d| div().child(d)), enabled, control)
+    }
+
+    /// Linha cuja descrição carrega um controle (o "Copiar do claro" do Destaque).
+    fn row_with(&self, icon: IconName, title: String, description: Div, enabled: bool, control: AnyElement) -> Div {
         // Divisória em cima de toda linha; a da primeira sobe 1px e some sob a borda da caixa.
         div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().items_center().gap(px(14.)).px_4().py(px(14.))
             .child(div().size(px(36.)).flex_shrink_0().rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::inset())
                 .flex().items_center().justify_center().child(chrome::small_icon(icon, 16., theme::muted())))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
                 .child(div().font_weight(FontWeight::MEDIUM).text_color(if enabled { theme::text() } else { theme::muted() }).child(title))
-                .when_some(description, |el, d| el.child(div().text_size(px(13.)).text_color(theme::muted()).child(d))))
+                .child(description.text_size(px(13.)).text_color(theme::muted())))
             // Desligado, quem esmaece é o próprio controle; esmaecer a linha também somava as duas e sumia o texto.
             .child(div().flex_shrink_0().child(control))
     }
 
-    fn slider_row(&self, icon: IconName, title: String, description: Option<String>, knob: Knob, enabled: bool, a: &Appearance) -> Div {
+    fn slider_row(&self, icon: IconName, title: String, description: Option<String>, knob: Knob, enabled: bool, a: &Appearance,
+        cx: &mut Context<Self>) -> Div {
         let state = self.settings_ui.slider(knob);
-        let control = div().w(px(230.)).flex().items_center().gap(px(10.))
+        let control = div().w(px(230.)).flex().items_center()
+            .child(self.slider_edge(knob, false, enabled, cx))
             .child(Slider::new(state).flex_1().bg(theme::accent()).text_color(theme::text()).disabled(!enabled))
+            .child(self.slider_edge(knob, true, enabled, cx))
             .child(div().w(px(28.)).text_right().text_size(px(12.5)).text_color(theme::muted()).child(knob.read(a).to_string()));
         self.row(icon, title, description, enabled, control.into_any_element())
     }
@@ -369,14 +508,6 @@ impl Hangar {
 
 fn settings_box() -> Div {
     div().flex().flex_col().rounded(px(14.)).border_1().border_color(theme::border()).bg(theme::boxed()).overflow_hidden()
-}
-
-/// Amostra de cor personalizada do web; o seletor de cor chega depois, então fica desligada e diz isso.
-fn custom_swatch(id: &'static str) -> AnyElement {
-    div().id(id).rounded(px(8.)).border_2().border_color(transparent_black()).p(px(1.)).opacity(0.6)
-        .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("settings_custom_color_soon")).build(window, cx))
-        .child(div().size(px(20.)).rounded(px(6.)).bg(linear_gradient(135., linear_color_stop(rgb(0xe070b0), 0.), linear_color_stop(rgb(0x3cc4d6), 1.))))
-        .into_any_element()
 }
 
 /// Controle inerte de uma opção que ainda não chegou: mostra o valor padrão do web, sem aceitar arrasto.
@@ -404,13 +535,15 @@ fn segments(id: &'static str, labels: &[String], selected: usize, available: usi
     let count = labels.len();
     div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden()
         .children(labels.iter().enumerate().map(|(n, label)| {
-            let on = n == selected;
+            // Opção que ainda não chegou não mostra escolha nenhuma: o padrão do web pareceria o estado do app.
+            let on = n == selected && available > 0;
             let enabled = n < available;
             let pick = pick.clone();
             Button::new(SharedString::from(format!("{id}-{n}")))
                 .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
                     .foreground(if on { theme::accent_text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
-                .h(px(28.)).px(px(11.)).rounded(px(0.)).text_size(px(13.))
+                // `small` dá ao rótulo o tamanho dos outros controles; o kit ignora `text_size` no rótulo.
+                .small().h(px(28.)).px(px(11.)).rounded(px(0.))
                 // Cor e fundo no próprio botão: vencem o estilo de desligado do kit, que apagava o texto a 50%.
                 .text_color(if on { theme::accent_text() } else if enabled { theme::muted() } else { theme::faint() })
                 .when(on, |el| el.bg(theme::accent_dim()))

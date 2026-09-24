@@ -6,7 +6,8 @@ use gpui_kit::assets::IconName;
 use tokio::{runtime::Runtime, task::JoinHandle};
 use crate::{api::{self, Api, Failure, Source, dto::*, sse::Update}, chat::{Chat, LiveTool}, composer,
     conversation::{self, Item, Tool}, delivery::{DeliveryTracker, SendOutcome, SessionKey}, i18n::tr, theme,
-    interaction::{self, Action, Ask, InFlight, Pick}, media::{self, MediaCache, MediaState}};
+    interaction::{self, Action, Ask, InFlight, Pick}, media::{self, MediaCache, MediaState}, appearance};
+use gpui_kit::component::notification::Notification;
 use serde_json::{Value, json};
 
 mod chrome;
@@ -58,6 +59,8 @@ enum Payload {
     Saved(SessionKey, bool, Result<PathBuf, String>),
     ConnectionNotSaved(String),
     AppearanceSaved(Result<(), String>),
+    // Paleta do papel de parede pedida à conexão atual (`GET /api/desktop/palette`).
+    DesktopPalette(Result<Value, Failure>),
     // Resposta amarrada à sessão e ao pedido capturados no gesto, não ao que está na tela na volta.
     Reply(SessionKey, Reply, Result<Value, Failure>),
     Config(Result<Value, Failure>),
@@ -190,6 +193,8 @@ pub struct Hangar {
     settings: Option<settings::Page>,
     settings_ui: settings::SettingsUi,
     appearance_note: Option<String>,
+    // Por que o tema Desktop não está pintando com o papel de parede; `None` quando pinta ou não foi escolhido.
+    desktop_note: Option<String>,
 }
 
 impl Drop for Hangar {
@@ -200,6 +205,7 @@ impl Drop for Hangar {
 
 impl Hangar {
     pub fn new(runtime: Arc<Runtime>, appearance_error: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::watch_system(window, cx);
         let saved = load_connection();
         let (saved_address, saved_token) = saved.clone().unwrap_or_else(|| ("http://127.0.0.1:8765".into(), String::new()));
         let address = cx.new(|cx| InputState::new(window, cx).default_value(saved_address).placeholder(tr("server")));
@@ -265,7 +271,64 @@ impl Hangar {
             side: side::Side::default(), controls: controls::Controls::default(),
             settings: None, settings_ui,
             appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
+            desktop_note: None,
         }
+    }
+
+    /// Automático acompanha a preferência do sistema; o Desktop relê a paleta quando a janela volta ao foco.
+    fn watch_system(window: &mut Window, cx: &mut Context<Self>) {
+        theme::set_system_dark(matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark));
+        theme::sync_kit(Some(window), cx);
+        cx.observe_window_appearance(window, |this, window, cx| {
+            theme::set_system_dark(matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark));
+            theme::sync_kit(Some(window), cx);
+            this.sync_sliders(window, cx);
+            cx.notify();
+        }).detach();
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() { this.refresh_desktop_palette(cx); }
+        }).detach();
+    }
+
+    /// Pede a paleta do papel de parede quando o tema é Desktop. Sem conexão, diz isso e desenha como Automático.
+    pub(super) fn refresh_desktop_palette(&mut self, cx: &mut Context<Self>) {
+        if appearance::get().theme != appearance::ThemeMode::Desktop { self.desktop_note = None; return; }
+        let Some(api) = self.api.clone() else {
+            self.desktop_note = Some(tr("settings_desktop_offline"));
+            cx.notify();
+            return;
+        };
+        let (tx, connection) = (self.tx.clone(), self.connection);
+        self.runtime.spawn(async move {
+            let result = api.desktop_palette().await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::DesktopPalette(result) }).await;
+        });
+    }
+
+    fn receive_desktop_palette(&mut self, result: Result<Value, Failure>, window: &mut Window, cx: &mut Context<Self>) {
+        let parsed = result.map_err(|error| match error.status {
+            Some(403) => tr("settings_desktop_remote"),
+            Some(404) => tr("settings_desktop_missing"),
+            _ => Self::failure(&error),
+        }).and_then(|value| {
+            let dark = value.get("escuro").and_then(Value::as_bool).unwrap_or(true);
+            let colors = value.get("cores");
+            theme::from_desktop(dark, |name| colors?.get(name)?.as_str()?.strip_prefix('#')
+                .and_then(|h| u32::from_str_radix(h, 16).ok()))
+                .ok_or_else(|| tr("invalid_response"))
+        });
+        // Tema trocado enquanto a resposta vinha: ela não vale mais.
+        if appearance::get().theme != appearance::ThemeMode::Desktop { return; }
+        let note = parsed.as_ref().err().cloned();
+        // Aviso fora das configurações só quando o motivo muda: a releitura a cada foco não repete a notificação.
+        if let Some(reason) = note.as_ref().filter(|reason| self.desktop_note.as_ref() != Some(*reason)) {
+            window.push_notification(Notification::warning(tr("settings_desktop_failed").replace("{reason}", reason)), cx);
+        }
+        self.desktop_note = note;
+        theme::set_desktop(parsed.ok());
+        theme::sync_kit(Some(window), cx);
+        self.sync_sliders(window, cx);
+        cx.notify();
     }
 
     /// Nome curto do servidor conectado (endereço sem o esquema), para a lista e as configurações.
@@ -357,6 +420,7 @@ impl Hangar {
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Config(result) }).await;
             });
         }
+        self.refresh_desktop_palette(cx);
         cx.notify();
     }
 
@@ -588,6 +652,7 @@ impl Hangar {
                 if rows > 0 { self.follow_content_changed(cx); self.list_state.remeasure_items(0..rows); }
             }
             Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
+            Payload::DesktopPalette(result) => { self.receive_desktop_palette(result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) => unreachable!(),
@@ -2765,7 +2830,8 @@ impl Render for Hangar {
                 Some(page) => el.child(self.render_settings(page, cx)),
                 None => el.child(sidebar).child(content).when_some(side, |el, side| el.child(side)),
             })
-            .when(self.connection_dialog, |el| el.child(div().absolute().inset_0().bg(rgba(0x100e11dd)).flex().items_center().justify_center()
+            .when(self.connection_dialog, |el| el.child(div().absolute().inset_0().bg(theme::scrim()).flex().items_center().justify_center()
                 .child(dialog.focus_trap("connection-dialog", &self.connection_focus))))
+            .children(Root::render_notification_layer(window, cx))
     }
 }

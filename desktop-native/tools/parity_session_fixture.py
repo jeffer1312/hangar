@@ -6,6 +6,7 @@ GET /control/mode?next=<ok|409|503|drop|slow> changes how the NEXT mutation answ
 takes next=503|409|empty).
 GET /control/set?name=<s>&field=<state field>&value=<json> changes a live state field.
 GET /control/reset restores the initial sessions.
+GET /control/palette?status=<200|403|404>&escuro=<true|false> sets what GET /api/desktop/palette answers.
 """
 
 import json
@@ -21,6 +22,14 @@ LOCK = threading.Lock()
 LOG = []
 MODE = {"next": "ok", "only": None}
 VERSION = {"n": 0}
+# Paleta Material You sintética, no formato de backend/app/desktop_palette.py.
+PALETTE = {"status": 200, "escuro": True}
+PALETTE_DARK = {"background": "#15121b", "surface": "#15121b", "surfaceContainerLow": "#1d1a24", "surfaceContainer": "#221e28",
+                "surfaceContainerHigh": "#2c2833", "onSurface": "#e8e0ec", "onSurfaceVariant": "#cbc3d1", "outline": "#958e9b",
+                "outlineVariant": "#4a4550", "primary": "#d4bbff", "onPrimary": "#3b255f"}
+PALETTE_LIGHT = {"background": "#fef7ff", "surface": "#fef7ff", "surfaceContainerLow": "#f8f1fa", "surfaceContainer": "#f2ebf4",
+                 "surfaceContainerHigh": "#ece6ee", "onSurface": "#1e1a22", "onSurfaceVariant": "#4a4550", "outline": "#7b7581",
+                 "outlineVariant": "#cbc3d1", "primary": "#6b4ea0", "onPrimary": "#ffffff"}
 CLAUDE_CYCLE = ["manual", "acceptEdits", "plan", "auto"]
 KIMI_MODELS = [("k3", "apikey", "K3", 1000000, ["low", "high"]), ("k3-256k", "apikey", "K3-256k", 262144, ["high"]),
                ("kimi-for-coding", "kimi-code", "K2.7 Coding", 262144, ["high"]),
@@ -164,6 +173,9 @@ class Handler(BaseHTTPRequestHandler):
                 if field in ("state", "question", "options", "loop_status", "limited", "limit_reset", "label"):
                     s["info"][field] = value
                 bump()
+            elif path == "/control/palette":
+                PALETTE["status"] = int(query.get("status", ["200"])[0])
+                PALETTE["escuro"] = query.get("escuro", ["true"])[0] != "false"
             elif path == "/control/reset":
                 SESSIONS.clear()
                 SESSIONS.update(build())
@@ -182,6 +194,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             record("GET", self.path, None)
             self.send_json({"campos": {"shortcuts": {"valor": SHORTCUTS}}})
+            return
+        if path == "/api/desktop/palette":
+            record("GET", self.path, None)
+            with LOCK:
+                status, dark = PALETTE["status"], PALETTE["escuro"]
+            if status != 200:
+                self.send_json({"detail": {"code": "erro_sem_paleta", "msg": "sem paleta"}}, status)
+            else:
+                self.send_json({"escuro": dark, "cores": PALETTE_DARK if dark else PALETTE_LIGHT})
             return
         parts = [unquote(p) for p in path.strip("/").split("/")]
         name = parts[2] if len(parts) > 2 else None

@@ -62,7 +62,7 @@ fn main() {
         if let Err(error) = cx.text_system().add_fonts(FONTS.iter().map(|bytes| Cow::Borrowed(*bytes)).collect()) {
             eprintln!("fonte embutida recusada: {error}");
         }
-        theme::sync_kit(cx);
+        theme::sync_kit(None, cx);
         cx.open_window(WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, window_size(), cx))),
             app_id: Some("com.hangar.native".into()),

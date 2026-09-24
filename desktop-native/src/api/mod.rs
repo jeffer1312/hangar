@@ -197,6 +197,15 @@ impl Api {
         Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
+    /// Paleta do papel de parede desta máquina. O backend só responde a pedidos locais: ligado a outro
+    /// servidor volta 403, e 404 quer dizer que o desktop não gera paleta.
+    pub async fn desktop_palette(&self) -> Result<Value, Failure> {
+        let mut url = self.base.clone();
+        url.path_segments_mut().expect("validated HTTP base").pop_if_empty().extend(["api", "desktop", "palette"]);
+        let r = self.client.get(url).timeout(Duration::from_secs(10)).send().await.map_err(|_| Failure::transport(false))?;
+        Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+    }
+
     async fn stream(&self, name: Option<&str>, cursor: &str) -> Result<Response, Failure> {
         let mut req = self.client.get(self.endpoint(name, Some("events"))).header(header::ACCEPT, "text/event-stream");
         if !cursor.is_empty() { req = req.header("Last-Event-ID", cursor); }
