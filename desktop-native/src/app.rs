@@ -18,7 +18,7 @@ mod rows;
 mod settings;
 mod side;
 
-actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply]);
+actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch]);
 
 const LIVE_THINKING: &str = "__thinking__";
 const LIVE_TOOL: &str = "__tool__";
@@ -206,6 +206,10 @@ pub struct Hangar {
     // Página de configurações aberta por cima da janela inteira; `None` é a janela da conversa.
     settings: Option<settings::Page>,
     settings_ui: settings::SettingsUi,
+    // Abas no topo: foco de cada aba pelo nome da sessão (setas andam entre elas) e a rolagem da faixa,
+    // que traz a aba ativa para a vista quando a seleção muda.
+    tab_focus: HashMap<String, FocusHandle>,
+    tabs_scroll: ScrollHandle,
     appearance_note: Option<String>,
     // Por que o tema Desktop não está pintando com o papel de parede; `None` quando pinta ou não foi escolhido.
     desktop_note: Option<String>,
@@ -249,7 +253,7 @@ impl Hangar {
         });
         // Ctrl+L leva ao campo de mensagem; a raiz da janela trata a ação e segura o foco quando nada mais o tem.
         cx.bind_keys([KeyBinding::new("ctrl-l", FocusComposer, None), KeyBinding::new("ctrl-,", OpenSettings, None),
-            KeyBinding::new("ctrl-shift-c", CopyLastReply, None)]);
+            KeyBinding::new("ctrl-shift-c", CopyLastReply, None), KeyBinding::new("ctrl-f", FocusSettingsSearch, None)]);
         let settings_ui = settings::SettingsUi::new(window, cx);
         let root_focus = cx.focus_handle();
         let command_search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("commands_search")));
@@ -294,7 +298,7 @@ impl Hangar {
             suggest_pick: 0, suggest_dismissed: None, command_panel: false, command_search, confirm: None,
             terminal_suggestion: String::new(), recent: None, media: MediaCache::new(), stats: None,
             side: side::Side::default(), controls: controls::Controls::default(),
-            settings: None, settings_ui,
+            settings: None, settings_ui, tab_focus: HashMap::new(), tabs_scroll: ScrollHandle::new(),
             appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
@@ -461,6 +465,8 @@ impl Hangar {
 
     fn select(&mut self, session: SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(old) = self.selected_key() { self.drafts.insert(old, self.composer.read(cx).value().to_string()); }
+        // Com as abas no topo, a aba da sessão aberta entra na vista da faixa.
+        if let Some(ix) = self.sessions.iter().position(|s| s.name == session.name) { self.tabs_scroll.scroll_to_item(ix); }
         self.selection += 1;
         self.revision += 1;
         if let Some(t) = self.session_task.take() { t.abort(); }
@@ -742,7 +748,25 @@ impl Hangar {
 
     fn replace_sessions(&mut self, sessions: Vec<SessionInfo>, window: &mut Window, cx: &mut Context<Self>) {
         let old = self.selected.clone();
+        // Aba com o foco, pela posição na lista antiga: se a sessão dela sumir, o foco não pode ficar numa alça morta.
+        let focused_tab = self.sessions.iter().position(|s| self.tab_focus.get(&s.name).is_some_and(|f| f.is_focused(window)))
+            .map(|ix| (ix, self.sessions[ix].name.clone()));
         self.sessions = sessions;
+        // Cada aba guarda o próprio foco pela vida da sessão; aba de sessão que sumiu leva o dela junto.
+        self.tab_focus.retain(|name, _| self.sessions.iter().any(|s| &s.name == name));
+        for session in &self.sessions {
+            if !self.tab_focus.contains_key(&session.name) { self.tab_focus.insert(session.name.clone(), cx.focus_handle().tab_stop(true)); }
+        }
+        // O foco passa para a aba que ficou naquela posição; sem abas, volta à raiz para os atalhos seguirem valendo.
+        if let Some((ix, _)) = focused_tab.filter(|(_, name)| !self.tab_focus.contains_key(name)) {
+            match self.sessions.len().checked_sub(1).map(|last| ix.min(last)) {
+                Some(next) => {
+                    if let Some(focus) = self.tab_focus.get(&self.sessions[next].name) { focus.focus(window, cx); }
+                    self.tabs_scroll.scroll_to_item(next);
+                }
+                None => self.root_focus.focus(window, cx),
+            }
+        }
         if let Some(old) = old {
             match self.sessions.iter().find(|s| s.name == old.name).cloned() {
                 Some(new) if new.jsonl != old.jsonl || new.tracked != old.tracked => self.select(new, window, cx),
@@ -2544,6 +2568,87 @@ impl Hangar {
             .into_any_element()
     }
 
+    /// Abas no topo (como o web): todas as sessões numa faixa, e o servidor, a conexão e a engrenagem que moravam
+    /// no rodapé da barra lateral. ←/→ andam o foco entre as abas; Enter ou Espaço abrem a sessão.
+    fn render_tabs(&mut self, selected_name: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let floating = theme::is_floating();
+        let host = self.server_label(cx);
+        let tabs = self.sessions.iter().filter_map(|session| {
+            let focus = self.tab_focus.get(&session.name)?.clone();
+            let on = selected_name == Some(session.name.as_str());
+            let state = if session.limited == Some(true) { "limited" } else { session.state.as_str() };
+            // Nome, estado e perguntas por extenso: o ponto só diz o estado pela cor.
+            let mut label = format!("{} · {}", session.name, tr(&format!("chip_{state}")));
+            if session.pending_questions > 0 { label.push_str(&format!(" · ? {}", session.pending_questions)); }
+            // Trabalhando gira (o kit para o giro com movimento reduzido); os outros estados são um ponto na cor dele.
+            let mark = if session.state == "working" {
+                gpui_kit::component::spinner::Spinner::new().color(theme::accent()).with_size(px(12.)).into_any_element()
+            } else {
+                div().size(px(8.)).mx(px(2.)).flex_shrink_0().rounded_full().bg(if state == "limited" { theme::limited() } else { theme::status(state) }).into_any_element()
+            };
+            let pick = session.clone();
+            let open = session.clone();
+            Some(div().id(SharedString::from(format!("tab-{}", session.name))).track_focus(&focus).flex_shrink_0().max_w(px(200.)).h(px(32.)).px(px(8.))
+                .flex().items_center().gap(px(6.)).rounded(px(6.)).border_1().cursor_pointer()
+                .map(|el| if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
+                    else { el.border_color(transparent_black()).text_color(theme::muted()).hover(|el| el.bg(theme::hover())) })
+                .when(focus.is_focused(window), |el| el.focus_ring_style(window, cx))
+                .role(Role::Tab).aria_selected(on).aria_label(label.clone())
+                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx))
+                .child(mark)
+                .child(chrome::provider_glyph(&session.provider, 14.))
+                .child(div().min_w_0().truncate().text_size(px(13.)).child(session.name.clone()))
+                .when(session.pending_questions > 0, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::warning())
+                    .child(format!("? {}", session.pending_questions))))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.select(pick.clone(), window, cx);
+                    if !this.connection_dialog && pick.readable() { this.composer.update(cx, |input, cx| input.focus(window, cx)); }
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.select(open.clone(), window, cx);
+                        cx.stop_propagation();
+                    }
+                })))
+        }).collect::<Vec<_>>();
+        // A folga lateral deixa o anel de foco da primeira e da última aba fora do recorte da rolagem.
+        let strip = div().id("tabs-strip").flex_1().min_w_0().h_full().px(px(3.)).flex().items_center().gap(px(2.)).overflow_x_scroll().track_scroll(&self.tabs_scroll)
+            .role(Role::TabList).aria_label(tr("sessions"))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let step = match event.keystroke.key.as_str() { "left" => -1, "right" => 1, _ => return };
+                let names: Vec<&String> = this.sessions.iter().map(|s| &s.name).collect();
+                let Some(current) = names.iter().position(|name| this.tab_focus.get(*name).is_some_and(|f| f.is_focused(window))) else { return };
+                let next = (current as isize + step).rem_euclid(names.len() as isize) as usize;
+                if let Some(focus) = this.tab_focus.get(names[next]) { focus.focus(window, cx); }
+                this.tabs_scroll.scroll_to_item(next);
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .children(tabs)
+            .when(self.sessions.is_empty() && self.list_error.is_none(), |el| el.child(div().px_2().text_xs().text_color(theme::faint())
+                .child(tr(if self.list_online { "empty_sessions" } else { "connecting" }))));
+        div().h(px(44.)).w_full().flex_shrink_0().px(px(8.)).flex().items_center().gap(px(6.))
+            .map(|el| if floating { el.rounded(px(18.)).border_1().border_color(theme::border()).bg(theme::chrome()).shadow(theme::panel_shadow()) }
+                else { el.bg(theme::chrome()).border_b_1().border_color(theme::border()) })
+            .child(div().px(px(6.)).child(chrome::hangar_mark(16., theme::accent())))
+            .child(strip)
+            .when_some(self.list_error.clone(), |el, text| el.child(div().flex_shrink_0().max_w(px(260.)).flex().items_center().gap_1()
+                .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
+                .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
+            .child(Button::new("connection").ghost().flex_shrink_0().max_w(px(220.)).h(px(32.)).px(px(8.))
+                .tooltip(tr("connection_tip")).accessibility_label(tr("connection"))
+                .child(div().min_w_0().flex().items_center().gap_2()
+                    .child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(if self.list_online { theme::success() } else { theme::warning() }))
+                    .child(div().min_w_0().truncate().text_size(px(13.)).text_color(theme::muted()).child(host)))
+                .on_click(cx.listener(|this, _, window, cx| this.open_connection(window, cx))))
+            .child(Button::new("open-settings").custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
+                    .hover(theme::hover()).active(theme::hover()))
+                .icon(chrome::small_icon(IconName::Settings, 16., theme::muted())).size(px(28.)).rounded(px(6.))
+                .accessibility_label(tr("settings")).tooltip_with_action(tr("settings_open"), &OpenSettings, None)
+                .on_click(cx.listener(|this, _, window, cx| this.open_settings(settings::Page::Appearance, window, cx))))
+            .into_any_element()
+    }
+
     /// Linha de 3 níveis do mock: pasta @ servidor e tempo; selo, nome e estado; pergunta pendente ou branch com o diff.
     fn render_session_row(&self, session: SessionInfo, selected: bool, host: &str, cx: &mut Context<Self>) -> AnyElement {
         let state = session.state.as_str();
@@ -2784,7 +2889,11 @@ impl Render for Hangar {
         });
         let stop_note = selected_key.as_ref().and_then(|key| self.stop_feedback.get(key)).cloned();
         let floating = theme::is_floating();
-        let sidebar = self.render_sidebar(selected_name.as_deref(), cx);
+        // Página de Configurações ocupa a janela; a caixa ao vivo deixa a janela da conversa por baixo.
+        let page = self.settings.filter(|_| !self.settings_ui.live);
+        let tabs = appearance::get().navigation == appearance::Navigation::Tabs;
+        let nav = if page.is_some() { None } else if tabs { Some(self.render_tabs(selected_name.as_deref(), window, cx)) }
+            else { Some(self.render_sidebar(selected_name.as_deref(), cx)) };
 
         // Sessão sem conversa não tem stream próprio: o estado é o da lista.
         let header_state = if self.chat_online && self.chat.state.state.is_empty() { "loading".to_owned() }
@@ -2889,25 +2998,28 @@ impl Render for Hangar {
                 }))))
                 .child(Button::new("connect").primary().label(tr("connect")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx)))));
 
-        let settings_page = self.settings;
+        let live = self.settings_live().then(|| self.render_live(window, cx));
         div().id("hangar-root").track_focus(&self.root_focus).relative().size_full().flex().bg(theme::window_fill()).text_color(theme::text()).text_base()
             .children(self.render_backdrop(window))
             .font_family(theme::SANS)
-            .when(floating && settings_page.is_none(), |el| el.p(px(10.)).gap(px(10.)))
+            .when(floating && page.is_none(), |el| el.p(px(10.)).gap(px(10.)))
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| {
-                if !this.connection_dialog && this.settings.is_none() && this.selected.as_ref().is_some_and(|s| s.readable()) {
+                let page_open = this.settings.is_some() && !this.settings_live();
+                if !this.connection_dialog && !page_open && this.selected.as_ref().is_some_and(|s| s.readable()) {
                     this.composer.update(cx, |input, cx| input.focus(window, cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 if !this.connection_dialog { this.open_settings(settings::Page::Appearance, window, cx); }
             }))
+            .on_action(cx.listener(|this, _: &FocusSettingsSearch, window, cx| this.focus_search(window, cx)))
             .on_action(cx.listener(|this, _: &CopyLastReply, _, cx| {
-                if let Some(text) = this.last_reply().filter(|_| this.settings.is_none()) { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
+                let page_open = this.settings.is_some() && !this.settings_live();
+                if let Some(text) = this.last_reply().filter(|_| !page_open) { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
             }))
             // Esc fora do campo fecha o painel aberto sobre o compositor (o clique no botão tira o foco do campo).
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key != "escape" || this.connection_dialog { return; }
+                if event.keystroke.key != "escape" || this.connection_dialog || this.search_focused(window, cx) { return; }
                 if this.settings.is_some() {
                     this.close_settings(window, cx);
                     cx.stop_propagation();
@@ -2931,10 +3043,20 @@ impl Render for Hangar {
                     this.drag_side(f32::from(event.position.x), event.pressed_button == Some(MouseButton::Left), cx);
                 }))
                 .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_drag(cx))))
-            .map(|el| match settings_page {
-                Some(page) => el.child(self.render_settings(page, cx)),
-                None => el.child(sidebar).child(content).when_some(side, |el, side| el.child(side)),
+            // Arrasto da caixa ao vivo pelo cabeçalho: mesmo esquema, gravando a posição ao soltar.
+            .when(self.live_dragging(), |el| el.cursor_move()
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                    this.drag_live(event.position, event.pressed_button == Some(MouseButton::Left), window, cx);
+                }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|this, event: &MouseUpEvent, window, cx| this.drag_live(event.position, false, window, cx))))
+            .map(|el| match (page, nav) {
+                (Some(page), _) => el.child(self.render_settings(page, cx)),
+                // Abas no topo: a faixa em cima, a conversa e o painel embaixo, sem barra lateral.
+                (None, Some(bar)) if tabs => el.flex_col().child(bar)
+                    .child(div().flex_1().min_h_0().flex().when(floating, |el| el.gap(px(10.))).child(content).when_some(side, |el, side| el.child(side))),
+                (None, sidebar) => el.children(sidebar).child(content).when_some(side, |el, side| el.child(side)),
             })
+            .children(live)
             .when(self.connection_dialog, |el| el.child(div().absolute().inset_0().bg(theme::scrim()).flex().items_center().justify_center()
                 .child(dialog.focus_trap("connection-dialog", &self.connection_focus))))
             .children(Root::render_notification_layer(window, cx))

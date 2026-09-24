@@ -15,6 +15,11 @@ pub enum Font { System, Mono }
 #[serde(rename_all = "snake_case")]
 pub enum SidebarHeight { Full, Content }
 
+/// Onde ficam as sessões: na barra lateral ou numa faixa de abas no topo, que tira a barra lateral.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Navigation { Sidebar, Tabs }
+
 /// Automático segue a preferência do sistema; Desktop pinta com a paleta do papel de parede.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,6 +126,9 @@ pub struct Appearance {
     pub line_height: u16,
     pub column: u16,
     pub sidebar_height: SidebarHeight,
+    pub navigation: Navigation,
+    /// Caixa do "Ver ao vivo": distância da borda direita e da de baixo da janela, em px lógicos.
+    pub live_corner: [f32; 2],
     pub tool_look: ToolLook,
     /// Lista de tarefas do agente (TaskCreate/TaskUpdate) como um bloco de progresso na conversa.
     pub task_list: bool,
@@ -133,6 +141,7 @@ const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeM
     desktop_text: DesktopText::Desktop, dark: MODE_COLORS, light: MODE_COLORS, transparency: 40, solidity: 70,
     background: Background::Plain, wallpaper: Wallpaper::Window, reading: Reading::Auto, sheet_solidity: 60, text_contrast: 30,
     font: Font::System, text_size: 100, line_height: 100, column: 100, sidebar_height: SidebarHeight::Full,
+    navigation: Navigation::Sidebar, live_corner: [16., 16.],
     tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, table_chart: false };
 
 impl Default for Appearance {
@@ -144,7 +153,8 @@ impl Appearance {
     pub fn reset_keeping_choices(self) -> Self {
         Self { panels: self.panels, font: self.font, theme: self.theme, palette: self.palette, desktop_text: self.desktop_text,
             background: self.background, wallpaper: self.wallpaper, tool_look: self.tool_look, task_list: self.task_list,
-            thinking_tools: self.thinking_tools, table_chart: self.table_chart, ..Self::default() }
+            thinking_tools: self.thinking_tools, table_chart: self.table_chart, navigation: self.navigation, live_corner: self.live_corner,
+            ..Self::default() }
     }
 
     /// Imagem ou área de trabalho atrás do texto: é o que a Leitura Automática resolve.
@@ -170,6 +180,8 @@ impl Appearance {
         self.text_contrast = self.text_contrast.min(100);
         for colors in [&mut self.dark, &mut self.light] { colors.tint_strength = colors.tint_strength.clamp(5, 100); }
         for v in [&mut self.text_size, &mut self.line_height, &mut self.column] { *v = (*v).clamp(50, 150); }
+        // O limite de cima depende da janela e é aplicado ao desenhar; aqui só o que nunca vale.
+        for v in &mut self.live_corner { *v = if v.is_finite() { v.max(0.) } else { 16. }; }
         self
     }
 }
@@ -273,6 +285,16 @@ mod tests {
         assert_eq!((reset.tool_look, reset.task_list, reset.thinking_tools, reset.table_chart), (ToolLook::Chips, true, ThinkingTools::All, true));
         let parsed: Appearance = serde_json::from_str(r#"{"tool_look":"chips","thinking_tools":"none"}"#).unwrap();
         assert_eq!((parsed.tool_look, parsed.thinking_tools), (ToolLook::Chips, ThinkingTools::None));
+    }
+
+    #[test]
+    fn navigation_and_live_corner_persist_and_survive_reset() {
+        assert_eq!((Appearance::default().navigation, Appearance::default().live_corner), (Navigation::Sidebar, [16., 16.]));
+        let parsed: Appearance = serde_json::from_str(r#"{"navigation":"tabs","live_corner":[300.5,-4]}"#).unwrap();
+        let parsed = parsed.clamped();
+        assert_eq!((parsed.navigation, parsed.live_corner), (Navigation::Tabs, [300.5, 0.]));
+        let reset = parsed.reset_keeping_choices();
+        assert_eq!((reset.navigation, reset.live_corner), (Navigation::Tabs, [300.5, 0.]));
     }
 
     #[test]

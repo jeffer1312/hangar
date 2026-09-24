@@ -155,7 +155,9 @@ def build():
             "stats": None, "modes": ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"], "model": "Sonnet 5",
         },
         "p5-codex": {
-            "info": info("p5-codex", "codex", branch="fix/cost", git_added=5, git_removed=2, git_dirty=1, limited=True, limit_reset="15:30"),
+            # Duas perguntas assíncronas do Codex pendentes: a aba mostra "? 2".
+            "info": info("p5-codex", "codex", branch="fix/cost", git_added=5, git_removed=2, git_dirty=1, limited=True, limit_reset="15:30",
+                         pending_questions=2),
             "state": state("idle", status_line="🤖 gpt-6-astra (high) │ 💬 ctx 41k/400k │ ⚡5h:98% ↺12m", codex_mode="default", limited=True, limit_reset="15:30"),
             "events": [msg("user_msg", "c1", "Quanto custou?"), msg("assistant_msg", "c2", "Veja o painel.")],
             "stats": {"turns": 1, "steps": 1, "in_tok": 41000, "out_tok": 700}, "permission": "Full Access",
@@ -251,6 +253,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/control/wallpaper":
                 WALLPAPER["status"] = int(query.get("status", ["200"])[0])
                 WALLPAPER["path"] = query.get("path", [None])[0]
+            elif path == "/control/remove":
+                # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
+                SESSIONS.pop(query["name"][0], None)
+                bump()
             elif path == "/control/reset":
                 SESSIONS.clear()
                 SESSIONS.update(build())

@@ -12,6 +12,8 @@ pub struct SessionInfo {
     pub tracked: Option<bool>,
     pub question: Option<String>,
     pub options: Option<Vec<String>>,
+    /// Perguntas esperando resposta fora do terminal (as assíncronas do Codex); a aba mostra "? N".
+    #[serde(default)] pub pending_questions: u32,
     pub problema: Option<String>,
     pub label: Option<String>,
     pub last_activity: Option<f64>,

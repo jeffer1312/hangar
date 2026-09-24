@@ -79,8 +79,9 @@ impl Side {
     }
 
     // Largura efetiva: nunca tira da conversa menos que CHAT_MIN; sem espaço, o painel não aparece.
-    fn fitted(&self, viewport: f32, floating: bool) -> Option<f32> {
-        let room = viewport - SIDEBAR - CHAT_MIN - if floating { FLOATING_GAPS } else { 0. };
+    // Com as abas no topo não há barra lateral ocupando a esquerda.
+    fn fitted(&self, viewport: f32, floating: bool, sidebar: bool) -> Option<f32> {
+        let room = viewport - if sidebar { SIDEBAR } else { 0. } - CHAT_MIN - if floating { FLOATING_GAPS } else { 0. };
         (room >= MIN_WIDTH).then(|| self.width.clamp(MIN_WIDTH, MAX_WIDTH).min(room))
     }
 }
@@ -571,7 +572,8 @@ impl Hangar {
 
     pub(super) fn render_side(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let viewport = f32::from(window.viewport_size().width);
-        let width = self.side.fitted(viewport, theme::is_floating()).filter(|_| self.side.open && self.selected.is_some());
+        let sidebar = appearance::get().navigation == appearance::Navigation::Sidebar;
+        let width = self.side.fitted(viewport, theme::is_floating(), sidebar).filter(|_| self.side.open && self.selected.is_some());
         let readable = self.selected.as_ref().is_some_and(|s| s.readable());
         self.sync_cost(width.is_some() && readable);
         let width = width?;
@@ -662,11 +664,13 @@ mod tests {
     #[test]
     fn panel_never_squeezes_the_chat() {
         let side = Side::default();
-        assert_eq!(side.fitted(1180., false), Some(300.));
-        assert_eq!(side.fitted(1000., false), None);
-        assert_eq!(side.fitted(1080., false), Some(256.));
+        assert_eq!(side.fitted(1180., false, true), Some(300.));
+        assert_eq!(side.fitted(1000., false, true), None);
+        assert_eq!(side.fitted(1080., false, true), Some(256.));
         // Na caixa solta as margens também saem da conversa.
-        assert_eq!(side.fitted(1080., true), None);
-        assert_eq!(side.fitted(1120., true), Some(256.));
+        assert_eq!(side.fitted(1080., true, true), None);
+        assert_eq!(side.fitted(1120., true, true), Some(256.));
+        // Com as abas no topo a largura da barra lateral volta para a conversa e o painel.
+        assert_eq!(side.fitted(1000., false, false), Some(300.));
     }
 }
