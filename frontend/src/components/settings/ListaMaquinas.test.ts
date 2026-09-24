@@ -20,7 +20,7 @@ afterEach(() => { if (aberto) unmount(aberto.comp); aberto = null; });
 function montar(linhas: LinhaMaquina[], over: Record<string, unknown> = {}) {
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const cbs = { onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn(), onSalvarIdentificador: vi.fn() };
+  const cbs = { onAcompanhar: vi.fn(), onFalar: vi.fn(), onToggleScan: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn(), onSalvarIdentificador: vi.fn() };
   const comp = mount(ListaMaquinas, { target: el, props: { linhas, estados: {}, meuIdentificador: 'casa', carregando: false, corrige: null, idSalvando: '', idErro: {}, ...cbs, ...over } });
   aberto = { comp };
   const linhaCurta = (chave: string) => el.querySelector<HTMLElement>(`.sv-linha[data-chave="${chave}"]`)!;
@@ -83,7 +83,7 @@ describe('ListaMaquinas — linha curta', () => {
     document.body.appendChild(el);
     const props = criarProps({ linhas: [B, C], estados: {}, meuIdentificador: 'casa', carregando: false, corrige: null,
       idSalvando: '', idErro: {},
-      onAcompanhar: vi.fn(), onFalar: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn(), onSalvarIdentificador: vi.fn() });
+      onAcompanhar: vi.fn(), onFalar: vi.fn(), onToggleScan: vi.fn(), onEditar: vi.fn(), onCorrige: vi.fn(), onTestarDeNovo: vi.fn(), onRemover: vi.fn(), onSalvarIdentificador: vi.fn() });
     const comp = mount(ListaMaquinas, { target: el, props });
     aberto = { comp };
     el.querySelector<HTMLElement>('.sv-linha[data-chave="peer:vps"]')!.click();
@@ -177,6 +177,18 @@ describe('ListaMaquinas — detalhe do servidor', () => {
     ac.click();
     expect(ac.checked).toBe(true);
     expect(t.cbs.onAcompanhar).toHaveBeenCalledWith(B, false);
+  });
+
+  it('"ligado neste servidor" segue o enabled do peers.json e só avisa o dono ao clicar', () => {
+    const desligado: LinhaMaquina = { ...C, peer: { ...C.peer!, enabled: false } };
+    const t = montar([desligado, D]);
+    const cb = t.detalhe('peer:vps').querySelector<HTMLInputElement>('.mq-varredura')!;
+    expect(cb.checked).toBe(false);
+    cb.click();
+    expect(cb.checked).toBe(false);
+    expect(t.cbs.onToggleScan).toHaveBeenCalledWith(desligado, true);
+    // Sem registro no peers.json não há o que ligar.
+    expect(t.detalhe('srv:srv-d').querySelector('.mq-varredura')).toBeNull();
   });
 
   it('falha na volta mostra o estado e as pílulas; sem token ou sem registro de lá, diz isso', () => {
