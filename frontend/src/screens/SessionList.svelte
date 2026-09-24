@@ -552,7 +552,7 @@ import * as m from '../paraglide/messages';
                             class:drop-alvo={dropResultado?.ok === true}
                             class:drop-recusado={dropRecusa !== null}
                             data-session-key={rep ? dragChave(rep) : undefined}
-                            title={dropRecusa !== null ? mensagemRecusa(dropRecusa) : undefined}>
+                            title={dropRecusa !== null ? mensagemRecusa(dropRecusa) : m.sessao_grupo_pareado({ label: item.label })}>
                       <span class="pair-chev" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
                       <span class="pair-label"><GroupGlyph size={13} /><span class="pair-text"><b class="pair-cod">{pairCodigo(item.label)}</b>{#if pairResto(item.label)}<span class="pair-resto"> {pairResto(item.label)}</span>{/if}</span></span>
                 {#if pairAwaiting(item.gid) > 0}
@@ -609,7 +609,7 @@ import * as m from '../paraglide/messages';
                       class:drop-alvo={dropResultado?.ok === true}
                       class:drop-recusado={dropRecusa !== null}
                       data-session-key={rep ? dragChave(rep) : undefined}
-                      title={dropRecusa !== null ? mensagemRecusa(dropRecusa) : undefined}>
+                      title={dropRecusa !== null ? mensagemRecusa(dropRecusa) : m.sessao_grupo_pareado({ label: item.label })}>
                 <span class="pair-chev" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
                 <span class="pair-label"><GroupGlyph size={13} /><span class="pair-text"><b class="pair-cod">{pairCodigo(item.label)}</b>{#if pairResto(item.label)}<span class="pair-resto"> {pairResto(item.label)}</span>{/if}</span></span>
                 {#if pairAwaiting(item.gid) > 0}
