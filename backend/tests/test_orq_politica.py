@@ -51,6 +51,8 @@ def maquina(tmp_path, monkeypatch):
         {"provider": "opencode-go", "id": "deepseek-v4-flash", "context": "128k", "thinking": True},
         {"provider": "openrouter", "id": "x/y", "context": "8k", "thinking": False}])
     monkeypatch.setattr(pol.apelidos, "ler", lambda: {})
+    monkeypatch.setattr(pol.codex_contas, "list_visible_accounts",
+                        lambda: [pol.codex_contas.Account("default", home / ".codex", True)])
     return home
 
 
@@ -82,6 +84,16 @@ def test_inventario_junta_os_quatro_providers(maquina):
     assert kimi.modelos[0]["id"] == "apikey/k3" and kimi.modelos[0]["efforts"] == ["low", "high", "max"]
     # Claude sem cache do picker → lista reduzida
     assert [m["id"] for m in inv[0].modelos] == ["opus", "sonnet", "haiku"]
+
+
+def test_inventario_lista_cada_conta_codex(maquina, monkeypatch):
+    extra = maquina / ".codex-jefferson-felizardo"
+    monkeypatch.setattr(pol.codex_contas, "list_visible_accounts", lambda: [
+        pol.codex_contas.Account("default", maquina / ".codex", True),
+        pol.codex_contas.Account("jefferson-felizardo", extra, False)])
+    monkeypatch.setattr(pol.apelidos, "ler", lambda: {f"codex:{extra.resolve()}": "Pessoal"})
+    codex = [(i.conta, i.apelido) for i in pol.inventario() if i.provider == "codex"]
+    assert codex == [("openai-codex", "OpenAI Codex"), ("jefferson-felizardo", "Pessoal")]
 
 
 def test_inventario_sobrevive_a_pi_ausente(maquina, monkeypatch):
