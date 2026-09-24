@@ -38,6 +38,9 @@ export const MODOS_PERMISSAO = [
   'plan', 'manual', 'auto', 'acceptEdits', 'bypassPermissions', 'dontAsk',
 ] as const;
 
+// Codex sem terminal: o modo vira sandbox/approval, com os nomes do próprio Codex.
+export const MODOS_PERMISSAO_CODEX_HEADLESS = ['Ask for approval', 'Approve for me', 'Full Access'];
+
 // Os dois últimos da escala: sem confirmação nenhuma. Ganham tinta mais quente no glifo — não
 // fundo de alerta, que fica reservado a erro; modo escolhido de propósito não é erro.
 export function permissaoSemFreio(modo: string): boolean {

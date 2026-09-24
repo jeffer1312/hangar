@@ -16,6 +16,7 @@
     idErro: string;
     onAcompanhar: (linha: LinhaMaquina, ligar: boolean) => void;
     onFalar: (linha: LinhaMaquina, ligar: boolean) => void;
+    onToggleScan: (linha: LinhaMaquina, ligar: boolean) => void;
     onEditar: (linha: LinhaMaquina) => void;
     onCorrige: (url: string | null) => void;
     onTestarDeNovo: (linha: LinhaMaquina) => void;
@@ -23,7 +24,7 @@
     onSalvarIdentificador: (linha: LinhaMaquina, valor: string) => void;
     onFechar: () => void;
   }
-  let { linha, estado, meuIdentificador, corrige, idSalvando, idErro, onAcompanhar, onFalar, onEditar, onCorrige, onTestarDeNovo, onRemover, onSalvarIdentificador, onFechar }: Props = $props();
+  let { linha, estado, meuIdentificador, corrige, idSalvando, idErro, onAcompanhar, onFalar, onToggleScan, onEditar, onCorrige, onTestarDeNovo, onRemover, onSalvarIdentificador, onFechar }: Props = $props();
 
   const e = $derived(estadoDaLinha(linha, estado));
   const url = $derived(linha.navegador?.baseUrl ?? linha.peer?.base_url ?? '');
@@ -166,6 +167,15 @@
       </label>
       {#if !meuIdentificador}
         <p class="sd-motivo">{m.peers_aviso_nao_definido()}</p>
+      {/if}
+      {#if linha.peer}
+        <label class="sd-campo">
+          <span class="sd-rot">{m.maquinas_varredura()} <EscopoChip escopo="servidor" />
+            <small>{m.maquinas_varredura_legenda()}</small>
+          </span>
+          <input type="checkbox" class="switch mq-varredura" checked={linha.peer.enabled !== false}
+                 onchange={(ev) => { const alvo = ev.currentTarget; const ligar = alvo.checked; alvo.checked = !ligar; onToggleScan(linha, ligar); }} />
+        </label>
       {/if}
     </div>
 

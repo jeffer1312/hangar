@@ -32,7 +32,11 @@
 #                                  --permissao "Full Access".
 #                                  --engine <motor> nasce num motor de ~/.claude/engines.json
 #                                  (outro modelo, conta do provedor — ver "Par noutro modelo").
-#                                  --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo).
+#                                  --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo); com
+#                                  --provider codex, numa conta Codex (~/.codex-<nome>;
+#                                  openai-codex = a padrão).
+#                                  --subagente <modelo> (claude sem motor) define o modelo dos
+#                                  subagentes da sessão.
 #                                  --profile <nome> (só --provider omp) nasce num perfil do omp:
 #                                  login, sessões e config em ~/.omp/profiles/<nome>/agent.
 #                                  --conta auto deixa a cota escolher: a conta Claude com mais
@@ -285,7 +289,7 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--profile <nome>] [--headless] [--jev|--sem-jev]}"
+    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--profile <nome>] [--headless] [--jev|--sem-jev]}"
     shift
     # servidor::nome cria a sessão NOUTRA máquina, pela API dela (peers.json), igual ao recado.
     remoto=""
@@ -301,7 +305,7 @@ if [[ "$1" == "--new" ]]; then
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--profile <nome>] [--headless] [--jev|--sem-jev]" >&2
+        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--profile <nome>] [--headless] [--jev|--sem-jev]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
@@ -321,9 +325,14 @@ if [[ "$1" == "--new" ]]; then
     # os valores aqui, senão o script envelhece separado do backend (mesma regra do --provider).
     # --profile: perfil do omp (`omp --profile x`): login, sessões e config em ~/.omp/profiles/x.
     # Só com --provider omp; o backend recusa o resto e valida o nome.
-    cwd=""; engine=""; provider=""; conta=""; config_dir=""; model=""; effort=""; permissao=""; perfil=""; read_only=""; headless=""; jev=""
+    # --subagente: modelo dos subagentes (CLAUDE_CODE_SUBAGENT_MODEL); só Claude sem motor.
+    # --conta com --provider codex: conta Codex (~/.codex-<nome>); `openai-codex` é a padrão.
+    cwd=""; engine=""; provider=""; conta=""; config_dir=""; model=""; effort=""; permissao=""; perfil=""; read_only=""; headless=""; jev=""; subagente=""; codex_conta=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --subagente)
+                [[ -n "$subagente" ]] && { echo "erro: --subagente informado duas vezes" >&2; exit 2; }
+                subagente="${2:?uso: --subagente <modelo>}"; shift 2 ;;
             # --jev / --sem-jev: a sessão nasce (ou não) com a chave do Jev no ambiente, e é ela que
             # faz o `hangar-preview objetivo` funcionar. SEM nenhum dos dois vale o padrão do
             # servidor — por isso existe o `--sem-jev`: com o padrão ligado, não haveria outro jeito
@@ -366,6 +375,11 @@ if [[ "$1" == "--new" ]]; then
                else echo "erro: argumento inesperado '$1'" >&2; exit 2; fi ;;
         esac
     done
+    if [[ "$provider" == "codex" && -n "$conta" ]]; then
+        [[ "$conta" == "auto" ]] && { echo "erro: --conta auto só vale para Claude" >&2; exit 2; }
+        codex_conta="$conta"; [[ "$conta" == "openai-codex" ]] && codex_conta="default"
+        conta=""
+    fi
     if [[ -n "$remoto" ]]; then
         cfg=$(peer_cfg "$remoto") || exit 1
         IFS=$'\t' read -r BASE rtok <<< "$cfg"
@@ -456,11 +470,15 @@ if sys.argv[12]:
     # "true"/"false", nunca ausente-por-omissao: o campo AUSENTE no corpo e o que faz o backend
     # aplicar o padrao do servidor, e mandar `false` cru apagaria esse padrao em todo uso do CLI.
     d["jev"] = sys.argv[12] == "true"
+if sys.argv[13]:
+    d["subagent_model"] = sys.argv[13]
+if sys.argv[14]:
+    d["codex_account"] = sys.argv[14]
 print(json.dumps(d))' \
-           "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao" "$perfil" "$read_only" "$headless" "$jev")
+           "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao" "$perfil" "$read_only" "$headless" "$jev" "$subagente" "$codex_conta")
     api POST /api/sessions "$body" >/dev/null || exit 1
     [[ -n "$remoto" ]] && name="$remoto::$name"
-    echo "sessão criada: $name ($cwd)${headless:+ [sem terminal]}${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]}${perfil:+ [perfil: $perfil]}${jev:+ [jev: $jev]} — fala com ela via: hangar-send $name \"msg\""
+    echo "sessão criada: $name ($cwd)${headless:+ [sem terminal]}${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${codex_conta:+ [conta codex: $codex_conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]}${subagente:+ [subagentes: $subagente]}${perfil:+ [perfil: $perfil]}${jev:+ [jev: $jev]} — fala com ela via: hangar-send $name \"msg\""
     exit 0
 fi
 

@@ -2,14 +2,14 @@
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
            onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
   import { checkPeer, descobrirMaquinas, getIdentificador, setIdentificador, listarPeers, removerPeerDoisLados,
-           type MaquinaDescoberta, type PeerView } from '../../lib/peers';
+           setPeerEnabled, type MaquinaDescoberta, type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
   import { unirMaquinas, type LinhaMaquina, type MotivoSemId } from '../../lib/maquinas';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import ModalDialog from '../ModalDialog.svelte';
   import { alcanceDoServidor, type AlcanceDoServidor, type TipoEndereco } from '../../lib/alcance';
-  import { reiniciarServidorEm } from '@hangar/core';
+  import { getAtualizacaoEm, reiniciarServidorEm } from '@hangar/core';
   import AdicionarMaquina from './AdicionarMaquina.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
   import ListaMaquinas from './ListaMaquinas.svelte';
@@ -190,6 +190,7 @@
     // O reinício e o "salvo" também pertencem à máquina que saiu da tela: sem isto o sucesso (ou
     // o erro) de reiniciar a anterior ficava à vista no detalhe da nova.
     reiniciando = false; reinicioErro = ''; reinicioFeito = false; reinicioRecusado = false; idSalvo = false;
+    reinicioAguardando = false; reinicioHora = '';
     // Gravação em voo pertence ao alvo que saiu da tela: sem isto o campo fica `readonly`
     // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
     idSalvando = false;
@@ -376,6 +377,10 @@
   let reinicioErro = $state('');
   let reinicioFeito = $state(false);
   let reinicioRecusado = $state(false);   // 409: o servidor respondeu dizendo que não faz
+  // Pedir não é reiniciar: quem diz que o serviço voltou é o estado que o motor grava
+  // (`fase: pronto`), casado pelo pid do motor que ESTE pedido lançou.
+  let reinicioAguardando = $state(false);
+  let reinicioHora = $state('');
   // Ponte do shell Electron (shell/preload.cjs). Lida na hora, não no import: o preload injeta
   // `window.hangar` antes da página, mas uma const de topo congelaria `undefined` nos testes.
   type ReinicioShell = () => Promise<{ ok: boolean; motivo?: string; detalhe?: string }>;
@@ -399,10 +404,13 @@
     reinicioErro = '';
     reinicioFeito = false;
     reinicioRecusado = false;
+    reinicioHora = '';
     try {
-      await reiniciarServidorEm(apiTarget);
+      const { pid } = await reiniciarServidorEm(apiTarget);
       if (meu !== geracao) return;
-      reinicioFeito = true;
+      reinicioAguardando = true;
+      reiniciando = false;
+      void confirmarReinicio(pid, meu);
     } catch (e) {
       if (meu !== geracao) return;
       // 409 é o servidor RECUSANDO com motivo (topologia que não reinicia sozinha, atualização já
@@ -414,6 +422,30 @@
         : msgErro(e);
     } finally {
       if (meu === geracao) reiniciando = false;
+    }
+  }
+
+  async function confirmarReinicio(pid: number, meu: number) {
+    const limite = Date.now() + 120_000;
+    try {
+      while (Date.now() < limite) {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (meu !== geracao) return;
+        let estado;
+        try {
+          estado = (await getAtualizacaoEm(apiTarget)).estado;
+        } catch {
+          continue;   // servidor caído no meio do reinício: é o esperado, pergunta de novo
+        }
+        if (meu !== geracao) return;
+        if (estado.pid !== pid || estado.fase !== 'pronto') continue;
+        if (estado.ok) reinicioHora = new Date(estado.ts ?? Date.now()).toLocaleTimeString();
+        else reinicioErro = estado.reinicio_erro || estado.erro || m.maquinas_servico_falhou();
+        return;
+      }
+      if (meu === geracao) reinicioErro = m.maquinas_servico_sem_confirmacao();
+    } finally {
+      if (meu === geracao) reinicioAguardando = false;
     }
   }
 
@@ -452,6 +484,18 @@
   function onAcompanhar(linha: LinhaMaquina, ligar: boolean) {
     if (!ligar && linha.navegador) { abrirRemocao(linha.navegador.id); return; }   // confirmação de hoje
     if (ligar && linha.peer) { addEndereco = linha.peer.base_url; showAdd = true; } // pede só o token
+  }
+
+  async function onToggleScan(linha: LinhaMaquina, ligar: boolean) {
+    if (!linha.peer) return;
+    const meu = geracao;
+    peersErro = '';
+    try {
+      const lista = await setPeerEnabled(apiTarget, linha.peer.id, ligar);
+      if (meu === geracao) peers = lista;
+    } catch (e) {
+      if (meu === geracao) peersErro = msgErro(e);
+    }
   }
 
   async function onFalar(linha: LinhaMaquina, ligar: boolean) {
@@ -667,10 +711,12 @@
       <p class="ss-secao">{m.maquinas_servico()}</p>
       <p class="ss-legenda">{m.maquinas_servico_ajuda()}</p>
       <div class="id-acoes">
-        <button type="button" class="btn primario" onclick={reiniciarServico} disabled={reiniciando}>
-          {reiniciando ? m.maquinas_servico_reiniciando() : m.maquinas_servico_reiniciar()}
+        <button type="button" class="btn primario" onclick={reiniciarServico} disabled={reiniciando || reinicioAguardando}>
+          {reiniciando || reinicioAguardando ? m.maquinas_servico_reiniciando() : m.maquinas_servico_reiniciar()}
         </button>
-        {#if reinicioFeito}<span class="id-ok" role="status">{m.maquinas_servico_pedido()}</span>{/if}
+        {#if reinicioAguardando}<span class="id-ok" role="status">{m.maquinas_servico_aguardando()}</span>
+        {:else if reinicioHora}<span class="id-ok" role="status">{m.maquinas_servico_reiniciado({ hora: reinicioHora })}</span>
+        {:else if reinicioFeito}<span class="id-ok" role="status">{m.maquinas_servico_pedido()}</span>{/if}
       </div>
       {#if reinicioErro}
         <p class="id-erro" role="alert">{reinicioErro}</p>
@@ -772,7 +818,7 @@
   linhas={linhas.filter((l) => !l.estaMaquina)} {estados} meuIdentificador={identificador}
   carregando={idsCarregando || peersCarregando}
   corrige={corrigeId ? { id: corrigeId, url: corrigeUrl } : null}
-  {onAcompanhar} {onFalar}
+  {onAcompanhar} {onFalar} {onToggleScan}
   idSalvando={idRemotoSalvando} idErro={idRemotoErro}
   onSalvarIdentificador={(l, v) => void salvarIdentificadorRemoto(l, v)}
   onEditar={(l) => (emEdicao = l.navegador)}

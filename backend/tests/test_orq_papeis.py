@@ -71,6 +71,24 @@ def test_contrato_sem_rodizio_nao_ganha_a_coluna():
     assert "| vez |" not in t
 
 
+def test_abertura_vira_coluna_so_quando_usada_e_volta_igual():
+    """Opções de abertura viram a coluna `abertura`, por último, só quando algum papel as usa; a
+    célula é o trecho de flags do `hangar-send --new`, e ler devolve os mesmos campos."""
+    assert op.escrever_papel(REGRAS, op.Papel("executor", "pm1-t*", "claude", "200-01", "opus", "high")) \
+        .count("abertura") == 0
+    p = op.Papel("executor", "pm1-t*", "claude", "200-01", "opus", "high", "",
+                 headless=True, permissao="bypassPermissions", jev=True, subagente="sonnet")
+    t = op.escrever_papel(REGRAS, p)
+    assert "| papel | sessão | provider | conta | modelo | esforço | abertura |" in t
+    assert "--headless --permissao bypassPermissions --subagente sonnet --jev" in t
+    assert op.ler(t)[1] == p and op.ler(t)[0].headless is False
+    # Com rodízio por cima: as duas colunas convivem e a linha antiga mantém a abertura.
+    t2 = op.escrever_papel(t, op.Papel("revisor", "pm1-rev*", "codex", "openai-codex", "", "", "1", headless=True))
+    assert "| papel | vez | sessão | provider | conta | modelo | esforço | abertura |" in t2
+    assert op.ler(t2)[1] == p and op.ler(t2)[3].headless is True
+    assert t2.count("## Quem é quem") == 1 and t2.index("## Quem é quem") < t2.index("## Gates")
+
+
 def test_regras_path():
     assert op.regras_path("ab12").name == "regras-ab12.md"
     assert op.regras_path("ab12").parent == pair._pair_dir()

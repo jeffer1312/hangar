@@ -57,7 +57,11 @@ Team table in `regras-<gid>.md`, raw values only (`-` = empty). Start from
 
 - `provider`: `claude` | `codex` | `pi` | `kimi`. `conta`: config-dir name on Claude (`padrao`,
   `200-01`); provider in `~/.kimi-code/config.toml` on Kimi; catalog provider on Pi;
-  `openai-codex` on Codex. `sessão` ending in `*` = one session per Task.
+  `openai-codex` (default account) or the account name (`~/.codex-<name>`) on Codex. `sessão`
+  ending in `*` = one session per Task.
+- Optional `abertura` column, last: the `hangar-send --new` flags the role opens with
+  (`--headless`, `--permissao <mode>`, `--engine <engine>`, `--subagente <model>`, `--jev`);
+  `-` = defaults. The panel writes it; copy it as is.
 - Optional `verificador` row (`<work>-verif-*`, own account/model/effort): delivers proofs; the
   reviewer still decides. Without it the reviewer runs the tests. It enters a running contract
   only with the user's authorization.

@@ -58,6 +58,10 @@ export function gravarPeer(alvo: Server | null, dado: { id: string; base_url: st
   return em<PeerView[]>(alvo, '/api/peers', { method: 'POST', body: JSON.stringify(dado) });
 }
 
+export function setPeerEnabled(alvo: Server | null, id: string, enabled: boolean): Promise<PeerView[]> {
+  return em<PeerView[]>(alvo, `/api/peers/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) });
+}
+
 export function removerPeer(alvo: Server | null, id: string): Promise<PeerView[]> {
   return em<PeerView[]>(alvo, `/api/peers/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }

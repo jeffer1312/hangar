@@ -159,6 +159,33 @@ def test_remover_uma_conta_do_rodizio_nao_leva_as_outras(cli, tmp_path):
                        json={"papel": "revisor", "vez": "9", "mtime": r.json()["mtime"]}).status_code == 404
 
 
+def test_papel_guarda_abertura_e_recusa_o_que_a_criacao_recusaria(cli, tmp_path, monkeypatch):
+    import app.api as api_mod
+    monkeypatch.setattr(api_mod.engines, "listar", lambda: ["m1"])
+    mt0 = cli.get("/api/orquestracao/politica", headers=H).json()["mtime"]
+    mt1 = cli.put("/api/orquestracao/politica/200-01", headers=H, json={"provider": "claude", "mtime": mt0}).json()["mtime"]
+    cli.put("/api/orquestracao/politica/apikey", headers=H, json={"provider": "kimi", "mtime": mt1})
+    r = cli.post("/api/sessions/exec/orq/papel", headers=H, json={
+        "papel": "árbitro", "sessao": "arb", "provider": "claude", "conta": "200-01",
+        "modelo": "opus[1m]", "esforco": "high", "mtime": 0.0})
+    base = {"papel": "executor", "sessao": "exe*", "provider": "claude", "conta": "200-01",
+            "modelo": "opus[1m]", "esforco": "medium", "mtime": r.json()["mtime"]}
+    r = cli.post("/api/sessions/exec/orq/papel", headers=H,
+                 json={**base, "headless": True, "permissao": "bypassPermissions", "jev": True})
+    assert r.status_code == 200, r.text
+    assert "abertura `--headless --permissao bypassPermissions --jev`" in cli.enviados[-1][1]
+    ex = next(p for p in cli.get("/api/sessions/exec/orq", headers=H).json()["papeis"] if p["papel"] == "executor")
+    assert ex["headless"] is True and ex["permissao"] == "bypassPermissions" and ex["jev"] is True
+    mt = r.json()["mtime"]
+    recusas = [({"provider": "kimi", "conta": "apikey", "modelo": "apikey/k3", "headless": True}, "erro_orq_headless_provider"),
+               ({"motor": "nao-existe"}, "erro_motor_invalido"),
+               ({"motor": "m1", "subagente": "sonnet"}, "erro_subagente_so_claude"),
+               ({"permissao": "tudo"}, "erro_permissao_invalida")]
+    for extra, codigo in recusas:
+        r = cli.post("/api/sessions/exec/orq/papel", headers=H, json={**base, "mtime": mt, **extra})
+        assert r.status_code == 400 and r.json()["detail"]["code"] == codigo, (extra, r.text)
+
+
 def test_papeis_salvar_sem_avisar_grava_e_nao_acorda_o_arbitro(cli, tmp_path):
     """`avisar: false` é o "salvar e continuar montando o time": o contrato tem de ficar gravado, e
     o árbitro NÃO pode receber recado nenhum — antes, cada papel salvo o acordava com meia

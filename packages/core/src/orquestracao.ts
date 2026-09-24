@@ -18,7 +18,17 @@ export interface Papel {
   vez?: string;
   viva: string | null;     // nome da sessão viva casada pelo backend, ou null
   id_cota?: string | null; // chave do /api/cotas da conta do papel
+  // Como o árbitro abre a sessão do papel — as mesmas opções da folha "Nova sessão".
+  // Opcionais porque o cache pode ter linha de antes deles; ausente = false/''.
+  headless?: boolean;
+  permissao?: string;      // '' = padrão
+  motor?: string;          // '' = conta Anthropic
+  jev?: boolean;
+  subagente?: string;      // '' = o mesmo da sessão
 }
+
+/** Campos de abertura de sessão de um papel, na forma que as rotas de gravação aceitam. */
+export type AberturaPapel = Required<Pick<Papel, 'headless' | 'permissao' | 'motor' | 'jev' | 'subagente'>>;
 
 // Dois modos, e não três: "rodar Tasks em paralelo" é outra coisa e já existe na skill (Tasks
 // independentes, uma worktree cada, cada uma com seu executor e seu revisor). Aquilo se declara no

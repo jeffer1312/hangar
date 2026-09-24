@@ -714,6 +714,8 @@ export interface AtualizacaoPasso {
 /** O que o motor está fazendo agora. Vem do arquivo de estado, que sobrevive ao restart. */
 export interface AtualizacaoEstado {
   fase?: 'rodando' | 'pronto';
+  /** Pid do processo que está atualizando/reiniciando — o mesmo que o POST devolve. */
+  pid?: number;
   etapa?: string;
   passo?: number;
   total?: number;

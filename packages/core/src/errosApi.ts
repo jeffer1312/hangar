@@ -299,6 +299,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_orq_modelo_nao_liberado: () => m.erro_orq_modelo_nao_liberado(),
   erro_orq_conta_travada: () => m.erro_orq_conta_travada(),
   erro_orq_esforco_invalido: () => m.erro_orq_esforco_invalido(),
+  erro_orq_headless_provider: () => m.erro_orq_headless_provider(),
 
   // Estado errado: terminal aberto, sessao trabalhando, loop ativo
   erro_terminal_aberto: () => m.erro_terminal_aberto(),
@@ -332,6 +333,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_config_dir_invalido: () => m.erro_config_dir_invalido(),
   erro_rollout_sem_id: () => m.erro_rollout_sem_id(),
   erro_motor_sem_claude: () => m.erro_motor_sem_claude(),
+  erro_subagente_so_claude: () => m.erro_subagente_so_claude(),
   erro_conta_reconciliacao_falhou: (p) => m.erro_conta_reconciliacao_falhou({ nome_conta: String(p.nome_conta), erro: String(p.erro) }),
   erro_cwd_indisponivel: () => m.erro_cwd_indisponivel(),
   erro_cwd_inexistente: (p) => m.erro_cwd_inexistente({ cwd: String(p.cwd) }),

@@ -766,7 +766,8 @@ export async function getOrqGrupo(name: string): Promise<import('./orquestracao'
 export async function postOrqPapeis(
   name: string,
   // `avisar: false` grava sem acordar o árbitro — é o "salvar e continuar montando o time".
-  body: { papeis: { papel: string; sessao?: string; provider: string; conta: string; modelo?: string; esforco?: string }[]; mtime: number; avisar?: boolean },
+  body: { papeis: ({ papel: string; sessao?: string; provider: string; conta: string; modelo?: string; esforco?: string; vez?: string }
+    & Partial<import('./orquestracao').AberturaPapel>)[]; mtime: number; avisar?: boolean },
 ): Promise<import('./orquestracao').RespostaPapel> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/papeis`, { method: 'POST', body: JSON.stringify(body) });
 }
@@ -1421,6 +1422,11 @@ export function iniciarAtualizacao(): Promise<{ ok: boolean; pid: number }> {
 /** Reinicia o servidor sem atualizar nada (disco já à frente do processo). 409 fora do systemd. */
 export function reiniciarServidor(): Promise<{ ok: boolean; pid: number }> {
   return apiFetch('/api/atualizacao/reiniciar', { method: 'POST' });
+}
+
+/** Estado da atualização/reinício no servidor que a tela está editando. */
+export function getAtualizacaoEm(s: Server | null): Promise<Atualizacao> {
+  return s ? apiFetchForServer(s, '/api/atualizacao') : getAtualizacao();
 }
 
 /** O mesmo reinício, no servidor que a tela está editando (que pode não ser o ativo). */

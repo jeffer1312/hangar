@@ -12,11 +12,13 @@
   import { untrack } from 'svelte';
   import { createQuery } from '@tanstack/svelte-query';
   import { comecarOrq, postOrqPapeis, removerPapel } from '@hangar/core';
-  import { clienteQuery, orqGrupo, orqPolitica } from '../lib/queries';
+  import { clienteQuery, motores, orqGrupo, orqPolitica } from '../lib/queries';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
+  import { segredos } from '../lib/segredos.svelte';
+  import { MODOS_PERMISSAO, MODOS_PERMISSAO_CODEX_HEADLESS } from '../lib/permissaoRotulo';
   import {
     agruparPorPapel, casarViva, contasLiberadas, estadoDoPapel, modelosLiberados, politicaDe,
-    type ModoPapel, type OrqGrupo, type OrqPolitica, type Papel, type Provider,
+    type AberturaPapel, type ModoPapel, type OrqGrupo, type OrqPolitica, type Papel, type Provider,
   } from '@hangar/core';
   import type { SessionInfo } from '@hangar/core';
 
@@ -74,6 +76,14 @@
   let fModelo = $state('');
   let fEsforco = $state('');
   let fVez = $state('');
+  let fHeadless = $state(false);
+  let fPermissao = $state('');
+  let fMotor = $state('');
+  let fJev = $state(false);
+  let fSubagente = $state('');
+
+  const qMotores = createQuery(() => ({ ...motores(null), enabled: open }), () => clienteQuery);
+  const listaMotores = $derived(qMotores.data?.motores ?? {});
 
   const papeis = $derived(grupo?.papeis ?? []);
   const grupos = $derived(agruparPorPapel(papeis));
@@ -106,6 +116,35 @@
   const vivaAtual = $derived(papelAtual ? casarViva(papelAtual.sessao, sessoes) : null);
   const estadoAtual = $derived(papelAtual ? estadoDoPapel(papelAtual, vivaAtual) : null);
 
+  // Abertura da sessão: mesmas regras da folha "Nova sessão" (e da validação do backend).
+  const temModoExec = $derived(fProvider === 'claude' || fProvider === 'codex');
+  const temPermissao = $derived(fProvider === 'claude' || (fProvider === 'codex' && fHeadless));
+  const modosPermissao = $derived<readonly string[]>(fProvider === 'codex' ? MODOS_PERMISSAO_CODEX_HEADLESS : MODOS_PERMISSAO);
+  const temMotor = $derived(fProvider === 'claude' && Object.keys(listaMotores).length > 0);
+  const temSubagente = $derived(fProvider === 'claude' && !fMotor && modelos.length > 0);
+  // Já ligado sem chave no servidor: o interruptor continua na tela, senão não haveria como desligar.
+  const temJev = $derived(segredos.temChave('jev_api_key') || fJev);
+
+  const aberturaDe = (p: Papel | null | undefined): AberturaPapel => ({
+    headless: !!p?.headless, permissao: p?.permissao ?? '', motor: p?.motor ?? '',
+    jev: !!p?.jev, subagente: p?.subagente ?? '',
+  });
+  /**
+   * O que o formulário grava: só os valores que valem pro provider escolhido. Filtrar aqui, e não
+   * só na tela, garante que nenhum caminho de gravação mande um motor pro codex.
+   */
+  function abertura(): AberturaPapel {
+    const claude = fProvider === 'claude';
+    const headless = (claude || fProvider === 'codex') && fHeadless;
+    return {
+      headless,
+      permissao: claude || headless ? fPermissao : '',
+      motor: claude ? fMotor : '',
+      jev: fJev,
+      subagente: claude && !fMotor ? fSubagente : '',
+    };
+  }
+
   $effect(() => {
     if (!open) return;
     aba = abaInicial;
@@ -124,7 +163,7 @@
 
   // Edições pendentes por papel (chave = nome do papel no contrato, ou 'novo'). Trocar de card
   // NÃO descarta o que foi mudado: o usuário edita vários e salva tudo no fim, num recado só.
-  type Rascunho = { papel: string; sessao: string; provider: Provider; conta: string; modelo: string; esforco: string; vez: string };
+  type Rascunho = { papel: string; sessao: string; provider: Provider; conta: string; modelo: string; esforco: string; vez: string } & AberturaPapel;
   let rascunhos = $state<Record<string, Rascunho>>({});
   const nRascunhos = $derived(Object.keys(rascunhos).length);
   // Chave papel+vez: num papel que reveza, chavear só pelo nome faria o rascunho da 2ª conta
@@ -137,14 +176,16 @@
     const k = chaveDe(sel);
     const orig = sel === 'novo' ? null : papeis[sel];
     const papelNome = fPapel.trim();
-    const r: Rascunho = { papel: papelNome, sessao: (fSessao.trim() || (papelNome ? sessaoDerivada(papelNome) : '')), provider: fProvider, conta: fConta, modelo: fModelo, esforco: fEsforco, vez: fVez };
+    const r: Rascunho = { papel: papelNome, sessao: (fSessao.trim() || (papelNome ? sessaoDerivada(papelNome) : '')), provider: fProvider, conta: fConta, modelo: fModelo, esforco: fEsforco, vez: fVez, ...abertura() };
+    const a = aberturaDe(orig);
     const igual = !!orig && orig.sessao === r.sessao && (orig.provider || 'claude') === r.provider
       && orig.conta === r.conta && orig.modelo === r.modelo && orig.esforco === r.esforco
-      && (orig.vez ?? '') === r.vez;
+      && (orig.vez ?? '') === r.vez
+      && (Object.keys(a) as (keyof AberturaPapel)[]).every((c) => a[c] === r[c]);
     if (igual || (sel === 'novo' && !r.papel)) delete rascunhos[k]; else rascunhos[k] = r;
   }
   $effect(() => {
-    void [fPapel, fSessao, fProvider, fConta, fModelo, fEsforco, fVez, sel];
+    void [fPapel, fSessao, fProvider, fConta, fModelo, fEsforco, fVez, fHeadless, fPermissao, fMotor, fJev, fSubagente, sel];
     untrack(guardarRascunho);
   });
 
@@ -160,6 +201,8 @@
     fModelo = r?.modelo ?? p?.modelo ?? '';
     fEsforco = r?.esforco ?? p?.esforco ?? '';
     fVez = r?.vez ?? p?.vez ?? '';
+    const a = r ?? aberturaDe(p);
+    fHeadless = a.headless; fPermissao = a.permissao; fMotor = a.motor; fJev = a.jev; fSubagente = a.subagente;
   }
 
   // ── Rodízio ────────────────────────────────────────────────────────────────
@@ -202,7 +245,7 @@
   function rascunhoDe(l: Papel, vez: string) {
     rascunhos[`${l.papel}::${l.vez ?? ''}`] = {
       papel: l.papel, sessao: l.sessao, provider: (l.provider || 'claude') as Provider,
-      conta: l.conta, modelo: l.modelo, esforco: l.esforco, vez,
+      conta: l.conta, modelo: l.modelo, esforco: l.esforco, vez, ...aberturaDe(l),
     };
   }
 
@@ -218,12 +261,13 @@
     const itens = linhas.map((l, idx) => ({
       papel: l.papel, sessao: l.sessao, provider: l.provider || 'claude',
       conta: l.conta, modelo: l.modelo, esforco: l.esforco, vez: (l.vez ?? '').trim() || String(idx + 1),
+      ...aberturaDe(l),
     }));
     const base = linhas[0] ?? null;
     itens.push({
       papel: fPapel.trim() || base?.papel || '', sessao: base?.sessao ?? fSessao,
       provider: (base?.provider || fProvider) as Provider, conta: '', modelo: '', esforco: '',
-      vez: String(Math.max(n, itens.length + 1)),
+      vez: String(Math.max(n, itens.length + 1)), ...aberturaDe(null),
     });
     salvando = true; erro = ''; aviso = '';
     try {
@@ -277,6 +321,8 @@
     fProvider = p;
     fConta = (politica?.politica.find((c) => c.provider === p)?.conta) ?? '';
     fModelo = ''; fEsforco = '';
+    // O Jev vale em qualquer provider; o resto da abertura é por provider e volta ao padrão.
+    fHeadless = false; fPermissao = ''; fMotor = ''; fSubagente = '';
   }
   // Conta travada: o modelo é o primeiro liberado, sem escolha.
   $effect(() => { if (contaTravada && modelos[0]) fModelo = modelos[0].id; });
@@ -537,6 +583,65 @@
       </div>
     </div>
 
+    <!-- As opções da folha "Nova sessão", por linha do contrato: é com elas que o árbitro abre a
+         sessão do papel. Quais aparecem segue o provider, como lá. -->
+    {#if temModoExec || temJev}
+      <h4 class="os-sub">{m.orqcfg_abertura()}</h4>
+    {/if}
+    {#if temModoExec}
+      <div class="field">
+        <span class="field-label">{m.orqcfg_modo_exec()}</span>
+        <div class="provider-grid os-modo" role="group" aria-label={m.orqcfg_modo_exec()}>
+          <button type="button" class="provider-tile os-modo-tile" class:on={!fHeadless} aria-pressed={!fHeadless}
+                  onclick={() => (fHeadless = false)}>
+            <span class="os-modo-nome">{m.criar_modo_exec_tmux()}</span>
+            <span class="os-modo-ajuda">{fProvider === 'codex' ? m.criar_modo_exec_tmux_resumo_codex() : m.criar_modo_exec_tmux_resumo()}</span>
+          </button>
+          <button type="button" class="provider-tile os-modo-tile" class:on={fHeadless} aria-pressed={fHeadless}
+                  onclick={() => (fHeadless = true)}>
+            <span class="os-modo-nome">{m.criar_modo_exec_headless()} <span class="os-chip">{m.comum_beta()}</span></span>
+            <span class="os-modo-ajuda">{fProvider === 'codex' ? m.criar_modo_exec_headless_resumo_codex() : m.criar_modo_exec_headless_resumo()}</span>
+          </button>
+        </div>
+      </div>
+    {/if}
+    {#if temPermissao || temMotor || temSubagente}
+      <div class="os-grid">
+        {#if temPermissao}
+          <div class="field">
+            <label class="field-label" for="orq-permissao">{m.criar_permissao()}</label>
+            <Select id="orq-permissao" class="field-input" ariaLabel={m.criar_permissao()} value={fPermissao}
+              opcoes={[{ value: '', label: m.criar_permissao_padrao() }, ...modosPermissao.map((n) => ({ value: n, label: n }))]}
+              onchange={(v) => (fPermissao = v)} />
+          </div>
+        {/if}
+        {#if temMotor}
+          <div class="field">
+            <label class="field-label" for="orq-motor">{m.comum_motor()}</label>
+            <Select id="orq-motor" class="field-input" ariaLabel={m.comum_motor()} value={fMotor}
+              opcoes={[{ value: '', label: m.criar_claude_sua_conta() },
+                       ...Object.entries(listaMotores).map(([nome, motor]) => ({ value: nome, label: motor.label ?? nome, hint: motor.model }))]}
+              onchange={(v) => (fMotor = v)} />
+          </div>
+        {/if}
+        {#if temSubagente}
+          <div class="field">
+            <label class="field-label" for="orq-subagente">{m.criar_subagente()}</label>
+            <Select id="orq-subagente" class="field-input" ariaLabel={m.criar_subagente()} value={fSubagente}
+              opcoes={[{ value: '', label: m.criar_subagente_padrao() },
+                       ...modelos.filter((x) => x.id !== 'default').map((x) => ({ value: x.id, label: x.name ?? x.id }))]}
+              onchange={(v) => (fSubagente = v)} />
+          </div>
+        {/if}
+      </div>
+    {/if}
+    {#if temJev}
+      <label class="os-row">
+        <span><span class="os-row-t">{m.criar_jev()}</span><span class="os-row-d">{m.orqcfg_jev_desc()}</span></span>
+        <input type="checkbox" role="switch" class="os-sw" bind:checked={fJev} />
+      </label>
+    {/if}
+
     {#if estadoAtual?.viva && papelAtual}
       <div class="os-agora" class:bad={estadoAtual.divergente}>
         {#if estadoAtual.modeloMedido || estadoAtual.esforcoMedido}
@@ -670,6 +775,14 @@
   .os-arrow { color: var(--text-muted); }
   .os-h { margin: 0 0 4px; font-size: var(--text-lg); font-weight: 600; }
   .os-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3); }
+  .os-sub { margin: var(--space-4) 0 var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
+  /* Interruptor no mesmo desenho do da aba Contas (OrquestracaoContas.svelte). */
+  .os-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px var(--space-3); margin: 6px 0; cursor: pointer; }
+  .os-row-t { display: block; } .os-row-d { display: block; font-size: 12px; color: var(--text-muted); }
+  .os-sw { appearance: none; width: 38px; height: 22px; border-radius: 11px; background: var(--surface-raised); position: relative; flex: none; cursor: pointer; margin: 0; }
+  .os-sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-muted); transition: transform 150ms var(--ease-out), background 150ms; }
+  .os-sw:checked { background: var(--success); }
+  .os-sw:checked::after { transform: translateX(16px); background: #fff; }
   .os-cota { margin: 0; color: var(--success); }
   .os-cota--alta { color: #e3b341; }
   .os-agora { margin-top: var(--space-3); padding: 10px 12px; border-radius: var(--radius-md); font-size: var(--text-sm); background: var(--surface-raised); border: 1px solid var(--border-subtle); }

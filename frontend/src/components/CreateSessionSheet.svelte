@@ -13,6 +13,7 @@
            getCreationProgress, type CreationProgress,
            type ModelOption, type Motor, type ArchiveEntry } from '@hangar/core';
   import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
+  import { MODOS_PERMISSAO_CODEX_HEADLESS } from '../lib/permissaoRotulo';
   import { basename, providerName, relativeTime, cotaDaConta, resumoCota } from '@hangar/core';
   import { renderMarkdown } from '../lib/markdown';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
@@ -246,7 +247,6 @@
 
   // Modos de permissão do Claude Code (--permission-mode), mesma lista do backend (model_args.py).
   const MODOS_PERMISSAO = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
-  const MODOS_PERMISSAO_CODEX_HEADLESS = ['Ask for approval', 'Approve for me', 'Full Access'];
   let permissao = $state('');
   // Claude/Codex sem terminal: processo gerenciado pelo backend, sem tmux. Fora do modo bastão e
   // sem retomar conversa (a retomada nasce por outro caminho).

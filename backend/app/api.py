@@ -4088,6 +4088,11 @@ class PapelBody(_StrictBody):
     conta: str
     modelo: str = ""
     esforco: str = ""
+    headless: bool = False
+    permissao: str = ""
+    motor: str = ""
+    jev: bool = False
+    subagente: str = ""
     mtime: float
 
 
@@ -4125,6 +4130,8 @@ def _recado_arbitro(novos: list[orq_papeis.Papel], gid: str) -> str:
     # desenha o chip "configuração · orquestração" e a sessão sabe que é recado automático.
     linhas = "; ".join("`" + p.papel + "` agora é provider `" + p.provider + "`, conta `" + p.conta
                        + "`, modelo `" + (p.modelo or "-") + "`, esforço `" + (p.esforco or "-") + "`"
+                       + (", abertura `" + orq_papeis.abertura_texto(p) + "`"
+                          if orq_papeis.abertura_texto(p) else "")
                        for p in novos)
     return ("[painel: orquestração] A configuração de modelos do grupo mudou no painel: " + linhas
             + ". Releia `" + str(orq_papeis.regras_path(gid))
@@ -4151,6 +4158,45 @@ class PapelItem(_StrictBody):
     # Vazio = o papel roda numa conta só (formato original). "1", "2", "3"… = rodízio, e a Task N
     # cabe à conta de índice (N-1) % total. "par" = todas ao mesmo tempo.
     vez: str = ""
+    # Abertura da sessão do papel: as mesmas escolhas da criação de sessão, gravadas como flags.
+    headless: bool = False
+    permissao: str = ""
+    motor: str = ""
+    jev: bool = False
+    subagente: str = ""
+
+
+async def _validar_abertura(p: orq_papeis.Papel) -> None:
+    """Mesmas regras da criação de sessão: o árbitro não pode receber uma linha que o
+    `hangar-send --new` recusaria."""
+    def recusa(codigo: str, msg: str):
+        raise HTTPException(400, detail=erro(codigo, f"{msg}: {p.papel}"))
+    if p.headless and p.provider not in ("claude", "codex"):
+        recusa("erro_orq_headless_provider", "sem terminal só vale para claude ou codex")
+    if p.motor:
+        if p.provider != "claude":
+            recusa("erro_motor_sem_claude", "motor so vale para provider claude")
+        if p.motor not in await asyncio.to_thread(engines.listar):
+            recusa("erro_motor_invalido", "motor invalido")
+    if p.permissao:
+        if p.provider == "codex" and p.headless:
+            from app.adapters.codex import sem_terminal
+            if p.permissao not in {m[0] for m in sem_terminal.MODOS}:
+                recusa("erro_permissao_invalida", "modo de permissao invalido")
+        elif p.provider != "claude":
+            recusa("erro_permissao_so_claude", "modo de permissao so vale para claude")
+        else:
+            try:
+                model_args.validar("claude", None, None, p.permissao)
+            except ValueError:
+                recusa("erro_permissao_invalida", "modo de permissao invalido")
+    if p.subagente:
+        if p.provider != "claude" or p.motor:
+            recusa("erro_subagente_so_claude", "modelo dos subagentes so vale para claude sem motor")
+        try:
+            model_args.validar("claude", p.subagente, None)
+        except ValueError as e:
+            recusa("erro_orq_celula_invalida", str(e))
 
 
 class PapeisBody(_StrictBody):
@@ -4187,10 +4233,13 @@ async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float,
                           and orq_md.normalizar(p.vez) == orq_md.normalizar(vez)), None)
             novo = orq_papeis.Papel(it.papel.strip(), (it.sessao or (atual.sessao if atual else "")).strip(),
                                     it.provider.strip().lower(), it.conta.strip(),
-                                    it.modelo.strip(), it.esforco.strip(), vez)
+                                    it.modelo.strip(), it.esforco.strip(), vez,
+                                    it.headless, it.permissao.strip(), it.motor.strip(), it.jev,
+                                    it.subagente.strip())
             motivo = await asyncio.to_thread(orq_politica.permitido, novo.provider, novo.conta, novo.modelo, novo.esforco)
             if motivo:
                 raise HTTPException(400, detail=erro(motivo, "a política de contas não permite esta escolha: " + novo.papel))
+            await _validar_abertura(novo)
             # ponytail: validar_celula roda dentro de escrever_papel — texto do cliente nunca chega
             # ao arquivo nem ao recado sem passar por ali.
             texto = orq_papeis.escrever_papel(texto, novo)
@@ -4296,9 +4345,8 @@ async def orq_papel_del(name: str, body: RemoverPapelBody):
     if alvo is None:
         raise HTTPException(404, detail=erro("erro_orq_papel_inexistente",
                                              f"não há linha para {body.papel!r} nesta configuração"))
-    cab = orq_papeis.CABECALHO_VEZ if orq_papeis.tem_coluna_vez(texto) else orq_papeis.CABECALHO
-    chave = (alvo.papel, alvo.vez or "-") if cab is orq_papeis.CABECALHO_VEZ else alvo.papel
-    texto = orq_md.remover_linha(texto, cab, chave)
+    cab = orq_papeis.cabecalho_atual(texto) or orq_papeis.CABECALHO
+    texto = orq_md.remover_linha(texto, cab, orq_papeis.chave_da_linha(cab, alvo.papel, alvo.vez))
     try:
         mtime = await asyncio.to_thread(orq_md.gravar, orq_papeis.regras_path(gid), texto, body.mtime)
     except orq_md.Conflito:

@@ -104,7 +104,7 @@ Outside tool (skill, subagent, command), three questions: exists under that name
 
 ## Opening a session — five steps, one unit
 
-1. Create on the agent's default account: `hangar-send --new <name> <cwd>`. "An <agent> session" = that agent's default account; the same model through a gateway or router is another provider. `--engine <engine>` only when the plan named one. Model, effort and permission go on the command (`--model <id> --effort <level> --permissao <mode>`; Pi: `--effort` → `--thinking`; Kimi: `--model` only; `--permissao` Claude-only). A 400 = session not born: recreate with the flags right, never create-then-switch. Old `hangar-send` without the flags → POST to the API with `model`/`effort`/`permission_mode`.
+1. Create on the agent's default account: `hangar-send --new <name> <cwd>`. "An <agent> session" = that agent's default account; the same model through a gateway or router is another provider. `--engine <engine>` only when the plan named one. Model, effort and permission go on the command (`--model <id> --effort <level> --permissao <mode>`; Pi: `--effort` → `--thinking`; Kimi: `--model` only; `--permissao` Claude-only). The row's `abertura` cell goes on the command as written (it may carry `--engine` and `--permissao`); a Codex `conta` other than `openai-codex` → `--conta <name>`. A 400 = session not born: recreate with the flags right, never create-then-switch. Old `hangar-send` without the flags → POST to the API with `model`/`effort`/`permission_mode`.
 
    ```bash
    hangar-send --new <name> <repo> --provider pi --model <provider>/<id> --effort <level>

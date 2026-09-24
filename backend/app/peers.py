@@ -228,6 +228,20 @@ def gravar_peer(server_id: str, base_url: str, token: str, web_url: str | None =
     return _mutar(_gravar)
 
 
+def set_peer_enabled(server_id: str, enabled: bool) -> dict:
+    """Liga ou desliga o peer na varredura (painel, `--list`, testes). Desconhecido é recusa."""
+    validar_id(server_id)
+
+    def _definir(dados: dict) -> dict:
+        cfg = dados.get(server_id)
+        if not isinstance(cfg, dict):
+            raise ValueError(f"servidor '{server_id}' não está no peers.json")
+        cfg["enabled"] = enabled
+        return cfg
+
+    return _mutar(_definir)
+
+
 def remover_peer(server_id: str) -> None:
     """Remove um peer do arquivo. Desconhecido é recusa (ValueError), não no-op: apagar um peer
     que não existe esconderia o typo de quem pediu."""

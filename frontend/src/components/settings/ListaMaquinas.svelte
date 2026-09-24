@@ -17,6 +17,7 @@
     idErro: Record<string, string>;
     onAcompanhar: (linha: LinhaMaquina, ligar: boolean) => void;
     onFalar: (linha: LinhaMaquina, ligar: boolean) => void;
+    onToggleScan: (linha: LinhaMaquina, ligar: boolean) => void;
     onEditar: (linha: LinhaMaquina) => void;
     onCorrige: (url: string | null) => void;
     onTestarDeNovo: (linha: LinhaMaquina) => void;
@@ -24,7 +25,7 @@
     onSalvarIdentificador: (linha: LinhaMaquina, valor: string) => void;
   }
 
-  let { linhas, estados, meuIdentificador, carregando, corrige, idSalvando, idErro, onAcompanhar, onFalar, onEditar, onCorrige, onTestarDeNovo, onRemover, onSalvarIdentificador }: Props = $props();
+  let { linhas, estados, meuIdentificador, carregando, corrige, idSalvando, idErro, onAcompanhar, onFalar, onToggleScan, onEditar, onCorrige, onTestarDeNovo, onRemover, onSalvarIdentificador }: Props = $props();
 
   // Pela chave, não pelo objeto: a linha é recriada a cada carga, e o detalhe tem de acompanhar o
   // dado novo. Linha que sumiu (removida) fecha o detalhe sozinha. Editar fecha antes de abrir a
@@ -87,7 +88,7 @@
   <DetalheServidor linha={linhaAberta} estado={estadoDe(linhaAberta)} {meuIdentificador} {corrige}
     idSalvando={!!linhaAberta.navegador && idSalvando === linhaAberta.navegador.id}
     idErro={idErro[linhaAberta.navegador?.id ?? ''] ?? ''}
-    {onAcompanhar} {onFalar} {onCorrige} {onTestarDeNovo} {onRemover} {onSalvarIdentificador}
+    {onAcompanhar} {onFalar} {onToggleScan} {onCorrige} {onTestarDeNovo} {onRemover} {onSalvarIdentificador}
     onEditar={(l) => { aberta = null; onEditar(l); }}
     onFechar={() => (aberta = null)} />
 {/if}
