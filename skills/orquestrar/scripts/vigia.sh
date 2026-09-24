@@ -238,16 +238,22 @@ def ctx(linha):
 sessoes = {s.get("name"): s for s in json.load(sys.stdin)}
 try:
     papeis = json.load(open(sys.argv[1])).get("papeis") or []
-except Exception:
+except Exception as e:
+    print(f"[vigia] contract unreadable ({e!r}); every limit falls back to {PADRAO}%", file=sys.stderr)
     papeis = []
-janela = {p.get("viva"): p.get("janela") for p in papeis if p.get("viva")}
+janela = {p.get("viva"): str(p.get("janela") or "") for p in papeis if p.get("viva")}
 saida = []
 for nome in sys.argv[2:]:
-    c = ctx((sessoes.get(nome) or {}).get("status_line"))
+    try:
+        c = ctx((sessoes.get(nome) or {}).get("status_line"))
+    except ValueError as e:
+        print(f"[vigia] {nome}: status line unreadable ({e!r})", file=sys.stderr)
+        c = None
     if c is None:
         saida.append("-")
         continue
-    lim = janela.get(nome) or PADRAO
+    lim = janela.get(nome, "")
+    lim = lim if lim.isdigit() else PADRAO
     saida.append("%d/%s/%dk/%dk" % (round(100 * c[0] / c[1]), lim, c[0] // 1000, c[1] // 1000))
 print("|".join(saida))
 PY
@@ -361,8 +367,15 @@ for i in $(seq 1 1440); do
   # CONTEXT past the row's `janela`: the session stops after what it is doing and asks for its
   # replacement; the arbiter opens the substitute. Once per crossing — dropping back below
   # (a compaction) re-arms it.
-  curl -s --config "$CURLRC" "$BASE/api/sessions/$ARB/orq" -o "$ORQF" 2>/dev/null || : > "$ORQF"
+  curl -sf --config "$CURLRC" "$BASE/api/sessions/$ARB/orq" -o "$ORQF" 2>>"${CP_VIGIA_LOG:-/dev/stderr}" || : > "$ORQF"
   ct=$(printf '%s' "$lista" | python3 "$CTXDET" "$ORQF" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
+  # The context reader dying cannot turn into "nobody crossed": same rule as the state reader.
+  if [ -z "$ct" ]; then
+    ctx_mudos=$(( ${ctx_mudos:-0} + 1 ))
+    [ "$ctx_mudos" -eq 5 ] && hangar-send --tmux "$ARB" "[vigia] I cannot read the sessions' context for 5 minutes: the context handover alarms are OFF. The reason is in ${CP_VIGIA_LOG}." >/dev/null 2>&1
+  else
+    ctx_mudos=0
+  fi
   IFS='|' read -r -a CTXS <<< "$ct"
   for k in "${!SESSOES[@]}"; do
     c=${CTXS[$k]:--}
@@ -370,7 +383,6 @@ for i in $(seq 1 1440); do
     IFS='/' read -r pct lim usado total <<< "$c"
     if [ "$pct" -lt "$lim" ]; then CAVISO[$k]=0; continue; fi
     [ "${CAVISO[$k]:-0}" -eq 1 ] && continue
-    CAVISO[$k]=1
     nome=${SESSOES[$k]}
     if [ "$k" -eq "$ULT" ]; then
       msg="[vigia] YOUR context is at ${pct}% of your window (${usado}/${total}); your row hands over at ${lim}%. Finish the current act and run your succession (arbitro-encerramento.md, \"Arbiter succession\")."
@@ -379,7 +391,12 @@ for i in $(seq 1 1440); do
       msg="[vigia] ${nome} is at ${pct}% of its window (${usado}/${total}; its row hands over at ${lim}%). I asked it to stop after the current act and request its replacement. Open the substitute before the next round (arbitro-vigia.md, \"Rotation\")."
     fi
     echo "$msg"
-    hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+    # Marked as warned only when the arbiter got it; a failed delivery retries next cycle.
+    if hangar-send --tmux "$ARB" "$msg" >/dev/null 2>>"${CP_VIGIA_LOG:-/dev/stderr}"; then
+      CAVISO[$k]=1
+    else
+      echo "[vigia] context alarm for $nome NOT delivered to $ARB; retrying next cycle" >&2
+    fi
   done
 
   # Stalled JOURNAL: the arbiter's journal is the retrospective's net; >60min without a write
