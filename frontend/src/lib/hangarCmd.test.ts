@@ -62,7 +62,21 @@ describe('lerComandoHangar', () => {
     const a = lerComandoHangar('hangar-send --list', saida, false);
     expect(a?.verbo).toBe('listar');
     expect(a?.sessoes).toHaveLength(2);
-    expect(a?.sessoes?.[0]).toEqual({ nome: 'sessao-b', estado: 'working', cwd: '/home/u/app-web' });
+    expect(a?.sessoes?.[0]).toMatchObject({ nome: 'sessao-b', estado: 'working', cwd: '/home/u/app-web' });
+    expect(a?.sessoes?.[0].harness).toBeUndefined();
+  });
+
+  it('--list com a coluna de harness, nome longo e pasta com espaço', () => {
+    const saida = [
+      'sessao-a                 idle            codex/headless     /home/u/app-web',
+      'servidor-remoto::sessao-longa  working         claude:motor-x/tmux  /home/u/Área de trabalho/app  (você)',
+    ].join('\n');
+    const a = lerComandoHangar('hangar-send --list', saida, false);
+    expect(a?.sessoes).toEqual([
+      { nome: 'sessao-a', estado: 'idle', harness: 'codex/headless', cwd: '/home/u/app-web' },
+      { nome: 'servidor-remoto::sessao-longa', estado: 'working', harness: 'claude:motor-x/tmux',
+        cwd: '/home/u/Área de trabalho/app  (você)' },
+    ]);
   });
 
   it('--list com peer fora do ar não é erro: a lista local veio', () => {
