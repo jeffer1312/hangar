@@ -121,3 +121,9 @@ With a bar: who won each blind round and which letter was yours, the biggest hol
 you fixed, the final screenshot's path. Lost both rounds: say so, with the hole that remains.
 
 Without this the reviewer blocks the Task.
+
+## Report line
+
+```
+Invalidators: viewport <value> · language <value> · edge <recaptured | point not compared> · framing <ok | state that failed>
+```

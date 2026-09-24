@@ -1,6 +1,6 @@
 # Executor — subagents inside your session
 
-Read at step 3 of `executor.md`, when steps can run apart.
+Read at step 3 of `executor.md` before the first subagent, and at step 4 on the first round.
 
 | The steps… | Run |
 |---|---|
@@ -18,3 +18,9 @@ Read at step 3 of `executor.md`, when steps can run apart.
   when the fix grew beyond the recipe (new file, new symbol, a step the recipe did not name).
 - An arm returning something you do not understand, or outside its file list → undo its part
   and redo it yourself.
+
+## Report line
+
+```
+Subagents: <arm → files it touched, or "none"> · reviewers: <names dispatched from the contract's tooling table | "the contract has no table" | "waived by <who>">
+```

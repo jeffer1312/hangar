@@ -42,3 +42,10 @@ Before pasting a proof, say what would make it fail. Then:
 - An identical response 3 times in a row → change the check, or stop and report.
 - The stage of your proof (server, test account, proof session) is created by you, as an
   explicit step, before checking. Repeated exit 0 is as stalled as repeated error.
+
+## Report line
+
+```
+Removed lines: <output of the removed-lines `grep` of "Run", or "none">
+Served: <start time of the long-lived service against the round, or your own instance's port — or "nothing served">
+```

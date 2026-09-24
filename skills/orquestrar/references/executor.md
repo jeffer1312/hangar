@@ -2,8 +2,9 @@
 
 You are the only session that writes in this tree: one Task at a time, the one the kick-off
 released. Execute with what the contract's `Executes with:` line names; line missing or method
-unknown → ask the arbiter before the first Edit. Read only this page and the sibling it names
-for the step you are in.
+unknown → ask the arbiter before the first Edit. A step that names a sibling page opens by
+reading it, and the round report carries that page's `Report line`; nothing else of this skill
+is yours to read.
 
 ## Process
 
@@ -40,8 +41,8 @@ Done when the tools are chosen and their answers to the three questions are writ
    the arbiter enforces waivers already given in the plan, the contract or a standing rule of
    the user's (which wins over the contract). Apply a user prohibition by the exact command;
    without the literal command, ask which one is forbidden and what remains allowed.
-3. Subagents (independent steps, reads, and the reviewer subagents of the first round) →
-   `executor-subagentes.md`.
+3. Before the first subagent (independent steps, reads, the reviewer subagents of the first
+   round), read `executor-subagentes.md`.
 4. Reality contradicts a plan premise:
 
    | Can the Task's verification tell the paths apart? | Do |
@@ -56,15 +57,17 @@ Done when every step of the Task is checked.
 
 ### 4. Verify
 
-Before sending, dispatch the reviewer subagents as `executor-subagentes.md` says (first round;
-correction round only when the fix grew beyond the recipe). Run the verification the plan
-orders for this Task as `executor-verificacao.md` says. Diff
-touches pixels (`.svelte`/`.tsx`/`.vue`, CSS, templates, anything that draws) → also
-`executor-visual.md`. Task creates or changes orchestration (tmux, CLI, process, account,
-network) → also `executor-fluxo.md`. Both gates hold even when the plan does not ask.
+1. Read now, before any command: `executor-verificacao.md`. First round, or a fix that grew
+   beyond the recipe → `executor-subagentes.md`. Diff touches pixels (`.svelte`/`.tsx`/`.vue`,
+   CSS, templates, anything that draws) → `executor-visual.md`. Task creates or changes
+   orchestration (tmux, CLI, process, account, network) → `executor-fluxo.md`. Both gates hold
+   even when the plan does not ask.
+2. Dispatch the reviewer subagents as `executor-subagentes.md` says (first round; correction
+   round only when the fix grew beyond the recipe).
+3. Run the verification the plan orders for this Task as `executor-verificacao.md` says.
 
-Done when every command's last lines are pasted in the report draft and each proof says what
-would make it fail.
+Done when every command's last lines are pasted in the report draft, each proof says what would
+make it fail, and the draft carries the `Report line` of every page read in steps 3, 4 and 7.
 
 ### 5. Freeze the round (no commit)
 
@@ -89,6 +92,7 @@ Task: <N> | Round: <R> | Object: <stash hash> | Base: <HEAD hash>
 Diff: <path to diff-task-N-rR.txt>
 Verification: <command> → <last ~3 lines of output, PASTED>
    (one such line per command the plan orders)
+Page lines: <the `Report line` of each sibling page read this round, one per line>
 git status --short: <pasted output>
 Siblings outside the fix: <list with reason, or "none">   ← correction rounds only
 Visual: <path to the visual report .md>                    ← pixel Tasks only
@@ -108,9 +112,9 @@ Done when the message is delivered and the validator exits 0.
 ### 7. Wait
 
 The tree stays untouched while the reviewer reads. REPROVA arrives (directly from the reviewer;
-from the arbiter only with context only he has) → `executor-receita.md`, then back to step 4
-and a new round R+1. Disagreement with the recipe goes to the arbiter with evidence; the
-reviewer is not debated.
+from the arbiter only with context only he has) → read `executor-receita.md` now and follow it,
+then back to step 4 and a new round R+1. Disagreement with the recipe goes to the arbiter with
+evidence; the reviewer is not debated.
 
 Done when APROVA arrives.
 

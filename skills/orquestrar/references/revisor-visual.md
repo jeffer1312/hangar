@@ -50,3 +50,9 @@ and the bar, hunting:
   (before the fix, mid-transition), a state nobody captured.
 - The capturer's description is input; the conclusion is yours. You cannot see images and the
   Task is visual: tell the arbiter.
+
+## Report line
+
+```
+Screens: <N opened together at the end> · invalidators: <ok | which failed> · bar: <result | "waived by <who>">
+```

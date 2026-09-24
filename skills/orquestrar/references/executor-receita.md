@@ -17,3 +17,9 @@ Stop, report to the arbiter and wait instead, when:
   arrived cut in half); the scope stays as it was, nothing is improvised;
 - the recipe breaks something else — report with the evidence;
 - you disagree with evidence — the arbiter decides; the reviewer is not debated.
+
+## Report line
+
+```
+Cause reproduced: <what you observed running the recipe's steps, before the fix>
+```

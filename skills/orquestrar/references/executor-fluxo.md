@@ -18,3 +18,9 @@ cycle is in `executor.md`.
   never a badge the screen itself paints.
 - The evidence carries what distinguishes the two paths: proof of "it went to the right server"
   says which one was active at that instant.
+
+## Report line
+
+```
+Flow: <command run end to end against the real source> → <what happened, pasted> · suite count <base → now>
+```

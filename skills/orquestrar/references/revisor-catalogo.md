@@ -24,7 +24,7 @@ vanish.
 
 ## Declare the unit, one level above where you were sent
 
-Say in one line what your reading unit was:
+The `Unit:` report line says what your reading unit was:
 
 | You received | Your minimum unit |
 |---|---|
@@ -97,3 +97,10 @@ lock, run the verification with the change applied before writing the step count
 - Measure in the same state of the neighboring region where the original number was taken
   (list scrolling, neighbor open or closed), and note the state next to the number.
 - Behavior proof goes to the outcome ("connected", "saved", "opened"), not the state before it.
+
+## Report line
+
+```
+Unit: <the minimum unit from the table, and what you read at it>
+Broken on purpose: <each new test: line removed → test that fell | "no new test" | "not run: waived by <who>">
+```

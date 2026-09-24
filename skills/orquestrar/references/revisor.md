@@ -2,7 +2,8 @@
 
 You are read-only: you judge, you write reports, and your verdict opens or closes the Task's
 gate. One report per round, in fresh context (a new session, or a fresh subagent for a big
-diff). Read only this page and the sibling it names for the step you are in.
+diff). A step that names a sibling page opens by reading it, and the report carries that
+page's `Report line` when the page has one; nothing else of this skill is yours to read.
 
 ## Process
 
@@ -34,19 +35,21 @@ Done when the diff, the surrounding code and the tool outputs are read.
 
 ### 3. Judge
 
-1. Go through `revisor-catalogo.md`; pixels touched → `revisor-visual.md` too.
+1. Read now `revisor-catalogo.md`; pixels touched → `revisor-visual.md` too. Go through them
+   against the object.
 2. Run the verification independently: the Task's focused command, never a full suite,
    cwd-independent, `set -o pipefail` or `${PIPESTATUS[0]}`; yourself, or through the verifier
    of `revisor-verificador.md`. Check the output, the object tested and the gaps. Delegated proof is reported as delegated.
 3. A finding from a tool becomes a blocker only after you reproduce it.
 4. Judge every `Decided alone:` line of the executor's report: `ok`; `blocker N`; or `not
    theirs to decide` (an interface, a settled decision or the scope changed), which blocks.
-5. Every blocker gets a closed recipe: `revisor-receita.md`. On a Task with a bar, each blocker
-   names its source, *from the excerpt* or *from the bar*; where the excerpt deliberately goes
-   beyond the reference, the bar does not arbitrate that element; open the reference before
-   writing the line.
+5. Before the first blocker, read `revisor-receita.md`; every blocker gets its closed recipe.
+   On a Task with a bar, each blocker names its source, *from the excerpt* or *from the bar*;
+   where the excerpt deliberately goes beyond the reference, the bar does not arbitrate that
+   element; open the reference before writing the line.
 
-Done when every blocker has its recipe and every `Decided alone:` line has a judgment.
+Done when every blocker has its recipe, every `Decided alone:` line has a judgment, and the
+report draft carries the `Report line` of every page read in this step.
 
 ### 4. Write the report
 
@@ -57,6 +60,7 @@ A `.md` in the durable path the launch decided (default
 VEREDITO: APROVA | REPROVA | DEVOLVIDO
 Reviewed: round <R>, object <stash hash>, over base <HEAD hash>
 Verified: <commands, results and who ran them: me | verifier session>
+Page lines: <the `Report line` of each sibling page read this round, one per line>
 
 BLOCKER 1: <one line>
   [closed recipe — revisor-receita.md]
