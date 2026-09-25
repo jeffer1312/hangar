@@ -87,6 +87,10 @@ EDITAVEIS: dict[str, type] = {
     # navegador — so aqui a escolha vale nos tres. Quem pede explicito (`--jev`, `jev=true`)
     # continua vencendo naquela sessao, sem mexer neste padrao.
     "jev_padrao": bool,
+    # Onde e com qual modelo o Jev decide. Vazio = a API da typesafe com o modelo padrão de cada
+    # consumidor; o OpenRouter serve o mesmo Jev com o mesmo corpo em outro endereço.
+    "jev_endpoint": str,
+    "jev_model": str,
     # LLM pequeno que escreve o valor de um campo que o chamador nao cobriu — OPCIONAL, e a mesma
     # ordem de precedencia que o CLI ja usa: base_url + api_key + modelo (endpoint compativel com
     # a OpenAI), senao cmd, senao o padrao do proprio CLI.
@@ -162,6 +166,10 @@ _JEV_TEXTO = (
     ("jev_texto_modelo", "JEV_TEXTO_MODELO"),
     ("jev_texto_cmd", "JEV_TEXTO_CMD"),
 )
+_JEV_DESTINO = (
+    ("jev_endpoint", "JEV_ENDPOINT"),
+    ("jev_model", "JEV_MODEL"),
+)
 # Marcador do estado do recurso NA SESSÃO. Vai sempre, ligado ou desligado: sem ele o
 # `hangar-preview objetivo` não separa "desligado nesta sessão" de "nunca configurado", e as duas
 # pedem frases diferentes.
@@ -190,7 +198,7 @@ def env_jev(ligado: bool) -> dict[str, str]:
     chave = str(get("jev_api_key") or "").strip()
     if chave:
         env["TYPESAFE_API_KEY"] = chave
-    for campo, var in _JEV_TEXTO:
+    for campo, var in _JEV_DESTINO + _JEV_TEXTO:
         valor = str(get(campo) or "").strip()
         if valor:
             env[var] = valor
@@ -329,7 +337,7 @@ def _coagir(campo: str, valor: Any) -> Any:
                 raise ValueError(f"term_origins: '{entrada}' nao tem endereco (ex: https://app.exemplo.com)")
     if campo == "shortcuts" and texto:
         _validate_shortcuts(texto)
-    if campo in ("transcription_base_url", "llm_base_url", "llm_briefing_base_url") and texto and not (texto.startswith("http://") or texto.startswith("https://")):
+    if campo in ("transcription_base_url", "llm_base_url", "llm_briefing_base_url", "jev_endpoint") and texto and not (texto.startswith("http://") or texto.startswith("https://")):
         # Mesmo argumento do editor: antes so o dono da maquina escolhia o endpoint (env), agora o
         # celular escreve. Aceita vazio (volta ao padrao) ou uma URL http(s) de verdade.
         raise ValueError(f"{campo}: use vazio ou uma URL http(s)://")

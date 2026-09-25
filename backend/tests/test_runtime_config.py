@@ -237,6 +237,25 @@ def test_env_jev_ligado_leva_chave_e_o_texto_configurado():
     assert "JEV_TEXTO_CMD" not in env
 
 
+def test_env_jev_ligado_leva_endpoint_e_modelo_do_jev():
+    rc.aplicar({"jev_api_key": "sk-or-x", "jev_endpoint": "https://openrouter.ai/api/alpha/decisions",
+                "jev_model": "typesafe/jev-1.13-20260917"})
+    env = rc.env_jev(True)
+    assert env["JEV_ENDPOINT"] == "https://openrouter.ai/api/alpha/decisions"
+    assert env["JEV_MODEL"] == "typesafe/jev-1.13-20260917"
+
+
+def test_env_jev_desligado_nao_leva_endpoint_nem_modelo():
+    rc.aplicar({"jev_endpoint": "https://openrouter.ai/api/alpha/decisions", "jev_model": "m"})
+    assert rc.env_jev(False) == {"HANGAR_JEV": "off"}
+
+
+def test_endpoint_do_jev_exige_url_http():
+    with pytest.raises(ValueError, match="jev_endpoint"):
+        rc.aplicar({"jev_endpoint": "openrouter.ai/api/alpha/decisions"})
+    rc.aplicar({"jev_endpoint": ""})
+
+
 def test_env_jev_ligado_sem_chave_cadastrada_nao_inventa_variavel():
     assert rc.env_jev(True) == {"HANGAR_JEV": "on"}
 

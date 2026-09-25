@@ -74,6 +74,10 @@
     // Logo abaixo da chave de propósito: é o único campo cujo efeito depende dela estar preenchida.
     { chave: 'jev_padrao', rotulo: m.config_server_jev_padrao(), tipo: 'liga', secao: 'avancado',
       ajuda: m.config_server_jev_padrao_ajuda() },
+    { chave: 'jev_endpoint', rotulo: m.config_server_jev_endpoint(), tipo: 'texto', secao: 'avancado',
+      ajuda: m.config_server_jev_endpoint_ajuda() },
+    { chave: 'jev_model', rotulo: m.config_server_jev_modelo(), tipo: 'texto', secao: 'avancado',
+      ajuda: m.config_server_jev_modelo_ajuda() },
     { chave: 'jev_texto_base_url', rotulo: m.config_server_jev_texto_endpoint(), tipo: 'texto', secao: 'avancado',
       ajuda: m.config_server_jev_texto_endpoint_ajuda() },
     { chave: 'jev_texto_api_key', rotulo: m.config_server_jev_texto_chave(), tipo: 'segredo', secao: 'avancado',
