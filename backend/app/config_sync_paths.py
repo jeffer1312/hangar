@@ -22,10 +22,11 @@ _SHELL_WORDS = frozenset({"if", "then", "else", "fi", "[", "[[", "test", "exec",
 _END = r"(?=$|[\\/\s'\"`;|&)])"
 _ANY = r"⟦(?:HANGAR|CLAUDE|CODEX|HOME)⟧"
 _QUOTED = re.compile(r"(['\"])(" + _ANY + r"[^'\"]*)\1")
-_BARE = re.compile(_ANY + r"[^\s'\"`;|&)]*")
+_BARE = re.compile(_ANY + r"[^\s'\"`;|&)⟦]*")
 # ponytail: o resto do caminho para no primeiro espaço; caminho com espaço vindo de origem
 # Windows fica com contrabarra depois do espaço. Resolver aspas aqui se isso aparecer.
-_WITH_REST = re.compile(r"⟦(HANGAR|CLAUDE|CODEX|HOME)⟧([^\s'\"`;|&)]*)")
+# `⟦` fica fora do resto para `⟦HOME⟧/a:⟦HOME⟧/b` resolver os dois marcadores.
+_WITH_REST = re.compile(r"⟦(HANGAR|CLAUDE|CODEX|HOME)⟧([^\s'\"`;|&)⟦]*)")
 _TOKEN = re.compile(r"""(['"])([^'"]*)\1|([^\s'"`;|&()]+)""")
 _ABSOLUTE = re.compile(r"^(?:/|[A-Za-z]:[\\/])")
 
@@ -116,6 +117,10 @@ def fix_programs(command: str, which=None, exists=None) -> tuple[str, list[str]]
 
     def swap(m: re.Match) -> str:
         nonlocal first
+        # Pedaço colado no texto anterior (`"$DIR"/.venv/bin/python`) não é palavra própria.
+        if m.start() > 0 and not command[m.start() - 1].isspace() \
+                and command[m.start() - 1] not in ";|&(":
+            return m.group(0)
         quote, inside, bare = m.group(1), m.group(2), m.group(3)
         token = inside if inside is not None else bare
         is_first, first = first, False

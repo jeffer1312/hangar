@@ -34,6 +34,11 @@ def test_resolve_to_windows_target_uses_forward_slashes():
     assert resolve(f"{H}/.orca/h.sh", WIN) == "C:/Users/bia/.orca/h.sh"
 
 
+def test_resolve_every_marker_in_path_list():
+    assert resolve(f"{H}/.local/bin:{H}/.cargo/bin:/usr/bin", DST) == \
+        "/home/bia/.local/bin:/home/bia/.cargo/bin:/usr/bin"
+
+
 def test_resolve_leaves_shell_variables_alone():
     assert resolve("echo ${HOME} {HOME}", DST) == "echo ${HOME} {HOME}"
 
@@ -67,6 +72,12 @@ def test_fix_programs_python3_falls_back_to_python():
 def test_fix_programs_reports_missing_bare_program():
     new, missing = fix_programs("rtk hook claude", which=lambda n: None, exists=lambda p: False)
     assert new == "rtk hook claude" and missing == ["rtk"]
+
+
+def test_fix_programs_leaves_path_glued_to_variable_alone():
+    new, missing = fix_programs('"$CLAUDE_PROJECT_DIR"/.venv/bin/python x.py',
+                                which=lambda n: "/usr/bin/python", exists=lambda p: False)
+    assert new == '"$CLAUDE_PROJECT_DIR"/.venv/bin/python x.py' and missing == []
 
 
 def test_fix_programs_ignores_shell_words_and_assignments():
