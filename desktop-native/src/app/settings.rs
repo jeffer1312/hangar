@@ -56,7 +56,7 @@ const APPEARANCE_ROWS: [(&str, Option<&str>); 27] = [
 ];
 
 /// Linhas das outras páginas prontas, no mesmo formato.
-const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 8] = [
+const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 9] = [
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
@@ -68,6 +68,12 @@ const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 8] = [
     (Page::Notifications, &[("server_notify_finished", Some("server_notify_finished_help")), ("server_short_turn", Some("server_short_turn_help")),
         ("server_notify_dead", Some("server_notify_dead_help")), ("server_stall", Some("server_stall_help")), ("server_quiet", Some("server_quiet_why"))]),
     (Page::Attachments, &[("server_keep_attachments", Some("server_keep_attachments_help"))]),
+    (Page::Advanced, &[("server_automations", Some("server_automations_help")), ("server_thinking", Some("server_thinking_help")),
+        ("server_translate_thinking", Some("server_translate_thinking_help")), ("server_editor", Some("server_editor_help")),
+        ("server_jev_key", Some("server_jev_key_help")), ("server_jev_default", Some("server_jev_default_help")),
+        ("server_jev_endpoint", Some("server_jev_endpoint_help")), ("server_jev_text_key", Some("server_jev_text_key_help")),
+        ("server_jev_model", Some("server_jev_model_help")), ("server_jev_cmd", Some("server_jev_cmd_help")),
+        ("server_roots", Some("server_roots_help")), ("server_machine_only", Some("server_machine_only_help")), ("server_env", Some("server_env_help"))]),
 ];
 
 /// Um resultado da busca: a linha de uma página, ou a própria página (`row: None`) quando ela ainda não tem linhas.
@@ -454,7 +460,7 @@ impl Hangar {
             Page::About => self.render_about(cx),
             Page::Accounts => self.render_accounts(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
-            Page::Notifications | Page::Attachments => self.render_server_page(page, cx),
+            Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             _ => self.render_page_soon(page, cx),
         };
         let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)

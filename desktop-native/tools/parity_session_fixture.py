@@ -17,7 +17,8 @@ Contas e modelos (Task 12 R5) moram em parity_accounts_fixture.py; GET /control/
 GET /control/r6?load=<ok|500|drop>&load_delay=<s>&save=<ok|422|500|drop>&save_delay=<s>&shortcuts=<fixture|json|>
 muda a config de atalhos (Task 12 R6): POST /api/config {"shortcuts"} grava na memória, null apaga o override.
 GET /control/r7?load=<ok|500|drop>&load_delay=<s>&save=<ok|422|500|drop>&save_delay=<s>&quiet_load=<ok|500>&quiet_save=<ok|422|500>
-&quiet_delay=<s>&quiet=<HH:MM-HH:MM|> muda os campos de Notificações/Anexos e as horas silenciosas (Task 12 R7a).
+&quiet_delay=<s>&quiet=<HH:MM-HH:MM|> muda os campos de Notificações/Anexos e as horas silenciosas (Task 12 R7a);
+env=<fixture|none> tira as variáveis do .env da leitura, como um servidor antigo (R7b).
 """
 
 import parity_accounts_fixture as accounts
@@ -92,14 +93,51 @@ SHORTCUTS = json.dumps([
 # Task 12 R6: a config de atalhos gravada aqui e como GET/POST /api/config respondem.
 R6 = {"shortcuts": SHORTCUTS, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0}
 # Task 12 R7: campos do runtime_config das páginas Notificações e Anexos (tipo do backend), e as horas silenciosas.
-R7_TYPES = {"notify_finished": bool, "finish_min_seconds": int, "notify_dead": bool, "stall_seconds": int, "upload_retention_days": int}
-R7 = {"values": {"notify_finished": True, "finish_min_seconds": 60, "notify_dead": True, "stall_seconds": 900, "upload_retention_days": 30},
-      "edited": {"stall_seconds"}, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0,
-      "quiet": {"start": "22:00", "end": "07:00"}, "quiet_load": "ok", "quiet_save": "ok", "quiet_delay": 0.0}
+R7_TYPES = {"notify_finished": bool, "finish_min_seconds": int, "notify_dead": bool, "stall_seconds": int, "upload_retention_days": int,
+            "automations": bool, "mostrar_pensamento": bool, "traduzir_pensamento": bool, "editor": str, "jev_api_key": str,
+            "jev_padrao": bool, "jev_texto_base_url": str, "jev_texto_api_key": str, "jev_texto_modelo": str, "jev_texto_cmd": str,
+            "scan_roots": str}
+# Segredo volta mascarado, como runtime_config.mascarar; a chave sintética daqui nunca vai para registro nem tela.
+R7_SECRETS = {"jev_api_key", "jev_texto_api_key"}
+R7 = {"values": {"notify_finished": True, "finish_min_seconds": 60, "notify_dead": True, "stall_seconds": 900, "upload_retention_days": 30,
+                 "automations": True, "mostrar_pensamento": False, "traduzir_pensamento": True, "editor": "code", "jev_api_key": "",
+                 "jev_padrao": False, "jev_texto_base_url": "", "jev_texto_api_key": "sintetica-fixture-0000abcd", "jev_texto_modelo": "",
+                 "jev_texto_cmd": "", "scan_roots": "/synthetic/projetos,/synthetic/pessoal/um-caminho-bem-comprido/que-nao-cabe-inteiro/na-linha"},
+      "edited": {"stall_seconds", "scan_roots"}, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0,
+      "quiet": {"start": "22:00", "end": "07:00"}, "quiet_load": "ok", "quiet_save": "ok", "quiet_delay": 0.0, "env": "fixture"}
+# Avançado: o bloco só leitura (os 5 primeiros são de Máquinas e a tela não repete) e as variáveis do .env, no formato do backend.
+R7_READ = {"port": 8765, "lan_bind_ip": "127.0.0.1", "server_id": "fixture", "public_url": "", "terminal_origem_ok": True,
+           "terminal_panel": True, "traducao_pensamento": False, "versao": "2026.09.24-sintetico"}
+R7_ENV = [
+    {"nome": "CP_AUTH_TOKEN", "valor": None, "definida": True, "segredo": True, "descricao": "auth_token", "alerta": None},
+    {"nome": "CP_VAPID_PRIVATE", "valor": None, "definida": False, "segredo": True, "descricao": "vapid_private", "alerta": None},
+    {"nome": "CP_PORT", "valor": 8765, "definida": True, "segredo": False, "descricao": "port", "alerta": None},
+    {"nome": "CP_RELOAD", "valor": False, "definida": True, "segredo": False, "descricao": "reload", "alerta": None},
+    {"nome": "CP_PUBLIC_URL", "valor": "", "definida": False, "segredo": False, "descricao": "public_url", "alerta": None},
+    {"nome": "CLAUDE_CONFIG_DIRS", "valor": "/synthetic/.claude,/synthetic/.claude-outra-conta,/synthetic/.claude-mais-uma-conta-longa",
+     "definida": True, "segredo": False, "descricao": "claude_config_dirs", "alerta": None},
+    {"nome": "CP_CODEX_SYNC_ENABLED", "valor": "0", "definida": True, "segredo": False, "descricao": "codex_sync_enabled",
+     "alerta": "codex_sync_desligado"},
+    {"nome": "CP_CODIGO_NOVO", "valor": "x", "definida": True, "segredo": False, "descricao": "codigo_que_a_tela_nao_conhece", "alerta": None},
+]
+
+
+def r7_mask(value):
+    if not value:
+        return ""
+    return "•" * len(value) if len(value) <= 8 else f"{value[:4]}{'•' * 8}{value[-4:]}"
 
 
 def r7_fields():
-    return {k: {"valor": v, "definido": True, "origem": "app" if k in R7["edited"] else "env"} for k, v in R7["values"].items()}
+    return {k: {"valor": r7_mask(v) if k in R7_SECRETS else v, "definido": bool(v) if k in R7_SECRETS else True,
+                "origem": "app" if k in R7["edited"] else "env"} for k, v in R7["values"].items()}
+
+
+def r7_config(fields, shortcuts):
+    body = {"campos": {"shortcuts": {"valor": shortcuts}, **fields}, "somente_leitura": R7_READ}
+    if R7["env"] == "fixture":
+        body["variaveis_env"] = R7_ENV
+    return body
 
 
 def msg(kind, eid, text, **extra):
@@ -254,7 +292,7 @@ def later(seconds, change):
     threading.Thread(target=run, daemon=True).start()
 
 
-SECRETS = ("api_key", "auth_cookie", "workspace_id", "codigo")
+SECRETS = ("api_key", "auth_cookie", "workspace_id", "codigo", *R7_SECRETS)
 
 
 def record(method, path, body):
@@ -338,7 +376,7 @@ class Handler(BaseHTTPRequestHandler):
                 for key, raw in ((k, v[0]) for k, v in query.items()):
                     if key in ("load_delay", "save_delay", "quiet_delay"):
                         R7[key] = float(raw)
-                    elif key in ("load", "save", "quiet_load", "quiet_save"):
+                    elif key in ("load", "save", "quiet_load", "quiet_save", "env"):
                         R7[key] = raw
                     elif key == "quiet":
                         R7["quiet"] = dict(zip(("start", "end"), raw.split("-"))) if raw else None
@@ -381,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
             elif mode == "500":
                 self.send_json(fail("erro_sintetico", "leitura da config falhou (sintético)"), 500)
             else:
-                self.send_json({"campos": {"shortcuts": {"valor": value}, **fields}, "somente_leitura": {}, "variaveis_env": []})
+                self.send_json(r7_config(fields, value))
             return
         if path == "/api/push/settings":
             record("GET", self.path, None)
@@ -657,6 +695,17 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     self.send_json({"detail": f"{key}: esperado número (sintético)"}, 400)
                     return
+            # Como runtime_config.aplicar: a máscara (ou vazio) devolvida sobre uma chave guardada não a troca.
+            if key in R7_SECRETS and str(value).strip() in {r7_mask(R7["values"][key]), ""} and R7["values"][key]:
+                continue
+            # As recusas do _coagir do backend, com o mesmo texto.
+            if key == "editor" and any(c in str(value) for c in "/\\"):
+                self.send_json({"detail": "editor: use o nome do binario (ex: code), sem caminho"}, 400)
+                return
+            bad = [p.strip() for p in str(value).split(",") if p.strip() and not (p.strip().startswith("/synthetic/") or os.path.isdir(p.strip()))]
+            if key == "scan_roots" and bad:
+                self.send_json({"detail": f"scan_roots: '{bad[0]}' nao e um diretorio nesta maquina"}, 400)
+                return
             changes[key] = value
         # O backend recusa validação com 400 (`patch_config`); o modo mantém o nome da R6.
         if mode == "422":
@@ -673,7 +722,8 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self.connection.shutdown(2)
             return
-        self.send_json({"campos": {"shortcuts": {"valor": R6["shortcuts"]}, **fields}, "somente_leitura": {}})
+        # Como o backend: o POST devolve campos e só leitura, sem as variáveis do .env.
+        self.send_json({k: v for k, v in r7_config(fields, R6["shortcuts"]).items() if k != "variaveis_env"})
 
     def save_quiet(self, body):
         """POST /api/push/quiet-hours: HH:MM nos dois liga a janela; qualquer um vazio desliga (como push.set_quiet_hours)."""
