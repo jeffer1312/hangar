@@ -1611,3 +1611,21 @@ def test_ask_user_question_conversar_nao_e_409_e_leva_as_outras_respostas(adapte
     assert "Branch base? → develop" in resp["message"]
     assert "Story points? → 5" in resp["message"]
     assert "Trabalhar onde?" in resp["message"]
+
+
+def test_transcript_path_segue_o_jsonl_movido_pela_worktree(tmp_path):
+    ad = ClaudeHeadlessAdapter()
+    cwd = "/repo/web"
+    sid = "22222222-2222-2222-2222-222222222222"
+    projetos = tmp_path / "projects"
+    original = projetos / "-repo-web" / f"{sid}.jsonl"
+    assert ad.transcript_path(cwd, sid, str(tmp_path)) == str(original)
+
+    movido = projetos / "-repo-web--claude-worktrees-grid" / f"{sid}.jsonl"
+    movido.parent.mkdir(parents=True)
+    movido.write_text("{}\n")
+    assert ad.transcript_path(cwd, sid, str(tmp_path)) == str(movido)
+
+    original.parent.mkdir(parents=True)
+    original.write_text("{}\n")
+    assert ad.transcript_path(cwd, sid, str(tmp_path)) == str(original)
