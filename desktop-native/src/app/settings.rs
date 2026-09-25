@@ -57,7 +57,7 @@ const APPEARANCE_ROWS: [(&str, Option<&str>); 27] = [
 ];
 
 /// Linhas das outras páginas prontas, no mesmo formato.
-const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 11] = [
+const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     // As entradas de Máquinas do web (`BuscaConfig.svelte`); a busca só abre a página, sem abrir o detalhe.
     (Page::Servers, &[("machines_others", None), ("machines_id", Some("machines_id_legend")),
         ("server_term_origins", Some("server_term_origins_help")), ("machines_sign_out_title", None), ("machines_reconnect", None),
@@ -480,7 +480,7 @@ impl Hangar {
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             Page::Servers => self.render_machines(cx),
-            _ => self.render_page_soon(page),
+            Page::Sync | Page::Orchestration | Page::Harnesses | Page::Windows => self.render_page_soon(page),
         };
         let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
             .child(div().w_full().flex().justify_center().child(div().w(px(720.)).max_w_full().px_4().pt(px(44.)).pb(px(40.)).child(body)));
