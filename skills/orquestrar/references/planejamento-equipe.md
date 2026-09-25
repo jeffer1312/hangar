@@ -70,6 +70,8 @@ Team table in `regras-<gid>.md`, raw values only (`-` = empty). Start from
 - Optional `vez` column (`| papel | vez | sessão | …`), one row per value; a role uses one
   selector: rotation (`vez` = 1, 2, 3; Task N → row `(N-1) % total`) or risk (`vez` = `low`/`high`;
   Task N → the row its `Risk:` line names). Rule in `arbitro-lancamento.md`.
+- No review round goes to the arbiter, the last one included: the reviewer row judges every
+  round, and the arbiter wakes for decisions and the next Task.
 - All pipeline roles in the table, phases 4 and 5 included. Final review with its trigger: "fires
   when every code Task is approved", never "after Task N".
 - The table is machine-read: cells carry raw values, explanations go outside the table.

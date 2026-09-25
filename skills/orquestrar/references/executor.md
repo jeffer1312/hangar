@@ -139,6 +139,9 @@ Done when your last message is the step-8 report and the tree is clean.
 
 ## Locks, at every step
 
+- Nobody reads your chat: no text for the user — no narration, plan, status or summary between
+  tool calls or at the end of a turn. What matters goes in the report file or the message to
+  the arbiter or reviewer.
 - The tree must be clean on arrival, unless the kick-off carries `Frozen round: <hash> · the
   dirty tree is YOURS` (then the dirt is your predecessor's round: `git stash show <hash>`).
   Other dirt is another session's uncommitted work → stop and report; a file you did not touch

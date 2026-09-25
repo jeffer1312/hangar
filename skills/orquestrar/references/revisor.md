@@ -115,6 +115,9 @@ Done when the next round arrives (back to step 1.3), or the arbiter has your one
 
 ## Locks, at every step
 
+- Nobody reads your chat: no text for the user — no narration, plan, status or summary between
+  tool calls or at the end of a turn. What matters goes in the report file or the message to
+  the executor or arbiter.
 - The executor's checkout, index and Git metadata stay untouched by you, your subagents and
   the verifier; the script says so. Tests that write cache or build, and mutation, run in a
   disposable copy of the frozen object per `protecao.md`; final artifacts go to the durable

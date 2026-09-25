@@ -56,6 +56,9 @@ turn: use the flag that exits, `timeout N`, or background file logging.
 - Every claim about color, sign or state (`✓` / `✗` / `·`, enabled, disabled) is written from a
   300–400% crop of the detail, and the caption cites the color with the sign.
 - Write each caption looking at that file. "idem" is forbidden.
+- Per round, join the states into one panel (`folha <shots in state order>`, numbered, up to 6
+  per sheet) and the reference's same states into another. The panels go to the reviewer only;
+  the single screenshots stay for a detail check. The arbiter gets no screenshot.
 - The proof of a behavior Task ends at the outcome the user asked for ("connected", "saved",
   "opened"), not at the state right before it.
 
@@ -114,7 +117,7 @@ state and width as yours. Capture both and ask a fresh subagent, without saying 
 
 ## What goes in the report
 
-Per state: the screenshot's path, what you clicked and what happened, the question asked of
+The two panels' paths. Per state: the screenshot's path, what you clicked and what happened, the question asked of
 whoever sees (if delegated) and the answer, what you changed because of it.
 
 With a bar: who won each blind round and which letter was yours, the biggest hole named, what

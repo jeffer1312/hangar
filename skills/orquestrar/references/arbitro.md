@@ -101,9 +101,9 @@ Done when the item is journaled and the ball is back with executor or reviewer.
    - Report ≠ repo → back to the executor, not the reviewer.
    - Commit diverging from the approved round → new round to the executor; the resulting
      second commit is legitimate; no `--amend`.
-2. Your check is metadata, never a second review: independent proof is the reviewer's, directly
-   or via the authorized verifier. Tests, diff, defect reproduction, visual comparison, editor
-   stay with them; you never run, read, reproduce, redo or open them.
+2. Your check is metadata, never a review: every round, the last included, is the reviewer's
+   (directly or via the authorized verifier), whatever a plan says. Tests, diff, screenshots,
+   defect reproduction, editor stay with them; you never run, read, reproduce, redo or open them.
 3. The commit is born reviewed: one Task = one commit on the normal path.
 4. Batch: merge one at a time after its APROVA; `git fetch` before every merge, only then read
    `## main...origin/main`; remove no worktree without checking its trail in global config

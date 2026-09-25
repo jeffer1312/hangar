@@ -16,6 +16,10 @@ Read at step 3 of `executor.md` before the first subagent, and at step 4 on the 
 - First round, before sending: dispatch the machine's reviewer subagents from the contract's
   tooling table, in parallel, with the Task's explicit paths. Correction round: re-run only
   when the fix grew beyond the recipe (new file, new symbol, a step the recipe did not name).
+- Pixel-touching Task, same first round: one fresh subagent gets your panel and the
+  reference's panel (`executor-visual.md`, step 3) and lists every difference from the
+  reference and every broken thing (overlap, cut text, a notice that does not show). Fix what it
+  names, once; what you leave goes in the report with the reason.
 - An arm returning something you do not understand, or outside its file list → undo its part
   and redo it yourself.
 

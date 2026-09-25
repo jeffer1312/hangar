@@ -43,8 +43,9 @@ and the bar, hunting:
 
 ## How to look without burning context
 
-- Do not follow screenshot by screenshot while the work moves. At the end, open ALL the
-  screenshots at once and check each shows what its caption says.
+- Do not follow screenshot by screenshot while the work moves. At the end, read the round's two
+  panels (yours and the reference's) and check each state shows what its caption says; open a
+  single screenshot only for a detail the panel cannot settle (color, sign, enabled).
 - A symbol or color claim is checked on the zoomed crop, never by eye on the whole image.
 - Hunt: a screenshot that does not prove its caption, a state captured at the wrong moment
   (before the fix, mid-transition), a state nobody captured.
@@ -54,5 +55,5 @@ and the bar, hunting:
 ## Report line
 
 ```
-Screens: <N opened together at the end> · invalidators: <ok | which failed> · bar: <result | "waived by <who>">
+Screens: <2 panels + N single shots for detail> · invalidators: <ok | which failed> · bar: <result | "waived by <who>">
 ```

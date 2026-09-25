@@ -70,6 +70,9 @@ above.
 
 ## Locks
 
+- Nobody reads your chat: no text for the user — no narration, plan, status or summary between
+  tool calls or at the end of a turn. What matters goes in the report file or the message to
+  the arbiter.
 - Account and model are the contract's row for your role; subagents on the same account, model
   switch only where the contract allows, `model:` in any agent frontmatter checked. Need
   another → stop and ask.
