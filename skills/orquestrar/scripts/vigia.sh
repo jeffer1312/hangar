@@ -326,7 +326,8 @@ deliver_alarm() {  # $1 = key (one per alarm), $2 = message, $3 = label for the 
   unset 'ALARM_FAILS[$1]'
   local drop="[aviso] [vigia] alarm dropped after 3 failed deliveries: $2"
   if [ -n "$ORQD" ]; then
-    ORQ_DIR="$ORQD" python3 "$ORQ" log "$drop" >/dev/null 2>>"$CP_VIGIA_LOG" || echo "$drop" >&2
+    # notify with a leading [aviso] only journals it (as `aviso:`, the prefix the panel feed reads).
+    ORQ_DIR="$ORQD" python3 "$ORQ" notify "$drop" >/dev/null 2>>"$CP_VIGIA_LOG" || echo "$drop" >&2
   else
     echo "$drop" >>"$CP_VIGIA_LOG"
   fi

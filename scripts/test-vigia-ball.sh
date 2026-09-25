@@ -168,7 +168,7 @@ novo r-teto; orq event task_inicio --task 1 --titulo x --executor exec1 --par re
 echo "9 Account out of quota" > "$t/falha"
 M=100 CICLOS=6 vigia
 [ "$(grep -c "^orq: --tmux arb \[vigia\] Account out of quota" "$t/sent.log")" -eq 3 ] || fail "o alarme não parou na 3ª tentativa"
-[ "$(grep -c "\[aviso\] \[vigia\] alarm dropped after 3 failed deliveries: .*Account out of quota" "$d/registro.md")" -eq 1 ] \
+[ "$(grep -c "^- [^·]* · aviso: \[aviso\] \[vigia\] alarm dropped after 3 failed deliveries: .*Account out of quota" "$d/registro.md")" -eq 1 ] \
   || fail "o alarme largado não deixou um [aviso] no registro"
 
 # Sem `orq init`, todo alarme via orq cairia só no log: o vigia recusa armar.
