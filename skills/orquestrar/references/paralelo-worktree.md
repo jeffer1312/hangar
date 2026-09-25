@@ -83,7 +83,7 @@ git merge --no-ff <work>-t2
 # the merged Tasks' verifications, here, now
 ```
 
-- Merge conflict → the regions touched. Don't resolve it yourself: the losing Task gets a
+- Merge conflict → the regions overlapped. Don't resolve it yourself: the losing Task gets a
   correction round on the merged base, same executor — a new worktree from the merged tip, its
   approved diff as reference, only its own region redone. Exception: a positional conflict in a
   file the plan declared additive — resolve it at the merge by merge strategy and prove it by

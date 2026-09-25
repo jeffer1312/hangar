@@ -22,12 +22,13 @@ retrospective, with triggers) in `<durable dir>/fechamento.md`, one `orq log` li
 (`arbitro-encerramento.md`) · a-priori estimate
 written: time and rounds per Task · account policy read and copied into the contract.
 
-### 2. Release one Task
+### 2. Release the ready Tasks
 
 1. May it start? Contract progress + plan. The plan's wave starts together, one worktree per
    Task (`paralelo-worktree.md`), while the team's accounts have quota; a Task outside the wave
-   waits for the one it depends on. Same tree: an open review freezes it (must commit anyway →
-   `arbitro-encerramento.md`, "Phase 4"). Only the plan declares waves.
+   waits for the one it depends on or collides with. Same tree: an open review freezes it (must
+   commit anyway → `arbitro-encerramento.md`, "Phase 4"). Only the plan declares waves; none
+   declared → one Task at a time, the previous one approved.
 2. One role, one session, from its row in `## Quem é quem` (`vez` → `arbitro-lancamento.md`,
    "A rotating role"): open that role's session ("Opening a session"); the one at hand keeps
    its role, roles never stack. The session that executed never reviews its own commit, even
@@ -71,18 +72,18 @@ made mid-work enters the contract before you use it.
 
 | Arrives | Do |
 |---|---|
-| DEVOLVIDO, any round | gate stays closed; resolve, send it back and log the ball: `orq event task_inicio …` again (executor) or the round's `orq event entrega …` again (reviewer) |
+| DEVOLVIDO, any round | gate stays closed; resolve, send it back and log the ball: `orq event task_inicio …` (executor) or the round's `orq event entrega …` (reviewer) again |
 | `"reincide": true` (second rejection of the same cause) — the single door into the loop | ask the reviewer for a recipe with a new approach, or rotate the reviewer |
 | recipe disagreement, with evidence (the arrow is one-way: the executor never replies to the reviewer) | decide on it, never by re-running; evidence doesn't close → one specific question to one of them, usually the reviewer |
 | recipe missing the six fields or the caller inventory; report without `VEREDITO:` / `Verified` (commands, results, who ran them) | back to the reviewer; the executor waits. Form you enforce, merit never |
 | two verdicts for one round (a round = its `git stash store` hash) | treat as DEVOLVIDO, order a new judgment |
 | reviewer rotated with a report in flight | `arbitro-vigia.md`, "Rotation" |
-| skipped skill step | waiving is the user's; enforce only waivers already given in plan, contract or standing rule; take the rest to a decision |
+| skipped skill step | waiving is the user's; enforce only waivers given in plan, contract or standing rule; take the rest to a decision |
 | a small finding | it blocks this Task; the next Task never carries it |
 | a blocker fix, including one an automatic reviewer provoked mid-Task | accepted with its trap (a test that bites) in the same commit; no test → not accepted, on both sides of the gate |
 | executor needs context only you have — the one case you relay | send the path, never prose |
 | pixels with no bar in the contract · stolen browser tab | yours; the bar as in step 2 |
-| a `low` Task rejected 2× for the same cause, or a `Decided alone:` line the reviewer flagged | re-tag `Risk: high` in the orchestration plan, upward only, never down; journal the reason; the next executor session is born on the `high` row (replacement kick-off, `Frozen round`); `orq event sessao_trocada … --motivo <reason>`. Route `audit` → `replanejar.md`, `audit` → `full` |
+| a `low` Task rejected 2× for the same cause, or a `Decided alone:` line the reviewer flagged | re-tag `Risk: high` in the orchestration plan, upward only; journal the reason; the next executor session is born on the `high` row (replacement kick-off, `Frozen round`); `orq event sessao_trocada … --motivo <reason>`. Route `audit` → `replanejar.md`, `audit` → `full` |
 | two consecutive rounds whose waste is "closed only the case the previous report named" | no guideline; `arbitro-vigia.md`, "Deciding vs waking the user" (ask the user, spend in hand; unavailable → "Tightened criterion") |
 | plan untrustworthy (fallen premise, method without executing half, two consecutive Tasks blowing the estimate for the same cause, user order) | `replanejar.md`: propose and conduct the swap; never rewrite your own plan. A recipe the plan declared "closes after Task N-1" is planning: the planner or a fresh session with the spec closes it; you deliver inputs and excerpt the result |
 | a user's suspicion about the product | a verification item: journal it, hand it to the next reviewer as a directed question; the answer comes from proof, never from memory |
@@ -98,9 +99,9 @@ Done when the item is journaled and the ball is back with executor or reviewer.
    Read the approving report's WASTE and NOTED lines (its path: the `veredito`'s `motivo=` in
    `orq read journal --task <N>`): NOTED → contract, WASTE → lessons. Add one PROGRESS line with
    `orq log --task <N>`: elapsed time and rounds vs the estimate; past 2× either → stop and ask.
-   Context does not count here; it rules rotation only.
-   - Commit diverging from the approved round → new round to the executor; the resulting
-     second commit is legitimate.
+   Context counts only for rotation.
+   - Commit diverging from the approved round → new round to the executor; the second
+     commit is legitimate.
    - An untouchable exception written in the contract → `orq init` again with the new
      `--untouchable` list; once that Task's `orq commit` passes, `orq init` again with the
      full original list.
@@ -110,11 +111,11 @@ Done when the item is journaled and the ball is back with executor or reviewer.
    verifier), whatever a plan says: tests, diff, screenshots, defect reproduction and editor
    stay with them; you never run, read, reproduce, redo or open them.
 3. The commit is born reviewed: one Task = one commit on the normal path.
-4. Batch: merge one at a time after its APROVA; `git fetch` before every merge, only then read
+4. Wave: merge one at a time after its APROVA; `git fetch` before every merge, only then read
    `## main...origin/main`; remove no worktree without checking its trail in global config
    (`paralelo-worktree.md`).
 5. Closed: update the contract's progress, retire the executor (`arbitro-vigia.md`,
-   "Rotation"), release the Tasks now ready (step 2); last code Task approved → step 6.
+   "Rotation"), release the ready Tasks (step 2); last code Task approved → step 6.
 
 Done when `orq commit`'s message reached you and the contract carries the hash.
 
@@ -164,4 +165,4 @@ Done when the branch is in the user's hands, the retrospective delivered,
 - Time comes from `date -Iseconds`, never from memory. Authorship comes from a transcript, never from time correlation (`arbitro-vigia.md`, "A vanished session").
 - Every number carries its scope: what entered the count, from where.
 - Close each session when its part ends: `arbitro-vigia.md`, "Closing sessions".
-- Talk little with the user: what and when, `arbitro-vigia.md`, "Deciding vs waking the user". Demand the same short reports from the sessions.
+- Talk little with the user: what and when, `arbitro-vigia.md`, "Deciding vs waking the user". Demand short reports from the sessions too.

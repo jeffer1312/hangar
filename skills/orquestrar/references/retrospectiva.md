@@ -58,7 +58,7 @@ From the executors' "premise wrong" reports in the journal and the WASTE lines, 
 | code nobody ran | executor reports `TypeError`, a missing attribute, a failed import |
 | a command that does not do what it says | "selected nothing" / "nothing to run" exit |
 | an invented count | "expected N PASS", N+2 came |
-| a batch declared disjoint that was not | a merge conflict; one file in two Tasks |
+| a wave declared disjoint that was not | a merge conflict; a shared file without named regions |
 | a defect the plan carried forward | a finding in a late Task originating in an early one |
 | a bar demanding what the reused code does not do | mock × existing-component divergence |
 | a decision the plan left open | the `Decided alone:` lines of the reports; three on one subject is a plan template hole |

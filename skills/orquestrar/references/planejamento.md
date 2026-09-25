@@ -49,8 +49,8 @@ Done when `Method:`, `Executes with:` and `Domain skill:` are written and `checa
 1. Open a read-only session or subagent, one closed question, output in a file the plan cites.
    Protect it per `protecao.md`; a subagent inherits the protection or has a proven native
    restriction.
-2. "It doesn't exist" answers one query: write the phrase searched. Absence that supports a
-   decision → redo the search by a second path. Zero rows from a DB or service don't prove
+2. "It doesn't exist" answers one query: write the phrase searched. Absence backing a
+   decision → search again by a second path. Zero rows from a DB or service don't prove
    absence.
 3. Before saying something depends on the user's decision, re-read their material.
 
@@ -83,7 +83,7 @@ chosen model has a card or a `## What they say` section.
 1. **The file.** The user's plan stays theirs, in their file, as the source: write a second
    short file pointing at it, adding only what the gate needs (skeleton in `planejamento-equipe.md`,
    "The plan skeleton"). "Where in their plan" points at a section, paragraph, line
-   or domain-skill step. Empty cell → the item goes in the bottom list; show that list to the user
+   or domain-skill step. Empty cell → the item goes in the bottom list; show it to the user
    before launching. No plan at all → the orchestration plan is the plan, in the chosen method or
    by hand. Want the bar → write the steps in the literal format here, never by reformatting the
    user's; a recipe shared by several Tasks → repeat the steps inside each Task.
@@ -91,10 +91,10 @@ chosen model has a card or a `## What they say` section.
 2. **Each Task carries:**
    - Wave: parallel by default. Tasks passing the four conditions of `paralelo-worktree.md`
      together share a wave; a dependent or colliding Task goes to a later wave (gate items 3, 4).
-   - Size: past ~400 changed lines or one screen proof → cut into parts Na, Nb…, each its own
+   - Size: past ~400 changed lines or 2+ screen proofs → cut into parts Na, Nb…, each its own
      round and commit, sized for one executor with no session swap.
    - A-priori estimate, one line: expected clock and rounds. Actuals live only in `eventos.jsonl`;
-     no second table. More than one authorized executor → consumption per model in quota and
+     no second table. 2+ authorized executors → consumption per model in quota and
      context (context per Task, sessions per Task, account/window per model, when the heavy model
      enters); the cards are the source.
    - The domain-skill step it executes, in the skill's order; the executor re-reads the skill
@@ -128,7 +128,7 @@ chosen model has a card or a `## What they say` section.
    independent, whatever the files. Found → write the ownership contract before the first of the
    two: who writes, who clears, what happens on unmount and on resize. An ownership rule that
    creates copies declares how many (Tasks touching the pattern) and either the unification Task
-   at the batch's end or "the N copies stay, the set review checks all N". Inside one commit, two
+   at the wave's end or "the N copies stay, the set review checks all N". Inside one commit, two
    computations that must agree become one. Estimate a screen Task by the
    state it touches, not by the pixel. Code blockers reject rounds; mock divergences are notes.
 
@@ -136,7 +136,7 @@ chosen model has a card or a `## What they say` section.
    sibling callers of the changed symbol, concurrency (delayed response, double click, target
    switch mid-flight, unmount), final state on disk/storage/URL, which review skills per Task type.
    Visual Task → the list of states needing screenshots (both widths, overlay, fullscreen, whatever
-   it affects). How many screenshots and who captures is the executor's call; the plan imposes no
+   it affects). Screenshot count and who captures are the executor's call; the plan imposes no
    number and states what capture costs. A large sweep may go to a disposable
    capture session with the state list in its kick-off; the choice goes in the executor's report.
    A demand for new proof enters only with its owner in the same sentence.
@@ -165,7 +165,8 @@ PRODUCE = write it in the orchestration plan.
    process: directory the server rises from, port per Task, who holds the device and when it is
    released.
 9. PRODUCE — per wave with visual proof: `Tela: própria` (a browser per session, a port per
-   worktree) or `Tela: compartilhada` (proofs queue on `orq screen`, `paralelo-worktree.md`).
+   worktree) or `Tela: compartilhada` (proofs queue on `orq screen`, `paralelo-worktree.md`),
+   repeated in each of its Tasks.
 10. AUDIT — remaining quota per account with reading time; fallback in writing.
 11. AUDIT — method's executing half installed and tested, or `none` with the orchestration plan
     written. One debut at a time: a new method, a freshly edited skill and a new provider never

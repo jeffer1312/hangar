@@ -103,12 +103,14 @@ plan, adding only what the gate needs.
 User's plan: <absolute path>   (it is in charge; this file only orchestrates)
 
 ## Tasks
-| # | What it is | Where in their plan | Files | Verification | Proof |
-|---|---|---|---|---|---|
-| 1 | create the schema | section "Database", 2nd paragraph | `<paths>` | `<test command>` | green suite + the table exists |
+| # | What it is | Where in their plan | Files | Verification | Proof | Tela |
+|---|---|---|---|---|---|---|
+| 1 | create the schema | section "Database", 2nd paragraph | `<paths>` | `<test command>` | green suite + the table exists | — |
+| 2 | <screen Task> | <where> | `<paths>` | `<test command>` | screenshots of <states> | `Tela: própria` (its wave's) |
 
 ## What their plan does NOT decide, and I decided here
-- Order: 1 before 2.
+- Waves: 1 (T1, T2) · 2 (T3). Wave with screen proof: `Tela: própria | compartilhada`, repeated
+  in each of its Tasks (column `Tela`).
 - Untouchables: <paths>.
 - Bar for Task 2: <screen, width>.
 ```
