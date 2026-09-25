@@ -20,6 +20,11 @@ pub enum SidebarHeight { Full, Content }
 #[serde(rename_all = "snake_case")]
 pub enum Navigation { Sidebar, Tabs }
 
+/// Como a barra lateral agrupa as sessões (`cp_group_by` do web; "Servidor" não se aplica a um servidor só).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarGroup { None, Project }
+
 /// Automático segue a preferência do sistema; Desktop pinta com a paleta do papel de parede.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -150,6 +155,7 @@ pub struct Appearance {
     pub currency: Currency,
     /// Contas e modelos em uma linha por conta, sem barras: escolha deste aparelho, como no web.
     pub accounts_compact: bool,
+    pub sidebar_group: SidebarGroup,
 }
 
 const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeMode::Dark, palette: Palette::Classic,
@@ -158,7 +164,7 @@ const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeM
     font: Font::System, text_size: 100, line_height: 100, column: 100, sidebar_height: SidebarHeight::Full,
     navigation: Navigation::Sidebar, live_corner: [16., 16.],
     tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, table_chart: false,
-    language: Language::System, currency: Currency::Usd, accounts_compact: false };
+    language: Language::System, currency: Currency::Usd, accounts_compact: false, sidebar_group: SidebarGroup::None };
 
 impl Default for Appearance {
     fn default() -> Self { DEFAULT }
@@ -170,7 +176,8 @@ impl Appearance {
         Self { panels: self.panels, font: self.font, theme: self.theme, palette: self.palette, desktop_text: self.desktop_text,
             background: self.background, wallpaper: self.wallpaper, tool_look: self.tool_look, task_list: self.task_list,
             thinking_tools: self.thinking_tools, table_chart: self.table_chart, navigation: self.navigation, live_corner: self.live_corner,
-            language: self.language, currency: self.currency, accounts_compact: self.accounts_compact, ..Self::default() }
+            language: self.language, currency: self.currency, accounts_compact: self.accounts_compact, sidebar_group: self.sidebar_group,
+            ..Self::default() }
     }
 
     /// Imagem ou área de trabalho atrás do texto: é o que a Leitura Automática resolve.

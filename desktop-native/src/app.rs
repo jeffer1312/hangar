@@ -1,5 +1,5 @@
 use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc, time::{Duration, Instant}};
-use gpui_kit::{component::{button::*, checkbox::Checkbox, radio::Radio, scroll::{Scrollbar, ScrollbarMode}, menu::{ContextMenuExt, PopupMenuItem},
+use gpui_kit::{component::{button::*, checkbox::Checkbox, radio::Radio, scroll::{Scrollbar, ScrollbarMode}, menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     input::{Escape, IndentInline, Input, InputEvent, InputState, MoveDown, MoveUp, Textarea, TextareaState}, text::{TextView, TextViewState}, *}, *};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::assets::IconName;
@@ -23,8 +23,9 @@ mod settings;
 mod server_config;
 mod shortcuts;
 mod side;
+mod sidebar;
 
-actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch]);
+actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, NextSession, PreviousSession]);
 
 const LIVE_THINKING: &str = "__thinking__";
 const LIVE_TOOL: &str = "__tool__";
@@ -91,6 +92,8 @@ enum Payload {
     // Diálogo Nova sessão: a resposta vai ao diálogo que a pediu, se ele ainda for o aberto.
     Create(EntityId, create::CreateReply),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
+    // Barra lateral: prévia, leitura do silenciar e as gravações do menu da sessão.
+    Sidebar(sidebar::SidebarReply),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -246,6 +249,7 @@ pub struct Hangar {
     server_config: server_config::ServerConfig,
     machines: machines::Machines,
     new_session: Option<Entity<create::NewSession>>,
+    sidebar: sidebar::Sidebar,
 }
 
 impl Drop for Hangar {
@@ -277,7 +281,8 @@ impl Hangar {
         });
         // Ctrl+L leva ao campo de mensagem; a raiz da janela trata a ação e segura o foco quando nada mais o tem.
         cx.bind_keys([KeyBinding::new("ctrl-l", FocusComposer, None), KeyBinding::new("ctrl-,", OpenSettings, None),
-            KeyBinding::new("ctrl-shift-c", CopyLastReply, None), KeyBinding::new("ctrl-f", FocusSettingsSearch, None)]);
+            KeyBinding::new("ctrl-shift-c", CopyLastReply, None), KeyBinding::new("ctrl-f", FocusSettingsSearch, None),
+            KeyBinding::new("secondary-down", NextSession, None), KeyBinding::new("secondary-up", PreviousSession, None)]);
         let settings_ui = settings::SettingsUi::new(window, cx);
         let root_focus = cx.focus_handle();
         cx.on_focus_lost(window, |this: &mut Self, window, cx| this.machines_focus_lost(window, cx)).detach();
@@ -305,6 +310,7 @@ impl Hangar {
         }
         let list_state = ListState::new(0, ListAlignment::Bottom, px(300.));
         Self::watch_user_scroll(&list_state, cx);
+        let sidebar = sidebar::Sidebar::new(window, cx);
         Self {
             runtime, tx, api: None, server: None, connection: 0, selection: 0, revision: 0, sessions: Vec::new(), selected: None,
             chat: Chat::default(), list_task: None, session_task: None, history_task: None,
@@ -328,7 +334,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
-            server_config: server_config::ServerConfig::default(), machines: machines::Machines::default(), new_session: None,
+            server_config: server_config::ServerConfig::default(), machines: machines::Machines::default(), new_session: None, sidebar,
         }
     }
 
@@ -504,6 +510,7 @@ impl Hangar {
         self.composer.update(cx, |input, cx| input.set_value("", window, cx));
         self.sync_rows(cx);
         self.side.reset_server();
+        self.sidebar.reset_server();
         self.controls = controls::Controls::default();
         self.accounts = accounts::Accounts::default();
         self.shortcuts = shortcuts::Shortcuts::default();
@@ -750,6 +757,7 @@ impl Hangar {
             Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
+            Payload::Sidebar(reply) => { self.receive_sidebar(reply, window, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
@@ -835,10 +843,11 @@ impl Hangar {
                     self.clear_visible_preview();
                     self.loading = false;
                     self.chat_online = false;
-                    self.error = Some(tr("session_gone"));
+                    if !self.lost_while_renaming(&old.name) { self.error = Some(tr("session_gone")); }
                 }
             }
         }
+        self.sidebar_sessions_changed(window, cx);
     }
 
     fn accept_chat_frame(&mut self, event: &str, data: serde_json::Value, cx: &mut Context<Self>) -> bool {
@@ -2566,26 +2575,44 @@ fn release_image(image: Arc<Image>, window: &mut Window, cx: &mut App) {
 
 impl Hangar {
     /// Barra lateral do mock: marca, escopo, seções "Aguardando você" e "Sessões", rodapé com o servidor e a engrenagem.
-    fn render_sidebar(&self, selected_name: Option<&str>, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar(&self, selected_name: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let a = crate::appearance::get();
         let floating = a.panels == crate::appearance::Panels::Floating;
         let fit_content = floating && a.sidebar_height == crate::appearance::SidebarHeight::Content;
         let host = self.server_label(cx);
-        let (waiting, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) = self.sessions.iter().partition(|s| s.state == "awaiting_input");
+        let layout = self.sidebar_layout(cx);
         let section = |label: String, count: Option<usize>| div().flex().items_center().justify_between().px(px(8.)).pt(px(12.)).pb(px(6.))
             .child(chrome::section_label(label))
             .when_some(count, |el, n| el.child(div().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(n.to_string())));
-        let rows = |list: Vec<&SessionInfo>, cx: &mut Context<Self>| list.into_iter().map(|session| {
+        let mut children: Vec<AnyElement> = Vec::new();
+        let rows = |list: &[&SessionInfo], children: &mut Vec<AnyElement>, window: &mut Window, cx: &mut Context<Self>| for session in list {
             let selected = selected_name == Some(session.name.as_str());
-            self.render_session_row(session.clone(), selected, &host, cx)
-        }).collect::<Vec<_>>();
-        let waiting_count = waiting.len();
+            children.push(self.render_session_row((*session).clone(), selected, &host, window, cx));
+        };
+        if !layout.waiting.is_empty() {
+            children.push(section(tr("sidebar_awaiting"), Some(layout.waiting.len())).into_any_element());
+            rows(&layout.waiting, &mut children, window, cx);
+        }
+        for group in &layout.groups {
+            if layout.by_project {
+                let awaiting = group.sessions.iter().filter(|s| s.state == "awaiting_input").count();
+                children.push(self.render_group_header(group, awaiting, window, cx));
+                if self.sidebar.is_collapsed(&group.key) { continue; }
+            } else {
+                children.push(section(group.label.clone(), None).into_any_element());
+            }
+            rows(&group.sessions, &mut children, window, cx);
+        }
+        let empty = self.sessions.iter().all(|s| self.sidebar.hidden().contains(&s.name));
         let list = div().id("session-list").min_h_0().overflow_y_scroll().px(px(8.)).flex().flex_col().gap(px(2.))
             .when(!fit_content, |el| el.flex_1())
-            .when(self.sessions.is_empty() && self.list_error.is_none(), |el| el.child(div().p_2().text_xs().text_color(theme::faint())
+            .when(empty && self.list_error.is_none(), |el| el.child(div().p_2().text_xs().text_color(theme::faint())
                 .child(tr(if self.list_online { "empty_sessions" } else { "connecting" }))))
-            .when(waiting_count > 0, |el| el.child(section(tr("sidebar_awaiting"), Some(waiting_count))).children(rows(waiting, cx)))
-            .when(!rest.is_empty(), |el| el.child(section(tr("sessions"), None)).children(rows(rest, cx)));
+            .when(layout.filter_empty(), |el| el.child(div().p_2().text_xs().text_color(theme::faint()).child(tr("sidebar_filter_empty"))))
+            .children(children);
+        let filter = layout.show_filter().then(|| div().flex_shrink_0().px(px(8.)).pb(px(4.))
+            .child(Input::new(&self.sidebar.filter).small().cleanable(true).prefix(chrome::small_icon(IconName::Search, 14., theme::faint()))
+                .aria_label(tr("sidebar_filter"))));
         div().w(px(284.)).flex_shrink_0().flex().flex_col().bg(theme::chrome())
             // A linha da janela estica os filhos; "Só o conteúdo" precisa soltar a barra do fundo.
             .map(|el| if fit_content { el.max_h_full().self_start() } else { el.h_full() })
@@ -2598,7 +2625,9 @@ impl Hangar {
             .child(div().flex_shrink_0().mx(px(8.)).mt(px(4.)).mb(px(8.)).h(px(32.)).px(px(8.)).flex().items_center().gap_2().font_weight(FontWeight::MEDIUM)
                 .child(chrome::small_icon(IconName::Server, 16., theme::muted()))
                 .child(div().flex_1().min_w_0().truncate().child(tr("sidebar_all_sessions")))
-                .child(div().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(self.sessions.len().to_string())))
+                .child(div().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(layout.total.to_string()))
+                .child(self.render_group_picker(cx)))
+            .children(filter)
             .child(list)
             .when_some(self.list_error.clone(), |el, text| el.child(div().px_4().py_1().flex().items_center().gap_2().text_xs().text_color(theme::warning())
                 .child(div().flex_1().min_w_0().child(text))
@@ -2625,7 +2654,8 @@ impl Hangar {
     fn render_tabs(&mut self, selected_name: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let floating = theme::is_floating();
         let host = self.server_label(cx);
-        let tabs = self.sessions.iter().filter_map(|session| {
+        let weak = cx.entity().downgrade();
+        let tabs = self.sessions.iter().filter(|s| !self.sidebar.hidden().contains(&s.name)).filter_map(|session| {
             let focus = self.tab_focus.get(&session.name)?.clone();
             let on = selected_name == Some(session.name.as_str());
             let state = if session.limited == Some(true) { "limited" } else { session.state.as_str() };
@@ -2640,6 +2670,7 @@ impl Hangar {
             };
             let pick = session.clone();
             let open = session.clone();
+            let menu_name = session.name.clone();
             Some(div().id(SharedString::from(format!("tab-{}", session.name))).track_focus(&focus).flex_shrink_0().max_w(px(200.)).h(px(32.)).px(px(8.))
                 .flex().items_center().gap(px(6.)).rounded(px(6.)).border_1().cursor_pointer()
                 .map(|el| if on { el.bg(theme::accent_dim()).border_color(theme::accent()).text_color(theme::text()).font_weight(FontWeight::SEMIBOLD) }
@@ -2661,14 +2692,17 @@ impl Hangar {
                         this.select(open.clone(), window, cx);
                         cx.stop_propagation();
                     }
-                })))
+                }))
+                // Clique direito na aba abre o mesmo menu da linha da barra, como o SessionTabs do web.
+                .on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_name.clone(), cx)))
+                .context_menu(sidebar::session_menu(weak.clone(), session.clone())))
         }).collect::<Vec<_>>();
         // A folga lateral deixa o anel de foco da primeira e da última aba fora do recorte da rolagem.
         let strip = div().id("tabs-strip").flex_1().min_w_0().h_full().px(px(3.)).flex().items_center().gap(px(2.)).overflow_x_scroll().track_scroll(&self.tabs_scroll)
             .role(Role::TabList).aria_label(tr("sessions"))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let step = match event.keystroke.key.as_str() { "left" => -1, "right" => 1, _ => return };
-                let names: Vec<&String> = this.sessions.iter().map(|s| &s.name).collect();
+                let names: Vec<&String> = this.sessions.iter().filter(|s| !this.sidebar.hidden().contains(&s.name)).map(|s| &s.name).collect();
                 let Some(current) = names.iter().position(|name| this.tab_focus.get(*name).is_some_and(|f| f.is_focused(window))) else { return };
                 let next = (current as isize + step).rem_euclid(names.len() as isize) as usize;
                 if let Some(focus) = this.tab_focus.get(names[next]) { focus.focus(window, cx); }
@@ -2703,7 +2737,9 @@ impl Hangar {
     }
 
     /// Linha de 3 níveis do mock: pasta @ servidor e tempo; selo, nome e estado; pergunta pendente ou branch com o diff.
-    fn render_session_row(&self, session: SessionInfo, selected: bool, host: &str, cx: &mut Context<Self>) -> AnyElement {
+    /// Mais, como o web: "? N" das perguntas, o ⋯ e o clique direito com o menu da sessão, pressionar 500 ms para renomear
+    /// na própria linha e a prévia da última resposta ao parar o mouse. A linha entra no Tab (Enter abre) e o ⋯ vem depois dela.
+    fn render_session_row(&self, session: SessionInfo, selected: bool, host: &str, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let state = session.state.as_str();
         let limited = session.limited == Some(true);
         let untracked = session.tracked == Some(false);
@@ -2720,19 +2756,59 @@ impl Hangar {
         let branch = session.branch.clone().filter(|b| !b.is_empty());
         let (added, removed) = (session.git_added.filter(|n| *n > 0), session.git_removed.filter(|n| *n > 0));
         let name = session.name.clone();
+        let questions = session.pending_questions;
+        let editing = self.sidebar.editing.as_ref().filter(|e| e.old == name).map(|e| e.input.clone());
+        let focus = self.tab_focus.get(&name).cloned();
+        let focused = focus.as_ref().is_some_and(|f| f.contains_focused(window, cx));
+        let hovered = self.sidebar.hover.as_deref() == Some(name.as_str());
+        let weak = cx.entity().downgrade();
+        let menu_open = self.sidebar.button_menu.as_deref() == Some(name.as_str());
+        let show_menu = selected || hovered || focused || menu_open;
+        // O ⋯ mora no lugar do tempo: com ele à vista, o tempo sai (senão sobra um pedaço do "12m" atrás dele).
+        let when = when.filter(|_| !show_menu);
+        let menu_button = show_menu.then(|| {
+            let (weak, target) = (weak.clone(), session.name.clone());
+            div().absolute().top(px(5.)).right(px(6.)).rounded(px(6.)).bg(if selected { theme::selected_row() } else { theme::hover() })
+                .child(Button::new(SharedString::from(format!("row-menu-{name}"))).ghost().xsmall().icon(IconName::Ellipsis)
+                    .accessibility_label(tr("sidebar_options").replace("{n}", &name)).tooltip(tr("sidebar_options_tip"))
+                    .dropdown_menu_with_anchor(Anchor::TopRight, sidebar::session_menu(weak.clone(), session.clone()))
+                    .on_open_change(move |open, _, cx| { let _ = weak.update(cx, |this, cx| this.button_menu(target.clone(), *open, cx)); }))
+        });
         let lane = || div().w(px(18.)).flex_shrink_0();
-        div().id(SharedString::from(session.name.clone())).flex_shrink_0().flex().flex_col().gap(px(1.)).px(px(8.)).py(px(7.)).rounded(px(10.))
+        let name_el = match editing {
+            // O campo não deixa o clique nele virar clique na linha.
+            Some(input) => div().flex_1().min_w_0().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_action(cx.listener(|this, _: &Escape, window, cx| this.cancel_session_rename(window, cx)))
+                .child(Input::new(&input).xsmall().aria_label(tr("sidebar_new_name"))).into_any_element(),
+            None => div().flex_1().min_w_0().flex().items_center().gap_2()
+                .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name.clone()))
+                .when(questions > 0, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::warning()).child(format!("? {questions}"))))
+                .when(untracked, |el| el.child(badge(tr("untracked_badge"), theme::faint()))).into_any_element(),
+        };
+        let (hover_name, press_name, menu_name, key_open, menu_session) = (name.clone(), name.clone(), name.clone(), session.clone(), session.clone());
+        div().id(SharedString::from(session.name.clone())).relative().flex_shrink_0().flex().flex_col().gap(px(1.)).px(px(8.)).py(px(7.)).rounded(px(10.))
+            .when_some(focus.as_ref(), |el, focus| el.track_focus(focus))
+            .when(focus.as_ref().is_some_and(|f| f.is_focused(window)), |el| el.focus_ring_style(window, cx))
             .when(selected, |el| el.bg(theme::selected_row()))
             .when(!selected, |el| el.hover(|el| el.bg(theme::hover())))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| this.row_hover(hover_name.clone(), *hovered, cx)))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| this.row_pointer(f32::from(event.position.y))))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| this.row_press(press_name.clone(), window, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.row_release()))
+            .on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_name.clone(), cx)))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                // Só a própria linha: Enter no ⋯ ou no campo do nome é deles.
+                if !matches!(event.keystroke.key.as_str(), "enter" | "space") || !this.tab_focus.get(&key_open.name).is_some_and(|f| f.is_focused(window)) { return; }
+                this.select(key_open.clone(), window, cx);
+                cx.stop_propagation();
+            }))
             .child(div().flex().items_center().gap(px(8.)).text_size(px(11.5)).text_color(theme::faint())
                 .child(lane())
                 .child(div().flex_1().min_w_0().truncate().child(meta))
                 .when_some(when, |el, w| el.child(div().flex_shrink_0().child(w))))
             .child(div().flex().items_center().gap(px(8.)).when(untracked, |el| el.opacity(0.45))
                 .child(lane().child(chrome::provider_glyph(&session.provider, 16.)))
-                .child(div().flex_1().min_w_0().flex().items_center().gap_2()
-                    .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name))
-                    .when(untracked, |el| el.child(badge(tr("untracked_badge"), theme::faint()))))
+                .child(name_el)
                 .child(chip))
             .map(|el| match sub {
                 Some((text, color, working)) => el.child(div().flex().gap(px(8.)).child(lane())
@@ -2746,13 +2822,17 @@ impl Hangar {
                         .when_some(removed, |el, r| el.child(div().flex_shrink_0().text_color(theme::removed()).child(format!("−{r}")))))),
                 None => el,
             })
+            .children(menu_button)
             .on_click(cx.listener(move |this, _, window, cx| {
+                this.hide_preview();
+                if this.take_long_press() { return; }
                 this.select(session.clone(), window, cx);
                 // Foco só no gesto sobre a lista; troca automática de transcript não tira o foco de ninguém.
                 if !this.connection_dialog && session.readable() {
                     this.composer.update(cx, |input, cx| input.focus(window, cx));
                 }
             }))
+            .context_menu(sidebar::session_menu(weak, menu_session))
             .into_any_element()
     }
 }
@@ -2953,7 +3033,7 @@ impl Render for Hangar {
         let page = self.settings.filter(|_| !self.settings_ui.live);
         let tabs = appearance::get().navigation == appearance::Navigation::Tabs;
         let nav = if page.is_some() { None } else if tabs { Some(self.render_tabs(selected_name.as_deref(), window, cx)) }
-            else { Some(self.render_sidebar(selected_name.as_deref(), cx)) };
+            else { Some(self.render_sidebar(selected_name.as_deref(), window, cx)) };
 
         // Sessão sem conversa não tem stream próprio: o estado é o da lista.
         let header_state = if self.chat_online && self.chat.state.state.is_empty() { "loading".to_owned() }
@@ -3073,6 +3153,8 @@ impl Render for Hangar {
                 if !this.connection_dialog { this.open_settings(settings::Page::Appearance, window, cx); }
             }))
             .on_action(cx.listener(|this, _: &FocusSettingsSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(cx.listener(|this, _: &NextSession, window, cx| this.step_session(1, window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousSession, window, cx| this.step_session(-1, window, cx)))
             .on_action(cx.listener(|this, _: &CopyLastReply, _, cx| {
                 let page_open = this.settings.is_some() && !this.settings_live();
                 if let Some(text) = this.last_reply().filter(|_| !page_open) { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
@@ -3119,6 +3201,7 @@ impl Render for Hangar {
                 (None, sidebar) => el.children(sidebar).child(content).when_some(side, |el, side| el.child(side)),
             })
             .children(live)
+            .children(self.render_preview(window))
             .when(self.connection_dialog, |el| el.child(div().absolute().inset_0().bg(theme::scrim()).flex().items_center().justify_center()
                 .child(dialog.focus_trap("connection-dialog", &self.connection_focus))))
             .children(Root::render_dialog_layer(window, cx))
