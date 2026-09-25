@@ -11,6 +11,13 @@ GET /control/t14 muda como as próximas respostas saem (só as chaves dadas muda
   delete=<ok|warn|500|drop>  preview=<ok|500|drop>
   <chave>_delay=<s> atrasa a rota (mute_read_delay, mute_delay, rename_delay, editor_delay, delete_delay, preview_delay).
   Renomear e fechar que dão certo mudam a lista (o SSE da lista manda a nova).
+
+Task 14b1 (nenhum git de verdade roda: branches, saídas e o stash são texto sintético guardado aqui):
+  GET /api/sessions/<n>/branches, POST /api/sessions/<n>/git {action: pull|stash}, POST /api/sessions/<n>/checkout {branch},
+  PUT /api/sessions/<n>/then {target, text}, DELETE /api/sessions/<n>/then.
+  branches=<ok|empty|409|500|drop>  pull=<ok|refused|500|404|drop>  stash=<ok|refused|500|drop>  checkout=<ok|409|500|drop>
+  then=<ok|400|404|500|drop>  unlink=<ok|500|drop>, cada uma com <chave>_delay. "refused" = 200 com ok:false (o git recusou).
+  Checkout e then que dão certo mudam a lista; o checkout com stash limpa a árvore suja.
 GET /control/t14reset volta sessões, silenciadas e modos ao começo.
 """
 import json
@@ -29,8 +36,14 @@ msg = BASE["msg"]
 
 FIRST = {"mute_read": "ok", "mute": "ok", "rename": "ok", "editor": "ok", "delete": "ok", "preview": "ok",
          "mute_read_delay": 0.0, "mute_delay": 0.0, "rename_delay": 0.0, "editor_delay": 0.0, "delete_delay": 0.0, "preview_delay": 0.0}
+GIT_KEYS = ("branches", "pull", "stash", "checkout", "then", "unlink")
+FIRST.update({k: "ok" for k in GIT_KEYS})
+FIRST.update({f"{k}_delay": 0.0 for k in GIT_KEYS})
 T14 = dict(FIRST)
 MUTED = set()
+# Repositório sintético por sessão: branches (a atual é a `branch` da lista) e se a árvore está suja.
+BRANCHES = ["main", "sintetica/parser-streaming", "sintetica/docs-novas", "sintetica/fix-acentos", "sintetica/experimento"]
+DIRTY = set()
 
 LONG = ("Terminei a troca do parser por **streaming**.\n\n- Lê o arquivo em pedaços\n- Mantém a ordem dos eventos\n- `cargo check` passou\n\n"
         "Falta rodar a suíte inteira e conferir o consumo de memória com o transcript grande (40 MB). "
@@ -57,8 +70,17 @@ def fill():
     for name, st, cwd, questions, events in ROWS:
         data = info(name, "claude", state=st, pending_questions=questions, branch="main" if cwd else None)
         data["cwd"] = cwd
+        # sintetica-docs já nasce encadeada; a ferramentas tem pasta mas não é repositório (branch nula, sem git no menu).
+        data["then_target"] = "sintetica-api" if name == "sintetica-docs" else None
+        if name == "sintetica-ferramentas":
+            data["branch"] = None
+        if data["branch"]:
+            # Contagens do git na lista: é o que faz o painel da direita mostrar a seção Projeto.
+            data.update(git_added=4, git_removed=1, git_dirty=2)
         SESSIONS[name] = {"info": data, "state": state(st, question="Posso seguir?" if st == "awaiting_input" else None),
                           "events": [dict(e) for e in events], "stats": None, "modes": []}
+    DIRTY.clear()
+    DIRTY.add("sintetica-parser")
     bump()
 
 
@@ -66,8 +88,16 @@ fill()
 
 
 class Handler(T13NS["Handler"]):
-    def t14(self, key):
-        """Aplica o modo da rota: atraso, queda ou erro. Devolve o modo quando a resposta ainda é desta rota."""
+    def t14(self, key, conflict=None):
+        """Aplica o modo da rota: atraso, queda ou erro. Devolve o modo quando a resposta ainda é desta rota.
+        `conflict` é o texto do 409 dessa rota (o git manda o stderr cru como `detail`)."""
+        if conflict is not None:
+            with LOCK:
+                mode = T14[key]
+            if mode == "409":
+                time.sleep(T14[f"{key}_delay"])
+                self.send_json({"detail": conflict}, 409)
+                return None
         with LOCK:
             mode, delay = T14[key], T14[f"{key}_delay"]
         time.sleep(delay)
@@ -110,6 +140,20 @@ class Handler(T13NS["Handler"]):
                 self.send_json({"muted": sorted(MUTED), "quiet_hours": None})
             return
         parts = [unquote(p) for p in path.strip("/").split("/")]
+        if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "branches":
+            record("GET", self.path, None)
+            if self.t14("branches", "fatal: sintético: não é um repositório git") is None:
+                return
+            with LOCK:
+                s = SESSIONS.get(parts[2])
+                if s is None:
+                    self.send_json(fail("erro_sessao_inexistente", "sessao nao encontrada"), 404)
+                    return
+                empty = T14["branches"] == "empty"
+                current = s["info"].get("branch")
+                self.send_json({"current": None if empty else current, "branches": [] if empty else BRANCHES, "remotes": [],
+                                "dirty": parts[2] in DIRTY})
+            return
         if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "history" and parts[2] in SESSIONS:
             record("GET", self.path, None)
             if self.t14("preview") is None:
@@ -127,12 +171,16 @@ class Handler(T13NS["Handler"]):
     def do_POST(self):
         url = urlparse(self.path)
         parts = [unquote(p) for p in url.path.strip("/").split("/")]
-        mine = url.path == "/api/push/mute" or (len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] in ("rename", "open-editor"))
+        mine = url.path == "/api/push/mute" or (len(parts) == 4 and parts[:2] == ["api", "sessions"]
+                                                and parts[3] in ("rename", "open-editor", "git", "checkout"))
         if not mine:
             return super().do_POST()
         body = self.body()
         record("POST", self.path, body)
         if not self.authorized():
+            return
+        if parts[-1] in ("git", "checkout"):
+            self.git(parts[2], parts[3], body or {})
             return
         if url.path == "/api/push/mute":
             if self.t14("mute") is None:
@@ -165,9 +213,80 @@ class Handler(T13NS["Handler"]):
             bump()
         self.send_json({"ok": True, "name": new})
 
+    def git(self, name, route, body):
+        """Pull, stash e checkout sintéticos: só mudam o que esta fixture guarda."""
+        if name not in SESSIONS:
+            self.send_json(fail("erro_sessao_inexistente", "sessao nao encontrada"), 404)
+            return
+        if route == "checkout":
+            branch = body.get("branch", "")
+            if self.t14("checkout", "error: Your local changes to the following files would be overwritten by checkout:\n"
+                                    "\tsintetica/arquivo.rs\nPlease commit your changes or stash them before you switch branches.\nAborting") is None:
+                return
+            with LOCK:
+                if branch not in BRANCHES:
+                    self.send_json({"detail": "branch inexistente"}, 400)
+                    return
+                SESSIONS[name]["info"]["branch"] = branch
+                bump()
+            self.send_json({"current": branch, "output": f"Switched to branch '{branch}'"})
+            return
+        action = body.get("action")
+        if action not in ("pull", "stash"):
+            self.send_json({"detail": "acao invalida"}, 400)
+            return
+        mode = self.t14(action)
+        if mode is None:
+            return
+        if mode == "refused":
+            out = ("fatal: Not possible to fast-forward, aborting. (sintético)" if action == "pull"
+                   else "error: sintético: não consegui guardar as mudanças")
+            self.send_json({"ok": False, "output": out})
+            return
+        if action == "stash":
+            with LOCK:
+                DIRTY.discard(name)
+            self.send_json({"ok": True, "output": "Saved working directory and index state WIP on main: 0000000 sintético"})
+            return
+        self.send_json({"ok": True, "output": "Updating 0000000..1111111\nFast-forward\n sintetica/arquivo.rs | 2 +-"})
+
+    def do_PUT(self):
+        url = urlparse(self.path)
+        parts = [unquote(p) for p in url.path.strip("/").split("/")]
+        if not (len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "then"):
+            return super().do_PUT()
+        body = self.body() or {}
+        record("PUT", self.path, body)
+        if not self.authorized():
+            return
+        if self.t14("then") is None:
+            return
+        name, target = parts[2], body.get("target", "")
+        with LOCK:
+            if not target or not (body.get("text") or "").strip():
+                self.send_json({"detail": [{"msg": "String should have at least 1 character"}]}, 422)
+            elif target == name:
+                self.send_json(fail("erro_encadeamento_proprio", "sessão não pode encadear pra si mesma"), 400)
+            elif name not in SESSIONS or target not in SESSIONS:
+                self.send_json(fail("erro_sessao_inexistente", "sessao nao encontrada"), 404)
+            else:
+                SESSIONS[name]["info"]["then_target"] = target
+                bump()
+                self.send_json({"ok": True})
+
     def do_DELETE(self):
         url = urlparse(self.path)
         parts = [unquote(p) for p in url.path.strip("/").split("/")]
+        if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "then":
+            record("DELETE", self.path, None)
+            if not self.authorized() or self.t14("unlink") is None:
+                return
+            with LOCK:
+                if parts[2] in SESSIONS:
+                    SESSIONS[parts[2]]["info"]["then_target"] = None
+                    bump()
+            self.send_json({"ok": True})
+            return
         if not (len(parts) == 3 and parts[:2] == ["api", "sessions"]):
             return super().do_DELETE()
         record("DELETE", self.path, None)

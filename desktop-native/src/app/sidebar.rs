@@ -4,7 +4,7 @@
 //! no que a pessoa fez depois.
 use super::*;
 use gpui_kit::base::AccordionTrigger;
-use gpui_kit::component::{WindowExt, dialog::{self, DialogButtonProps}, menu::{DropdownMenu, PopupMenu}};
+use gpui_kit::component::{WindowExt, dialog::{self, DialogButtonProps}, menu::{DropdownMenu, PopupMenu}, notification::NotificationType};
 use super::machines::enter_to_focused;
 use std::{cell::RefCell, rc::Rc};
 
@@ -23,16 +23,80 @@ const NO_CWD: &str = "no-cwd";
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Mute { Loading, Known(bool), Failed(String) }
 
+/// Branches do repositório da sessão do menu aberto, lidas de `GET …/branches` ao abrir o menu.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Branches { Loading, Known(BranchList), Failed(String) }
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
+pub(super) struct BranchList { #[serde(default)] branches: Vec<String>, current: Option<String>, #[serde(default)] dirty: bool }
+
+struct MenuRead { name: String, seq: u64, mute: Mute, branches: Option<Branches> }
+
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
 pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete }
 
+/// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
+enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
+
 pub(super) enum SidebarReply {
     Preview(u64, String, Result<String, Failure>),
     MuteRead(u64, Result<Value, Failure>),
+    BranchRead(u64, Result<Value, Failure>),
     Wrote(String, Write, Result<Value, Failure>),
+    /// Resultado de uma gravação de git: nível e texto da notificação daquela sessão.
+    Note(String, NotificationType, String),
+    Chained(String, u64, String, Result<Value, Failure>),
     NotSaved(String),
 }
+
+/// Uma notificação por sessão: o "git pull…" dá lugar ao resultado, como o `flash` único do web.
+struct GitNote;
+
+fn git_note(name: &str, kind: NotificationType, text: String) -> Notification {
+    // O título diz de qual sessão é: o gesto pode ter sido numa linha que não é a aberta.
+    Notification::new().title(name.to_owned()).message(text).with_type(kind).id1::<GitNote>(SharedString::from(name.to_owned()))
+}
+
+/// Git no menu só com pasta num repositório: o backend manda `branch` nulo fora de um (como o web, SCM:162).
+fn has_git(s: &SessionInfo) -> bool { s.cwd.as_deref().is_some_and(|c| !c.is_empty()) && s.branch.is_some() }
+
+fn first_line(value: &Value) -> Option<String> {
+    value.get("output").and_then(Value::as_str).and_then(|o| o.trim().lines().next()).filter(|l| !l.is_empty()).map(str::to_owned)
+}
+
+async fn git_result(api: &Api, name: &str, what: GitWrite) -> (NotificationType, String) {
+    let failed = |key: &str, error: &Failure| (NotificationType::Error, tr(key).replace("{n}", &Hangar::fetch_failure(error)));
+    let checkout = async |branch: &str, done: String| match api.act(name, &["checkout"], Some(json!({"branch": branch})), false, 60).await {
+        Ok(_) => (NotificationType::Success, done),
+        Err(error) => failed("sidebar_checkout_failed", &error),
+    };
+    match what {
+        // O backend responde 200 com `ok: false` quando o git recusa: aí é aviso com a saída, não sucesso.
+        GitWrite::Pull => match api.act(name, &["git"], Some(json!({"action": "pull"})), false, 120).await {
+            Ok(value) if value.get("ok").and_then(Value::as_bool) != Some(true) => (NotificationType::Warning,
+                tr("sidebar_pull_failed").replace("{n}", &first_line(&value).unwrap_or_else(|| tr("sidebar_git_refused")))),
+            Ok(value) => (NotificationType::Success, first_line(&value).unwrap_or_else(|| tr("sidebar_pull_ok"))),
+            Err(error) => failed("sidebar_pull_failed", &error),
+        },
+        GitWrite::Checkout(branch) => checkout(&branch, tr("sidebar_switched").replace("{n}", &branch)).await,
+        // Stash recusado para aqui: trocar de branch sem ter guardado levaria as mudanças junto.
+        GitWrite::StashCheckout(branch) => match api.act(name, &["git"], Some(json!({"action": "stash"})), false, 60).await {
+            Ok(value) if value.get("ok").and_then(Value::as_bool) != Some(true) => (NotificationType::Error, tr("sidebar_checkout_failed")
+                .replace("{n}", &value.get("output").and_then(Value::as_str).map(str::trim).filter(|o| !o.is_empty()).map(str::to_owned)
+                    .unwrap_or_else(|| tr("sidebar_stash_failed")))),
+            Ok(_) => checkout(&branch, tr("sidebar_switched_stashed").replace("{n}", &branch)).await,
+            Err(error) => failed("sidebar_checkout_failed", &error),
+        },
+        GitWrite::Unlink => match api.act(name, &["then"], None, true, 30).await {
+            Ok(_) => (NotificationType::Success, tr("sidebar_unlinked")),
+            Err(error) => failed("sidebar_unlink_failed", &error),
+        },
+    }
+}
+
+/// Encadear: o alvo escolhido no submenu e o prompt, num diálogo curto.
+pub(super) struct Chain { from: String, target: String, input: Entity<InputState>, status: Rc<RefCell<Pending>>, _events: Subscription }
 
 /// Leva a resposta de volta à janela, amarrada à conexão do pedido.
 struct Tell(async_channel::Sender<Envelope>, u64);
@@ -64,9 +128,11 @@ pub(super) struct Sidebar {
     follow: Option<String>,
     /// A aberta sumiu da lista com o renomear em voo: a resposta decide se ela reabre pelo nome novo.
     lost: Option<String>,
-    menu: Option<(String, u64, Mute)>,
+    menu: Option<MenuRead>,
     menu_seq: u64,
     rename_seq: u64,
+    pub(super) chain: Option<Chain>,
+    chain_seq: u64,
     /// Renomeada pelo diálogo antes de a aba nova existir: o foco vai a ela quando a lista trouxer o nome.
     focus_tab: Option<String>,
     /// Número do último clique em cabeçalho de grupo: gravação de um clique anterior que termine depois não volta o arquivo.
@@ -87,7 +153,7 @@ impl Sidebar {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("sidebar_filter")).clean_on_escape());
         cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         Self { filter, collapsed: load_collapsed(), deleting: HashSet::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None,
-            menu: None, menu_seq: 0, rename_seq: 0, focus_tab: None, collapse_gen: 0, button_menu: None, hover: None, hover_seq: 0, pointer_y: 0., preview: None, cache: HashMap::new(), press_seq: 0,
+            menu: None, menu_seq: 0, rename_seq: 0, chain: None, chain_seq: 0, focus_tab: None, collapse_gen: 0, button_menu: None, hover: None, hover_seq: 0, pointer_y: 0., preview: None, cache: HashMap::new(), press_seq: 0,
             long_pressed: false }
     }
 
@@ -96,15 +162,20 @@ impl Sidebar {
         self.deleting.clear();
         self.renaming.clear();
         (self.editing, self.follow, self.lost, self.menu, self.button_menu, self.hover, self.preview) = (None, None, None, None, None, None, None);
-        self.focus_tab = None;
+        (self.focus_tab, self.chain) = (None, None);
+        self.chain_seq += 1;
         self.cache.clear();
         self.menu_seq += 1;
         self.hover_seq += 1;
         self.press_seq += 1;
     }
 
-    fn mute_for(&self, name: &str) -> Option<Mute> {
-        self.menu.as_ref().filter(|(n, ..)| n == name).map(|(.., mute)| mute.clone())
+    fn menu_for(&self, name: &str) -> Option<Mute> {
+        self.menu.as_ref().filter(|m| m.name == name).map(|m| m.mute.clone())
+    }
+
+    fn branches_for(&self, name: &str) -> Option<Branches> {
+        self.menu.as_ref().filter(|m| m.name == name).and_then(|m| m.branches.clone())
     }
 
     pub(super) fn hidden(&self) -> &HashSet<String> { &self.deleting }
@@ -369,11 +440,18 @@ impl Hangar {
         self.sidebar.press_seq += 1;
         self.sidebar.menu_seq += 1;
         let seq = self.sidebar.menu_seq;
+        // Branches só onde o menu mostra o git (pasta num repositório); como o silenciar, lidas a cada abertura do menu.
+        let git = self.sessions.iter().find(|s| s.name == name).is_some_and(has_git);
         let Some(api) = self.api.clone() else {
-            self.sidebar.menu = Some((name, seq, Mute::Failed(tr("connection_failed"))));
+            let failed = tr("connection_failed");
+            self.sidebar.menu = Some(MenuRead { name, seq, mute: Mute::Failed(failed.clone()), branches: git.then_some(Branches::Failed(failed)) });
             return;
         };
-        self.sidebar.menu = Some((name, seq, Mute::Loading));
+        self.sidebar.menu = Some(MenuRead { name: name.clone(), seq, mute: Mute::Loading, branches: git.then_some(Branches::Loading) });
+        if git {
+            let (api, tell) = (api.clone(), self.sidebar_tell());
+            self.runtime.spawn(async move { tell.send(SidebarReply::BranchRead(seq, api.read(&name, &["branches"], &[], 30).await)).await; });
+        }
         let tell = self.sidebar_tell();
         self.runtime.spawn(async move { tell.send(SidebarReply::MuteRead(seq, api.server_read(&["push", "settings"], &[], 15).await)).await; });
         cx.notify();
@@ -482,6 +560,122 @@ impl Hangar {
         cx.notify();
     }
 
+    // ── Git e encadear ──
+
+    /// "Git": a visão de git do nativo é a seção Projeto do painel da direita (decisão do árbitro), já com os arquivos alterados.
+    fn open_git(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.as_ref().is_none_or(|s| s.name != name) {
+            let Some(session) = self.sessions.iter().find(|s| s.name == name).cloned() else { return };
+            self.select(session, window, cx);
+        }
+        self.side.open = true;
+        self.load_files(cx);
+    }
+
+    fn git_write(&mut self, name: String, what: GitWrite, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else {
+            window.push_notification(git_note(&name, NotificationType::Error, tr("connection_failed")), cx);
+            return;
+        };
+        let waiting = match &what {
+            GitWrite::Pull => Some(tr("sidebar_pulling")),
+            GitWrite::Checkout(branch) => Some(tr("sidebar_checking_out").replace("{n}", branch)),
+            GitWrite::StashCheckout(_) => Some(tr("sidebar_stashing")),
+            GitWrite::Unlink => None,
+        };
+        if let Some(text) = waiting { window.push_notification(git_note(&name, NotificationType::Info, text), cx); }
+        let tell = self.sidebar_tell();
+        self.runtime.spawn(async move {
+            let (kind, text) = git_result(&api, &name, what).await;
+            tell.send(SidebarReply::Note(name, kind, text)).await;
+        });
+    }
+
+    /// Branch com a árvore suja pergunta antes, como o web; limpa troca direto.
+    fn pick_branch(&mut self, name: String, branch: String, dirty: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !dirty { self.git_write(name, GitWrite::Checkout(branch), window, cx); return; }
+        self.focus_origin(&name, window, cx);
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let run = |id: &'static str, label: String, stash: bool| {
+                let (weak, name, branch) = (weak.clone(), name.clone(), branch.clone());
+                Button::new(id).label(label).when(stash, |b| b.primary()).on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    let what = if stash { GitWrite::StashCheckout(branch.clone()) } else { GitWrite::Checkout(branch.clone()) };
+                    let _ = weak.update(cx, |this, cx| this.git_write(name.clone(), what, window, cx));
+                })
+            };
+            let line = |label: String, text: String| div().child(div().font_weight(FontWeight::SEMIBOLD).child(label))
+                .child(div().text_color(theme::muted()).child(text));
+            dialog.w(px(460.)).title(tr("sidebar_dirty_title"))
+                .child(div().flex().flex_col().gap(px(10.)).text_sm()
+                    .child(div().font_family(theme::MONO).child(format!("→ {branch}")))
+                    .child(div().child(tr("sidebar_dirty_body")))
+                    .child(line(tr("sidebar_stash_and_switch"), tr("sidebar_stash_help")))
+                    .child(line(tr("sidebar_switch_anyway"), tr("sidebar_carry_help"))))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("dirty-cancel").label(tr("cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(run("dirty-anyway", tr("sidebar_switch_anyway"), false))
+                    .child(run("dirty-stash", tr("sidebar_stash_and_switch"), true)))
+                .on_ok(enter_to_focused)
+        });
+    }
+
+    fn start_chain(&mut self, from: String, target: String, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("sidebar_chain_prompt")));
+        let events = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
+            InputEvent::PressEnter { .. } => this.commit_chain(window, cx),
+            // O diálogo é desenhado com a janela: refazê-la liga e desliga o Salvar enquanto se digita.
+            InputEvent::Change => cx.notify(),
+            _ => {}
+        });
+        let field = input.clone();
+        cx.defer_in(window, move |_, window, cx| field.update(cx, |state, cx| state.focus(window, cx)));
+        let status = Rc::new(RefCell::new(Pending::default()));
+        self.sidebar.chain = Some(Chain { from: from.clone(), target: target.clone(), input: input.clone(), status: status.clone(), _events: events });
+        self.focus_origin(&from, window, cx);
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let empty = input.read(cx).value().trim().is_empty();
+            let (busy, error) = { let s = status.borrow(); (s.sent.is_some(), s.error.clone()) };
+            let (save, close, owner) = (weak.clone(), weak.clone(), status.clone());
+            let field = Input::new(&input).aria_label(tr("sidebar_chain_prompt_aria"))
+                .when(error.is_some(), |el| el.focus_bordered(false).border_color(theme::danger()));
+            dialog.w(px(460.)).title(tr("sidebar_chain_title").replace("{n}", &target)).child(field)
+                .when_some(error, |dialog, error| dialog.child(div().id("chain-error").role(Role::Alert).mt(px(6.)).text_sm().text_color(theme::danger()).child(error)))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("chain-cancel").label(tr("cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(Button::new("chain-save").primary().label(tr("sidebar_save")).loading(busy).disabled(busy || empty)
+                        .on_click(move |_, window, cx| { let _ = save.update(cx, |this, cx| this.commit_chain(window, cx)); })))
+                .on_ok(enter_to_focused)
+                // Fechar sem esperar a resposta a esquece: ela vai à notificação e não mexe num diálogo aberto depois.
+                .on_close(move |_, _, cx| { let _ = close.update(cx, |this, _| {
+                    if this.sidebar.chain.as_ref().is_some_and(|c| Rc::ptr_eq(&c.status, &owner)) { this.sidebar.chain = None; }
+                }); })
+        });
+        cx.notify();
+    }
+
+    fn commit_chain(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(chain) = self.sidebar.chain.as_ref() else { return };
+        let text = chain.input.read(cx).value().trim().to_owned();
+        if text.is_empty() || chain.status.borrow().sent.is_some() { return; }
+        let Some(api) = self.api.clone() else {
+            *chain.status.borrow_mut() = Pending { sent: None, error: Some(tr("sidebar_chain_failed").replace("{n}", &tr("connection_failed"))) };
+            cx.notify();
+            return;
+        };
+        self.sidebar.chain_seq += 1;
+        let seq = self.sidebar.chain_seq;
+        *chain.status.borrow_mut() = Pending { sent: Some(seq), error: None };
+        let (from, target, tell) = (chain.from.clone(), chain.target.clone(), self.sidebar_tell());
+        self.runtime.spawn(async move {
+            let result = api.server_send(reqwest::Method::PUT, &["sessions", &from, "then"], Some(json!({"target": target, "text": text})), 30).await;
+            tell.send(SidebarReply::Chained(from, seq, target, result)).await;
+        });
+        cx.notify();
+    }
+
     /// Foco na linha/aba de onde o menu saiu (o `menuOrigem` do web), para o diálogo devolvê-lo ao fechar.
     fn focus_origin(&self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.tab_focus.get(name).unwrap_or(&self.root_focus).focus(window, cx);
@@ -528,15 +722,39 @@ impl Hangar {
                 if seq == self.sidebar.hover_seq && self.sidebar.hover.as_deref() == Some(name.as_str()) { self.show_preview(name, text, cx); }
             }
             SidebarReply::MuteRead(seq, result) => {
-                let Some((name, current, mute)) = self.sidebar.menu.as_mut() else { return };
-                if *current != seq { return; }
-                *mute = match result {
+                let Some(menu) = self.sidebar.menu.as_mut().filter(|m| m.seq == seq) else { return };
+                menu.mute = match result {
                     Ok(value) => match value.get("muted").and_then(Value::as_array) {
-                        Some(list) => Mute::Known(list.iter().any(|v| v.as_str() == Some(name.as_str()))),
+                        Some(list) => Mute::Known(list.iter().any(|v| v.as_str() == Some(menu.name.as_str()))),
                         None => Mute::Failed(tr("invalid_response")),
                     },
                     Err(error) => Mute::Failed(Self::fetch_failure(&error)),
                 };
+                cx.notify();
+            }
+            SidebarReply::BranchRead(seq, result) => {
+                let Some(menu) = self.sidebar.menu.as_mut().filter(|m| m.seq == seq) else { return };
+                menu.branches = Some(match result {
+                    Ok(value) => serde_json::from_value::<BranchList>(value).map(Branches::Known)
+                        .unwrap_or_else(|_| Branches::Failed(tr("invalid_response"))),
+                    Err(error) => Branches::Failed(Self::fetch_failure(&error)),
+                });
+                cx.notify();
+            }
+            SidebarReply::Note(name, kind, text) => window.push_notification(git_note(&name, kind, text), cx),
+            SidebarReply::Chained(from, seq, target, result) => {
+                // Só o diálogo que mandou este pedido recebe a resposta; fechado, ela vai à notificação.
+                let open = self.sidebar.chain.as_ref().filter(|c| c.status.borrow().sent == Some(seq));
+                match (result, open) {
+                    (Ok(_), open) => {
+                        if open.is_some() { self.sidebar.chain = None; window.close_dialog(cx); }
+                        window.push_notification(git_note(&from, NotificationType::Success, tr("sidebar_chained").replace("{n}", &target)), cx);
+                    }
+                    (Err(error), Some(chain)) => *chain.status.borrow_mut() = Pending { sent: None,
+                        error: Some(tr("sidebar_chain_failed").replace("{n}", &Self::fetch_failure(&error))) },
+                    (Err(error), None) => window.push_notification(git_note(&from, NotificationType::Error,
+                        tr("sidebar_chain_failed").replace("{n}", &Self::fetch_failure(&error))), cx),
+                }
                 cx.notify();
             }
             SidebarReply::Wrote(name, what, result) => {
@@ -659,21 +877,29 @@ impl Hangar {
 pub(super) fn session_menu(hangar: WeakEntity<Hangar>, session: SessionInfo) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
     move |menu, window, cx| {
         let Some(entity) = hangar.upgrade() else { return menu };
-        let seen = Rc::new(RefCell::new(entity.read(cx).sidebar.mute_for(&session.name)));
+        // As outras sessões deste servidor, na ordem da barra sem o filtro, são as candidatas do encadear (web: `chainCandidates`,
+        // que lê os grupos inteiros).
+        let others = |hangar: &Hangar, name: &str| -> Vec<String> {
+            let l = layout(&hangar.sessions, "", Hangar::by_project(), &hangar.sidebar.deleting);
+            l.waiting.iter().chain(l.groups.iter().flat_map(|g| g.sessions.iter())).filter(|s| s.name != name).map(|s| s.name.clone()).collect()
+        };
+        let seen = Rc::new(RefCell::new(entity.read(cx).sidebar.menu_for(&session.name)));
         let (weak, again, seen_now) = (hangar.clone(), session.clone(), seen.clone());
         cx.observe_in(&entity, window, move |menu, entity, window, cx| {
-            let now = entity.read(cx).sidebar.mute_for(&again.name);
+            let now = entity.read(cx).sidebar.menu_for(&again.name);
             if *seen_now.borrow() == now { return; }
             *seen_now.borrow_mut() = now.clone();
-            let (weak, again) = (weak.clone(), again.clone());
-            menu.rebuild(window, cx, move |menu, _, _| fill_menu(menu, &weak, &again, now));
+            let (weak, again, list) = (weak.clone(), again.clone(), others(entity.read(cx), &again.name));
+            menu.rebuild(window, cx, move |menu, window, cx| fill_menu(menu, &weak, &again, now, list, window, cx));
         }).detach();
-        let mute = seen.borrow().clone();
-        fill_menu(menu, &hangar, &session, mute)
+        let view = seen.borrow().clone();
+        let list = others(entity.read(cx), &session.name);
+        fill_menu(menu, &hangar, &session, view, list, window, cx)
     }
 }
 
-fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, session: &SessionInfo, mute: Option<Mute>) -> PopupMenu {
+fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, session: &SessionInfo, mute: Option<Mute>, others: Vec<String>,
+    window: &mut Window, cx: &mut Context<PopupMenu>) -> PopupMenu {
     let item = |label: String, act: fn(&mut Hangar, String, &mut Window, &mut Context<Hangar>)| {
         let (hangar, name) = (hangar.clone(), session.name.clone());
         PopupMenuItem::new(label).on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| act(this, name.clone(), window, cx)); })
@@ -694,20 +920,107 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, session: &SessionInfo
         PopupMenuItem::element(|_, _| div().text_color(theme::danger()).child(tr("sidebar_close")))
             .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| this.confirm_delete(name.clone(), window, cx)); })
     };
+    let git = has_git(session);
+    let chain_label = match &session.then_target {
+        Some(target) => tr("sidebar_chained_to").replace("{n}", target),
+        None => tr("sidebar_chain"),
+    };
+    let (weak, name, current) = (hangar.clone(), session.name.clone(), session.then_target.clone());
     menu.min_w(px(200.))
         .item(item(tr("sidebar_rename"), |this, name, window, cx| this.start_session_rename(name, window, cx)))
         .item(mute_item)
         .when_some(cwd, |menu, cwd| menu
             .item(PopupMenuItem::new(tr("sidebar_copy_cwd")).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(cwd.clone()))))
             .item(item(tr("sidebar_open_editor"), |this, name, _, cx| this.write(name, Write::Editor, cx))))
+        .when(git, |menu| {
+            let (weak, name) = (hangar.clone(), session.name.clone());
+            menu.separator()
+                .item(item(tr("sidebar_git"), |this, name, window, cx| this.open_git(name, window, cx)))
+                .item(item(tr("sidebar_git_pull"), |this, name, window, cx| this.git_write(name, GitWrite::Pull, window, cx)))
+                .submenu(tr("sidebar_switch_branch"), window, cx, move |menu, window, cx| branch_menu(menu, &weak, &name, window, cx))
+        })
+        .separator()
+        .submenu(chain_label, window, cx, move |menu, _, _| fill_chain(menu, &weak, &name, current.clone(), &others))
         .separator()
         .item(close)
+}
+
+/// O submenu de branches se refaz sozinho quando a leitura chega: refazer o menu de cima fecharia o submenu aberto.
+fn branch_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, name: &str, window: &mut Window, cx: &mut Context<PopupMenu>) -> PopupMenu {
+    let Some(entity) = hangar.upgrade() else { return menu };
+    let seen = RefCell::new(entity.read(cx).sidebar.branches_for(name));
+    let now = seen.borrow().clone();
+    let (weak, owner) = (hangar.clone(), name.to_owned());
+    cx.observe_in(&entity, window, move |menu, entity, window, cx| {
+        let now = entity.read(cx).sidebar.branches_for(&owner);
+        if *seen.borrow() == now { return; }
+        *seen.borrow_mut() = now.clone();
+        let (weak, owner) = (weak.clone(), owner.clone());
+        menu.rebuild(window, cx, move |menu, _, _| fill_branches(menu, &weak, &owner, now));
+    }).detach();
+    fill_branches(menu, hangar, name, now)
+}
+
+/// Submenu "Trocar branch": o estado da leitura feita ao abrir o menu; a atual com ✓ e sem ação.
+fn fill_branches(menu: PopupMenu, hangar: &WeakEntity<Hangar>, name: &str, branches: Option<Branches>) -> PopupMenu {
+    let list = match branches {
+        Some(Branches::Known(list)) => list,
+        // Falha em vermelho, não no cinza do "carregando…": é um estado, não uma espera.
+        Some(Branches::Failed(reason)) => {
+            let text = tr("sidebar_branches_failed").replace("{n}", &reason);
+            return menu.item(PopupMenuItem::element(move |_, _| div().text_color(theme::danger()).child(text.clone())).disabled(true));
+        }
+        Some(Branches::Loading) | None => return menu.item(PopupMenuItem::new(tr("sidebar_loading")).disabled(true)),
+    };
+    if list.branches.is_empty() { return menu.item(PopupMenuItem::new(tr("sidebar_no_branches")).disabled(true)); }
+    list.branches.iter().fold(menu.max_h(px(260.)).scrollable(true), |menu, branch| {
+        let current = list.current.as_deref() == Some(branch.as_str());
+        let (hangar, name, branch, dirty) = (hangar.clone(), name.to_owned(), branch.clone(), list.dirty);
+        menu.item(mono_item(branch.clone(), current).on_click(move |_, window, cx| {
+            if current { return; }
+            let _ = hangar.update(cx, |this, cx| this.pick_branch(name.clone(), branch.clone(), dirty, window, cx));
+        }))
+    })
+}
+
+/// Nome de branch ou de sessão em fonte mono, como o web; o atual com ✓ e na cor de destaque.
+fn mono_item(text: String, current: bool) -> PopupMenuItem {
+    PopupMenuItem::element(move |_, _| div().font_family(theme::MONO).text_sm().when(current, |el| el.text_color(theme::accent_text())).child(text.clone()))
+        .checked(current)
+}
+
+/// Submenu do encadear: as outras sessões (✓ no alvo atual) e, com alvo, o Remover vínculo.
+fn fill_chain(menu: PopupMenu, hangar: &WeakEntity<Hangar>, name: &str, current: Option<String>, others: &[String]) -> PopupMenu {
+    let menu = if others.is_empty() { menu.item(PopupMenuItem::new(tr("sidebar_no_other")).disabled(true)) } else {
+        others.iter().fold(menu.min_w(px(220.)).max_h(px(260.)).scrollable(true), |menu, target| {
+            let (hangar, name, target) = (hangar.clone(), name.to_owned(), target.clone());
+            menu.item(mono_item(target.clone(), current.as_deref() == Some(target.as_str())).on_click(move |_, window, cx| {
+                let _ = hangar.update(cx, |this, cx| this.start_chain(name.clone(), target.clone(), window, cx));
+            }))
+        })
+    };
+    let (hangar, name) = (hangar.clone(), name.to_owned());
+    menu.when(current.is_some(), |menu| menu.separator().item(PopupMenuItem::element(|_, _| div().text_color(theme::danger()).child(tr("sidebar_unlink")))
+        .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| this.git_write(name.clone(), GitWrite::Unlink, window, cx)); })))
 }
 
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
-    use super::{HashSet, SessionInfo, layout, save_collapsed};
+    use super::{BranchList, HashSet, SessionInfo, first_line, has_git, layout, save_collapsed};
+
+    #[test]
+    fn git_items_need_a_repository_and_the_first_output_line_is_the_result() {
+        let mut repo = s("r", "idle", Some("/p/r"));
+        repo.branch = Some("main".into());
+        assert!(has_git(&repo));
+        assert!(!has_git(&s("r", "idle", Some("/p/r"))), "branch nula: pasta fora de um repositório");
+        assert!(!has_git(&super::SessionInfo { branch: Some("main".into()), ..s("r", "idle", None) }), "sem pasta não há git");
+        assert_eq!(first_line(&serde_json::json!({"output": "\nUpdating 0..1\nFast-forward"})).as_deref(), Some("Updating 0..1"));
+        assert_eq!(first_line(&serde_json::json!({"output": "  "})), None);
+        let list: BranchList = serde_json::from_value(serde_json::json!({"current": "main", "branches": ["main", "b"], "remotes": ["x"]})).unwrap();
+        assert!(!list.dirty && list.branches.len() == 2, "dirty ausente é árvore limpa; remotes não entram no menu, como no web");
+    }
 
     fn s(name: &str, state: &str, cwd: Option<&str>) -> SessionInfo {
         SessionInfo { name: name.into(), state: state.into(), cwd: cwd.map(str::to_owned), ..Default::default() }

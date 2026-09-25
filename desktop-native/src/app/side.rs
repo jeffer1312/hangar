@@ -218,7 +218,7 @@ impl Hangar {
         self.side.cost_task = Some((key, task));
     }
 
-    fn load_files(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn load_files(&mut self, cx: &mut Context<Self>) {
         let (Some(api), Some(key)) = (self.api.clone(), self.selected_key()) else { return; };
         self.side.files = Some((key.clone(), None));
         self.side.diff = None;

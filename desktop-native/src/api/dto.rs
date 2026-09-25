@@ -27,6 +27,8 @@ pub struct SessionInfo {
     pub loop_max: Option<u32>,
     pub limited: Option<bool>,
     pub limit_reset: Option<String>,
+    /// Sessão que recebe um prompt quando esta terminar (`PUT …/then`).
+    pub then_target: Option<String>,
 }
 
 impl SessionInfo {
