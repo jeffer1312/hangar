@@ -36,6 +36,8 @@
 #      the alarms go to a session called "5" while the group stalls. E.g.:
 #      vigia.sh t1 t2 t3 review review2 arbitro -m 10 -d ~/.hangar/orq/<date>-<gid>/registro.md
 #      The old form `vigia.sh exec rev arb 5` still works.
+# Usage: vigia.sh <arbiter> -e <durable dir> [-m N]
+#      the list follows `orq ball` every cycle.
 #
 # Confirming it LIVES (is-active right after the systemd-run answers `active` because it was just
 # born, not because it reads the API — a watchdog once sat `active` for hours with no log line):
@@ -72,11 +74,13 @@ set -u
 # `sanitize_session_name` accepts them.
 LIMITE=5
 DIARIO=
+ORQD=
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -m|--minutos) LIMITE=${2:?"-m needs the number of minutes"}; shift 2 ;;
     -d|--diario)  DIARIO=${2:?"-d needs the journal's path"}; shift 2 ;;
+    -e|--eventos) ORQD=${2:?"-e needs the durable directory (orq)"}; shift 2 ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done
@@ -87,9 +91,20 @@ if [ "$n" -eq 4 ] && printf '%s' "${ARGS[3]}" | grep -qE '^[0-9]+$'; then
   ARGS=("${ARGS[0]}" "${ARGS[1]}" "${ARGS[2]}")
 fi
 SESSOES=("${ARGS[@]}")
-[ "${#SESSOES[@]}" -ge 2 ] || { echo "usage: vigia.sh <session> [session...] <arbiter> [minutes]" >&2; exit 2; }
+[ "${#SESSOES[@]}" -ge 2 ] || [ -n "$ORQD" ] || { echo "usage: vigia.sh <session> [session...] <arbiter> [-m minutes] | vigia.sh <arbiter> -e <dir>" >&2; exit 2; }
 ARB=${SESSOES[$((${#SESSOES[@]}-1))]}      # the last one is the arbiter
 export ARB
+# With -e the list is `orq ball` + the arbiter, re-read every cycle: nobody re-arms at a handoff,
+# and a session waiting as it was told is never on the list.
+ORQ="$(dirname "$(realpath "$0")")/orq.py"
+[ -n "$ORQD" ] && DIARIO=${DIARIO:-$ORQD/registro.md}
+avisar_arb() {
+  if [ -n "$ORQD" ]; then
+    ORQ_DIR="$ORQD" python3 "$ORQ" notify --alarm "$1" >/dev/null 2>>"${CP_VIGIA_LOG:-/dev/stderr}"
+  else
+    hangar-send --tmux "$ARB" "$1" >/dev/null 2>&1
+  fi
+}
 
 BASE=${CP_BASE:-http://127.0.0.1:8765}
 ENVFILE=${CP_ENV:-$(dirname "$(realpath "$(command -v hangar-send)")")/../backend/.env}
@@ -263,8 +278,22 @@ CAVISO=()        # already warned that this session crossed its window? (1 warni
 # loop in seconds; in normal use nobody passes it.
 INTERVALO=${CP_VIGIA_INTERVALO:-60}
 
-for i in $(seq 1 1440); do
+CICLOS=${CP_VIGIA_CICLOS:-1440}
+for i in $(seq 1 "$CICLOS"); do
   sleep "$INTERVALO"
+  if [ -n "$ORQD" ]; then
+    if bola=$(ORQ_DIR="$ORQD" python3 "$ORQ" ball 2>>"${CP_VIGIA_LOG:-/dev/stderr}"); then
+      read -r -a nova <<< "$bola"
+      nova+=("$ARB")
+      if [ "${nova[*]}" != "${SESSOES[*]}" ]; then
+        SESSOES=("${nova[@]}")
+        PSEQ=(); NUDGE=(); RHASH=(); RSEQ=(); RAVISO=(); CAVISO=()
+        echo "[vigia] watching: ${SESSOES[*]}"
+      fi
+    else
+      echo "[vigia] orq ball failed; keeping: ${SESSOES[*]}" >&2
+    fi
+  fi
   lista=$(curl -s --config "$CURLRC" "$BASE/api/sessions")
   st=$(printf '%s' "$lista" | python3 "$LEITOR" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
   if [ -z "$st" ]; then
@@ -285,7 +314,7 @@ for i in $(seq 1 1440); do
     resumo="$resumo${resumo:+ · }${SESSOES[$k]}=${ESTADOS[$k]:-?}"
   done
   # Only the PAIR (everyone but the arbiter) counts for stuck/noquota: an idle arbiter is normal.
-  par_estados="${st%|*}"
+  if [ "${#SESSOES[@]}" -gt 1 ]; then par_estados="${st%|*}"; else par_estados=""; fi
 
   # "Stopped" is everything that is not work in progress:
   #   idle          — finished the turn and is waiting
@@ -329,7 +358,7 @@ for i in $(seq 1 1440); do
       fi
       msg="[vigia] ${SESSOES[$k]} is stopped (${ESTADOS[$k]:-?}) for ${LIMITE} min${cutucada}. Team: $resumo. Look at its screen (the pane, or its transcript without a terminal): a provider timeout with retries blown, a dead turn and a report stuck in the queue do not undo themselves."
       echo "$msg"
-      hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+      avisar_arb "$msg"
       PSEQ[$k]=0
     fi
   done
@@ -356,7 +385,7 @@ for i in $(seq 1 1440); do
         # the session is stuck or working — an imperative false alarm has ordered a STOP in the
         # middle of legitimate work. Stop orders come from the arbiter, after looking.
         hangar-send --tmux "${SESSOES[$k]}" "[vigia] You repeat the SAME command for ~${RSEQ[$k]} min. Is this a wait on an external condition? If so, the cap has blown: report to the arbiter what you wait for and the last return (executor.md rule). If you are working, ignore this notice." >/dev/null 2>&1
-        hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+        avisar_arb "$msg"
         RAVISO[$k]=1
       fi
     else
@@ -392,7 +421,7 @@ for i in $(seq 1 1440); do
     fi
     echo "$msg"
     # Marked as warned only when the arbiter got it; a failed delivery retries next cycle.
-    if hangar-send --tmux "$ARB" "$msg" >/dev/null 2>>"${CP_VIGIA_LOG:-/dev/stderr}"; then
+    if avisar_arb "$msg"; then
       CAVISO[$k]=1
     else
       echo "[vigia] context alarm for $nome NOT delivered to $ARB; retrying next cycle" >&2
@@ -414,7 +443,7 @@ for i in $(seq 1 1440); do
     idade=$(( $(date +%s) - mtime ))
     if [ "$idade" -ge 3600 ] && [ "$diario_avisado" -lt "$(( idade / 3600 ))" ]; then
       diario_avisado=$(( idade / 3600 ))
-      hangar-send --tmux "$ARB" "[vigia] The trail ($parado) has gone $(( idade / 60 ))min without a write, with the group active. The journal and eventos.jsonl are written AT the event — if reports/merges happened in this window, they are outside the trail." >/dev/null 2>&1
+      avisar_arb "[vigia] The trail ($parado) has gone $(( idade / 60 ))min without a write, with the group active. The journal and eventos.jsonl are written AT the event — if reports/merges happened in this window, they are outside the trail."
       echo "[vigia] trail stalled for $(( idade / 60 ))min ($parado)"
     fi
     [ "$idade" -lt 3600 ] && diario_avisado=0
@@ -428,7 +457,7 @@ for i in $(seq 1 1440); do
       if [ "$avisou_travado" != "$par_estados" ]; then
         msg="[vigia] STUCK session: $resumo. It says 'working' but has produced no event for over 10 minutes — the classic case is a picker/AskUserQuestion blocking the firing turn. Look at its screen (pane or transcript) and unblock it (POST /api/sessions/<name>/select with {\"option\": N})."
         echo "$msg"
-        hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+        avisar_arb "$msg"
         avisou_travado="$par_estados"
       fi
       ;;
@@ -442,7 +471,7 @@ for i in $(seq 1 1440); do
       if [ "$avisou_cota" != "$par_estados" ]; then
         msg="[vigia] Account out of quota: $resumo. The session will not come back on its own — open the substitute on an account ALLOWED by the contract and send the same kick-off, with the open Task."
         echo "$msg"
-        hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+        avisar_arb "$msg"
         avisou_cota="$par_estados"
       fi
       ;;
@@ -453,7 +482,7 @@ for i in $(seq 1 1440); do
   if [ "$parados" -ge "$LIMITE" ]; then
     msg="[vigia] Nobody has had the ball for ${LIMITE} min: $resumo (minute $i). If you fell (an API error), this is what brings you back. Check whether someone delivered while you were out — a report stuck in the queue and a stalled verdict are the two ways the pipeline locks up with nobody noticing."
     echo "$msg"
-    hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+    avisar_arb "$msg"
     avisos=$((avisos+1))
     parados=0
     if [ "$avisos" -ge 20 ]; then
