@@ -374,14 +374,14 @@ def test_log_anexa_decisao_com_a_task(env, tmp_path):
 
 @pytest.fixture
 def jev_server():
-    """Jev falso: devolve a resposta que o teste pôs em `resp`, ou um status de erro."""
+    """Jev falso: devolve o `answers` que o teste pôs em `resp`, ou um status de erro."""
     ctl = {"status": 200, "resp": {}, "body": None}
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             ctl["body"] = json.loads(self.rfile.read(int(self.headers["content-length"])))
             ctl["auth"] = self.headers.get("authorization")
-            out = json.dumps({"answers": {"kind": ctl["resp"]}}).encode()
+            out = json.dumps({"answers": ctl["resp"]}).encode()
             self.send_response(ctl["status"])
             self.send_header("content-type", "application/json")
             if ctl.get("cut"):
@@ -404,14 +404,25 @@ def _jev_env(e, ctl, mode):
     return {**e, "ORQ_JEV": mode, "ORQ_JEV_URL": ctl["url"], "TYPESAFE_API_KEY": "k"}
 
 
-def test_sombra_consulta_registra_e_acorda_igual(env, tmp_path, jev_server):
+VETOS = ("context", "user", "problem", "deviation")
+
+
+def _answers(choice="nothing", p=0.9, veto=0.1, **over):
+    """Resposta do Jev: a escolha `kind` e os 4 vetos `noul`; `over` troca um veto."""
+    return {"kind": {"choice": choice, "probabilities": {choice: p}},
+            **{k: {"noul": veto} for k in VETOS}, **{k: {"noul": v} for k, v in over.items()}}
+
+
+def test_sombra_consulta_registra_veto_e_acorda_igual(env, tmp_path, jev_server):
     d, log, e = env
     init(e, tmp_path)
-    jev_server["resp"] = {"choice": "no_action", "probabilities": {"no_action": 0.97}}
+    jev_server["resp"] = _answers(p=0.97, user=0.2)
     run(_jev_env(e, jev_server, "shadow"), "notify", "tela fechada, 41 de 60 ações")
     assert sent(log) == ["arb tela fechada, 41 de 60 ações"]
     linha = json.loads((d / "jev-shadow.jsonl").read_text())
     assert linha["would_drop"] is True and linha["mode"] == "shadow"
+    assert linha["choice"] == "nothing" and linha["p"] == 0.97
+    assert linha["veto"] == {"context": 0.1, "user": 0.2, "problem": 0.1, "deviation": 0.1}
     assert jev_server["body"]["model"] == "jev-1.13.0"
     assert jev_server["auth"] == "Bearer k"
 
@@ -419,7 +430,7 @@ def test_sombra_consulta_registra_e_acorda_igual(env, tmp_path, jev_server):
 def test_jev_usa_endpoint_e_modelo_do_ambiente(env, tmp_path, jev_server):
     d, log, e = env
     init(e, tmp_path)
-    jev_server["resp"] = {"choice": "decision", "probabilities": {"decision": 0.9}}
+    jev_server["resp"] = _answers("act", 0.9)
     amb = {**e, "ORQ_JEV": "shadow", "TYPESAFE_API_KEY": "sk-or-x",
            "JEV_ENDPOINT": jev_server["url"], "JEV_MODEL": "typesafe/jev-1.13-20260917"}
     run(amb, "notify", "x")
@@ -427,16 +438,68 @@ def test_jev_usa_endpoint_e_modelo_do_ambiente(env, tmp_path, jev_server):
     assert jev_server["auth"] == "Bearer sk-or-x"
 
 
-def test_ligado_descarta_so_com_certeza_alta(env, tmp_path, jev_server):
+def test_pedido_leva_as_5_perguntas_calibradas(env, tmp_path, jev_server):
     d, log, e = env
     init(e, tmp_path)
-    jev_server["resp"] = {"choice": "no_action", "probabilities": {"no_action": 0.95}}
+    jev_server["resp"] = _answers()
+    run(_jev_env(e, jev_server, "shadow"), "notify", "ok")
+    q = jev_server["body"]["questions"]
+    assert set(q) == {"kind", *VETOS}
+    assert q["kind"]["type"] == "choice" and all(q[k]["type"] == "noul" for k in VETOS)
+    assert q["kind"]["instructions"] == (
+        "A session of a software team sent this message to the team's coordinator. "
+        "Routine bookkeeping is automatic; the coordinator is needed only to decide "
+        "or act. What does the coordinator have to do with this message?")
+    assert jev_server["body"]["state"] == "ok"
+
+
+def test_ligado_descarta_informe_certo_sem_veto(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = _answers()
     run(_jev_env(e, jev_server, "on"), "notify", "ok, recebido")
     assert sent(log) == []
     assert "(jev: no action) ok, recebido" in (d / "registro.md").read_text()
-    jev_server["resp"] = {"choice": "no_action", "probabilities": {"no_action": 0.6}}
+
+
+def test_um_veto_acima_do_limite_acorda(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = _answers(problem=0.5)
+    run(_jev_env(e, jev_server, "on"), "notify", "deu 401 no hangar-send")
+    assert sent(log) == ["arb deu 401 no hangar-send"]
+
+
+def test_limites_de_descarte_e_de_veto(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = _answers(p=0.84)
+    run(_jev_env(e, jev_server, "on"), "notify", "quase")
+    assert sent(log) == ["arb quase"]
+    jev_server["resp"] = _answers(p=0.85, veto=0.40)
+    run(_jev_env(e, jev_server, "on"), "notify", "no limite")
+    assert sent(log) == ["arb quase"]
+    assert "(jev: no action) no limite" in (d / "registro.md").read_text()
+
+
+def test_escolha_agir_acorda_mesmo_com_certeza(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = _answers("act", 0.99, veto=0)
     run(_jev_env(e, jev_server, "on"), "notify", "posso usar a tela?")
     assert sent(log) == ["arb posso usar a tela?"]
+    assert json.loads((d / "jev-shadow.jsonl").read_text())["p"] == 0.0
+
+
+def test_resposta_sem_um_veto_acorda_o_arbitro(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    resp = _answers()
+    del resp["deviation"]
+    jev_server["resp"] = resp
+    run(_jev_env(e, jev_server, "on"), "notify", "sem veto")
+    assert sent(log) == ["arb sem veto"]
+    assert json.loads((d / "jev-shadow.jsonl").read_text())["error"].startswith("KeyError")
 
 
 def test_jev_com_erro_json_torto_ou_sem_chave_acorda_o_arbitro(env, tmp_path, jev_server):
@@ -467,7 +530,7 @@ def test_chave_do_settings_json_vale_sem_variavel(env, tmp_path, jev_server):
     init(e, tmp_path)
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text(json.dumps({"env": {"TYPESAFE_API_KEY": "s"}}))
-    jev_server["resp"] = {"choice": "decision", "probabilities": {"decision": 0.9}}
+    jev_server["resp"] = _answers("act", 0.9)
     run({**_jev_env(e, jev_server, "shadow"), "TYPESAFE_API_KEY": ""}, "notify", "x")
     assert jev_server["auth"] == "Bearer s"
 
@@ -482,10 +545,11 @@ def test_settings_json_que_nao_e_objeto_acorda_o_arbitro(env, tmp_path, jev_serv
     assert json.loads((d / "jev-shadow.jsonl").read_text())["error"] == "no key"
 
 
-def test_alarme_usa_a_pergunta_do_vigia(env, tmp_path, jev_server):
+def test_alarme_acorda_sem_consultar_o_jev(env, tmp_path, jev_server):
     d, log, e = env
     init(e, tmp_path)
-    jev_server["resp"] = {"choice": "waiting_as_told", "probabilities": {"waiting_as_told": 0.99}}
+    jev_server["resp"] = _answers(p=0.99, veto=0)
     run(_jev_env(e, jev_server, "on"), "notify", "--alarm", "[vigia] rev parado")
-    assert "waiting_as_told" in jev_server["body"]["questions"]["kind"]["criteria"]
-    assert sent(log) == []
+    assert sent(log) == ["--tmux arb [vigia] rev parado"]
+    assert jev_server["body"] is None
+    assert not (d / "jev-shadow.jsonl").exists()

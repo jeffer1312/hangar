@@ -38,22 +38,45 @@ EVENT_FIELDS_STR = ("commit", "resultado", "sessao", "motivo", "titulo", "execut
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-1.13.0"
 JEV_TIMEOUT_S = 5
-DISCARD_P = 0.9
-# (instruction, options, the option that means "no need to wake the arbiter")
+# Calibrated on real arbiter messages: changing a word or a threshold means measuring again.
+DISCARD_P = 0.85  # p of "nothing" (the choice's winner) needed to drop
+VETO_P = 0.40     # any alert above this keeps the arbiter awake
+JEV_VETOES = ("context", "user", "problem", "deviation")
 JEV_QUESTIONS = {
-    False: ("What does the coordinator of a software team need to do with this message from a "
-            "worker session?",
-            {"no_action": "nothing: it is a status note, a confirmation or an acknowledgement",
-             "decision": "decide, authorize, unblock or answer something the sender asks",
-             "round_report": "read a report of finished work",
-             "none": "none of these"},
-            "no_action"),
-    True: ("A watchdog alarm about a worker session in a software team. What is the session doing?",
-           {"idle": "it stopped and owes work",
-            "stuck": "it claims to work but nothing moves",
-            "waiting_as_told": "it is waiting exactly as it was told to",
-            "none": "none of these"},
-           "waiting_as_told"),
+    "kind": {
+        "type": "choice",
+        "instructions": ("A session of a software team sent this message to the team's coordinator. "
+                         "Routine bookkeeping is automatic; the coordinator is needed only to decide "
+                         "or act. What does the coordinator have to do with this message?"),
+        "criteria": {
+            "act": ("decide or act: answer a question; grant a permission or a go-ahead (screen time, "
+                    "more actions, 'may I', 'waiting for your OK'); choose between options; handle a "
+                    "failure, blocker or environment problem; open, name or replace a session (the "
+                    "sender is at its context limit or hands over, a session is gone, a reviewer must "
+                    "be named); settle a disagreement or a change of plan; record a decision from the "
+                    "user; or release the next Task after a commit"),
+            "nothing": ("nothing: the message only informs - progress, a status note, an "
+                        "acknowledgement, a wake-up or environment confirmation, a proof window "
+                        "opened or closed, a round delivered to the reviewer, a verdict already sent "
+                        "to the executor - and asks nothing of the coordinator"),
+            "none": "none of these",
+        },
+    },
+    "context": {"type": "noul", "instructions": (
+        "Does the message say the sender's context is at or above about 45% of its "
+        "window, or that the sender retires, stops for good or will be replaced "
+        "('sucessora', 'passagem', 'aposento', 'última entrega', 'sessão nova')?")},
+    "user": {"type": "noul", "instructions": (
+        "Does the message relay words or a decision of the user ('palavra do usuário', "
+        "'resposta do usuário', 'decisão de produto')?")},
+    "problem": {"type": "noul", "instructions": (
+        "Does the message report something broken that blocks the work: a crash, a "
+        "failing command or tool (for example HTTP 401), a full disk, a dirty git tree "
+        "nobody explained, a session that no longer exists, or a repeated defect "
+        "('reincide')?")},
+    "deviation": {"type": "noul", "instructions": (
+        "Does the message say a required step was skipped, deferred or done "
+        "differently from the instructions or the recipe?")},
 }
 
 
@@ -436,40 +459,40 @@ def jev_key() -> str:
     return v if isinstance(v, str) else ""
 
 
-def jev_ask(text: str, alarm: bool) -> dict:
-    """{'choice', 'p'} or {'error'}; never raises — any failure wakes the arbiter."""
+def jev_ask(text: str) -> dict:
+    """{'choice', 'p', 'veto'} or {'error'}; never raises — any failure wakes the arbiter."""
     key = jev_key()
     if not key:
         return {"error": "no key"}
-    instructions, criteria, _ = JEV_QUESTIONS[alarm]
     model = os.environ.get("JEV_MODEL", "").strip() or JEV_MODEL
-    body = json.dumps({"model": model, "state": text[-20_000:],
-                       "questions": {"kind": {"type": "choice", "instructions": instructions,
-                                              "criteria": criteria}}}).encode()
+    body = json.dumps({"model": model, "state": text[-20_000:], "questions": JEV_QUESTIONS}).encode()
     url = os.environ.get("ORQ_JEV_URL") or os.environ.get("JEV_ENDPOINT", "").strip() or JEV_URL
     req = urllib.request.Request(url, data=body,
                                  headers={"authorization": f"Bearer {key}",
                                           "content-type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=JEV_TIMEOUT_S) as r:
-            ans = json.load(r)["answers"]["kind"]
-        choice = ans.get("choice")
-        p = (ans.get("probabilities") or {}).get(choice)
+            answers = json.load(r)["answers"]
+        choice = answers["kind"].get("choice")
+        # Only a "nothing" winner can drop; its probability, not `confidence`.
+        p = (answers["kind"].get("probabilities") or {}).get("nothing") if choice == "nothing" else 0.0
+        veto = {k: float(answers[k]["noul"]) for k in JEV_VETOES}
     except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError, KeyError,
             TypeError, AttributeError) as e:
         return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
-    # The winner's probability, not `confidence`: the Jev calibrates them differently.
-    return {"choice": choice, "p": float(p) if isinstance(p, (int, float)) else 0.0}
+    return {"choice": choice, "p": float(p) if isinstance(p, (int, float)) else 0.0, "veto": veto}
 
 
 def triage(d: Path, text: str, alarm: bool) -> str:
-    """Unmarked message: 'drop' only in mode `on` and when the Jev is sure it needs no action.
-    Shadow (default) asks and records, and the arbiter wakes the same."""
+    """Unmarked message: 'drop' only in mode `on`, when the Jev is sure it asks nothing and no veto
+    fires. Shadow (default) asks and records, and the arbiter wakes the same. Every real alarm
+    needs action, so alarms wake without asking."""
     mode = os.environ.get("ORQ_JEV", "shadow")
-    if mode == "off":
+    if mode == "off" or alarm:
         return "wake"
-    r = jev_ask(text, alarm)
-    would_drop = r.get("choice") == JEV_QUESTIONS[alarm][2] and r.get("p", 0.0) >= DISCARD_P
+    r = jev_ask(text)
+    would_drop = ("error" not in r and r["choice"] == "nothing" and r["p"] >= DISCARD_P
+                  and max(r["veto"].values()) <= VETO_P)
     with (d / "jev-shadow.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps({"ts": now(), "mode": mode, "alarm": alarm, "text": text[:500], **r,
                             "would_drop": would_drop}, ensure_ascii=False) + "\n")
