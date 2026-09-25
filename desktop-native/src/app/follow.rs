@@ -1,6 +1,7 @@
 //! Rolagem da conversa: colada no fim, a lista desliza até o texto novo em vez de saltar; a roda
 //! do mouse anda em passos animados; só gesto da pessoa solta o fim.
 use super::*;
+use super::panes::Area;
 
 // Mola de velocidade no formato do use-stick-to-bottom, com as constantes medidas pelo Zeron.
 const DAMPING: f32 = 0.7;
@@ -141,14 +142,14 @@ impl Hangar {
     pub(super) fn follow_engage(&mut self, cx: &mut Context<Self>) {
         self.follow.pinned = true;
         self.follow.wheel = 0.;
-        if cx.reduce_motion() { self.list_state.scroll_to_end(); cx.notify(); return; }
+        if cx.reduce_motion() { self.list_state.scroll_to_end(); self.redraw(Area::Conversation, cx); return; }
         let viewport = f32::from(self.list_state.viewport_bounds().size.height);
         let distance = self.distance_from_bottom();
         if viewport > 0. && distance > GLIDE_MAX_VIEWPORTS * viewport {
             self.list_state.scroll_by(px(distance - GLIDE_MAX_VIEWPORTS * viewport));
         }
         self.follow.kick = true;
-        cx.notify();
+        self.redraw(Area::Conversation, cx);
     }
 
     fn release(&mut self) {
@@ -170,7 +171,7 @@ impl Hangar {
             self.follow.pinned = true;
             self.follow.kick = true;
         }
-        cx.notify();
+        self.redraw(Area::Conversation, cx);
     }
 
     /// Entalhe da roda do mouse: vira distância a percorrer em alguns quadros, não um salto.
@@ -181,7 +182,7 @@ impl Hangar {
         if self.follow.wheel != 0. && self.follow.wheel.signum() != down.signum() { self.follow.wheel = 0.; }
         if self.follow.wheel == 0. { self.follow.wheel_tick = None; }
         self.follow.wheel += down;
-        cx.notify();
+        self.redraw(Area::Conversation, cx);
     }
 
     /// Camada sobre a lista que pega a roda antes dela; trackpad (pixels) segue direto para a lista.
@@ -215,7 +216,7 @@ impl Hangar {
         let now = Instant::now();
         if self.follow.wheel != 0. { self.wheel_frame(now); }
         if self.follow.pinned && self.follow.wheel == 0. { self.spring_frame(now); }
-        if self.follow.wheel != 0. || self.follow.pinned && self.distance_from_bottom() > 0.5 { cx.notify(); }
+        if self.follow.wheel != 0. || self.follow.pinned && self.distance_from_bottom() > 0.5 { self.redraw(Area::Conversation, cx); }
     }
 
     fn wheel_frame(&mut self, now: Instant) {

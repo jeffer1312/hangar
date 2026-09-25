@@ -582,6 +582,7 @@ impl Hangar {
             Some(Ok(value)) => {
                 let source = safe_markdown(&text(&value, "markdown"));
                 let view = self.text_view(&format!("plan-preview:{marker}"), "__plan__", source, cx);
+                self.saw_selectable_text();
                 Some(div().id("plan-preview-body").max_h(px(320.)).overflow_y_scroll().p_3().rounded_md().bg(theme::raised())
                     .child(TextView::new(&view).selectable(true).scrollable(false)).into_any_element())
             }
@@ -601,7 +602,7 @@ impl Hangar {
     }
 
     /// Codex antes da thread: a pergunta (aprovação dos hooks) vem da lista e sai por `/select`.
-    fn prethread_key(&self) -> Option<SessionKey> {
+    pub(super) fn prethread_key(&self) -> Option<SessionKey> {
         let session = self.selected.as_ref().filter(|s| !s.readable() && s.provider == "codex")?;
         Some(SessionKey { server: self.server.clone()?, name: session.name.clone(), jsonl: String::new() })
     }

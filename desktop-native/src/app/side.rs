@@ -524,6 +524,7 @@ impl Hangar {
                 Some(Ok((diff, truncated))) => {
                     let (shown, clipped) = conversation::clip(&diff, DIFF_MAX);
                     let view = self.text_view(&format!("side-diff:{path}"), "__side__", conversation::fenced(shown), cx);
+                    self.saw_selectable_text();
                     div().flex().flex_col().gap_1()
                         .child(div().id("side-diff").max_h(px(360.)).overflow_y_scroll().text_xs().child(TextView::new(&view).selectable(true).scrollable(false)))
                         .when(truncated || clipped, |el| el.child(div().text_xs().text_color(theme::muted()).child(tr("side_diff_truncated"))))
@@ -578,13 +579,22 @@ impl Hangar {
             && self.side.fitted(f32::from(window.viewport_size().width), theme::is_floating(), sidebar).is_some()
     }
 
-    pub(super) fn render_side(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// Largura do painel aberto nesta janela; `None` quando está fechado ou não cabe.
+    pub(super) fn side_width(&self, window: &Window) -> Option<f32> {
         let viewport = f32::from(window.viewport_size().width);
         let sidebar = appearance::get().navigation == appearance::Navigation::Sidebar;
-        let width = self.side.fitted(viewport, theme::is_floating(), sidebar).filter(|_| self.side.open && self.selected.is_some());
+        self.side.fitted(viewport, theme::is_floating(), sidebar).filter(|_| self.side.open && self.selected.is_some())
+    }
+
+    /// A leitura de custo acompanha o painel visível; roda no desenho da janela, que acontece mesmo com o painel fechado.
+    pub(super) fn sync_side_cost(&mut self, window: &Window) {
+        let visible = self.side_width(window).is_some() && self.selected.as_ref().is_some_and(|s| s.readable());
+        self.sync_cost(visible);
+    }
+
+    pub(super) fn render_side(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let width = self.side_width(window)?;
         let readable = self.selected.as_ref().is_some_and(|s| s.readable());
-        self.sync_cost(width.is_some() && readable);
-        let width = width?;
         let session = self.selected.clone()?;
         let status = self.status();
         let state = if self.chat_online && !self.chat.state.state.is_empty() { self.chat.state.state.clone() } else { session.state.clone() };

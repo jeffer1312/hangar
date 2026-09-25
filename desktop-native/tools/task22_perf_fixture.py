@@ -85,6 +85,12 @@ class Handler(T14NS["Handler"]):
             return
         super().do_GET()
 
+    def do_POST(self):
+        # O envio responde depois de 1,5 s: dá tempo de ver na tela o "Enviando…" que o Enter mostra.
+        if urlparse(self.path).path.endswith("/input"):
+            time.sleep(1.5)
+        super().do_POST()
+
     def long_stream(self, name):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
