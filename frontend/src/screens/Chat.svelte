@@ -1475,7 +1475,6 @@
     if (!desktop || !publishWorkspaceActions || !publish) return;
     publish([
       action('git', m.sessao_git(), () => (gitOpen = true)),
-      action('loop', m.chat_loop(), () => (loopSheetOpen = true)),
       action('pair', m.chat_parear_sessao(), () => (pairOpen = true)),
       action('run', m.chat_executar_workflow(), () => (runOpen = true)),
       ...(sessionHeadless ? [] : [action('terminal', m.ctx_terminal(), abrirTerminalReal)]),

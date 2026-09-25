@@ -10,7 +10,7 @@ import * as m from '../../paraglide/messages';
 // do @react-native-menu/menu é no-op.
 // A âncora é um Host de 1px no rodapé da linha, sem toque: a linha em si continua sendo RN pura,
 // fora do Compose, senão o arrasto do swipe passaria a atravessar a interop.
-export function SessionMenu({ children, aberto, onFechar, temCwd, onRenomear, onGit, onLoop, onExcluir }: Props) {
+export function SessionMenu({ children, aberto, onFechar, temCwd, onRenomear, onGit, onExcluir }: Props) {
   const { theme } = useUnistyles();
   // O slot de texto é uma view do Compose: string crua ali vira o erro "Text strings must be
   // rendered within a <Text>". Quem entra é o `Text` do próprio @expo/ui, não o do react-native.
@@ -30,7 +30,6 @@ export function SessionMenu({ children, aberto, onFechar, temCwd, onRenomear, on
           <DropdownMenu.Items>
             {item(m.sessao_renomear(), onRenomear)}
             {temCwd ? item('Git', onGit) : null}
-            {item(m.loop_titulo(), onLoop)}
             {item(m.sessao_excluir_curto(), onExcluir, theme.tokens.status.error)}
           </DropdownMenu.Items>
         </DropdownMenu>

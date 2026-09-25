@@ -39,7 +39,6 @@ export function MoreSheet({ open, onClose, serverId, name, recarregar }: Props) 
     }] : []),
     { icon: 'CircleHelp', label: m.askq_sua_resposta(), route: 'ask' },
     { icon: 'Activity', label: m.ctx_atividade(), sub: m.more_tarefas_agentes(), route: 'activity' },
-    { icon: 'Repeat', label: m.loop_titulo(), sub: m.loop_objetivo(), route: 'loop' },
     { icon: 'Users', label: m.par_titulo(), sub: m.ctx_grupo(), route: 'pair' },
     { icon: 'Folder', label: m.arq_aba(), sub: m.ctx_repositorio(), route: 'files' },
     { icon: 'Terminal', label: m.term_titulo(), sub: m.ctx_terminal(), route: 'terminal' },

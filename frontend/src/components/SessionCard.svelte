@@ -25,7 +25,6 @@ import { textoProblema } from '../lib/problema';
     onResume?: () => void;
     onRename?: (newName: string) => void;
     onGit?: () => void;
-    onLoop?: () => void;
     // Alça de arrastar-para-agrupar (Task 6): a mecânica de arrasto (fantasma, alvo sob o dedo,
     // auto-scroll) mora na LISTA — aqui só plumbing de pointer capture, repassando fase+evento.
     onGroupDrag?: (phase: 'down' | 'move' | 'up' | 'cancel', e: PointerEvent) => void;
@@ -39,7 +38,7 @@ import { textoProblema } from '../lib/problema';
     showProvider?: boolean;
   }
   let {
-    session, serverBadge = null, onClick, onDelete, onResume, onRename, onGit, onLoop, onGroupDrag,
+    session, serverBadge = null, onClick, onDelete, onResume, onRename, onGit, onGroupDrag,
     selectMode = false, selected = false, onToggleSelect, showProvider = false,
   }: Props = $props();
 
@@ -544,17 +543,6 @@ import { textoProblema } from '../lib/problema';
           </svg>
         </span>
         <span class="card-menu-label">{m.sessao_git()}</span>
-      </button>
-      <button class="card-menu-item" onclick={() => menuPick(() => onLoop?.())}>
-        <span class="card-menu-ico" aria-hidden="true">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m17 2 4 4-4 4"/>
-            <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
-            <path d="m7 22-4-4 4-4"/>
-            <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
-          </svg>
-        </span>
-        <span class="card-menu-label">{m.sessao_loop_runner()}</span>
       </button>
     {/if}
     <button class="card-menu-item danger" onclick={() => menuPick(onDelete)}>

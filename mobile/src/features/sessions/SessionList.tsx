@@ -72,7 +72,6 @@ export function SessionList() {
 
   const abrir = useCallback((s: AggSession) => router.push(`/s/${s.serverId}/${s.name}` as never), [router]);
   const abrirGit = useCallback((s: AggSession) => router.push(`/s/${s.serverId}/${s.name}/files` as never), [router]);
-  const abrirLoop = useCallback((s: AggSession) => router.push(`/s/${s.serverId}/${s.name}/loop` as never), [router]);
 
   const excluir = useCallback(
     (s: AggSession) =>
@@ -235,7 +234,6 @@ export function SessionList() {
             onGit={() => abrirGit(item)}
             onExcluir={() => excluir(item)}
             onRenomear={() => setRenomeando(item)}
-            onLoop={() => abrirLoop(item)}
             onResume={() => retomar(item)}
             aoAbrir={trocarAberta}
           />

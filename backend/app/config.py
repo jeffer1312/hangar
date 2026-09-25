@@ -254,10 +254,11 @@ class Settings(BaseSettings):
     # CP_EDITOR: binario do editor pro "abrir pasta no editor" (menu da sessao). So-desktop: abre na
     # maquina que roda o backend. Binario unico (sem args/shell) -> exec seguro com o cwd da sessao.
     editor: str = "code"
-    # Kill-switch MESTRE (feature #12) pra qualquer acao autonoma sem o usuario olhar: encadeamento de
-    # sessao (chain.py) e auto-resume (feature #8, stall_watch.py). Default ON (as duas features ja tem
-    # seu proprio opt-in/config — isto e um portao ADICIONAL, nao substitui CP_AUTO_RESUME). CP_AUTOMATIONS=0
-    # desliga tudo de uma vez (ex: antes de um teste manual, ou se uma automacao ficar barulhenta).
+    # Kill-switch MESTRE das acoes autonomas: encadeamento de sessao, tick do loop, auto-resume,
+    # auto-update, sync do Codex e do omp, ask-history (quem chama automations_enabled()). Default ON;
+    # e portao ADICIONAL, nao substitui o flag proprio de cada uma (ex: CP_AUTO_RESUME). Manutencao
+    # (renovacao de token, limpeza, hooks no boot, varredura de grupo) fica fora de proposito: desligar
+    # a chave nao pode deixar login vencer nem sidecar orfao acumular. CP_AUTOMATIONS=0 desliga tudo.
     automations: bool = True
     # Resumo em pt-BR dos blocos de raciocínio (pensamento_pt). Desligado, o front nem pede e a
     # rota devolve o texto original: em link fraco cada abertura de chat custava 3-5 chamadas.
@@ -427,8 +428,8 @@ def variaveis_env(s: "Settings | None" = None) -> list[dict]:
 
 
 def automations_enabled() -> bool:
-    """Kill-switch mestre: True = automacoes desatendidas (encadeamento de sessao, auto-resume) podem
-    disparar. Cada feature ainda mantem seu proprio flag por cima (ex: auto_resume exige ESTE + CP_AUTO_RESUME).
+    """Kill-switch mestre: True = automacoes desatendidas podem disparar (lista no campo `automations`).
+    Cada feature ainda mantem seu proprio flag por cima (ex: auto_resume exige ESTE + CP_AUTO_RESUME).
 
     Import local: o runtime_config importa ESTE modulo, entao um import no topo fecharia o ciclo."""
     from app import runtime_config

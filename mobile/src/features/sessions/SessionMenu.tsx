@@ -14,13 +14,12 @@ export interface Props {
   temCwd: boolean;
   onRenomear: () => void;
   onGit: () => void;
-  onLoop: () => void;
   onExcluir: () => void;
 }
 
 // Variante padrão (iOS e o que não for Android): folha de ações do próprio app.
 // O Android tem a sua em `SessionMenu.android.tsx`, com o menu nativo do Compose.
-export function SessionMenu({ children, aberto, onFechar, temCwd, onRenomear, onGit, onLoop, onExcluir }: Props) {
+export function SessionMenu({ children, aberto, onFechar, temCwd, onRenomear, onGit, onExcluir }: Props) {
   const { theme } = useUnistyles();
 
   const item = (icone: IconName, rotulo: string, acao: () => void, destrutivo?: boolean) => (
@@ -42,7 +41,6 @@ export function SessionMenu({ children, aberto, onFechar, temCwd, onRenomear, on
         <View style={styles.inner}>
           {item('PenLine', m.sessao_renomear(), onRenomear)}
           {temCwd ? item('GitBranch', 'Git', onGit) : null}
-          {item('RefreshCw', m.loop_titulo(), onLoop)}
           {item('Trash2', m.sessao_excluir_curto(), onExcluir, true)}
         </View>
       </Sheet>

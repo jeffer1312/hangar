@@ -27,13 +27,12 @@ interface Props {
   onGit: () => void;
   onExcluir: () => void;
   onRenomear: () => void;
-  onLoop: () => void;
   onResume: () => void;
   // a lista fecha a linha aberta anterior quando esta abre (uma aberta por vez)
   aoAbrir?: (metodos: SwipeableMethods | null) => void;
 }
 
-export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcluir, onRenomear, onLoop, onResume, aoAbrir }: Props) {
+export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcluir, onRenomear, onResume, aoAbrir }: Props) {
   const { theme } = useUnistyles();
   const swipe = useRef<SwipeableMethods>(null);
   const [menuAberto, setMenuAberto] = useState(false);
@@ -56,7 +55,6 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
     () => [
       { name: 'rename', label: m.sessao_renomear() },
       ...(s.cwd ? [{ name: 'git', label: 'Git' }] : []),
-      { name: 'loop', label: m.loop_titulo() },
       { name: 'delete', label: m.sessao_excluir_curto() },
     ],
     [s.cwd],
@@ -97,7 +95,6 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
         temCwd={!!s.cwd}
         onRenomear={onRenomear}
         onGit={onGit}
-        onLoop={onLoop}
         onExcluir={onExcluir}
       >
       <GestureDetector gesture={toqueLongo}>
@@ -115,7 +112,6 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
           onAccessibilityAction={({ nativeEvent }) => {
             if (nativeEvent.actionName === 'rename') onRenomear();
             else if (nativeEvent.actionName === 'git') onGit();
-            else if (nativeEvent.actionName === 'loop') onLoop();
             else if (nativeEvent.actionName === 'delete') onExcluir();
           }}
         >
