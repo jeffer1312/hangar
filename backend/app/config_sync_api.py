@@ -46,7 +46,10 @@ async def get_bundle(items: str = Query("")) -> Response:
         largest = ", ".join(f"{item} ({size // (1024 * 1024)} MB)" for item, size in exc.largest)
         raise HTTPException(413, detail=erro("config_sync_bundle_too_big", str(exc),
                                              largest=largest)) from exc
-    return Response(raw, media_type="application/gzip")
+    # Já é gzip: sem o Content-Encoding o GZipMiddleware comprimiria de novo. Leva segredo, por
+    # isso nenhum cache guarda.
+    return Response(raw, media_type="application/gzip",
+                    headers={"Content-Encoding": "identity", "Cache-Control": "no-store"})
 
 
 @config_sync_router.post("/apply", dependencies=[Depends(require_auth)])

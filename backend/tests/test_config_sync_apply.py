@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -5,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app import config_sync
+from app.config_sync_paths import mark
 from tests.config_sync_machines import make_machine, prefs_path, use_machine
 
 
@@ -54,6 +56,35 @@ async def test_new_machine_gets_skills_hooks_and_referenced_files(pair, monkeypa
     assert (home / ".orca/agent-hooks/lib.sh").read_text() == "# lib\n"
     assert report["items"]["claude_skills"]["status"] == "applied"
     assert report["backup"] == ""
+
+
+async def test_private_files_arrive_private(pair, monkeypatch):
+    ana, bia = pair
+    (Path(ana.home) / "Projetos/skills/minha/SKILL.md").chmod(0o600)
+    await _apply(_send(monkeypatch, ana, bia, ["claude_skills"]), ["claude_skills"], bia)
+    if os.name != "nt":
+        assert (Path(bia.claude) / "skills/minha/SKILL.md").stat().st_mode & 0o777 == 0o600
+
+
+async def test_forged_refs_to_credentials_or_merged_configs_are_refused(pair, monkeypatch):
+    ana, bia = pair
+    login = Path(bia.home) / ".claude.json"
+    login.write_text('{"oauthAccount": {"emailAddress": "bia@x"}}')
+    bundle = _send(monkeypatch, ana, bia, ["claude_hooks"])
+    forged = [f"{mark('HOME')}/.claude.json", f"{mark('CLAUDE')}/.credentials.json",
+              f"{mark('CLAUDE')}/settings.json", f"{mark('CLAUDE')}/.hangar-pair/a__b.md"]
+    for ref in forged:
+        member = "refs/" + hashlib.sha1(ref.encode()).hexdigest()
+        bundle.items["claude_hooks"]["refs"][ref] = {"member": member, "text": False}
+        bundle.files[member] = config_sync.FileBlob(b'{"oauthAccount": "ana@x"}', 0o644)
+    report = await _apply(bundle, ["claude_hooks"], bia)
+    assert login.read_text() == '{"oauthAccount": {"emailAddress": "bia@x"}}'
+    assert not (Path(bia.claude) / ".credentials.json").exists()
+    assert "ana@x" not in (Path(bia.claude) / "settings.json").read_text()
+    assert not (Path(bia.claude) / ".hangar-pair").exists()
+    refused = {w["params"]["entry"] for w in report["items"]["claude_hooks"]["warnings"]
+               if w["code"] == "config_sync_invalid_entry"}
+    assert refused == set(forged)
 
 
 async def test_shell_variables_survive_roundtrip(pair, monkeypatch):

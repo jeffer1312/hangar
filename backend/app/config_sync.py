@@ -12,6 +12,7 @@ import inspect
 import io
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -84,7 +85,12 @@ def _hash(value) -> str:
 
 
 def _mode(path: Path) -> int:
-    return 0o755 if path.stat().st_mode & 0o111 else 0o644
+    """Viajam o bit de execução e a privacidade: arquivo que só o dono lê (token, `.env`)
+    chega do mesmo jeito no destino."""
+    mode = path.stat().st_mode
+    if not mode & 0o044:
+        return 0o700 if mode & 0o111 else 0o600
+    return 0o755 if mode & 0o111 else 0o644
 
 
 def _read_json(path: Path) -> dict:
@@ -265,6 +271,25 @@ def _ref_files(marked: str, local: Path, roots: Roots) -> dict[str, Path]:
     return found or {marked: local}
 
 
+_NEVER_REF = frozenset({".credentials.json", "auth.json", "claude.local.md"})
+# Têm item próprio: inteiros passariam por cima da mescla por chave e da escolha de itens.
+_MERGED_FILES = frozenset(p.lower() for p in (
+    mark("CLAUDE") + "/settings.json", mark("CODEX") + "/config.toml",
+    mark("CLAUDE") + "/engines.json"))
+
+
+def _never_ref(marked: str) -> bool:
+    """Arquivo citado num comando que não viaja como ref: credencial, login (e as cópias de
+    backup do `.claude.json`), o que é só desta máquina, ou arquivo com item próprio. Minúsculas
+    porque no Windows `Settings.json` é o mesmo arquivo."""
+    path = posixpath.normpath(marked.replace("\\", "/")).lower()
+    parts = path.split("/")
+    return (parts[-1] in _NEVER_REF or parts[-1].startswith(".claude.json")
+            or any(p.startswith(".hangar") for p in parts)
+            or path.startswith(mark("CLAUDE").lower() + "/projects/")
+            or path in _MERGED_FILES)
+
+
 def _export_refs(roots: Roots, commands: list[str], bundle: Bundle) -> dict[str, dict]:
     refs: dict[str, dict] = {}
     for command in commands:
@@ -274,10 +299,10 @@ def _export_refs(roots: Roots, commands: list[str], bundle: Bundle) -> dict[str,
                 continue
             name = PurePosixPath(marked.replace("\\", "/")).name.removesuffix(".exe").lower()
             local = local_path(marked, roots)
-            if name in PROGRAMS or not local.is_file():
-                continue   # programa, pasta ou caminho inexistente: nada para levar
+            if name in PROGRAMS or not local.is_file() or _never_ref(marked):
+                continue   # programa, pasta, caminho inexistente ou proibido: nada para levar
             for ref, path in _ref_files(marked, local, roots).items():
-                if ref in refs:
+                if ref in refs or _never_ref(ref):
                     continue
                 blob, text = _read_blob(path, roots)
                 member = "refs/" + hashlib.sha1(ref.encode("utf-8")).hexdigest()
@@ -437,7 +462,7 @@ def export_bundle(roots: Roots, items, *, limit: bool = True) -> Bundle:
     for item in items:
         try:
             bundle.items[item] = _EXPORTERS[item](roots, bundle)
-        except (OSError, ValueError, BundleError) as exc:
+        except Exception as exc:  # noqa: BLE001 — um item quebrado não derruba o manifesto
             for member in [m for m in bundle.files if m.startswith(f"files/{item}/")]:
                 del bundle.files[member]
             bundle.warnings.setdefault(item, []).append(
@@ -704,7 +729,8 @@ def _apply_refs(ctx: _Apply, item: str) -> None:
                 res["warnings"].append(_warn("config_sync_hangar_outdated", file=str(local)))
             continue
         rest = marked.split("⟧", 1)[-1].replace("\\", "/")
-        if not marked.startswith(_REF_PREFIXES) or ".." in PurePosixPath(rest).parts:
+        if (not marked.startswith(_REF_PREFIXES) or ".." in PurePosixPath(rest).parts
+                or _never_ref(marked)):
             res["warnings"].append(_warn("config_sync_invalid_entry", entry=marked))
             continue
         blob = _blob(ctx, ref["member"], bool(ref.get("text")))

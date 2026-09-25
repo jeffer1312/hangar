@@ -1,6 +1,8 @@
 import io
 import json
+import os
 import tarfile
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -75,6 +77,17 @@ def test_bundle_then_apply_on_other_machine(cli, ana, tmp_path, monkeypatch):
     r = cli.post("/api/config-sync/apply?items=claude_env", headers=GZIP, content=raw.content)
     assert r.status_code == 200
     assert r.json()["items"]["claude_env"]["changed"] == ["JIRA_TOKEN"]
+
+
+def test_bundle_is_not_gzipped_again_nor_cached(cli, ana):
+    # Maior que o minimum_size do GZipMiddleware, para ele ter motivo de comprimir.
+    (Path(ana.home) / "Projetos/skills/minha/blob.bin").write_bytes(os.urandom(4096))
+    raw = cli.get("/api/config-sync/bundle?items=claude_skills", headers=AUTH)
+    assert raw.status_code == 200
+    assert raw.headers.get("content-encoding") != "gzip"
+    assert raw.headers["cache-control"] == "no-store"
+    back = config_sync.unpack(raw.content)
+    assert "files/claude_skills/skills/minha/blob.bin" in back.files
 
 
 def test_apply_rejects_other_version(cli, ana):

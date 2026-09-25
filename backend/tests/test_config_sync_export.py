@@ -106,6 +106,43 @@ def test_pack_roundtrip_and_unpack_rejects_bad_members(ana):
         config_sync.unpack(b"lixo")
 
 
+def _members(raw: bytes) -> bytes:
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+        return b"".join(tar.extractfile(m).read() for m in tar.getmembers())
+
+
+def test_cited_credentials_and_merged_configs_never_travel_as_refs(ana):
+    home, claude = Path(ana.home), Path(ana.claude)
+    settings = json.loads((claude / "settings.json").read_text())
+    settings["statusLine"]["command"] = (
+        f"cat '{home}/.claude.json' '{claude}/.credentials.json' '{claude}/settings.json' "
+        f"'{claude}/engines.json'")
+    (claude / "settings.json").write_text(json.dumps(settings))
+    b = config_sync.export_bundle(ana, ["claude_hooks"])
+    refs = b.items["claude_hooks"]["refs"]
+    for name in (".claude.json", ".credentials.json", "settings.json", "engines.json"):
+        assert not any(ref.endswith(name) for ref in refs), (name, sorted(refs))
+    blob = _members(config_sync.pack(b))
+    assert b"nao-pode-sair" not in blob and b"ana@x" not in blob
+
+
+def test_private_files_keep_a_private_mode(ana):
+    repo = Path(ana.home) / "Projetos" / "skills" / "minha"
+    (repo / "SKILL.md").chmod(0o600)
+    (repo / "run.sh").chmod(0o700)
+    files = config_sync.export_bundle(ana, ["claude_skills"]).files
+    assert files["files/claude_skills/skills/minha/SKILL.md"].mode == 0o600
+    assert files["files/claude_skills/skills/minha/run.sh"].mode == 0o700
+
+
+def test_broken_item_does_not_break_the_manifest(ana):
+    (Path(ana.claude) / "settings.json").write_text(json.dumps({"hooks": ["x"]}))
+    items = config_sync.manifest(ana)["items"]
+    assert items["claude_hooks"]["ok"] is False
+    assert [w["code"] for w in items["claude_hooks"]["warnings"]] == ["config_sync_item_failed"]
+    assert items["claude_skills"]["ok"] is True
+
+
 def test_bundle_too_big_names_largest_items(ana, monkeypatch):
     monkeypatch.setattr(config_sync, "MAX_BUNDLE", 10)
     with pytest.raises(config_sync.BundleTooBig) as exc:
