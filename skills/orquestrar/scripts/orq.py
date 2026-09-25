@@ -379,17 +379,19 @@ def cmd_commit(a) -> int:
     """The arbiter's step-5.1 metadata check, done here so the arbiter wakes once per Task."""
     d = base_dir(a.dir)
     cfg = config(d)
-    repo = cfg["repo"]
+    repo = a.repo or cfg["repo"]
     problems = []
     full = git(repo, "rev-parse", "--verify", f"{a.hash}^{{commit}}").strip()
     head = git(repo, "rev-parse", "HEAD").strip()
     if full != head:
         problems.append(f"{a.hash} is not the tip (HEAD={head[:12]})")
-    files = set(git(repo, "show", "--name-only", "--format=", full).splitlines()) - {""}
+    files: set[str] = set()
     obj = _approved_object(d, a.task)
     if obj is None:
         problems.append(f"no APROVA for Task {a.task} with a delivered round object")
     else:
+        # Everything since the round's base, so correction commits and reverts count as a whole.
+        files = set(git(repo, "diff", "--name-only", f"{obj}^1", full).splitlines()) - {""}
         # ^2 is the index the executor staged: the Task's paths, not the arbiter's dirty plan.
         rnd = set(git(repo, "diff", "--name-only", f"{obj}^1", f"{obj}^2").splitlines()) - {""}
         if files != rnd:
@@ -516,6 +518,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("commit", help="check the Task's commit and close it")
     s.add_argument("--task", type=int, required=True)
     s.add_argument("--hash", required=True)
+    s.add_argument("--repo", help="the checkout holding the commit (a batch worktree); default orq.json's")
     s = sub.add_parser("notify", help="the only path of a message to the arbiter")
     s.add_argument("--alarm", action="store_true")
     s.add_argument("text")

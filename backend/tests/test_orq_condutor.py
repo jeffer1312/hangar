@@ -185,16 +185,21 @@ def repo(tmp_path):
     return r, g
 
 
-def _rodada_aprovada(e, r, g, extra=()):
-    """Task 1 com a.txt na rodada; o plano sujo do árbitro fica fora do stage."""
-    (r / "a.txt").write_text("2\n")
-    (r / "plano.md").write_text("p2\n")
-    g("add", "a.txt")
+def _aprova(e, g):
+    """O stage atual vira a rodada 1 da Task 1, entregue e aprovada."""
     h = g("stash", "create")
     g("stash", "store", "-m", "task-1 round 1", h)
     run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
     run(e, "event", "entrega", "--task", "1", "--rodada", "1", "--commit", h)
     run(e, "event", "veredito", "--task", "1", "--rodada", "1", "--resultado", "aprova", "--sessao", "rev")
+
+
+def _rodada_aprovada(e, r, g, extra=()):
+    """Task 1 com a.txt na rodada; o plano sujo do árbitro fica fora do stage."""
+    (r / "a.txt").write_text("2\n")
+    (r / "plano.md").write_text("p2\n")
+    g("add", "a.txt")
+    _aprova(e, g)
     for f in extra:
         (r / f).parent.mkdir(parents=True, exist_ok=True)
         (r / f).write_text("x\n")
@@ -276,6 +281,54 @@ def test_commit_que_nao_e_a_ponta_e_recusado(env, repo, tmp_path):
     g("commit", "-qam", "outro")
     res = run(e, "commit", "--task", "1", "--hash", h, check=False)
     assert res.returncode == 1 and "is not the tip" in res.stdout
+
+
+def test_commit_de_correcao_fecha_a_task_contando_desde_a_base_da_rodada(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    (r / "a.txt").write_text("2\n")
+    (r / "b.txt").write_text("b\n")
+    g("add", "a.txt", "b.txt")
+    _aprova(e, g)
+    g("commit", "-qm", "t1", "a.txt")
+    res = run(e, "commit", "--task", "1", "--hash", g("rev-parse", "HEAD"), check=False)
+    assert res.returncode == 1 and "only in round ['b.txt']" in res.stdout
+    g("commit", "-qm", "t1 fix", "b.txt")
+    tip = g("rev-parse", "HEAD")
+    run(e, "commit", "--task", "1", "--hash", tip)
+    assert [m for m in sent(log) if m.startswith("arb ")] == [
+        f"arb [decisao] Task 1 closed and checked: {tip[:12]}, 2 file(s), tip = hash, "
+        "matches the approved round. Release the next Task."]
+
+
+def test_intocavel_commitado_e_revertido_nao_conta(env, repo, tmp_path):
+    d, _, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"),
+        "--untouchable", "secret/*")
+    _rodada_aprovada(e, r, g, extra=("secret/k.txt",))
+    g("rm", "-q", "secret/k.txt")
+    g("commit", "-qm", "revert")
+    run(e, "commit", "--task", "1", "--hash", g("rev-parse", "HEAD"))
+    assert json.loads((d / "closed.jsonl").read_text())["task"] == 1
+
+
+def test_commit_com_repo_confere_na_worktree_do_lote(env, repo, tmp_path):
+    d, _, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    wt = tmp_path / "wt"
+    g("worktree", "add", "-q", "-b", "t1", str(wt))
+
+    def gw(*a):
+        return subprocess.run(["git", "-C", str(wt), *a], check=True, capture_output=True,
+                              text=True).stdout.strip()
+    h = _rodada_aprovada(e, wt, gw)
+    res = run(e, "commit", "--task", "1", "--hash", h, check=False)
+    assert res.returncode == 1 and "is not the tip" in res.stdout
+    run(e, "commit", "--task", "1", "--hash", h, "--repo", str(wt))
+    assert json.loads((d / "closed.jsonl").read_text())["hash"] == h
 
 
 def test_notify_aviso_vai_pro_registro_decisao_e_sem_marca_acordam(env, tmp_path):
