@@ -1,7 +1,6 @@
 <script lang="ts">
-  import * as m from '../paraglide/messages';
-  import { relativeTime, type OrqWatchdog } from '@hangar/core';
-  import { conductorChip } from '../lib/orqConductor';
+  import type { OrqWatchdog } from '@hangar/core';
+  import { conductorChip, conductorChipLabel } from '../lib/orqConductor';
 
   let { watchdog, finished = false }: { watchdog: OrqWatchdog | null | undefined; finished?: boolean } = $props();
   const chip = $derived(conductorChip(watchdog, finished));
@@ -9,17 +8,7 @@
 
 {#if chip}
   <span class="conductor-chip k-{chip.kind}" class:alarm={chip.kind === 'stopped' && chip.alarm}>
-    {#if chip.kind === 'alive'}
-      {chip.lastCycle === null
-        ? m.orq_conductor_alive_no_heartbeat()
-        : m.orq_conductor_alive({ when: relativeTime(chip.lastCycle), who: chip.watching.join(', ') })}
-    {:else if chip.kind === 'stopped'}
-      {chip.lastCycle === null ? m.orq_conductor_stopped() : m.orq_conductor_stopped_since({ when: relativeTime(chip.lastCycle) })}
-    {:else if chip.kind === 'none'}
-      {m.orq_conductor_none()}
-    {:else}
-      {m.orq_conductor_unavailable()}
-    {/if}
+    {conductorChipLabel(chip)}
   </span>
 {/if}
 

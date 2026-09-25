@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OrqFeedItem, OrqWatchdog } from '@hangar/core';
-import { conductorChip, feedTasks, filterFeed, fmtP } from './orqConductor';
+import { conductorChip, conductorChipLabel, feedTasks, filterFeed, fmtP } from './orqConductor';
 
 const wd = (o: Partial<OrqWatchdog>): OrqWatchdog => ({
   alive: false, last_cycle: null, since: null, restarts: null, unit: null, unit_state: null,
@@ -32,6 +32,17 @@ describe('conductorChip', () => {
   it('nada achado com systemd é "sem condutor"; sem systemd é indisponível', () => {
     expect(conductorChip(wd({ source: 'none' }))).toEqual({ kind: 'none' });
     expect(conductorChip(wd({ source: 'unavailable' }))).toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe('conductorChipLabel', () => {
+  it('vivo sem sessão vigiada não termina num "vigiando" solto', () => {
+    const label = conductorChipLabel({ kind: 'alive', lastCycle: Date.now() / 1000, watching: [] });
+    expect(label).not.toMatch(/vigiando|watching/);
+    expect(label).toMatch(/·/);
+  });
+  it('vivo com sessão vigiada diz quem', () => {
+    expect(conductorChipLabel({ kind: 'alive', lastCycle: Date.now() / 1000, watching: ['rev1', 'arb'] })).toMatch(/rev1, arb$/);
   });
 });
 

@@ -1,4 +1,5 @@
-import type { OrqFeedItem, OrqFeedKind, OrqWatchdog } from '@hangar/core';
+import { relativeTime, type OrqFeedItem, type OrqFeedKind, type OrqWatchdog } from '@hangar/core';
+import * as m from '../paraglide/messages';
 
 export type ConductorChip =
   | { kind: 'alive'; lastCycle: number | null; watching: string[] }
@@ -16,6 +17,22 @@ export function conductorChip(w: OrqWatchdog | null | undefined, finished = fals
   if (w.source === 'unavailable') return { kind: 'unavailable' };
   if (w.source === 'none') return { kind: 'none' };
   return { kind: 'stopped', lastCycle, alarm: !finished };
+}
+
+export function conductorChipLabel(chip: ConductorChip): string {
+  switch (chip.kind) {
+    case 'alive':
+      if (chip.lastCycle === null) return m.orq_conductor_alive_no_heartbeat();
+      return chip.watching.length
+        ? m.orq_conductor_alive({ when: relativeTime(chip.lastCycle), who: chip.watching.join(', ') })
+        : m.orq_conductor_alive_idle({ when: relativeTime(chip.lastCycle) });
+    case 'stopped':
+      return chip.lastCycle === null ? m.orq_conductor_stopped() : m.orq_conductor_stopped_since({ when: relativeTime(chip.lastCycle) });
+    case 'none':
+      return m.orq_conductor_none();
+    case 'unavailable':
+      return m.orq_conductor_unavailable();
+  }
 }
 
 export type FeedFilter = 'all' | OrqFeedKind;

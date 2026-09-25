@@ -284,6 +284,7 @@
   "orq_voltar": "Back",
   "orq_voltas": "reviewer returns",
   "orq_conductor_alive": "conductor alive · {when} · watching {who}",
+  "orq_conductor_alive_idle": "conductor alive · {when}",
   "orq_conductor_alive_no_heartbeat": "conductor alive · no heartbeat",
   "orq_conductor_stopped": "conductor stopped",
   "orq_conductor_stopped_since": "conductor stopped · {when}",

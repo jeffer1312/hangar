@@ -284,6 +284,7 @@
   "orq_voltar": "Voltar",
   "orq_voltas": "voltas do revisor",
   "orq_conductor_alive": "condutor vivo · {when} · vigiando {who}",
+  "orq_conductor_alive_idle": "condutor vivo · {when}",
   "orq_conductor_alive_no_heartbeat": "condutor vivo · sem batimento",
   "orq_conductor_stopped": "condutor parado",
   "orq_conductor_stopped_since": "condutor parado · {when}",
