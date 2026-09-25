@@ -155,10 +155,10 @@ if [ -n "$ORQD" ]; then
   ARB=${bola##* }
   SESSOES=("$ARB")
 fi
-hangar-send --tmux "$ARB" "[vigia] ARMED over: ${SESSOES[*]} (window ${LIMITE}min${DIARIO:+, journal $DIARIO}). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply."
+avisar_arb "[vigia] ARMED over: ${SESSOES[*]} (window ${LIMITE}min${DIARIO:+, journal $DIARIO}). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply."
 rc_arm=$?
 if [ "$rc_arm" -ne 0 ]; then
-  echo "[vigia] FAILED to prove the channel with '$ARB' (hangar-send --tmux rc=$rc_arm). I am NOT armed." >&2
+  echo "[vigia] FAILED to prove the channel with '$ARB' (rc=$rc_arm, stderr in $CP_VIGIA_LOG). I am NOT armed." >&2
   exit 1
 fi
 
@@ -361,7 +361,7 @@ for i in $(seq 1 "$CICLOS"); do
       # arbiter didn't solve it: he may be down too, and then it was the user who came looking.
       # Nudge ONCE per stall (nudge=1) and keep warning every LIMITE min while it lasts.
       if [ "${NUDGE[$k]:-0}" -eq 0 ] && [ "${ESTADOS[$k]:-?}" != "gone" ] && [ "${ESTADOS[$k]:-?}" != "noquota" ]; then
-        hangar-send --tmux "${SESSOES[$k]}" "[vigia] You have been stopped for ${LIMITE} min without reporting. If your last turn died (provider timeout, retries blown, connection cut), CONTINUE from where you stopped, without restarting and without redoing what was done. If you already delivered and are waiting for a verdict, ignore this message. If you are blocked waiting for something from the arbiter, say in one line what it is." >/dev/null 2>&1
+        hangar-send --tmux "${SESSOES[$k]}" "[vigia] You have been stopped for ${LIMITE} min without reporting. If your last turn died (provider timeout, retries blown, connection cut), CONTINUE from where you stopped, without restarting and without redoing what was done. If you already delivered and are waiting for a verdict, ignore this message. If you are blocked waiting for something from the arbiter, tell him in one line: orq notify '[decisao] waiting for <what>'." >/dev/null 2>&1
         NUDGE[$k]=1
         cutucada=" — I NUDGED it just now (1st time); if it doesn't come back, the turn didn't die, it is truly stuck"
       else
@@ -395,7 +395,7 @@ for i in $(seq 1 "$CICLOS"); do
         # A question, never an order: the watchdog reads two numbers and does not know whether
         # the session is stuck or working — an imperative false alarm has ordered a STOP in the
         # middle of legitimate work. Stop orders come from the arbiter, after looking.
-        hangar-send --tmux "${SESSOES[$k]}" "[vigia] You repeat the SAME command for ~${RSEQ[$k]} min. Is this a wait on an external condition? If so, the cap has blown: report to the arbiter what you wait for and the last return (executor.md rule). If you are working, ignore this notice." >/dev/null 2>&1
+        hangar-send --tmux "${SESSOES[$k]}" "[vigia] You repeat the SAME command for ~${RSEQ[$k]} min. Is this a wait on an external condition? If so, the cap has blown: orq notify '[decisao] waiting for <what>; last return: <line>' (executor.md rule). If you are working, ignore this notice." >/dev/null 2>&1
         avisar_arb "$msg"
         RAVISO[$k]=1
       fi
@@ -427,7 +427,7 @@ for i in $(seq 1 "$CICLOS"); do
     if [ "$k" -eq "$ULT" ]; then
       msg="[vigia] YOUR context is at ${pct}% of your window (${usado}/${total}); your row hands over at ${lim}%. Finish the current act and run your succession (arbitro-encerramento.md, \"Arbiter succession\")."
     else
-      hangar-send --tmux "$nome" "[vigia] Your context is at ${pct}% of your window (${usado}/${total}); your role's row hands over at ${lim}%. Finish what you are doing now (the current step, or this round's report), start nothing new, and ask the arbiter for your replacement in that report, with HEAD and the hash." >/dev/null 2>&1
+      hangar-send --tmux "$nome" "[vigia] Your context is at ${pct}% of your window (${usado}/${total}); your role's row hands over at ${lim}%. Finish what you are doing now (the current step, or this round's report), start nothing new, then ask for your replacement: orq notify '[decisao] replace me: ctx ${pct}%, HEAD <hash>, round <stash hash | none>'." >/dev/null 2>&1
       msg="[vigia] ${nome} is at ${pct}% of its window (${usado}/${total}; its row hands over at ${lim}%). I asked it to stop after the current act and request its replacement. Open the substitute before the next round (arbitro-vigia.md, \"Rotation\")."
     fi
     echo "$msg"

@@ -45,10 +45,11 @@ orq event task_inicio --task 1 --titulo x --executor exec1 --par rev1
 orq event entrega --task 1 --rodada 1 --commit abc
 vigia
 grep -q "watching: rev1 arb" "$t/out" || fail "a lista não seguiu a vez"
-grep -q "^--tmux rev1 " "$t/sent.log" || fail "rev1 não foi cutucado"
+grep -q "^--tmux rev1 .*orq notify '\[decisao\]" "$t/sent.log" || fail "rev1 não foi cutucado com o caminho do orq notify"
 if grep -q "exec1" "$t/sent.log"; then fail "exec1 espera como mandado e foi cutucado"; fi
+grep -q "^orq: --tmux arb \[vigia\] ARMED" "$t/sent.log" || fail "a prova de armação não passou pelo orq"
 grep -q "^orq: --tmux arb \[vigia\] rev1 is stopped" "$t/sent.log" || fail "o árbitro não foi avisado pelo orq"
-if grep "^--tmux arb " "$t/sent.log" | grep -qv ARMED; then fail "alarme ao árbitro saiu por fora do orq"; fi
+if grep -q "^--tmux arb " "$t/sent.log"; then fail "recado ao árbitro saiu por fora do orq"; fi
 
 # Sucessão do árbitro antes do lançamento: armação, lista, alarmes e /orq vão para arb2.
 printf '%s' '[{"name":"exec1","state":"idle"},{"name":"rev1","state":"idle"},{"name":"arb2","state":"idle"}]' > "$t/sessions.json"
@@ -58,7 +59,7 @@ orq event entrega --task 1 --rodada 1 --commit abc
 orq event sessao_trocada --de arb --para arb2
 vigia
 grep -q "watching: rev1 arb2" "$t/out" || fail "a lista não seguiu a sucessão do árbitro"
-grep -q "^--tmux arb2 \[vigia\] ARMED" "$t/sent.log" || fail "a armação não foi para o árbitro da vez"
+grep -q "^orq: --tmux arb2 \[vigia\] ARMED" "$t/sent.log" || fail "a armação não foi para o árbitro da vez"
 grep -q "^orq: --tmux arb2 \[vigia\] rev1 is stopped" "$t/sent.log" || fail "o alarme não foi para arb2"
 if grep -q -- "--tmux arb " "$t/sent.log"; then fail "falou com o árbitro que saiu"; fi
 grep -q "/api/sessions/arb2/orq" "$t/urls" || fail "o contrato não foi lido do árbitro da vez"
