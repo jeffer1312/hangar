@@ -765,6 +765,14 @@ def test_done_troca_so_lista_quem_foi_executor_ou_revisor(env, tmp_path):
     assert _done(e) == [("ex1", "replaced by ex2"), ("ex2", "replaced by ex3")]
 
 
+def test_done_nao_lista_arbitro_trocado_mesmo_sendo_revisor(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex1", "--par", "arb")
+    run(e, "event", "sessao_trocada", "--de", "arb", "--para", "arb2")
+    assert _done(e) == []
+
+
 def test_done_depois_do_fim_lista_o_time_e_trabalho_retomado_desfaz(env, tmp_path):
     d, _, e = env
     init(e, tmp_path)

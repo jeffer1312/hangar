@@ -201,7 +201,8 @@ def state(d: Path) -> dict:
         elif t in ("entrega", "veredito"):
             last[ev.get("task")] = ev
         elif t == "sessao_trocada":
-            if ev.get("de") == arbiter:
+            was_arbiter = ev.get("de") == arbiter
+            if was_arbiter:
                 arbiter = ev.get("para")
             held = False
             for r in roles.values():
@@ -209,9 +210,9 @@ def state(d: Path) -> dict:
                     if r.get(k) == ev.get("de"):
                         r[k] = ev.get("para")
                         held = True
-            # Only who held a Task role is closable: an arbiter swapped out may be the user's
-            # own coordinator session.
-            if held:
+            # Only who held a Task role is closable, and never an arbiter swapped out: it may be
+            # the user's own coordinator session.
+            if held and not was_arbiter:
                 replaced.append((ev.get("de"), ev.get("para")))
         elif t == "execucao_fim":
             # Work may resume in the same file without a new execucao_inicio; only Tasks
