@@ -43,7 +43,7 @@ Handoff checklist — before every handoff, in order:
 2. Kick-off/recipe in a file; the message is the path, via `"$(cat <<'EOF' … EOF)"`.
 3. `entregue` read → check engagement: ctx left zero within 1 min. Kick-off only.
 4. `orq event task_inicio --task <N> --titulo <t> --executor <session> --par <reviewer session>`
-   before the kick-off; the watchdog follows the ball by itself.
+   before the kick-off.
 5. A decision of yours goes in with `orq log --task <N> "…"` before the next action.
 6. Sending someone to check a set → the command that discovers the list (`run \`git grep -n
    <sym> -- src/\` and check ALL that show up`), never the list; no command possible → the
@@ -71,7 +71,7 @@ made mid-work enters the contract before you use it.
 
 | Arrives | Do |
 |---|---|
-| DEVOLVIDO, any round | gate stays closed; resolve and send for review again |
+| DEVOLVIDO, any round | gate stays closed; resolve, send it back and log the ball: `orq event task_inicio …` again (executor) or the round's `orq event entrega …` again (reviewer) |
 | `"reincide": true` (second rejection of the same cause) — the single door into the loop | ask the reviewer for a recipe with a new approach, or rotate the reviewer |
 | recipe disagreement, with evidence (the arrow is one-way: the executor never replies to the reviewer) | decide on it, never by re-running; evidence doesn't close → one specific question to one of them, usually the reviewer |
 | recipe missing the six fields or the caller inventory; report without `VEREDITO:` / `Verified` (commands, results, who ran them) | back to the reviewer; the executor waits. Form you enforce, merit never |
@@ -94,16 +94,16 @@ Done when the item is journaled and the ball is back with executor or reviewer.
 
 ### 5. Close the Task
 
-1. `orq commit` already checked tip, everything since the round's base against the approved
-   round, and untouchables; its message to you is that check. Read the approving report's
-   WASTE and NOTED lines (its path: the `veredito`'s `motivo=` in `orq read journal --task
-   <N>`): NOTED → contract, WASTE → lessons. Add one PROGRESS line with `orq log --task <N>`:
-   elapsed time and rounds vs the estimate; past 2× either → stop and ask. Context does not
-   count here; it rules rotation only.
+1. `orq commit` checked tip, approved round and untouchables; its message is that check.
+   Read the approving report's WASTE and NOTED lines (its path: the `veredito`'s `motivo=` in
+   `orq read journal --task <N>`): NOTED → contract, WASTE → lessons. Add one PROGRESS line with
+   `orq log --task <N>`: elapsed time and rounds vs the estimate; past 2× either → stop and ask.
+   Context does not count here; it rules rotation only.
    - Commit diverging from the approved round → new round to the executor; the resulting
      second commit is legitimate.
    - An untouchable exception written in the contract → `orq init` again with the new
-     `--untouchable` list.
+     `--untouchable` list; once that Task's `orq commit` passes, `orq init` again with the
+     full original list.
    - No other commit in the checkout between a round's freeze and its `orq commit`; your plan
      edits stay uncommitted until the Task closes.
 2. Every round, the last included, is the reviewer's (directly or via the authorized
@@ -130,7 +130,7 @@ Done when the branch is in the user's hands, the retrospective delivered,
 
 | File | Contains | Who reads |
 |---|---|---|
-| `~/.hangar/orq/<date>-<gid>/registro.md` — journal | one line per entry, written by `orq` (`event`, `commit`, `log`); 40k-character cap, rotated to `registro-arquivo-N.md` | you, only through `orq read journal [--task N]` |
+| `~/.hangar/orq/<date>-<gid>/registro.md` — journal | one line per entry, written by `orq` (`event`, `commit`, `log`) | you, only through `orq read journal [--task N]` |
 | `<config>/.hangar-pair/regras-<gid>.md` — rules | who is who, untouchables, gates, method, domain skill, branch, bars, review coverage, accounts; common part ≤ 8k characters, each Task's specifics in a `## Task N` section at the end | executor and reviewer, through `orq read contract --task N` |
 | `~/.hangar/orq/<date>-<gid>/licoes.md` — lessons | born empty with a header; every guideline born mid-work, one per block, with date and measured proof | nobody whole; you paste 3–4 per kick-off |
 | `~/.hangar/orq/<date>-<gid>/eventos.jsonl` — events | one JSON line per event | machines: app screens, phase 5 |
@@ -138,7 +138,6 @@ Done when the branch is in the user's hands, the retrospective delivered,
 - Only you write rules and lessons. Journal and events are written through `orq` by whoever acts: you (`task_inicio`, `sessao_trocada`, `execucao_*`, `log`), the executor (`entrega`, `commit`), the reviewer (`veredito`).
 - Lessons live in the durable directory, never in `<config>/.hangar-pair/`.
 - Lessons: raw material is the **waste** line of each review report; its "would have prevented" becomes a guideline written as a principle, with the measured case as proof next to it — in `licoes.md`, never in `regras-<gid>.md`. Every guideline stays: no cap, never deleted. The cap is how much goes into a kick-off: pick by subject (screen, database, channel, file), never by age; in doubt, paste; text, never the path.
-- Write AT the event, through `orq`, before the next action.
 - By type, not subject: it happened → journal; agreement decided at launch → rules; guideline born now → lessons.
 - Turn state (released Task, counterpart) goes in the kick-off and `orq event`; the rules get only the Progress hash.
 - First lines of the rules file:

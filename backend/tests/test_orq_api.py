@@ -95,6 +95,9 @@ def test_papel_post_grava_e_avisa_arbitro(cli, tmp_path):
     assert r.json()["aviso"] == "enviado"
     nome, texto = cli.enviados[-1]
     assert nome == "arb" and "`executor`" in texto and "regras-g1.md" in texto and "TRABALHANDO" in texto
+    # The succession rite lives in the skill page; the notice only points at it.
+    assert '"Arbiter succession"' in texto and "arbitro-encerramento.md" in texto
+    assert "Passagem" not in texto and "avise executor" not in texto
     got = cli.get("/api/sessions/exec/orq", headers=H).json()
     ex = next(p for p in got["papeis"] if p["papel"] == "executor")
     assert ex["viva"] == "exec" and ex["id_cota"].startswith("claude:")

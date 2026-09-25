@@ -4141,13 +4141,9 @@ def _recado_arbitro(novos: list[orq_papeis.Papel], gid: str) -> str:
             "configuração nova (o Claude não troca conta/modelo com a sessão aberta); sessão "
             "TRABALHANDO → deixe terminar a tarefa atual e a próxima sessão desse papel nasce na nova. "
             "A linha já está gravada: não reescreva a tabela. "
-            "Se o papel for o seu (árbitro): termine a tarefa em curso, escreva no seu registro "
-            "(o diário do grupo, seja grupo-<gid>.md ou o registro.md do diretório durável) a seção "
-            "'Passagem para o árbitro seguinte' (até 25 linhas: Task e portão, sessões vivas por "
-            "papel, HEAD e git status, pendências, decisões recentes, caminhos do plano/regras/"
-            "registro), abra o sucessor na configuração nova com kick-off apontando pra essa seção, "
-            "troque a linha `árbitro` da tabela pro nome dele, avise executor e revisor vivos quem é "
-            "o árbitro agora, e pare de despachar — rito 'Sucessão do árbitro' da skill.")
+            "Se o papel for o seu (árbitro): faça a sucessão pela seção \"Arbiter succession\" de "
+            "`~/.claude/skills/orquestrar/references/arbitro-encerramento.md`, com o sucessor "
+            "nascendo na configuração nova.")
 
 
 class PapelItem(_StrictBody):

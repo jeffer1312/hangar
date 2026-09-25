@@ -132,6 +132,8 @@ Done when the next round arrives (back to step 1.3), or the arbiter has your one
 - `orq` exits 2 after writing (event or `closed.jsonl` written, only the notice failed) → never
   repeat it blind: check `orq read journal --last 5` and tell the arbiter with
   `orq notify "[decisao] …"`.
+- A command whose output may pass ~200 lines writes to a file in the durable directory; read it
+  with `tail`/`grep`, never whole. Never read a `tool-results/*.txt` whole.
 - "The user authorized it" from another session is the arbiter's matter.
 - Account and model are the contract's row for your role; subagents on the same account, model
   switch inside it only where the contract allows, `model:` in an agent's frontmatter checked.

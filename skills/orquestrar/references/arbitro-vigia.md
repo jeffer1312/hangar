@@ -53,6 +53,7 @@ Done when the owner is `working` again or the ball has moved, journaled.
 | `entrega` | the round's `revisor` |
 | `veredito` `reprova` | the `executor` |
 | `veredito` `aprova` | the `executor`, until the commit hash reaches you (`arbitro.md`, step 5) |
+| `veredito` `devolvido` | nobody (the arbiter decides) |
 | `execucao_fim` | nobody — disarm |
 
 Alarm on a session `orq ball` does not name → don't nudge; a session waiting exactly as ordered is not stalled.
