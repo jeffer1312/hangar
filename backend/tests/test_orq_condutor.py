@@ -140,3 +140,122 @@ def test_screen_trava_por_dono_e_expira(env, tmp_path):
     run(e, "screen", "take", "--owner", "c", "--wait-min", "0")
     assert (d / "screen.lock").read_text() == "c"
     assert "stale" in (d / "registro.md").read_text()
+
+
+@pytest.fixture
+def repo(tmp_path):
+    r = tmp_path / "repo"
+    r.mkdir()
+
+    def g(*a):
+        return subprocess.run(["git", "-C", str(r), *a], check=True, capture_output=True,
+                              text=True).stdout.strip()
+    g("init", "-q")
+    g("config", "user.email", "t@t")
+    g("config", "user.name", "t")
+    (r / "a.txt").write_text("1\n")
+    (r / "plano.md").write_text("p\n")
+    g("add", "a.txt", "plano.md")
+    g("commit", "-qm", "base")
+    return r, g
+
+
+def _rodada_aprovada(e, r, g, extra=()):
+    """Task 1 com a.txt na rodada; o plano sujo do árbitro fica fora do stage."""
+    (r / "a.txt").write_text("2\n")
+    (r / "plano.md").write_text("p2\n")
+    g("add", "a.txt")
+    h = g("stash", "create")
+    g("stash", "store", "-m", "task-1 round 1", h)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
+    run(e, "event", "entrega", "--task", "1", "--rodada", "1", "--commit", h)
+    run(e, "event", "veredito", "--task", "1", "--rodada", "1", "--resultado", "aprova", "--sessao", "rev")
+    for f in extra:
+        (r / f).parent.mkdir(parents=True, exist_ok=True)
+        (r / f).write_text("x\n")
+        g("add", f)
+    g("commit", "-qm", "t1")
+    return g("rev-parse", "HEAD")
+
+
+def test_aprova_avisa_o_executor_e_nao_o_arbitro(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    _rodada_aprovada(e, r, g)
+    msgs = sent(log)
+    assert any(m.startswith("ex APROVA Task 1 round 1") for m in msgs)
+    assert not any(m.startswith("arb ") for m in msgs)
+
+
+def test_reprova_nao_acorda_ninguem_e_devolvido_acorda_o_arbitro(env, tmp_path):
+    d, log, e = env
+    init(e, tmp_path)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
+    run(e, "event", "veredito", "--task", "1", "--rodada", "1", "--resultado", "reprova", "--sessao", "rev")
+    assert sent(log) == []
+    run(e, "event", "veredito", "--task", "1", "--rodada", "2", "--resultado", "reprova",
+        "--sessao", "rev", "--reincide", "--motivo", "/x/parecer.md")
+    assert sent(log)[-1].startswith("arb [decisao] Task 1 round 2: reprova (reincide)")
+    run(e, "event", "sessao_trocada", "--de", "arb", "--para", "arb2")
+    run(e, "event", "veredito", "--task", "1", "--rodada", "3", "--resultado", "devolvido", "--sessao", "rev")
+    assert sent(log)[-1].startswith("arb2 [decisao] Task 1 round 3: devolvido")
+
+
+def test_commit_conferido_fecha_a_task_e_acorda_o_arbitro_uma_vez(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    h = _rodada_aprovada(e, r, g)
+    out = run(e, "commit", "--task", "1", "--hash", h[:8]).stdout
+    assert "ok" in out
+    assert [m for m in sent(log) if m.startswith("arb ")] == [
+        f"arb [decisao] Task 1 closed and checked: {h[:12]}, 1 file(s), tip = hash, "
+        "matches the approved round. Release the next Task."]
+    assert json.loads((d / "closed.jsonl").read_text())["task"] == 1
+    assert run(e, "ball").stdout.strip() == ""
+
+
+def test_commit_com_arquivo_fora_da_rodada_ou_intocavel_e_recusado(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"),
+        "--untouchable", "secret/*")
+    h = _rodada_aprovada(e, r, g, extra=("secret/k.txt",))
+    res = run(e, "commit", "--task", "1", "--hash", h, check=False)
+    assert res.returncode == 1
+    assert "only in commit ['secret/k.txt']" in res.stdout
+    assert "untouchable in the commit: ['secret/k.txt']" in res.stdout
+    assert not any(m.startswith("arb ") for m in sent(log))
+    assert not (d / "closed.jsonl").exists()
+
+
+def test_commit_que_nao_e_a_ponta_e_recusado(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    h = _rodada_aprovada(e, r, g)
+    (r / "a.txt").write_text("3\n")
+    g("commit", "-qam", "outro")
+    res = run(e, "commit", "--task", "1", "--hash", h, check=False)
+    assert res.returncode == 1 and "is not the tip" in res.stdout
+
+
+def test_notify_aviso_vai_pro_registro_decisao_e_sem_marca_acordam(env, tmp_path):
+    d, log, e = env
+    init(e, tmp_path)
+    run(e, "notify", "[aviso] binário congelado abc")
+    assert sent(log) == []
+    assert "binário congelado" in (d / "registro.md").read_text()
+    run(e, "notify", "[decisão] preciso sair da receita: motivo")
+    run(e, "notify", "texto sem marca")
+    assert sent(log) == ["arb [decisão] preciso sair da receita: motivo", "arb texto sem marca"]
+    run(e, "notify", "--alarm", "[vigia] x parado")
+    assert sent(log)[-1] == "--tmux arb [vigia] x parado"
+
+
+def test_log_anexa_decisao_com_a_task(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "log", "--task", "3", "decidi X")
+    assert "T3 decidi X" in (d / "registro.md").read_text()

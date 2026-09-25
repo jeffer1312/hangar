@@ -176,8 +176,33 @@ def _event_line(ev: dict) -> str:
     return " ".join(parts)
 
 
+def send(target: str, text: str, tmux: bool = False) -> None:
+    """Wakes a session through hangar-send, keeping the caller's identity. ORQ_SEND: tests."""
+    cmd = [os.environ.get("ORQ_SEND", "hangar-send")]
+    if tmux:
+        cmd.append("--tmux")
+    r = subprocess.run(cmd + [target, text], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise OrqError(f"hangar-send {target} failed (rc={r.returncode}): {r.stderr.strip()[:200]}")
+
+
 def _after_event(d: Path, ev: dict) -> None:
-    """Routing after an event; filled by the verdict routing."""
+    """APROVA goes to the executor only; the arbiter wakes for DEVOLVIDO and a repeated cause.
+    REPROVA wakes nobody: the reviewer already sent the recipe to the executor."""
+    if ev["tipo"] != "veredito":
+        return
+    st = state(d)
+    task, rnd, res = ev["task"], ev["rodada"], ev["resultado"]
+    if res == "aprova":
+        ex = st["roles"].get(task, {}).get("executor")
+        if not ex:
+            raise OrqError(f"Task {task} has no task_inicio: executor unknown")
+        send(ex, f"APROVA Task {task} round {rnd}: commit only the Task's paths, by explicit path, "
+                 f"then run `orq commit --task {task} --hash <hash>`.")
+    elif res == "devolvido" or ev.get("reincide"):
+        extra = " (reincide)" if ev.get("reincide") else ""
+        send(st["arbiter"], f"[decisao] Task {task} round {rnd}: {res}{extra}. "
+                            f"Report: {ev.get('motivo', 'see the journal')}")
 
 
 def cmd_init(a) -> int:
@@ -299,6 +324,91 @@ def cmd_screen(a) -> int:
         return 0
 
 
+MARK = re.compile(r"^\s*\[(aviso|decis[aã]o)\]", re.IGNORECASE)
+
+
+def git(repo: str, *args: str) -> str:
+    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise OrqError(f"git {' '.join(args)}: {r.stderr.strip()[:200]}")
+    return r.stdout
+
+
+def _approved_object(d: Path, task: int) -> str | None:
+    """The stash object of the round the last APROVA of this Task judged."""
+    evs = events(d)
+    rnd = next((ev.get("rodada") for ev in reversed(evs) if ev.get("tipo") == "veredito"
+                and ev.get("task") == task and ev.get("resultado") == "aprova"), None)
+    if rnd is None:
+        return None
+    return next((ev.get("commit") for ev in reversed(evs) if ev.get("tipo") == "entrega"
+                 and ev.get("task") == task and ev.get("rodada") == rnd), None)
+
+
+def cmd_commit(a) -> int:
+    """The arbiter's step-5.1 metadata check, done here so the arbiter wakes once per Task."""
+    d = base_dir(a.dir)
+    cfg = config(d)
+    repo = cfg["repo"]
+    problems = []
+    full = git(repo, "rev-parse", "--verify", f"{a.hash}^{{commit}}").strip()
+    head = git(repo, "rev-parse", "HEAD").strip()
+    if full != head:
+        problems.append(f"{a.hash} is not the tip (HEAD={head[:12]})")
+    files = set(git(repo, "show", "--name-only", "--format=", full).splitlines()) - {""}
+    obj = _approved_object(d, a.task)
+    if obj is None:
+        problems.append(f"no APROVA for Task {a.task} with a delivered round object")
+    else:
+        # ^2 is the index the executor staged: the Task's paths, not the arbiter's dirty plan.
+        rnd = set(git(repo, "diff", "--name-only", f"{obj}^1", f"{obj}^2").splitlines()) - {""}
+        if files != rnd:
+            problems.append(f"files differ from the approved round {obj[:12]}: "
+                            f"only in commit {sorted(files - rnd)}, only in round {sorted(rnd - files)}")
+    bad = sorted({f for f in files for pat in cfg.get("untouchables", []) if fnmatch.fnmatch(f, pat)})
+    if bad:
+        problems.append(f"untouchable in the commit: {bad}")
+    if problems:
+        print("REFUSED:\n- " + "\n- ".join(problems))
+        return 1
+    with (d / "closed.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": now(), "task": a.task, "hash": full}) + "\n")
+    journal_append(d, f"commit T{a.task} {full[:12]} checked ({len(files)} file(s))")
+    send(state(d)["arbiter"], f"[decisao] Task {a.task} closed and checked: {full[:12]}, "
+                              f"{len(files)} file(s), tip = hash, matches the approved round. "
+                              "Release the next Task.")
+    print("ok")
+    return 0
+
+
+def triage(d: Path, text: str, alarm: bool) -> str:
+    """Unmarked message: 'drop' only when the Jev is sure it needs no action."""
+    return "wake"
+
+
+def cmd_notify(a) -> int:
+    d = base_dir(a.dir)
+    m = MARK.match(a.text)
+    if m and m.group(1).lower() == "aviso":
+        journal_append(d, a.text)
+        print("journal")
+        return 0
+    if not m and triage(d, a.text, a.alarm) == "drop":
+        journal_append(d, f"(jev: no action) {a.text}")
+        print("journal (jev)")
+        return 0
+    send(state(d)["arbiter"], a.text, tmux=a.alarm)
+    print("arbiter woken")
+    return 0
+
+
+def cmd_log(a) -> int:
+    d = base_dir(a.dir)
+    journal_append(d, (f"T{a.task} " if a.task is not None else "") + a.text)
+    print("ok")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="orq", description=__doc__.splitlines()[0])
     p.add_argument("--dir")
@@ -324,10 +434,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("action", choices=["take", "release"])
     s.add_argument("--owner", required=True)
     s.add_argument("--wait-min", type=float, default=20)
+    s = sub.add_parser("commit", help="check the Task's commit and close it")
+    s.add_argument("--task", type=int, required=True)
+    s.add_argument("--hash", required=True)
+    s = sub.add_parser("notify", help="the only path of a message to the arbiter")
+    s.add_argument("--alarm", action="store_true")
+    s.add_argument("text")
+    s = sub.add_parser("log", help="a decision entry in the journal")
+    s.add_argument("--task", type=int)
+    s.add_argument("text")
     return p
 
 
-CMDS = {"init": cmd_init, "event": cmd_event, "read": cmd_read, "ball": cmd_ball, "screen": cmd_screen}
+CMDS = {"init": cmd_init, "event": cmd_event, "read": cmd_read, "ball": cmd_ball,
+        "screen": cmd_screen, "commit": cmd_commit, "notify": cmd_notify, "log": cmd_log}
 
 
 def main(argv: list[str] | None = None) -> int:
