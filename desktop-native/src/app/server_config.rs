@@ -388,7 +388,7 @@ impl ServerConfig {
     }
 }
 
-fn chip(text: String, color: Hsla, bg: Hsla) -> Div {
+pub(super) fn chip(text: String, color: Hsla, bg: Hsla) -> Div {
     div().px(px(6.)).rounded_full().bg(bg).text_size(px(10.5)).font_weight(FontWeight::BOLD).text_color(color).child(text)
 }
 

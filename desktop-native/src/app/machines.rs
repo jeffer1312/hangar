@@ -2,10 +2,11 @@
 //! reinício do serviço e o Avançado. Porta de `MaquinasSettings.svelte` e da parte "detalhe" de `AcessoSettings.svelte`.
 //! O nativo fala com um servidor só: o que depende de guardar outras máquinas neste aparelho chega depois.
 use super::*;
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 use super::device::Remote;
+use super::server_config::chip;
 use super::settings::{settings_box, Page};
-use gpui_kit::component::{WindowExt, dialog::DialogButtonProps, tooltip::Tooltip};
+use gpui_kit::component::{WindowExt, dialog::DialogButtonProps, switch::Switch, tooltip::Tooltip};
 
 /// O web espera o serviço voltar por até 2 minutos, perguntando a cada 2 segundos.
 const RESTART_WAIT: Duration = Duration::from_secs(120);
@@ -115,6 +116,75 @@ fn valid_id(id: &str) -> bool {
 
 fn id_hint() -> String { tr("machines_id_hint").replace("{exemplos}", "casa, notebook") }
 
+/// Uma outra máquina do `peers.json` deste servidor, como `/api/peers` a devolve. O token vem mascarado e não é lido: o nativo não
+/// guarda token de outra máquina, e toda linha é a "só no servidor" do web (`navegador: null`).
+#[derive(Clone, Debug)]
+struct Peer { id: String, url: String, enabled: bool }
+
+fn parse_peers(value: &Value) -> Option<Vec<Peer>> {
+    value.as_array()?.iter().map(|p| Some(Peer { id: p.get("id")?.as_str()?.to_owned(), url: p.get("base_url")?.as_str()?.to_owned(),
+        enabled: p.get("enabled").and_then(Value::as_bool).unwrap_or(true) })).collect()
+}
+
+/// A ida (este servidor → ela), medida pelo servidor em `/api/peers/check`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Way { Ok, Other, Failed, Unset }
+
+#[derive(Clone, Debug)]
+struct Going {
+    way: Way,
+    answered_as: String,
+    ms: Option<i64>,
+    /// O pedido do teste falhou neste servidor (não é a outra máquina que não respondeu): a frase dele vai no cartão.
+    error: Option<String>,
+}
+
+fn parse_going(value: &Value) -> Going {
+    let way = match value.get("estado").and_then(Value::as_str) {
+        Some("ok") => Way::Ok, Some("estranho") => Way::Other, Some("falhou" | "recusou") => Way::Failed, _ => Way::Unset,
+    };
+    Going { way, answered_as: value.get("identificador").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        ms: value.get("tempo_ms").and_then(Value::as_f64).map(|ms| ms.round() as i64), error: None }
+}
+
+/// Medição de uma máquina, só em memória: cada abertura da página mede de novo.
+#[derive(Default)]
+struct Check { seq: u64, testing: bool, going: Option<Going>, at: Option<chrono::DateTime<chrono::Local>> }
+
+impl Check {
+    fn done(&self) -> Option<&Going> { self.going.as_ref().filter(|_| !self.testing) }
+}
+
+/// O que a linha da lista diz (`sessionsState` do web para quem não tem entrada no aparelho).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Row { Testing, NoToken, Off, Silent }
+
+fn row_state(peer: &Peer, check: Option<&Check>) -> Row {
+    if !peer.enabled { return Row::Off; }
+    match check.and_then(Check::done) { None => Row::Testing, Some(g) if g.way == Way::Ok => Row::NoToken, Some(_) => Row::Silent }
+}
+
+/// Desligada no servidor ou sem resposta: vai para "Não respondem", como no web (`recolhida`).
+fn collapsed(row: Row) -> bool { matches!(row, Row::Off | Row::Silent) }
+
+/// O cartão dos recados (`recadosCard` do web). Sem token no aparelho a volta nunca é medida, então "ok" não acontece.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Card { Testing, MissingToken, GoingFailed, GoingOther, Paused }
+
+fn card_state(peer: &Peer, check: Option<&Check>) -> Card {
+    if !peer.enabled { return Card::Paused; }
+    match check.and_then(Check::done).map(|g| g.way) {
+        None => Card::Testing, Some(Way::Other) => Card::GoingOther, Some(Way::Failed) => Card::GoingFailed, Some(_) => Card::MissingToken,
+    }
+}
+
+/// De onde saiu uma gravação de outra máquina: a falha aparece só junto desse controle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Spot { Row, Messages, TurnOn, Scan, Footer }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PeerWrite { Enabled(bool), Removed }
+
 /// Como o reinício terminou, lido do estado que o motor grava (`fase: pronto`, casado pelo pid do pedido).
 pub(super) enum RestartEnd { Done(Option<String>), Failed(Option<String>), Unconfirmed }
 
@@ -124,6 +194,9 @@ pub(super) enum MachinesReply {
     IdSaved(u64, Result<Value, Failure>),
     Restart(u64, Result<Value, Failure>),
     RestartEnd(u64, RestartEnd),
+    Peers(u64, Result<Value, Failure>),
+    PeerCheck(String, u64, Result<Value, Failure>),
+    PeerSaved(u64, PeerWrite, Result<Value, Failure>),
 }
 
 #[derive(Default)]
@@ -156,6 +229,18 @@ pub(in crate::app) struct Machines {
     advanced: bool,
     /// O arquivo da conexão não saiu do disco: a ação não aconteceu. Cada ação mostra a sua falha junto do próprio botão.
     leave_error: Option<(Leave, String)>,
+    /// As outras máquinas que este servidor conhece, e a medição de cada uma pelo id.
+    peers: Remote<Vec<Peer>>,
+    checks: HashMap<String, Check>,
+    check_seq: u64,
+    /// Uma gravação por vez: a máquina e o controle que a pediu. O `seq` descarta resposta de pedido velho.
+    peer_busy: Option<(String, Spot)>,
+    peer_seq: u64,
+    peer_error: Option<(String, Spot, String)>,
+    silent_open: bool,
+    /// A máquina do detalhe aberto e o Avançado dele.
+    peer_open: Option<String>,
+    peer_advanced: bool,
 }
 
 impl Drop for Machines {
@@ -183,9 +268,99 @@ impl Hangar {
         let m = &mut self.machines;
         if let Some(task) = m.restart.task.take() { task.abort(); }
         m.restart = Restart { seq: m.restart.seq + 1, ..Restart::default() };
-        (m.id_saved, m.leave_error) = (false, None);
+        (m.id_saved, m.leave_error, m.peer_error) = (false, None, None);
+        // Medições só em memória: cada abertura mede de novo, e a resposta de um teste de antes cai pelo `seq`.
+        m.checks.clear();
         if !m.id_saving { self.load_machine_id(cx); }
         self.load_reach(cx);
+        self.load_peers(cx);
+    }
+
+    fn load_peers(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let seq = self.machines.peers.start();
+        let done = self.machines_send_later();
+        self.runtime.spawn(async move { done(MachinesReply::Peers(seq, api.server_read(&["peers"], &[], 15).await)).await });
+        cx.notify();
+    }
+
+    /// Mede a ida de uma máquina de novo. Uma medição em voo não é refeita (clique duplo, abrir o detalhe enquanto a lista mede).
+    fn check_peer(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let m = &mut self.machines;
+        let Some(url) = m.peers.ok().and_then(|list| list.iter().find(|p| p.id == id && p.enabled)).map(|p| p.url.clone()) else { return };
+        if m.checks.get(id).is_some_and(|c| c.testing) { return; }
+        m.check_seq += 1;
+        let seq = m.check_seq;
+        let check = m.checks.entry(id.to_owned()).or_default();
+        (check.seq, check.testing) = (seq, true);
+        let (id, done) = (id.to_owned(), self.machines_send_later());
+        self.runtime.spawn(async move {
+            let result = api.server_read(&["peers", "check"], &[("url", &url), ("id", &id)], 30).await;
+            done(MachinesReply::PeerCheck(id, seq, result)).await
+        });
+        cx.notify();
+    }
+
+    /// PUT `/api/peers/{id}/enabled` ou DELETE `/api/peers/{id}`; as duas respondem a lista nova.
+    fn write_peer(&mut self, id: String, spot: Spot, write: PeerWrite, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let m = &mut self.machines;
+        if m.peer_busy.is_some() { return; }
+        m.peer_seq += 1;
+        (m.peer_busy, m.peer_error) = (Some((id.clone(), spot)), None);
+        let (seq, done) = (m.peer_seq, self.machines_send_later());
+        self.runtime.spawn(async move {
+            let result = match write {
+                PeerWrite::Enabled(on) => api.server_send(reqwest::Method::PUT, &["peers", &id, "enabled"], Some(json!({"enabled": on})), 15).await,
+                PeerWrite::Removed => api.server_send(reqwest::Method::DELETE, &["peers", &id], None, 15).await,
+            };
+            done(MachinesReply::PeerSaved(seq, write, result)).await
+        });
+        cx.notify();
+    }
+
+    /// Remover pergunta antes, como o web; a pergunta diz que o lado de lá fica, porque este aparelho não tem o token dele.
+    fn confirm_peer_removal(&mut self, id: String, spot: Spot, window: &mut Window, cx: &mut Context<Self>) {
+        let title = tr("machines_peer_remove_title").replace("{nome}", &id);
+        let this = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let (this, id) = (this.clone(), id.clone());
+            alert.title(SharedString::from(title.clone())).description(SharedString::from(tr("machines_peer_here_only")))
+                .button_props(DialogButtonProps::default().show_cancel(true).ok_text(tr("machines_peer_remove")).ok_variant(ButtonVariant::Danger)
+                    .cancel_text(tr("cancel")))
+                .on_ok(move |_, _, cx| {
+                    let _ = this.update(cx, |this, cx| this.write_peer(id.clone(), spot, PeerWrite::Removed, cx));
+                    true
+                })
+        });
+    }
+
+    fn open_peer_detail(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        // Abrir o detalhe mede de novo: o resultado de antes era de outra hora.
+        self.check_peer(&id, cx);
+        let m = &mut self.machines;
+        (m.peer_open, m.peer_advanced) = (Some(id.clone()), false);
+        if m.peer_error.as_ref().is_some_and(|(_, spot, _)| *spot != Spot::Row) { m.peer_error = None; }
+        let hangar = cx.entity();
+        let detail = cx.new(|cx| PeerDetail { _observe: cx.observe(&hangar, |_, _, cx| cx.notify()), hangar: hangar.downgrade() });
+        let weak = hangar.downgrade();
+        // Fechado pela pessoa, o detalhe deixa de ser o diálogo do topo: um Remover que volta depois não fecha outro diálogo.
+        window.open_dialog(cx, move |dialog, _, _| {
+            let (weak, id) = (weak.clone(), id.clone());
+            dialog.w(px(600.)).child(detail.clone()).on_ok(|_, _, _| false)
+                .on_close(move |_, _, cx| { let _ = weak.update(cx, |this, _| {
+                    if this.machines.peer_open.as_deref() == Some(id.as_str()) { this.machines.peer_open = None; }
+                }); })
+        });
+    }
+
+    fn peer_error_at(&self, id: &str, spot: Spot) -> Option<String> {
+        self.machines.peer_error.as_ref().filter(|(i, s, _)| i == id && *s == spot).map(|(.., error)| error.clone())
+    }
+
+    fn peer_busy_at(&self, id: &str, spot: Spot) -> bool {
+        self.machines.peer_busy.as_ref().is_some_and(|(i, s)| i == id && *s == spot)
     }
 
     fn load_reach(&mut self, cx: &mut Context<Self>) {
@@ -326,8 +501,54 @@ impl Hangar {
                     RestartEnd::Unconfirmed => r.error = Some(tr("machines_restart_unconfirmed")),
                 }
             }
+            MachinesReply::Peers(seq, result) => {
+                let parsed = result.map_err(|e| Self::failure(&e)).and_then(|v| parse_peers(&v).ok_or_else(|| tr("invalid_response")));
+                if !self.machines.peers.finish(seq, parsed) { return; }
+                self.peers_arrived(cx);
+            }
+            MachinesReply::PeerCheck(id, seq, result) => {
+                let Some(check) = self.machines.checks.get_mut(&id).filter(|c| c.seq == seq) else { return };
+                // Falha do próprio pedido é "não chegou", como o web faz com o erro do `checkPeer`.
+                let going = result.map(|v| parse_going(&v)).unwrap_or_else(|error| Going { way: Way::Failed, answered_as: String::new(), ms: None,
+                    error: Some(Self::fetch_failure(&error)) });
+                (check.testing, check.going, check.at) = (false, Some(going), Some(chrono::Local::now()));
+            }
+            MachinesReply::PeerSaved(seq, write, result) => {
+                let m = &mut self.machines;
+                if seq != m.peer_seq { return; }
+                let Some((id, spot)) = m.peer_busy.take() else { return };
+                let parsed = result.map_err(|e| Self::fetch_failure(&e)).and_then(|v| parse_peers(&v).ok_or_else(|| tr("invalid_response")));
+                match parsed {
+                    Ok(list) => {
+                        // A resposta é a lista nova do servidor: mais nova que qualquer leitura em voo.
+                        let newest = m.peers.start();
+                        m.peers.finish(newest, Ok(list));
+                        // Religada: a medição de antes de desligar não vale para agora (sem isto o web fica em "Testando…").
+                        if write == PeerWrite::Enabled(true) { m.checks.remove(&id); }
+                        if write == PeerWrite::Removed {
+                            m.checks.remove(&id);
+                            // Saiu pelo detalhe (rodapé ou recados): o detalhe dela fecha, como no web.
+                            if matches!(spot, Spot::Footer | Spot::Messages) && m.peer_open.as_deref() == Some(id.as_str()) {
+                                m.peer_open = None;
+                                window.close_dialog(cx);
+                            }
+                        }
+                        self.peers_arrived(cx);
+                    }
+                    Err(error) => m.peer_error = Some((id, spot, error)),
+                }
+            }
         }
         cx.notify();
+    }
+
+    /// Lista nova: some a medição de quem saiu, e toda máquina ligada sem medição (ou religada agora) é medida.
+    fn peers_arrived(&mut self, cx: &mut Context<Self>) {
+        let list = self.machines.peers.ok().cloned().unwrap_or_default();
+        self.machines.checks.retain(|id, _| list.iter().any(|p| &p.id == id));
+        for peer in list.iter().filter(|p| p.enabled) {
+            if self.machines.checks.get(&peer.id).is_none_or(|c| c.going.is_none() && !c.testing) { self.check_peer(&peer.id, cx); }
+        }
     }
 
     /// O campo do identificador com o valor salvo no servidor.
@@ -450,7 +671,7 @@ impl Hangar {
                         .child(tr("machines_no_id_short")))))
                 .child(chrome::small_icon(IconName::ChevronRight, 16., theme::muted())));
         let this = cx.entity().downgrade();
-        let card = FocusOnClick { id: "machines-this", button: card, open: Rc::new(move |window, cx| {
+        let card = FocusOnClick { id: "machines-this".into(), button: card, open: Rc::new(move |window, cx| {
             let _ = this.update(cx, |this, cx| this.open_machine_detail(window, cx));
         }) };
         let card = self.mark(self.mark(div().rounded(px(14.)).child(card), "machines_id"), "server_term_origins");
@@ -471,9 +692,214 @@ impl Hangar {
             .when_some(m.id.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.id.loading).cloned(), |el, error| el.child(div().id("machines-id-read-error")
                 .role(Role::Alert).mt(px(8.)).text_size(px(12.5)).text_color(theme::danger()).child(error)))
             .child(others)
-            .child(settings_box().child(div().px_4().py(px(12.)).text_sm().text_color(theme::muted()).child(next.clone())))
+            .child(self.render_peers(cx))
             .child(actions)
             .into_any_element()
+    }
+
+    /// "Máquinas neste aparelho": as outras máquinas deste servidor, e as que não respondem recolhidas embaixo (ListaMaquinas.svelte).
+    fn render_peers(&mut self, cx: &mut Context<Self>) -> Div {
+        let m = &self.machines;
+        let rows = m.peers.ok().cloned().unwrap_or_default().into_iter()
+            .map(|p| { let row = row_state(&p, m.checks.get(&p.id)); (p, row) }).collect::<Vec<_>>();
+        let (silent, shown): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(_, row)| collapsed(*row));
+        let error = m.peers.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.peers.loading).cloned();
+        let note = |text: String| div().px_4().py(px(12.)).text_size(px(12.5)).text_color(theme::muted()).child(text);
+        let list = settings_box().map(|el| match error {
+            Some(error) => el.child(div().id("machines-peers-error").role(Role::Alert).flex().items_center().gap(px(10.)).px_4().py(px(12.))
+                .child(div().flex_1().text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error))
+                .child(Button::new("machines-peers-retry").outline().small().label(tr("server_retry"))
+                    .on_click(cx.listener(|this, _, _, cx| this.load_peers(cx))))),
+            None if shown.is_empty() => el.child(note(if m.peers.loading { tr("server_loading") } else if !silent.is_empty() {
+                tr("machines_peers_none_answering") } else { tr("machines_peers_empty") })),
+            None => el.children(shown.iter().enumerate().map(|(n, (peer, row))| div().when(n > 0, |el| el.border_t_1().border_color(theme::border()))
+                .child(self.peer_row(peer, *row, false, cx))).collect::<Vec<_>>()),
+        });
+        let open = m.silent_open;
+        let this = cx.entity().downgrade();
+        let silent_block = (!silent.is_empty()).then(|| div().mt(px(14.)).flex().flex_col().gap(px(8.))
+            .child(div().flex().child(super::settings::Disclosure::new("machines-silent", open,
+                tr("machines_peers_silent").replace("{n}", &silent.len().to_string()), false)
+                .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| { this.machines.silent_open = open; cx.notify(); }); })))
+            .when(open, |el| el.child(settings_box().children(silent.iter().enumerate()
+                .map(|(n, (peer, row))| div().when(n > 0, |el| el.border_t_1().border_color(theme::border())).child(self.peer_row(peer, *row, true, cx)))
+                .collect::<Vec<_>>()))));
+        div().flex().flex_col().child(list).children(silent_block)
+    }
+
+    /// Uma linha da lista: abre o detalhe. Recolhida ("não respondem"), ganha o Remover ao lado, como no web.
+    fn peer_row(&self, peer: &Peer, row: Row, silent: bool, cx: &mut Context<Self>) -> Div {
+        let (glyph, color, phrase) = match row {
+            Row::Testing => ("◌", theme::muted(), tr("machines_testing")),
+            Row::NoToken => ("●", theme::warning(), tr("machines_peer_no_token")),
+            // O "·" do web some no desenho do app: o neutro é o mesmo ○ do farol deste servidor.
+            Row::Off => (Light::Neutral.glyph(), theme::muted(), tr("machines_peer_off")),
+            Row::Silent => (Light::Neutral.glyph(), theme::muted(), tr("machines_peer_silent")),
+        };
+        let id = peer.id.clone();
+        let key = SharedString::from(format!("machines-peer-{id}"));
+        let button = Button::new(key.clone())
+            .custom(ButtonCustomVariant::new(cx).color(theme::boxed()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+            .w_full().h_auto().min_h(px(56.)).px_4().py(px(10.)).rounded(px(0.))
+            .accessibility_label(format!("{}. {phrase}", tr("machines_open").replace("{nome}", &id)))
+            .child(div().w_full().flex().items_center().gap(px(12.))
+                .child(div().w(px(16.)).flex_shrink_0().text_center().text_size(px(14.)).text_color(color).child(glyph))
+                .child(div().flex_1().min_w_0().flex().flex_col().items_start().gap(px(2.))
+                    .child(div().font_weight(FontWeight::MEDIUM).child(id.clone()))
+                    .child(div().text_size(px(12.5)).text_color(if row == Row::NoToken { theme::warning() } else { theme::muted() })
+                        .whitespace_normal().child(phrase)))
+                .when(!silent, |el| el.child(chrome::small_icon(IconName::ChevronRight, 16., theme::muted()))));
+        let this = cx.entity().downgrade();
+        let open_id = id.clone();
+        let line = FocusOnClick { id: key.into(), button, open: Rc::new(move |window, cx| {
+            let _ = this.update(cx, |this, cx| this.open_peer_detail(open_id.clone(), window, cx));
+        }) };
+        if !silent { return div().child(line); }
+        let key = SharedString::from(format!("machines-peer-{id}-remove"));
+        let removing = self.peer_busy_at(&id, Spot::Row);
+        let remove = Button::new(key.clone()).ghost().small().label(tr(if removing { "machines_peer_removing" } else { "machines_peer_remove" }))
+            .text_color(theme::danger())
+            .accessibility_label(if removing { tr("machines_peer_removing") } else { tr("machines_peer_remove_aria").replace("{nome}", &id) })
+            .loading(removing).disabled(self.machines.peer_busy.is_some());
+        let this = cx.entity().downgrade();
+        let remove_id = id.clone();
+        let remove = FocusOnClick { id: key.into(), button: remove, open: Rc::new(move |window, cx| {
+            let _ = this.update(cx, |this, cx| this.confirm_peer_removal(remove_id.clone(), Spot::Row, window, cx));
+        }) };
+        div().flex().flex_col()
+            .child(div().flex().items_center().child(div().flex_1().min_w_0().child(line)).child(div().pr(px(12.)).flex_shrink_0().child(remove)))
+            .when_some(self.peer_error_at(&id, Spot::Row), |el, error| el.child(div().id(SharedString::from(format!("machines-peer-{id}-error")))
+                .role(Role::Alert).px_4().pb(px(10.)).text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error)))
+    }
+
+    /// Detalhe de outra máquina (DetalheServidor.svelte, no caso "só no servidor"): o que o aparelho guarda dela, os recados e o avançado.
+    fn render_peer_detail(&mut self, cx: &mut Context<Self>) -> Div {
+        let m = &self.machines;
+        let Some(peer) = m.peer_open.as_ref().and_then(|id| m.peers.ok()?.iter().find(|p| &p.id == id)).cloned() else { return div() };
+        let check = m.checks.get(&peer.id);
+        let (card, row) = (card_state(&peer, check), row_state(&peer, check));
+        let (here, name) = (self.server_label(cx), peer.id.clone());
+        let fill = |key: &str| tr(key).replace("{este}", &here).replace("{nome}", &name);
+        let tested = if check.is_some_and(|c| c.testing) || card == Card::Testing || row == Row::Testing { tr("machines_testing") } else {
+            match check.and_then(|c| c.at) {
+                Some(at) => tr("machines_peer_tested_at").replace("{hora}", &at.format("%H:%M").to_string()),
+                None => tr("machines_peer_tested_now"),
+            }
+        };
+        let busy = m.peer_busy.is_some();
+        let next = tr("settings_next_version");
+        let section = |title: String| div().mt(px(20.)).mb(px(8.)).flex().items_center().gap(px(8.)).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD)
+            .child(title);
+        let muted = |text: String| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text);
+        let setting = |title: String, help: String| div().flex().items_center().gap(px(14.)).px_4().py(px(12.))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).child(div().font_weight(FontWeight::MEDIUM).child(title)).child(muted(help)));
+        let error = |id: &str, error: Option<String>| error.map(|error| div().id(SharedString::from(id.to_owned())).role(Role::Alert).px_4().pb(px(12.))
+            .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error));
+        let scope = || chip(tr("server_scope"), theme::muted(), theme::raised());
+
+        // Neste aparelho: acompanhar as sessões dela exige guardar o token dela aqui, que chega na próxima versão.
+        let follow = div().id("machines-peer-follow").child(Switch::new("machines-peer-follow-switch").checked(false).disabled(true)
+            .accessibility_label(format!("{}. {next}", tr("machines_peer_show_sessions"))))
+            .tooltip({ let next = next.clone(); move |window, cx| Tooltip::new(next.clone()).build(window, cx) });
+        let device = settings_box().child(setting(tr("machines_peer_show_sessions"), tr("machines_peer_no_token_here"))
+            .child(div().flex_shrink_0().child(follow)));
+
+        // Recados: desligar é remover o registro, com a mesma pergunta do Remover.
+        let has_id = m.id.ok().is_some_and(|id| !id.is_empty());
+        let peer_id = peer.id.clone();
+        let messages_switch = Switch::new("machines-peer-messages").checked(true).disabled(!has_id || busy)
+            // Desligado sem identificador: o motivo vai no nome e embaixo da legenda.
+            .accessibility_label(if has_id { fill("machines_peer_messages_title") } else {
+                format!("{}. {}", fill("machines_peer_messages_title"), tr("machines_no_id_short")) })
+            .on_click(cx.listener(move |this, on: &bool, window, cx| if !*on { this.confirm_peer_removal(peer_id.clone(), Spot::Messages, window, cx) }));
+        let tone = match card { Card::Testing => theme::border(), Card::MissingToken | Card::Paused => theme::warning(), _ => theme::danger() };
+        let phrase = |text: String| div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(text);
+        let going = check.and_then(Check::done).cloned();
+        let peer_id = peer.id.clone();
+        let result = div().id("machines-peer-result").role(Role::Status).p(px(12.)).rounded(px(10.)).border_1().border_color(tone).bg(theme::inset())
+            .flex().flex_col().gap(px(8.))
+            .map(|el| match card {
+                Card::Testing => el.child(phrase(format!("◌ {}", tr("machines_peer_testing_both")))),
+                Card::MissingToken => el.child(phrase(fill("machines_peer_missing_token"))).child(muted(fill("machines_peer_missing_token_p")))
+                    .child(div().flex().flex_wrap().items_center().gap(px(8.))
+                        .child(Button::new("machines-peer-use-token").primary().small().label(fill("machines_peer_use_token")).disabled(true)
+                            .accessibility_label(format!("{}. {next}", fill("machines_peer_use_token"))))
+                        .child(muted(next.clone()))),
+                Card::GoingFailed => el.child(phrase(fill("machines_peer_going_failed"))).child(muted(tr("machines_peer_going_failed_p")))
+                    .when_some(going.as_ref().and_then(|g| g.error.clone()), |el, error| el.child(div().id("machines-peer-check-error")
+                        .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error))),
+                Card::GoingOther => el.child(phrase(fill("machines_peer_going_other"))).child(muted(fill("machines_peer_going_other_p")
+                    .replace("{endereco}", &peer.url).replace("{outro}", going.as_ref().map(|g| g.answered_as.as_str()).unwrap_or_default()))),
+                Card::Paused => el.child(phrase(tr("machines_peer_off"))).child(muted(tr("machines_peer_scan_legend")))
+                    .child(div().flex().child(Button::new("machines-peer-turn-on").primary().small().label(tr("machines_peer_turn_on"))
+                        .loading(self.peer_busy_at(&peer.id, Spot::TurnOn)).disabled(busy)
+                        .on_click(cx.listener(move |this, _, _, cx| this.write_peer(peer_id.clone(), Spot::TurnOn, PeerWrite::Enabled(true), cx)))))
+                    .when_some(self.peer_error_at(&peer.id, Spot::TurnOn), |el, error| el.child(div().id("machines-peer-turn-on-error")
+                        .role(Role::Alert).text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error))),
+            })
+            // Desligada não é testada: a medida de antes de desligar não é o estado de agora.
+            .when_some(going.filter(|g| g.way == Way::Ok && card != Card::Paused).and_then(|g| g.ms), |el, ms| el.child(muted(tr("machines_peer_measure")
+                .replace("{de}", &here).replace("{para}", &name).replace("{ms}", &ms.to_string()))))
+            .when(matches!(card, Card::Testing | Card::GoingFailed | Card::GoingOther), |el| {
+                let id = peer.id.clone();
+                el.child(div().flex().child(Button::new("machines-peer-test").outline().small().label(tr("machines_peer_test_again"))
+                    .disabled(card == Card::Testing).on_click(cx.listener(move |this, _, _, cx| this.check_peer(&id, cx)))))
+            });
+        let messages = settings_box()
+            .child(setting(fill("machines_peer_messages_title"), fill("machines_peer_messages_legend")).child(div().flex_shrink_0().child(messages_switch)))
+            .when(!has_id, |el| el.child(div().px_4().pb(px(12.)).text_size(px(12.5)).text_color(theme::warning()).whitespace_normal()
+                .child(tr("machines_no_id_short"))))
+            .children(error("machines-peer-messages-error", self.peer_error_at(&peer.id, Spot::Messages)))
+            .child(div().border_t_1().border_color(theme::border()).p(px(12.)).child(result));
+
+        // Avançado: tirar da varredura grava no servidor; o endereço de ida é o que ele guardou.
+        let this = cx.entity().downgrade();
+        let advanced_open = m.peer_advanced;
+        let peer_id = peer.id.clone();
+        let advanced = div().mt(px(18.)).flex().flex_col().gap(px(10.))
+            .child(div().flex().child(super::settings::Disclosure::new("machines-peer-advanced", advanced_open, tr("machines_advanced"), false)
+                .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| { this.machines.peer_advanced = open; cx.notify(); }); })))
+            .when(advanced_open, |el| el.child(settings_box()
+                .child(div().flex().items_center().gap(px(14.)).px_4().py(px(12.))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                        .child(div().flex().flex_wrap().items_center().gap(px(8.)).child(div().font_weight(FontWeight::MEDIUM).child(tr("machines_peer_scan")))
+                            .child(scope()))
+                        .child(muted(tr("machines_peer_scan_legend"))))
+                    .child(div().flex_shrink_0().child(Switch::new("machines-peer-scan").checked(peer.enabled).disabled(busy)
+                        .accessibility_label(tr("machines_peer_scan"))
+                        .on_click(cx.listener(move |this, on: &bool, _, cx| this.write_peer(peer_id.clone(), Spot::Scan, PeerWrite::Enabled(*on), cx))))))
+                .children(error("machines-peer-scan-error", self.peer_error_at(&peer.id, Spot::Scan)))
+                .child(div().border_t_1().border_color(theme::border()).px_4().py(px(12.)).flex().flex_col().gap(px(2.))
+                    .child(div().font_weight(FontWeight::MEDIUM).child(fill("machines_peer_going_url")))
+                    .child(div().font_family(theme::MONO).text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(peer.url.clone())))));
+
+        let key = SharedString::from("machines-peer-remove");
+        let removing = self.peer_busy_at(&peer.id, Spot::Footer);
+        let remove = Button::new(key.clone()).ghost().small().text_color(theme::danger())
+            .child(div().flex().items_center().gap(px(8.))
+                .child(tr(if removing { "machines_peer_removing" } else { "machines_peer_remove_machine" })).child(scope()))
+            .accessibility_label(if removing { tr("machines_peer_removing") } else { fill("machines_peer_remove_machine_aria") })
+            .loading(removing).disabled(busy);
+        let this = cx.entity().downgrade();
+        let peer_id = peer.id.clone();
+        let remove = FocusOnClick { id: key.into(), button: remove, open: Rc::new(move |window, cx| {
+            let _ = this.update(cx, |this, cx| this.confirm_peer_removal(peer_id.clone(), Spot::Footer, window, cx));
+        }) };
+        let footer = div().mt(px(22.)).flex().flex_col().items_end().gap(px(6.))
+            .children(self.peer_error_at(&peer.id, Spot::Footer).map(|error| div().id("machines-peer-remove-error").role(Role::Alert)
+                .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error)))
+            .child(remove);
+
+        div().flex().flex_col().pb(px(8.))
+            .child(div().pr(px(28.)).mb(px(4.)).flex().flex_col().gap(px(2.))
+                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(name.clone()))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tested)))
+            .child(section(tr("machines_peer_on_device")))
+            .child(device)
+            .child(section(tr("machines_peer_messages")).child(scope()))
+            .child(messages)
+            .child(advanced)
+            .child(footer)
     }
 
     fn render_machine_detail(&mut self, cx: &mut Context<Self>) -> Div {
@@ -665,7 +1091,8 @@ impl Hangar {
 /// o nome do tipo do componente no caminho antes de desenhá-lo).
 #[derive(IntoElement)]
 struct FocusOnClick {
-    id: &'static str,
+    /// O mesmo id dado ao `Button`.
+    id: ElementId,
     button: Button,
     open: Rc<dyn Fn(&mut Window, &mut App)>,
 }
@@ -696,9 +1123,21 @@ impl Render for MachineDetail {
     }
 }
 
+/// O corpo do diálogo de outra máquina, no mesmo desenho do `MachineDetail`.
+struct PeerDetail {
+    hangar: WeakEntity<Hangar>,
+    _observe: Subscription,
+}
+
+impl Render for PeerDetail {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.hangar.update(cx, |hangar, cx| hangar.render_peer_detail(cx)).unwrap_or_else(|_| div())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Kind, Light, Reach, parse_reach, valid_id};
+    use super::{Card, Check, Kind, Light, Peer, Reach, Row, card_state, collapsed, parse_going, parse_peers, parse_reach, row_state, valid_id};
     use crate::i18n::tr;
 
     fn reach(text: &str) -> Reach { parse_reach(&serde_json::from_str(text).expect("JSON")).expect("formato do /api/alcance") }
@@ -727,6 +1166,29 @@ mod tests {
         let lan = &isolated.addresses[1];
         assert_eq!(isolated.light(lan), Light::Neutral);
         assert_eq!(isolated.extras().iter().map(|a| a.kind).collect::<Vec<_>>(), [Kind::Here, Kind::Public]);
+    }
+
+    #[test]
+    fn peer_row_and_card_follow_the_web_without_a_token_here() {
+        let peer = |enabled| Peer { id: "casa".into(), url: "https://casa.test".into(), enabled };
+        let check = |estado: &str| Check { going: Some(parse_going(&serde_json::json!({"estado": estado}))), ..Check::default() };
+        // Sem medição (ou medindo): testando nos dois lugares.
+        assert_eq!((row_state(&peer(true), None), card_state(&peer(true), None)), (Row::Testing, Card::Testing));
+        let testing = Check { testing: true, ..check("ok") };
+        assert_eq!(card_state(&peer(true), Some(&testing)), Card::Testing);
+        // Ida ok: aparece na lista pedindo o token; a volta não dá pra conferir.
+        assert_eq!((row_state(&peer(true), Some(&check("ok"))), card_state(&peer(true), Some(&check("ok")))), (Row::NoToken, Card::MissingToken));
+        // Falha e outra máquina vão para "Não respondem", cada uma com o seu cartão.
+        assert_eq!(card_state(&peer(true), Some(&check("recusou"))), Card::GoingFailed);
+        assert_eq!(card_state(&peer(true), Some(&check("estranho"))), Card::GoingOther);
+        assert!(collapsed(row_state(&peer(true), Some(&check("falhou")))));
+        // Desligada no servidor: pausada, recolhida, qualquer que seja a medição antiga.
+        assert_eq!((row_state(&peer(false), Some(&check("ok"))), card_state(&peer(false), Some(&check("ok")))), (Row::Off, Card::Paused));
+        assert!(collapsed(Row::Off) && !collapsed(Row::NoToken) && !collapsed(Row::Testing));
+        // Lista do servidor: `enabled` ausente é ligada, como no backend.
+        let list = parse_peers(&serde_json::json!([{"id": "a", "base_url": "http://a"}, {"id": "b", "base_url": "http://b", "enabled": false}]))
+            .expect("formato do /api/peers");
+        assert_eq!(list.iter().map(|p| p.enabled).collect::<Vec<_>>(), [true, false]);
     }
 
     #[test]

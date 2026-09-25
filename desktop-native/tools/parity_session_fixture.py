@@ -25,6 +25,9 @@ GET /control/r8?voices=<ok|empty|500>&usage=<ok|500>&delay=<s> muda o que GET /a
 GET /control/r9?reach=<ok|isolated|500>&reach_delay=<s>&id=<valor|>&id_load=<ok|500>&id_save=<ok|500>&restart=<ok|fail|409|never|drop>
 muda Máquinas (Task 12 R9a): GET /api/alcance, GET/PUT /api/peers/identificador e POST /api/atualizacao/reiniciar. O reinício é
 FALSO: só anda o estado sintético (a leitura cai por 3 s, depois `fase: pronto` com o pid do pedido); nada reinicia em lugar nenhum.
+GET /control/r9b?peers=<fixture|none>&load=<ok|500>&save=<ok|500|404>&remove=<ok|500|404>&load_delay=<s>&check_delay=<s>&save_delay=<s>
+&check_<id>=<ok|falhou|recusou|estranho|nao_configurado|500> muda as outras máquinas (Task 12 R9b): GET /api/peers, GET /api/peers/check,
+PUT /api/peers/<id>/enabled e DELETE /api/peers/<id>. As máquinas são SINTÉTICAS e o check não abre conexão nenhuma.
 """
 
 import parity_accounts_fixture as accounts
@@ -149,6 +152,19 @@ R9_REACH = {
         {"tipo": "publico", "url": "", "estado": "nao_configurado", "tempo_ms": None, "motivo": ""}]},
 }
 R9_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+
+
+def r9b_peers():
+    """Outras máquinas SINTÉTICAS do peers.json (Task 12 R9b): endereços de documentação, nenhum é testado de verdade."""
+    return [{"id": "antigo", "base_url": "http://192.0.2.30:8765", "enabled": False},
+            {"id": "casa", "base_url": "https://casa.sintetico.test"},
+            {"id": "notebook", "base_url": "http://192.0.2.21:8765"},
+            {"id": "trabalho", "base_url": "https://trabalho.sintetico.test"}]
+
+
+# O check responde o estado pedido por máquina (ok|falhou|recusou|estranho|nao_configurado|500); sem pedido, ok.
+R9B = {"peers": r9b_peers(), "load": "ok", "load_delay": 0.0, "check": {"notebook": "falhou", "trabalho": "estranho"},
+       "check_delay": 0.0, "save": "ok", "remove": "ok", "save_delay": 0.0}
 
 
 def restart_walk(pid, fail):
@@ -449,6 +465,16 @@ class Handler(BaseHTTPRequestHandler):
                         R9[key] = float(raw)
                     elif key in ("reach", "id", "id_load", "id_save", "restart"):
                         R9[key] = raw
+            elif path == "/control/r9b":
+                for key, raw in ((k, v[0]) for k, v in query.items()):
+                    if key == "peers":
+                        R9B["peers"] = r9b_peers() if raw == "fixture" else []
+                    elif key in ("load_delay", "check_delay", "save_delay"):
+                        R9B[key] = float(raw)
+                    elif key in ("load", "save", "remove"):
+                        R9B[key] = raw
+                    elif key.startswith("check_"):
+                        R9B["check"][key[len("check_"):]] = raw
             elif path == "/control/remove":
                 # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
                 SESSIONS.pop(query["name"][0], None)
@@ -506,6 +532,28 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(fail("erro_sintetico", "não consegui ler o identificador (sintético)"), 500)
             else:
                 self.send_json({"identificador": value})
+            return
+        if path == "/api/peers":
+            record("GET", self.path, None)
+            with LOCK:
+                mode, delay = R9B["load"], R9B["load_delay"]
+            time.sleep(delay)
+            if mode == "500":
+                self.send_json(fail("erro_sintetico", "não consegui ler o peers.json (sintético)"), 500)
+            else:
+                self.send_json(self.r9b_list())
+            return
+        if path == "/api/peers/check":
+            record("GET", self.path, None)
+            pid = query.get("id", [""])[0]
+            with LOCK:
+                mode, delay = R9B["check"].get(pid, "ok"), R9B["check_delay"]
+            time.sleep(delay)
+            if mode == "500":
+                self.send_json(fail("erro_sintetico", "o teste da máquina falhou (sintético)"), 500)
+            else:
+                self.send_json({"estado": mode, "identificador": "vizinho" if mode == "estranho" else (pid if mode == "ok" else ""),
+                                "motivo": "" if mode == "ok" else "sintético", "tempo_ms": 18.4 if mode == "ok" else None})
             return
         if path == "/api/config":
             record("GET", self.path, None)
@@ -765,6 +813,10 @@ class Handler(BaseHTTPRequestHandler):
                     R9["id"] = value
                 self.send_json({"identificador": value})
             return
+        match = re.fullmatch(r"/api/peers/([^/]+)/enabled", url.path)
+        if match:
+            self.r9b_write("save", match.group(1), lambda p: p.update(enabled=(body or {}).get("enabled") is not False))
+            return
         if not accounts.handle_put(self, url.path, body):
             self.send_json({"detail": "not found"}, 404)
 
@@ -773,8 +825,32 @@ class Handler(BaseHTTPRequestHandler):
         record("DELETE", self.path, None)
         if not self.authorized():
             return
+        match = re.fullmatch(r"/api/peers/([^/]+)", url.path)
+        if match:
+            self.r9b_write("remove", match.group(1), lambda p: R9B["peers"].remove(p))
+            return
         if not accounts.handle_delete(self, url.path):
             self.send_json({"detail": "not found"}, 404)
+
+    def r9b_list(self):
+        """A lista como o backend devolve: token só mascarado (nenhum token de outra máquina existe aqui)."""
+        return [{**p, "token": "••••0000"} for p in sorted(R9B["peers"], key=lambda p: p["id"])]
+
+    def r9b_write(self, kind, pid, change):
+        """PUT enabled / DELETE de um peer sintético: falha pelo modo (500 ou 404) ou muda a lista e a devolve, como o backend."""
+        with LOCK:
+            mode, delay = R9B[kind], R9B["save_delay"]
+        time.sleep(delay)
+        with LOCK:
+            peer = next((p for p in R9B["peers"] if p["id"] == pid), None)
+            if mode == "500":
+                what = "gravar" if kind == "save" else "remover"
+                self.send_json(fail("erro_sintetico", f"não consegui {what} no peers.json (sintético)"), 500)
+            elif mode == "404" or peer is None:
+                self.send_json(fail("peers_desconhecido", f"peer {pid!r} desconhecido"), 404)
+            else:
+                change(peer)
+                self.send_json(self.r9b_list())
 
     def save_shortcuts(self, value):
         """POST /api/config {"shortcuts": <json|null>}: grava na memória (null apaga o override) ou falha pelo modo."""
