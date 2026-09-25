@@ -324,7 +324,7 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
   // Fila: as bolhas `queued-` que ainda nao foram confirmadas pelo transcript. O painel ja recebe
   // os eventos do Chat, entao a contagem nao custa uma rota nova.
   const naFila = $derived(
-    events?.filter((e) => e.id.startsWith('queued-') && !e.queued_confirmed).length ?? 0,
+    events?.filter((e) => e.kind === 'user_msg' && e.id.startsWith('queued-') && !e.queued_confirmed).length ?? 0,
   );
   // Diff do working tree vs HEAD: o backend ja calcula (git_ops.git_diffstat) e manda na lista.
   // "alteracoes locais" dizia que havia algo; isto diz quanto.
