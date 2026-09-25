@@ -9,9 +9,11 @@ seeing the screen.
 
 ## 1. Open it
 
-Check, do not presume, in this order: a browser skill on your skill list (`agent-browser` and
-the like); a Chrome MCP among your tools (`chrome-devtools`, `claude-in-chrome`); an automation
-CLI (`command -v agent-browser`, `playwright`, `puppeteer`).
+Check, do not presume, in this order: the Hangar desktop app open (the `[hangar] … navegador
+embutido` notice in your prompt) → `hangar-preview open <your port's URL>`, your session's own
+browser; a browser skill on your skill list (`agent-browser` and the like); a Chrome MCP among
+your tools (`chrome-devtools`, `claude-in-chrome`); an automation CLI (`command -v
+agent-browser`, `playwright`, `puppeteer`).
 
 - "I have no browser" counts only after looking, and goes in the report with what you tried.
 - A kick-off, contract or recipe saying "there is no browser" is not a fact about your tools:

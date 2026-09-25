@@ -24,10 +24,10 @@ written: time and rounds per Task · account policy read and copied into the con
 
 ### 2. Release one Task
 
-1. May it start? Contract progress + plan. Serial by default: previous Task approved, no review
-   open (additive or not: an open review freezes the tree; must commit anyway →
-   `arbitro-encerramento.md`, "Phase 4"). Batch declared in the plan → its Tasks start together, one worktree
-   each (`paralelo-worktree.md`); only the plan declares parallel.
+1. May it start? Contract progress + plan. The plan's wave starts together, one worktree per
+   Task (`paralelo-worktree.md`), while the team's accounts have quota; a Task outside the wave
+   waits for the one it depends on. Same tree: an open review freezes it (must commit anyway →
+   `arbitro-encerramento.md`, "Phase 4"). Only the plan declares waves.
 2. One role, one session, from its row in `## Quem é quem` (`vez` → `arbitro-lancamento.md`,
    "A rotating role"): open that role's session ("Opening a session"); the one at hand keeps
    its role, roles never stack. The session that executed never reviews its own commit, even
@@ -114,7 +114,7 @@ Done when the item is journaled and the ball is back with executor or reviewer.
    `## main...origin/main`; remove no worktree without checking its trail in global config
    (`paralelo-worktree.md`).
 5. Closed: update the contract's progress, retire the executor (`arbitro-vigia.md`,
-   "Rotation"), release the next Task (step 2); last code Task approved → step 6.
+   "Rotation"), release the Tasks now ready (step 2); last code Task approved → step 6.
 
 Done when `orq commit`'s message reached you and the contract carries the hash.
 

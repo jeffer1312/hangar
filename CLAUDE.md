@@ -135,8 +135,8 @@ quando o usuário pedir o fluxo ou o kick-off mandar invocá-lo com `Role:`. A r
 fase 1 e só escala: `audit` (quem planejou escreve, uma revisão fresca do diff inteiro fecha) ou
 `full` (após o planejamento aprovado, executor e revisor independente trabalham com portão entre
 Tasks e revisão final da branch). A linha do executor na tabela do time pode ser escolhida pelo
-`Risk:` da Task (`vez` = `low`/`high`) em vez de rodízio. Push depende de autorização do usuário. Um escritor por árvore, execução serial por
-padrão. **Só planejador e árbitro invocam a skill**: executor, revisor, revisão final e
+`Risk:` da Task (`vez` = `low`/`high`) em vez de rodízio. Push depende de autorização do usuário. Um escritor por árvore; Tasks independentes rodam em paralelo por padrão, uma por
+worktree. **Só planejador e árbitro invocam a skill**: executor, revisor, revisão final e
 retrospectiva recebem no kick-off o caminho da página do papel
 (`~/.claude/skills/orquestrar/references/<papel>.md`) e leem só ela e as irmãs que ela nomeia
 no passo. Cada página é escrita como

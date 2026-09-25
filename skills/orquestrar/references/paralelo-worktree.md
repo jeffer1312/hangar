@@ -1,12 +1,11 @@
-# Exception: Tasks in parallel, one worktree each
+# Tasks in parallel, one worktree each
 
 `orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
 
-- The default is serial: one writer per tree, the gate closing each Task before the next opens.
-- Parallelize only when the Tasks are truly independent and the work is big enough to pay the setup.
-- Prefer arms inside one tree first: the executor runs one subagent per disjoint file set,
-  verification once after the join (`executor-subagentes.md`). A worktree only for a Task that
-  justifies a whole session of its own.
+- The default is parallel: every Task passing the four conditions with the others of its wave
+  runs at once, one writer per worktree, each with its own gate.
+- Inside one tree, the executor still spreads disjoint file sets over subagents
+  (`executor-subagentes.md`).
 
 ## The trigger — four conditions, all together
 
@@ -16,18 +15,20 @@
   does not deduce it later.
 - New repo: audit condition 3 on the design (who creates what, who consumes), not on the disk.
 
-1. **Disjoint files.** No file in two Tasks of the batch. Check in the steps' text, not the Task
-   header. Single exception: a purely additive shared file with a declared insertion discipline
-   (below).
+1. **Disjoint regions.** Two Tasks of a wave share a file only in regions the plan names per
+   Task (function, section, block), with untouched lines between them; checked in the steps'
+   text, not the Task header. Insertions into a shared list go at distinct declared anchors,
+   never both at the end (below).
 2. **No symbol crosses.** Nothing Task A creates or modifies is consumed by Task B. Ask who
    consumes each file, not only who writes it.
 3. **No shared state.** Store, module singleton, registry, cache, table: two Tasks mounting hosts
    of the same state are not independent, whatever the files.
 4. **Isolated verification.** Each Task's verification runs alone, in its worktree.
 
-- One fails → that Task returns to the serial queue.
-- Batches of two or three.
-- Trigger passed → weigh this repo's setup cost (below) before deciding.
+- One fails → that Task goes to a later wave, after the Task it collides with.
+- No fixed wave size: the arbiter releases the whole wave while the team's accounts have quota;
+  the plan may set a lower `Lote máximo` with the user.
+- Trigger passed → the plan carries the setup below per worktree.
 
 ## What does not change
 
@@ -55,11 +56,15 @@ git worktree add /path/wt-t3 -b <work>-t3 "$BASE"
 ## The cost
 
 - Each worktree carries its own environment (dependencies installed per tree).
-- The port table per Task goes in the plan. A visual Task in parallel, in doubt: serialize.
-- 2+ visual Tasks in a batch: the plan declares either a browser instance per executor (separate
-  profile/port) or visual proof as a critical section (one captures at a time, through
-  `orq screen take`/`release`, `executor.md`). The executor checks the tab before every capture regardless (`executor-visual.md`,
-  "3. Capture").
+- The port table per Task goes in the plan.
+- Each wave with visual proof declares its screen in the plan:
+  - `Tela: própria` — a browser per session (the Hangar desktop app's embedded browser, one per
+    session, or separate `agent-browser` sessions), each worktree serving on its own port: the
+    proofs run at once, with no lock.
+  - `Tela: compartilhada` — one window serves all (a native app on one display): the proofs
+    queue through `orq screen take`/`release` (`executor.md`).
+  - The executor checks the tab before every capture regardless (`executor-visual.md`,
+    "3. Capture").
 - A global device resource (the device, its port forwarding, the app's storage) is a critical
   section: forwarding redone right before every capture; executors may negotiate time slots among
   themselves; whoever holds releases before closing their own work; the arbiter checks who holds
@@ -78,11 +83,11 @@ git merge --no-ff <work>-t2
 # the merged Tasks' verifications, here, now
 ```
 
-- Merge conflict = the Tasks were not independent. Stop; don't resolve. The losing Task becomes a
-  new serial Task on the merged base, with its executor. Exception: a positional conflict in a
-  file the plan declared additive — the arbiter resolves it at the merge by merge strategy and
-  proves it by content (key counts on each side before and after, zero values changed); never
-  returns it to the executor.
+- Merge conflict → the regions touched. Don't resolve it yourself: the losing Task gets a
+  correction round on the merged base, same executor — a new worktree from the merged tip, its
+  approved diff as reference, only its own region redone. Exception: a positional conflict in a
+  file the plan declared additive — resolve it at the merge by merge strategy and prove it by
+  content (key counts on each side before and after, zero values changed).
 - The merged Tasks' verifications after each merge. Red → back to that Task's executor even
   with its isolated `APROVA`: fix on the main line, reviewer judges before the commit — dirty
   tree, frozen round, `APROVA`, then the commit.
@@ -96,10 +101,10 @@ git merge --no-ff <work>-t2
 
 | Excuse | Rule |
 |---|---|
-| "The plan is big, so parallelize" | Size is not independence. The four conditions, or serial. |
+| "The plan is big, so parallelize" | Size is not independence. The four conditions, or a later wave. |
 | "The files are disjoint, so they're independent" | Condition 3. |
-| "Only `types.ts` is touched by both" | One shared file leaves the batch. |
-| "I'll resolve this little conflict" | Read-only. A conflict is a new serial Task. |
+| "Only `types.ts` is touched by both" | Condition 1: regions named in the plan, or a later wave. |
+| "I'll resolve this little conflict" | Read-only. A conflict is a correction round for the losing Task. |
 | "Both passed, merge both and verify at the end" | Verification after each merge. |
 | "It has its `APROVA`, no need to re-verify after the merge" | `APROVA` means right alone. |
 | "I'll leave the worktree, clean up later" | Trail check, then remove, before the batch closes. |

@@ -31,7 +31,7 @@ Route: <audit | full>            # decided in phase 1, escalates only
    default). `none` = the plan is the user's, from another ticket, or there is no written plan.
 2. A method has two halves. Planning half: spec and plan in phase 1; what it does not
    produce, you produce by hand. Executing half: what the executor invokes per Task; its command
-   goes in `Executes with:` (`none` when there is none).
+   goes in `Executes with:` (or `none`).
 3. Check both halves installed and tested in the account that executes, every time:
    `<hangar>/scripts/checar-skills.sh <names from the contract>` (the Hangar checkout path the
    plan records, `consumo.md`).
@@ -44,7 +44,7 @@ never a patch. Method ≠ engine (the model provider); a session has both, decid
 
 Done when `Method:`, `Executes with:` and `Domain skill:` are written and `checar-skills.sh` passed.
 
-### 2. Research (phase 0 — only when the plan cannot be written without it)
+### 2. Research (phase 0 — only when the plan needs it)
 
 1. Open a read-only session or subagent, one closed question, output in a file the plan cites.
    Protect it per `protecao.md`; a subagent inherits the protection or has a proven native
@@ -52,7 +52,7 @@ Done when `Method:`, `Executes with:` and `Domain skill:` are written and `checa
 2. "It doesn't exist" answers one query: write the phrase searched. Absence that supports a
    decision → redo the search by a second path. Zero rows from a DB or service don't prove
    absence.
-3. Before declaring that something depends on the user's decision, re-read their material.
+3. Before saying something depends on the user's decision, re-read their material.
 
 Done when the plan cites the output file (its session closed), or needed no research.
 
@@ -80,7 +80,7 @@ chosen model has a card or a `## What they say` section.
 
 ### 4. The orchestration plan
 
-1. **The file.** The user's plan stays theirs, in their file, and stays the source: write a second
+1. **The file.** The user's plan stays theirs, in their file, as the source: write a second
    short file pointing at it, adding only what the gate needs (skeleton in `planejamento-equipe.md`,
    "The plan skeleton"). "Where in their plan" points at a section, paragraph, line
    or domain-skill step. Empty cell → the item goes in the bottom list; show that list to the user
@@ -89,17 +89,19 @@ chosen model has a card or a `## What they say` section.
    user's; a recipe shared by several Tasks → repeat the steps inside each Task.
 
 2. **Each Task carries:**
-   - Order; serial by default. Parallel batch only through `paralelo-worktree.md`, decided here
-     with the user and the reason; audit the trigger yourself (gate items 3 and 4).
+   - Wave: parallel by default. Tasks passing the four conditions of `paralelo-worktree.md`
+     together share a wave; a dependent or colliding Task goes to a later wave (gate items 3, 4).
+   - Size: past ~400 changed lines or one screen proof → cut into parts Na, Nb…, each its own
+     round and commit, sized for one executor with no session swap.
    - A-priori estimate, one line: expected clock and rounds. Actuals live only in `eventos.jsonl`;
      no second table. More than one authorized executor → consumption per model in quota and
      context (context per Task, sessions per Task, account/window per model, when the heavy model
      enters); the cards are the source.
    - The domain-skill step it executes, in the skill's order; the executor re-reads the skill
-     first. Two checks (gate item 13): no Task does what a skill step already does internally
-     (that Task does not exist — demand the step's evidence inside the Task that contains it); no
+     first. Two checks (gate item 13): no Task does what a skill step does internally
+     (that Task does not exist — demand the step's evidence inside its containing Task); no
      skill step without a Task citing it. Add the set-level verification the skill lacks.
-   - An OWNER in every step that waits for something external; the owner is the executor, as an
+   - An OWNER in every step that waits on something external: the executor, as an
      explicit prior step.
    - `Risk: low | high` when the executor row is selected by risk. `low` = bounded, fully
      specified, small blast radius; `high` = judgment-heavy, wide blast radius, context-heavy, or
@@ -117,8 +119,8 @@ chosen model has a card or a `## What they say` section.
      (`replanejar.md`, the miniature).
 
 3. **The plan's header carries:** quota and fallback — each team account's remaining quota, pasted
-   with the reading time, and the fallback authorized in writing (no money cap exists in this
-   skill; the walls the arbiter reads: quota; context, `janela` → decide, `arbitro.md`;
+   with the reading time, and the fallback authorized in writing (this skill has no money
+   cap; the walls the arbiter reads: quota; context, `janela` → decide, `arbitro.md`;
    clock and rounds, 2× the estimate → the arbiter asks); the team — engine and account per role;
    the shared state (item 4).
 
@@ -127,7 +129,7 @@ chosen model has a card or a `## What they say` section.
    two: who writes, who clears, what happens on unmount and on resize. An ownership rule that
    creates copies declares how many (Tasks touching the pattern) and either the unification Task
    at the batch's end or "the N copies stay, the set review checks all N". Inside one commit, two
-   computations that must agree become one, derived in one place. Estimate a screen Task by the
+   computations that must agree become one. Estimate a screen Task by the
    state it touches, not by the pixel. Code blockers reject rounds; mock divergences are notes.
 
 5. **Review rigor.** Write what the review must break: full flow in the UI or the real command,
@@ -150,22 +152,20 @@ PRODUCE = write it in the orchestration plan.
    output pasted, count compared in the app with the steps written.
 2. PRODUCE — a-priori estimate per Task: clock and rounds; no `___`. Flaky provider → ≥2 sessions
    per Task (the card gives the rate).
-3. AUDIT — non-collision proven: files per Task × `git merge-tree`, output pasted. Decides whether
-   a batch exists; waived only when serial was declared upfront. Files from the steps' text (never
-   the "Files" block alone), or from the repo via subagent.
+3. AUDIT — non-collision proven: files per Task × `git merge-tree`, output pasted. Decides the waves.
+   Files from the steps' text (never the "Files" block alone), or from the repo via subagent.
 4. AUDIT — shared state searched; ownership contract with copy count and who checks the N; shared
    state in the plan's HEADER, not inside a Task.
 5. PRODUCE — bar, or `none — user's decision`, per visual Task; possible with the code the plan
    orders reused.
-6. PRODUCE — long screen Task: context-rotation point in the steps ("step N is a safe switching
-   milestone").
-7. PRODUCE — orchestration Task: smoke step, literal command. Measurement Task: more than one
-   starting state swept, which ones declared.
+6. PRODUCE — every Task within the size line, or cut into parts.
+7. PRODUCE — orchestration Task: smoke step, literal command. Measurement Task: ≥2
+   starting states swept, which ones declared.
 8. PRODUCE — owner for every external precondition, including a stage on another device or
    process: directory the server rises from, port per Task, who holds the device and when it is
    released.
-9. PRODUCE — parallel batch with visual proof: exclusive browser per executor, or proof as a
-   critical section (`paralelo-worktree.md`).
+9. PRODUCE — per wave with visual proof: `Tela: própria` (a browser per session, a port per
+   worktree) or `Tela: compartilhada` (proofs queue on `orq screen`, `paralelo-worktree.md`).
 10. AUDIT — remaining quota per account with reading time; fallback in writing.
 11. AUDIT — method's executing half installed and tested, or `none` with the orchestration plan
     written. One debut at a time: a new method, a freshly edited skill and a new provider never

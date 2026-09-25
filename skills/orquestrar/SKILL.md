@@ -57,8 +57,7 @@ its page and reads that page plus the sibling pages it names; nothing else of th
 - A role is declared, never deduced. Refuse one that contradicts what you are doing ("I am the
   executor of Task N, confirm the addressee").
 - Other pages: `references/paralelo-worktree.md` (the planner reads it while decomposing and
-  writes serial or batch into the plan, with the reason; the arbiter reads it when integrating
-  a batch);
+  writes the waves into the plan; the arbiter reads it when integrating a wave);
   `references/replanejar.md` (rewriting plan and contract mid-execution; the only door for a
   method switch or route escalation); `references/protecao.md` (opening any read-only session);
   `references/consumo.md` (whoever opens or closes a session measures it).
