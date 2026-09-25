@@ -504,14 +504,16 @@ if [[ "$1" == "--close" ]]; then
     [[ "$alvo" == *::* ]] && { echo "erro: --close só fecha sessão desta máquina" >&2; exit 2; }
     # Fechar a si mesma mata o processo no meio do comando: quem fecha é quem assumiu ou quem coordena.
     # O carimbo do nascimento também conta: se a identificação cair no "cli", ele ainda segura.
-    if [[ "$alvo" == "$(me)" || "$alvo" == "${CP_SESSION_NAME:-}" ]]; then
+    eu=$(me)
+    if [[ "$alvo" == "$eu" || "$alvo" == "${CP_SESSION_NAME:-}" ]]; then
         echo "recusado: '$alvo' é esta sessão — peça pra outra fechar" >&2; exit 2
     fi
     # O DELETE responde ok pra nome que não existe: nome errado não pode virar "fechada".
     vivas=$(api GET /api/sessions) || exit 1
     printf '%s' "$vivas" | python3 -c 'import json,sys; sys.exit(0 if any(s.get("name") == sys.argv[1] for s in json.load(sys.stdin)) else 1)' "$alvo" \
         || { echo "erro: sessão '$alvo' não existe (hangar-send --list)" >&2; exit 1; }
-    resp=$(api DELETE "/api/sessions/$alvo") || exit 1
+    # by= poupa quem fechou do aviso de saída do grupo; sem identidade, vai sem ele.
+    resp=$(api DELETE "/api/sessions/$alvo${eu:+?by=$eu}") || exit 1
     echo "fechada: $alvo"
     # Fechou, mas o aviso ao grupo dela pode ter falhado: isso não some calado.
     printf '%s' "$resp" | python3 -c 'import json,sys; w=(json.load(sys.stdin) or {}).get("warning"); w and print("aviso: " + (w.get("msg") or json.dumps(w, ensure_ascii=False)), file=sys.stderr)' || true

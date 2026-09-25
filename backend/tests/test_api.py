@@ -3344,6 +3344,20 @@ def test_kill_avisa_companheiros_que_ficaram(api_client):
     assert "a" not in entregues
 
 
+def test_kill_nao_avisa_quem_fechou(api_client):
+    entregues = {}
+    async def fake_deliver(name, text):
+        entregues[name] = text
+        return None
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.api.registry.kill"), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.delete("/api/sessions/a?by=b", headers=_h())
+    assert r.status_code == 200
+    assert "b" not in entregues
+    assert entregues["c"].endswith("O grupo continua entre você e 'b'.")
+
+
 def test_kill_sem_grupo_nao_avisa(api_client):
     with patch("app.api.PairLink.get", return_value=None), \
          patch("app.api.registry.kill"), \

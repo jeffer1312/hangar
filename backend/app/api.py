@@ -2199,7 +2199,7 @@ async def _criar_sessao(body: CreateBody):
 
 
 @app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth)])
-async def kill_session(name: str):
+async def kill_session(name: str, by: str | None = None):
     # 500 quando a sessao SOBREVIVE ao kill — mesmo padrao do /rename logo abaixo, que ja confere e
     # responde 404/500. Antes era {"ok": true} incondicional: o card sumia da UI e a sessao reaparecia
     # na varredura seguinte, sem fila e sem pareamento (ver SessionRegistry.kill).
@@ -2213,7 +2213,8 @@ async def kill_session(name: str):
     plugin_bridge.esquecer(name)
     warn = None
     if link:
-        errs = await _avisar_saida(name, link["peers"], "encerrou a sessão e saiu do grupo de trabalho")
+        errs = await _avisar_saida(name, link["peers"], "encerrou a sessão e saiu do grupo de trabalho",
+                                   pular=by)
         if errs:
             warn = erro("erro_pareamento_saida_falhou",
                         "aviso de saída falhou: " + "; ".join(
@@ -4377,7 +4378,7 @@ def pair_contract(name: str):
     return {"peers": link.get("peers", []), "path": str(p), "content": content}
 
 
-async def _avisar_saida(name: str, expeers: list[str], motivo: str) -> list[dict]:
+async def _avisar_saida(name: str, expeers: list[str], motivo: str, pular: str | None = None) -> list[dict]:
     """Avisa quem FICOU depois de `name` sair do grupo (o sidecar dele já foi limpo): remoto via
     /unpair-remote do backend dele, local via _deliver. Uma esteira só pra unpair e kill — o kill
     não avisava ninguém e os pares seguiam mandando recado pra um nome morto (ou pra sessão nova
@@ -4403,6 +4404,9 @@ async def _avisar_saida(name: str, expeers: list[str], motivo: str) -> list[dict
             errs.append({"sessao": p, "erro": erro("erro_peer_nao_avisado", str(ex), peer=p)})
     resto = [p for p in expeers if not peers.is_remote(p)]
     for p in resto:
+        if p == pular:
+            # Quem fechou já sabe; o aviso só acordaria um turno à toa.
+            continue
         e = await _deliver(p, pair_texto.texto_saida(name, motivo, [x for x in resto if x != p]))
         if e:
             errs.append({"sessao": p, "erro": e})
