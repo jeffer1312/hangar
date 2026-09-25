@@ -57,8 +57,9 @@ turn: use the flag that exits, `timeout N`, or background file logging.
   300–400% crop of the detail, and the caption cites the color with the sign.
 - Write each caption looking at that file. "idem" is forbidden.
 - Per round, join the states into one panel (`folha <shots in state order>`, numbered, up to 6
-  per sheet) and the reference's same states into another. The panels go to the reviewer only;
-  the single screenshots stay for a detail check. The arbiter gets no screenshot.
+  per sheet) and the reference's same states into another. The panels go to your self-review
+  subagent and the reviewer; the single screenshots stay for a detail check. The arbiter gets
+  no screenshot.
 - The proof of a behavior Task ends at the outcome the user asked for ("connected", "saved",
   "opened"), not at the state right before it.
 

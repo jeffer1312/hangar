@@ -96,6 +96,7 @@ Page lines: <the `Report line` of each sibling page read this round, one per lin
 git status --short: <pasted output>
 Siblings outside the fix: <list with reason, or "none">   ← correction rounds only
 Visual: <path to the visual report .md>                    ← pixel Tasks only
+Left from self-review: <item — reason, one per line, or "none">   ← first round only
 Risks: <what you know about what you wrote, or "none">
 Decided alone: <what the Task left open and what you chose, one per line — or "none">
 ```
