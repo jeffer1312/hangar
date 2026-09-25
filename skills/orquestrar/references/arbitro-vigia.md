@@ -119,8 +119,8 @@ A session closes when its part ends, with `hangar-send --close <name>`; never yo
 - research (phase 0): its output file exists;
 - executor: its Task approved and committed;
 - a retired session (rotation, context, quota): its substitute confirmed the takeover;
-- reviewer and the executor for findings: the branch review approved;
-- branch review and retrospective: they delivered;
+- reviewer, executor for findings and the branch review itself: the branch review approved;
+- retrospective: its patch delivered;
 - the previous arbiter: its successor closes it on taking over.
 
 Done when `hangar-send --list` shows only the current phase's sessions plus you.
