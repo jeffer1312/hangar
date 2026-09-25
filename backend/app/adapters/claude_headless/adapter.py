@@ -305,7 +305,12 @@ class ClaudeHeadlessAdapter:
     def transcript_path(self, cwd: str, session_id: str, config_dir: str | None = None) -> str:
         base = (Path(config_dir) / "projects") if config_dir else Path(settings.projects_dir)
         from app.registry import sanitize_cwd   # local: registry importa os adapters
-        return str(base / sanitize_cwd(cwd) / f"{session_id}.jsonl")
+        esperado = base / sanitize_cwd(cwd) / f"{session_id}.jsonl"
+        if esperado.exists():
+            return str(esperado)
+        # EnterWorktree move o transcript pra pasta do cwd da worktree; o sid não repete entre pastas.
+        movido = next(base.glob(f"*/{session_id}.jsonl"), None)
+        return str(movido or esperado)
 
     def transcript_path_de(self, meta: dict) -> str:
         return self.transcript_path(meta["cwd"], meta["session_id"], meta.get("config_dir"))
