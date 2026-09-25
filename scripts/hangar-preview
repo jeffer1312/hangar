@@ -107,6 +107,7 @@ Identidade: sidecar da sessão no modo sem terminal; tmux no modo com terminal.
     --dados <json>        valores para os campos, com as chaves que você quiser: o Jev casa cada
                           um com o rótulo da página. Campo não coberto cai no LLM pequeno
                           (JEV_TEXTO_BASE_URL/_API_KEY/_MODELO, ou JEV_TEXTO_CMD)
+  confere <estado>        o Jev diz se a tela já mostra o estado (sai 0 = sim); use antes do shot
 
 Referência completa: skill hangar-preview.`);
   process.exit(0);
@@ -380,6 +381,26 @@ function escritorDeTexto() {
   };
 }
 
+if (cmd === 'confere') {
+  const estado = pos.slice(1).join(' ').trim();
+  if (!estado) erro('confere precisa do estado: hangar-preview confere "o dialogo fechou e a lista mostra o item novo"');
+  const chaveJev = process.env.TYPESAFE_API_KEY;
+  if (!chaveJev) erro(semJev());
+  const chave = sidecarDa(nomeSessao()).chave;
+  let arvore = (await chamar(chave, 'snapshot', [])).texto;
+  // A prova pode estar no topo ou no fim da página; o miolo de uma lista longa é repetição.
+  if (arvore.length > 100_000) arvore = `${arvore.slice(0, 50_000)}\n…\n${arvore.slice(-50_000)}`;
+  const r = await fetch('https://api.typesafe.ai/v1/systemone', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${chaveJev}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'jev-1.13.0', state: arvore, questions: jev.perguntaDeConfere(estado) }),
+  });
+  if (!r.ok) erro(`o Jev recusou: ${r.status} ${(await r.text()).slice(0, 200)}`);
+  const { p, ok } = jev.chegouNoEstado((await r.json()).answers);
+  console.log(`confere: ${p.toFixed(2)}`);
+  process.exit(ok ? 0 : 1);
+}
+
 if (cmd === 'objetivo') {
   const objetivo = pos.slice(1).join(' ').trim();
   if (!objetivo) erro('objetivo precisa do texto: hangar-preview objetivo "faz login e abre a agenda"');
@@ -422,4 +443,4 @@ if (cmd === 'objetivo') {
   process.exit(resultado.sucesso ? 0 : 1);
 }
 
-erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|layout|console|network|text|url|shot|folha|tab|objetivo|close|batch)`);
+erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|layout|console|network|text|url|shot|folha|tab|confere|objetivo|close|batch)`);

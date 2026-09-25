@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { parsarSnapshot, montarPerguntas, montarEstado, decidir, rodar, pedidoDeTexto, valorDoCampo, cabecaDoValor, NENHUM, SEM_SELECT } = require('./jev_objetivo.cjs');
+const { parsarSnapshot, montarPerguntas, montarEstado, decidir, rodar, pedidoDeTexto, valorDoCampo, cabecaDoValor, perguntaDeConfere, chegouNoEstado, NENHUM, SEM_SELECT } = require('./jev_objetivo.cjs');
 
 const SNAPSHOT = `- RootWebArea "Cadastro"
   - link "Ver ajuda" [ref=@e1]
@@ -608,4 +608,14 @@ test('o estado nao repete os rotulos que ja estao nos criterios dos heads', () =
   const e = montarEstado('objetivo', 'http://local', [], 'texto');
   assert.ok(!('elementos' in e));
   assert.equal(e.objetivo, 'objetivo');
+});
+
+test('confere: noul no piso da conclusao passa; abaixo, torto ou ausente nao', () => {
+  const q = perguntaDeConfere('a lista mostra o item novo');
+  assert.equal(q.chegou.type, 'noul');
+  assert.match(q.chegou.instructions, /a lista mostra o item novo/);
+  assert.deepEqual(chegouNoEstado({ chegou: { noul: 0.8 } }), { p: 0.8, ok: true });
+  assert.deepEqual(chegouNoEstado({ chegou: { noul: 0.4 } }), { p: 0.4, ok: false });
+  assert.deepEqual(chegouNoEstado({ chegou: { noul: 'x' } }), { p: 0, ok: false });
+  assert.deepEqual(chegouNoEstado(undefined), { p: 0, ok: false });
 });

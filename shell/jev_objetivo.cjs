@@ -625,8 +625,25 @@ async function rodar({ objetivo, dados, maxPassos = 15, perguntar, executar, esc
   return { feito, sucesso: false, parou: `estourou ${maxPassos} passos` };
 }
 
+/** `confere`: uma pergunta sobre o fato que a tela mostra, com o mesmo piso da conclusão do laço. */
+function perguntaDeConfere(estado) {
+  return {
+    chegou: {
+      type: 'noul',
+      instructions: `The page now shows this state: ${estado}. `
+        + 'Loading, a spinner, an error or a different screen mean this is false.',
+    },
+  };
+}
+
+function chegouNoEstado(respostas) {
+  const p = respostas?.chegou?.noul;
+  return typeof p === 'number' ? { p, ok: p >= LIMIARES.conclusao } : { p: 0, ok: false };
+}
+
 module.exports = {
   parsarSnapshot, montarPerguntas, montarEstado, decidir, rodar, pedidoDeTexto,
   valorDoCampo, cabecaDoValor, jsDeSelecionar, jsDeEstarAberto, normalizar,
+  perguntaDeConfere, chegouNoEstado,
   LIMIARES, NENHUM, OPERACOES, SEM_SELECT, MAX_CANDIDATOS,
 };
