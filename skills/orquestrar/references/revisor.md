@@ -15,9 +15,10 @@ page's `Report line` when the page has one; nothing else of this skill is yours 
    the arbiter's; something missing to judge → ask him.
 2. Prove the `--read-only` protection as `protecao.md` says; record the proof in your first
    report. Same for the verifier and your local subagents.
-3. From the round message, note round, object (stash hash) and base (HEAD).
+3. From the round message, note round, object (stash hash), base (HEAD) and `Phase:` (pixel
+   Task); your verdict carries that phase as `--fase`.
 
-Done when the protection proof is recorded and round, object and base are noted.
+Done when the protection proof is recorded and round, object, base and phase are noted.
 
 ### 2. Read the frozen object
 
@@ -32,15 +33,16 @@ Done when the protection proof is recorded and round, object and base are noted.
    read. One you cannot find → `orq notify "[decisao] T<N>: <tool> missing, <what exists
    instead>"`, proceed.
    Correction round: judge the recipe's application and its proof yourself.
-3. The visual gate is your own eyes: the round's panels (`folha`) first; a single screenshot
-   only to check a detail.
+3. `Phase: prova`, or a pixel round with no `Phase:` → the visual gate is your own eyes: the
+   round's panels (`folha`) first; a single screenshot only to check a detail. A `Phase:
+   codigo` round is judged without screenshots.
 
 Done when the diff, the surrounding code and the tool outputs are read.
 
 ### 3. Judge
 
-1. Read now `revisor-catalogo.md`; pixels touched → `revisor-visual.md` too. Go through them
-   against the object.
+1. Read now `revisor-catalogo.md`; pixels touched on a `Phase: prova` round, or with no
+   `Phase:` → `revisor-visual.md` too. Go through them against the object.
 2. Run the verification independently: the Task's focused command, never a full suite,
    cwd-independent, `set -o pipefail` or `${PIPESTATUS[0]}`; yourself, or through the verifier
    of `revisor-verificador.md`. Check the output, the object tested and the gaps. Delegated proof is reported as delegated.
@@ -96,7 +98,7 @@ Done when the file is on disk with every field filled.
 | Verdict | Goes to | And |
 |---|---|---|
 | **REPROVA** | the executor only; the message is the file's path | `orq event veredito … --resultado reprova`; the arbiter gets nothing, except with `--reincide`, which wakes him |
-| **APROVA** | nobody by hand | `orq event veredito … --resultado aprova` tells the executor to prove (`--fase codigo`) or to commit; you close the gate only after the proof |
+| **APROVA** | nobody by hand | `orq event veredito … --resultado aprova` tells the executor to prove (`--fase codigo`) or to commit; you close the gate, on a pixel Task only after the proof |
 | **DEVOLVIDO** | nobody by hand | `orq event veredito … --resultado devolvido --motivo <report path>` wakes the arbiter; gate closed, he decides |
 
 - Everything the executor must do (a missing screenshot, one more verification, a recapture)
@@ -104,9 +106,9 @@ Done when the file is on disk with every field filled.
 - Every round, APROVA included: `orq event veredito --task <N> --rodada <R> --resultado
   <aprova|reprova|devolvido> --sessao <you> --motivo <report path>`, plus `--reincide` on the second rejection of the same
   cause. It validates, journals and routes; the commit hash is never an event.
-- The round carries `--fase` → your verdict carries the same. `codigo`: judge the code only,
-  no screen asked. `prova`: judge the proof (`revisor-visual.md`) and that the stash is the one
-  you approved; a code change in it is a REPROVA back to a code round.
+- The round carries `Phase:` → your verdict carries the same `--fase`. `codigo`: judge the code
+  only, no screen asked. `prova`: judge the proof (`revisor-visual.md`) and that the stash is the
+  one you approved; a code change in it is a REPROVA back to a code round.
 - Messages: form and transport rungs in `hangar-send --help`; the rung used goes in the report.
 
 Done when `orq event` exits 0 and, on REPROVA, the executor has the path.

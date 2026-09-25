@@ -93,14 +93,15 @@ Done when `$H` is stored and the diff file exists.
 Directly to the reviewer the kick-off named, in this format and no other:
 
 ```
-Task: <N> | Round: <R> | Object: <stash hash> | Base: <HEAD hash>
+Task: <N> | Round: <R> | Object: <stash hash> | Base: <HEAD hash> | Phase: <codigo|prova>
+   (`| Phase:` on a pixel Task only)
 Diff: <path to diff-task-N-rR.txt>
 Verification: <command> → <last ~3 lines of output, PASTED>
    (one such line per command the plan orders)
 Page lines: <the `Report line` of each sibling page read this round, one per line>
 git status --short: <pasted output>
 Siblings outside the fix: <list with reason, or "none">   ← correction rounds only
-Visual: <path to the visual report .md>                    ← pixel Tasks only
+Visual: <path to the visual report .md>                    ← proof round only (pixel Task)
 Left from self-review: <item — reason, one per line, or "none">   ← first round only
 Risks: <what you know about what you wrote, or "none">
 Decided alone: <what the Task left open and what you chose, one per line — or "none">
@@ -109,9 +110,9 @@ Decided alone: <what the Task left open and what you chose, one per line — or 
 `Decided alone:` lists every place the Task did not say and you chose. A choice that changes an
 interface, a settled decision or the scope is the arbiter's: stop and ask instead.
 
-Run `orq event entrega --task <N> --rodada <R> --commit <stash hash>`, plus `--fase codigo` on a
-pixel Task's code round (validates, appends, journals; exit 0). More than the template → a `.md`
-in the durable directory first, its path in the message.
+Run `orq event entrega --task <N> --rodada <R> --commit <stash hash>`, plus `--fase` with the
+message's `Phase:` on a pixel Task (validates, appends, journals; exit 0). More than the template
+→ a `.md` in the durable directory first, its path in the message.
 
 Done when the message is delivered and `orq event` exits 0.
 
@@ -123,10 +124,15 @@ then back to step 4 and a new round R+1. Disagreement with the recipe goes to th
 evidence; the reviewer is not debated.
 
 `CODE OK` (pixel Task, code approved) → prove it now, changing no code: `executor-visual.md` on
-that exact stash; `Tela: própria` → your own browser, no lock; `Tela: compartilhada` → `orq
-screen take` first. Then send the report's `Visual:` line to the same reviewer and run the
-command the `CODE OK` names (`--fase prova`, the same stash hash). The proof exposes a code
-defect → fix it, new round with `--fase codigo`, then prove again.
+that exact stash; `Tela: própria` → your own browser, no lock; `Tela: compartilhada`, or no
+`Tela:` declared → `orq screen take` first. Then send the proof to the same reviewer in the
+step-6 template: `Round: <R+1> | Object: <the same stash> | Phase: prova`, `Diff:` the approved
+code round's file, the page lines and the `Visual:` line; and run the command the `CODE OK`
+names (`--fase prova`, the same stash hash).
+A proof REPROVA that changes no code (recapture, wrong width…) → recapture and deliver
+`Phase: prova` again on the same stash, a new round, no code round. A proof REPROVA that changes
+code, or a code defect the proof exposes → step 4 and a `--fase codigo` round first, then prove
+again.
 
 Done when APROVA arrives (after the proof, on a pixel Task).
 
@@ -187,10 +193,10 @@ Done when `orq commit` exited 0 and the tree is clean.
 - `orq` exits 2 after writing (event or `closed.jsonl` written, only the notice failed) → never
   repeat it blind: check `orq read journal --last 5` and tell the arbiter with
   `orq notify "[decisao] …"`.
-- `Tela: compartilhada` only: `orq screen take --owner <you> --wait-min 9` (Bash tool timeout at its
-  10-min maximum; exit 1 → run it again) before the first action on it, `orq screen release
-  --owner <you>` after the last capture; in a proof longer than 40 min, run `take` again to
-  renew. Never ask the arbiter for it.
+- `Tela: compartilhada`, or no `Tela:` declared, only: `orq screen take --owner <you>
+  --wait-min 9` (Bash tool timeout at its 10-min maximum; exit 1 → run it again) before the
+  first action on it, `orq screen release --owner <you>` after the last capture; in a proof
+  longer than 40 min, run `take` again to renew. Never ask the arbiter for it.
 - A command whose output may pass ~200 lines writes to a file in the durable directory; read it
   with `tail`/`grep`, never whole. Never read a `tool-results/*.txt` whole.
 - One step, one response: the independent reads and commands of a step go together, as several
