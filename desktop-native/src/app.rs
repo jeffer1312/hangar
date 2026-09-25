@@ -18,6 +18,7 @@ mod device;
 mod follow;
 mod rows;
 mod settings;
+mod server_config;
 mod shortcuts;
 mod side;
 
@@ -81,6 +82,8 @@ enum Payload {
     Accounts(accounts::AccountsReply),
     // Página Atalhos da conexão atual.
     Shortcuts(shortcuts::ShortcutsReply),
+    // Notificações e Anexos: rascunho do servidor e horas silenciosas da conexão atual.
+    ServerConfig(server_config::ServerConfigReply),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
 }
 
@@ -234,6 +237,7 @@ pub struct Hangar {
     device: device::Device,
     accounts: accounts::Accounts,
     shortcuts: shortcuts::Shortcuts,
+    server_config: server_config::ServerConfig,
 }
 
 impl Drop for Hangar {
@@ -315,6 +319,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
+            server_config: server_config::ServerConfig::default(),
         }
     }
 
@@ -466,6 +471,8 @@ impl Hangar {
         self.reset_device(cx);
         self.accounts = accounts::Accounts::default();
         self.shortcuts = shortcuts::Shortcuts::default();
+        // O rascunho é deste servidor: na troca ele morre, no "Reconectar" ao mesmo ele fica.
+        self.server_config.reconnected(format!("{}\n{}", self.server.as_deref().unwrap_or(""), self.token.read(cx).value()));
         // Página do servidor aberta na troca: relê do servidor novo.
         if let Some(page) = self.settings { self.settings_opened(page, cx); }
         if let Some(api) = self.api.clone() {
@@ -719,6 +726,7 @@ impl Hangar {
             Payload::Device(reply) => { self.receive_device(reply, cx); return; }
             Payload::Accounts(reply) => { self.receive_accounts(reply, window, cx); return; }
             Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, cx); return; }
+            Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)

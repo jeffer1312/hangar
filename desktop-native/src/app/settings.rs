@@ -37,7 +37,7 @@ impl Page {
         }
     }
 
-    fn title(self) -> String { tr(&format!("settings_page_{}", self.key())) }
+    pub(super) fn title(self) -> String { tr(&format!("settings_page_{}", self.key())) }
 }
 
 /// Linhas da Aparência que a busca acha: título e descrição, como chaves de tradução. O título é também
@@ -56,7 +56,7 @@ const APPEARANCE_ROWS: [(&str, Option<&str>); 27] = [
 ];
 
 /// Linhas das outras páginas prontas, no mesmo formato.
-const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 6] = [
+const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 8] = [
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
@@ -65,6 +65,9 @@ const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 6] = [
     (Page::Accounts, &[("accounts_subscriptions", Some("accounts_menu_note")), ("accounts_models", None),
         ("accounts_others", Some("accounts_others_empty")), ("accounts_density", None), ("accounts_refresh", None)]),
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help"))]),
+    (Page::Notifications, &[("server_notify_finished", Some("server_notify_finished_help")), ("server_short_turn", Some("server_short_turn_help")),
+        ("server_notify_dead", Some("server_notify_dead_help")), ("server_stall", Some("server_stall_help")), ("server_quiet", Some("server_quiet_why"))]),
+    (Page::Attachments, &[("server_keep_attachments", Some("server_keep_attachments_help"))]),
 ];
 
 /// Um resultado da busca: a linha de uma página, ou a própria página (`row: None`) quando ela ainda não tem linhas.
@@ -451,10 +454,12 @@ impl Hangar {
             Page::About => self.render_about(cx),
             Page::Accounts => self.render_accounts(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
+            Page::Notifications | Page::Attachments => self.render_server_page(page, cx),
             _ => self.render_page_soon(page, cx),
         };
-        let content = div().id("settings-content").flex_1().min_w_0().h_full().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
+        let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
             .child(div().w_full().flex().justify_center().child(div().w(px(720.)).max_w_full().px_4().pt(px(44.)).pb(px(40.)).child(body)));
+        let content = div().flex_1().min_w_0().h_full().flex().flex_col().child(scroll).children(self.server_config_footer(page, cx));
         div().size_full().flex().when(floating, |el| el.p(px(10.)).gap(px(10.))).child(nav).child(content).into_any_element()
     }
 

@@ -163,6 +163,7 @@ impl Hangar {
             Page::About if !self.device.about.loading => self.load_about(false, cx),
             Page::Accounts => self.accounts_opened(cx),
             Page::Shortcuts => self.shortcuts_opened(cx),
+            Page::Notifications | Page::Attachments => self.server_config_opened(page, cx),
             _ => {}
         }
     }

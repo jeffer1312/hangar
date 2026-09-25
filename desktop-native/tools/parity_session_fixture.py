@@ -16,6 +16,8 @@ GET /api/atualizacao drops the connection, then the outcome). Nothing is updated
 Contas e modelos (Task 12 R5) moram em parity_accounts_fixture.py; GET /control/r5 muda como elas respondem.
 GET /control/r6?load=<ok|500|drop>&load_delay=<s>&save=<ok|422|500|drop>&save_delay=<s>&shortcuts=<fixture|json|>
 muda a config de atalhos (Task 12 R6): POST /api/config {"shortcuts"} grava na memória, null apaga o override.
+GET /control/r7?load=<ok|500|drop>&load_delay=<s>&save=<ok|422|500|drop>&save_delay=<s>&quiet_load=<ok|500>&quiet_save=<ok|422|500>
+&quiet_delay=<s>&quiet=<HH:MM-HH:MM|> muda os campos de Notificações/Anexos e as horas silenciosas (Task 12 R7a).
 """
 
 import parity_accounts_fixture as accounts
@@ -89,6 +91,15 @@ SHORTCUTS = json.dumps([
 ])
 # Task 12 R6: a config de atalhos gravada aqui e como GET/POST /api/config respondem.
 R6 = {"shortcuts": SHORTCUTS, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0}
+# Task 12 R7: campos do runtime_config das páginas Notificações e Anexos (tipo do backend), e as horas silenciosas.
+R7_TYPES = {"notify_finished": bool, "finish_min_seconds": int, "notify_dead": bool, "stall_seconds": int, "upload_retention_days": int}
+R7 = {"values": {"notify_finished": True, "finish_min_seconds": 60, "notify_dead": True, "stall_seconds": 900, "upload_retention_days": 30},
+      "edited": {"stall_seconds"}, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0,
+      "quiet": {"start": "22:00", "end": "07:00"}, "quiet_load": "ok", "quiet_save": "ok", "quiet_delay": 0.0}
+
+
+def r7_fields():
+    return {k: {"valor": v, "definido": True, "origem": "app" if k in R7["edited"] else "env"} for k, v in R7["values"].items()}
 
 
 def msg(kind, eid, text, **extra):
@@ -323,6 +334,14 @@ class Handler(BaseHTTPRequestHandler):
                         R6[key] = raw
                     elif key == "shortcuts":
                         R6["shortcuts"] = SHORTCUTS if raw == "fixture" else raw
+            elif path == "/control/r7":
+                for key, raw in ((k, v[0]) for k, v in query.items()):
+                    if key in ("load_delay", "save_delay", "quiet_delay"):
+                        R7[key] = float(raw)
+                    elif key in ("load", "save", "quiet_load", "quiet_save"):
+                        R7[key] = raw
+                    elif key == "quiet":
+                        R7["quiet"] = dict(zip(("start", "end"), raw.split("-"))) if raw else None
             elif path == "/control/remove":
                 # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
                 SESSIONS.pop(query["name"][0], None)
@@ -352,6 +371,9 @@ class Handler(BaseHTTPRequestHandler):
             record("GET", self.path, None)
             with LOCK:
                 mode, delay, value = R6["load"], R6["load_delay"], R6["shortcuts"]
+                if mode == "ok":
+                    mode, delay = R7["load"], max(delay, R7["load_delay"])
+                fields = r7_fields()
             time.sleep(delay)
             if mode == "drop":
                 self.close_connection = True
@@ -359,7 +381,17 @@ class Handler(BaseHTTPRequestHandler):
             elif mode == "500":
                 self.send_json(fail("erro_sintetico", "leitura da config falhou (sintético)"), 500)
             else:
-                self.send_json({"campos": {"shortcuts": {"valor": value}}})
+                self.send_json({"campos": {"shortcuts": {"valor": value}, **fields}, "somente_leitura": {}, "variaveis_env": []})
+            return
+        if path == "/api/push/settings":
+            record("GET", self.path, None)
+            with LOCK:
+                mode, delay, quiet = R7["quiet_load"], R7["quiet_delay"], R7["quiet"]
+            time.sleep(delay)
+            if mode == "500":
+                self.send_json(fail("erro_sintetico", "leitura das horas silenciosas falhou (sintético)"), 500)
+            else:
+                self.send_json({"muted": [], "quiet_hours": quiet})
             return
         if path == "/api/cotacao":
             record("GET", self.path, None)
@@ -610,6 +642,56 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json({"campos": {"shortcuts": {"valor": value or ""}}})
 
+    def save_r7(self, body):
+        """POST /api/config com campos da R7: coage como o backend (texto de número vira int), grava e devolve os campos."""
+        with LOCK:
+            mode, delay = R7["save"], R7["save_delay"]
+        time.sleep(delay)
+        changes = {}
+        for key, value in body.items():
+            if key not in R7_TYPES:
+                continue
+            if R7_TYPES[key] is int:
+                try:
+                    value = int(str(value).strip())
+                except ValueError:
+                    self.send_json({"detail": f"{key}: esperado número (sintético)"}, 400)
+                    return
+            changes[key] = value
+        # O backend recusa validação com 400 (`patch_config`); o modo mantém o nome da R6.
+        if mode == "422":
+            self.send_json({"detail": "stall_seconds: valor recusado (sintético)"}, 400)
+            return
+        if mode == "500":
+            self.send_json(fail("erro_sintetico", "gravação da config falhou (sintético)"), 500)
+            return
+        with LOCK:
+            R7["values"].update(changes)
+            R7["edited"].update(changes)
+            fields = r7_fields()
+        if mode == "drop":
+            self.close_connection = True
+            self.connection.shutdown(2)
+            return
+        self.send_json({"campos": {"shortcuts": {"valor": R6["shortcuts"]}, **fields}, "somente_leitura": {}})
+
+    def save_quiet(self, body):
+        """POST /api/push/quiet-hours: HH:MM nos dois liga a janela; qualquer um vazio desliga (como push.set_quiet_hours)."""
+        with LOCK:
+            mode, delay = R7["quiet_save"], R7["quiet_delay"]
+        time.sleep(delay)
+        start, end = (body or {}).get("start"), (body or {}).get("end")
+        valid = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+        if mode == "422" or (start and end and not (valid.match(start) and valid.match(end))):
+            self.send_json({"detail": "horario invalido (use HH:MM)"}, 422)
+            return
+        if mode == "500":
+            self.send_json(fail("erro_sintetico", "gravação das horas silenciosas falhou (sintético)"), 500)
+            return
+        with LOCK:
+            R7["quiet"] = {"start": start, "end": end} if start and end else None
+        self.send_json({"ok": True})
+
     def do_POST(self):
         url = urlparse(self.path)
         length = int(self.headers.get("Content-Length") or 0)
@@ -628,6 +710,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/api/config" and "shortcuts" in (body or {}):
             self.save_shortcuts(body["shortcuts"])
+            return
+        if url.path == "/api/config":
+            self.save_r7(body or {})
+            return
+        if url.path == "/api/push/quiet-hours":
+            self.save_quiet(body)
             return
         if url.path == "/api/atualizacao/iniciar":
             with LOCK:
