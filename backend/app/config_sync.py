@@ -5,6 +5,7 @@ marcador) e aplica aqui o pacote de outra máquina, com backup. Quem envia vence
 desta máquina (hooks e skills do Hangar, MCP `hangar`, caminhos e programas) continua daqui.
 """
 import asyncio
+import errno
 import hashlib
 import inspect
 import io
@@ -17,7 +18,7 @@ import time
 import tomllib
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from app import atomico, codex_contas_sync, hook_installer, runtime_config
 from app.config_sync_paths import (HEAVY_DIRS, PROGRAMS, Roots, canonicalize, local_path,
@@ -540,8 +541,16 @@ def _backup_target(path: Path, ctx: _Apply) -> Path:
     return target
 
 
-def _to_backup(path: Path, ctx: _Apply) -> None:
-    shutil.move(str(path), str(_backup_target(path, ctx)))
+def _move(src: Path, dst: Path) -> None:
+    """Rename puro; só copia entre discos. Com arquivo aberto no Windows o rename falha, e o
+    `shutil.move` cairia em copiar e apagar a origem, que para no meio e deixa a pasta pela
+    metade."""
+    try:
+        os.rename(src, dst)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.move(str(src), str(dst))
 
 
 def _current(path: Path) -> dict[str, tuple[bytes, bool]] | None:
@@ -589,29 +598,50 @@ def _write_entry(dest: Path, kind: str, files: dict[str, FileBlob], ctx: _Apply,
     pastas pesadas que já existiam aqui (venv, node_modules, .git) continuam."""
     if _same(_current(dest), files):
         return False
-    if dest.is_symlink():
+    staging = None
+    if kind != "file":
+        staging = dest.with_name(f".{dest.name}.hangar-novo-{uuid.uuid4().hex[:8]}")
+        try:
+            staging.mkdir(parents=True)
+            for rel, blob in files.items():
+                _write_file(staging / rel, blob)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+    link = os.readlink(dest) if dest.is_symlink() else None
+    done: list[tuple[Path, Path]] = []   # (onde ficou, de onde saiu), para desfazer
+
+    def move(src: Path, dst: Path) -> None:
+        _move(src, dst)
+        done.append((dst, src))
+
+    # Falha no meio desfaz na ordem inversa: sem isso a entrada some do destino e o .git/.venv
+    # fica preso na pasta escondida.
+    try:
+        if kind == "file":
+            if link is not None or dest.is_dir():
+                move(dest, _backup_target(dest, ctx))
+            elif dest.exists():
+                shutil.copy2(dest, _backup_target(dest, ctx))
+            _write_file(dest, files[""])
+        else:
+            if link is None and dest.is_dir():
+                for heavy in sorted(HEAVY_DIRS):
+                    old = dest / heavy
+                    if old.is_dir() and not old.is_symlink():
+                        move(old, staging / heavy)
+            if link is not None or dest.exists():
+                move(dest, _backup_target(dest, ctx))
+            _move(staging, dest)
+    except BaseException:
+        for now, back in reversed(done):
+            _move(now, back)
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if link is not None:
         _result(ctx, item)["warnings"].append(
-            _warn("config_sync_link_replaced", entry=name, target=os.readlink(dest)))
-        _to_backup(dest, ctx)
-    if kind == "file":
-        if dest.is_dir():
-            _to_backup(dest, ctx)
-        elif dest.exists():
-            shutil.copy2(dest, _backup_target(dest, ctx))
-        _write_file(dest, files[""])
-        return True
-    staging = dest.with_name(f".{dest.name}.hangar-novo-{uuid.uuid4().hex[:8]}")
-    staging.mkdir(parents=True)
-    for rel, blob in files.items():
-        _write_file(staging / rel, blob)
-    if dest.is_dir():
-        for heavy in sorted(HEAVY_DIRS):
-            old = dest / heavy
-            if old.is_dir() and not old.is_symlink():
-                shutil.move(str(old), str(staging / heavy))
-    if dest.exists():
-        _to_backup(dest, ctx)
-    shutil.move(str(staging), str(dest))
+            _warn("config_sync_link_replaced", entry=name, target=link))
     return True
 
 
@@ -625,6 +655,13 @@ def _blob(ctx: _Apply, member: str, text: bool) -> FileBlob:
 _ENTRY = re.compile(r"^(?:[^/\\]+|(?:rules|skills|agents|commands|output-styles|hooks)/[^/\\]+)$")
 
 
+def _escapes(rel: str) -> bool:
+    """Caminho dentro da entrada que sairia da pasta. Contrabarra e letra de drive só escapam no
+    destino Windows, mas são recusadas em qualquer um; `:` solto continua valendo no Linux."""
+    return ("\\" in rel or rel.startswith("/") or ".." in PurePosixPath(rel).parts
+            or bool(PureWindowsPath(rel).drive))
+
+
 def _apply_dir_item(ctx: _Apply, item: str) -> None:
     res = _result(ctx, item)
     own_skills, own_hooks = _hangar_skill_names(ctx.roots), _hangar_hook_names(ctx.roots)
@@ -632,12 +669,10 @@ def _apply_dir_item(ctx: _Apply, item: str) -> None:
     for name, entry in sorted((ctx.bundle.items[item].get("entries") or {}).items()):
         folder, _, base = name.rpartition("/")
         rels = entry.get("files") or []
-        # Contrabarra fica fora: no destino Windows `..\..\x` sai da pasta. O nome já não
-        # passa no _ENTRY com ela.
+        # Nome com contrabarra já não passa no _ENTRY.
         if (not _ENTRY.match(name) or folder not in allowed or base in ("", ".", "..")
                 or (folder == "" and not base.endswith(".md"))
-                or any("\\" in r or ".." in PurePosixPath(r).parts or r.startswith("/")
-                       for r in rels)):
+                or PureWindowsPath(name).drive or any(_escapes(r) for r in rels)):
             res["warnings"].append(_warn("config_sync_invalid_entry", entry=name))
             continue
         if folder == "skills" and base in own_skills:

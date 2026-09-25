@@ -145,6 +145,95 @@ async def test_backslash_paths_inside_an_entry_are_refused(pair, monkeypatch):
     assert "config_sync_invalid_entry" in codes
 
 
+async def test_drive_letter_paths_are_refused(pair, monkeypatch):
+    ana, bia = pair
+    items = ["claude_instructions", "claude_skills"]
+    bundle = _send(monkeypatch, ana, bia, items)
+    bundle.items["claude_skills"]["entries"]["skills/minha"] = {
+        "kind": "dir", "files": ["C:/fora.md"], "text": [], "hash": "x"}
+    bundle.files["files/claude_skills/skills/minha/C:/fora.md"] = config_sync.FileBlob(b"x", 0o644)
+    bundle.items["claude_instructions"]["entries"]["D:fora.md"] = {
+        "kind": "file", "files": [""], "text": [], "hash": "x"}
+    bundle.files["files/claude_instructions/D:fora.md"] = config_sync.FileBlob(b"x", 0o644)
+    report = await _apply(bundle, items, bia)
+    assert not list(Path(bia.home).parent.rglob("*fora.md"))
+    for item in items:
+        codes = [w["code"] for w in report["items"][item]["warnings"]]
+        assert "config_sync_invalid_entry" in codes
+
+
+def _fail_second_write(monkeypatch):
+    real, calls = config_sync._write_file, []
+
+    def flaky(path, blob):
+        calls.append(path)
+        if len(calls) == 2:
+            raise OSError(28, "No space left")
+        real(path, blob)
+    monkeypatch.setattr(config_sync, "_write_file", flaky)
+
+
+def _old_skill(bia) -> Path:
+    skill = Path(bia.claude) / "skills" / "minha"
+    (skill / ".venv").mkdir(parents=True)
+    (skill / ".venv" / "keep").write_text("venv daqui")
+    (skill / ".git").mkdir()
+    (skill / ".git" / "HEAD").write_text("ref: main")
+    (skill / "SKILL.md").write_text("velho\n")
+    return skill
+
+
+def _assert_untouched_after_failure(report, bia):
+    assert report["items"]["claude_skills"]["status"] == "failed"
+    assert not list((Path(bia.claude) / "skills").glob(".minha.hangar-novo-*"))
+
+
+async def test_failed_write_keeps_the_old_folder_and_its_heavy_dirs(pair, monkeypatch):
+    ana, bia = pair
+    skill = _old_skill(bia)
+    bundle = _send(monkeypatch, ana, bia, ["claude_skills"])
+    _fail_second_write(monkeypatch)
+    report = await _apply(bundle, ["claude_skills"], bia)
+    _assert_untouched_after_failure(report, bia)
+    assert (skill / "SKILL.md").read_text() == "velho\n"
+    assert (skill / ".venv" / "keep").exists()
+
+
+async def test_failed_write_keeps_the_link(pair, monkeypatch):
+    ana, bia = pair
+    repo = Path(bia.home) / "clone" / "minha"
+    repo.mkdir(parents=True)
+    (repo / "SKILL.md").write_text("versão antiga\n")
+    (Path(bia.claude) / "skills").mkdir()
+    link = Path(bia.claude) / "skills" / "minha"
+    link.symlink_to(repo)
+    bundle = _send(monkeypatch, ana, bia, ["claude_skills"])
+    _fail_second_write(monkeypatch)
+    report = await _apply(bundle, ["claude_skills"], bia)
+    _assert_untouched_after_failure(report, bia)
+    assert link.is_symlink() and os.readlink(link) == str(repo)
+    codes = [w["code"] for w in report["items"]["claude_skills"]["warnings"]]
+    assert "config_sync_link_replaced" not in codes
+
+
+async def test_failed_swap_puts_the_folder_and_heavy_dirs_back(pair, monkeypatch):
+    ana, bia = pair
+    skill = _old_skill(bia)
+    bundle = _send(monkeypatch, ana, bia, ["claude_skills"])
+    real = config_sync._move
+
+    def swap_fails(src, dst):
+        if Path(src).name.startswith(".minha.hangar-novo") and Path(dst) == skill:
+            raise PermissionError(13, "arquivo aberto")
+        real(src, dst)
+    monkeypatch.setattr(config_sync, "_move", swap_fails)
+    report = await _apply(bundle, ["claude_skills"], bia)
+    _assert_untouched_after_failure(report, bia)
+    assert (skill / "SKILL.md").read_text() == "velho\n"
+    assert (skill / ".venv" / "keep").read_text() == "venv daqui"
+    assert (skill / ".git" / "HEAD").read_text() == "ref: main"
+
+
 async def test_hangar_file_missing_on_destination_is_reported(pair, monkeypatch):
     ana, bia = pair
     (Path(bia.hangar) / "scripts" / "statusline.js").unlink()
