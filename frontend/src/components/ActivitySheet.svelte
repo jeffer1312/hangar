@@ -6,6 +6,7 @@
   import { renderMarkdown } from '../lib/markdown';
   import { formatarIntervalo } from '../lib/contaEstado';
   import MessageList from './MessageList.svelte';
+  import Spinner from './Spinner.svelte';
   import { onDestroy, tick } from 'svelte';
   import type { Activity, TaskStatus } from '@hangar/core';
   import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun, SessionInfo, PlanDetail, ShellVivo } from '@hangar/core';
@@ -205,6 +206,17 @@
   const orfaos = $derived(
     subs.filter((s2) => !activity.agents.some((a) => matchSub(a.prompt)?.agentId === s2.agentId)),
   );
+
+  // O subagente aberto ainda trabalha? Kimi e Pi dizem no arquivo do filho (`finished`); no Claude
+  // quem sabe é o transcript do pai, o mesmo dado do cartão "Executando…" da conversa.
+  // null = não dá pra saber (subagente que só o disco conhece).
+  const subRodando = $derived.by((): boolean | null => {
+    const d = subDetail;
+    if (!d || d.ilegivel) return null;
+    if (d.finished !== undefined) return !d.finished;
+    const pai = activity.agents.find((a) => matchSub(a.prompt)?.agentId === d.agentId);
+    return pai ? pai.running : null;
+  });
 
   async function openSubagent(prompt: string | undefined, title: string) {
     if (subs.length === 0) {
@@ -598,11 +610,9 @@
                 <div class="ag-meta"><span>{m.atividade_sub_ilegivel()}</span></div>
               {:else}
                 <div class="ag-meta">
-                  <!-- `finished` vem do próprio transcript do filho (Kimi e Pi sabem dizer). Antes
-                       isto era um "◐ Rodando" fixo no HTML, então um subagente que terminou há
-                       horas abria dizendo que ainda estava trabalhando — e a linha da lista, uma
-                       tela acima, já mostrava "concluído" pelo mesmo dado. -->
-                  {#if subDetail.finished}
+                  <!-- Antes isto era um "◐ Rodando" fixo no HTML, então um subagente que terminou
+                       há horas abria dizendo que ainda estava trabalhando. -->
+                  {#if subRodando === false}
                     <span class="ok">✓ {m.atividade_sub_concluido()}</span>
                   {:else}
                     <span class="rodando">◐ {m.atividade_rodando()}</span>
@@ -630,6 +640,7 @@
                     onSelectOption={() => {}}
                     onCancel={() => {}}
                   />
+                  {#if subRodando}<Spinner label={m.pensamento_vivo()} />{/if}
                 </div>
               {:else if subDetail.ilegivel || subDetail.toolCalls > 0}
                 <!-- Ele JA chamou ferramentas (ou o proprio registro nao deu pra ler): e falha de
