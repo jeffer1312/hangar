@@ -9,6 +9,7 @@ import { registrar as registrarDiag, novoReq } from './diag';
 import { retryAfterMs, registrarFalha, registrarSucesso } from './esfriamento';
 import type { CotaContaResumo } from './cotaResumo';
 import type { UsoFiltros, UsoReport } from './uso';
+import type { ConfigSyncItem, ConfigSyncManifest, ConfigSyncReport } from './configSync';
 import type {
   Atualizacao,
   SessionInfo,
@@ -2657,4 +2658,28 @@ export async function resolveLoopForServer(s: Server, name: string, accept: bool
   });
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<{ loop: LoopState }>;
+}
+
+// Configuração compartilhada. O manifesto soma o disco inteiro de skills da máquina, e a
+// aplicação instala plugins no destino: os prazos são de minutos, não os 8s de uma leitura.
+export function getConfigSyncManifestForServer(s: Server, signal?: AbortSignal): Promise<ConfigSyncManifest> {
+  return apiFetchForServer(s, '/api/config-sync/manifest', { signal: comTeto(signal, 60_000) }, 60_000);
+}
+
+export async function getConfigSyncBundleForServer(s: Server, items: readonly ConfigSyncItem[], signal?: AbortSignal): Promise<Blob> {
+  const res = await apiFetchRes(`/api/config-sync/bundle?items=${encodeURIComponent(items.join(','))}`,
+    { signal: comTeto(signal, 180_000) }, s);
+  if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
+  return res.blob();
+}
+
+export async function applyConfigSyncForServer(s: Server, items: readonly ConfigSyncItem[], bundle: Blob, signal?: AbortSignal): Promise<ConfigSyncReport> {
+  const res = await apiFetchRes(`/api/config-sync/apply?items=${encodeURIComponent(items.join(','))}`, {
+    method: 'POST',
+    body: bundle,
+    headers: { 'Content-Type': 'application/gzip' },
+    signal: comTeto(signal, 600_000),
+  }, s);
+  if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
+  return res.json() as Promise<ConfigSyncReport>;
 }

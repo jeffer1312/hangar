@@ -49,3 +49,4 @@ export * from './proposedPlan';
 export * from './credenciais';
 export * from './pairDrop';
 export * from './pairGroups';
+export * from './configSync';
