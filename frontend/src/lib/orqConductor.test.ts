@@ -23,7 +23,11 @@ describe('conductorChip', () => {
   });
   it('batimento velho é parado desde a última volta', () => {
     expect(conductorChip(wd({ source: 'heartbeat', last_cycle: '2026-09-25T10:00:00-03:00' })))
-      .toEqual({ kind: 'stopped', lastCycle: Date.parse('2026-09-25T10:00:00-03:00') / 1000 });
+      .toEqual({ kind: 'stopped', lastCycle: Date.parse('2026-09-25T10:00:00-03:00') / 1000, alarm: true });
+  });
+  it('execução terminada: parado é o esperado, sem tom de alarme', () => {
+    expect(conductorChip(wd({ source: 'heartbeat', last_cycle: '2026-09-25T10:00:00-03:00' }), true))
+      .toEqual({ kind: 'stopped', lastCycle: Date.parse('2026-09-25T10:00:00-03:00') / 1000, alarm: false });
   });
   it('nada achado com systemd é "sem condutor"; sem systemd é indisponível', () => {
     expect(conductorChip(wd({ source: 'none' }))).toEqual({ kind: 'none' });

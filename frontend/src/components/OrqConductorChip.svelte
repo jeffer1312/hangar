@@ -3,12 +3,12 @@
   import { relativeTime, type OrqWatchdog } from '@hangar/core';
   import { conductorChip } from '../lib/orqConductor';
 
-  let { watchdog }: { watchdog: OrqWatchdog | null | undefined } = $props();
-  const chip = $derived(conductorChip(watchdog));
+  let { watchdog, finished = false }: { watchdog: OrqWatchdog | null | undefined; finished?: boolean } = $props();
+  const chip = $derived(conductorChip(watchdog, finished));
 </script>
 
 {#if chip}
-  <span class="conductor-chip k-{chip.kind}">
+  <span class="conductor-chip k-{chip.kind}" class:alarm={chip.kind === 'stopped' && chip.alarm}>
     {#if chip.kind === 'alive'}
       {chip.lastCycle === null
         ? m.orq_conductor_alive_no_heartbeat()
@@ -32,5 +32,5 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .conductor-chip.k-alive { color: var(--success); }
-  .conductor-chip.k-stopped { color: var(--warning); }
+  .conductor-chip.alarm { color: var(--warning); }
 </style>

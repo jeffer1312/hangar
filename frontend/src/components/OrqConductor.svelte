@@ -8,8 +8,9 @@
   interface Props {
     conductor: OrqConductor | null;   // null = ainda carregando
     error: string;
+    finished?: boolean;
   }
-  let { conductor, error }: Props = $props();
+  let { conductor, error, finished = false }: Props = $props();
 
   // Filtro e itens abertos vivem aqui e sobrevivem à revalidação: o pai troca `conductor` a cada
   // 20 s sem desmontar este componente.
@@ -44,14 +45,18 @@
 
 <section class="conductor">
   <h2>{m.orq_conductor_title()}</h2>
-  {#if error}
-    <p class="warn">{m.orq_conductor_error({ error })}</p>
-  {:else if !conductor}
-    <Spinner label={m.orq_conductor_loading()} />
+  {#if !conductor}
+    {#if error}
+      <p class="warn">{m.orq_conductor_error({ error })}</p>
+    {:else}
+      <Spinner label={m.orq_conductor_loading()} />
+    {/if}
   {:else}
     {@const w = conductor.watchdog}
+    <!-- Falha de uma revalidação não derruba o feed já carregado: filtro e rolagem ficam. -->
+    {#if error}<p class="warn">{m.orq_conductor_error({ error })}</p>{/if}
     <div class="head">
-      <OrqConductorChip watchdog={w} />
+      <OrqConductorChip watchdog={w} {finished} />
       <dl class="fields">
         <div><dt>{m.orq_conductor_last_cycle()}</dt><dd>{time(w.last_cycle)}</dd></div>
         <div><dt>{m.orq_conductor_since()}</dt><dd>{time(w.since)}</dd></div>

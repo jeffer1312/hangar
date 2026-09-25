@@ -335,7 +335,7 @@
       </div>
 
       <div bind:this={conductorSection}>
-        <OrqConductor {conductor} error={conductorError} />
+        <OrqConductor {conductor} error={conductorError} finished={!!aberta.exec.fim} />
       </div>
     {/if}
   {:else if linhas.length === 0}
@@ -371,7 +371,7 @@
           <span class="estado" class:viva={!e.fim}>
             {e.fim ? (e.resultado === 'abortada' ? m.orq_abortada() : m.orq_concluida()) : m.orq_em_curso()}
           </span>
-          <OrqConductorChip watchdog={e.watchdog} />
+          <OrqConductorChip watchdog={e.watchdog} finished={!!e.fim} />
         </span>
         <span class="linha-metricas">
           <span class="mt">{m.orq_tasks()} <b>{e.tasks.length}</b></span>

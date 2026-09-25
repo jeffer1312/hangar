@@ -2,19 +2,20 @@ import type { OrqFeedItem, OrqFeedKind, OrqWatchdog } from '@hangar/core';
 
 export type ConductorChip =
   | { kind: 'alive'; lastCycle: number | null; watching: string[] }
-  | { kind: 'stopped'; lastCycle: number | null }
+  // `alarm` falso: execução terminada, condutor parado é o esperado e não pede atenção.
+  | { kind: 'stopped'; lastCycle: number | null; alarm: boolean }
   | { kind: 'none' }
   | { kind: 'unavailable' };
 
 // Servidor antigo da malha não manda `watchdog`: sem dado, sem chip — nunca um "parado" inventado.
-export function conductorChip(w: OrqWatchdog | null | undefined): ConductorChip | null {
+export function conductorChip(w: OrqWatchdog | null | undefined, finished = false): ConductorChip | null {
   if (!w) return null;
   const ms = w.last_cycle ? Date.parse(w.last_cycle) : Number.NaN;
   const lastCycle = Number.isFinite(ms) ? ms / 1000 : null;
   if (w.alive) return { kind: 'alive', lastCycle, watching: w.watching };
   if (w.source === 'unavailable') return { kind: 'unavailable' };
   if (w.source === 'none') return { kind: 'none' };
-  return { kind: 'stopped', lastCycle };
+  return { kind: 'stopped', lastCycle, alarm: !finished };
 }
 
 export type FeedFilter = 'all' | OrqFeedKind;
