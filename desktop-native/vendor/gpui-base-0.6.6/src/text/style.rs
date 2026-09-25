@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{HighlightStyle, Hsla, Pixels, Rems, StyleRefinement, px, rems};
+use gpui::{HighlightStyle, Hsla, Pixels, Rems, SharedString, StyleRefinement, px, rems};
 
 use crate::ColorTokens;
 
@@ -27,6 +27,9 @@ pub struct TextViewStyle {
     table_cell: StyleRefinement,
     inline_code: HighlightStyle,
     is_dark: bool,
+    // Modified for Hangar: both off by default, so every existing view keeps the kit's look.
+    list_marker_width: Option<Pixels>,
+    code_language_band: Option<SharedString>,
 }
 
 impl PartialEq for TextViewStyle {
@@ -53,6 +56,8 @@ impl PartialEq for TextViewStyle {
             && self.table_cell == other.table_cell
             && self.inline_code == other.inline_code
             && self.is_dark == other.is_dark
+            && self.list_marker_width == other.list_marker_width
+            && self.code_language_band == other.code_language_band
     }
 }
 
@@ -96,6 +101,8 @@ impl TextViewStyle {
                 ..Default::default()
             },
             is_dark,
+            list_marker_width: None,
+            code_language_band: None,
         }
     }
 
@@ -212,6 +219,33 @@ impl TextViewStyle {
         self
     }
 
+    /// Modified for Hangar: draws list markers in a column of this width and
+    /// indents nested lists and continuation blocks by the same amount, so a
+    /// nested marker sits under its parent's text. `None` keeps the inline
+    /// prefix and the 1 rem indent.
+    pub fn with_list_marker_width(mut self, width: Option<Pixels>) -> Self {
+        self.list_marker_width = width;
+        self
+    }
+
+    /// Modified for Hangar: tops each fenced code block with a band holding
+    /// its language (or `label` when the fence names none) and the code block
+    /// actions. `None` keeps the plain block with the actions in its corner.
+    pub fn with_code_language_band(mut self, label: Option<SharedString>) -> Self {
+        self.code_language_band = label;
+        self
+    }
+
+    /// The width of the list marker column, when markers get one.
+    pub fn list_marker_width(&self) -> Option<Pixels> {
+        self.list_marker_width
+    }
+
+    /// The label of an unnamed code block's band, when blocks get a band.
+    pub fn code_language_band(&self) -> Option<&SharedString> {
+        self.code_language_band.as_ref()
+    }
+
     /// The default body-text color.
     pub fn foreground(&self) -> Hsla {
         self.foreground
@@ -321,6 +355,8 @@ mod tests {
         assert!(base != base.clone().with_table_cell(table));
 
         assert!(base != base.clone().with_dark(true));
+        assert!(base != base.clone().with_list_marker_width(Some(px(20.))));
+        assert!(base != base.clone().with_code_language_band(Some("code".into())));
     }
 
     #[test]
@@ -343,6 +379,8 @@ mod tests {
         assert_eq!(style.code_block().corner_radii.top_right, None);
         assert_eq!(style.code_block().corner_radii.bottom_left, None);
         assert_eq!(style.code_block().corner_radii.bottom_right, None);
+        assert_eq!(style.list_marker_width(), None);
+        assert_eq!(style.code_language_band(), None);
     }
 
     #[test]

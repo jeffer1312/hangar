@@ -1562,6 +1562,77 @@ impl CodeBlock {
         cx: &mut App,
     ) -> AnyElement {
         let style = &node_cx.style;
+        let gap = if options.is_last {
+            rems(0.)
+        } else {
+            style.paragraph_gap()
+        };
+        let code = Inline::new(
+            self.state.clone(),
+            vec![],
+            fade_highlights(
+                node_cx
+                    .code_block_highlighter
+                    .as_ref()
+                    .map(|highlighter| self.highlighted_styles(highlighter))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(range, style)| (range, InlineHighlight::from(style)))
+                    .collect(),
+                node_cx.stream_fades(self.span.map(|span| TextLeafKey::block(span.start))),
+            ),
+            node_cx.link_click_handler.clone(),
+        );
+
+        // Modified for Hangar: a band on top names the language and holds the
+        // actions, so they never cover the first line of code.
+        if let Some(fallback) = style.code_language_band() {
+            let label = self
+                .lang
+                .as_ref()
+                .map(|lang| SharedString::from(lang.to_lowercase()))
+                .unwrap_or_else(|| fallback.clone());
+            let block = div()
+                .id(block_element_id("codeblock", self.span, options.ix))
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .bg(style.code_background())
+                .border_1()
+                .border_color(style.border())
+                .font_family(cx.theme().tokens.typography.mono.clone())
+                .text_size(cx.theme().tokens.typography.mono_md.size)
+                .refine_style(&style.code_block())
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .min_h(px(28.))
+                        .pl_2p5()
+                        .pr_1()
+                        .border_b_1()
+                        .border_color(style.border())
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(style.muted_foreground())
+                                .child(label),
+                        )
+                        .children(
+                            node_cx
+                                .code_block_actions
+                                .clone()
+                                .map(|actions| actions(&self, window, cx)),
+                        ),
+                )
+                .child(div().w_full().min_w_0().p_3().child(code));
+            return gapped(block.into_any_element(), gap);
+        }
 
         let block = div()
             .w_full()
@@ -1572,22 +1643,7 @@ impl CodeBlock {
             .text_size(cx.theme().tokens.typography.mono_md.size)
             .relative()
             .refine_style(&style.code_block())
-            .child(Inline::new(
-                self.state.clone(),
-                vec![],
-                fade_highlights(
-                    node_cx
-                        .code_block_highlighter
-                        .as_ref()
-                        .map(|highlighter| self.highlighted_styles(highlighter))
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|(range, style)| (range, InlineHighlight::from(style)))
-                        .collect(),
-                    node_cx.stream_fades(self.span.map(|span| TextLeafKey::block(span.start))),
-                ),
-                node_cx.link_click_handler.clone(),
-            ));
+            .child(code);
         // The id scopes the caller's action ids per code block, so plain ids
         // like `"copy"` don't collide across blocks; without actions nothing
         // under the block needs element state.
@@ -1608,14 +1664,7 @@ impl CodeBlock {
             None => block.into_any_element(),
         };
 
-        gapped(
-            block,
-            if options.is_last {
-                rems(0.)
-            } else {
-                style.paragraph_gap()
-            },
-        )
+        gapped(block, gap)
     }
 }
 
@@ -2384,7 +2433,22 @@ impl BlockNode {
             .items_start()
             .content_start()
             .when(!options.todo && checked.is_none(), |this| {
-                this.child(list_item_prefix(ix, options.ordered, options.depth))
+                let mut prefix = list_item_prefix(ix, options.ordered, options.depth);
+                // Modified for Hangar: the marker hangs right-aligned in its own
+                // column, so wrapped lines and nested lists line up with the text.
+                match style.list_marker_width() {
+                    Some(width) => this.child({
+                        prefix.truncate(prefix.trim_end().len());
+                        div()
+                            .flex()
+                            .flex_none()
+                            .justify_end()
+                            .w(width)
+                            .pr(px(6.))
+                            .child(prefix)
+                    }),
+                    None => this.child(prefix),
+                }
             })
             .when_some(checked, |this, checked| {
                 // Todo list checkbox
@@ -2432,6 +2496,12 @@ impl BlockNode {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
+        // Modified for Hangar: with a marker column, nesting steps by its width.
+        let indent: gpui::AbsoluteLength = node_cx
+            .style
+            .list_marker_width()
+            .map(Into::into)
+            .unwrap_or_else(|| rems(1.).into());
         match item {
             BlockNode::ListItem {
                 children,
@@ -2472,7 +2542,7 @@ impl BlockNode {
                                             div().child(preceding_row).child(
                                                 div()
                                                     .w_full()
-                                                    .pl(rems(1.))
+                                                    .pl(indent)
                                                     .overflow_hidden()
                                                     .child(text),
                                             ),
@@ -2491,7 +2561,7 @@ impl BlockNode {
                                 ));
                             }
                             BlockNode::List { .. } => {
-                                items.push(div().ml(rems(1.)).child(child.render_block(
+                                items.push(div().ml(indent).child(child.render_block(
                                     NodeRenderOptions {
                                         depth: options.depth + 1,
                                         todo: checked.is_some(),
@@ -2539,7 +2609,7 @@ impl BlockNode {
                                         div()
                                             .w_full()
                                             .min_w_0()
-                                            .pl(rems(1.))
+                                            .pl(indent)
                                             .overflow_hidden()
                                             .child(block),
                                     );

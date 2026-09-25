@@ -2138,7 +2138,7 @@ impl Hangar {
                 if event.kind == "thinking" {
                     let key = format!("{}:thought", event.id);
                     let view = self.text_view(&key, row, safe_markdown(event.text.as_deref().unwrap_or("")), cx);
-                    body.push(TextView::new(&view).selectable(true).scrollable(false).text_color(theme::muted()).into_any_element());
+                    body.push(chat_text(&view, cx).text_color(theme::muted()).into_any_element());
                 } else {
                     body.push(self.render_tool(Tool { call: i, result: paired.get(&i).copied() }, row, cx));
                 }
@@ -2158,7 +2158,7 @@ impl Hangar {
         let view = self.text_view(LIVE_THINKING, LIVE_THINKING, source, cx);
         div().flex().flex_col().gap_1().px_3().py_2()
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::accent()).child(tr("thinking_live")))
-            .child(TextView::new(&view).selectable(true).scrollable(false).text_sm().text_color(theme::muted()))
+            .child(chat_text(&view, cx).text_sm().text_color(theme::muted()))
             .into_any_element()
     }
 
@@ -2282,7 +2282,7 @@ impl Hangar {
             let source = self.plan_view.as_ref().map(|(source, _)| source.clone()).unwrap_or_default();
             if self.plan_scroll.0 != source { self.plan_scroll = (source, ScrollHandle::new()); }
             body = body.child(div().rounded_md().bg(theme::raised())
-                .child(scrolled("plan-scroll", &self.plan_scroll.1, 320., div().p_3().child(TextView::new(&view).selectable(true).scrollable(false)))))
+                .child(scrolled("plan-scroll", &self.plan_scroll.1, 320., div().p_3().child(TextView::new(&view).selectable(true).scrollable(false).code_block_actions(copy_code)))))
                 .when_some(plan.path, |el, path| el.child(div().text_xs().text_color(theme::muted()).child(path)));
         }
         body = body.child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(question));
@@ -2754,7 +2754,7 @@ impl Hangar {
         let report_style = gpui_kit::component::text::TextViewStyle::default().heading_font_size(|level, _| px(if level <= 1 { 13. } else { 12. }));
         let body = div().flex().flex_col().gap_2().px_3().pt_2().pb_3()
             .child(TextView::new(&view).selectable(true).scrollable(false).text_xs().text_color(theme::muted()).style(report_style)
-                .on_link_click(open_web_link))
+                .code_block_actions(copy_code).on_link_click(open_web_link))
             .child(div().flex().flex_col().pt_1().border_t_1().border_color(theme::border()).child(original)
                 .when_some(raw, |el, (raw, note)| el.child(div().px_2().pt_1().font_family(theme::MONO).text_xs().text_color(theme::muted()).child(raw))
                     .when_some(note, |el, note| el.child(div().px_2().pt_1().text_xs().text_color(theme::muted()).child(note)))));
@@ -2837,7 +2837,7 @@ impl Hangar {
             Some(tables) => self.render_charted(&id, &markdown, &tables, cx),
             None if !blank || files.is_none() => {
                 let view = self.text_view(&id, &id, markdown, cx);
-                vec![TextView::new(&view).selectable(true).scrollable(false).stream_fade(id == PREVIEW).on_link_click(open_web_link).into_any_element()]
+                vec![chat_text(&view, cx).motion(stream_motion(id == PREVIEW)).on_link_click(open_web_link).into_any_element()]
             }
             None => Vec::new(),
         };
@@ -2872,6 +2872,25 @@ fn with_copy_menu(row: Stateful<Div>, id: String, view: WeakEntity<Hangar>) -> A
 
 fn open_web_link(url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App) {
     if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); }
+}
+
+/// Markdown da conversa. É o `TextView` do gpui-base porque o do componente não repassa os campos que só a
+/// conversa liga (marcador em coluna, faixa de linguagem).
+fn chat_text(view: &Entity<TextViewState>, cx: &App) -> gpui_kit::base::TextView {
+    gpui_kit::base::TextView::new(view).selectable(true).scrollable(false).style(theme::conversation_markdown(cx))
+        .code_block_actions(copy_code)
+}
+
+fn copy_code(block: &gpui_kit::base::text::CodeBlock, _: &mut Window, _: &mut App) -> gpui_kit::component::clipboard::Clipboard {
+    gpui_kit::component::clipboard::Clipboard::new("copy").xsmall().value(block.code()).tooltip(activity::web("comum_copiar_codigo"))
+}
+
+/// Resposta chegando: cada pedaço esmaece por palavra em 250 ms, e a resposta assentada não anima.
+fn stream_motion(live: bool) -> gpui_kit::base::TextViewMotion {
+    let motion = gpui_kit::base::TextViewMotion::default();
+    if !live { return motion; }
+    motion.with_stream_fade(Duration::from_millis(250)).with_stream_fade_stagger(Duration::from_millis(20))
+        .with_stream_fade_easing(gpui_kit::base::Easing::EaseOut)
 }
 
 // A barra fica no recuo à direita do conteúdo, sem cobrir controles; o modo Always mostra que há mais abaixo.
@@ -3634,8 +3653,18 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{message_card, preview_step};
+    use super::{message_card, preview_step, stream_motion};
     use crate::{api::dto::ChatEvent, cards::Card};
+    use std::time::Duration;
+
+    #[test]
+    fn only_the_live_reply_fades_word_by_word() {
+        let live = stream_motion(true);
+        assert_eq!((live.stream_fade(), live.stream_fade_stagger()), (Duration::from_millis(250), Duration::from_millis(20)));
+        // A resposta assentada volta ao padrão sem esmaecer, desligando o que o quadro anterior ligou.
+        let settled = stream_motion(false);
+        assert_eq!((settled.stream_fade(), settled.stream_fade_stagger()), (Duration::ZERO, Duration::ZERO));
+    }
 
     #[test]
     fn baton_card_also_in_the_queue_codex_card_only_recorded() {

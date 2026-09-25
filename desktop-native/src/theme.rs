@@ -336,6 +336,51 @@ pub fn from_desktop(dark: bool, token: impl Fn(&str) -> Option<u32>) -> Option<C
         text, muted, faint, line, line_strong, accent, on_accent })
 }
 
+/// Markdown da conversa: parte das cores que o kit dá a todo texto e muda só a leitura longa. Títulos curtos,
+/// 12 px entre blocos, código inline no destaque, tabela só com filetes, marcador de lista em coluna e faixa de
+/// linguagem no código. Os dois últimos são campos da cópia do gpui-base que nenhuma outra tela liga.
+/// Guardado pelo que ele lê (idioma do rótulo e cores do tema): cada linha da conversa pede o estilo a cada quadro.
+pub fn conversation_markdown(cx: &App) -> gpui_kit::base::TextViewStyle {
+    type Key = (bool, bool, [Hsla; 8], Pixels);
+    thread_local! { static CACHED: std::cell::RefCell<Option<(Key, gpui_kit::base::TextViewStyle)>> = const { std::cell::RefCell::new(None) }; }
+    let kit = Theme::global(cx);
+    let radius = kit.semantic_tokens().radius.md;
+    let key: Key = (crate::i18n::english(), kit.is_dark(),
+        [kit.foreground, kit.muted_foreground, kit.link, kit.selection, elevated(), border(), accent_text(), accent_dim()], radius);
+    CACHED.with_borrow_mut(|cached| match cached {
+        Some((hit, style)) if *hit == key => style.clone(),
+        _ => {
+            let style = build_conversation_markdown(kit, radius);
+            *cached = Some((key, style.clone()));
+            style
+        }
+    })
+}
+
+fn build_conversation_markdown(kit: &Theme, radius: Pixels) -> gpui_kit::base::TextViewStyle {
+    let mut code_block = StyleRefinement::default();
+    code_block.corner_radii = CornersRefinement { top_left: Some(radius.into()), top_right: Some(radius.into()),
+        bottom_left: Some(radius.into()), bottom_right: Some(radius.into()) };
+    gpui_kit::base::TextViewStyle::default()
+        .with_foreground(kit.foreground)
+        .with_muted_foreground(kit.muted_foreground)
+        .with_link(kit.link)
+        .with_selection(kit.selection)
+        // Fundo e filete do app, como o `.code-block` do web: o `border` do kit tem o tom do `muted`, e a faixa sumia.
+        .with_code_background(elevated())
+        .with_border(border())
+        .with_dark(kit.is_dark())
+        .with_paragraph_gap(rems(0.75))
+        .with_heading_font_size(|level, base| match level { 1 => px(19.), 2 => px(16.), 3 => px(15.), _ => base })
+        .with_inline_code(HighlightStyle { color: Some(accent_text()), background_color: Some(accent_dim()), ..Default::default() })
+        .with_code_block(code_block)
+        .with_table(StyleRefinement::default().border_0().bg(transparent_black()))
+        .with_table_head(StyleRefinement::default().bg(transparent_black()).font_weight(FontWeight::BOLD))
+        .with_table_cell(StyleRefinement::default().border_r_0().px_3().py_1p5())
+        .with_list_marker_width(Some(px(26.)))
+        .with_code_language_band(Some(crate::i18n::tr_web("comum_codigo", &Default::default()).unwrap_or_default().into()))
+}
+
 /// Leva modo claro/escuro, destaque e fonte para os componentes do gpui-kit (entrada, menus, botão primário).
 pub fn sync_kit(window: Option<&mut Window>, cx: &mut App) {
     let dark = is_dark();
