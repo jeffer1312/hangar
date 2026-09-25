@@ -99,6 +99,7 @@ from app import pair
 from app import pair_texto
 from app import peers
 from app import alcance, conta_estado, cotas, credenciais, peers_api
+from app import config_sync_api
 from app import codex_contas as codex_accounts
 from app import codex_contas_api
 from app.codex_contas_login import CodexContasLogin, codex_session_alive
@@ -585,6 +586,7 @@ app.include_router(codex_contas_api.codex_contas_router)
 app.include_router(harness_api.harness_router)
 app.include_router(peers_api.peers_router)
 app.include_router(plugin_bridge.plugin_router)
+app.include_router(config_sync_api.config_sync_router)
 registry = SessionRegistry()
 registry_mod.apos_saida_codex = _codex_lease_released
 registry_mod.apos_renomear_codex = _codex_lease_renamed
