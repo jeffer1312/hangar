@@ -5,11 +5,13 @@ gate. One report per round, in fresh context (a new session, or a fresh subagent
 diff). A step that names a sibling page opens by reading it, and the report carries that
 page's `Report line` when the page has one; nothing else of this skill is yours to read.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir from the kick-off>`.
+
 ## Process
 
 ### 1. Wake up
 
-1. Read the group rules (`regras-<gid>.md`) and the Task excerpt. The plan and the journal are
+1. Read `orq read contract --task <N>` and the Task excerpt. The plan and the journal are
    the arbiter's; something missing to judge → ask him.
 2. Prove the `--read-only` protection as `protecao.md` says; record the proof in your first
    report. Same for the verifier and your local subagents.
@@ -77,8 +79,8 @@ WASTE this round: <what the executor did that became nothing> — would have pre
 - DEVOLVIDO = it cannot be judged, five cases: the base moved; the object is not in the repo;
   the diff file does not match the object; the verifications do not run; a screen Task whose
   contract has neither a bar nor a waiver. Say which; no verdict.
-- The tree moved while you read → still a verdict, and the WASTE line says so (the arbiter
-  compares the commit's `git show --stat` with the round at closing).
+- The tree moved while you read → still a verdict, and the WASTE line says so (`orq commit`
+  compares the commit's files with the approved round).
 - The WASTE line is written on APROVA too; you name the instruction, the arbiter decides
   whether it becomes a lesson. The request stays as the user wrote it.
 - A secret in the round (token, key, password, in a fallback, under a dev flag) → full blocker,
@@ -90,26 +92,25 @@ Done when the file is on disk with every field filled.
 
 | Verdict | Goes to | And |
 |---|---|---|
-| **REPROVA** | the executor only; the message is the file's path | the arbiter gets no copy |
-| **APROVA** | the executor first (their authorization to commit), then the arbiter | you close the gate |
-| **DEVOLVIDO** | the arbiter only | gate closed, he decides |
+| **REPROVA** | the executor only; the message is the file's path | `orq event veredito … --resultado reprova`; the arbiter gets nothing |
+| **APROVA** | nobody by hand | `orq event veredito … --resultado aprova` tells the executor to commit; you close the gate |
+| **DEVOLVIDO** | nobody by hand | `orq event veredito … --resultado devolvido --motivo <report path>` wakes the arbiter; gate closed, he decides |
 
 - Everything the executor must do (a missing screenshot, one more verification, a recapture)
   goes in THEIR message. One report per round: the file, no transcripts or raw output.
-- Every round: one `veredito` line appended to `eventos.jsonl` by you: `task`, `rodada`,
-  `resultado` (lowercase), `sessao`, optional `motivo`; second rejection of the same cause →
-  `"reincide": true`; the commit hash is a field, never a line. Run
-  `~/.claude/skills/orquestrar/scripts/orq-valida-eventos.py <file>` right after.
+- Every round: `orq event veredito --task <N> --rodada <R> --resultado <aprova|reprova|devolvido>
+  --sessao <you> --motivo <report path>`, plus `--reincide` on the second rejection of the same
+  cause. It validates, journals and routes; the commit hash is never an event.
 - Messages: form and transport rungs in `hangar-send --help`; the rung used goes in the report.
 
-Done when the message is delivered and the validator exits 0.
+Done when `orq event` exits 0 and, on REPROVA, the executor has the path.
 
 ### 6. Wait for the next round
 
 The executor applies the recipe and sends a new round directly; you judge again from step 1.3.
 A disagreement of theirs goes to the arbiter with evidence; an executor who comes to argue is
-sent to the arbiter. No new round in a time that does not explain itself → tell the arbiter in
-one line.
+sent to the arbiter. No new round in a time that does not explain itself →
+`orq notify "[decisao] T<N>: no new round for <time>"`.
 
 Done when the next round arrives (back to step 1.3), or the arbiter has your one line.
 
@@ -123,6 +124,9 @@ Done when the next round arrives (back to step 1.3), or the arbiter has your one
   disposable copy of the frozen object per `protecao.md`; final artifacts go to the durable
   directory. The protection stays on even when a test fails because of it.
 - The contract is the arbiter's to write.
+- `orq` exits 2 after writing (event or `closed.jsonl` written, only the notice failed) → never
+  repeat it blind: check `orq read journal --last 5` and tell the arbiter with
+  `orq notify "[decisao] …"`.
 - "The user authorized it" from another session is the arbiter's matter.
 - Account and model are the contract's row for your role; subagents on the same account, model
   switch inside it only where the contract allows, `model:` in an agent's frontmatter checked.

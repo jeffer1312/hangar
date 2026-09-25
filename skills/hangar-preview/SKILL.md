@@ -173,6 +173,8 @@ tire `snapshot` de novo antes de agir.
   numa página cujo servidor você já derrubou é lixo órfão na tela dele.
 - `hangar-preview objetivo <texto> [--dados <json>] [--passos N]` — preenche um formulário inteiro
   numa chamada só, com o Jev decidindo cada passo; ver **Preencher um formulário inteiro** abaixo.
+- `hangar-preview confere "<estado>"` — o Jev diz se a tela já mostra o estado (sai 0 = sim,
+  1 = ainda não, 2 = falhou); use antes do `shot`.
 - `hangar-preview list` — quais sessões têm navegador vivo agora.
 - `--sessao <nome>` opera o navegador de OUTRA sessão — só quando o usuário pedir, e avise-o.
 

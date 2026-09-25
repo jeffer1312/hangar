@@ -5,6 +5,8 @@ every report against the repo and maintain the contract. Only you write the cont
 correction recipe goes reviewer → executor without you. Read this page whole; open a sibling only at the
 step that names it.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
+
 ## Process
 
 A Task's cycle is steps 2–5.
@@ -15,7 +17,7 @@ Run `arbitro-lancamento.md`, "Launch", whole. The phase-1 exit gate is method-ag
 artifact present → proceed; one missing → planner or `replanejar.md`, and the launch waits.
 
 Done when all five stand: watchdog armed and proven by the synthetic alarm
-(`arbitro-vigia.md`) · baseline measured, hash next to it · closing items (branch review +
+(`arbitro-vigia.md`) · `orq init` run · baseline measured, hash next to it · closing items (branch review +
 retrospective, with triggers) in the journal (`arbitro-encerramento.md`) · a-priori estimate
 written: time and rounds per Task · account policy read and copied into the contract.
 
@@ -39,23 +41,23 @@ Handoff checklist — before every handoff, in order:
 1. This finding's guideline in `licoes.md`? No → write it now and paste it into this kick-off.
 2. Kick-off/recipe in a file; the message is the path, via `"$(cat <<'EOF' … EOF)"`.
 3. `entregue` read → check engagement: ctx left zero within 1 min. Kick-off only.
-4. Watchdog re-armed (`arbitro-vigia.md`); whoever takes the ball rewrites it.
-5. Journal: JSON line, then paragraph, before the next action.
+4. `orq event task_inicio --task <N> --titulo <t> --executor <session> --par <reviewer session>`
+   before the kick-off; the watchdog follows the ball by itself.
+5. A decision of yours goes in with `orq log --task <N> "…"` before the next action.
 6. Sending someone to check a set → the command that discovers the list (`run \`git grep -n
    <sym> -- src/\` and check ALL that show up`), never the list; no command possible → the
    question ("who else calls this?"), never the answer. Recipes, kick-offs, directed questions
    alike.
 
-Done when the kick-off is delivered and engaged, the watchdog lists `<executor> <arbiter>`,
-the journal carries the release.
+Done when the kick-off is delivered and engaged, and `orq ball` names the executor.
 
 ### 3. Wait — the loop runs without you
 
 The executor works, checks steps off, verifies, stops without committing; freezes the round
 (`git add` of the paths + `git stash create` + `git stash store`) and calls the reviewer
 directly — the `entrega` line does not wake you. REPROVA → recipe straight to the executor.
-APROVA → the reviewer notifies the executor (may commit) and you. The executor commits only
-the Task's paths, by explicit path, and reports the hash to you.
+APROVA → `orq` tells the executor to commit; the executor's `orq commit` checks it and wakes
+you once.
 
 Hash, recipe and pre-review commit check travel executor ↔ reviewer, never through you. The
 REPROVA is the executor's mail: leave it closed, unreproduced, unrelayed, unconfirmed; the
@@ -82,7 +84,7 @@ made mid-work enters the contract before you use it.
 | a blocker fix, including one an automatic reviewer provoked mid-Task | accepted with its trap (a test that bites) in the same commit; no test → not accepted, on both sides of the gate |
 | executor needs context only you have — the one case you relay | send the path, never prose |
 | pixels with no bar in the contract · stolen browser tab | yours; the bar as in step 2 |
-| a `low` Task rejected 2× for the same cause, or a `Decided alone:` line the reviewer flagged | re-tag `Risk: high` in the orchestration plan, upward only, never down; journal the reason; the next executor session is born on the `high` row (replacement kick-off, `Frozen round`); log `sessao_trocada` + extra field `motivo`. Route `audit` → `replanejar.md`, `audit` → `full` |
+| a `low` Task rejected 2× for the same cause, or a `Decided alone:` line the reviewer flagged | re-tag `Risk: high` in the orchestration plan, upward only, never down; journal the reason; the next executor session is born on the `high` row (replacement kick-off, `Frozen round`); `orq event sessao_trocada … --motivo <reason>`. Route `audit` → `replanejar.md`, `audit` → `full` |
 | two consecutive rounds whose waste is "closed only the case the previous report named" | no guideline; `arbitro-vigia.md`, "Deciding vs waking the user" (ask the user, spend in hand; unavailable → "Tightened criterion") |
 | plan untrustworthy (fallen premise, method without executing half, two consecutive Tasks blowing the estimate for the same cause, user order) | `replanejar.md`: propose and conduct the swap; never rewrite your own plan. A recipe the plan declared "closes after Task N-1" is planning: the planner or a fresh session with the spec closes it; you deliver inputs and excerpt the result |
 | a user's suspicion about the product | a verification item: journal it, hand it to the next reviewer as a directed question; the answer comes from proof, never from memory |
@@ -94,13 +96,10 @@ Done when the item is journaled and the ball is back with executor or reviewer.
 
 ### 5. Close the Task
 
-1. Check the report against the repo — closed list: `git log --oneline -1` (hash is the tip),
-   `git show --stat <hash>` (files match the Task and the approved round), no untouchable
-   staged. Plus one PROGRESS line: elapsed time and rounds vs the estimate; past 2× either →
-   stop and ask. Context does not count here; it rules rotation only.
-   - Report ≠ repo → back to the executor, not the reviewer.
-   - Commit diverging from the approved round → new round to the executor; the resulting
-     second commit is legitimate; no `--amend`.
+1. `orq commit` already checked tip, files against the approved round and untouchables; its
+   message to you is that check. Add one PROGRESS line with `orq log --task <N>`: elapsed time
+   and rounds vs the estimate; past 2× either → stop and ask. Context does not count here; it
+   rules rotation only.
 2. Your check is metadata, never a review: every round, the last included, is the reviewer's
    (directly or via the authorized verifier), whatever a plan says. Tests, diff, screenshots,
    defect reproduction, editor stay with them; you never run, read, reproduce, redo or open them.
@@ -108,10 +107,10 @@ Done when the item is journaled and the ball is back with executor or reviewer.
 4. Batch: merge one at a time after its APROVA; `git fetch` before every merge, only then read
    `## main...origin/main`; remove no worktree without checking its trail in global config
    (`paralelo-worktree.md`).
-5. Closed: update the contract, write the journal, retire the executor (`arbitro-vigia.md`,
+5. Closed: update the contract's progress, retire the executor (`arbitro-vigia.md`,
    "Rotation"), release the next Task (step 2); last code Task approved → step 6.
 
-Done when contract and journal carry the hash and the tip equals it.
+Done when `orq commit`'s message reached you and the contract carries the hash.
 
 ### 6. After the last Task
 
@@ -125,17 +124,16 @@ logged, the watchdog disarmed.
 
 | File | Contains | Who reads |
 |---|---|---|
-| `~/.hangar/orq/<date>-<gid>/registro.md` — journal | Task→hash→verdict, what each round broke, burned sessions, dated decisions | you only; send the path to no one |
-| `<config>/.hangar-pair/regras-<gid>.md` — rules | who is who, untouchables, gates, method, domain skill, branch, bars, review coverage, accounts | executor and reviewer, whole |
+| `~/.hangar/orq/<date>-<gid>/registro.md` — journal | one line per entry, written by `orq` (`event`, `commit`, `log`); 40k-character cap, rotated to `registro-arquivo-N.md` | you, only through `orq read journal [--task N]` |
+| `<config>/.hangar-pair/regras-<gid>.md` — rules | who is who, untouchables, gates, method, domain skill, branch, bars, review coverage, accounts; common part ≤ 8k characters, each Task's specifics in a `## Task N` section at the end | executor and reviewer, through `orq read contract --task N` |
 | `~/.hangar/orq/<date>-<gid>/licoes.md` — lessons | born empty with a header; every guideline born mid-work, one per block, with date and measured proof | nobody whole; you paste 3–4 per kick-off |
 | `~/.hangar/orq/<date>-<gid>/eventos.jsonl` — events | one JSON line per event | machines: app screens, phase 5 |
 
-- Only you write journal, rules and lessons. `eventos.jsonl` has three writers: you, the executor (`entrega`), the reviewer (`veredito`).
-- Journal cap 500 lines: at the cap move the oldest block whole to `registro-tasks-1-N.md` in the same directory and leave a pointer. The block travels whole, never summarized.
+- Only you write rules and lessons. Journal and events are written through `orq` by whoever acts: you (`task_inicio`, `sessao_trocada`, `execucao_*`, `log`), the executor (`entrega`, `commit`), the reviewer (`veredito`).
 - Journal and lessons live in the durable directory, never in `<config>/.hangar-pair/`; the rules stay there.
 - Lessons: raw material is the **waste** line of each review report; its "would have prevented" becomes a guideline written as a principle, with the measured case as proof next to it — in `licoes.md`, never in `regras-<gid>.md`. Every guideline stays: no cap, never deleted. The cap is how much goes into a kick-off: pick by subject (screen, database, channel, file), never by age; in doubt, paste; text, never the path.
-- Events: types and fields are the validator's, `${CLAUDE_SKILL_DIR}/scripts/orq-valida-eventos.py` (docstring = spec; exit 0 = holds). Six types; extra fields allowed, new types forbidden.
-- Write AT the event: JSON line first, journal paragraph after, both before the next action (report arrived, merge done, session swapped). The watchdog's `-d` covers both mtimes.
+- Events: six types, checked by `orq event` (its validator's docstring is the spec); extra fields allowed, new types forbidden.
+- Write AT the event, through `orq`, before the next action.
 - By type, not subject: it happened → journal; agreement decided at launch → rules; guideline born now → lessons.
 - What changes per Task (released Task, hash, counterpart) goes in no file — only in the kick-off.
 - First lines of the rules file:
@@ -144,6 +142,7 @@ logged, the watchdog disarmed.
 > Sessions of this group: read the page of your role in ~/.claude/skills/orquestrar/references/ (executor.md, revisor.md, revisao-final.md, retrospectiva.md). Planner and arbiter invoke the `orquestrar` skill.
 > Branch: <branch> · Repo: <path>
 > Method: <name | none> · Executes with: <command | none> · Domain skill: <name | none> · Route: <audit | full>
+> Read with: ~/.claude/skills/orquestrar/scripts/orq.py --dir ~/.hangar/orq/<date>-<gid> read contract --task <N>
 ```
 
 ## The contract commands

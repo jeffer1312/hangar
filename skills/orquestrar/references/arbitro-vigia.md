@@ -3,44 +3,25 @@
 Read when arming the watchdog (once, at launch), when an alarm arrives, when a session must be
 replaced, and when unsure whether to decide alone or wake the user.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
+
 ## Arming
 
-1. Run it as a unit; the command goes into no file, the form does:
+1. Once, at launch, after `orq init`:
 
    ```bash
    systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
-     "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <who has the ball> <arbiter> -m 5 \
-     -d ~/.hangar/orq/<date>-<gid>/registro.md
+     "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <arbiter> -e ~/.hangar/orq/<date>-<gid> -m 5
    ```
 
-   The last name is always the arbiter; `-d` points at the journal (60 min without a write
-   dings you). Flags and liveness checks: the header of `vigia.sh`.
-2. The list is whoever has the ball now, plus you — never the whole cast, never the pair
-   together, never a session not yet opened, retired, or stopped by your order. Two windows
-   have nobody waiting and are the watchdog's: kick-off → first round, and APROVA → commit.
-   Mid-loop, whoever waits for the ball notices the silence.
+2. The list follows `orq ball` every cycle: whoever owes work now, plus you. Nothing to rewrite at a handoff; a session waiting as it was told is never on it.
+3. Ball with the user: `systemctl --user stop vigia-<gid>` before asking, start it again on the answer. `execucao_fim` logged → stop it for good.
 
-   | Window | List |
-   |---|---|
-   | kick-off dispatched → 1st round delivered | `<executor> <arbiter>` |
-   | round delivered → verdict | `<reviewer> <arbiter>` |
-   | APROVA → commit reported | `<executor> <arbiter>` |
-
-   Parallel batch: every writer in ONE watchdog — `vigia.sh t1 t2 t3 review review2 arbitro -m 10 -d …`.
-3. Rewrite the command at every handoff; whoever takes the ball rewrites it with their own
-   name. After a REPROVA the ball passes reviewer → executor without you. Remove yourself from
-   the list while an executor has the ball; put yourself back when nobody does.
-4. Nobody with the ball = disarm. Ball with the user = nobody: disarm before asking, re-arm on
-   the answer.
-5. Kill the old watchdog when retiring a session. One live watchdog, pointed at the current
-   pair.
-
-Done when the `[vigia] ARMADA …` prompt arrives in your session within 2 min of arming — the
-proof it works. `active` is not proof; a hand-typed test is not proof.
+Done when the `[vigia] ARMED …` prompt arrives in your session within 2 min of arming — the proof it works. `active` is not proof; a hand-typed test is not proof.
 
 ## What it does
 
-- Watches everyone on the list, including you, with or without a terminal. Wakes via `hangar-send`.
+- Watches everyone on the list, including you, with or without a terminal. Wakes you through `orq notify --alarm`.
 - Context: each listed session's window against its row's `janela`, re-read from the contract every cycle. Crossing it asks the session to stop after the current act and request its replacement, and tells you; once per crossing.
 - Fires when the current owner stops, not when everyone stops; `vanished` counts as stopped. Immediate, without waiting for silence: a stuck session (`working`, no event for 10 min) and a session out of quota.
 - To team sessions it ASKS, evidence attached; to you it may be affirmative. Stop orders come from you, after looking, never from the counter.
@@ -64,7 +45,7 @@ Done when the owner is `working` again or the ball has moved, journaled.
 
 ## Before acting on an alarm
 
-Compare the watchdog's list with the last line of `eventos.jsonl`:
+`orq ball` computes this table; read it before acting:
 
 | Last line | The ball is with |
 |---|---|
@@ -74,7 +55,7 @@ Compare the watchdog's list with the last line of `eventos.jsonl`:
 | `veredito` `aprova` | the `executor`, until the commit hash reaches you (`arbitro.md`, step 5) |
 | `execucao_fim` | nobody — disarm |
 
-Mismatch → re-arm, don't nudge; a session waiting exactly as ordered is not stalled.
+Alarm on a session `orq ball` does not name → don't nudge; a session waiting exactly as ordered is not stalled.
 
 ## Night mode — three preconditions
 

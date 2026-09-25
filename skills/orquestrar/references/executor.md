@@ -6,19 +6,23 @@ unknown → ask the arbiter before the first Edit. A step that names a sibling p
 reading it, and the round report carries that page's `Report line`; nothing else of this skill
 is yours to read.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir from the kick-off>`.
+
 ## Process
 
 ### 1. Wake up
 
-1. Read the group rules (`regras-<gid>.md`), the Task excerpt, and the recipe if a path came.
+1. Read `orq read contract --task <N>` (the contract's common part plus your Task's section;
+   never the whole file), the Task excerpt, and the recipe if a path came.
    The whole plan, the journal and the lessons file belong to the arbiter; something missing →
    ask him.
 2. `git branch --show-current`, `git status --short`, `git log --oneline -5`. HEAD differs from
    the kick-off's `Expected HEAD` → stop and report.
 3. Read model and effort back (statusline or the switch command's return).
-4. Reply in one line: branch, HEAD, untouchables, the Task you understood as yours.
+4. Record in one line: `orq notify "[aviso] T<N> wake-up: branch <b>, HEAD <h>, model
+   <m>/<effort>, untouchables read"`. It goes to the journal and wakes nobody.
 
-Done when the one-line confirmation is sent and HEAD matches.
+Done when the wake-up line is recorded and HEAD matches.
 
 ### 2. Prepare
 
@@ -104,11 +108,11 @@ Decided alone: <what the Task left open and what you chose, one per line — or 
 `Decided alone:` lists every place the Task did not say and you chose. A choice that changes an
 interface, a settled decision or the scope is the arbiter's: stop and ask instead.
 
-Append an `entrega` line to `eventos.jsonl` and run
-`~/.claude/skills/orquestrar/scripts/orq-valida-eventos.py <file>` (exit 0; it refuses new
-types). More than the template → a `.md` in the durable directory first, its path in the message.
+Run `orq event entrega --task <N> --rodada <R> --commit <stash hash>` (validates, appends,
+journals; exit 0). More than the template → a `.md` in the durable directory first, its path in
+the message.
 
-Done when the message is delivered and the validator exits 0.
+Done when the message is delivered and `orq event` exits 0.
 
 ### 7. Wait
 
@@ -122,21 +126,18 @@ Done when APROVA arrives.
 ### 8. Commit
 
 Commit only the Task's paths, by explicit path. History stays as committed: a correction is a
-new commit, never `--amend`, rebase or squash. Then, to the arbiter, and only now:
+new commit, never `--amend`, rebase or squash. Then `orq commit --task <N> --hash <commit hash>`:
+it checks the tip, the files against the approved round and the untouchables, and tells the
+arbiter itself. Exit 1 prints what is wrong: fix it with a new commit, never amend, and run it
+again.
 
-```
-Task: <N> | Hash: <commit hash> | Rounds: <how many>
-Approved on round: <stash hash of the approved round>
-git status --short: <pasted output>
-```
-
-Done when the hash is reported and `git status --short` is clean.
+Done when `orq commit` exits 0 and `git status --short` is clean.
 
 ### 9. Stop
 
 No next Task, no "additive step that touches nothing". Push and MR are the user's.
 
-Done when your last message is the step-8 report and the tree is clean.
+Done when `orq commit` exited 0 and the tree is clean.
 
 ## Locks, at every step
 
@@ -164,9 +165,22 @@ Done when your last message is the step-8 report and the tree is clean.
 - An exception in a shared gate (allow, ignore, skip, baseline) comes after changing the data,
   and states its cause.
 - Past your row's `janela` (default 50%) of your context window, or a `[vigia]` saying so →
-  finish the step, freeze (step 5), request replacement in
-  the report with the hash. Swap and compaction are the arbiter's call.
+  finish the step, freeze (step 5), request replacement with
+  `orq notify "[decisao] T<N> replacement: ctx <x>, frozen round <hash>"`. Swap and compaction
+  are the arbiter's call.
 - Account and model are the contract's row for your role; subagents on the same account, model
   switch inside it only where the contract allows, `model:` in an agent's frontmatter checked.
   Need another → stop and ask.
+- To the arbiter only through `orq notify`: `"[decisao] …"` when you need a decision (deviating
+  from a recipe, a skipped step, a replacement); `"[aviso] …"` for what he only needs on record.
+  No other message to him: no step status, no environment confirmation, no progress.
+- `orq` exits 2 after writing (event or `closed.jsonl` written, only the notice failed) → never
+  repeat it blind: check `orq read journal --last 5` and tell the arbiter with
+  `orq notify "[decisao] …"`.
+- The shared screen: `orq screen take --owner <you> --wait-min 9` (Bash tool timeout at its
+  10-min maximum; exit 1 → run it again) before the first action on it, `orq screen release
+  --owner <you>` after the last capture; in a proof longer than 40 min, run `take` again to
+  renew. Never ask the arbiter for it.
+- A command whose output may pass ~200 lines writes to a file in the durable directory; read it
+  with `tail`/`grep`, never whole. Never read a `tool-results/*.txt` whole.
 - Messages: form and transport rungs in `hangar-send --help`; the rung used goes in the report.

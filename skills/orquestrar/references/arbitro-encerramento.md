@@ -3,6 +3,8 @@
 Read when the code Tasks are done (step 6 of `arbitro.md`), and when you step down. The two
 closing items are written at launch (`arbitro.md`, step 1) and executed here.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
+
 ## Closing items — written at launch, before the first session
 
 ```markdown
@@ -56,11 +58,11 @@ Done when the proposed patch exists at `~/.hangar/orq/<date>-<gid>.md`, `execuca
 When you leave: window past your row's `janela` (default 50%), or the user changed the `árbitro` row (the "configuration changed in the panel" message names the `árbitro` role).
 
 1. Finish the task at hand: the open gate closes or rejects. Dispatch no new Task.
-2. Journal section `## Handover to the next arbiter (<output of date -Iseconds>)`: current Task and gate state; live sessions per role (name, account, model, effort, measured ctx) and which are retired; HEAD and `git status`; what is on disk uncommitted; pending items and what remains of the plan; the user's decisions not yet rules, one by one, dated; traps paid; absolute paths of plan, `regras-<gid>.md`, `licoes.md`, `eventos.jsonl`, durable dir; the last line written to `eventos.jsonl`; the closing items with who carries each; the bars decided. No line cap, no context copy: what the successor cannot discover from the files pointed at.
-3. Open the successor by the usual recipe on the `árbitro` row's new configuration. Kick-off: invoke the `orquestrar` skill with the arbiter role; the journal path (handover section first), the rules, the plan; "take over: you are the arbiter from now on; once you confirm, close me: `hangar-send --close <your name>`".
-4. Change the `árbitro` row to the new name (the user already changed it via the panel: only the session name); log `sessao_trocada` (from, to, reason).
+2. `<durable dir>/passagem.md`, headed `# Handover to the next arbiter (<output of date -Iseconds>)`: current Task and gate state; live sessions per role (name, account, model, effort, measured ctx) and which are retired; HEAD and `git status`; what is on disk uncommitted; pending items and what remains of the plan; the user's decisions not yet rules, one by one, dated; traps paid; absolute paths of plan, `regras-<gid>.md`, `licoes.md`, `eventos.jsonl`, durable dir; the last line written to `eventos.jsonl`; the closing items with who carries each; the bars decided. No line cap, no context copy: what the successor cannot discover from the files pointed at.
+3. Open the successor by the usual recipe on the `árbitro` row's new configuration. Kick-off: invoke the `orquestrar` skill with the arbiter role; the `<durable dir>/passagem.md` path, the rules, the plan; "take over: you are the arbiter from now on; once you confirm, close me: `hangar-send --close <your name>`".
+4. Change the `árbitro` row to the new name (the user already changed it via the panel: only the session name) and `orq event sessao_trocada --de <you> --para <successor> --motivo <reason>`. The watchdog follows the new arbiter by itself (`orq ball --with-arbiter`); the successor leaves it untouched.
 5. Tell the live executor and reviewer, 1:1: "the arbiter is now `<name>`; reports go to them".
-6. One line in the journal ("left at <ctx>, successor `<name>` took over"); stop sending work. You never close yourself: the successor does.
+6. `orq log` ("left at <ctx>, successor `<name>` took over"); stop sending work. You never close yourself: the successor does.
 
 Done when the successor confirmed the takeover and the `árbitro` row names them; the successor then closes your session.
 

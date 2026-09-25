@@ -42,8 +42,11 @@ turn: use the flag that exits, `timeout N`, or background file logging.
 
 - Confirm the tab is yours before each capture round: `location.href` returns your port. It
   returned another: reopen your URL. Taken again: report the conflict to the arbiter.
-- How many screenshots is your call; the plan says which STATES must be proven.
-- Stopping point: 1h or 60 navigation commands per Task. Hit it: stop and report with what you
+- Capture only the STATES the plan names, plus at most 2. Chain the actions that reach a state
+  without capturing. Before capturing, `hangar-preview wait` for the state's text or element, or
+  `hangar-preview confere "<state>"` when it exists only in prose (exit 0 = reached, 1 = not
+  yet, 2 = failed → capture as before). The round's ceiling counts captures, never actions.
+- Stopping point: 1h per Task, or the capture ceiling above. Hit it: stop and report with what you
   have; if the sweep is big, propose to the arbiter a separate capture session with the state
   list in its kick-off. A new state discovered midway goes to the arbiter's list, not into your
   loop.

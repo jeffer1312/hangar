@@ -3,6 +3,8 @@
 Read whole at step 1 of `arbitro.md`; "Opening a session" and "Kick-off" again whenever a
 session is opened or a Task released. Back to `arbitro.md` once the team stands.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
+
 ## Launch (phase 2)
 
 1. Pre-flight:
@@ -28,8 +30,10 @@ session is opened or a Task released. Back to `arbitro.md` once the team stands.
    estimate: time and rounds per Task.
 5. Survey the tooling (below), once.
 6. Create, in order: `--new` ("Opening a session", below) → `--pair` → read the `gid` in your
-   own sidecar → write the contract (skeleton in `planejamento-equipe.md`) → arm the watchdog
-   and prove it (`arbitro-vigia.md`, "Arming") → kick-offs ("Kick-off", below).
+   own sidecar → write the contract (skeleton in `planejamento-equipe.md`; each Task's specifics
+   in a `## Task N` section at the end) → `orq init --arbiter <you> --repo <repo> --contract
+   <regras path> --untouchable <glob>…` → arm the watchdog and prove it (`arbitro-vigia.md`,
+   "Arming") → kick-offs ("Kick-off", below).
 
    ```bash
    hangar-send --pair <session> "<work> — each session's role is in the regras-<gid>.md contract"   # one call per session
@@ -81,7 +85,7 @@ Untouchables: <path/to/file>, <other/path>
 
 Once at launch: subagents (per-language and per-dimension reviewers), skills (click-path audit, security review, production readiness, browser QA, house patterns), marketplace commands. Write into the contract a table per work type: what the reviewer dispatches, what helps the executor.
 
-Outside tool (skill, subagent, command), three questions: exists under that name in this account; reads where this round's code is (uncommitted); reads this Task's files (pass paths explicitly). Failed → record why, one line. A tool's silence counts only if you know what it read.
+Outside tool (skill, subagent, command): the three questions of `SKILL.md`'s locks, paths passed explicitly.
 
 ## Locks on model and tools
 
@@ -153,7 +157,7 @@ Read ONLY these files. The whole plan, the journal and the lessons file are NOT 
 
 - Lessons go pasted, never as a path. Every visual Task kick-off also pastes the visual-proof invalidators (`executor-visual.md`), even when in the contract.
 - The same text re-sent puts a `/clear`-ed session back. No line carries turn state; "Task 2 already passed" belongs to the contract.
-- Sending someone to check a set → the command that discovers the list, never the list (`arbitro.md`, "Release one Task", handoff checklist).
+- Every kick-off names the durable directory (`~/.hangar/orq/<date>-<gid>`) that every `orq --dir` call uses, and never asks for step status, environment confirmation or a screen turn by message: those go through `orq`.
 
 ### Tightened criterion (reviewer kick-off, spiral with the user unavailable)
 

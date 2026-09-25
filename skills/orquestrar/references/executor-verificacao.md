@@ -10,6 +10,9 @@ Read at step 4 of `executor.md`.
 - Before sending (the round is uncommitted, so diff against HEAD, never `<base>..HEAD`):
   `git diff HEAD -- <file>` shows only what the Task asked; check removed lines with
   `git diff HEAD | grep -E '^-.*(role=|aria-|try|catch|await)'`.
+- Output goes to a file in the durable directory (`<command> > <durable>/out-task-<N>-r<R>.txt
+  2>&1`); read `tail -n 40` and `grep -nE 'FAIL|Error|error\['` of it, never the file whole,
+  and paste those lines in the report.
 
 ## Proof
 

@@ -73,11 +73,13 @@ approved switch runs through `references/replanejar.md`. Detail: `references/pla
 ## Phase 3 in short
 
 The commit comes AFTER the review, and the arbiter is out of the transport: the executor freezes
-the round (dirty tree, stash object) and sends it to the reviewer directly; on APROVA the
-reviewer authorizes the commit and notifies the arbiter. One Task = one commit. What still
-reaches the arbiter is decision, not transport: DEVOLVIDO, recipe disagreement, a skipped skill
-step, pixels with no bar, a stolen browser tab, a session replacement request, and the second
-rejection of the same Task.
+the round (dirty tree, stash object) and sends it to the reviewer directly; the APROVA
+authorizes the commit, and the commit check notifies the arbiter. One Task = one commit. What
+still reaches the arbiter is decision, not transport: DEVOLVIDO, recipe disagreement, a skipped
+skill step, pixels with no bar, a stolen browser tab, a session replacement request, and the
+second rejection of the same Task. Transport and bookkeeping go through `scripts/orq.py`:
+events, journal, the commit check, the shared-screen lock, who has the ball, and the triage of
+every message to the arbiter.
 
 ## Locks for the planner and the arbiter
 
