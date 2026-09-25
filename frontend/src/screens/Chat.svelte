@@ -1986,10 +1986,13 @@
           // assistant_msg (replaces do replay não passam aqui -> não contam dobrado).
           if (ev.kind === 'thinking' && pensamentoVivo) limparPensamento();
           if (ev.kind === 'tool_use' && ferramentaViva) limparFerramenta();
-          if (ev.kind === 'tool_use' || ev.kind === 'tool_result') {
+          // Fala do pai e mensagem do usuário também entram: são elas que dão por terminado o
+          // subagente em primeiro plano cujo tool_result o harness não gravou.
+          if (ev.kind !== 'notice') {
             actFolder.push(ev);
             activity = actFolder.snapshot();
-          } else if (ev.kind === 'assistant_msg' && ev.text) {
+          }
+          if (ev.kind === 'assistant_msg' && ev.text) {
             asstCount += 1;
             // Swap preview->bolha ATOMICO: o bloco real entra SEM animacao (swapIds) e o preview
             // zera AQUI, sincrono, no mesmo flush do append -> UM paint so, sem frame vazio nem
