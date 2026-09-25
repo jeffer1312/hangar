@@ -4,7 +4,7 @@ use gpui_kit::{component::{button::*, checkbox::Checkbox, radio::Radio, scroll::
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::assets::IconName;
 use tokio::{runtime::Runtime, task::JoinHandle};
-use crate::{api::{self, Api, Failure, Source, dto::*, sse::Update}, chat::{Chat, LiveTool}, composer,
+use crate::{api::{self, Api, Failure, Source, dto::*, sse::Update}, cards, chat::{Chat, LiveTool}, composer,
     conversation::{self, Item, Tool}, delivery::{DeliveryTracker, SendOutcome, SessionKey}, i18n::tr, theme,
     interaction::{self, Action, Ask, InFlight, Pick}, media::{self, MediaCache, MediaState}, appearance};
 use gpui_kit::component::notification::Notification;
@@ -140,7 +140,8 @@ enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Que
 /// detalhe aberto (entrada/saída) de uma chamada.
 #[derive(Clone)]
 enum Prepared {
-    Message { markdown: String, blank: bool, unsupported: bool },
+    /// `card`: a notificação de subagente do Codex já lida, para o desenho não reler o JSON a cada quadro.
+    Message { markdown: String, blank: bool, unsupported: bool, card: Option<cards::CodexSubagent> },
     Lines(usize),
     Detail { fenced: String, total: usize, clipped: bool, full: SharedString },
 }
@@ -2707,6 +2708,57 @@ impl Hangar {
         self.chat.events.iter().find(|event| event.id == id).map(ChatEvent::body)
     }
 
+    /// Notificação de subagente do Codex: o desfecho no cabeçalho, o relatório em markdown e a notificação crua num
+    /// bloco fechado, porque o cartão pode ler errado e o texto original não.
+    fn render_codex_card(&mut self, id: &str, event: usize, card: cards::CodexSubagent, markdown: String, cx: &mut Context<Self>) -> AnyElement {
+        let failed = card.failed();
+        let title = match card.status.as_str() {
+            "completed" => activity::web("subagente_card_concluido"),
+            _ if failed => activity::web("subagente_card_falhou"),
+            status => crate::i18n::tr_web("subagente_card_status", &HashMap::from([("s".to_owned(), status.to_owned())]))
+                .unwrap_or_else(|| status.to_owned()),
+        };
+        // Só os 8 primeiros: o agent_path é um uuid inteiro e come a linha do cabeçalho.
+        let short: String = card.agent_path.chars().take(8).collect();
+        let raw_key = format!("{id}#raw");
+        let open = self.expanded.contains(&raw_key);
+        let event = &self.chat.events[event];
+        // O cru só aberto, e com o mesmo teto dos detalhes das chamadas.
+        let raw = open.then(|| {
+            let body = event.body();
+            let (shown, clipped) = conversation::clip(body.trim(), DETAIL_MAX);
+            let note = clipped.then(|| tr("clipped").replace("{shown}", &DETAIL_MAX.to_string())
+                .replace("{total}", &body.trim().chars().count().to_string()));
+            (shown.to_owned(), note)
+        });
+        let time = clock(event.ts);
+        let view = self.text_view(id, id, markdown, cx);
+        let tint = if failed { theme::danger() } else { theme::muted() };
+        let header = div().flex().items_center().gap_2().px_3().py_2().bg(theme::inset())
+            .child(Icon::new(IconName::Bot).size_4().flex_shrink_0().text_color(tint))
+            .child(div().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(if failed { theme::danger() } else { theme::text() }).child(title))
+            .when(!short.is_empty(), |el| el.child(div().flex_shrink_0().px(px(6.)).py(px(1.)).rounded_full().bg(theme::raised())
+                .font_family(theme::MONO).text_size(px(10.5)).text_color(theme::muted()).child(short)))
+            .when_some(time, |el, time| el.child(div().ml_auto().flex_shrink_0().text_size(px(10.5)).text_color(theme::muted()).child(time)));
+        let toggle_key = raw_key.clone();
+        let original = self.disclosure(&raw_key, open)
+            .child(div().flex_1().text_xs().text_color(theme::muted()).child(activity::web("subagente_card_original")))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
+        // Relatório de outra ferramenta num bloco estreito: letra pequena e títulos no tamanho do texto, como no web.
+        let report_style = gpui_kit::component::text::TextViewStyle::default().heading_font_size(|level, _| px(if level <= 1 { 13. } else { 12. }));
+        let body = div().flex().flex_col().gap_2().px_3().pt_2().pb_3()
+            .child(TextView::new(&view).selectable(true).scrollable(false).text_xs().text_color(theme::muted()).style(report_style)
+                .on_link_click(open_web_link))
+            .child(div().flex().flex_col().pt_1().border_t_1().border_color(theme::border()).child(original)
+                .when_some(raw, |el, (raw, note)| el.child(div().px_2().pt_1().font_family(theme::MONO).text_xs().text_color(theme::muted()).child(raw))
+                    .when_some(note, |el, note| el.child(div().px_2().pt_1().text_xs().text_color(theme::muted()).child(note)))));
+        let row = div().id(SharedString::from(format!("message-{id}"))).w_full().flex()
+            .child(div().max_w(relative(0.8)).min_w(px(280.)).flex().flex_col().overflow_hidden().rounded_md().bg(theme::raised())
+                .border_1().border_color(if failed { theme::danger().opacity(0.45) } else { theme::border() })
+                .child(header).child(body));
+        with_copy_menu(row, id.to_owned(), cx.weak_entity())
+    }
+
     fn render_message(&mut self, index: usize, id: &str, cx: &mut Context<Self>) -> AnyElement {
         let id = id.to_owned();
         let mut discard = None;
@@ -2721,7 +2773,10 @@ impl Hangar {
                 Some(message) => message,
                 None => { local = prepare_message(&self.chat.events[*event_index]); &local }
             };
-            let Prepared::Message { markdown, blank, .. } = message else { return div().into_any_element(); };
+            let Prepared::Message { markdown, blank, card, .. } = message else { return div().into_any_element(); };
+            if let Some(card) = card.clone() {
+                return self.render_codex_card(&id, *event_index, card, markdown.clone(), cx);
+            }
             (markdown.clone(), *blank)
         };
         let (label, note, user, error) = if id == PREVIEW {
@@ -2772,27 +2827,29 @@ impl Hangar {
             .when(!user && !plain, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label)))
             .children(text)
             .when_some(files, |el, files| el.child(files));
-        let copy_label = tr("copy_message");
-        let view = cx.weak_entity();
-        div().id(SharedString::from(format!("message-{id}"))).w_full().flex().flex_col().gap_2()
+        let row = div().id(SharedString::from(format!("message-{id}"))).w_full().flex().flex_col().gap_2()
             .map(|el| if user {
                 el.items_end().child(div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content))
             } else { el.child(content) })
             .when_some(note, |el, note| el.child(div().flex().items_center().gap_2().when(user, |el| el.justify_end())
                 .child(div().min_w_0().text_sm().text_color(theme::warning()).child(note))
-                .when_some(discard, |el, button| el.child(button))))
-            // Copiar sai da vista e mora no menu de contexto (e no Ctrl+Shift+C para a última resposta). O texto é
-            // lido no clique, não copiado a cada quadro.
-            .context_menu(move |menu, _, _| {
-                let (view, id) = (view.clone(), id.clone());
-                menu.item(PopupMenuItem::new(copy_label.clone()).icon(IconName::Copy)
-                    .on_click(move |_, _, cx| {
-                        let text = view.upgrade().and_then(|view| view.read(cx).copy_text(&id));
-                        if let Some(text) = text { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
-                    }))
-            })
-            .into_any_element()
+                .when_some(discard, |el, button| el.child(button))));
+        with_copy_menu(row, id, cx.weak_entity())
     }
+}
+
+// Copiar sai da vista e mora no menu de contexto (e no Ctrl+Shift+C para a última resposta). O texto é lido no
+// clique, não copiado a cada quadro.
+fn with_copy_menu(row: Stateful<Div>, id: String, view: WeakEntity<Hangar>) -> AnyElement {
+    let copy_label = tr("copy_message");
+    row.context_menu(move |menu, _, _| {
+        let (view, id) = (view.clone(), id.clone());
+        menu.item(PopupMenuItem::new(copy_label.clone()).icon(IconName::Copy)
+            .on_click(move |_, _, cx| {
+                let text = view.upgrade().and_then(|view| view.read(cx).copy_text(&id));
+                if let Some(text) = text { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
+            }))
+    }).into_any_element()
 }
 
 fn open_web_link(url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App) {
@@ -3193,9 +3250,26 @@ fn display_body(event: &ChatEvent) -> String {
         "notice" => tr(&event.body()),
         "assistant_msg" => interaction::plan_display(&event.body()),
         // Anexos viram cartões próprios; o texto mostra só a legenda.
-        "user_msg" => { let body = event.body(); composer::parse_marked(&body).map(|m| m.caption).unwrap_or(body) }
+        "user_msg" => {
+            let body = event.body();
+            if let Some(card) = codex_card(event) { return card.report; }
+            composer::parse_marked(&body).map(|m| m.caption).unwrap_or(body)
+        }
         _ => event.body(),
     }
+}
+
+/// Mensagem que vira o cartão do subagente do Codex: só a de usuário gravada, sem imagem e fora da fila, como no web.
+fn codex_card(event: &ChatEvent) -> Option<cards::CodexSubagent> {
+    if event.kind != "user_msg" || event.image_count.unwrap_or(0) > 0 || event.queued() || event.id.starts_with("held:") { return None; }
+    cards::codex_subagent(event.text.as_deref()?)
+}
+
+/// Hora local "HH:MM" de um instante do transcript.
+fn clock(ts: Option<f64>) -> Option<String> {
+    use chrono::{Local, TimeZone, Timelike};
+    let at = Local.timestamp_opt(ts.filter(|ts| ts.is_finite() && *ts > 0.)? as i64, 0).single()?;
+    Some(format!("{:02}:{:02}", at.hour(), at.minute()))
 }
 
 fn render_source(event: &ChatEvent) -> String { safe_markdown(&display_body(event)) }
@@ -3220,9 +3294,10 @@ fn prepare_detail(full: String) -> Prepared {
 }
 
 fn prepare_message(event: &ChatEvent) -> Prepared {
-    let body = display_body(event);
+    let card = codex_card(event);
+    let body = card.as_ref().map(|card| card.report.clone()).unwrap_or_else(|| display_body(event));
     let unsupported = body.contains("![") || !matches!(event.kind.as_str(), "user_msg" | "assistant_msg" | "tool_use" | "tool_result" | "thinking" | "notice");
-    Prepared::Message { markdown: safe_markdown(&body), blank: body.trim().is_empty(), unsupported }
+    Prepared::Message { markdown: safe_markdown(&body), blank: body.trim().is_empty(), unsupported, card }
 }
 
 // Identidade do conteúdo de uma linha que não é mensagem: muda quando chega resultado ou o grupo cresce.

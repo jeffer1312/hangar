@@ -1,6 +1,7 @@
 mod api;
 mod app;
 mod appearance;
+mod cards;
 mod chat;
 mod composer;
 mod conversation;
