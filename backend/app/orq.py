@@ -84,9 +84,21 @@ def _le_eventos(path: Path) -> list[dict]:
     return out
 
 
+def _current_end(eventos: list[dict]) -> dict | None:
+    """O último execucao_fim, se nenhum evento de Task veio depois dele: a mesma regra do
+    orq.state() da skill. Trabalho retomado no mesmo arquivo reabre a execução."""
+    fim = None
+    for e in eventos:
+        if e["tipo"] == "execucao_fim":
+            fim = e
+        elif _int_ou_none(e.get("task")) is not None:
+            fim = None
+    return fim
+
+
 def _monta(exec_id: str, eventos: list[dict]) -> ExecucaoResumo:
     inicio = next((e for e in eventos if e["tipo"] == "execucao_inicio"), {})
-    fim = next((e for e in eventos if e["tipo"] == "execucao_fim"), None)
+    fim = _current_end(eventos)
     por_task: dict[int, list[dict]] = {}
     soltos: list[dict] = []
     for e in eventos:
