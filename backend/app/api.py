@@ -3751,6 +3751,8 @@ class PairBody(_StrictBody):
     peers: list[str] = []
     task: str = ""
     replace_task: bool = False
+    # False: só quem entra recebe o protocolo; veterano não é acordado pela linha de entrada.
+    notify_members: bool = True
 
 
 def _group_text(me: str, others: list[str], task: str, harness: dict[str, str]) -> str:
@@ -3820,6 +3822,8 @@ async def pair_session(name: str, body: PairBody):
         outros = [x for x in members if x != m]
         if antes is None:
             avisos.append((m, _group_text(m, outros, task, harness)))
+            continue
+        if not body.notify_members:
             continue
         entraram = [x for x in outros if x not in antes["peers"]]
         if entraram:

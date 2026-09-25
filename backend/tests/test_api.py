@@ -3179,6 +3179,27 @@ def test_pair_protocolo_completo_so_pro_novato(api_client):
     assert "Membros agora: 'a' (Claude Code), 'b' (Claude Code), 'd' (Claude Code)" in entregues["a"]
 
 
+def test_pair_sem_avisar_membros_so_o_novato_recebe(api_client):
+    # O vigia junta ao grupo quem ficou de fora: a linha "entrou no seu grupo" acordaria cada veterano.
+    entregues = {}
+    async def fake_deliver(name, text):
+        entregues[name] = text
+        return None
+    snap = {"a": {"peers": ["b"], "task": "t", "gid": "g1"},
+            "b": {"peers": ["a"], "task": "t", "gid": "g1"},
+            "d": None}
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name=n, cwd="/p") for n in ("a", "b", "d")]), \
+         patch("app.api.pair.join_group", return_value=(["a", "b", "d"], snap)), \
+         patch("app.api.PairLink.get", return_value={"peers": ["b", "d"], "task": "t", "gid": "g1"}), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.post("/api/sessions/a/pair", headers=_h(),
+                            json={"peer": "d", "task": "t", "notify_members": False})
+    assert r.status_code == 200, r.text
+    assert list(entregues) == ["d"]
+    assert entregues["d"].startswith("[painel: grupo de trabalho] GRUPO DE TRABALHO ATIVO")
+
+
 def test_pair_repetido_sem_mudanca_nao_avisa_ninguem(api_client):
     entregues = []
     async def fake_deliver(name, text):
