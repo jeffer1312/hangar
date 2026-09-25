@@ -399,15 +399,9 @@ if (cmd === 'confere') {
   let respostas;
   const { url, modelo } = jev.destinoDoJev(process.env, 'jev-1.13.0');
   try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${chaveJev}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: modelo, state: arvore, questions: jev.perguntaDeConfere(estado) }),
-    });
-    if (!r.ok) erro(`o Jev recusou: ${r.status} ${(await r.text()).slice(0, 200)}`, 2);
-    respostas = (await r.json()).answers;
+    respostas = await jev.askJev({ url, modelo, chave: chaveJev, estado: arvore, perguntas: jev.perguntaDeConfere(estado) });
   } catch (err) {
-    erro(`o Jev falhou: ${String(err.message).slice(0, 200)}`, 2);
+    erro(err.message, 2);
   }
   const { p, ok } = jev.chegouNoEstado(respostas);
   console.log(`confere: ${p.toFixed(2)}`);
@@ -436,13 +430,11 @@ if (cmd === 'objetivo') {
     executar: async (verbo, args) => (await chamar(chave, verbo, args)).texto,
     perguntar: async (estado, perguntas) => {
       const { url, modelo } = jev.destinoDoJev(process.env, 'jev-latest');
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${chaveJev}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: modelo, state: estado, questions: perguntas }),
-      });
-      if (!r.ok) erro(`o Jev recusou: ${r.status} ${(await r.text()).slice(0, 200)}`);
-      return (await r.json()).answers;
+      try {
+        return await jev.askJev({ url, modelo, chave: chaveJev, estado, perguntas });
+      } catch (err) {
+        erro(err.message);
+      }
     },
   });
   console.log(`\nparou: ${resultado.parou}`);

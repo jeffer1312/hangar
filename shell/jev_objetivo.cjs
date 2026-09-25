@@ -650,9 +650,36 @@ function destinoDoJev(env, modeloPadrao) {
   return { url, modelo };
 }
 
+const JEV_DEADLINE_MS = 15_000;
+
+// Endpoint pendurado prendia o comando pra sempre, e um `until hangar-preview confere` parava calado.
+async function askJev({ url, modelo, chave, estado, perguntas, deadlineMs = JEV_DEADLINE_MS }) {
+  let r;
+  let corpo;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${chave}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: modelo, state: estado, questions: perguntas }),
+      signal: AbortSignal.timeout(deadlineMs),
+    });
+    corpo = await r.text();
+  } catch (err) {
+    throw new Error(err?.name === 'TimeoutError'
+      ? `o Jev não respondeu em ${deadlineMs / 1000} s`
+      : `o Jev falhou: ${String(err?.message).slice(0, 200)}`);
+  }
+  if (!r.ok) throw new Error(`o Jev recusou: ${r.status} ${corpo.slice(0, 200)}`);
+  try {
+    return JSON.parse(corpo).answers;
+  } catch (err) {
+    throw new Error(`o Jev falhou: ${String(err.message).slice(0, 200)}`);
+  }
+}
+
 module.exports = {
   parsarSnapshot, montarPerguntas, montarEstado, decidir, rodar, pedidoDeTexto,
   valorDoCampo, cabecaDoValor, jsDeSelecionar, jsDeEstarAberto, normalizar,
-  perguntaDeConfere, chegouNoEstado, destinoDoJev,
+  perguntaDeConfere, chegouNoEstado, destinoDoJev, askJev,
   LIMIARES, NENHUM, OPERACOES, SEM_SELECT, MAX_CANDIDATOS,
 };
