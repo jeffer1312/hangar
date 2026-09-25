@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tarfile
 import time
 import tomllib
@@ -21,7 +22,9 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from app import atomico, codex_arquivos, codex_contas_sync, hook_installer, runtime_config
+from app import (atomico, codex_arquivos, codex_contas_sync, hook_installer, runtime_config,
+                 skill_bridge)
+from app.codex_importador import CodexNativo
 from app.config_sync_paths import (HEAVY_DIRS, PROGRAMS, Roots, canonicalize, fix_programs,
                                    local_path, map_strings, mark, marked_paths, resolve)
 
@@ -901,15 +904,151 @@ def _apply_prefs(ctx: _Apply) -> None:
         res["changed"].append(key)
 
 
+_NATIVE = CodexNativo
+# Os mesmos que main.py roda na subida: recolocam os hooks do Hangar se algo os tirou.
+_HANGAR_HOOK_INSTALLERS = ("ensure_askq_hook_installed", "ensure_state_hooks_installed",
+                           "ensure_preview_hook_installed", "ensure_subagent_hook_installed",
+                           "ensure_pair_hook_installed", "ensure_nav_hook_installed",
+                           "ensure_guard_hooks_installed")
+
+
+def _run(args: list[str]) -> tuple[bool, str]:
+    """CLI do Claude sobre o ~/.claude principal: sem o CLAUDE_CONFIG_DIR que o backend pode ter
+    herdado de uma conta, e que mudaria até onde fica o `.claude.json`."""
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    try:
+        done = subprocess.run(args, capture_output=True, text=True, errors="replace",
+                              timeout=180, env=env)
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except OSError as exc:
+        return False, type(exc).__name__
+    return done.returncode == 0, (done.stderr or done.stdout or "").strip()[-300:]
+
+
+def _source_arg(source: dict) -> str | None:
+    key = {"git": "url", "url": "url", "github": "repo", "directory": "path",
+           "file": "path"}.get(source.get("source"))
+    value = source.get(key) if key else None
+    return value if isinstance(value, str) and value else None
+
+
+def _install_plugins(ctx: _Apply) -> None:
+    """Instala no destino o marketplace e o plugin que faltam. Instalar é do CLI: copiar
+    plugins/cache levaria caminho absoluto e versão da origem."""
+    res = _result(ctx, "claude_plugins")
+    data = ctx.bundle.items["claude_plugins"]
+    claude = shutil.which("claude")
+    if not claude:
+        res["warnings"].append(_warn("config_sync_missing_program", program="claude",
+                                     where="plugins"))
+        return
+    runner = ctx.runner or _run
+    plugins = Path(ctx.roots.claude) / "plugins"
+    known = _read_json(plugins / "known_marketplaces.json")
+    installed = _read_json(plugins / "installed_plugins.json").get("plugins") or {}
+    for name, source in sorted((data.get("sources") or {}).items()):
+        if name in known:
+            continue
+        arg = _source_arg(_uncanon(source, ctx.roots))
+        if not arg:
+            res["warnings"].append(_warn("config_sync_marketplace_unknown", marketplace=name))
+            continue
+        ok, detail = runner([claude, "plugin", "marketplace", "add", arg])
+        if ok:
+            res["changed"].append(f"marketplace:{name}")
+        else:
+            res["warnings"].append(_warn("config_sync_marketplace_failed", marketplace=name,
+                                         detail=detail))
+    for plugin, enabled in sorted((data.get("enabledPlugins") or {}).items()):
+        if not enabled or plugin in installed:
+            continue
+        ok, detail = runner([claude, "plugin", "install", plugin])
+        if ok:
+            res["changed"].append(f"plugin:{plugin}")
+        else:
+            res["warnings"].append(_warn("config_sync_plugin_failed", plugin=plugin,
+                                         detail=detail))
+
+
+def _apply_plugins(ctx: _Apply) -> None:
+    _apply_plugin_keys(ctx)
+    _install_plugins(ctx)
+
+
+async def _apply_codex(ctx: _Apply) -> None:
+    """AGENTS.md como arquivo e config.toml pelo escritor do próprio Codex (TOML não tem
+    escritor na stdlib). O `mcp_servers.hangar` daqui fica."""
+    res = _result(ctx, "codex")
+    data = ctx.bundle.items["codex"]
+    codex = Path(ctx.roots.codex)
+    agents = data.get("agents_md")
+    if isinstance(agents, dict):
+        blob = _blob(ctx, agents["member"], bool(agents.get("text")))
+        if await asyncio.to_thread(_write_entry, codex / "AGENTS.md", "file", {"": blob}, ctx,
+                                   "codex", "AGENTS.md"):
+            res["changed"].append("AGENTS.md")
+    config = _uncanon(data.get("config") or {}, ctx.roots)
+    if not config:
+        return
+    if not shutil.which("codex"):
+        res["warnings"].append(_warn("config_sync_missing_program", program="codex",
+                                     where="config.toml"))
+        return
+    changed: list[str] = []
+
+    def prepare(current: dict):
+        changed.clear()
+        edits = []
+        for key, value in config.items():
+            if key == "mcp_servers" and isinstance(value, dict) and isinstance(current.get(key), dict):
+                value = {**current[key], **value}
+            if current.get(key) != value:
+                changed.append(f"config:{key}")
+                edits.append({"keyPath": json.dumps(key), "value": value,
+                              "mergeStrategy": "replace"})
+        return edits, lambda: None
+
+    await codex_arquivos.editar_config(
+        codex / "config.toml", ctx.backups / "codex",
+        Path(ctx.roots.home) / ".hangar" / "config-sync" / "work", _NATIVE, prepare)
+    res["changed"] += changed
+
+
+async def _after_apply(ctx: _Apply, items: list[str]) -> None:
+    """Refaz o que o Hangar daqui deriva da configuração: ponte de skills (Pi, Kimi, Codex),
+    hooks do Hangar e a integração do Codex. Falha aqui é aviso: o que foi aplicado fica."""
+    async def step(item: str, name: str, call) -> None:
+        try:
+            await call()
+        except Exception as exc:  # noqa: BLE001
+            _result(ctx, item)["warnings"].append(
+                _warn("config_sync_after_failed", step=name, error=str(exc)[:200]))
+
+    touched = [i for i in ("claude_skills", "claude_hooks", "claude_plugins") if i in items]
+    if touched:
+        await step(touched[0], "skill_bridge", lambda: asyncio.to_thread(
+            skill_bridge.rebuild, Path(ctx.roots.home), log=lambda _m: None))
+    if "claude_hooks" in items:
+        for name in _HANGAR_HOOK_INSTALLERS:
+            await step("claude_hooks", name,
+                       lambda name=name: asyncio.to_thread(getattr(hook_installer, name)))
+    if "codex" in items and runtime_config.get("codex_sync"):
+        from app import codex_integracao
+        await step("codex", "codex_integracao",
+                   lambda: codex_integracao.SERVICO.iniciar("config_sync", True))
+
+
 _APPLIERS = {
     "claude_instructions": lambda ctx: _apply_dir_item(ctx, "claude_instructions"),
     "claude_skills": lambda ctx: _apply_dir_item(ctx, "claude_skills"),
     "claude_agents": lambda ctx: _apply_dir_item(ctx, "claude_agents"),
     "claude_hooks": _apply_hooks,
-    "claude_plugins": _apply_plugin_keys,
+    "claude_plugins": _apply_plugins,
     "claude_mcp": _apply_mcp,
     "claude_env": _apply_env,
     "claude_settings": _apply_settings,
+    "codex": _apply_codex,
     "engines": _apply_engines,
     "hangar_prefs": _apply_prefs,
 }
@@ -945,6 +1084,5 @@ async def apply_bundle(bundle: Bundle, items: list[str], roots: Roots, *, runner
                                          error=str(exc)[:300]))
             continue
         res["status"] = "applied" if res["changed"] else "same"
-    if after is not None:
-        await after(ctx, chosen)
+    await (after or _after_apply)(ctx, chosen)
     return {"items": ctx.report, "backup": str(ctx.backups) if ctx.backups.exists() else ""}

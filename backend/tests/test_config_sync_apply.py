@@ -340,3 +340,111 @@ async def test_hangar_prefs_skip_machine_keys(pair, monkeypatch):
     assert "sync" not in prefs
     assert sorted(report["items"]["hangar_prefs"]["changed"]) == ["elevenlabs_api_key",
                                                                   "tts_max_chars"]
+
+
+async def test_install_plugins_adds_missing_marketplace_and_plugin(pair, monkeypatch):
+    ana, bia = pair
+    calls = []
+    monkeypatch.setattr(config_sync.shutil, "which",
+                        lambda n: "/usr/bin/claude" if n == "claude" else None)
+    report = await config_sync.apply_bundle(
+        _send(monkeypatch, ana, bia, ["claude_plugins"]), ["claude_plugins"], bia,
+        runner=lambda args: calls.append(args) or (True, ""), after=_no_after)
+    assert calls == [
+        ["/usr/bin/claude", "plugin", "marketplace", "add", "https://x/ponytail.git"],
+        ["/usr/bin/claude", "plugin", "install", "ponytail@ponytail"]]
+    assert _settings(bia)["enabledPlugins"] == {"ponytail@ponytail": True}
+    assert report["items"]["claude_plugins"]["status"] == "applied"
+
+
+async def test_plugin_failure_keeps_detail(pair, monkeypatch):
+    ana, bia = pair
+    monkeypatch.setattr(config_sync.shutil, "which",
+                        lambda n: "/usr/bin/claude" if n == "claude" else None)
+    report = await config_sync.apply_bundle(
+        _send(monkeypatch, ana, bia, ["claude_plugins"]), ["claude_plugins"], bia,
+        runner=lambda args: (False, "fatal: repo not found"), after=_no_after)
+    warnings = report["items"]["claude_plugins"]["warnings"]
+    assert {w["code"] for w in warnings} >= {"config_sync_marketplace_failed",
+                                             "config_sync_plugin_failed"}
+    assert all(w["params"].get("detail") == "fatal: repo not found" for w in warnings
+               if w["code"].endswith("_failed"))
+
+
+async def test_install_plugins_without_claude_cli_warns(pair, monkeypatch):
+    ana, bia = pair
+    monkeypatch.setattr(config_sync.shutil, "which", lambda n: None)
+    report = await _apply(_send(monkeypatch, ana, bia, ["claude_plugins"]), ["claude_plugins"], bia)
+    assert any(w["code"] == "config_sync_missing_program" and w["params"]["program"] == "claude"
+               for w in report["items"]["claude_plugins"]["warnings"])
+    assert _settings(bia)["enabledPlugins"] == {"ponytail@ponytail": True}
+
+
+async def test_failing_item_does_not_stop_the_others(pair, monkeypatch):
+    ana, bia = pair
+
+    def boom(ctx):
+        raise RuntimeError("quebrou")
+
+    monkeypatch.setitem(config_sync._APPLIERS, "claude_env", boom)
+    items = ["claude_env", "claude_settings"]
+    report = await _apply(_send(monkeypatch, ana, bia, items), items, bia)
+    assert report["items"]["claude_env"]["status"] == "failed"
+    assert report["items"]["claude_settings"]["status"] == "applied"
+
+
+class FakeNative:
+    edits: list = []
+
+    def __init__(self, home, codex, binario):
+        self.codex = codex
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def request(self, method, params):
+        FakeNative.edits.append(params["edits"])
+        (self.codex / "config.toml").write_text('model = "gpt-6"\n')
+
+
+async def test_apply_codex_writes_agents_and_config_through_native_writer(pair, monkeypatch):
+    ana, bia = pair
+    (Path(bia.codex) / "config.toml").write_text(
+        '[mcp_servers.hangar]\nurl = "http://127.0.0.1:9999/mcp/"\n')
+    FakeNative.edits = []
+    monkeypatch.setattr(config_sync, "_NATIVE", FakeNative)
+    monkeypatch.setattr(config_sync.shutil, "which",
+                        lambda n: "/usr/bin/codex" if n == "codex" else None)
+    report = await _apply(_send(monkeypatch, ana, bia, ["codex"]), ["codex"], bia)
+    assert (Path(bia.codex) / "AGENTS.md").read_text() == "# regras\n"
+    edits = {json.loads(e["keyPath"]): e["value"] for e in FakeNative.edits[0]}
+    assert edits["model"] == "gpt-6"
+    assert set(edits["mcp_servers"]) == {"hangar", "docs"}
+    assert edits["mcp_servers"]["hangar"]["url"] == "http://127.0.0.1:9999/mcp/"
+    assert "config:model" in report["items"]["codex"]["changed"]
+
+
+async def test_apply_codex_without_cli_warns(pair, monkeypatch):
+    ana, bia = pair
+    monkeypatch.setattr(config_sync.shutil, "which", lambda n: None)
+    report = await _apply(_send(monkeypatch, ana, bia, ["codex"]), ["codex"], bia)
+    assert (Path(bia.codex) / "AGENTS.md").exists()
+    assert any(w["params"].get("program") == "codex"
+               for w in report["items"]["codex"]["warnings"])
+
+
+async def test_after_apply_rebuilds_bridges_and_hangar_hooks(pair, monkeypatch):
+    ana, bia = pair
+    calls = []
+    monkeypatch.setattr(config_sync.skill_bridge, "rebuild",
+                        lambda home, log=None: calls.append(("bridge", home)))
+    for name in config_sync._HANGAR_HOOK_INSTALLERS:
+        monkeypatch.setattr(config_sync.hook_installer, name,
+                            lambda name=name: calls.append((name,)))
+    bundle = _send(monkeypatch, ana, bia, ["claude_hooks"])
+    await config_sync.apply_bundle(bundle, ["claude_hooks"], bia, runner=_no_runner)
+    assert ("bridge", Path(bia.home)) in calls
+    assert ("ensure_state_hooks_installed",) in calls
