@@ -182,6 +182,18 @@ def test_run_git_not_found(tmp_path, monkeypatch):
     assert e.value.status == 500
 
 
+def test_run_desliga_travas_opcionais(tmp_path, monkeypatch):
+    # status morto pelo timeout nao pode deixar .git/index.lock orfao no repo da sessao.
+    visto = {}
+
+    def fake(*a, **k):
+        visto.update(k["env"])
+        return subprocess.CompletedProcess(a[0], 0, "", "")
+    monkeypatch.setattr(git_ops.subprocess, "run", fake)
+    git_ops._run(str(tmp_path), "status", "--porcelain")
+    assert visto["GIT_OPTIONAL_LOCKS"] == "0"
+
+
 def test_commit_amend_reescreve_e_dobra(tmp_path):
     d, f = _repo_with_file(tmp_path)          # commits: "init" (vazio) + "add tracked"
     (tmp_path / "novo.txt").write_text("N\n")
