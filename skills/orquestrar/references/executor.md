@@ -164,8 +164,9 @@ Done when your last message is the step-8 report and the tree is clean.
 - An exception in a shared gate (allow, ignore, skip, baseline) comes after changing the data,
   and states its cause.
 - Past your row's `janela` (default 50%) of your context window, or a `[vigia]` saying so →
-  finish the step, freeze (step 5), request replacement in
-  the report with the hash. Swap and compaction are the arbiter's call.
+  tell the arbiter in one line what is left (actions, screenshots, report) and your context
+  now, and keep working. Told to swap → finish the step, freeze (step 5), request replacement
+  in the report with the hash. Swap and compaction are the arbiter's call.
 - Account and model are the contract's row for your role; subagents on the same account, model
   switch inside it only where the contract allows, `model:` in an agent's frontmatter checked.
   Need another → stop and ask.

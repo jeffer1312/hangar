@@ -41,7 +41,7 @@ proof it works. `active` is not proof; a hand-typed test is not proof.
 ## What it does
 
 - Watches everyone on the list, including you, with or without a terminal. Wakes via `hangar-send`.
-- Context: each listed session's window against its row's `janela`, re-read from the contract every cycle. Crossing it asks the session to stop after the current act and request its replacement, and tells you; once per crossing.
+- Context: each listed session's window against its row's `janela`, re-read from the contract every cycle. Crossing it tells you and asks the session to report what is left; once per crossing. The swap is your decision ("Rotation"); a stop order to the session comes only from you, after it.
 - Fires when the current owner stops, not when everyone stops; `vanished` counts as stopped. Immediate, without waiting for silence: a stuck session (`working`, no event for 10 min) and a session out of quota.
 - To team sessions it ASKS, evidence attached; to you it may be affirmative. Stop orders come from you, after looking, never from the counter.
 - Liveness: journal over one full cycle, `show -p ActiveState -p MainPID`. Work in progress with `ps -eo pid,ppid,cmd | grep vigia.sh` empty, or pointing at a retired pair, is work without a net.
@@ -99,11 +99,14 @@ It becomes a case only if the repo is strange (unexplained dirty tree, unreporte
 ## Rotation
 
 - Executor: one session per Task, retired at the approved milestone.
-- Mid-gate swap, mandatory: the same cause failing round after round; context past its row's `janela`. Swap now, mid-gate, before the gate closes.
-- Writer past its row's `janela`: the writer asks in its report (the watchdog prompts it); you open the substitute before the next round, never "at the next milestone".
-- Reviewer past its row's `janela`, or `current ctx + measured round cost` crossing it: open the substitute before the correction arrives; never dispatch a round to one that said it crossed. Measure a round's cost on Task 1 and add it before dispatching.
+- Mid-gate swap, mandatory: the same cause failing round after round. Swap now, mid-gate, before the gate closes.
+- The context ceiling (the row's `janela`, default 50% of the session's own window, or a ceiling the user set) is a reference for your decision, never an order to stop. At it, decide by cost, with numbers: the session's context now, what is left (actions, screenshots, report) and the context it will end at, against a new session's start (its opening context, uncached, plus rereading the handover and the code).
+  - Little left to close the act or the round → the session finishes, past the ceiling if needed.
+  - Much left → swap at the nearest clean point (end of a step or of the round).
+  - Either way, journal the decision with its numbers.
+- Writer at the ceiling: it reports what is left (the watchdog prompts it) and keeps working until you decide.
+- Reviewer: before dispatching a round, add the round's measured cost (measure it on Task 1) to its current context; crossing the ceiling → decide as above before the correction arrives.
 - Reviewer rotated with a report in flight: the retired report dies, the successor judges from scratch, and the round closes only with the verdict of a reviewer named in the journal. Rotation between accounts never puts two reviewers on one commit.
-- The trigger is the row's `janela` (default 50%) of each session's own window, never an absolute number.
 - Screen Task with a short-window reviewer: count one reviewer per round. A wide-window model on the user's machine → suggest it for the plan from round 1; the user chooses; no rule depends on it.
 - Provider drops are not a reason; throughput is: swap when ctx barely moves between drops, or no revival after two nudges.
 - Handover in a file that points: HEAD, `git status`, uncommitted disk, what remains, traps paid, paths of plan, contract and Task excerpt, and every decision made. No line count; never a context copy.

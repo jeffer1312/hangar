@@ -4132,7 +4132,7 @@ def _recado_arbitro(novos: list[orq_papeis.Papel], gid: str) -> str:
                        + "`, modelo `" + (p.modelo or "-") + "`, esforço `" + (p.esforco or "-") + "`"
                        + (", abertura `" + orq_papeis.abertura_texto(p) + "`"
                           if orq_papeis.abertura_texto(p) else "")
-                       + (", troca aos `" + p.janela + "%` da janela" if p.janela else "")
+                       + (", teto de contexto `" + p.janela + "%`" if p.janela else "")
                        for p in novos)
     return ("[painel: orquestração] A configuração de modelos do grupo mudou no painel: " + linhas
             + ". Releia `" + str(orq_papeis.regras_path(gid))
@@ -4165,7 +4165,7 @@ class PapelItem(_StrictBody):
     motor: str = ""
     jev: bool = False
     subagente: str = ""
-    # % da janela de contexto em que a sessão do papel passa a vez ("" = 50%). O vigia lê daqui.
+    # Teto de contexto do papel, em % da janela da sessão ("" = 50%). O vigia lê daqui.
     # None = cliente que não conhece o campo: mantém o valor gravado em vez de apagá-lo.
     janela: str | None = None
 

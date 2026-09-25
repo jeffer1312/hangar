@@ -118,7 +118,7 @@ chosen model has a card or a `## What they say` section.
 
 3. **The plan's header carries:** quota and fallback — each team account's remaining quota, pasted
    with the reading time, and the fallback authorized in writing (no money cap exists in this
-   skill; the walls the arbiter reads: quota; context, `janela` → rotate, `arbitro.md`;
+   skill; the walls the arbiter reads: quota; context, `janela` → decide, `arbitro.md`;
    clock and rounds, 2× the estimate → the arbiter asks); the team — engine and account per role;
    the shared state (item 4).
 

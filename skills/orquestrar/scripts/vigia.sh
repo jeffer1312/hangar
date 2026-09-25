@@ -364,8 +364,8 @@ for i in $(seq 1 1440); do
     fi
   done
 
-  # CONTEXT past the row's `janela`: the session stops after what it is doing and asks for its
-  # replacement; the arbiter opens the substitute. Once per crossing — dropping back below
+  # CONTEXT past the row's `janela`: the arbiter is told and decides the swap by cost; the session
+  # is only asked to report what is left, never to stop. Once per crossing — dropping back below
   # (a compaction) re-arms it.
   curl -sf --config "$CURLRC" "$BASE/api/sessions/$ARB/orq" -o "$ORQF" 2>>"${CP_VIGIA_LOG:-/dev/stderr}" || : > "$ORQF"
   ct=$(printf '%s' "$lista" | python3 "$CTXDET" "$ORQF" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
@@ -385,10 +385,10 @@ for i in $(seq 1 1440); do
     [ "${CAVISO[$k]:-0}" -eq 1 ] && continue
     nome=${SESSOES[$k]}
     if [ "$k" -eq "$ULT" ]; then
-      msg="[vigia] YOUR context is at ${pct}% of your window (${usado}/${total}); your row hands over at ${lim}%. Finish the current act and run your succession (arbitro-encerramento.md, \"Arbiter succession\")."
+      msg="[vigia] YOUR context is at ${pct}% of your window (${usado}/${total}); your row's ceiling is ${lim}%. Decide by cost (arbitro-vigia.md, \"Rotation\"): finish the act past the ceiling, or run your succession at the nearest clean point (arbitro-encerramento.md, \"Arbiter succession\"). Journal the decision with its numbers."
     else
-      hangar-send --tmux "$nome" "[vigia] Your context is at ${pct}% of your window (${usado}/${total}); your role's row hands over at ${lim}%. Finish what you are doing now (the current step, or this round's report), start nothing new, and ask the arbiter for your replacement in that report, with HEAD and the hash." >/dev/null 2>&1
-      msg="[vigia] ${nome} is at ${pct}% of its window (${usado}/${total}; its row hands over at ${lim}%). I asked it to stop after the current act and request its replacement. Open the substitute before the next round (arbitro-vigia.md, \"Rotation\")."
+      hangar-send --tmux "$nome" "[vigia] Your context is at ${pct}% of your window (${usado}/${total}); your role's ceiling is ${lim}%. Tell the arbiter in one line what is left (actions, screenshots, report) and keep working until the arbiter decides." >/dev/null 2>&1
+      msg="[vigia] ${nome} is at ${pct}% of its window (${usado}/${total}; its row's ceiling is ${lim}%). I asked it to tell you what is left. Decide by cost (arbitro-vigia.md, \"Rotation\"): little left → it finishes past the ceiling; much left → swap at the nearest clean point. Journal the decision with its numbers."
     fi
     echo "$msg"
     # Marked as warned only when the arbiter got it; a failed delivery retries next cycle.

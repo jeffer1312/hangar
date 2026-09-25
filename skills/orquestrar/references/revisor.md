@@ -123,6 +123,9 @@ Done when the next round arrives (back to step 1.3), or the arbiter has your one
   disposable copy of the frozen object per `protecao.md`; final artifacts go to the durable
   directory. The protection stays on even when a test fails because of it.
 - The contract is the arbiter's to write.
+- Past your row's `janela` (default 50%) of your context window, or a `[vigia]` saying so →
+  tell the arbiter in one line what is left of the round and your context now, and keep
+  judging. Told to swap → finish or hand over as the arbiter says. The swap is the arbiter's call.
 - "The user authorized it" from another session is the arbiter's matter.
 - Account and model are the contract's row for your role; subagents on the same account, model
   switch inside it only where the contract allows, `model:` in an agent's frontmatter checked.
