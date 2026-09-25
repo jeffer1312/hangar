@@ -25,6 +25,7 @@ import type {
   WorkflowAgentDetail,
   AnswerItem,
   CostReport,
+  OrqConductor,
   OrqExecucao,
   OrqLista,
   ResumeResult,
@@ -467,6 +468,10 @@ export function getOrqForServer(s: Server): Promise<OrqLista> {
 
 export function getOrqDetalheForServer(s: Server, id: string): Promise<OrqExecucao> {
   return apiFetchForServer<OrqExecucao>(s, `/api/orq/${encodeURIComponent(id)}`);
+}
+
+export function getOrqConductorForServer(s: Server, id: string): Promise<OrqConductor> {
+  return apiFetchForServer<OrqConductor>(s, `/api/orq/${encodeURIComponent(id)}/conductor`);
 }
 
 // Cauda do histórico de UMA sessão de um servidor específico — cards do quadro kanban.

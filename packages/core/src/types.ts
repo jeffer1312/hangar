@@ -683,6 +683,7 @@ export interface OrqExecucao {
   voltas: number;
   aprovadas_primeira: number;
   reconstruida: boolean;
+  watchdog?: OrqWatchdog;      // só na LISTA: o chip do condutor no card
 }
 
 export interface OrqFicha {
@@ -691,6 +692,47 @@ export interface OrqFicha {
   nao_aceitas: number;
   aprovadas_primeira: number;
   rodadas_media: number;
+}
+
+// ── Condutor (GET /api/orq/{id}/conductor) — espelha backend/app/orq_conductor.py ──────
+export interface OrqWatchdog {
+  alive: boolean;
+  last_cycle: string | null;   // ts do último batimento (vigia.json)
+  since: string | null;        // unidade no ar desde (systemd)
+  restarts: number | null;
+  unit: string | null;
+  unit_state: string | null;
+  arbiter: string | null;
+  watching: string[];
+  source: 'heartbeat' | 'systemd' | 'none' | 'unavailable';
+}
+
+export type OrqFeedKind = 'woke' | 'dropped' | 'notice' | 'alarm' | 'event';
+
+export interface OrqJev {
+  mode: string | null;
+  choice: string | null;
+  p: number | null;
+  veto: Record<string, number | null>;
+  held: string[];              // vetos acima do limiar: os que mantiveram o árbitro acordado
+  would_drop: boolean | null;
+  error: string | null;
+}
+
+export interface OrqFeedItem {
+  id: string;                  // estável entre revalidações: fonte + linha do arquivo
+  ts: string;
+  kind: OrqFeedKind;
+  text: string;
+  task: number | null;
+  jev: OrqJev | null;
+}
+
+export interface OrqConductor {
+  watchdog: OrqWatchdog;
+  feed: OrqFeedItem[];
+  truncated: boolean;
+  skipped: number;
 }
 
 export interface OrqLista {
