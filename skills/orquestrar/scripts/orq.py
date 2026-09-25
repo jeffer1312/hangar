@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import http.client
 import importlib.util
 import io
 import json
@@ -19,6 +20,8 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +35,26 @@ TASK_HEAD = re.compile(r"^## Task (\d+)\b")
 EVENT_FIELDS_INT = ("task", "rodada")
 EVENT_FIELDS_STR = ("commit", "resultado", "sessao", "motivo", "titulo", "executor", "par",
                     "de", "para", "plano", "branch", "gid")
+JEV_URL = "https://api.typesafe.ai/v1/systemone"
+JEV_MODEL = "jev-1.13.0"
+JEV_TIMEOUT_S = 5
+DISCARD_P = 0.9
+# (instruction, options, the option that means "no need to wake the arbiter")
+JEV_QUESTIONS = {
+    False: ("What does the coordinator of a software team need to do with this message from a "
+            "worker session?",
+            {"no_action": "nothing: it is a status note, a confirmation or an acknowledgement",
+             "decision": "decide, authorize, unblock or answer something the sender asks",
+             "round_report": "read a report of finished work",
+             "none": "none of these"},
+            "no_action"),
+    True: ("A watchdog alarm about a worker session in a software team. What is the session doing?",
+           {"idle": "it stopped and owes work",
+            "stuck": "it claims to work but nothing moves",
+            "waiting_as_told": "it is waiting exactly as it was told to",
+            "none": "none of these"},
+           "waiting_as_told"),
+}
 
 
 class OrqError(Exception):
@@ -383,9 +406,54 @@ def cmd_commit(a) -> int:
     return 0
 
 
+def jev_key() -> str:
+    k = os.environ.get("TYPESAFE_API_KEY", "")
+    if k:
+        return k
+    try:
+        env = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8")).get("env") or {}
+    except (OSError, ValueError):
+        return ""
+    v = env.get("TYPESAFE_API_KEY") if isinstance(env, dict) else None
+    return v if isinstance(v, str) else ""
+
+
+def jev_ask(text: str, alarm: bool) -> dict:
+    """{'choice', 'p'} or {'error'}; never raises — any failure wakes the arbiter."""
+    key = jev_key()
+    if not key:
+        return {"error": "no key"}
+    instructions, criteria, _ = JEV_QUESTIONS[alarm]
+    body = json.dumps({"model": JEV_MODEL, "state": text[-20_000:],
+                       "questions": {"kind": {"type": "choice", "instructions": instructions,
+                                              "criteria": criteria}}}).encode()
+    req = urllib.request.Request(os.environ.get("ORQ_JEV_URL", JEV_URL), data=body,
+                                 headers={"authorization": f"Bearer {key}",
+                                          "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=JEV_TIMEOUT_S) as r:
+            ans = json.load(r)["answers"]["kind"]
+        choice = ans.get("choice")
+        p = (ans.get("probabilities") or {}).get(choice)
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError, KeyError,
+            TypeError, AttributeError) as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+    # The winner's probability, not `confidence`: the Jev calibrates them differently.
+    return {"choice": choice, "p": float(p) if isinstance(p, (int, float)) else 0.0}
+
+
 def triage(d: Path, text: str, alarm: bool) -> str:
-    """Unmarked message: 'drop' only when the Jev is sure it needs no action."""
-    return "wake"
+    """Unmarked message: 'drop' only in mode `on` and when the Jev is sure it needs no action.
+    Shadow (default) asks and records, and the arbiter wakes the same."""
+    mode = os.environ.get("ORQ_JEV", "shadow")
+    if mode == "off":
+        return "wake"
+    r = jev_ask(text, alarm)
+    would_drop = r.get("choice") == JEV_QUESTIONS[alarm][2] and r.get("p", 0.0) >= DISCARD_P
+    with (d / "jev-shadow.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": now(), "mode": mode, "alarm": alarm, "text": text[:500], **r,
+                            "would_drop": would_drop}, ensure_ascii=False) + "\n")
+    return "drop" if mode == "on" and would_drop else "wake"
 
 
 def cmd_notify(a) -> int:

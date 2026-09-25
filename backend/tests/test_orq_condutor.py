@@ -1,8 +1,10 @@
 """orq (skills/orquestrar/scripts/orq.py): o condutor da orquestração, rodado como CLI."""
+import http.server
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -271,3 +273,101 @@ def test_log_anexa_decisao_com_a_task(env, tmp_path):
     init(e, tmp_path)
     run(e, "log", "--task", "3", "decidi X")
     assert "T3 decidi X" in (d / "registro.md").read_text()
+
+
+@pytest.fixture
+def jev_server():
+    """Jev falso: devolve a resposta que o teste pôs em `resp`, ou um status de erro."""
+    ctl = {"status": 200, "resp": {}, "body": None}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            ctl["body"] = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            ctl["auth"] = self.headers.get("authorization")
+            out = json.dumps({"answers": {"kind": ctl["resp"]}}).encode()
+            self.send_response(ctl["status"])
+            self.send_header("content-type", "application/json")
+            if ctl.get("cut"):
+                # Promises more than it sends: the connection drops mid-answer.
+                self.send_header("content-length", str(len(out) + 100))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    ctl["url"] = f"http://127.0.0.1:{srv.server_port}/v1/systemone"
+    yield ctl
+    srv.shutdown()
+
+
+def _jev_env(e, ctl, mode):
+    return {**e, "ORQ_JEV": mode, "ORQ_JEV_URL": ctl["url"], "TYPESAFE_API_KEY": "k"}
+
+
+def test_sombra_consulta_registra_e_acorda_igual(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = {"choice": "no_action", "probabilities": {"no_action": 0.97}}
+    run(_jev_env(e, jev_server, "shadow"), "notify", "tela fechada, 41 de 60 ações")
+    assert sent(log) == ["arb tela fechada, 41 de 60 ações"]
+    linha = json.loads((d / "jev-shadow.jsonl").read_text())
+    assert linha["would_drop"] is True and linha["mode"] == "shadow"
+    assert jev_server["body"]["model"] == "jev-1.13.0"
+    assert jev_server["auth"] == "Bearer k"
+
+
+def test_ligado_descarta_so_com_certeza_alta(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = {"choice": "no_action", "probabilities": {"no_action": 0.95}}
+    run(_jev_env(e, jev_server, "on"), "notify", "ok, recebido")
+    assert sent(log) == []
+    assert "(jev: no action) ok, recebido" in (d / "registro.md").read_text()
+    jev_server["resp"] = {"choice": "no_action", "probabilities": {"no_action": 0.6}}
+    run(_jev_env(e, jev_server, "on"), "notify", "posso usar a tela?")
+    assert sent(log) == ["arb posso usar a tela?"]
+
+
+def test_jev_com_erro_json_torto_ou_sem_chave_acorda_o_arbitro(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["status"] = 529
+    run(_jev_env(e, jev_server, "on"), "notify", "um")
+    jev_server["status"] = 200
+    jev_server["resp"] = "torto"
+    run(_jev_env(e, jev_server, "on"), "notify", "dois")
+    run({**_jev_env(e, jev_server, "on"), "TYPESAFE_API_KEY": ""}, "notify", "três")
+    assert sent(log) == ["arb um", "arb dois", "arb três"]
+    erros = [json.loads(l).get("error") for l in (d / "jev-shadow.jsonl").read_text().splitlines()]
+    assert erros[0].startswith("HTTPError") and erros[2] == "no key" and erros[1]
+
+
+def test_jev_resposta_cortada_acorda_o_arbitro(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["cut"] = True
+    run(_jev_env(e, jev_server, "on"), "notify", "quatro")
+    assert sent(log) == ["arb quatro"]
+    assert json.loads((d / "jev-shadow.jsonl").read_text())["error"].startswith("IncompleteRead")
+
+
+def test_chave_do_settings_json_vale_sem_variavel(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(json.dumps({"env": {"TYPESAFE_API_KEY": "s"}}))
+    jev_server["resp"] = {"choice": "decision", "probabilities": {"decision": 0.9}}
+    run({**_jev_env(e, jev_server, "shadow"), "TYPESAFE_API_KEY": ""}, "notify", "x")
+    assert jev_server["auth"] == "Bearer s"
+
+
+def test_alarme_usa_a_pergunta_do_vigia(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = {"choice": "waiting_as_told", "probabilities": {"waiting_as_told": 0.99}}
+    run(_jev_env(e, jev_server, "on"), "notify", "--alarm", "[vigia] rev parado")
+    assert "waiting_as_told" in jev_server["body"]["questions"]["kind"]["criteria"]
+    assert sent(log) == []
