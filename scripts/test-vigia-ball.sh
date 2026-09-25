@@ -146,6 +146,14 @@ echo "1 MAY be looping" > "$t/falha"
 REP=1 vigia
 retenta "MAY be looping"
 
+# `orq screen take` repetido é a fila da tela, não laço: nem alarme nem aviso à sessão.
+novo fila-tela; orq event task_inicio --task 1 --titulo x --executor exec1 --par rev1
+printf '%s' '[{"kind":"tool_use","tool_input":{"command":"python3 ~/.claude/skills/orquestrar/scripts/orq.py --dir /x screen take --owner ex --wait-min 9"}}]' > "$t/history.json"
+REP=1 vigia
+grep -q "/api/sessions/exec1/history" "$t/urls" || fail "o detector de laço não leu o histórico"
+if grep -q "MAY be looping" "$t/sent.log" "$t/out"; then fail "a fila da tela virou alarme de laço"; fi
+if grep -q "You repeat the SAME command" "$t/sent.log"; then fail "a fila da tela levou aviso de laço"; fi
+
 novo r-trilha; orq event task_inicio --task 1 --titulo x --executor exec1 --par rev1
 touch -d '2 hours ago' "$d/eventos.jsonl" "$d/registro.md"
 echo "1 The trail" > "$t/falha"

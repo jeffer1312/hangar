@@ -111,8 +111,9 @@ Done when the file is on disk with every field filled.
   cause. It validates, journals and routes; the commit hash is never an event.
 - The round carries `Phase:` → your verdict carries the same `--fase`. `codigo`: judge the code
   only, no screen asked. `prova`: judge the proof (`revisor-visual.md`) and that the stash is the
-  one you approved and that the tree equals it (`git diff <object> --stat` empty); a code
-  change in it is a REPROVA back to a code round.
+  one you approved and that the round's paths are unchanged from it (`git diff <object> --stat
+  -- $(git diff --name-only <object>^1 <object>^2)` empty, run in the Task's checkout — its
+  worktree in a wave); a code change in them is a REPROVA back to a code round.
 - Messages: form and transport rungs in `hangar-send --help`; the rung used goes in the report.
 
 Done when `orq event` exits 0 and, on REPROVA, the executor has the path.

@@ -225,8 +225,14 @@ try:
     if not tool:
         print("")
     else:
-        payload = json.dumps(tool[-1].get("tool_input"), sort_keys=True, ensure_ascii=False)
-        print(hashlib.md5(payload.encode()).hexdigest())
+        ti = tool[-1].get("tool_input")
+        cmd = str(ti.get("command") or "") if isinstance(ti, dict) else ""
+        # Re-running `orq screen take` is the screen queue (exit 1 → again), not a loop.
+        if "orq" in cmd and "screen take" in cmd:
+            print("")
+        else:
+            payload = json.dumps(ti, sort_keys=True, ensure_ascii=False)
+            print(hashlib.md5(payload.encode()).hexdigest())
 except Exception:
     print("")
 PY

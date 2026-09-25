@@ -47,6 +47,8 @@ Before pasting a proof, say what would make it fail. Then:
 - An identical response 3 times in a row → change the check, or stop and report.
 - The stage of your proof (server, test account, proof session) is created by you, as an
   explicit step, before checking. Repeated exit 0 is as stalled as repeated error.
+- The screen queue (`orq screen take`, `executor.md`) is not an external wait: no cap, run it
+  again until it is yours.
 
 ## Report line
 
