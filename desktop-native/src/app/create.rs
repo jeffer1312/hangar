@@ -10,7 +10,8 @@ use super::accounts::ModelChoice;
 use super::device::Remote;
 use super::machines::{FocusOnClick, enter_to_focused};
 use super::settings::Disclosure;
-use gpui_kit::component::{IndexPath, WindowExt, select::{Select, SelectEvent, SelectState}, searchable_list::SearchableVec, skeleton::Skeleton};
+use gpui_kit::component::{IndexPath, WindowExt, select::{Select, SelectEvent, SelectState}, searchable_list::SearchableVec};
+use super::chrome::Skeleton;
 use serde::Deserialize;
 use std::{future::Future, pin::Pin, rc::Rc};
 
@@ -38,7 +39,7 @@ struct Entry {
 }
 
 /// Uma pasta lida: as subpastas, ou o motivo de não haver lista (código do backend já em texto).
-struct Scan { entries: Vec<Entry>, error: Option<String> }
+pub(super) struct Scan { entries: Vec<Entry>, error: Option<String> }
 
 #[derive(Clone, Debug, Deserialize)]
 struct Probe { disponivel: bool }
@@ -81,7 +82,8 @@ pub(super) struct Opened { session: SessionInfo, notes: Vec<String> }
 pub(super) enum CreateReply {
     /// Raízes e a última raiz escolhida neste aparelho.
     Roots(u64, Result<Value, Failure>, Option<String>),
-    Scan(u64, Result<Value, Failure>),
+    /// A pasta já convertida na tarefa do tokio: a lista grande não é lida na thread da janela.
+    Scan(u64, Result<Scan, String>),
     Sessions(u64, Result<Vec<SessionInfo>, Failure>),
     Providers(u64, Result<Value, Failure>),
     Configs(u64, Result<Value, Failure>),
@@ -217,6 +219,8 @@ pub(in crate::app) struct NewSession {
     /// A pasta listada à esquerda.
     dir: String,
     scan: Remote<Scan>,
+    /// Pastas da leitura que casam com a busca, na ordem da lista: refeito quando a busca ou a leitura mudam, não a cada quadro.
+    folders: Vec<usize>,
     query: Entity<InputState>,
     /// A pasta escolhida: é ela que o formulário configura.
     picked: Option<String>,
@@ -296,7 +300,7 @@ impl NewSession {
         let account_name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_account_placeholder")));
         // O Enter no Nome não cria: no web o campo não está num formulário.
         let subscriptions = vec![
-            cx.subscribe(&query, |_, _, event: &InputEvent, cx| if matches!(event, InputEvent::Change) { cx.notify() }),
+            cx.subscribe(&query, |this: &mut Self, _, event: &InputEvent, cx| if matches!(event, InputEvent::Change) { this.refilter(cx); cx.notify() }),
             cx.subscribe(&name, |_, _, event: &InputEvent, cx| if matches!(event, InputEvent::Change) { cx.notify() }),
             cx.subscribe_in(&manual, window, |this: &mut Self, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => cx.notify(),
@@ -310,7 +314,7 @@ impl NewSession {
             }),
         ];
         Self {
-            link, roots: Remote::default(), root: None, dir: String::new(), scan: Remote::default(), query, picked: None,
+            link, roots: Remote::default(), root: None, dir: String::new(), scan: Remote::default(), folders: Vec::new(), query, picked: None,
             sessions: Remote::default(), same_folder: false, name, provider: "claude", providers: Remote::default(), configs: Remote::default(),
             config: None, config_pick: None, codex: Remote::default(), codex_account: String::new(), codex_pick: None, headless: false,
             difference: false, manual_open: false, manual, choosing: false, choose_error: None, create_seq: 0, creating: false, started: None,
@@ -379,7 +383,7 @@ impl NewSession {
         let seq = self.scan.start();
         self.request(cx, move |api, send| Box::pin(async move {
             let query: Vec<(&str, &str)> = if path == root { vec![("root", root.as_str())] } else { vec![("root", root.as_str()), ("path", path.as_str())] };
-            send(CreateReply::Scan(seq, api.server_read(&["fs", "scan"], &query, 15).await)).await
+            send(CreateReply::Scan(seq, scan_of(api.server_read(&["fs", "scan"], &query, 15).await))).await
         }));
         cx.notify();
     }
@@ -524,7 +528,7 @@ impl NewSession {
                 let list = self.roots.ok().cloned().unwrap_or_default();
                 if let Some(root) = list.iter().find(|r| Some(&r.path) == last.as_ref()).or(list.first()).cloned() { self.select_root(root, window, cx); }
             }
-            CreateReply::Scan(seq, result) => { self.scan.finish(seq, scan_of(result)); }
+            CreateReply::Scan(seq, result) => { if self.scan.finish(seq, result) { self.refilter(cx); } }
             CreateReply::Sessions(seq, result) => {
                 if seq != self.sessions.seq { return None; }
                 let Some(path) = self.picked.clone() else { return None };
@@ -632,7 +636,7 @@ fn choice(id: impl Into<ElementId>, on: bool, cx: &App) -> Button {
 impl NewSession {
     fn render_roots(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.roots.loading || self.roots.value.is_none() {
-            return div().flex().gap(px(8.)).children((0..2).map(|_| Skeleton::new().w(px(96.)).h(px(32.)).rounded_full())).into_any_element();
+            return div().flex().gap(px(8.)).children((0..2usize).map(|i| Skeleton::new(("create-root-skeleton", i)).w(px(96.)).h(px(32.)).rounded_full())).into_any_element();
         }
         match self.roots.value.as_ref() {
             Some(Err(error)) => alert("create-roots-error", format!("{} {error}", tr("create_roots_failed"))).into_any_element(),
@@ -649,10 +653,12 @@ impl NewSession {
     }
 
     fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(root) = self.root.clone() else { return div().into_any_element() };
+        if self.root.is_none() { return div().into_any_element(); }
         if self.scan.loading || self.scan.value.is_none() {
-            return div().flex().flex_col().gap(px(6.)).children((0..5).map(|_| div().flex().flex_col().gap(px(6.)).px(px(10.)).py(px(8.))
-                .child(Skeleton::new().w(px(160.)).h(px(12.))).child(Skeleton::new().secondary().w(px(240.)).h(px(10.))))).into_any_element();
+            // Esqueletos são marcadores de posição, sem item de domínio: a posição é a identidade deles.
+            return div().flex().flex_col().gap(px(6.)).children((0..5usize).map(|i| div().flex().flex_col().gap(px(6.)).px(px(10.)).py(px(8.))
+                .child(Skeleton::new(("create-row-skeleton", i)).w(px(160.)).h(px(12.)))
+                .child(Skeleton::new(("create-row-skeleton-detail", i)).secondary().w(px(240.)).h(px(10.))))).into_any_element();
         }
         let scan = match self.scan.value.as_ref() {
             Some(Err(error)) => return alert("create-scan-error", error.clone()).into_any_element(),
@@ -660,32 +666,49 @@ impl NewSession {
             None => return div().into_any_element(),
         };
         if let Some(error) = scan.error.clone() { return muted(error).into_any_element(); }
-        let query = self.query.read(cx).value().to_string();
-        let rows: Vec<&Entry> = scan.entries.iter().filter(|e| shown(&query, &root.path, e)).collect();
-        if rows.is_empty() {
-            return muted(tr(if query.trim().is_empty() { "create_no_subfolders" } else { "create_no_results" })).into_any_element();
+        if self.folders.is_empty() {
+            let searching = !self.query.read(cx).value().trim().is_empty();
+            return muted(tr(if searching { "create_no_results" } else { "create_no_subfolders" })).into_any_element();
         }
-        div().flex().flex_col().gap(px(2.)).children(rows.into_iter().map(|entry| {
-            let on = self.picked.as_deref() == Some(entry.path.as_str());
-            let (pick, open) = (entry.path.clone(), entry.path.clone());
-            let badge = |text: &str| div().px(px(6.)).rounded(px(4.)).border_1().border_color(theme::border()).text_size(px(10.5))
-                .font_family(theme::MONO).text_color(theme::muted()).child(text.to_owned());
-            div().flex().items_center().gap(px(4.))
-                .child(choice(SharedString::from(format!("create-folder-{}", entry.path)), on, cx).disabled(self.creating).flex_1().min_w_0().h_auto().py(px(6.)).px(px(10.))
-                    .rounded(px(8.)).accessibility_label(entry.name.clone()).selected(on)
-                    .child(div().w_full().min_w_0().flex().flex_col().items_start().gap(px(2.))
-                        .child(div().w_full().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(entry.name.clone()))
-                        .child(div().w_full().flex().items_center().gap(px(6.))
-                            .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).text_size(px(11.)).text_color(theme::muted())
-                                .child(rel_path(&root.path, &entry.path)))
-                            .when(entry.is_git, |el| el.child(badge("git")))
-                            .when(entry.has_claude_md, |el| el.child(badge("CLAUDE.md")))
-                            .when_some(entry.mtime, |el, t| el.child(div().flex_shrink_0().text_size(px(11.)).text_color(theme::faint()).child(folder_time(t))))))
-                    .on_click(cx.listener(move |this, _, window, cx| this.pick(pick.clone(), window, cx))))
-                .child(Button::new(SharedString::from(format!("create-open-{}", entry.path))).ghost().small().flex_shrink_0().disabled(self.creating)
-                    .icon(IconName::ChevronRight).accessibility_label(tr("create_open").replace("{nome}", &entry.name))
-                    .on_click(cx.listener(move |this, _, window, cx| this.drill(open.clone(), window, cx))))
-        })).into_any_element()
+        // Só as linhas visíveis são montadas; todas têm a mesma altura, e o espaço entre elas vai dentro de cada uma.
+        uniform_list("create-folder-list", self.folders.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+            range.filter_map(|ix| this.folder_row(ix, cx)).collect::<Vec<_>>()
+        })).size_full().into_any_element()
+    }
+
+    fn refilter(&mut self, cx: &App) {
+        let query = self.query.read(cx).value().to_string();
+        let root = self.root.as_ref().map(|r| r.path.as_str()).unwrap_or("");
+        self.folders = match self.scan.ok() {
+            Some(scan) => scan.entries.iter().enumerate().filter(|(_, e)| shown(&query, root, e)).map(|(ix, _)| ix).collect(),
+            None => Vec::new(),
+        };
+    }
+
+    fn folder_row(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let root = self.root.as_ref()?;
+        let entry = self.scan.ok()?.entries.get(*self.folders.get(ix)?)?;
+        let on = self.picked.as_deref() == Some(entry.path.as_str());
+        let (pick, open) = (entry.path.clone(), entry.path.clone());
+        let badge = |text: &str| div().px(px(6.)).rounded(px(4.)).border_1().border_color(theme::border()).text_size(px(10.5))
+            .font_family(theme::MONO).text_color(theme::muted()).child(text.to_owned());
+        // A linha da lista virtual não estica sozinha como o filho da coluna esticava.
+        Some(div().w_full().flex().items_center().gap(px(4.)).pb(px(2.))
+            .child(choice(SharedString::from(format!("create-folder-{}", entry.path)), on, cx).disabled(self.creating).flex_1().min_w_0().h_auto().py(px(6.)).px(px(10.))
+                .rounded(px(8.)).accessibility_label(entry.name.clone()).selected(on)
+                .child(div().w_full().min_w_0().flex().flex_col().items_start().gap(px(2.))
+                    .child(div().w_full().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(entry.name.clone()))
+                    .child(div().w_full().flex().items_center().gap(px(6.))
+                        .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).text_size(px(11.)).text_color(theme::muted())
+                            .child(rel_path(&root.path, &entry.path)))
+                        .when(entry.is_git, |el| el.child(badge("git")))
+                        .when(entry.has_claude_md, |el| el.child(badge("CLAUDE.md")))
+                        .when_some(entry.mtime, |el, t| el.child(div().flex_shrink_0().text_size(px(11.)).text_color(theme::faint()).child(folder_time(t))))))
+                .on_click(cx.listener(move |this, _, window, cx| this.pick(pick.clone(), window, cx))))
+            .child(Button::new(SharedString::from(format!("create-open-{}", entry.path))).ghost().small().flex_shrink_0().disabled(self.creating)
+                .icon(IconName::ChevronRight).accessibility_label(tr("create_open").replace("{nome}", &entry.name))
+                .on_click(cx.listener(move |this, _, window, cx| this.drill(open.clone(), window, cx))))
+            .into_any_element())
     }
 
     fn render_left(&self, cx: &mut Context<Self>) -> Div {
@@ -723,7 +746,9 @@ impl NewSession {
             .when(self.root.is_some(), |el| el.child(Input::new(&self.query).small().cleanable(true).prefix(chrome::small_icon(IconName::Search, 14., theme::muted()))
                 .aria_label(tr("create_search"))))
             .children(path_row)
-            .child(div().id("create-folders").flex_1().min_h_0().overflow_y_scroll().child(self.render_rows(cx)))
+            // A lista de pastas rola sozinha; carregando, vazia ou com erro, a caixa é que rola.
+            .child(div().id("create-folders").flex_1().min_h_0().flex().flex_col()
+                .when(self.folders.is_empty() || self.scan.loading, |el| el.overflow_y_scroll()).child(self.render_rows(cx)))
             .child(footer)
     }
 

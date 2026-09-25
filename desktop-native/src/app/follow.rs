@@ -24,6 +24,16 @@ const GLIDE_MAX_VIEWPORTS: f32 = 2.5;
 const WHEEL_LINE_PX: f32 = 20.;
 const WHEEL_TAU_MS: f32 = 45.;
 
+/// Passo da roda neste quadro e o que ainda falta andar. Descer zera o resto ao chegar no fim:
+/// sem isso, um entalhe dado já no fim fica pendente e pede um quadro atrás do outro.
+fn wheel_step(wheel: f32, ms: f32, distance: f32) -> (f32, f32) {
+    let mut step = wheel * (1. - (-ms / WHEEL_TAU_MS).exp());
+    if (wheel - step).abs() < 0.5 { step = wheel; }
+    if wheel <= 0. { return (step, wheel - step); }
+    step = step.min(distance);
+    (step, if distance - step <= 0.5 { 0. } else { wheel - step })
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct StickSpring { velocity: f32, target_vel: f32, last_target: Option<f32> }
 
@@ -211,16 +221,14 @@ impl Hangar {
     fn wheel_frame(&mut self, now: Instant) {
         let ms = self.follow.wheel_tick.map_or(FRAME_MS, |t| now.duration_since(t).as_secs_f32() * 1000.).min(4. * FRAME_MS);
         self.follow.wheel_tick = Some(now);
-        let mut step = self.follow.wheel * (1. - (-ms / WHEEL_TAU_MS).exp());
-        if (self.follow.wheel - step).abs() < 0.5 { step = self.follow.wheel; }
-        let distance = self.distance_from_bottom();
-        if step > 0. { step = step.min(distance); }
-        self.follow.wheel = if step > 0. && distance - step <= 0.5 { 0. } else { self.follow.wheel - step };
+        let down = self.follow.wheel > 0.;
+        let step;
+        (step, self.follow.wheel) = wheel_step(self.follow.wheel, ms, self.distance_from_bottom());
         if step < 0. { self.unglue(0.); }
         if step != 0. { self.list_state.scroll_by(px(step)); }
         let distance = self.distance_from_bottom();
         self.follow.last_top = self.visible_top();
-        if step > 0. && !self.follow.pinned && distance <= STICK_BAND {
+        if down && !self.follow.pinned && distance <= STICK_BAND {
             self.follow.pinned = true;
             self.follow.wheel = 0.;
         }
@@ -296,5 +304,14 @@ mod tests {
         assert!(next <= 4. * super::MAX_STEP + 0.01, "{next} px em 4 quadros");
         let mut spring = StickSpring::default();
         assert_eq!(spring.step(29.8, 30., 8.), 30.);
+    }
+
+    #[test]
+    fn wheel_down_at_the_bottom_leaves_nothing_pending() {
+        assert_eq!(super::wheel_step(780., super::FRAME_MS, 0.), (0., 0.));
+        let (step, left) = super::wheel_step(100., super::FRAME_MS, 10.);
+        assert_eq!((step, left), (10., 0.));
+        let (step, left) = super::wheel_step(-100., super::FRAME_MS, 0.);
+        assert!(step < 0. && left < 0. && left > -100.);
     }
 }

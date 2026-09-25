@@ -144,7 +144,7 @@ pub(super) fn project_label(cwd: Option<&str>) -> String {
 
 // ponytail: `localeCompare` sem tabela de colação — minúsculas com os acentos do português dobrados na letra-base, empate pelo
 // texto cru. Outras escritas ordenam por ponto de código; uma tabela (icu_collator) resolveria se isso importar.
-fn by_text(a: &str, b: &str) -> std::cmp::Ordering { sort_key(a).cmp(&sort_key(b)).then_with(|| a.cmp(b)) }
+fn text_key(text: &str) -> (String, String) { (sort_key(text), text.to_owned()) }
 
 fn sort_key(text: &str) -> String {
     text.to_lowercase().chars().map(|c| match c {
@@ -162,7 +162,8 @@ pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: b
         || s.cwd.as_deref().unwrap_or("").to_lowercase().contains(&q)
         || (by_project && project_label(s.cwd.as_deref()).to_lowercase().contains(&q));
     let mut shown: Vec<&SessionInfo> = live.into_iter().filter(|s| matches(s)).collect();
-    shown.sort_by(|a, b| by_text(&a.name, &b.name));
+    // Chave de ordem montada uma vez por sessão, não duas por comparação.
+    shown.sort_by_cached_key(|s| text_key(&s.name));
     let (waiting, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) = shown.into_iter().partition(|s| s.state == "awaiting_input");
     let groups = if by_project {
         let mut by_key: Vec<Group> = Vec::new();
@@ -173,7 +174,7 @@ pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: b
                 None => by_key.push(Group { label: project_label(s.cwd.as_deref()), key, sessions: vec![s] }),
             }
         }
-        by_key.sort_by(|a, b| by_text(&a.label, &b.label));
+        by_key.sort_by_cached_key(|g| text_key(&g.label));
         by_key
     } else if rest.is_empty() { Vec::new() } else { vec![Group { key: "*".into(), label: tr("sessions"), sessions: rest }] };
     Layout { waiting, groups, by_project, total, filtering: !q.is_empty() }

@@ -75,6 +75,8 @@ fn main() {
             app_id: Some("com.hangar.native".into()),
             titlebar: Some(TitlebarOptions { title: Some("Hangar Native — Experimental".into()), ..Default::default() }),
             window_background: if cfg!(target_os = "linux") { WindowBackgroundAppearance::Transparent } else { WindowBackgroundAppearance::Opaque },
+            // Resposta chegando com o foco no outro monitor anda no ritmo da tela, não a 30 quadros.
+            inactive_frame_interval: None,
             ..Default::default()
         }, |window, cx| {
             let view = cx.new(|cx| app::Hangar::new(runtime.clone(), appearance_error.clone(), window, cx));

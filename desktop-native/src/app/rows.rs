@@ -2,7 +2,7 @@
 //! e o gráfico das tabelas das respostas.
 use super::*;
 use crate::{conversation::{Family, Task, TaskStatus}, tables::{self, Table}};
-use gpui_kit::component::{chart::BarChart, progress::ProgressCircle, spinner::Spinner};
+use gpui_kit::component::{chart::BarChart, progress::ProgressCircle};
 
 /// Os grupos pequenos nascem abertos no modo Chips, como no web; nos maiores, a pessoa abre.
 const CHIPS_OPEN_UP_TO: usize = 5;
@@ -63,7 +63,7 @@ impl Hangar {
                 .when(removed > 0, |el| el.child(div().text_color(theme::removed()).child(format!("−{removed}"))))
                 .into_any_element();
         }
-        let lines = raw.lines().count();
+        let lines = self.result_lines(result);
         let outcome = match (raw.is_empty(), conversation::family(name)) {
             (true, _) => tr("chip_done"),
             (false, Family::Run) => format!("{} ({})", tr("chip_done"), counted("chip_lines", lines)),
@@ -162,10 +162,10 @@ impl Hangar {
             // Identidade pela chave da tarefa, nunca pela posição: uma tarefa que sai não passa o estado aberto para a vizinha.
             let key = format!("{row}#{}", task.key);
             let open = self.expanded.contains(&key);
-            // Em andamento gira pelo Spinner do kit, que fica parado quando o sistema pede movimento reduzido.
+            // Em andamento gira, parado quando o sistema pede movimento reduzido.
             let glyph = match task.status {
                 TaskStatus::Pending => chrome::small_icon(IconName::CircleDashed, 14., theme::faint()).into_any_element(),
-                TaskStatus::InProgress => Spinner::new().icon(IconName::LoaderCircle).color(theme::accent()).with_size(px(14.)).into_any_element(),
+                TaskStatus::InProgress => chrome::Spinner::new(SharedString::from(format!("{key}-spin")), IconName::LoaderCircle, px(14.), theme::accent()).into_any_element(),
                 TaskStatus::Completed => chrome::small_icon(IconName::CircleCheck, 14., theme::success()).into_any_element(),
             };
             let active = task.status == TaskStatus::InProgress;

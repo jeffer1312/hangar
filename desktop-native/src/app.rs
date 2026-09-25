@@ -126,6 +126,17 @@ struct Recent { key: SessionKey, files: Option<Result<Vec<UploadFile>, String>> 
 struct Envelope { connection: u64, selection: Option<u64>, payload: Payload }
 struct RichText { source: String, view: Entity<TextViewState>, _observer: Subscription, touched: u64, row: String }
 enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), Reset }
+/// Texto preparado de uma linha: a mensagem pronta para o `TextView`, as linhas do resultado de uma chamada ou o
+/// detalhe aberto (entrada/saída) de uma chamada.
+#[derive(Clone)]
+enum Prepared {
+    Message { markdown: String, blank: bool, unsupported: bool },
+    Lines(usize),
+    Detail { fenced: String, total: usize, clipped: bool, full: SharedString },
+}
+/// O que um quadro do SSE mudou: nada (ping), só a tela (estatísticas, aviso) ou as linhas da conversa.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Changed { Nothing, Screen, Rows }
 
 // Formulário da pergunta atual; refeito quando a pergunta (identidade + conteúdo) muda.
 #[derive(Default)]
@@ -200,6 +211,9 @@ pub struct Hangar {
     last_message: Option<usize>,
     live_clear_epoch: [u64; 2],
     rich: HashMap<String, RichText>,
+    // Texto das linhas já preparado, pela chave da linha ou da parte: esvaziado quando o chat muda, e o desenho
+    // só prepara o que falta. Assim contar linhas, formatar JSON e limpar o markdown não roda a cada quadro.
+    prepared: HashMap<String, Prepared>,
     render_tick: u64,
     preview_drop_epoch: u64,
     preview_drop_scheduled: bool,
@@ -207,6 +221,7 @@ pub struct Hangar {
     preview_tick_epoch: u64,
     preview_tick_scheduled: bool,
     preview_last_tick: Option<Instant>,
+    preview_carry: f64,
     preview_deadline: Option<Instant>,
     // Anexos e rascunho têm a mesma identidade (servidor + sessão + transcript): trocar de sessão não mistura.
     attachments: HashMap<SessionKey, Vec<Attachment>>,
@@ -269,7 +284,9 @@ impl Hangar {
         // A imagem escolhida abre sem depender de conexão; o papel de parede em Vidro vem ao conectar.
         cx.defer_in(window, |this: &mut Self, window, cx| this.refresh_backdrop(window, cx));
         let connection_focus = cx.focus_handle();
-        address.update(cx, |input, cx| input.focus(window, cx));
+        // O cursor do campo só para de piscar ao perder o foco: foco num campo que nunca aparece o deixa piscando para sempre.
+        // Com conexão salva o diálogo não abre; o `connect` que falhar põe o foco aqui.
+        if saved.is_none() { address.update(cx, |input, cx| input.focus(window, cx)); }
         let composer = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 10).submit_on_enter(true));
         let input_subscription = cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
             match event {
@@ -321,10 +338,10 @@ impl Hangar {
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), ask_form: AskForm::default(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             list_state, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), items: Vec::new(), expanded: HashSet::new(),
-            table_column: HashMap::new(), tables: HashMap::new(), paired: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), render_tick: 0,
+            table_column: HashMap::new(), tables: HashMap::new(), paired: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), prepared: HashMap::new(), render_tick: 0,
             preview_drop_epoch: 0, preview_drop_scheduled: false,
             visible_preview: Preview::default(), preview_tick_epoch: 0, preview_tick_scheduled: false,
-            preview_last_tick: None, preview_deadline: None,
+            preview_last_tick: None, preview_carry: 0., preview_deadline: None,
             attachments: HashMap::new(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(),
             suggest_pick: 0, suggest_dismissed: None, command_panel: false, command_search, confirm: None,
             terminal_suggestion: String::new(), recent: None, media: MediaCache::new(), stats: None,
@@ -446,7 +463,12 @@ impl Hangar {
         let (address, token) = (self.address.read(cx).value().to_string(), self.token.read(cx).value().to_string());
         let api = match Api::new(&address, &token) {
             Ok(api) => api,
-            Err(error) => { self.error = Some(Self::failure(&error)); cx.notify(); return; }
+            Err(error) => {
+                self.error = Some(Self::failure(&error));
+                self.address.update(cx, |input, cx| input.focus(window, cx));
+                cx.notify();
+                return;
+            }
         };
         self.unsaved_connection = Some((address, token));
         if let Some(key) = self.selected_key() { self.drafts.insert(key, self.composer.read(cx).value().to_string()); }
@@ -644,6 +666,10 @@ impl Hangar {
         if envelope.connection != self.connection { return; }
         if envelope.selection.is_some_and(|selection| selection != self.selection) { return; }
         let is_chat = envelope.selection.is_some();
+        // A conversa só é refeita quando o chat mudou, e a janela só redesenha quando algo visível mudou:
+        // ping, lista e estatísticas chegam o tempo todo e não mexem nas linhas.
+        let selection = self.selection;
+        let (mut rows, mut visible) = (false, true);
         match payload {
             Payload::Sessions(Ok(sessions)) => {
                 self.list_error = None;
@@ -682,17 +708,21 @@ impl Hangar {
                 else { self.list_online = false; self.list_error = Some(Self::failure(&error)); }
             }
             Payload::Stream(Update::Frame(frame)) => {
-                let applied = if is_chat { self.accept_chat_frame(&frame.event, frame.data, cx) }
-                    else if frame.event == "sessions" {
-                        match serde_json::from_value(frame.data) {
-                            Ok(sessions) => { self.list_error = None; self.replace_sessions(sessions, window, cx); true }
-                            Err(_) => { self.list_error = Some(tr("invalid_response")); false }
-                        }
-                    } else if frame.event == "list_error" { self.list_error = Some(tr("list_stale")); true }
-                    else { true };
+                let applied = if is_chat {
+                    let (applied, changed) = self.accept_chat_frame(&frame.event, frame.data, window, cx);
+                    (rows, visible) = (changed == Changed::Rows, changed != Changed::Nothing);
+                    applied
+                } else if frame.event == "sessions" {
+                    match serde_json::from_value(frame.data) {
+                        Ok(sessions) => { self.list_error = None; self.replace_sessions(sessions, window, cx); true }
+                        Err(_) => { self.list_error = Some(tr("invalid_response")); false }
+                    }
+                } else if frame.event == "list_error" { self.list_error = Some(tr("list_stale")); true }
+                else { visible = false; true };
                 let _ = frame.applied.send(applied);
             }
             Payload::History(revision, limit, result) if revision == self.revision && limit == self.history_limit => {
+                rows = true;
                 self.history_task = None;
                 self.loading = false;
                 match result {
@@ -707,7 +737,7 @@ impl Hangar {
                             }
                         }
                         self.history_installed = true;
-                        for update in std::mem::take(&mut self.pending_chat) { self.apply_chat_update(update, cx); }
+                        for update in std::mem::take(&mut self.pending_chat) { self.apply_chat_update(update, window, cx); }
                         self.error = None;
                         self.ensure_commands(false);
                         self.discover_plan();
@@ -724,7 +754,7 @@ impl Hangar {
                             }
                         }
                         self.history_installed = true;
-                        for update in std::mem::take(&mut self.pending_chat) { self.apply_chat_update(update, cx); }
+                        for update in std::mem::take(&mut self.pending_chat) { self.apply_chat_update(update, window, cx); }
                         self.error = Some(Self::failure(&error));
                     }
                 }
@@ -763,8 +793,9 @@ impl Hangar {
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..) => unreachable!(),
         }
-        self.sync_rows(cx);
-        cx.notify();
+        // Lista que trocou ou tirou a sessão aberta refaz a conversa.
+        if rows || self.selection != selection { self.sync_rows(cx); }
+        if visible { cx.notify(); }
     }
 
     fn receive_sent(&mut self, key: SessionKey, text: String, draft: String, result: Result<Delivery, Failure>, window: &mut Window, cx: &mut Context<Self>) {
@@ -850,7 +881,8 @@ impl Hangar {
         self.sidebar_sessions_changed(window, cx);
     }
 
-    fn accept_chat_frame(&mut self, event: &str, data: serde_json::Value, cx: &mut Context<Self>) -> bool {
+    /// Aplica um quadro do SSE da conversa. Devolve se ele valeu e o que mudou na tela.
+    fn accept_chat_frame(&mut self, event: &str, data: serde_json::Value, window: &mut Window, cx: &mut Context<Self>) -> (bool, Changed) {
         let update = match event {
             "message" | "queue_confirmed" => serde_json::from_value(data).map(ChatUpdate::Message),
             "preview" => serde_json::from_value(data).map(ChatUpdate::Preview),
@@ -860,18 +892,18 @@ impl Hangar {
             "reset" => Ok(ChatUpdate::Reset),
             "suggest" => {
                 self.terminal_suggestion = data.get("text").and_then(Value::as_str).unwrap_or("").to_owned();
-                return true;
+                return (true, Changed::Screen);
             }
             "stats" => {
                 return match serde_json::from_value::<Option<Stats>>(data) {
-                    Ok(stats) => { self.stats = stats; true }
-                    Err(_) => { self.error = Some(tr("invalid_response")); false }
+                    Ok(stats) => { self.stats = stats; (true, Changed::Screen) }
+                    Err(_) => { self.error = Some(tr("invalid_response")); (false, Changed::Screen) }
                 };
             }
             "pensamento" | "ferramenta" => {
                 let Some(text) = data.get("text").and_then(|v| v.as_str()) else {
                     self.error = Some(tr("invalid_response"));
-                    return false;
+                    return (false, Changed::Screen);
                 };
                 if event == "pensamento" { Ok(ChatUpdate::Thinking(text.to_owned())) }
                 else if text.is_empty() { Ok(ChatUpdate::LiveTool(None)) }
@@ -883,19 +915,23 @@ impl Hangar {
                     })))
                 }
             }
-            _ => return true,
+            _ => return (true, Changed::Nothing),
         };
         let update = match update {
             Ok(update) => update,
-            Err(_) => { self.error = Some(tr("invalid_response")); return false; }
+            Err(_) => { self.error = Some(tr("invalid_response")); return (false, Changed::Screen); }
         };
         if !self.history_installed && !matches!(update, ChatUpdate::Reset) {
             self.pending_chat.push(update);
-        } else { self.apply_chat_update(update, cx); }
-        true
+            return (true, Changed::Nothing);
+        }
+        // Estado não mexe nos eventos: redesenha (chip, "em execução") sem refazer a conversa.
+        let changed = if matches!(update, ChatUpdate::State(_)) { Changed::Screen } else { Changed::Rows };
+        self.apply_chat_update(update, window, cx);
+        (true, changed)
     }
 
-    fn apply_chat_update(&mut self, update: ChatUpdate, cx: &mut Context<Self>) {
+    fn apply_chat_update(&mut self, update: ChatUpdate, window: &mut Window, cx: &mut Context<Self>) {
         match update {
             ChatUpdate::Message(event) => {
                 if event.kind == "user_msg" && !event.queued() {
@@ -912,7 +948,7 @@ impl Hangar {
             ChatUpdate::Preview(preview) => {
                 if self.chat.update_preview(preview) {
                     self.cancel_preview_drop();
-                    self.update_visible_preview(cx);
+                    self.update_visible_preview(window, cx);
                 }
                 if self.chat.state.state != "working" { self.defer_preview_drop(cx); }
             }
@@ -998,6 +1034,7 @@ impl Hangar {
 
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
         if !self.expanded.remove(&key) { self.expanded.insert(key.clone()); }
+        self.prepare_tools();
         let row = self.row_ids.iter().position(|id| id == &key).or_else(|| {
             let events = &self.chat.events;
             self.items.iter().position(|item| match item {
@@ -1040,11 +1077,12 @@ impl Hangar {
         self.preview_tick_epoch = self.preview_tick_epoch.wrapping_add(1);
         self.preview_tick_scheduled = false;
         self.preview_last_tick = None;
+        self.preview_carry = 0.;
         self.preview_deadline = None;
         self.visible_preview = Preview::default();
     }
 
-    fn update_visible_preview(&mut self, cx: &mut Context<Self>) {
+    fn update_visible_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let next = &self.chat.preview;
         let extends = self.visible_preview.md == next.md && self.visible_preview.full == next.full
             && self.visible_preview.vivo == next.vivo && next.text.starts_with(&self.visible_preview.text);
@@ -1055,44 +1093,43 @@ impl Hangar {
             return;
         }
         self.preview_deadline = Some(Instant::now() + Duration::from_millis(1200));
-        self.schedule_preview_tick(cx);
+        self.schedule_preview_tick(window, cx);
     }
 
-    fn schedule_preview_tick(&mut self, cx: &mut Context<Self>) {
+    /// Um passo por quadro da tela: o texto anda no ritmo da mola da rolagem, não num relógio próprio.
+    fn schedule_preview_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.preview_tick_scheduled || self.visible_preview.text == self.chat.preview.text { return; }
         self.preview_tick_scheduled = true;
         let (connection, selection, epoch) = (self.connection, self.selection, self.preview_tick_epoch);
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(33)).await;
-            if let Some(this) = this.upgrade() {
-                this.update(cx, |this, cx| {
-                    if this.connection != connection || this.selection != selection || this.preview_tick_epoch != epoch { return; }
-                    this.preview_tick_scheduled = false;
-                    this.advance_visible_preview(cx);
-                });
-            }
-        }).detach();
+        cx.on_next_frame(window, move |this, window, cx| {
+            if this.connection != connection || this.selection != selection || this.preview_tick_epoch != epoch { return; }
+            this.preview_tick_scheduled = false;
+            this.advance_visible_preview(window, cx);
+        });
     }
 
-    fn advance_visible_preview(&mut self, cx: &mut Context<Self>) {
+    fn advance_visible_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rest) = self.chat.preview.text.strip_prefix(&self.visible_preview.text) else {
-            self.update_visible_preview(cx);
+            self.update_visible_preview(window, cx);
             self.sync_rows(cx);
             cx.notify();
             return;
         };
         let remaining_chars = rest.chars().count();
-        if remaining_chars == 0 { self.preview_last_tick = None; return; }
+        if remaining_chars == 0 { (self.preview_last_tick, self.preview_carry) = (None, 0.); return; }
         let now = Instant::now();
-        let elapsed = self.preview_last_tick.replace(now).map(|last| now.duration_since(last).as_secs_f64()).unwrap_or(0.033).max(0.033);
+        let elapsed = self.preview_last_tick.replace(now).map(|last| now.duration_since(last).as_secs_f64()).unwrap_or(1. / 60.);
         let remaining_time = self.preview_deadline.unwrap_or(now).saturating_duration_since(now).as_secs_f64().max(0.05);
         let pace = 160.0_f64.max(remaining_chars as f64 / remaining_time);
-        let count = ((pace * elapsed).ceil() as usize).clamp(1, remaining_chars);
+        let count;
+        (count, self.preview_carry) = preview_step(self.preview_carry, pace, elapsed, remaining_chars);
+        // Quadro sem caractere novo não muda a tela: só espera o próximo.
+        if count == 0 { self.schedule_preview_tick(window, cx); return; }
         self.visible_preview.text.extend(rest.chars().take(count));
-        self.sync_rows(cx);
+        if !self.sync_preview_row(cx) { self.sync_rows(cx); }
         cx.notify();
-        if count < remaining_chars { self.schedule_preview_tick(cx); }
-        else { self.preview_last_tick = None; }
+        if count < remaining_chars { self.schedule_preview_tick(window, cx); }
+        else { (self.preview_last_tick, self.preview_carry) = (None, 0.); }
     }
 
     fn known_user_ids(&self) -> HashSet<String> {
@@ -1604,7 +1641,6 @@ impl Hangar {
     }
 
     fn sync_rows(&mut self, cx: &mut Context<Self>) {
-        self.follow_content_changed(cx);
         let a = appearance::get();
         self.items = conversation::build(&self.chat.events, conversation::View { thinking: a.thinking_tools, tasks: a.task_list });
         self.paired = conversation::pair_results(&self.chat.events).0;
@@ -1617,33 +1653,43 @@ impl Hangar {
         if !self.visible_preview.text.is_empty() { ids.push(PREVIEW.into()); signatures.push(String::new()); }
         let prefix = self.row_ids.iter().zip(&ids).take_while(|(a,b)| a == b).count();
         let suffix = self.row_ids[prefix..].iter().rev().zip(ids[prefix..].iter().rev()).take_while(|(a,b)| a == b).count();
-        if prefix + suffix < self.row_ids.len() || prefix + suffix < ids.len() {
-            self.splice_rows(prefix..self.row_ids.len()-suffix, ids.len()-prefix-suffix);
-        }
+        let spliced = prefix + suffix < self.row_ids.len() || prefix + suffix < ids.len();
         // Mesma linha com outro conteúdo (resultado que chegou, grupo que cresceu): altura muda.
         let previous: HashMap<&String, &String> = self.row_ids.iter().zip(&self.row_signatures).collect();
-        for (index, (id, signature)) in ids.iter().zip(&signatures).enumerate() {
-            if previous.get(id).is_some_and(|old| *old != signature) { self.list_state.remeasure_items(index..index + 1); }
+        let resized: Vec<usize> = ids.iter().zip(&signatures).enumerate()
+            .filter(|(_, (id, signature))| previous.get(id).is_some_and(|old| old != signature)).map(|(index, _)| index).collect();
+        let mut prepared = HashMap::new();
+        let rewritten: Vec<(usize, String)> = ids.iter().enumerate().filter_map(|(index, id)| {
+            let body = if id == PREVIEW { preview_source(&self.visible_preview) } else {
+                let Some(Item::Event(i)) = self.items.get(index) else { return None };
+                let message = prepare_message(&events[*i]);
+                let Prepared::Message { markdown, .. } = &message else { unreachable!() };
+                let body = markdown.clone();
+                prepared.insert(id.clone(), message);
+                body
+            };
+            self.rich.get(id).filter(|cached| cached.source != body).map(|_| (index, body))
+        }).collect();
+        self.prepared = prepared;
+        self.last_message = events.iter().rposition(|e| e.kind == "assistant_msg" || e.kind == "user_msg" && !e.queued());
+        self.prepare_tools();
+        // Só linha que muda de altura puxa a mola: um quadro sem mudança não pode desgrudar a lista do fim.
+        if spliced || !resized.is_empty() || !rewritten.is_empty() { self.follow_content_changed(cx); }
+        if spliced { self.splice_rows(prefix..self.row_ids.len()-suffix, ids.len()-prefix-suffix); }
+        for index in resized { self.list_state.remeasure_items(index..index + 1); }
+        for (index, body) in rewritten {
+            let Some(cached) = self.rich.get_mut(&ids[index]) else { continue };
+            let added = if ids[index] == PREVIEW { body.strip_prefix(&cached.source).map(str::to_owned) } else { None };
+            cached.source = body.clone();
+            if let Some(added) = added {
+                cached.view.update(cx, |view, cx| view.push_str(&added, cx));
+            } else {
+                cached.view.update(cx, |view, cx| view.set_text(&body, cx));
+            }
+            self.list_state.remeasure_items(index..index+1);
         }
         self.row_ids = ids;
         self.row_signatures = signatures;
-        self.last_message = events.iter().rposition(|e| e.kind == "assistant_msg" || e.kind == "user_msg" && !e.queued());
-        for (index, id) in self.row_ids.iter().enumerate() {
-            let body = if id == PREVIEW { preview_source(&self.visible_preview) }
-                else { match self.items.get(index) { Some(Item::Event(i)) => render_source(&events[*i]), _ => continue } };
-            if let Some(cached) = self.rich.get_mut(id) {
-                if cached.source != body {
-                    let added = if id == PREVIEW { body.strip_prefix(&cached.source).map(str::to_owned) } else { None };
-                    cached.source = body.clone();
-                    if let Some(added) = added {
-                        cached.view.update(cx, |view, cx| view.push_str(&added, cx));
-                    } else {
-                        cached.view.update(cx, |view, cx| view.set_text(&body, cx));
-                    }
-                    self.list_state.remeasure_items(index..index+1);
-                }
-            }
-        }
         let rows: HashSet<&String> = self.row_ids.iter().collect();
         // Visões fora da lista (plano, diff do painel) usam linha "__…__" e saem só pelo limite do cache.
         self.rich.retain(|_, rich| rows.contains(&rich.row) || rich.row.starts_with("__"));
@@ -1653,6 +1699,25 @@ impl Hangar {
                 .filter(|ask| !ask.tool_use_id.as_deref().is_some_and(|id| self.tool_answered(id)));
             if self.chat.update_ask(derived) { self.ask_form = AskForm::default(); }
         }
+    }
+
+    /// Passo do streaming com a linha da prévia já na lista: só ela muda, e o resto da conversa não é refeito
+    /// a cada quadro. Devolve falso quando a linha ainda não existe e é preciso o `sync_rows` inteiro.
+    fn sync_preview_row(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.row_ids.iter().rposition(|id| id == PREVIEW) else { return false };
+        let body = preview_source(&self.visible_preview);
+        let Some(cached) = self.rich.get(PREVIEW) else { return true };
+        if cached.source == body { return true; }
+        let added = body.strip_prefix(&cached.source).map(str::to_owned);
+        self.follow_content_changed(cx);
+        let Some(cached) = self.rich.get_mut(PREVIEW) else { return true };
+        cached.source = body.clone();
+        match added {
+            Some(added) => cached.view.update(cx, |view, cx| view.push_str(&added, cx)),
+            None => cached.view.update(cx, |view, cx| view.set_text(&body, cx)),
+        }
+        self.list_state.remeasure_items(index..index + 1);
+        true
     }
 
     /// Tabelas das respostas gravadas que dão gráfico. Lidas aqui, quando as linhas mudam, e só para a
@@ -1690,8 +1755,10 @@ impl Hangar {
         }
         let view = cx.new(|cx| TextViewState::markdown(&source, cx));
         let owner = row.to_owned();
+        // O parse que termina já redesenha quem mostra o texto (o estado é lido no desenho); aqui só a
+        // altura da linha é refeita, sem um segundo quadro para a janela inteira.
         let observer = cx.observe(&view, move |this, _, cx| {
-            if let Some(i) = this.row_ids.iter().position(|id| id == &owner) { this.follow_content_changed(cx); this.list_state.remeasure_items(i..i+1); cx.notify(); }
+            if let Some(i) = this.row_ids.iter().position(|id| id == &owner) { this.follow_content_changed(cx); this.list_state.remeasure_items(i..i+1); }
         });
         self.rich.insert(key.to_owned(), RichText { source, view: view.clone(), _observer: observer, touched: self.render_tick, row: row.to_owned() });
         view
@@ -1731,9 +1798,9 @@ impl Hangar {
                 (line.map(|l| conversation::one_line(l, 72)).unwrap_or_else(|| tr("tool_failed")), theme::warning())
             }
             Some(result) => {
-                let text = result.result.as_deref().unwrap_or("").trim();
-                let lines = text.lines().count();
-                let label = if text.is_empty() { tr("tool_done") } else if lines == 1 { tr("tool_line") } else { tr("tool_lines").replace("{n}", &lines.to_string()) };
+                let label = match self.result_lines(result) {
+                    0 => tr("tool_done"), 1 => tr("tool_line"), lines => tr("tool_lines").replace("{n}", &lines.to_string()),
+                };
                 (label, theme::muted())
             }
             None if self.running(tool.call) => (tr("tool_running"), theme::accent()),
@@ -1770,29 +1837,83 @@ impl Hangar {
     fn tool_body(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> Div {
         let call = &self.chat.events[tool.call];
         let key = call.id.clone();
-        let input = conversation::pretty_input(call.tool_input.as_ref());
         let error = tool.result.is_some_and(|i| self.chat.events[i].is_error == Some(true));
+        let input_key = format!("{key}:input");
+        let input = self.prepared_detail(&input_key, || conversation::pretty_input(call.tool_input.as_ref()));
         let mut body = div().flex().flex_col().gap_2().pt_1().pb_2();
-        if !input.is_empty() { body = body.child(self.detail(row, &format!("{key}:input"), tr("tool_input"), tr("copy_input"), input, false, cx)); }
+        if matches!(input, Prepared::Detail { total, .. } if total > 0) {
+            body = body.child(self.detail(row, &input_key, input, tr("tool_input"), tr("copy_input"), false, cx));
+        }
         match tool.result {
             Some(i) => {
-                let result = self.chat.events[i].result.clone().unwrap_or_default();
-                body.child(self.detail(row, &format!("{key}:result"), tr("tool_output"), tr("copy_result"), result, error, cx))
+                let result_key = format!("{key}:result");
+                let result = self.prepared_detail(&result_key, || self.chat.events[i].result.clone().unwrap_or_default());
+                body.child(self.detail(row, &result_key, result, tr("tool_output"), tr("copy_result"), error, cx))
             }
             None => body.child(div().text_sm().text_color(theme::muted()).child(self.tool_status(tool).0)),
         }
     }
 
-    fn detail(&mut self, row: &str, key: &str, label: String, copy_label: String, full: String, error: bool, cx: &mut Context<Self>) -> AnyElement {
-        let total = full.chars().count();
-        let (shown, clipped) = conversation::clip(&full, DETAIL_MAX);
-        let view = self.text_view(key, row, conversation::fenced(shown), cx);
+    /// Linhas do resultado aparado, contadas no `prepare_tools`; faltando, conta aqui sem guardar.
+    fn result_lines(&self, result: &ChatEvent) -> usize {
+        match self.prepared.get(&format!("{}:lines", result.id)) {
+            Some(Prepared::Lines(lines)) => *lines,
+            _ => count_lines(result),
+        }
+    }
+
+    /// Detalhe aberto preparado no `prepare_tools`; faltando, monta aqui sem guardar.
+    fn prepared_detail(&self, key: &str, full: impl FnOnce() -> String) -> Prepared {
+        match self.prepared.get(key) {
+            Some(detail @ Prepared::Detail { .. }) => detail.clone(),
+            _ => prepare_detail(full()),
+        }
+    }
+
+    /// Contar, cortar e cercar uma saída grande pesa: faz uma vez por mudança do chat ou abertura de detalhe,
+    /// nunca no desenho. Só insere o que falta.
+    fn prepare_tools(&mut self) {
+        let (events, prepared, expanded) = (&self.chat.events, &mut self.prepared, &self.expanded);
+        let mut tools = Vec::new();
+        let mut orphans = Vec::new();
+        for item in &self.items {
+            match item {
+                Item::Tool(tool) => tools.push(*tool),
+                Item::Group { tools: group, .. } => tools.extend(group.iter().copied()),
+                Item::Thinking { parts, .. } => tools.extend(parts.iter().filter(|&&i| events[i].kind != "thinking")
+                    .map(|&i| Tool { call: i, result: self.paired.get(&i).copied() })),
+                Item::Orphan(i) => orphans.push(*i),
+                Item::Event(_) | Item::Tasks { .. } => {}
+            }
+        }
+        for tool in tools {
+            let call = &events[tool.call];
+            if let Some(result) = tool.result.map(|i| &events[i]) {
+                prepared.entry(format!("{}:lines", result.id)).or_insert_with(|| Prepared::Lines(count_lines(result)));
+            }
+            if !expanded.contains(&call.id) { continue; }
+            prepared.entry(format!("{}:input", call.id)).or_insert_with(|| prepare_detail(conversation::pretty_input(call.tool_input.as_ref())));
+            if let Some(result) = tool.result.map(|i| &events[i]) {
+                prepared.entry(format!("{}:result", call.id)).or_insert_with(|| prepare_detail(result.result.clone().unwrap_or_default()));
+            }
+        }
+        for i in orphans {
+            let event = &events[i];
+            if expanded.contains(&event.id) {
+                prepared.entry(format!("{}:result", event.id)).or_insert_with(|| prepare_detail(event.result.clone().unwrap_or_default()));
+            }
+        }
+    }
+
+    fn detail(&mut self, row: &str, key: &str, detail: Prepared, label: String, copy_label: String, error: bool, cx: &mut Context<Self>) -> AnyElement {
+        let Prepared::Detail { fenced, total, clipped, full } = detail else { return div().into_any_element() };
+        let view = self.text_view(key, row, fenced, cx);
         let note = clipped.then(|| tr("clipped").replace("{shown}", &DETAIL_MAX.to_string()).replace("{total}", &total.to_string()));
         div().flex().flex_col().gap_1()
             .child(div().flex().items_center().justify_between()
                 .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label))
                 .child(Button::new(SharedString::from(format!("copy-{key}"))).ghost().xsmall().icon(IconName::Copy).label(copy_label)
-                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(full.clone())))))
+                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(full.to_string())))))
             .child(TextView::new(&view).selectable(true).scrollable(false))
             .when_some(note, |el, note| el.child(div().text_xs().text_color(theme::muted()).child(note)))
             .into_any_element()
@@ -1802,15 +1923,18 @@ impl Hangar {
         let event = &self.chat.events[index];
         let key = event.id.clone();
         let error = event.is_error == Some(true);
-        let full = event.result.clone().unwrap_or_default();
-        let first = full.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| conversation::one_line(l, 96)).unwrap_or_default();
+        let first = event.result.as_deref().unwrap_or("").lines().map(str::trim).find(|l| !l.is_empty()).map(|l| conversation::one_line(l, 96)).unwrap_or_default();
         let open = self.expanded.contains(&key);
         let toggle_key = key.clone();
         let header = self.disclosure(&key, open)
             .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::text() }).child(tr("tool_orphan")))
             .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(first))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
-        let detail = open.then(|| self.detail(row, &format!("{key}:result"), tr("tool_output"), tr("copy_result"), full, error, cx));
+        let result_key = format!("{key}:result");
+        let detail = open.then(|| {
+            let detail = self.prepared_detail(&result_key, || self.chat.events[index].result.clone().unwrap_or_default());
+            self.detail(row, &result_key, detail, tr("tool_output"), tr("copy_result"), error, cx)
+        });
         div().flex().flex_col().child(header)
             .when_some(detail, |el, detail| el.child(div().pl_6().pt_1().pb_2().child(detail)))
             .into_any_element()
@@ -2449,12 +2573,31 @@ impl Hangar {
         cx.notify();
     }
 
+    /// Texto que "Copiar" leva de uma linha de mensagem: o corpo gravado, ou a prévia como está na tela.
+    fn copy_text(&self, id: &str) -> Option<String> {
+        if id == PREVIEW { return Some(self.visible_preview.text.clone()); }
+        self.chat.events.iter().find(|event| event.id == id).map(ChatEvent::body)
+    }
+
     fn render_message(&mut self, index: usize, id: &str, cx: &mut Context<Self>) -> AnyElement {
         let id = id.to_owned();
         let mut discard = None;
-        let (body, copy_text, label, note, user, error) = if id == PREVIEW {
-            let body = self.visible_preview.text.clone();
-            (body.clone(), body, tr("assistant"), Some(tr("working")), false, false)
+        // Texto preparado quando o chat mudou; a prévia usa a fonte que o passo do streaming já montou.
+        let (markdown, blank) = if id == PREVIEW {
+            let markdown = self.rich.get(&id).map(|rich| rich.source.clone()).unwrap_or_else(|| preview_source(&self.visible_preview));
+            (markdown, self.visible_preview.text.trim().is_empty())
+        } else {
+            let Some(Item::Event(event_index)) = self.items.get(index) else { return div().into_any_element(); };
+            let local;
+            let message = match self.prepared.get(&id) {
+                Some(message) => message,
+                None => { local = prepare_message(&self.chat.events[*event_index]); &local }
+            };
+            let Prepared::Message { markdown, blank, .. } = message else { return div().into_any_element(); };
+            (markdown.clone(), *blank)
+        };
+        let (label, note, user, error) = if id == PREVIEW {
+            (tr("assistant"), Some(tr("working")), false, false)
         } else {
             let Some(Item::Event(event_index)) = self.items.get(index) else { return div().into_any_element(); };
             let event = &self.chat.events[*event_index];
@@ -2471,13 +2614,9 @@ impl Hangar {
             if event.desistiu == Some(true) { discard = event.id.strip_prefix("queued-").map(str::to_owned); }
             else if event.queued() { notes.push(tr(if event.queued_delivered == Some(true) { "delivering" } else { "queued" })); }
             if event.is_error == Some(true) { notes.push(tr("tool_error")); }
-            let full = display_body(event);
-            if full.contains("![") || !matches!(event.kind.as_str(), "user_msg" | "assistant_msg" | "tool_use" | "tool_result" | "thinking" | "notice") {
-                notes.push(tr("unsupported"));
-            }
-            (full, event.body(), label, (!notes.is_empty()).then(|| notes.join(" · ")), event.kind == "user_msg", event.is_error == Some(true))
+            if matches!(self.prepared.get(&id), Some(Prepared::Message { unsupported: true, .. })) { notes.push(tr("unsupported")); }
+            (label, (!notes.is_empty()).then(|| notes.join(" · ")), event.kind == "user_msg", event.is_error == Some(true))
         };
-        let markdown = if id == PREVIEW { preview_source(&self.visible_preview) } else { safe_markdown(&body) };
         // Conversa sem cartões: usuário em bolha à direita, agente em texto corrido. Só o que não é nenhum dos
         // dois (erro, aviso, formato desconhecido) mantém o rótulo, porque ali o rótulo é informação.
         let plain = id == PREVIEW || (kind_of(&self.items, index, &self.chat.events) == Some("assistant_msg") && !error);
@@ -2492,7 +2631,7 @@ impl Hangar {
         let files = (!refs.is_empty()).then(|| self.render_refs(&id, refs, cx));
         let text: Vec<AnyElement> = match charted {
             Some(tables) => self.render_charted(&id, &markdown, &tables, cx),
-            None if !body.trim().is_empty() || files.is_none() => {
+            None if !blank || files.is_none() => {
                 let view = self.text_view(&id, &id, markdown, cx);
                 vec![TextView::new(&view).selectable(true).scrollable(false).stream_fade(id == PREVIEW).on_link_click(open_web_link).into_any_element()]
             }
@@ -2506,6 +2645,7 @@ impl Hangar {
             .children(text)
             .when_some(files, |el, files| el.child(files));
         let copy_label = tr("copy_message");
+        let view = cx.weak_entity();
         div().id(SharedString::from(format!("message-{id}"))).w_full().flex().flex_col().gap_2()
             .map(|el| if user {
                 el.items_end().child(div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content))
@@ -2513,11 +2653,15 @@ impl Hangar {
             .when_some(note, |el, note| el.child(div().flex().items_center().gap_2().when(user, |el| el.justify_end())
                 .child(div().min_w_0().text_sm().text_color(theme::warning()).child(note))
                 .when_some(discard, |el, button| el.child(button))))
-            // Copiar sai da vista e mora no menu de contexto (e no Ctrl+Shift+C para a última resposta).
+            // Copiar sai da vista e mora no menu de contexto (e no Ctrl+Shift+C para a última resposta). O texto é
+            // lido no clique, não copiado a cada quadro.
             .context_menu(move |menu, _, _| {
-                let text = copy_text.clone();
+                let (view, id) = (view.clone(), id.clone());
                 menu.item(PopupMenuItem::new(copy_label.clone()).icon(IconName::Copy)
-                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))))
+                    .on_click(move |_, _, cx| {
+                        let text = view.upgrade().and_then(|view| view.read(cx).copy_text(&id));
+                        if let Some(text) = text { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
+                    }))
             })
             .into_any_element()
     }
@@ -2664,7 +2808,7 @@ impl Hangar {
             if session.pending_questions > 0 { label.push_str(&format!(" · ? {}", session.pending_questions)); }
             // Trabalhando gira (o kit para o giro com movimento reduzido); os outros estados são um ponto na cor dele.
             let mark = if session.state == "working" {
-                gpui_kit::component::spinner::Spinner::new().color(theme::accent()).with_size(px(12.)).into_any_element()
+                chrome::Spinner::new(SharedString::from(format!("tab-spin-{}", session.name)), IconName::Loader, px(12.), theme::accent()).into_any_element()
             } else {
                 div().size(px(8.)).mx(px(2.)).flex_shrink_0().rounded_full().bg(if state == "limited" { theme::limited() } else { theme::status(state) }).into_any_element()
             };
@@ -2925,6 +3069,31 @@ fn display_body(event: &ChatEvent) -> String {
 }
 
 fn render_source(event: &ChatEvent) -> String { safe_markdown(&display_body(event)) }
+
+/// Caracteres da prévia neste quadro. O resto fracionário passa ao próximo: em `t` segundos entram `floor(pace·t)`,
+/// seja qual for a taxa da tela.
+fn preview_step(carry: f64, pace: f64, elapsed: f64, remaining: usize) -> (usize, f64) {
+    let carry = carry + pace * elapsed;
+    let count = (carry.floor() as usize).min(remaining);
+    (count, carry - count as f64)
+}
+
+fn count_lines(result: &ChatEvent) -> usize {
+    result.result.as_deref().unwrap_or("").trim().lines().count()
+}
+
+fn prepare_detail(full: String) -> Prepared {
+    let total = full.chars().count();
+    let (shown, clipped) = conversation::clip(&full, DETAIL_MAX);
+    let fenced = conversation::fenced(shown);
+    Prepared::Detail { fenced, total, clipped, full: full.into() }
+}
+
+fn prepare_message(event: &ChatEvent) -> Prepared {
+    let body = display_body(event);
+    let unsupported = body.contains("![") || !matches!(event.kind.as_str(), "user_msg" | "assistant_msg" | "tool_use" | "tool_result" | "thinking" | "notice");
+    Prepared::Message { markdown: safe_markdown(&body), blank: body.trim().is_empty(), unsupported }
+}
 
 // Identidade do conteúdo de uma linha que não é mensagem: muda quando chega resultado ou o grupo cresce.
 fn signature(item: &Item, events: &[ChatEvent]) -> String {
@@ -3206,5 +3375,24 @@ impl Render for Hangar {
                 .child(dialog.focus_trap("connection-dialog", &self.connection_focus))))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_step;
+
+    #[test]
+    fn preview_pace_does_not_depend_on_the_refresh_rate() {
+        for hz in [60., 144.] {
+            let (mut shown, mut carry) = (0, 0.);
+            for _ in 0..hz as usize {
+                let count;
+                (count, carry) = preview_step(carry, 160., 1. / hz, usize::MAX);
+                shown += count;
+            }
+            // A soma de 1/hz em ponto flutuante pode ficar um fio abaixo de 160.
+            assert!((159..=160).contains(&shown), "{hz} Hz: {shown} caracteres em 1 s");
+        }
     }
 }
