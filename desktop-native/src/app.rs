@@ -34,6 +34,8 @@ const LIVE_THINKING: &str = "__thinking__";
 const LIVE_TOOL: &str = "__tool__";
 const PREVIEW: &str = "__preview__";
 const WORKING: &str = "__working__";
+/// Entrada da linha "trabalhando"; a marca, desenhada fora da conversa, entra no mesmo tempo.
+const WORKING_FADE: Duration = Duration::from_millis(200);
 /// Prefixo da linha do cartão fixo de um agente rodando, seguido do id do tool_use.
 const PINNED: &str = "pin:";
 const COLUMN: f32 = 780.;
@@ -1925,10 +1927,11 @@ impl Hangar {
     fn render_working(&self, cx: &mut Context<Self>) -> AnyElement {
         let label = self.chat.state.label.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| tr("working_line"));
         let row = div().relative().h(px(38.)).px(px(4.)).flex().items_center().gap(px(8.))
-            .child(chrome::WorkingMark::new("working-line", 22., theme::accent()))
+            // A marca anima fora da conversa guardada (`working_mark_float`); aqui fica só o lugar dela.
+            .child(self.working_mark_slot(22.))
             .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::muted()).child(label));
         if cx.reduce_motion() { return row.into_any_element(); }
-        row.with_animation("working-line-in", Animation::new(Duration::from_millis(200)).with_easing(chrome::ease_out),
+        row.with_animation("working-line-in", Animation::new(WORKING_FADE).with_easing(chrome::ease_out),
             |el, t| el.opacity(t).top(px(6. * (1. - t)))).into_any_element()
     }
 
@@ -3438,6 +3441,8 @@ impl Render for Hangar {
                     .selected(self.side.open).on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx))))))
             // Cada área é uma view própria, guardada entre quadros quando pode (`panes.rs`).
             .child(self.pane_element(panes::Area::Conversation, StyleRefinement::default().w_full().flex_1().min_h_0(), cx))
+            // Entre a conversa e a faixa de baixo: o que a faixa abre por cima (comandos, sugestões) cobre a marca.
+            .when(page.is_none(), |el| el.child(self.working_mark_float(WORKING_FADE, cx.reduce_motion())))
             .child(self.pane_element(panes::Area::Bottom, StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())), cx));
         let nav = if page.is_some() { None }
             else if tabs { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w_full().h(px(44.)).flex_shrink_0(), cx)) }
