@@ -390,16 +390,26 @@ def cmd_commit(a) -> int:
     if obj is None:
         problems.append(f"no APROVA for Task {a.task} with a delivered round object")
     else:
-        # Everything since the round's base, so correction commits and reverts count as a whole.
-        files = set(git(repo, "diff", "--name-only", f"{obj}^1", full).splitlines()) - {""}
+        # --no-renames: a renamed path shows both names, so neither side hides behind the other.
+        # Everything since the round's base, so correction commits count as a whole.
+        files = set(git(repo, "diff", "--name-only", "--no-renames", f"{obj}^1", full).splitlines()) - {""}
         # ^2 is the index the executor staged: the Task's paths, not the arbiter's dirty plan.
-        rnd = set(git(repo, "diff", "--name-only", f"{obj}^1", f"{obj}^2").splitlines()) - {""}
+        rnd = set(git(repo, "diff", "--name-only", "--no-renames", f"{obj}^1", f"{obj}^2").splitlines()) - {""}
         if files != rnd:
             problems.append(f"files differ from the approved round {obj[:12]}: "
                             f"only in commit {sorted(files - rnd)}, only in round {sorted(rnd - files)}")
-    bad = sorted({f for f in files for pat in cfg.get("untouchables", []) if fnmatch.fnmatch(f, pat)})
-    if bad:
-        problems.append(f"untouchable in the commit: {bad}")
+        if rnd:
+            changed = sorted(set(git(repo, "--literal-pathspecs", "diff", "--name-only", "--no-renames",
+                                     f"{obj}^2", full, "--", *sorted(rnd)).splitlines()) - {""})
+            if changed:
+                problems.append(f"content differs from the approved round in: {changed}")
+        # Per commit, not the net diff: history is never rewritten, so a reverted untouchable
+        # still sits in it and only the arbiter or the user may accept that.
+        touched = set(git(repo, "log", "--no-renames", "--name-only", "--format=",
+                          f"{obj}^1..{full}").splitlines()) - {""}
+        bad = sorted({f for f in touched for pat in cfg.get("untouchables", []) if fnmatch.fnmatch(f, pat)})
+        if bad:
+            problems.append(f"untouchable in commit history: {bad}")
     if problems:
         print("REFUSED:\n- " + "\n- ".join(problems))
         return 1

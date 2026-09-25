@@ -255,7 +255,7 @@ def test_commit_com_arquivo_fora_da_rodada_ou_intocavel_e_recusado(env, repo, tm
     res = run(e, "commit", "--task", "1", "--hash", h, check=False)
     assert res.returncode == 1
     assert "only in commit ['secret/k.txt']" in res.stdout
-    assert "untouchable in the commit: ['secret/k.txt']" in res.stdout
+    assert "untouchable in commit history: ['secret/k.txt']" in res.stdout
     assert not any(m.startswith("arb ") for m in sent(log))
     assert not (d / "closed.jsonl").exists()
 
@@ -268,7 +268,7 @@ def test_commit_com_intocavel_acentuado_e_recusado_com_o_nome_cru(env, repo, tmp
     h = _rodada_aprovada(e, r, g, extra=("secret/decisão.txt",))
     res = run(e, "commit", "--task", "1", "--hash", h, check=False)
     assert res.returncode == 1
-    assert "untouchable in the commit: ['secret/decisão.txt']" in res.stdout
+    assert "untouchable in commit history: ['secret/decisão.txt']" in res.stdout
     assert not (d / "closed.jsonl").exists()
 
 
@@ -302,14 +302,35 @@ def test_commit_de_correcao_fecha_a_task_contando_desde_a_base_da_rodada(env, re
         "matches the approved round. Release the next Task."]
 
 
-def test_intocavel_commitado_e_revertido_nao_conta(env, repo, tmp_path):
-    d, _, e = env
+def test_intocavel_commitado_e_revertido_e_recusado(env, repo, tmp_path):
+    d, log, e = env
     r, g = repo
     run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"),
         "--untouchable", "secret/*")
     _rodada_aprovada(e, r, g, extra=("secret/k.txt",))
     g("rm", "-q", "secret/k.txt")
     g("commit", "-qm", "revert")
+    res = run(e, "commit", "--task", "1", "--hash", g("rev-parse", "HEAD"), check=False)
+    assert res.returncode == 1
+    assert "untouchable in commit history: ['secret/k.txt']" in res.stdout
+    assert not any(m.startswith("arb ") for m in sent(log))
+    assert not (d / "closed.jsonl").exists()
+
+
+def test_conteudo_diferente_da_rodada_e_recusado_e_a_correcao_fecha(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    (r / "a.txt").write_text("2\n")
+    g("add", "a.txt")
+    _aprova(e, g)
+    (r / "a.txt").write_text("3\n")
+    g("commit", "-qam", "t1")
+    res = run(e, "commit", "--task", "1", "--hash", g("rev-parse", "HEAD"), check=False)
+    assert res.returncode == 1
+    assert "content differs from the approved round in: ['a.txt']" in res.stdout
+    (r / "a.txt").write_text("2\n")
+    g("commit", "-qam", "t1 fix")
     run(e, "commit", "--task", "1", "--hash", g("rev-parse", "HEAD"))
     assert json.loads((d / "closed.jsonl").read_text())["task"] == 1
 
