@@ -328,7 +328,9 @@ MARK = re.compile(r"^\s*\[(aviso|decis[aã]o)\]", re.IGNORECASE)
 
 
 def git(repo: str, *args: str) -> str:
-    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    # Unquoted paths: an escaped accented name would slip past the untouchables glob.
+    r = subprocess.run(["git", "-c", "core.quotePath=false", "-C", repo, *args],
+                       capture_output=True, text=True)
     if r.returncode != 0:
         raise OrqError(f"git {' '.join(args)}: {r.stderr.strip()[:200]}")
     return r.stdout

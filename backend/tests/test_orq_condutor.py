@@ -230,6 +230,18 @@ def test_commit_com_arquivo_fora_da_rodada_ou_intocavel_e_recusado(env, repo, tm
     assert not (d / "closed.jsonl").exists()
 
 
+def test_commit_com_intocavel_acentuado_e_recusado_com_o_nome_cru(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"),
+        "--untouchable", "secret/*")
+    h = _rodada_aprovada(e, r, g, extra=("secret/decisão.txt",))
+    res = run(e, "commit", "--task", "1", "--hash", h, check=False)
+    assert res.returncode == 1
+    assert "untouchable in the commit: ['secret/decisão.txt']" in res.stdout
+    assert not (d / "closed.jsonl").exists()
+
+
 def test_commit_que_nao_e_a_ponta_e_recusado(env, repo, tmp_path):
     d, log, e = env
     r, g = repo
