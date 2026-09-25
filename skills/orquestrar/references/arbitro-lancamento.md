@@ -10,7 +10,7 @@ session is opened or a Task released. Back to `arbitro.md` once the team stands.
    ```bash
    git status --short                  # dirty tree → the paths become untouchables, one by one
    git branch --show-current
-   hangar-send --list                  # who else is alive in this cwd
+   hangar-send --list                  # who else is alive in this cwd; phase-0 leftovers → --close
    echo "$CP_SESSION_NAME"             # which of those is you; renamed → MCP who_am_i
    ```
 

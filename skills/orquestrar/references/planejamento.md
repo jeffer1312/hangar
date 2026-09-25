@@ -22,7 +22,7 @@ midway (the route comes at step 3):
 
 ```markdown
 Method: <name | none>            # what plans and executes — the user names it
-Executes with: <command | none>  # the method's executing half; the executor's kick-off starts with it
+Executes with: <command | none>  # the method's executing half; opens the executor's kick-off
 Domain skill: <name | none>      # the step-by-step of this kind of work
 Route: <audit | full>            # decided in phase 1, escalates only
 ```
@@ -50,11 +50,11 @@ Done when `Method:`, `Executes with:` and `Domain skill:` are written and `checa
    Protect it per `protecao.md`; a subagent inherits the protection or has a proven native
    restriction.
 2. "It doesn't exist" answers one query: write the phrase searched. Absence that supports a
-   decision → redo the search by a second path. Zero rows from a DB or service is not proof of
+   decision → redo the search by a second path. Zero rows from a DB or service don't prove
    absence.
 3. Before declaring that something depends on the user's decision, re-read their material.
 
-Done when the plan cites the output file, or needed no research.
+Done when the plan cites the output file (its session closed), or needed no research.
 
 ### 3. Team first: route, team and accounts
 

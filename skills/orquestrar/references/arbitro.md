@@ -161,4 +161,5 @@ logged, the watchdog disarmed.
 - Model, account, subagents and outside tools: `arbitro-lancamento.md`, "Locks on model and tools".
 - Time comes from `date -Iseconds`, never from memory. Authorship comes from a transcript, never from time correlation (`arbitro-vigia.md`, "A vanished session").
 - Every number carries its scope: what entered the count, from where.
+- Close each session when its part ends: `arbitro-vigia.md`, "Closing sessions".
 - Talk little with the user: what and when, `arbitro-vigia.md`, "Deciding vs waking the user". Demand the same short reports from the sessions.

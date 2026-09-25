@@ -38,7 +38,7 @@ closing items are written at launch (`arbitro.md`, step 1) and executed here.
 6. Two final reviews in parallel: hold findings that overlap until both deliver, and tell each you are holding.
 7. Closing sentence to the user carries, beyond "approved": which commits in the range came from outside the pipeline; by which step (build, deploy, publish) the approved code reaches the screen they will open. Push and MR are the user's.
 
-Done when the branch review approved and the closing sentence is sent.
+Done when the branch review approved, the closing sentence is sent, and the branch review, reviewer and executor sessions are closed.
 
 ## The branch reopened after approval
 
@@ -49,7 +49,7 @@ Done when the branch review approved and the closing sentence is sent.
 
 Fire the closing item on its trigger: the branch in the user's hands, nothing in flight. Open the fresh session by the recipe in `arbitro-lancamento.md`, on the `retrospectiva` row; the kick-off carries the lines the closing item lists.
 
-Done when the proposed patch exists at `~/.hangar/orq/<date>-<gid>.md`, `execucao_fim` is logged and the watchdog disarmed.
+Done when the proposed patch exists at `~/.hangar/orq/<date>-<gid>.md`, `execucao_fim` is logged, the watchdog disarmed and the retrospective session closed.
 
 ## Arbiter succession
 
@@ -57,12 +57,12 @@ When you leave: window past your row's `janela` (default 50%), or the user chang
 
 1. Finish the task at hand: the open gate closes or rejects. Dispatch no new Task.
 2. Journal section `## Handover to the next arbiter (<output of date -Iseconds>)`: current Task and gate state; live sessions per role (name, account, model, effort, measured ctx) and which are retired; HEAD and `git status`; what is on disk uncommitted; pending items and what remains of the plan; the user's decisions not yet rules, one by one, dated; traps paid; absolute paths of plan, `regras-<gid>.md`, `licoes.md`, `eventos.jsonl`, durable dir; the last line written to `eventos.jsonl`; the closing items with who carries each; the bars decided. No line cap, no context copy: what the successor cannot discover from the files pointed at.
-3. Open the successor by the usual recipe on the `árbitro` row's new configuration. Kick-off: invoke the `orquestrar` skill with the arbiter role; the journal path (handover section first), the rules, the plan; "take over: you are the arbiter from now on".
+3. Open the successor by the usual recipe on the `árbitro` row's new configuration. Kick-off: invoke the `orquestrar` skill with the arbiter role; the journal path (handover section first), the rules, the plan; "take over: you are the arbiter from now on; once you confirm, close me: `hangar-send --close <your name>`".
 4. Change the `árbitro` row to the new name (the user already changed it via the panel: only the session name); log `sessao_trocada` (from, to, reason).
 5. Tell the live executor and reviewer, 1:1: "the arbiter is now `<name>`; reports go to them".
-6. One line in the journal ("left at <ctx>, successor `<name>` took over"); stop sending work. Your own session stays alive.
+6. One line in the journal ("left at <ctx>, successor `<name>` took over"); stop sending work. You never close yourself: the successor does.
 
-Done when the successor confirmed the takeover and the `árbitro` row names them.
+Done when the successor confirmed the takeover and the `árbitro` row names them; the successor then closes your session.
 
 Locks for every baton pass, any role:
 

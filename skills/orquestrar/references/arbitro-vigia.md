@@ -108,9 +108,22 @@ It becomes a case only if the repo is strange (unexplained dirty tree, unreporte
 - Provider drops are not a reason; throughput is: swap when ctx barely moves between drops, or no revival after two nudges.
 - Handover in a file that points: HEAD, `git status`, uncommitted disk, what remains, traps paid, paths of plan, contract and Task excerpt, and every decision made. No line count; never a context copy.
 - Retiring is an act with a message: stop, don't capture, don't commit, release the stage without killing. In the same act tell the reviewer the new address.
-- Mid-gate: release, don't kill. Closed milestone (approved, committed, nothing in flight): end the session by name via the API, at once.
+- Mid-gate: release, don't kill; close it once the substitute confirms. Closed milestone (approved, committed, nothing in flight): close it at once.
 - The substitute gets the full kick-off (`arbitro-lancamento.md`) with `Frozen round`, and proves model/effort before its first `Edit`. Interrupted turn → list the half-edited paths as untrusted draft.
 - Arbiter leaving → `arbitro-encerramento.md`.
+
+## Closing sessions
+
+A session closes when its part ends, with `hangar-send --close <name>`; never your own:
+
+- research (phase 0): its output file exists;
+- executor: its Task approved and committed;
+- a retired session (rotation, context, quota): its substitute confirmed the takeover;
+- reviewer and the executor for findings: the branch review approved;
+- branch review and retrospective: they delivered;
+- the previous arbiter: its successor closes it on taking over.
+
+Done when `hangar-send --list` shows only the current phase's sessions plus you.
 
 ## Authorization from outside
 

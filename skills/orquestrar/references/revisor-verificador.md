@@ -13,7 +13,7 @@ hangar-send --new <work>-verif-<task> <worktree> --provider <provider> --model <
 # 1. read model and effort back
 # 2. capture the consumption start (consumo.md)
 hangar-send <work>-verif-<task> "<closed script>"
-# 3. capture the end; close through the sessions API
+# 3. capture the end, then: hangar-send --close <work>-verif-<task>
 ```
 
 - The script is closed: exact steps, states to capture, absolute save paths, what to report
