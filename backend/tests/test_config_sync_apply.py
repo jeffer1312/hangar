@@ -257,10 +257,10 @@ async def test_hooks_keep_destination_hangar_hooks_and_replace_user_hooks(pair, 
     commands = [h["command"] for g in hooks["PreToolUse"] for h in g["hooks"]]
     assert commands == [ours, f"python3 {bia.claude}/hooks/lembrete.py",
                         f"/bin/sh '{bia.home}/.orca/agent-hooks/claude-hook.sh'"]
-    assert "Stop" not in hooks
+    assert [h["command"] for g in hooks["Stop"] for h in g["hooks"]] == ["echo tchau"]
     replaced = sorted(w["params"]["command"] for w in report["items"]["claude_hooks"]["warnings"]
                       if w["code"] == "config_sync_hook_replaced")
-    assert replaced == ["echo tchau", "python3 /velho.py"]
+    assert replaced == ["python3 /velho.py"]
     again = await _apply(_send(monkeypatch, ana, bia, ["claude_hooks"]), ["claude_hooks"], bia)
     assert again["items"]["claude_hooks"]["status"] == "same"
 
@@ -313,11 +313,14 @@ async def test_mcp_keeps_destination_hangar_entry_and_login(pair, monkeypatch):
     (Path(bia.home) / ".claude.json").write_text(json.dumps({
         "oauthAccount": {"emailAddress": "bia@x"},
         "mcpServers": {"hangar": {"type": "http", "url": "http://127.0.0.1:9999/mcp/"}}}))
+    (Path(bia.home) / ".claude.json").chmod(0o644)
     await _apply(_send(monkeypatch, ana, bia, ["claude_mcp"]), ["claude_mcp"], bia)
     data = json.loads((Path(bia.home) / ".claude.json").read_text())
     assert data["oauthAccount"] == {"emailAddress": "bia@x"}
     assert data["mcpServers"]["hangar"]["url"] == "http://127.0.0.1:9999/mcp/"
     assert data["mcpServers"]["grafana"]["headers"] == {"Authorization": "Bearer seg"}
+    if os.name != "nt":   # agora leva o Authorization da origem
+        assert (Path(bia.home) / ".claude.json").stat().st_mode & 0o777 == 0o600
 
 
 async def test_engines_file_is_private(pair, monkeypatch):

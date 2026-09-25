@@ -721,7 +721,10 @@ def _edit_json(path: Path, change, ctx: _Apply) -> bool:
         if raw is not None and new == current:
             return raw
         return (json.dumps(new, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
-    return codex_arquivos.transformar(path, transform, ctx.backups / "json")
+    written = codex_arquivos.transformar(path, transform, ctx.backups / "json")
+    if os.name != "nt" and path.exists():
+        os.chmod(path, 0o600)   # o gravar mantém o modo antigo, e agora pode haver segredo
+    return written
 
 
 def _merge_keys(current: dict, incoming: dict, changed: list[str], prefix: str = "") -> dict:
@@ -742,8 +745,8 @@ def _fix_commands(value: dict, res: dict, where: str) -> None:
 
 
 def _apply_hooks(ctx: _Apply) -> None:
-    """Pasta hooks/, arquivos que os comandos usam e, no settings.json, a lista de cada evento:
-    a da origem inteira mais os hooks do Hangar daqui. Hook do usuário que só existia aqui sai
+    """Pasta hooks/, arquivos que os comandos usam e, no settings.json, a lista de cada evento que
+    a origem mandou: a da origem inteira mais os hooks do Hangar daqui. Hook do usuário que só existia aqui sai
     (vai para o backup do settings.json) e aparece no relatório."""
     item = "claude_hooks"
     res = _result(ctx, item)
@@ -767,8 +770,8 @@ def _apply_hooks(ctx: _Apply) -> None:
         replaced.clear()
         changed.clear()
         current = settings.get("hooks") if isinstance(settings.get("hooks"), dict) else {}
-        merged = {}
-        for event in sorted(set(current) | set(incoming)):
+        merged = dict(current)   # evento que a origem não mandou fica como está
+        for event in sorted(incoming):
             new = _split_hooks(current.get(event), own, hangar=True) + list(incoming.get(event) or [])
             arriving = set(_hook_commands({event: incoming.get(event) or []}))
             leaving = _hook_commands({event: _split_hooks(current.get(event), own, hangar=False)})
@@ -778,6 +781,8 @@ def _apply_hooks(ctx: _Apply) -> None:
                 changed.append(f"hooks:{event}")
             if new:
                 merged[event] = new
+            else:
+                merged.pop(event, None)
         if merged or "hooks" in settings:
             settings["hooks"] = merged
         if status is not None and settings.get("statusLine") != status:
