@@ -4956,6 +4956,7 @@
   "native_create_baton_preview_note": "This is a sample: {n} keeps working, and the summary the new session receives is built at creation time — it may not be exactly this one.",
   "native_create_baton_preview_failed": "Couldn't read the summary right now.",
   "native_create_baton_preview_empty": "The summary is empty.",
+  "native_baton_origin_missing": "{nome} isn't in this server's session list.",
   "native_create_baton_summary_failed": "The session started with Hangar's summary: {motivo}.",
   "native_create_baton_unlisted": "The session started, but it isn't in the list yet: the conversation shows up once the list brings it.",
   "native_create_step_checking": "Checking the request",

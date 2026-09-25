@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 mod activity;
 mod backdrop;
+mod baton;
 mod accounts;
 mod chrome;
 mod controls;
@@ -104,6 +105,8 @@ enum Payload {
     Sidebar(sidebar::SidebarReply),
     // Aba Atividade: a conta de subagentes no disco e a lista da aba.
     Activity(activity::ActivityReply),
+    // Resumo do bastão (`GET …/bastao/dossie`), amarrado ao estado da tela que o pediu e ao número do pedido.
+    Dossier(EntityId, u64, Result<String, Failure>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,8 +143,8 @@ enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Que
 /// detalhe aberto (entrada/saída) de uma chamada.
 #[derive(Clone)]
 enum Prepared {
-    /// `card`: a notificação de subagente do Codex já lida, para o desenho não reler o JSON a cada quadro.
-    Message { markdown: String, blank: bool, unsupported: bool, card: Option<cards::CodexSubagent> },
+    /// `card`: o cartão já lido, para o desenho não reler o texto a cada quadro.
+    Message { markdown: String, blank: bool, unsupported: bool, card: Option<cards::Card> },
     Lines(usize),
     Detail { fenced: String, total: usize, clipped: bool, full: SharedString },
 }
@@ -282,6 +285,7 @@ pub struct Hangar {
     sidebar: sidebar::Sidebar,
     act: activity::ActivityState,
     panes: panes::Panes,
+    dossier: Option<Entity<baton::Dossier>>,
 }
 
 impl Drop for Hangar {
@@ -372,7 +376,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
             server_config: server_config::ServerConfig::default(), machines: machines::Machines::default(), new_session: None, sidebar,
-            act: activity::ActivityState::new(cx), panes,
+            act: activity::ActivityState::new(cx), panes, dossier: None,
         }
     }
 
@@ -597,6 +601,7 @@ impl Hangar {
         self.command_panel = false;
         self.suggest_dismissed = None;
         self.side.on_select();
+        self.dossier = None;
         self.controls.on_select();
         self.reset_subagent_count();
         self.selected = Some(session.clone());
@@ -817,6 +822,7 @@ impl Hangar {
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
             Payload::Sidebar(reply) => { self.receive_sidebar(reply, window, cx); return; }
             Payload::Activity(reply) => { self.receive_activity(reply, cx); return; }
+            Payload::Dossier(key, seq, result) => { self.receive_dossier(key, seq, result, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
@@ -2762,6 +2768,7 @@ impl Hangar {
     fn render_message(&mut self, index: usize, id: &str, cx: &mut Context<Self>) -> AnyElement {
         let id = id.to_owned();
         let mut discard = None;
+        let mut baton = None;
         // Texto preparado quando o chat mudou; a prévia usa a fonte que o passo do streaming já montou.
         let (markdown, blank) = if id == PREVIEW {
             let markdown = self.rich.get(&id).map(|rich| rich.source.clone()).unwrap_or_else(|| preview_source(&self.visible_preview));
@@ -2774,8 +2781,10 @@ impl Hangar {
                 None => { local = prepare_message(&self.chat.events[*event_index]); &local }
             };
             let Prepared::Message { markdown, blank, card, .. } = message else { return div().into_any_element(); };
-            if let Some(card) = card.clone() {
-                return self.render_codex_card(&id, *event_index, card, markdown.clone(), cx);
+            match card.clone() {
+                Some(cards::Card::Codex(card)) => return self.render_codex_card(&id, *event_index, card, markdown.clone(), cx),
+                Some(cards::Card::Baton(card)) => baton = Some((*event_index, card)),
+                None => {}
             }
             (markdown.clone(), *blank)
         };
@@ -2800,6 +2809,18 @@ impl Hangar {
             if matches!(self.prepared.get(&id), Some(Prepared::Message { unsupported: true, .. })) { notes.push(tr("unsupported")); }
             (label, (!notes.is_empty()).then(|| notes.join(" · ")), event.kind == "user_msg", event.is_error == Some(true))
         };
+        let busy = self.selected_key().is_some_and(|key| self.flight.busy(&key));
+        let discard = discard.map(|entry| Button::new(format!("discard-{id}")).small().ghost().label(tr("queue_discard")).disabled(busy)
+            .on_click(cx.listener(move |this, _, _, cx| this.act(Action::Discard(entry.clone()), entry.clone(), cx))));
+        // O bastão chega pela fila: o cartão fica no lugar da bolha, e a nota de entrega (com o Descartar) embaixo dele.
+        if let Some((event, card)) = baton {
+            let card = self.render_baton_card(&id, event, card, cx);
+            let row = div().id(SharedString::from(format!("message-{id}"))).w_full().flex().flex_col().gap_2().child(card)
+                .when_some(note, |el, note| el.child(div().flex().items_center().gap_2()
+                    .child(div().min_w_0().text_sm().text_color(theme::warning()).child(note))
+                    .when_some(discard, |el, button| el.child(button))));
+            return with_copy_menu(row, id, cx.weak_entity());
+        }
         // Conversa sem cartões: usuário em bolha à direita, agente em texto corrido. Só o que não é nenhum dos
         // dois (erro, aviso, formato desconhecido) mantém o rótulo, porque ali o rótulo é informação.
         let plain = id == PREVIEW || (kind_of(&self.items, index, &self.chat.events) == Some("assistant_msg") && !error);
@@ -2820,9 +2841,6 @@ impl Hangar {
             }
             None => Vec::new(),
         };
-        let busy = self.selected_key().is_some_and(|key| self.flight.busy(&key));
-        let discard = discard.map(|entry| Button::new(format!("discard-{id}")).small().ghost().label(tr("queue_discard")).disabled(busy)
-            .on_click(cx.listener(move |this, _, _, cx| this.act(Action::Discard(entry.clone()), entry.clone(), cx))));
         let content = conversation_text(div().flex().flex_col().gap_2())
             .when(!user && !plain, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label)))
             .children(text)
@@ -3252,17 +3270,21 @@ fn display_body(event: &ChatEvent) -> String {
         // Anexos viram cartões próprios; o texto mostra só a legenda.
         "user_msg" => {
             let body = event.body();
-            if let Some(card) = codex_card(event) { return card.report; }
+            if let Some(cards::Card::Codex(card)) = message_card(event) { return card.report; }
             composer::parse_marked(&body).map(|m| m.caption).unwrap_or(body)
         }
         _ => event.body(),
     }
 }
 
-/// Mensagem que vira o cartão do subagente do Codex: só a de usuário gravada, sem imagem e fora da fila, como no web.
-fn codex_card(event: &ChatEvent) -> Option<cards::CodexSubagent> {
-    if event.kind != "user_msg" || event.image_count.unwrap_or(0) > 0 || event.queued() || event.id.starts_with("held:") { return None; }
-    cards::codex_subagent(event.text.as_deref()?)
+/// Mensagem de usuário sem imagem que vira cartão, como no web: o bastão também na fila (é por ela que ele chega); o
+/// subagente do Codex só gravado.
+fn message_card(event: &ChatEvent) -> Option<cards::Card> {
+    if event.kind != "user_msg" || event.image_count.unwrap_or(0) > 0 { return None; }
+    let text = event.text.as_deref()?;
+    if let Some(baton) = cards::baton(text) { return Some(cards::Card::Baton(baton)); }
+    if event.queued() || event.id.starts_with("held:") { return None; }
+    cards::codex_subagent(text).map(cards::Card::Codex)
 }
 
 /// Hora local "HH:MM" de um instante do transcript.
@@ -3294,8 +3316,8 @@ fn prepare_detail(full: String) -> Prepared {
 }
 
 fn prepare_message(event: &ChatEvent) -> Prepared {
-    let card = codex_card(event);
-    let body = card.as_ref().map(|card| card.report.clone()).unwrap_or_else(|| display_body(event));
+    let card = message_card(event);
+    let body = display_body(event);
     let unsupported = body.contains("![") || !matches!(event.kind.as_str(), "user_msg" | "assistant_msg" | "tool_use" | "tool_result" | "thinking" | "notice");
     Prepared::Message { markdown: safe_markdown(&body), blank: body.trim().is_empty(), unsupported, card }
 }
@@ -3612,7 +3634,24 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::preview_step;
+    use super::{message_card, preview_step};
+    use crate::{api::dto::ChatEvent, cards::Card};
+
+    #[test]
+    fn baton_card_also_in_the_queue_codex_card_only_recorded() {
+        let baton = "[hangar: passagem de bastão] Você continua o trabalho da sessão `origem-x` — é a mesma.\n\
+            Comece lendo o resumo do trabalho em `/srv/r.md`.\nLeia o plano antes.\nA sessão `origem-x` continua VIVA.\n\
+            A continuação NÃO move esses vínculos.";
+        let codex = "<subagent_notification>\n{\"status\": {\"completed\": \"ok\"}}\n</subagent_notification>";
+        let event = |id: &str, text: &str, images: u32| ChatEvent { kind: "user_msg".into(), id: id.into(), text: Some(text.into()),
+            image_count: Some(images), ..ChatEvent::default() };
+        for id in ["b1", "queued-b1", "held:b1"] { assert!(matches!(message_card(&event(id, baton, 0)), Some(Card::Baton(_))), "{id}"); }
+        assert!(matches!(message_card(&event("k1", codex, 0)), Some(Card::Codex(_))));
+        for id in ["queued-k1", "held:k1"] { assert_eq!(message_card(&event(id, codex, 0)), None, "{id}"); }
+        // Com imagem, a imagem vence, como no web.
+        assert_eq!(message_card(&event("b2", baton, 1)), None);
+        assert_eq!(message_card(&ChatEvent { kind: "assistant_msg".into(), ..event("b3", baton, 0) }), None);
+    }
 
     #[test]
     fn preview_pace_does_not_depend_on_the_refresh_rate() {

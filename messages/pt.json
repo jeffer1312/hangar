@@ -4956,6 +4956,7 @@
   "native_create_baton_preview_note": "É uma amostra: {n} continua trabalhando, e o resumo que a sessão nova vai receber é montado na hora de criar — pode não ser exatamente este.",
   "native_create_baton_preview_failed": "Não consegui ler o resumo agora.",
   "native_create_baton_preview_empty": "O resumo está vazio.",
+  "native_baton_origin_missing": "{nome} não está na lista de sessões deste servidor.",
   "native_create_baton_summary_failed": "A sessão nasceu com o resumo do Hangar: {motivo}.",
   "native_create_baton_unlisted": "A sessão nasceu, mas ainda não está na lista: a conversa aparece quando a lista a trouxer.",
   "native_create_step_checking": "Conferindo o pedido",

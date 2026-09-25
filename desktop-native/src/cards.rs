@@ -40,9 +40,90 @@ pub fn codex_subagent(text: &str) -> Option<CodexSubagent> {
     })
 }
 
+/// Mensagem de usuário que vira cartão.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Card { Codex(CodexSubagent), Baton(Baton) }
+
+/// Kick-off que a sessão sucessora recebe na passagem de bastão (`frontend/src/lib/bastaoRecado.ts`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Baton {
+    /// Sessão de onde o trabalho vem; continua viva, só parou de escrever.
+    pub origin: String,
+    /// Caminho do resumo `.md` gravado no disco do servidor.
+    pub dossier: String,
+    pub account: String,
+    pub model: String,
+}
+
+pub const BATON_PREFIX: &str = "[hangar: passagem de bastão]";
+// O cartão reescreve o recado em frases curtas; só é honesto enquanto o recado diz o mesmo. Mudou a instrução, estas
+// marcas deixam de casar e a mensagem volta inteira, como bolha.
+const BATON_MARKS: [&str; 3] = ["Leia o plano", "continua VIVA", "NÃO move esses vínculos"];
+
+/// O texto entre crases logo depois de `label` (espaços no meio), na primeira ocorrência que tiver um.
+fn ticked<'a>(text: &'a str, label: &str) -> Option<&'a str> {
+    text.match_indices(label).find_map(|(at, _)| {
+        let rest = text[at + label.len()..].trim_start().strip_prefix('`')?;
+        rest.find('`').map(|end| &rest[..end]).filter(|inside| !inside.is_empty())
+    })
+}
+
+pub fn baton(text: &str) -> Option<Baton> {
+    if !text.starts_with(BATON_PREFIX) || !BATON_MARKS.iter().all(|mark| text.contains(mark)) { return None; }
+    let origin = ticked(text, "Você continua o trabalho da sessão")?;
+    // Duas redações: o recado já chamou o arquivo de "dossiê" e hoje o chama de "resumo do trabalho"; vale a que vem antes.
+    let dossier = ["o dossiê em", "o resumo do trabalho em"].iter()
+        .filter_map(|label| text.match_indices(label).find_map(|(at, _)| ticked(&text[at..], label).map(|path| (at, path))))
+        .min_by_key(|(at, _)| *at).map(|(_, path)| path)?;
+    // "Ela vinha de <conta e modelo> —", na mesma linha.
+    let from = text.split_once("Ela vinha de").and_then(|(_, rest)| rest.lines().next()?.split_once('—')).map_or("", |(from, _)| from.trim());
+    Some(Baton {
+        origin: origin.to_owned(),
+        dossier: dossier.to_owned(),
+        account: ticked(from, "conta").unwrap_or("").to_owned(),
+        model: ticked(from, "modelo").unwrap_or("").to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // As linhas do `bastao.kickoff` do backend.
+    fn kickoff(dossier_line: &str, from_line: &str) -> String {
+        [
+            "[hangar: passagem de bastão] Você continua o trabalho da sessão `origem-x` — não é tarefa nova, é a mesma.",
+            dossier_line,
+            "Leia o plano e o contrato citados no resumo ANTES de mexer em qualquer arquivo.",
+            "A sessão `origem-x` continua VIVA, mas parou de escrever.",
+            "Se o resumo mostrar par ou grupo, a continuação NÃO move esses vínculos: troque a linha.",
+            from_line,
+        ].join("\n")
+    }
+    const DOSSIER: &str = "Comece lendo, com um `Read`, o resumo do trabalho em `/srv/bastao/origem-x.md`: onde ele está.";
+    const FROM: &str = "Ela vinha de conta `02-200` · modelo `opus/high` — você pode estar em outra.";
+
+    #[test]
+    fn baton_reads_origin_dossier_account_and_model() {
+        let card = baton(&kickoff(DOSSIER, FROM)).unwrap();
+        assert_eq!(card, Baton { origin: "origem-x".into(), dossier: "/srv/bastao/origem-x.md".into(), account: "02-200".into(), model: "opus/high".into() });
+        // Redação antiga ("dossiê") e sem conta/modelo (a linha diz que estão no resumo).
+        let old = baton(&kickoff("Comece lendo o dossiê em `/srv/velho.md`.", "A conta e o modelo de onde ela vinha estão na primeira seção do resumo.")).unwrap();
+        assert_eq!((old.dossier.as_str(), old.account.as_str(), old.model.as_str()), ("/srv/velho.md", "", ""));
+        let only_model = baton(&kickoff(DOSSIER, "Ela vinha de modelo `sonnet` — você pode estar em outra.")).unwrap();
+        assert_eq!((only_model.account.as_str(), only_model.model.as_str()), ("", "sonnet"));
+    }
+
+    #[test]
+    fn baton_without_prefix_marks_origin_or_dossier_stays_a_bubble() {
+        let full = kickoff(DOSSIER, FROM);
+        assert_eq!(baton(&format!("oi {full}")), None);
+        assert_eq!(baton(&full.replace("continua VIVA", "continua viva")), None);
+        assert_eq!(baton(&full.replace("Leia o plano", "Leia")), None);
+        assert_eq!(baton(&full.replace("NÃO move esses vínculos", "não move")), None);
+        assert_eq!(baton(&kickoff("Comece lendo o resumo.", FROM)), None);
+        assert_eq!(baton(&full.replace("sessão `origem-x` —", "sessão origem-x —")), None);
+    }
 
     fn wrap(json: &str) -> String { format!("<subagent_notification>\n{json}\n</subagent_notification>") }
 
