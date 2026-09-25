@@ -20,6 +20,8 @@ GET /control/r7?load=<ok|500|drop>&load_delay=<s>&save=<ok|422|500|drop>&save_de
 &quiet_delay=<s>&quiet=<HH:MM-HH:MM|> muda os campos de Notificações/Anexos e as horas silenciosas (Task 12 R7a);
 env=<fixture|none> tira as variáveis do .env da leitura, como um servidor antigo (R7b).
 Voz (R8a) usa as mesmas rotas e modos da R7; null num campo apaga o override e ele volta ao valor do ambiente.
+GET /control/r8?voices=<ok|empty|500>&usage=<ok|500>&delay=<s> muda o que GET /api/tts/voices e /api/tts/saldo respondem
+(Task 12 R8b). As vozes e o consumo são SINTÉTICOS: nenhum provedor de voz é chamado, e não há POST /api/tts.
 """
 
 import parity_accounts_fixture as accounts
@@ -101,21 +103,32 @@ R7_TYPES = {"notify_finished": bool, "finish_min_seconds": int, "notify_dead": b
             # Task 12 R8a: Voz (transcrever, estilo e palavras do ditado, organizar o texto).
             "groq_api_key": str, "transcription_base_url": str, "transcription_model": str, "ditado_vocabulario": str,
             "ditado_estilo": str, "llm_base_url": str, "llm_api_key": str, "llm_model": str, "llm_reasoning_effort": str,
-            "llm_briefing_base_url": str, "llm_briefing_api_key": str, "llm_briefing_model": str}
+            "llm_briefing_base_url": str, "llm_briefing_api_key": str, "llm_briefing_model": str,
+            # Task 12 R8b: ler em voz alta.
+            "elevenlabs_api_key": str, "elevenlabs_voice_id": str, "tts_local_cmd": str, "tts_max_chars": int,
+            "tts_stability": int, "tts_similarity_boost": int, "tts_style": int, "tts_speed": int}
 # Segredo volta mascarado, como runtime_config.mascarar; a chave sintética daqui nunca vai para registro nem tela.
-R7_SECRETS = {"jev_api_key", "jev_texto_api_key", "groq_api_key", "llm_api_key", "llm_briefing_api_key"}
+R7_SECRETS = {"jev_api_key", "jev_texto_api_key", "groq_api_key", "llm_api_key", "llm_briefing_api_key", "elevenlabs_api_key"}
 R7 = {"values": {"notify_finished": True, "finish_min_seconds": 60, "notify_dead": True, "stall_seconds": 900, "upload_retention_days": 30,
                  "automations": True, "mostrar_pensamento": False, "traduzir_pensamento": True, "editor": "code", "jev_api_key": "",
                  "jev_padrao": False, "jev_texto_base_url": "", "jev_texto_api_key": "sintetica-fixture-0000abcd", "jev_texto_modelo": "",
                  "jev_texto_cmd": "", "scan_roots": "/synthetic/projetos,/synthetic/pessoal/um-caminho-bem-comprido/que-nao-cabe-inteiro/na-linha",
                  "groq_api_key": "sintetica-fixture-voz-0000wxyz", "transcription_base_url": "", "transcription_model": "",
                  "ditado_vocabulario": "Hangar, tmux, Zeron", "ditado_estilo": "prosa", "llm_base_url": "", "llm_api_key": "",
-                 "llm_model": "", "llm_reasoning_effort": "", "llm_briefing_base_url": "", "llm_briefing_api_key": "", "llm_briefing_model": ""},
-      "edited": {"stall_seconds", "scan_roots", "groq_api_key", "ditado_vocabulario"}, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0,
+                 "llm_model": "", "llm_reasoning_effort": "", "llm_briefing_base_url": "", "llm_briefing_api_key": "", "llm_briefing_model": "",
+                 "elevenlabs_api_key": "sintetica-fixture-leitura-0000efgh", "elevenlabs_voice_id": "voz-sintetica-2", "tts_local_cmd": "",
+                 "tts_max_chars": 0, "tts_stability": 50, "tts_similarity_boost": 75, "tts_style": 0, "tts_speed": 110},
+      "edited": {"stall_seconds", "scan_roots", "groq_api_key", "ditado_vocabulario", "elevenlabs_api_key", "elevenlabs_voice_id", "tts_speed"},
+      "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0,
       "quiet": {"start": "22:00", "end": "07:00"}, "quiet_load": "ok", "quiet_save": "ok", "quiet_delay": 0.0, "env": "fixture"}
 # Avançado: o bloco só leitura (os 5 primeiros são de Máquinas e a tela não repete) e as variáveis do .env, no formato do backend.
 # Valor do ambiente de cada campo: o que volta quando o override é removido (POST com null, como patch_config).
-R7_ENV_VALUES = {"stall_seconds": 900, "scan_roots": "/synthetic/projetos", "ditado_estilo": "prosa"}
+R7_ENV_VALUES = {"stall_seconds": 900, "scan_roots": "/synthetic/projetos", "ditado_estilo": "prosa", "tts_max_chars": 0,
+                 "tts_stability": 50, "tts_similarity_boost": 75, "tts_style": 0, "tts_speed": 100}
+# Task 12 R8b: vozes e consumo da conta de voz, sintéticos; nada daqui sai para um provedor.
+R8 = {"voices": "ok", "usage": "ok", "delay": 0.0}
+R8_VOICES = [{"id": "voz-sintetica-1", "nome": "Sintética Aurora"}, {"id": "voz-sintetica-2", "nome": "Sintética Bento"},
+             {"id": "voz-sintetica-3", "nome": "Sintética Clara"}]
 R7_READ = {"port": 8765, "lan_bind_ip": "127.0.0.1", "server_id": "fixture", "public_url": "", "terminal_origem_ok": True,
            "terminal_panel": True, "traducao_pensamento": False, "versao": "2026.09.24-sintetico"}
 R7_ENV = [
@@ -390,6 +403,12 @@ class Handler(BaseHTTPRequestHandler):
                         R7[key] = raw
                     elif key == "quiet":
                         R7["quiet"] = dict(zip(("start", "end"), raw.split("-"))) if raw else None
+            elif path == "/control/r8":
+                for key, raw in ((k, v[0]) for k, v in query.items()):
+                    if key == "delay":
+                        R8["delay"] = float(raw)
+                    elif key in ("voices", "usage"):
+                        R8[key] = raw
             elif path == "/control/remove":
                 # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
                 SESSIONS.pop(query["name"][0], None)
@@ -414,6 +433,20 @@ class Handler(BaseHTTPRequestHandler):
             record("GET", self.path, None)
             if not accounts.handle_get(self, path, query):
                 self.send_json({"detail": "not found"}, 404)
+            return
+        if path in ("/api/tts/voices", "/api/tts/saldo"):
+            record("GET", self.path, None)
+            voices = path.endswith("voices")
+            with LOCK:
+                mode, delay = R8["voices" if voices else "usage"], R8["delay"]
+            time.sleep(delay)
+            if mode == "500":
+                what = "as vozes" if voices else "o consumo"
+                self.send_json({"detail": f"ElevenLabs recusou ler {what} (sintético)"}, 502)
+            elif voices:
+                self.send_json({"voices": [] if mode == "empty" else R8_VOICES})
+            else:
+                self.send_json({"usados": 12345, "limite": 100000})
             return
         if path == "/api/config":
             record("GET", self.path, None)

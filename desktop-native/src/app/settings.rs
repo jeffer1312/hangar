@@ -5,6 +5,7 @@ use super::*;
 use std::{cell::Cell, rc::Rc};
 use crate::appearance::{self, Appearance, Background, DesktopText, Font, Hex, Navigation, Palette, Panels, Reading, SidebarHeight, Swatch,
     ThemeMode, ThinkingTools, ToolLook, Wallpaper};
+use gpui_kit::base::AccordionTrigger;
 use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState}, slider::{Slider, SliderEvent, SliderState}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,7 +72,11 @@ const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 10] = [
         ("voice_cleanup", Some("voice_cleanup_help")), ("voice_llm_endpoint", Some("voice_llm_endpoint_help")), ("voice_llm_key", Some("voice_llm_key_help")),
         ("voice_llm_model", Some("voice_llm_model_help")), ("voice_llm_effort", Some("voice_llm_effort_help")),
         ("voice_briefing_endpoint", Some("voice_briefing_endpoint_help")), ("voice_briefing_key", Some("voice_briefing_key_help")),
-        ("voice_briefing_model", Some("voice_briefing_model_help"))]),
+        ("voice_briefing_model", Some("voice_briefing_model_help")), ("voice_read", Some("voice_read_help")),
+        ("voice_elevenlabs_key", Some("voice_elevenlabs_key_help")), ("voice_voice", Some("voice_voice_help")),
+        ("voice_tune_stability", Some("voice_tune_stability_help")), ("voice_tune_similarity", Some("voice_tune_similarity_help")),
+        ("voice_tune_style", Some("voice_tune_style_help")), ("voice_tune_speed", Some("voice_tune_speed_help")),
+        ("voice_local_cmd", Some("voice_local_cmd_help")), ("voice_max_chars", Some("voice_max_chars_help"))]),
     (Page::Notifications, &[("server_notify_finished", Some("server_notify_finished_help")), ("server_short_turn", Some("server_short_turn_help")),
         ("server_notify_dead", Some("server_notify_dead_help")), ("server_stall", Some("server_stall_help")), ("server_quiet", Some("server_quiet_why"))]),
     (Page::Attachments, &[("server_keep_attachments", Some("server_keep_attachments_help"))]),
@@ -886,6 +891,48 @@ impl Hangar {
 
 pub(super) fn settings_box() -> Div {
     div().flex().flex_col().rounded(px(14.)).border_1().border_color(theme::border()).bg(theme::boxed()).overflow_hidden()
+}
+
+/// Botão que abre e fecha um trecho (seção da Voz, "por quê?"): o `AccordionTrigger` do kit anuncia aberto/fechado, que o
+/// `Button` não expõe, e o foco próprio — guardado pelo kit entre desenhos, como o do `Button` — o põe no Tab com Enter e Espaço.
+#[derive(IntoElement)]
+pub(super) struct Disclosure {
+    id: SharedString,
+    open: bool,
+    label: String,
+    /// O "por quê?" (20px, texto miúdo); sem isso, o tamanho do disparador de seção.
+    small: bool,
+    name: Option<String>,
+    on_change: Option<Rc<dyn Fn(bool, &mut App)>>,
+}
+
+impl Disclosure {
+    pub(super) fn new(id: impl Into<SharedString>, open: bool, label: String, small: bool) -> Self {
+        Self { id: id.into(), open, label, small, name: None, on_change: None }
+    }
+
+    /// Nome acessível quando o rótulo sozinho é ambíguo ("Por que: Automações").
+    pub(super) fn name(mut self, name: String) -> Self { self.name = Some(name); self }
+
+    /// Recebe o estado pedido: o contrário do atual.
+    pub(super) fn on_change(mut self, handler: impl Fn(bool, &mut App) + 'static) -> Self { self.on_change = Some(Rc::new(handler)); self }
+}
+
+impl RenderOnce for Disclosure {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self { id, open, label, small, name, on_change } = self;
+        let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
+        AccordionTrigger::new(id).open(open).track_focus(&focus)
+            .when_some(name, |el, name| el.aria_label(name))
+            .flex().items_center().rounded(px(6.)).border_1().border_color(transparent_black()).text_color(theme::text()).cursor_pointer()
+            .map(|el| if small { el.gap(px(4.)).h(px(20.)).px(px(4.)).text_size(px(12.)) }
+                else { el.gap(px(6.)).h(px(28.)).px(px(8.)).text_sm().font_weight(FontWeight::MEDIUM) })
+            .hover(|el| el.bg(theme::hover())).focus_visible(|el| el.border_color(theme::accent_focus()))
+            .child(chrome::small_icon(if open { IconName::ChevronUp } else { IconName::ChevronDown }, if small { 12. } else { 14. },
+                if small { theme::text() } else { theme::muted() }))
+            .child(label)
+            .when_some(on_change, |el, handler| el.on_change(move |open, _, _, cx| handler(open, cx)))
+    }
 }
 
 /// Controle segmentado: uma silhueta só, segmento escolhido com fundo de destaque suave.

@@ -3,6 +3,7 @@
 //! painel do OpenCode. Cada escrita vai uma vez; a resposta só mexe no formulário que a pediu (número do pedido), e a
 //! chave digitada sai do campo assim que o servidor a guarda.
 use super::*;
+use crate::app::settings::Disclosure;
 use gpui_kit::component::{IndexPath, WindowExt, dialog::DialogButtonProps, select::{Select, SelectEvent, SelectState},
     searchable_list::{SearchableListItem, SearchableVec}, switch::Switch};
 
@@ -753,13 +754,13 @@ impl Hangar {
                 8 => div().w(px(132.)).child(Input::new(&f.compact).small().disabled(busy).aria_label(title.clone())).into_any_element(),
                 _ => div().w(px(132.)).child(Input::new(&f.output).small().disabled(busy).aria_label(title.clone())).into_any_element(),
             };
-            let toggle_why = Button::new(SharedString::from(format!("accounts-engine-why-{index}"))).ghost().xsmall()
-                .label(tr("accounts_engine_why")).icon(if open { IconName::ChevronUp } else { IconName::ChevronDown })
-                .accessibility_label(tr("accounts_engine_why_of").replace("{name}", &title))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(form) = this.accounts.form.as_mut() { form.why = if form.why == Some(index) { None } else { Some(index) }; }
+            let this = cx.entity().downgrade();
+            let toggle_why = Disclosure::new(format!("accounts-engine-why-{index}"), open, tr("accounts_engine_why"), true)
+                .name(tr("accounts_engine_why_of").replace("{name}", &title))
+                .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| {
+                    if let Some(form) = this.accounts.form.as_mut() { form.why = if open { Some(index) } else if form.why == Some(index) { None } else { form.why }; }
                     cx.notify();
-                }));
+                }); });
             div().flex().flex_col().border_b_1().border_color(theme::border())
                 .child(div().flex().items_center().gap(px(16.)).py(px(10.))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))

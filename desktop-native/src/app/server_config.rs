@@ -4,9 +4,9 @@
 //! fora do rascunho: são gravadas no servidor e silenciam o push que chega no celular. A Voz usa o mesmo rascunho.
 use super::*;
 use super::device::Remote;
-use super::settings::{segments_with_hints, settings_box, Page};
-use gpui_kit::base::AccordionTrigger;
-use gpui_kit::component::{select::{Select, SelectEvent, SelectState}, searchable_list::SearchableListItem, switch::Switch, tooltip::Tooltip};
+use super::settings::{segments_with_hints, settings_box, Disclosure, Page};
+use gpui_kit::component::{select::{Select, SelectEvent, SelectState}, searchable_list::SearchableListItem, slider::{Slider, SliderEvent, SliderState},
+    switch::Switch, tooltip::Tooltip};
 use serde_json::Map;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -28,16 +28,40 @@ impl SearchableListItem for Choice {
 
 type Picker = Entity<SelectState<Vec<Choice>>>;
 
+/// Uma voz da conta ElevenLabs (`/api/tts/voices`); o id vazio é o "Padrão da máquina".
+#[derive(Clone)]
+struct Voice { id: String, name: String }
+
+impl SearchableListItem for Voice {
+    type Value = String;
+    fn title(&self) -> SharedString { if self.id.is_empty() { tr("voice_machine_default").into() } else { self.name.clone().into() } }
+    fn value(&self) -> &String { &self.id }
+}
+
 /// Estilos do ditado, na ordem do web (`estilosDitado`).
 const STYLES: [&str; 3] = ["limpar", "prosa", "briefing"];
-/// Campos de cada seção que abre e fecha na Voz: outro serviço de transcrição, outro para organizar, o do briefing.
-const SECTIONS: [&[&str]; 3] = [&["transcription_base_url", "transcription_model"],
-    &["llm_base_url", "llm_api_key", "llm_model", "llm_reasoning_effort"], &["llm_briefing_base_url", "llm_briefing_api_key", "llm_briefing_model"]];
+/// Campos de cada seção que abre e fecha na Voz: outro serviço de transcrição, outro para organizar, o do briefing, a
+/// ElevenLabs, os ajustes da voz (dentro da ElevenLabs) e o leitor instalado.
+const SECTIONS: [&[&str]; 6] = [&["transcription_base_url", "transcription_model"],
+    &["llm_base_url", "llm_api_key", "llm_model", "llm_reasoning_effort"], &["llm_briefing_base_url", "llm_briefing_api_key", "llm_briefing_model"],
+    &["elevenlabs_api_key", "elevenlabs_voice_id"], &["tts_stability", "tts_similarity_boost", "tts_style", "tts_speed"], &["tts_local_cmd"]];
+/// Seção que contém outra: abrir a de dentro abre o caminho até ela.
+const PARENTS: [(usize, usize); 2] = [(2, 1), (4, 3)];
+
+/// Um ajuste da voz (`AJUSTES_VOZ` do web): chave, nome das mensagens, padrão, mínimo e máximo.
+struct Tune { key: &'static str, name: &'static str, default: i64, min: i64, max: i64 }
+
+const TUNES: [Tune; 4] = [
+    Tune { key: "tts_stability", name: "stability", default: 50, min: 0, max: 100 },
+    Tune { key: "tts_similarity_boost", name: "similarity", default: 75, min: 0, max: 100 },
+    Tune { key: "tts_style", name: "style", default: 0, min: 0, max: 100 },
+    Tune { key: "tts_speed", name: "speed", default: 100, min: 70, max: 120 },
+];
 
 struct Field { key: &'static str, label: &'static str, help: &'static str, icon: IconName, kind: Kind, page: Page }
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
-const FIELDS: [Field; 26] = [
+const FIELDS: [Field; 29] = [
     Field { key: "upload_retention_days", label: "server_keep_attachments", help: "server_keep_attachments_help", icon: IconName::Paperclip,
         kind: Kind::Number("server_days"), page: Page::Attachments },
     Field { key: "notify_finished", label: "server_notify_finished", help: "server_notify_finished_help", icon: IconName::CircleCheck,
@@ -82,13 +106,20 @@ const FIELDS: [Field; 26] = [
         page: Page::Voice },
     Field { key: "llm_briefing_model", label: "voice_briefing_model", help: "voice_briefing_model_help", icon: IconName::Bot, kind: Kind::Text,
         page: Page::Voice },
+    Field { key: "elevenlabs_api_key", label: "voice_elevenlabs_key", help: "voice_elevenlabs_key_help", icon: IconName::Key, kind: Kind::Secret,
+        page: Page::Voice },
+    Field { key: "tts_local_cmd", label: "voice_local_cmd", help: "voice_local_cmd_help", icon: IconName::SquareTerminal, kind: Kind::Text,
+        page: Page::Voice },
+    Field { key: "tts_max_chars", label: "voice_max_chars", help: "voice_max_chars_help", icon: IconName::Hash, kind: Kind::Number("voice_chars"),
+        page: Page::Voice },
 ];
 
 fn field(key: &str) -> &'static Field { FIELDS.iter().find(|f| f.key == key).expect("campo declarado em FIELDS") }
 
 /// Veredito com o "por quê?" que expande, como no web: Automações e o raciocínio da organização.
-const VERDICTS: [(&str, &str, &str); 2] = [("automations", "server_recommended_on", "server_automations_why"),
-    ("llm_reasoning_effort", "voice_llm_effort_verdict", "voice_llm_effort_why")];
+const VERDICTS: [(&str, &str, &str); 3] = [("automations", "server_recommended_on", "server_automations_why"),
+    ("llm_reasoning_effort", "voice_llm_effort_verdict", "voice_llm_effort_why"),
+    ("tts_local_cmd", "voice_local_cmd_verdict", "voice_local_cmd_why")];
 
 /// Do bloco só leitura, o que Máquinas já mostra não se repete aqui.
 const READ_IN_MACHINES: [&str; 5] = ["port", "lan_bind_ip", "server_id", "public_url", "terminal_origem_ok"];
@@ -160,10 +191,16 @@ pub(in crate::app) struct ServerConfig {
     why: Vec<&'static str>,
     /// Seções da Voz abertas (`SECTIONS`). A primeira leitura boa abre as que já têm valor, uma vez: um Salvar depois
     /// não reabre o que a pessoa fechou.
-    open: [bool; 3],
+    open: [bool; 6],
     opened_by_read: bool,
-    /// Foco dos três disparadores de seção.
-    section_focus: Vec<FocusHandle>,
+    /// Havia chave da ElevenLabs e comando local no último olhar: a seção de cada um abre quando isso passa a valer.
+    readers: [bool; 2],
+    /// Vozes da conta e consumo do mês: só lidos no clique, nunca ao abrir a página.
+    voices: Remote<Vec<Voice>>,
+    usage: Remote<[Option<i64>; 2]>,
+    voice_picker: Option<(Entity<SelectState<Vec<Voice>>>, Subscription)>,
+    /// Um slider por ajuste, com o foco do invólucro que dá teclado e nome a ele.
+    tunes: Vec<(&'static str, Entity<SliderState>, FocusHandle)>,
     quiet: Quiet,
     /// Servidor e chave do rascunho: trocar qualquer um dos dois é outro dono, e o rascunho não passa para ele.
     owner: String,
@@ -197,6 +234,8 @@ pub(super) enum ServerConfigReply {
     Saved(u64, Map<String, Value>, Result<Value, Failure>),
     QuietLoaded(u64, Result<Value, Failure>),
     QuietSaved(u64, [String; 2], Result<Value, Failure>),
+    Voices(u64, Result<Value, Failure>),
+    Usage(u64, Result<Value, Failure>),
 }
 
 impl ServerConfig {
@@ -211,6 +250,7 @@ impl ServerConfig {
         self.fields.clear();
         (self.read, self.env) = (Map::new(), Vec::new());
         (self.quiet.load, self.quiet.saving, self.quiet.note) = (Remote::default(), false, None);
+        (self.voices, self.usage, self.voice_picker) = (Remote::default(), Remote::default(), None);
     }
 
     /// Valor que a tela mostra: o do rascunho, senão o do servidor.
@@ -251,7 +291,42 @@ impl ServerConfig {
     }
 
     /// A única porta de escrita no rascunho: devolve `false` quando a chave não veio da última leitura boa.
-    fn stage(&mut self, key: &str, value: Value) -> bool { self.draft.stage(&self.fields, key, value) }
+    fn stage(&mut self, key: &str, value: Value) -> bool {
+        let staged = self.draft.stage(&self.fields, key, value);
+        self.follow_readers();
+        staged
+    }
+
+    /// Como os `$effect` do web: a seção da ElevenLabs abre quando passa a haver chave, e a do leitor quando o comando passa a
+    /// ter valor; fechada à mão, fica fechada até isso mudar de novo.
+    fn follow_readers(&mut self) {
+        let now = [self.key_set("elevenlabs_api_key"), self.filled("tts_local_cmd")];
+        for (n, (on, was)) in [3, 5].into_iter().zip(now.into_iter().zip(self.readers)) {
+            if on && !was { self.open[n] = true; }
+        }
+        self.readers = now;
+    }
+
+    /// Dá para ler em voz alta (`podeLerCriterio` do web), contra o rascunho: chave que fica ou comando local.
+    fn can_read(&self) -> bool { self.key_set("elevenlabs_api_key") || self.filled("tts_local_cmd") }
+
+    /// Estado da leitura, `None` desativada; a ElevenLabs vence o comando local, como no web.
+    fn read_status(&self) -> Option<&'static str> {
+        if self.key_set("elevenlabs_api_key") { Some("voice_status_elevenlabs") } else if self.filled("tts_local_cmd") { Some("voice_status_local") } else { None }
+    }
+
+    /// Valor de um ajuste: o do rascunho ou do servidor; ausente, removido ou fora de número, o padrão (`ajusteValor` do web).
+    fn tune_value(&self, tune: &Tune) -> i64 {
+        let value = self.current(tune.key);
+        value.as_i64().or_else(|| value.as_str().and_then(|s| s.trim().parse().ok())).unwrap_or(tune.default)
+    }
+
+    /// Nome da voz escolhida: o da lista carregada, senão o id, senão o padrão da máquina.
+    fn voice_name(&self) -> String {
+        let id = text_of(&self.current("elevenlabs_voice_id")).trim().to_owned();
+        if id.is_empty() { return tr("voice_machine_default"); }
+        self.voices.ok().and_then(|v| v.iter().find(|v| v.id == id)).map_or(id, |v| v.name.clone())
+    }
 
     /// "Remover" do web: `null` no rascunho apaga o override no Salvar, e o campo volta ao valor do ambiente.
     fn removing(&self, key: &str) -> bool { self.draft.get(key) == Some(&Value::Null) }
@@ -293,10 +368,13 @@ impl ServerConfig {
 
     /// A busca levou a uma linha de seção fechada: abre o caminho até ela.
     pub(super) fn reveal(&mut self, label: &str) {
-        let Some(key) = FIELDS.iter().find(|f| f.label == label).map(|f| f.key) else { return };
+        let key = FIELDS.iter().find(|f| f.label == label).map(|f| f.key)
+            .or_else(|| TUNES.iter().find(|t| label == format!("voice_tune_{}", t.name)).map(|t| t.key))
+            .or((label == "voice_voice").then_some("elevenlabs_voice_id"));
+        let Some(key) = key else { return };
         if let Some(n) = SECTIONS.iter().position(|keys| keys.contains(&key)) {
             self.open[n] = true;
-            if n == 2 { self.open[1] = true; }
+            for (child, parent) in PARENTS { if n == child { self.open[parent] = true; } }
         }
     }
 
@@ -360,8 +438,23 @@ impl Hangar {
         s.fields.clear();
         (s.read, s.env) = (Map::new(), Vec::new());
         (s.save_error, s.saved) = (None, None);
+        // O web remonta a página a cada abertura, e os `$effect` reabrem as seções de quem já tem leitor.
+        s.readers = [false; 2];
         let done = self.server_config_send_later();
         self.runtime.spawn(async move { done(ServerConfigReply::Loaded(seq, api.config().await)).await });
+        cx.notify();
+    }
+
+    /// "Carregar vozes da conta": as vozes e o consumo do mês, juntos, como o `carregarVozes` do web.
+    fn load_voices(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let s = &mut self.server_config;
+        if s.voices.loading { return; }
+        let (voices, usage) = (s.voices.start(), s.usage.start());
+        let (done, done_usage) = (self.server_config_send_later(), self.server_config_send_later());
+        let usage_api = api.clone();
+        self.runtime.spawn(async move { done(ServerConfigReply::Voices(voices, api.server_read(&["tts", "voices"], &[], 15).await)).await });
+        self.runtime.spawn(async move { done_usage(ServerConfigReply::Usage(usage, usage_api.server_read(&["tts", "saldo"], &[], 15).await)).await });
         cx.notify();
     }
 
@@ -429,6 +522,7 @@ impl Hangar {
                     // Ausente num servidor mais antigo: o bloco some.
                     if let Value::Array(env) = config["variaveis_env"].take() { s.env = env; }
                     s.open_filled();
+                    s.follow_readers();
                     self.fill_config_inputs(window, cx);
                 }
             }
@@ -447,6 +541,7 @@ impl Hangar {
                         // A tradução do raciocínio disponível muda com campo editável: a linha só leitura não fica velha.
                         if let Some(read) = read { s.read = read; }
                         s.settle(&sent);
+                        s.follow_readers();
                         s.saved = Some(seq);
                         self.fill_config_inputs(window, cx);
                         cx.spawn(async move |this, cx| {
@@ -491,6 +586,33 @@ impl Hangar {
                     // "horario invalido (use HH:MM)" e afins chegam como vieram; o que foi digitado fica nos campos.
                     Err(error) => (Self::failure(&error), true),
                 });
+            }
+            ServerConfigReply::Voices(seq, result) => {
+                let parsed = result.map_err(|e| Self::failure(&e)).and_then(|r| match r.get("voices") {
+                    Some(Value::Array(list)) => Ok(list.iter().filter_map(|v| {
+                        let id = v.get("id")?.as_str()?.to_owned();
+                        Some(Voice { name: v.get("nome").and_then(Value::as_str).filter(|n| !n.is_empty()).unwrap_or(&id).to_owned(), id })
+                    }).collect::<Vec<_>>()),
+                    _ => Err(tr("invalid_response")),
+                });
+                let list = parsed.as_ref().ok().cloned();
+                if !self.server_config.voices.finish(seq, parsed) { return; }
+                // Lista vazia volta ao botão, como o web; a lista anterior não fica no lugar dela.
+                self.server_config.voice_picker = list.filter(|l| !l.is_empty()).map(|list| {
+                    let items = std::iter::once(Voice { id: String::new(), name: String::new() }).chain(list).collect::<Vec<_>>();
+                    let picker = cx.new(|cx| SelectState::new(items, None, window, cx));
+                    let sub = cx.subscribe_in(&picker, window, |this: &mut Hangar, _, event: &SelectEvent<Vec<Voice>>, window, cx| {
+                        let SelectEvent::Confirm(Some(id)) = event else { return };
+                        if !this.server_config.stage("elevenlabs_voice_id", Value::String(id.clone())) { this.show_voice(window, cx); }
+                        cx.notify();
+                    });
+                    (picker, sub)
+                });
+                self.show_voice(window, cx);
+            }
+            ServerConfigReply::Usage(seq, result) => {
+                let parsed = result.map_err(|e| Self::failure(&e)).map(|r| ["usados", "limite"].map(|k| r.get(k).and_then(Value::as_i64)));
+                self.server_config.usage.finish(seq, parsed);
             }
         }
         cx.notify();
@@ -537,7 +659,19 @@ impl Hangar {
                 self.server_config._subscriptions.push(sub);
                 self.server_config.choices.push((key, picker));
             }
-            self.server_config.section_focus = (0..SECTIONS.len()).map(|_| cx.focus_handle().tab_stop(true)).collect();
+            for tune in &TUNES {
+                let key = tune.key;
+                let state = cx.new(|_| SliderState::new().min(tune.min as f32).max(tune.max as f32).step(1.).default_value(tune.default as f32));
+                // Como o `oninput` do web: cada passo do arrasto vai ao rascunho.
+                let sub = cx.subscribe_in(&state, window, move |this: &mut Hangar, _, event: &SliderEvent, window, cx| {
+                    let (SliderEvent::Change(v) | SliderEvent::Release(v)) = event;
+                    // Recusado (campo fora da leitura): o slider volta, para não mostrar um valor que o Salvar não leva.
+                    if !this.server_config.stage(key, json!(v.start().round() as i64)) { this.show_tune(key, window, cx); }
+                    cx.notify();
+                });
+                self.server_config._subscriptions.push(sub);
+                self.server_config.tunes.push((key, state, cx.focus_handle().tab_stop(true)));
+            }
         }
         let s = &self.server_config;
         for (key, input) in &s.inputs {
@@ -554,6 +688,54 @@ impl Hangar {
             if s.draft.contains_key(*key) { continue; }
             s.show_choice(key, picker, window, cx);
         }
+        for (key, _, _) in s.tunes.clone() {
+            if !self.server_config.draft.contains_key(key) { self.show_tune(key, window, cx); }
+        }
+        if !self.server_config.draft.contains_key("elevenlabs_voice_id") { self.show_voice(window, cx); }
+    }
+
+    /// O slider no valor atual (o do rascunho ou do servidor, senão o padrão).
+    fn show_tune(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let s = &self.server_config;
+        let Some(tune) = TUNES.iter().find(|t| t.key == key) else { return };
+        let Some((_, state, _)) = s.tunes.iter().find(|(k, ..)| *k == key) else { return };
+        let value = s.tune_value(tune) as f32;
+        state.update(cx, |state, cx| state.set_value(value, window, cx));
+    }
+
+    /// A lista de vozes na voz atual; id que ela não conhece fica sem escolha, como o `show_choice`.
+    fn show_voice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let s = &self.server_config;
+        let Some((picker, _)) = &s.voice_picker else { return };
+        let id = text_of(&s.current("elevenlabs_voice_id")).trim().to_owned();
+        let known = s.voices.ok().is_some_and(|v| id.is_empty() || v.iter().any(|v| v.id == id));
+        picker.update(cx, |state, cx| if known { state.set_selected_value(&id, window, cx) } else { state.set_selected_index(None, window, cx) });
+    }
+
+    /// Teclado do slider, que o kit não dá: setas ±1, Home e End nas pontas. O valor vai ao rascunho pela mesma porta.
+    fn tune_key(&mut self, key: &'static str, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tune) = TUNES.iter().find(|t| t.key == key) else { return };
+        if !self.server_config.fields.contains_key(key) { return; }
+        let now = self.server_config.tune_value(tune);
+        let next = match event.keystroke.key.as_str() {
+            "left" | "down" => now - 1,
+            "right" | "up" => now + 1,
+            "home" => tune.min,
+            "end" => tune.max,
+            _ => return,
+        }.clamp(tune.min, tune.max);
+        cx.stop_propagation();
+        if next == now { return; }
+        self.server_config.stage(key, json!(next));
+        self.show_tune(key, window, cx);
+        cx.notify();
+    }
+
+    /// "voltar ao padrão" dos ajustes e da voz: `null` no rascunho, como o `removerRascunho` do web.
+    fn back_to_default(&mut self, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.server_config.stage(key, Value::Null) { return; }
+        if key == "elevenlabs_voice_id" { self.show_voice(window, cx); } else { self.show_tune(key, window, cx); }
+        cx.notify();
     }
 
     /// "Remover": o campo fica vazio (a lista volta ao "padrão") até o Salvar apagar o override, ou até o Desfazer.
@@ -567,6 +749,7 @@ impl Hangar {
 
     fn undo_config(&mut self, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         self.server_config.draft.unstage(key);
+        self.server_config.follow_readers();
         self.fill_config_inputs(window, cx);
         cx.notify();
     }
@@ -696,16 +879,19 @@ impl Hangar {
                     .tooltip(|window, cx| Tooltip::new(tr("server_secret_no_return")).build(window, cx))))
         });
         let open = s.why.contains(&key);
+        let this = cx.entity().downgrade();
         let verdict = VERDICTS.iter().find(|(k, ..)| *k == key).map(|&(_, verdict, why)| div().flex().flex_col().gap(px(6.))
             .child(div().flex().items_center().gap(px(6.)).text_size(px(13.))
                 .child(div().text_color(theme::muted()).child(tr(verdict)))
-                .child(Button::new(SharedString::from(format!("server-{key}-why"))).ghost().xsmall().label(tr("accounts_engine_why"))
-                    .icon(if open { IconName::ChevronUp } else { IconName::ChevronDown })
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                .child(Disclosure::new(format!("server-{key}-why"), open, tr("accounts_engine_why"), true)
+                    // Na Voz dois "por quê?" ficam à vista juntos: o nome diz de qual linha é, como nas Contas.
+                    .name(tr("accounts_engine_why_of").replace("{name}", &tr(field.label)))
+                    .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| {
                         let why = &mut this.server_config.why;
-                        if let Some(n) = why.iter().position(|k| *k == key) { why.remove(n); } else { why.push(key); }
+                        why.retain(|k| *k != key);
+                        if open { why.push(key); }
                         cx.notify();
-                    }))))
+                    }); })))
             .when(open, |el| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr(why)))));
         // "Remover"/"Desfazer" do `removivel` do web: só na Voz, e só com valor gravado pelo app.
         let removal = (field.page == Page::Voice).then(|| if removing {
@@ -835,6 +1021,122 @@ impl Hangar {
             .when(s.open[1], |el| el.child(div().mt(px(8.)).child(rows(SECTIONS[1], cx)))
                 .child(div().mt(px(8.)).flex().child(self.section_toggle(2, "voice_briefing_own", cx)))
                 .when(s.open[2], |el| el.child(div().mt(px(8.)).child(rows(SECTIONS[2], cx)))))
+            .child(self.render_read_aloud(cx))
+    }
+
+    /// Ler em voz alta (`VozSettings.svelte`, "Ler em voz alta"): ElevenLabs, leitor instalado e o limite da confirmação.
+    fn render_read_aloud(&self, cx: &mut Context<Self>) -> Div {
+        let s = &self.server_config;
+        let can_read = s.can_read();
+        let eleven = settings_box().child(self.config_row(field("elevenlabs_api_key"), cx))
+            .when(s.key_set("elevenlabs_api_key"), |el| el.child(self.voice_row(cx)).child(self.sample_row()));
+        div()
+            .child(self.voice_head("voice_read", "voice_read_help", s.read_status()))
+            .when(!can_read, |el| el.child(div().mb(px(10.)).text_sm().text_color(theme::muted()).whitespace_normal().child(tr("voice_read_no_reader"))))
+            .child(div().flex().child(self.section_toggle(3, "voice_elevenlabs_section", cx)))
+            .when(s.open[3], |el| el.child(div().mt(px(8.)).child(eleven))
+                .when(s.key_set("elevenlabs_api_key"), |el| el
+                    .child(div().mt(px(8.)).flex().child(self.section_toggle(4, "voice_tune", cx)))
+                    .when(s.open[4], |el| el.child(div().mt(px(8.)).child(settings_box()
+                        .children(TUNES.iter().map(|t| self.tune_row(t, cx)).collect::<Vec<_>>()))))))
+            .child(div().mt(px(8.)).flex().child(self.section_toggle(5, "voice_local_section", cx)))
+            .when(s.open[5], |el| el.child(div().mt(px(8.)).child(settings_box().child(self.config_row(field("tts_local_cmd"), cx)))))
+            .when(can_read, |el| el.child(div().mt(px(12.)).child(settings_box().child(self.config_row(field("tts_max_chars"), cx)))))
+    }
+
+    /// Cabeça de uma linha própria da Voz (voz, ajuste): ícone, título com as etiquetas e a ajuda.
+    fn own_head(&self, icon: IconName, key: &str, label: &'static str, help: &'static str) -> Div {
+        div().flex_1().min_w_0().flex().items_start().gap(px(14.))
+            .child(icon_box(icon))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                .child(div().flex().flex_wrap().items_center().gap(px(8.))
+                    .child(div().font_weight(FontWeight::MEDIUM).child(tr(label))).child(self.config_badges(key)))
+                .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr(help))))
+    }
+
+    /// "voltar ao padrão": só com valor gravado pelo app e que não está saindo no Salvar.
+    fn back_button(&self, key: &'static str, label: &str, cx: &mut Context<Self>) -> Option<Button> {
+        let s = &self.server_config;
+        (s.edited_in_app(key) && !s.removing(key)).then(|| Button::new(SharedString::from(format!("server-{key}-default"))).ghost().xsmall()
+            .label(tr("voice_back_to_default")).accessibility_label(format!("{label}, {}", tr("voice_back_to_default")))
+            .on_click(cx.listener(move |this, _, window, cx| this.back_to_default(key, window, cx))))
+    }
+
+    /// Voz da conta: carrega sob demanda (vozes e consumo), escolhe na lista e grava no rascunho.
+    fn voice_row(&self, cx: &mut Context<Self>) -> Div {
+        let s = &self.server_config;
+        let key = "elevenlabs_voice_id";
+        let off = !s.fields.contains_key(key);
+        let loading = s.voices.loading;
+        let error = s.voices.value.as_ref().and_then(|v| v.as_ref().err()).cloned();
+        let control = match (&s.voice_picker, &error) {
+            (Some((picker, _)), None) => div().w(px(200.)).child(Select::new(picker).small().disabled(off).accessibility_label(tr("voice_voice"))),
+            _ => div().child(Button::new("voice-load").outline().small().loading(loading).disabled(loading)
+                .label(tr(if loading { "server_loading" } else if error.is_some() { "server_retry" } else { "voice_load_voices" }))
+                .on_click(cx.listener(|this, _, _, cx| this.load_voices(cx)))),
+        };
+        // O resultado do clique fica na linha do botão: erro das vozes, consumo do mês ou o erro dele.
+        let usage = match &s.usage.value {
+            Some(Ok([used, limit])) => Some((tr("voice_usage").replace("{usados}", &used.map_or("?".into(), |n| n.to_string()))
+                .replace("{limite}", &limit.map_or("?".into(), |n| n.to_string())), false)),
+            Some(Err(e)) => Some((e.clone(), true)),
+            None => None,
+        };
+        let notes = error.map(|e| (e, true)).into_iter().chain(usage).map(|(text, bad)| div().text_size(px(12.5)).whitespace_normal()
+            .text_color(if bad { theme::danger() } else { theme::muted() }).child(text));
+        let head = self.own_head(IconName::AudioLines, key, "voice_voice", "voice_voice_help");
+        let row = div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(8.)).px_4().py(px(14.))
+            .child(div().flex().items_start().gap(px(14.)).child(head).child(div().flex_shrink_0().child(control)))
+            .child(div().pl(px(50.)).flex().flex_col().gap(px(4.))
+                .child(div().flex().items_center().gap(px(8.)).text_size(px(13.))
+                    .child(div().id("voice-current").role(Role::Status).child(tr("voice_current").replace("{valor}", &s.voice_name())))
+                    .children(self.back_button(key, &tr("voice_voice"), cx)))
+                .children(notes));
+        self.mark(row, "voice_voice")
+    }
+
+    /// "Ouvir amostra": o app ainda não lê em voz alta, então a linha aparece desligada dizendo por quê, no desenho do
+    /// mãos-livres.
+    fn sample_row(&self) -> Div {
+        let next = tr("settings_next_version");
+        let head = div().flex_1().min_w_0().flex().items_center().gap(px(14.))
+            .child(icon_box(IconName::Volume2))
+            .child(div().flex().flex_wrap().items_center().gap(px(8.))
+                .child(div().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(tr("voice_sample")))
+                .child(chip(next.trim_end_matches('.').to_owned(), theme::muted(), theme::raised())));
+        // O kit não dá descrição ao `Button`: o motivo entra no nome, para o leitor de tela não anunciar só "desligado".
+        let button = Button::new("voice-sample").outline().small().icon(IconName::Volume2).label(tr("voice_sample")).disabled(true)
+            .accessibility_label(format!("{}. {next}", tr("voice_sample")));
+        div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().items_center().gap(px(14.)).px_4().py(px(14.))
+            .child(head).child(div().flex_shrink_0().child(button))
+    }
+
+    /// Um ajuste da voz: título com o valor, "voltar ao padrão", ajuda e o slider entre as pontas. O invólucro dá ao slider
+    /// o nome e o teclado que o kit não dá.
+    fn tune_row(&self, tune: &Tune, cx: &mut Context<Self>) -> Div {
+        let s = &self.server_config;
+        let (key, name) = (tune.key, tune.name);
+        let label = tr(&format!("voice_tune_{name}"));
+        let off = !s.fields.contains_key(key);
+        let value = s.tune_value(tune);
+        let slider = s.tunes.iter().find(|(k, ..)| *k == key).map(|(_, state, focus)| div().id(SharedString::from(format!("voice-tune-{key}")))
+            .track_focus(focus).role(Role::Group).aria_label(label.clone()).flex_1().min_w_0().px(px(6.)).py(px(4.)).rounded(px(6.))
+            .border_1().border_color(transparent_black()).focus_visible(|el| el.border_color(theme::accent_focus()))
+            .when(!off, |el| el.on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| this.tune_key(key, event, window, cx))))
+            .child(Slider::new(state).bg(theme::accent()).text_color(theme::text()).disabled(off)));
+        // Pontas de largura fixa: os quatro sliders começam e terminam na mesma coluna, qualquer que seja o texto.
+        let end = |side: &str| div().w(px(96.)).flex_shrink_0().text_size(px(12.)).text_color(theme::muted()).whitespace_normal()
+            .when(side == "right", |el| el.text_right()).child(tr(&format!("voice_tune_{name}_{side}")));
+        let title = div().flex().flex_wrap().items_center().gap(px(8.))
+            .child(div().font_weight(FontWeight::MEDIUM).child(label.clone()))
+            .child(div().font_family(theme::MONO).text_size(px(13.)).text_color(theme::accent_text()).child(value.to_string()))
+            .child(self.config_badges(key))
+            .children(self.back_button(key, &label, cx));
+        let row = div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(6.)).px_4().py(px(14.))
+            .child(title)
+            .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr(&format!("voice_tune_{name}_help"))))
+            .child(div().flex().items_center().gap(px(10.)).child(end("left")).children(slider).child(end("right")));
+        self.mark(row, &format!("voice_tune_{name}"))
     }
 
     /// Título de seção da Voz com o estado dela à direita; o texto diz o estado, a cor só reforça.
@@ -850,20 +1152,11 @@ impl Hangar {
             .child(div().flex_shrink_0().child(pill))
     }
 
-    /// Abre e fecha uma seção de `SECTIONS`, como o `<details>` do web: o `AccordionTrigger` do kit anuncia aberto/fechado
-    /// (o `Button` não expõe esse estado), e o foco próprio o põe na ordem do Tab com Enter e Espaço.
-    fn section_toggle(&self, n: usize, label: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        let open = self.server_config.open[n];
+    /// Abre e fecha uma seção de `SECTIONS`, como o `<details>` do web.
+    fn section_toggle(&self, n: usize, label: &'static str, cx: &mut Context<Self>) -> Disclosure {
         let this = cx.entity().downgrade();
-        AccordionTrigger::new(SharedString::from(format!("voice-section-{n}"))).open(open)
-            .when_some(self.server_config.section_focus.get(n), |el, focus| el.track_focus(focus))
-            .flex().items_center().gap(px(6.)).h(px(28.)).px(px(8.)).rounded(px(6.)).border_1().border_color(transparent_black())
-            .text_sm().font_weight(FontWeight::MEDIUM).text_color(theme::text()).cursor_pointer()
-            .hover(|el| el.bg(theme::hover())).focus_visible(|el| el.border_color(theme::accent_focus()))
-            .child(chrome::small_icon(if open { IconName::ChevronUp } else { IconName::ChevronDown }, 14., theme::muted()))
-            .child(tr(label))
-            .on_change(move |open, _, _, cx| { let _ = this.update(cx, |this, cx| { this.server_config.open[n] = open; cx.notify(); }); })
-            .into_any_element()
+        Disclosure::new(format!("voice-section-{n}"), self.server_config.open[n], tr(label), false)
+            .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| { this.server_config.open[n] = open; cx.notify(); }); })
     }
 
     /// Mãos-livres é do aparelho (localStorage no web), e o app ainda não dita: aparece desligado, dizendo por quê.
@@ -914,11 +1207,11 @@ impl Hangar {
             .child(div().font_weight(FontWeight::MEDIUM).child(tr("server_quiet")))
             .child(div().px(px(6.)).rounded_full().bg(theme::raised()).text_size(px(10.5)).font_weight(FontWeight::BOLD)
                 .text_color(theme::muted()).child(tr("server_scope")));
+        let this = cx.entity().downgrade();
         let why = div().flex().items_center().gap(px(6.)).text_size(px(13.))
             .child(div().text_color(theme::muted()).child(tr("server_quiet_verdict")))
-            .child(Button::new("server-quiet-why").ghost().xsmall().label(tr("accounts_engine_why"))
-                .icon(if q.why { IconName::ChevronUp } else { IconName::ChevronDown })
-                .on_click(cx.listener(|this, _, _, cx| { this.server_config.quiet.why = !this.server_config.quiet.why; cx.notify(); })));
+            .child(Disclosure::new("server-quiet-why", q.why, tr("accounts_engine_why"), true)
+                .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| { this.server_config.quiet.why = open; cx.notify(); }); }));
         let fields = match &q.inputs {
             None => div().text_sm().text_color(theme::muted()).child(tr("server_loading")),
             Some([start, end]) => div().flex().items_center().gap(px(10.))
@@ -962,7 +1255,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, Quiet, ServerConfig, env_value, shown, text_of};
+    use super::{Kind, Quiet, ServerConfig, TUNES, Voice, env_value, shown, text_of};
     use serde_json::{Value, json};
 
     #[test]
@@ -1096,14 +1389,55 @@ mod tests {
         let mut s = ServerConfig::default();
         s.fields.insert("llm_briefing_model".into(), json!({"valor": "modelo-sintetico"}));
         s.open_filled();
-        assert_eq!(s.open, [false, true, true], "o briefing abre junto com a seção que o contém");
-        s.open = [false; 3];
+        assert_eq!(s.open, [false, true, true, false, false, false], "o briefing abre junto com a seção que o contém");
+        s.open = [false; 6];
         s.open_filled();
-        assert_eq!(s.open, [false; 3], "leitura seguinte não reabre o que foi fechado");
+        assert_eq!(s.open, [false; 6], "leitura seguinte não reabre o que foi fechado");
         s.reveal("voice_transcription_model");
-        assert_eq!(s.open, [true, false, false]);
+        assert_eq!(s.open, [true, false, false, false, false, false]);
         s.reveal("voice_style");
-        assert_eq!(s.open, [true, false, false], "linha fora de seção não mexe em nada");
+        assert_eq!(s.open, [true, false, false, false, false, false], "linha fora de seção não mexe em nada");
+        s.open = [false; 6];
+        s.reveal("voice_tune_speed");
+        assert_eq!(s.open, [false, false, false, true, true, false], "o ajuste abre a ElevenLabs que o contém");
+        s.reveal("voice_voice");
+        s.reveal("voice_local_cmd");
+        assert_eq!(s.open, [false, false, false, true, true, true]);
+    }
+
+    #[test]
+    fn reader_sections_open_when_a_reader_appears_like_the_web() {
+        let mut s = ServerConfig::default();
+        s.fields.insert("elevenlabs_api_key".into(), json!({"valor": "", "definido": false}));
+        s.fields.insert("tts_local_cmd".into(), json!({"valor": ""}));
+        s.follow_readers();
+        assert_eq!((s.open[3], s.open[5], s.can_read(), s.read_status()), (false, false, false, None));
+        assert!(s.stage("tts_local_cmd", json!("kokoro")));
+        assert_eq!((s.open[5], s.can_read(), s.read_status()), (true, true, Some("voice_status_local")), "o comando digitado já conta, sem Salvar");
+        s.open[5] = false;
+        assert!(s.stage("tts_local_cmd", json!("kokoro --pt")));
+        assert!(!s.open[5], "fechada à mão, fica fechada enquanto o comando continua lá");
+        s.fields.insert("elevenlabs_api_key".into(), json!({"valor": "sint••••••••wxyz", "definido": true, "origem": "app"}));
+        s.follow_readers();
+        assert_eq!((s.open[3], s.read_status()), (true, Some("voice_status_elevenlabs")), "a ElevenLabs vence o comando");
+        assert!(s.stage("elevenlabs_api_key", Value::Null));
+        assert_eq!(s.read_status(), Some("voice_status_local"), "chave saindo no Salvar já não conta");
+    }
+
+    #[test]
+    fn tunes_fall_back_to_the_default_and_the_voice_name_to_the_id() {
+        let mut s = ServerConfig::default();
+        let speed = TUNES.iter().find(|t| t.key == "tts_speed").unwrap();
+        assert_eq!(s.tune_value(speed), 100, "sem leitura, o padrão");
+        s.fields.insert("tts_speed".into(), json!({"valor": 110, "origem": "app"}));
+        assert_eq!(s.tune_value(speed), 110);
+        assert!(s.stage("tts_speed", Value::Null));
+        assert_eq!(s.tune_value(speed), 100, "voltar ao padrão mostra o padrão até o Salvar");
+        assert_eq!(s.voice_name(), crate::i18n::tr("voice_machine_default"));
+        s.fields.insert("elevenlabs_voice_id".into(), json!({"valor": "voz-sintetica-1"}));
+        assert_eq!(s.voice_name(), "voz-sintetica-1", "sem a lista carregada, o id");
+        s.voices.value = Some(Ok(vec![Voice { id: "voz-sintetica-1".into(), name: "Sintética".into() }]));
+        assert_eq!(s.voice_name(), "Sintética");
     }
 
     #[test]
