@@ -4,17 +4,22 @@ Exporta a configuração de Claude Code e Codex desta máquina num pacote canôn
 marcador) e aplica aqui o pacote de outra máquina, com backup. Quem envia vence; o que depende
 desta máquina (hooks e skills do Hangar, MCP `hangar`, caminhos e programas) continua daqui.
 """
+import asyncio
 import hashlib
+import inspect
 import io
 import json
 import os
 import re
+import shutil
 import tarfile
+import time
 import tomllib
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from app import codex_contas_sync, hook_installer, runtime_config
+from app import atomico, codex_contas_sync, hook_installer, runtime_config
 from app.config_sync_paths import (HEAVY_DIRS, PROGRAMS, Roots, canonicalize, local_path,
                                    map_strings, mark, marked_paths, resolve)
 
@@ -505,3 +510,212 @@ def unpack(raw: bytes) -> Bundle:
     bundle.items = meta.get("items") if isinstance(meta.get("items"), dict) else {}
     bundle.warnings = meta.get("warnings") if isinstance(meta.get("warnings"), dict) else {}
     return bundle
+
+
+@dataclass
+class _Apply:
+    roots: Roots
+    backups: Path
+    report: dict[str, dict]
+    bundle: Bundle
+    runner: object = None
+
+
+def _result(ctx: _Apply, item: str) -> dict:
+    if item not in ctx.report:
+        ctx.report[item] = {"status": "same", "changed": [],
+                            "warnings": list(ctx.bundle.warnings.get(item) or [])}
+    return ctx.report[item]
+
+
+def _backup_target(path: Path, ctx: _Apply) -> Path:
+    """Lugar no backup desta rodada, espelhando o caminho a partir da casa."""
+    try:
+        rel = path.absolute().relative_to(Path(ctx.roots.home))
+    except ValueError:
+        rel = Path(*path.absolute().parts[1:])
+    target = ctx.backups / "files" / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(ctx.backups, 0o700)   # pode ter segredo
+    return target
+
+
+def _to_backup(path: Path, ctx: _Apply) -> None:
+    shutil.move(str(path), str(_backup_target(path, ctx)))
+
+
+def _current(path: Path) -> dict[str, tuple[bytes, bool]] | None:
+    """O que está hoje no destino, seguindo links e sem as pastas pesadas; None se não existe."""
+    if not path.exists():
+        return None
+    if path.is_file():
+        return {"": (path.read_bytes(), bool(path.stat().st_mode & 0o111))}
+    found: dict[str, tuple[bytes, bool]] = {}
+    seen: set[str] = set()
+    for current, dirs, names in os.walk(path, followlinks=True):
+        real = os.path.realpath(current)
+        if real in seen:
+            dirs[:] = []
+            continue
+        seen.add(real)
+        dirs[:] = [d for d in dirs if d not in HEAVY_DIRS]
+        for name in names:
+            p = Path(current) / name
+            if p.is_file() and not name.startswith(".hangar"):
+                found[p.relative_to(path).as_posix()] = (p.read_bytes(),
+                                                        bool(p.stat().st_mode & 0o111))
+    return found
+
+
+def _same(current, files: dict[str, FileBlob]) -> bool:
+    if current is None or set(current) != set(files):
+        return False
+    return all(current[rel][0] == b.data
+               and (os.name == "nt" or current[rel][1] == bool(b.mode & 0o111))
+               for rel, b in files.items())
+
+
+def _write_file(path: Path, blob: FileBlob) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.hangar-novo-{uuid.uuid4().hex[:8]}")
+    tmp.write_bytes(blob.data)
+    os.chmod(tmp, blob.mode & 0o777)
+    atomico.substituir(tmp, path)
+
+
+def _write_entry(dest: Path, kind: str, files: dict[str, FileBlob], ctx: _Apply, item: str,
+                 name: str) -> bool:
+    """Deixa `dest` igual ao que veio e devolve se mudou algo. O que sai vai para o backup; as
+    pastas pesadas que já existiam aqui (venv, node_modules, .git) continuam."""
+    if _same(_current(dest), files):
+        return False
+    if dest.is_symlink():
+        _result(ctx, item)["warnings"].append(
+            _warn("config_sync_link_replaced", entry=name, target=os.readlink(dest)))
+        _to_backup(dest, ctx)
+    if kind == "file":
+        if dest.is_dir():
+            _to_backup(dest, ctx)
+        elif dest.exists():
+            shutil.copy2(dest, _backup_target(dest, ctx))
+        _write_file(dest, files[""])
+        return True
+    staging = dest.with_name(f".{dest.name}.hangar-novo-{uuid.uuid4().hex[:8]}")
+    staging.mkdir(parents=True)
+    for rel, blob in files.items():
+        _write_file(staging / rel, blob)
+    if dest.is_dir():
+        for heavy in sorted(HEAVY_DIRS):
+            old = dest / heavy
+            if old.is_dir() and not old.is_symlink():
+                shutil.move(str(old), str(staging / heavy))
+    if dest.exists():
+        _to_backup(dest, ctx)
+    shutil.move(str(staging), str(dest))
+    return True
+
+
+def _blob(ctx: _Apply, member: str, text: bool) -> FileBlob:
+    blob = ctx.bundle.files[member]
+    if not text:
+        return blob
+    return FileBlob(resolve(blob.data.decode("utf-8"), ctx.roots).encode("utf-8"), blob.mode)
+
+
+_ENTRY = re.compile(r"^(?:[^/\\]+|(?:rules|skills|agents|commands|output-styles|hooks)/[^/\\]+)$")
+
+
+def _apply_dir_item(ctx: _Apply, item: str) -> None:
+    res = _result(ctx, item)
+    own_skills, own_hooks = _hangar_skill_names(ctx.roots), _hangar_hook_names(ctx.roots)
+    allowed = _DIRS[item] + (("",) if item == "claude_instructions" else ())
+    for name, entry in sorted((ctx.bundle.items[item].get("entries") or {}).items()):
+        folder, _, base = name.rpartition("/")
+        rels = entry.get("files") or []
+        # Contrabarra fica fora: no destino Windows `..\..\x` sai da pasta. O nome já não
+        # passa no _ENTRY com ela.
+        if (not _ENTRY.match(name) or folder not in allowed or base in ("", ".", "..")
+                or (folder == "" and not base.endswith(".md"))
+                or any("\\" in r or ".." in PurePosixPath(r).parts or r.startswith("/")
+                       for r in rels)):
+            res["warnings"].append(_warn("config_sync_invalid_entry", entry=name))
+            continue
+        if folder == "skills" and base in own_skills:
+            res["warnings"].append(_warn("config_sync_hangar_skill_kept", entry=name))
+            continue
+        if folder == "hooks" and base in own_hooks:
+            continue
+        texts = set(entry.get("text") or [])
+        files = {rel: _blob(ctx, _member(item, name, rel), rel in texts) for rel in rels}
+        if _write_entry(Path(ctx.roots.claude) / name, entry.get("kind", "dir"), files, ctx,
+                        item, name):
+            res["changed"].append(name)
+
+
+_REF_PREFIXES = tuple(mark(m) for m in ("CLAUDE", "CODEX", "HOME"))
+
+
+def _apply_refs(ctx: _Apply, item: str) -> None:
+    """Arquivos que os comandos usam. Os do Hangar só são conferidos: é código do Hangar daqui."""
+    res = _result(ctx, item)
+    for marked, ref in sorted((ctx.bundle.items[item].get("refs") or {}).items()):
+        local = local_path(marked, ctx.roots)
+        if marked.startswith(mark("HANGAR")):
+            if not local.exists():
+                res["warnings"].append(_warn("config_sync_hangar_outdated", file=str(local)))
+            continue
+        rest = marked.split("⟧", 1)[-1].replace("\\", "/")
+        if not marked.startswith(_REF_PREFIXES) or ".." in PurePosixPath(rest).parts:
+            res["warnings"].append(_warn("config_sync_invalid_entry", entry=marked))
+            continue
+        blob = _blob(ctx, ref["member"], bool(ref.get("text")))
+        if _write_entry(local, "file", {"": blob}, ctx, item, marked):
+            res["changed"].append(str(local))
+
+
+def _apply_hooks(ctx: _Apply) -> None:
+    _apply_dir_item(ctx, "claude_hooks")
+    _apply_refs(ctx, "claude_hooks")
+
+
+_APPLIERS = {
+    "claude_instructions": lambda ctx: _apply_dir_item(ctx, "claude_instructions"),
+    "claude_skills": lambda ctx: _apply_dir_item(ctx, "claude_skills"),
+    "claude_agents": lambda ctx: _apply_dir_item(ctx, "claude_agents"),
+    "claude_hooks": _apply_hooks,
+}
+
+
+def _new_backups(roots: Roots) -> Path:
+    stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    return Path(roots.home) / ".hangar" / "config-sync" / "backups" / stamp
+
+
+async def apply_bundle(bundle: Bundle, items: list[str], roots: Roots, *, runner=None,
+                       after=None) -> dict:
+    """Aplica os itens escolhidos, na ordem de ITEMS. Item que quebra vira `failed` no relatório
+    e os outros seguem: parar no meio deixaria a máquina pela metade sem dizer o quê."""
+    ctx = _Apply(roots=roots, backups=_new_backups(roots), report={}, bundle=bundle,
+                 runner=runner)
+    chosen = [i for i in ITEMS if i in items]
+    for item in chosen:
+        res = _result(ctx, item)
+        applier = _APPLIERS.get(item)
+        if item not in bundle.items or applier is None:
+            res["status"] = "failed"
+            res["warnings"].append(_warn("config_sync_item_missing", item=item))
+            continue
+        try:
+            if inspect.iscoroutinefunction(applier):
+                await applier(ctx)
+            else:
+                await asyncio.to_thread(applier, ctx)
+        except Exception as exc:  # noqa: BLE001 — um item quebrado não para os outros
+            res["status"] = "failed"
+            res["warnings"].append(_warn("config_sync_item_failed", item=item,
+                                         error=str(exc)[:300]))
+            continue
+        res["status"] = "applied" if res["changed"] else "same"
+    if after is not None:
+        await after(ctx, chosen)
+    return {"items": ctx.report, "backup": str(ctx.backups) if ctx.backups.exists() else ""}
