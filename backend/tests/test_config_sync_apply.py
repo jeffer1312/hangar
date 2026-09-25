@@ -240,3 +240,100 @@ async def test_hangar_file_missing_on_destination_is_reported(pair, monkeypatch)
     report = await _apply(_send(monkeypatch, ana, bia, ["claude_hooks"]), ["claude_hooks"], bia)
     codes = [w["code"] for w in report["items"]["claude_hooks"]["warnings"]]
     assert "config_sync_hangar_outdated" in codes
+
+
+async def test_hooks_keep_destination_hangar_hooks_and_replace_user_hooks(pair, monkeypatch):
+    ana, bia = pair
+    hangar = Path(bia.hangar)
+    ours = f'"{hangar}/.venv/bin/python3" "{hangar}/backend/hooks/state_hook.py" || exit 0'
+    (Path(bia.claude) / "settings.json").write_text(json.dumps({"hooks": {
+        "PreToolUse": [{"hooks": [{"type": "command", "command": ours}]},
+                       {"hooks": [{"type": "command", "command": "python3 /velho.py"}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": "echo tchau"}]}],
+    }}))
+    monkeypatch.setattr("app.config_sync_paths.shutil.which", lambda n: f"/usr/bin/{n}")
+    report = await _apply(_send(monkeypatch, ana, bia, ["claude_hooks"]), ["claude_hooks"], bia)
+    hooks = _settings(bia)["hooks"]
+    commands = [h["command"] for g in hooks["PreToolUse"] for h in g["hooks"]]
+    assert commands == [ours, f"python3 {bia.claude}/hooks/lembrete.py",
+                        f"/bin/sh '{bia.home}/.orca/agent-hooks/claude-hook.sh'"]
+    assert "Stop" not in hooks
+    replaced = sorted(w["params"]["command"] for w in report["items"]["claude_hooks"]["warnings"]
+                      if w["code"] == "config_sync_hook_replaced")
+    assert replaced == ["echo tchau", "python3 /velho.py"]
+    again = await _apply(_send(monkeypatch, ana, bia, ["claude_hooks"]), ["claude_hooks"], bia)
+    assert again["items"]["claude_hooks"]["status"] == "same"
+
+
+async def test_status_line_gets_local_node_and_hangar_path(pair, monkeypatch):
+    ana, bia = pair
+    monkeypatch.setattr("app.config_sync_paths.shutil.which",
+                        lambda n: "/usr/bin/node" if n == "node" else None)
+    await _apply(_send(monkeypatch, ana, bia, ["claude_hooks"]), ["claude_hooks"], bia)
+    assert _settings(bia)["statusLine"]["command"] == \
+        f"'/usr/bin/node' '{bia.hangar}/scripts/statusline.js'"
+
+
+async def test_missing_program_is_reported(pair, monkeypatch):
+    ana, bia = pair
+    monkeypatch.setattr("app.config_sync_paths.shutil.which", lambda n: None)
+    report = await _apply(_send(monkeypatch, ana, bia, ["claude_hooks"]), ["claude_hooks"], bia)
+    missing = {(w["params"]["program"], w["params"]["where"])
+               for w in report["items"]["claude_hooks"]["warnings"]
+               if w["code"] == "config_sync_missing_program"}
+    assert {("node", "statusLine"), ("python3", "PreToolUse")} <= missing
+
+
+async def test_env_and_settings_origin_wins_and_local_only_keys_stay(pair, monkeypatch):
+    ana, bia = pair
+    (Path(bia.claude) / "settings.json").write_text(json.dumps(
+        {"model": "sonnet", "theme": "light", "env": {"JIRA_TOKEN": "velho", "SO_LA": "1"}}))
+    items = ["claude_env", "claude_settings"]
+    report = await _apply(_send(monkeypatch, ana, bia, items), items, bia)
+    s = _settings(bia)
+    assert s["model"] == "opus" and s["theme"] == "light"
+    assert s["env"] == {"JIRA_TOKEN": "segredo-jira", "SO_LA": "1"}
+    assert report["items"]["claude_env"]["changed"] == ["JIRA_TOKEN"]
+    assert report["backup"]   # o settings.json anterior foi guardado
+
+
+async def test_plugin_keys_merge_per_plugin(pair, monkeypatch):
+    ana, bia = pair
+    (Path(bia.claude) / "settings.json").write_text(json.dumps(
+        {"enabledPlugins": {"so-la@mkt": True, "ponytail@ponytail": False}}))
+    monkeypatch.setitem(config_sync._APPLIERS, "claude_plugins", config_sync._apply_plugin_keys)
+    await _apply(_send(monkeypatch, ana, bia, ["claude_plugins"]), ["claude_plugins"], bia)
+    s = _settings(bia)
+    assert s["enabledPlugins"] == {"so-la@mkt": True, "ponytail@ponytail": True}
+    assert s["extraKnownMarketplaces"]["ponytail"]["source"]["url"] == "https://x/ponytail.git"
+
+
+async def test_mcp_keeps_destination_hangar_entry_and_login(pair, monkeypatch):
+    ana, bia = pair
+    (Path(bia.home) / ".claude.json").write_text(json.dumps({
+        "oauthAccount": {"emailAddress": "bia@x"},
+        "mcpServers": {"hangar": {"type": "http", "url": "http://127.0.0.1:9999/mcp/"}}}))
+    await _apply(_send(monkeypatch, ana, bia, ["claude_mcp"]), ["claude_mcp"], bia)
+    data = json.loads((Path(bia.home) / ".claude.json").read_text())
+    assert data["oauthAccount"] == {"emailAddress": "bia@x"}
+    assert data["mcpServers"]["hangar"]["url"] == "http://127.0.0.1:9999/mcp/"
+    assert data["mcpServers"]["grafana"]["headers"] == {"Authorization": "Bearer seg"}
+
+
+async def test_engines_file_is_private(pair, monkeypatch):
+    ana, bia = pair
+    await _apply(_send(monkeypatch, ana, bia, ["engines"]), ["engines"], bia)
+    path = Path(bia.claude) / "engines.json"
+    assert json.loads(path.read_text())["kimi"]["api_key"] == "sk-kimi"
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+
+
+async def test_hangar_prefs_skip_machine_keys(pair, monkeypatch):
+    ana, bia = pair
+    report = await _apply(_send(monkeypatch, ana, bia, ["hangar_prefs"]), ["hangar_prefs"], bia)
+    prefs = json.loads(prefs_path(bia).read_text())
+    assert prefs["elevenlabs_api_key"] == "el-key" and prefs["tts_max_chars"] == 900
+    assert "sync" not in prefs
+    assert sorted(report["items"]["hangar_prefs"]["changed"]) == ["elevenlabs_api_key",
+                                                                  "tts_max_chars"]

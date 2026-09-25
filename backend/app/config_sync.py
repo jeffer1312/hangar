@@ -5,6 +5,7 @@ marcador) e aplica aqui o pacote de outra máquina, com backup. Quem envia vence
 desta máquina (hooks e skills do Hangar, MCP `hangar`, caminhos e programas) continua daqui.
 """
 import asyncio
+import copy
 import errno
 import hashlib
 import inspect
@@ -20,9 +21,9 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from app import atomico, codex_contas_sync, hook_installer, runtime_config
-from app.config_sync_paths import (HEAVY_DIRS, PROGRAMS, Roots, canonicalize, local_path,
-                                   map_strings, mark, marked_paths, resolve)
+from app import atomico, codex_arquivos, codex_contas_sync, hook_installer, runtime_config
+from app.config_sync_paths import (HEAVY_DIRS, PROGRAMS, Roots, canonicalize, fix_programs,
+                                   local_path, map_strings, mark, marked_paths, resolve)
 
 VERSION = 1
 MAX_BUNDLE = 90 * 1024 * 1024
@@ -708,9 +709,191 @@ def _apply_refs(ctx: _Apply, item: str) -> None:
             res["changed"].append(str(local))
 
 
+def _edit_json(path: Path, change, ctx: _Apply) -> bool:
+    """Lê, muda e grava relendo se outro processo escreveu no meio (o CLI do Claude grava o
+    `.claude.json` o tempo todo). Arquivo novo nasce 0600: pode levar segredo."""
+    def transform(raw: bytes | None) -> bytes:
+        current = json.loads(raw) if raw else {}
+        if not isinstance(current, dict):
+            raise BundleError("config_sync_invalid_json", f"{path.name} não é um objeto JSON",
+                              file=path.name)
+        new = change(copy.deepcopy(current))
+        if raw is not None and new == current:
+            return raw
+        return (json.dumps(new, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    return codex_arquivos.transformar(path, transform, ctx.backups / "json")
+
+
+def _merge_keys(current: dict, incoming: dict, changed: list[str], prefix: str = "") -> dict:
+    for key, value in incoming.items():
+        if current.get(key) != value:
+            changed.append(prefix + key)
+            current[key] = value
+    return current
+
+
+def _fix_commands(value: dict, res: dict, where: str) -> None:
+    command = value.get("command")
+    if isinstance(command, str):
+        value["command"], missing = fix_programs(command)
+        for program in missing:
+            res["warnings"].append(_warn("config_sync_missing_program", program=program,
+                                         where=where))
+
+
 def _apply_hooks(ctx: _Apply) -> None:
-    _apply_dir_item(ctx, "claude_hooks")
-    _apply_refs(ctx, "claude_hooks")
+    """Pasta hooks/, arquivos que os comandos usam e, no settings.json, a lista de cada evento:
+    a da origem inteira mais os hooks do Hangar daqui. Hook do usuário que só existia aqui sai
+    (vai para o backup do settings.json) e aparece no relatório."""
+    item = "claude_hooks"
+    res = _result(ctx, item)
+    data = ctx.bundle.items[item]
+    _apply_dir_item(ctx, item)
+    _apply_refs(ctx, item)
+    own = _hangar_hook_names(ctx.roots)
+    incoming = _uncanon(data.get("hooks") or {}, ctx.roots)
+    for event, groups in incoming.items():
+        for group in groups:
+            for hook in group.get("hooks") or []:
+                _fix_commands(hook, res, event)
+    status = None
+    if isinstance(data.get("statusLine"), dict):
+        status = _uncanon(data["statusLine"], ctx.roots)
+        _fix_commands(status, res, "statusLine")
+    replaced: list[dict] = []
+    changed: list[str] = []
+
+    def change(settings: dict) -> dict:
+        replaced.clear()
+        changed.clear()
+        current = settings.get("hooks") if isinstance(settings.get("hooks"), dict) else {}
+        merged = {}
+        for event in sorted(set(current) | set(incoming)):
+            new = _split_hooks(current.get(event), own, hangar=True) + list(incoming.get(event) or [])
+            arriving = set(_hook_commands({event: incoming.get(event) or []}))
+            leaving = _hook_commands({event: _split_hooks(current.get(event), own, hangar=False)})
+            replaced.extend(_warn("config_sync_hook_replaced", event=event, command=c[:120])
+                            for c in leaving if c not in arriving)
+            if new != (current.get(event) or []):
+                changed.append(f"hooks:{event}")
+            if new:
+                merged[event] = new
+        if merged or "hooks" in settings:
+            settings["hooks"] = merged
+        if status is not None and settings.get("statusLine") != status:
+            settings["statusLine"] = status
+            changed.append("statusLine")
+        return settings
+
+    _edit_json(Path(ctx.roots.claude) / "settings.json", change, ctx)
+    res["changed"] += changed
+    res["warnings"] += replaced
+
+
+def _apply_plugin_keys(ctx: _Apply) -> None:
+    res = _result(ctx, "claude_plugins")
+    data = ctx.bundle.items["claude_plugins"]
+    incoming = (("enabledPlugins", data.get("enabledPlugins") or {}, "plugin:"),
+                ("extraKnownMarketplaces",
+                 _uncanon(data.get("extraKnownMarketplaces") or {}, ctx.roots), "marketplace:"))
+    changed: list[str] = []
+
+    def change(settings: dict) -> dict:
+        changed.clear()
+        for key, values, prefix in incoming:
+            if values:
+                current = settings.get(key) if isinstance(settings.get(key), dict) else {}
+                settings[key] = _merge_keys(dict(current), values, changed, prefix)
+        return settings
+
+    _edit_json(Path(ctx.roots.claude) / "settings.json", change, ctx)
+    res["changed"] += changed
+
+
+def _apply_settings_key(ctx: _Apply, item: str, key: str | None, incoming: dict) -> None:
+    """Chaves do settings.json: dentro de `key` (env) ou no topo (key=None). Origem vence por
+    chave; o que só existe aqui fica."""
+    res = _result(ctx, item)
+    changed: list[str] = []
+
+    def change(settings: dict) -> dict:
+        changed.clear()
+        if key is None:
+            return _merge_keys(settings, incoming, changed)
+        if incoming:
+            current = settings.get(key) if isinstance(settings.get(key), dict) else {}
+            settings[key] = _merge_keys(dict(current), incoming, changed)
+        return settings
+
+    _edit_json(Path(ctx.roots.claude) / "settings.json", change, ctx)
+    res["changed"] += changed
+
+
+def _apply_env(ctx: _Apply) -> None:
+    env = _uncanon(ctx.bundle.items["claude_env"].get("env") or {}, ctx.roots)
+    _apply_settings_key(ctx, "claude_env", "env", env)
+
+
+def _apply_settings(ctx: _Apply) -> None:
+    rest = _uncanon(ctx.bundle.items["claude_settings"].get("settings") or {}, ctx.roots)
+    _apply_settings_key(ctx, "claude_settings", None,
+                        {k: v for k, v in rest.items() if k not in _OWNED_SETTINGS})
+
+
+def _apply_mcp(ctx: _Apply) -> None:
+    item = "claude_mcp"
+    res = _result(ctx, item)
+    _apply_refs(ctx, item)
+    servers = {k: v for k, v in _uncanon(ctx.bundle.items[item].get("servers") or {},
+                                         ctx.roots).items() if k != _HANGAR_MCP}
+    for name, server in servers.items():
+        if isinstance(server, dict):
+            _fix_commands(server, res, name)
+    changed: list[str] = []
+
+    def change(data: dict) -> dict:
+        changed.clear()
+        if servers:
+            current = data.get("mcpServers") if isinstance(data.get("mcpServers"), dict) else {}
+            data["mcpServers"] = _merge_keys(dict(current), servers, changed)
+        return data
+
+    _edit_json(Path(ctx.roots.home) / ".claude.json", change, ctx)
+    res["changed"] += changed
+
+
+def _apply_engines(ctx: _Apply) -> None:
+    res = _result(ctx, "engines")
+    incoming = _uncanon(ctx.bundle.items["engines"].get("engines") or {}, ctx.roots)
+    changed: list[str] = []
+
+    def change(data: dict) -> dict:
+        changed.clear()
+        return _merge_keys(data, incoming, changed)
+
+    _edit_json(_engines_path(ctx.roots), change, ctx)
+    res["changed"] += changed
+
+
+def _apply_prefs(ctx: _Apply) -> None:
+    """Uma chave por vez pelo próprio runtime_config: a validação dele recusa valor torto sem
+    derrubar as outras chaves."""
+    res = _result(ctx, "hangar_prefs")
+    incoming = _uncanon(ctx.bundle.items["hangar_prefs"].get("prefs") or {}, ctx.roots)
+    current = runtime_config._carregar()
+    pending = {k: v for k, v in sorted(incoming.items())
+               if k in runtime_config.EDITAVEIS and k not in _MACHINE_PREFS
+               and current.get(k) != v}
+    path = runtime_config._caminho()
+    if pending and path.exists():
+        shutil.copy2(path, _backup_target(path, ctx))
+    for key, value in pending.items():
+        try:
+            runtime_config.aplicar({key: value})
+        except ValueError as exc:
+            res["warnings"].append(_warn("config_sync_pref_rejected", key=key, error=str(exc)[:200]))
+            continue
+        res["changed"].append(key)
 
 
 _APPLIERS = {
@@ -718,6 +901,12 @@ _APPLIERS = {
     "claude_skills": lambda ctx: _apply_dir_item(ctx, "claude_skills"),
     "claude_agents": lambda ctx: _apply_dir_item(ctx, "claude_agents"),
     "claude_hooks": _apply_hooks,
+    "claude_plugins": _apply_plugin_keys,
+    "claude_mcp": _apply_mcp,
+    "claude_env": _apply_env,
+    "claude_settings": _apply_settings,
+    "engines": _apply_engines,
+    "hangar_prefs": _apply_prefs,
 }
 
 
