@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -38,6 +39,8 @@ EVENT_FIELDS_STR = ("commit", "resultado", "sessao", "motivo", "titulo", "execut
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-1.13.0"
 JEV_TIMEOUT_S = 5
+# A hung backend cannot hang the session that called orq.
+SEND_TIMEOUT_S = 30
 # Calibrated on real arbiter messages: changing a word or a threshold means measuring again.
 DISCARD_P = 0.85  # p of "nothing" (the choice's winner) needed to drop
 VETO_P = 0.40     # any alert above this keeps the arbiter awake
@@ -241,9 +244,24 @@ def send(target: str, text: str, tmux: bool = False) -> None:
     cmd = [os.environ.get("ORQ_SEND", "hangar-send")]
     if tmux:
         cmd.append("--tmux")
-    r = subprocess.run(cmd + [target, text], capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd + [target, text], capture_output=True, text=True,
+                           timeout=SEND_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise OrqError(f"hangar-send {target} did not answer in {SEND_TIMEOUT_S}s") from None
     if r.returncode != 0:
         raise OrqError(f"hangar-send {target} failed (rc={r.returncode}): {r.stderr.strip()[:200]}")
+
+
+def _send_after_event(target: str, text: str, arbiter: str) -> None:
+    """The event is already in eventos.jsonl here: running `orq event` again would log it twice."""
+    try:
+        send(target, text)
+    except OrqError as e:
+        again = (f"orq notify {shlex.quote(text)}" if target == arbiter
+                 else f"hangar-send {shlex.quote(target)} {shlex.quote(text)}")
+        raise OrqError(f"{e}. The event IS recorded: do not run `orq event` again. "
+                       f"Resend with: {again}") from None
 
 
 def _after_event(d: Path, ev: dict) -> None:
@@ -257,12 +275,14 @@ def _after_event(d: Path, ev: dict) -> None:
         ex = st["roles"].get(task, {}).get("executor")
         if not ex:
             raise OrqError(f"Task {task} has no task_inicio: executor unknown")
-        send(ex, f"APROVA Task {task} round {rnd}: commit only the Task's paths, by explicit path, "
-                 f"then run `orq commit --task {task} --hash <hash>`.")
+        _send_after_event(ex, f"APROVA Task {task} round {rnd}: commit only the Task's paths, by "
+                              f"explicit path, then run `orq commit --task {task} --hash <hash>`.",
+                          st["arbiter"])
     elif res == "devolvido" or ev.get("reincide"):
         extra = " (reincide)" if ev.get("reincide") else ""
-        send(st["arbiter"], f"[decisao] Task {task} round {rnd}: {res}{extra}. "
-                            f"Report: {ev.get('motivo', 'see the journal')}")
+        _send_after_event(st["arbiter"], f"[decisao] Task {task} round {rnd}: {res}{extra}. "
+                                         f"Report: {ev.get('motivo', 'see the journal')}",
+                          st["arbiter"])
 
 
 def cmd_init(a) -> int:
@@ -513,9 +533,13 @@ def triage(d: Path, text: str, alarm: bool) -> str:
     r = jev_ask(text)
     would_drop = ("error" not in r and r["choice"] == "nothing" and r["p"] >= DISCARD_P
                   and all(v <= VETO_P for v in r["veto"].values()))  # NaN never drops
-    with (d / "jev-shadow.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": now(), "mode": mode, "alarm": alarm, "text": text[:500], **r,
-                            "would_drop": would_drop}, ensure_ascii=False) + "\n")
+    try:
+        with (d / "jev-shadow.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": now(), "mode": mode, "alarm": alarm, "text": text[:500], **r,
+                                "would_drop": would_drop}, ensure_ascii=False) + "\n")
+    except OSError as e:
+        # Losing the shadow record never costs the arbiter the message.
+        print(f"orq: jev-shadow.jsonl not written: {e}", file=sys.stderr)
     return "drop" if mode == "on" and would_drop else "wake"
 
 
@@ -523,16 +547,21 @@ def cmd_notify(a) -> int:
     d = base_dir(a.dir)
     m = MARK.match(a.text)
     if m and m.group(1).lower() == "aviso":
-        journal_append(d, a.text)
+        journal_append(d, f"aviso: {a.text}")
         print("journal")
         return 0
     if not m and triage(d, a.text, a.alarm) == "drop":
         journal_append(d, f"(jev: no action) {a.text}")
         print("journal (jev)")
         return 0
-    # Before sending: a failed send still leaves the message in the journal.
-    journal_append(d, f"notify → arbiter: {a.text}")
-    send(state(d)["arbiter"], a.text, tmux=a.alarm)
+    # Before sending: a failed send still leaves the message in the journal. The prefixes are what
+    # the panel's feed classifies by.
+    journal_append(d, f"{'alarm' if a.alarm else 'notify → arbiter'}: {a.text}")
+    try:
+        send(state(d)["arbiter"], a.text, tmux=a.alarm)
+    except OrqError as e:
+        journal_append(d, f"notify FAILED: {e}")
+        raise
     print("arbiter woken")
     return 0
 

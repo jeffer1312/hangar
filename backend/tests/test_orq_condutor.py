@@ -642,3 +642,80 @@ def test_alarme_acorda_sem_consultar_o_jev(env, tmp_path, jev_server):
     assert sent(log) == ["--tmux arb [vigia] rev parado"]
     assert jev_server["body"] is None
     assert not (d / "jev-shadow.jsonl").exists()
+
+
+def _corpo_do_registro(d):
+    """Cada linha do registro sem o `- <ts> · ` da frente."""
+    return [l.split(" · ", 1)[1] for l in (d / "registro.md").read_text().splitlines()]
+
+
+def test_registro_leva_prefixo_estavel_por_tipo(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    run(e, "notify", "[aviso] binário congelado")
+    run(e, "notify", "--alarm", "[vigia] rev parado")
+    run(e, "notify", "[decisao] preciso da tela")
+    jev_server["resp"] = _answers()
+    run(_jev_env(e, jev_server, "on"), "notify", "ok, recebido")
+    corpo = _corpo_do_registro(d)
+    assert "aviso: [aviso] binário congelado" in corpo
+    assert "alarm: [vigia] rev parado" in corpo
+    assert "notify → arbiter: [decisao] preciso da tela" in corpo
+    assert "(jev: no action) ok, recebido" in corpo
+
+
+def test_envio_falho_deixa_notify_failed_no_registro(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    falho = tmp_path / "send-falho"
+    falho.write_text("#!/bin/sh\necho sem rota >&2\nexit 3\n")
+    falho.chmod(0o755)
+    r = run({**e, "ORQ_SEND": str(falho)}, "notify", "--alarm", "[vigia] x parado", check=False)
+    assert r.returncode == 2
+    corpo = _corpo_do_registro(d)
+    assert corpo[-2] == "alarm: [vigia] x parado"
+    assert corpo[-1] == "notify FAILED: hangar-send arb failed (rc=3): sem rota"
+
+
+def test_envio_pendurado_vira_erro_no_prazo(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("orq_send", ORQ)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    lento = tmp_path / "send-lento"
+    lento.write_text("#!/bin/sh\nexec sleep 5\n")
+    lento.chmod(0o755)
+    monkeypatch.setenv("ORQ_SEND", str(lento))
+    monkeypatch.setattr(m, "SEND_TIMEOUT_S", 0.2)
+    t0 = time.monotonic()
+    with pytest.raises(m.OrqError, match="did not answer"):
+        m.send("arb", "x")
+    assert time.monotonic() - t0 < 3
+
+
+def test_sombra_que_nao_grava_ainda_acorda_o_arbitro(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    (d / "jev-shadow.jsonl").mkdir()          # open("a") num diretório: OSError
+    jev_server["resp"] = _answers()
+    r = run(_jev_env(e, jev_server, "shadow"), "notify", "ok")
+    assert sent(log) == ["arb ok"]
+    assert "jev-shadow.jsonl not written" in r.stderr
+
+
+def test_evento_gravado_com_envio_falho_diz_como_reenviar(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
+    falho = tmp_path / "send-falho"
+    falho.write_text("#!/bin/sh\nexit 3\n")
+    falho.chmod(0o755)
+    e2 = {**e, "ORQ_SEND": str(falho)}
+    r = run(e2, "event", "veredito", "--task", "1", "--rodada", "1", "--resultado", "aprova",
+            "--sessao", "rev", check=False)
+    assert r.returncode == 2
+    assert "The event IS recorded: do not run `orq event` again" in r.stderr
+    assert "Resend with: hangar-send ex 'APROVA Task 1 round 1:" in r.stderr
+    assert json.loads((d / "eventos.jsonl").read_text().splitlines()[-1])["resultado"] == "aprova"
+    r = run(e2, "event", "veredito", "--task", "1", "--rodada", "2", "--resultado", "devolvido",
+            "--sessao", "rev", "--motivo", "m", check=False)
+    assert "Resend with: orq notify '[decisao] Task 1 round 2: devolvido. Report: m'" in r.stderr
