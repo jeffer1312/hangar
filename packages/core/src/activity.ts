@@ -133,7 +133,8 @@ export function createActivityFolder(): ActivityFolder {
 
   function push(e: ChatEvent): void {
     if (semResultado.size && (e.kind === 'assistant_msg' || e.kind === 'thinking'
-        || (e.kind === 'user_msg' && !e.id.startsWith('queued-')))) {
+        || (e.kind === 'user_msg' && !e.id.startsWith('queued-')
+            && !e.text?.includes('<task-notification>')))) {
       for (const id of semResultado) resulted.add(id);
       semResultado.clear();
     }

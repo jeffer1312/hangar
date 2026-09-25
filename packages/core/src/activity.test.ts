@@ -69,6 +69,11 @@ describe('activity — agente em primeiro plano sem tool_result', () => {
     const s = run([launch('tf4'), user('queued-abc', 'e aí?')]);
     expect(s.agents[0].running).toBe(true);
   });
+
+  it('fim de OUTRO trabalho de fundo nao é continuação: segue rodando', () => {
+    const s = run([launch('tf5'), done('outro99')]);
+    expect(s.agents[0].running).toBe(true);
+  });
 });
 
 describe('activity — AgentSwarm (Kimi)', () => {
