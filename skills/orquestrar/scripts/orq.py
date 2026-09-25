@@ -430,10 +430,12 @@ def jev_ask(text: str, alarm: bool) -> dict:
     if not key:
         return {"error": "no key"}
     instructions, criteria, _ = JEV_QUESTIONS[alarm]
-    body = json.dumps({"model": JEV_MODEL, "state": text[-20_000:],
+    model = os.environ.get("JEV_MODEL", "").strip() or JEV_MODEL
+    body = json.dumps({"model": model, "state": text[-20_000:],
                        "questions": {"kind": {"type": "choice", "instructions": instructions,
                                               "criteria": criteria}}}).encode()
-    req = urllib.request.Request(os.environ.get("ORQ_JEV_URL", JEV_URL), data=body,
+    url = os.environ.get("ORQ_JEV_URL") or os.environ.get("JEV_ENDPOINT", "").strip() or JEV_URL
+    req = urllib.request.Request(url, data=body,
                                  headers={"authorization": f"Bearer {key}",
                                           "content-type": "application/json"})
     try:

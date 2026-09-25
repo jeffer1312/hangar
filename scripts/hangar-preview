@@ -108,6 +108,7 @@ Identidade: sidecar da sessão no modo sem terminal; tmux no modo com terminal.
                           um com o rótulo da página. Campo não coberto cai no LLM pequeno
                           (JEV_TEXTO_BASE_URL/_API_KEY/_MODELO, ou JEV_TEXTO_CMD)
   confere <estado>        o Jev diz se a tela já mostra o estado (sai 0 = sim); use antes do shot
+  JEV_ENDPOINT / JEV_MODEL  onde e com qual modelo o Jev decide (configuração do servidor; vazio = typesafe.ai)
 
 Referência completa: skill hangar-preview.`);
   process.exit(0);
@@ -385,21 +386,23 @@ if (cmd === 'confere') {
   const estado = pos.slice(1).join(' ').trim();
   if (!estado) erro('confere precisa do estado: hangar-preview confere "o dialogo fechou e a lista mostra o item novo"');
   const chaveJev = process.env.TYPESAFE_API_KEY;
-  if (!chaveJev) erro(semJev());
+  if (!chaveJev) erro(semJev(), 2);
   const chave = sidecarDa(nomeSessao()).chave;
   const snap = await chamar(chave, 'snapshot', []);
-  // Erro do snapshot e da chamada ao Jev sai 2: com 1, um laço `until confere` giraria achando
-  // que a tela só não chegou lá. Navegador fechado ou shell fora do ar ainda saem 1 (helpers comuns).
+  // Falta de chave, erro do snapshot e da chamada ao Jev saem 2: com 1, um laço `until confere`
+  // giraria achando que a tela só não chegou lá. Navegador fechado ou shell fora do ar ainda saem 1
+  // (helpers comuns).
   if (snap.codigo !== 0) erro(`o snapshot falhou: ${snap.texto.slice(0, 200)}`, 2);
   let arvore = snap.texto;
   // A prova pode estar no topo ou no fim da página; o miolo de uma lista longa é repetição.
   if (arvore.length > 100_000) arvore = `${arvore.slice(0, 50_000)}\n…\n${arvore.slice(-50_000)}`;
   let respostas;
+  const { url, modelo } = jev.destinoDoJev(process.env, 'jev-1.13.0');
   try {
-    const r = await fetch('https://api.typesafe.ai/v1/systemone', {
+    const r = await fetch(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${chaveJev}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'jev-1.13.0', state: arvore, questions: jev.perguntaDeConfere(estado) }),
+      body: JSON.stringify({ model: modelo, state: arvore, questions: jev.perguntaDeConfere(estado) }),
     });
     if (!r.ok) erro(`o Jev recusou: ${r.status} ${(await r.text()).slice(0, 200)}`, 2);
     respostas = (await r.json()).answers;
@@ -432,10 +435,11 @@ if (cmd === 'objetivo') {
     log: (linha) => console.log(linha),
     executar: async (verbo, args) => (await chamar(chave, verbo, args)).texto,
     perguntar: async (estado, perguntas) => {
-      const r = await fetch('https://api.typesafe.ai/v1/systemone', {
+      const { url, modelo } = jev.destinoDoJev(process.env, 'jev-latest');
+      const r = await fetch(url, {
         method: 'POST',
         headers: { authorization: `Bearer ${chaveJev}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: 'jev-latest', state: estado, questions: perguntas }),
+        body: JSON.stringify({ model: modelo, state: estado, questions: perguntas }),
       });
       if (!r.ok) erro(`o Jev recusou: ${r.status} ${(await r.text()).slice(0, 200)}`);
       return (await r.json()).answers;

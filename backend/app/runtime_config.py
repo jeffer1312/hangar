@@ -78,9 +78,10 @@ EDITAVEIS: dict[str, type] = {
     # perimetro de quem PODE abrir o terminal, e um override por inteiro feito do celular tiraria
     # do ar a origem que o dono declarou no .env — inclusive a que ele esta usando pra editar.
     "term_origins": str,
-    # Jev (typesafe.ai), que decide a navegacao do `hangar-preview objetivo`. A chave fica aqui e
-    # nao no ambiente de quem sobe o servidor: a sessao so a recebe se tiver sido aberta com o
-    # recurso ligado, e trocar de chave nao pede reinicio.
+    # Chave do endpoint do Jev (typesafe.ai ou OpenRouter), lida pelo `objetivo` e pelo `confere`
+    # do `hangar-preview` e pela triagem da orquestracao. A chave fica aqui e nao no ambiente de
+    # quem sobe o servidor: a sessao so a recebe se tiver sido aberta com o recurso ligado, e
+    # trocar de chave nao pede reinicio.
     "jev_api_key": str,
     # Como a sessao NOVA nasce quando ninguem disse nada. Mora no servidor, e nao no localStorage
     # da folha, porque os outros dois caminhos de criacao (hangar-send, MCP new_session) nao leem
@@ -166,6 +167,7 @@ _JEV_TEXTO = (
     ("jev_texto_modelo", "JEV_TEXTO_MODELO"),
     ("jev_texto_cmd", "JEV_TEXTO_CMD"),
 )
+# Endereço e modelo do Jev -> variável lida pelo `objetivo`/`confere` do hangar-preview e pelo orq.
 _JEV_DESTINO = (
     ("jev_endpoint", "JEV_ENDPOINT"),
     ("jev_model", "JEV_MODEL"),

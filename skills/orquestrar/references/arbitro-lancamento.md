@@ -108,7 +108,7 @@ Outside tool (skill, subagent, command): the three questions of `SKILL.md`'s loc
 
 ## Opening a session — five steps, one unit
 
-1. Create on the agent's default account: `hangar-send --new <name> <cwd>`. "An <agent> session" = that agent's default account; the same model through a gateway or router is another provider. `--engine <engine>` only when the plan named one. Model, effort and permission go on the command (`--model <id> --effort <level> --permissao <mode>`; Pi: `--effort` → `--thinking`; Kimi: `--model` only; `--permissao` Claude-only). The row's `abertura` cell goes on the command as written (it may carry `--engine` and `--permissao`); a Codex `conta` other than `openai-codex` → `--conta <name>`. A 400 = session not born: recreate with the flags right, never create-then-switch. Old `hangar-send` without the flags → POST to the API with `model`/`effort`/`permission_mode`.
+1. Create on the agent's default account: `hangar-send --new <name> <cwd>`. "An <agent> session" = that agent's default account; the same model through a gateway or router is another provider. `--engine <engine>` only when the plan named one. Model, effort and permission go on the command (`--model <id> --effort <level> --permissao <mode>`; Pi: `--effort` → `--thinking`; Kimi: `--model` only; `--permissao` Claude-only). Server with a Jev key: every executor and reviewer is born with `--jev`. The row's `abertura` cell goes on the command as written (it may carry `--engine` and `--permissao`); a Codex `conta` other than `openai-codex` → `--conta <name>`. A 400 = session not born: recreate with the flags right, never create-then-switch. Old `hangar-send` without the flags → POST to the API with `model`/`effort`/`permission_mode`.
 
    ```bash
    hangar-send --new <name> <repo> --provider pi --model <provider>/<id> --effort <level>
@@ -129,7 +129,7 @@ The real engine, model and harness, never the request:
 
 - With a terminal, `tmux display -p -t "=<name>:" '#{pane_start_command}'`; without one, its sidecar in `~/.hangar/claude-headless/` or `~/.hangar/codex-sessions/`: the request became a command, and the harness (`claude` × `pi`) plus the API's `provider` match the row.
 - Live proof from the session (statusline or `/cp-think` return) on its first turn, before its first `Edit`. Echoing the kick-off is not proof.
-- The proof comes from the pane and the live session; `/proc/<pid>/cmdline` stays unread. A sidecar proof must match the live session's `session-id`.
+- `/proc/<pid>/cmdline` stays unread. A sidecar proof must match the live session's `session-id`.
 - A proof belongs to the session it was taken from: another row = another session = another proof.
 - A model's capability (images) is proven in the session, one `Read` on a PNG; never copied from another work's contract.
 
@@ -157,7 +157,7 @@ Read ONLY these files. The whole plan, the journal and the lessons file are NOT 
 
 - Lessons go pasted, never as a path. Every visual Task kick-off also pastes the visual-proof invalidators (`executor-visual.md`), even when in the contract.
 - The same text re-sent puts a `/clear`-ed session back. No line carries turn state; "Task 2 already passed" belongs to the contract.
-- Every kick-off names the durable directory (`~/.hangar/orq/<date>-<gid>`) that every `orq --dir` call uses, and never asks for step status, environment confirmation or a screen turn by message: those go through `orq`.
+- Every kick-off names the durable directory that every `orq --dir` call uses, and never asks for step status, environment confirmation or a screen turn by message: those go through `orq`.
 
 ### Tightened criterion (reviewer kick-off, spiral with the user unavailable)
 

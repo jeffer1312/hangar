@@ -1475,7 +1475,7 @@
   "config_server_editor": "Editor",
   "config_server_editor_ajuda": "Binário que abre a pasta da sessão no desktop (ex: code, subl).",
   "config_server_jev_chave": "Chave do Jev",
-  "config_server_jev_chave_ajuda": "Chave do endpoint do Jev (typesafe.ai por padrão, ou OpenRouter). É ela que liga o `hangar-preview objetivo`, o laço em que um modelo pequeno navega e preenche uma tela sozinho no navegador embutido, um passo por vez — sem chave esse verbo não existe, e o resto do navegador continua funcionando. O Hangar a injeta no ambiente da sessão, e só nas que nascem com o Jev ligado; nessas, fica legível por quem já roda dentro delas.",
+  "config_server_jev_chave_ajuda": "Chave do endpoint do Jev (typesafe.ai por padrão, ou OpenRouter). É ela que liga o `objetivo` e o `confere` do navegador embutido (`hangar-preview`) e a triagem da orquestração. O `objetivo` é o laço em que um modelo pequeno navega e preenche uma tela sozinho, um passo por vez — sem chave nada disso roda, e o resto do navegador continua funcionando. O Hangar a injeta no ambiente da sessão, e só nas que nascem com o Jev ligado; nessas, fica legível por quem já roda dentro delas.",
   "config_server_jev_padrao": "Jev ligado nas sessões novas",
   "config_server_jev_padrao_ajuda": "Como a sessão nasce quando ninguém escolhe — vale para a folha \"Nova sessão\", para o hangar-send e para o MCP. Marcar o interruptor na folha também atualiza este padrão.",
   "config_server_jev_endpoint": "Endpoint do Jev",

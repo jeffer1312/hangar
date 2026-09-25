@@ -641,9 +641,18 @@ function chegouNoEstado(respostas) {
   return typeof p === 'number' ? { p, ok: p >= LIMIARES.conclusao } : { p: 0, ok: false };
 }
 
+const JEV_URL_PADRAO = 'https://api.typesafe.ai/v1/systemone';
+
+/** Endereço e modelo do Jev: os da configuração do servidor (injetados na sessão) ou o padrão. */
+function destinoDoJev(env, modeloPadrao) {
+  const url = String(env.JEV_ENDPOINT ?? '').trim() || JEV_URL_PADRAO;
+  const modelo = String(env.JEV_MODEL ?? '').trim() || modeloPadrao;
+  return { url, modelo };
+}
+
 module.exports = {
   parsarSnapshot, montarPerguntas, montarEstado, decidir, rodar, pedidoDeTexto,
   valorDoCampo, cabecaDoValor, jsDeSelecionar, jsDeEstarAberto, normalizar,
-  perguntaDeConfere, chegouNoEstado,
+  perguntaDeConfere, chegouNoEstado, destinoDoJev,
   LIMIARES, NENHUM, OPERACOES, SEM_SELECT, MAX_CANDIDATOS,
 };

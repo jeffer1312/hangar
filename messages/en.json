@@ -1475,7 +1475,7 @@
   "config_server_editor": "Editor",
   "config_server_editor_ajuda": "Binary that opens the session folder on the desktop (e.g. code, subl).",
   "config_server_jev_chave": "Jev key",
-  "config_server_jev_chave_ajuda": "Key for the Jev endpoint (typesafe.ai by default, or OpenRouter). It is what enables `hangar-preview objetivo`, the loop where a small model navigates and fills a screen on its own in the built-in browser, one step at a time — without a key that verb does not exist, and the rest of the browser keeps working. Hangar injects it into the session environment, and only into sessions born with Jev on; in those, it is readable by whatever already runs inside them.",
+  "config_server_jev_chave_ajuda": "Key for the Jev endpoint (typesafe.ai by default, or OpenRouter). It is what enables the built-in browser's `objetivo` and `confere` (`hangar-preview`) and the orchestration's triage. `objetivo` is the loop where a small model navigates and fills a screen on its own, one step at a time — without a key none of this runs, and the rest of the browser keeps working. Hangar injects it into the session environment, and only into sessions born with Jev on; in those, it is readable by whatever already runs inside them.",
   "config_server_jev_padrao": "Jev on for new sessions",
   "config_server_jev_padrao_ajuda": "How a session starts when nobody picks — applies to the \"New session\" sheet, to hangar-send and to MCP. Ticking the switch on the sheet also updates this default.",
   "config_server_jev_endpoint": "Jev endpoint",

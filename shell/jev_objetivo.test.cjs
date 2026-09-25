@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { parsarSnapshot, montarPerguntas, montarEstado, decidir, rodar, pedidoDeTexto, valorDoCampo, cabecaDoValor, perguntaDeConfere, chegouNoEstado, NENHUM, SEM_SELECT } = require('./jev_objetivo.cjs');
+const { parsarSnapshot, montarPerguntas, montarEstado, decidir, rodar, pedidoDeTexto, valorDoCampo, cabecaDoValor, perguntaDeConfere, chegouNoEstado, destinoDoJev, NENHUM, SEM_SELECT } = require('./jev_objetivo.cjs');
 
 const SNAPSHOT = `- RootWebArea "Cadastro"
   - link "Ver ajuda" [ref=@e1]
@@ -618,4 +618,13 @@ test('confere: noul no piso da conclusao passa; abaixo, torto ou ausente nao', (
   assert.deepEqual(chegouNoEstado({ chegou: { noul: 0.4 } }), { p: 0.4, ok: false });
   assert.deepEqual(chegouNoEstado({ chegou: { noul: 'x' } }), { p: 0, ok: false });
   assert.deepEqual(chegouNoEstado(undefined), { p: 0, ok: false });
+});
+
+test('destino do Jev: endpoint e modelo do ambiente vencem o padrao', () => {
+  assert.deepEqual(destinoDoJev({}, 'jev-latest'),
+    { url: 'https://api.typesafe.ai/v1/systemone', modelo: 'jev-latest' });
+  assert.deepEqual(destinoDoJev({ JEV_ENDPOINT: 'https://openrouter.ai/api/alpha/decisions', JEV_MODEL: 'typesafe/jev-1.13-20260917' }, 'jev-latest'),
+    { url: 'https://openrouter.ai/api/alpha/decisions', modelo: 'typesafe/jev-1.13-20260917' });
+  assert.deepEqual(destinoDoJev({ JEV_ENDPOINT: '  ', JEV_MODEL: '' }, 'jev-1.13.0'),
+    { url: 'https://api.typesafe.ai/v1/systemone', modelo: 'jev-1.13.0' });
 });

@@ -22,7 +22,7 @@ def env(tmp_path):
     fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log}"\n')
     fake.chmod(0o755)
     e = {**os.environ, "ORQ_DIR": str(d), "ORQ_SEND": str(fake), "ORQ_JEV": "off",
-         "HOME": str(tmp_path), "TYPESAFE_API_KEY": ""}
+         "HOME": str(tmp_path), "TYPESAFE_API_KEY": "", "JEV_ENDPOINT": "", "JEV_MODEL": ""}
     return d, log, e
 
 
@@ -340,6 +340,17 @@ def test_sombra_consulta_registra_e_acorda_igual(env, tmp_path, jev_server):
     assert linha["would_drop"] is True and linha["mode"] == "shadow"
     assert jev_server["body"]["model"] == "jev-1.13.0"
     assert jev_server["auth"] == "Bearer k"
+
+
+def test_jev_usa_endpoint_e_modelo_do_ambiente(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = {"choice": "decision", "probabilities": {"decision": 0.9}}
+    amb = {**e, "ORQ_JEV": "shadow", "TYPESAFE_API_KEY": "sk-or-x",
+           "JEV_ENDPOINT": jev_server["url"], "JEV_MODEL": "typesafe/jev-1.13-20260917"}
+    run(amb, "notify", "x")
+    assert jev_server["body"]["model"] == "typesafe/jev-1.13-20260917"
+    assert jev_server["auth"] == "Bearer sk-or-x"
 
 
 def test_ligado_descarta_so_com_certeza_alta(env, tmp_path, jev_server):
