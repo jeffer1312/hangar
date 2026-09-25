@@ -154,17 +154,31 @@ def event_append(d: Path, ev: dict) -> dict:
     return ev
 
 
-def _closed(d: Path) -> set:
+def _closed(d: Path) -> dict:
+    """Task → ts of its latest close (None: an old line without ts)."""
     p = d / "closed.jsonl"
     if not p.exists():
-        return set()
-    out = set()
+        return {}
+    out = {}
     for line in p.read_text(encoding="utf-8").splitlines():
         try:
-            out.add(json.loads(line).get("task"))
+            c = json.loads(line)
         except ValueError:
             continue
+        if isinstance(c, dict):
+            out[c.get("task")] = c.get("ts")
     return out
+
+
+def _closed_after(closed_ts, ev_ts) -> bool:
+    """A Task reopened under the same number after its close owns the ball again. A line without
+    ts, or a ts that does not parse, closes everything before it."""
+    if closed_ts is None:
+        return True
+    try:
+        return datetime.fromisoformat(closed_ts) >= datetime.fromisoformat(ev_ts)
+    except (TypeError, ValueError):
+        return True
 
 
 def state(d: Path) -> dict:
@@ -194,7 +208,7 @@ def state(d: Path) -> dict:
     ball: list[str] = []
     closed = _closed(d)
     for task, ev in last.items():
-        if task in closed:
+        if task in closed and _closed_after(closed[task], ev.get("ts")):
             continue
         r = roles.get(task, {})
         if ev["tipo"] == "entrega":
@@ -412,6 +426,11 @@ def cmd_commit(a) -> int:
     obj = _approved_object(d, a.task)
     if obj is None:
         problems.append(f"no APROVA for Task {a.task} with a delivered round object")
+    elif subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "--quiet", f"{obj}^2"],
+                        capture_output=True).returncode != 0:
+        # A stash has two parents (base, index); an old-contract round was a diff file.
+        problems.append(f"round object {obj} is not a stash commit; freeze rounds with git stash "
+                        "create + git stash store (executor.md step 5)")
     else:
         # --no-renames: a renamed path shows both names, so neither side hides behind the other.
         # Everything since the round's base, so correction commits count as a whole.
@@ -422,8 +441,9 @@ def cmd_commit(a) -> int:
             problems.append(f"files differ from the approved round {obj[:12]}: "
                             f"only in commit {sorted(files - rnd)}, only in round {sorted(rnd - files)}")
         if rnd:
+            # Against the tree the reviewer judged (the stash itself), unstaged edits included.
             changed = sorted(set(git(repo, "--literal-pathspecs", "diff", "--name-only", "--no-renames",
-                                     f"{obj}^2", full, "--", *sorted(rnd)).splitlines()) - {""})
+                                     obj, full, "--", *sorted(rnd)).splitlines()) - {""})
             if changed:
                 problems.append(f"content differs from the approved round in: {changed}")
         # Per commit, not the net diff: history is never rewritten, so a reverted untouchable
@@ -492,7 +512,7 @@ def triage(d: Path, text: str, alarm: bool) -> str:
         return "wake"
     r = jev_ask(text)
     would_drop = ("error" not in r and r["choice"] == "nothing" and r["p"] >= DISCARD_P
-                  and max(r["veto"].values()) <= VETO_P)
+                  and all(v <= VETO_P for v in r["veto"].values()))  # NaN never drops
     with (d / "jev-shadow.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps({"ts": now(), "mode": mode, "alarm": alarm, "text": text[:500], **r,
                             "would_drop": would_drop}, ensure_ascii=False) + "\n")
@@ -510,6 +530,8 @@ def cmd_notify(a) -> int:
         journal_append(d, f"(jev: no action) {a.text}")
         print("journal (jev)")
         return 0
+    # Before sending: a failed send still leaves the message in the journal.
+    journal_append(d, f"notify → arbiter: {a.text}")
     send(state(d)["arbiter"], a.text, tmux=a.alarm)
     print("arbiter woken")
     return 0

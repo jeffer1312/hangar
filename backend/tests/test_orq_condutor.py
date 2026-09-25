@@ -1,5 +1,7 @@
 """orq (skills/orquestrar/scripts/orq.py): o condutor da orquestração, rodado como CLI."""
+import hashlib
 import http.server
+import importlib.util
 import json
 import os
 import subprocess
@@ -246,6 +248,57 @@ def test_commit_conferido_fecha_a_task_e_acorda_o_arbitro_uma_vez(env, repo, tmp
     assert run(e, "ball").stdout.strip() == ""
 
 
+def test_task_reaberta_depois_de_fechada_volta_a_ter_a_vez(env, repo, tmp_path):
+    d, _, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    run(e, "commit", "--task", "1", "--hash", _rodada_aprovada(e, r, g))
+    assert run(e, "ball").stdout.split() == []
+    time.sleep(1.1)  # ts has second precision; a close in the same second still wins
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex2", "--par", "rev2")
+    assert run(e, "ball").stdout.split() == ["ex2"]
+    # An old closed line without ts closes everything before it.
+    with (d / "closed.jsonl").open("a") as f:
+        f.write(json.dumps({"task": 1}) + "\n")
+    assert run(e, "ball").stdout.split() == []
+
+
+def test_commit_de_rodada_que_nao_e_stash_e_recusado_limpo(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
+    (r / "a.txt").write_text("2\n")
+    g("commit", "-qam", "t1")
+    tip = g("rev-parse", "HEAD")  # a normal commit: one parent
+    for rnd, obj in ((1, "diff-task-1-rodada1.txt sha256 2bcdbe6f"), (2, tip)):
+        run(e, "event", "entrega", "--task", "1", "--rodada", str(rnd), "--commit", obj)
+        run(e, "event", "veredito", "--task", "1", "--rodada", str(rnd), "--resultado", "aprova",
+            "--sessao", "rev")
+        res = run(e, "commit", "--task", "1", "--hash", tip, check=False)
+        assert res.returncode == 1, res.stdout + res.stderr
+        assert res.stdout.startswith("REFUSED:")
+        assert (f"round object {obj} is not a stash commit; freeze rounds with git stash create + "
+                "git stash store (executor.md step 5)") in res.stdout
+    assert not (d / "closed.jsonl").exists()
+    assert not any(m.startswith("arb ") for m in sent(log))
+
+
+def test_commit_sem_a_edicao_nao_staged_que_o_revisor_viu_e_recusado(env, repo, tmp_path):
+    d, _, e = env
+    r, g = repo
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    (r / "a.txt").write_text("2\n")
+    g("add", "a.txt")
+    (r / "a.txt").write_text("3\n")  # in the round's tree, not in its index
+    _aprova(e, g)
+    g("commit", "-qm", "t1")
+    res = run(e, "commit", "--task", "1", "--hash", g("rev-parse", "HEAD"), check=False)
+    assert res.returncode == 1
+    assert "content differs from the approved round in: ['a.txt']" in res.stdout
+    assert not (d / "closed.jsonl").exists()
+
+
 def test_commit_com_arquivo_fora_da_rodada_ou_intocavel_e_recusado(env, repo, tmp_path):
     d, log, e = env
     r, g = repo
@@ -365,6 +418,21 @@ def test_notify_aviso_vai_pro_registro_decisao_e_sem_marca_acordam(env, tmp_path
     assert sent(log)[-1] == "--tmux arb [vigia] x parado"
 
 
+def test_notify_registra_antes_de_enviar_e_o_envio_falho_deixa_rastro(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "notify", "[decisao] T1: preciso da tela")
+    run(e, "notify", "sem marca")
+    falho = tmp_path / "send-falho"
+    falho.write_text("#!/bin/sh\nexit 3\n")
+    falho.chmod(0o755)
+    r = run({**e, "ORQ_SEND": str(falho)}, "notify", "[decisao] T1: rodada 2 congelada", check=False)
+    assert r.returncode == 2
+    j = (d / "registro.md").read_text()
+    for t in ("[decisao] T1: preciso da tela", "sem marca", "[decisao] T1: rodada 2 congelada"):
+        assert f"notify → arbiter: {t}" in j
+
+
 def test_log_anexa_decisao_com_a_task(env, tmp_path):
     d, _, e = env
     init(e, tmp_path)
@@ -480,6 +548,27 @@ def test_limites_de_descarte_e_de_veto(env, tmp_path, jev_server):
     run(_jev_env(e, jev_server, "on"), "notify", "no limite")
     assert sent(log) == ["arb quase"]
     assert "(jev: no action) no limite" in (d / "registro.md").read_text()
+
+
+def test_veto_nan_fora_da_primeira_posicao_acorda(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    jev_server["resp"] = _answers(deviation=float("nan"))
+    run(_jev_env(e, jev_server, "on"), "notify", "veto nan")
+    assert sent(log) == ["arb veto nan"]
+
+
+# The calibrated question set and thresholds: a changed word or number means measuring again.
+QUESTIONS_SHA256 = "0c585afb5bf81ae72c4df6cb765bef86a82a1767989600a2e00a1f5e821dff6f"
+
+
+def test_perguntas_e_limites_calibrados_nao_mudam():
+    spec = importlib.util.spec_from_file_location("orq_pin", ORQ)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    h = hashlib.sha256(json.dumps(m.JEV_QUESTIONS, sort_keys=True).encode()).hexdigest()
+    assert (h, m.DISCARD_P, m.VETO_P, m.JEV_VETOES) == (
+        QUESTIONS_SHA256, 0.85, 0.40, ("context", "user", "problem", "deviation"))
 
 
 def test_escolha_agir_acorda_mesmo_com_certeza(env, tmp_path, jev_server):
