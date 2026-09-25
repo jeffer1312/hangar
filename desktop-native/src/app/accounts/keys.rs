@@ -275,8 +275,11 @@ impl Hangar {
         let name = input(window, cx, if kind == FormKind::Key { title.clone() } else { String::new() },
             if kind == FormKind::Key { title.clone() } else { "kimi".into() });
         let url = input(window, cx, engine.base_url.clone(), if kind == FormKind::Key { "https://api.exemplo.com".into() } else { "https://…".into() });
-        let key = cx.new(|cx| InputState::new(window, cx).masked(true)
-            .placeholder(tr(if key_set { "accounts_engine_key_replace" } else { "accounts_engine_key_paste" })));
+        // O formulário curto, como no web, não tem texto de fundo na chave.
+        let key = cx.new(|cx| {
+            let state = InputState::new(window, cx).masked(true);
+            if kind == FormKind::Key { state } else { state.placeholder(tr(if key_set { "accounts_engine_key_replace" } else { "accounts_engine_key_paste" })) }
+        });
         let model = input(window, cx, engine.model.clone(), tr("accounts_engine_model_id"));
         let subagent = input(window, cx, engine.subagent_model.clone().unwrap_or_default(), tr("accounts_engine_subagent_empty"));
         let context = input(window, cx, numeric(engine.context_window), tr("accounts_engine_tokens"));
@@ -299,6 +302,12 @@ impl Hangar {
         self.accounts.form = Some(form);
         focus.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
+    }
+
+    /// A lista de modelos chegou (ou mudou): "nome em uso" e "lista indisponível" são refeitos com ela.
+    pub(super) fn refresh_engine_form(&mut self, cx: &mut Context<Self>) {
+        let taken = self.engine_names();
+        if let Some(form) = self.accounts.form.as_mut() { form.refresh(&taken, cx); }
     }
 
     /// Um campo mudou (digitado ou pelo atalho de endereço). Endereço ou chave novos: o teste em voo e a lista já
@@ -548,13 +557,14 @@ impl Hangar {
                 });
             }
             KeysReply::Cookie(seq, result) => {
+                // Relê mesmo sem o formulário (página deixada no meio): a leitura de quem voltou pode ter chegado antes da gravação.
+                self.load_accounts(true, cx);
                 let Some(c) = self.accounts.cookie.as_mut().filter(|c| c.seq == seq && c.saving) else { return };
                 c.saving = false;
                 match result {
                     Ok(_) => { self.accounts.cookie = None; self.root_focus.focus(window, cx); }
                     Err(error) => c.error = Some(if error.uncertain { tr("accounts_cookie_uncertain") } else { Self::failure(&error) }),
                 }
-                self.load_accounts(true, cx);
             }
             KeysReply::Cleared(id, name, result) => {
                 if self.accounts.cookie_clearing.as_deref() == Some(id.as_str()) { self.accounts.cookie_clearing = None; }
@@ -615,7 +625,7 @@ impl Hangar {
 
         let key_label = tr(if short { "accounts_key_secret" } else { "accounts_engine_key" });
         body = body.child(field(key_label.clone(), Input::new(&f.key).disabled(busy).aria_label(key_label))
-            .when(f.key_set, |el| el.child(tone(tr("accounts_engine_key_set"), theme::success()))));
+            .when(f.key_set && !short, |el| el.child(tone(tr("accounts_engine_key_set"), theme::success()))));
 
         // Testar e listar: no formulário curto é o bloco "Modelos" com a lista.
         let testing = f.testing.is_some();

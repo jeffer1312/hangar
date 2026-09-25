@@ -241,6 +241,13 @@ impl Api {
         Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
     }
 
+    /// DELETE com parâmetros na URL (cancelar o login do Codex leva a tentativa na query).
+    pub async fn server_delete(&self, path: &[&str], query: &[(&str, &str)], seconds: u64) -> Result<Value, Failure> {
+        let r = self.client.delete(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
+            .map_err(|_| Failure::transport(true))?;
+        Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))
+    }
+
     /// Paleta do papel de parede desta máquina. O backend só responde a pedidos locais: ligado a outro
     /// servidor volta 403, e 404 quer dizer que o desktop não gera paleta.
     pub async fn desktop_palette(&self) -> Result<Value, Failure> {

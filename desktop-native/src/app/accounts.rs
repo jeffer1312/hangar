@@ -2,13 +2,15 @@
 //! com a cota de cada uma, e os modelos do Claude Code (`GET /api/engines`). O que a tela mostra é
 //! montado na chegada da resposta e a cada meio minuto (o "há X" e os prazos envelhecem); o desenho só lê.
 //! Renomear escreve daqui; entrar, sair, remover e adicionar conta Claude moram em `actions`; o formulário do modelo, a
-//! chave de outro agente e o cookie do OpenCode, em `keys`. As ações do Codex aparecem desligadas até chegarem.
+//! chave de outro agente e o cookie do OpenCode, em `keys`; entrar no Codex, importar ou herdar e usar a redefinição, em `codex`.
 mod actions;
+mod codex;
 mod keys;
 
 use super::*;
 use super::device::Remote;
 use actions::{ActionReply, AddAccount, AddStep, Change, ChangeKind, SignIn};
+use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
 use keys::{CookieForm, EngineForm, KeysReply};
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
@@ -68,7 +70,11 @@ struct QuotaWindow {
 }
 
 #[derive(Clone, Deserialize)]
-struct ResetCredits { available_count: u64 }
+/// `credits` pode vir ausente ou `null` (o web aceita os dois): a oferta sai de `available_count`.
+struct ResetCredits { available_count: u64, #[serde(default)] credits: Option<Vec<ResetCredit>> }
+
+#[derive(Clone, Deserialize)]
+struct ResetCredit { id: String, expires_at: Option<f64>, status: String }
 
 /// Um modelo do Claude Code (`engines.json`): o que a lista mostra e o que o formulário de edição abre. A chave nunca
 /// vem, só se ela existe.
@@ -120,8 +126,9 @@ struct Row {
     subtitle: (String, Vec<(std::ops::Range<usize>, Tone)>),
     chips: Vec<String>,
     quota: QuotaView,
-    /// Ações que chegam na próxima versão, mostradas desligadas na linha.
-    later: Vec<String>,
+    /// Conta Codex: o id dela e se a ação da linha é herdar da padrão (senão, entrar).
+    codex: Option<(String, bool)>,
+    reset: Option<ResetOffer>,
     /// Editar o modelo: `Some(false)` quando os detalhes dele não chegaram (a leitura dos modelos falhou).
     edit: Option<bool>,
     /// Cookie do painel do OpenCode: `Some(já guardado)` na credencial que aceita.
@@ -162,8 +169,12 @@ pub(super) struct Accounts {
     /// Cookie do OpenCode sendo digitado (abaixo da linha) e o que está sendo apagado.
     cookie: Option<CookieForm>,
     cookie_clearing: Option<String>,
-    /// Número de cada pedido do formulário e do cookie: resposta de outro pedido não mexe no atual.
+    /// Número de cada pedido do formulário, do cookie e do painel do Codex: resposta de outro pedido não mexe no atual.
     keys_seq: u64,
+    codex: Option<CodexFlow>,
+    reset: Option<ResetTry>,
+    /// Leitura da lista pedida depois de uma redefinição (número dela, se a redefinição valeu): a falha dela entra no aviso.
+    reset_refresh: Option<(u64, bool)>,
 }
 
 pub(super) enum AccountsReply {
@@ -172,6 +183,7 @@ pub(super) enum AccountsReply {
     Renamed(u64, Result<Value, Failure>),
     Action(ActionReply),
     Keys(KeysReply),
+    Codex(CodexReply),
 }
 
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.) }
@@ -250,7 +262,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     let muted = |text: String| (text, Tone::Muted);
     let mut subtitle = Vec::new();
     let mut chips = Vec::new();
-    let mut later = Vec::new();
+    let mut codex = None;
     let mut edit = None;
     let mut sign_in = None;
     let initial = c.name.chars().find(|ch| ch.is_alphanumeric()).map(|ch| ch.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
@@ -294,11 +306,12 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
                 subtitle.push(muted(tr(match sync { "ready" => "accounts_codex_inherited", "running" => "accounts_codex_preparing",
                     "idle" => "accounts_codex_not_inherited", _ => "accounts_codex_inherit_failed" })));
             }
-            if c.codex_account.is_some() && c.auth() == "none" { later.push(tr("accounts_sign_in")); }
-            else if c.codex_account.is_some() && c.codex_sync.as_deref() == Some("idle") && logged == Some(true) { later.push(tr("accounts_inherit")); }
-            let weekly_full = c.read_windows().is_some_and(|w| w.iter().any(|w| w.label == "7d" && w.pct >= 100.));
-            let credits = c.quota.as_ref().and_then(|q| q.reset_credits.as_ref()).map_or(0, |r| r.available_count);
-            if c.codex_account.is_some() && credits > 0 && weekly_full { later.push(tr("accounts_use_reset")); }
+            // Como no web: sem login, Entrar; logada e sem nunca ter herdado, Herdar ("Depois" do login desembarca aqui).
+            codex = c.codex_account.clone().and_then(|id| match (c.auth(), c.codex_sync.as_deref(), logged) {
+                ("none", _, _) => Some((id, false)),
+                (_, Some("idle"), Some(true)) => Some((id, true)),
+                _ => None,
+            });
         }
         _ => match engine {
             // Como no mock: só o que foge do padrão vira ficha; o endereço e o resto ficam no Editar.
@@ -359,7 +372,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     });
     Row {
         id: c.id.clone(), name: c.name.clone(), label: c.natural.clone(), natural: c.natural.clone(), alias: c.alias.clone().unwrap_or_default(),
-        active: c.active, glyph, subtitle, chips, quota, later, edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
+        active: c.active, glyph, subtitle, chips, quota, codex, reset: codex::reset_offer(c, now), edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
         can_sign_out: c.kind == "claude" && c.managed != Some(false) && logged == Some(true) && !c.expired(),
         remove,
     }
@@ -505,7 +518,15 @@ impl Hangar {
     pub(super) fn receive_accounts(&mut self, reply: AccountsReply, window: &mut Window, cx: &mut Context<Self>) {
         let accounts = &mut self.accounts;
         match reply {
-            AccountsReply::List(seq, result) => match result.map(serde_json::from_value::<Vec<Credential>>) {
+            AccountsReply::List(seq, result) => {
+                // A lista relida depois de uma redefinição não veio: o aviso diz que o que está na tela é anterior a ela.
+                if let Some((_, applied)) = accounts.reset_refresh.take_if(|(s, _)| *s == seq)
+                    && !matches!(&result, Ok(list) if Vec::<Credential>::deserialize(list).is_ok())
+                    && let Some((text, error)) = accounts.outcome.as_mut() {
+                    *text = format!("{text} {}", tr(if applied { "accounts_reset_refresh_failed" } else { "accounts_reset_refresh_failed_neutral" }));
+                    *error = true;
+                }
+                match result.map(serde_json::from_value::<Vec<Credential>>) {
                 // `finish` só aceita o último pedido: resposta atrasada não apaga a falha de uma releitura mais nova.
                 Ok(Ok(list)) => if accounts.list.finish(seq, Ok(list)) { (accounts.read_at, accounts.notice) = (Some(Instant::now()), None); },
                 // Falhou com a lista anterior na tela: ela fica, e a falha aparece acima dela.
@@ -515,15 +536,20 @@ impl Hangar {
                 },
                 Err(e) => { accounts.list.finish(seq, Err(Self::failure(&e))); }
                 Ok(Err(_)) => { accounts.list.finish(seq, Err(tr("invalid_response"))); }
-            },
-            AccountsReply::Engines(seq, result) => match result.map_err(|e| Self::failure(&e)).and_then(|v| parse_engines(&v)) {
-                // Releitura que falhou com os modelos já na tela: eles ficam, e a falha aparece como a da lista.
-                Err(error) if accounts.engines.ok().is_some() => if seq == accounts.engines.seq {
-                    accounts.engines.loading = false;
-                    accounts.engines_notice = Some(error);
-                },
-                parsed => if accounts.engines.finish(seq, parsed) { accounts.engines_notice = None; },
-            },
+                }
+            }
+            AccountsReply::Engines(seq, result) => {
+                match result.map_err(|e| Self::failure(&e)).and_then(|v| parse_engines(&v)) {
+                    // Releitura que falhou com os modelos já na tela: eles ficam, e a falha aparece como a da lista.
+                    Err(error) if accounts.engines.ok().is_some() => if seq == accounts.engines.seq {
+                        accounts.engines.loading = false;
+                        accounts.engines_notice = Some(error);
+                    },
+                    parsed => if accounts.engines.finish(seq, parsed) { accounts.engines_notice = None; },
+                }
+                // O formulário de criação aberto antes da lista chegar refaz o "nome em uso" com ela.
+                self.refresh_engine_form(cx);
+            }
             AccountsReply::Renamed(seq, result) => {
                 let Some(rename) = accounts.rename.as_mut().filter(|r| r.seq == seq) else { return };
                 match result {
@@ -535,6 +561,7 @@ impl Hangar {
             }
             AccountsReply::Action(reply) => self.receive_action(reply, window, cx),
             AccountsReply::Keys(reply) => self.receive_keys(reply, window, cx),
+            AccountsReply::Codex(reply) => self.receive_codex(reply, window, cx),
         }
         self.rebuild_accounts();
         cx.notify();
@@ -553,6 +580,7 @@ impl Hangar {
         }
         if let Some(panel) = self.render_sign_in(cx) { return page.child(panel).into_any_element(); }
         if let Some(panel) = self.render_engine_form(cx) { return page.child(panel).into_any_element(); }
+        if let Some(panel) = self.render_codex(cx) { return page.child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {
             (None, _) => return page.child(self.heading("accounts_subscriptions"))
                 .child(settings_box().child(note(tr("accounts_loading"), theme::muted()))).into_any_element(),
@@ -700,12 +728,19 @@ impl Hangar {
             Button::new(SharedString::from(format!("accounts-sign-in-{}", row.id))).outline().small().label(label).disabled(busy)
                 .on_click(cx.listener(move |this, _, window, cx| this.start_sign_in(id.clone(), window, cx)))
         });
+        // "Herdar" curto na linha para não cobrir a cota; o nome inteiro fica na dica e na leitura de tela.
+        let codex = row.codex.clone().filter(|_| changing.is_none()).map(|(account, inherit)| {
+            let label = tr(if inherit { "accounts_codex_inherit_short" } else { "accounts_sign_in" });
+            Button::new(SharedString::from(format!("accounts-codex-{}", row.id))).outline().small().label(label).disabled(busy)
+                .when(inherit, |el| el.tooltip(tr("accounts_inherit")).accessibility_label(tr("accounts_inherit")))
+                .on_click(cx.listener(move |this, _, window, cx| this.start_codex(Some(account.clone()), inherit, window, cx)))
+        });
         let actions = div().w(px(160.)).flex_shrink_0().flex().items_center().justify_end().gap(px(6.))
             .children(changing.map(|text| div().text_size(px(12.5)).text_color(theme::muted()).child(text)))
             .children(sign_in)
+            .children(codex)
             .children(edit)
             .children(cookie)
-            .children(row.later.iter().enumerate().map(|(n, label)| soon_button(SharedString::from(format!("accounts-later-{}-{n}", row.id)), label.clone())))
             .child(menu);
         let line = div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().items_center().gap(px(12.)).px_4()
             .py(px(if compact { 8. } else { 14. }))
@@ -715,6 +750,10 @@ impl Hangar {
             Some(error) => div().child(line).child(div().px_4().pb(px(12.)).pl(px(16. + size + 12.)).text_size(px(13.))
                 .child(div().text_color(theme::danger()).child(error))),
             None => line,
+        };
+        let line = match (&row.reset, self.accounts.reset.as_ref().is_some_and(|r| r.id == row.id)) {
+            (None, false) => line,
+            (offer, _) => div().child(line).child(self.render_reset(row, offer.as_ref(), size, cx)),
         };
         match self.accounts.cookie.as_ref().filter(|c| c.id == row.id) {
             Some(form) => div().child(line).child(self.render_cookie(form, size, cx)),
@@ -735,11 +774,6 @@ impl Hangar {
                 .child(Button::new("accounts-rename-cancel").ghost().small().label(tr("cancel")).disabled(saving)
                     .on_click(cx.listener(|this, _, window, cx| this.cancel_rename(window, cx)))))
     }
-}
-
-/// Ação que chega na próxima versão: aparece, desligada, dizendo isso.
-fn soon_button(id: impl Into<ElementId>, label: String) -> Button {
-    Button::new(id).outline().small().label(label).disabled(true).tooltip(tr("settings_next_version"))
 }
 
 /// Janela de cota na linha completa: nome, reinício e % acima da barra.
@@ -816,7 +850,7 @@ mod tests {
             "login": {"estado": "ok", "loggedIn": true, "refreshExpiresAt": now + 2. * 86_400.}}));
         let row = build_row(&renew, &HashMap::new(), false, now);
         assert_eq!(row.sign_in, Some(tr("accounts_renew")));
-        assert!(row.later.is_empty());
+        assert!(row.codex.is_none() && row.reset.is_none());
         let (line, marks) = &row.subtitle;
         assert!(marks.iter().any(|(range, tone)| *tone == Tone::Warn && line[range.clone()] == tr("accounts_login_expires").replace("{n}", "2")));
         let expired = credential(json!({"id": "claude:/b", "tipo": "claude", "nome": "b",
@@ -828,11 +862,38 @@ mod tests {
     }
 
     #[test]
-    fn reset_offer_needs_the_weekly_window_full() {
-        let codex = |pct: f64| serde_json::from_str::<Credential>(&format!(r#"{{"id": "codex:/c", "tipo": "codex", "nome": "c", "codex_account": "c",
-            "auth_method": "oauth", "cota": {{"estado": "lida", "janelas": [{{"rotulo": "7d", "pct": {pct}}}], "reset_credits": {{"available_count": 1}}}}}}"#))
+    fn reset_shows_with_credit_and_unlocks_only_at_a_full_week() {
+        let codex = |pct: f64, credits: u64| serde_json::from_str::<Credential>(&format!(r#"{{"id": "codex:/c", "tipo": "codex", "nome": "c", "codex_account": "c",
+            "auth_method": "oauth", "cota": {{"estado": "lida", "janelas": [{{"rotulo": "7d", "pct": {pct}}}],
+            "reset_credits": {{"available_count": {credits}, "credits": [{{"id": "k1", "expires_at": null, "status": "available"}}]}}}}}}"#))
             .expect("synthetic credential");
-        assert!(build_row(&codex(99.), &HashMap::new(), false, 0.).later.is_empty());
-        assert_eq!(build_row(&codex(100.), &HashMap::new(), false, 0.).later, vec![tr("accounts_use_reset")]);
+        let row = |pct, credits| build_row(&codex(pct, credits), &HashMap::new(), false, 0.);
+        assert!(row(100., 0).reset.is_none());
+        let blocked = row(99.4, 1).reset.expect("offer with credit");
+        assert_eq!(blocked.blocked, Some(tr("accounts_reset_weekly_remaining").replace("{pct}", "99")));
+        let free = row(100., 1).reset.expect("offer with credit");
+        assert!(free.blocked.is_none() && free.credit.as_deref() == Some("k1"));
+    }
+
+    #[test]
+    fn reset_credits_accept_null_missing_and_filled_like_the_web() {
+        let codex = |credits: &str| serde_json::from_str::<Credential>(&format!(r#"{{"id": "codex:/c", "tipo": "codex", "nome": "c", "codex_account": "c",
+            "auth_method": "oauth", "cota": {{"estado": "lida", "janelas": [{{"rotulo": "7d", "pct": 100}}],
+            "reset_credits": {{"available_count": 1{credits}}}}}}}"#)).expect("credits null, missing or filled parse");
+        for credits in [r#", "credits": null"#, ""] {
+            let offer = build_row(&codex(credits), &HashMap::new(), false, 0.).reset.expect("offer from available_count");
+            assert!(offer.blocked.is_none() && offer.credit.is_none() && offer.expires.is_none());
+        }
+        let filled = build_row(&codex(r#", "credits": [{"id": "k1", "expires_at": null, "status": "available"}]"#), &HashMap::new(), false, 0.);
+        assert_eq!(filled.reset.and_then(|o| o.credit).as_deref(), Some("k1"));
+    }
+
+    #[test]
+    fn codex_row_offers_sign_in_or_inherit_like_the_web() {
+        let codex = |auth: &str, sync: &str, logged: bool| credential(json!({"id": "codex:/h/.codex-b", "tipo": "codex", "nome": "b", "codex_account": "b",
+            "auth_method": auth, "codex_sync": sync, "login": {"estado": "ok", "loggedIn": logged}}));
+        assert_eq!(build_row(&codex("none", "idle", false), &HashMap::new(), false, 0.).codex, Some(("b".into(), false)));
+        assert_eq!(build_row(&codex("oauth", "idle", true), &HashMap::new(), false, 0.).codex, Some(("b".into(), true)));
+        assert_eq!(build_row(&codex("oauth", "ready", true), &HashMap::new(), false, 0.).codex, None);
     }
 }

@@ -330,7 +330,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.authorized():
             return
-        if path in ("/api/credenciais", "/api/engines") or path.startswith("/api/conta-estado/"):
+        if path in ("/api/credenciais", "/api/engines", "/api/harness/codex/integracao", "/api/fs/roots") \
+                or path.startswith(("/api/conta-estado/", "/api/codex-contas")):
             record("GET", self.path, None)
             if not accounts.handle_get(self, path, query):
                 self.send_json({"detail": "not found"}, 404)
@@ -582,6 +583,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if accounts.handle_post(self, url.path, body):
             return
+        if url.path == "/api/sessions":
+            self.create_session(body or {})
+            return
         if url.path == "/api/atualizacao/iniciar":
             with LOCK:
                 mode = R4["update"]
@@ -623,6 +627,27 @@ class Handler(BaseHTTPRequestHandler):
             status, reply = self.apply(s, action, body)
             bump()
         self.send_json(reply, status)
+
+    def create_session(self, body):
+        """Sessão Codex nova (R5c2, "Abrir sessão e aprovar"): nasce perguntando pelos hooks, como o Codex faz."""
+        name, mode = body.get("name", ""), accounts.MODE["session"]
+        if mode == "500":
+            self.send_json(fail("erro_sintetico", "não consegui criar a sessão (sintético)"), 500)
+            return
+        with LOCK:
+            exists = name in SESSIONS
+            if not exists:
+                SESSIONS[name] = {
+                    "info": info(name, body.get("provider", "codex"), jsonl=False, state="awaiting_input",
+                                 question="Aprovar os hooks desta conta?", options=["Sim, aprovar", "Não, sair"]),
+                    "state": state("awaiting_input"), "events": [], "stats": None,
+                }
+                SESSIONS[name]["info"]["cwd"] = body.get("cwd")
+                bump()
+        if exists or mode == "409":
+            self.send_json(fail("erro_sessao_existe", "409: sessão já existe"), 409)
+        else:
+            self.send_json({"ok": True, "name": name})
 
     def apply(self, s, action, body):
         st = s["state"]

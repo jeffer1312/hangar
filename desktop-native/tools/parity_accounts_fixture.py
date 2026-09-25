@@ -21,20 +21,41 @@ fica, "" limpa, chave vazia ou mascarada mantém a atual), POST /api/credenciais
 /control/r5 também aceita probe=<ok|empty|502|drop>&probe_delay=<s>, put=<ok|400|drop>&put_delay=<s>,
 sync=<ok|500|drop>&sync_delay=<s>, cookie=<ok|500|drop>&cookie_delay=<s>. Chave e cookie nunca vão para o registro
 (só o tamanho) e ficam aqui só mascarados.
+
+R5c2 (Codex), também contra o estado em memória: GET/POST /api/codex-contas, POST/GET/DELETE /api/codex-contas/{id}/login
+(código do aparelho SINTÉTICO, endereço https://auth.exemplo.test), POST/GET /api/codex-contas/{id}/prepare, POST/GET
+/api/harness/codex/integracao, POST /api/codex-contas/{id}/rate-limit-reset (nenhum crédito de verdade existe aqui) e
+GET /api/fs/roots; o POST /api/sessions mora na fixture de sessão. /control/r5 também aceita codex_base=<ok|out> (out: a
+padrão sem login), codex_create=<ok|409|500>, codex_login=<ok|409|500|drop>, codex_step=<auto|wait|fail|500> (auto: confirma
+no 3º passo), codex_cancel=<ok|500>, prepare=<ok|trust|issues|500>, integ=<ok|parcial|500>, reset=<ok|409|500|drop>&reset_delay=<s>,
+weekly=<pct|none> (a semana da conta codex-pessoal), roots=<ok|empty>, session=<ok|409|500>, integ_done=<no|yes>,
+credit=restore (o crédito volta; as chaves já usadas continuam valendo como repetição), credits=<list|null|missing>
+(como vem a lista de créditos da codex-pessoal), second=<no|yes> (a padrão também com semana em 100% e um crédito).
 """
 
 import json
 import re
 import threading
 import time
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 LOCK = threading.Lock()
 MODE = {"list": "ok", "list_delay": 0.0, "engines": "ok", "engines_delay": 0.0, "rename": "ok", "rename_delay": 0.0,
         "login": "ok", "login_delay": 0.0, "url_after": 1.0, "step": "ok", "code": "ok", "code_delay": 0.0,
         "cancel": "ok", "cancel_delay": 0.0, "logout": "ok", "logout_delay": 0.0, "delete": "ok", "delete_delay": 0.0,
         "create": "ok", "create_delay": 0.0, "base": "ok", "probe": "ok", "probe_delay": 0.0, "put": "ok", "put_delay": 0.0,
-        "sync": "ok", "sync_delay": 0.0, "cookie": "ok", "cookie_delay": 0.0}
+        "sync": "ok", "sync_delay": 0.0, "cookie": "ok", "cookie_delay": 0.0,
+        "codex_base": "ok", "codex_create": "ok", "codex_login": "ok", "codex_step": "auto", "codex_cancel": "ok", "prepare": "ok",
+        "integ": "ok", "reset": "ok", "reset_delay": 0.0, "weekly": "100", "roots": "ok", "session": "ok", "integ_done": "no",
+        "credits": "list", "second": "no"}
+# Codex: contas criadas na prova, as que entraram, a herança de cada uma, tentativas de login e a redefinição.
+CODEX_CREATED = []
+CODEX_LOGGED = set()
+CODEX_SYNC = {}
+CODEX_ATTEMPTS = {}
+PREP = {}
+INTEG = {"estado": "ocioso", "reads": 0, "ultima": None}
+RESET = {"used": False, "keys": []}
 # Credenciais com o cookie do painel guardado.
 COOKIES = set()
 ALIASES = {}
@@ -106,6 +127,39 @@ def _state(now):
             if row["cookie_definido"]:
                 row["cota"] = {"estado": "lida", "janelas": [{"rotulo": "5h", "pct": 27, "reset_ts": now + 2 * 3600},
                                                              {"rotulo": "7d", "pct": 44, "reset_ts": now + 4 * 86_400}], "idade_s": 0}
+    for row in rows:
+        if row["id"] == "codex:/home/prova/.codex-pessoal":
+            quota = row["cota"]
+            if RESET["used"]:
+                quota["janelas"] = [{"rotulo": "5h", "pct": 0, "reset_ts": now + 5 * 3600}, {"rotulo": "7d", "pct": 0, "reset_ts": now + 7 * 86_400}]
+                quota["reset_credits"] = {"available_count": 0, "credits": []}
+            elif MODE["weekly"] == "none":
+                quota["janelas"] = [w for w in quota["janelas"] if w["rotulo"] != "7d"]
+            else:
+                quota["janelas"][1]["pct"] = float(MODE["weekly"])
+            if not RESET["used"] and MODE["credits"] == "null":
+                quota["reset_credits"]["credits"] = None
+            elif not RESET["used"] and MODE["credits"] == "missing":
+                del quota["reset_credits"]["credits"]
+    base_in = MODE["codex_base"] != "out" or "default" in CODEX_LOGGED
+    second = base_in and MODE["second"] == "yes"
+    rows.insert(3, {"id": "codex:/home/prova/.codex", "tipo": "codex", "auth_method": "oauth" if base_in else "none", "codex_account": "default",
+                    "nome_natural": "codex", "ativa": True, "path": "/home/prova/.codex", "usos": ["codex_cli"],
+                    "login": {"estado": "ok", "loggedIn": base_in, **({"email": "codex-padrao@exemplo.test", "plano": "pro"} if base_in else {})},
+                    "cota": {"estado": "lida", "janelas": [{"rotulo": "5h", "pct": 7, "reset_ts": now + 4 * 3600},
+                                                           {"rotulo": "7d", "pct": 100 if second else 22, "reset_ts": now + 5 * 86_400}], "idade_s": 40,
+                             **({"reset_credits": {"available_count": 1, "credits": [{"id": "c2", "expires_at": now + 6 * 86_400, "status": "available"}]}}
+                                if second else {})}
+                    if base_in else {"estado": "sem_credencial", "janelas": []}})
+    for name in CODEX_CREATED:
+        if f"codex:/home/prova/.codex-{name}" in REMOVED:
+            continue
+        logged = name in CODEX_LOGGED
+        rows.append({"id": f"codex:/home/prova/.codex-{name}", "tipo": "codex", "auth_method": "oauth" if logged else "none",
+                     "codex_account": name, "codex_sync": CODEX_SYNC.get(name, "idle"), "nome_natural": f"codex-{name}",
+                     "path": f"/home/prova/.codex-{name}", "usos": ["codex_cli"],
+                     "login": {"estado": "ok", "loggedIn": logged, **({"email": f"{name}@exemplo.test", "plano": "plus"} if logged else {})},
+                     "cota": {"estado": "sem_credencial", "janelas": []}})
     for name in CREATED:
         rows.append({"id": f"claude:/home/prova/.claude-{name}", "tipo": "claude", "auth_method": "oauth", "nome_natural": name,
                      "path": f"/home/prova/.claude-{name}", "usos": [], "login": {"estado": "ok", "loggedIn": False},
@@ -141,6 +195,9 @@ def listing(forced):
 
 def control(query):
     with LOCK:
+        # credit=restore: o crédito volta, as chaves já usadas ficam (repetir uma delas é "já redefinida").
+        if query.get("credit", [""])[0] == "restore":
+            RESET["used"] = False
         for key, raw in ((k, v[0]) for k, v in query.items()):
             if key in MODE:
                 MODE[key] = float(raw) if key.endswith("_delay") or key == "url_after" else raw
@@ -182,7 +239,202 @@ def handle_get(handler, path, query):
     if parts[:2] == ["api", "conta-estado"] and parts[3:] == ["login", "passo"]:
         step(handler, parts[2])
         return True
+    if path == "/api/codex-contas":
+        with LOCK:
+            handler.send_json(_codex_accounts())
+        return True
+    if parts[:2] == ["api", "codex-contas"] and parts[3:] == ["login"]:
+        _codex_login_read(handler, parts[2])
+        return True
+    if parts[:2] == ["api", "codex-contas"] and parts[3:] == ["prepare"]:
+        _prepare_read(handler, parts[2])
+        return True
+    if path == "/api/harness/codex/integracao":
+        _integ_read(handler)
+        return True
+    if path == "/api/fs/roots":
+        handler.send_json([] if MODE["roots"] == "empty" else [{"path": "/synthetic/prova", "label": "prova"}])
+        return True
     return False
+
+
+# --- Codex (R5c2) ---------------------------------------------------------------------------------------------------
+
+def _codex_accounts():
+    base_in = MODE["codex_base"] != "out" or "default" in CODEX_LOGGED
+    auth = lambda logged, name: {"method": "oauth" if logged else "none", "status": "connected" if logged else "disconnected",
+                                 "email": f"{name}@exemplo.test" if logged else None, "plan": "plus" if logged else None}
+    idle = {"status": "ready", "trust_pending": False, "issues": []}
+    out = [{"id": "default", "credential_id": "codex:/home/prova/.codex", "name": "default", "home": "/home/prova/.codex", "is_default": True,
+            "auth": auth(base_in, "codex-padrao"), "sync": idle, "has_settings": True},
+           {"id": "pessoal", "credential_id": "codex:/home/prova/.codex-pessoal", "name": "pessoal", "home": "/home/prova/.codex-pessoal",
+            "is_default": False, "auth": auth(True, "codex"), "sync": idle}]
+    for name in CODEX_CREATED:
+        if f"codex:/home/prova/.codex-{name}" not in REMOVED:
+            out.append({"id": name, "credential_id": f"codex:/home/prova/.codex-{name}", "name": name, "home": f"/home/prova/.codex-{name}",
+                        "is_default": False, "auth": auth(name in CODEX_LOGGED, name),
+                        "sync": {"status": CODEX_SYNC.get(name, "idle"), "trust_pending": False, "issues": []}})
+    return out
+
+
+def _codex_known(name):
+    return name in ("default", "pessoal") or (name in CODEX_CREATED and f"codex:/home/prova/.codex-{name}" not in REMOVED)
+
+
+def _codex_login_read(handler, name):
+    with LOCK:
+        attempt = CODEX_ATTEMPTS.get(name)
+        if MODE["codex_step"] == "500":
+            attempt = "fail"
+        elif attempt is not None and attempt["status"] == "waiting":
+            attempt["reads"] += 1
+            if MODE["codex_step"] == "fail" and attempt["reads"] >= 3:
+                attempt.update(status="failed", error={"code": "codex_account_login_timeout", "params": {}})
+            elif MODE["codex_step"] == "auto" and attempt["reads"] >= 3:
+                attempt["status"] = "completed"
+                CODEX_LOGGED.add(name)
+        view = None if attempt in (None, "fail") else {k: v for k, v in attempt.items() if k != "reads"}
+    if attempt == "fail":
+        _fail(handler, 500, "leitura do login do Codex falhou (sintético)")
+    else:
+        handler.send_json(view)
+
+
+def _codex_login_start(handler, name, log):
+    if _refused(handler, "codex_login", "já existe um login em andamento nesta conta (sintético)"):
+        return
+    if not _codex_known(name):
+        _fail(handler, 404, "Conta Codex não encontrada.")
+        return
+    with LOCK:
+        n = len(CODEX_ATTEMPTS) + 1
+        CODEX_ATTEMPTS[name] = {"account_id": name, "attempt_id": f"tentativa-{n}", "status": "waiting", "reads": 0,
+                                "user_code": "PROV-4821", "verification_url": "https://auth.exemplo.test/codex/device"}
+        view = {k: v for k, v in CODEX_ATTEMPTS[name].items() if k != "reads"}
+    log["attempt"] = view["attempt_id"]
+    drop(handler) if MODE["codex_login"] == "drop" else handler.send_json(view)
+
+
+def _prepare_view(name):
+    prep = PREP.get(name)
+    if prep is None:
+        return {"status": CODEX_SYNC.get(name, "idle"), "trust_pending": False, "issues": []}
+    if prep["reads"] < 4:
+        return {"status": "running", "trust_pending": False, "issues": [], "etapa": ["principal", "configuracoes", "recursos", "plugins"][prep["reads"]]}
+    mode = MODE["prepare"]
+    herdado = {"skills": 3, "hooks": 2, "agents": 1, "plugins": 2, "mcps": 1}
+    if mode == "issues":
+        CODEX_SYNC[name] = "partial"
+        return {"status": "partial", "trust_pending": False, "herdado": herdado,
+                "issues": [{"code": "codex_account_resource_conflict", "params": {}}]}
+    CODEX_SYNC[name] = "ready"
+    if mode == "trust":
+        return {"status": "ready", "trust_pending": True, "herdado": herdado,
+                "issues": [{"code": "codex_account_mcp_runtime_excluded", "params": {"server": "docs", "variable": "CODEX_HOME"}}]}
+    return {"status": "ready", "trust_pending": False, "issues": [], "herdado": herdado}
+
+
+def _prepare_read(handler, name):
+    with LOCK:
+        if name in PREP:
+            PREP[name]["reads"] += 1
+        view = _prepare_view(name)
+    handler.send_json(view)
+
+
+def _integ_view():
+    if INTEG["estado"] != "executando":
+        return {"estado": INTEG["estado"], "ultima_execucao": INTEG["ultima"] or ("2026-09-20T10:00:00-03:00" if MODE["integ_done"] == "yes" else None),
+                "etapa": None}
+    reads = INTEG["reads"]
+    if reads >= 4:
+        INTEG["estado"] = "ok" if MODE["integ"] == "ok" else "parcial"
+        INTEG["ultima"] = time.strftime("%Y-%m-%dT%H:%M:%S-03:00")
+        return _integ_view()
+    etapa = [{"codigo": "etapa_inventariando", "params": {}, "texto": "Inventariando configuração"},
+             {"codigo": "etapa_importando_plugins", "params": {"plugins": "hangar, docs"}, "texto": "Codex importando hangar, docs"},
+             {"codigo": "etapa_skills", "params": {}, "texto": "Atualizando ponte de skills"},
+             {"codigo": None, "params": {}, "texto": "Etapa só em texto (sintético)"}][reads]
+    return {"estado": "executando", "ultima_execucao": INTEG["ultima"], "etapa": etapa}
+
+
+def _integ_read(handler):
+    with LOCK:
+        if INTEG["estado"] == "executando":
+            INTEG["reads"] += 1
+        view = _integ_view()
+    handler.send_json(view)
+
+
+def _codex_post(handler, parts, body, log):
+    """Escritas do Codex; False quando a rota não é daqui."""
+    if parts == ["api", "codex-contas"]:
+        name = (body or {}).get("name", "")
+        log["name"] = name
+        if _refused(handler, "codex_create", "não consegui criar a conta Codex (sintético)"):
+            return True
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", name):
+            handler.send_json({"detail": {"code": "codex_account_invalid_name", "params": {}, "msg": "Use um nome válido para a conta Codex."}}, 422)
+        elif _codex_known(name):
+            handler.send_json({"detail": {"code": "codex_account_exists", "params": {}, "msg": "Já existe uma conta com esse nome."}}, 409)
+        else:
+            with LOCK:
+                CODEX_CREATED.append(name)
+                REMOVED.discard(f"codex:/home/prova/.codex-{name}")
+                view = next(a for a in _codex_accounts() if a["id"] == name)
+            handler.send_json(view)
+        return True
+    if parts[:2] != ["api", "codex-contas"] and parts != ["api", "harness", "codex", "integracao"]:
+        return False
+    if parts == ["api", "harness", "codex", "integracao"]:
+        if MODE["integ"] == "500":
+            _fail(handler, 500, "a importação não começou (sintético)")
+            return True
+        with LOCK:
+            INTEG.update(estado="executando", reads=0)
+            view = _integ_view()
+        handler.send_json(view)
+        return True
+    name, action = parts[2], "/".join(parts[3:])
+    if action == "login":
+        _codex_login_start(handler, name, log)
+    elif action == "prepare":
+        if MODE["prepare"] == "500":
+            _fail(handler, 500, "a preparação não começou (sintético)")
+            return True
+        with LOCK:
+            PREP[name] = {"reads": 0}
+            CODEX_SYNC[name] = "running"
+            view = _prepare_view(name)
+        handler.send_json(view)
+    elif action == "rate-limit-reset":
+        _reset(handler, name, body or {}, log)
+    else:
+        return False
+    return True
+
+
+def _reset(handler, name, body, log):
+    key, credit = body.get("idempotency_key", ""), body.get("credit_id")
+    log.update({"credit": credit, "key": key})
+    with LOCK:
+        mode, delay = MODE["reset"], MODE["reset_delay"]
+    time.sleep(delay)
+    if mode in ("409", "500"):
+        _fail(handler, int(mode), "a cota semanal ainda não acabou (sintético)" if mode == "409" else "o Codex não respondeu (sintético)")
+        return
+    with LOCK:
+        repeat = key in RESET["keys"]
+        if repeat:
+            outcome = "alreadyRedeemed"
+        elif RESET["used"]:
+            outcome = "noCredit"
+        else:
+            RESET["used"] = True
+            outcome = "reset"
+        RESET["keys"].append(key)
+    log["outcome"] = outcome
+    drop(handler) if mode == "drop" else handler.send_json({"outcome": outcome})
 
 
 def _labels():
@@ -297,7 +549,7 @@ def handle_post(handler, path, body):
         _probe(handler, body or {}, log)
     elif parts == ["api", "credenciais", "sincronizar"]:
         _sync(handler, (body or {}).get("id", ""), log)
-    else:
+    elif not _codex_post(handler, parts, body, log):
         return False
     print("ACCOUNTS", json.dumps(log), flush=True)
     return True
@@ -305,6 +557,17 @@ def handle_post(handler, path, body):
 
 def handle_delete(handler, path):
     parts = [unquote(p) for p in path.strip("/").split("/")]
+    if parts[:2] == ["api", "codex-contas"] and parts[3:] == ["login"]:
+        attempt_id = parse_qs(urlparse(handler.path).query).get("attempt_id", [""])[0]
+        if not _refused(handler, "codex_cancel", "não consegui cancelar o login (sintético)"):
+            with LOCK:
+                attempt = CODEX_ATTEMPTS.get(parts[2])
+                if attempt and attempt["attempt_id"] == attempt_id and attempt["status"] == "waiting":
+                    attempt["status"] = "cancelled"
+                view = attempt and {k: v for k, v in attempt.items() if k != "reads"}
+            handler.send_json(view) if view else _fail(handler, 404, "tentativa não encontrada (sintético)")
+        print("ACCOUNTS", json.dumps({"delete": path, "attempt": attempt_id}), flush=True)
+        return True
     kind, name = "/".join(parts[1:-1]), parts[-1]
     ids = {"claude-configs": "claude:/home/prova/.claude" + ("" if name == "pessoal" else f"-{name}"),
            "engines": f"chave:{name}", "credenciais/kimi": f"kimi:{name}", "codex-contas": f"codex:/home/prova/.codex-{name}"}

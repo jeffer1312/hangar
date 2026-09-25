@@ -157,7 +157,6 @@ impl Render for AddAccount {
                 let previous = if this.step == AddStep::Claude { AddStep::Subscriptions } else { AddStep::Choose };
                 this.go(previous, window, cx);
             }));
-        let soon = |id: &'static str| Button::new(id).outline().small().label(tr("accounts_add_soon")).disabled(true);
         let body = match self.step {
             AddStep::Choose => div().flex().flex_col()
                 .child(choice(tr("accounts_add_subscription"), tr("accounts_add_subscription_desc"),
@@ -182,7 +181,12 @@ impl Render for AddAccount {
                 .child(choice(tr("accounts_add_claude"), tr("accounts_add_claude_desc"),
                     Button::new("accounts-add-pick-claude").outline().small().icon(IconName::Plus).label(tr("accounts_add_connect"))
                         .on_click(cx.listener(|this, _, window, cx| this.go(AddStep::Claude, window, cx)))))
-                .child(choice(tr("accounts_add_codex"), tr("accounts_add_codex_desc"), soon("accounts-add-pick-codex"))),
+                .child(choice(tr("accounts_add_codex"), tr("accounts_add_codex_desc"),
+                    Button::new("accounts-add-pick-codex").outline().small().icon(IconName::Plus).label(tr("accounts_add_connect"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            window.close_dialog(cx);
+                            let _ = this.hangar.update(cx, |hangar, cx| { hangar.accounts.add = None; hangar.start_codex(None, false, window, cx); });
+                        })))),
             AddStep::Claude => match self.base.clone() {
                 Some((id, name)) => div().flex().flex_col().gap(px(14.))
                     .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal()
@@ -221,7 +225,7 @@ impl Hangar {
     pub(super) fn accounts_busy(&self) -> bool {
         self.accounts.sign_in.is_some() || self.accounts.change.is_some() || self.accounts.rename.as_ref().is_some_and(|r| r.saving)
             || self.accounts.form.as_ref().is_some_and(EngineForm::busy) || self.accounts.cookie.as_ref().is_some_and(|c| c.saving)
-            || self.accounts.cookie_clearing.is_some()
+            || self.accounts.cookie_clearing.is_some() || self.accounts.codex.is_some() || self.accounts.reset.as_ref().is_some_and(|r| r.consuming)
     }
 
     pub(super) fn start_sign_in(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -343,8 +347,10 @@ impl Hangar {
     /// A tentativa perdeu a tela (outra página, página fechada, outro servidor): o estado sai. Parada no meio, fecha
     /// aqui, no servidor atual, na vez da conta. Começando ou com o código em voo, a própria tarefa fecha pela resposta.
     pub(in crate::app) fn accounts_page_left(&mut self) {
-        // O que estava sendo digitado sai com a página; uma gravação em voo termina sozinha e relê as listas.
-        (self.accounts.form, self.accounts.cookie) = (None, None);
+        // O que estava sendo digitado sai com a página; uma gravação em voo termina sozinha e relê as listas. O painel do
+        // Codex para de ler (como o web ao desmontar): a tentativa e a importação seguem no servidor. A redefinição
+        // pedida fica com a chave dela: voltar e repetir tem de ser a mesma tentativa, e a resposta ainda acha quem pediu.
+        (self.accounts.form, self.accounts.cookie, self.accounts.codex) = (None, None, None);
         let Some(s) = self.accounts.sign_in.take() else { return };
         let Some(api) = self.api.clone().filter(|_| s.open && !s.starting && !s.sending) else { return };
         let (label, turn) = (s.label.clone(), login_turn(&api, &s.label));
@@ -352,7 +358,7 @@ impl Hangar {
     }
 
     /// Troca de servidor: a tentativa aberta é do servidor que sai, e é nele que se cancela.
-    pub(in crate::app) fn leave_accounts(&mut self) { self.accounts_page_left(); }
+    pub(in crate::app) fn leave_accounts(&mut self) { self.accounts_page_left(); self.accounts.reset = None; }
 
     pub(super) fn confirm_change(&mut self, id: String, kind: ChangeKind, window: &mut Window, cx: &mut Context<Self>) {
         if self.accounts_busy() { return; }
