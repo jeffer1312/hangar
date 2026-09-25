@@ -582,7 +582,6 @@ impl Hangar {
             Some(Ok(value)) => {
                 let source = safe_markdown(&text(&value, "markdown"));
                 let view = self.text_view(&format!("plan-preview:{marker}"), "__plan__", source, cx);
-                self.saw_selectable_text();
                 Some(div().id("plan-preview-body").max_h(px(320.)).overflow_y_scroll().p_3().rounded_md().bg(theme::raised())
                     .child(TextView::new(&view).selectable(true).scrollable(false)).into_any_element())
             }

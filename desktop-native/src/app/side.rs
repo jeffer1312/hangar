@@ -524,7 +524,6 @@ impl Hangar {
                 Some(Ok((diff, truncated))) => {
                     let (shown, clipped) = conversation::clip(&diff, DIFF_MAX);
                     let view = self.text_view(&format!("side-diff:{path}"), "__side__", conversation::fenced(shown), cx);
-                    self.saw_selectable_text();
                     div().flex().flex_col().gap_1()
                         .child(div().id("side-diff").max_h(px(360.)).overflow_y_scroll().text_xs().child(TextView::new(&view).selectable(true).scrollable(false)))
                         .when(truncated || clipped, |el| el.child(div().text_xs().text_color(theme::muted()).child(tr("side_diff_truncated"))))
@@ -647,7 +646,7 @@ impl Hangar {
                 .map(|el| if floating { el.rounded(px(18.)).border_1().border_color(theme::border()).shadow(theme::panel_shadow()) }
                     else { el.border_l_1().border_color(theme::border()) })
                 .child(header)
-                .child(if on_activity { div().flex_1().min_h_0().child(self.activity_view()).into_any_element() }
+                .child(if on_activity { div().flex_1().min_h_0().child(self.activity_view(cx)).into_any_element() }
                     else { div().id("side-scroll").flex_1().min_h_0().overflow_y_scroll().child(content).into_any_element() })
                 .child(div().flex_shrink_0().px_4().py_3().flex().items_center().justify_between().gap_2().border_t_1().border_color(theme::border()).text_size(px(11.))
                     .child(div().min_w_0().truncate().text_color(theme::faint()).child(format!("{} · {server}", agent_label(&session.provider))))

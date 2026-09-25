@@ -17,11 +17,6 @@ pub(super) struct Panes {
     pub overlay: Entity<Pane>,
     /// Altura medida da faixa de baixo: a view guardada precisa de altura definida, e o compositor cresce com o texto.
     pub bottom_height: Rc<Cell<f32>>,
-    /// Área que desenhou texto selecionável no último desenho. A seleção do kit apaga, depois de todo quadro, o texto
-    /// que não se pintou nele: área assim não pode ser reusada do cache, ou perde a seleção e redesenha no quadro seguinte.
-    pub bottom_text: Cell<bool>,
-    pub side_text: Cell<bool>,
-    drawing: Cell<Option<Area>>,
 }
 
 impl Panes {
@@ -36,7 +31,6 @@ impl Panes {
         Self {
             nav: pane(Area::Nav), conversation: pane(Area::Conversation), bottom: pane(Area::Bottom), side: pane(Area::Side),
             overlay: pane(Area::Overlay), bottom_height: Rc::new(Cell::new(120.)),
-            bottom_text: Cell::new(false), side_text: Cell::new(false), drawing: Cell::new(None),
         }
     }
 }
@@ -51,14 +45,9 @@ impl Render for Pane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let area = self.area;
         if count_frames() { eprintln!("pane {area:?}"); }
+        rendered(cx.entity_id(), window, cx);
         let Some(hangar) = self.hangar.upgrade() else { return div().into_any_element() };
-        hangar.update(cx, |this, cx| {
-            this.panes.drawing.set(Some(area));
-            match area { Area::Bottom => this.panes.bottom_text.set(false), Area::Side => this.panes.side_text.set(false), _ => {} }
-            let element = this.render_area(area, window, cx);
-            this.panes.drawing.set(None);
-            element
-        })
+        hangar.update(cx, |this, cx| this.render_area(area, window, cx))
     }
 }
 
@@ -76,29 +65,20 @@ impl Hangar {
         }
     }
 
-    /// Chamar ao montar texto selecionável na faixa de baixo ou no painel: no próximo quadro a área sai do cache.
-    pub(super) fn saw_selectable_text(&self) {
-        match self.panes.drawing.get() {
-            Some(Area::Bottom) => self.panes.bottom_text.set(true),
-            Some(Area::Side) => self.panes.side_text.set(true),
-            _ => {}
-        }
-    }
-
-    /// A área guardada entre quadros, ou desenhada em todo quadro quando mostrou texto selecionável no último desenho.
-    pub(super) fn pane_element(&self, area: Area, style: StyleRefinement) -> AnyElement {
-        let (pane, text) = match area {
-            Area::Bottom => (&self.panes.bottom, self.panes.bottom_text.get()),
-            Area::Side => (&self.panes.side, self.panes.side_text.get()),
-            Area::Nav => (&self.panes.nav, false),
-            // A conversa sempre tem texto selecionável; o diálogo lê o estado do `Root`, que não o avisa.
-            Area::Conversation => (&self.panes.conversation, true),
-            Area::Overlay => (&self.panes.overlay, true),
+    /// A área guardada entre quadros; o diálogo não, porque lê o estado do `Root`, que não o avisa.
+    pub(super) fn pane_element(&self, area: Area, style: StyleRefinement, cx: &App) -> AnyElement {
+        let pane = match area {
+            Area::Nav => &self.panes.nav, Area::Conversation => &self.panes.conversation, Area::Bottom => &self.panes.bottom,
+            Area::Side => &self.panes.side,
+            Area::Overlay => {
+                let mut frame = div();
+                frame.style().refine(&style);
+                return frame.child(self.panes.overlay.clone()).into_any_element();
+            }
         };
-        if !text { return pane.clone().cached(style).into_any_element(); }
-        let mut frame = div();
-        frame.style().refine(&style);
-        frame.child(pane.clone()).into_any_element()
+        // O painel mostra a aba Atividade, que tem views próprias com texto selecionável dentro dele.
+        let nested = if area == Area::Side { self.activity_views(cx) } else { Vec::new() };
+        cached_selectable(pane.clone().into(), nested, style)
     }
 
     /// Redesenha uma área só, sem acordar as outras: para o que muda só nela (texto chegando, rolagem, digitação).
@@ -123,4 +103,24 @@ impl Hangar {
                 }, |_, _, _, _| {}).absolute().inset_0()))
             .into_any_element()
     }
+}
+
+/// Guarda uma view entre quadros sem perder o texto selecionável dela. A seleção do kit apaga, no fim do quadro, o texto
+/// que não se pintou, e a view reusada não pinta: o `canvas` depois dela avisa o kit que ela e as views de dentro dela
+/// (`nested`) continuam na tela. Toda view guardada assim chama `rendered` no próprio `render`.
+pub(super) fn cached_selectable(view: AnyView, nested: Vec<EntityId>, style: StyleRefinement) -> AnyElement {
+    let mut ids = nested;
+    ids.push(view.entity_id());
+    let mut frame = div().relative();
+    frame.style().refine(&style);
+    frame.child(view.cached(StyleRefinement::default().size_full()))
+        .child(canvas(|_, _, _| {}, move |_, _, window, cx| {
+            for id in ids { base::TextSelection::retain_cached_view(id, window, cx); }
+        }).absolute().size_0())
+        .into_any_element()
+}
+
+/// A view guardada desenhou de novo: o texto dela que não se pintou sai da seleção.
+pub(super) fn rendered(view: EntityId, window: &Window, cx: &mut App) {
+    base::TextSelection::view_rendered(view, window, cx);
 }

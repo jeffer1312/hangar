@@ -384,8 +384,14 @@ fn shell_row(prefix: &str, line: &ShellLine) -> AnyElement {
         .into_any_element()
 }
 
+impl ActivityPanel {
+    /// Views guardadas dentro desta, para quem guarda esta (`panes::cached_selectable`).
+    pub(super) fn views(&self) -> Vec<EntityId> { vec![self.conversation.entity_id()] }
+}
+
 impl Render for ActivityPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::panes::rendered(cx.entity_id(), window, cx);
         if self.opened.is_some() { return self.render_detail(window, cx); }
         let lines = &self.lines;
         let mut body = div().px_4().py(px(14.)).flex().flex_col().gap_4();
@@ -500,8 +506,9 @@ impl ActivityPanel {
         };
         let empty = |text: String| div().px_4().py_4().text_center().text_sm().text_color(theme::faint()).child(text).into_any_element();
         let body = if !opened.loaded { empty(tr("subagent_loading")) }
-            // Sem cache: a conversa do agente tem texto selecionável, que a seleção do kit apaga quando não é repintado.
-            else if opened.has_events { div().size_full().child(self.conversation.clone()).into_any_element() }
+            else if opened.has_events {
+                super::panes::cached_selectable(self.conversation.clone().into(), Vec::new(), StyleRefinement::default().size_full())
+            }
             // Já chamou ferramentas (ou o registro não foi lido): é falha de leitura, não agente parado.
             else if run.unreadable || run.calls > 0 { empty(web("atividade_erro_transcript")) }
             else { empty(web("atividade_pensando")) };
@@ -655,10 +662,16 @@ pub(super) fn agent_request(call: &ChatEvent) -> Option<(Option<String>, String)
 impl Hangar {
 
     /// A aba do painel: Atividade (a view própria) ou nada, e o Contexto segue como era.
-    pub(super) fn activity_view(&self) -> AnyElement {
-        // Sem cache, pela conversa do agente que ela mostra; e o painel também deixa o cache enquanto a aba está aberta.
-        self.saw_selectable_text();
-        div().size_full().child(self.act.view.clone()).into_any_element()
+    pub(super) fn activity_view(&self, cx: &App) -> AnyElement {
+        let nested = self.act.view.read(cx).views();
+        super::panes::cached_selectable(self.act.view.clone().into(), nested, StyleRefinement::default().size_full())
+    }
+
+    /// A aba Atividade e as views guardadas dentro dela, que o painel guardado leva junto.
+    pub(super) fn activity_views(&self, cx: &App) -> Vec<EntityId> {
+        let mut views = self.act.view.read(cx).views();
+        views.push(self.act.view.entity_id());
+        views
     }
 
     /// Abas "Contexto | Atividade" no cabeçalho do painel; sem atividade, só o título de antes.

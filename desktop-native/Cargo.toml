@@ -17,6 +17,9 @@ async-channel = "=2.5.0"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
+[patch.crates-io]
+gpui-base = { path = "vendor/gpui-base-0.6.6" }
+
 [profile.dev]
 debug = 0
 

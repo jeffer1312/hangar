@@ -63,7 +63,7 @@ impl ChatEvent {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct SessionState {
     #[serde(default)] pub state: String,
     pub label: Option<String>,

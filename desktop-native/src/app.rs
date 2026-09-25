@@ -145,7 +145,7 @@ enum Prepared {
 /// O que um quadro do SSE mudou: nada (ping), só a tela (estatísticas, aviso), as linhas da conversa, ou só as linhas
 /// do fim dela (prévia, pensamento e ferramenta ao vivo), que ninguém fora da conversa lê.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Changed { Nothing, Screen, Rows, Tail }
+enum Changed { Nothing, Screen, Rows, Tail, Bottom }
 
 // Formulário da pergunta atual; refeito quando a pergunta (identidade + conteúdo) muda.
 #[derive(Default)]
@@ -731,7 +731,8 @@ impl Hangar {
             Payload::Stream(Update::Frame(frame)) => {
                 let applied = if is_chat {
                     let (applied, changed) = self.accept_chat_frame(&frame.event, frame.data, window, cx);
-                    (rows, visible, tail) = (changed == Changed::Rows, changed != Changed::Nothing, changed == Changed::Tail);
+                    (rows, visible, tail) = (changed == Changed::Rows, !matches!(changed, Changed::Nothing | Changed::Bottom), changed == Changed::Tail);
+                    if changed == Changed::Bottom { self.redraw(panes::Area::Bottom, cx); }
                     applied
                 } else if frame.event == "sessions" {
                     match serde_json::from_value(frame.data) {
@@ -926,7 +927,8 @@ impl Hangar {
             }
             "stats" => {
                 return match serde_json::from_value::<Option<Stats>>(data) {
-                    Ok(stats) => { self.stats = stats; (true, Changed::Screen) }
+                    // Só o rodapé do compositor lê as estatísticas.
+                    Ok(stats) => { self.stats = stats; (true, Changed::Bottom) }
                     Err(_) => { self.error = Some(tr("invalid_response")); (false, Changed::Screen) }
                 };
             }
@@ -956,7 +958,9 @@ impl Hangar {
             return (true, Changed::Nothing);
         }
         // Estado não mexe nos eventos: redesenha (chip, "em execução") sem refazer a conversa.
-        let changed = match update {
+        let changed = match &update {
+            // O mesmo estado repetido não redesenha: a conversa guardada sairia do cache à toa.
+            ChatUpdate::State(state) if *state == self.chat.state && self.chat.ask.is_none() => Changed::Nothing,
             ChatUpdate::State(_) => Changed::Screen,
             ChatUpdate::Preview(_) | ChatUpdate::Thinking(_) | ChatUpdate::LiveTool(_) => Changed::Tail,
             _ => Changed::Rows,
@@ -2267,7 +2271,6 @@ impl Hangar {
             };
             let source = self.plan_view.as_ref().map(|(source, _)| source.clone()).unwrap_or_default();
             if self.plan_scroll.0 != source { self.plan_scroll = (source, ScrollHandle::new()); }
-            self.saw_selectable_text();
             body = body.child(div().rounded_md().bg(theme::raised())
                 .child(scrolled("plan-scroll", &self.plan_scroll.1, 320., div().p_3().child(TextView::new(&view).selectable(true).scrollable(false)))))
                 .when_some(plan.path, |el, path| el.child(div().text_xs().text_color(theme::muted()).child(path)));
@@ -3434,13 +3437,13 @@ impl Render for Hangar {
                         tr(if self.side.open { "side_hide" } else { "side_show" }), cx)
                     .selected(self.side.open).on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx))))))
             // Cada área é uma view própria, guardada entre quadros quando pode (`panes.rs`).
-            .child(self.pane_element(panes::Area::Conversation, StyleRefinement::default().w_full().flex_1().min_h_0()))
-            .child(self.pane_element(panes::Area::Bottom, StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get()))));
+            .child(self.pane_element(panes::Area::Conversation, StyleRefinement::default().w_full().flex_1().min_h_0(), cx))
+            .child(self.pane_element(panes::Area::Bottom, StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())), cx));
         let nav = if page.is_some() { None }
-            else if tabs { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w_full().h(px(44.)).flex_shrink_0())) }
-            else { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w(px(284.)).h_full().flex_shrink_0())) };
+            else if tabs { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w_full().h(px(44.)).flex_shrink_0(), cx)) }
+            else { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w(px(284.)).h_full().flex_shrink_0(), cx)) };
         self.sync_side_cost(window);
-        let side = self.side_width(window).map(|width| self.pane_element(panes::Area::Side, StyleRefinement::default().w(px(width)).h_full().flex_shrink_0()));
+        let side = self.side_width(window).map(|width| self.pane_element(panes::Area::Side, StyleRefinement::default().w(px(width)).h_full().flex_shrink_0(), cx));
         let dialog = div().w(px(480.)).p_6().bg(theme::surface()).border_1().border_color(theme::border()).rounded_xl().flex().flex_col().gap_4()
             .child(div().text_xl().font_weight(FontWeight::BOLD).child(tr("connection")))
             .child(div().text_sm().text_color(theme::muted()).child(tr("connection_hint")))
