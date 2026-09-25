@@ -411,9 +411,10 @@ def jev_key() -> str:
     if k:
         return k
     try:
-        env = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8")).get("env") or {}
+        loaded = json.loads((Path.home() / ".claude" / "settings.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
+    env = loaded.get("env") if isinstance(loaded, dict) else None
     v = env.get("TYPESAFE_API_KEY") if isinstance(env, dict) else None
     return v if isinstance(v, str) else ""
 

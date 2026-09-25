@@ -364,6 +364,16 @@ def test_chave_do_settings_json_vale_sem_variavel(env, tmp_path, jev_server):
     assert jev_server["auth"] == "Bearer s"
 
 
+def test_settings_json_que_nao_e_objeto_acorda_o_arbitro(env, tmp_path, jev_server):
+    d, log, e = env
+    init(e, tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("[]")
+    run({**_jev_env(e, jev_server, "shadow"), "TYPESAFE_API_KEY": ""}, "notify", "y")
+    assert sent(log) == ["arb y"]
+    assert json.loads((d / "jev-shadow.jsonl").read_text())["error"] == "no key"
+
+
 def test_alarme_usa_a_pergunta_do_vigia(env, tmp_path, jev_server):
     d, log, e = env
     init(e, tmp_path)
