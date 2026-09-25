@@ -192,11 +192,50 @@ pub struct AgentRun {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellRun { pub id: String, pub command: String, pub label: String, pub description: Option<String>, pub ts: Option<f64>, pub running: bool }
 
+/// Tarefa da aba Atividade: TaskCreate/TaskUpdate/TaskStop pelo número sequencial, ou a lista inteira do último
+/// TodoWrite/`update_plan`, como o fold do web (não o da lista de tarefas da conversa, que lê o id no resultado).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActivityTask { pub title: String, pub active_form: Option<String>, pub status: TaskStatus }
+
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Activity { pub agents: Vec<AgentRun>, pub shells: Vec<ShellRun> }
+pub struct Activity { pub agents: Vec<AgentRun>, pub shells: Vec<ShellRun>, pub tasks: Vec<ActivityTask> }
 
 impl Activity {
     pub fn running_agents(&self) -> impl Iterator<Item = &AgentRun> { self.agents.iter().filter(|a| a.running) }
+    pub fn running_shells(&self) -> impl Iterator<Item = &ShellRun> { self.shells.iter().filter(|s| s.running) }
+    /// O número do botão Atividade: tarefas em andamento, agentes e shells rodando.
+    pub fn badge(&self) -> usize {
+        self.tasks.iter().filter(|t| t.status == TaskStatus::InProgress).count() + self.running_agents().count() + self.running_shells().count()
+    }
+}
+
+/// `pending` para o que não for um dos três outros, como o `normStatus` do web; `None` é a tarefa apagada.
+fn task_status(value: Option<&Value>) -> Option<TaskStatus> {
+    match value.and_then(Value::as_str) {
+        Some("in_progress") => Some(TaskStatus::InProgress),
+        Some("completed") => Some(TaskStatus::Completed),
+        Some("deleted") => None,
+        _ => Some(TaskStatus::Pending),
+    }
+}
+
+/// O `String(x ?? y ?? '')` do web para ids que chegam como texto ou número.
+fn loose_id(input: Option<&Value>, keys: &[&str]) -> String {
+    let value = keys.iter().find_map(|key| input.and_then(|v| v.get(*key)).filter(|v| !v.is_null()));
+    match value { Some(Value::String(s)) => s.clone(), Some(other) => other.to_string(), None => String::new() }
+}
+
+/// Lista inteira de um TodoWrite (`todos[].content`) ou `update_plan` (`plan[].step`); `None` quando o campo não é lista.
+fn whole_list(input: Option<&Value>, list: &str, title: &str) -> Option<Vec<(ActivityTask, bool)>> {
+    let raw = input.and_then(|v| v.get(list))?;
+    let parsed = raw.as_str().and_then(|s| serde_json::from_str::<Value>(s).ok());
+    let items = parsed.as_ref().unwrap_or(raw).as_array()?;
+    Some(items.iter().filter_map(|item| {
+        let title = item.get(title)?.as_str()?.to_owned();
+        let status = task_status(item.get("status"));
+        let active_form = item.get("activeForm").and_then(Value::as_str).map(str::to_owned);
+        Some((ActivityTask { title, active_form, status: status.unwrap_or(TaskStatus::Pending) }, status.is_none()))
+    }).collect())
 }
 
 /// Agentes e shells de fundo, dobrados dos eventos como o `createActivityFolder` do web. Refeito a cada troca do
@@ -212,6 +251,9 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     let mut agent_calls: HashSet<&str> = HashSet::new();
     let mut agents = Vec::new();
     let mut shells = Vec::new();
+    // Tarefas pelo número sequencial do TaskCreate; o `bool` marca a apagada. A lista do último TodoWrite vence.
+    let mut created: Vec<(ActivityTask, bool)> = Vec::new();
+    let mut whole: Option<Vec<(ActivityTask, bool)>> = None;
     fn finish<'a>(id: String, background: &HashMap<String, &'a str>, resulted: &mut HashSet<&'a str>, early: &mut HashSet<String>) {
         match background.get(&id) { Some(&call) => { resulted.insert(call); } None => { early.insert(id); } }
     }
@@ -246,9 +288,32 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 finish(task.to_owned(), &background, &mut resulted, &mut finished_early);
             }
             "tool_use" => {
-                let Some(id) = tool_key(event) else { continue };
                 let input = event.tool_input.as_ref();
                 let text = |key: &str| input.and_then(|v| v.get(key)).and_then(Value::as_str).map(str::to_owned);
+                // Tarefas não dependem do id da chamada.
+                match event.tool_name.as_deref() {
+                    Some("TodoWrite") => { if let Some(list) = whole_list(input, "todos", "content") { whole = Some(list); } continue; }
+                    Some("update_plan") => { if let Some(list) = whole_list(input, "plan", "step") { whole = Some(list); } continue; }
+                    Some("TaskCreate") => {
+                        let title = text("subject").or_else(|| text("content"))
+                            .unwrap_or_else(|| crate::i18n::tr_web("atividade_tarefa_fallback", &HashMap::new()).unwrap_or_else(|| "Tarefa".into()));
+                        created.push((ActivityTask { title, active_form: text("activeForm"), status: TaskStatus::Pending }, false));
+                        continue;
+                    }
+                    Some(name @ ("TaskUpdate" | "TaskStop")) => {
+                        let keys: &[&str] = if name == "TaskStop" { &["task_id", "taskId", "id"] } else { &["taskId", "id"] };
+                        let id = loose_id(input, keys);
+                        if let Some(task) = created.iter_mut().enumerate().find(|(k, _)| (k + 1).to_string() == id).map(|(_, t)| t) {
+                            match (name, task_status(input.and_then(|v| v.get("status")))) {
+                                ("TaskStop", _) | (_, None) => task.1 = true,
+                                (_, Some(status)) => (task.0.status, task.1) = (status, false),
+                            }
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                let Some(id) = tool_key(event) else { continue };
                 match event.tool_name.as_deref() {
                     Some("Agent" | "AgentSwarm") => {
                         let items = input.and_then(|v| v.get("items")).and_then(Value::as_array).map_or(0, Vec::len);
@@ -278,7 +343,8 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     for shell in &mut shells { shell.running = !resulted.contains(shell.id.as_str()); }
     agents.sort_by_key(|a| !a.running);
     shells.sort_by_key(|s| !s.running);
-    Activity { agents, shells }
+    let tasks = whole.unwrap_or(created).into_iter().filter(|(_, deleted)| !deleted).map(|(task, _)| task).collect();
+    Activity { agents, shells, tasks }
 }
 
 /// A palavra `[A-Za-z0-9_-]+` logo depois do marcador (espaços no meio à vontade).
@@ -298,7 +364,11 @@ pub fn command_label(command: &str) -> String {
         let after = after.trim_start();
         let path_end = match after.chars().next() {
             Some(q @ ('"' | '\'')) => after[1..].find(q).map(|at| at + 2),
-            Some(_) => after.find(char::is_whitespace).or(Some(after.len())),
+            // O `\S+` do web recua até um `&&` colado (`cd /a&&make`) quando não há `&&` depois do espaço.
+            Some(_) => {
+                let word = after.find(char::is_whitespace).unwrap_or(after.len());
+                if after[word..].trim_start().starts_with("&&") { Some(word) } else { after[..word].rfind("&&").filter(|&at| at > 0) }
+            }
             None => None,
         };
         if let Some(rest) = path_end.map(|end| after[end..].trim_start()).and_then(|rest| rest.strip_prefix("&&")) {
@@ -712,6 +782,33 @@ mod tests {
         assert_eq!(command_label("make 2>/dev/null | head -n 20"), "make");
         assert_eq!(command_label("echo a > out.txt | tail -f log"), "echo a > out.txt | tail -f log");
         assert_eq!(command_label("  >/dev/null "), ">/dev/null");
+        assert_eq!(command_label("cd /a&&make"), "make");
+        assert_eq!(command_label("cd /a && b&&c"), "b&&c");
+    }
+
+    #[test]
+    fn activity_tasks_follow_the_web_fold() {
+        let task = |id: &str, tool: &str, name: &str, input: Value| with_input(call(id, tool, name), input);
+        let titles = |events: &[ChatEvent]| fold_activity(events).tasks.into_iter().map(|t| (t.title, t.status)).collect::<Vec<_>>();
+        let events = vec![
+            task("a", "1", "TaskCreate", json!({"subject": "Ler"})),
+            task("b", "2", "TaskCreate", json!({"content": "Codar", "activeForm": "Codando"})),
+            task("c", "3", "TaskCreate", json!({})),
+            task("d", "4", "TaskUpdate", json!({"taskId": 2, "status": "in_progress"})),
+            task("e", "5", "TaskUpdate", json!({"taskId": "1", "status": "completed"})),
+            task("f", "6", "TaskStop", json!({"task_id": "3"})),
+            task("g", "7", "TaskUpdate", json!({"taskId": "9", "status": "completed"})),
+        ];
+        assert_eq!(titles(&events), vec![("Ler".into(), TaskStatus::Completed), ("Codar".into(), TaskStatus::InProgress)]);
+        let fallback = crate::i18n::tr_web("atividade_tarefa_fallback", &HashMap::new()).unwrap();
+        assert_eq!(titles(&events[..3]).last(), Some(&(fallback, TaskStatus::Pending)));
+        assert_eq!(fold_activity(&events).badge(), 1);
+        // A lista inteira do último TodoWrite (mesmo em texto JSON) ou update_plan vence as TaskCreate.
+        let mut todo = events.clone();
+        todo.push(task("h", "8", "TodoWrite", json!({"todos": "[{\"content\": \"A\", \"status\": \"completed\"}, {\"content\": \"B\", \"status\": \"deleted\"}]"})));
+        assert_eq!(titles(&todo), vec![("A".into(), TaskStatus::Completed)]);
+        todo.push(task("i", "9", "update_plan", json!({"plan": [{"step": "P", "status": "in_progress"}, {"nope": 1}]})));
+        assert_eq!(titles(&todo), vec![("P".into(), TaskStatus::InProgress)]);
     }
 
     #[test]

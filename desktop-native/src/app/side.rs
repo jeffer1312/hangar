@@ -183,6 +183,7 @@ impl Hangar {
     pub(super) fn toggle_side(&mut self, cx: &mut Context<Self>) {
         self.side.open = !self.side.open;
         if !self.side.open { self.side.stop_cost(); }
+        self.sync_activity(cx);
         cx.notify();
     }
 
@@ -570,6 +571,13 @@ impl Hangar {
         Some(div().flex().flex_col().gap(px(10.)).child(chrome::section_label(tr("side_actions"))).child(grid).into_any_element())
     }
 
+    /// O painel está à vista: aberto, com sessão e com largura para ele.
+    pub(super) fn side_shown(&self, window: &Window) -> bool {
+        let sidebar = appearance::get().navigation == appearance::Navigation::Sidebar;
+        self.side.open && self.selected.is_some()
+            && self.side.fitted(f32::from(window.viewport_size().width), theme::is_floating(), sidebar).is_some()
+    }
+
     pub(super) fn render_side(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let viewport = f32::from(window.viewport_size().width);
         let sidebar = appearance::get().navigation == appearance::Navigation::Sidebar;
@@ -584,8 +592,9 @@ impl Hangar {
         // Cabeçalho do mock: título "Contexto" e o botão de recolher. Nome e estado já estão no cabeçalho da conversa;
         // o detalhe do estado e o loop descem para a primeira seção.
         let _ = state;
+        let on_activity = self.activity_tab();
         let header = div().flex_shrink_0().h(px(44.)).pl_4().pr(px(12.)).flex().items_center().justify_between()
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(tr("side_context")))
+            .child(self.render_side_title(cx))
             .child(chrome::icon_button("side-toggle", IconName::PanelRight, tr("side_hide"), cx)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx))));
         let section = |body: AnyElement| div().px_4().py(px(14.)).border_b_1().border_color(theme::border()).child(body);
@@ -628,7 +637,8 @@ impl Hangar {
                 .map(|el| if floating { el.rounded(px(18.)).border_1().border_color(theme::border()).shadow(theme::panel_shadow()) }
                     else { el.border_l_1().border_color(theme::border()) })
                 .child(header)
-                .child(div().id("side-scroll").flex_1().min_h_0().overflow_y_scroll().child(content))
+                .child(if on_activity { div().flex_1().min_h_0().child(self.activity_view()).into_any_element() }
+                    else { div().id("side-scroll").flex_1().min_h_0().overflow_y_scroll().child(content).into_any_element() })
                 .child(div().flex_shrink_0().px_4().py_3().flex().items_center().justify_between().gap_2().border_t_1().border_color(theme::border()).text_size(px(11.))
                     .child(div().min_w_0().truncate().text_color(theme::faint()).child(format!("{} · {server}", agent_label(&session.provider))))
                     .when(queued > 0, |el| el.child(div().flex_shrink_0().text_color(theme::muted()).child(tr("side_queued").replace("{n}", &queued.to_string()))))))

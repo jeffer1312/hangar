@@ -114,6 +114,42 @@ impl RenderOnce for Skeleton {
     }
 }
 
+/// Ícone que respira (o `breathe` do botão Atividade do web: opacidade 0,55 → 1 e escala 0,92 → 1,05 em 1,5 s), no
+/// relógio comum de 30 batidas, numa view própria; inteiro e parado com movimento reduzido.
+#[derive(IntoElement)]
+pub struct Breathing { key: ElementId, icon: IconName, size: Pixels, color: Hsla }
+
+impl Breathing {
+    pub fn new(key: impl Into<ElementId>, icon: IconName, size: Pixels, color: Hsla) -> Self { Self { key: key.into(), icon, size, color } }
+}
+
+struct BreathingView { icon: IconName, size: Pixels, color: Hsla }
+
+impl Render for BreathingView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let k = if cx.reduce_motion() { 1. } else {
+            let p = pulse_phase(Duration::from_millis(1500));
+            ease_in_out(if p < 0.5 { 2. * p } else { 2. - 2. * p })
+        };
+        let (opacity, scale) = (0.55 + 0.45 * k, 0.92 + 0.13 * k);
+        // A escala muda o tamanho do ícone, não um `transform`: o da GPUI corta o desenho de ícone que não é quadrado cheio.
+        div().size(self.size).flex().items_center().justify_center()
+            .child(Icon::new(self.icon.clone()).size(self.size * scale).text_color(self.color.opacity(opacity)))
+    }
+}
+
+impl RenderOnce for Breathing {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (icon, size, color) = (self.icon, self.size, self.color);
+        let view = keyed_view(self.key, window, cx, |cx| { pulse(Duration::ZERO, |_| true, cx); BreathingView { icon: icon.clone(), size, color } });
+        view.update(cx, |view, cx| {
+            if view.icon != icon || view.size != size || view.color != color { (view.icon, view.size, view.color) = (icon, size, color); cx.notify(); }
+        });
+        // Sem encolher: dentro do botão a caixa guardada perdia largura e o ícone saía cortado à direita.
+        view.cached(StyleRefinement::default().size(size).flex_shrink_0())
+    }
+}
+
 /// `--ease-out` do web: `cubic-bezier(0.23, 1, 0.32, 1)`.
 pub fn ease_out(x: f32) -> f32 {
     let curve = |s: f32, a: f32, b: f32| 3. * (1. - s) * (1. - s) * s * a + 3. * (1. - s) * s * s * b + s * s * s;

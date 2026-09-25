@@ -83,6 +83,16 @@ pub struct SessionState {
     pub loop_status: Option<String>,
     pub loop_iter: Option<u32>,
     pub loop_max: Option<u32>,
+    // Processos de fundo que a sessão deixou vivos, lidos do sistema pelo backend.
+    #[serde(default)] pub shells: Vec<ShellAlive>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct ShellAlive {
+    pub pid: i64,
+    #[serde(default)] pub cmd: String,
+    /// Epoch em segundos; ausente quando o sistema não soube dizer.
+    pub desde: Option<f64>,
 }
 
 /// Evento SSE `stats`: só turns/steps/in/out são garantidos; o resto aparece quando o backend mede.

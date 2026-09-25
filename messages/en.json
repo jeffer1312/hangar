@@ -3753,6 +3753,7 @@
   "native_notice": "Notice",
   "native_working": "Working",
   "native_working_line": "Working…",
+  "native_activity_loading": "Reading this session's subagents…",
   "native_idle": "Idle",
   "native_awaiting_input": "Waiting for you",
   "native_dead": "Ended",

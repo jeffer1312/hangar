@@ -10,6 +10,7 @@ use crate::{api::{self, Api, Failure, Source, dto::*, sse::Update}, chat::{Chat,
 use gpui_kit::component::notification::Notification;
 use serde_json::{Value, json};
 
+mod activity;
 mod backdrop;
 mod accounts;
 mod chrome;
@@ -97,6 +98,8 @@ enum Payload {
     HeadlessPlan(SessionKey, controls::PlanOutcome),
     // Barra lateral: prévia, leitura do silenciar e as gravações do menu da sessão.
     Sidebar(sidebar::SidebarReply),
+    // Aba Atividade: a conta de subagentes no disco e a lista da aba.
+    Activity(activity::ActivityReply),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -271,6 +274,7 @@ pub struct Hangar {
     machines: machines::Machines,
     new_session: Option<Entity<create::NewSession>>,
     sidebar: sidebar::Sidebar,
+    act: activity::ActivityState,
 }
 
 impl Drop for Hangar {
@@ -358,6 +362,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
             server_config: server_config::ServerConfig::default(), machines: machines::Machines::default(), new_session: None, sidebar,
+            act: activity::ActivityState::new(cx),
         }
     }
 
@@ -583,6 +588,7 @@ impl Hangar {
         self.suggest_dismissed = None;
         self.side.on_select();
         self.controls.on_select();
+        self.reset_subagent_count();
         self.selected = Some(session.clone());
         if session.readable() {
             if let Some(api) = self.api.clone() {
@@ -592,6 +598,8 @@ impl Hangar {
                 self.session_task = Some(self.runtime.spawn(forward_stream(api, Some(session.name), connection, Some(selection), tx)));
             }
         }
+        (self.activity, self.pinned) = (Default::default(), HashSet::new());
+        self.sync_activity(cx);
         cx.notify();
     }
 
@@ -742,11 +750,14 @@ impl Hangar {
                                 self.clear_visible_preview();
                             }
                         }
+                        let first = !self.history_installed;
                         self.history_installed = true;
                         for update in std::mem::take(&mut self.pending_chat) { self.apply_chat_update(update, window, cx); }
                         self.error = None;
                         self.ensure_commands(false);
                         self.discover_plan();
+                        // A primeira conta de subagentes espera a conversa chegar, como o `aoAquecer` do web.
+                        if first { self.restart_subagent_count(cx); }
                     }
                     Err(error) => {
                         if error.status == Some(404) {
@@ -794,6 +805,7 @@ impl Hangar {
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
             Payload::Sidebar(reply) => { self.receive_sidebar(reply, window, cx); return; }
+            Payload::Activity(reply) => { self.receive_activity(reply, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
@@ -962,8 +974,11 @@ impl Hangar {
                 // Turno terminou: o plano do Claude com terminal pode ter mudado de arquivo.
                 let finished = self.chat.state.state == "working" && state.state != "working";
                 let resumed = self.chat.state.state == "awaiting_input" && state.state == "working";
+                let turned = (self.chat.state.state == "working") != (state.state == "working");
                 self.chat.update_state(state);
                 self.sync_working_row(cx);
+                if turned { self.restart_subagent_count(cx); }
+                self.sync_activity(cx);
                 if finished { self.discover_plan(); }
                 if resumed { self.controls.clear_plan_preview(); }
                 if self.chat.ask.is_none() { self.ask_form = AskForm::default(); }
@@ -1651,6 +1666,7 @@ impl Hangar {
         let a = appearance::get();
         self.activity = conversation::fold_activity(&self.chat.events);
         self.pinned = self.activity.running_agents().map(|agent| agent.call).collect();
+        self.sync_activity(cx);
         self.items = conversation::build(&self.chat.events, conversation::View { thinking: a.thinking_tools, tasks: a.task_list }, &self.pinned);
         self.paired = conversation::pair_results(&self.chat.events).0;
         self.sync_tables(a.table_chart);
@@ -3284,6 +3300,7 @@ impl Render for Hangar {
                 .child(div().flex_1())
                 .child(if session_chip { chrome::state_chip(&chip_state, tr(&format!("chip_{chip_state}")), true) }
                     else { div().flex_shrink_0().text_xs().text_color(theme::status(&header_state)).child(tr(&header_state)).into_any_element() })
+                .when_some(self.render_activity_button(window, cx), |el, button| el.child(button))
                 .when(self.selected.is_some(), |el| el.child(chrome::icon_button("side-show", IconName::PanelRight,
                         tr(if self.side.open { "side_hide" } else { "side_show" }), cx)
                     .selected(self.side.open).on_click(cx.listener(|this, _, _, cx| this.toggle_side(cx))))));
