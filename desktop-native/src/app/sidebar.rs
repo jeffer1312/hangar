@@ -4,7 +4,7 @@
 //! no que a pessoa fez depois.
 use super::*;
 use gpui_kit::base::AccordionTrigger;
-use gpui_kit::component::{WindowExt, dialog::{self, DialogButtonProps}, menu::{DropdownMenu, PopupMenu}, notification::NotificationType};
+use gpui_kit::component::{WindowExt, dialog, menu::{DropdownMenu, PopupMenu}, notification::NotificationType};
 use super::machines::enter_to_focused;
 use std::{cell::RefCell, rc::Rc};
 
@@ -684,12 +684,8 @@ impl Hangar {
     fn confirm_delete(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_origin(&name, window, cx);
         let this = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let (this, name) = (this.clone(), name.clone());
-            alert.title(SharedString::from(tr("sidebar_close_title"))).description(SharedString::from(name.clone()))
-                .button_props(DialogButtonProps::default().show_cancel(true).ok_text(tr("sidebar_close")).ok_variant(ButtonVariant::Danger)
-                    .cancel_text(tr("cancel")))
-                .on_ok(move |_, window, cx| { let _ = this.update(cx, |this, cx| {
+        chrome::confirm_alert(window, cx, tr("sidebar_close_title"), name.clone(), tr("sidebar_close"), ButtonVariant::Danger,
+            move |window, cx| { let _ = this.update(cx, |this, cx| {
                     // A linha some na hora e volta se o servidor recusar; sem conexão nada sai, e ela não some.
                     if this.api.is_none() { return; }
                     this.sidebar.deleting.insert(name.clone());
@@ -705,8 +701,7 @@ impl Hangar {
                             if gone && (on_row || window.focused(cx).is_none()) { this.root_focus.focus(window, cx); }
                         });
                     }).detach();
-                }); true })
-        });
+                }); true });
     }
 
     pub(super) fn receive_sidebar(&mut self, reply: SidebarReply, window: &mut Window, cx: &mut Context<Self>) {

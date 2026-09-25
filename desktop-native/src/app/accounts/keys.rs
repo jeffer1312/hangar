@@ -4,7 +4,7 @@
 //! chave digitada sai do campo assim que o servidor a guarda.
 use super::*;
 use crate::app::settings::Disclosure;
-use gpui_kit::component::{IndexPath, WindowExt, dialog::DialogButtonProps, select::{Select, SelectEvent, SelectState},
+use gpui_kit::component::{IndexPath, select::{Select, SelectEvent, SelectState},
     searchable_list::{SearchableListItem, SearchableVec}, switch::Switch};
 
 /// Um provedor do catálogo: o endereço é a raiz, sem `/v1` (o servidor monta o caminho).
@@ -478,13 +478,8 @@ impl Hangar {
         let Some(row) = self.find_row(&id) else { return };
         let title = tr("accounts_cookie_clear_title").replace("{name}", &row.name);
         let this = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let (this, id) = (this.clone(), id.clone());
-            alert.title(SharedString::from(title.clone())).description(tr("accounts_cookie_clear_desc"))
-                .button_props(DialogButtonProps::default().show_cancel(true).ok_text(tr("accounts_cookie_clear_ok")).ok_variant(ButtonVariant::Danger)
-                    .cancel_text(tr("cancel")))
-                .on_ok(move |_, _, cx| { let _ = this.update(cx, |this, cx| this.clear_cookie(id.clone(), cx)); true })
-        });
+        chrome::confirm_alert(window, cx, title, tr("accounts_cookie_clear_desc"), tr("accounts_cookie_clear_ok"), ButtonVariant::Danger,
+            move |_, cx| { let _ = this.update(cx, |this, cx| this.clear_cookie(id.clone(), cx)); true });
     }
 
     fn clear_cookie(&mut self, id: String, cx: &mut Context<Self>) {
