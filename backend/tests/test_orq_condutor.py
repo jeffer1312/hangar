@@ -271,7 +271,7 @@ def test_commit_conferido_fecha_a_task_e_acorda_o_arbitro_uma_vez(env, repo, tmp
     assert "ok" in out
     assert [m for m in sent(log) if m.startswith("arb ")] == [
         f"arb [decisao] Task 1 closed and checked: {h[:12]}, 1 file(s), tip = hash, "
-        "matches the approved round. Release the next Task."]
+        "matches the approved round. Release the next ready Task(s)."]
     assert json.loads((d / "closed.jsonl").read_text())["task"] == 1
     assert run(e, "ball").stdout.strip() == ""
 
@@ -380,7 +380,7 @@ def test_commit_de_correcao_fecha_a_task_contando_desde_a_base_da_rodada(env, re
     run(e, "commit", "--task", "1", "--hash", tip)
     assert [m for m in sent(log) if m.startswith("arb ")] == [
         f"arb [decisao] Task 1 closed and checked: {tip[:12]}, 2 file(s), tip = hash, "
-        "matches the approved round. Release the next Task."]
+        "matches the approved round. Release the next ready Task(s)."]
 
 
 def test_intocavel_commitado_e_revertido_e_recusado(env, repo, tmp_path):
@@ -827,3 +827,107 @@ def test_team_e_os_donos_de_task_aberta_e_o_arbitro_e_nao_cruza_com_done(env, tm
     time_ = run(e, "team").stdout.split()
     assert time_ == ["ex2", "rev2", "arb"]
     assert _done(e) == [("ex1", "Task 1 closed")]
+
+
+def _stash(g, r, content="2\n"):
+    """a.txt com `content` no stage, congelado como stash guardado; devolve o hash."""
+    (r / "a.txt").write_text(content)
+    g("add", "a.txt")
+    h = g("stash", "create")
+    g("stash", "store", "-m", "round", h)
+    return h
+
+
+def _code_ok(e, h, rnd=1):
+    run(e, "event", "entrega", "--task", "1", "--rodada", str(rnd), "--fase", "codigo", "--commit", h)
+    run(e, "event", "veredito", "--task", "1", "--rodada", str(rnd), "--fase", "codigo",
+        "--resultado", "aprova", "--sessao", "rev")
+
+
+def _fases_init(e, r, tmp_path):
+    run(e, "init", "--arbiter", "arb", "--repo", str(r), "--contract", str(tmp_path / "c.md"))
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
+
+
+def test_codigo_aprovado_manda_provar_e_nao_commitar(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    _fases_init(e, r, tmp_path)
+    h = _stash(g, r)
+    _code_ok(e, h)
+    msg = sent(log)[-1]
+    assert msg.startswith("ex CODE OK Task 1 round 1")
+    assert f"--fase prova --commit {h}" in msg
+    assert "Do not commit yet" in msg
+    assert not any(m.startswith("arb ") for m in sent(log))
+    assert run(e, "ball").stdout.split() == ["ex"]
+
+
+def test_prova_so_entra_com_o_stash_do_codigo_aprovado(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    _fases_init(e, r, tmp_path)
+    h1 = _stash(g, r, "2\n")
+    antes = (d / "eventos.jsonl").read_text()
+    bad = run(e, "event", "entrega", "--task", "1", "--rodada", "1", "--fase", "prova",
+              "--commit", h1, check=False)
+    assert bad.returncode != 0
+    assert "the proof must run on the approved code" in bad.stderr
+    assert (d / "eventos.jsonl").read_text() == antes
+    _code_ok(e, h1)
+    outro = _stash(g, r, "3\n")
+    bad = run(e, "event", "entrega", "--task", "1", "--rodada", "2", "--fase", "prova",
+              "--commit", outro, check=False)
+    assert bad.returncode != 0
+    assert "the proof must run on the approved code" in bad.stderr
+    run(e, "event", "entrega", "--task", "1", "--rodada", "2", "--fase", "prova", "--commit", h1[:8])
+    assert run(e, "ball").stdout.split() == ["rev"]
+
+
+def test_prova_depois_de_correcao_usa_o_codigo_aprovado_mais_novo(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    _fases_init(e, r, tmp_path)
+    h1 = _stash(g, r, "2\n")
+    _code_ok(e, h1, 1)
+    run(e, "event", "entrega", "--task", "1", "--rodada", "2", "--fase", "prova", "--commit", h1)
+    n = len(sent(log))
+    run(e, "event", "veredito", "--task", "1", "--rodada", "2", "--fase", "prova",
+        "--resultado", "reprova", "--sessao", "rev")
+    assert len(sent(log)) == n
+    assert run(e, "ball").stdout.split() == ["ex"]
+    h3 = _stash(g, r, "3\n")
+    _code_ok(e, h3, 3)
+    bad = run(e, "event", "entrega", "--task", "1", "--rodada", "4", "--fase", "prova",
+              "--commit", h1, check=False)
+    assert bad.returncode != 0
+    run(e, "event", "entrega", "--task", "1", "--rodada", "4", "--fase", "prova", "--commit", h3)
+
+
+def test_commit_so_depois_da_prova_aprovada(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    _fases_init(e, r, tmp_path)
+    h = _stash(g, r)
+    _code_ok(e, h)
+    g("commit", "-qm", "t1")
+    head = g("rev-parse", "HEAD")
+    out = run(e, "commit", "--task", "1", "--hash", head, check=False)
+    assert out.returncode == 1
+    assert "no APROVA for Task 1" in out.stdout
+    run(e, "event", "entrega", "--task", "1", "--rodada", "2", "--fase", "prova", "--commit", h)
+    run(e, "event", "veredito", "--task", "1", "--rodada", "2", "--fase", "prova",
+        "--resultado", "aprova", "--sessao", "rev")
+    assert sent(log)[-1].startswith("ex APROVA Task 1 round 2")
+    assert "ok" in run(e, "commit", "--task", "1", "--hash", head).stdout
+
+
+def test_fase_fora_do_vocabulario_e_recusada(env, tmp_path):
+    d, log, e = env
+    init(e, tmp_path)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
+    bad = run(e, "event", "entrega", "--task", "1", "--rodada", "1", "--fase", "tela",
+              "--commit", "abc", check=False)
+    assert bad.returncode != 0
+    assert "fase" in bad.stdout + bad.stderr
+    assert '"tela"' not in (d / "eventos.jsonl").read_text()

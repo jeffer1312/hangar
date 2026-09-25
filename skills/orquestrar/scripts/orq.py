@@ -35,7 +35,7 @@ SCREEN_STALE_S = 60 * 60
 TASK_HEAD = re.compile(r"^## Task (\d+)\b")
 EVENT_FIELDS_INT = ("task", "rodada")
 EVENT_FIELDS_STR = ("commit", "resultado", "sessao", "motivo", "titulo", "executor", "par",
-                    "de", "para", "plano", "branch", "gid")
+                    "de", "para", "plano", "branch", "gid", "fase")
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-1.13.0"
 JEV_TIMEOUT_S = 5
@@ -275,7 +275,7 @@ def _event_line(ev: dict) -> str:
         parts.append(f"T{ev['task']}")
     if "rodada" in ev:
         parts.append(f"r{ev['rodada']}")
-    for k in ("resultado", "commit", "sessao", "executor", "par", "de", "para", "motivo"):
+    for k in ("resultado", "fase", "commit", "sessao", "executor", "par", "de", "para", "motivo"):
         if k in ev:
             parts.append(f"{k}={ev[k]}")
     if ev.get("reincide"):
@@ -310,7 +310,8 @@ def _send_after_event(target: str, text: str, arbiter: str) -> None:
 
 def _after_event(d: Path, ev: dict) -> None:
     """APROVA goes to the executor only; the arbiter wakes for DEVOLVIDO and a repeated cause.
-    REPROVA wakes nobody: the reviewer already sent the recipe to the executor."""
+    REPROVA wakes nobody: the reviewer already sent the recipe to the executor.
+    A code-phase APROVA sends the executor to prove, never to commit."""
     if ev["tipo"] != "veredito":
         return
     st = state(d)
@@ -319,6 +320,13 @@ def _after_event(d: Path, ev: dict) -> None:
         ex = st["roles"].get(task, {}).get("executor")
         if not ex:
             raise OrqError(f"Task {task} has no task_inicio: executor unknown")
+        if ev.get("fase") == "codigo":
+            obj = _code_approved_object(d, task) or "<the approved stash hash>"
+            _send_after_event(ex, f"CODE OK Task {task} round {rnd}: prove it on this exact code, "
+                                  f"then `orq event entrega --task {task} --rodada {rnd + 1} "
+                                  f"--fase prova --commit {obj}`. Do not commit yet.",
+                              st["arbiter"])
+            return
         _send_after_event(ex, f"APROVA Task {task} round {rnd}: commit only the Task's paths, by "
                               f"explicit path, then run `orq commit --task {task} --hash <hash>`.",
                           st["arbiter"])
@@ -383,6 +391,12 @@ def cmd_event(a) -> int:
             ev[k] = v
     if a.reincide:
         ev["reincide"] = True
+    if ev.get("tipo") == "entrega" and ev.get("fase") == "prova":
+        ok = _code_approved_object(d, ev.get("task"))
+        got = ev.get("commit") or ""
+        if not ok or not got or not (ok.startswith(got) or got.startswith(ok)):
+            raise OrqError("the proof must run on the approved code: deliver a code round first "
+                           f"(approved code: {ok or 'none'}, given: {got or 'none'})")
     ev = event_append(d, ev)
     journal_append(d, _event_line(ev))
     _after_event(d, ev)
@@ -499,10 +513,24 @@ def git(repo: str, *args: str) -> str:
 
 
 def _approved_object(d: Path, task: int) -> str | None:
-    """The stash object of the round the last APROVA of this Task judged."""
+    """The stash object of the round the last APROVA of this Task judged.
+    A code-phase APROVA never releases the commit: the proof has to pass first."""
     evs = events(d)
     rnd = next((ev.get("rodada") for ev in reversed(evs) if ev.get("tipo") == "veredito"
-                and ev.get("task") == task and ev.get("resultado") == "aprova"), None)
+                and ev.get("task") == task and ev.get("resultado") == "aprova"
+                and ev.get("fase") != "codigo"), None)
+    if rnd is None:
+        return None
+    return next((ev.get("commit") for ev in reversed(evs) if ev.get("tipo") == "entrega"
+                 and ev.get("task") == task and ev.get("rodada") == rnd), None)
+
+
+def _code_approved_object(d: Path, task: int) -> str | None:
+    """The stash object of the round the last code-phase APROVA of this Task judged."""
+    evs = events(d)
+    rnd = next((ev.get("rodada") for ev in reversed(evs) if ev.get("tipo") == "veredito"
+                and ev.get("task") == task and ev.get("resultado") == "aprova"
+                and ev.get("fase") == "codigo"), None)
     if rnd is None:
         return None
     return next((ev.get("commit") for ev in reversed(evs) if ev.get("tipo") == "entrega"
@@ -558,7 +586,7 @@ def cmd_commit(a) -> int:
     journal_append(d, f"commit T{a.task} {full[:12]} checked ({len(files)} file(s))")
     send(state(d)["arbiter"], f"[decisao] Task {a.task} closed and checked: {full[:12]}, "
                               f"{len(files)} file(s), tip = hash, matches the approved round. "
-                              "Release the next Task.")
+                              "Release the next ready Task(s).")
     print("ok")
     return 0
 

@@ -11,6 +11,8 @@ completam o contrato:
   - `veredito.resultado` ∈ aprova|reprova|devolvido (o MESMO vocabulário do parecer); leva `sessao`
     e, opcionais, `motivo` (str, a razão curta) e `reincide` (bool: segunda reprovação da mesma
     causa — a porta do árbitro no laço). `entrega` leva o hash da rodada (stash) no campo `commit`.
+  - `fase` (opcional, em `entrega` e `veredito`) ∈ codigo|prova: rodada em duas fases de Task com
+    prova de tela. Sem `fase`, a rodada é única.
   - Campo extra pode; tipo novo NÃO — o app agrega por esses seis.
 
 Exemplo, no fecho de uma rodada:
@@ -29,6 +31,7 @@ TIPOS = {
     "execucao_fim": {"resultado"},
 }
 RESULTADOS = {"aprova", "reprova", "devolvido"}
+FASES = {"codigo", "prova"}
 
 
 def valida(path: str) -> int:
@@ -67,6 +70,8 @@ def _valida_linhas(path: str, linhas) -> int:
                 print(f"{path}:{i}: {campo} nao e numero ({ev[campo]!r})"); erros += 1
         if tipo == "veredito" and ev.get("resultado") not in RESULTADOS:
             print(f"{path}:{i}: resultado {ev.get('resultado')!r} fora de {sorted(RESULTADOS)}"); erros += 1
+        if "fase" in ev and ev["fase"] not in FASES:
+            print(f"{path}:{i}: fase {ev['fase']!r} fora de {sorted(FASES)}"); erros += 1
         if "reincide" in ev and not isinstance(ev["reincide"], bool):
             print(f"{path}:{i}: reincide nao e bool ({ev['reincide']!r})"); erros += 1
     return erros
