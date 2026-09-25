@@ -544,7 +544,8 @@ impl Hangar {
                         add.error = Some(if error.uncertain { tr("accounts_create_uncertain") } else { Self::failure(&error) });
                         cx.notify();
                     }),
-                    (Err(error), None) => self.accounts.outcome = Some((Self::failure(&error), true)),
+                    (Err(error), None) => self.accounts.outcome = Some((if error.uncertain { tr("accounts_create_uncertain") }
+                        else { Self::failure(&error) }, true)),
                 }
                 self.load_accounts(false, cx);
             }

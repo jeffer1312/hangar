@@ -164,6 +164,8 @@ impl Hangar {
             Page::Accounts => self.accounts_opened(cx),
             Page::Shortcuts => self.shortcuts_opened(cx),
             Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.server_config_opened(page, cx),
+            // As origens do terminal moram no Avançado do detalhe e usam o rascunho do servidor.
+            Page::Servers => { self.machines_opened(cx); self.server_config_opened(page, cx); }
             _ => {}
         }
     }

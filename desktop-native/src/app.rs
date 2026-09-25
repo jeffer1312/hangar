@@ -16,6 +16,7 @@ mod chrome;
 mod controls;
 mod device;
 mod follow;
+mod machines;
 mod rows;
 mod settings;
 mod server_config;
@@ -84,6 +85,8 @@ enum Payload {
     Shortcuts(shortcuts::ShortcutsReply),
     // Notificações e Anexos: rascunho do servidor e horas silenciosas da conexão atual.
     ServerConfig(server_config::ServerConfigReply),
+    // Máquinas: identificador, alcance e reinício do servidor conectado.
+    Machines(machines::MachinesReply),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
 }
 
@@ -238,6 +241,7 @@ pub struct Hangar {
     accounts: accounts::Accounts,
     shortcuts: shortcuts::Shortcuts,
     server_config: server_config::ServerConfig,
+    machines: machines::Machines,
 }
 
 impl Drop for Hangar {
@@ -319,7 +323,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
-            server_config: server_config::ServerConfig::default(),
+            server_config: server_config::ServerConfig::default(), machines: machines::Machines::default(),
         }
     }
 
@@ -429,35 +433,11 @@ impl Hangar {
         };
         self.unsaved_connection = Some((address, token));
         if let Some(key) = self.selected_key() { self.drafts.insert(key, self.composer.read(cx).value().to_string()); }
-        self.connection += 1;
-        self.selection += 1;
-        self.revision += 1;
-        for slot in [&mut self.list_task, &mut self.session_task, &mut self.history_task] { if let Some(t) = slot.take() { t.abort(); } }
-        self.leave_accounts();
+        self.drop_connection(window, cx);
         self.api = Some(api.clone());
         self.server = Some(api.identity());
-        self.selected = None;
-        self.sessions.clear();
-        self.chat = Chat::default();
-        self.stats = None;
-        self.reset_details();
-        self.cancel_preview_drop();
-        self.clear_visible_preview();
-        self.rich.clear();
-        // Resposta de imagem da conexão anterior é descartada no filtro; sem limpar, a prévia ficava em "Carregando".
-        for image in self.media.clear() { cx.drop_image(image, Some(window)); }
-        self.error = None;
-        self.list_error = None;
-        self.list_online = false;
-        self.chat_online = false;
         self.connection_dialog = false;
         self.root_focus.focus(window, cx);
-        self.loading = false;
-        self.history_started = false;
-        self.history_installed = false;
-        self.pending_chat.clear();
-        self.composer.update(cx, |input, cx| input.set_value("", window, cx));
-        self.sync_rows(cx);
         let tx = self.tx.clone();
         let connection = self.connection;
         self.list_task = Some(self.runtime.spawn(async move {
@@ -466,11 +446,7 @@ impl Hangar {
             if tx.send(Envelope { connection, selection: None, payload: Payload::Sessions(result) }).await.is_err() || fatal { return; }
             forward_stream(api, None, connection, None, tx).await;
         }));
-        self.side.reset_server();
-        self.controls = controls::Controls::default();
         self.reset_device(cx);
-        self.accounts = accounts::Accounts::default();
-        self.shortcuts = shortcuts::Shortcuts::default();
         // O rascunho é deste servidor: na troca ele morre, no "Reconectar" ao mesmo ele fica.
         self.server_config.reconnected(format!("{}\n{}", self.server.as_deref().unwrap_or(""), self.token.read(cx).value()));
         // Página do servidor aberta na troca: relê do servidor novo.
@@ -487,6 +463,40 @@ impl Hangar {
         let a = appearance::get();
         if a.background == appearance::Background::Desktop && a.wallpaper == appearance::Wallpaper::Glass { self.refresh_backdrop(window, cx); }
         cx.notify();
+    }
+
+    /// O que é da conexão atual sai da tela e os pedidos em voo passam a ser descartados. Serve à troca de servidor e ao Sair.
+    fn drop_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.connection += 1;
+        self.selection += 1;
+        self.revision += 1;
+        for slot in [&mut self.list_task, &mut self.session_task, &mut self.history_task] { if let Some(t) = slot.take() { t.abort(); } }
+        self.leave_accounts();
+        self.selected = None;
+        self.sessions.clear();
+        self.chat = Chat::default();
+        self.stats = None;
+        self.reset_details();
+        self.cancel_preview_drop();
+        self.clear_visible_preview();
+        self.rich.clear();
+        // Resposta de imagem da conexão anterior é descartada no filtro; sem limpar, a prévia ficava em "Carregando".
+        for image in self.media.clear() { cx.drop_image(image, Some(window)); }
+        self.error = None;
+        self.list_error = None;
+        self.list_online = false;
+        self.chat_online = false;
+        self.loading = false;
+        self.history_started = false;
+        self.history_installed = false;
+        self.pending_chat.clear();
+        self.composer.update(cx, |input, cx| input.set_value("", window, cx));
+        self.sync_rows(cx);
+        self.side.reset_server();
+        self.controls = controls::Controls::default();
+        self.accounts = accounts::Accounts::default();
+        self.shortcuts = shortcuts::Shortcuts::default();
+        self.machines = machines::Machines::default();
     }
 
     fn select(&mut self, session: SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
@@ -727,6 +737,7 @@ impl Hangar {
             Payload::Accounts(reply) => { self.receive_accounts(reply, window, cx); return; }
             Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, cx); return; }
             Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
+            Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)

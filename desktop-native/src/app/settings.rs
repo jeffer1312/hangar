@@ -57,7 +57,11 @@ const APPEARANCE_ROWS: [(&str, Option<&str>); 27] = [
 ];
 
 /// Linhas das outras páginas prontas, no mesmo formato.
-const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 10] = [
+const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 11] = [
+    // As entradas de Máquinas do web (`BuscaConfig.svelte`); a busca só abre a página, sem abrir o detalhe.
+    (Page::Servers, &[("machines_others", None), ("machines_id", Some("machines_id_legend")),
+        ("server_term_origins", Some("server_term_origins_help")), ("machines_sign_out_title", None), ("machines_reconnect", None),
+        ("machines_search_tailscale", Some("machines_search_tailscale_help"))]),
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
@@ -474,7 +478,8 @@ impl Hangar {
             Page::Accounts => self.render_accounts(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
-            _ => self.render_page_soon(page, cx),
+            Page::Servers => self.render_machines(cx),
+            _ => self.render_page_soon(page),
         };
         let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
             .child(div().w_full().flex().justify_center().child(div().w(px(720.)).max_w_full().px_4().pt(px(44.)).pb(px(40.)).child(body)));
@@ -499,6 +504,8 @@ impl Hangar {
                 .on_click(cx.listener(move |this, _, _, cx| this.search_go(Some(n), cx)))
         }))
     }
+
+    pub(super) fn search_hit(&self, key: &str) -> bool { self.settings_ui.hit == Some(key) }
 
     /// Destaque da linha levada pela busca, e a rolagem até ela quando o desenho já sabe onde ela está.
     pub(super) fn mark(&self, el: Div, key: &str) -> Div {
@@ -554,14 +561,10 @@ impl Hangar {
             .into_any_element()
     }
 
-    fn render_page_soon(&self, page: Page, cx: &mut Context<Self>) -> AnyElement {
+    fn render_page_soon(&self, page: Page) -> AnyElement {
         div().flex().flex_col()
             .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(page.title()))
             .child(div().mt(px(6.)).text_color(theme::muted()).child(tr("settings_soon")))
-            // A conexão de hoje continua a um clique enquanto a página de servidores não chega.
-            .when(page == Page::Servers, |el| el.child(div().mt_4().flex().child(Button::new("settings-connection").outline().small()
-                .icon(chrome::small_icon(IconName::Plug, 14., theme::muted())).label(tr("settings_connection"))
-                .on_click(cx.listener(|this, _, window, cx| this.open_connection(window, cx))))))
             .into_any_element()
     }
 

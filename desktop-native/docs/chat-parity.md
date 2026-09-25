@@ -100,5 +100,5 @@ Terminal embutido, navegador, árvore de arquivos e Git completos (stage, commit
 cd desktop-native && cargo build --locked
 PARITY_COMPOSER_PORT=18794 python3 tools/parity_composer_fixture.py   # token parity-composer-fixture
 LANG=pt_BR.UTF-8 target/debug/hangar-native                            # Conexão: http://127.0.0.1:18794
-PARITY_SESSION_PORT=18796 python3 tools/parity_session_fixture.py      # barra direita e controles; token parity-session-fixture
+PARITY_SESSION_PORT=18796 python3 tools/parity_session_fixture.py      # barra direita e controles; o token está em TOKEN no topo do arquivo
 ```

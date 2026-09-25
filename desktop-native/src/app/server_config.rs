@@ -61,7 +61,7 @@ const TUNES: [Tune; 4] = [
 struct Field { key: &'static str, label: &'static str, help: &'static str, icon: IconName, kind: Kind, page: Page }
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
-const FIELDS: [Field; 29] = [
+const FIELDS: [Field; 30] = [
     Field { key: "upload_retention_days", label: "server_keep_attachments", help: "server_keep_attachments_help", icon: IconName::Paperclip,
         kind: Kind::Number("server_days"), page: Page::Attachments },
     Field { key: "notify_finished", label: "server_notify_finished", help: "server_notify_finished_help", icon: IconName::CircleCheck,
@@ -112,6 +112,9 @@ const FIELDS: [Field; 29] = [
         page: Page::Voice },
     Field { key: "tts_max_chars", label: "voice_max_chars", help: "voice_max_chars_help", icon: IconName::Hash, kind: Kind::Number("voice_chars"),
         page: Page::Voice },
+    // No Avançado do detalhe desta máquina, em Máquinas (`MaquinasSettings.svelte`, `CAMPO_TERM_ORIGINS`).
+    Field { key: "term_origins", label: "server_term_origins", help: "server_term_origins_help", icon: IconName::SquareTerminal, kind: Kind::Text,
+        page: Page::Servers },
 ];
 
 fn field(key: &str) -> &'static Field { FIELDS.iter().find(|f| f.key == key).expect("campo declarado em FIELDS") }
@@ -530,8 +533,9 @@ impl Hangar {
                 let s = &mut self.server_config;
                 if seq != s.save_seq { return; }
                 s.saving = false;
-                // Sem `campos` não dá para confirmar o que valeu: é falha, e o rascunho fica.
-                let result = result.map_err(|e| Self::failure(&e)).and_then(|r| match r.get("campos") {
+                // Sem `campos` não dá para confirmar o que valeu: é falha, e o rascunho fica. Um 5xx traz a frase do servidor, não a
+                // da entrega de mensagem.
+                let result = result.map_err(|e| Self::fetch_failure(&e)).and_then(|r| match r.get("campos") {
                     Some(Value::Object(campos)) => Ok((campos.clone(), r.get("somente_leitura").and_then(Value::as_object).cloned())),
                     _ => Err(tr("invalid_response")),
                 });
@@ -584,7 +588,7 @@ impl Hangar {
                         (text, false)
                     }
                     // "horario invalido (use HH:MM)" e afins chegam como vieram; o que foi digitado fica nos campos.
-                    Err(error) => (Self::failure(&error), true),
+                    Err(error) => (Self::fetch_failure(&error), true),
                 });
             }
             ServerConfigReply::Voices(seq, result) => {
@@ -1233,6 +1237,35 @@ impl Hangar {
 
     /// Rodapé do Salvar, fora da rolagem: só existe com o que salvar, salvando ou com o "salvo" na tela, e grava o que foi
     /// mexido em todas as páginas do servidor — com um rascunho só, é o único significado honesto do botão.
+    /// `term_origins` no detalhe desta máquina, com o Salvar e o resultado ao lado dela, como o web: o rascunho é o das outras
+    /// páginas, e o rodapé delas ficaria atrás do diálogo.
+    pub(super) fn term_origins_block(&self, cx: &mut Context<Self>) -> Div {
+        let s = &self.server_config;
+        // Leitura boa sem o campo (servidor antigo) cai na linha desligada, como nas outras páginas.
+        if s.fields.is_empty() {
+            match &s.load.value {
+                Some(Err(error)) if !s.load.loading => return div().flex().flex_col().items_start().gap(px(8.))
+                    .child(div().id("machines-config-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal()
+                        .child(error.clone()))
+                    .child(Button::new("machines-config-retry").outline().small().label(tr("server_retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.load_server_config(cx)))),
+                Some(Ok(())) if !s.load.loading => {}
+                _ => return div().text_sm().text_color(theme::muted()).child(tr("server_loading")),
+            }
+        }
+        let dirty = !s.draft.is_empty();
+        div().flex().flex_col().gap(px(8.))
+            .child(settings_box().child(self.config_row(field("term_origins"), cx)))
+            .when_some(s.save_error.clone(), |el, error| el.child(div().id("machines-save-error").role(Role::Alert)
+                .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error)))
+            .when(dirty || s.saving || s.saved.is_some(), |el| el.child(div().flex().items_center().justify_end().gap(px(12.))
+                .when(s.saved.is_some(), |el| el.child(div().id("machines-saved").role(Role::Status).text_size(px(12.5))
+                    .text_color(theme::success()).child(tr("server_saved"))))
+                .when(dirty || s.saving, |el| el.child(Button::new("machines-config-save").primary().small()
+                    .label(tr(if s.saving { "server_saving" } else { "server_save" })).loading(s.saving).disabled(s.saving)
+                    .on_click(cx.listener(|this, _, _, cx| this.save_server_config(cx)))))))
+    }
+
     pub(super) fn server_config_footer(&self, page: Page, cx: &mut Context<Self>) -> Option<Div> {
         let s = &self.server_config;
         let dirty = !s.draft.is_empty();

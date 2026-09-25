@@ -289,7 +289,7 @@ impl Hangar {
                         }).detach();
                     }
                     // Erro de validação do backend chega como veio ("shortcuts: item 2 …").
-                    Err(error) => s.save_error = Some(Self::failure(&error)),
+                    Err(error) => s.save_error = Some(Self::fetch_failure(&error)),
                 }
             }
             ShortcutsReply::Commands(result) => {

@@ -22,6 +22,9 @@ env=<fixture|none> tira as variáveis do .env da leitura, como um servidor antig
 Voz (R8a) usa as mesmas rotas e modos da R7; null num campo apaga o override e ele volta ao valor do ambiente.
 GET /control/r8?voices=<ok|empty|500>&usage=<ok|500>&delay=<s> muda o que GET /api/tts/voices e /api/tts/saldo respondem
 (Task 12 R8b). As vozes e o consumo são SINTÉTICOS: nenhum provedor de voz é chamado, e não há POST /api/tts.
+GET /control/r9?reach=<ok|isolated|500>&reach_delay=<s>&id=<valor|>&id_load=<ok|500>&id_save=<ok|500>&restart=<ok|fail|409|never|drop>
+muda Máquinas (Task 12 R9a): GET /api/alcance, GET/PUT /api/peers/identificador e POST /api/atualizacao/reiniciar. O reinício é
+FALSO: só anda o estado sintético (a leitura cai por 3 s, depois `fase: pronto` com o pid do pedido); nada reinicia em lugar nenhum.
 """
 
 import parity_accounts_fixture as accounts
@@ -33,7 +36,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-TOKEN = "parity-session-fixture"
+# Sintético pela regra das provas (prefixo "sintetica-"); nunca impresso nem logado.
+TOKEN = "sintetica-fixture-sessao-0000"
 LOCK = threading.Lock()
 LOG = []
 MODE = {"next": "ok", "only": None}
@@ -100,6 +104,8 @@ R7_TYPES = {"notify_finished": bool, "finish_min_seconds": int, "notify_dead": b
             "automations": bool, "mostrar_pensamento": bool, "traduzir_pensamento": bool, "editor": str, "jev_api_key": str,
             "jev_padrao": bool, "jev_texto_base_url": str, "jev_texto_api_key": str, "jev_texto_modelo": str, "jev_texto_cmd": str,
             "scan_roots": str,
+            # Task 12 R9a: origens que podem abrir o terminal (Máquinas → detalhe → Avançado).
+            "term_origins": str,
             # Task 12 R8a: Voz (transcrever, estilo e palavras do ditado, organizar o texto).
             "groq_api_key": str, "transcription_base_url": str, "transcription_model": str, "ditado_vocabulario": str,
             "ditado_estilo": str, "llm_base_url": str, "llm_api_key": str, "llm_model": str, "llm_reasoning_effort": str,
@@ -117,7 +123,8 @@ R7 = {"values": {"notify_finished": True, "finish_min_seconds": 60, "notify_dead
                  "ditado_vocabulario": "Hangar, tmux, Zeron", "ditado_estilo": "prosa", "llm_base_url": "", "llm_api_key": "",
                  "llm_model": "", "llm_reasoning_effort": "", "llm_briefing_base_url": "", "llm_briefing_api_key": "", "llm_briefing_model": "",
                  "elevenlabs_api_key": "sintetica-fixture-leitura-0000efgh", "elevenlabs_voice_id": "voz-sintetica-2", "tts_local_cmd": "",
-                 "tts_max_chars": 0, "tts_stability": 50, "tts_similarity_boost": 75, "tts_style": 0, "tts_speed": 110},
+                 "tts_max_chars": 0, "tts_stability": 50, "tts_similarity_boost": 75, "tts_style": 0, "tts_speed": 110,
+                 "term_origins": ""},
       "edited": {"stall_seconds", "scan_roots", "groq_api_key", "ditado_vocabulario", "elevenlabs_api_key", "elevenlabs_voice_id", "tts_speed"},
       "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0,
       "quiet": {"start": "22:00", "end": "07:00"}, "quiet_load": "ok", "quiet_save": "ok", "quiet_delay": 0.0, "env": "fixture"}
@@ -129,6 +136,33 @@ R7_ENV_VALUES = {"stall_seconds": 900, "scan_roots": "/synthetic/projetos", "dit
 R8 = {"voices": "ok", "usage": "ok", "delay": 0.0}
 R8_VOICES = [{"id": "voz-sintetica-1", "nome": "Sintética Aurora"}, {"id": "voz-sintetica-2", "nome": "Sintética Bento"},
              {"id": "voz-sintetica-3", "nome": "Sintética Clara"}]
+# Task 12 R9a: Máquinas. Endereços sintéticos no formato de backend/app/alcance.py; nenhum é testado de verdade.
+R9 = {"reach": "ok", "reach_delay": 0.0, "id": "fixture", "id_load": "ok", "id_save": "ok", "restart": "ok", "pid": 4100}
+R9_REACH = {
+    "ok": {"loopback": False, "bind": "0.0.0.0", "enderecos": [
+        {"tipo": "rede_local", "url": "http://192.0.2.10:8765", "estado": "ok", "tempo_ms": 4, "motivo": ""},
+        {"tipo": "tailscale", "url": "https://fixture.sintetico.ts.net", "estado": "ok", "tempo_ms": 12, "motivo": ""},
+        {"tipo": "publico", "url": "", "estado": "nao_configurado", "tempo_ms": None, "motivo": ""}]},
+    "isolated": {"loopback": True, "bind": "127.0.0.1", "enderecos": [
+        {"tipo": "nesta_maquina", "url": "http://127.0.0.1:8765", "estado": "ok", "tempo_ms": 1, "motivo": ""},
+        {"tipo": "rede_local", "url": "http://192.0.2.10:8765", "estado": "falhou", "tempo_ms": 2, "motivo": "recusou"},
+        {"tipo": "publico", "url": "", "estado": "nao_configurado", "tempo_ms": None, "motivo": ""}]},
+}
+R9_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+
+
+def restart_walk(pid, fail):
+    """Reinício sintético: a leitura do estado cai por 3 s e volta com o desfecho casado pelo pid."""
+    with LOCK:
+        UPDATE["estado"] = {"fase": "rodando", "texto": "Reiniciando", "pid": pid, "ts": time.strftime("%Y-%m-%dT%H:%M:%S-03:00")}
+        R4["offline_until"] = time.time() + 3
+    time.sleep(3)
+    with LOCK:
+        now = time.strftime("%Y-%m-%dT%H:%M:%S-03:00")
+        UPDATE["estado"] = ({"fase": "pronto", "ok": False, "reinicio_erro": "o serviço não subiu de volta (sintético)", "pid": pid, "ts": now}
+                            if fail else {"fase": "pronto", "ok": True, "texto": "Reiniciado", "pid": pid, "ts": now})
+
+
 R7_READ = {"port": 8765, "lan_bind_ip": "127.0.0.1", "server_id": "fixture", "public_url": "", "terminal_origem_ok": True,
            "terminal_panel": True, "traducao_pensamento": False, "versao": "2026.09.24-sintetico"}
 R7_ENV = [
@@ -409,6 +443,12 @@ class Handler(BaseHTTPRequestHandler):
                         R8["delay"] = float(raw)
                     elif key in ("voices", "usage"):
                         R8[key] = raw
+            elif path == "/control/r9":
+                for key, raw in ((k, v[0]) for k, v in query.items()):
+                    if key == "reach_delay":
+                        R9[key] = float(raw)
+                    elif key in ("reach", "id", "id_load", "id_save", "restart"):
+                        R9[key] = raw
             elif path == "/control/remove":
                 # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
                 SESSIONS.pop(query["name"][0], None)
@@ -447,6 +487,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"voices": [] if mode == "empty" else R8_VOICES})
             else:
                 self.send_json({"usados": 12345, "limite": 100000})
+            return
+        if path == "/api/alcance":
+            record("GET", self.path, None)
+            with LOCK:
+                mode, delay = R9["reach"], R9["reach_delay"]
+            time.sleep(delay)
+            if mode == "500":
+                self.send_json(fail("erro_sintetico", "não consegui medir os endereços (sintético)"), 500)
+            else:
+                self.send_json(R9_REACH[mode])
+            return
+        if path == "/api/peers/identificador":
+            record("GET", self.path, None)
+            with LOCK:
+                mode, value = R9["id_load"], R9["id"]
+            if mode == "500":
+                self.send_json(fail("erro_sintetico", "não consegui ler o identificador (sintético)"), 500)
+            else:
+                self.send_json({"identificador": value})
             return
         if path == "/api/config":
             record("GET", self.path, None)
@@ -693,6 +752,19 @@ class Handler(BaseHTTPRequestHandler):
         record("PUT", self.path, body)
         if not self.authorized():
             return
+        if url.path == "/api/peers/identificador":
+            value = (body or {}).get("identificador") or ""
+            with LOCK:
+                mode = R9["id_save"]
+            if mode == "500":
+                self.send_json(fail("erro_sintetico", "não consegui gravar o .env (sintético)"), 500)
+            elif value and not R9_ID.fullmatch(value):
+                self.send_json(fail("peers_id_invalido", f"identificador invalido: {value!r} (use minusculas, numeros e hifen)"), 400)
+            else:
+                with LOCK:
+                    R9["id"] = value
+                self.send_json({"identificador": value})
+            return
         if not accounts.handle_put(self, url.path, body):
             self.send_json({"detail": "not found"}, 404)
 
@@ -754,6 +826,10 @@ class Handler(BaseHTTPRequestHandler):
             bad = [p.strip() for p in str(value).split(",") if p.strip() and not (p.strip().startswith("/synthetic/") or os.path.isdir(p.strip()))]
             if key == "scan_roots" and bad:
                 self.send_json({"detail": f"scan_roots: '{bad[0]}' nao e um diretorio nesta maquina"}, 400)
+                return
+            loose = [p.strip() for p in str(value).split(",") if p.strip() and not p.strip().startswith(("http://", "https://"))]
+            if key == "term_origins" and loose:
+                self.send_json({"detail": f"term_origins: '{loose[0]}' precisa comecar com http:// ou https://"}, 400)
                 return
             changes[key] = value
         # O backend recusa validação com 400 (`patch_config`); o modo mantém o nome da R6.
@@ -818,6 +894,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/api/push/quiet-hours":
             self.save_quiet(body)
+            return
+        if url.path == "/api/atualizacao/reiniciar":
+            with LOCK:
+                mode = R9["restart"]
+                R9["pid"] += 1
+                pid = R9["pid"]
+            if mode == "409":
+                self.send_json(fail("erro_reinicio_indisponivel", "esta maquina nao reinicia sozinha (topologia manual)"), 409)
+                return
+            if mode == "drop":
+                self.close_connection = True
+                self.connection.shutdown(2)
+                return
+            # "never": aceita e nunca chega a `pronto` com este pid (o app desiste em 2 minutos).
+            if mode != "never":
+                threading.Thread(target=restart_walk, args=(pid, mode == "fail"), daemon=True).start()
+            self.send_json({"ok": True, "pid": pid})
             return
         if url.path == "/api/atualizacao/iniciar":
             with LOCK:
@@ -948,7 +1041,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 server = ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("PARITY_SESSION_PORT", "0"))), Handler)
-print(f"Fixture URL: http://127.0.0.1:{server.server_port} token={TOKEN}", flush=True)
+print(f"Fixture URL: http://127.0.0.1:{server.server_port}", flush=True)
 try:
     server.serve_forever()
 except KeyboardInterrupt:
