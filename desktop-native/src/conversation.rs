@@ -77,7 +77,8 @@ pub fn pair_results(events: &[ChatEvent]) -> (HashMap<usize, usize>, HashSet<usi
     (paired, orphans)
 }
 
-pub fn build(events: &[ChatEvent], view: View) -> Vec<Item> {
+/// `pinned`: chamadas de agente ainda rodando. Saem do meio da conversa (e do grupo) porque o cartão delas fica fixo no fim.
+pub fn build(events: &[ChatEvent], view: View, pinned: &HashSet<usize>) -> Vec<Item> {
     let (paired, orphans) = pair_results(events);
     let mut items = Vec::new();
     let mut run: Vec<Tool> = Vec::new();
@@ -96,6 +97,7 @@ pub fn build(events: &[ChatEvent], view: View) -> Vec<Item> {
         }
     };
     for (i, event) in events.iter().enumerate() {
+        if pinned.contains(&i) { continue; }
         match event.kind.as_str() {
             "tool_result" if !orphans.contains(&i) => continue,
             // Sinal sintético de fim de tarefa em segundo plano: não é saída de ferramenta.
@@ -177,6 +179,161 @@ pub fn fold_tasks(events: &[ChatEvent], paired: &HashMap<usize, usize>) -> Vec<T
         }
     }
     order.into_iter().map(|(_, task)| task).collect()
+}
+
+/// Subagente lançado por Agent/AgentSwarm. `call` é o índice do tool_use nos eventos.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentRun {
+    pub call: usize, pub id: String, pub description: String,
+    pub subagent_type: Option<String>, pub model: Option<String>, pub prompt: Option<String>, pub running: bool,
+}
+
+/// Bash com `run_in_background: true`: o comando cru e o rótulo sem o encanamento.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShellRun { pub id: String, pub command: String, pub label: String, pub description: Option<String>, pub ts: Option<f64>, pub running: bool }
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Activity { pub agents: Vec<AgentRun>, pub shells: Vec<ShellRun> }
+
+impl Activity {
+    pub fn running_agents(&self) -> impl Iterator<Item = &AgentRun> { self.agents.iter().filter(|a| a.running) }
+}
+
+/// Agentes e shells de fundo, dobrados dos eventos como o `createActivityFolder` do web. Refeito a cada troca do
+/// conjunto de eventos, então `/clear` e histórico novo não carregam nada do anterior.
+pub fn fold_activity(events: &[ChatEvent]) -> Activity {
+    let mut resulted: HashSet<&str> = HashSet::new();
+    // Id do trabalho em segundo plano (agentId, id do shell) -> tool_use_id do lançamento.
+    let mut background: HashMap<String, &str> = HashMap::new();
+    // Fim que chegou antes do lançamento: o par fecha quando ele aparecer.
+    let mut finished_early: HashSet<String> = HashSet::new();
+    // Bash de fundo esperando a resposta de lançamento; outro resultado com a mesma frase não conta.
+    let mut shell_pending: HashSet<&str> = HashSet::new();
+    let mut agent_calls: HashSet<&str> = HashSet::new();
+    let mut agents = Vec::new();
+    let mut shells = Vec::new();
+    fn finish<'a>(id: String, background: &HashMap<String, &'a str>, resulted: &mut HashSet<&'a str>, early: &mut HashSet<String>) {
+        match background.get(&id) { Some(&call) => { resulted.insert(call); } None => { early.insert(id); } }
+    }
+    for (i, event) in events.iter().enumerate() {
+        match event.kind.as_str() {
+            "tool_result" => {
+                let Some(id) = tool_key(event) else { continue };
+                if let Some(task) = id.strip_prefix("task:") { finish(task.to_owned(), &background, &mut resulted, &mut finished_early); continue; }
+                let text = event.result.as_deref().unwrap_or("");
+                // Só o resultado de um Agent é lido: a conta é refeita a cada evento e as saídas de ferramenta são grandes.
+                if agent_calls.contains(id) && text.to_lowercase().contains("async agent launched") {
+                    if let Some(agent) = word_after(text, "agentId:") {
+                        if finished_early.remove(agent) { resulted.insert(id); }
+                        background.insert(agent.to_owned(), id);
+                    }
+                    continue;
+                }
+                if shell_pending.remove(id) {
+                    if let Some(shell) = word_after(text, "Command running in background with ID:") {
+                        if finished_early.remove(shell) { resulted.insert(id); }
+                        background.insert(shell.to_owned(), id);
+                        continue;
+                    }
+                    // Pediu fundo e não foi: este resultado já é o final.
+                }
+                resulted.insert(id);
+            }
+            "user_msg" => {
+                let text = event.text.as_deref().unwrap_or("");
+                if !text.contains("<task-notification>") { continue; }
+                let Some(task) = text.split_once("<task-id>").and_then(|(_, rest)| rest.split_once("</task-id>")).map(|(id, _)| id.trim()) else { continue };
+                finish(task.to_owned(), &background, &mut resulted, &mut finished_early);
+            }
+            "tool_use" => {
+                let Some(id) = tool_key(event) else { continue };
+                let input = event.tool_input.as_ref();
+                let text = |key: &str| input.and_then(|v| v.get(key)).and_then(Value::as_str).map(str::to_owned);
+                match event.tool_name.as_deref() {
+                    Some("Agent" | "AgentSwarm") => {
+                        let items = input.and_then(|v| v.get("items")).and_then(Value::as_array).map_or(0, Vec::len);
+                        let desc = text("description").or_else(|| text("subagent_type"))
+                            .unwrap_or_else(|| crate::i18n::tr_web("atividade_agente", &HashMap::new()).unwrap_or_else(|| "Agente".into()));
+                        let description = if items > 0 {
+                            let params = HashMap::from([("desc".to_owned(), desc.clone()), ("n".to_owned(), items.to_string())]);
+                            crate::i18n::tr_web("atividade_swarm_itens", &params).unwrap_or(desc)
+                        } else { desc };
+                        agent_calls.insert(id);
+                        agents.push(AgentRun { call: i, id: id.to_owned(), description, subagent_type: text("subagent_type"),
+                            model: text("model"), prompt: text("prompt"), running: false });
+                    }
+                    Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
+                        shell_pending.insert(id);
+                        let command = text("command").unwrap_or_default();
+                        shells.push(ShellRun { id: id.to_owned(), label: command_label(&command), command,
+                            description: text("description"), ts: event.ts, running: false });
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    for agent in &mut agents { agent.running = !resulted.contains(agent.id.as_str()); }
+    for shell in &mut shells { shell.running = !resulted.contains(shell.id.as_str()); }
+    agents.sort_by_key(|a| !a.running);
+    shells.sort_by_key(|s| !s.running);
+    Activity { agents, shells }
+}
+
+/// A palavra `[A-Za-z0-9_-]+` logo depois do marcador (espaços no meio à vontade).
+fn word_after<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
+    let rest = text[text.find(marker)? + marker.len()..].trim_start();
+    let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).unwrap_or(rest.len());
+    (end > 0).then(|| &rest[..end])
+}
+
+/// O comando sem o encanamento que não diz o que ele faz: o `cd … &&` da frente, as redireções e o `| tail -N` do fim.
+/// É poda, não interpretação; comando que era só encanamento volta cru.
+pub fn command_label(command: &str) -> String {
+    let mut s = command.to_owned();
+    // cd <caminho> && no começo.
+    let head = s.trim_start();
+    if let Some(after) = head.strip_prefix("cd").filter(|rest| rest.starts_with(char::is_whitespace)) {
+        let after = after.trim_start();
+        let path_end = match after.chars().next() {
+            Some(q @ ('"' | '\'')) => after[1..].find(q).map(|at| at + 2),
+            Some(_) => after.find(char::is_whitespace).or(Some(after.len())),
+            None => None,
+        };
+        if let Some(rest) = path_end.map(|end| after[end..].trim_start()).and_then(|rest| rest.strip_prefix("&&")) {
+            s = format!(" {}", rest.trim_start());
+        }
+    }
+    // >/dev/null, 2>&1, 2>/dev/null em qualquer lugar.
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s.as_str();
+    while let Some(at) = rest.find('>') {
+        let after = rest[at + 1..].trim_start();
+        let target = if after.starts_with('&') && after[1..].starts_with(|c: char| c.is_ascii_digit()) { Some(2) }
+            else if after.starts_with("/dev/null") { Some("/dev/null".len()) } else { None };
+        let Some(len) = target else { out.push_str(&rest[..=at]); rest = &rest[at + 1..]; continue };
+        let mut start = at;
+        if rest[..start].ends_with(|c: char| c.is_ascii_digit()) { start -= 1; }
+        out.push_str(rest[..start].trim_end());
+        out.push(' ');
+        rest = &after[len..];
+    }
+    out.push_str(rest);
+    // | tail -N / | head -N no fim.
+    let trimmed = out.trim_end();
+    if let Some(pipe) = trimmed.rfind('|') {
+        let tail = trimmed[pipe + 1..].trim_start();
+        let tool = tail.strip_prefix("tail").or_else(|| tail.strip_prefix("head")).filter(|r| r.starts_with(char::is_whitespace));
+        let flag = tool.map(str::trim_start).and_then(|r| r.strip_prefix('-'));
+        if let Some(flag) = flag {
+            let word = flag.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(flag.len());
+            let left = flag[word..].trim_start().trim_start_matches(|c: char| c.is_ascii_digit()).trim();
+            if word > 0 && left.is_empty() { out.truncate(pipe); }
+        }
+    }
+    let label = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if label.is_empty() { command.trim().to_owned() } else { label }
 }
 
 /// O número depois de "Task #" (com espaço à vontade e sem caixa), como a regra do web; outro "#" do texto não conta.
@@ -323,14 +480,14 @@ mod tests {
     }
     fn result(id: &str, tool: &str) -> ChatEvent { ChatEvent { tool_use_id: Some(tool.into()), ..ev("tool_result", id) } }
     // Os testes antigos valem para o padrão da Aparência.
-    fn build(events: &[ChatEvent]) -> Vec<Item> { super::build(events, View::default()) }
+    fn build(events: &[ChatEvent]) -> Vec<Item> { super::build(events, View::default(), &HashSet::new()) }
     fn with_input(mut event: ChatEvent, input: Value) -> ChatEvent { event.tool_input = Some(input); event }
     fn answered(id: &str, tool: &str, text: &str) -> ChatEvent { ChatEvent { result: Some(text.into()), ..result(id, tool) } }
 
     #[test]
     fn thinking_mode_decides_which_calls_fold_in() {
         let events = vec![ev("thinking", "t1"), call("s", "1", "WebSearch"), call("b", "2", "Bash"), call("k", "3", "TaskCreate")];
-        let parts = |mode| match &super::build(&events, View { thinking: mode, tasks: false })[0] {
+        let parts = |mode| match &super::build(&events, View { thinking: mode, tasks: false }, &HashSet::new())[0] {
             Item::Thinking { parts, .. } => parts.clone(),
             other => panic!("{other:?}"),
         };
@@ -351,7 +508,7 @@ mod tests {
             with_input(call("x", "4", "TaskUpdate"), json!({"taskId": "9", "status": "completed"})),
             ev("assistant_msg", "b"),
         ];
-        let items = super::build(&events, View { tasks: true, ..View::default() });
+        let items = super::build(&events, View { tasks: true, ..View::default() }, &HashSet::new());
         let tasks = fold_tasks(&events, &pair_results(&events).0);
         assert_eq!(items, vec![Item::Event(0), Item::Event(5), Item::Tasks { id: "tasks-c1".into(), tasks: tasks.clone() }, Item::Event(8)]);
         assert_eq!(tasks.iter().map(|t| (t.key.as_str(), t.subject.as_str(), t.status)).collect::<Vec<_>>(),
@@ -365,7 +522,7 @@ mod tests {
         let events = vec![with_input(call("c", "1", "TaskCreate"), json!({"subject": "A"})), answered("r", "1", "Task #7 created"),
             with_input(call("d", "2", "TaskUpdate"), json!({"taskId": "7", "status": "deleted"}))];
         assert!(fold_tasks(&events, &pair_results(&events).0).is_empty());
-        assert!(!super::build(&events, View { tasks: true, ..View::default() }).iter().any(|i| matches!(i, Item::Tasks { .. })));
+        assert!(!super::build(&events, View { tasks: true, ..View::default() }, &HashSet::new()).iter().any(|i| matches!(i, Item::Tasks { .. })));
         assert_eq!(edit_counts(Some("Edit"), Some(&json!({"old_string": "a\nb", "new_string": "a\nb\nc"}))), Some((3, 2)));
         assert_eq!(tool_display_name("mcp__hangar-computer-control__objetivo"), "computer-control · objetivo");
         assert_eq!(family(Some("Glob")), Family::Search);
@@ -463,6 +620,98 @@ mod tests {
         assert_eq!(summarize_input(Some("Bash"), Some(&json!({"command": "ls   -la\n/tmp"}))), "ls -la /tmp");
         assert_eq!(summarize_input(Some("Grep"), Some(&json!({"pattern": "foo", "path": "src"}))), "\"foo\" src");
         assert_eq!(summarize_input(Some("mcp_x"), Some(&json!({"other": 3}))), "3");
+    }
+
+    fn agent(id: &str, tool: &str, input: Value) -> ChatEvent { with_input(call(id, tool, "Agent"), input) }
+    fn note(id: &str, task: &str) -> ChatEvent {
+        ChatEvent { text: Some(format!("<task-notification>\n<task-id> {task} </task-id>\n<status>completed</status></task-notification>")), ..ev("user_msg", id) }
+    }
+    fn running(events: &[ChatEvent]) -> Vec<String> { fold_activity(events).running_agents().map(|a| a.id.clone()).collect() }
+
+    #[test]
+    fn foreground_agent_runs_until_its_result() {
+        let mut events = vec![agent("a", "t1", json!({"description": "Ler o fold", "subagent_type": "Explore", "model": "haiku", "prompt": "p"}))];
+        let run = &fold_activity(&events).agents[0];
+        assert_eq!((run.call, run.description.as_str(), run.subagent_type.as_deref(), run.model.as_deref(), run.prompt.as_deref(), run.running),
+            (0, "Ler o fold", Some("Explore"), Some("haiku"), Some("p"), true));
+        events.push(answered("r", "t1", "pronto"));
+        assert!(running(&events).is_empty());
+    }
+
+    #[test]
+    fn background_agent_survives_its_launch_and_ends_by_either_signal_in_either_order() {
+        let launch = |id: &str, tool: &str, agent_id: &str| answered(id, tool, &format!("Async agent launched successfully.\nagentId: {agent_id} (use it)"));
+        let start = vec![agent("a", "t1", json!({})), launch("r", "t1", "ag-1")];
+        assert_eq!(running(&start), vec!["t1"]);
+        // Fim pelo resultado sintético do backend.
+        let mut ended = start.clone();
+        ended.push(result("x", "task:ag-1"));
+        assert!(running(&ended).is_empty());
+        // Fim pela notificação na mensagem do usuário.
+        let mut ended = start.clone();
+        ended.push(note("n", "ag-1"));
+        assert!(running(&ended).is_empty());
+        // Fim antes do lançamento, pelos dois caminhos.
+        for end in [result("x", "task:ag-1"), note("n", "ag-1")] {
+            let events = vec![agent("a", "t1", json!({})), end, launch("r", "t1", "ag-1")];
+            assert!(running(&events).is_empty());
+        }
+        // Fim de outro agente não fecha este.
+        let mut other = start.clone();
+        other.push(result("x", "task:ag-2"));
+        assert_eq!(running(&other), vec!["t1"]);
+    }
+
+    #[test]
+    fn swarm_counts_items_and_description_falls_back_to_the_type() {
+        let events = vec![with_input(call("a", "t1", "AgentSwarm"), json!({"description": "Revisar", "items": [1, 2, 3]})),
+            agent("b", "t2", json!({"subagent_type": "Explore"})), agent("c", "t3", json!({}))];
+        let descriptions: Vec<String> = fold_activity(&events).agents.into_iter().map(|a| a.description).collect();
+        let swarm = crate::i18n::tr_web("atividade_swarm_itens", &HashMap::from([("desc".into(), "Revisar".into()), ("n".into(), "3".into())])).unwrap();
+        assert_eq!(descriptions, vec![swarm, "Explore".into(), crate::i18n::tr_web("atividade_agente", &HashMap::new()).unwrap()]);
+    }
+
+    #[test]
+    fn background_shell_ends_by_notification_and_a_refused_one_ends_on_its_result() {
+        let shell = |id: &str, tool: &str, command: &str| with_input(call(id, tool, "Bash"), json!({"command": command, "run_in_background": true}));
+        let events = vec![
+            shell("a", "s1", "cd /tmp/x && cargo build 2>&1 | tail -5"),
+            answered("r1", "s1", "Command running in background with ID: bg1"),
+            shell("b", "s2", "sleep 9"),
+            answered("r2", "s2", "Error: background refused"),
+            with_input(call("c", "s3", "Bash"), json!({"command": "grep x"})),
+            answered("r3", "s3", "Command running in background with ID: bg9"),
+        ];
+        let activity = fold_activity(&events);
+        let shells: Vec<(&str, &str, bool)> = activity.shells.iter().map(|s| (s.id.as_str(), s.label.as_str(), s.running)).collect();
+        assert_eq!(shells, vec![("s1", "cargo build", true), ("s2", "sleep 9", false)]);
+        let mut ended = events.clone();
+        ended.push(result("x", "task:bg1"));
+        assert!(fold_activity(&ended).shells.iter().all(|s| !s.running));
+    }
+
+    #[test]
+    fn fold_starts_over_on_a_new_event_set() {
+        let old = vec![agent("a", "t1", json!({}))];
+        assert_eq!(running(&old), vec!["t1"]);
+        let fresh = vec![ev("assistant_msg", "m")];
+        assert_eq!(fold_activity(&fresh), Activity::default());
+    }
+
+    #[test]
+    fn running_agent_leaves_the_middle_and_its_group() {
+        let events = vec![call("a", "t1", "Read"), agent("b", "t2", json!({})), call("c", "t3", "Read"), call("d", "t4", "Read")];
+        let pinned: HashSet<usize> = fold_activity(&events).running_agents().map(|a| a.call).collect();
+        let items = super::build(&events, View::default(), &pinned);
+        assert_eq!(items, vec![Item::Group { id: "g-a".into(), tools: vec![Tool { call: 0, result: None }, Tool { call: 2, result: None }, Tool { call: 3, result: None }] }]);
+    }
+
+    #[test]
+    fn command_label_prunes_plumbing_only() {
+        assert_eq!(command_label("cd \"/a b\" && npm test >/dev/null 2>&1"), "npm test");
+        assert_eq!(command_label("make 2>/dev/null | head -n 20"), "make");
+        assert_eq!(command_label("echo a > out.txt | tail -f log"), "echo a > out.txt | tail -f log");
+        assert_eq!(command_label("  >/dev/null "), ">/dev/null");
     }
 
     #[test]

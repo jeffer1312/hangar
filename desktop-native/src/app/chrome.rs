@@ -2,7 +2,7 @@
 use gpui_kit::{component::{ActiveTheme, Icon, Sizable, StyledExt, button::*}, prelude::FluentBuilder, *};
 use gpui_kit::assets::IconName;
 use crate::theme;
-use std::{sync::OnceLock, time::{Duration, Instant}};
+use std::{cell::Cell, rc::Rc, sync::OnceLock, time::{Duration, Instant}};
 
 /// Batida das animações que se repetem: 30 por segundo, numa grade de tempo comum a todas. O `Spinner`/`Skeleton` do
 /// kit pedem um quadro por atualização da tela enquanto montados; relógios próprios de 30 Hz, fora de fase entre si,
@@ -21,14 +21,15 @@ fn pulse_phase(period: Duration) -> f32 {
     (pulse_epoch().elapsed().as_secs_f64() % period.as_secs_f64() / period.as_secs_f64()) as f32
 }
 
-/// Redesenha a view a cada batida da grade, a partir de `delay`, até ela sair da tela. Com movimento reduzido, não redesenha.
-fn pulse<V: 'static>(delay: Duration, cx: &mut Context<V>) {
+/// Redesenha a view a cada batida da grade, a partir de `delay`, até ela sair da tela. Com movimento reduzido, ou com
+/// `awake` dizendo que ela não está à vista, não redesenha.
+fn pulse<V: 'static>(delay: Duration, awake: fn(&V) -> bool, cx: &mut Context<V>) {
     cx.spawn(async move |view, cx| {
         cx.background_executor().timer(delay).await;
         loop {
             let into = Duration::from_nanos((pulse_epoch().elapsed().as_nanos() % PULSE_TICK.as_nanos()) as u64);
             cx.background_executor().timer(PULSE_TICK - into).await;
-            if view.update(cx, |_, cx| if !cx.reduce_motion() { cx.notify() }).is_err() { break; }
+            if view.update(cx, |view, cx| if !cx.reduce_motion() && awake(view) { cx.notify() }).is_err() { break; }
         }
     }).detach();
 }
@@ -65,7 +66,7 @@ impl Render for SpinnerView {
 impl RenderOnce for Spinner {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (icon, size, color) = (self.icon, self.size, self.color);
-        let view = keyed_view(self.key, window, cx, |cx| { pulse(Duration::ZERO, cx); SpinnerView { icon: icon.clone(), size, color } });
+        let view = keyed_view(self.key, window, cx, |cx| { pulse(Duration::ZERO, |_| true, cx); SpinnerView { icon: icon.clone(), size, color } });
         view.update(cx, |view, cx| {
             if view.icon != icon || view.size != size || view.color != color { (view.icon, view.size, view.color) = (icon, size, color); cx.notify(); }
         });
@@ -103,13 +104,120 @@ impl RenderOnce for Skeleton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (style, secondary) = (self.style, self.secondary);
         let view = keyed_view(self.key, window, cx, |cx| {
-            pulse(SKELETON_DELAY, cx);
+            pulse(SKELETON_DELAY, |_| true, cx);
             SkeletonView { style: style.clone(), secondary, born: Instant::now() }
         });
         view.update(cx, |view, cx| {
             if view.style != style || view.secondary != secondary { (view.style, view.secondary) = (style.clone(), secondary); cx.notify(); }
         });
         view.cached(style)
+    }
+}
+
+/// `--ease-out` do web: `cubic-bezier(0.23, 1, 0.32, 1)`.
+pub fn ease_out(x: f32) -> f32 {
+    let curve = |s: f32, a: f32, b: f32| 3. * (1. - s) * (1. - s) * s * a + 3. * (1. - s) * s * s * b + s * s * s;
+    let (mut lo, mut hi) = (0f32, 1f32);
+    for _ in 0..20 {
+        let mid = (lo + hi) / 2.;
+        if curve(mid, 0.23, 0.32) < x { lo = mid } else { hi = mid }
+    }
+    curve((lo + hi) / 2., 1., 1.)
+}
+
+// A marca "trabalhando" do web (HangarWorking.svelte), no quadro de 24: raio, abertura e atraso de entrada e de giro de cada arco.
+const MARK_ARCS: [(f32, f32, f32, f32); 3] = [(9.1, 30., 0., 0.), (6.35, 18., 0.09, 0.48), (3.6, 6., 0.18, 0.96)];
+const MARK_STROKE: f32 = 1.55;
+const MARK_DRAW: f32 = 0.72;
+const MARK_LOOP: f32 = 0.9;
+const MARK_CYCLE: f32 = 3.2;
+
+/// Um quadro da marca: escala do conjunto e, por arco, quanto do traço está desenhado e o giro total em graus.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MarkFrame { scale: f32, arcs: [(f32, f32); 3] }
+
+/// `t` em segundos desde que a marca apareceu; `None` é a marca completa e parada (movimento reduzido).
+fn mark_frame(t: Option<f32>) -> MarkFrame {
+    let Some(t) = t else { return MarkFrame { scale: 1., arcs: [(1., 0.); 3] } };
+    let cycle = |start: f32| (t >= start).then(|| (t - start) % MARK_CYCLE / MARK_CYCLE);
+    // Trecho de `from` a `to` do ciclo, com a curva aplicada em cada trecho, como o keyframe do CSS.
+    let span = |c: f32, from: f32, to: f32| ease_out(((c - from) / (to - from)).clamp(0., 1.));
+    let whole = cycle(MARK_LOOP);
+    let scale = whole.map_or(1., |c| match c {
+        c if c < 0.63 => 1.,
+        c if c < 0.78 => 1. - 0.56 * span(c, 0.63, 0.78),
+        c if c < 0.90 => 0.44 + 0.62 * span(c, 0.78, 0.90),
+        c => 1.06 - 0.06 * span(c, 0.90, 1.),
+    });
+    let mut arcs = [(0., 0.); 3];
+    for (k, &(_, _, enter, phase)) in MARK_ARCS.iter().enumerate() {
+        let drawn = if t < enter { 0. } else { ease_out(((t - enter) / MARK_DRAW).min(1.)) };
+        let turn = cycle(MARK_LOOP + phase).map_or(0., |p| if p < 0.33 { 360. * span(p, 0., 0.33) } else { 0. });
+        let spiral = whole.map_or(0., |c| if c < 0.63 { 0. } else { 360. * (k + 1) as f32 * span(c, 0.63, 1.) });
+        arcs[k] = (drawn, turn + spiral);
+    }
+    MarkFrame { scale, arcs }
+}
+
+fn paint_mark(bounds: Bounds<Pixels>, frame: MarkFrame, color: Hsla, window: &mut Window) {
+    let unit = f32::from(bounds.size.width) / 24.;
+    let center = bounds.center();
+    let width = MARK_STROKE * unit * frame.scale;
+    for (&(radius, gap, _, _), &(drawn, turn)) in MARK_ARCS.iter().zip(&frame.arcs) {
+        if drawn <= 0. { continue; }
+        let radius = radius * unit * frame.scale;
+        let start = 180. - gap + turn;
+        let sweep = (180. + 2. * gap) * drawn;
+        let at = |deg: f32| {
+            let rad = deg.to_radians();
+            point(center.x + px(radius * rad.cos()), center.y + px(radius * rad.sin()))
+        };
+        let steps = (sweep / 6.).ceil().max(2.) as usize;
+        let mut path = PathBuilder::stroke(px(width));
+        path.move_to(at(start));
+        for step in 1..=steps { path.line_to(at(start + sweep * step as f32 / steps as f32)); }
+        if let Ok(path) = path.build() { window.paint_path(path, color); }
+        // Pontas redondas, como o `stroke-linecap="round"` do web.
+        for end in [at(start), at(start + sweep)] {
+            window.paint_quad(fill(Bounds::centered_at(end, size(px(width), px(width))), color).corner_radii(px(width / 2.)));
+        }
+    }
+}
+
+/// A marca animada "trabalhando" (três arcos: entrada que se desenha, onda de giro e respiro), no relógio comum de 30
+/// batidas, numa view própria guardada entre quadros. Fora da área visível (barra rolada, aba fora da faixa) para de
+/// pedir quadro; com movimento reduzido fica completa e parada.
+#[derive(IntoElement)]
+pub struct WorkingMark { key: ElementId, size: f32, color: Hsla }
+
+impl WorkingMark {
+    pub fn new(key: impl Into<ElementId>, size: f32, color: Hsla) -> Self { Self { key: key.into(), size, color } }
+}
+
+struct WorkingMarkView { size: f32, color: Hsla, born: Instant, visible: Rc<Cell<bool>> }
+
+impl Render for WorkingMarkView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let frame = mark_frame((!cx.reduce_motion()).then(|| self.born.elapsed().as_secs_f32()));
+        let (color, visible) = (self.color, self.visible.clone());
+        div().size(px(self.size)).flex_shrink_0().child(canvas(
+            move |bounds, window, _| visible.set(window.content_mask().bounds.intersects(&bounds)),
+            move |bounds, _, window, _| paint_mark(bounds, frame, color, window),
+        ).size_full())
+    }
+}
+
+impl RenderOnce for WorkingMark {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (size, color) = (self.size, self.color);
+        let view = keyed_view(self.key, window, cx, |cx| {
+            pulse(Duration::ZERO, |view: &WorkingMarkView| view.visible.get(), cx);
+            WorkingMarkView { size, color, born: Instant::now(), visible: Rc::new(Cell::new(true)) }
+        });
+        view.update(cx, |view, cx| {
+            if view.size != size || view.color != color { (view.size, view.color) = (size, color); cx.notify(); }
+        });
+        view.cached(StyleRefinement::default().size(px(size)))
     }
 }
 
@@ -162,6 +270,14 @@ pub fn state_chip(state: &str, label: String, large: bool) -> AnyElement {
         .text_size(px(12.)).font_weight(FontWeight::MEDIUM)
         .when(state != "limited", |el| el.child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(fg)))
         .child(label).into_any_element()
+}
+
+/// O chip "Trabalhando" da lista com a marca animada no lugar do ponto; o resto igual ao `state_chip`.
+pub fn working_chip(key: impl Into<ElementId>, label: String) -> AnyElement {
+    let (bg, fg) = theme::pill("working");
+    div().flex_shrink_0().h(px(22.)).px(px(9.)).flex().items_center().gap(px(6.)).rounded_full().bg(bg).text_color(fg)
+        .text_size(px(12.)).font_weight(FontWeight::MEDIUM)
+        .child(WorkingMark::new(key, 12., fg)).child(label).into_any_element()
 }
 
 pub fn meter(pct: f64) -> AnyElement {

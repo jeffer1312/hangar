@@ -3752,6 +3752,7 @@
   "native_thinking": "Raciocínio",
   "native_notice": "Aviso",
   "native_working": "Trabalhando",
+  "native_working_line": "Trabalhando…",
   "native_idle": "Disponível",
   "native_awaiting_input": "Aguardando você",
   "native_dead": "Encerrada",

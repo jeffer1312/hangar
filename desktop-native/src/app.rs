@@ -30,6 +30,9 @@ actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearc
 const LIVE_THINKING: &str = "__thinking__";
 const LIVE_TOOL: &str = "__tool__";
 const PREVIEW: &str = "__preview__";
+const WORKING: &str = "__working__";
+/// Prefixo da linha do cartão fixo de um agente rodando, seguido do id do tool_use.
+const PINNED: &str = "pin:";
 const COLUMN: f32 = 780.;
 
 /// Largura da coluna da conversa e do compositor: a do mock vezes o ajuste de Aparência.
@@ -208,6 +211,9 @@ pub struct Hangar {
     tables: HashMap<String, (String, std::rc::Rc<[crate::tables::Table]>)>,
     // Chamada → resultado do transcript, refeito junto com as linhas; o desenho só consulta.
     paired: HashMap<usize, usize>,
+    // Agentes e shells de fundo, dobrados junto com as linhas; `pinned` são as chamadas dos agentes rodando.
+    activity: conversation::Activity,
+    pinned: HashSet<usize>,
     last_message: Option<usize>,
     live_clear_epoch: [u64; 2],
     rich: HashMap<String, RichText>,
@@ -338,7 +344,7 @@ impl Hangar {
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(),
             flight: InFlight::default(), action_feedback: HashMap::new(), ask_form: AskForm::default(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             list_state, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), items: Vec::new(), expanded: HashSet::new(),
-            table_column: HashMap::new(), tables: HashMap::new(), paired: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), prepared: HashMap::new(), render_tick: 0,
+            table_column: HashMap::new(), tables: HashMap::new(), paired: HashMap::new(), activity: Default::default(), pinned: HashSet::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), prepared: HashMap::new(), render_tick: 0,
             preview_drop_epoch: 0, preview_drop_scheduled: false,
             visible_preview: Preview::default(), preview_tick_epoch: 0, preview_tick_scheduled: false,
             preview_last_tick: None, preview_carry: 0., preview_deadline: None,
@@ -957,6 +963,7 @@ impl Hangar {
                 let finished = self.chat.state.state == "working" && state.state != "working";
                 let resumed = self.chat.state.state == "awaiting_input" && state.state == "working";
                 self.chat.update_state(state);
+                self.sync_working_row(cx);
                 if finished { self.discover_plan(); }
                 if resumed { self.controls.clear_plan_preview(); }
                 if self.chat.ask.is_none() { self.ask_form = AskForm::default(); }
@@ -1035,7 +1042,7 @@ impl Hangar {
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
         if !self.expanded.remove(&key) { self.expanded.insert(key.clone()); }
         self.prepare_tools();
-        let row = self.row_ids.iter().position(|id| id == &key).or_else(|| {
+        let row = self.row_ids.iter().position(|id| id == &key || id.strip_prefix(PINNED) == Some(key.as_str())).or_else(|| {
             let events = &self.chat.events;
             self.items.iter().position(|item| match item {
                 Item::Group { tools, .. } => tools.iter().any(|t| events[t.call].id == key),
@@ -1642,7 +1649,9 @@ impl Hangar {
 
     fn sync_rows(&mut self, cx: &mut Context<Self>) {
         let a = appearance::get();
-        self.items = conversation::build(&self.chat.events, conversation::View { thinking: a.thinking_tools, tasks: a.task_list });
+        self.activity = conversation::fold_activity(&self.chat.events);
+        self.pinned = self.activity.running_agents().map(|agent| agent.call).collect();
+        self.items = conversation::build(&self.chat.events, conversation::View { thinking: a.thinking_tools, tasks: a.task_list }, &self.pinned);
         self.paired = conversation::pair_results(&self.chat.events).0;
         self.sync_tables(a.table_chart);
         let events = &self.chat.events;
@@ -1651,6 +1660,8 @@ impl Hangar {
         if !self.chat.live_thinking.is_empty() { ids.push(LIVE_THINKING.into()); signatures.push(String::new()); }
         if let Some(tool) = &self.chat.live_tool { ids.push(LIVE_TOOL.into()); signatures.push(format!("{}{}", tool.name, tool.input)); }
         if !self.visible_preview.text.is_empty() { ids.push(PREVIEW.into()); signatures.push(String::new()); }
+        if self.working_row_shown() { ids.push(WORKING.into()); signatures.push(String::new()); }
+        for agent in self.activity.running_agents() { ids.push(format!("{PINNED}{}", events[agent.call].id)); signatures.push(String::new()); }
         let prefix = self.row_ids.iter().zip(&ids).take_while(|(a,b)| a == b).count();
         let suffix = self.row_ids[prefix..].iter().rev().zip(ids[prefix..].iter().rev()).take_while(|(a,b)| a == b).count();
         let spliced = prefix + suffix < self.row_ids.len() || prefix + suffix < ids.len();
@@ -1770,6 +1781,12 @@ impl Hangar {
             (PREVIEW, _) => self.render_message(index, &id, cx),
             (LIVE_THINKING, _) => self.render_live_thinking(cx),
             (LIVE_TOOL, _) => self.render_live_tool(),
+            (WORKING, _) => self.render_working(cx),
+            (pin, _) if pin.starts_with(PINNED) => match self.pinned_call(&pin[PINNED.len()..]) {
+                // Sem resultado: o do lançamento em segundo plano não é o fim.
+                Some(call) => self.render_tool(Tool { call, result: None }, &id, cx),
+                None => div().into_any_element(),
+            },
             (_, Some(Item::Event(_))) => self.render_message(index, &id, cx),
             (_, Some(Item::Tool(tool))) => self.render_tool(tool, &id, cx),
             (_, Some(Item::Orphan(result))) => self.render_orphan(result, &id, cx),
@@ -1808,9 +1825,52 @@ impl Hangar {
         }
     }
 
-    // Sem resultado só é "em execução" enquanto a sessão trabalha e nenhuma mensagem veio depois.
+    // Sem resultado só é "em execução" enquanto a sessão trabalha e nenhuma mensagem veio depois. Agente rodando é
+    // "em execução" até o fim real, mesmo com a sessão ociosa.
     fn running(&self, call: usize) -> bool {
-        self.chat.state.state == "working" && self.last_message.is_none_or(|last| call > last)
+        self.pinned.contains(&call) || self.chat.state.state == "working" && self.last_message.is_none_or(|last| call > last)
+    }
+
+    fn pinned_call(&self, event_id: &str) -> Option<usize> {
+        self.activity.running_agents().map(|agent| agent.call).find(|&call| self.chat.events[call].id == event_id)
+    }
+
+    /// A linha de trabalhando: sessão trabalhando sem pensamento, ferramenta ou prévia ao vivo (a prévia já diz "Trabalhando").
+    fn working_row_shown(&self) -> bool {
+        self.chat.state.state == "working" && self.chat.live_thinking.is_empty() && self.chat.live_tool.is_none()
+            && self.visible_preview.text.is_empty()
+    }
+
+    /// Estado que chega pelo SSE não refaz a conversa: a linha de trabalhando entra ou sai por um splice, antes dos cartões fixos.
+    fn sync_working_row(&mut self, cx: &mut Context<Self>) {
+        let at = self.row_ids.iter().position(|id| id == WORKING);
+        if at.is_some() == self.working_row_shown() { return; }
+        self.follow_content_changed(cx);
+        match at {
+            Some(at) => {
+                self.row_ids.remove(at);
+                self.row_signatures.remove(at);
+                self.splice_rows(at..at + 1, 0);
+            }
+            None => {
+                let at = self.row_ids.iter().position(|id| id.starts_with(PINNED)).unwrap_or(self.row_ids.len());
+                self.row_ids.insert(at, WORKING.into());
+                self.row_signatures.insert(at, String::new());
+                self.splice_rows(at..at, 1);
+            }
+        }
+    }
+
+    /// Marca animada e o rótulo do estado (o texto do terminal) numa linha só, de altura fixa: o rótulo que muda a cada
+    /// segundo não remede a lista.
+    fn render_working(&self, cx: &mut Context<Self>) -> AnyElement {
+        let label = self.chat.state.label.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| tr("working_line"));
+        let row = div().relative().h(px(38.)).px(px(4.)).flex().items_center().gap(px(8.))
+            .child(chrome::WorkingMark::new("working-line", 22., theme::accent()))
+            .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::muted()).child(label));
+        if cx.reduce_motion() { return row.into_any_element(); }
+        row.with_animation("working-line-in", Animation::new(Duration::from_millis(200)).with_easing(chrome::ease_out),
+            |el, t| el.opacity(t).top(px(6. * (1. - t)))).into_any_element()
     }
 
     fn render_tool(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -2806,9 +2866,9 @@ impl Hangar {
             // Nome, estado e perguntas por extenso: o ponto só diz o estado pela cor.
             let mut label = format!("{} · {}", session.name, tr(&format!("chip_{state}")));
             if session.pending_questions > 0 { label.push_str(&format!(" · ? {}", session.pending_questions)); }
-            // Trabalhando gira (o kit para o giro com movimento reduzido); os outros estados são um ponto na cor dele.
+            // Trabalhando é a marca animada da lista (parada com movimento reduzido); os outros estados são um ponto na cor dele.
             let mark = if session.state == "working" {
-                chrome::Spinner::new(SharedString::from(format!("tab-spin-{}", session.name)), IconName::Loader, px(12.), theme::accent()).into_any_element()
+                chrome::WorkingMark::new(SharedString::from(format!("tab-mark-{}", session.name)), 14., theme::accent()).into_any_element()
             } else {
                 div().size(px(8.)).mx(px(2.)).flex_shrink_0().rounded_full().bg(if state == "limited" { theme::limited() } else { theme::status(state) }).into_any_element()
             };
@@ -2888,7 +2948,9 @@ impl Hangar {
         let limited = session.limited == Some(true);
         let untracked = session.tracked == Some(false);
         let chip_state = if limited { "limited" } else { state };
-        let chip = chrome::state_chip(chip_state, tr(&format!("chip_{chip_state}")), false);
+        let chip = if chip_state == "working" {
+            chrome::working_chip(SharedString::from(format!("row-mark-{}", session.name)), tr("chip_working"))
+        } else { chrome::state_chip(chip_state, tr(&format!("chip_{chip_state}")), false) };
         let sub = match state {
             "awaiting_input" => session.question.clone().map(|q| (conversation::one_line(&q, 80), theme::warning(), false)),
             "working" => session.label.clone().filter(|l| !l.trim().is_empty())
