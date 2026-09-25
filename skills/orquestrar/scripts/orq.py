@@ -361,6 +361,8 @@ def cmd_init(a) -> int:
         too_big = _over_cap(_contract_parts(contract.read_text(encoding="utf-8"))[0])
     except FileNotFoundError:
         too_big = None  # written after init: `orq read contract` enforces the cap then
+    except (OSError, UnicodeDecodeError) as e:
+        raise OrqError(f"contract unreadable: {contract}: {e}")
     if too_big:
         raise OrqError(too_big)
     cfg = {"arbiter": a.arbiter, "repo": str(Path(a.repo).expanduser().resolve()),

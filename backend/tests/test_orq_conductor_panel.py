@@ -226,6 +226,16 @@ def test_feed_junta_eventos_com_ts_sem_fuso_em_ordem(tmp_path):
     assert r["skipped"] == 2
 
 
+def test_feed_skips_ts_at_calendar_edge(tmp_path):
+    # Sem fuso vira hora local (ValueError em fuso negativo); com +14:00 a conversão dá OverflowError.
+    (tmp_path / "eventos.jsonl").write_text("\n".join(
+        json.dumps({"ts": ts, "tipo": "entrega", "task": 1, "rodada": 1})
+        for ts in ["0001-01-01T00:00:00", "0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59"]
+    ) + "\n", encoding="utf-8")
+    r = orq_conductor.feed(tmp_path)
+    assert r["feed"] == [] and r["skipped"] == 3
+
+
 def test_feed_corta_em_500_e_avisa(tmp_path):
     base = datetime(2026, 9, 25, 10, 0, tzinfo=AGORA.tzinfo)
     (tmp_path / "eventos.jsonl").write_text("".join(

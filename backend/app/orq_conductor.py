@@ -47,12 +47,12 @@ _EXEC_DIR = re.compile(r"(?:^|\s)(?:-e|--eventos)\s+(\S+)")
 
 
 def _when(v) -> datetime | None:
-    try:
-        d = datetime.fromisoformat(str(v))
-    except ValueError:
-        return None
     # Linha antiga sem fuso vira hora local: naive contra aware levantaria no sort.
-    return d if d.tzinfo else d.astimezone()
+    # Data na borda do calendário estoura na conversão: a linha é pulada, nunca um 500.
+    try:
+        return datetime.fromisoformat(str(v)).astimezone()
+    except (ValueError, OverflowError):
+        return None
 
 
 def _num(v) -> float | None:

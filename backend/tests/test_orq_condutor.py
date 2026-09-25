@@ -139,6 +139,19 @@ def test_init_recusa_contrato_acima_do_teto_e_a_task_longa_nao_conta(env, tmp_pa
     assert (d / "orq.json").exists()
 
 
+@pytest.mark.parametrize("kind", ["dir", "binary"])
+def test_init_contract_unreadable_exits_2_without_traceback(env, tmp_path, kind):
+    d, _, e = env
+    c = tmp_path / "regras.md"
+    if kind == "dir":
+        c.mkdir()
+    else:
+        c.write_bytes(b"\xff\xfe\x80 not utf-8")
+    r = run(e, "init", "--arbiter", "arb", "--repo", str(tmp_path), "--contract", str(c), check=False)
+    assert r.returncode == 2 and "orq: contract unreadable:" in r.stderr
+    assert "Traceback" not in r.stderr and not (d / "orq.json").exists()
+
+
 def test_read_contract_ausente_sai_com_erro_do_orq(env, tmp_path):
     _, _, e = env
     init(e, tmp_path)
