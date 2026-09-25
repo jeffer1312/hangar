@@ -63,9 +63,10 @@ Done when every step of the Task is checked.
 
 1. Read now, before any command: `executor-verificacao.md`. First round, or a fix that grew
    beyond the recipe → `executor-subagentes.md`. Diff touches pixels (`.svelte`/`.tsx`/`.vue`,
-   CSS, templates, anything that draws) → `executor-visual.md`. Task creates or changes
-   orchestration (tmux, CLI, process, account, network) → `executor-fluxo.md`. Both gates hold
-   even when the plan does not ask.
+   CSS, templates, anything that draws) → two phases: this round is code only (build, tests, no
+   screen) with `--fase codigo`; the screen proof, `executor-visual.md`, comes after `CODE OK`
+   (step 7). Task creates or changes orchestration (tmux, CLI, process, account, network) →
+   `executor-fluxo.md`. Both gates hold even when the plan does not ask.
 2. Dispatch the reviewer subagents as `executor-subagentes.md` says (first round; correction
    round only when the fix grew beyond the recipe).
 3. Run the verification the plan orders for this Task as `executor-verificacao.md` says.
@@ -108,9 +109,9 @@ Decided alone: <what the Task left open and what you chose, one per line — or 
 `Decided alone:` lists every place the Task did not say and you chose. A choice that changes an
 interface, a settled decision or the scope is the arbiter's: stop and ask instead.
 
-Run `orq event entrega --task <N> --rodada <R> --commit <stash hash>` (validates, appends,
-journals; exit 0). More than the template → a `.md` in the durable directory first, its path in
-the message.
+Run `orq event entrega --task <N> --rodada <R> --commit <stash hash>`, plus `--fase codigo` on a
+pixel Task's code round (validates, appends, journals; exit 0). More than the template → a `.md`
+in the durable directory first, its path in the message.
 
 Done when the message is delivered and `orq event` exits 0.
 
@@ -121,7 +122,13 @@ from the arbiter only with context only he has) → read `executor-receita.md` n
 then back to step 4 and a new round R+1. Disagreement with the recipe goes to the arbiter with
 evidence; the reviewer is not debated.
 
-Done when APROVA arrives.
+`CODE OK` (pixel Task, code approved) → prove it now, changing no code: `executor-visual.md` on
+that exact stash; `Tela: própria` → your own browser, no lock; `Tela: compartilhada` → `orq
+screen take` first. Then send the report's `Visual:` line to the same reviewer and run the
+command the `CODE OK` names (`--fase prova`, the same stash hash). The proof exposes a code
+defect → fix it, new round with `--fase codigo`, then prove again.
+
+Done when APROVA arrives (after the proof, on a pixel Task).
 
 ### 8. Commit
 
@@ -180,7 +187,7 @@ Done when `orq commit` exited 0 and the tree is clean.
 - `orq` exits 2 after writing (event or `closed.jsonl` written, only the notice failed) → never
   repeat it blind: check `orq read journal --last 5` and tell the arbiter with
   `orq notify "[decisao] …"`.
-- The shared screen: `orq screen take --owner <you> --wait-min 9` (Bash tool timeout at its
+- `Tela: compartilhada` only: `orq screen take --owner <you> --wait-min 9` (Bash tool timeout at its
   10-min maximum; exit 1 → run it again) before the first action on it, `orq screen release
   --owner <you>` after the last capture; in a proof longer than 40 min, run `take` again to
   renew. Never ask the arbiter for it.

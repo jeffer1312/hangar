@@ -96,7 +96,7 @@ Done when the file is on disk with every field filled.
 | Verdict | Goes to | And |
 |---|---|---|
 | **REPROVA** | the executor only; the message is the file's path | `orq event veredito … --resultado reprova`; the arbiter gets nothing, except with `--reincide`, which wakes him |
-| **APROVA** | nobody by hand | `orq event veredito … --resultado aprova` tells the executor to commit; you close the gate |
+| **APROVA** | nobody by hand | `orq event veredito … --resultado aprova` tells the executor to prove (`--fase codigo`) or to commit; you close the gate only after the proof |
 | **DEVOLVIDO** | nobody by hand | `orq event veredito … --resultado devolvido --motivo <report path>` wakes the arbiter; gate closed, he decides |
 
 - Everything the executor must do (a missing screenshot, one more verification, a recapture)
@@ -104,6 +104,9 @@ Done when the file is on disk with every field filled.
 - Every round, APROVA included: `orq event veredito --task <N> --rodada <R> --resultado
   <aprova|reprova|devolvido> --sessao <you> --motivo <report path>`, plus `--reincide` on the second rejection of the same
   cause. It validates, journals and routes; the commit hash is never an event.
+- The round carries `--fase` → your verdict carries the same. `codigo`: judge the code only,
+  no screen asked. `prova`: judge the proof (`revisor-visual.md`) and that the stash is the one
+  you approved; a code change in it is a REPROVA back to a code round.
 - Messages: form and transport rungs in `hangar-send --help`; the rung used goes in the report.
 
 Done when `orq event` exits 0 and, on REPROVA, the executor has the path.
