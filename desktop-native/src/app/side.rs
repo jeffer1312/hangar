@@ -121,7 +121,7 @@ fn duration(ms: f64) -> String {
     else { format!("{}h{:02}m", (s / 3600.).floor(), ((s % 3600.) / 60.).floor()) }
 }
 
-fn ago(seconds: f64) -> String {
+pub(super) fn ago(seconds: f64) -> String {
     let s = seconds.max(0.);
     if s < 60. { tr("ago_now") }
     else if s < 3600. { tr("ago_min").replace("{n}", &(s / 60.).floor().to_string()) }

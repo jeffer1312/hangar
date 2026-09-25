@@ -12,6 +12,7 @@ use super::device::Remote;
 use actions::{ActionReply, AddAccount, AddStep, Change, ChangeKind, SignIn};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
 use keys::{CookieForm, EngineForm, KeysReply};
+pub(super) use keys::ModelChoice;
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;

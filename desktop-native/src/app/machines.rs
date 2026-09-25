@@ -1147,7 +1147,7 @@ impl Hangar {
 
 /// Diálogo sem ação principal: o Enter vira o "confirmar" do kit, que sem `propagate` para a tecla ali e o botão focado nunca
 /// recebe o clique de teclado. Seguindo, o botão focado clica ao soltar a tecla, e o diálogo não fecha.
-fn enter_to_focused(_: &ClickEvent, _: &mut Window, cx: &mut App) -> bool {
+pub(super) fn enter_to_focused(_: &ClickEvent, _: &mut Window, cx: &mut App) -> bool {
     cx.propagate();
     false
 }
@@ -1156,11 +1156,11 @@ fn enter_to_focused(_: &ClickEvent, _: &mut Window, cx: &mut App) -> bool {
 /// o Esc deixaria o foco na página. O foco é o que o próprio botão guarda, achado pelo mesmo caminho na árvore (o gpui põe
 /// o nome do tipo do componente no caminho antes de desenhá-lo).
 #[derive(IntoElement)]
-struct FocusOnClick {
+pub(super) struct FocusOnClick {
     /// O mesmo id dado ao `Button`.
-    id: ElementId,
-    button: Button,
-    open: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) id: ElementId,
+    pub(super) button: Button,
+    pub(super) open: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 impl RenderOnce for FocusOnClick {

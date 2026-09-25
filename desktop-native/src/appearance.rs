@@ -219,6 +219,13 @@ fn path() -> Option<PathBuf> { Some(dir()?.join("appearance.json")) }
 /// Cópia da imagem de fundo escolhida: o original pode sumir ou mudar depois.
 pub fn image_path() -> Option<PathBuf> { Some(dir()?.join("background-image")) }
 
+/// A raiz escolhida por último em Nova sessão, como o `cp:last-root` do web; falha de disco só faz esquecer. Bloqueantes.
+pub fn last_root() -> Option<String> { std::fs::read_to_string(dir()?.join("last-root")).ok().map(|s| s.trim().to_owned()) }
+
+pub fn remember_root(path: &str) {
+    if let Some(dir) = dir() { let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join("last-root"), path)); }
+}
+
 /// Sem arquivo, ou arquivo ilegível, abre no padrão; o motivo da falha de leitura volta para ser mostrado.
 pub fn load() -> Result<Appearance, String> {
     let Some(path) = path() else { return Ok(Appearance::default()) };

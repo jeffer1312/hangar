@@ -78,9 +78,9 @@ fn thousands(tokens: u64) -> String { format!("{}k", (tokens as f64 / 1000.).rou
 #[derive(Clone, Deserialize)]
 struct ProviderModel { id: String, context_length: Option<u64>, vision: Option<bool> }
 
-/// Item do seletor de modelo: o id e a janela ao lado.
+/// Item de seletor: o id, o rótulo e a dica ao lado (a janela do modelo, a conta em uso).
 #[derive(Clone)]
-struct ModelChoice { id: String, label: String, hint: String }
+pub(in crate::app) struct ModelChoice { pub(in crate::app) id: String, pub(in crate::app) label: String, pub(in crate::app) hint: String }
 
 impl SearchableListItem for ModelChoice {
     type Value = String;

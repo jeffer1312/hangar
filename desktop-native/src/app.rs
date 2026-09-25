@@ -14,6 +14,7 @@ mod backdrop;
 mod accounts;
 mod chrome;
 mod controls;
+mod create;
 mod device;
 mod follow;
 mod machines;
@@ -87,6 +88,8 @@ enum Payload {
     ServerConfig(server_config::ServerConfigReply),
     // Máquinas: identificador, alcance e reinício do servidor conectado.
     Machines(machines::MachinesReply),
+    // Diálogo Nova sessão: a resposta vai ao diálogo que a pediu, se ele ainda for o aberto.
+    Create(EntityId, create::CreateReply),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
 }
 
@@ -242,6 +245,7 @@ pub struct Hangar {
     shortcuts: shortcuts::Shortcuts,
     server_config: server_config::ServerConfig,
     machines: machines::Machines,
+    new_session: Option<Entity<create::NewSession>>,
 }
 
 impl Drop for Hangar {
@@ -324,7 +328,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
-            server_config: server_config::ServerConfig::default(), machines: machines::Machines::default(),
+            server_config: server_config::ServerConfig::default(), machines: machines::Machines::default(), new_session: None,
         }
     }
 
@@ -745,6 +749,7 @@ impl Hangar {
             Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, cx); return; }
             Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
+            Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
@@ -2598,6 +2603,8 @@ impl Hangar {
             .when_some(self.list_error.clone(), |el, text| el.child(div().px_4().py_1().flex().items_center().gap_2().text_xs().text_color(theme::warning())
                 .child(div().flex_1().min_w_0().child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
+            // O CTA do rodapé da barra do web.
+            .child(div().flex_shrink_0().px(px(8.)).pt(px(8.)).pb(px(8.)).child(self.new_session_button(false, cx)))
             .child(div().h(px(48.)).flex_shrink_0().px(px(8.)).flex().items_center().gap_1().border_t_1().border_color(theme::border())
                 .child(Button::new("connection").ghost().flex_1().min_w_0().h(px(32.)).px(px(6.))
                     .tooltip(tr("connection_tip")).accessibility_label(tr("connection"))
@@ -2677,6 +2684,7 @@ impl Hangar {
                 else { el.bg(theme::chrome()).border_b_1().border_color(theme::border()) })
             .child(div().px(px(6.)).child(chrome::hangar_mark(16., theme::accent())))
             .child(strip)
+            .child(self.new_session_button(true, cx))
             .when_some(self.list_error.clone(), |el, text| el.child(div().flex_shrink_0().max_w(px(260.)).flex().items_center().gap_1()
                 .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
