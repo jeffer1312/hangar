@@ -83,6 +83,19 @@ def test_ball_segue_a_rodada_a_troca_e_o_lote(env, tmp_path):
     assert ball() == []
 
 
+def test_ball_retoma_depois_de_execucao_fim_sem_ressuscitar_task_velha(env, tmp_path):
+    _, _, e = env
+    init(e, tmp_path)
+    ball = lambda: run(e, "ball").stdout.split()
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
+    run(e, "event", "entrega", "--task", "1", "--rodada", "1", "--commit", "abc")
+    run(e, "event", "execucao_fim", "--resultado", "ok")
+    run(e, "event", "task_inicio", "--task", "2", "--titulo", "u", "--executor", "ey", "--par", "rev2")
+    assert ball() == ["ey"]
+    run(e, "event", "execucao_fim", "--resultado", "ok")
+    assert ball() == []
+
+
 def test_ball_com_arbitro_termina_no_arbitro_da_vez(env, tmp_path):
     _, _, e = env
     init(e, tmp_path)

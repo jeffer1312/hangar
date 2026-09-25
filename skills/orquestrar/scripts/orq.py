@@ -150,7 +150,6 @@ def state(d: Path) -> dict:
     arbiter = config(d)["arbiter"]
     roles: dict[int, dict] = {}
     last: dict[int, dict] = {}
-    ended = False
     for ev in events(d):
         t = ev.get("tipo")
         if t == "task_inicio":
@@ -166,22 +165,23 @@ def state(d: Path) -> dict:
                     if r.get(k) == ev.get("de"):
                         r[k] = ev.get("para")
         elif t == "execucao_fim":
-            ended = True
+            # Work may resume in the same file without a new execucao_inicio; only Tasks
+            # touched after the end can own the ball.
+            last.clear()
     ball: list[str] = []
-    if not ended:
-        closed = _closed(d)
-        for task, ev in last.items():
-            if task in closed:
-                continue
-            r = roles.get(task, {})
-            if ev["tipo"] == "entrega":
-                owner = r.get("par")
-            elif ev["tipo"] == "veredito" and ev.get("resultado") == "devolvido":
-                owner = None  # the arbiter's, and he is always watched
-            else:
-                owner = r.get("executor")
-            if owner and owner not in ball:
-                ball.append(owner)
+    closed = _closed(d)
+    for task, ev in last.items():
+        if task in closed:
+            continue
+        r = roles.get(task, {})
+        if ev["tipo"] == "entrega":
+            owner = r.get("par")
+        elif ev["tipo"] == "veredito" and ev.get("resultado") == "devolvido":
+            owner = None  # the arbiter's, and he is always watched
+        else:
+            owner = r.get("executor")
+        if owner and owner not in ball:
+            ball.append(owner)
     return {"roles": roles, "ball": ball, "arbiter": arbiter}
 
 
