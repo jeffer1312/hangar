@@ -40,6 +40,37 @@ describe('activity — pareamento de agente background', () => {
   });
 });
 
+// Agente em primeiro plano bloqueia o turno do pai: se a conversa do pai andou, ele acabou —
+// mesmo sem o tool_result gravado no transcript (visto em sessão headless).
+const asst = (text: string): ChatEvent => ({ kind: 'assistant_msg', id: `e${seq++}`, text });
+const user = (id: string, text: string): ChatEvent => ({ kind: 'user_msg', id, text });
+
+describe('activity — agente em primeiro plano sem tool_result', () => {
+  it('termina quando o pai volta a falar', () => {
+    const s = run([launch('tf1'), asst('Pronto, o subagente respondeu.')]);
+    expect(s.runningAgents).toBe(0);
+    expect(s.agents[0].running).toBe(false);
+  });
+
+  it('sem nada depois, segue rodando', () => {
+    const s = run([launch('tf2')]);
+    expect(s.agents[0].running).toBe(true);
+  });
+
+  it('agente em background NAO fecha pela fala do pai, só pela notificação', () => {
+    const f = createActivityFolder();
+    f.reset([launch('tf3'), launched('tf3', 'ab33'), asst('Lancei, sigo aqui.')]);
+    expect(f.snapshot().runningAgents).toBe(1);
+    f.push(done('ab33'));
+    expect(f.snapshot().runningAgents).toBe(0);
+  });
+
+  it('mensagem da fila (queued-) nao é continuação: segue rodando', () => {
+    const s = run([launch('tf4'), user('queued-abc', 'e aí?')]);
+    expect(s.agents[0].running).toBe(true);
+  });
+});
+
 describe('activity — AgentSwarm (Kimi)', () => {
   // Lote: N subagentes de uma vez, um por item. Antes disto o AgentSwarm nao caia em nenhum case e
   // o painel de Atividade dizia "nada rolando agora" com quatro agentes trabalhando.

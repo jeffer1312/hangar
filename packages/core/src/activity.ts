@@ -120,6 +120,10 @@ export function createActivityFolder(): ActivityFolder {
   // ficava "rodando" pra sempre. Guardado aqui e resolvido quando o launch aparecer -> pareamento
   // INDEPENDENTE DE ORDEM.
   let completedIds = new Set<string>();
+  // Agent/AgentSwarm sem tool_result ainda. O de primeiro plano bloqueia o turno do pai: se o pai
+  // voltou a falar, ele acabou, mesmo sem tool_result gravado. tool_use/tool_result não contam
+  // (chamadas paralelas terminam em qualquer ordem), nem a msg da fila (queued-).
+  let semResultado = new Set<string>();
   // Marca um agente background como terminado pelo agentId, com o launch vindo ANTES ou DEPOIS do fim.
   function completeAgent(agentId: string): void {
     const tuid = bgAgent.get(agentId);
@@ -128,7 +132,13 @@ export function createActivityFolder(): ActivityFolder {
   }
 
   function push(e: ChatEvent): void {
+    if (semResultado.size && (e.kind === 'assistant_msg' || e.kind === 'thinking'
+        || (e.kind === 'user_msg' && !e.id.startsWith('queued-')))) {
+      for (const id of semResultado) resulted.add(id);
+      semResultado.clear();
+    }
     if (e.kind === 'tool_result' && e.tool_use_id) {
+      semResultado.delete(e.tool_use_id);
       // tool_result sintetico do backend (transcript.py): <task-notification> virou "task:<id>".
       // Resolve o launch background correspondente e marca como terminado.
       if (e.tool_use_id.startsWith('task:')) {
@@ -251,6 +261,7 @@ export function createActivityFolder(): ActivityFolder {
       case 'Agent':
       case 'AgentSwarm': {
         if (e.tool_use_id) {
+          semResultado.add(e.tool_use_id);
           const itens = Array.isArray(input.items) ? input.items.length : 0;
           const desc = String(input.description ?? input.subagent_type ?? m.atividade_agente());
           agents.push({
@@ -288,6 +299,7 @@ export function createActivityFolder(): ActivityFolder {
     agents = [];
     bgAgent = new Map();
     completedIds = new Set();
+    semResultado = new Set();
     shells = [];
     bgPendente = new Set();
     for (const e of events) push(e);
