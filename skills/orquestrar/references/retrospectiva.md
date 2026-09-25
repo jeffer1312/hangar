@@ -15,7 +15,7 @@ continuing from the last P).
 ## Inputs
 
 ```bash
-cat ~/.hangar/orq/<date>-<gid>/registro.md          # the arbiter's journal
+cat ~/.hangar/orq/<date>-<gid>/registro-arquivo-*.md ~/.hangar/orq/<date>-<gid>/registro.md 2>/dev/null   # the journal, rotated parts first
 ls  ~/.hangar/orq/<date>-<gid>/pareceres/*.md       # review reports: each round's WASTE line
 ls  ~/.hangar/orq/<date>-<gid>/kickoffs/            # what each session knew when starting
 cat ~/.hangar/orq/<date>-<gid>/licoes.md            # every guideline written mid-work

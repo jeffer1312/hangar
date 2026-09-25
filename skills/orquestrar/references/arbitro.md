@@ -18,7 +18,8 @@ artifact present → proceed; one missing → planner or `replanejar.md`, and th
 
 Done when all five stand: watchdog armed and proven by the synthetic alarm
 (`arbitro-vigia.md`) · `orq init` run · baseline measured, hash next to it · closing items (branch review +
-retrospective, with triggers) in the journal (`arbitro-encerramento.md`) · a-priori estimate
+retrospective, with triggers) in `<durable dir>/fechamento.md`, one `orq log` line pointing at it
+(`arbitro-encerramento.md`) · a-priori estimate
 written: time and rounds per Task · account policy read and copied into the contract.
 
 ### 2. Release one Task

@@ -7,6 +7,8 @@ closing items are written at launch (`arbitro.md`, step 1) and executed here.
 
 ## Closing items — written at launch, before the first session
 
+Write them to `<durable dir>/fechamento.md`; one `orq log` line points at it.
+
 ```markdown
 ## Closing — own items, written at LAUNCH
 
@@ -23,7 +25,7 @@ closing items are written at launch (`arbitro.md`, step 1) and executed here.
 
 - Both roles have a row in `## Quem é quem` since launch (account, model, effort). Missing row → stop and ask, like any off-plan Task.
 - The retrospective's trigger is never conditional on things having gone badly.
-- Phase 5 launched after the first approval, with findings still becoming Tasks → record the addendum at that same moment:
+- Phase 5 launched after the first approval, with findings still becoming Tasks → append the addendum to `<durable dir>/fechamento.md` at that same moment:
 
 ```markdown
 - [ ] **Retrospective addendum** — trigger: nothing in flight. Scope: the Tasks that entered

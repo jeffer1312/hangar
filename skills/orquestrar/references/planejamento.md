@@ -193,7 +193,7 @@ Done when all 16 items are closed and the plan is approved.
 
 Follow `planejamento-equipe.md`, "Phase 2": procedure, contract skeleton, `audit` variant. Writer
 discipline on `audit`: stage by explicit path, no `--amend`/rebase/squash, one Task = one commit,
-verification pasted in the journal, no push, no MR.
+verification pasted via `orq log`, no push, no MR.
 
 Done when the kick-offs are sent (`full`), or contract and journal exist and Task 1 is yours
 (`audit`).

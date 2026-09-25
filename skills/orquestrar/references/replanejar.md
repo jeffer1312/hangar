@@ -3,6 +3,8 @@
 A procedure, not a role: phase 1 runs again, smaller, only over what remains. It is the only door
 for switching methods and for escalating the route.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
+
 ## Triggers
 
 - The user ordered it.
@@ -27,8 +29,9 @@ never replans on his own and never rewrites his own plan.
   1. What is on the base: the branch's `git log`. Merged Tasks are facts.
   2. What is in flight: a commit without merge, a worktree with an uncommitted diff, a frozen
      round. Each becomes an explicit decision in the new plan: adopt, review, discard.
-  3. The contract, the lessons and the journal (`regras-<gid>.md`, `licoes.md`, `registro.md`):
-     guidelines already fixed enter the new plan as a starting point.
+  3. The contract, the lessons and the journal (`regras-<gid>.md`, `licoes.md`,
+     `orq read journal --last 1000`): guidelines already fixed enter the new plan as a starting
+     point.
   4. The review reports: each round's waste line.
   5. `eventos.jsonl`: real clock and rounds per Task; where missing, `git log` and transcripts.
   6. The old plan, last: inherit what still holds, don't defend it.
@@ -52,10 +55,12 @@ never replans on his own and never rewrites his own plan.
 
 1. The arbiter (the previous one, or the replanner taking over — the user's decision, recorded;
    taking over is an arbiter succession, `arbitro-encerramento.md`) rewrites `regras-<gid>.md`
-   from scratch from the phase-2 skeleton, pointing at the new plan. A live guideline of the
-   previous phase enters; a dead Task's guideline becomes one journal line.
-2. The journal stays the same file (`~/.hangar/orq/<date>-<gid>/registro.md`): a dated entry
-   marks the replanning — reason, what died of the old plan, the base's hash.
+   from scratch from the phase-2 skeleton, pointing at the new plan: common part ≤ 8k
+   characters, each Task's specifics in a `## Task N` section at the end, read through
+   `orq read contract --task N`. A live guideline of the previous phase enters; a dead Task's
+   guideline becomes one `orq log` line.
+2. The journal stays the same: one `orq log` line marks the replanning — reason, what died of
+   the old plan, the base's hash.
 3. Every kick-off from then on points at the new plan and rules. A continuing session gets a new
    kick-off; one that doesn't fit the new team is retired with the usual rite (transcript read,
    work recovered).

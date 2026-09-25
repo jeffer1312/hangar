@@ -4,6 +4,8 @@ Whoever opens a session measures its interval (the reviewer does it for the veri
 arbiter also measures his own period). Read at opening, closing and in the retrospective. No
 periodic collection, price lookup or sweep of other people's conversations.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
+
 ## Capture start and end
 
 Use Hangar's collector. The plan records the Hangar checkout path. Create `<durable>/medicao/`
@@ -47,8 +49,8 @@ uv run --directory <hangar>/backend --no-sync python -m app.orq_consumo report \
 - The total covers the registered sources only. Subagents with their own transcript need their
   own pairs, linked to the role that opened them; without them, declare that coverage missing.
   Never look for children by directory or name coincidence.
-- The events JSONL keeps its types; add only the report paths to the journal and to the
-  retrospective's request.
+- The events JSONL keeps its types; the report paths go to the journal through `orq log` and
+  into the retrospective's request.
 - The observed window includes waiting and measures no productivity. Tokens are not price nor
   subscription percentage. A quota variation belongs to the whole account; do not attribute it
   to this work without separate measurement.

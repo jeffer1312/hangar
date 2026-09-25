@@ -4,6 +4,8 @@ Sibling of `planejamento.md`: "The team" is read at its step 3 ("Team first"), "
 skeleton" and "The bar" at step 4, "Phase 2" and the contract skeleton at step 6. The
 decomposition and the exit gate stay in `planejamento.md`.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
+
 ## The team: you propose, the user chooses
 
 1. Read `~/.hangar/orquestracao-contas.md`: it says what MAY be used, never what WILL. Copy into
@@ -136,25 +138,24 @@ d) No bar for this Task.
   `arbitro-lancamento.md` ("Launch"): pre-flight, branch question, baseline, sessions, contract,
   kick-offs.
 - On `audit`: open no session. Run the pre-flight, the branch question and the baseline of
-  `arbitro-lancamento.md`; write the contract (skeleton below; three-row table, `Route: audit`)
-  and the journal; write Task 1 yourself. Open phase 4's session when the last Task is
-  committed, phase 5's after the branch is in the user's hands.
+  `arbitro-lancamento.md`; write the contract (skeleton below; three-row table, `Route: audit`);
+  the journal goes through `orq log`; write Task 1 yourself. Open phase 4's session when the
+  last Task is committed, phase 5's after the branch is in the user's hands.
 
 ### The contract skeleton
 
-Copy and fill; a field that doesn't apply gets `n/a` and stays in place. The rules file carries
-the same minus the history (first lines: `arbitro.md`, "The four files").
+Copy into `regras-<gid>.md` and fill; a field that doesn't apply gets `n/a` and stays in place.
+Common part ≤ 8k characters; each Task's specifics in a `## Task N` section at the end, read by
+executor and reviewer through `orq read contract --task N`. History (who took over from whom,
+when, why) goes to the journal through `orq event sessao_trocada`, never here.
 
 ````markdown
-> Arbiter's journal. Group rules: <path to regras-<gid>.md>.
+<first lines: `arbitro.md`, "The four files">
 > Lessons: <path to licoes.md>. User's plan: <path>.
-> Orchestration plan: <path | this very file>.
-> Method: <name | none>. Executes with: <command | none>. Domain skill: <name | none>. Route: <audit | full>.
-> Branch: <branch>. Starting HEAD: <hash>.
+> Orchestration plan: <path | this very file>. Starting HEAD: <hash>.
 
 ## Quem é quem
-In the rules (`regras-<gid>.md`, fixed table `| papel | sessão | provider | conta | modelo | esforço |`).
-Here only history: who took over from whom, when, why.
+<the team table, "`## Quem é quem`" above>
 A group notice contradicting that table: the table wins.
 
 ## What the plan owns (point, don't copy)
@@ -180,4 +181,7 @@ Task N — Bar: <screen, state, width> | none — user's decision, <date>
 
 ## Supervening decisions
 <date> — <decision, whose, reason in one line>
+
+## Task N — <title>
+<that Task's specifics: bar, untouchable exceptions, recipe path>
 ````

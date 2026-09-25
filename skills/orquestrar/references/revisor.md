@@ -29,7 +29,8 @@ Done when the protection proof is recorded and round, object and base are noted.
    contract's tooling table names for what the Task touched, with explicit paths. Each passes
    three questions: exists under that name in this account; reads the frozen object or
    uncommitted changes; reads this Task's files. Silence counts only when you know what it
-   read. One you cannot find → tell the arbiter which and what exists instead, proceed.
+   read. One you cannot find → `orq notify "[decisao] T<N>: <tool> missing, <what exists
+   instead>"`, proceed.
    Correction round: judge the recipe's application and its proof yourself.
 3. The visual gate is your own eyes.
 
@@ -84,7 +85,8 @@ WASTE this round: <what the executor did that became nothing> — would have pre
 - The WASTE line is written on APROVA too; you name the instruction, the arbiter decides
   whether it becomes a lesson. The request stays as the user wrote it.
 - A secret in the round (token, key, password, in a fallback, under a dev flag) → full blocker,
-  reported to the arbiter now; whether to block is the user's decision.
+  and `orq notify "[decisao] T<N>: secret in round <R>, <report path>"` now; whether to block is
+  the user's decision.
 
 Done when the file is on disk with every field filled.
 
@@ -124,6 +126,9 @@ Done when the next round arrives (back to step 1.3), or the arbiter has your one
   disposable copy of the frozen object per `protecao.md`; final artifacts go to the durable
   directory. The protection stays on even when a test fails because of it.
 - The contract is the arbiter's to write.
+- To the arbiter only through `orq notify`: `"[decisao] …"` for what needs his decision,
+  `"[aviso] …"` for what he only needs on record. No other message to him: no step status, no
+  progress.
 - `orq` exits 2 after writing (event or `closed.jsonl` written, only the notice failed) → never
   repeat it blind: check `orq read journal --last 5` and tell the arbiter with
   `orq notify "[decisao] …"`.

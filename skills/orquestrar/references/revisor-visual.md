@@ -3,6 +3,8 @@
 This page belongs to the Task that touches pixels. Diff draws nothing: go back to `revisor.md`
 and `revisor-catalogo.md`.
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir from the kick-off>`.
+
 ## Proof of seeing, or a BLOCKER
 
 - The round carries the absolute paths of the per-state screenshots, the visual question asked
@@ -35,8 +37,9 @@ and the bar, hunting:
 
 ## No bar, or a waived bar
 
-- Pixels touched and no bar at all in the contract: `DEVOLVIDO` to the arbiter: "Task N draws a
-  screen and the contract carries neither a bar nor a waiver; the bar is the user's decision".
+- Pixels touched and no bar at all in the contract: `DEVOLVIDO` (`revisor.md`, step 5), the
+  report saying "Task N draws a screen and the contract carries neither a bar nor a waiver; the
+  bar is the user's decision".
   Do not propose one, pick one, or judge as if it existed.
 - Contract says `Bar: none — user's decision`: judge normally without the blind comparison
   (per-state screenshots, missing state is a finding) and enforce no bar.
@@ -50,7 +53,7 @@ and the bar, hunting:
 - Hunt: a screenshot that does not prove its caption, a state captured at the wrong moment
   (before the fix, mid-transition), a state nobody captured.
 - The capturer's description is input; the conclusion is yours. You cannot see images and the
-  Task is visual: tell the arbiter.
+  Task is visual: `orq notify "[decisao] T<N>: visual Task, I cannot see images"`.
 
 ## Report line
 
