@@ -278,7 +278,7 @@ impl SubConversation {
                 let content = conversation_text(div().flex().flex_col().gap_2())
                     .when_some(label, |el, (label, error)| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD)
                         .text_color(if error { theme::warning() } else { theme::muted() }).child(label)))
-                    .child(TextView::new(&view).selectable(true).scrollable(false).on_link_click(open_web_link));
+                    .child(chat_text(&view, cx).on_link_click(open_web_link));
                 div().w_full().flex().flex_col().map(|el| if user {
                     el.items_end().child(div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content))
                 } else { el.child(content) }).into_any_element()
@@ -314,7 +314,7 @@ impl SubConversation {
                 let body: Vec<AnyElement> = if open { parts.iter().map(|part| match part {
                     Part::Thought(key, source) => {
                         let view = self.text(key.clone(), source.clone(), cx);
-                        TextView::new(&view).selectable(true).scrollable(false).text_color(theme::muted()).into_any_element()
+                        chat_text(&view, cx).text_color(theme::muted()).into_any_element()
                     }
                     Part::Tool(tool) => self.render_tool(tool, cx),
                 }).collect() } else { Vec::new() };
