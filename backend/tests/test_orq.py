@@ -156,6 +156,18 @@ def test_ficha_conta_aceita_e_nao_aceita(tmp_path):
                   "aprovadas_primeira": 1, "rodadas_media": 1.0}]
 
 
+def test_codigo_aprovado_sem_prova_nao_conta_como_aceita(tmp_path):
+    linhas = _exec_basica()[:-1]
+    linhas[2]["fase"] = "codigo"
+    linhas[3]["fase"] = "codigo"
+    _grava(tmp_path, "2026-08-22-paridade", linhas)
+    execs = orq.listar_execucoes(tmp_path)
+    t = execs[0].tasks[0]
+    assert t.resultado is None and t.fim is None
+    assert execs[0].aprovadas_primeira == 0
+    assert orq.fichas(execs)[0]["aceitas"] == 0
+
+
 def test_execucao_sem_fim_e_viva(tmp_path):
     _grava(tmp_path, "2026-08-25-viva", _exec_basica()[:-1])
     e = orq.listar_execucoes(tmp_path)[0]

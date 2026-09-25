@@ -397,6 +397,14 @@ def cmd_event(a) -> int:
         if not ok or not got or not (ok.startswith(got) or got.startswith(ok)):
             raise OrqError("the proof must run on the approved code: deliver a code round first "
                            f"(approved code: {ok or 'none'}, given: {got or 'none'})")
+        ev["commit"] = max(ok, got, key=len)  # a short prefix never reaches `orq commit`
+    if ev.get("tipo") == "veredito":
+        # A verdict without the round's phase would send a code round straight to commit.
+        ent = next((x for x in reversed(events(d)) if x.get("tipo") == "entrega"
+                    and x.get("task") == ev.get("task") and x.get("rodada") == ev.get("rodada")), None)
+        if ent and ent.get("fase") and ent["fase"] != ev.get("fase"):
+            raise OrqError("verdict phase must match the delivered round: "
+                           f"round {ev.get('rodada')} was delivered with --fase {ent['fase']}")
     ev = event_append(d, ev)
     journal_append(d, _event_line(ev))
     _after_event(d, ev)

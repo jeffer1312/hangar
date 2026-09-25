@@ -931,3 +931,33 @@ def test_fase_fora_do_vocabulario_e_recusada(env, tmp_path):
     assert bad.returncode != 0
     assert "fase" in bad.stdout + bad.stderr
     assert '"tela"' not in (d / "eventos.jsonl").read_text()
+
+
+def test_veredito_sem_a_fase_da_entrega_e_recusado(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    _fases_init(e, r, tmp_path)
+    h = _stash(g, r)
+    run(e, "event", "entrega", "--task", "1", "--rodada", "1", "--fase", "codigo", "--commit", h)
+    antes = (d / "eventos.jsonl").read_text()
+    bad = run(e, "event", "veredito", "--task", "1", "--rodada", "1", "--resultado", "aprova",
+              "--sessao", "rev", check=False)
+    assert bad.returncode != 0
+    assert ("verdict phase must match the delivered round: round 1 was delivered with --fase codigo"
+            in bad.stderr)
+    assert (d / "eventos.jsonl").read_text() == antes
+    assert sent(log) == []
+    run(e, "event", "veredito", "--task", "1", "--rodada", "1", "--fase", "codigo",
+        "--resultado", "aprova", "--sessao", "rev")
+    assert sent(log)[-1].startswith("ex CODE OK Task 1 round 1")
+
+
+def test_prova_grava_o_stash_inteiro_mesmo_com_prefixo(env, repo, tmp_path):
+    d, log, e = env
+    r, g = repo
+    _fases_init(e, r, tmp_path)
+    h = _stash(g, r)
+    _code_ok(e, h)
+    run(e, "event", "entrega", "--task", "1", "--rodada", "2", "--fase", "prova", "--commit", h[:6])
+    ev = json.loads((d / "eventos.jsonl").read_text().splitlines()[-1])
+    assert ev["fase"] == "prova" and ev["commit"] == h

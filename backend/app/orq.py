@@ -114,8 +114,11 @@ def _monta(exec_id: str, eventos: list[dict]) -> ExecucaoResumo:
         evs = por_task[n]
         ini = next((e for e in evs if e["tipo"] == "task_inicio"), {})
         vereditos = [e for e in evs if e["tipo"] == "veredito"]
-        final = vereditos[-1] if vereditos else None
-        rodadas = max((r for e in evs if e["tipo"] in ("entrega", "veredito")
+        # Aprovação da fase de código ainda deve a prova de tela: não fecha a Task nem conta rodada.
+        final_verdicts = [e for e in vereditos if e.get("fase") != "codigo"]
+        final = final_verdicts[-1] if final_verdicts else None
+        rodadas = max((r for e in evs if e["tipo"] == "entrega"
+                       or (e["tipo"] == "veredito" and e.get("fase") != "codigo")
                        if (r := _int_ou_none(e.get("rodada"))) is not None), default=0)
         voltas += sum(1 for e in vereditos if e.get("resultado") in ("devolvido", "reprova"))
         if final and final.get("resultado") == "aprova" and rodadas == 1:
