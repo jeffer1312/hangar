@@ -18,6 +18,7 @@ mod device;
 mod follow;
 mod rows;
 mod settings;
+mod shortcuts;
 mod side;
 
 actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch]);
@@ -78,6 +79,8 @@ enum Payload {
     Device(device::DeviceReply),
     // Contas e modelos da conexão atual.
     Accounts(accounts::AccountsReply),
+    // Página Atalhos da conexão atual.
+    Shortcuts(shortcuts::ShortcutsReply),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
 }
 
@@ -230,6 +233,7 @@ pub struct Hangar {
     grain: Arc<RenderImage>,
     device: device::Device,
     accounts: accounts::Accounts,
+    shortcuts: shortcuts::Shortcuts,
 }
 
 impl Drop for Hangar {
@@ -310,7 +314,7 @@ impl Hangar {
             appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
-            device: device::Device::default(), accounts: accounts::Accounts::default(),
+            device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
         }
     }
 
@@ -461,6 +465,7 @@ impl Hangar {
         self.controls = controls::Controls::default();
         self.reset_device(cx);
         self.accounts = accounts::Accounts::default();
+        self.shortcuts = shortcuts::Shortcuts::default();
         // Página do servidor aberta na troca: relê do servidor novo.
         if let Some(page) = self.settings { self.settings_opened(page, cx); }
         if let Some(api) = self.api.clone() {
@@ -713,6 +718,7 @@ impl Hangar {
             Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
             Payload::Device(reply) => { self.receive_device(reply, cx); return; }
             Payload::Accounts(reply) => { self.receive_accounts(reply, window, cx); return; }
+            Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
@@ -3041,6 +3047,7 @@ impl Render for Hangar {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Com a confirmação aberta, o Esc é dela: fecha só o diálogo.
                 if event.keystroke.key != "escape" || this.connection_dialog || this.search_focused(window, cx) || window.has_active_dialog(cx) { return; }
+                if this.shortcuts_escape(window, cx) { cx.stop_propagation(); return; }
                 if this.settings.is_some() {
                     this.close_settings(window, cx);
                     cx.stop_propagation();

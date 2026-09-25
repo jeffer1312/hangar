@@ -14,6 +14,8 @@ GET /control/r4?rate=<n|none>&rate_status=<200|500>&rate_delay=<s>&diag=<ok|empt
 POST /api/atualizacao/iniciar is FAKE: it only walks a synthetic state (5 steps, a 4 s "restart" in which
 GET /api/atualizacao drops the connection, then the outcome). Nothing is updated or restarted anywhere.
 Contas e modelos (Task 12 R5) moram em parity_accounts_fixture.py; GET /control/r5 muda como elas respondem.
+GET /control/r6?load=<ok|500|drop>&load_delay=<s>&save=<ok|422|500|drop>&save_delay=<s>&shortcuts=<fixture|json|>
+muda a config de atalhos (Task 12 R6): POST /api/config {"shortcuts"} grava na memória, null apaga o override.
 """
 
 import parity_accounts_fixture as accounts
@@ -85,6 +87,8 @@ SHORTCUTS = json.dumps([
     {"id": "anexos", "type": "internal", "action": "anexos"},
     {"id": "term", "type": "internal", "action": "terminal"},
 ])
+# Task 12 R6: a config de atalhos gravada aqui e como GET/POST /api/config respondem.
+R6 = {"shortcuts": SHORTCUTS, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0}
 
 
 def msg(kind, eid, text, **extra):
@@ -311,6 +315,14 @@ class Handler(BaseHTTPRequestHandler):
                         R4[key] = raw
             elif path == "/control/r5":
                 accounts.control(query)
+            elif path == "/control/r6":
+                for key, raw in ((k, v[0]) for k, v in query.items()):
+                    if key in ("load_delay", "save_delay"):
+                        R6[key] = float(raw)
+                    elif key in ("load", "save"):
+                        R6[key] = raw
+                    elif key == "shortcuts":
+                        R6["shortcuts"] = SHORTCUTS if raw == "fixture" else raw
             elif path == "/control/remove":
                 # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
                 SESSIONS.pop(query["name"][0], None)
@@ -338,7 +350,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/config":
             record("GET", self.path, None)
-            self.send_json({"campos": {"shortcuts": {"valor": SHORTCUTS}}})
+            with LOCK:
+                mode, delay, value = R6["load"], R6["load_delay"], R6["shortcuts"]
+            time.sleep(delay)
+            if mode == "drop":
+                self.close_connection = True
+                self.connection.shutdown(2)
+            elif mode == "500":
+                self.send_json(fail("erro_sintetico", "leitura da config falhou (sintético)"), 500)
+            else:
+                self.send_json({"campos": {"shortcuts": {"valor": value}}})
             return
         if path == "/api/cotacao":
             record("GET", self.path, None)
@@ -570,6 +591,25 @@ class Handler(BaseHTTPRequestHandler):
         if not accounts.handle_delete(self, url.path):
             self.send_json({"detail": "not found"}, 404)
 
+    def save_shortcuts(self, value):
+        """POST /api/config {"shortcuts": <json|null>}: grava na memória (null apaga o override) ou falha pelo modo."""
+        with LOCK:
+            mode, delay = R6["save"], R6["save_delay"]
+        time.sleep(delay)
+        if mode == "422" or (value is not None and not isinstance(value, str)):
+            self.send_json({"detail": "shortcuts: item 2 sem rótulo (sintético)"}, 422)
+            return
+        if mode == "500":
+            self.send_json(fail("erro_sintetico", "gravação da config falhou (sintético)"), 500)
+            return
+        with LOCK:
+            R6["shortcuts"] = value or ""
+        if mode == "drop":
+            self.close_connection = True
+            self.connection.shutdown(2)
+            return
+        self.send_json({"campos": {"shortcuts": {"valor": value or ""}}})
+
     def do_POST(self):
         url = urlparse(self.path)
         length = int(self.headers.get("Content-Length") or 0)
@@ -585,6 +625,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/api/sessions":
             self.create_session(body or {})
+            return
+        if url.path == "/api/config" and "shortcuts" in (body or {}):
+            self.save_shortcuts(body["shortcuts"])
             return
         if url.path == "/api/atualizacao/iniciar":
             with LOCK:

@@ -162,6 +162,7 @@ impl Hangar {
             Page::Diary => self.load_diary(cx),
             Page::About if !self.device.about.loading => self.load_about(false, cx),
             Page::Accounts => self.accounts_opened(cx),
+            Page::Shortcuts => self.shortcuts_opened(cx),
             _ => {}
         }
     }

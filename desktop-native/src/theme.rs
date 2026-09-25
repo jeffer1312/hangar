@@ -347,6 +347,10 @@ pub fn sync_kit(window: Option<&mut Window>, cx: &mut App) {
     theme.primary_hover = accent_press();
     theme.primary_active = accent_press();
     theme.primary_foreground = on_accent();
+    // Checkbox, Radio e Switch do kit pintam o marcado pelo token, não pelo campo acima.
+    theme.tokens.primary = theme.primary.into();
+    theme.tokens.primary_hover = theme.primary_hover.into();
+    theme.tokens.primary_active = theme.primary_active.into();
     theme.ring = accent_focus();
     theme.font_family = SANS.into();
     Theme::sync_base(cx);

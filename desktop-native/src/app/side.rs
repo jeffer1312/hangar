@@ -15,8 +15,8 @@ const DIFF_MAX: usize = 20_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Shortcut {
-    Send { label: String, text: String, direct: bool, confirm: bool },
-    Shell { label: String, command: String, confirm: bool },
+    Send { label: String, text: String, direct: bool, confirm: bool, icon: Option<String> },
+    Shell { label: String, command: String, confirm: bool, icon: Option<String> },
     Attach,
 }
 
@@ -24,6 +24,17 @@ impl Shortcut {
     fn confirm(&self) -> bool { matches!(self, Shortcut::Send { confirm: true, .. } | Shortcut::Shell { confirm: true, .. }) }
     fn label(&self) -> String {
         match self { Shortcut::Send { label, .. } | Shortcut::Shell { label, .. } => label.clone(), Shortcut::Attach => tr("attach") }
+    }
+
+    /// O que o painel roda de um atalho da config; terminal, modo, navegador e rodar são módulos à parte aqui.
+    fn from_item(item: &shortcuts::Item) -> Option<Self> {
+        let (label, icon, confirm) = (item.label().to_owned(), item.icon().map(str::to_owned), item.confirm());
+        match item.kind() {
+            "send_text" => Some(Shortcut::Send { label, text: item.content().to_owned(), direct: item.sends_direct(), confirm, icon }),
+            "shell" => Some(Shortcut::Shell { label, command: item.content().to_owned(), confirm, icon }),
+            "internal" if item.action() == "anexos" => Some(Shortcut::Attach),
+            _ => None,
+        }
     }
 }
 
@@ -73,6 +84,11 @@ impl Side {
         self.cost_gen += 1;
     }
 
+    /// A lista que a página Atalhos leu ou gravou: o painel mostra na hora, sem reler a config.
+    pub(super) fn set_shortcuts(&mut self, items: &[shortcuts::Item]) {
+        self.shortcuts = Some(Ok(items.iter().filter_map(Shortcut::from_item).collect()));
+    }
+
     pub fn receive_config(&mut self, result: Result<Value, String>) {
         self.shortcuts = Some(result.map(|config| parse_shortcuts(
             config.pointer("/campos/shortcuts/valor").and_then(Value::as_str).unwrap_or(""))));
@@ -86,26 +102,8 @@ impl Side {
     }
 }
 
-/// Porta de `resolveShortcuts`: vazio ou inválido volta ao conjunto nativo; item ruim sai sozinho.
-/// Dos internos só "anexos" existe aqui; terminal, navegador, modo e rodar são módulos à parte.
-fn parse_shortcuts(raw: &str) -> Vec<Shortcut> {
-    let defaults = vec![Shortcut::Attach];
-    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(raw.trim()) else { return defaults; };
-    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
-    let flag = |v: &Value, k: &str| v.get(k).and_then(Value::as_bool);
-    let mut seen = HashSet::new();
-    items.iter().filter_map(|item| {
-        let id = text(item, "id")?;
-        if !seen.insert(id) { return None; }
-        let confirm = flag(item, "confirm").unwrap_or(false);
-        match item.get("type").and_then(Value::as_str)? {
-            "send_text" => Some(Shortcut::Send { label: text(item, "label")?, text: text(item, "text")?, direct: flag(item, "send_direct").unwrap_or(true), confirm }),
-            "shell" => Some(Shortcut::Shell { label: text(item, "label")?, command: text(item, "command")?, confirm }),
-            "internal" if item.get("action").and_then(Value::as_str) == Some("anexos") => Some(Shortcut::Attach),
-            _ => None,
-        }
-    }).collect()
-}
+/// A resolução do web (`shortcuts::resolve`), reduzida ao que o painel nativo roda.
+fn parse_shortcuts(raw: &str) -> Vec<Shortcut> { shortcuts::resolve(raw).iter().filter_map(Shortcut::from_item).collect() }
 
 /// Tokens como o painel web: milhar arredondado em "k", milhão com uma casa, menos de mil cru.
 pub(super) fn tokens(n: f64) -> String {
@@ -547,14 +545,18 @@ impl Hangar {
         let busy = self.selected_key().is_some_and(|key| self.uploading.contains_key(&key));
         // "Ações" do mock: grade de quatro por linha, cada atalho com borda, ícone em cima e rótulo embaixo.
         let buttons: Vec<Button> = list.into_iter().enumerate().map(|(n, shortcut)| {
-            let icon = match &shortcut { Shortcut::Attach => IconName::Paperclip, Shortcut::Shell { .. } => IconName::SquareTerminal, Shortcut::Send { .. } => IconName::SquareSlash };
+            // O ícone salvo (glifo ou emoji), como no web; anexos mantém o clipe.
+            let icon = match &shortcut {
+                Shortcut::Attach => chrome::small_icon(IconName::Paperclip, 16., theme::muted()).into_any_element(),
+                Shortcut::Send { icon, .. } | Shortcut::Shell { icon, .. } => shortcuts::icon_element(icon.as_deref(), 16., theme::muted()),
+            };
             let label = shortcut.label();
             Button::new(SharedString::from(format!("shortcut-{n}")))
                 .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
                 .flex_1().min_w_0().h_auto().py(px(8.)).rounded(px(10.)).border_1().border_color(theme::border())
                 .tooltip(label.clone()).accessibility_label(label.clone()).disabled(!readable || busy)
                 .child(div().w_full().flex().flex_col().items_center().gap(px(4.))
-                    .child(chrome::small_icon(icon, 16., theme::muted()))
+                    .child(icon)
                     .child(div().max_w_full().truncate().text_size(px(11.5)).child(label)))
                 .on_click(cx.listener(move |this, _, window, cx| this.run_shortcut(shortcut.clone(), false, window, cx)))
         }).collect();
@@ -648,8 +650,8 @@ mod tests {
             {"id":"a","type":"shell","label":"dup","command":"x"},{"id":"b","type":"shell","label":"Build","command":"make"},
             {"id":"c","type":"send_text","label":"","text":"x"},{"id":"t","type":"internal","action":"terminal"}]"#;
         assert_eq!(parse_shortcuts(raw), vec![
-            Shortcut::Send { label: "Relatório".into(), text: "/relatorio".into(), direct: false, confirm: true },
-            Shortcut::Shell { label: "Build".into(), command: "make".into(), confirm: false },
+            Shortcut::Send { label: "Relatório".into(), text: "/relatorio".into(), direct: false, confirm: true, icon: None },
+            Shortcut::Shell { label: "Build".into(), command: "make".into(), confirm: false, icon: None },
         ]);
     }
 

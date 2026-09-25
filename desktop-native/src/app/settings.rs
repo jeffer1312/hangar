@@ -56,7 +56,7 @@ const APPEARANCE_ROWS: [(&str, Option<&str>); 27] = [
 ];
 
 /// Linhas das outras páginas prontas, no mesmo formato.
-const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 5] = [
+const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 6] = [
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
@@ -64,6 +64,7 @@ const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 5] = [
     (Page::About, &[("settings_about_app", None), ("settings_about_server", None), ("settings_about_update", Some("settings_about_update_desc"))]),
     (Page::Accounts, &[("accounts_subscriptions", Some("accounts_menu_note")), ("accounts_models", None),
         ("accounts_others", Some("accounts_others_empty")), ("accounts_density", None), ("accounts_refresh", None)]),
+    (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help"))]),
 ];
 
 /// Um resultado da busca: a linha de uma página, ou a própria página (`row: None`) quando ela ainda não tem linhas.
@@ -449,6 +450,7 @@ impl Hangar {
             Page::Diary => self.render_diary(cx),
             Page::About => self.render_about(cx),
             Page::Accounts => self.render_accounts(cx),
+            Page::Shortcuts => self.render_shortcuts_page(cx),
             _ => self.render_page_soon(page, cx),
         };
         let content = div().id("settings-content").flex_1().min_w_0().h_full().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
