@@ -1,22 +1,43 @@
 //! Configuração do servidor pelo app: as páginas Notificações, Anexos e Avançado editam UM rascunho, e o
 //! Salvar do rodapé grava tudo o que foi mexido nelas num só `POST /api/config`. Porta de `serverConfig.svelte.ts`,
 //! `ServerSettings.svelte` e `LinhaConfig.svelte`. As horas silenciosas têm leitura e Salvar próprios (`PushQuiet.svelte`),
-//! fora do rascunho: são gravadas no servidor e silenciam o push que chega no celular.
+//! fora do rascunho: são gravadas no servidor e silenciam o push que chega no celular. A Voz usa o mesmo rascunho.
 use super::*;
 use super::device::Remote;
-use super::settings::{settings_box, Page};
-use gpui_kit::component::{switch::Switch, tooltip::Tooltip};
+use super::settings::{segments_with_hints, settings_box, Page};
+use gpui_kit::base::AccordionTrigger;
+use gpui_kit::component::{select::{Select, SelectEvent, SelectState}, searchable_list::SearchableListItem, switch::Switch, tooltip::Tooltip};
 use serde_json::Map;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind { Toggle, Number(&'static str), Text,
     /// Entra mas não sai: o servidor devolve só a máscara, e o campo nunca a recebe — tocado, ela voltaria como chave.
-    Secret }
+    Secret,
+    /// Lista fechada (`escolha` do web): os valores e o rótulo do vazio, que é o "padrão".
+    Choice(&'static [&'static str], &'static str) }
+
+/// Opção de um campo `Choice`; o rótulo é lido a cada desenho, para seguir a troca de idioma.
+#[derive(Clone)]
+struct Choice { value: &'static str, empty: &'static str }
+
+impl SearchableListItem for Choice {
+    type Value = &'static str;
+    fn title(&self) -> SharedString { if self.value.is_empty() { tr(self.empty).into() } else { self.value.into() } }
+    fn value(&self) -> &&'static str { &self.value }
+}
+
+type Picker = Entity<SelectState<Vec<Choice>>>;
+
+/// Estilos do ditado, na ordem do web (`estilosDitado`).
+const STYLES: [&str; 3] = ["limpar", "prosa", "briefing"];
+/// Campos de cada seção que abre e fecha na Voz: outro serviço de transcrição, outro para organizar, o do briefing.
+const SECTIONS: [&[&str]; 3] = [&["transcription_base_url", "transcription_model"],
+    &["llm_base_url", "llm_api_key", "llm_model", "llm_reasoning_effort"], &["llm_briefing_base_url", "llm_briefing_api_key", "llm_briefing_model"]];
 
 struct Field { key: &'static str, label: &'static str, help: &'static str, icon: IconName, kind: Kind, page: Page }
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
-const FIELDS: [Field; 15] = [
+const FIELDS: [Field; 26] = [
     Field { key: "upload_retention_days", label: "server_keep_attachments", help: "server_keep_attachments_help", icon: IconName::Paperclip,
         kind: Kind::Number("server_days"), page: Page::Attachments },
     Field { key: "notify_finished", label: "server_notify_finished", help: "server_notify_finished_help", icon: IconName::CircleCheck,
@@ -42,10 +63,32 @@ const FIELDS: [Field; 15] = [
     Field { key: "jev_texto_modelo", label: "server_jev_model", help: "server_jev_model_help", icon: IconName::Bot, kind: Kind::Text, page: Page::Advanced },
     Field { key: "jev_texto_cmd", label: "server_jev_cmd", help: "server_jev_cmd_help", icon: IconName::SquareTerminal, kind: Kind::Text,
         page: Page::Advanced },
+    // Voz, na ordem do `VozSettings.svelte`; a página as distribui pelas seções dela.
+    Field { key: "groq_api_key", label: "voice_groq", help: "voice_groq_help", icon: IconName::Key, kind: Kind::Secret, page: Page::Voice },
+    Field { key: "transcription_base_url", label: "voice_transcription_endpoint", help: "voice_transcription_endpoint_help", icon: IconName::Globe,
+        kind: Kind::Text, page: Page::Voice },
+    Field { key: "transcription_model", label: "voice_transcription_model", help: "voice_transcription_model_help", icon: IconName::Bot,
+        kind: Kind::Text, page: Page::Voice },
+    Field { key: "ditado_vocabulario", label: "voice_vocabulary", help: "voice_vocabulary_help", icon: IconName::BookOpen, kind: Kind::Text,
+        page: Page::Voice },
+    Field { key: "llm_base_url", label: "voice_llm_endpoint", help: "voice_llm_endpoint_help", icon: IconName::Globe, kind: Kind::Text, page: Page::Voice },
+    Field { key: "llm_api_key", label: "voice_llm_key", help: "voice_llm_key_help", icon: IconName::Key, kind: Kind::Secret, page: Page::Voice },
+    Field { key: "llm_model", label: "voice_llm_model", help: "voice_llm_model_help", icon: IconName::Bot, kind: Kind::Text, page: Page::Voice },
+    Field { key: "llm_reasoning_effort", label: "voice_llm_effort", help: "voice_llm_effort_help", icon: IconName::SlidersHorizontal,
+        kind: Kind::Choice(&["", "none", "low", "medium", "high"], "voice_llm_effort_default"), page: Page::Voice },
+    Field { key: "llm_briefing_base_url", label: "voice_briefing_endpoint", help: "voice_briefing_endpoint_help", icon: IconName::Globe,
+        kind: Kind::Text, page: Page::Voice },
+    Field { key: "llm_briefing_api_key", label: "voice_briefing_key", help: "voice_briefing_key_help", icon: IconName::Key, kind: Kind::Secret,
+        page: Page::Voice },
+    Field { key: "llm_briefing_model", label: "voice_briefing_model", help: "voice_briefing_model_help", icon: IconName::Bot, kind: Kind::Text,
+        page: Page::Voice },
 ];
 
-/// Veredito com o "por quê?" que expande: só Automações tem, como no web.
-const VERDICTS: [(&str, &str, &str); 1] = [("automations", "server_recommended_on", "server_automations_why")];
+fn field(key: &str) -> &'static Field { FIELDS.iter().find(|f| f.key == key).expect("campo declarado em FIELDS") }
+
+/// Veredito com o "por quê?" que expande, como no web: Automações e o raciocínio da organização.
+const VERDICTS: [(&str, &str, &str); 2] = [("automations", "server_recommended_on", "server_automations_why"),
+    ("llm_reasoning_effort", "voice_llm_effort_verdict", "voice_llm_effort_why")];
 
 /// Do bloco só leitura, o que Máquinas já mostra não se repete aqui.
 const READ_IN_MACHINES: [&str; 5] = ["port", "lan_bind_ip", "server_id", "public_url", "terminal_origem_ok"];
@@ -74,6 +117,8 @@ mod draft {
             true
         }
         pub(super) fn get(&self, key: &str) -> Option<&Value> { self.0.get(key) }
+        /// "Desfazer": a chave sai do rascunho e a tela volta ao valor do servidor.
+        pub(super) fn unstage(&mut self, key: &str) { self.0.remove(key); }
         pub(super) fn contains_key(&self, key: &str) -> bool { self.0.contains_key(key) }
         pub(super) fn is_empty(&self) -> bool { self.0.is_empty() }
         pub(super) fn snapshot(&self) -> Map<String, Value> { self.0.clone() }
@@ -87,7 +132,7 @@ mod draft {
 }
 
 /// Páginas que leem e gravam o rascunho do servidor.
-pub(super) fn is_server_page(page: Page) -> bool { matches!(page, Page::Notifications | Page::Attachments | Page::Advanced) }
+pub(super) fn is_server_page(page: Page) -> bool { matches!(page, Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced) }
 
 #[derive(Default)]
 pub(in crate::app) struct ServerConfig {
@@ -110,7 +155,15 @@ pub(in crate::app) struct ServerConfig {
     /// Diálogo de pasta do sistema aberto: dois ao mesmo tempo voltariam fora de ordem.
     picking: bool,
     pick_error: Option<String>,
-    why: bool,
+    choices: Vec<(&'static str, Picker)>,
+    /// Chaves com o "por quê?" aberto.
+    why: Vec<&'static str>,
+    /// Seções da Voz abertas (`SECTIONS`). A primeira leitura boa abre as que já têm valor, uma vez: um Salvar depois
+    /// não reabre o que a pessoa fechou.
+    open: [bool; 3],
+    opened_by_read: bool,
+    /// Foco dos três disparadores de seção.
+    section_focus: Vec<FocusHandle>,
     quiet: Quiet,
     /// Servidor e chave do rascunho: trocar qualquer um dos dois é outro dono, e o rascunho não passa para ele.
     owner: String,
@@ -200,6 +253,53 @@ impl ServerConfig {
     /// A única porta de escrita no rascunho: devolve `false` quando a chave não veio da última leitura boa.
     fn stage(&mut self, key: &str, value: Value) -> bool { self.draft.stage(&self.fields, key, value) }
 
+    /// "Remover" do web: `null` no rascunho apaga o override no Salvar, e o campo volta ao valor do ambiente.
+    fn removing(&self, key: &str) -> bool { self.draft.get(key) == Some(&Value::Null) }
+
+    fn filled(&self, key: &str) -> bool { !text_of(&self.current(key)).trim().is_empty() }
+
+    /// Chave guardada no servidor e que não sai no próximo Salvar.
+    fn key_set(&self, key: &str) -> bool { self.secret_mask(key).is_some() && !self.removing(key) }
+
+    /// Estado da transcrição, `None` desativada. Contra o rascunho, sem esperar o Salvar, como o web.
+    fn transcribe_status(&self) -> Option<&'static str> {
+        self.key_set("groq_api_key").then(|| if self.filled("transcription_base_url") { "voice_status_custom" } else { "voice_status_on" })
+    }
+
+    /// Estado da organização: com endpoint próprio vale a chave dele; sem, o padrão reusa a da transcrição padrão.
+    fn cleanup_status(&self) -> Option<&'static str> {
+        if self.filled("llm_base_url") { return self.key_set("llm_api_key").then_some("voice_status_custom"); }
+        (self.transcribe_status() == Some("voice_status_on")).then_some("voice_status_default")
+    }
+
+    /// A lista mostra o valor atual; valor que ela não conhece fica sem escolha, em vez de parecer o padrão.
+    fn show_choice(&self, key: &str, picker: &Picker, window: &mut Window, cx: &mut App) {
+        let current = text_of(&self.current(key));
+        let Kind::Choice(values, _) = field(key).kind else { return };
+        let known = values.iter().find(|v| **v == current).copied();
+        picker.update(cx, |state, cx| match known {
+            Some(value) => state.set_selected_value(&value, window, cx),
+            None => state.set_selected_index(None, window, cx),
+        });
+    }
+
+    /// Abre as seções que já têm valor; só abre, nunca fecha.
+    fn open_filled(&mut self) {
+        if self.opened_by_read || self.fields.is_empty() { return; }
+        self.opened_by_read = true;
+        for n in 0..3 { self.open[n] |= SECTIONS[n].iter().any(|k| self.filled(k)); }
+        self.open[1] |= self.open[2];
+    }
+
+    /// A busca levou a uma linha de seção fechada: abre o caminho até ela.
+    pub(super) fn reveal(&mut self, label: &str) {
+        let Some(key) = FIELDS.iter().find(|f| f.label == label).map(|f| f.key) else { return };
+        if let Some(n) = SECTIONS.iter().position(|keys| keys.contains(&key)) {
+            self.open[n] = true;
+            if n == 2 { self.open[1] = true; }
+        }
+    }
+
     /// Resposta da gravação: sai do rascunho só a chave cujo valor ainda é o enviado — o que foi mexido durante o
     /// salvar continua lá e vai no próximo.
     fn settle(&mut self, sent: &Map<String, Value>) {
@@ -209,6 +309,11 @@ impl ServerConfig {
 
 fn chip(text: String, color: Hsla, bg: Hsla) -> Div {
     div().px(px(6.)).rounded_full().bg(bg).text_size(px(10.5)).font_weight(FontWeight::BOLD).text_color(color).child(text)
+}
+
+fn icon_box(icon: IconName) -> Div {
+    div().size(px(36.)).flex_shrink_0().rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::inset())
+        .flex().items_center().justify_center().child(chrome::small_icon(icon, 16., theme::muted()))
 }
 
 fn text_of(value: &Value) -> String {
@@ -323,6 +428,7 @@ impl Hangar {
                     if let Value::Object(read) = config["somente_leitura"].take() { s.read = read; }
                     // Ausente num servidor mais antigo: o bloco some.
                     if let Value::Array(env) = config["variaveis_env"].take() { s.env = env; }
+                    s.open_filled();
                     self.fill_config_inputs(window, cx);
                 }
             }
@@ -393,7 +499,7 @@ impl Hangar {
     /// Campos de texto com o valor atual. Criados na primeira leitura; nas seguintes só o que não está no rascunho muda.
     fn fill_config_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.server_config.inputs.is_empty() {
-            for field in FIELDS.iter().filter(|f| f.kind != Kind::Toggle) {
+            for field in FIELDS.iter().filter(|f| matches!(f.kind, Kind::Number(_) | Kind::Text | Kind::Secret)) {
                 let (key, kind) = (field.key, field.kind);
                 let input = cx.new(|cx| match kind {
                     // Como o `type="number" min="0"` do web: só dígitos entram.
@@ -419,10 +525,23 @@ impl Hangar {
             });
             self.server_config._subscriptions.push(sub);
             self.server_config.root = Some(root);
+            for field in FIELDS.iter() {
+                let (key, Kind::Choice(values, empty)) = (field.key, field.kind) else { continue };
+                let items = values.iter().map(|&value| Choice { value, empty }).collect::<Vec<_>>();
+                let picker = cx.new(|cx| SelectState::new(items, None, window, cx));
+                let sub = cx.subscribe_in(&picker, window, move |this: &mut Hangar, _, event: &SelectEvent<Vec<Choice>>, _, cx| {
+                    let SelectEvent::Confirm(Some(value)) = event else { return };
+                    this.server_config.stage(key, Value::String((*value).to_owned()));
+                    cx.notify();
+                });
+                self.server_config._subscriptions.push(sub);
+                self.server_config.choices.push((key, picker));
+            }
+            self.server_config.section_focus = (0..SECTIONS.len()).map(|_| cx.focus_handle().tab_stop(true)).collect();
         }
         let s = &self.server_config;
         for (key, input) in &s.inputs {
-            let kind = FIELDS.iter().find(|f| f.key == *key).map_or(Kind::Text, |f| f.kind);
+            let kind = field(key).kind;
             if kind == Kind::Secret {
                 let hint = tr(if s.secret_mask(key).is_some() { "server_secret_paste_new" } else { "server_secret_paste" });
                 input.update(cx, |state, cx| state.set_placeholder(hint, window, cx));
@@ -431,6 +550,25 @@ impl Hangar {
             let value = s.input_text(key, kind);
             input.update(cx, |state, cx| if state.value() != value.as_str() { state.set_value(value, window, cx) });
         }
+        for (key, picker) in &s.choices {
+            if s.draft.contains_key(*key) { continue; }
+            s.show_choice(key, picker, window, cx);
+        }
+    }
+
+    /// "Remover": o campo fica vazio (a lista volta ao "padrão") até o Salvar apagar o override, ou até o Desfazer.
+    fn remove_config(&mut self, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        let s = &mut self.server_config;
+        if !s.stage(key, Value::Null) { return; }
+        if let Some((_, input)) = s.inputs.iter().find(|(k, _)| *k == key) { input.update(cx, |state, cx| state.set_value("", window, cx)); }
+        if let Some((_, picker)) = s.choices.iter().find(|(k, _)| *k == key) { s.show_choice(key, picker, window, cx); }
+        cx.notify();
+    }
+
+    fn undo_config(&mut self, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        self.server_config.draft.unstage(key);
+        self.fill_config_inputs(window, cx);
+        cx.notify();
     }
 
     /// Só quem adicionou limpa o campo: digitar uma pasta que já está na lista não apaga o que foi escrito.
@@ -505,6 +643,8 @@ impl Hangar {
                 .child(div().text_sm().text_color(theme::danger()).whitespace_normal().child(error.clone()))
                 .child(Button::new("server-config-retry").outline().small().label(tr("server_retry"))
                     .on_click(cx.listener(|this, _, _, cx| this.load_server_config(cx))))
+        } else if page == Page::Voice {
+            self.render_voice(cx)
         } else {
             let rows = FIELDS.iter().filter(|f| f.page == page).map(|f| self.config_row(f, cx)).collect::<Vec<_>>();
             div().mt(px(24.)).child(settings_box().children(rows))
@@ -519,7 +659,8 @@ impl Hangar {
     fn config_badges(&self, key: &str) -> Div {
         div().flex().items_center().gap(px(6.))
             .child(chip(tr("server_scope"), theme::muted(), theme::raised()))
-            .when(self.server_config.edited_in_app(key), |el| el.child(chip(tr("server_edited"), theme::accent_text(), theme::accent_dim())))
+            .when(self.server_config.edited_in_app(key) && !self.server_config.removing(key),
+                |el| el.child(chip(tr("server_edited"), theme::accent_text(), theme::accent_dim())))
     }
 
     /// A linha de cada campo, no desenho do `row` das outras páginas, com as etiquetas ao lado do título.
@@ -527,44 +668,67 @@ impl Hangar {
         let s = &self.server_config;
         let key = field.key;
         let input = s.inputs.iter().find(|(k, _)| *k == key).map(|(_, i)| i.clone());
+        // Campo que a leitura não trouxe (servidor mais antigo) fica desligado: o `stage` recusaria, e o controle mostraria
+        // uma escolha que o Salvar não leva.
+        let off = !s.fields.contains_key(key);
         // Liga e número à direita; texto e segredo descem para baixo da ajuda, na largura da coluna: endereço e comando
         // não cabem num campo estreito ao lado.
         let control = match field.kind {
             Kind::Toggle => Some(Switch::new(SharedString::from(format!("server-{key}"))).checked(s.current(key) == Value::Bool(true))
-                .accessibility_label(tr(field.label))
+                .accessibility_label(tr(field.label)).disabled(off)
                 .on_click(cx.listener(move |this, on: &bool, _, cx| this.set_config_toggle(key, *on, cx))).into_any_element()),
             Kind::Number(suffix) => Some(div().flex().items_center().gap(px(8.))
-                .children(input.clone().map(|i| div().w(px(96.)).child(Input::new(&i).small().aria_label(tr(field.label)))))
+                .children(input.clone().map(|i| div().w(px(96.)).child(Input::new(&i).small().disabled(off).aria_label(tr(field.label)))))
                 .child(div().text_size(px(13.)).text_color(theme::muted()).child(tr(suffix)))
                 .into_any_element()),
+            Kind::Choice(..) => s.choices.iter().find(|(k, _)| *k == key).map(|(_, picker)| div().w(px(200.))
+                .child(Select::new(picker).small().disabled(off).accessibility_label(tr(field.label))).into_any_element()),
             Kind::Text | Kind::Secret => None,
         };
+        let removing = s.removing(key);
         let below = matches!(field.kind, Kind::Text | Kind::Secret).then_some(input).flatten().map(|i| {
-            let mask = (field.kind == Kind::Secret).then(|| s.secret_mask(key)).flatten();
+            let mask = (field.kind == Kind::Secret && !removing).then(|| s.secret_mask(key)).flatten();
             div().mt(px(8.)).flex().items_center().gap(px(10.))
-                .child(div().flex_1().min_w_0().child(Input::new(&i).small().aria_label(tr(field.label))))
+                .child(div().flex_1().min_w_0().child(Input::new(&i).small().disabled(off).aria_label(tr(field.label))))
                 .children(mask.map(|mask| div().id(SharedString::from(format!("server-{key}-mask"))).flex_shrink_0().flex().items_center().gap(px(6.))
                     .text_size(px(12.5)).text_color(theme::muted())
                     .child(div().font_family(theme::MONO).child(mask)).child(tr("server_secret_set"))
                     .tooltip(|window, cx| Tooltip::new(tr("server_secret_no_return")).build(window, cx))))
         });
+        let open = s.why.contains(&key);
         let verdict = VERDICTS.iter().find(|(k, ..)| *k == key).map(|&(_, verdict, why)| div().flex().flex_col().gap(px(6.))
             .child(div().flex().items_center().gap(px(6.)).text_size(px(13.))
                 .child(div().text_color(theme::muted()).child(tr(verdict)))
                 .child(Button::new(SharedString::from(format!("server-{key}-why"))).ghost().xsmall().label(tr("accounts_engine_why"))
-                    .icon(if s.why { IconName::ChevronUp } else { IconName::ChevronDown })
-                    .on_click(cx.listener(|this, _, _, cx| { this.server_config.why = !this.server_config.why; cx.notify(); }))))
-            .when(s.why, |el| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr(why)))));
+                    .icon(if open { IconName::ChevronUp } else { IconName::ChevronDown })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let why = &mut this.server_config.why;
+                        if let Some(n) = why.iter().position(|k| *k == key) { why.remove(n); } else { why.push(key); }
+                        cx.notify();
+                    }))))
+            .when(open, |el| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr(why)))));
+        // "Remover"/"Desfazer" do `removivel` do web: só na Voz, e só com valor gravado pelo app.
+        let removal = (field.page == Page::Voice).then(|| if removing {
+            Some(div().id(SharedString::from(format!("server-{key}-removing"))).role(Role::Status).flex().items_center().gap(px(8.))
+                .text_size(px(12.5)).text_color(theme::warning()).child(tr("server_remove_on_save"))
+                .child(Button::new(SharedString::from(format!("server-{key}-undo"))).ghost().xsmall().label(tr("server_undo"))
+                    .on_click(cx.listener(move |this, _, window, cx| this.undo_config(key, window, cx))))
+                .into_any_element())
+        } else if s.edited_in_app(key) {
+            Some(div().flex().child(Button::new(SharedString::from(format!("server-{key}-remove"))).ghost().xsmall().label(tr("server_remove"))
+                .text_color(theme::danger()).accessibility_label(tr("server_root_remove").replace("{p}", &tr(field.label)))
+                .on_click(cx.listener(move |this, _, window, cx| this.remove_config(key, window, cx))))
+                .into_any_element())
+        } else { None }).flatten();
         // Com o campo embaixo a linha fica alta: o ícone sobe para junto do título em vez de flutuar no meio dela.
-        let tall = below.is_some();
+        let tall = below.is_some() || removal.is_some();
         let head = div().flex_1().min_w_0().flex().gap(px(14.)).map(|el| if tall { el.items_start() } else { el.items_center() })
-            .child(div().size(px(36.)).flex_shrink_0().rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::inset())
-                .flex().items_center().justify_center().child(chrome::small_icon(field.icon, 16., theme::muted())))
+            .child(icon_box(field.icon))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
                 .child(div().flex().flex_wrap().items_center().gap(px(8.))
                     .child(div().font_weight(FontWeight::MEDIUM).child(tr(field.label))).child(self.config_badges(key)))
                 .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr(field.help)))
-                .children(verdict).children(below));
+                .children(verdict).children(below).children(removal));
         let row = div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().items_center().gap(px(14.)).px_4().py(px(14.))
             .child(head).children(control.map(|c| div().flex_shrink_0().child(c)));
         self.mark(row, field.label)
@@ -647,6 +811,99 @@ impl Hangar {
         let chips = chip(tr("server_env_scope"), theme::muted(), theme::raised());
         Some(div().child(self.block_head("server_env", "server_env_help", div().child(chips)))
             .child(settings_box().id("server-env-list").role(Role::DescriptionList).aria_label(tr("server_env")).children(rows)))
+    }
+
+    /// Voz (`VozSettings.svelte`), na ordem do caminho do áudio: transcrever, o que vem depois, organizar o texto.
+    fn render_voice(&self, cx: &mut Context<Self>) -> Div {
+        let s = &self.server_config;
+        let rows = |keys: &[&str], cx: &mut Context<Self>| settings_box().children(keys.iter().map(|k| self.config_row(field(k), cx)).collect::<Vec<_>>());
+        let transcribe = s.transcribe_status();
+        div()
+            .child(self.voice_head("voice_transcribe", "voice_transcribe_help", transcribe))
+            .when(transcribe.is_none(), |el| el.child(div().mb(px(10.)).text_sm().text_color(theme::muted()).whitespace_normal()
+                .child(tr("voice_transcribe_no_key"))))
+            .child(rows(&["groq_api_key"], cx))
+            .child(div().mt(px(8.)).flex().flex_wrap().items_center().gap(px(12.))
+                .child(Button::new("voice-create-key").link().small().icon(IconName::ExternalLink).label(tr("voice_create_key"))
+                    .on_click(|_, _, cx| cx.open_url("https://console.groq.com/keys")))
+                .child(self.section_toggle(0, "voice_transcribe_other", cx)))
+            .when(s.open[0], |el| el.child(div().mt(px(8.)).child(rows(SECTIONS[0], cx))))
+            .child(div().mt(px(28.)).mb(px(10.)).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(tr("voice_after")))
+            .child(settings_box().child(self.hands_free_row()).child(self.style_row(cx)).child(self.config_row(field("ditado_vocabulario"), cx)))
+            .child(self.voice_head("voice_cleanup", "voice_cleanup_help", s.cleanup_status()))
+            .child(div().flex().child(self.section_toggle(1, "voice_cleanup_other", cx)))
+            .when(s.open[1], |el| el.child(div().mt(px(8.)).child(rows(SECTIONS[1], cx)))
+                .child(div().mt(px(8.)).flex().child(self.section_toggle(2, "voice_briefing_own", cx)))
+                .when(s.open[2], |el| el.child(div().mt(px(8.)).child(rows(SECTIONS[2], cx)))))
+    }
+
+    /// Título de seção da Voz com o estado dela à direita; o texto diz o estado, a cor só reforça.
+    fn voice_head(&self, title: &'static str, help: &'static str, status: Option<&'static str>) -> Div {
+        let pill = match status {
+            Some(key) => chip(tr(key), theme::success(), theme::success().alpha(0.14)),
+            None => chip(tr("voice_status_off"), theme::muted(), theme::raised()),
+        };
+        div().mt(px(28.)).mb(px(10.)).flex().items_start().gap(px(16.))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(4.))
+                .child(self.mark(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(tr(title)), title))
+                .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr(help))))
+            .child(div().flex_shrink_0().child(pill))
+    }
+
+    /// Abre e fecha uma seção de `SECTIONS`, como o `<details>` do web: o `AccordionTrigger` do kit anuncia aberto/fechado
+    /// (o `Button` não expõe esse estado), e o foco próprio o põe na ordem do Tab com Enter e Espaço.
+    fn section_toggle(&self, n: usize, label: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.server_config.open[n];
+        let this = cx.entity().downgrade();
+        AccordionTrigger::new(SharedString::from(format!("voice-section-{n}"))).open(open)
+            .when_some(self.server_config.section_focus.get(n), |el, focus| el.track_focus(focus))
+            .flex().items_center().gap(px(6.)).h(px(28.)).px(px(8.)).rounded(px(6.)).border_1().border_color(transparent_black())
+            .text_sm().font_weight(FontWeight::MEDIUM).text_color(theme::text()).cursor_pointer()
+            .hover(|el| el.bg(theme::hover())).focus_visible(|el| el.border_color(theme::accent_focus()))
+            .child(chrome::small_icon(if open { IconName::ChevronUp } else { IconName::ChevronDown }, 14., theme::muted()))
+            .child(tr(label))
+            .on_change(move |open, _, _, cx| { let _ = this.update(cx, |this, cx| { this.server_config.open[n] = open; cx.notify(); }); })
+            .into_any_element()
+    }
+
+    /// Mãos-livres é do aparelho (localStorage no web), e o app ainda não dita: aparece desligado, dizendo por quê.
+    fn hands_free_row(&self) -> Div {
+        let switch = div().id("voice-hands-free").child(Switch::new("voice-hands-free-switch").checked(false).disabled(true)
+            .accessibility_label(tr("voice_hands_free")))
+            .tooltip(|window, cx| Tooltip::new(tr("settings_next_version")).build(window, cx));
+        // As etiquetas no lugar do "Este servidor" das vizinhas: onde vale e por que está desligado.
+        let head = div().flex_1().min_w_0().flex().items_center().gap(px(14.))
+            .child(icon_box(IconName::Mic))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                .child(div().flex().flex_wrap().items_center().gap(px(8.))
+                    .child(div().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(tr("voice_hands_free")))
+                    .child(chip(tr("settings_group_device"), theme::muted(), theme::raised()))
+                    .child(chip(tr("settings_next_version").trim_end_matches('.').to_owned(), theme::muted(), theme::raised())))
+                .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr("voice_hands_free_help"))));
+        let row = div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().items_center().gap(px(14.)).px_4().py(px(14.))
+            .child(head).child(div().flex_shrink_0().child(switch));
+        self.mark(row, "voice_hands_free")
+    }
+
+    /// Estilo do ditado: grava pelo rascunho, no Salvar do rodapé (o web grava no clique). Cada opção explica a si mesma no
+    /// tooltip e no nome acessível, como o `SegmentedPicker` do web.
+    fn style_row(&self, cx: &mut Context<Self>) -> Div {
+        let s = &self.server_config;
+        let current = text_of(&s.current("ditado_estilo"));
+        let selected = STYLES.iter().position(|v| *v == current).unwrap_or(usize::MAX);
+        let labels = STYLES.map(|v| tr(&format!("voice_style_{v}"))).to_vec();
+        let hints = STYLES.map(|v| tr(&format!("voice_style_{v}_hint"))).to_vec();
+        let available = if s.fields.contains_key("ditado_estilo") { STYLES.len() } else { 0 };
+        let control = segments_with_hints("voice-style", &labels, &hints, selected, available, false, tr("settings_next_version"),
+            |this, n, _, cx| { this.server_config.stage("ditado_estilo", Value::String(STYLES[n].to_owned())); cx.notify(); }, cx);
+        let head = div().flex_1().min_w_0().flex().items_start().gap(px(14.))
+            .child(icon_box(IconName::Type))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                .child(div().flex().flex_wrap().items_center().gap(px(8.))
+                    .child(div().font_weight(FontWeight::MEDIUM).child(tr("voice_style"))).child(chip(tr("server_scope"), theme::muted(), theme::raised())))
+                .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr("voice_style_help")))
+                .child(div().mt(px(8.)).flex().child(control)));
+        self.mark(div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex().px_4().py(px(14.)).child(head), "voice_style")
     }
 
     fn render_quiet(&self, cx: &mut Context<Self>) -> Div {
@@ -802,6 +1059,51 @@ mod tests {
         s.settle(&sent);
         assert_eq!(s.draft.get("stall_seconds"), Some(&json!("700")));
         assert!(!s.draft.contains_key("notify_dead"));
+    }
+
+    #[test]
+    fn remove_goes_as_null_and_undo_brings_the_server_value_back() {
+        let mut s = ServerConfig::default();
+        assert!(!s.stage("groq_api_key", Value::Null), "sem leitura não há o que remover");
+        s.fields.insert("groq_api_key".into(), json!({"valor": "sint••••••••wxyz", "definido": true, "origem": "app"}));
+        assert!(s.transcribe_status().is_some());
+        assert!(s.stage("groq_api_key", Value::Null));
+        assert!(s.removing("groq_api_key") && s.draft.snapshot()["groq_api_key"].is_null(), "o Salvar manda null");
+        assert_eq!(s.transcribe_status(), None, "a seção já diz desativada antes do Salvar, como o web");
+        s.draft.unstage("groq_api_key");
+        assert!(!s.removing("groq_api_key") && s.draft.is_empty());
+        assert_eq!(s.transcribe_status(), Some("voice_status_on"));
+    }
+
+    #[test]
+    fn voice_statuses_follow_the_web() {
+        let mut s = ServerConfig::default();
+        for key in ["groq_api_key", "llm_api_key"] { s.fields.insert(key.into(), json!({"valor": "", "definido": false})); }
+        for key in ["transcription_base_url", "llm_base_url"] { s.fields.insert(key.into(), json!({"valor": ""})); }
+        assert_eq!((s.transcribe_status(), s.cleanup_status()), (None, None));
+        s.fields.insert("groq_api_key".into(), json!({"valor": "sint••••••••wxyz", "definido": true}));
+        assert_eq!((s.transcribe_status(), s.cleanup_status()), (Some("voice_status_on"), Some("voice_status_default")));
+        s.stage("transcription_base_url", json!("http://x/v1"));
+        assert_eq!((s.transcribe_status(), s.cleanup_status()), (Some("voice_status_custom"), None), "o padrão só reusa a chave do padrão");
+        s.stage("llm_base_url", json!("http://y/v1"));
+        assert_eq!(s.cleanup_status(), None, "endpoint próprio sem chave própria");
+        s.fields.insert("llm_api_key".into(), json!({"valor": "sint••••••••abcd", "definido": true}));
+        assert_eq!(s.cleanup_status(), Some("voice_status_custom"));
+    }
+
+    #[test]
+    fn sections_open_once_from_the_read_and_for_the_search() {
+        let mut s = ServerConfig::default();
+        s.fields.insert("llm_briefing_model".into(), json!({"valor": "modelo-sintetico"}));
+        s.open_filled();
+        assert_eq!(s.open, [false, true, true], "o briefing abre junto com a seção que o contém");
+        s.open = [false; 3];
+        s.open_filled();
+        assert_eq!(s.open, [false; 3], "leitura seguinte não reabre o que foi fechado");
+        s.reveal("voice_transcription_model");
+        assert_eq!(s.open, [true, false, false]);
+        s.reveal("voice_style");
+        assert_eq!(s.open, [true, false, false], "linha fora de seção não mexe em nada");
     }
 
     #[test]

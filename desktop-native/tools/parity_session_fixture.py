@@ -19,6 +19,7 @@ muda a config de atalhos (Task 12 R6): POST /api/config {"shortcuts"} grava na m
 GET /control/r7?load=<ok|500|drop>&load_delay=<s>&save=<ok|422|500|drop>&save_delay=<s>&quiet_load=<ok|500>&quiet_save=<ok|422|500>
 &quiet_delay=<s>&quiet=<HH:MM-HH:MM|> muda os campos de Notificações/Anexos e as horas silenciosas (Task 12 R7a);
 env=<fixture|none> tira as variáveis do .env da leitura, como um servidor antigo (R7b).
+Voz (R8a) usa as mesmas rotas e modos da R7; null num campo apaga o override e ele volta ao valor do ambiente.
 """
 
 import parity_accounts_fixture as accounts
@@ -96,16 +97,25 @@ R6 = {"shortcuts": SHORTCUTS, "load": "ok", "load_delay": 0.0, "save": "ok", "sa
 R7_TYPES = {"notify_finished": bool, "finish_min_seconds": int, "notify_dead": bool, "stall_seconds": int, "upload_retention_days": int,
             "automations": bool, "mostrar_pensamento": bool, "traduzir_pensamento": bool, "editor": str, "jev_api_key": str,
             "jev_padrao": bool, "jev_texto_base_url": str, "jev_texto_api_key": str, "jev_texto_modelo": str, "jev_texto_cmd": str,
-            "scan_roots": str}
+            "scan_roots": str,
+            # Task 12 R8a: Voz (transcrever, estilo e palavras do ditado, organizar o texto).
+            "groq_api_key": str, "transcription_base_url": str, "transcription_model": str, "ditado_vocabulario": str,
+            "ditado_estilo": str, "llm_base_url": str, "llm_api_key": str, "llm_model": str, "llm_reasoning_effort": str,
+            "llm_briefing_base_url": str, "llm_briefing_api_key": str, "llm_briefing_model": str}
 # Segredo volta mascarado, como runtime_config.mascarar; a chave sintética daqui nunca vai para registro nem tela.
-R7_SECRETS = {"jev_api_key", "jev_texto_api_key"}
+R7_SECRETS = {"jev_api_key", "jev_texto_api_key", "groq_api_key", "llm_api_key", "llm_briefing_api_key"}
 R7 = {"values": {"notify_finished": True, "finish_min_seconds": 60, "notify_dead": True, "stall_seconds": 900, "upload_retention_days": 30,
                  "automations": True, "mostrar_pensamento": False, "traduzir_pensamento": True, "editor": "code", "jev_api_key": "",
                  "jev_padrao": False, "jev_texto_base_url": "", "jev_texto_api_key": "sintetica-fixture-0000abcd", "jev_texto_modelo": "",
-                 "jev_texto_cmd": "", "scan_roots": "/synthetic/projetos,/synthetic/pessoal/um-caminho-bem-comprido/que-nao-cabe-inteiro/na-linha"},
-      "edited": {"stall_seconds", "scan_roots"}, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0,
+                 "jev_texto_cmd": "", "scan_roots": "/synthetic/projetos,/synthetic/pessoal/um-caminho-bem-comprido/que-nao-cabe-inteiro/na-linha",
+                 "groq_api_key": "sintetica-fixture-voz-0000wxyz", "transcription_base_url": "", "transcription_model": "",
+                 "ditado_vocabulario": "Hangar, tmux, Zeron", "ditado_estilo": "prosa", "llm_base_url": "", "llm_api_key": "",
+                 "llm_model": "", "llm_reasoning_effort": "", "llm_briefing_base_url": "", "llm_briefing_api_key": "", "llm_briefing_model": ""},
+      "edited": {"stall_seconds", "scan_roots", "groq_api_key", "ditado_vocabulario"}, "load": "ok", "load_delay": 0.0, "save": "ok", "save_delay": 0.0,
       "quiet": {"start": "22:00", "end": "07:00"}, "quiet_load": "ok", "quiet_save": "ok", "quiet_delay": 0.0, "env": "fixture"}
 # Avançado: o bloco só leitura (os 5 primeiros são de Máquinas e a tela não repete) e as variáveis do .env, no formato do backend.
+# Valor do ambiente de cada campo: o que volta quando o override é removido (POST com null, como patch_config).
+R7_ENV_VALUES = {"stall_seconds": 900, "scan_roots": "/synthetic/projetos", "ditado_estilo": "prosa"}
 R7_READ = {"port": 8765, "lan_bind_ip": "127.0.0.1", "server_id": "fixture", "public_url": "", "terminal_origem_ok": True,
            "terminal_panel": True, "traducao_pensamento": False, "versao": "2026.09.24-sintetico"}
 R7_ENV = [
@@ -685,10 +695,16 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             mode, delay = R7["save"], R7["save_delay"]
         time.sleep(delay)
-        changes = {}
+        changes, removed = {}, set()
         for key, value in body.items():
             if key not in R7_TYPES:
                 continue
+            if value is None:
+                removed.add(key)
+                continue
+            if key == "ditado_estilo" and value not in ("limpar", "prosa", "briefing"):
+                self.send_json({"detail": f"ditado_estilo: '{value}' nao existe. Use um de: limpar, prosa, briefing."}, 400)
+                return
             if R7_TYPES[key] is int:
                 try:
                     value = int(str(value).strip())
@@ -717,6 +733,9 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             R7["values"].update(changes)
             R7["edited"].update(changes)
+            for key in removed:
+                R7["values"][key] = R7_ENV_VALUES.get(key, "" if R7_TYPES[key] is str else R7["values"][key])
+                R7["edited"].discard(key)
             fields = r7_fields()
         if mode == "drop":
             self.close_connection = True

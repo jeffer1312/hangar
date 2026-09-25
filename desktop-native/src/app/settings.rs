@@ -56,7 +56,7 @@ const APPEARANCE_ROWS: [(&str, Option<&str>); 27] = [
 ];
 
 /// Linhas das outras páginas prontas, no mesmo formato.
-const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 9] = [
+const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 10] = [
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
@@ -65,6 +65,13 @@ const PAGE_ROWS: [(Page, &[(&str, Option<&str>)]); 9] = [
     (Page::Accounts, &[("accounts_subscriptions", Some("accounts_menu_note")), ("accounts_models", None),
         ("accounts_others", Some("accounts_others_empty")), ("accounts_density", None), ("accounts_refresh", None)]),
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help"))]),
+    (Page::Voice, &[("voice_transcribe", Some("voice_transcribe_help")), ("voice_groq", Some("voice_groq_help")),
+        ("voice_transcription_endpoint", Some("voice_transcription_endpoint_help")), ("voice_transcription_model", Some("voice_transcription_model_help")),
+        ("voice_hands_free", Some("voice_hands_free_help")), ("voice_style", Some("voice_style_help")), ("voice_vocabulary", Some("voice_vocabulary_help")),
+        ("voice_cleanup", Some("voice_cleanup_help")), ("voice_llm_endpoint", Some("voice_llm_endpoint_help")), ("voice_llm_key", Some("voice_llm_key_help")),
+        ("voice_llm_model", Some("voice_llm_model_help")), ("voice_llm_effort", Some("voice_llm_effort_help")),
+        ("voice_briefing_endpoint", Some("voice_briefing_endpoint_help")), ("voice_briefing_key", Some("voice_briefing_key_help")),
+        ("voice_briefing_model", Some("voice_briefing_model_help"))]),
     (Page::Notifications, &[("server_notify_finished", Some("server_notify_finished_help")), ("server_short_turn", Some("server_short_turn_help")),
         ("server_notify_dead", Some("server_notify_dead_help")), ("server_stall", Some("server_stall_help")), ("server_quiet", Some("server_quiet_why"))]),
     (Page::Attachments, &[("server_keep_attachments", Some("server_keep_attachments_help"))]),
@@ -293,7 +300,8 @@ impl Hangar {
         let opened = self.settings != Some(found.page);
         ui.hit = found.row;
         match found.row {
-            Some(_) => ui.reveal.set(true),
+            // Linha dentro de seção fechada da Voz: a seção abre, senão não há o que rolar até ela.
+            Some(row) => { ui.reveal.set(true); self.server_config.reveal(row); }
             None => { ui.reveal.set(false); ui.scroll.set_offset(point(px(0.), px(0.))); }
         }
         self.settings = Some(found.page);
@@ -460,7 +468,7 @@ impl Hangar {
             Page::About => self.render_about(cx),
             Page::Accounts => self.render_accounts(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
-            Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
+            Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             _ => self.render_page_soon(page, cx),
         };
         let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
@@ -890,6 +898,14 @@ fn segmented(id: &'static str, labels: &[String], selected: usize, enabled: bool
 /// `off_note`: a dica das opções além de `available`, dizendo por que estão desligadas.
 pub(super) fn segments(id: &'static str, labels: &[String], selected: usize, available: usize, locked: bool, off_note: String,
     pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>) -> AnyElement {
+    segments_with_hints(id, labels, &[], selected, available, locked, off_note, pick, cx)
+}
+
+/// `hints`: a explicação de cada opção, no tooltip e como nome acessível dela (o `aria` do `SegmentedPicker` do web).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn segments_with_hints(id: &'static str, labels: &[String], hints: &[String], selected: usize, available: usize, locked: bool,
+    off_note: String, pick: impl Fn(&mut Hangar, usize, &mut Window, &mut Context<Hangar>) + Clone + 'static, cx: &mut Context<Hangar>)
+    -> AnyElement {
     let count = labels.len();
     div().flex().rounded(px(6.)).border_1().border_color(theme::border_strong()).overflow_hidden()
         .when(locked, |el| el.opacity(0.6))
@@ -909,6 +925,7 @@ pub(super) fn segments(id: &'static str, labels: &[String], selected: usize, ava
                 .when(n + 1 < count, |el| el.border_r_1().border_color(theme::border_strong()))
                 .disabled(!enabled).label(label.clone())
                 .when(!enabled && available > 0, |el| el.tooltip(off_note.clone()))
+                .when_some(hints.get(n).filter(|_| enabled), |el, hint| el.tooltip(hint.clone()).accessibility_label(hint.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) }))
         }))
         .into_any_element()
