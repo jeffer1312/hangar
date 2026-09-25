@@ -40,7 +40,7 @@
 ## The recipe
 
 ```bash
-BASE=$(git rev-parse HEAD)          # the SAME base for all — record it in the contract
+BASE=$(git rev-parse HEAD)          # HEAD at this release, after the merges — record it per Task
 git worktree add /path/wt-t2 -b <work>-t2 "$BASE"
 git worktree add /path/wt-t3 -b <work>-t3 "$BASE"
 ```
@@ -49,9 +49,9 @@ git worktree add /path/wt-t3 -b <work>-t3 "$BASE"
   carries its worktree's path as the repo, its branch, and `Expected HEAD` = `$BASE`.
 - Each batch executor closes its Task with `orq commit --task <N> --hash <hash> --repo <its
   worktree>`.
-- The contract records the batch: Tasks, `$BASE`, worktree and branch per Task, merge order.
-- The contract also records, with the batch: phase 4's final review over `$BASE..tip`, in a fresh
-  session, is the first place the Tasks meet.
+- The contract records per Task: its `$BASE`, worktree, branch; and the merge order.
+- The contract also records, with the batch: phase 4's final review over the first `$BASE`..tip,
+  in a fresh session, is the first place the Tasks meet.
 
 ## The cost
 

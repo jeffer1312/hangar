@@ -91,8 +91,8 @@ chosen model has a card or a `## What they say` section.
 2. **Each Task carries:**
    - Wave: parallel by default. Tasks passing the four conditions of `paralelo-worktree.md`
      together share a wave; a dependent or colliding Task goes to a later wave (gate items 3, 4).
-   - Size: past ~400 changed lines or 2+ screen proofs → cut into parts Na, Nb…, each its own
-     round and commit, sized for one executor with no session swap.
+   - Size: past ~400 changed lines or 2+ screen proofs → cut into parts, each its own
+     Task number, round, commit, sized for one executor with no session swap.
    - A-priori estimate, one line: expected clock and rounds. Actuals live only in `eventos.jsonl`;
      no second table. 2+ authorized executors → consumption per model in quota and
      context (context per Task, sessions per Task, account/window per model, when the heavy model

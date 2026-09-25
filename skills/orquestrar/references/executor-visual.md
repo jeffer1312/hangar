@@ -4,6 +4,9 @@ This page belongs to the Task whose diff touches pixels: `.svelte`/`.tsx`/`.vue`
 templates, anything that draws. Its gate is mandatory even when the plan does not ask. Diff
 draws nothing: go back to `executor.md`.
 
+After `CODE OK`, any code fix below is a `--fase codigo` round first (`executor.md`, step 7);
+recapture on the newly approved stash.
+
 A green test, a zeroed type gate, the DOM, CSS and the accessibility tree do not replace
 seeing the screen.
 

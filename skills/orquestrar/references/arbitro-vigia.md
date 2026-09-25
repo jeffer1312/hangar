@@ -31,7 +31,7 @@ Done when the `[vigia] ARMED …` prompt arrives in your session within 2 min of
 ## Idleness — who owes work
 
 1. You always know who has the ball: the executor of the released Task, or the reviewer of the open round.
-2. Owner `working` → wait; the question "how's it going?" is never sent. `working` with the same last command for 3 readings is a loop, not work.
+2. Owner `working` → wait; the question "how's it going?" is never sent. `working` with the same last command for 3 readings is a loop, not work; `orq screen take` repeated is the screen queue, not a loop.
 3. Owner `idle` and nothing received → one of three, resolved without asking anyone:
    1. the message didn't arrive → resend once, saying it is a resend;
    2. the reply was produced and not sent → read its transcript (`~/.claude*/projects/<sanitized-cwd>/<uuid>.jsonl`, the most recent, messages `type: "assistant"`, the last one);

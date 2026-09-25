@@ -57,7 +57,7 @@ Done when the kick-off is delivered and engaged, and `orq ball` names the execut
 
 The executor works, verifies, freezes the round (no commit) and calls the reviewer directly;
 `entrega` does not wake you. REPROVA → recipe straight to the executor. APROVA →
-`orq` tells the executor to commit; the executor's `orq commit` checks it and wakes you once.
+`orq` tells the executor to prove or commit; the executor's `orq commit` checks it and wakes you once.
 
 Hash and recipe travel executor ↔ reviewer, never through you; the executor needs you only to
 deviate from a recipe. A wrong recipe is not yours to catch.
@@ -76,7 +76,7 @@ made mid-work enters the contract before you use it.
 | `"reincide": true` (second rejection of the same cause) — the single door into the loop | ask the reviewer for a recipe with a new approach, or rotate the reviewer |
 | recipe disagreement, with evidence (the arrow is one-way: the executor never replies to the reviewer) | decide on it, never by re-running; evidence doesn't close → one specific question to one of them, usually the reviewer |
 | recipe missing the six fields or the caller inventory; report without `VEREDITO:` / `Verified` (commands, results, who ran them) | back to the reviewer; the executor waits. Form you enforce, merit never |
-| two verdicts for one round (a round = its `git stash store` hash) | treat as DEVOLVIDO, order a new judgment |
+| two verdicts for one `entrega` | treat as DEVOLVIDO, order a new judgment |
 | reviewer rotated with a report in flight | `arbitro-vigia.md`, "Rotation" |
 | skipped skill step | waiving is the user's; enforce only waivers given in plan, contract or standing rule; take the rest to a decision |
 | a small finding | it blocks this Task; the next Task never carries it |
@@ -98,7 +98,7 @@ Done when the item is journaled and the ball is back with executor or reviewer.
 1. `orq commit` checked tip, approved round and untouchables; its message is that check.
    Read the approving report's WASTE and NOTED lines (its path: the `veredito`'s `motivo=` in
    `orq read journal --task <N>`): NOTED → contract, WASTE → lessons. Add one PROGRESS line with
-   `orq log --task <N>`: elapsed time and rounds vs the estimate; past 2× either → stop and ask.
+   `orq log --task <N>`: elapsed time and code rounds (proof rounds apart) vs the estimate; past 2× either → stop and ask.
    Context counts only for rotation.
    - Commit diverging from the approved round → new round to the executor; the second
      commit is legitimate.

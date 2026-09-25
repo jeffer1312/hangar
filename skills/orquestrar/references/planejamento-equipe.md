@@ -186,5 +186,5 @@ Task N — Bar: <screen, state, width> | none — user's decision, <date>
 <date> — <decision, whose, reason in one line>
 
 ## Task N — <title>
-<that Task's specifics: bar, untouchable exceptions, recipe path>
+<that Task's specifics: bar, its wave's `Tela:` line, its port and worktree, untouchable exceptions, recipe path>
 ````
