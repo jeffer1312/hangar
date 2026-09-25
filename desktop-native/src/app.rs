@@ -2448,7 +2448,7 @@ impl Hangar {
             Some(tables) => self.render_charted(&id, &markdown, &tables, cx),
             None if !body.trim().is_empty() || files.is_none() => {
                 let view = self.text_view(&id, &id, markdown, cx);
-                vec![TextView::new(&view).selectable(true).scrollable(false).on_link_click(open_web_link).into_any_element()]
+                vec![TextView::new(&view).selectable(true).scrollable(false).stream_fade(id == PREVIEW).on_link_click(open_web_link).into_any_element()]
             }
             None => Vec::new(),
         };
@@ -2820,7 +2820,7 @@ fn signature(item: &Item, events: &[ChatEvent]) -> String {
 }
 
 fn preview_source(preview: &Preview) -> String {
-    if preview.md { return safe_markdown(&preview.text); }
+    if preview.md { return safe_markdown(&crate::mend::close_hanging(&preview.text)); }
     let line_count = preview.text.lines().count();
     let source = if preview.full || line_count <= 10 { preview.text.as_str() }
         else { &preview.text[preview.text.match_indices('\n').nth(line_count - 11).map(|(index, _)| index + 1).unwrap_or(0)..] };

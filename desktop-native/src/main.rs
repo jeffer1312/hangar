@@ -8,6 +8,7 @@ mod delivery;
 mod i18n;
 mod interaction;
 mod media;
+mod mend;
 mod status;
 mod tables;
 mod theme;
@@ -61,6 +62,8 @@ fn main() {
     i18n::set_language(appearance::get().language);
     gpui_kit::application().with_assets(AppAssets).run(move |cx| {
         gpui_kit::init(cx);
+        // Só para provar: HANGAR_NATIVE_REDUCE_MOTION=1 liga o movimento reduzido onde o sistema não informa.
+        if std::env::var_os("HANGAR_NATIVE_REDUCE_MOTION").is_some() { cx.set_reduce_motion(true); }
         Theme::change(ThemeMode::Dark, None, cx);
         if let Err(error) = cx.text_system().add_fonts(FONTS.iter().map(|bytes| Cow::Borrowed(*bytes)).collect()) {
             eprintln!("fonte embutida recusada: {error}");
