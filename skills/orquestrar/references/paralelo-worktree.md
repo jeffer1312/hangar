@@ -1,5 +1,7 @@
 # Exception: Tasks in parallel, one worktree each
 
+`orq` below = `~/.claude/skills/orquestrar/scripts/orq.py --dir <durable dir>`.
+
 - The default is serial: one writer per tree, the gate closing each Task before the next opens.
 - Parallelize only when the Tasks are truly independent and the work is big enough to pay the setup.
 - Prefer arms inside one tree first: the executor runs one subagent per disjoint file set,
@@ -44,6 +46,8 @@ git worktree add /path/wt-t3 -b <work>-t3 "$BASE"
 
 - One executor session per worktree (`arbitro-lancamento.md`, "Opening a session"). Each kick-off
   carries its worktree's path as the repo, its branch, and `Expected HEAD` = `$BASE`.
+- Each batch executor closes its Task with `orq commit --task <N> --hash <hash> --repo <its
+  worktree>`.
 - The contract records the batch: Tasks, `$BASE`, worktree and branch per Task, merge order.
 - The contract also records, with the batch: phase 4's final review over `$BASE..tip`, in a fresh
   session, is the first place the Tasks meet.
@@ -53,8 +57,8 @@ git worktree add /path/wt-t3 -b <work>-t3 "$BASE"
 - Each worktree carries its own environment (dependencies installed per tree).
 - The port table per Task goes in the plan. A visual Task in parallel, in doubt: serialize.
 - 2+ visual Tasks in a batch: the plan declares either a browser instance per executor (separate
-  profile/port) or visual proof as a critical section (one captures at a time, the arbiter grants
-  the turn). The executor checks the tab before every capture regardless (`executor-visual.md`,
+  profile/port) or visual proof as a critical section (one captures at a time, through
+  `orq screen take`/`release`, `executor.md`). The executor checks the tab before every capture regardless (`executor-visual.md`,
   "3. Capture").
 - A global device resource (the device, its port forwarding, the app's storage) is a critical
   section: forwarding redone right before every capture; executors may negotiate time slots among

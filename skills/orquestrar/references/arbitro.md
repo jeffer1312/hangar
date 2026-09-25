@@ -54,16 +54,13 @@ Done when the kick-off is delivered and engaged, and `orq ball` names the execut
 
 ### 3. Wait — the loop runs without you
 
-The executor works, checks steps off, verifies, stops without committing; freezes the round
-(`git add` of the paths + `git stash create` + `git stash store`) and calls the reviewer
-directly — the `entrega` line does not wake you. REPROVA → recipe straight to the executor.
-APROVA → `orq` tells the executor to commit; the executor's `orq commit` checks it and wakes
-you once.
+The executor works, verifies, freezes the round (no commit) and calls the reviewer directly;
+`entrega` does not wake you. REPROVA → recipe straight to the executor. APROVA →
+`orq` tells the executor to commit; the executor's `orq commit` checks it and wakes you once.
 
-Hash, recipe and pre-review commit check travel executor ↔ reviewer, never through you. The
-REPROVA is the executor's mail: leave it closed, unreproduced, unrelayed, unconfirmed; the
-executor needs you only to deviate from a recipe. A wrong recipe is not yours to catch.
-Silence and the watchdog windows: `arbitro-vigia.md`.
+Hash and recipe travel executor ↔ reviewer, never through you; the executor needs you only to
+deviate from a recipe. A wrong recipe is not yours to catch.
+Silence: `arbitro-vigia.md`.
 
 Done when the commit hash reaches you, or a step-4 item does.
 
@@ -79,7 +76,7 @@ made mid-work enters the contract before you use it.
 | recipe disagreement, with evidence (the arrow is one-way: the executor never replies to the reviewer) | decide on it, never by re-running; evidence doesn't close → one specific question to one of them, usually the reviewer |
 | recipe missing the six fields or the caller inventory; report without `VEREDITO:` / `Verified` (commands, results, who ran them) | back to the reviewer; the executor waits. Form you enforce, merit never |
 | two verdicts for one round (a round = its `git stash store` hash) | treat as DEVOLVIDO, order a new judgment |
-| reviewer rotated with a report in flight | `arbitro-vigia.md`, "Rotation": the retired report dies, the successor judges from scratch |
+| reviewer rotated with a report in flight | `arbitro-vigia.md`, "Rotation" |
 | skipped skill step | waiving is the user's; enforce only waivers already given in plan, contract or standing rule; take the rest to a decision |
 | a small finding | it blocks this Task; the next Task never carries it |
 | a blocker fix, including one an automatic reviewer provoked mid-Task | accepted with its trap (a test that bites) in the same commit; no test → not accepted, on both sides of the gate |
@@ -90,20 +87,28 @@ made mid-work enters the contract before you use it.
 | plan untrustworthy (fallen premise, method without executing half, two consecutive Tasks blowing the estimate for the same cause, user order) | `replanejar.md`: propose and conduct the swap; never rewrite your own plan. A recipe the plan declared "closes after Task N-1" is planning: the planner or a fresh session with the spec closes it; you deliver inputs and excerpt the result |
 | a user's suspicion about the product | a verification item: journal it, hand it to the next reviewer as a directed question; the answer comes from proof, never from memory |
 | a user order given to a non-arbiter session, contradicting yours · early release at the user's word | `arbitro-vigia.md`, "Authorization from outside" |
-| silence · vanished session · context cap · session replacement request · "configuration changed in the panel" | `arbitro-vigia.md` |
+| silence · vanished session · context cap · session replacement request · "configuration changed in the panel" | `arbitro-vigia.md`; every replacement → `orq event sessao_trocada` before the substitute's kick-off |
 | unforeseen | ask, decision ready (stakes, options, recommendation); never fill the gap yourself. Decide alone or wake, the score, findings about a report: `arbitro-vigia.md`, "Deciding vs waking the user" |
 
 Done when the item is journaled and the ball is back with executor or reviewer.
 
 ### 5. Close the Task
 
-1. `orq commit` already checked tip, files against the approved round and untouchables; its
-   message to you is that check. Add one PROGRESS line with `orq log --task <N>`: elapsed time
-   and rounds vs the estimate; past 2× either → stop and ask. Context does not count here; it
-   rules rotation only.
-2. Your check is metadata, never a review: every round, the last included, is the reviewer's
-   (directly or via the authorized verifier), whatever a plan says. Tests, diff, screenshots,
-   defect reproduction, editor stay with them; you never run, read, reproduce, redo or open them.
+1. `orq commit` already checked tip, everything since the round's base against the approved
+   round, and untouchables; its message to you is that check. Read the approving report's
+   WASTE and NOTED lines (its path: the `veredito`'s `motivo=` in `orq read journal --task
+   <N>`): NOTED → contract, WASTE → lessons. Add one PROGRESS line with `orq log --task <N>`:
+   elapsed time and rounds vs the estimate; past 2× either → stop and ask. Context does not
+   count here; it rules rotation only.
+   - Commit diverging from the approved round → new round to the executor; the resulting
+     second commit is legitimate.
+   - An untouchable exception written in the contract → `orq init` again with the new
+     `--untouchable` list.
+   - No other commit in the checkout between a round's freeze and its `orq commit`; your plan
+     edits stay uncommitted until the Task closes.
+2. Every round, the last included, is the reviewer's (directly or via the authorized
+   verifier), whatever a plan says: tests, diff, screenshots, defect reproduction and editor
+   stay with them; you never run, read, reproduce, redo or open them.
 3. The commit is born reviewed: one Task = one commit on the normal path.
 4. Batch: merge one at a time after its APROVA; `git fetch` before every merge, only then read
    `## main...origin/main`; remove no worktree without checking its trail in global config
@@ -118,8 +123,8 @@ Done when `orq commit`'s message reached you and the contract carries the hash.
 `arbitro-encerramento.md`: "Phase 4" (the branch review), the branch reopened, the
 retrospective, your succession.
 
-Done when the branch is in the user's hands, the retrospective delivered, `execucao_fim`
-logged, the watchdog disarmed.
+Done when the branch is in the user's hands, the retrospective delivered,
+`orq event execucao_fim --resultado <result>` logged, the watchdog disarmed.
 
 ## The four files
 
@@ -131,12 +136,11 @@ logged, the watchdog disarmed.
 | `~/.hangar/orq/<date>-<gid>/eventos.jsonl` — events | one JSON line per event | machines: app screens, phase 5 |
 
 - Only you write rules and lessons. Journal and events are written through `orq` by whoever acts: you (`task_inicio`, `sessao_trocada`, `execucao_*`, `log`), the executor (`entrega`, `commit`), the reviewer (`veredito`).
-- Journal and lessons live in the durable directory, never in `<config>/.hangar-pair/`; the rules stay there.
+- Lessons live in the durable directory, never in `<config>/.hangar-pair/`.
 - Lessons: raw material is the **waste** line of each review report; its "would have prevented" becomes a guideline written as a principle, with the measured case as proof next to it — in `licoes.md`, never in `regras-<gid>.md`. Every guideline stays: no cap, never deleted. The cap is how much goes into a kick-off: pick by subject (screen, database, channel, file), never by age; in doubt, paste; text, never the path.
-- Events: six types, checked by `orq event` (its validator's docstring is the spec); extra fields allowed, new types forbidden.
 - Write AT the event, through `orq`, before the next action.
 - By type, not subject: it happened → journal; agreement decided at launch → rules; guideline born now → lessons.
-- What changes per Task (released Task, hash, counterpart) goes in no file — only in the kick-off.
+- Turn state (released Task, counterpart) goes in the kick-off and `orq event`; the rules get only the Progress hash.
 - First lines of the rules file:
 
 ```markdown
@@ -156,7 +160,6 @@ logged, the watchdog disarmed.
 ## Locks
 
 - Stage by explicit path; never `git add -A` / `git add .`. No `--amend`/rebase/squash; a correction is a new commit.
-- Write first, notify after: file in the durable dir, message carries the path. Long text: `hangar-send <s> "$(cat <<'EOF' … EOF)"`.
 - Delivery is not a reply: `entregue`/`success` = entered the queue. The idleness signal is `arbitro-vigia.md`'s ("Idleness").
 - Model, account, subagents and outside tools: `arbitro-lancamento.md`, "Locks on model and tools".
 - Time comes from `date -Iseconds`, never from memory. Authorship comes from a transcript, never from time correlation (`arbitro-vigia.md`, "A vanished session").

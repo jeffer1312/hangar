@@ -32,8 +32,9 @@ session is opened or a Task released. Back to `arbitro.md` once the team stands.
 6. Create, in order: `--new` ("Opening a session", below) → `--pair` → read the `gid` in your
    own sidecar → write the contract (skeleton in `planejamento-equipe.md`; each Task's specifics
    in a `## Task N` section at the end) → `orq init --arbiter <you> --repo <repo> --contract
-   <regras path> --untouchable <glob>…` → arm the watchdog and prove it (`arbitro-vigia.md`,
-   "Arming") → kick-offs ("Kick-off", below).
+   <regras path> --untouchable <glob>…` → `orq event execucao_inicio --plano <plan> --branch
+   <branch> --gid <gid>` → arm the watchdog and prove it (`arbitro-vigia.md`, "Arming") →
+   kick-offs ("Kick-off", below).
 
    ```bash
    hangar-send --pair <session> "<work> — each session's role is in the regras-<gid>.md contract"   # one call per session
@@ -96,7 +97,6 @@ Outside tool (skill, subagent, command): the three questions of `SKILL.md`'s loc
 
 ## Who you open
 
-- The cast is the contract's table, never `hangar-send --list`.
 - The verifier session is the reviewer's: they open it, send the script, record `consumo.md` snapshots and close it, from the optional `verificador` line. You open neither; you receive only the review report.
 
 ## A rotating role
@@ -142,8 +142,8 @@ Method: <name | none — the plan is the user's>.   Executes with: <command | no
 Domain skill: <name | none>.   Route: <audit | full>.
 Repo/branch: <path> / <branch>.   Expected HEAD: <hash>.
 Baseline (<hash>): backend N · check N · front N + <named known red>.
-Group rules: <path to regras-<gid>.md>.
-Durable dir: <~/.hangar/orq/<date>-<gid>/ with {pareceres,tasks,kickoffs,visual}/ — reports, diffs and screenshots go here, never /tmp>.
+Contract: `orq read contract --task <N>` · branch review: <path to regras-<gid>.md>.
+Durable dir: <~/.hangar/orq/<date>-<gid>/, the `--dir` of every `orq` call; {pareceres,tasks,kickoffs,visual}/ hold reports, diffs and screenshots, never /tmp>.
 The current Task: <path to its file>.
 Untouchables: <paths, one by one, exceptions inside — not "the ones in the contract">.
 Lessons that apply to this Task: <pasted here, 3 or 4, not the file path>.
@@ -157,7 +157,7 @@ Read ONLY these files. The whole plan, the journal and the lessons file are NOT 
 
 - Lessons go pasted, never as a path. Every visual Task kick-off also pastes the visual-proof invalidators (`executor-visual.md`), even when in the contract.
 - The same text re-sent puts a `/clear`-ed session back. No line carries turn state; "Task 2 already passed" belongs to the contract.
-- Every kick-off names the durable directory that every `orq --dir` call uses, and never asks for step status, environment confirmation or a screen turn by message: those go through `orq`.
+- A kick-off never asks for step status, environment confirmation or a screen turn by message: those go through `orq`.
 
 ### Tightened criterion (reviewer kick-off, spiral with the user unavailable)
 

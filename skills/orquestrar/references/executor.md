@@ -126,10 +126,12 @@ Done when APROVA arrives.
 ### 8. Commit
 
 Commit only the Task's paths, by explicit path. History stays as committed: a correction is a
-new commit, never `--amend`, rebase or squash. Then `orq commit --task <N> --hash <commit hash>`:
-it checks the tip, the files against the approved round and the untouchables, and tells the
-arbiter itself. Exit 1 prints what is wrong: fix it with a new commit, never amend, and run it
-again.
+new commit, never `--amend`, rebase or squash. Then `orq commit --task <N> --hash <commit hash>`
+(in a batch worktree, plus `--repo <your worktree>`):
+it checks the tip, everything changed since the round's base against the approved round, and the
+untouchables, and tells the arbiter itself. Exit 1 prints what is wrong: fix it with a new
+commit, never amend, and run `orq commit` again; still refused, or the refusal is not yours to
+fix → `orq notify "[decisao] T<N> orq commit refused: <output>"` and wait.
 
 Done when `orq commit` exits 0 and `git status --short` is clean.
 

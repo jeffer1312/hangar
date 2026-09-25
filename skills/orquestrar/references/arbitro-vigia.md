@@ -15,7 +15,7 @@ replaced, and when unsure whether to decide alone or wake the user.
    ```
 
 2. The list follows `orq ball` every cycle: whoever owes work now, plus you. Nothing to rewrite at a handoff; a session waiting as it was told is never on it.
-3. Ball with the user: `systemctl --user stop vigia-<gid>` before asking, start it again on the answer. `execucao_fim` logged → stop it for good.
+3. Ball with the user: `systemctl --user stop vigia-<gid>` before asking; on the answer, run the arming command of step 1 again and wait for ARMED. `orq event execucao_fim --resultado <result>` logged → stop it for good.
 
 Done when the `[vigia] ARMED …` prompt arrives in your session within 2 min of arming — the proof it works. `active` is not proof; a hand-typed test is not proof.
 
@@ -25,7 +25,7 @@ Done when the `[vigia] ARMED …` prompt arrives in your session within 2 min of
 - Context: each listed session's window against its row's `janela`, re-read from the contract every cycle. Crossing it asks the session to stop after the current act and request its replacement, and tells you; once per crossing.
 - Fires when the current owner stops, not when everyone stops; `vanished` counts as stopped. Immediate, without waiting for silence: a stuck session (`working`, no event for 10 min) and a session out of quota.
 - To team sessions it ASKS, evidence attached; to you it may be affirmative. Stop orders come from you, after looking, never from the counter.
-- Liveness: journal over one full cycle, `show -p ActiveState -p MainPID`. Work in progress with `ps -eo pid,ppid,cmd | grep vigia.sh` empty, or pointing at a retired pair, is work without a net.
+- Liveness: journal over one full cycle, `show -p ActiveState -p MainPID`. Work in progress with `ps -eo pid,ppid,cmd | grep vigia.sh` empty, or its `-e` pointing at another work's durable directory, is work without a net.
 - It is the net; a session's message arriving as a prompt is the normal path.
 
 ## Idleness — who owes work
@@ -72,7 +72,7 @@ Any failing → stop at the current Task's end and wake the user before sleeping
 Gone from `hangar-send --list` without your order → open another and move on; the investigation is skipped.
 
 1. Read its transcript (most recent jsonl, `assistant` messages) and, if it had a terminal, its pane (`tmux capture-pane -p -t "=<name>:" -S -200`): the report or review may be there, complete.
-2. Open the substitute by the recipe in `arbitro-lancamento.md`, full kick-off.
+2. Open the substitute by the recipe in `arbitro-lancamento.md`; `orq event sessao_trocada --de <old> --para <new> --motivo vanished` before its full kick-off.
 3. One line in the contract: which session vanished, what was recovered, who took over.
 
 It becomes a case only if the repo is strange (unexplained dirty tree, unreported commit, untouchable touched) — then the subject is the repo. Time correlation is not authorship: name an author only when the command appears in their transcript; otherwise "author unidentified", investigate the mechanism.
@@ -90,6 +90,7 @@ It becomes a case only if the repo is strange (unexplained dirty tree, unreporte
 - Handover in a file that points: HEAD, `git status`, uncommitted disk, what remains, traps paid, paths of plan, contract and Task excerpt, and every decision made. No line count; never a context copy.
 - Retiring is an act with a message: stop, don't capture, don't commit, release the stage without killing. In the same act tell the reviewer the new address.
 - Mid-gate: release, don't kill; close it once the substitute confirms. Closed milestone (approved, committed, nothing in flight): close it at once.
+- Every executor or reviewer replacement: `orq event sessao_trocada --de <old> --para <new> --motivo <reason>` before the substitute's kick-off.
 - The substitute gets the full kick-off (`arbitro-lancamento.md`) with `Frozen round`, and proves model/effort before its first `Edit`. Interrupted turn → list the half-edited paths as untrusted draft.
 - Arbiter leaving → `arbitro-encerramento.md`.
 

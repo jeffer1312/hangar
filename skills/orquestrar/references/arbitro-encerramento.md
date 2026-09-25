@@ -53,7 +53,7 @@ Done when the branch review approved, the closing sentence is sent, and the bran
 
 Fire the closing item on its trigger: the branch in the user's hands, nothing in flight. Open the fresh session by the recipe in `arbitro-lancamento.md`, on the `retrospectiva` row; the kick-off carries the lines the closing item lists.
 
-Done when the proposed patch exists at `~/.hangar/orq/<date>-<gid>.md`, `execucao_fim` is logged, the watchdog disarmed and the retrospective session closed.
+Done when the proposed patch exists at `~/.hangar/orq/<date>-<gid>.md`, `orq event execucao_fim --resultado <result>` is logged, the watchdog disarmed and the retrospective session closed.
 
 ## Arbiter succession
 
