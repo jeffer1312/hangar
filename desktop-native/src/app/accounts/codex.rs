@@ -304,7 +304,7 @@ impl Hangar {
         let Some(flow) = self.accounts.codex.as_mut() else { return };
         (flow.question, flow.importing, flow.error, flow.stage, flow.result) = (None, true, None, String::new(), None);
         flow.task = Some(self.runtime.spawn(async move {
-            let fail = |error: Failure| Hangar::failure(&error);
+            let fail = |error: Failure| Hangar::setting_failure(&error);
             let out = match kind {
                 Import::Inherit => {
                     let mut reply = api.server_post(&["codex-contas", &id, "prepare"], 30).await;
@@ -422,7 +422,7 @@ impl Hangar {
                         flow.error = Some(match &error {
                             e if e.uncertain && started => tr("accounts_codex_start_uncertain"),
                             e if e.status.is_none() && !e.uncertain => tr("accounts_codex_read_failed"),
-                            e => Hangar::failure(e),
+                            e => Hangar::setting_failure(e),
                         });
                         return;
                     }

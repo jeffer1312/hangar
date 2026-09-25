@@ -554,7 +554,7 @@ impl Hangar {
                             .and_then(|(_, _, why)| why.split_once("exporte ").and_then(|(_, rest)| rest.split_whitespace().next()).map(str::to_owned));
                         Ok(Synced { lines, codex_var })
                     }
-                    Err(error) => Err(tr("accounts_engine_sync_failed").replace("{reason}", &Self::failure(&error))),
+                    Err(error) => Err(tr("accounts_engine_sync_failed").replace("{reason}", &Self::setting_failure(&error))),
                 });
             }
             KeysReply::Cookie(seq, result) => {

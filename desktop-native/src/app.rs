@@ -276,6 +276,7 @@ impl Hangar {
             KeyBinding::new("ctrl-shift-c", CopyLastReply, None), KeyBinding::new("ctrl-f", FocusSettingsSearch, None)]);
         let settings_ui = settings::SettingsUi::new(window, cx);
         let root_focus = cx.focus_handle();
+        cx.on_focus_lost(window, |this: &mut Self, window, cx| this.machines_focus_lost(window, cx)).detach();
         let command_search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("commands_search")));
         cx.subscribe(&command_search, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         let (tx, rx) = async_channel::bounded::<Envelope>(256);
@@ -412,7 +413,13 @@ impl Hangar {
 
     // Leitura de arquivo: 403/404 é a política de caminho do backend, e o motivo dele é o que se mostra.
     fn fetch_failure(error: &Failure) -> String {
-        match error.status { Some(401) => tr("auth_error"), Some(_) => tr(&error.detail), None => Self::failure(error) }
+        match error.status { Some(401) => tr("auth_error"), Some(_) => tr(&error.detail), None => Self::setting_failure(error) }
+    }
+
+    /// Gravação de configuração que ficou sem resposta (tempo esgotado, conexão recusada): a frase do web para queda de rede. O texto de
+    /// entrega incerta é do envio de mensagens.
+    fn setting_failure(error: &Failure) -> String {
+        if error.status.is_none() && error.uncertain { tr("connection_failed") } else { Self::failure(error) }
     }
 
     fn selected_key(&self) -> Option<SessionKey> {

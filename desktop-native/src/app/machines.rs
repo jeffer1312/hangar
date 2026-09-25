@@ -1,9 +1,14 @@
 //! Página Máquinas (web: "Servidores"): o servidor conectado vira um cartão, e o detalhe dele traz identificador, endereços,
 //! reinício do serviço e o Avançado. Porta de `MaquinasSettings.svelte` e da parte "detalhe" de `AcessoSettings.svelte`.
 //! O nativo fala com um servidor só: o que depende de guardar outras máquinas neste aparelho chega depois.
+mod add;
+mod pair;
+
 use super::*;
 use std::{collections::HashMap, rc::Rc};
 use super::device::Remote;
+use add::{AddMachine, Found};
+use pair::Pair;
 use super::server_config::chip;
 use super::settings::{settings_box, Page};
 use gpui_kit::component::{WindowExt, dialog::DialogButtonProps, switch::Switch, tooltip::Tooltip};
@@ -23,6 +28,10 @@ impl Kind {
     fn name(self) -> String {
         tr(match self { Kind::Here => "machines_kind_here", Kind::Lan => "machines_kind_lan", Kind::Tailscale => "machines_kind_tailscale",
             Kind::Public => "machines_kind_public" })
+    }
+    /// O nome do tipo nas rotas do servidor (`/api/alcance/pareamento?endereco=`).
+    fn raw(self) -> &'static str {
+        match self { Kind::Here => "nesta_maquina", Kind::Lan => "rede_local", Kind::Tailscale => "tailscale", Kind::Public => "publico" }
     }
 }
 
@@ -128,10 +137,10 @@ fn parse_peers(value: &Value) -> Option<Vec<Peer>> {
 
 /// A ida (este servidor → ela), medida pelo servidor em `/api/peers/check`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Way { Ok, Other, Failed, Unset }
+pub(super) enum Way { Ok, Other, Failed, Unset }
 
 #[derive(Clone, Debug)]
-struct Going {
+pub(super) struct Going {
     way: Way,
     answered_as: String,
     ms: Option<i64>,
@@ -197,6 +206,11 @@ pub(super) enum MachinesReply {
     Peers(u64, Result<Value, Failure>),
     PeerCheck(String, u64, Result<Value, Failure>),
     PeerSaved(u64, PeerWrite, Result<Value, Failure>),
+    /// Do diálogo Adicionar, pela entidade dele: a resposta de um diálogo já fechado não acha dono.
+    Discovered(EntityId, u64, Result<Value, Failure>),
+    Probed(EntityId, u64, Result<Found, String>),
+    Registered(EntityId, u64, Result<(Going, Going), String>),
+    Paired(u64, Result<Value, Failure>),
 }
 
 #[derive(Default)]
@@ -241,6 +255,9 @@ pub(in crate::app) struct Machines {
     /// A máquina do detalhe aberto e o Avançado dele.
     peer_open: Option<String>,
     peer_advanced: bool,
+    /// O diálogo Adicionar aberto.
+    add: Option<Entity<AddMachine>>,
+    pair: Pair,
 }
 
 impl Drop for Machines {
@@ -269,6 +286,8 @@ impl Hangar {
         if let Some(task) = m.restart.task.take() { task.abort(); }
         m.restart = Restart { seq: m.restart.seq + 1, ..Restart::default() };
         (m.id_saved, m.leave_error, m.peer_error) = (false, None, None);
+        // "Não respondem" nasce fechado, como o `<details>` do web remontado.
+        m.silent_open = false;
         // Medições só em memória: cada abertura mede de novo, e a resposta de um teste de antes cai pelo `seq`.
         m.checks.clear();
         if !m.id_saving { self.load_machine_id(cx); }
@@ -348,7 +367,7 @@ impl Hangar {
         // Fechado pela pessoa, o detalhe deixa de ser o diálogo do topo: um Remover que volta depois não fecha outro diálogo.
         window.open_dialog(cx, move |dialog, _, _| {
             let (weak, id) = (weak.clone(), id.clone());
-            dialog.w(px(600.)).child(detail.clone()).on_ok(|_, _, _| false)
+            dialog.w(px(600.)).child(detail.clone()).on_ok(enter_to_focused)
                 .on_close(move |_, _, cx| { let _ = weak.update(cx, |this, _| {
                     if this.machines.peer_open.as_deref() == Some(id.as_str()) { this.machines.peer_open = None; }
                 }); })
@@ -531,6 +550,9 @@ impl Hangar {
                             if matches!(spot, Spot::Footer | Spot::Messages) && m.peer_open.as_deref() == Some(id.as_str()) {
                                 m.peer_open = None;
                                 window.close_dialog(cx);
+                                // O kit devolve o foco à linha que abriu o detalhe, e ela acabou de sair: sem isto, com a
+                                // resposta rápida o foco fica fora da árvore e o Esc não chega à página.
+                                if !window.has_active_dialog(cx) { self.root_focus.focus(window, cx); }
                             }
                         }
                         self.peers_arrived(cx);
@@ -538,8 +560,39 @@ impl Hangar {
                     Err(error) => m.peer_error = Some((id, spot, error)),
                 }
             }
+            MachinesReply::Discovered(dialog, seq, result) => {
+                let parsed = result.map_err(|e| Self::fetch_failure(&e)).and_then(|v| add::parse_discovered(&v).ok_or_else(|| tr("invalid_response")));
+                if let Some(add) = self.add_dialog(dialog) { add.update(cx, |add, cx| add.discovered(seq, parsed, cx)); }
+            }
+            MachinesReply::Probed(dialog, seq, result) => {
+                if let Some(add) = self.add_dialog(dialog) { add.update(cx, |add, cx| add.probed(seq, result, window, cx)); }
+            }
+            MachinesReply::Registered(dialog, seq, result) => {
+                // Gravou aqui: a lista já tem a máquina, mesmo que o outro lado tenha falhado.
+                if result.is_ok() { self.load_peers(cx); }
+                let Some(add) = self.add_dialog(dialog).filter(|add| add.read(cx).waiting(seq)) else { return };
+                if result.as_ref().is_ok_and(|(going, back)| going.way == Way::Ok && back.way == Way::Ok) {
+                    // Em voo o diálogo não fecha nem tem outro por cima: ele é o do topo.
+                    self.machines.add = None;
+                    window.close_dialog(cx);
+                } else {
+                    add.update(cx, |add, cx| add.registered(seq, result, cx));
+                }
+            }
+            MachinesReply::Paired(seq, result) => self.paired(seq, result, window),
         }
         cx.notify();
+    }
+
+    fn add_dialog(&self, dialog: EntityId) -> Option<Entity<AddMachine>> {
+        self.machines.add.clone().filter(|add| add::owns(Some(add.entity_id()), dialog))
+    }
+
+    /// Foco que ficou sem dono na página (a linha saiu da lista, o botão sumiu): vai ao ancestral focável mais próximo que
+    /// sobrou ou à raiz, onde o Esc fecha a página — o `fallbackFocus` do web.
+    pub(super) fn machines_focus_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings != Some(Page::Servers) { return; }
+        window.focus_lost_restore_target(cx).unwrap_or_else(|| self.root_focus.clone()).focus(window, cx);
     }
 
     /// Lista nova: some a medição de quem saiu, e toda máquina ligada sem medição (ou religada agora) é medida.
@@ -618,23 +671,27 @@ impl Hangar {
         let hangar = cx.entity();
         let detail = cx.new(|cx| MachineDetail { _observe: cx.observe(&hangar, |_, _, cx| cx.notify()), hangar: hangar.downgrade() });
         // Enter no diálogo é o "confirmar" do kit, que fecharia o detalhe; aqui Enter só salva o identificador (no campo dele).
-        window.open_dialog(cx, move |dialog, _, _| dialog.w(px(600.)).child(detail.clone()).on_ok(|_, _, _| false));
+        window.open_dialog(cx, move |dialog, _, _| dialog.w(px(600.)).child(detail.clone()).on_ok(enter_to_focused));
     }
 
     pub(super) fn render_machines(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let m = &self.machines;
-        let next = tr("settings_next_version");
-        let soon = |id: &'static str, label: String, icon: IconName, primary: bool| {
-            let button = Button::new(id).small().icon(icon).label(label.clone()).disabled(true).accessibility_label(format!("{label}. {next}"));
-            let next = next.clone();
-            div().id(SharedString::from(format!("{id}-wrap"))).child(if primary { button.primary() } else { button.outline() })
-                .tooltip(move |window, cx| Tooltip::new(next.clone()).build(window, cx))
-        };
+        let offline = self.api.is_none();
+        // Os dois abrem diálogo: o foco volta a eles no Esc.
+        let this = cx.entity().downgrade();
+        let add = FocusOnClick { id: "machines-add".into(), button: Button::new("machines-add").outline().small().icon(IconName::Plus)
+            .label(tr("machines_add_device")).disabled(offline), open: Rc::new(move |window, cx| {
+                let _ = this.update(cx, |this, cx| this.open_add_machine(window, cx));
+            }) };
+        let this = cx.entity().downgrade();
+        let pair = FocusOnClick { id: "machines-pair".into(), button: Button::new("machines-pair").primary().small().icon(IconName::Smartphone)
+            .label(tr("machines_pair")).disabled(offline), open: Rc::new(move |window, cx| {
+                let _ = this.update(cx, |this, cx| this.open_pair(window, cx));
+            }) };
         let top = div().flex().items_center().gap(px(8.))
             .child(div().flex_1().text_xl().font_weight(FontWeight::SEMIBOLD).child(Page::Servers.title()))
-            .child(self.mark(div().rounded(px(8.)).child(soon("machines-add", tr("machines_add_device"), IconName::Plus, false)),
-                "machines_search_tailscale"))
-            .child(soon("machines-pair", tr("machines_pair"), IconName::Smartphone, true));
+            .child(self.mark(div().rounded(px(8.)).child(add), "machines_search_tailscale"))
+            .child(pair);
         if self.api.is_none() {
             return div().flex().flex_col().child(top).child(div().mt_4().text_sm().text_color(theme::muted()).child(tr("settings_offline")))
                 .into_any_element();
@@ -760,7 +817,8 @@ impl Hangar {
         let remove = Button::new(key.clone()).ghost().small().label(tr(if removing { "machines_peer_removing" } else { "machines_peer_remove" }))
             .text_color(theme::danger())
             .accessibility_label(if removing { tr("machines_peer_removing") } else { tr("machines_peer_remove_aria").replace("{nome}", &id) })
-            .loading(removing).disabled(self.machines.peer_busy.is_some());
+            // Gravando a própria remoção: carregando, não desligado. O botão desligado larga o foco, e o Esc não sobe mais.
+            .loading(removing).disabled(self.machines.peer_busy.is_some() && !removing);
         let this = cx.entity().downgrade();
         let remove_id = id.clone();
         let remove = FocusOnClick { id: key.into(), button: remove, open: Rc::new(move |window, cx| {
@@ -879,7 +937,8 @@ impl Hangar {
             .child(div().flex().items_center().gap(px(8.))
                 .child(tr(if removing { "machines_peer_removing" } else { "machines_peer_remove_machine" })).child(scope()))
             .accessibility_label(if removing { tr("machines_peer_removing") } else { fill("machines_peer_remove_machine_aria") })
-            .loading(removing).disabled(busy);
+            // Carregando, não desligado: com o foco nele o Esc tem de continuar chegando ao diálogo.
+            .loading(removing).disabled(busy && !removing);
         let this = cx.entity().downgrade();
         let peer_id = peer.id.clone();
         let remove = FocusOnClick { id: key.into(), button: remove, open: Rc::new(move |window, cx| {
@@ -1084,6 +1143,13 @@ impl Hangar {
             .child(advanced)
             .child(remove)
     }
+}
+
+/// Diálogo sem ação principal: o Enter vira o "confirmar" do kit, que sem `propagate` para a tecla ali e o botão focado nunca
+/// recebe o clique de teclado. Seguindo, o botão focado clica ao soltar a tecla, e o diálogo não fecha.
+fn enter_to_focused(_: &ClickEvent, _: &mut Window, cx: &mut App) -> bool {
+    cx.propagate();
+    false
 }
 
 /// O `Button` do kit não toma foco no clique, e o diálogo devolve ao fechar o foco de quem o abriu: sem focar o cartão antes,

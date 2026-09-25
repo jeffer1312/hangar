@@ -28,6 +28,10 @@ FALSO: só anda o estado sintético (a leitura cai por 3 s, depois `fase: pronto
 GET /control/r9b?peers=<fixture|none>&load=<ok|500>&save=<ok|500|404>&remove=<ok|500|404>&load_delay=<s>&check_delay=<s>&save_delay=<s>
 &check_<id>=<ok|falhou|recusou|estranho|nao_configurado|500> muda as outras máquinas (Task 12 R9b): GET /api/peers, GET /api/peers/check,
 PUT /api/peers/<id>/enabled e DELETE /api/peers/<id>. As máquinas são SINTÉTICAS e o check não abre conexão nenhuma.
+save/remove=drop derruba a conexão sem resposta.
+GET /control/r9c?discover=<ok|empty|500|drop>&candidate=<url>&register=<ok|500|drop>&pair=<ok|500|drop>&<x>_delay=<s> muda Adicionar e
+Parear (Task 12 R9c): GET /api/peers/descobrir (candidatos SINTÉTICOS; `candidate` aponta para outra fixture), POST /api/peers e
+GET /api/alcance/pareamento (QR sintético, não codifica nada). O token do POST não é guardado nem registrado.
 """
 
 import parity_accounts_fixture as accounts
@@ -165,6 +169,27 @@ def r9b_peers():
 # O check responde o estado pedido por máquina (ok|falhou|recusou|estranho|nao_configurado|500); sem pedido, ok.
 R9B = {"peers": r9b_peers(), "load": "ok", "load_delay": 0.0, "check": {"notebook": "falhou", "trabalho": "estranho"},
        "check_delay": 0.0, "save": "ok", "remove": "ok", "save_delay": 0.0}
+# Task 12 R9c: Adicionar servidor e Parear. `candidate` é o endereço da OUTRA fixture, que a busca sintética devolve; nenhuma
+# máquina de verdade é procurada. O POST /api/peers guarda só id e endereço: o token recebido é descartado e não vai ao registro.
+R9C = {"discover": "ok", "discover_delay": 0.0, "candidate": "", "register": "ok", "register_delay": 0.0, "pair": "ok", "pair_delay": 0.0}
+
+
+def synthetic_qr(seed):
+    """Um quadriculado com cara de QR, SINTÉTICO: não codifica nada."""
+    n, cells = 21, []
+    finders = ((0, 0), (n - 7, 0), (0, n - 7))
+    for y in range(n):
+        for x in range(n):
+            finder = next(((x - fx, y - fy) for fx, fy in finders if fx <= x < fx + 7 and fy <= y < fy + 7), None)
+            if finder:
+                ring = max(abs(finder[0] - 3), abs(finder[1] - 3))
+                on = ring != 2
+            else:
+                on = (x * 7 + y * 13 + x * y + len(seed) * 5) % 3 == 0
+            if on:
+                cells.append(f'<rect x="{x}" y="{y}" width="1" height="1"/>')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="210" height="210" viewBox="0 0 {n} {n}">'
+            f'<rect width="{n}" height="{n}" fill="#fff"/><g fill="#000">{"".join(cells)}</g></svg>')
 
 
 def restart_walk(pid, fail):
@@ -365,7 +390,7 @@ def later(seconds, change):
     threading.Thread(target=run, daemon=True).start()
 
 
-SECRETS = ("api_key", "auth_cookie", "workspace_id", "codigo", *R7_SECRETS)
+SECRETS = ("api_key", "auth_cookie", "workspace_id", "codigo", "token", *R7_SECRETS)
 
 
 def record(method, path, body):
@@ -475,6 +500,13 @@ class Handler(BaseHTTPRequestHandler):
                         R9B[key] = raw
                     elif key.startswith("check_"):
                         R9B["check"][key[len("check_"):]] = raw
+            elif path == "/control/r9c":
+                for key, raw in ((k, v[0]) for k, v in query.items()):
+                    if key in ("discover_delay", "register_delay", "pair_delay"):
+                        # Até 8 s: o app desiste em 15.
+                        R9C[key] = min(float(raw), 8.0)
+                    elif key in ("discover", "candidate", "register", "pair"):
+                        R9C[key] = raw
             elif path == "/control/remove":
                 # Sessão encerrada: some da lista ao vivo (prova do foco da aba que some).
                 SESSIONS.pop(query["name"][0], None)
@@ -523,6 +555,40 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(fail("erro_sintetico", "não consegui medir os endereços (sintético)"), 500)
             else:
                 self.send_json(R9_REACH[mode])
+            return
+        if path == "/api/peers/descobrir":
+            record("GET", self.path, None)
+            with LOCK:
+                mode, delay, candidate = R9C["discover"], R9C["discover_delay"], R9C["candidate"]
+            time.sleep(delay)
+            if mode == "drop":
+                self.close_connection = True
+                self.connection.shutdown(2)
+            elif mode == "500":
+                self.send_json(fail("descoberta_sem_tailscale", "tailscale não respondeu (sintético)"), 503)
+            else:
+                # A segunda já está no peers.json: a tela não a oferece de novo.
+                self.send_json([] if mode == "empty" else [
+                    {"nome": "vizinho", "base_url": candidate or "http://192.0.2.40:8765", "hosts": ["vizinho", "192.0.2.40"]},
+                    {"nome": "casa", "base_url": "https://casa.sintetico.test", "hosts": ["casa"]}])
+            return
+        if path == "/api/alcance/pareamento":
+            record("GET", self.path, None)
+            kind = query.get("endereco", [""])[0]
+            with LOCK:
+                mode, delay = R9C["pair"], R9C["pair_delay"]
+                address = next((e["url"] for e in R9_REACH.get(R9["reach"], {}).get("enderecos", [])
+                                if e["tipo"] == kind and e["estado"] == "ok"), None)
+            time.sleep(delay)
+            if mode == "drop":
+                self.close_connection = True
+                self.connection.shutdown(2)
+            elif mode == "500":
+                self.send_json(fail("erro_sintetico", "não consegui gerar o pareamento (sintético)"), 500)
+            elif address is None:
+                self.send_json(fail("alcance_endereco_desconhecido", "candidato de pareamento desconhecido"), 404)
+            else:
+                self.send_json({"url": f"{address}/?codigo=sintetico-{kind}", "qr_svg": synthetic_qr(kind)})
             return
         if path == "/api/peers/identificador":
             record("GET", self.path, None)
@@ -843,7 +909,10 @@ class Handler(BaseHTTPRequestHandler):
         time.sleep(delay)
         with LOCK:
             peer = next((p for p in R9B["peers"] if p["id"] == pid), None)
-            if mode == "500":
+            if mode == "drop":
+                self.close_connection = True
+                self.connection.shutdown(2)
+            elif mode == "500":
                 what = "gravar" if kind == "save" else "remover"
                 self.send_json(fail("erro_sintetico", f"não consegui {what} no peers.json (sintético)"), 500)
             elif mode == "404" or peer is None:
@@ -851,6 +920,24 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 change(peer)
                 self.send_json(self.r9b_list())
+
+    def register_peer(self, body):
+        """POST /api/peers (upsert, como o backend): falha pelo modo ou grava id e endereço e devolve a lista mascarada."""
+        with LOCK:
+            mode, delay = R9C["register"], R9C["register_delay"]
+        time.sleep(delay)
+        pid, base = body.get("id") or "", body.get("base_url") or ""
+        if mode == "drop":
+            self.close_connection = True
+            self.connection.shutdown(2)
+        elif mode == "500":
+            self.send_json(fail("erro_sintetico", "não consegui gravar no peers.json (sintético)"), 500)
+        elif not R9_ID.fullmatch(pid) or not base:
+            self.send_json(fail("peers_registro_invalido", "identificador ou endereço inválido"), 400)
+        else:
+            with LOCK:
+                R9B["peers"] = [p for p in R9B["peers"] if p["id"] != pid] + [{"id": pid, "base_url": base}]
+            self.send_json(self.r9b_list())
 
     def save_shortcuts(self, value):
         """POST /api/config {"shortcuts": <json|null>}: grava na memória (null apaga o override) ou falha pelo modo."""
@@ -961,6 +1048,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/api/sessions":
             self.create_session(body or {})
+            return
+        if url.path == "/api/peers":
+            self.register_peer(body or {})
             return
         if url.path == "/api/config" and "shortcuts" in (body or {}):
             self.save_shortcuts(body["shortcuts"])
