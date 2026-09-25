@@ -102,7 +102,7 @@ avisar_arb() {
   if [ -n "$ORQD" ]; then
     ORQ_DIR="$ORQD" python3 "$ORQ" notify --alarm "$1" >/dev/null 2>>"${CP_VIGIA_LOG:-/dev/stderr}"
   else
-    hangar-send --tmux "$ARB" "$1" >/dev/null 2>&1
+    hangar-send --tmux "$ARB" "$1" >/dev/null 2>>"${CP_VIGIA_LOG:-/dev/stderr}"
   fi
 }
 
@@ -145,6 +145,11 @@ diario_avisado=0
 # PROVEN ARMING: the synthetic alarm goes out through the SAME path as the real ones. If it does
 # not deliver, the watchdog does NOT stand pretending to be a net — it exits loudly, which is the
 # opposite of shouting into the void.
+# Under -e every alarm goes through orq: without `orq init` each one would fail into the log only.
+if [ -n "$ORQD" ] && ! erro_orq=$(ORQ_DIR="$ORQD" python3 "$ORQ" ball 2>&1 >/dev/null); then
+  echo "[vigia] orq ball failed in $ORQD: $erro_orq. I am NOT armed." >&2
+  exit 1
+fi
 hangar-send --tmux "$ARB" "[vigia] ARMED over: ${SESSOES[*]} (window ${LIMITE}min${DIARIO:+, journal $DIARIO}). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply."
 rc_arm=$?
 if [ "$rc_arm" -ne 0 ]; then

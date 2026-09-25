@@ -31,4 +31,12 @@ grep -q "watching: rev1 arb" "$t/out" || fail "a lista não seguiu a vez"
 grep -q "^--tmux rev1 " "$t/sent.log" || fail "rev1 não foi cutucado"
 if grep -q "exec1" "$t/sent.log"; then fail "exec1 espera como mandado e foi cutucado"; fi
 grep -q "^--tmux arb \[vigia\] rev1 is stopped" "$t/sent.log" || fail "o árbitro não foi avisado pelo orq"
+# Sem `orq init`, todo alarme via orq cairia só no log: o vigia recusa armar.
+mkdir -p "$t/vazio"; antes=$(wc -l < "$t/sent.log")
+if PATH="$t/bin:$PATH" CP_ENV="$t/env" CP_VIGIA_INTERVALO=0 CP_VIGIA_CICLOS=1 CP_VIGIA_LOG="$t/err" \
+  timeout 10 bash "$raiz/skills/orquestrar/scripts/vigia.sh" arb -e "$t/vazio" > "$t/out2" 2> "$t/err2"; then
+  fail "armou sem orq init"
+fi
+[ "$(wc -l < "$t/sent.log")" -eq "$antes" ] || fail "mandou recado sem orq init"
+grep -q "orq.json" "$t/err2" || fail "não disse por que não armou"
 echo ok
