@@ -3754,6 +3754,7 @@
   "native_working": "Working",
   "native_working_line": "Working…",
   "native_activity_loading": "Reading this session's subagents…",
+  "native_subagent_loading": "Reading the subagent's conversation…",
   "native_idle": "Idle",
   "native_awaiting_input": "Waiting for you",
   "native_dead": "Ended",

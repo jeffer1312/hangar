@@ -3,6 +3,7 @@
 //! esta view, em pedidos numerados, e a chegada redesenha só ela; a conta de subagentes no disco, que decide se a aba e o
 //! botão existem, é do `Hangar`, como no `Chat.svelte`.
 use super::*;
+use super::subagent::SubConversation;
 use crate::conversation::{Activity, TaskStatus};
 use gpui_kit::component::tooltip::Tooltip;
 
@@ -10,24 +11,30 @@ use gpui_kit::component::tooltip::Tooltip;
 const COUNT_EVERY: Duration = Duration::from_secs(5);
 /// O "há N min" dos shells anda de 20 em 20 s, e só com a aba à vista.
 const CLOCK_EVERY: Duration = Duration::from_secs(20);
+/// Consulta do subagente aberto, como o `ActivitySheet`.
+const DETAIL_EVERY: Duration = Duration::from_millis(2500);
+/// Falhas seguidas que param a consulta; o 404 para na primeira.
+const DETAIL_FAILS: u32 = 3;
 
 pub(super) enum ActivityReply {
     /// Quantos subagentes a sessão tem no disco, amarrado à sessão e ao pedido.
     Count(SessionKey, u64, Result<usize, Failure>),
     /// A lista da aba, com o número do pedido.
     List(u64, Result<Vec<SubRun>, Failure>),
+    /// O subagente aberto (`…/subagents/{id}?events=200`), com o número do pedido.
+    Detail(u64, Result<Value, Failure>),
 }
 
 /// Um subagente do disco (`GET …/subagents`), só com o que a lista mostra e casa.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct SubRun {
     agent_id: String, agent_type: Option<String>, prompt: Option<String>, calls: u64, last_tool: Option<String>,
-    finished: bool, unreadable: bool,
+    finished: bool, unreadable: bool, tools: Vec<(String, u64)>,
 }
 
-fn parse_subs(value: &Value) -> Vec<SubRun> {
+fn parse_sub(item: &Value) -> Option<SubRun> {
     let text = |item: &Value, key: &str| item.get(key).and_then(Value::as_str).map(str::to_owned);
-    value.as_array().map(|list| list.iter().filter_map(|item| Some(SubRun {
+    Some(SubRun {
         agent_id: text(item, "agentId")?,
         agent_type: text(item, "agentType").filter(|t| !t.is_empty()),
         prompt: text(item, "prompt"),
@@ -35,10 +42,16 @@ fn parse_subs(value: &Value) -> Vec<SubRun> {
         last_tool: item.get("recent").and_then(Value::as_array).and_then(|recent| recent.last()).and_then(|last| text(last, "name")),
         finished: item.get("finished").and_then(Value::as_bool).unwrap_or(false),
         unreadable: item.get("ilegivel").and_then(Value::as_bool).unwrap_or(false),
-    })).collect()).unwrap_or_default()
+        tools: item.get("tools").and_then(Value::as_array).map(|tools| tools.iter()
+            .filter_map(|t| Some((text(t, "name")?, t.get("count").and_then(Value::as_u64).unwrap_or(0)))).collect()).unwrap_or_default(),
+    })
 }
 
-fn web(key: &str) -> String { crate::i18n::tr_web(key, &HashMap::new()).unwrap_or_else(|| key.to_owned()) }
+fn parse_subs(value: &Value) -> Vec<SubRun> {
+    value.as_array().map(|list| list.iter().filter_map(parse_sub).collect()).unwrap_or_default()
+}
+
+pub(super) fn web(key: &str) -> String { crate::i18n::tr_web(key, &HashMap::new()).unwrap_or_else(|| key.to_owned()) }
 fn web_with(key: &str, name: &str, value: String) -> String {
     crate::i18n::tr_web(key, &HashMap::from([(name.to_owned(), value)])).unwrap_or_else(|| key.to_owned())
 }
@@ -89,7 +102,7 @@ fn calls_line(sub: &SubRun) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct AgentLine { key: String, description: String, tags: Vec<(String, bool)>, now: Option<String> }
+struct AgentLine { key: String, description: String, tags: Vec<(String, bool)>, now: Option<String>, sub: Option<String> }
 #[derive(Clone, Debug, PartialEq)]
 struct OrphanLine { key: String, title: String, tag: Option<String>, now: String, done: bool }
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +117,9 @@ struct Lines { agents: Vec<AgentLine>, orphans: Vec<OrphanLine>, shells: Vec<She
 #[derive(Clone)]
 pub(super) struct Link { pub api: Api, pub runtime: Arc<Runtime>, pub tx: async_channel::Sender<Envelope>, pub connection: u64 }
 
+/// O subagente aberto no detalhe: o que a lista sabia dele até a primeira resposta, depois o que a consulta traz.
+struct Opened { run: SubRun, title: String, raw: Option<Value>, loaded: bool, has_events: bool, fails: u32, busy: bool }
+
 pub(super) struct ActivityPanel {
     link: Option<Link>,
     key: Option<SessionKey>,
@@ -117,12 +133,23 @@ pub(super) struct ActivityPanel {
     lines: Lines,
     clock: Option<Task<()>>,
     scroll: ScrollHandle,
+    opened: Option<Opened>,
+    detail_seq: u64,
+    poll: Option<Task<()>>,
+    /// Aviso do detalhe ("parou", "não achei"), em cima de tudo, como o `subError` do web.
+    notice: Option<String>,
+    /// Clique num cartão Agent antes de a lista chegar: prompt e título.
+    pending: Option<(Option<String>, String)>,
+    conversation: Entity<SubConversation>,
+    /// O ‹ do detalhe: quem abriu pelo teclado cai nele, e Enter volta.
+    back_focus: FocusHandle,
 }
 
 impl ActivityPanel {
-    fn new() -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
         Self { link: None, key: None, shown: false, activity: Activity::default(), processes: Vec::new(), subs: Vec::new(), seq: 0,
-            loading: false, failed: false, lines: Lines::default(), clock: None, scroll: ScrollHandle::new() }
+            loading: false, failed: false, lines: Lines::default(), clock: None, scroll: ScrollHandle::new(), opened: None, detail_seq: 0,
+            poll: None, notice: None, pending: None, conversation: cx.new(|_| SubConversation::new()), back_focus: cx.focus_handle().tab_stop(true) }
     }
 
     /// Refaz as linhas; `true` quando mudou algo que aparece.
@@ -134,7 +161,7 @@ impl ActivityPanel {
             let mut tags = Vec::new();
             if let Some(t) = &a.subagent_type { tags.push((t.clone(), false)); }
             if let Some(m) = &a.model { tags.push((m.clone(), true)); }
-            AgentLine { key: a.id.clone(), description: a.description.clone(), tags, now: sub.map(calls_line) }
+            AgentLine { key: a.id.clone(), description: a.description.clone(), tags, now: sub.map(calls_line), sub: sub.map(|s| s.agent_id.clone()) }
         }).collect();
         let listed: HashSet<&str> = self.activity.agents.iter()
             .filter_map(|a| match_sub(&self.subs, a.prompt.as_deref())).map(|s| s.agent_id.as_str()).collect();
@@ -184,6 +211,9 @@ impl ActivityPanel {
         let Some((key, link)) = target else {
             self.shown = false;
             self.clock = None;
+            // Sair da aba mata o pedido do cartão e a consulta, e a volta começa na lista.
+            self.close_detail(cx);
+            (self.notice, self.pending) = (None, None);
             return;
         };
         let other = self.key.as_ref() != Some(&key);
@@ -192,6 +222,7 @@ impl ActivityPanel {
             // sessão anterior não entra na desta.
             self.seq += 1;
             (self.subs, self.failed, self.loading) = (Vec::new(), false, false);
+            if other { self.close_detail(cx); (self.notice, self.pending) = (None, None); }
             self.key = Some(key);
             self.link = Some(link);
             self.prepare();
@@ -225,7 +256,102 @@ impl ActivityPanel {
         // Falha mantém o que já se sabia e avisa em cima de tudo.
         match result { Ok(subs) => (self.subs, self.failed) = (subs, false), Err(_) => self.failed = true }
         self.prepare();
+        // Pedido do cartão que esperava a lista: com a lista falhando, o aviso dela já diz por quê.
+        if let Some((prompt, title)) = self.pending.take().filter(|_| !self.failed) { self.resolve(prompt.as_deref(), title, cx); }
         cx.notify();
+    }
+
+    /// Clique no cartão Agent da conversa: abre a conversa daquele agente, casada pelo prompt. Sem a lista ainda,
+    /// espera por ela (e a pede de novo se ela não está a caminho).
+    pub(super) fn request_agent(&mut self, prompt: Option<String>, title: String, cx: &mut Context<Self>) {
+        if self.subs.is_empty() {
+            self.pending = Some((prompt, title));
+            if !self.loading { self.load(cx); }
+            return;
+        }
+        self.resolve(prompt.as_deref(), title, cx);
+    }
+
+    fn resolve(&mut self, prompt: Option<&str>, title: String, cx: &mut Context<Self>) {
+        match match_sub(&self.subs, prompt).cloned() {
+            Some(run) => self.open_sub(run, title, cx),
+            None => {
+                // Sem avisar, a tela ficaria no agente anterior: a conversa errada com cara de certa.
+                self.close_detail(cx);
+                self.notice = Some(web("atividade_agente_nao_achado"));
+                cx.notify();
+            }
+        }
+    }
+
+    fn open_sub(&mut self, run: SubRun, title: String, cx: &mut Context<Self>) {
+        self.close_detail(cx);
+        self.notice = None;
+        self.opened = Some(Opened { run, title, raw: None, loaded: false, has_events: false, fails: 0, busy: false });
+        self.poll = Some(cx.spawn(async move |this, cx| loop {
+            if this.update(cx, |this, _| this.fetch_detail()).is_err() { break; }
+            cx.background_executor().timer(DETAIL_EVERY).await;
+        }));
+        cx.notify();
+    }
+
+    /// Volta para a lista e esquece o subagente: resposta dele que ainda chegar é descartada.
+    fn close_detail(&mut self, cx: &mut Context<Self>) {
+        self.detail_seq += 1;
+        self.poll = None;
+        if self.opened.take().is_some() { self.conversation.update(cx, |view, _| view.clear()); }
+    }
+
+    fn back(&mut self, cx: &mut Context<Self>) {
+        self.close_detail(cx);
+        cx.notify();
+    }
+
+    /// Uma batida da consulta: com um pedido em voo, a batida não pede outro.
+    fn fetch_detail(&mut self) {
+        let (Some(link), Some(key)) = (self.link.clone(), self.key.clone()) else { return };
+        let Some(opened) = self.opened.as_mut().filter(|o| !o.busy) else { return };
+        opened.busy = true;
+        let (seq, id) = (self.detail_seq, opened.run.agent_id.clone());
+        link.runtime.spawn(async move {
+            let result = link.api.read(&key.name, &["subagents", &id], &[("events", "200")], 15).await;
+            let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(ActivityReply::Detail(seq, result)) }).await;
+        });
+    }
+
+    fn receive_detail(&mut self, seq: u64, result: Result<Value, Failure>, cx: &mut Context<Self>) {
+        if seq != self.detail_seq { return; }
+        let Some(opened) = self.opened.as_mut() else { return };
+        opened.busy = false;
+        match result {
+            Ok(value) => {
+                opened.fails = 0;
+                let first = !opened.loaded;
+                opened.loaded = true;
+                let cleared = self.notice.take().is_some();
+                // Resposta igual à anterior não pede quadro.
+                if opened.raw.as_ref() == Some(&value) { if first || cleared { cx.notify(); } return; }
+                let run = parse_sub(&value).unwrap_or_else(|| opened.run.clone());
+                let events: Vec<ChatEvent> = value.get("events").cloned().and_then(|e| serde_json::from_value(e).ok()).unwrap_or_default();
+                let finished = run.finished;
+                let has_events = !events.is_empty();
+                let changed = first || cleared || opened.run != run || opened.has_events != has_events;
+                (opened.run, opened.raw, opened.has_events) = (run, Some(value), has_events);
+                self.conversation.update(cx, |view, cx| view.set_events(events, finished, cx));
+                if changed { cx.notify(); }
+            }
+            Err(failure) => {
+                // Falha isolada é normal (o arquivo some quando o agente termina) e mantém o último estado; o 404 é
+                // definitivo (a sessão morreu por baixo do painel) e a terceira seguida é erro de verdade.
+                opened.fails += 1;
+                if failure.status == Some(404) || opened.fails >= DETAIL_FAILS {
+                    opened.loaded = true;
+                    self.poll = None;
+                    self.notice = Some(web("atividade_erro_vivo"));
+                    cx.notify();
+                }
+            }
+        }
     }
 }
 
@@ -259,30 +385,40 @@ fn shell_row(prefix: &str, line: &ShellLine) -> AnyElement {
 }
 
 impl Render for ActivityPanel {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.opened.is_some() { return self.render_detail(window, cx); }
         let lines = &self.lines;
         let mut body = div().px_4().py(px(14.)).flex().flex_col().gap_4();
         if self.failed {
-            body = body.child(div().text_xs().text_color(theme::warning()).child(format!("⚠ {}", web("atividade_erro_subagentes"))));
+            body = body.child(warning_line(web("atividade_erro_subagentes")));
         }
+        if let Some(notice) = &self.notice { body = body.child(warning_line(notice.clone())); }
         if !lines.agents.is_empty() {
-            body = body.child(section(web("atividade_rodando_agora"), None).children(lines.agents.iter().map(|a| {
-                div().flex().items_start().gap_2().child(spinning(format!("act-agent-spin-{}", a.key)))
+            let rows: Vec<AnyElement> = lines.agents.iter().map(|a| {
+                let content = div().flex().items_start().gap_2().child(spinning(format!("act-agent-spin-{}", a.key)))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
                         .child(div().flex().items_center().gap_1().min_w_0()
                             .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(a.description.clone()))
                             .children(a.tags.iter().map(|(t, muted)| tag(t.clone(), *muted))))
-                        .when_some(a.now.clone(), |el, now| el.child(now_text(now))))
-            })));
+                        .when_some(a.now.clone(), |el, now| el.child(now_text(now))));
+                // Só abre quem casou com o disco; o resto é informação.
+                match &a.sub {
+                    Some(sub) => openable(format!("act-agent-{}", a.key), sub.clone(), a.description.clone(), content, window, cx),
+                    None => content.into_any_element(),
+                }
+            }).collect();
+            body = body.child(section(web("atividade_rodando_agora"), None).children(rows));
         }
         if !lines.orphans.is_empty() {
-            body = body.child(section(web("atividade_subagentes"), None).children(lines.orphans.iter().map(|s| {
-                div().flex().flex_col().gap(px(3.)).when(s.done, |el| el.opacity(0.6))
+            let rows: Vec<AnyElement> = lines.orphans.iter().map(|s| {
+                let content = div().flex().flex_col().gap(px(3.)).when(s.done, |el| el.opacity(0.6))
                     .child(div().flex().items_center().gap_1().min_w_0()
                         .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(s.title.clone()))
                         .when_some(s.tag.clone(), |el, t| el.child(tag(t, false))))
-                    .child(now_text(s.now.clone()))
-            })));
+                    .child(now_text(s.now.clone()));
+                openable(format!("act-orphan-{}", s.key), s.key.clone(), s.title.clone(), content, window, cx)
+            }).collect();
+            body = body.child(section(web("atividade_subagentes"), None).children(rows));
         }
         if !lines.shells.is_empty() {
             body = body.child(section(web("atividade_shells"), Some(lines.shells.len()))
@@ -310,7 +446,90 @@ impl Render for ActivityPanel {
             let text = if self.loading && self.subs.is_empty() && !self.failed { tr("activity_loading") } else { web("atividade_vazio") };
             body = body.child(div().py_4().text_center().text_sm().text_color(theme::faint()).child(text));
         }
-        div().id("activity-scroll").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(body)
+        div().id("activity-scroll").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(body).into_any_element()
+    }
+}
+
+fn warning_line(text: String) -> AnyElement {
+    div().text_xs().text_color(theme::warning()).child(format!("⚠ {text}")).into_any_element()
+}
+
+/// Linha da lista que abre a conversa do subagente: foco pelo Tab, Enter ou espaço abrem, › à direita como o web.
+fn openable(id: String, agent_id: String, title: String, content: Div, window: &mut Window, cx: &mut Context<ActivityPanel>) -> AnyElement {
+    let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
+    let label = format!("{}: {title}", web("tool_abrir_agente"));
+    let (click_id, click_title) = (agent_id.clone(), title.clone());
+    div().id(SharedString::from(id)).track_focus(&focus).flex().items_center().gap_2().mx(px(-8.)).px(px(8.)).py(px(4.)).rounded(px(8.))
+        .cursor_pointer().hover(|el| el.bg(theme::hover()))
+        .when(focus.is_focused(window), |el| el.focus_ring_style(window, cx))
+        .role(Role::Button).aria_label(label)
+        .child(content.flex_1().min_w_0())
+        .child(chrome::small_icon(IconName::ChevronRight, 14., theme::faint()).flex_shrink_0())
+        .on_click(cx.listener(move |this, _, _, cx| this.open_listed(&click_id, click_title.clone(), cx)))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                this.open_listed(&agent_id, title.clone(), cx);
+                // A linha focada some com a lista: o foco passa ao ‹, e o caminho de volta fica a um Enter.
+                if this.opened.is_some() { this.back_focus.focus(window, cx); }
+                cx.stop_propagation();
+            }
+        }))
+        .into_any_element()
+}
+
+impl ActivityPanel {
+    /// Linha da lista: o subagente já é conhecido, sem casar de novo pelo texto.
+    fn open_listed(&mut self, agent_id: &str, title: String, cx: &mut Context<Self>) {
+        if let Some(run) = self.subs.iter().find(|s| s.agent_id == agent_id).cloned() { self.open_sub(run, title, cx); }
+    }
+
+    /// Detalhe: ‹ e o título, o estado dele, a conversa (só ela rola), as ferramentas e o rodapé de só leitura.
+    fn render_detail(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(opened) = &self.opened else { return div().into_any_element() };
+        let run = &opened.run;
+        let small = |text: String, color: Hsla| div().child(text).text_color(color).into_any_element();
+        let meta: Vec<AnyElement> = if run.unreadable { vec![small(web("atividade_sub_ilegivel"), theme::muted())] } else {
+            let mut meta = vec![
+                if run.finished { small(format!("✓ {}", web("atividade_sub_concluido")), theme::success()) }
+                else { small(format!("◐ {}", web("atividade_rodando")), theme::accent()) },
+                small(web_with("atividade_chamadas", "n", run.calls.to_string()), theme::muted()),
+            ];
+            if let Some(t) = &run.agent_type { meta.push(small(t.clone(), theme::muted())); }
+            if let Some(t) = &run.last_tool { meta.push(div().font_family(theme::MONO).text_color(theme::faint()).child(t.clone()).into_any_element()); }
+            meta
+        };
+        let empty = |text: String| div().px_4().py_4().text_center().text_sm().text_color(theme::faint()).child(text).into_any_element();
+        let body = if !opened.loaded { empty(tr("subagent_loading")) }
+            else if opened.has_events { self.conversation.clone().cached(StyleRefinement::default().size_full()).into_any_element() }
+            // Já chamou ferramentas (ou o registro não foi lido): é falha de leitura, não agente parado.
+            else if run.unreadable || run.calls > 0 { empty(web("atividade_erro_transcript")) }
+            else { empty(web("atividade_pensando")) };
+        let title = if opened.title.trim().is_empty() { web("atividade_subagente") } else { opened.title.clone() };
+        let back = web("comum_voltar");
+        let session = self.key.as_ref().map(|k| k.name.clone()).unwrap_or_default();
+        div().size_full().flex().flex_col()
+            .child(div().flex_shrink_0().px(px(10.)).pt(px(10.)).pb(px(4.)).flex().items_center().gap_1()
+                .child(div().id("act-back").track_focus(&self.back_focus).size(px(28.)).flex_shrink_0().rounded(px(6.))
+                    .flex().items_center().justify_center().cursor_pointer().hover(|el| el.bg(theme::hover()))
+                    .when(self.back_focus.is_focused(window), |el| el.focus_ring_style(window, cx))
+                    .role(Role::Button).aria_label(back.clone())
+                    .tooltip(move |window, cx| Tooltip::new(back.clone()).build(window, cx))
+                    .child(chrome::small_icon(IconName::ChevronLeft, 16., theme::text()))
+                    .on_click(cx.listener(|this, _, _, cx| this.back(cx)))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") { this.back(cx); cx.stop_propagation(); }
+                    })))
+                .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(title)))
+            .when_some(self.notice.clone(), |el, notice| el.child(div().flex_shrink_0().px_4().pb_2().child(warning_line(notice))))
+            .child(div().flex_shrink_0().px_4().pb(px(10.)).flex().flex_wrap().gap_x(px(10.)).gap_y(px(2.)).text_xs().children(meta))
+            .child(div().flex_1().min_h_0().border_t_1().border_color(theme::border()).child(body))
+            .when(!run.tools.is_empty(), |el| el.child(div().flex_shrink_0().px_4().py(px(10.)).border_t_1().border_color(theme::border())
+                .flex().flex_col().gap_2()
+                .child(chrome::section_label(web_with("atividade_ferramentas_chamadas", "n", run.calls.to_string())))
+                .child(div().flex().flex_wrap().gap_1().children(run.tools.iter().map(|(name, n)| tag(format!("{name} ×{n}"), false))))))
+            .child(div().flex_shrink_0().px_4().py(px(8.)).border_t_1().border_color(theme::border()).text_xs().text_color(theme::faint())
+                .child(web_with("atividade_conversa_so_leitura", "nome", session)))
+            .into_any_element()
     }
 }
 
@@ -328,7 +547,7 @@ pub(super) struct ActivityState {
 
 impl ActivityState {
     pub fn new(cx: &mut App) -> Self {
-        Self { view: cx.new(|_| ActivityPanel::new()), count: 0, count_seq: 0, count_busy: false, count_timer: None, chosen: HashSet::new() }
+        Self { view: cx.new(ActivityPanel::new), count: 0, count_seq: 0, count_busy: false, count_timer: None, chosen: HashSet::new() }
     }
 }
 
@@ -413,8 +632,26 @@ impl Hangar {
                 if self.has_activity() != before { self.sync_activity(cx); cx.notify(); }
             }
             ActivityReply::List(seq, result) => self.act.view.update(cx, |view, cx| view.receive(seq, result, cx)),
+            ActivityReply::Detail(seq, result) => self.act.view.update(cx, |view, cx| view.receive_detail(seq, result, cx)),
         }
     }
+
+    /// Clique no cartão Agent da conversa: abre o painel na aba Atividade, já na conversa desse agente. Cada clique é um
+    /// pedido novo, então clicar de novo no mesmo agente depois do ‹ reabre.
+    pub(super) fn open_agent(&mut self, (prompt, title): (Option<String>, String), cx: &mut Context<Self>) {
+        self.open_activity(cx);
+        self.act.view.update(cx, |view, cx| view.request_agent(prompt, title, cx));
+    }
+}
+
+/// O cartão Agent (só ele) abre a conversa do agente: prompt, que casa com o disco, e o título do detalhe.
+pub(super) fn agent_request(call: &ChatEvent) -> Option<(Option<String>, String)> {
+    if call.tool_name.as_deref() != Some("Agent") { return None; }
+    let text = |key: &str| call.tool_input.as_ref().and_then(|i| i.get(key)).and_then(Value::as_str).map(str::to_owned);
+    Some((text("prompt"), text("description").filter(|d| !d.trim().is_empty()).unwrap_or_else(|| web("atividade_subagente"))))
+}
+
+impl Hangar {
 
     /// A aba do painel: Atividade (a view própria) ou nada, e o Contexto segue como era.
     pub(super) fn activity_view(&self) -> AnyElement {
@@ -468,7 +705,7 @@ mod tests {
     use super::{SubRun, base_title, interval, match_sub, sub_title};
 
     fn sub(id: &str, prompt: &str) -> SubRun {
-        SubRun { agent_id: id.into(), agent_type: None, prompt: Some(prompt.into()), calls: 0, last_tool: None, finished: false, unreadable: false }
+        SubRun { agent_id: id.into(), agent_type: None, prompt: Some(prompt.into()), calls: 0, last_tool: None, finished: false, unreadable: false, tools: Vec::new() }
     }
 
     #[test]

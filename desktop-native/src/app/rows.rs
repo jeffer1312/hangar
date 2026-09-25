@@ -85,7 +85,9 @@ impl Hangar {
         let open = self.expanded.contains(&key);
         let ending = self.chip_ending(tool);
         let toggle_key = key.clone();
-        let label = format!("{verb} {chip}");
+        // O cartão Agent abre a conversa dele na aba Atividade em vez de expandir.
+        let agent = super::activity::agent_request(call);
+        let label = if agent.is_some() { format!("{}: {chip}", super::activity::web("tool_abrir_agente")) } else { format!("{verb} {chip}") };
         let button = Button::new(SharedString::from(format!("chip-{key}")))
             .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
             .w_full().h(px(34.)).px(px(12.)).rounded(px(0.))
@@ -97,7 +99,10 @@ impl Hangar {
                 .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).text_size(px(12.5)).child(chip))
                 .child(ending)
                 .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint())))
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
+            .on_click(cx.listener(move |this, _, _, cx| match &agent {
+                Some(request) => this.open_agent(request.clone(), cx),
+                None => this.toggle(toggle_key.clone(), cx),
+            }));
         let body = open.then(|| self.tool_body(tool, row, cx).px(px(12.)));
         div().flex().flex_col().child(button).children(body).into_any_element()
     }

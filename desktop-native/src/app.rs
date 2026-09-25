@@ -25,6 +25,7 @@ mod server_config;
 mod shortcuts;
 mod side;
 mod sidebar;
+mod subagent;
 
 actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, NextSession, PreviousSession]);
 
@@ -1899,12 +1900,18 @@ impl Hangar {
         let error = tool.result.is_some_and(|i| self.chat.events[i].is_error == Some(true));
         let open = self.expanded.contains(&key);
         let toggle_key = key.clone();
+        // O cartão Agent abre a conversa dele na aba Atividade em vez de expandir.
+        let agent = activity::agent_request(call);
+        let label = if agent.is_some() { format!("{}: {summary}", activity::web("tool_abrir_agente")) } else { format!("{name}: {summary}. {status}") };
         let header = self.disclosure(&key, open)
-            .accessibility_label(format!("{name}: {summary}. {status}"))
+            .accessibility_label(label)
             .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::text() }).child(name))
             .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(summary))
             .child(div().flex_shrink_0().max_w(px(320.)).truncate().text_color(status_color).child(status))
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
+            .on_click(cx.listener(move |this, _, _, cx| match &agent {
+                Some(request) => this.open_agent(request.clone(), cx),
+                None => this.toggle(toggle_key.clone(), cx),
+            }));
         let body = open.then(|| self.tool_body(tool, row, cx).pl_6());
         div().flex().flex_col().child(header).children(body).into_any_element()
     }

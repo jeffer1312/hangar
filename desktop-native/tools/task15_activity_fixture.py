@@ -12,6 +12,14 @@ GET /control/t15?do=<passo> continua valendo (passos da 15a) e ganha:
   tasks             TaskCreate ×3 + TaskUpdate (em andamento, concluída)
   todo              TodoWrite com a lista inteira (vence as TaskCreate)
 Cada pedido a /subagents sai no log como "REQ" (a contagem de 5 s e a leitura da aba aparecem ali).
+
+15c: GET /api/sessions/{n}/subagents/{id}?events=N (detalhe) e GET /control/t15c?detail=<modo>[&slow=<id>&delay=<s>][&grow=0|1][&reset=1]:
+  ok        conversa sintética do subagente (ag-bg1: rodando, com pensamento, ferramentas, erro e markdown; ag-orf1:
+            concluído; ag-sw1: 0 chamadas e sem eventos (a lista diz 3); ag-sw2: chamadas sem eventos; ag-ilegivel: ilegível; outro id: 404)
+  404 | 500 | drop   erro do backend / queda, em todo pedido de detalhe
+  flaky     um pedido sim, um não (500): falha isolada, que não para a consulta
+  slow=<id>&delay=<s>  só o detalhe desse subagente espera s segundos (resposta atrasada de um subagente anterior)
+  grow=1    cada pedido do ag-bg1 acrescenta uma resposta à conversa dele (a consulta de 2,5 s traz novidade); reset=1 zera
 """
 import pathlib
 import time
@@ -26,6 +34,7 @@ BASE, LOCK, SESSIONS, bump, call, NAME = (T15[k] for k in ("BASE", "LOCK", "SESS
 record = BASE.get("record") or (lambda method, path, body: print("REQ", method, path, flush=True))
 
 SUBS = {"mode": "ok", "delay": 0.0}
+DETAIL = {"mode": "ok", "slow": "", "delay": 0.0, "grow": False, "extra": 0, "count": 0}
 PROCS = {"on": False}
 
 
@@ -47,6 +56,47 @@ def listing():
         {"agentId": "ag-ilegivel", "agentType": None, "prompt": None, "startedAt": "", "updatedAt": "", "mtime": 1790340000.0,
          "toolCalls": 0, "tools": [], "recent": [], "lastText": "", "ilegivel": True},
     ]
+
+
+def ev(kind, eid, text=None, **extra):
+    return {"kind": kind, "id": eid, "text": text, **extra}
+
+
+def use(eid, tid, name, tool_input):
+    return ev("tool_use", eid, tool_name=name, tool_input=tool_input, tool_use_id=tid)
+
+
+def out(eid, tid, text, error=False):
+    return ev("tool_result", eid, tool_use_id=tid, result=text, is_error=error)
+
+
+def detail(agent_id):
+    base = next((s for s in listing() if s["agentId"] == agent_id), None)
+    if base is None:
+        return None
+    events = []
+    if agent_id == "ag-bg1":
+        events = [
+            ev("user_msg", "s1", "Confira conversation.rs (sintético)."),
+            ev("thinking", "s2", "Primeiro leio o fold, depois procuro onde o Agent de fundo fecha."),
+            use("s3", "u1", "Read", {"file_path": "/sintetica/src/conversation.rs"}),
+            out("s4", "u1", "fn fold_activity(events: &[ChatEvent]) -> Activity {\n    // sintético\n}"),
+            ev("assistant_msg", "s5", "O fold fecha o agente em **dois** caminhos:\n\n- `task:<id>` no resultado\n"
+                                      "- `<task-notification>` na mensagem\n\n## Próximo passo\nConferir a ordem de chegada."),
+            use("s6", "u2", "Grep", {"pattern": "task-notification", "path": "/sintetica/src"}),
+            out("s7", "u2", "Arquivo sintético não encontrado", error=True),
+            use("s8", "u3", "Grep", {"pattern": "fold_activity", "path": "/sintetica"}),
+        ]
+        events += [ev("assistant_msg", f"s-grow-{i}", f"Resposta sintética nova número {i + 1}.") for i in range(DETAIL["extra"])]
+    elif agent_id == "ag-orf1":
+        events = [ev("user_msg", "o1", "Mapear as rotas sintéticas do backend"),
+                  use("o2", "v1", "Bash", {"command": "rg '@app.get' /sintetica/backend | wc -l"}),
+                  out("o3", "v1", "42"),
+                  ev("assistant_msg", "o4", "São 42 rotas sintéticas. Terminei.")]
+    elif agent_id == "ag-sw1":
+        # Recomeçou: nenhuma chamada ainda ("Ainda pensando"), embora a lista, mais velha, diga 3.
+        base = {**base, "toolCalls": 0, "tools": [], "recent": []}
+    return {**base, "events": events}
 
 
 STEPS = T15["STEPS"]
@@ -100,7 +150,42 @@ class Handler(T15["Handler"]):
                 SUBS["delay"] = float(query.get("delay", [SUBS["delay"]])[0])
             self.send_json(dict(SUBS))
             return
+        if url.path == "/control/t15c":
+            query = parse_qs(url.query)
+            with LOCK:
+                DETAIL["mode"] = query.get("detail", [DETAIL["mode"]])[0]
+                DETAIL["slow"] = query.get("slow", [DETAIL["slow"]])[0]
+                DETAIL["delay"] = float(query.get("delay", [DETAIL["delay"]])[0])
+                DETAIL["grow"] = query.get("grow", ["1" if DETAIL["grow"] else "0"])[0] == "1"
+                if "reset" in query:
+                    DETAIL["extra"] = 0
+                self.send_json(dict(DETAIL))
+            return
         parts = url.path.strip("/").split("/")
+        if len(parts) == 5 and parts[:2] == ["api", "sessions"] and parts[3] == "subagents":
+            if not self.authorized():
+                return
+            record("GET", self.path, None)
+            with LOCK:
+                mode, slow, delay = DETAIL["mode"], DETAIL["slow"], DETAIL["delay"]
+                DETAIL["count"] += 1
+                if DETAIL["grow"] and parts[4] == "ag-bg1":
+                    DETAIL["extra"] += 1
+                flaky_fail = mode == "flaky" and DETAIL["count"] % 2 == 0
+            if slow == parts[4]:
+                time.sleep(delay)
+            if mode == "drop":
+                self.close_connection = True
+                self.connection.close()
+                return
+            body = detail(parts[4]) if parts[2] == NAME else None
+            if mode == "404" or body is None:
+                self.send_json({"detail": "subagent not found (sintético)"}, 404)
+            elif mode == "500" or flaky_fail:
+                self.send_json({"detail": "falha sintética do detalhe"}, 500)
+            else:
+                self.send_json(body)
+            return
         if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "subagents":
             if not self.authorized():
                 return
