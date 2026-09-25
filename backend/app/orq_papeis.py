@@ -23,7 +23,8 @@ CABECALHO_VEZ = ("papel", "vez", "sessão", "provider", "conta", "modelo", "esfo
 # `abertura` segue a mesma regra da `vez`: a coluna só entra no arquivo quando algum papel usa uma
 # opção de abertura, e vai por último. A célula é o trecho de flags do `hangar-send --new`.
 ABERTURA = "abertura"
-# `janela`: % da janela de contexto da própria sessão em que o papel passa a vez (o vigia lê).
+# `janela`: teto de contexto do papel, em % da janela da própria sessão. O vigia avisa o árbitro
+# nele; quem decide a troca é o árbitro.
 # Mesma regra das outras opcionais; fica antes de `abertura`. Vazio = 50%.
 JANELA = "janela"
 _CABECALHOS = tuple(sorted(
@@ -55,7 +56,7 @@ class Papel:
     # Trecho da célula que o painel não edita (ex.: `--read-only` escrito pelo árbitro): volta
     # intacto no fim da célula, senão salvar pelo painel apagaria a proteção sem ninguém ver.
     abertura_extra: str = ""
-    janela: str = ""        # "60" = passa a vez aos 60% da janela; "" = 50%
+    janela: str = ""        # "60" = teto de contexto em 60% da janela; "" = 50%
 
     def e_arbitro(self) -> bool:
         return orq_md.normalizar(self.papel) == ARBITRO

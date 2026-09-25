@@ -282,7 +282,7 @@ for nome in sys.argv[2:]:
     saida.append("%d/%s/%dk/%dk" % (round(100 * c[0] / c[1]), lim, c[0] // 1000, c[1] // 1000))
 print("|".join(saida))
 PY
-CAVISO=()        # already warned that this session crossed its window? (1 warning per crossing)
+CAVISO=()        # context % at the last delivered ceiling alarm, per session (0 = below the ceiling)
 
 # Interval between readings. It exists as a variable only so the smoke test can run the whole
 # loop in seconds; in normal use nobody passes it.
@@ -404,9 +404,9 @@ for i in $(seq 1 "$CICLOS"); do
     fi
   done
 
-  # CONTEXT past the row's `janela`: the session stops after what it is doing and asks for its
-  # replacement; the arbiter opens the substitute. Once per crossing — dropping back below
-  # (a compaction) re-arms it.
+  # CONTEXT past the row's `janela`: the arbiter is told and decides the swap by cost; the session
+  # is only asked to report what is left, never to stop. Once per crossing, again every 10 more
+  # points while it stays above; dropping back below (a compaction) re-arms it.
   curl -sf --config "$CURLRC" "$BASE/api/sessions/$ARB/orq" -o "$ORQF" 2>>"${CP_VIGIA_LOG:-/dev/stderr}" || : > "$ORQF"
   ct=$(printf '%s' "$lista" | python3 "$CTXDET" "$ORQF" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
   # The context reader dying cannot turn into "nobody crossed": same rule as the state reader.
@@ -422,18 +422,22 @@ for i in $(seq 1 "$CICLOS"); do
     [ "$c" = "-" ] && continue
     IFS='/' read -r pct lim usado total <<< "$c"
     if [ "$pct" -lt "$lim" ]; then CAVISO[$k]=0; continue; fi
-    [ "${CAVISO[$k]:-0}" -eq 1 ] && continue
+    # Past the ceiling the session keeps working until the arbiter decides; with no decision the
+    # alarm comes back every 10 more points instead of going quiet for good.
+    ult=${CAVISO[$k]:-0}
+    [ "$ult" -gt 0 ] && [ "$pct" -lt $(( ult + 10 )) ] && continue
+    ainda=""; [ "$ult" -gt 0 ] && ainda=" STILL past it, no swap since the alarm at ${ult}%."
     nome=${SESSOES[$k]}
     if [ "$k" -eq "$ULT" ]; then
-      msg="[vigia] YOUR context is at ${pct}% of your window (${usado}/${total}); your row hands over at ${lim}%. Finish the current act and run your succession (arbitro-encerramento.md, \"Arbiter succession\")."
+      msg="[vigia] YOUR context is at ${pct}% of your window (${usado}/${total}); your row's ceiling is ${lim}%.${ainda} Decide by cost (arbitro-vigia.md, \"Rotation\"): finish the act past the ceiling, or run your succession at the nearest clean point (arbitro-encerramento.md, \"Arbiter succession\"). Record the decision with its numbers: orq log --task <N> \"…\"."
     else
-      hangar-send --tmux "$nome" "[vigia] Your context is at ${pct}% of your window (${usado}/${total}); your role's row hands over at ${lim}%. Finish what you are doing now (the current step, or this round's report), start nothing new, then ask for your replacement: orq notify '[decisao] replace me: ctx ${pct}%, HEAD <hash>, round <stash hash | none>'." >/dev/null 2>&1
-      msg="[vigia] ${nome} is at ${pct}% of its window (${usado}/${total}; its row hands over at ${lim}%). I asked it to stop after the current act and request its replacement. Open the substitute before the next round (arbitro-vigia.md, \"Rotation\")."
+      hangar-send --tmux "$nome" "[vigia] Your context is at ${pct}% of your window (${usado}/${total}); your role's ceiling is ${lim}%.${ainda} Tell the arbiter what is left and keep working until the arbiter decides: orq notify '[decisao] ceiling: ctx ${pct}%, left: <actions, screenshots, report>'." >/dev/null 2>&1
+      msg="[vigia] ${nome} is at ${pct}% of its window (${usado}/${total}; its row's ceiling is ${lim}%).${ainda} I asked it to tell you what is left. Decide by cost (arbitro-vigia.md, \"Rotation\"): little left → it finishes past the ceiling; much left → swap at the nearest clean point. Record the decision with its numbers: orq log --task <N> \"…\"."
     fi
     echo "$msg"
     # Marked as warned only when the arbiter got it; a failed delivery retries next cycle.
     if avisar_arb "$msg"; then
-      CAVISO[$k]=1
+      CAVISO[$k]=$pct
     else
       echo "[vigia] context alarm for $nome NOT delivered to $ARB; retrying next cycle" >&2
     fi

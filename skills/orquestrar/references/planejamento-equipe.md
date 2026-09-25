@@ -65,7 +65,8 @@ Team table in `regras-<gid>.md`, raw values only (`-` = empty). Start from
   (`--headless`, `--permissao <mode>`, `--engine <engine>`, `--subagente <model>`, `--jev`);
   `-` = defaults. The panel writes it; copy it as is.
 - Optional `janela` column, before `abertura`: the % of the session's own context window at
-  which the role hands over (`60%`); `-` = 50%. The panel writes it; the watchdog reads it.
+  which the arbiter decides the role's handover (`60%`); `-` = 50%. A reference, never an order
+  to stop. The panel writes it; the watchdog reads it.
 - Optional `verificador` row (`<work>-verif-*`, own account/model/effort): delivers proofs; the
   reviewer still decides. Without it the reviewer runs the tests. It enters a running contract
   only with the user's authorization.

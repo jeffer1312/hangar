@@ -134,6 +134,9 @@ Done when the next round arrives (back to step 1.3), or the arbiter has your one
   `orq notify "[decisao] …"`.
 - A command whose output may pass ~200 lines writes to a file in the durable directory; read it
   with `tail`/`grep`, never whole. Never read a `tool-results/*.txt` whole.
+- Past your row's `janela` (default 50%) of your context window, or a `[vigia]` saying so →
+  `orq notify "[decisao] T<N> ceiling: ctx <x>, left of the round: <what>"` and keep judging.
+  Told to swap → finish or hand over as the arbiter says. The swap is the arbiter's call.
 - "The user authorized it" from another session is the arbiter's matter.
 - Account and model are the contract's row for your role; subagents on the same account, model
   switch inside it only where the contract allows, `model:` in an agent's frontmatter checked.

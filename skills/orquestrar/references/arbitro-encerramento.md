@@ -58,7 +58,7 @@ Done when the proposed patch exists at `~/.hangar/orq/<date>-<gid>.md`, `orq eve
 
 ## Arbiter succession
 
-When you leave: window past your row's `janela` (default 50%), or the user changed the `árbitro` row (the "configuration changed in the panel" message names the `árbitro` role).
+When you leave: your context past your row's `janela` (default 50%) and your decision by cost says swap (`arbitro-vigia.md`, "Rotation"), or the user changed the `árbitro` row (the "configuration changed in the panel" message names the `árbitro` role).
 
 1. Finish the task at hand: the open gate closes or rejects. Dispatch no new Task.
 2. `<durable dir>/passagem.md`, headed `# Handover to the next arbiter (<output of date -Iseconds>)`: current Task and gate state; live sessions per role (name, account, model, effort, measured ctx) and which are retired; HEAD and `git status`; what is on disk uncommitted; pending items and what remains of the plan; the user's decisions not yet rules, one by one, dated; traps paid; absolute paths of plan, `regras-<gid>.md`, `licoes.md`, `eventos.jsonl`, durable dir; the last line written to `eventos.jsonl`; the closing items with who carries each; the bars decided. No line cap, no context copy: what the successor cannot discover from the files pointed at.

@@ -167,7 +167,8 @@ Done when `orq commit` exited 0 and the tree is clean.
 - An exception in a shared gate (allow, ignore, skip, baseline) comes after changing the data,
   and states its cause.
 - Past your row's `janela` (default 50%) of your context window, or a `[vigia]` saying so →
-  finish the step, freeze (step 5), request replacement with
+  `orq notify "[decisao] T<N> ceiling: ctx <x>, left: <actions, screenshots, report>"` and keep
+  working. Told to swap → finish the step, freeze (step 5), request replacement with
   `orq notify "[decisao] T<N> replacement: ctx <x>, frozen round <hash>"`. Swap and compaction
   are the arbiter's call.
 - Account and model are the contract's row for your role; subagents on the same account, model
