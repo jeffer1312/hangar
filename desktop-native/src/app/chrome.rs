@@ -292,6 +292,37 @@ pub fn popover(content: AnyElement, narrow: bool) -> AnyElement {
         .shadow(theme::popover_shadow()).child(content).into_any_element()
 }
 
+/// Alerta de sim ou não. O Enter do kit confirma o alerta ao descer a tecla, com o foco onde estiver: no Cancelar, Enter
+/// confirmaria. Aqui o Enter segue para o botão focado, e só o clique no botão de confirmar entra no confirmar do kit,
+/// que fecha com a animação e devolve o foco como antes. `act` devolve se o alerta fecha.
+pub fn confirm_alert(window: &mut Window, cx: &mut App, title: String, description: String, ok: String, variant: ButtonVariant,
+    act: impl Fn(&mut Window, &mut App) -> bool + 'static) {
+    use gpui_kit::{base::actions::{Cancel, Confirm}, component::{WindowExt, dialog::DialogFooter}};
+    let act = Rc::new(act);
+    let pressed = Rc::new(Cell::new(false));
+    // Cada botão despacha a partir de um nó dentro dele, como o rodapé do kit: pelo foco, uma superfície que o
+    // tomasse deixaria o botão mudo. O nó não entra na ordem do Tab.
+    let (cancel_from, ok_from) = (cx.focus_handle(), cx.focus_handle());
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let (act, confirm) = (act.clone(), pressed.clone());
+        let (press, cancel_from, ok_from) = (pressed.clone(), cancel_from.clone(), ok_from.clone());
+        let anchor = |from: &FocusHandle| div().absolute().size_0().track_focus(from);
+        alert.title(SharedString::from(title.clone())).description(SharedString::from(description.clone()))
+            .footer(DialogFooter::new()
+                .child(Button::new("cancel").label(crate::i18n::tr("cancel")).child(anchor(&cancel_from))
+                    .on_click(move |_, window, cx| cancel_from.dispatch_action(&Cancel, window, cx)))
+                .child(Button::new("ok").label(ok.clone()).with_variant(variant).child(anchor(&ok_from))
+                    .on_click(move |_, window, cx| {
+                        press.set(true);
+                        ok_from.dispatch_action(&Confirm { secondary: false }, window, cx);
+                        press.set(false);
+                    })))
+            .on_ok(move |event, window, cx| {
+                if confirm.take() { act(window, cx) } else { super::machines::enter_to_focused(event, window, cx) }
+            })
+    });
+}
+
 /// Rótulo de seção (lista e painel): 12px, peso médio, sem caixa alta, como no mock.
 pub fn section_label(title: String) -> Div {
     div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::faint()).child(title)

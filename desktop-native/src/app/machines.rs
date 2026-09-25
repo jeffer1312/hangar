@@ -11,7 +11,7 @@ use add::{AddMachine, Found};
 use pair::Pair;
 use super::server_config::chip;
 use super::settings::{settings_box, Page};
-use gpui_kit::component::{WindowExt, dialog::DialogButtonProps, switch::Switch, tooltip::Tooltip};
+use gpui_kit::component::{WindowExt, switch::Switch, tooltip::Tooltip};
 
 /// O web espera o serviço voltar por até 2 minutos, perguntando a cada 2 segundos.
 const RESTART_WAIT: Duration = Duration::from_secs(120);
@@ -343,16 +343,11 @@ impl Hangar {
     fn confirm_peer_removal(&mut self, id: String, spot: Spot, window: &mut Window, cx: &mut Context<Self>) {
         let title = tr("machines_peer_remove_title").replace("{nome}", &id);
         let this = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let (this, id) = (this.clone(), id.clone());
-            alert.title(SharedString::from(title.clone())).description(SharedString::from(tr("machines_peer_here_only")))
-                .button_props(DialogButtonProps::default().show_cancel(true).ok_text(tr("machines_peer_remove")).ok_variant(ButtonVariant::Danger)
-                    .cancel_text(tr("cancel")))
-                .on_ok(move |_, _, cx| {
-                    let _ = this.update(cx, |this, cx| this.write_peer(id.clone(), spot, PeerWrite::Removed, cx));
-                    true
-                })
-        });
+        chrome::confirm_alert(window, cx, title, tr("machines_peer_here_only"), tr("machines_peer_remove"), ButtonVariant::Danger,
+            move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.write_peer(id.clone(), spot, PeerWrite::Removed, cx));
+                true
+            });
     }
 
     fn open_peer_detail(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -653,17 +648,11 @@ impl Hangar {
             (tr("machines_sign_out_title"), tr("machines_back_needs"), tr("machines_sign_out"))
         };
         let this = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let this = this.clone();
-            alert.title(SharedString::from(title.clone())).description(SharedString::from(description.clone()))
-                .button_props(DialogButtonProps::default().show_cancel(true).ok_text(ok.clone()).ok_variant(ButtonVariant::Danger)
-                    .cancel_text(tr("cancel")))
-                .on_ok(move |_, window, cx| {
-                    // Saiu: o detalhe e esta pergunta fecham juntos. Não saiu: o aviso aparece onde se clicou.
-                    let left = this.update(cx, |this, cx| this.forget_connection(leave, window, cx)).unwrap_or(false);
-                    if left { window.close_all_dialogs(cx); }
-                    !left
-                })
+        chrome::confirm_alert(window, cx, title, description, ok, ButtonVariant::Danger, move |window, cx| {
+            // Saiu: o detalhe e esta pergunta fecham juntos. Não saiu: o aviso aparece onde se clicou.
+            let left = this.update(cx, |this, cx| this.forget_connection(leave, window, cx)).unwrap_or(false);
+            if left { window.close_all_dialogs(cx); }
+            !left
         });
     }
 

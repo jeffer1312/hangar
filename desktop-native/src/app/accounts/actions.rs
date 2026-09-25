@@ -2,7 +2,7 @@
 //! se repete sozinha: queda depois de enviar é resultado incerto, dito assim, e a lista relida mostra o que valeu.
 //! Uma ação em curso segura os controles das outras, para que a resposta sempre ache quem a pediu.
 use super::*;
-use gpui_kit::component::{WindowExt, dialog::DialogButtonProps};
+use gpui_kit::component::WindowExt;
 use tokio::sync::oneshot;
 
 /// Tentativa de login numa conta; enquanto existe, a página mostra os passos no lugar da lista, como no web.
@@ -369,13 +369,8 @@ impl Hangar {
         };
         let title = title.replace("{name}", &row.name);
         let this = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let (this, id) = (this.clone(), id.clone());
-            alert.title(SharedString::from(title.clone())).description(SharedString::from(description.clone()))
-                .button_props(DialogButtonProps::default().show_cancel(true).ok_text(ok.clone()).ok_variant(ButtonVariant::Danger)
-                    .cancel_text(tr("cancel")))
-                .on_ok(move |_, _, cx| { let _ = this.update(cx, |this, cx| this.start_change(id.clone(), kind, cx)); true })
-        });
+        chrome::confirm_alert(window, cx, title, description, ok, ButtonVariant::Danger,
+            move |_, cx| { let _ = this.update(cx, |this, cx| this.start_change(id.clone(), kind, cx)); true });
     }
 
     fn start_change(&mut self, id: String, kind: ChangeKind, cx: &mut Context<Self>) {

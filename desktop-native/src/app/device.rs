@@ -4,7 +4,7 @@
 use super::*;
 use super::settings::{Page, segments, settings_box};
 use crate::appearance::{self, Currency, Language};
-use gpui_kit::component::{WindowExt, dialog::DialogButtonProps, progress::Progress};
+use gpui_kit::component::progress::Progress;
 
 /// Um pedido ao servidor e o último resultado: carregando, erro, vazio e com dados saem daqui.
 pub(super) struct Remote<T> { pub(super) value: Option<Result<T, String>>, pub(super) loading: bool, pub(super) seq: u64 }
@@ -249,14 +249,9 @@ impl Hangar {
     fn open_update_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let this = cx.entity().downgrade();
         let server = self.server_label(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let this = this.clone();
-            alert.title(SharedString::from(tr("update_confirm_title").replace("{server}", &server)))
-                .description(SharedString::from(tr("update_confirm_desc")))
-                .button_props(DialogButtonProps::default().show_cancel(true)
-                    .ok_text(tr("update_confirm_ok")).cancel_text(tr("cancel")))
-                .on_ok(move |_, _, cx| { let _ = this.update(cx, |this, cx| this.start_update(cx)); true })
-        });
+        chrome::confirm_alert(window, cx, tr("update_confirm_title").replace("{server}", &server), tr("update_confirm_desc"),
+            tr("update_confirm_ok"), ButtonVariant::Primary,
+            move |_, cx| { let _ = this.update(cx, |this, cx| this.start_update(cx)); true });
     }
 
     fn start_update(&mut self, cx: &mut Context<Self>) {
