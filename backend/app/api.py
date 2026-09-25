@@ -42,7 +42,7 @@ from app import filesearch, filetree, git_ops
 from app.file_response import file_response
 from app.filesearch import SearchError
 from app.filetree import FileError
-from app import orq, orq_md, orq_papeis, orq_politica
+from app import orq, orq_conductor, orq_md, orq_papeis, orq_politica
 from app import pi_catalog
 from app import cli_probe
 from app import pi_models
@@ -5773,14 +5773,20 @@ async def session_plans(name: str):
 @app.get("/api/orq", dependencies=[Depends(require_auth)])
 async def orq_lista():
     """Execucoes de orquestracao (eventos.jsonl escrito pelo arbitro), mais recentes primeiro.
-    A lista vem SEM os eventos crus — quem quer a linha do tempo pede o detalhe."""
-    execs = await asyncio.to_thread(orq.listar_execucoes, orq.raiz_padrao())
+    A lista vem SEM os eventos crus — quem quer a linha do tempo pede o detalhe. Cada uma leva o
+    `watchdog` do chip do card: um systemctl por pedido, nunca um por execução."""
+    raiz = orq.raiz_padrao()
+    execs = await asyncio.to_thread(orq.listar_execucoes, raiz)
+    unidades = await asyncio.to_thread(orq_conductor.units)
+    vigias = await asyncio.to_thread(
+        lambda: {e.id: orq_conductor.watchdog(raiz / e.id, unidades) for e in execs})
 
     def _resumo(e):
         d = asdict(e)
         d.pop("eventos_execucao", None)
         for t in d["tasks"]:
             t.pop("eventos", None)
+        d["watchdog"] = vigias[e.id]
         return d
 
     return {"execucoes": [_resumo(e) for e in execs], "fichas": orq.fichas(execs)}
@@ -5792,6 +5798,16 @@ async def orq_detalhe(exec_id: str):
     if e is None:
         raise HTTPException(404, detail=erro("erro_nao_encontrado", "execucao nao encontrada"))
     return asdict(e)
+
+
+@app.get("/api/orq/{exec_id}/conductor", dependencies=[Depends(require_auth)])
+async def orq_conductor_panel(exec_id: str):
+    """Painel do condutor: o vigia vivo ou parado e o feed do que passou pelo orq. Só leitura."""
+    d = orq.exec_dir(orq.raiz_padrao(), exec_id)
+    if d is None or not await asyncio.to_thread(d.is_dir):
+        raise HTTPException(404, detail=erro("erro_nao_encontrado", "execucao nao encontrada"))
+    unidades = await asyncio.to_thread(orq_conductor.units)
+    return await asyncio.to_thread(orq_conductor.conductor, d, unidades)
 
 
 class PlanPinBody(_StrictBody):

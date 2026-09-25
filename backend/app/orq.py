@@ -175,14 +175,21 @@ def listar_execucoes(raiz: Path) -> list[ExecucaoResumo]:
     return out
 
 
-def detalhe(raiz: Path, exec_id: str) -> ExecucaoResumo | None:
+def exec_dir(raiz: Path, exec_id: str) -> Path | None:
     # exec_id vem de URL e vira NOME DE PASTA. A lista de proibidos leva `:` por causa do Windows,
     # onde `D:foo` não tem separador nenhum e mesmo assim escapa da raiz — `Path("C:/base") /
     # "D:foo"` resolve pra `D:foo`, relativo ao diretório corrente do OUTRO drive. Este repo roda
     # em Windows (ConPTY/psmux), então não é hipótese.
     if not exec_id or any(c in exec_id for c in "/\\:\x00") or exec_id in (".", ".."):
         return None
-    eventos = _le_eventos(raiz / exec_id / "eventos.jsonl")
+    return raiz / exec_id
+
+
+def detalhe(raiz: Path, exec_id: str) -> ExecucaoResumo | None:
+    d = exec_dir(raiz, exec_id)
+    if d is None:
+        return None
+    eventos = _le_eventos(d / "eventos.jsonl")
     return _monta(exec_id, eventos) if eventos else None
 
 
