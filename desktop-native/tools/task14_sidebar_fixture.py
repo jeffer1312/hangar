@@ -18,6 +18,11 @@ Task 14b1 (nenhum git de verdade roda: branches, saídas e o stash são texto si
   branches=<ok|empty|409|500|drop>  pull=<ok|refused|500|404|drop>  stash=<ok|refused|500|drop>  checkout=<ok|409|500|drop>
   then=<ok|400|404|500|drop>  unlink=<ok|500|drop>, cada uma com <chave>_delay. "refused" = 200 com ok:false (o git recusou).
   Checkout e then que dão certo mudam a lista; o checkout com stash limpa a árvore suja.
+Task 14b2 (bastão; nenhum resumo de verdade é montado: o texto é sintético):
+  GET /api/sessions/<n>/bastao (markdown)  bastao=<ok|empty|404|500|drop>  bastao_delay=<s>
+  POST /api/sessions/<n>/bastao (BastaoBody)  handoff=<ok|aviso|400|409|500|drop|lost>  handoff_delay=<s>
+  "aviso" = sessão criada com o aviso de que o modelo não reescreveu; "lost" = cria a sessão e derruba a conexão sem responder.
+  O passo da criação (creation-progress) anda como na Task 13 durante o atraso.
 GET /control/t14reset volta sessões, silenciadas e modos ao começo.
 """
 import json
@@ -39,6 +44,12 @@ FIRST = {"mute_read": "ok", "mute": "ok", "rename": "ok", "editor": "ok", "delet
 GIT_KEYS = ("branches", "pull", "stash", "checkout", "then", "unlink")
 FIRST.update({k: "ok" for k in GIT_KEYS})
 FIRST.update({f"{k}_delay": 0.0 for k in GIT_KEYS})
+FIRST.update({"bastao": "ok", "bastao_delay": 0.0, "handoff": "ok", "handoff_delay": 0.0})
+CREATING = T13NS["CREATING"]
+DOSSIE = ("# Passagem de bastão — {n} (sintético)\n\n## Onde parou\n\nTroca do parser por **streaming** feita; falta a suíte inteira.\n\n"
+          "## Arquivos mexidos\n\n- `sintetica/parser.rs`\n- `sintetica/leitor.rs`\n\n## Próximo passo\n\n1. Rodar `cargo test`\n"
+          "2. Medir a memória com o transcript grande\n\n```\ngit status: 2 arquivos alterados (sintético)\n```\n"
+          + "\nLinha extra para passar da altura da caixa." * 10)
 T14 = dict(FIRST)
 MUTED = set()
 # Repositório sintético por sessão: branches (a atual é a `branch` da lista) e se a árvore está suja.
@@ -154,6 +165,22 @@ class Handler(T13NS["Handler"]):
                 self.send_json({"current": None if empty else current, "branches": [] if empty else BRANCHES, "remotes": [],
                                 "dirty": parts[2] in DIRTY})
             return
+        if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "bastao":
+            record("GET", self.path, None)
+            mode = self.t14("bastao")
+            if mode is None:
+                return
+            with LOCK:
+                if parts[2] not in SESSIONS:
+                    self.send_json(fail("erro_sessao_inexistente", "sessao nao encontrada"), 404)
+                    return
+            data = ("" if mode == "empty" else DOSSIE.format(n=parts[2])).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/markdown; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "history" and parts[2] in SESSIONS:
             record("GET", self.path, None)
             if self.t14("preview") is None:
@@ -172,12 +199,15 @@ class Handler(T13NS["Handler"]):
         url = urlparse(self.path)
         parts = [unquote(p) for p in url.path.strip("/").split("/")]
         mine = url.path == "/api/push/mute" or (len(parts) == 4 and parts[:2] == ["api", "sessions"]
-                                                and parts[3] in ("rename", "open-editor", "git", "checkout"))
+                                                and parts[3] in ("rename", "open-editor", "git", "checkout", "bastao"))
         if not mine:
             return super().do_POST()
         body = self.body()
         record("POST", self.path, body)
         if not self.authorized():
+            return
+        if parts[-1] == "bastao":
+            self.handoff(parts[2], body or {})
             return
         if parts[-1] in ("git", "checkout"):
             self.git(parts[2], parts[3], body or {})
@@ -212,6 +242,45 @@ class Handler(T13NS["Handler"]):
             SESSIONS[new] = s
             bump()
         self.send_json({"ok": True, "name": new})
+
+    def handoff(self, origin, body):
+        """A passagem sintética: com o atraso, o passo da criação anda; a sessão nova nasce na lista."""
+        name = BASE_CLEAN(body.get("name", ""))
+        with LOCK:
+            mode, delay = T14["handoff"], T14["handoff_delay"]
+            CREATING[name] = time.time()
+        try:
+            time.sleep(delay)
+            if mode == "drop":
+                self.drop()
+                return
+            codes = {"400": fail("erro_sintetico", "provider inválido (sintético)"),
+                     "409": fail("erro_sessao_existe", f"já existe uma sessão chamada {name}"),
+                     "500": fail("erro_sintetico", "não consegui gravar o resumo (sintético)")}
+            if mode in codes:
+                self.send_json(codes[mode], int(mode))
+                return
+            with LOCK:
+                source = SESSIONS.get(origin)
+                if source is None:
+                    self.send_json(fail("erro_sessao_inexistente", "sessao nao encontrada"), 404)
+                    return
+                if name in SESSIONS:
+                    self.send_json(fail("erro_sessao_existe", f"já existe uma sessão chamada {name}"), 409)
+                    return
+                data = info(name, body.get("provider", "claude"), headless=bool(body.get("headless")))
+                data["cwd"] = body.get("cwd") or source["info"].get("cwd")
+                SESSIONS[name] = {"info": data, "state": state("idle"), "events": [], "stats": None, "modes": []}
+                bump()
+            if mode == "lost":
+                self.drop()
+                return
+            aviso = "cota da sessão de origem no fim (sintético)" if mode == "aviso" else None
+            self.send_json({"name": name, "dossie": f"/sintetica/.hangar/bastao/{name}.md", "texto": DOSSIE.format(n=origin),
+                            "kickoff": f"[hangar: passagem de bastão] de {origin} (sintético)", "aviso": aviso})
+        finally:
+            with LOCK:
+                CREATING.pop(name, None)
 
     def git(self, name, route, body):
         """Pull, stash e checkout sintéticos: só mudam o que esta fixture guarda."""

@@ -39,7 +39,8 @@ impl NewSession {
         self.want_resume = false;
         self.conversation.clear();
         self.target_changed(window, cx);
-        let Some(cwd) = self.picked.clone().filter(|_| !(self.provider == "codex" && self.codex_account.is_empty())) else {
+        // O bastão fica de fora: retomar reabre uma conversa antiga, e o bastão é o oposto, uma sessão nova com o resumo.
+        let Some(cwd) = self.picked.clone().filter(|_| self.baton.is_none() && !(self.provider == "codex" && self.codex_account.is_empty())) else {
             self.archive.finish(seq, Ok(Vec::new()));
             return;
         };
@@ -140,7 +141,7 @@ impl NewSession {
         self.request(cx, move |api, send| Box::pin(async move {
             let result = api.server_send(reqwest::Method::POST, &["archive", &c.project, &c.session_id, "resume"], Some(body), 120).await;
             let opened = result.map_err(|e| Hangar::fetch_failure(&e))
-                .and_then(|v| serde_json::from_value(v).map_err(|_| tr("invalid_response"))).map(|session| Opened { session, notes: Vec::new() });
+                .and_then(|v| serde_json::from_value(v).map_err(|_| tr("invalid_response"))).map(|session| Opened { session, notes: Vec::new(), warning: None });
             send(CreateReply::Created(seq, opened)).await
         }));
         cx.notify();

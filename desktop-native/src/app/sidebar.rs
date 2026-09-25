@@ -926,6 +926,17 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, session: &SessionInfo
         None => tr("sidebar_chain"),
     };
     let (weak, name, current) = (hangar.clone(), session.name.clone(), session.then_target.clone());
+    // O diálogo de criar, aberto para continuar esta sessão.
+    let baton = {
+        let (hangar, name, cwd) = (hangar.clone(), session.name.clone(), session.cwd.clone());
+        PopupMenuItem::new(tr("sidebar_baton")).on_click(move |_, window, cx| {
+            let baton = super::create::Baton { name: name.clone(), cwd: cwd.clone() };
+            let _ = hangar.update(cx, |this, cx| {
+                this.focus_origin(&baton.name, window, cx);
+                this.open_new_session(Some(baton), window, cx);
+            });
+        })
+    };
     menu.min_w(px(200.))
         .item(item(tr("sidebar_rename"), |this, name, window, cx| this.start_session_rename(name, window, cx)))
         .item(mute_item)
@@ -941,6 +952,8 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, session: &SessionInfo
         })
         .separator()
         .submenu(chain_label, window, cx, move |menu, _, _| fill_chain(menu, &weak, &name, current.clone(), &others))
+        .separator()
+        .item(baton)
         .separator()
         .item(close)
 }

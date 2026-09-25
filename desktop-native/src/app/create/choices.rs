@@ -501,10 +501,11 @@ impl NewSession {
     /// "Mais opções": motor, modelo dos subagentes e Jev, recolhidos, com o valor de cada um no resumo.
     pub(super) fn render_more(&self, cx: &mut Context<Self>) -> Option<Div> {
         let engine = (self.provider == "claude").then_some(self.engine_pick.as_ref()).flatten();
-        let subagent = (self.target().is_none() && self.provider == "claude" && self.engine.is_empty() && !self.catalog().is_empty())
+        // O bastão não leva subagente nem Jev: a rota dele não recebe os dois.
+        let subagent = (self.target().is_none() && self.baton.is_none() && self.provider == "claude" && self.engine.is_empty() && !self.catalog().is_empty())
             .then_some(self.subagent_pick.as_ref()).flatten();
         // O retomar não leva o Jev: com uma conversa escolhida, o interruptor seria um controle sem efeito.
-        let jev = self.jev_choice().is_some() && self.target().is_none();
+        let jev = self.jev_choice().is_some() && self.target().is_none() && self.baton.is_none();
         if engine.is_none() && subagent.is_none() && !jev { return None; }
         let engine_label = self.engines.ok().and_then(|l| l.iter().find(|(n, _)| *n == self.engine))
             .map(|(n, m)| m.label.clone().unwrap_or_else(|| n.clone())).unwrap_or_else(|| tr("create_own_account"));

@@ -77,7 +77,19 @@ impl CodexAccount {
 }
 
 /// A sessão aberta pela resposta do backend e os avisos já em texto (reconciliação da conta, sessão achada pela lista).
-pub(super) struct Opened { session: SessionInfo, notes: Vec<String> }
+/// `warning`: a continuação nasceu com outra coisa que a pedida (o resumo do Hangar no lugar do escrito pelo modelo).
+pub(super) struct Opened { session: SessionInfo, notes: Vec<String>, warning: Option<String> }
+
+/// A sessão que o diálogo continua (modo bastão): o servidor monta o resumo dela e o manda à sessão nova.
+pub(in crate::app) struct Baton { pub(in crate::app) name: String, pub(in crate::app) cwd: Option<String> }
+
+/// Nome de quem continua: `pm18368-t24` → `pm18368-t24b`, e a próxima letra livre. Letra, não `-2`: o `-2` é o desempate de
+/// duas sessões na mesma pasta.
+fn successor(origin: &str, taken: &HashSet<String>) -> String {
+    let base = sanitize(origin);
+    if base.is_empty() { return unique_name("sessao", taken); }
+    ('b'..='z').map(|c| format!("{base}{c}")).find(|name| !taken.contains(name)).unwrap_or_else(|| unique_name(&format!("{base}b"), taken))
+}
 
 pub(super) enum CreateReply {
     /// Raízes e a última raiz escolhida neste aparelho.
@@ -101,6 +113,8 @@ pub(super) enum CreateReply {
     Account(u64, AccountDone),
     Archive(u64, Result<Value, Failure>),
     Preview(u64, Result<Value, Failure>),
+    /// A amostra do resumo do bastão, em markdown.
+    Baton(u64, Result<String, Failure>),
 }
 
 /// A regra do backend (`names.sanitize_session_name`): acento vira a letra sem ele, o que não for letra, número, `_` ou `-` vira `-`,
@@ -288,11 +302,16 @@ pub(in crate::app) struct NewSession {
     preview: Remote<Vec<PreviewLine>>,
     preview_scroll: ScrollHandle,
     resuming: bool,
+    /// Modo bastão: a sessão continuada, quem escreve o resumo, e a amostra recolhida (`None` dentro dela é resumo vazio).
+    baton: Option<Baton>,
+    baton_by_model: bool,
+    baton_open: bool,
+    baton_preview: Remote<Option<Entity<TextViewState>>>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl NewSession {
-    fn new(link: Link, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(link: Link, baton: Option<Baton>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_search")));
         let name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_name_placeholder")));
         let manual = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_path_placeholder")));
@@ -324,7 +343,8 @@ impl NewSession {
             more: false, omp, quotas: Remote::default(), asking: false, confirming: false, account_busy: false, account_seq: 0, account_name,
             notice: None, created_path: None, context_seq: 0, context_busy: false, context_on: None, context_want: None, context_error: None,
             archive: Remote::default(), want_resume: false, conversation: String::new(), before: None, preview: Remote::default(),
-            preview_scroll: ScrollHandle::new(), resuming: false, _subscriptions: subscriptions,
+            preview_scroll: ScrollHandle::new(), resuming: false, baton, baton_by_model: false, baton_open: false,
+            baton_preview: Remote::default(), _subscriptions: subscriptions,
         }
     }
 
@@ -338,7 +358,7 @@ impl NewSession {
         self.link.runtime.spawn(work(self.link.api.clone(), send));
     }
 
-    fn load(&mut self, cx: &mut Context<Self>) {
+    fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let seq = self.roots.start();
         self.request(cx, move |api, send| Box::pin(async move {
             let last = tokio::task::spawn_blocking(crate::appearance::last_root).await.ok().flatten();
@@ -347,6 +367,26 @@ impl NewSession {
         self.load_providers(cx);
         self.load_configs(cx);
         self.load_extras(cx);
+        // A continuação trabalha na mesma árvore: a pasta da origem já vem escolhida. Sem pasta conhecida, o nome sai já e a
+        // pasta fica por escolher.
+        match self.baton.as_ref().map(|b| (b.cwd.clone().filter(|c| !c.is_empty()), b.name.clone())) {
+            Some((Some(cwd), _)) => self.pick(cwd, window, cx),
+            Some((None, origin)) => self.name.update(cx, |input, cx| input.set_value(successor(&origin, &HashSet::new()), window, cx)),
+            None => {}
+        }
+    }
+
+    /// Abre ou fecha a amostra; lê o resumo só na primeira abertura, ou de novo depois de uma falha.
+    fn toggle_baton_preview(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.baton_open = open;
+        cx.notify();
+        let Some(origin) = self.baton.as_ref().map(|b| b.name.clone()) else { return };
+        if !open || self.baton_preview.loading || self.baton_preview.ok().is_some() { return; }
+        let seq = self.baton_preview.start();
+        self.request(cx, move |api, send| Box::pin(async move {
+            let text = api.server_bytes(&["sessions", &origin, "bastao"], 30).await.map(|b| String::from_utf8_lossy(&b).into_owned());
+            send(CreateReply::Baton(seq, text)).await
+        }));
     }
 
     fn load_providers(&mut self, cx: &mut Context<Self>) {
@@ -485,8 +525,22 @@ impl NewSession {
             body["headless"] = json!(true);
             if provider == "codex" { body["permission_mode"] = text(&self.permission); }
         }
-        let jev = self.jev_choice();
+        // O bastão não leva o Jev (o interruptor nem aparece) e vai por rota própria, que monta, grava e manda o resumo.
+        let baton = self.baton.as_ref().map(|b| b.name.clone());
+        let jev = self.jev_choice().filter(|_| baton.is_none());
         if let Some((on, _)) = jev { body["jev"] = json!(on); }
+        if baton.is_some() {
+            let claude = provider == "claude";
+            let omp = self.omp.read(cx).value().trim().to_owned();
+            body = json!({"name": name, "cwd": cwd, "provider": provider, "model": text(&self.model), "effort": text(&self.effort),
+                "config_dir": if claude { json!(self.config) } else { Value::Null },
+                "engine": if claude { text(&self.engine) } else { Value::Null },
+                "permission_mode": if claude { text(&self.permission) } else { Value::Null },
+                "omp_profile": if provider == "omp" { text(&omp) } else { Value::Null },
+                "headless": matches!(provider, "claude" | "codex") && self.headless,
+                "resumo_por_modelo": self.baton_by_model});
+            if provider == "codex" { body["codex_account"] = json!(self.codex_account); }
+        }
         // A memória vai antes do POST: a escolha não se perde se a criação falhar.
         let (key, model, effort) = (self.memory_key(), self.model.clone(), self.effort.clone());
         self.link.runtime.spawn_blocking(move || crate::appearance::remember_model(&key, &model, &effort));
@@ -511,9 +565,20 @@ impl NewSession {
                     tokio::time::sleep(STEP_POLL).await;
                 }
             });
-            let result = api.server_send(reqwest::Method::POST, &["sessions"], Some(body), 120).await;
-            poll.abort();
-            send(CreateReply::Created(seq, opened(&api, result, &name, &cwd).await)).await
+            let opened = match baton {
+                // A reescrita pelo modelo leva até 180 s no servidor.
+                Some(origin) => {
+                    let result = api.server_send(reqwest::Method::POST, &["sessions", &origin, "bastao"], Some(body), 200).await;
+                    poll.abort();
+                    handed(&api, result, &name, &cwd).await
+                }
+                None => {
+                    let result = api.server_send(reqwest::Method::POST, &["sessions"], Some(body), 120).await;
+                    poll.abort();
+                    opened(&api, result, &name, &cwd).await
+                }
+            };
+            send(CreateReply::Created(seq, opened)).await
         }));
         cx.notify();
     }
@@ -532,13 +597,16 @@ impl NewSession {
             CreateReply::Sessions(seq, result) => {
                 if seq != self.sessions.seq { return None; }
                 let Some(path) = self.picked.clone() else { return None };
-                // Lista que não veio não trava: o nome vai sem desempate, e o backend recusa se repetir.
+                // Lista que não veio não trava: o nome vai sem desempate, e o backend recusa se repetir. No bastão o nome vem da
+                // origem, não da pasta.
+                let origin = self.baton.as_ref().map(|b| b.name.clone());
                 let name = match &result {
                     Ok(list) => {
                         self.same_folder = list.iter().any(|s| s.cwd.as_deref() == Some(path.as_str()));
-                        unique_name(basename(&path), &list.iter().map(|s| s.name.clone()).collect())
+                        let taken = list.iter().map(|s| s.name.clone()).collect();
+                        match &origin { Some(origin) => successor(origin, &taken), None => unique_name(basename(&path), &taken) }
                     }
-                    Err(_) => basename(&path).to_owned(),
+                    Err(_) => match &origin { Some(origin) => successor(origin, &HashSet::new()), None => basename(&path).to_owned() },
                 };
                 self.sessions.finish(seq, result.map_err(|e| Hangar::fetch_failure(&e)));
                 self.name.update(cx, |input, cx| input.set_value(name, window, cx));
@@ -576,6 +644,12 @@ impl NewSession {
             reply @ (CreateReply::Models(..) | CreateReply::Engines(..) | CreateReply::Config(..) | CreateReply::Quotas(..)
                 | CreateReply::Context(..) | CreateReply::Account(..)) => self.receive_extra(reply, window, cx),
             reply @ (CreateReply::Archive(..) | CreateReply::Preview(..)) => self.receive_archive(reply, cx),
+            CreateReply::Baton(seq, result) => {
+                // "Não consegui ler" e "o resumo está vazio" são respostas diferentes: a falha nunca vira caixa vazia.
+                let view = result.map_err(|e| Hangar::fetch_failure(&e))
+                    .map(|text| (!text.trim().is_empty()).then(|| cx.new(|cx| TextViewState::markdown(&safe_markdown(&text), cx))));
+                self.baton_preview.finish(seq, view);
+            }
             CreateReply::Step(seq, step) => {
                 if seq != self.create_seq || !self.creating { return None; }
                 if let Some(step) = step { self.step = step; }
@@ -602,7 +676,7 @@ async fn opened(api: &Api, result: Result<Value, Failure>, name: &str, cwd: &str
                 .unwrap_or_default();
             let notes = if accounts.is_empty() { Vec::new() } else { vec![tr("create_account_notes").replace("{n}", &accounts.join(" · "))] };
             match serde_json::from_value(value.clone()) {
-                Ok(session) => Ok(Opened { session, notes }),
+                Ok(session) => Ok(Opened { session, notes, warning: None }),
                 Err(_) => found(api, name, cwd, tr("invalid_response")).await,
             }
         }
@@ -611,11 +685,32 @@ async fn opened(api: &Api, result: Result<Value, Failure>, name: &str, cwd: &str
     }
 }
 
+/// A resposta do bastão traz só o nome da sessão nova: a sessão vem da lista. Lista que não responde não desfaz a passagem, que
+/// já aconteceu: a sessão abre pelo nome e a lista seguinte completa o resto.
+async fn handed(api: &Api, result: Result<Value, Failure>, name: &str, cwd: &str) -> Result<Opened, String> {
+    let value = match result {
+        Ok(value) => value,
+        Err(error) if error.uncertain && error.status.is_none() => return found(api, name, cwd, tr("connection_failed")).await,
+        Err(error) => return Err(Hangar::fetch_failure(&error)),
+    };
+    let Some(created) = value.get("name").and_then(Value::as_str).map(str::to_owned) else { return found(api, name, cwd, tr("invalid_response")).await };
+    let warning = value.get("aviso").and_then(Value::as_str).filter(|a| !a.is_empty()).map(|a| tr("create_baton_summary_failed").replace("{motivo}", a));
+    let listed = match api.sessions().await {
+        Ok(list) => list.into_iter().find(|s| s.name == created),
+        Err(error) => { eprintln!("bastao-lista: {}", error.detail); None }
+    };
+    let (session, notes) = match listed {
+        Some(session) => (session, Vec::new()),
+        None => (SessionInfo { name: created, cwd: Some(cwd.to_owned()), ..SessionInfo::default() }, vec![tr("create_baton_unlisted")]),
+    };
+    Ok(Opened { session, notes, warning })
+}
+
 async fn found(api: &Api, name: &str, cwd: &str, failure: String) -> Result<Opened, String> {
     let clean = sanitize(name);
     let list = api.sessions().await.map_err(|_| failure.clone())?;
     list.into_iter().find(|s| s.name == clean && s.cwd.as_deref() == Some(cwd))
-        .map(|session| Opened { session, notes: vec![tr("create_found_in_list")] }).ok_or(failure)
+        .map(|session| Opened { session, notes: vec![tr("create_found_in_list")], warning: None }).ok_or(failure)
 }
 
 fn label(text: String) -> Div { div().text_size(px(13.)).text_color(theme::muted()).child(text) }
@@ -633,7 +728,55 @@ fn choice(id: impl Into<ElementId>, on: bool, cx: &App) -> Button {
         .border_1().border_color(if on { theme::accent() } else { theme::border() }).when(on, |b| b.bg(theme::accent_dim()))
 }
 
+/// Cartão de uma escolha entre duas (onde roda, quem escreve o resumo): o ponto de rádio, o título e o resumo da escolha.
+fn option_card(id: &'static str, on: bool, title: String, beta: bool, summary: String, busy: bool, cx: &App) -> Button {
+    choice(id, on, cx).flex_1().min_w_0().h_auto().py(px(8.)).px(px(12.)).rounded(px(8.)).selected(on).disabled(busy)
+        .accessibility_label(format!("{title}. {summary}"))
+        // No topo, não no centro que o botão dá: com resumos de alturas diferentes, os títulos dos dois cartões ficam na mesma linha.
+        .child(div().self_start().w_full().flex().items_start().gap(px(10.))
+            .child(div().mt(px(3.)).size(px(12.)).flex_shrink_0().rounded_full().border_1()
+                .border_color(if on { theme::accent() } else { theme::border_strong() })
+                .when(on, |el| el.child(div().m(px(2.)).size(px(6.)).rounded_full().bg(theme::accent()))))
+            .child(div().flex_1().min_w_0().flex().flex_col().items_start().gap(px(2.))
+                .child(div().flex().items_center().gap(px(6.)).text_sm().font_weight(FontWeight::MEDIUM).child(title)
+                    .when(beta, |el| el.child(super::server_config::chip(tr("create_beta"), theme::accent_text(), theme::accent_dim()))))
+                .child(div().w_full().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(summary))))
+}
+
 impl NewSession {
+    /// Modo bastão: quem escreve o resumo e a amostra dele, recolhida (aberta, empurraria o formulário e ainda mostraria um
+    /// texto que não é o que vai: a origem segue trabalhando até o envio).
+    fn render_baton(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let baton = self.baton.as_ref()?;
+        let busy = self.creating;
+        let author = |id: &'static str, by_model: bool, title: &str, summary: &str| {
+            option_card(id, self.baton_by_model == by_model, tr(title), false, tr(summary), busy, cx)
+                .on_click(cx.listener(move |this, _, _, cx| { this.baton_by_model = by_model; cx.notify(); }))
+        };
+        let preview = match self.baton_preview.value.as_ref().filter(|_| !self.baton_preview.loading) {
+            None => div().id("create-baton-loading").role(Role::Status).child(muted(tr("loading"))).into_any_element(),
+            Some(Err(error)) => alert("create-baton-error", format!("{} {error}", tr("create_baton_preview_failed"))).into_any_element(),
+            Some(Ok(None)) => muted(tr("create_baton_preview_empty")).into_any_element(),
+            // Títulos no tamanho do texto, como no web: é um documento lido numa caixa pequena, não uma página.
+            Some(Ok(Some(view))) => div().text_sm().text_color(theme::muted()).child(TextView::new(view).selectable(true).scrollable(false)
+                .style(gpui_kit::component::text::TextViewStyle::default().heading_font_size(|_, _| px(14.)))).into_any_element(),
+        };
+        let this = cx.entity().downgrade();
+        Some(div().flex().flex_col().gap(px(16.))
+            .child(div().flex().flex_col().gap(px(6.))
+                .child(label(tr("create_baton_author")))
+                .child(div().id("create-baton-author").role(Role::Group).aria_label(tr("create_baton_author")).flex().gap(px(12.))
+                    .child(author("create-baton-hangar", false, "create_baton_hangar", "create_baton_hangar_summary"))
+                    .child(author("create-baton-model", true, "create_baton_model", "create_baton_model_summary"))))
+            .child(div().flex().flex_col().gap(px(8.))
+                .child(div().child(Disclosure::new("create-baton-preview", self.baton_open, tr("create_baton_preview"), true)
+                    .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| this.toggle_baton_preview(open, cx)); })))
+                .when(self.baton_open, |el| el
+                    .child(muted(tr("create_baton_preview_note").replace("{n}", &baton.name)))
+                    .child(div().id("create-baton-sample").max_h(px(220.)).overflow_y_scroll().p(px(12.)).rounded(px(8.))
+                        .bg(theme::inset()).child(preview)))))
+    }
+
     fn render_roots(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.roots.loading || self.roots.value.is_none() {
             return div().flex().gap(px(8.)).children((0..2usize).map(|i| Skeleton::new(("create-root-skeleton", i)).w(px(96.)).h(px(32.)).rounded_full())).into_any_element();
@@ -737,8 +880,13 @@ impl NewSession {
                 .child(div().flex_1().min_w_0().child(Input::new(&self.manual).small().font_family(theme::MONO).aria_label(tr("create_path_aria"))))
                 .child(Button::new("create-use-typed").outline().small().label(tr("create_use")).disabled(!manual_ready || self.creating)
                     .on_click(cx.listener(|this, _, window, cx| this.use_typed(window, cx))))));
+        let title = div().text_lg().font_weight(FontWeight::SEMIBOLD).child(tr(if self.baton.is_some() { "create_baton_title" } else { "create_title" }));
         let column = div().w(relative(0.45)).flex_shrink_0().h_full().min_h_0().pr(px(20.)).border_r_1().border_color(theme::border()).flex().flex_col()
-            .gap(px(12.)).child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(tr("create_title")));
+            .gap(px(12.)).child(match &self.baton {
+                Some(b) => div().flex().flex_col().gap(px(4.)).child(title)
+                    .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("create_baton_origin").replace("{n}", &b.name))),
+                None => title,
+            });
         // Com uma conversa escolhida, a coluna larga vira a leitura dela: a pasta já está escolhida.
         if let Some(c) = self.target() { return column.child(self.render_preview(c, cx)); }
         column
@@ -791,16 +939,7 @@ impl NewSession {
         let modes = (fresh && matches!(self.provider, "claude" | "codex")).then(|| {
             let codex = self.provider == "codex";
             let mode = |id: &'static str, on: bool, title: String, beta: bool, summary: String, headless: bool| {
-                choice(id, on, cx).flex_1().min_w_0().h_auto().py(px(8.)).px(px(12.)).rounded(px(8.)).selected(on).disabled(busy)
-                    .accessibility_label(format!("{title}. {summary}"))
-                    .child(div().w_full().flex().items_start().gap(px(10.))
-                        .child(div().mt(px(3.)).size(px(12.)).flex_shrink_0().rounded_full().border_1()
-                            .border_color(if on { theme::accent() } else { theme::border_strong() })
-                            .when(on, |el| el.child(div().m(px(2.)).size(px(6.)).rounded_full().bg(theme::accent()))))
-                        .child(div().flex_1().min_w_0().flex().flex_col().items_start().gap(px(2.))
-                            .child(div().flex().items_center().gap(px(6.)).text_sm().font_weight(FontWeight::MEDIUM).child(title)
-                                .when(beta, |el| el.child(super::server_config::chip(tr("create_beta"), theme::accent_text(), theme::accent_dim()))))
-                            .child(div().w_full().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(summary))))
+                option_card(id, on, title, beta, summary, busy, cx)
                     .on_click(cx.listener(move |this, _, window, cx| this.set_headless(headless, window, cx)))
             };
             let help = match (codex, self.headless) {
@@ -839,7 +978,8 @@ impl NewSession {
                 .when(fresh && self.provider == "omp", |el| el.child(self.render_omp()))
                 .when(fresh, |el| el.children(self.render_trio()))
                 .when(fresh && self.provider == "codex", |el| el.child(self.render_context(cx)))
-                .children(self.render_more(cx)));
+                .children(self.render_more(cx))
+                .children(self.render_baton(cx)));
         let can = self.can_create(cx);
         let seconds = self.started.map(|t| t.elapsed().as_secs()).unwrap_or(0);
         let step = if self.step.is_empty() { tr("create_creating") } else { self.step.clone() };
@@ -847,7 +987,8 @@ impl NewSession {
         let submit = match &target {
             Some(c) => Button::new("create-resume-submit").primary().w_full().label(self.resume_label(c)).loading(busy).disabled(busy)
                 .on_click(cx.listener(|this, _, _, cx| this.resume(cx))),
-            None => Button::new("create-submit").primary().w_full().label(tr(if busy { "create_creating" } else { "create_submit" }))
+            None => Button::new("create-submit").primary().w_full()
+                .label(tr(if busy { "create_creating" } else if self.baton.is_some() { "create_baton_submit" } else { "create_submit" }))
                 .loading(busy).disabled(!can && !busy).on_click(cx.listener(|this, _, _, cx| this.create(cx))),
         };
         let footer = div().flex_shrink_0().pt(px(12.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(8.))
@@ -878,11 +1019,12 @@ impl Render for NewSession {
 }
 
 impl Hangar {
-    pub(super) fn open_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Com `baton`, o mesmo diálogo cria a sessão que continua aquela (o "Continuar em outra conta" do menu da sessão).
+    pub(super) fn open_new_session(&mut self, baton: Option<Baton>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         let link = Link { api, runtime: self.runtime.clone(), tx: self.tx.clone(), connection: self.connection };
-        let dialog = cx.new(|cx| NewSession::new(link, window, cx));
-        dialog.update(cx, |d, cx| d.load(cx));
+        let dialog = cx.new(|cx| NewSession::new(link, baton, window, cx));
+        dialog.update(cx, |d, cx| d.load(window, cx));
         self.new_session = Some(dialog.clone());
         let weak = cx.entity().downgrade();
         let width = (window.viewport_size().width * 0.94).min(px(1320.));
@@ -900,7 +1042,7 @@ impl Hangar {
 
     pub(super) fn receive_create(&mut self, dialog: EntityId, reply: CreateReply, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entity) = self.new_session.clone().filter(|d| d.entity_id() == dialog) else { return };
-        let Some(Opened { session, notes }) = entity.update(cx, |d, cx| d.receive(reply, window, cx)) else { return };
+        let Some(Opened { session, notes, warning }) = entity.update(cx, |d, cx| d.receive(reply, window, cx)) else { return };
         self.new_session = None;
         window.close_dialog(cx);
         let readable = session.readable();
@@ -908,6 +1050,8 @@ impl Hangar {
         // O fechar devolveu o foco ao botão que abriu; a sessão nova é onde se escreve em seguida, como no clique na aba.
         if readable { self.composer.update(cx, |input, cx| input.focus(window, cx)); }
         for note in notes { window.push_notification(Notification::info(note), cx); }
+        // Fica até ser fechado, como o `alert` do web: quem pediu o resumo do modelo tem de saber que recebeu o do Hangar.
+        if let Some(warning) = warning { window.push_notification(Notification::warning(warning).autohide(false), cx); }
         cx.notify();
     }
 
@@ -922,14 +1066,23 @@ impl Hangar {
             Button::new(id).outline().small().w_full().icon(IconName::Plus).label(tr("create_title"))
         };
         FocusOnClick { id: id.into(), button: button.accessibility_label(tr("create_title")).disabled(self.api.is_none()), open: Rc::new(move |window, cx| {
-            let _ = weak.update(cx, |this, cx| this.open_new_session(window, cx));
+            let _ = weak.update(cx, |this, cx| this.open_new_session(None, window, cx));
         }) }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, HashSet, Root, basename, crumbs, json, rel_path, sanitize, scan_of, tr, unique_name};
+    use super::{Failure, HashSet, Root, basename, crumbs, json, rel_path, sanitize, scan_of, successor, tr, unique_name};
+
+    #[test]
+    fn the_successor_takes_the_next_free_letter() {
+        let taken: HashSet<String> = ["pm18368-t24b", "pm18368-t24c"].into_iter().map(String::from).collect();
+        assert_eq!(successor("pm18368-t24", &HashSet::new()), "pm18368-t24b");
+        assert_eq!(successor("pm18368-t24", &taken), "pm18368-t24d");
+        assert_eq!(successor("São Paulo", &HashSet::new()), "Sao-Paulob");
+        assert_eq!(successor("日本", &HashSet::new()), "sessao");
+    }
 
     #[test]
     fn names_follow_the_backend_rule_and_never_repeat() {
