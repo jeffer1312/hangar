@@ -15,6 +15,8 @@
 #                                        --substituir-tarefa vale em
 #                                        QUALQUER posição entre os tokens de tarefa
 #   hangar-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
+#   hangar-send --close <sessao>       fecha OUTRA sessão desta máquina, com ou sem terminal (o
+#                                  grupo dela é avisado). Nunca a própria.
 #   hangar-send --group [--tmux] <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei",
 #                                  "contrato atualizado"). Chega como [grupo: X]. UNIDIRECIONAL —
 #                                  nunca responda um [grupo:] com --group (evita loop); responda 1:1.
@@ -494,6 +496,20 @@ fi
 if [[ "$1" == "--unpair" ]]; then
     api DELETE "/api/sessions/$(me)/pair" >/dev/null
     echo "despareado"
+    exit 0
+fi
+
+if [[ "$1" == "--close" ]]; then
+    alvo="${2:?uso: hangar-send --close <sessao>}"
+    [[ "$alvo" == *::* ]] && { echo "erro: --close só fecha sessão desta máquina" >&2; exit 2; }
+    # Fechar a si mesma mata o processo no meio do comando: quem fecha é quem assumiu ou quem coordena.
+    [[ "$alvo" == "$(me)" ]] && { echo "recusado: '$alvo' é esta sessão — peça pra outra fechar" >&2; exit 2; }
+    # O DELETE responde ok pra nome que não existe: nome errado não pode virar "fechada".
+    vivas=$(api GET /api/sessions) || exit 1
+    printf '%s' "$vivas" | python3 -c 'import json,sys; sys.exit(0 if any(s.get("name") == sys.argv[1] for s in json.load(sys.stdin)) else 1)' "$alvo" \
+        || { echo "erro: sessão '$alvo' não existe (hangar-send --list)" >&2; exit 1; }
+    api DELETE "/api/sessions/$alvo" >/dev/null || exit 1
+    echo "fechada: $alvo"
     exit 0
 fi
 
