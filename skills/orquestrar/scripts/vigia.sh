@@ -358,9 +358,14 @@ from pathlib import Path
 # forgotten dev server would block the close forever.
 # ponytail: a launch from another process (resumed session) is never notified, so it only counts
 # while agent-<id>.jsonl (or, before that file exists, the launch itself) is younger than FRESH_S.
+# ponytail: only the current transcript is read, so a launch made before a /clear is not seen.
 FRESH_S = 1800
 name = sys.argv[1]
-jsonl = next((s.get("jsonl") for s in json.load(sys.stdin) if s.get("name") == name), None)
+s = next((s for s in json.load(sys.stdin) if s.get("name") == name), {})
+jsonl = s.get("jsonl")
+if not jsonl and s.get("provider", "claude") != "claude":
+    print("none")   # Pi/Kimi/omp: no Agent tool, and no jsonl in the listing
+    sys.exit()
 if not jsonl:
     sys.exit(f"no transcript for {name}")
 launched, notified = {}, set()

@@ -230,6 +230,13 @@ touch -d '31 minutes ago' "$t/exec1/subagents/agent-a1.jsonl"
 CLOSE_IDLE_S=0 CICLOS=3 vigia
 [ "$(closes exec1)" -ge 1 ] || fail "lançamento de mais de 30 min segurou o fechamento"
 
+# Pi/Kimi/omp não têm jsonl na lista nem tool Agent: fecha como antes, sem falha no registro.
+finished pi-sem-jsonl
+printf '%s' '[{"name":"exec1","state":"idle","provider":"pi"},{"name":"arb","state":"idle"}]' > "$t/sessions.json"
+CLOSE_IDLE_S=0 CICLOS=3 vigia
+[ "$(closes exec1)" -ge 1 ] || fail "sessão Pi sem jsonl não foi fechada"
+if grep -q "close failed: exec1" "$d/registro.md"; then fail "sessão Pi sem jsonl contou como falha"; fi
+
 # Transcript ilegível não fecha: conta como tentativa falha, para em 3 com [aviso].
 finished transcript-sumiu; rm -f "$t/exec1.jsonl"
 CLOSE_IDLE_S=0 CICLOS=5 vigia
