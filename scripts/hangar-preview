@@ -388,18 +388,25 @@ if (cmd === 'confere') {
   if (!chaveJev) erro(semJev());
   const chave = sidecarDa(nomeSessao()).chave;
   const snap = await chamar(chave, 'snapshot', []);
-  // Código próprio: sair 1 aqui confundiria "navegador falhou" com "a tela ainda não chegou lá".
+  // Erro do snapshot e da chamada ao Jev sai 2: com 1, um laço `until confere` giraria achando
+  // que a tela só não chegou lá. Navegador fechado ou shell fora do ar ainda saem 1 (helpers comuns).
   if (snap.codigo !== 0) erro(`o snapshot falhou: ${snap.texto.slice(0, 200)}`, 2);
   let arvore = snap.texto;
   // A prova pode estar no topo ou no fim da página; o miolo de uma lista longa é repetição.
   if (arvore.length > 100_000) arvore = `${arvore.slice(0, 50_000)}\n…\n${arvore.slice(-50_000)}`;
-  const r = await fetch('https://api.typesafe.ai/v1/systemone', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${chaveJev}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'jev-1.13.0', state: arvore, questions: jev.perguntaDeConfere(estado) }),
-  });
-  if (!r.ok) erro(`o Jev recusou: ${r.status} ${(await r.text()).slice(0, 200)}`);
-  const { p, ok } = jev.chegouNoEstado((await r.json()).answers);
+  let respostas;
+  try {
+    const r = await fetch('https://api.typesafe.ai/v1/systemone', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${chaveJev}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'jev-1.13.0', state: arvore, questions: jev.perguntaDeConfere(estado) }),
+    });
+    if (!r.ok) erro(`o Jev recusou: ${r.status} ${(await r.text()).slice(0, 200)}`, 2);
+    respostas = (await r.json()).answers;
+  } catch (err) {
+    erro(`o Jev falhou: ${String(err.message).slice(0, 200)}`, 2);
+  }
+  const { p, ok } = jev.chegouNoEstado(respostas);
   console.log(`confere: ${p.toFixed(2)}`);
   process.exit(ok ? 0 : 1);
 }
