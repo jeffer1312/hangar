@@ -341,6 +341,10 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   do realpath. Escrita nova fora da raiz entra por aqui, nunca afrouxando o `/files/write`.
 - **HTML servido como arquivo executa isolado e sem o token na URL do documento interno.**
   Arquivos citados e uploads usam `file_response`; SVG/XML mantêm o MIME com scripts bloqueados.
+- **Configuração compartilhada leva o conteúdo, e o destino resolve caminho e programa.** Caminho
+  vira marcador `⟦HOME⟧`/`⟦CLAUDE⟧`/`⟦CODEX⟧`/`⟦HANGAR⟧` (nunca `{HOME}`); quem envia vence;
+  hooks e skills do Hangar, MCP `hangar`, credenciais e o login do `.claude.json` são sempre do
+  destino. Regras e motivo em [plataforma.md](docs/decisoes/plataforma.md#configuração-compartilhada-leva-o-conteúdo-o-destino-resolve-caminho-e-programa).
 - **Logs pertencem ao Hangar, não à conta.** Use `log_paths.base()`; diário exportável registra
   etapas, códigos e origem da falha. Texto de conversa, credenciais e saídas brutas ficam fora
   dele. O shell Electron também escreve lá (`privado/shell.log`): lançado pelo `.desktop`, o

@@ -636,3 +636,19 @@ em blocos; SVG/XML continuam como arquivos, com scripts bloqueados por CSP. O ET
 citados mudou para invalidar respostas antigas na revalidação; cache fresco anterior dura até 60s.
 No navegador embutido, o HTML executou JavaScript, mas não leu token pela URL, baseURI ou referrer,
 nem acessou a página pai ou o armazenamento. Sem mudanças na autorização de caminhos.
+
+## Configuração compartilhada: leva o conteúdo, o destino resolve caminho e programa
+
+(25/09/2026, pedido do usuário.) Levar a configuração de uma máquina para outras, só manual.
+Decisões dele, que o desenho não pode amolecer: quem envia vence; segredos vão (variáveis `env`,
+cabeçalhos de MCP, motores, chaves de voz), porque as máquinas são internas e o pacote viaja pelo
+Tailscale; link de skill é do layout de uma pessoa, então vai o conteúdo; arquivo que um hook usa
+e não existe no destino vai junto; caminho absoluto é resolvido pelo Hangar do destino, e não por
+troca de texto, porque o destino pode ser Windows.
+
+Os marcadores são `⟦HOME⟧`, `⟦CLAUDE⟧`, `⟦CODEX⟧` e `⟦HANGAR⟧`: `{HOME}` colidiria com `${HOME}`
+de script de shell e com f-string de Python, e o destino trocaria o que não é caminho. O destino
+só resolve marcador em arquivo que a origem marcou. Criptografia extra do pacote foi descartada:
+o bearer que vai na mesma requisição abre a máquina inteira, e o Tailscale já cifra o caminho.
+Quem leva o pacote é o navegador (ele tem o token de todas as máquinas), então nenhuma máquina
+precisa conhecer a outra pelo `peers.json`.

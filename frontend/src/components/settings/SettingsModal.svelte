@@ -12,6 +12,7 @@
   import ContasSettings from './ContasSettings.svelte';
   import HarnessSettings from './HarnessSettings.svelte';
   import SyncSettings from './SyncSettings.svelte';
+  import SharedConfigSettings from './SharedConfigSettings.svelte';
   import ComputerControlSettings from './ComputerControlSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
   import ConfigIcone from './ConfigIcone.svelte';
@@ -82,7 +83,7 @@
   $effect(() => {
     const id = identidade;
     const mudouAlvo = id !== identidadeAnterior;
-    const propria = (t: TelaConfig | null) => t === 'maquinas' || t === 'sincronizacao';
+    const propria = (t: TelaConfig | null) => t === 'maquinas' || t === 'sincronizacao' || t === 'shared-config';
     const veioDeMaquinas = propria(telaAnterior) && !propria(tela);
     identidadeAnterior = id;
     telaAnterior = tela;
@@ -107,6 +108,7 @@
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
     { id: 'maquinas', secao: 'servidor', rotulo: m.maquinas_titulo(), icone: 'tela', servidor: false },
     { id: 'sincronizacao', secao: 'servidor', rotulo: m.sync_config_titulo(), icone: 'globo', servidor: true },
+    { id: 'shared-config', secao: 'servidor', rotulo: m.shared_config_title(), icone: 'sinal', servidor: true },
     { id: 'contas', secao: 'servidor', rotulo: m.contas_modelos_titulo(), icone: 'pessoa', servidor: true },
     { id: 'harnesses', secao: 'servidor', rotulo: m.harness_titulo(), icone: 'pulso', servidor: true },
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
@@ -383,6 +385,12 @@
       onLogout={onLogout ?? (() => {})} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
+  {:else if telaAtual === 'shared-config'}
+    {#if resolvedServer}
+      {#key identidade}<SharedConfigSettings server={resolvedServer} />{/key}
+    {:else}
+      <p>{m.config_modal_escolha_servidor()}</p>
+    {/if}
   {:else if telaAtual === 'sincronizacao'}
     {#if resolvedServer}
       {#key identidade}<SyncSettings server={resolvedServer} />{/key}

@@ -19,6 +19,7 @@
     orquestracao: m.config_modal_orquestracao,
     harnesses: m.harness_titulo,
     sincronizacao: m.sync_config_titulo,
+    'shared-config': m.shared_config_title,
     computer: m.computer_control_title,
   };
 
@@ -95,6 +96,8 @@
     { tela: 'sincronizacao', rotulo: m.sync_config_desativar, descricao: m.sync_config_desativada },
     { tela: 'sincronizacao', rotulo: m.sync_config_copiar, descricao: m.sync_config_como_entrar },
     { tela: 'sincronizacao', rotulo: m.sync_config_abrir, descricao: m.sync_config_como_entrar },
+
+    { tela: 'shared-config', rotulo: m.shared_config_title, descricao: m.shared_config_search_desc },
 
     { tela: 'voz', rotulo: m.voz_transcrever, descricao: m.voz_transcrever_ajuda },
     { tela: 'voz', rotulo: m.config_server_groq, descricao: m.config_server_groq_ajuda },

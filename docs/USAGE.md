@@ -700,6 +700,26 @@ falhar, em vez de deixar apenas o papel de parede.
 Instalações antigas com `CP_SYNC=1` e `CP_SYNC_BOOTSTRAP` continuam compatíveis.
 As escolhas feitas na tela ficam salvas na configuração do Hangar.
 
+### Configuração compartilhada entre máquinas
+
+Configurações → Servidor → **Configuração compartilhada** leva a configuração do Claude Code e do
+Codex de uma máquina para outras: skills, agents, hooks (com os arquivos que eles usam), barra de
+status, plugins, MCPs, variáveis de ambiente, motores, preferências do Hangar e o `AGENTS.md` e o
+`config.toml` do Codex.
+
+1. Escolha a **origem** (qualquer máquina cadastrada), os **destinos** e o que levar.
+2. **Comparar** mostra, por destino, o que é novo, o que mudou, o que já é igual e o que só
+   existe lá (isso fica).
+3. **Enviar** baixa o pacote da origem uma vez e aplica em cada destino. Quem envia vence; o
+   destino guarda uma cópia do que trocou em `~/.hangar/config-sync/backups/<data-hora>/`.
+
+Os caminhos são resolvidos no destino (inclusive Windows), e o programa de um hook que não existe
+lá (o `node` de outra versão, por exemplo) é trocado pelo que o destino tem no PATH. Não vão:
+credenciais (`.credentials.json`, `auth.json`), o login do `.claude.json`, o `CLAUDE.local.md`,
+os hooks e skills do próprio Hangar e o MCP `hangar` de cada máquina. As pastas `.venv`,
+`node_modules` e `.git` de uma skill ficam de fora e, no destino, as que já existiam continuam.
+Máquina com Hangar anterior a esta tela aparece como "atualize o Hangar lá".
+
 ## 7. Problemas comuns
 
 ### Onde ficam os logs
