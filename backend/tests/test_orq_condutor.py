@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -719,3 +720,75 @@ def test_evento_gravado_com_envio_falho_diz_como_reenviar(env, tmp_path):
     r = run(e2, "event", "veredito", "--task", "1", "--rodada", "2", "--resultado", "devolvido",
             "--sessao", "rev", "--motivo", "m", check=False)
     assert "Resend with: orq notify '[decisao] Task 1 round 2: devolvido. Report: m'" in r.stderr
+
+
+def _fecha(d, task):
+    """A linha que `orq commit` grava ao fechar a Task, sem passar pelo git."""
+    ts = datetime.now().astimezone().isoformat(timespec="seconds")
+    with (d / "closed.jsonl").open("a") as f:
+        f.write(json.dumps({"ts": ts, "task": task, "hash": "abc"}) + "\n")
+
+
+def _done(e):
+    return [tuple(l.split(" ", 1)) for l in run(e, "done").stdout.splitlines()]
+
+
+def test_done_lista_executor_de_task_fechada_e_quem_foi_trocado(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex1", "--par", "rev")
+    _fecha(d, 1)
+    run(e, "event", "task_inicio", "--task", "2", "--titulo", "u", "--executor", "ex2", "--par", "rev")
+    run(e, "event", "sessao_trocada", "--de", "ex2", "--para", "ex3")
+    assert _done(e) == [("ex1", "Task 1 closed"), ("ex2", "replaced by ex3")]
+
+
+def test_done_nunca_lista_dono_de_task_aberta_nem_o_arbitro_atual(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex1", "--par", "rev")
+    _fecha(d, 1)
+    run(e, "event", "task_inicio", "--task", "2", "--titulo", "u", "--executor", "rev", "--par", "ex1")
+    run(e, "event", "sessao_trocada", "--de", "arb", "--para", "arb2")
+    run(e, "event", "sessao_trocada", "--de", "arb2", "--para", "arb")
+    assert _done(e) == []
+
+
+def test_done_troca_so_lista_quem_foi_executor_ou_revisor(env, tmp_path):
+    # An arbiter swapped out may be the user's own coordinator session.
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "event", "sessao_trocada", "--de", "coord", "--para", "arb9")
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex1", "--par", "rev")
+    run(e, "event", "sessao_trocada", "--de", "ex1", "--para", "ex2")
+    run(e, "event", "sessao_trocada", "--de", "ex2", "--para", "ex3")
+    assert _done(e) == [("ex1", "replaced by ex2"), ("ex2", "replaced by ex3")]
+
+
+def test_done_depois_do_fim_lista_o_time_e_trabalho_retomado_desfaz(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex1", "--par", "rev")
+    run(e, "event", "execucao_fim", "--resultado", "concluida")
+    assert sorted(_done(e)) == [("ex1", "execution ended"), ("rev", "execution ended")]
+    run(e, "event", "task_inicio", "--task", "2", "--titulo", "u", "--executor", "ex2", "--par", "rev")
+    assert _done(e) == []
+
+
+def test_done_ignora_task_fechada_que_nao_esta_nos_eventos(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    _fecha(d, 9)
+    assert _done(e) == []
+
+
+def test_team_e_os_donos_de_task_aberta_e_o_arbitro_e_nao_cruza_com_done(env, tmp_path):
+    d, _, e = env
+    init(e, tmp_path)
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex1", "--par", "rev1")
+    _fecha(d, 1)
+    run(e, "event", "task_inicio", "--task", "2", "--titulo", "u", "--executor", "ex2", "--par", "rev2")
+    run(e, "event", "entrega", "--task", "2", "--rodada", "1", "--commit", "abc")
+    time_ = run(e, "team").stdout.split()
+    assert time_ == ["ex2", "rev2", "arb"]
+    assert _done(e) == [("ex1", "Task 1 closed")]

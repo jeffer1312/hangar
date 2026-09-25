@@ -186,10 +186,13 @@ def _closed_after(closed_ts, ev_ts) -> bool:
 
 def state(d: Path) -> dict:
     """One pass over the events: who executes and reviews each Task (after swaps), who has the
-    ball, and who the arbiter is now. The ball table is arbitro-vigia.md's."""
+    ball, who the arbiter is now, which Tasks are open, whether the run has ended, and which swaps
+    replaced an executor or reviewer. The ball table is arbitro-vigia.md's."""
     arbiter = config(d)["arbiter"]
     roles: dict[int, dict] = {}
     last: dict[int, dict] = {}
+    ended = False
+    replaced: list[tuple[str, str]] = []
     for ev in events(d):
         t = ev.get("tipo")
         if t == "task_inicio":
@@ -200,19 +203,30 @@ def state(d: Path) -> dict:
         elif t == "sessao_trocada":
             if ev.get("de") == arbiter:
                 arbiter = ev.get("para")
+            held = False
             for r in roles.values():
                 for k in ("executor", "par"):
                     if r.get(k) == ev.get("de"):
                         r[k] = ev.get("para")
+                        held = True
+            # Only who held a Task role is closable: an arbiter swapped out may be the user's
+            # own coordinator session.
+            if held:
+                replaced.append((ev.get("de"), ev.get("para")))
         elif t == "execucao_fim":
             # Work may resume in the same file without a new execucao_inicio; only Tasks
             # touched after the end can own the ball.
             last.clear()
+            ended = True
+        if t != "execucao_fim" and isinstance(ev.get("task"), int):
+            ended = False
     ball: list[str] = []
+    open_tasks: list[int] = []
     closed = _closed(d)
     for task, ev in last.items():
         if task in closed and _closed_after(closed[task], ev.get("ts")):
             continue
+        open_tasks.append(task)
         r = roles.get(task, {})
         if ev["tipo"] == "entrega":
             owner = r.get("par")
@@ -222,7 +236,36 @@ def state(d: Path) -> dict:
             owner = r.get("executor")
         if owner and owner not in ball:
             ball.append(owner)
-    return {"roles": roles, "ball": ball, "arbiter": arbiter}
+    return {"roles": roles, "ball": ball, "arbiter": arbiter, "open": open_tasks, "ended": ended,
+            "replaced": replaced}
+
+
+def done(d: Path) -> list[tuple[str, str]]:
+    """Sessions whose part is over, with why: the watchdog closes these. Never the arbiter of the
+    moment, never an executor or reviewer of an open Task, never a name the events do not carry."""
+    st = state(d)
+    busy = {st["roles"].get(t, {}).get(k) for t in st["open"] for k in ("executor", "par")}
+    out: dict[str, str] = {}
+    if st["ended"]:
+        for r in st["roles"].values():
+            for k in ("executor", "par"):
+                if r.get(k):
+                    out.setdefault(r[k], "execution ended")
+    for task in sorted(k for k in _closed(d) if isinstance(k, int)):
+        ex = st["roles"].get(task, {}).get("executor")
+        if ex and task not in st["open"]:
+            out.setdefault(ex, f"Task {task} closed")
+    for de, para in st["replaced"]:
+        if de:
+            out.setdefault(de, f"replaced by {para}")
+    return [(n, why) for n, why in out.items() if n not in busy and n != st["arbiter"]]
+
+
+def team(d: Path) -> list[str]:
+    """Who must be in the arbiter's group: the open Tasks' executors and reviewers, then him."""
+    st = state(d)
+    names = [st["roles"].get(t, {}).get(k) for t in st["open"] for k in ("executor", "par")]
+    return [n for n in dict.fromkeys(names) if n and n != st["arbiter"]] + [st["arbiter"]]
 
 
 def _event_line(ev: dict) -> str:
@@ -357,6 +400,17 @@ def cmd_ball(a) -> int:
         # The watchdog's list: the arbiter of the moment last, so it follows succession.
         names = [n for n in names if n != st["arbiter"]] + [st["arbiter"]]
     print(" ".join(names))
+    return 0
+
+
+def cmd_done(a) -> int:
+    for name, why in done(base_dir(a.dir)):
+        print(f"{name} {why}")
+    return 0
+
+
+def cmd_team(a) -> int:
+    print(" ".join(team(base_dir(a.dir))))
     return 0
 
 
@@ -595,6 +649,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--last", type=int, default=15)
     s = sub.add_parser("ball", help="who owes work now")
     s.add_argument("--with-arbiter", action="store_true", help="append the current arbiter, last")
+    sub.add_parser("done", help="sessions whose part is over (the watchdog closes them)")
+    sub.add_parser("team", help="who must be in the arbiter's group (the watchdog joins them)")
     s = sub.add_parser("screen", help="the shared-screen lock")
     s.add_argument("action", choices=["take", "release"])
     s.add_argument("--owner", required=True)
@@ -613,6 +669,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 CMDS = {"init": cmd_init, "event": cmd_event, "read": cmd_read, "ball": cmd_ball,
+        "done": cmd_done, "team": cmd_team,
         "screen": cmd_screen, "commit": cmd_commit, "notify": cmd_notify, "log": cmd_log}
 
 
