@@ -995,6 +995,11 @@ async def _apply_codex(ctx: _Apply) -> None:
         res["warnings"].append(_warn("config_sync_missing_program", program="codex",
                                      where="config.toml"))
         return
+    servers = config.get("mcp_servers")
+    if isinstance(servers, dict):
+        for name, server in servers.items():
+            if isinstance(server, dict):
+                _fix_commands(server, res, name)
     changed: list[str] = []
 
     def prepare(current: dict):
@@ -1025,10 +1030,21 @@ async def _after_apply(ctx: _Apply, items: list[str]) -> None:
             _result(ctx, item)["warnings"].append(
                 _warn("config_sync_after_failed", step=name, error=str(exc)[:200]))
 
+    async def bridge() -> None:
+        # O rebuild segura a falha de cada harness e só a devolve como {"erro": 1}.
+        lines: list[str] = []
+        stats = await asyncio.to_thread(skill_bridge.rebuild, Path(ctx.roots.home),
+                                        log=lines.append)
+        for harness, s in sorted((stats or {}).items()):
+            if isinstance(s, dict) and s.get("erro"):
+                logged = [line.strip() for line in lines if f"⚠ {harness}:" in line]
+                _result(ctx, touched[0])["warnings"].append(_warn(
+                    "config_sync_after_failed", step=f"skill_bridge:{harness}",
+                    error=(" | ".join(logged) or "erro")[:200]))
+
     touched = [i for i in ("claude_skills", "claude_hooks", "claude_plugins") if i in items]
     if touched:
-        await step(touched[0], "skill_bridge", lambda: asyncio.to_thread(
-            skill_bridge.rebuild, Path(ctx.roots.home), log=lambda _m: None))
+        await step(touched[0], "skill_bridge", bridge)
     if "claude_hooks" in items:
         for name in _HANGAR_HOOK_INSTALLERS:
             await step("claude_hooks", name,

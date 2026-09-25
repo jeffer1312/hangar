@@ -436,6 +436,19 @@ async def test_apply_codex_without_cli_warns(pair, monkeypatch):
                for w in report["items"]["codex"]["warnings"])
 
 
+async def test_apply_codex_fixes_mcp_server_programs(pair, monkeypatch):
+    ana, bia = pair
+    (Path(ana.codex) / "config.toml").write_text(
+        f'[mcp_servers.docs]\ncommand = "{ana.home}/.local/share/fnm/v24/bin/node"\n')
+    FakeNative.edits = []
+    monkeypatch.setattr(config_sync, "_NATIVE", FakeNative)
+    monkeypatch.setattr(config_sync.shutil, "which",
+                        lambda n: {"node": "/usr/bin/node", "codex": "/usr/bin/codex"}.get(n))
+    await _apply(_send(monkeypatch, ana, bia, ["codex"]), ["codex"], bia)
+    edits = {json.loads(e["keyPath"]): e["value"] for e in FakeNative.edits[0]}
+    assert edits["mcp_servers"]["docs"]["command"] == "/usr/bin/node"
+
+
 async def test_after_apply_rebuilds_bridges_and_hangar_hooks(pair, monkeypatch):
     ana, bia = pair
     calls = []
@@ -448,3 +461,21 @@ async def test_after_apply_rebuilds_bridges_and_hangar_hooks(pair, monkeypatch):
     await config_sync.apply_bundle(bundle, ["claude_hooks"], bia, runner=_no_runner)
     assert ("bridge", Path(bia.home)) in calls
     assert ("ensure_state_hooks_installed",) in calls
+
+
+async def test_skill_bridge_failure_is_reported(pair, monkeypatch):
+    ana, bia = pair
+
+    def rebuild(home, log=print):
+        log("skill-bridge[kimi]: 1 criados, 0 trocados, 0 removidos, 0 mantidos")
+        log("  ⚠ pi: falhou")
+        return {"pi": {"erro": 1}, "kimi": {"criados": 1}}
+
+    monkeypatch.setattr(config_sync.skill_bridge, "rebuild", rebuild)
+    for name in config_sync._HANGAR_HOOK_INSTALLERS:
+        monkeypatch.setattr(config_sync.hook_installer, name, lambda: None)
+    bundle = _send(monkeypatch, ana, bia, ["claude_hooks"])
+    report = await config_sync.apply_bundle(bundle, ["claude_hooks"], bia, runner=_no_runner)
+    failed = [w["params"] for w in report["items"]["claude_hooks"]["warnings"]
+              if w["code"] == "config_sync_after_failed"]
+    assert failed == [{"step": "skill_bridge:pi", "error": "⚠ pi: falhou"}]
