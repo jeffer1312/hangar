@@ -284,11 +284,61 @@ print("|".join(saida))
 PY
 CAVISO=()        # context % at the last delivered ceiling alarm, per session (0 = below the ceiling)
 
+# HEARTBEAT (-e): the panel reads <dir>/vigia.json to tell a live watchdog from a dead one
+# without asking the arbiter. tmp + mv: a reader never sees half a file.
+UNIT=$(sed -n 's#^.*/\(vigia-[^/]*\)\.service$#\1#p' /proc/self/cgroup 2>/dev/null | head -n 1)
+BEAT=$(mktemp /tmp/vigia-beat-XXXXXX.py)
+trap 'rm -f "$LEITOR" "$CURLRC" "$LOOPDET" "$CTXDET" "$ORQF" "$BEAT"' EXIT
+cat > "$BEAT" <<'PY'
+import json, sys
+from datetime import datetime
+pid, unit, arb, iv, st, *names = sys.argv[1:]
+print(json.dumps({"ts": datetime.now().astimezone().isoformat(timespec="seconds"), "pid": int(pid),
+                  "unit": unit or None, "arbiter": arb, "watching": names,
+                  "states": dict(zip(names, st.split("|"))) if st else {}, "interval_s": int(iv)},
+                 ensure_ascii=False))
+PY
+heartbeat() {  # $1 = this cycle's states in SESSOES order, "" when the API did not answer
+  [ -n "$ORQD" ] || return 0
+  local tmp="$ORQD/.vigia.json.$$"
+  if python3 "$BEAT" "$$" "${UNIT:-}" "$ARB" "$INTERVALO" "$1" "${SESSOES[@]}" > "$tmp" 2>>"$CP_VIGIA_LOG"; then
+    mv -f "$tmp" "$ORQD/vigia.json"
+  else
+    rm -f "$tmp"
+    echo "[vigia] heartbeat not written to $ORQD/vigia.json" >&2
+  fi
+}
+
+# An alarm counts as given only once it reached the arbiter: a failed delivery retries next
+# cycle, at most 3 attempts, then it is dropped with one [aviso] so the trail shows the loss.
+declare -A ALARM_FAILS=()
+deliver_alarm() {  # $1 = key (one per alarm), $2 = message, $3 = label for the log; rc 0 = done with it
+  if avisar_arb "$2"; then
+    unset 'ALARM_FAILS[$1]'
+    return 0
+  fi
+  local n=$(( ${ALARM_FAILS[$1]:-0} + 1 ))
+  if [ "$n" -lt 3 ]; then
+    ALARM_FAILS[$1]=$n
+    echo "[vigia] $3 NOT delivered to $ARB; retrying next cycle" >&2
+    return 1
+  fi
+  unset 'ALARM_FAILS[$1]'
+  local drop="[aviso] [vigia] alarm dropped after 3 failed deliveries: $2"
+  if [ -n "$ORQD" ]; then
+    ORQ_DIR="$ORQD" python3 "$ORQ" log "$drop" >/dev/null 2>>"$CP_VIGIA_LOG" || echo "$drop" >&2
+  else
+    echo "$drop" >>"$CP_VIGIA_LOG"
+  fi
+  return 0
+}
+
 # Interval between readings. It exists as a variable only so the smoke test can run the whole
 # loop in seconds; in normal use nobody passes it.
 INTERVALO=${CP_VIGIA_INTERVALO:-60}
 
 CICLOS=${CP_VIGIA_CICLOS:-1440}
+heartbeat ""   # alive from the arming on, not only after the first sleep
 for i in $(seq 1 "$CICLOS"); do
   sleep "$INTERVALO"
   if [ -n "$ORQD" ]; then
@@ -298,7 +348,7 @@ for i in $(seq 1 "$CICLOS"); do
       export ARB=${nova[-1]}
       if [ "${nova[*]}" != "${SESSOES[*]}" ]; then
         SESSOES=("${nova[@]}")
-        PSEQ=(); NUDGE=(); RHASH=(); RSEQ=(); RAVISO=(); CAVISO=(); avisou_travado=; avisou_cota=
+        PSEQ=(); NUDGE=(); RHASH=(); RSEQ=(); RAVISO=(); CAVISO=(); ALARM_FAILS=(); avisou_travado=; avisou_cota=
         echo "[vigia] watching: ${SESSOES[*]}"
       fi
     else
@@ -307,12 +357,13 @@ for i in $(seq 1 "$CICLOS"); do
   fi
   lista=$(curl -s --config "$CURLRC" "$BASE/api/sessions")
   st=$(printf '%s' "$lista" | python3 "$LEITOR" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
+  heartbeat "$st"
   if [ -z "$st" ]; then
     # The API's silence cannot be the watchdog's silence: that is how the hole above hid.
     mudos=$((mudos+1))
     if [ "$mudos" -eq 5 ]; then
       echo "[vigia] 5 straight readings with no answer from $BASE/api/sessions — I am watching nothing"
-      hangar-send --tmux "$ARB" "[vigia] I cannot read /api/sessions for 5 minutes. Meanwhile I am watching NOBODY — check the backend and re-arm me." >/dev/null 2>&1
+      avisar_arb "[vigia] I cannot read /api/sessions for 5 minutes. Meanwhile I am watching NOBODY — check the backend and re-arm me."
     fi
     continue
   fi
@@ -369,8 +420,7 @@ for i in $(seq 1 "$CICLOS"); do
       fi
       msg="[vigia] ${SESSOES[$k]} is stopped (${ESTADOS[$k]:-?}) for ${LIMITE} min${cutucada}. Team: $resumo. Look at its screen (the pane, or its transcript without a terminal): a provider timeout with retries blown, a dead turn and a report stuck in the queue do not undo themselves."
       echo "$msg"
-      avisar_arb "$msg"
-      PSEQ[$k]=0
+      deliver_alarm "stopped:${SESSOES[$k]}" "$msg" "stopped alarm for ${SESSOES[$k]}" && PSEQ[$k]=0
     fi
   done
 
@@ -396,8 +446,7 @@ for i in $(seq 1 "$CICLOS"); do
         # the session is stuck or working — an imperative false alarm has ordered a STOP in the
         # middle of legitimate work. Stop orders come from the arbiter, after looking.
         hangar-send --tmux "${SESSOES[$k]}" "[vigia] You repeat the SAME command for ~${RSEQ[$k]} min. Is this a wait on an external condition? If so, the cap has blown: orq notify '[decisao] waiting for <what>; last return: <line>' (executor.md rule). If you are working, ignore this notice." >/dev/null 2>&1
-        avisar_arb "$msg"
-        RAVISO[$k]=1
+        deliver_alarm "loop:${SESSOES[$k]}" "$msg" "loop alarm for ${SESSOES[$k]}" && RAVISO[$k]=1
       fi
     else
       RSEQ[$k]=0; RHASH[$k]=""; RAVISO[$k]=0
@@ -412,7 +461,7 @@ for i in $(seq 1 "$CICLOS"); do
   # The context reader dying cannot turn into "nobody crossed": same rule as the state reader.
   if [ -z "$ct" ]; then
     ctx_mudos=$(( ${ctx_mudos:-0} + 1 ))
-    [ "$ctx_mudos" -eq 5 ] && hangar-send --tmux "$ARB" "[vigia] I cannot read the sessions' context for 5 minutes: the context handover alarms are OFF. The reason is in ${CP_VIGIA_LOG}." >/dev/null 2>&1
+    [ "$ctx_mudos" -eq 5 ] && avisar_arb "[vigia] I cannot read the sessions' context for 5 minutes: the context handover alarms are OFF. The reason is in ${CP_VIGIA_LOG}."
   else
     ctx_mudos=0
   fi
@@ -435,12 +484,7 @@ for i in $(seq 1 "$CICLOS"); do
       msg="[vigia] ${nome} is at ${pct}% of its window (${usado}/${total}; its row's ceiling is ${lim}%).${ainda} I asked it to tell you what is left. Decide by cost (arbitro-vigia.md, \"Rotation\"): little left → it finishes past the ceiling; much left → swap at the nearest clean point. Record the decision with its numbers: orq log --task <N> \"…\"."
     fi
     echo "$msg"
-    # Marked as warned only when the arbiter got it; a failed delivery retries next cycle.
-    if avisar_arb "$msg"; then
-      CAVISO[$k]=$pct
-    else
-      echo "[vigia] context alarm for $nome NOT delivered to $ARB; retrying next cycle" >&2
-    fi
+    deliver_alarm "context:$nome" "$msg" "context alarm for $nome" && CAVISO[$k]=$pct
   done
 
   # Stalled JOURNAL: the arbiter's journal is the retrospective's net; >60min without a write
@@ -457,9 +501,10 @@ for i in $(seq 1 "$CICLOS"); do
     fi
     idade=$(( $(date +%s) - mtime ))
     if [ "$idade" -ge 3600 ] && [ "$diario_avisado" -lt "$(( idade / 3600 ))" ]; then
-      diario_avisado=$(( idade / 3600 ))
-      avisar_arb "[vigia] The trail ($parado) has gone $(( idade / 60 ))min without a write, with the group active. The journal and eventos.jsonl are written AT the event — if reports/merges happened in this window, they are outside the trail."
-      echo "[vigia] trail stalled for $(( idade / 60 ))min ($parado)"
+      if deliver_alarm trail "[vigia] The trail ($parado) has gone $(( idade / 60 ))min without a write, with the group active. The journal and eventos.jsonl are written AT the event — if reports/merges happened in this window, they are outside the trail." "trail alarm"; then
+        diario_avisado=$(( idade / 3600 ))
+        echo "[vigia] trail stalled for $(( idade / 60 ))min ($parado)"
+      fi
     fi
     [ "$idade" -lt 3600 ] && diario_avisado=0
   fi
@@ -472,8 +517,7 @@ for i in $(seq 1 "$CICLOS"); do
       if [ "$avisou_travado" != "$par_estados" ]; then
         msg="[vigia] STUCK session: $resumo. It says 'working' but has produced no event for over 10 minutes — the classic case is a picker/AskUserQuestion blocking the firing turn. Look at its screen (pane or transcript) and unblock it (POST /api/sessions/<name>/select with {\"option\": N})."
         echo "$msg"
-        avisar_arb "$msg"
-        avisou_travado="$par_estados"
+        deliver_alarm stuck "$msg" "stuck alarm" && avisou_travado="$par_estados"
       fi
       ;;
   esac
@@ -486,8 +530,7 @@ for i in $(seq 1 "$CICLOS"); do
       if [ "$avisou_cota" != "$par_estados" ]; then
         msg="[vigia] Account out of quota: $resumo. The session will not come back on its own — open the substitute on an account ALLOWED by the contract and send the same kick-off, with the open Task."
         echo "$msg"
-        avisar_arb "$msg"
-        avisou_cota="$par_estados"
+        deliver_alarm quota "$msg" "quota alarm" && avisou_cota="$par_estados"
       fi
       ;;
   esac
@@ -497,13 +540,14 @@ for i in $(seq 1 "$CICLOS"); do
   if [ "$parados" -ge "$LIMITE" ]; then
     msg="[vigia] Nobody has had the ball for ${LIMITE} min: $resumo (minute $i). If you fell (an API error), this is what brings you back. Check whether someone delivered while you were out — a report stuck in the queue and a stalled verdict are the two ways the pipeline locks up with nobody noticing."
     echo "$msg"
-    avisar_arb "$msg"
-    avisos=$((avisos+1))
-    parados=0
-    if [ "$avisos" -ge 20 ]; then
-      echo "20 warnings without unblocking; shutting the watchdog down"
-      exit 0
+    if deliver_alarm nobody "$msg" "nobody-has-the-ball alarm"; then
+      avisos=$((avisos+1))
+      parados=0
+      if [ "$avisos" -ge 20 ]; then
+        echo "20 warnings without unblocking; shutting the watchdog down"
+        exit 0
+      fi
     fi
   fi
 done
-echo "1440min over; last state: $resumo"
+echo "1440min over; last state: ${resumo:-}"
