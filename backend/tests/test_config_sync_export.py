@@ -1,6 +1,7 @@
 import io
 import json
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -74,6 +75,18 @@ def test_manifest_hashes_match_between_machines_with_same_config(tmp_path, monke
     for item in ("claude_instructions", "claude_skills", "claude_hooks", "claude_mcp", "claude_env"):
         assert a["items"][item]["hashes"] == b["items"][item]["hashes"], item
     assert "segredo-jira" not in json.dumps(a)
+
+
+def test_manifest_sees_changes_in_referenced_files(tmp_path, monkeypatch):
+    ana, bia = make_machine(tmp_path, "ana"), make_machine(tmp_path, "bia")
+    (Path(bia.home) / ".orca/agent-hooks/claude-hook.sh").write_text("#!/bin/sh\necho outro\n")
+    use_machine(monkeypatch, ana)
+    a = config_sync.manifest(ana)["items"]["claude_hooks"]["hashes"]
+    use_machine(monkeypatch, bia)
+    b = config_sync.manifest(bia)["items"]["claude_hooks"]["hashes"]
+    key = f"ref:{H}/.orca/agent-hooks/claude-hook.sh"
+    assert key in a and a[key] != b[key]
+    assert f"ref:{G}/scripts/statusline.js" not in a
 
 
 def test_pack_roundtrip_and_unpack_rejects_bad_members(ana):

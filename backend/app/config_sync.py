@@ -276,6 +276,13 @@ def _export_refs(roots: Roots, commands: list[str], bundle: Bundle) -> dict[str,
     return refs
 
 
+def _ref_hashes(refs: dict[str, dict], bundle: Bundle) -> dict[str, str]:
+    """Sem isto, duas máquinas que só diferem no script de um hook dariam o mesmo manifesto. Ref do
+    Hangar fica fora: o conteúdo dele é o código do Hangar do destino."""
+    return {f"ref:{ref}": _hash(bundle.files[r["member"]].data)
+            for ref, r in refs.items() if r["member"]}
+
+
 def _export_hooks(roots: Roots, bundle: Bundle) -> dict:
     data = _export_dir_item(roots, "claude_hooks", bundle)
     settings = _settings(roots)
@@ -293,6 +300,7 @@ def _export_hooks(roots: Roots, bundle: Bundle) -> dict:
         data["hashes"]["statusLine"] = _hash(data["statusLine"])
     data["hashes"].update({f"hooks:{event}": _hash(g) for event, g in hooks.items()})
     data["refs"] = _export_refs(roots, commands, bundle)
+    data["hashes"].update(_ref_hashes(data["refs"], bundle))
     return data
 
 
@@ -326,8 +334,9 @@ def _export_mcp(roots: Roots, bundle: Bundle) -> dict:
     commands = [" ".join([str(s.get("command") or "")]
                          + [a for a in s.get("args") or [] if isinstance(a, str)])
                 for s in servers.values() if isinstance(s, dict)]
-    return {"servers": servers, "refs": _export_refs(roots, commands, bundle),
-            "hashes": {k: _hash(v) for k, v in servers.items()}}
+    refs = _export_refs(roots, commands, bundle)
+    return {"servers": servers, "refs": refs,
+            "hashes": {k: _hash(v) for k, v in servers.items()} | _ref_hashes(refs, bundle)}
 
 
 def _export_env(roots: Roots, bundle: Bundle) -> dict:
