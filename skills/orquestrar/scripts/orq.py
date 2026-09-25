@@ -294,7 +294,12 @@ def cmd_read(a) -> int:
 
 
 def cmd_ball(a) -> int:
-    print(" ".join(state(base_dir(a.dir))["ball"]))
+    st = state(base_dir(a.dir))
+    names = st["ball"]
+    if a.with_arbiter:
+        # The watchdog's list: the arbiter of the moment last, so it follows succession.
+        names = [n for n in names if n != st["arbiter"]] + [st["arbiter"]]
+    print(" ".join(names))
     return 0
 
 
@@ -500,7 +505,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("what", choices=["contract", "journal"])
     s.add_argument("--task", type=int)
     s.add_argument("--last", type=int, default=15)
-    sub.add_parser("ball", help="who owes work now")
+    s = sub.add_parser("ball", help="who owes work now")
+    s.add_argument("--with-arbiter", action="store_true", help="append the current arbiter, last")
     s = sub.add_parser("screen", help="the shared-screen lock")
     s.add_argument("action", choices=["take", "release"])
     s.add_argument("--owner", required=True)

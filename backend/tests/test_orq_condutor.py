@@ -83,6 +83,16 @@ def test_ball_segue_a_rodada_a_troca_e_o_lote(env, tmp_path):
     assert ball() == []
 
 
+def test_ball_com_arbitro_termina_no_arbitro_da_vez(env, tmp_path):
+    _, _, e = env
+    init(e, tmp_path)
+    assert run(e, "ball", "--with-arbiter").stdout.split() == ["arb"]
+    run(e, "event", "task_inicio", "--task", "1", "--titulo", "t", "--executor", "ex", "--par", "rev")
+    run(e, "event", "sessao_trocada", "--de", "arb", "--para", "arb2")
+    assert run(e, "ball", "--with-arbiter").stdout.split() == ["ex", "arb2"]
+    assert run(e, "ball").stdout.split() == ["ex"]
+
+
 def test_read_contract_da_parte_comum_e_so_a_task_pedida(env, tmp_path):
     _, _, e = env
     init(e, tmp_path, "> cabecalho\n## Quem é quem\n| a |\n## Task 1\nsó da um\n## Task 2\nsó da dois\n### detalhe\nainda dois\n")

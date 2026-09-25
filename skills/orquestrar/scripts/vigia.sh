@@ -146,9 +146,14 @@ diario_avisado=0
 # not deliver, the watchdog does NOT stand pretending to be a net — it exits loudly, which is the
 # opposite of shouting into the void.
 # Under -e every alarm goes through orq: without `orq init` each one would fail into the log only.
-if [ -n "$ORQD" ] && ! erro_orq=$(ORQ_DIR="$ORQD" python3 "$ORQ" ball 2>&1 >/dev/null); then
-  echo "[vigia] orq ball failed in $ORQD: $erro_orq. I am NOT armed." >&2
-  exit 1
+# The arbiter comes from orq as well, so a succession before launch arms the one in charge now.
+if [ -n "$ORQD" ]; then
+  bola=$(ORQ_DIR="$ORQD" python3 "$ORQ" ball --with-arbiter 2>&1) || {
+    echo "[vigia] orq ball failed in $ORQD: $bola. I am NOT armed." >&2
+    exit 1
+  }
+  ARB=${bola##* }
+  SESSOES=("$ARB")
 fi
 hangar-send --tmux "$ARB" "[vigia] ARMED over: ${SESSOES[*]} (window ${LIMITE}min${DIARIO:+, journal $DIARIO}). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply."
 rc_arm=$?
@@ -287,12 +292,13 @@ CICLOS=${CP_VIGIA_CICLOS:-1440}
 for i in $(seq 1 "$CICLOS"); do
   sleep "$INTERVALO"
   if [ -n "$ORQD" ]; then
-    if bola=$(ORQ_DIR="$ORQD" python3 "$ORQ" ball 2>>"${CP_VIGIA_LOG:-/dev/stderr}"); then
+    # The arbiter is the last name: a succession moves every alarm and the /orq lookup with it.
+    if bola=$(ORQ_DIR="$ORQD" python3 "$ORQ" ball --with-arbiter 2>>"${CP_VIGIA_LOG:-/dev/stderr}") && [ -n "$bola" ]; then
       read -r -a nova <<< "$bola"
-      nova+=("$ARB")
+      export ARB=${nova[-1]}
       if [ "${nova[*]}" != "${SESSOES[*]}" ]; then
         SESSOES=("${nova[@]}")
-        PSEQ=(); NUDGE=(); RHASH=(); RSEQ=(); RAVISO=(); CAVISO=()
+        PSEQ=(); NUDGE=(); RHASH=(); RSEQ=(); RAVISO=(); CAVISO=(); avisou_travado=; avisou_cota=
         echo "[vigia] watching: ${SESSOES[*]}"
       fi
     else
