@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import * as m from '../paraglide/messages';
   import { listServers, onServersChanged, type Server } from '../lib/auth';
-  import { getOrqForServer } from '@hangar/core';
+  import { getOrqConductorForServer, getOrqForServer } from '@hangar/core';
   import { clienteQuery, orqDetalhe } from '../lib/queries';
-  import type { OrqExecucao, OrqFicha } from '@hangar/core';
+  import type { OrqConductor as OrqConductorData, OrqExecucao, OrqFicha } from '@hangar/core';
   import { duracaoLegivel } from '../lib/orq';
   import Spinner from '../components/Spinner.svelte';
   import OrqAgora from '../components/OrqAgora.svelte';
+  import OrqConductor from '../components/OrqConductor.svelte';
+  import OrqConductorChip from '../components/OrqConductorChip.svelte';
 
   interface Props {
     onBack?: () => void;                       // só no celular: a tela é rota própria lá
@@ -23,6 +25,9 @@
   $effect(() => onServersChanged(() => { servidores = listServers(); }));
 
   let carregando = $state(true);
+  // O spinner de tela inteira é só da primeira carga: na revalidação ele desmontava o detalhe e o
+  // feed aberto, e a rolagem e o filtro voltavam ao começo a cada 20 s.
+  let firstLoad = $state(true);
   let linhas = $state<ExecComServidor[]>([]);
   let fichas = $state<OrqFicha[]>([]);
   let falhas = $state<string[]>([]);           // rótulos das máquinas que não responderam
@@ -68,6 +73,7 @@
     fichas = [...porPar.values()].sort((a, b) => (b.aceitas + b.nao_aceitas) - (a.aceitas + a.nao_aceitas));
     falhas = ruins;
     carregando = false;
+    firstLoad = false;
   }
 
   // Mesma chave de identidade do Costs: token entra (consertar credencial recarrega), rótulo não.
@@ -84,6 +90,7 @@
     const timer = setInterval(() => {
       if (document.hidden || carregando) return;
       carregar(untrack(() => servidores));
+      if (aberta) loadConductor(aberta);
     }, REVALIDA_MS);
     return () => clearInterval(timer);
   });
@@ -119,12 +126,31 @@
   let detalhe = $state<OrqExecucao | null>(null);
   let erroDetalhe = $state('');
   let tasksAbertas = $state<Set<number>>(new Set());
+  let conductor = $state<OrqConductorData | null>(null);
+  let conductorError = $state('');
+  let conductorSection = $state<HTMLElement>();
 
-  async function abrir(linha: ExecComServidor) {
+  // Mesma guarda de identidade do `abrir`: a resposta de A não pode cair sob o cabeçalho de B.
+  async function loadConductor(linha: ExecComServidor) {
+    try {
+      const c = await getOrqConductorForServer(linha.servidor, linha.exec.id);
+      if (aberta !== linha) return;
+      conductor = c;
+      conductorError = '';
+    } catch (e) {
+      if (aberta !== linha) return;
+      conductorError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function abrir(linha: ExecComServidor, toFeed = false) {
     aberta = linha;
     detalhe = null;
     erroDetalhe = '';
     tasksAbertas = new Set();
+    conductor = null;
+    conductorError = '';
+    loadConductor(linha);
     try {
       // Execução terminada não muda mais: reabrir a mesma linha serve do cache, sem novo GET.
       const d = await clienteQuery.fetchQuery(orqDetalhe(linha.servidor, linha.exec.id, !!linha.exec.fim));
@@ -133,6 +159,11 @@
       // errada na tela, sem nenhum sinal de que estava errada.
       if (aberta !== linha) return;
       detalhe = d;
+      // O chip do card leva direto ao feed; a seção só existe depois que o detalhe desenha.
+      if (toFeed) {
+        await tick();
+        conductorSection?.scrollIntoView({ block: 'start' });
+      }
     } catch (e) {
       if (aberta !== linha) return;
       erroDetalhe = e instanceof Error ? e.message : String(e);
@@ -142,6 +173,8 @@
   function fechar() {
     aberta = null;
     detalhe = null;
+    conductor = null;
+    conductorError = '';
   }
 
   function alternarTask(n: number) {
@@ -195,7 +228,7 @@
       <button class="voltar" onclick={fechar} aria-label={m.orq_voltar()}>←</button>
     {/if}
     <h1>{aberta ? aberta.exec.id : m.shell_orq()}</h1>
-    {#if !aberta && !carregando}
+    {#if !aberta && !firstLoad}
       <span class="contagem">{linhas.length} {m.orq_execucoes()}</span>
     {/if}
   </header>
@@ -204,7 +237,7 @@
     <p class="aviso">{m.orq_parcial()} {falhas.join(', ')}</p>
   {/if}
 
-  {#if carregando}
+  {#if carregando && firstLoad}
     <div class="centro"><Spinner /></div>
   {:else if aberta}
     <!-- ── DETALHE ─────────────────────────────────────────────────────── -->
@@ -300,6 +333,10 @@
           {/if}
         </section>
       </div>
+
+      <div bind:this={conductorSection}>
+        <OrqConductor {conductor} error={conductorError} />
+      </div>
     {/if}
   {:else if linhas.length === 0}
     <div class="vazio">
@@ -325,13 +362,16 @@
 
     {#each linhas as linha (linha.servidor.id + '::' + linha.exec.id)}
       {@const e = linha.exec}
-      <button class="exec" onclick={() => abrir(linha)}>
+      <!-- O chip não é botão próprio (botão dentro de botão é HTML inválido): o clique que nasce
+           nele abre o detalhe já rolado até o feed. -->
+      <button class="exec" onclick={(ev) => abrir(linha, (ev.target as Element).closest('.conductor-chip') !== null)}>
         <span class="hd">
           <span class="nome">{e.id}</span>
           <span class="branch">{e.branch || '—'}</span>
           <span class="estado" class:viva={!e.fim}>
             {e.fim ? (e.resultado === 'abortada' ? m.orq_abortada() : m.orq_concluida()) : m.orq_em_curso()}
           </span>
+          <OrqConductorChip watchdog={e.watchdog} />
         </span>
         <span class="linha-metricas">
           <span class="mt">{m.orq_tasks()} <b>{e.tasks.length}</b></span>
