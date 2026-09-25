@@ -346,7 +346,57 @@ CLOSE_IDLE_S=${CP_VIGIA_CLOSE_IDLE_S:-600}   # the smoke test lowers it; nobody 
 declare -A IDLE_CYCLES=() FAILS=() GAVE_UP=()
 warned_no_group=
 GROUP=$(mktemp /tmp/vigia-group-XXXXXX.py)
-trap 'rm -f "$LEITOR" "$CURLRC" "$LOOPDET" "$CTXDET" "$ORQF" "$BEAT" "$GROUP"' EXIT
+LIVESUB=$(mktemp /tmp/vigia-livesub-XXXXXX.py)
+trap 'rm -f "$LEITOR" "$CURLRC" "$LOOPDET" "$CTXDET" "$ORQF" "$BEAT" "$GROUP" "$LIVESUB"' EXIT
+cat > "$LIVESUB" <<'PY'
+import json, re, sys, time
+from datetime import datetime
+from pathlib import Path
+# stdin = /api/sessions, argv[1] = session. Prints "live" when its transcript has a background
+# Agent launched and not yet notified (same pairing as packages/core/src/activity.ts), else "none";
+# no transcript or a read error → exit 1. Bash background launches are ignored on purpose: a
+# forgotten dev server would block the close forever.
+# ponytail: a launch from another process (resumed session) is never notified, so it only counts
+# while agent-<id>.jsonl (or, before that file exists, the launch itself) is younger than FRESH_S.
+FRESH_S = 1800
+name = sys.argv[1]
+jsonl = next((s.get("jsonl") for s in json.load(sys.stdin) if s.get("name") == name), None)
+if not jsonl:
+    sys.exit(f"no transcript for {name}")
+launched, notified = {}, set()
+def texts(content):
+    if isinstance(content, str):
+        return [content]
+    return [b.get("text") or "" for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
+with open(jsonl, encoding="utf-8") as f:
+    for line in f:
+        o = json.loads(line)
+        if o.get("type") == "queue-operation" and isinstance(o.get("content"), str):
+            if o["content"].lstrip().startswith("<task-notification>"):
+                notified.update(t.strip() for t in re.findall(r"<task-id>([^<]+)</task-id>", o["content"]))
+            continue
+        if o.get("type") != "user":
+            continue
+        content = (o.get("message") or {}).get("content")
+        for t in texts(content):
+            if "<task-notification>" in t:
+                notified.update(x.strip() for x in re.findall(r"<task-id>([^<]+)</task-id>", t))
+        for b in content if isinstance(content, list) else []:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                r = "\n".join(texts(b.get("content")))
+                m = re.search(r"agentId:\s*([A-Za-z0-9_-]+)", r) if "Async agent launched" in r else None
+                if m:
+                    launched[m.group(1)] = o.get("timestamp")
+now = time.time()
+def fresh(agent_id, ts):
+    p = Path(jsonl).with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"
+    try:
+        t = p.stat().st_mtime
+    except FileNotFoundError:
+        t = datetime.fromisoformat(ts).timestamp() if ts else 0
+    return now - t < FRESH_S
+print("live" if any(fresh(a, ts) for a, ts in launched.items() if a not in notified) else "none")
+PY
 cat > "$GROUP" <<'PY'
 import json, sys
 # Joining merges WHOLE groups (pair.join_group): a session already in another group is reported,
@@ -381,7 +431,7 @@ attempt_failed() {  # $1 = close:<name> | join:<name>, $2 = what failed (starts 
   fi
 }
 close_finished() {
-  local out name reason k err names=() reasons=() states=()
+  local out name reason k err live names=() reasons=() states=()
   out=$(ORQ_DIR="$ORQD" python3 "$ORQ" done 2>>"$CP_VIGIA_LOG") || { echo "[vigia] orq done failed" >&2; return 0; }
   [ -n "$out" ] || return 0
   while read -r name reason; do names+=("$name"); reasons+=("$reason"); done <<< "$out"
@@ -395,6 +445,11 @@ close_finished() {
     IDLE_CYCLES[$name]=$(( ${IDLE_CYCLES[$name]:-0} + 1 ))
     [ $(( ${IDLE_CYCLES[$name]} * INTERVALO )) -ge "$CLOSE_IDLE_S" ] || continue
     IDLE_CYCLES[$name]=0
+    # A background subagent leaves its parent `idle`; closing would kill it.
+    if ! live=$(printf '%s' "$lista" | python3 "$LIVESUB" "$name" 2>&1); then
+      attempt_failed "close:$name" "close failed: $name: subagents check: $(tail -n1 <<< "$live" | cut -c1-200)"; continue
+    fi
+    [ "$live" = none ] || continue
     # ?by=<arbiter>: the backend spares the arbiter the exit notice of a close it did not ask for.
     if err=$(curl -sS -f --config "$CURLRC" -X DELETE "$BASE/api/sessions/$name?by=$ARB" 2>&1 >/dev/null); then
       unset 'FAILS[close:$name]'

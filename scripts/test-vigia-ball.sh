@@ -183,11 +183,24 @@ M=100 CICLOS=6 vigia
 # ?by=<árbitro>; quem trabalha não fecha; --no-housekeeping desliga; falha para em 3 com [aviso].
 closes() { grep -c "DELETE http://127.0.0.1:8765/api/sessions/$1?by=arb\$" "$t/urls" || true; }
 finished() {  # exec1 fechou a Task 1 e está idle; exec2 fechou a Task 2 e trabalha
-  printf '%s' '[{"name":"exec1","state":"idle"},{"name":"exec2","state":"working","last_activity":9999999999},{"name":"rev1","state":"idle"},{"name":"arb","state":"idle"}]' > "$t/sessions.json"
+  printf '%s' '[{"name":"exec1","state":"idle","jsonl":"'"$t/exec1.jsonl"'"},{"name":"exec2","state":"working","last_activity":9999999999},{"name":"rev1","state":"idle"},{"name":"arb","state":"idle"}]' > "$t/sessions.json"
   novo "$1"
   orq event task_inicio --task 1 --titulo x --executor exec1 --par rev1
   orq event task_inicio --task 2 --titulo y --executor exec2 --par rev1
   printf '{"ts":"%s","task":1,"hash":"a"}\n{"ts":"%s","task":2,"hash":"b"}\n' "$(date -Iseconds)" "$(date -Iseconds)" > "$d/closed.jsonl"
+  : > "$t/exec1.jsonl"; rm -rf "$t/exec1"
+}
+# Transcript de exec1 com um lançamento de fundo: $1 = Agent|Bash, $2 = notified|pending.
+launch() {
+  if [ "$1" = Agent ]; then
+    r='Async agent launched successfully.\nagentId: a1 (internal ID)'
+    mkdir -p "$t/exec1/subagents"; : > "$t/exec1/subagents/agent-a1.jsonl"
+  else
+    r='Command running in background with ID: a1'
+  fi
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"%s"}]}]}}\n' \
+    "$(date -u +%FT%TZ)" "$r" > "$t/exec1.jsonl"
+  [ "$2" = pending ] || printf '%s\n' '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>a1</task-id>\n</task-notification>"}' >> "$t/exec1.jsonl"
 }
 finished fecha
 INTERVALO=1 CICLOS=3 CLOSE_IDLE_S=2 vigia
@@ -195,6 +208,34 @@ INTERVALO=1 CICLOS=3 CLOSE_IDLE_S=2 vigia
 [ "$(closes exec2)" -eq 0 ] || fail "fechou sessão trabalhando"
 if grep -q -- '--close' "$t/sent.log"; then fail "fechou por hangar-send em vez da API"; fi
 grep -q "closed session: exec1 (Task 1 closed)" "$d/registro.md" || fail "fechamento sem linha no registro"
+
+# Subagente de fundo lançado e sem notificação: não fecha. Notificado, fecha. Bash de fundo não
+# notificado não segura o fechamento.
+finished agente-vivo; launch Agent pending
+CLOSE_IDLE_S=0 CICLOS=3 vigia
+[ "$(closes exec1)" -eq 0 ] || fail "fechou sessão com subagente vivo"
+if grep -q "close failed: exec1" "$d/registro.md"; then fail "subagente vivo contou como falha"; fi
+
+finished agente-notificado; launch Agent notified
+CLOSE_IDLE_S=0 CICLOS=3 vigia
+[ "$(closes exec1)" -ge 1 ] || fail "subagente notificado segurou o fechamento"
+
+finished bash-fundo; launch Bash pending
+CLOSE_IDLE_S=0 CICLOS=3 vigia
+[ "$(closes exec1)" -ge 1 ] || fail "Bash de fundo segurou o fechamento"
+
+# Lançamento velho sem notificação (sessão retomada noutro processo): passa como parado.
+finished agente-velho; launch Agent pending
+touch -d '31 minutes ago' "$t/exec1/subagents/agent-a1.jsonl"
+CLOSE_IDLE_S=0 CICLOS=3 vigia
+[ "$(closes exec1)" -ge 1 ] || fail "lançamento de mais de 30 min segurou o fechamento"
+
+# Transcript ilegível não fecha: conta como tentativa falha, para em 3 com [aviso].
+finished transcript-sumiu; rm -f "$t/exec1.jsonl"
+CLOSE_IDLE_S=0 CICLOS=5 vigia
+[ "$(closes exec1)" -eq 0 ] || fail "fechou sem conseguir ler o transcript"
+grep -q "close failed: exec1: subagents check: .*(1/3)" "$d/registro.md" || fail "falha de leitura do transcript fora do registro"
+grep -q "aviso: \[aviso\] vigia gave up after 3 attempts: close failed: exec1: subagents check" "$d/registro.md" || fail "desistência sem [aviso]"
 
 finished sem-arrumacao
 CLOSE_IDLE_S=0 vigia --no-housekeeping
