@@ -26,7 +26,7 @@ Done when the wake-up line is recorded and HEAD matches.
 
 ### 2. Prepare
 
-1. Re-read the contract's `Domain skill:` when it is not `none`.
+1. Use the contract's `Domain skill:`, from the step 1 read, when it is not `none`.
 2. Choose the tooling: the contract's list plus whatever on your own skill list matches the Task
    (frontend/design, testing, browser QA, house patterns, accessibility, framework). Each tool
    passes three questions: exists under that name in this account; reads UNCOMMITTED changes;
@@ -186,4 +186,9 @@ Done when `orq commit` exited 0 and the tree is clean.
   renew. Never ask the arbiter for it.
 - A command whose output may pass ~200 lines writes to a file in the durable directory; read it
   with `tail`/`grep`, never whole. Never read a `tool-results/*.txt` whole.
+- One step, one response: the independent reads and commands of a step go together, as several
+  tool calls in one message or chained in one Bash. A new response only when the next command
+  depends on the previous result.
+- Read by excerpt: `grep -n` to find, `sed -n <a>,<b>p` to read. A whole file only when it is
+  small or you edit it whole. This page and the contract: one read per session.
 - Messages: form and transport rungs in `hangar-send --help`; the rung used goes in the report.

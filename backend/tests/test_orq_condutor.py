@@ -118,11 +118,25 @@ def test_read_contract_da_parte_comum_e_so_a_task_pedida(env, tmp_path):
     assert "só da um" not in out
 
 
-def test_read_contract_avisa_parte_comum_acima_do_teto(env, tmp_path):
+def test_read_contract_acima_do_teto_sai_2_e_manda_o_arbitro_cortar(env, tmp_path):
     _, _, e = env
-    init(e, tmp_path, "x" * 8100 + "\n## Task 1\nt\n")
-    r = run(e, "read", "contract", "--task", "1")
-    assert "8000" in r.stderr
+    init(e, tmp_path, "## Task 1\nt\n")
+    (tmp_path / "regras.md").write_text("x" * 8100 + "\n## Task 1\nt\n")
+    r = run(e, "read", "contract", "--task", "1", check=False)
+    assert r.returncode == 2 and "8000" in r.stderr and "the arbiter must cut it" in r.stderr
+    assert r.stdout == ""
+
+
+def test_init_recusa_contrato_acima_do_teto_e_a_task_longa_nao_conta(env, tmp_path):
+    d, _, e = env
+    c = tmp_path / "regras.md"
+    c.write_text("x" * 8100 + "\n## Task 1\nt\n")
+    r = run(e, "init", "--arbiter", "arb", "--repo", str(tmp_path), "--contract", str(c), check=False)
+    assert r.returncode == 2 and "8000" in r.stderr
+    assert not (d / "orq.json").exists()
+    c.write_text("x" * 100 + "\n## Task 1\n" + "t" * 9000 + "\n")
+    run(e, "init", "--arbiter", "arb", "--repo", str(tmp_path), "--contract", str(c))
+    assert (d / "orq.json").exists()
 
 
 def test_read_contract_ausente_sai_com_erro_do_orq(env, tmp_path):

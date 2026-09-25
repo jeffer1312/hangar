@@ -32,7 +32,8 @@ Done when the protection proof is recorded and round, object and base are noted.
    read. One you cannot find → `orq notify "[decisao] T<N>: <tool> missing, <what exists
    instead>"`, proceed.
    Correction round: judge the recipe's application and its proof yourself.
-3. The visual gate is your own eyes.
+3. The visual gate is your own eyes: the round's panels (`folha`) first; a single screenshot
+   only to check a detail.
 
 Done when the diff, the surrounding code and the tool outputs are read.
 
@@ -134,6 +135,11 @@ Done when the next round arrives (back to step 1.3), or the arbiter has your one
   `orq notify "[decisao] …"`.
 - A command whose output may pass ~200 lines writes to a file in the durable directory; read it
   with `tail`/`grep`, never whole. Never read a `tool-results/*.txt` whole.
+- One step, one response: the independent reads and commands of a step go together, as several
+  tool calls in one message or chained in one Bash. A new response only when the next command
+  depends on the previous result.
+- Read by excerpt: `grep -n` to find, `sed -n <a>,<b>p` to read. A whole file only when it is
+  small. This page and the contract: one read per session.
 - Past your row's `janela` (default 50%) of your context window, or a `[vigia]` saying so →
   `orq notify "[decisao] T<N> ceiling: ctx <x>, left of the round: <what>"` and keep judging.
   Told to swap → finish or hand over as the arbiter says. The swap is the arbiter's call.

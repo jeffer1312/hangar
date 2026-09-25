@@ -68,7 +68,8 @@ turn: use the flag that exits, `timeout N`, or background file logging.
 
 ## 4. Look at the screenshot
 
-Read the image yourself first, by absolute path. Delegate only when the read fails (the tool
+Read the round's states through the panels of section 3 (`folha`); a single image only to check
+a detail. Read the image yourself first, by absolute path. Delegate only when the read fails (the tool
 refuses the file, a hook blocks it, the model does not take images), in this order:
 
 1. a vision command on the machine (`command -v see`; `see <image> "<question>"`);

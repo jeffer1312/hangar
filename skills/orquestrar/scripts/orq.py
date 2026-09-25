@@ -329,10 +329,42 @@ def _after_event(d: Path, ev: dict) -> None:
                           st["arbiter"])
 
 
+def _contract_parts(text: str) -> tuple[str, dict[int, str]]:
+    """The contract's common part and each `## Task N` section."""
+    common: list[str] = []
+    sections: dict[int, list[str]] = {}
+    cur = None
+    for line in text.splitlines(keepends=True):
+        m = TASK_HEAD.match(line)
+        if m:
+            cur = int(m.group(1))
+            sections[cur] = [line]
+            continue
+        if cur is not None and line.startswith("## "):
+            cur = None
+        (sections[cur] if cur is not None else common).append(line)
+    return "".join(common), {k: "".join(v) for k, v in sections.items()}
+
+
+def _over_cap(common: str) -> str | None:
+    """Every executor and reviewer re-reads the common part on each response of the session."""
+    if len(common) <= COMMON_CAP:
+        return None
+    return (f"the contract's common part has {len(common)} characters (cap {COMMON_CAP}): "
+            "the arbiter must cut it — Task specifics go in `## Task N` sections")
+
+
 def cmd_init(a) -> int:
     d = base_dir(a.dir)
+    contract = Path(a.contract).expanduser().resolve()
+    try:
+        too_big = _over_cap(_contract_parts(contract.read_text(encoding="utf-8"))[0])
+    except FileNotFoundError:
+        too_big = None  # written after init: `orq read contract` enforces the cap then
+    if too_big:
+        raise OrqError(too_big)
     cfg = {"arbiter": a.arbiter, "repo": str(Path(a.repo).expanduser().resolve()),
-           "contract": str(Path(a.contract).expanduser().resolve()), "untouchables": a.untouchable}
+           "contract": str(contract), "untouchables": a.untouchable}
     (d / "orq.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     journal_append(d, f"orq init: arbiter={a.arbiter} repo={cfg['repo']}")
     print("ok")
@@ -366,24 +398,12 @@ def cmd_read(a) -> int:
             text = Path(path).read_text(encoding="utf-8")
         except FileNotFoundError:
             raise OrqError(f"contract not found: {path}") from None
-        common: list[str] = []
-        sections: dict[int, list[str]] = {}
-        cur = None
-        for line in text.splitlines(keepends=True):
-            m = TASK_HEAD.match(line)
-            if m:
-                cur = int(m.group(1))
-                sections[cur] = [line]
-                continue
-            if cur is not None and line.startswith("## "):
-                cur = None
-            (sections[cur] if cur is not None else common).append(line)
-        c = "".join(common)
-        if len(c) > COMMON_CAP:
-            print(f"orq: the contract's common part has {len(c)} characters (cap {COMMON_CAP}); "
-                  "tell the arbiter", file=sys.stderr)
-        own = "".join(sections.get(a.task, []))
-        print(c.rstrip())
+        common, sections = _contract_parts(text)
+        too_big = _over_cap(common)
+        if too_big:
+            raise OrqError(too_big)
+        own = sections.get(a.task, "")
+        print(common.rstrip())
         print("\n" + own.rstrip() if own else f"\n(no '## Task {a.task}' section in the contract)")
         return 0
     j = d / "registro.md"
