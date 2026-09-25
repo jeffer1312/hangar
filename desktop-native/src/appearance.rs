@@ -1,7 +1,7 @@
 //! Aparência escolhida neste computador: vale só aqui, fica num arquivo ao lado da conexão.
 //! O tema lê daqui a cada desenho; quem muda chama `set` e grava fora da thread da janela.
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, sync::{Mutex, RwLock}};
+use std::{collections::HashMap, path::PathBuf, sync::{Mutex, RwLock}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,6 +224,25 @@ pub fn last_root() -> Option<String> { std::fs::read_to_string(dir()?.join("last
 
 pub fn remember_root(path: &str) {
     if let Some(dir) = dir() { let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join("last-root"), path)); }
+}
+
+/// Último modelo e esforço escolhidos na criação, pela chave servidor:provider:conta/motor (`cp_last_model` do web).
+pub fn last_model(key: &str) -> (String, String) {
+    let saved: HashMap<String, (String, String)> = dir().and_then(|d| std::fs::read(d.join("last-models.json")).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    saved.get(key).cloned().unwrap_or_default()
+}
+
+/// Escolha em "Padrão" apaga a lembrança, como o `removeItem` do web.
+pub fn remember_model(key: &str, model: &str, effort: &str) {
+    let Some(dir) = dir() else { return };
+    let file = dir.join("last-models.json");
+    let mut saved: HashMap<String, (String, String)> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if model.is_empty() && effort.is_empty() { saved.remove(key); } else { saved.insert(key.to_owned(), (model.to_owned(), effort.to_owned())); }
+    // Falha de disco só faz esquecer a escolha; fica no log para dar para saber por quê.
+    if let Ok(bytes) = serde_json::to_vec(&saved) && let Err(error) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(file, bytes)) {
+        eprintln!("memória do modelo não gravou: {error}");
+    }
 }
 
 /// Sem arquivo, ou arquivo ilegível, abre no padrão; o motivo da falha de leitura volta para ser mostrado.

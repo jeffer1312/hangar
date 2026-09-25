@@ -1,7 +1,11 @@
 //! Criar sessão (`CreateSessionSheet.svelte` + `FolderScanner.svelte` do web, no desenho de duas colunas do desktop): a pasta à
-//! esquerda, o formulário à direita. Modelo, esforço, permissão, criar e apagar conta, mais opções e retomar conversa chegam na
-//! parte seguinte; sem eles a sessão nasce no padrão, que no web é "nenhuma flag".
+//! esquerda, o formulário à direita. As escolhas finas moram em `choices`; continuar uma conversa antiga, em `resume`.
+mod choices;
+mod resume;
+
 use super::*;
+use choices::{AccountDone, Catalog, Jev, Motor, QuotaLine};
+use resume::{ArchiveEntry, PreviewLine};
 use super::accounts::ModelChoice;
 use super::device::Remote;
 use super::machines::{FocusOnClick, enter_to_focused};
@@ -52,7 +56,7 @@ struct Auth { #[serde(default)] status: String, email: Option<String>, #[serde(d
 struct Inherit { #[serde(default)] status: String, #[serde(default)] issues: Vec<Issue> }
 
 #[derive(Clone, Debug, Deserialize)]
-struct CodexAccount { id: String, name: String, #[serde(default)] is_default: bool, #[serde(default)] auth: Auth, #[serde(default)] sync: Inherit }
+struct CodexAccount { id: String, name: String, credential_id: Option<String>, #[serde(default)] is_default: bool, #[serde(default)] auth: Auth, #[serde(default)] sync: Inherit }
 
 impl CodexAccount {
     fn auth_text(&self) -> String {
@@ -85,6 +89,16 @@ pub(super) enum CreateReply {
     /// Passo da criação em voo; `None` é consulta que falhou, e o passo anterior fica.
     Step(u64, Option<String>),
     Created(u64, Result<Opened, String>),
+    /// O catálogo de modelos e o último modelo e esforço lembrados para a chave dele.
+    Models(u64, Result<Value, Failure>, (String, String)),
+    Engines(u64, Result<Value, Failure>),
+    /// A configuração do servidor: só a chave do Jev e o padrão dele interessam aqui.
+    Config(u64, Result<Value, Failure>),
+    Quotas(u64, Result<Value, Failure>),
+    Context(u64, Result<Value, Failure>),
+    Account(u64, AccountDone),
+    Archive(u64, Result<Value, Failure>),
+    Preview(u64, Result<Value, Failure>),
 }
 
 /// A regra do backend (`names.sanitize_session_name`): acento vira a letra sem ele, o que não for letra, número, `_` ou `-` vira `-`,
@@ -180,11 +194,12 @@ fn step_text(value: &Value) -> Option<String> {
 /// O seletor e a assinatura dele: a lista relida troca os dois juntos, e a assinatura velha sai com o seletor.
 type Picker = (Entity<SelectState<SearchableVec<ModelChoice>>>, Subscription);
 
-fn picker(choices: Vec<ModelChoice>, at: Option<usize>, chosen: fn(&mut NewSession, String), window: &mut Window,
-    cx: &mut Context<NewSession>) -> Picker {
+type Chosen = fn(&mut NewSession, String, &mut Window, &mut Context<NewSession>);
+
+fn picker(choices: Vec<ModelChoice>, at: Option<usize>, chosen: Chosen, window: &mut Window, cx: &mut Context<NewSession>) -> Picker {
     let state = cx.new(|cx| SelectState::new(SearchableVec::new(choices), at.map(IndexPath::new), window, cx));
-    let subscription = cx.subscribe(&state, move |this, _, event: &SelectEvent<SearchableVec<ModelChoice>>, cx| {
-        if let SelectEvent::Confirm(Some(id)) = event { chosen(this, id.clone()); cx.notify(); }
+    let subscription = cx.subscribe_in(&state, window, move |this, _, event: &SelectEvent<SearchableVec<ModelChoice>>, window, cx| {
+        if let SelectEvent::Confirm(Some(id)) = event { chosen(this, id.clone(), window, cx); cx.notify(); }
     });
     (state, subscription)
 }
@@ -227,6 +242,48 @@ pub(in crate::app) struct NewSession {
     started: Option<Instant>,
     step: String,
     error: Option<String>,
+    /// O relógio do "passo · N s": anda sozinho a cada segundo, mesmo sem resposta do backend.
+    clock: Option<Task<()>>,
+    models: Remote<Catalog>,
+    model: String,
+    effort: String,
+    permission: String,
+    subagent: String,
+    engine: String,
+    model_pick: Option<Picker>,
+    effort_pick: Option<Picker>,
+    permission_pick: Option<Picker>,
+    subagent_pick: Option<Picker>,
+    engine_pick: Option<Picker>,
+    engines: Remote<Vec<(String, Motor)>>,
+    jev: Remote<Jev>,
+    jev_on: bool,
+    more: bool,
+    omp: Entity<InputState>,
+    quotas: Remote<Vec<QuotaLine>>,
+    /// "+ conta": a linha do nome aberta; "Apagar": a confirmação na tela.
+    asking: bool,
+    confirming: bool,
+    account_busy: bool,
+    account_seq: u64,
+    account_name: Entity<InputState>,
+    /// O resultado da última operação de conta e se é erro.
+    notice: Option<(String, bool)>,
+    /// A conta criada nesta abertura: o aviso do /login só vale enquanto ela está escolhida.
+    created_path: Option<String>,
+    context_seq: u64,
+    context_busy: bool,
+    context_on: Option<bool>,
+    context_want: Option<bool>,
+    context_error: Option<String>,
+    archive: Remote<Vec<ArchiveEntry>>,
+    want_resume: bool,
+    conversation: String,
+    /// A conta de antes de a conversa escolhida puxar o seletor para a dela.
+    before: Option<Option<String>>,
+    preview: Remote<Vec<PreviewLine>>,
+    preview_scroll: ScrollHandle,
+    resuming: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -235,16 +292,20 @@ impl NewSession {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_search")));
         let name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_name_placeholder")));
         let manual = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_path_placeholder")));
+        let omp = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_omp_profile_hint")));
+        let account_name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("create_account_placeholder")));
+        // O Enter no Nome não cria: no web o campo não está num formulário.
         let subscriptions = vec![
             cx.subscribe(&query, |_, _, event: &InputEvent, cx| if matches!(event, InputEvent::Change) { cx.notify() }),
-            cx.subscribe_in(&name, window, |this: &mut Self, _, event: &InputEvent, _, cx| match event {
+            cx.subscribe(&name, |_, _, event: &InputEvent, cx| if matches!(event, InputEvent::Change) { cx.notify() }),
+            cx.subscribe_in(&manual, window, |this: &mut Self, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => cx.notify(),
-                InputEvent::PressEnter { .. } => this.create(cx),
+                InputEvent::PressEnter { .. } => this.use_typed(window, cx),
                 _ => {}
             }),
-            cx.subscribe_in(&manual, window, |this: &mut Self, _, event: &InputEvent, _, cx| match event {
+            cx.subscribe(&account_name, |this: &mut Self, _, event: &InputEvent, cx| match event {
                 InputEvent::Change => cx.notify(),
-                InputEvent::PressEnter { .. } => this.use_typed(cx),
+                InputEvent::PressEnter { .. } => this.add_account(cx),
                 _ => {}
             }),
         ];
@@ -253,7 +314,13 @@ impl NewSession {
             sessions: Remote::default(), same_folder: false, name, provider: "claude", providers: Remote::default(), configs: Remote::default(),
             config: None, config_pick: None, codex: Remote::default(), codex_account: String::new(), codex_pick: None, headless: false,
             difference: false, manual_open: false, manual, choosing: false, choose_error: None, create_seq: 0, creating: false, started: None,
-            step: String::new(), error: None, _subscriptions: subscriptions,
+            step: String::new(), error: None, clock: None, models: Remote::default(), model: String::new(), effort: String::new(),
+            permission: String::new(), subagent: String::new(), engine: String::new(), model_pick: None, effort_pick: None,
+            permission_pick: None, subagent_pick: None, engine_pick: None, engines: Remote::default(), jev: Remote::default(), jev_on: false,
+            more: false, omp, quotas: Remote::default(), asking: false, confirming: false, account_busy: false, account_seq: 0, account_name,
+            notice: None, created_path: None, context_seq: 0, context_busy: false, context_on: None, context_want: None, context_error: None,
+            archive: Remote::default(), want_resume: false, conversation: String::new(), before: None, preview: Remote::default(),
+            preview_scroll: ScrollHandle::new(), resuming: false, _subscriptions: subscriptions,
         }
     }
 
@@ -275,6 +342,7 @@ impl NewSession {
         }));
         self.load_providers(cx);
         self.load_configs(cx);
+        self.load_extras(cx);
     }
 
     fn load_providers(&mut self, cx: &mut Context<Self>) {
@@ -323,17 +391,18 @@ impl NewSession {
     }
 
     /// Escolher a pasta lê as sessões: o nome sugerido não pode repetir, e a pasta com sessão ganha o aviso.
-    fn pick(&mut self, path: String, cx: &mut Context<Self>) {
+    fn pick(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.creating { return; }
         (self.picked, self.error, self.same_folder) = (Some(path), None, false);
         let seq = self.sessions.start();
         self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Sessions(seq, api.sessions().await)).await }));
+        self.load_archive(window, cx);
         cx.notify();
     }
 
-    fn use_typed(&mut self, cx: &mut Context<Self>) {
+    fn use_typed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.manual.read(cx).value().trim().to_owned();
-        if !path.is_empty() { self.pick(path, cx); }
+        if !path.is_empty() { self.pick(path, window, cx); }
     }
 
     /// "Pasta do computador": o seletor do sistema. A pasta é desta máquina; com o backend em outra, o erro vem na criação.
@@ -343,10 +412,10 @@ impl NewSession {
         let prompt = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: None });
         cx.spawn_in(window, async move |this, cx| {
             let chosen = prompt.await;
-            let _ = this.update(cx, |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
                 this.choosing = false;
                 match chosen {
-                    Ok(Ok(Some(paths))) => if let Some(path) = paths.first() { this.pick(path.to_string_lossy().into_owned(), cx); },
+                    Ok(Ok(Some(paths))) => if let Some(path) = paths.first() { this.pick(path.to_string_lossy().into_owned(), window, cx); },
                     Ok(Ok(None)) => {}
                     Ok(Err(error)) => this.choose_error = Some(error.to_string()),
                     Err(_) => this.choose_error = Some(tr("picker_failed")),
@@ -357,10 +426,20 @@ impl NewSession {
         cx.notify();
     }
 
-    fn set_provider(&mut self, provider: &'static str, cx: &mut Context<Self>) {
+    /// Trocar de provider zera o modo e a permissão (o Codex nasce em "Full Access", como no web) e relê o que depende dele.
+    fn set_provider(&mut self, provider: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         if provider == self.provider || self.creating { return; }
         (self.provider, self.headless, self.error) = (provider, false, None);
-        if provider == "codex" { self.load_codex(cx); }
+        self.permission = if provider == "codex" { "Full Access".into() } else { String::new() };
+        if provider == "codex" { self.load_codex(cx); self.load_context(cx); } else { self.drop_context(); self.drop_codex(); }
+        self.load_models(window, cx);
+        self.load_archive(window, cx);
+        cx.notify();
+    }
+
+    fn set_headless(&mut self, headless: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.headless = headless;
+        self.build_permission_pick(window, cx);
         cx.notify();
     }
 
@@ -376,7 +455,7 @@ impl NewSession {
 
     fn can_create(&self, cx: &App) -> bool {
         !self.creating && self.picked.is_some() && !self.sessions.loading && !self.name.read(cx).value().trim().is_empty()
-            && self.provider_ready() == Some(true) && self.codex_ready()
+            && self.provider_ready() == Some(true) && self.codex_ready() && !(self.provider == "codex" && self.context_busy)
     }
 
     fn create(&mut self, cx: &mut Context<Self>) {
@@ -384,21 +463,42 @@ impl NewSession {
         let Some(cwd) = self.picked.clone() else { return };
         let name = self.name.read(cx).value().trim().to_owned();
         let provider = self.provider;
-        let mut body = json!({"name": name, "cwd": cwd, "provider": provider});
+        let text = |s: &str| if s.is_empty() { Value::Null } else { json!(s) };
+        let mut body = json!({"name": name, "cwd": cwd, "provider": provider, "model": text(&self.model), "effort": text(&self.effort)});
         match provider {
-            "claude" => body["config_dir"] = json!(self.config),
+            "claude" => {
+                body["config_dir"] = json!(self.config);
+                body["engine"] = text(&self.engine);
+                if !self.permission.is_empty() { body["permission_mode"] = json!(self.permission); }
+                // O motor exporta o próprio modelo de subagente: com ele, o campo nem aparece.
+                if self.engine.is_empty() && !self.subagent.is_empty() { body["subagent_model"] = json!(self.subagent); }
+            }
             "codex" => body["codex_account"] = json!(self.codex_account),
+            "omp" => { let profile = self.omp.read(cx).value().trim().to_owned(); if !profile.is_empty() { body["omp_profile"] = json!(profile); } }
             _ => {}
         }
         if self.headless && matches!(provider, "claude" | "codex") {
             body["headless"] = json!(true);
-            // O padrão de permissão do web para o Codex sem terminal.
-            if provider == "codex" { body["permission_mode"] = json!("Full Access"); }
+            if provider == "codex" { body["permission_mode"] = text(&self.permission); }
         }
+        let jev = self.jev_choice();
+        if let Some((on, _)) = jev { body["jev"] = json!(on); }
+        // A memória vai antes do POST: a escolha não se perde se a criação falhar.
+        let (key, model, effort) = (self.memory_key(), self.model.clone(), self.effort.clone());
+        self.link.runtime.spawn_blocking(move || crate::appearance::remember_model(&key, &model, &effort));
         self.create_seq += 1;
         let seq = self.create_seq;
         (self.creating, self.error, self.step, self.started) = (true, None, String::new(), Some(Instant::now()));
+        self.clock = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            if !this.update(cx, |this, cx| { cx.notify(); this.creating }).unwrap_or(false) { break; }
+        }));
         self.request(cx, move |api, send| Box::pin(async move {
+            // O padrão do Jev muda só aqui, ao criar; falhar nele não impede a sessão de nascer com a escolha feita.
+            if let Some((on, true)) = jev
+                && let Err(error) = api.server_send(reqwest::Method::POST, &["config"], Some(json!({"jev_padrao": on})), 8).await {
+                eprintln!("jev-padrao-salvar: {}", error.detail);
+            }
             let (poll_api, poll_send, poll_name) = (api.clone(), send.clone(), name.clone());
             let poll = tokio::spawn(async move {
                 loop {
@@ -448,12 +548,10 @@ impl NewSession {
                 let list = result.map_err(|e| Hangar::fetch_failure(&e))
                     .and_then(|v| serde_json::from_value::<Vec<ConfigDir>>(v).map_err(|_| tr("invalid_response")));
                 if !self.configs.finish(seq, list) { return None; }
-                let list = self.configs.ok().cloned().unwrap_or_default();
-                let at = list.iter().position(|c| c.active).or((!list.is_empty()).then_some(0));
-                self.config = at.map(|n| list[n].path.clone());
-                let choices = list.iter().map(|c| ModelChoice { id: c.path.clone(), label: c.label.clone(),
-                    hint: if c.active { tr("create_current") } else { String::new() } }).collect();
-                self.config_pick = Some(picker(choices, at, |this, path| this.config = Some(path), window, cx));
+                self.config = self.fallback_config();
+                self.build_config_pick(window, cx);
+                // Lista que falhou também pede o catálogo: sem conta, o backend usa a padrão.
+                self.load_models(window, cx);
             }
             CreateReply::Codex(seq, result) => {
                 let list = result.map_err(|e| Hangar::fetch_failure(&e))
@@ -463,15 +561,24 @@ impl NewSession {
                 let at = list.iter().position(|a| a.is_default).or((!list.is_empty()).then_some(0));
                 self.codex_account = at.map(|n| list[n].id.clone()).unwrap_or_default();
                 let choices = list.iter().map(|a| ModelChoice { id: a.id.clone(), label: a.name.clone(), hint: a.hint() }).collect();
-                self.codex_pick = Some(picker(choices, at, |this, id| this.codex_account = id, window, cx));
+                self.codex_pick = Some(picker(choices, at, |this, id, window, cx| {
+                    this.codex_account = id;
+                    this.load_models(window, cx);
+                    this.load_archive(window, cx);
+                }, window, cx));
+                self.load_models(window, cx);
+                self.load_archive(window, cx);
             }
+            reply @ (CreateReply::Models(..) | CreateReply::Engines(..) | CreateReply::Config(..) | CreateReply::Quotas(..)
+                | CreateReply::Context(..) | CreateReply::Account(..)) => self.receive_extra(reply, window, cx),
+            reply @ (CreateReply::Archive(..) | CreateReply::Preview(..)) => self.receive_archive(reply, cx),
             CreateReply::Step(seq, step) => {
                 if seq != self.create_seq || !self.creating { return None; }
                 if let Some(step) = step { self.step = step; }
             }
             CreateReply::Created(seq, result) => {
                 if seq != self.create_seq || !self.creating { return None; }
-                (self.creating, self.started) = (false, None);
+                (self.creating, self.resuming, self.started, self.clock) = (false, false, None, None);
                 match result { Ok(opened) => return Some(opened), Err(error) => self.error = Some(error) }
             }
         }
@@ -574,7 +681,7 @@ impl NewSession {
                             .when(entry.is_git, |el| el.child(badge("git")))
                             .when(entry.has_claude_md, |el| el.child(badge("CLAUDE.md")))
                             .when_some(entry.mtime, |el, t| el.child(div().flex_shrink_0().text_size(px(11.)).text_color(theme::faint()).child(folder_time(t))))))
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick(pick.clone(), cx))))
+                    .on_click(cx.listener(move |this, _, window, cx| this.pick(pick.clone(), window, cx))))
                 .child(Button::new(SharedString::from(format!("create-open-{}", entry.path))).ghost().small().flex_shrink_0().disabled(self.creating)
                     .icon(IconName::ChevronRight).accessibility_label(tr("create_open").replace("{nome}", &entry.name))
                     .on_click(cx.listener(move |this, _, window, cx| this.drill(open.clone(), window, cx))))
@@ -590,7 +697,7 @@ impl NewSession {
                     .child(Button::new(SharedString::from(format!("create-crumb-{n}"))).ghost().xsmall().label(text).disabled(self.creating)
                         .on_click(cx.listener(move |this, _, window, cx| this.drill(path.clone(), window, cx)))))))
             .child(div().child(Button::new("create-use-here").outline().small().icon(IconName::FolderOpen).label(tr("create_use_folder")).disabled(self.creating)
-                .on_click(cx.listener(|this, _, _, cx| { let dir = this.dir.clone(); this.pick(dir, cx); })))));
+                .on_click(cx.listener(|this, _, window, cx| { let dir = this.dir.clone(); this.pick(dir, window, cx); })))));
         let manual_ready = !self.manual.read(cx).value().trim().is_empty();
         let footer = div().flex_shrink_0().pt(px(12.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(8.))
             .child(div().flex().items_center().gap(px(8.))
@@ -606,9 +713,12 @@ impl NewSession {
             .when(self.manual_open, |el| el.child(div().flex().items_center().gap(px(8.))
                 .child(div().flex_1().min_w_0().child(Input::new(&self.manual).small().font_family(theme::MONO).aria_label(tr("create_path_aria"))))
                 .child(Button::new("create-use-typed").outline().small().label(tr("create_use")).disabled(!manual_ready || self.creating)
-                    .on_click(cx.listener(|this, _, _, cx| this.use_typed(cx))))));
-        div().w(relative(0.45)).flex_shrink_0().h_full().min_h_0().pr(px(20.)).border_r_1().border_color(theme::border()).flex().flex_col().gap(px(12.))
-            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(tr("create_title")))
+                    .on_click(cx.listener(|this, _, window, cx| this.use_typed(window, cx))))));
+        let column = div().w(relative(0.45)).flex_shrink_0().h_full().min_h_0().pr(px(20.)).border_r_1().border_color(theme::border()).flex().flex_col()
+            .gap(px(12.)).child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(tr("create_title")));
+        // Com uma conversa escolhida, a coluna larga vira a leitura dela: a pasta já está escolhida.
+        if let Some(c) = self.target() { return column.child(self.render_preview(c, cx)); }
+        column
             .child(self.render_roots(cx))
             .when(self.root.is_some(), |el| el.child(Input::new(&self.query).small().cleanable(true).prefix(chrome::small_icon(IconName::Search, 14., theme::muted()))
                 .aria_label(tr("create_search"))))
@@ -629,16 +739,11 @@ impl NewSession {
                 choice(SharedString::from(format!("create-provider-{p}")), self.provider == p, cx).flex_1().min_w_0().h(px(36.)).rounded(px(8.))
                     .selected(self.provider == p).disabled(!available || busy).accessibility_label(provider_name(p))
                     .child(div().flex().items_center().gap(px(6.)).child(chrome::provider_glyph(p, 16.)).child(provider_name(p)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_provider(p, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| this.set_provider(p, window, cx)))
             }));
-        let claude = (self.provider == "claude").then(|| div().flex().flex_col().gap(px(4.))
-            .child(label(tr("create_claude_account")))
-            .map(|el| match (&self.config_pick, self.configs.value.as_ref()) {
-                // A falha vem antes do seletor: a leitura que falhou também deixa um seletor vazio.
-                (_, Some(Err(error))) if !self.configs.loading => el.child(alert("create-configs-error", error.clone())),
-                (Some((pick, _)), _) if !self.configs.loading => el.child(Select::new(pick).small().disabled(busy).accessibility_label(tr("create_claude_account"))),
-                _ => el.child(muted(tr("loading"))),
-            }));
+        let target = self.target().cloned();
+        let fresh = target.is_none();
+        let claude = (self.provider == "claude").then(|| self.render_claude_account(cx));
         let codex = (self.provider == "codex").then(|| {
             let account = self.codex.ok().and_then(|list| list.iter().find(|a| a.id == self.codex_account)).cloned();
             div().flex().flex_col().gap(px(4.))
@@ -649,7 +754,7 @@ impl NewSession {
                     (Some((pick, _)), _) => el.child(Select::new(pick).small().disabled(busy).accessibility_label(tr("create_codex_account"))),
                     _ => el,
                 })
-                .when_some(account, |el, a| el.child(muted(a.hint()))
+                .when_some(account, |el, a| el.child(muted(a.hint())).children(self.render_codex_quota(a.credential_id.as_deref()))
                     .children(a.sync.issues.iter().enumerate().map(|(n, issue)| {
                         let text = crate::i18n::tr_web(&issue.code, &issue.params).or_else(|| crate::i18n::tr_web("codex_account_error_unknown", &HashMap::new()))
                             .unwrap_or_else(|| issue.code.clone());
@@ -658,7 +763,7 @@ impl NewSession {
                             .text_size(px(12.5)).whitespace_normal().text_color(if ready { theme::muted() } else { theme::danger() }).child(text)
                     })))
         });
-        let modes = matches!(self.provider, "claude" | "codex").then(|| {
+        let modes = (fresh && matches!(self.provider, "claude" | "codex")).then(|| {
             let codex = self.provider == "codex";
             let mode = |id: &'static str, on: bool, title: String, beta: bool, summary: String, headless: bool| {
                 choice(id, on, cx).flex_1().min_w_0().h_auto().py(px(8.)).px(px(12.)).rounded(px(8.)).selected(on).disabled(busy)
@@ -671,7 +776,7 @@ impl NewSession {
                             .child(div().flex().items_center().gap(px(6.)).text_sm().font_weight(FontWeight::MEDIUM).child(title)
                                 .when(beta, |el| el.child(super::server_config::chip(tr("create_beta"), theme::accent_text(), theme::accent_dim()))))
                             .child(div().w_full().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(summary))))
-                    .on_click(cx.listener(move |this, _, _, cx| { this.headless = headless; cx.notify(); }))
+                    .on_click(cx.listener(move |this, _, window, cx| this.set_headless(headless, window, cx)))
             };
             let help = match (codex, self.headless) {
                 (false, false) => "create_mode_tmux_help", (false, true) => "create_mode_headless_help",
@@ -694,24 +799,36 @@ impl NewSession {
                 .child(div().font_family(theme::MONO).text_size(px(12.)).text_color(theme::muted()).whitespace_normal().child(path.to_owned()))
                 .when(checking, |el| el.child(div().id("create-checking").role(Role::Status).child(muted(tr("create_checking")))))
                 .when(!checking && self.same_folder, |el| el.child(div().id("create-same-folder").role(Role::Status).child(muted(tr("create_same_folder"))))))
+            // Nome, modo, modelo, esforço e permissão não chegam ao retomar: com uma conversa escolhida, somem.
             .when(!checking, |el| el
-                .child(div().flex().flex_col().gap(px(4.)).child(label(tr("create_name")))
-                    .child(Input::new(&self.name).disabled(busy).aria_label(tr("create_name"))))
+                .when(fresh, |el| el.child(div().flex().flex_col().gap(px(4.)).child(label(tr("create_name")))
+                    .child(Input::new(&self.name).disabled(busy).aria_label(tr("create_name")))))
                 .child(div().flex().flex_col().gap(px(6.)).child(label(tr("create_provider"))).child(providers)
                     .when_some(probe_error, |el, error| el.child(muted(tr("create_probe_failed").replace("{erro}", &error))
                         .id("create-probe-error").role(Role::Alert)))
                     .when(missing, |el| el.child(alert("create-provider-missing", tr("create_provider_missing").replace("{p}", self.provider)))))
-                .children(claude)
                 .children(codex)
-                .children(modes));
+                .children(claude)
+                .children(modes)
+                .children(self.render_resume(cx))
+                .when(fresh && self.provider == "omp", |el| el.child(self.render_omp()))
+                .when(fresh, |el| el.children(self.render_trio()))
+                .when(fresh && self.provider == "codex", |el| el.child(self.render_context(cx)))
+                .children(self.render_more(cx)));
         let can = self.can_create(cx);
         let seconds = self.started.map(|t| t.elapsed().as_secs()).unwrap_or(0);
         let step = if self.step.is_empty() { tr("create_creating") } else { self.step.clone() };
+        // Uma ação primária só: com uma conversa escolhida, o botão continua aquela conversa em vez de criar.
+        let submit = match &target {
+            Some(c) => Button::new("create-resume-submit").primary().w_full().label(self.resume_label(c)).loading(busy).disabled(busy)
+                .on_click(cx.listener(|this, _, _, cx| this.resume(cx))),
+            None => Button::new("create-submit").primary().w_full().label(tr(if busy { "create_creating" } else { "create_submit" }))
+                .loading(busy).disabled(!can && !busy).on_click(cx.listener(|this, _, _, cx| this.create(cx))),
+        };
         let footer = div().flex_shrink_0().pt(px(12.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(8.))
             .when_some(self.error.clone(), |el, error| el.child(alert("create-error", error)))
-            .child(Button::new("create-submit").primary().w_full().label(tr(if busy { "create_creating" } else { "create_submit" }))
-                .loading(busy).disabled(!can && !busy).on_click(cx.listener(|this, _, _, cx| this.create(cx))))
-            .when(busy, |el| el.child(div().id("create-step").role(Role::Status).child(muted(tr("create_step_time")
+            .child(submit)
+            .when(busy && !self.resuming, |el| el.child(div().id("create-step").role(Role::Status).child(muted(tr("create_step_time")
                 .replace("{passo}", &step).replace("{segundos}", &seconds.to_string())))));
         div().flex_1().min_w_0().h_full().min_h_0().pl(px(20.)).flex().flex_col().gap(px(12.))
             .child(div().id("create-form").flex_1().min_h_0().overflow_y_scroll().child(fields))

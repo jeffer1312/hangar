@@ -10,7 +10,15 @@ GET /control/t13 muda como as próximas respostas saem (só as chaves dadas muda
   roots=<ok|empty|404|500|drop>  scan=<ok|unreadable|400|403|404|500|drop>  providers=<ok|404|500|drop>
   configs=<ok|404|500|drop>  codex=<ok|404|500|drop>  sessions=<ok|404|500|drop>  (a lista que a escolha da pasta lê)
   create=<ok|rename|notes|409|400|422|500|drop>  delay=<s> (leituras)  create_delay=<s> (a criação, com os passos)
-/control/log (da fixture de sessão) mostra o que foi pedido.
+Atraso por rota: <rota>_delay=<s> (providers, configs, codex, models, context, preview...) e progress_delay (a consulta do passo).
+Task 13b (escolhas finas e retomada):
+  models=<ok|reduced|empty|404|500|drop>  engines=<ok|empty|500|drop>  quotas=<ok|500|drop>
+  config=<ok|nokey|500|drop> (GET /api/config: a chave do Jev e o jev_padrao)  configpost=<ok|500|drop>
+  context=<ok|500|drop> (GET /api/harness/codex/opcoes)  contextpost=<ok|500|drop>  context_delay=<s>
+  account=<ok|missing|listfail|400|409|500|drop> (POST /api/claude-configs)  delete=<ok|listfail|409|500|drop>  account_delay=<s>
+  archive=<ok|empty|500|drop> (GET /api/archive-por-cwd)  preview=<ok|empty|500|drop>  preview_delay=<s>
+  resume=<ok|409|500|drop>  models_delay=<s>
+  GET /control/t13reset volta contas e o jev_padrao ao começo.
 
 A régua: fora de /api e /control, serve o build do web (T13_WEB, só leitura; padrão ~/hangar/frontend/dist) na mesma origem,
 com a conexão sintética e o idioma (?lang=pt|en na primeira página) semeados no index.html que sai daqui. O service worker
@@ -32,7 +40,16 @@ exec(compile(SOURCE[:SOURCE.index("\nserver = ThreadingHTTPServer(")], "parity_s
 LOCK, SESSIONS, record, fail, bump, info, state, TOKEN = (BASE[k] for k in ("LOCK", "SESSIONS", "record", "fail", "bump", "info", "state", "TOKEN"))
 
 T13 = {"roots": "ok", "scan": "ok", "providers": "ok", "configs": "ok", "codex": "ok", "sessions": "ok", "create": "ok",
-       "delay": 0.0, "create_delay": 0.0}
+       "delay": 0.0, "create_delay": 0.0,
+       "models": "ok", "engines": "ok", "quotas": "ok", "config": "ok", "configpost": "ok", "context": "ok", "contextpost": "ok",
+       "account": "ok", "delete": "ok", "archive": "ok", "preview": "ok", "resume": "ok",
+       "context_delay": 0.0, "account_delay": 0.0, "preview_delay": 0.0, "models_delay": 0.0,
+       "providers_delay": 0.0, "configs_delay": 0.0, "codex_delay": 0.0, "progress_delay": 0.0}
+FIRST_CONFIGS = [{"path": "/sintetica/.claude", "label": "default", "active": True},
+                 {"path": "/sintetica/.claude-sintetica-trabalho", "label": "sintetica-trabalho", "active": False},
+                 {"path": "/sintetica/.claude-sintetica-velha", "label": "sintetica-velha", "active": False}]
+# O estado que as gravações da 13b mudam: contas Claude, o padrão do Jev e o contexto estendido do Codex.
+T13B = {"configs": [dict(c) for c in FIRST_CONFIGS], "jev_padrao": False, "contexto": False}
 # Passos da criação em voo, pelo nome limpo: (instante do início, passos).
 CREATING = {}
 
@@ -87,9 +104,10 @@ class Handler(BASE["Handler"]):
         self.close_connection = True
         self.connection.shutdown(2)
 
-    def mine(self, key):
+    def mine(self, key, delay_key=None):
+        # Atraso de uma rota só (`<rota>_delay`, ex.: providers_delay=8), além do geral.
         with LOCK:
-            mode, delay = T13[key], T13["delay"]
+            mode, delay = T13[key], max(T13["delay"], T13.get(delay_key or f"{key}_delay", 0.0))
         time.sleep(delay)
         if mode == "drop":
             self.drop()
@@ -111,8 +129,20 @@ class Handler(BASE["Handler"]):
                 current = dict(T13)
             self.send_json(current)
             return
+        if path == "/control/t13reset":
+            with LOCK:
+                T13B.update({"configs": [dict(c) for c in FIRST_CONFIGS], "jev_padrao": False, "contexto": False})
+            self.send_json(T13B)
+            return
         routes = {"/api/fs/roots": self.roots, "/api/fs/scan": self.scan, "/api/providers": self.providers,
-                  "/api/claude-configs": self.configs, "/api/codex-contas": self.codex, "/api/sessions/creation-progress": self.progress}
+                  "/api/claude-configs": self.configs, "/api/codex-contas": self.codex, "/api/sessions/creation-progress": self.progress,
+                  "/api/model-options": self.models, "/api/engines": self.engines, "/api/cotas": self.quotas, "/api/config": self.config,
+                  "/api/harness/codex/opcoes": self.context, "/api/archive-por-cwd": self.archive}
+        if path.startswith("/api/archive/") and path.endswith("/history"):
+            record("GET", self.path, None)
+            if self.authorized():
+                self.preview(path)
+            return
         if path in routes:
             record("GET", self.path, None)
             if self.authorized():
@@ -158,8 +188,96 @@ class Handler(BASE["Handler"]):
 
     def configs(self, _):
         if self.mine("configs"):
-            self.send_json([{"path": "/sintetica/.claude", "label": "default", "active": True},
-                            {"path": "/sintetica/.claude-sintetica-trabalho", "label": "sintetica-trabalho", "active": False}])
+            with LOCK:
+                self.send_json(list(T13B["configs"]))
+
+    def models(self, query):
+        mode = self.mine("models", "models_delay")
+        if not mode:
+            return
+        provider = query.get("provider", ["claude"])[0]
+        catalog = {
+            "claude": [{"id": "default"}, {"id": "opus", "name": "Opus 5.5", "context": "1M", "vision": True},
+                       {"id": "sonnet", "name": "Sonnet 5", "context": "200K"}, {"id": "haiku", "name": "Haiku 4.5"}],
+            "codex": [{"id": "gpt-sintetico-sol", "name": "GPT sintético Sol", "efforts": ["low", "medium", "high", "ultra"]},
+                      {"id": "gpt-sintetico-5", "name": "GPT sintético 5", "efforts": ["low", "medium"]}],
+            "pi": [{"id": "k3", "provider": "kimi-sintetica", "context_length": 256000, "images": True},
+                   {"id": "k3", "provider": "outra-sintetica", "context_length": 128000}],
+            "kimi": [{"id": "kimi-sintetico", "name": "Kimi sintético"}],
+            "omp": [{"id": "k3", "provider": "kimi-sintetica", "context_length": 256000}],
+        }.get(provider, [])
+        if mode == "empty":
+            catalog = []
+        elif mode == "reduced":
+            catalog = [{"id": "opus"}, {"id": "sonnet"}, {"id": "haiku"}]
+        self.send_json({"kind": provider, "reduced": mode == "reduced", "models": catalog})
+
+    def engines(self, _):
+        mode = self.mine("engines")
+        if mode:
+            motores = {} if mode == "empty" else {"motor-sintetico": {"label": "Motor sintético", "model": "modelo-sintetico-1"}}
+            self.send_json({"motores": motores})
+
+    def quotas(self, _):
+        if not self.mine("quotas"):
+            return
+        now = time.time()
+        self.send_json([
+            {"id": "claude:/sintetica/.claude", "label": "default", "provedor": "claude", "estado": "lida",
+             "janelas": [{"rotulo": "5h", "pct": 42.4, "reset_ts": now + 7800}, {"rotulo": "7d", "pct": 18.0, "reset_ts": now + 3 * 86400}]},
+            {"id": "claude:/sintetica/.claude-sintetica-trabalho", "label": "sintetica-trabalho", "provedor": "claude", "estado": "lida",
+             "janelas": [{"rotulo": "5h", "pct": 86.0, "reset_ts": now + 2100}, {"rotulo": "7d", "pct": 93.0, "reset_ts": now + 86400 * 1.2}]},
+            {"id": "claude:/sintetica/.claude-sintetica-velha", "label": "sintetica-velha", "provedor": "claude", "estado": "expirada", "janelas": []},
+            {"id": "codex:default", "label": "Padrão", "provedor": "codex", "estado": "lida", "janelas": [{"rotulo": "5h", "pct": 12.0, "reset_ts": now + 600}]},
+        ])
+
+    def config(self, _):
+        mode = self.mine("config")
+        if mode:
+            with LOCK:
+                padrao = T13B["jev_padrao"]
+            self.send_json({"campos": {"jev_api_key": {"definido": mode != "nokey", "valor": "…" if mode != "nokey" else ""},
+                                       "jev_padrao": {"definido": True, "valor": padrao}}})
+
+    def context(self, _):
+        if self.mine("context", "context_delay"):
+            with LOCK:
+                self.send_json({"contexto_estendido": T13B["contexto"], "codex_voice_beta": False})
+
+    def archive(self, query):
+        mode = self.mine("archive")
+        if not mode:
+            return
+        cwd, provider = query.get("cwd", [""])[0], query.get("provider", ["claude"])[0]
+        if mode == "empty" or provider not in ("claude", "codex"):
+            self.send_json([])
+            return
+        now = time.time()
+        entry = lambda sid, last, age, cfg, conta, live=False: {
+            "project": "sintetica-projeto", "cwd": cwd, "session_id": sid, "mtime": now - age, "preview": "primeira mensagem sintética",
+            "ultima": last, "live": live, "config_dir": cfg, "conta": conta, "provider": provider,
+            "codex_account": "default" if provider == "codex" else None}
+        self.send_json([
+            entry("sintetica-viva", "conversa aberta agora (não aparece)", 30, "/sintetica/.claude", "default", live=True),
+            entry("sintetica-1", "Revise o parser do relatório sintético e rode os testes", 3600, "/sintetica/.claude-sintetica-trabalho", "sintetica-trabalho"),
+            entry("sintetica-2", "Ajuste a cor do botão da tela de exemplo", 86400 * 2, "/sintetica/.claude", "default"),
+            entry("sintetica-3", "", 86400 * 9, "/sintetica/.claude", "default"),
+        ])
+
+    def preview(self, path):
+        mode = self.mine("preview", "preview_delay")
+        if not mode:
+            return
+        if mode == "empty":
+            self.send_json([])
+            return
+        sid = path.split("/")[4]
+        events = []
+        for n in range(1, 16):
+            events.append({"kind": "user_msg", "id": f"{sid}-u{n}", "text": f"Pedido sintético **{n}** da conversa `{sid}`."})
+            events.append({"kind": "tool_use", "id": f"{sid}-t{n}", "tool_name": "Read", "tool_input": {"file_path": "/sintetica/x"}})
+            events.append({"kind": "assistant_msg", "id": f"{sid}-a{n}", "text": f"Resposta sintética {n}:\n\n- item um\n- item dois"})
+        self.send_json(events[-30:])
 
     def codex(self, _):
         if not self.mine("codex"):
@@ -176,6 +294,10 @@ class Handler(BASE["Handler"]):
     def progress(self, query):
         name = clean(query.get("name", [""])[0])
         with LOCK:
+            slow = T13["progress_delay"]
+        # Consulta lenta: o relógio do app tem de andar sozinho enquanto ela não volta.
+        time.sleep(slow)
+        with LOCK:
             started = CREATING.get(name)
         if started is None:
             self.send_json({"step": None, "params": {}})
@@ -184,14 +306,90 @@ class Handler(BASE["Handler"]):
         step = "preparando" if elapsed < 2 else "conta" if elapsed < 4 else "criando"
         self.send_json({"step": step, "params": {"conta": "sintetica-trabalho"} if step == "conta" else {}})
 
+    def written(self, key, delay_key="account_delay"):
+        """Modo de uma gravação da 13b: None quando a resposta já saiu (queda ou erro forçado)."""
+        with LOCK:
+            mode, delay = T13[key], T13.get(delay_key, 0.0)
+        time.sleep(delay)
+        if mode == "drop":
+            self.drop()
+            return None
+        if mode in ("400", "409", "500"):
+            text = {"400": "nome de conta inválido (sintético)", "409": "conta em uso por uma sessão viva (sintético)",
+                    "500": "falha sintética do servidor"}[mode]
+            self.send_json(fail("erro_sintetico", text), int(mode))
+            return None
+        return mode
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if not path.startswith("/api/claude-configs/"):
+            super().do_DELETE()
+            return
+        record("DELETE", self.path, None)
+        if not self.authorized():
+            return
+        name = path.rsplit("/", 1)[1]
+        mode = self.written("delete")
+        if not mode:
+            return
+        with LOCK:
+            T13B["configs"] = [c for c in T13B["configs"] if c["path"] != f"/sintetica/.claude-{name}"]
+            if mode == "listfail":
+                T13["configs"] = "500"
+        self.send_json({"ok": True})
+
     def do_POST(self):
-        if urlparse(self.path).path != "/api/sessions":
+        path = urlparse(self.path).path
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        if path not in ("/api/sessions", "/api/claude-configs", "/api/config", "/api/harness/codex/opcoes") \
+                and not (path.startswith("/api/archive/") and path.endswith("/resume")):
+            # A fixture de sessão lê o corpo de novo: devolve o que já foi lido.
+            import io
+            self.rfile = io.BytesIO(raw)
             super().do_POST()
             return
-        length = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(length) or b"{}")
+        body = json.loads(raw or b"{}")
         record("POST", self.path, body)
         if not self.authorized():
+            return
+        if path == "/api/claude-configs":
+            mode = self.written("account")
+            if not mode:
+                return
+            name = clean(body.get("nome", ""))
+            created = {"path": f"/sintetica/.claude-{name}", "label": name, "active": False}
+            with LOCK:
+                if mode != "missing":
+                    T13B["configs"].append(created)
+                if mode == "listfail":
+                    T13["configs"] = "500"
+            self.send_json(created)
+            return
+        if path == "/api/config":
+            if self.written("configpost", "delay"):
+                with LOCK:
+                    T13B["jev_padrao"] = bool(body.get("jev_padrao"))
+                self.send_json({"campos": {}})
+            return
+        if path == "/api/harness/codex/opcoes":
+            if self.written("contextpost", "context_delay"):
+                with LOCK:
+                    T13B["contexto"] = bool(body.get("contexto_estendido"))
+                    self.send_json({"contexto_estendido": T13B["contexto"], "codex_voice_beta": False})
+            return
+        if path.endswith("/resume"):
+            if not self.written("resume", "create_delay"):
+                return
+            sid = path.split("/")[4]
+            name = f"retomada-{sid}"
+            with LOCK:
+                data = info(name, body.get("provider", "claude"))
+                data["cwd"] = "/sintetica/projetos/hangar-sintetico"
+                SESSIONS[name] = {"info": data, "state": state("idle"), "events": [], "stats": None}
+                bump()
+            self.send_json(data)
             return
         name = clean(body.get("name", ""))
         with LOCK:
