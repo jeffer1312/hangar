@@ -78,5 +78,7 @@ if __name__ == "__main__":
     if not env.get("CP_AUTH_TOKEN"):
         sys.exit("erro: CP_AUTH_TOKEN ausente no backend/.env")
     url = f"http://127.0.0.1:{env.get('CP_PORT') or 8765}/mcp/"
-    claude(url, str(HOME / ".local" / "bin" / "hangar-mcp-headers"))
+    # Windows não executa o shim sem extensão; o .cmd vem do install.ps1.
+    helper = "hangar-mcp-headers.cmd" if os.name == "nt" else "hangar-mcp-headers"
+    claude(url, str(HOME / ".local" / "bin" / helper))
     codex(url, env["CP_AUTH_TOKEN"])

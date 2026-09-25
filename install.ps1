@@ -2087,6 +2087,16 @@ if (-not $bash) {
     if (Escrever-Lancador $lancadorFolha $conteudoFolha 'cmd') { Ok "lancador folha.cmd criado em $binUsuario" }
     else { Ok 'lancador folha.cmd ja atualizado' }
 
+    # headersHelper do MCP `hangar`: o Claude Code executa o caminho gravado no .claude.json, e o
+    # shim sem extensao nao roda no Windows - sem cabecalho o backend da 401 e o MCP cai no OAuth.
+    # Pelo bash: o hangar-mcp-headers.sh e bash de verdade.
+    $lancadorMcp = Join-Path $binUsuario 'hangar-mcp-headers.cmd'
+    $conteudoMcp = "@echo off`r`n" +
+                   "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
+                   "`"$bash`" `"$raiz\scripts\hangar-mcp-headers.sh`" %*`r`n"
+    if (Escrever-Lancador $lancadorMcp $conteudoMcp 'cmd') { Ok "lancador hangar-mcp-headers.cmd criado em $binUsuario" }
+    else { Ok 'lancador hangar-mcp-headers.cmd ja atualizado' }
+
     # (2e) lancadores do Codex. O `hangar-codex-tui` e o COMANDO do pane de toda sessao Codex, e o
     # backend o procura com `shutil.which` (registry._exigir_lancador_codex). No Windows o `which`
     # so acha o que casa PATHEXT (.COM;.EXE;.BAT;.CMD;...), entao arquivo SEM extensao nunca e

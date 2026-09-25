@@ -108,10 +108,16 @@ claude() {
     # ARGUMENTO some da linha (a armadilha do `$run` acima e so para posicao de COMANDO).
     # Passado SEMPRE, nao so quando o chamador tem a variavel: o servidor tmux guarda o ambiente
     # com que foi INICIADO, e omitir o `-e` numa sessao posterior nao remove a variavel — o pane
-    # nasceria na conta de uma sessao antiga. Chamador sem a variavel -> padrao explicito
-    # ($HOME/.claude), nunca string vazia (diretorio invalido/indefinido pro claude).
+    # nasceria na conta de uma sessao antiga. Chamador sem a variavel -> `env -u` no inicio do
+    # comando do pane, nunca `=$HOME/.claude`: pro Claude Code a conta padrao e a AUSENCIA da
+    # variavel; setada, mesmo no proprio ~/.claude, ele le ~/.claude/.claude.json em vez de
+    # ~/.claude.json (e perde MCPs, pastas confiaveis e historico).
     local -a cfg
-    cfg=(-e "CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}")
+    if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+        cfg=(-e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+    else
+        cfg=(env -u CLAUDE_CONFIG_DIR)
+    fi
 
     # duplicated call: zsh doesn't word-split an unquoted prefix var, so no $run trick here.
     # O `command -v` diz que o BINARIO existe, nao que ele FUNCIONA: o gerenciador systemd do usuario
