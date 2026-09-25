@@ -8,7 +8,8 @@ t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 export VT="$t"
 mkdir -p "$t/bin"
 # /api/sessions responde $VT/sessions.json, ou nada com $VT/api-down; $VT/on-sessions, se existir,
-# roda uma vez antes. /history responde $VT/history.json.
+# roda uma vez antes. /history responde $VT/history.json. DELETE (?by=) e /pair respondem ok, ou
+# falham com $VT/close-fails, $VT/close-404 e $VT/pair-fails.
 cat > "$t/bin/curl" <<'SH'
 #!/bin/sh
 for a; do url=$a; done
@@ -19,6 +20,13 @@ case "$url" in
     if [ -f "$VT/on-sessions" ]; then bash "$VT/on-sessions"; rm -f "$VT/on-sessions"; fi
     cat "$VT/sessions.json" ;;
   */history*) [ -f "$VT/history.json" ] || exit 22; cat "$VT/history.json" ;;
+  *'?by='*)
+    [ -f "$VT/close-404" ] && { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+    [ -f "$VT/close-fails" ] && { echo "curl: (22) The requested URL returned error: 500" >&2; exit 22; }
+    echo '{"ok":true}' ;;
+  */pair)
+    [ -f "$VT/pair-fails" ] && { echo "curl: (22) The requested URL returned error: 409" >&2; exit 22; }
+    echo '{"ok":true}' ;;
   *) exit 22 ;;
 esac
 SH
@@ -45,13 +53,13 @@ orq() { python3 "$ORQPY" --dir "$d" "$@" >/dev/null; }
 novo() {
   d="$t/$1"; mkdir -p "$d"
   : > "$t/sent.log"; : > "$t/urls"; : > "$t/err"
-  rm -f "$t/falha" "$t/api-down" "$t/history.json"
+  rm -f "$t/falha" "$t/api-down" "$t/history.json" "$t/close-fails" "$t/close-404" "$t/pair-fails"
   orq init --arbiter arb --repo "$raiz" --contract "$t/regras.md"
 }
-# M, CICLOS, INTERVALO e REP mudam por cenário (VAR=x vigia); o stderr do vigia vai pro $VT/err.
+# M, CICLOS, INTERVALO, REP e CLOSE_IDLE_S mudam por cenário (VAR=x vigia); o stderr do vigia vai pro $VT/err.
 vigia() {
   PATH="$t/bin:$PATH" CP_ENV="$t/env" CP_VIGIA_INTERVALO="${INTERVALO:-0}" CP_VIGIA_CICLOS="${CICLOS:-3}" \
-    CP_VIGIA_REP="${REP:-10}" CP_VIGIA_LOG="$t/err" \
+    CP_VIGIA_REP="${REP:-10}" CP_VIGIA_CLOSE_IDLE_S="${CLOSE_IDLE_S:-600}" CP_VIGIA_LOG="$t/err" \
     timeout 20 bash "$raiz/skills/orquestrar/scripts/vigia.sh" arb -e "$d" -m "${M:-1}" "$@" > "$t/out" 2>> "$t/err" || fail "vigia died (rc=$?)"
 }
 fail() { echo "FAIL: $1"; for f in out err sent.log; do echo "--- $f"; cat "$t/$f"; done; exit 1; }
@@ -170,6 +178,69 @@ M=100 CICLOS=6 vigia
 [ "$(grep -c "^orq: --tmux arb \[vigia\] Account out of quota" "$t/sent.log")" -eq 3 ] || fail "o alarme não parou na 3ª tentativa"
 [ "$(grep -c "^- [^·]* · aviso: \[aviso\] \[vigia\] alarm dropped after 3 failed deliveries: .*Account out of quota" "$d/registro.md")" -eq 1 ] \
   || fail "o alarme largado não deixou um [aviso] no registro"
+
+# Arrumação: executor de Task fechada que está idle fecha depois da janela, uma vez, pela API com
+# ?by=<árbitro>; quem trabalha não fecha; --no-housekeeping desliga; falha para em 3 com [aviso].
+closes() { grep -c "DELETE http://127.0.0.1:8765/api/sessions/$1?by=arb\$" "$t/urls" || true; }
+finished() {  # exec1 fechou a Task 1 e está idle; exec2 fechou a Task 2 e trabalha
+  printf '%s' '[{"name":"exec1","state":"idle"},{"name":"exec2","state":"working","last_activity":9999999999},{"name":"rev1","state":"idle"},{"name":"arb","state":"idle"}]' > "$t/sessions.json"
+  novo "$1"
+  orq event task_inicio --task 1 --titulo x --executor exec1 --par rev1
+  orq event task_inicio --task 2 --titulo y --executor exec2 --par rev1
+  printf '{"ts":"%s","task":1,"hash":"a"}\n{"ts":"%s","task":2,"hash":"b"}\n' "$(date -Iseconds)" "$(date -Iseconds)" > "$d/closed.jsonl"
+}
+finished fecha
+INTERVALO=1 CICLOS=3 CLOSE_IDLE_S=2 vigia
+[ "$(closes exec1)" -eq 1 ] || fail "exec1 ociosa não foi fechada exatamente uma vez depois da janela"
+[ "$(closes exec2)" -eq 0 ] || fail "fechou sessão trabalhando"
+if grep -q -- '--close' "$t/sent.log"; then fail "fechou por hangar-send em vez da API"; fi
+grep -q "closed session: exec1 (Task 1 closed)" "$d/registro.md" || fail "fechamento sem linha no registro"
+
+finished sem-arrumacao
+CLOSE_IDLE_S=0 vigia --no-housekeeping
+if grep -q 'DELETE' "$t/urls"; then fail "--no-housekeeping fechou sessão"; fi
+
+finished fecha-404
+: > "$t/close-404"
+CLOSE_IDLE_S=0 CICLOS=4 vigia
+[ "$(closes exec1)" -eq 1 ] || fail "404 no fechamento foi retentado"
+if grep -q "closed session: exec1\|close failed: exec1" "$d/registro.md"; then fail "404 deixou linha no registro"; fi
+
+finished fecha-falha
+: > "$t/close-fails"
+CLOSE_IDLE_S=0 CICLOS=5 vigia
+[ "$(closes exec1)" -eq 3 ] || fail "fechamento falho não parou em 3 tentativas"
+if grep -q "closed session: exec1" "$d/registro.md"; then fail "fechamento falho registrado como feito"; fi
+grep -q "close failed: exec1: .*error: 500 (1/3)" "$d/registro.md" || fail "falha de fechamento fora do registro"
+grep -q "aviso: \[aviso\] vigia gave up after 3 attempts: close failed: exec1" "$d/registro.md" || fail "desistência do fechamento sem [aviso]"
+
+# Grupo: rev1 (revisora de Task aberta) está sem grupo e entra no do árbitro sem acordar os
+# veteranos; exec1 já está no grupo; `outro` está em OUTRO grupo e não é fundido.
+group() {
+  printf '%s' '[{"name":"exec1","state":"working","last_activity":9999999999,"pair_gid":"g1"},{"name":"rev1","state":"idle"},{"name":"outro","state":"working","last_activity":9999999999,"pair_gid":"g2"},{"name":"arb","state":"idle","pair_gid":"g1","pair_task":"Plano X"}]' > "$t/sessions.json"
+  novo "$1"
+  orq event task_inicio --task 1 --titulo x --executor exec1 --par rev1
+  orq event task_inicio --task 2 --titulo y --executor outro --par rev1
+}
+group grupo
+vigia
+grep -q -- '--data {"peer": "rev1", "task": "Plano X", "notify_members": false} http://127.0.0.1:8765/api/sessions/arb/pair' "$t/urls" \
+  || fail "rev1 não entrou no grupo do árbitro com notify_members false"
+if grep -q '"peer": "exec1"\|"peer": "outro"' "$t/urls"; then fail "pareou quem já tinha grupo"; fi
+grep -q "joined group: rev1" "$d/registro.md" || fail "entrada no grupo sem linha no registro"
+[ "$(grep -c 'aviso: \[aviso\] outro is in another group (g2)' "$d/registro.md")" -eq 1 ] || fail "aviso de outro grupo não saiu uma vez só"
+
+group grupo-desligado
+vigia --no-housekeeping
+if grep -q '/pair' "$t/urls"; then fail "--no-housekeeping pareou"; fi
+
+group grupo-falha
+: > "$t/pair-fails"
+CICLOS=5 vigia
+[ "$(grep -c '/api/sessions/arb/pair' "$t/urls")" -eq 3 ] || fail "pareamento falho não parou em 3 tentativas"
+if grep -q "joined group: rev1" "$d/registro.md"; then fail "pareamento falho registrado como feito"; fi
+grep -q "join failed: rev1: .*error: 409 (1/3)" "$d/registro.md" || fail "falha de pareamento fora do registro"
+grep -q "aviso: \[aviso\] vigia gave up after 3 attempts: join failed: rev1" "$d/registro.md" || fail "desistência do grupo sem [aviso]"
 
 # Sem `orq init`, todo alarme via orq cairia só no log: o vigia recusa armar.
 d="$t/vazio"; mkdir -p "$d"; : > "$t/sent.log"

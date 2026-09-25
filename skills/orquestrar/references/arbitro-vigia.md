@@ -100,11 +100,11 @@ It becomes a case only if the repo is strange (unexplained dirty tree, unreporte
 
 ## Closing sessions
 
-A session closes when its part ends, with `hangar-send --close <name>`; never your own:
+The watchdog (`-e`) closes what `orq done` lists once it has been `idle` for 10 min: the executor of a committed Task, the `de` side of a `sessao_trocada`, and, after `execucao_fim`, every executor and reviewer. It also keeps you and the open Tasks' executor and reviewer in your group (`orq team`). Each act leaves `closed session:` or `joined group:` in the journal; 3 failures on one session → an `[aviso]` and it stops trying. `--no-housekeeping` turns both off.
+
+You close, with `hangar-send --close <name>`, what `orq` does not see; never your own:
 
 - research (phase 0): its output file exists;
-- executor: its Task approved and committed;
-- a retired session (rotation, context, quota): its substitute confirmed the takeover;
 - reviewer, executor for findings and the branch review itself: the branch review approved;
 - retrospective: its patch delivered;
 - the previous arbiter: its successor closes it on taking over.

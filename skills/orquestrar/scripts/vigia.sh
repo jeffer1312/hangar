@@ -36,8 +36,10 @@
 #      the alarms go to a session called "5" while the group stalls. E.g.:
 #      vigia.sh t1 t2 t3 review review2 arbitro -m 10 -d ~/.hangar/orq/<date>-<gid>/registro.md
 #      The old form `vigia.sh exec rev arb 5` still works.
-# Usage: vigia.sh <arbiter> -e <durable dir> [-m N]
-#      the list follows `orq ball` every cycle.
+# Usage: vigia.sh <arbiter> -e <durable dir> [-m N] [--no-housekeeping]
+#      the list follows `orq ball` every cycle. Each cycle it also writes <dir>/vigia.json (the
+#      panel's heartbeat), closes the sessions `orq done` lists after 10 idle minutes and joins
+#      `orq team` to the arbiter's group; --no-housekeeping turns the closing and the joining off.
 #
 # Confirming it LIVES (is-active right after the systemd-run answers `active` because it was just
 # born, not because it reads the API — a watchdog once sat `active` for hours with no log line):
@@ -75,12 +77,14 @@ set -u
 LIMITE=5
 DIARIO=
 ORQD=
+HOUSEKEEPING=1   # under -e: close finished sessions, keep the team in the arbiter's group
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -m|--minutos) LIMITE=${2:?"-m needs the number of minutes"}; shift 2 ;;
     -d|--diario)  DIARIO=${2:?"-d needs the journal's path"}; shift 2 ;;
     -e|--eventos) ORQD=${2:?"-e needs the durable directory (orq)"}; shift 2 ;;
+    --no-housekeeping) HOUSEKEEPING=0; shift ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done
@@ -334,6 +338,103 @@ deliver_alarm() {  # $1 = key (one per alarm), $2 = message, $3 = label for the 
   return 0
 }
 
+# HOUSEKEEPING (-e, off with --no-housekeeping): closes the sessions whose part is over
+# (`orq done`) once idle for CLOSE_IDLE_S, measured by cycles, and keeps the arbiter and the open
+# Tasks' owners (`orq team`) in the arbiter's group. Every act is journaled, so the panel's feed
+# shows it; three failures on one session → an [aviso] and the watchdog stops trying it.
+CLOSE_IDLE_S=${CP_VIGIA_CLOSE_IDLE_S:-600}   # the smoke test lowers it; nobody else passes it
+declare -A IDLE_CYCLES=() FAILS=() GAVE_UP=()
+warned_no_group=
+GROUP=$(mktemp /tmp/vigia-group-XXXXXX.py)
+trap 'rm -f "$LEITOR" "$CURLRC" "$LOOPDET" "$CTXDET" "$ORQF" "$BEAT" "$GROUP"' EXIT
+cat > "$GROUP" <<'PY'
+import json, sys
+# Joining merges WHOLE groups (pair.join_group): a session already in another group is reported,
+# never pulled in.
+arb, *team = sys.argv[1:]
+by_name = {s.get("name"): s for s in json.load(sys.stdin)}
+a = by_name.get(arb) or {}
+gid = a.get("pair_gid")
+if not gid:
+    print("noarb")
+    sys.exit()
+for n in team:
+    s = by_name.get(n)
+    if n == arb or s is None or "::" in n or s.get("pair_gid") == gid:
+        continue
+    if s.get("pair_gid"):
+        print(f"other\t{n}\t{s['pair_gid']}")
+    else:
+        body = {"peer": n, "task": a.get("pair_task") or "", "notify_members": False}
+        print(f"join\t{n}\t{json.dumps(body, ensure_ascii=False)}")
+PY
+orq_log() { ORQ_DIR="$ORQD" python3 "$ORQ" log "$1" >/dev/null 2>>"$CP_VIGIA_LOG"; }
+# A leading [aviso] makes notify only journal it, as `aviso:` (the panel feed's prefix).
+orq_warn() { ORQ_DIR="$ORQD" python3 "$ORQ" notify "[aviso] $1" >/dev/null 2>>"$CP_VIGIA_LOG" || echo "[aviso] $1" >&2; }
+attempt_failed() {  # $1 = close:<name> | join:<name>, $2 = what failed (starts with the journal prefix)
+  FAILS[$1]=$(( ${FAILS[$1]:-0} + 1 ))
+  echo "[vigia] $2 (${FAILS[$1]}/3)" >&2
+  orq_log "$2 (${FAILS[$1]}/3)"
+  if [ "${FAILS[$1]}" -ge 3 ]; then
+    GAVE_UP[$1]=1
+    orq_warn "vigia gave up after 3 attempts: $2"
+  fi
+}
+close_finished() {
+  local out name reason k err names=() reasons=() states=()
+  out=$(ORQ_DIR="$ORQD" python3 "$ORQ" done 2>>"$CP_VIGIA_LOG") || { echo "[vigia] orq done failed" >&2; return 0; }
+  [ -n "$out" ] || return 0
+  while read -r name reason; do names+=("$name"); reasons+=("$reason"); done <<< "$out"
+  IFS='|' read -r -a states <<< "$(printf '%s' "$lista" | python3 "$LEITOR" "${names[@]}" 2>>"$CP_VIGIA_LOG")"
+  for k in "${!names[@]}"; do
+    name=${names[$k]}
+    [ -n "${GAVE_UP[close:$name]:-}" ] && continue
+    [[ $name == *::* ]] && continue   # another server's session: not ours to close
+    # Only `idle` counts: working, awaiting_input and stuck are someone still in the middle.
+    if [ "${states[$k]:-?}" != idle ]; then IDLE_CYCLES[$name]=0; continue; fi
+    IDLE_CYCLES[$name]=$(( ${IDLE_CYCLES[$name]:-0} + 1 ))
+    [ $(( ${IDLE_CYCLES[$name]} * INTERVALO )) -ge "$CLOSE_IDLE_S" ] || continue
+    IDLE_CYCLES[$name]=0
+    # ?by=<arbiter>: the backend spares the arbiter the exit notice of a close it did not ask for.
+    if err=$(curl -sS -f --config "$CURLRC" -X DELETE "$BASE/api/sessions/$name?by=$ARB" 2>&1 >/dev/null); then
+      unset 'FAILS[close:$name]'
+      orq_log "closed session: $name (${reasons[$k]})"
+      echo "[vigia] closed $name (${reasons[$k]})"
+    elif [[ $err == *"error: 404"* ]]; then
+      GAVE_UP[close:$name]=1   # already gone: nothing to do
+    else
+      attempt_failed "close:$name" "close failed: $name: ${err:0:200}"
+    fi
+  done
+}
+join_team() {
+  local out kind name rest err members=()
+  out=$(ORQ_DIR="$ORQD" python3 "$ORQ" team 2>>"$CP_VIGIA_LOG") || { echo "[vigia] orq team failed" >&2; return 0; }
+  read -r -a members <<< "$out"
+  out=$(printf '%s' "$lista" | python3 "$GROUP" "$ARB" "${members[@]}" 2>>"$CP_VIGIA_LOG")
+  while IFS=$'\t' read -r kind name rest; do
+    case "$kind" in
+      noarb)
+        [ -n "$warned_no_group" ] || echo "[vigia] $ARB is in no group: nobody to join to it" >&2
+        warned_no_group=1 ;;
+      other)
+        [ -n "${GAVE_UP[join:$name]:-}" ] && continue
+        GAVE_UP[join:$name]=1   # warned once; never merged
+        orq_warn "$name is in another group ($rest); the watchdog does not merge groups — pair it by hand if it belongs to this work" ;;
+      join)
+        [ -n "${GAVE_UP[join:$name]:-}" ] && continue
+        if err=$(curl -sS -f --config "$CURLRC" -X POST -H 'content-type: application/json' \
+                    --data "$rest" "$BASE/api/sessions/$ARB/pair" 2>&1 >/dev/null); then
+          unset 'FAILS[join:$name]'
+          orq_log "joined group: $name"
+          echo "[vigia] joined $name to $ARB's group"
+        else
+          attempt_failed "join:$name" "join failed: $name: ${err:0:200}"
+        fi ;;
+    esac
+  done <<< "$out"
+}
+
 # Interval between readings. It exists as a variable only so the smoke test can run the whole
 # loop in seconds; in normal use nobody passes it.
 INTERVALO=${CP_VIGIA_INTERVALO:-60}
@@ -369,6 +470,10 @@ for i in $(seq 1 "$CICLOS"); do
     continue
   fi
   mudos=0
+  if [ -n "$ORQD" ] && [ "$HOUSEKEEPING" -eq 1 ]; then
+    close_finished
+    join_team
+  fi
 
   # One state per session, in the SAME order as SESSOES. `resumo` is what goes in the messages.
   IFS='|' read -r -a ESTADOS <<< "$st"
