@@ -41,7 +41,7 @@ proof it works. `active` is not proof; a hand-typed test is not proof.
 ## What it does
 
 - Watches everyone on the list, including you, with or without a terminal. Wakes via `hangar-send`.
-- Context: each listed session's window against its row's `janela`, re-read from the contract every cycle. Crossing it tells you and asks the session to report what is left; once per crossing. The swap is your decision ("Rotation"); a stop order to the session comes only from you, after it.
+- Context: each listed session's window against its row's `janela`, re-read from the contract every cycle. Crossing it tells you and asks the session to report what is left; once per crossing, again every 10 more points while no swap happens. The swap is your decision ("Rotation"); a stop order to the session comes only from you, after it.
 - Fires when the current owner stops, not when everyone stops; `vanished` counts as stopped. Immediate, without waiting for silence: a stuck session (`working`, no event for 10 min) and a session out of quota.
 - To team sessions it ASKS, evidence attached; to you it may be affirmative. Stop orders come from you, after looking, never from the counter.
 - Liveness: journal over one full cycle, `show -p ActiveState -p MainPID`. Work in progress with `ps -eo pid,ppid,cmd | grep vigia.sh` empty, or pointing at a retired pair, is work without a net.
