@@ -20,6 +20,9 @@ Cada pedido a /subagents sai no log como "REQ" (a contagem de 5 s e a leitura da
   flaky     um pedido sim, um não (500): falha isolada, que não para a consulta
   slow=<id>&delay=<s>  só o detalhe desse subagente espera s segundos (resposta atrasada de um subagente anterior)
   grow=1    cada pedido do ag-bg1 acrescenta uma resposta à conversa dele (a consulta de 2,5 s traz novidade); reset=1 zera
+
+15d: os eventos do detalhe usam ids no formato do `_sub_id` do backend (`U`, `U:1`…). ag-fg1 casa com o Agent de
+primeiro plano de /control/t15?do=fgsub (fim: do=fgsub_end, sem agentId, casado pelo prompt); o ag-bg1 termina com do=bg_task.
 """
 import pathlib
 import time
@@ -53,6 +56,8 @@ def listing():
             finished=True),
         sub("ag-sw1", "Revise a tela sintética\nitem 1", 3, ["Read"]),
         sub("ag-sw2", "Revise a tela sintética\nitem 2", 4, ["Glob"]),
+        # 15d: casa com o Agent de primeiro plano do passo `fgsub` só pelo prompt (o resultado dele não traz agentId).
+        sub("ag-fg1", "Conte as rotas do backend sintético.", 3, ["Bash", "Read", "Grep"], agent_type="general-purpose"),
         {"agentId": "ag-ilegivel", "agentType": None, "prompt": None, "startedAt": "", "updatedAt": "", "mtime": 1790340000.0,
          "toolCalls": 0, "tools": [], "recent": [], "lastText": "", "ilegivel": True},
     ]
@@ -76,23 +81,27 @@ def detail(agent_id):
         return None
     events = []
     if agent_id == "ag-bg1":
+        # Ids como o `_sub_id` do backend: as partes da mesma linha do transcript são `U`, `U:1`, `U:2`…
         events = [
-            ev("user_msg", "s1", "Confira conversation.rs (sintético)."),
-            ev("thinking", "s2", "Primeiro leio o fold, depois procuro onde o Agent de fundo fecha."),
-            use("s3", "u1", "Read", {"file_path": "/sintetica/src/conversation.rs"}),
-            out("s4", "u1", "fn fold_activity(events: &[ChatEvent]) -> Activity {\n    // sintético\n}"),
-            ev("assistant_msg", "s5", "O fold fecha o agente em **dois** caminhos:\n\n- `task:<id>` no resultado\n"
-                                      "- `<task-notification>` na mensagem\n\n## Próximo passo\nConferir a ordem de chegada."),
-            use("s6", "u2", "Grep", {"pattern": "task-notification", "path": "/sintetica/src"}),
-            out("s7", "u2", "Arquivo sintético não encontrado", error=True),
-            use("s8", "u3", "Grep", {"pattern": "fold_activity", "path": "/sintetica"}),
+            ev("user_msg", "u-0001", "Confira conversation.rs (sintético)."),
+            ev("thinking", "a-0001", "Primeiro leio o fold, depois procuro onde o Agent de fundo fecha."),
+            use("a-0001:1", "u1", "Read", {"file_path": "/sintetica/src/conversation.rs"}),
+            out("r-0001", "u1", "fn fold_activity(events: &[ChatEvent]) -> Activity {\n    // sintético\n}"),
+            ev("assistant_msg", "a-0002", "O fold fecha o agente em **dois** caminhos:\n\n- `task:<id>` no resultado\n"
+                                          "- `<task-notification>` na mensagem\n\n## Próximo passo\nConferir a ordem de chegada."),
+            use("a-0002:1", "u2", "Grep", {"pattern": "task-notification", "path": "/sintetica/src"}),
+            out("r-0002", "u2", "Arquivo sintético não encontrado", error=True),
+            use("a-0003", "u3", "Grep", {"pattern": "fold_activity", "path": "/sintetica"}),
         ]
-        events += [ev("assistant_msg", f"s-grow-{i}", f"Resposta sintética nova número {i + 1}.") for i in range(DETAIL["extra"])]
-    elif agent_id == "ag-orf1":
-        events = [ev("user_msg", "o1", "Mapear as rotas sintéticas do backend"),
-                  use("o2", "v1", "Bash", {"command": "rg '@app.get' /sintetica/backend | wc -l"}),
-                  out("o3", "v1", "42"),
-                  ev("assistant_msg", "o4", "São 42 rotas sintéticas. Terminei.")]
+        events += [ev("assistant_msg", f"g-{i:04d}", f"Resposta sintética nova número {i + 1}.") for i in range(DETAIL["extra"])]
+    elif agent_id in ("ag-orf1", "ag-fg1"):
+        events = [ev("user_msg", "u-0101", base["prompt"]),
+                  ev("assistant_msg", "a-0101", "Vou contar as rotas."),
+                  use("a-0101:1", "v1", "Bash", {"command": "rg '@app.get' /sintetica/backend | wc -l"}),
+                  use("a-0101:2", "v2", "Read", {"file_path": "/sintetica/backend/api.py"}),
+                  use("a-0101:3", "v3", "Grep", {"pattern": "@app.post", "path": "/sintetica/backend"}),
+                  out("r-0101", "v1", "42"), out("r-0101:1", "v2", "rotas sintéticas"), out("r-0101:2", "v3", "7"),
+                  ev("assistant_msg", "a-0102", "São 42 rotas sintéticas. Terminei.")]
     elif agent_id == "ag-sw1":
         # Recomeçou: nenhuma chamada ainda ("Ainda pensando"), embora a lista, mais velha, diga 3.
         base = {**base, "toolCalls": 0, "tools": [], "recent": []}
@@ -107,6 +116,10 @@ STEPS["tasks"] = [
     call("live-k4", "t-k4", "TaskUpdate", {"taskId": "1", "status": "completed"}),
     call("live-k5", "t-k5", "TaskUpdate", {"taskId": "2", "status": "in_progress"}),
 ]
+# 15d: o subagente do Claude termina com o Agent do pai — pelo prompt (`fgsub`/`fgsub_end`) ou pelo agentId (`bg`/`bg_task`
+# da 15a). O `fg` da 15a segue sem subagente no disco (o "não achei" da 15c).
+STEPS["fgsub"] = [T15["agent"]("live-fgsub", "t-fgsub", "Contar as rotas", "Conte as rotas do backend sintético.")]
+STEPS["fgsub_end"] = [T15["result"]("live-fgsub-end", "t-fgsub", "São 42 rotas sintéticas.")]
 STEPS["todo"] = [call("live-td", "t-td", "TodoWrite", {"todos": [
     {"content": "Lista inteira do TodoWrite", "status": "completed"},
     {"content": "Segundo item", "activeForm": "Fazendo o segundo item", "status": "in_progress"},

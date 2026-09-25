@@ -186,6 +186,8 @@ pub fn fold_tasks(events: &[ChatEvent], paired: &HashMap<usize, usize>) -> Vec<T
 pub struct AgentRun {
     pub call: usize, pub id: String, pub description: String,
     pub subagent_type: Option<String>, pub model: Option<String>, pub prompt: Option<String>, pub running: bool,
+    /// O `agentId` que o resultado do Agent traz: o nome do arquivo do subagente no disco.
+    pub agent_id: Option<String>,
 }
 
 /// Bash com `run_in_background: true`: o comando cru e o rótulo sem o encanamento.
@@ -249,6 +251,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     // Bash de fundo esperando a resposta de lançamento; outro resultado com a mesma frase não conta.
     let mut shell_pending: HashSet<&str> = HashSet::new();
     let mut agent_calls: HashSet<&str> = HashSet::new();
+    let mut agent_ids: HashMap<&str, &str> = HashMap::new();
     let mut agents = Vec::new();
     let mut shells = Vec::new();
     // Tarefas pelo número sequencial do TaskCreate; o `bool` marca a apagada. A lista do último TodoWrite vence.
@@ -264,6 +267,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 if let Some(task) = id.strip_prefix("task:") { finish(task.to_owned(), &background, &mut resulted, &mut finished_early); continue; }
                 let text = event.result.as_deref().unwrap_or("");
                 // Só o resultado de um Agent é lido: a conta é refeita a cada evento e as saídas de ferramenta são grandes.
+                if agent_calls.contains(id) { if let Some(agent) = word_after(text, "agentId:") { agent_ids.insert(id, agent); } }
                 if agent_calls.contains(id) && text.to_lowercase().contains("async agent launched") {
                     if let Some(agent) = word_after(text, "agentId:") {
                         if finished_early.remove(agent) { resulted.insert(id); }
@@ -325,7 +329,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                         } else { desc };
                         agent_calls.insert(id);
                         agents.push(AgentRun { call: i, id: id.to_owned(), description, subagent_type: text("subagent_type"),
-                            model: text("model"), prompt: text("prompt"), running: false });
+                            model: text("model"), prompt: text("prompt"), running: false, agent_id: None });
                     }
                     Some("Bash") if input.and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) => {
                         shell_pending.insert(id);
@@ -339,7 +343,10 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
             _ => {}
         }
     }
-    for agent in &mut agents { agent.running = !resulted.contains(agent.id.as_str()); }
+    for agent in &mut agents {
+        agent.running = !resulted.contains(agent.id.as_str());
+        agent.agent_id = agent_ids.get(agent.id.as_str()).map(|a| (*a).to_owned());
+    }
     for shell in &mut shells { shell.running = !resulted.contains(shell.id.as_str()); }
     agents.sort_by_key(|a| !a.running);
     shells.sort_by_key(|s| !s.running);
@@ -706,6 +713,15 @@ mod tests {
             (0, "Ler o fold", Some("Explore"), Some("haiku"), Some("p"), true));
         events.push(answered("r", "t1", "pronto"));
         assert!(running(&events).is_empty());
+        assert_eq!(fold_activity(&events).agents[0].agent_id, None);
+    }
+
+    #[test]
+    fn agent_result_names_the_subagent_on_disk_in_either_plane() {
+        let events = vec![agent("a", "t1", json!({})), answered("r", "t1", "pronto\nagentId: ab12 (for resuming)"),
+            agent("b", "t2", json!({})), answered("s", "t2", "Async agent launched successfully.\nagentId: cd34 (use it)")];
+        let ids: Vec<_> = fold_activity(&events).agents.iter().map(|a| (a.id.clone(), a.agent_id.clone(), a.running)).collect();
+        assert_eq!(ids, vec![("t2".into(), Some("cd34".into()), true), ("t1".into(), Some("ab12".into()), false)]);
     }
 
     #[test]

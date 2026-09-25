@@ -36,69 +36,104 @@ fn chip_text(event: &ChatEvent) -> String {
     }
 }
 
-fn chip_box() -> Div {
+pub(super) fn chip_box() -> Div {
     div().flex().flex_col().rounded(px(10.)).border_1().border_color(theme::border()).overflow_hidden()
 }
 
+/// Fim da linha no modo Chips: rodando, erro, linhas postas e tiradas, ou o desfecho por ferramenta. As linhas do
+/// resultado vêm de quem chama, porque a conversa principal as guarda prontas.
+pub(super) fn chip_ending(call: &ChatEvent, result: Option<&ChatEvent>, running: bool, lines: impl FnOnce(&ChatEvent) -> usize) -> AnyElement {
+    let name = call.tool_name.as_deref();
+    let text = |t: String, color: Hsla| div().flex_shrink_0().max_w(px(260.)).truncate().text_size(px(12.5)).text_color(color).child(t);
+    let Some(result) = result else {
+        return if running { text(tr("chip_running"), theme::accent()).into_any_element() }
+            else { text(tr("tool_no_result"), theme::faint()).into_any_element() };
+    };
+    let raw = result.result.as_deref().unwrap_or("").trim();
+    if result.is_error == Some(true) {
+        let first = raw.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| conversation::one_line(l, 72)).unwrap_or_else(|| tr("tool_failed"));
+        return div().flex_shrink_0().flex().items_center().gap_1().child(chrome::small_icon(IconName::CircleX, 13., theme::warning()))
+            .child(text(first, theme::warning())).into_any_element();
+    }
+    if let Some((added, removed)) = conversation::edit_counts(name, call.tool_input.as_ref()) {
+        return div().flex_shrink_0().flex().gap(px(6.)).font_family(theme::MONO).text_size(px(12.))
+            .child(div().text_color(theme::success()).child(format!("+{added}")))
+            .when(removed > 0, |el| el.child(div().text_color(theme::removed()).child(format!("−{removed}"))))
+            .into_any_element();
+    }
+    let lines = lines(result);
+    let outcome = match (raw.is_empty(), conversation::family(name)) {
+        (true, _) => tr("chip_done"),
+        (false, Family::Run) => format!("{} ({})", tr("chip_done"), counted("chip_lines", lines)),
+        (false, Family::Read) => counted("chip_lines_loaded", lines),
+        _ => counted("chip_lines_returned", lines),
+    };
+    // Pronto tem sinal próprio além da cor: o ✓ distingue do "rodando" e do erro.
+    div().flex_shrink_0().flex().items_center().gap_1().child(chrome::small_icon(IconName::Check, 13., theme::success()))
+        .child(text(outcome, theme::muted())).into_any_element()
+}
+
+/// Uma chamada no modo Chips: linha da tabela com verbo, resumo em mono e desfecho à direita. Quem chama liga o clique;
+/// `label` troca o rótulo acessível quando o clique faz outra coisa que abrir.
+pub(super) fn chip_button(id: String, call: &ChatEvent, ending: AnyElement, open: bool, label: Option<String>, cx: &App) -> Button {
+    let verb = verb(call.tool_name.as_deref());
+    let chip = chip_text(call);
+    let label = label.unwrap_or_else(|| format!("{verb} {chip}"));
+    Button::new(SharedString::from(id))
+        .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+        .w_full().h(px(34.)).px(px(12.)).rounded(px(0.))
+        .toggled(open).accessibility_label(label)
+        .child(div().w_full().min_w_0().flex().items_center().gap(px(8.)).text_size(px(13.5))
+            // Tabela do mock: verbo numa coluna, o resumo em mono, o desfecho alinhado à direita.
+            // Coluna mínima, não fixa: nome de ferramenta sem verbo (ToolSearch, MCP) empurra o resumo.
+            .child(div().min_w(px(64.)).flex_shrink_0().text_color(theme::muted()).child(verb))
+            .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).text_size(px(12.5)).child(chip))
+            .child(ending)
+            .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint())))
+}
+
+/// Grupo pequeno nasce aberto nos Chips; o clique inverte.
+pub(super) fn chip_group_open(tools: usize, toggled: bool) -> bool { (tools <= CHIPS_OPEN_UP_TO) != toggled }
+
+/// Cabeçalho do grupo nos Chips, no botão de abrir de quem chama: título pela contagem por família, chamadas, rodando
+/// e erros.
+pub(super) fn chip_group_header(button: Button, events: &[ChatEvent], tools: &[Tool], running: bool) -> Button {
+    let text = conversation::family_counts(events, tools).into_iter().map(|(family, n)| counted(match family {
+        Family::Read => "chip_title_read", Family::Search => "chip_title_search", Family::Edit => "chip_title_edit",
+        Family::Create => "chip_title_create", Family::Run => "chip_title_run", Family::Other => "chip_title_other",
+    }, n)).collect::<Vec<_>>().join(" · ");
+    let mut chars = text.chars();
+    let title: String = chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default();
+    let errors = tools.iter().filter(|t| t.result.is_some_and(|i| events[i].is_error == Some(true))).count();
+    let last = tools.last().map(|t| conversation::family(events[t.call].tool_name.as_deref())).unwrap_or(Family::Other);
+    let calls = counted("chip_calls", tools.len());
+    button.accessibility_label(format!("{title} · {calls}"))
+        .child(chrome::small_icon(family_icon(last), 14., if errors > 0 { theme::warning() } else { theme::muted() }))
+        .child(div().min_w_0().truncate().text_color(if errors > 0 { theme::warning() } else { theme::text() }).child(title))
+        .child(div().flex_shrink_0().text_color(theme::faint()).child(format!("· {calls}")))
+        .child(div().flex_1())
+        .when(running, |el| el.child(div().flex_shrink_0().text_color(theme::accent()).child(tr("chip_running"))))
+        .when(errors > 0, |el| el.child(div().flex_shrink_0().text_color(theme::warning()).child(tr("tools_errors").replace("{n}", &errors.to_string()))))
+}
+
+/// As linhas do grupo aberto numa tabela com borda.
+pub(super) fn chip_table(rows: Vec<AnyElement>) -> Div {
+    chip_box().children(rows.into_iter().enumerate().map(|(n, row)| div().when(n > 0, |el| el.border_t_1().border_color(theme::border())).child(row)))
+}
+
 impl Hangar {
-    /// Fim da linha no modo Chips: rodando, erro, linhas postas e tiradas, ou o desfecho por ferramenta.
-    fn chip_ending(&self, tool: Tool) -> AnyElement {
+    /// Uma chamada no modo Chips da conversa principal.
+    fn render_chip(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> AnyElement {
         let events = &self.chat.events;
         let call = &events[tool.call];
-        let name = call.tool_name.as_deref();
-        let text = |t: String, color: Hsla| div().flex_shrink_0().max_w(px(260.)).truncate().text_size(px(12.5)).text_color(color).child(t);
-        let Some(result) = tool.result.map(|i| &events[i]) else {
-            return if self.running(tool.call) { text(tr("chip_running"), theme::accent()).into_any_element() }
-                else { text(tr("tool_no_result"), theme::faint()).into_any_element() };
-        };
-        let raw = result.result.as_deref().unwrap_or("").trim();
-        if result.is_error == Some(true) {
-            let first = raw.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| conversation::one_line(l, 72)).unwrap_or_else(|| tr("tool_failed"));
-            return div().flex_shrink_0().flex().items_center().gap_1().child(chrome::small_icon(IconName::CircleX, 13., theme::warning()))
-                .child(text(first, theme::warning())).into_any_element();
-        }
-        if let Some((added, removed)) = conversation::edit_counts(name, call.tool_input.as_ref()) {
-            return div().flex_shrink_0().flex().gap(px(6.)).font_family(theme::MONO).text_size(px(12.))
-                .child(div().text_color(theme::success()).child(format!("+{added}")))
-                .when(removed > 0, |el| el.child(div().text_color(theme::removed()).child(format!("−{removed}"))))
-                .into_any_element();
-        }
-        let lines = self.result_lines(result);
-        let outcome = match (raw.is_empty(), conversation::family(name)) {
-            (true, _) => tr("chip_done"),
-            (false, Family::Run) => format!("{} ({})", tr("chip_done"), counted("chip_lines", lines)),
-            (false, Family::Read) => counted("chip_lines_loaded", lines),
-            _ => counted("chip_lines_returned", lines),
-        };
-        // Pronto tem sinal próprio além da cor: o ✓ distingue do "rodando" e do erro.
-        div().flex_shrink_0().flex().items_center().gap_1().child(chrome::small_icon(IconName::Check, 13., theme::success()))
-            .child(text(outcome, theme::muted())).into_any_element()
-    }
-
-    /// Uma chamada no modo Chips: linha da tabela com verbo, resumo em mono e desfecho à direita.
-    fn render_chip(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> AnyElement {
-        let call = &self.chat.events[tool.call];
         let key = call.id.clone();
-        let name = call.tool_name.clone();
-        let verb = verb(name.as_deref());
-        let chip = chip_text(call);
         let open = self.expanded.contains(&key);
-        let ending = self.chip_ending(tool);
+        let ending = chip_ending(call, tool.result.map(|i| &events[i]), self.running(tool.call), |result| self.result_lines(result));
         let toggle_key = key.clone();
         // O cartão Agent abre a conversa dele na aba Atividade em vez de expandir.
         let agent = super::activity::agent_request(call);
-        let label = if agent.is_some() { format!("{}: {chip}", super::activity::web("tool_abrir_agente")) } else { format!("{verb} {chip}") };
-        let button = Button::new(SharedString::from(format!("chip-{key}")))
-            .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
-            .w_full().h(px(34.)).px(px(12.)).rounded(px(0.))
-            .toggled(open).accessibility_label(label)
-            .child(div().w_full().min_w_0().flex().items_center().gap(px(8.)).text_size(px(13.5))
-                // Tabela do mock: verbo numa coluna, o resumo em mono, o desfecho alinhado à direita.
-                // Coluna mínima, não fixa: nome de ferramenta sem verbo (ToolSearch, MCP) empurra o resumo.
-                .child(div().min_w(px(64.)).flex_shrink_0().text_color(theme::muted()).child(verb))
-                .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).text_size(px(12.5)).child(chip))
-                .child(ending)
-                .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint())))
+        let label = agent.is_some().then(|| format!("{}: {}", super::activity::web("tool_abrir_agente"), chip_text(call)));
+        let button = chip_button(format!("chip-{key}"), call, ending, open, label, cx)
             .on_click(cx.listener(move |this, _, _, cx| match &agent {
                 Some(request) => this.open_agent(request.clone(), cx),
                 None => this.toggle(toggle_key.clone(), cx),
@@ -115,33 +150,13 @@ impl Hangar {
 
     /// Grupo no modo Chips: título pela contagem por família e as chamadas numa tabela com borda.
     pub(super) fn render_chip_group(&mut self, row: &str, tools: &[Tool], cx: &mut Context<Self>) -> AnyElement {
-        let events = &self.chat.events;
-        let text = conversation::family_counts(events, tools).into_iter().map(|(family, n)| counted(match family {
-            Family::Read => "chip_title_read", Family::Search => "chip_title_search", Family::Edit => "chip_title_edit",
-            Family::Create => "chip_title_create", Family::Run => "chip_title_run", Family::Other => "chip_title_other",
-        }, n)).collect::<Vec<_>>().join(" · ");
-        let mut chars = text.chars();
-        let title: String = chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default();
-        let errors = tools.iter().filter(|t| t.result.is_some_and(|i| events[i].is_error == Some(true))).count();
         let running = tools.iter().any(|t| t.result.is_none() && self.running(t.call));
-        let last = tools.last().map(|t| conversation::family(events[t.call].tool_name.as_deref())).unwrap_or(Family::Other);
-        let calls = counted("chip_calls", tools.len());
-        let open = (tools.len() <= CHIPS_OPEN_UP_TO) != self.expanded.contains(row);
+        let open = chip_group_open(tools.len(), self.expanded.contains(row));
         let toggle_key = row.to_owned();
-        let header = self.disclosure(row, open)
-            .accessibility_label(format!("{title} · {calls}"))
-            .child(chrome::small_icon(family_icon(last), 14., if errors > 0 { theme::warning() } else { theme::muted() }))
-            .child(div().min_w_0().truncate().text_color(if errors > 0 { theme::warning() } else { theme::text() }).child(title))
-            .child(div().flex_shrink_0().text_color(theme::faint()).child(format!("· {calls}")))
-            .child(div().flex_1())
-            .when(running, |el| el.child(div().flex_shrink_0().text_color(theme::accent()).child(tr("chip_running"))))
-            .when(errors > 0, |el| el.child(div().flex_shrink_0().text_color(theme::warning()).child(tr("tools_errors").replace("{n}", &errors.to_string()))))
+        let header = chip_group_header(self.disclosure(row, open), &self.chat.events, tools, running)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
         let rows: Vec<AnyElement> = if open { tools.iter().map(|&tool| self.render_chip(tool, row, cx)).collect() } else { Vec::new() };
-        div().flex().flex_col().gap_1().child(header)
-            .when(open, |el| el.child(chip_box()
-                .children(rows.into_iter().enumerate().map(|(n, row)| div().when(n > 0, |el| el.border_t_1().border_color(theme::border())).child(row)))))
-            .into_any_element()
+        div().flex().flex_col().gap_1().child(header).when(open, |el| el.child(chip_table(rows))).into_any_element()
     }
 
     /// Lista de tarefas do agente, no lugar das chamadas TaskCreate/TaskUpdate: anel de progresso, quanto falta

@@ -4,7 +4,7 @@
 //! botão existem, é do `Hangar`, como no `Chat.svelte`.
 use super::*;
 use super::subagent::SubConversation;
-use crate::conversation::{Activity, TaskStatus};
+use crate::conversation::{Activity, AgentRun, TaskStatus};
 use gpui_kit::component::tooltip::Tooltip;
 
 /// Recontagem dos subagentes no disco enquanto a sessão trabalha.
@@ -80,6 +80,20 @@ fn match_sub<'a>(subs: &'a [SubRun], prompt: Option<&str>) -> Option<&'a SubRun>
     })
 }
 
+/// Terminou: o backend diz (Kimi, Pi) ou o Agent do pai que o lançou já teve o fim real — o registro do Claude não traz
+/// `finished`. O Agent é achado pelo `agentId` do resultado; sem ele, pelo prompt, e só quando um Agent e um subagente
+/// casam um com o outro e mais ninguém: ambíguo não afirma o fim.
+fn sub_done(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
+    if run.finished { return true; }
+    if let Some(agent) = agents.iter().find(|a| a.agent_id.as_deref() == Some(run.agent_id.as_str())) { return !agent.running; }
+    let subs_of = |prompt: Option<&str>| subs.iter().filter(|s| match_sub(std::slice::from_ref(*s), prompt).is_some()).count();
+    let mut by_prompt = agents.iter().filter(|a| a.agent_id.is_none() && match_sub(std::slice::from_ref(run), a.prompt.as_deref()).is_some());
+    match (by_prompt.next(), by_prompt.next()) {
+        (Some(agent), None) => !agent.running && subs_of(agent.prompt.as_deref()) == 1,
+        _ => false,
+    }
+}
+
 /// Primeira linha útil do prompt (pula o cabeçalho de skill e títulos), até 90 caracteres.
 fn base_title(sub: &SubRun) -> String {
     let prompt = sub.prompt.as_deref().unwrap_or("");
@@ -118,7 +132,8 @@ struct Lines { agents: Vec<AgentLine>, orphans: Vec<OrphanLine>, shells: Vec<She
 pub(super) struct Link { pub api: Api, pub runtime: Arc<Runtime>, pub tx: async_channel::Sender<Envelope>, pub connection: u64 }
 
 /// O subagente aberto no detalhe: o que a lista sabia dele até a primeira resposta, depois o que a consulta traz.
-struct Opened { run: SubRun, title: String, raw: Option<Value>, loaded: bool, has_events: bool, fails: u32, busy: bool }
+/// `done` é o fim mostrado: o do backend ou o do Agent que o lançou.
+struct Opened { run: SubRun, title: String, raw: Option<Value>, loaded: bool, has_events: bool, fails: u32, busy: bool, done: bool }
 
 pub(super) struct ActivityPanel {
     link: Option<Link>,
@@ -204,7 +219,11 @@ impl ActivityPanel {
         if &self.activity == activity && self.processes == processes { return; }
         (self.activity, self.processes) = (activity.clone(), processes.to_vec());
         if self.prepare() { cx.notify(); }
+        // O Agent do pai terminou com o detalhe aberto: uma última leitura traz o fim, e a resposta dela para a consulta.
+        if self.poll.is_some() && self.opened.as_ref().is_some_and(|o| !o.done && self.done(&o.run)) { self.fetch_detail(); }
     }
+
+    fn done(&self, run: &SubRun) -> bool { sub_done(&self.activity.agents, &self.subs, run) }
 
     /// A aba passou a aparecer (ou mudou de sessão): relê a lista. `None` = escondida, o relógio para.
     fn show(&mut self, target: Option<(SessionKey, Link)>, cx: &mut Context<Self>) {
@@ -287,7 +306,8 @@ impl ActivityPanel {
     fn open_sub(&mut self, run: SubRun, title: String, cx: &mut Context<Self>) {
         self.close_detail(cx);
         self.notice = None;
-        self.opened = Some(Opened { run, title, raw: None, loaded: false, has_events: false, fails: 0, busy: false });
+        let done = self.done(&run);
+        self.opened = Some(Opened { run, title, raw: None, loaded: false, has_events: false, fails: 0, busy: false, done });
         self.poll = Some(cx.spawn(async move |this, cx| loop {
             if this.update(cx, |this, _| this.fetch_detail()).is_err() { break; }
             cx.background_executor().timer(DETAIL_EVERY).await;
@@ -325,19 +345,22 @@ impl ActivityPanel {
         opened.busy = false;
         match result {
             Ok(value) => {
+                let run = parse_sub(&value).unwrap_or_else(|| opened.run.clone());
+                let done = self.done(&run);
+                // Terminou: esta leitura já traz o fim, e a consulta para aqui.
+                if done { self.poll = None; }
+                let Some(opened) = self.opened.as_mut() else { return };
                 opened.fails = 0;
                 let first = !opened.loaded;
                 opened.loaded = true;
                 let cleared = self.notice.take().is_some();
                 // Resposta igual à anterior não pede quadro.
-                if opened.raw.as_ref() == Some(&value) { if first || cleared { cx.notify(); } return; }
-                let run = parse_sub(&value).unwrap_or_else(|| opened.run.clone());
+                if opened.raw.as_ref() == Some(&value) && opened.done == done { if first || cleared { cx.notify(); } return; }
                 let events: Vec<ChatEvent> = value.get("events").cloned().and_then(|e| serde_json::from_value(e).ok()).unwrap_or_default();
-                let finished = run.finished;
                 let has_events = !events.is_empty();
-                let changed = first || cleared || opened.run != run || opened.has_events != has_events;
-                (opened.run, opened.raw, opened.has_events) = (run, Some(value), has_events);
-                self.conversation.update(cx, |view, cx| view.set_events(events, finished, cx));
+                let changed = first || cleared || opened.run != run || opened.has_events != has_events || opened.done != done;
+                (opened.run, opened.raw, opened.has_events, opened.done) = (run, Some(value), has_events, done);
+                self.conversation.update(cx, |view, cx| view.set_events(events, done, cx));
                 if changed { cx.notify(); }
             }
             Err(failure) => {
@@ -496,7 +519,7 @@ impl ActivityPanel {
         let small = |text: String, color: Hsla| div().child(text).text_color(color).into_any_element();
         let meta: Vec<AnyElement> = if run.unreadable { vec![small(web("atividade_sub_ilegivel"), theme::muted())] } else {
             let mut meta = vec![
-                if run.finished { small(format!("✓ {}", web("atividade_sub_concluido")), theme::success()) }
+                if opened.done { small(format!("✓ {}", web("atividade_sub_concluido")), theme::success()) }
                 else { small(format!("◐ {}", web("atividade_rodando")), theme::accent()) },
                 small(web_with("atividade_chamadas", "n", run.calls.to_string()), theme::muted()),
             ];
@@ -644,6 +667,12 @@ impl Hangar {
         }
     }
 
+    /// A conversa do subagente segue a Aparência, como a principal.
+    pub(super) fn restyle_subagent(&mut self, cx: &mut Context<Self>) {
+        let conversation = self.act.view.read(cx).conversation.clone();
+        conversation.update(cx, |view, cx| view.restyle(cx));
+    }
+
     /// Clique no cartão Agent da conversa: abre o painel na aba Atividade, já na conversa desse agente. Cada clique é um
     /// pedido novo, então clicar de novo no mesmo agente depois do ‹ reabre.
     pub(super) fn open_agent(&mut self, (prompt, title): (Option<String>, String), cx: &mut Context<Self>) {
@@ -718,7 +747,28 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{SubRun, base_title, interval, match_sub, sub_title};
+    use super::{AgentRun, SubRun, base_title, interval, match_sub, sub_done, sub_title};
+
+    fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
+        AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
+            running, agent_id: agent_id.map(Into::into) }
+    }
+
+    #[test]
+    fn claude_subagent_ends_with_its_parent_agent_by_id_or_by_a_unique_prompt() {
+        let subs = vec![sub("a", "tarefa um"), sub("b", "tarefa dois"), sub("c", "tarefa dois")];
+        // Pelo agentId, mesmo com o prompt repetido.
+        assert!(sub_done(&[parent("t1", "tarefa dois", Some("b"), false)], &subs, &subs[1]));
+        assert!(!sub_done(&[parent("t1", "tarefa dois", Some("b"), true)], &subs, &subs[1]));
+        // Pelo prompt só quando um Agent e um subagente casam entre si.
+        assert!(sub_done(&[parent("t1", "tarefa um", None, false)], &subs, &subs[0]));
+        assert!(!sub_done(&[parent("t1", "tarefa um", None, true)], &subs, &subs[0]));
+        assert!(!sub_done(&[parent("t1", "tarefa dois", None, false)], &subs, &subs[1]));
+        assert!(!sub_done(&[parent("t1", "tarefa um", None, false), parent("t2", "tarefa um", None, false)], &subs, &subs[0]));
+        // Agent que já se sabe de outro subagente não fecha este; o `finished` do backend fecha sozinho.
+        assert!(!sub_done(&[parent("t1", "tarefa um", Some("z"), false)], &subs, &subs[0]));
+        assert!(sub_done(&[], &subs, &SubRun { finished: true, ..sub("k", "kimi") }));
+    }
 
     fn sub(id: &str, prompt: &str) -> SubRun {
         SubRun { agent_id: id.into(), agent_type: None, prompt: Some(prompt.into()), calls: 0, last_tool: None, finished: false, unreadable: false, tools: Vec::new() }

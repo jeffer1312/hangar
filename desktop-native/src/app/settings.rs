@@ -365,6 +365,7 @@ impl Hangar {
             != (next.tool_look, next.task_list, next.thinking_tools, next.table_chart) {
             self.sync_rows(cx);
             self.list_state.remeasure();
+            self.restyle_subagent(cx);
         }
         if save {
             let (connection, tx) = (self.connection, self.tx.clone());

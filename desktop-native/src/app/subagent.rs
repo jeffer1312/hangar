@@ -3,6 +3,8 @@
 //! própria: a chegada de uma resposta igual não pede quadro, e uma diferente só remede as linhas que mudaram.
 use super::*;
 
+fn chips() -> bool { appearance::get().tool_look == appearance::ToolLook::Chips }
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Tone { Muted, Accent, Warning }
 
@@ -38,6 +40,7 @@ struct Rich { source: String, view: Entity<TextViewState>, _observer: Subscripti
 
 pub(super) struct SubConversation {
     events: Vec<ChatEvent>,
+    finished: bool,
     rows: Vec<Row>,
     expanded: HashSet<String>,
     rich: HashMap<String, Rich>,
@@ -119,14 +122,30 @@ fn prepare(events: &[ChatEvent], finished: bool) -> Vec<Row> {
     })).collect()
 }
 
+/// A linha dona da chave: id igual, senão o id mais longo seguido de `:` — o backend dá `U`, `U:1`, `U:2`… às partes da
+/// mesma mensagem, e `U:1:input` é da linha `U:1`, não da `U`.
+fn owner(rows: &[Row], key: &str) -> Option<usize> {
+    rows.iter().enumerate().filter(|(_, r)| key.strip_prefix(r.id()).is_some_and(|rest| rest.is_empty() || rest.starts_with(':')))
+        .max_by_key(|(_, r)| r.id().len()).map(|(i, _)| i)
+}
+
 impl SubConversation {
     pub fn new() -> Self {
-        Self { events: Vec::new(), rows: Vec::new(), expanded: HashSet::new(), rich: HashMap::new(), list: ListState::new(0, ListAlignment::Bottom, px(200.)) }
+        Self { events: Vec::new(), finished: false, rows: Vec::new(), expanded: HashSet::new(), rich: HashMap::new(),
+            list: ListState::new(0, ListAlignment::Bottom, px(200.)) }
+    }
+
+    /// A Aparência mudou: refaz as linhas (pensamento com ou sem ferramentas) e remede todas (Clássico ou Chips).
+    pub fn restyle(&mut self, cx: &mut Context<Self>) {
+        let events = std::mem::take(&mut self.events);
+        self.set_events(events, self.finished, cx);
+        self.list.remeasure();
+        cx.notify();
     }
 
     /// Outro subagente: nada do anterior fica.
     pub fn clear(&mut self) {
-        (self.events, self.rows) = (Vec::new(), Vec::new());
+        (self.events, self.rows, self.finished) = (Vec::new(), Vec::new(), false);
         self.expanded.clear();
         self.rich.clear();
         self.list.reset(0);
@@ -135,7 +154,7 @@ impl SubConversation {
     /// Conversa nova do mesmo subagente: só o trecho que mudou entra na lista, e linha igual não é remedida.
     pub fn set_events(&mut self, events: Vec<ChatEvent>, finished: bool, cx: &mut Context<Self>) {
         let rows = prepare(&events, finished);
-        self.events = events;
+        (self.events, self.finished) = (events, finished);
         // Só o estado do subagente mudou (chamadas, fim): as linhas são as mesmas e nada se redesenha.
         if rows == self.rows { return; }
         let old: HashMap<&str, &Row> = self.rows.iter().map(|r| (r.id(), r)).collect();
@@ -154,7 +173,7 @@ impl SubConversation {
     }
 
     fn remeasure(&mut self, key: &str) {
-        if let Some(i) = self.rows.iter().position(|r| key.starts_with(r.id())) { self.list.remeasure_items(i..i + 1); }
+        if let Some(i) = owner(&self.rows, key) { self.list.remeasure_items(i..i + 1); }
     }
 
     fn text(&mut self, key: String, source: String, cx: &mut Context<Self>) -> Entity<TextViewState> {
@@ -205,6 +224,8 @@ impl SubConversation {
     }
 
     fn render_tool(&mut self, tool: &ToolRow, cx: &mut Context<Self>) -> AnyElement {
+        // Nos Chips, a conversa do subagente segue o desenho da principal, como o `MessageList` do detalhe no web.
+        if chips() && !tool.orphan { return super::rows::chip_box().child(self.render_chip(tool, cx)).into_any_element(); }
         let error = tool.tone == Tone::Warning;
         let header = self.header(&tool.key, cx)
             .accessibility_label(format!("{}: {}. {}", tool.name, tool.summary, tool.status))
@@ -212,7 +233,27 @@ impl SubConversation {
             .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(tool.summary.clone()))
             .when(!tool.status.is_empty(), |el| el.child(div().flex_shrink_0().max_w(px(140.)).truncate().text_color(tool.tone.color()).child(tool.status.clone())));
         if !self.expanded.contains(&tool.key) { return header.into_any_element(); }
-        let mut body = div().flex().flex_col().gap_2().pt_1().pb_2().pl_6();
+        let body = self.tool_body(tool, cx).pl_6();
+        div().flex().flex_col().child(header).child(body).into_any_element()
+    }
+
+    /// Uma chamada nos Chips: a linha da tabela e, aberta, a entrada e o resultado.
+    fn render_chip(&mut self, tool: &ToolRow, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.expanded.contains(&tool.key);
+        let running = tool.result.is_none() && tool.tone == Tone::Accent;
+        let call = &self.events[tool.call];
+        let ending = super::rows::chip_ending(call, tool.result.map(|i| &self.events[i]), running, count_lines);
+        let key = tool.key.clone();
+        let button = super::rows::chip_button(format!("sub-chip-{}", tool.key), call, ending, open, None, cx)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)));
+        let body = open.then(|| self.tool_body(tool, cx).px(px(12.)));
+        div().flex().flex_col().child(button).children(body).into_any_element()
+    }
+
+    /// Entrada e resultado da chamada aberta, o mesmo no Clássico e nos Chips.
+    fn tool_body(&mut self, tool: &ToolRow, cx: &mut Context<Self>) -> Div {
+        let error = tool.tone == Tone::Warning;
+        let mut body = div().flex().flex_col().gap_2().pt_1().pb_2();
         if !tool.orphan {
             let input = conversation::pretty_input(self.events[tool.call].tool_input.as_ref());
             if !input.is_empty() { body = body.child(self.detail(format!("{}:input", tool.key), input, tr("tool_input"), false, cx)); }
@@ -224,7 +265,7 @@ impl SubConversation {
             }
             None => body.child(div().text_sm().text_color(theme::muted()).child(tool.status.clone())),
         };
-        div().flex().flex_col().child(header).child(body).into_any_element()
+        body
     }
 
     fn render_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -243,6 +284,18 @@ impl SubConversation {
                 } else { el.child(content) }).into_any_element()
             }
             Row::Tool(tool) => self.render_tool(&tool, cx),
+            Row::Group { id, tools, .. } if chips() => {
+                let open = super::rows::chip_group_open(tools.len(), self.expanded.contains(&id));
+                let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();
+                let running = tools.iter().any(|t| t.result.is_none() && t.tone == Tone::Accent);
+                let toggle = id.clone();
+                let button = Button::new(SharedString::from(format!("sub-toggle-{id}"))).ghost().small().w_full().toggled(open)
+                    .icon(if open { IconName::ChevronDown } else { IconName::ChevronRight });
+                let header = super::rows::chip_group_header(button, &self.events, &calls, running)
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle.clone(), cx)));
+                let rows: Vec<AnyElement> = if open { tools.iter().map(|t| self.render_chip(t, cx)).collect() } else { Vec::new() };
+                div().flex().flex_col().gap_1().child(header).when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
+            }
             Row::Group { id, label, summary, status, tone, tools } => {
                 let open = self.expanded.contains(&id);
                 let header = self.header(&id, cx).accessibility_label(format!("{label}: {summary}. {status}"))
@@ -276,7 +329,14 @@ impl SubConversation {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatEvent, Row, Tone, prepare};
+    use super::{ChatEvent, Row, Tone, owner, prepare};
+
+    #[test]
+    fn a_key_belongs_to_the_row_with_the_same_id_or_the_longest_one_before_a_colon() {
+        let rows: Vec<Row> = ["U", "U:1", "U:10"].iter().map(|id| Row::Message { id: (*id).into(), markdown: String::new(), user: false, label: None }).collect();
+        assert_eq!((owner(&rows, "U"), owner(&rows, "U:1"), owner(&rows, "U:1:input"), owner(&rows, "U:10:result")), (Some(0), Some(1), Some(1), Some(2)));
+        assert_eq!((owner(&rows, "U:2:input"), owner(&rows, "V")), (Some(0), None));
+    }
 
     fn event(kind: &str, id: &str, tool: Option<&str>, key: Option<&str>) -> ChatEvent {
         ChatEvent { kind: kind.into(), id: id.into(), tool_name: tool.map(Into::into), tool_use_id: key.map(Into::into),
