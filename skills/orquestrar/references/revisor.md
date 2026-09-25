@@ -18,7 +18,8 @@ page's `Report line` when the page has one; nothing else of this skill is yours 
 3. From the round message, note round, object (stash hash), base (HEAD) and `Phase:` (pixel
    Task); your verdict carries that phase as `--fase`.
 
-Done when the protection proof is recorded and round, object, base and phase are noted.
+Done when the protection proof is recorded and round, object, base and phase (on a pixel Task)
+are noted.
 
 ### 2. Read the frozen object
 
@@ -41,11 +42,13 @@ Done when the diff, the surrounding code and the tool outputs are read.
 
 ### 3. Judge
 
-1. Read now `revisor-catalogo.md`; pixels touched on a `Phase: prova` round, or with no
-   `Phase:` → `revisor-visual.md` too. Go through them against the object.
-2. Run the verification independently: the Task's focused command, never a full suite,
-   cwd-independent, `set -o pipefail` or `${PIPESTATUS[0]}`; yourself, or through the verifier
-   of `revisor-verificador.md`. Check the output, the object tested and the gaps. Delegated proof is reported as delegated.
+1. `Phase: prova` → read now `revisor-visual.md` only; judge the screen and that the object is
+   the stash you approved. Otherwise read now `revisor-catalogo.md`, plus `revisor-visual.md`
+   on a pixel round with no `Phase:`; go through them against the object.
+2. Not on `Phase: prova`: run the verification independently: the Task's focused command,
+   never a full suite, cwd-independent, `set -o pipefail` or `${PIPESTATUS[0]}`; yourself, or
+   through the verifier of `revisor-verificador.md`. Check the output, the object tested and the
+   gaps. Delegated proof is reported as delegated.
 3. A finding from a tool becomes a blocker only after you reproduce it.
 4. Judge every `Decided alone:` line of the executor's report: `ok`; `blocker N`; or `not
    theirs to decide` (an interface, a settled decision or the scope changed), which blocks.

@@ -9,7 +9,8 @@ Read at step 7 of `executor.md`, when a REPROVA arrives.
    sibling left out on purpose is named in the report with the reason. Unit: recipe about a
    function → check the file; about a network module → check the route.
 3. Apply the steps, run the proof, go back to step 4 of `executor.md`, freeze round R+1, send
-   it to the reviewer.
+   it to the reviewer. A proof REPROVA that changes no code → back to step 7 of `executor.md`
+   with `Phase: prova` on the same stash, not to step 4.
 
 Stop, report to the arbiter and wait instead, when:
 

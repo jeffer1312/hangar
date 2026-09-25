@@ -118,21 +118,23 @@ Done when the message is delivered and `orq event` exits 0.
 
 ### 7. Wait
 
-The tree stays untouched while the reviewer reads. REPROVA arrives (directly from the reviewer;
-from the arbiter only with context only he has) → read `executor-receita.md` now and follow it,
-then back to step 4 and a new round R+1. Disagreement with the recipe goes to the arbiter with
-evidence; the reviewer is not debated.
+The tree stays untouched while the reviewer reads. REPROVA on a code round, or on a round with
+no `Phase:` (directly from the reviewer; from the arbiter only with context only he has) → read
+`executor-receita.md` now and follow it, then back to step 4 and a new round R+1. Disagreement
+with the recipe goes to the arbiter with evidence; the reviewer is not debated.
 
 `CODE OK` (pixel Task, code approved) → prove it now, changing no code: `executor-visual.md` on
 that exact stash; `Tela: própria` → your own browser, no lock; `Tela: compartilhada`, or no
 `Tela:` declared → `orq screen take` first. Then send the proof to the same reviewer in the
 step-6 template: `Round: <R+1> | Object: <the same stash> | Phase: prova`, `Diff:` the approved
-code round's file, the page lines and the `Visual:` line; and run the command the `CODE OK`
-names (`--fase prova`, the same stash hash).
-A proof REPROVA that changes no code (recapture, wrong width…) → recapture and deliver
-`Phase: prova` again on the same stash, a new round, no code round. A proof REPROVA that changes
-code, or a code defect the proof exposes → step 4 and a `--fase codigo` round first, then prove
-again.
+code round's file, `Verification:` "unchanged since round <R>, code approved" (no re-run), the
+page lines and the `Visual:` line, every other field as usual; and run the command the
+`CODE OK` names (`--fase prova`, the same stash hash).
+
+REPROVA on a proof round → read `executor-receita.md` now and follow it. The recipe changes no
+code (recapture, wrong width…) → recapture and deliver `Phase: prova` again on the same stash,
+round R+1, no code round. The recipe changes code, or your proof exposes a code defect → step 4
+and a `--fase codigo` round first, then prove again.
 
 Done when APROVA arrives (after the proof, on a pixel Task).
 
