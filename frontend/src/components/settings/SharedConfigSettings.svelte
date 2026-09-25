@@ -43,6 +43,12 @@
     return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
   }
 
+  // Prévia feita com outra origem ou outros itens decidiria a sobrescrita errada.
+  function clearResults() {
+    diffs = {};
+    reports = {};
+  }
+
   function toggleAllTargets() {
     targetIds = allTargets ? [] : candidates.map((s) => s.id);
   }
@@ -123,7 +129,7 @@
   {:else}
     <label class="campo">
       <span class="rotulo">{m.shared_config_origin()}</span>
-      <select bind:value={originId} disabled={!!busy}>
+      <select bind:value={originId} disabled={!!busy} onchange={clearResults}>
         {#each servers as s (s.id)}<option value={s.id}>{s.label}</option>{/each}
       </select>
     </label>
@@ -139,7 +145,7 @@
     <fieldset disabled={!!busy}>
       <legend class="rotulo">{m.shared_config_items()}</legend>
       {#each CONFIG_SYNC_ITEMS as item (item)}
-        <label class="linha"><input type="checkbox" class="switch" checked={items.includes(item)} onchange={() => (items = toggle(items, item))} />{configSyncItemLabel(item)}</label>
+        <label class="linha"><input type="checkbox" class="switch" checked={items.includes(item)} onchange={() => { items = toggle(items, item); clearResults(); }} />{configSyncItemLabel(item)}</label>
       {/each}
     </fieldset>
 

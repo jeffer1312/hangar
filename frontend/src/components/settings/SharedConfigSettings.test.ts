@@ -101,3 +101,19 @@ it('destino com Hangar antigo pede atualização na comparação', async () => {
   expect(document.body.textContent).toContain(
     m.shared_config_diff_line({ added: 0, changed: 0, same: 1, onlyTarget: 0 }));
 });
+
+it('trocar a origem apaga a comparação feita com a origem anterior', async () => {
+  const manifest = { version: 1, machine: '', items: { claude_env: { ok: true, hashes: { A: '1' }, bytes: 0, warnings: [] } } };
+  vi.mocked(getConfigSyncManifestForServer).mockResolvedValue(manifest);
+  const line = m.shared_config_diff_line({ added: 0, changed: 0, same: 1, onlyTarget: 0 });
+  await render();
+  await toggle('VPS');
+  button(m.shared_config_compare())!.click();
+  await flush();
+  expect(document.body.textContent).toContain(line);
+  const select = document.querySelector('select')!;
+  select.value = 'note';
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  await flush();
+  expect(document.body.textContent).not.toContain(line);
+});
