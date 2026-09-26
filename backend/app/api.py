@@ -24,7 +24,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
 from app import (agentes_sync, atomico, atualizacoes, atualizar, btw, diag, harness_api,
-                 pensamento_pt, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
+                 loop_monitor, pensamento_pt, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
 from app.auth import require_auth, require_loopback
 from app.send_executor import send_thread as _send_thread
@@ -331,6 +331,8 @@ async def _lifespan(app: FastAPI):
 
     stall_task.add_done_callback(_stall_watch_done)
 
+    loop_monitor_task = asyncio.create_task(loop_monitor.watch(), name="loop-monitor")
+
     # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
     # 24h — ver app/prune.py para o criterio conservador (chave de sessao nao viva + idade
     # minima de 7 dias) e o porquê de periodica em vez de so no startup.
@@ -457,6 +459,7 @@ async def _lifespan(app: FastAPI):
             _log.exception("Falha ao encerrar a integração Codex")
         task.cancel()
         stall_task.cancel()
+        loop_monitor_task.cancel()
         prune_task.cancel()
         renova_task.cancel()
         await omp_sync.close()
@@ -468,6 +471,7 @@ async def _lifespan(app: FastAPI):
             await stall_task
         except asyncio.CancelledError:
             pass
+        await asyncio.gather(loop_monitor_task, return_exceptions=True)
         try:
             await prune_task
         except asyncio.CancelledError:
