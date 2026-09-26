@@ -1862,7 +1862,7 @@ impl Hangar {
             let Item::Event(i) = item else { continue };
             let event = &events[*i];
             if event.kind != "assistant_msg" || event.is_error == Some(true) { continue; }
-            let source = render_source(event);
+            let source = safe_markdown(&composer::citation_markdown(&display_body(event)));
             let tables = match old.remove(&event.id) {
                 Some((seen, tables)) if seen == source => tables,
                 _ => crate::tables::read(&source, decimal).into(),
@@ -2897,7 +2897,8 @@ impl Hangar {
         let report_style = gpui_kit::component::text::TextViewStyle::default().heading_font_size(|level, _| px(if level <= 1 { 13. } else { 12. }));
         let body = div().flex().flex_col().gap_2().px_3().pt_2().pb_3()
             .child(TextView::new(&view).selectable(true).scrollable(false).text_xs().text_color(theme::muted()).style(report_style)
-                .code_block_actions(copy_code).on_link_click(open_web_link))
+                .code_block_actions(copy_code).on_link_click(open_web_link)
+                .markdown_extensions(citation_extensions(&id, cx.weak_entity())))
             .child(div().flex().flex_col().pt_1().border_t_1().border_color(theme::border()).child(original)
                 .when_some(raw, |el, (raw, note)| el.child(div().px_2().pt_1().font_family(theme::MONO).text_xs().text_color(theme::muted()).child(raw))
                     .when_some(note, |el, note| el.child(div().px_2().pt_1().text_xs().text_color(theme::muted()).child(note)))));
@@ -2983,7 +2984,8 @@ impl Hangar {
             Some(tables) => self.render_charted(&id, &markdown, &tables, cx),
             None if !blank || files.is_none() => {
                 let view = self.text_view(&id, &id, markdown, cx);
-                let text = chat_text(&view, cx).motion(stream_motion(id == PREVIEW)).on_link_click(open_web_link);
+                let text = chat_text(&view, cx).motion(stream_motion(id == PREVIEW)).on_link_click(open_web_link)
+                    .markdown_extensions(citation_extensions(&id, cx.weak_entity()));
                 vec![collapse(text, long, open).into_any_element()]
             }
             None => Vec::new(),
@@ -3032,6 +3034,34 @@ fn with_copy_menu(row: Stateful<Div>, id: String, view: WeakEntity<Hangar>) -> A
 
 fn open_web_link(url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App) {
     if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); }
+}
+
+fn citation_extensions(row: &str, owner: WeakEntity<Hangar>) -> gpui_kit::base::text::MarkdownExtensions {
+    use gpui_kit::base::text::{markdown_ast, MarkdownExtensions, MarkdownNode, MarkdownParseContext, MarkdownPlugin};
+    struct Citations { row: String, owner: WeakEntity<Hangar> }
+    impl MarkdownPlugin for Citations {
+        fn name(&self) -> &str { "file-citation" }
+        fn parse(&self, node: &markdown_ast::Node, context: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
+            let markdown_ast::Node::Link(link) = node else { return None; };
+            let url = url::Url::parse(&link.url).ok().filter(|url| url.scheme() == "hangar-file")?;
+            let path = url.query_pairs().find(|(key, _)| key == "path")?.1.into_owned();
+            let line = url.query_pairs().find(|(key, _)| key == "line").and_then(|(_, value)| value.parse::<u32>().ok()).filter(|n| *n > 0);
+            let text = format!("{path}{}", line.map(|n| format!(":{n}")).unwrap_or_default());
+            Some(MarkdownNode::new(self.name(), (path, line)).text(text).markdown(context.node_source(node).unwrap_or_default().to_owned()))
+        }
+        fn render(&self, node: &MarkdownNode, _: &mut Window, _: &mut App) -> impl IntoElement {
+            let (path, line) = node.data::<(String, Option<u32>)>().unwrap().clone();
+            let owner = self.owner.clone();
+            let label = format!("{}{}", composer::basename(&path), line.map(|n| format!(":{n}")).unwrap_or_default());
+            let title = tr("citation_open").replace("{path}", node.as_text());
+            Button::new(format!("citation-{}-{}", self.row, node.source_range().map_or(0, |range| range.start)))
+                .small().outline().label(label).tooltip(title.clone()).accessibility_label(title)
+                .on_click(move |_, window, cx| {
+                    let _ = owner.update(cx, |this, cx| this.open_file(path.clone(), line, window, cx));
+                })
+        }
+    }
+    MarkdownExtensions::default().plugin(Citations { row: row.to_owned(), owner })
 }
 
 /// Markdown da conversa. É o `TextView` do gpui-base porque o do componente não repassa os campos que só a
@@ -3556,7 +3586,8 @@ fn prepare_detail(full: String) -> Prepared {
 fn prepare_message(event: &ChatEvent) -> Prepared {
     let card = message_card(event);
     let body = display_body(event);
-    Prepared::Message { markdown: safe_markdown(&body), blank: body.trim().is_empty(), card }
+    let source = if event.kind == "assistant_msg" { composer::citation_markdown(&body) } else { body.clone() };
+    Prepared::Message { markdown: safe_markdown(&source), blank: body.trim().is_empty(), card }
 }
 
 // Identidade do conteúdo de uma linha que não é mensagem: muda quando chega resultado ou o grupo cresce.
@@ -3582,7 +3613,7 @@ fn working_verb(label: Option<&str>) -> String {
 }
 
 fn preview_source(preview: &Preview) -> String {
-    if preview.md { return safe_markdown(&crate::mend::close_hanging(&preview.text)); }
+    if preview.md { return safe_markdown(&composer::citation_markdown(&crate::mend::close_hanging(&preview.text))); }
     let line_count = preview.text.lines().count();
     let source = if preview.full || line_count <= 10 { preview.text.as_str() }
         else { &preview.text[preview.text.match_indices('\n').nth(line_count - 11).map(|(index, _)| index + 1).unwrap_or(0)..] };
@@ -3934,6 +3965,13 @@ mod tests {
         assert!(super::long_message("1\n2\n3\n4\n5\n6"));
         assert!(!super::long_message(&"a".repeat(400)));
         assert!(super::long_message(&"á".repeat(401)));
+        let body = format!("{} /home/x/app.rs:12 e `app.rs:12`.", "a".repeat(345));
+        let event = |kind: &str| ChatEvent { kind: kind.into(), text: Some(body.clone()), ..Default::default() };
+        let super::Prepared::Message { markdown, .. } = super::prepare_message(&event("user_msg")) else { panic!() };
+        assert_eq!(markdown, body);
+        assert!(!super::long_message(&markdown));
+        let super::Prepared::Message { markdown, .. } = super::prepare_message(&event("assistant_msg")) else { panic!() };
+        assert_eq!(markdown.matches("hangar-file:").count(), 2);
         assert_eq!(super::stamp(None), None);
         let now = chrono::Local::now().timestamp() as f64;
         assert_eq!(super::stamp(Some(now)), super::clock(Some(now)));
