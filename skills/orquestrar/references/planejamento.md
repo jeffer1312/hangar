@@ -47,8 +47,7 @@ Done when `Method:`, `Executes with:` and `Domain skill:` are written and `checa
 ### 2. Research (phase 0 — only when the plan needs it)
 
 1. Open a read-only session or subagent, one closed question, output in a file the plan cites.
-   Protect it per `protecao.md`; a subagent inherits the protection or has a proven native
-   restriction.
+   Protect it per `protecao.md`.
 2. "It doesn't exist" answers one query: write the phrase searched. Absence backing a
    decision → search again by a second path. Zero rows from a DB or service don't prove
    absence.
@@ -60,14 +59,12 @@ Done when the plan cites the output file (its session closed), or needed no rese
 
 Right after the spec closes, before Task 1:
 
-1. Propose the route. `full` (default): the whole pipeline. `audit`: you write the code in this
-   session after the "go ahead", one Task = one commit, no arbiter, executor or per-Task reviewer;
-   a fresh read-only session reviews the whole diff (`revisao-final.md`), then the retrospective;
-   team table `escritor` (this session), `revisão final`, `retrospectiva`. Propose `audit` only
-   when all hold, and say which: every Task bounded and fully specified; small blast radius (no
-   public contract, shared state, destination or credential change); few enough Tasks for one
-   writer in one context. One fails → `full`. The user decides; no answer → `full`. The route only
-   escalates: `audit` → `full` through `replanejar.md`, reason in the journal. No `solo`.
+1. Propose the route, `full` (default) or `audit`, as the router defines them; on `audit` the
+   team table is `escritor` (this session), `revisão final`, `retrospectiva`. Propose `audit`
+   only when all hold, and say which: every Task bounded and fully specified; small blast radius
+   (no public contract, shared state, destination or credential change); few enough Tasks for one
+   writer in one context. One fails → `full`. The user decides; no answer → `full`. Escalation
+   runs through `replanejar.md`, reason in the journal.
 2. Ask about the team and the accounts: `planejamento-equipe.md`, "The team".
 3. Read each chosen model's card in `~/.hangar/orq/modelos/`. No card → write the plan
    conservatively, do one sweep (vendor guide + community) into a `## What they say` section marked
@@ -132,13 +129,12 @@ chosen model has a card or a `## What they say` section.
    computations that must agree become one. Estimate a screen Task by the
    state it touches, not by the pixel. Code blockers reject rounds; mock divergences are notes.
 
-5. **Review rigor.** Write what the review must break: full flow in the UI or the real command,
-   sibling callers of the changed symbol, concurrency (delayed response, double click, target
-   switch mid-flight, unmount), final state on disk/storage/URL, which review skills per Task type.
-   Visual Task → the list of states needing screenshots (both widths, overlay, fullscreen, whatever
-   it affects). Screenshot count and who captures are the executor's call; the plan imposes no
-   number and states what capture costs. A large sweep may go to a disposable
-   capture session with the state list in its kick-off; the choice goes in the executor's report.
+5. **Review rigor.** Write which review skills per Task type; what the review must break is
+   `revisor-catalogo.md`, not a second copy here. Visual Task → the list of states needing
+   screenshots (both widths, overlay, fullscreen, whatever it affects). Screenshot count and who
+   captures are the executor's call; the plan imposes no number and states what capture costs. A
+   large sweep may go to a disposable capture session with the state list in its kick-off; the
+   choice goes in the executor's report.
    A demand for new proof enters only with its owner in the same sentence.
 
 Done when every Task has its row, the header is filled and the user saw the bottom list.
@@ -183,10 +179,12 @@ PRODUCE = write it in the orchestration plan.
     external lib's behavior carries the NOT VERIFIED mark or the installed source snippet. Every
     factual claim in plan, excerpt and kick-off: measured, or written as "I assume", or absent.
 16. PRODUCE — a Task that moves, retires or extracts something lists its consumers: two searches
-    (code symbol, on-screen name) from the repo root minus untouchables minus dated history,
-    covering infra, wrappers, docs, instruction files and mock helpers that point by string; and
-    what the old home did for free: what reset, who owned the value after the await, what was dead
-    there and becomes live.
+    sharing no vocabulary (code symbol, on-screen name), one of them over the text with line
+    breaks undone, from the repo root minus untouchables minus dated history, covering infra,
+    wrappers, docs, instruction files and mock helpers that point by string; a hit outside the
+    list means the list was incomplete, never that the hit is out of scope. And what the old home
+    did for free: what reset, who owned the value after the await, what was dead there and becomes
+    live.
 
 Done when all 16 items are closed and the plan is approved.
 

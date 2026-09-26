@@ -30,6 +30,8 @@ Before pasting a proof, say what would make it fail. Then:
   X in the image" is a result.
 - A blocker fix ships with its trap in the same round: the test that fails without the fix
   exists; undo the fix and watch it go red. Same for a finding an automatic reviewer raised.
+  A check this work writes down ships the same way: run it once in the state it exists to catch,
+  and paste the red.
 - Mutation runs in a detached worktree: `git worktree add --detach <tmp>/mut-<x> <object>` →
   apply → run → `git worktree remove --force`. The tree you commit stays intact.
 

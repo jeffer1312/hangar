@@ -159,10 +159,8 @@ Done when the branch is in the user's hands, the retrospective delivered,
 
 ## Locks
 
-- Stage by explicit path; never `git add -A` / `git add .`. No `--amend`/rebase/squash; a correction is a new commit.
-- Delivery is not a reply: `entregue`/`success` = entered the queue. The idleness signal is `arbitro-vigia.md`'s ("Idleness").
 - Model, account, subagents and outside tools: `arbitro-lancamento.md`, "Locks on model and tools".
 - Time comes from `date -Iseconds`, never from memory. Authorship comes from a transcript, never from time correlation (`arbitro-vigia.md`, "A vanished session").
-- Every number carries its scope: what entered the count, from where.
+- Every number carries its scope: what entered the count, from which source and which field of it.
 - Close each session when its part ends: `arbitro-vigia.md`, "Closing sessions".
 - Talk little with the user: what and when, `arbitro-vigia.md`, "Deciding vs waking the user". Demand short reports from the sessions too.

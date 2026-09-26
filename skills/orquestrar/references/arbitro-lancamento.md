@@ -90,7 +90,7 @@ Outside tool (skill, subagent, command): the three questions of `SKILL.md`'s loc
 
 ## Locks on model and tools
 
-- The model is the user's decision. The contract carries the account↔model table per role; a model outside it is not used even to test; the model comes from the ROLE, including bug worktrees and one-off tasks. Need one outside the table → stop and ask.
+- The model comes from the ROLE, including bug worktrees and one-off tasks.
 - Before creating any session: re-read its row and state in the message which engine/model you use and where it came from.
 - A new session is born on the harness default → switch, read the model back, only then send work.
 - Subagents: same account always; a model switch inside it only where the contract allows; an agent frontmatter `model:` overrides yours.
