@@ -21,6 +21,7 @@ mod device;
 mod follow;
 mod viewer;
 mod machines;
+mod orchestration;
 mod panes;
 mod rows;
 mod settings;
@@ -94,6 +95,7 @@ enum Payload {
     Device(device::DeviceReply),
     // Contas e modelos da conexão atual.
     Accounts(accounts::AccountsReply),
+    Orchestration(orchestration::OrchestrationReply),
     // Página Atalhos da conexão atual.
     Shortcuts(shortcuts::ShortcutsReply),
     // Notificações e Anexos: rascunho do servidor e horas silenciosas da conexão atual.
@@ -281,6 +283,7 @@ pub struct Hangar {
     grain: Arc<RenderImage>,
     device: device::Device,
     accounts: accounts::Accounts,
+    orchestration: orchestration::Orchestration,
     shortcuts: shortcuts::Shortcuts,
     server_config: server_config::ServerConfig,
     sync: sync::Sync,
@@ -378,7 +381,7 @@ impl Hangar {
             appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
-            device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
+            device: device::Device::default(), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), shortcuts: shortcuts::Shortcuts::default(),
             server_config: server_config::ServerConfig::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), new_session: None, sidebar,
             act: activity::ActivityState::new(cx), panes, dossier: None,
         }
@@ -565,6 +568,7 @@ impl Hangar {
         self.sync = sync::Sync::default();
         self.controls = controls::Controls::default();
         self.accounts = accounts::Accounts::default();
+        self.orchestration = orchestration::Orchestration::default();
         self.shortcuts = shortcuts::Shortcuts::default();
         self.machines = machines::Machines::default();
     }
@@ -821,6 +825,7 @@ impl Hangar {
             Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
             Payload::Device(reply) => { self.receive_device(reply, cx); return; }
             Payload::Accounts(reply) => { self.receive_accounts(reply, window, cx); return; }
+            Payload::Orchestration(reply) => { self.receive_orchestration(reply, cx); return; }
             Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, cx); return; }
             Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
             Payload::Sync(reply) => { self.receive_sync(reply, window, cx); return; }
