@@ -73,6 +73,7 @@ from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, Up
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
 from app.config import (list_config_dirs, ConfigDirInfo, _backend_config_base, settings,
+                        resolve_scan_roots,
                         automations_enabled, resolve_bind_ip, variaveis_env)
 from app import runtime_config
 from app import tts
@@ -82,7 +83,7 @@ from app import contas, default_model, engine_probe, engines, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import costs_sources, pricing
 from app.git_ops import (
-    list_branches, switch_branch, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, sequencer_state, GitError, branch_of, git_summary,
+    list_branches, switch_branch, create_worktree, remove_worktree, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, sequencer_state, GitError, branch_of, git_summary,
 )
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
@@ -1469,6 +1470,7 @@ class _StrictBody(BaseModel):
 class CreateBody(_StrictBody):
     name: str = Field(min_length=1)
     cwd: str = Field(min_length=1)
+    branch: str | None = Field(default=None, min_length=1)
     config_dir: str | None = None
     # Qual Adapter cria a sessao (app.adapters.get_adapter). Default "claude" preserva o
     # comportamento de hoje pros clientes que ainda nao mandam o campo.
@@ -1942,10 +1944,34 @@ async def creation_progress(name: str):
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=SessionInfo)
 async def create_session(body: CreateBody):
     with _acompanhar_criacao(body.name):
-        return await _criar_sessao(body)
+        worktree: dict = {}
+        try:
+            info = await _criar_sessao(body, worktree)
+            if body.branch is not None:
+                return info.model_copy(update={"cwd": body.cwd, "branch": body.branch,
+                                               "worktree": Path(body.cwd, ".git").is_file()})
+            return info
+        except BaseException:
+            if worktree.get("path") and not worktree.get("session_created"):
+                try:
+                    await asyncio.shield(asyncio.to_thread(
+                        remove_worktree, worktree["source"], worktree["path"]))
+                except GitError as exc:
+                    raise HTTPException(500, detail=erro("erro_criacao_sessao",
+                                                          f"falha ao desfazer a worktree: {exc.detail}")) from exc
+            raise
 
 
-async def _criar_sessao(body: CreateBody):
+def _allowed_scan_root(path: str) -> Path:
+    target = Path(os.path.realpath(os.path.expanduser(path)))
+    root = next((r for r in resolve_scan_roots(settings) if target.is_relative_to(r)), None)
+    if root is None:
+        raise FsError(403, "root not allowed")
+    scan_dir(str(root), str(target))
+    return root
+
+
+async def _criar_sessao(body: CreateBody, worktree: dict):
     # Handler async por causa da trava de conta mais abaixo. Todo provider passa pelo MESMO
     # registry.create — o Codex tambem, desde que o lancador unico virou o comando do pane dele.
     # registry.create e SINCRONO e spawna um
@@ -2040,6 +2066,28 @@ async def _criar_sessao(body: CreateBody):
             raise HTTPException(502, detail=erro("erro_codex_catalogo_invalido", str(e),
                                                  erro=str(e))) from None
 
+    if body.branch is not None:
+        try:
+            root = await asyncio.to_thread(_allowed_scan_root, body.cwd)
+            source = body.cwd
+            name = sanitize_session_name(body.name)
+            if not name:
+                raise GitError(400, "nome de sessão inválido")
+            worker = asyncio.create_task(asyncio.to_thread(
+                create_worktree, source, body.branch, name, root))
+            try:
+                path, created = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                path, created = await asyncio.shield(worker)
+                if created:
+                    worktree.update(source=source, path=path)
+                raise
+        except (FsError, GitError) as exc:
+            raise HTTPException(exc.status, detail=erro("erro_criacao_sessao", exc.detail)) from None
+        if created:
+            worktree.update(source=source, path=path)
+        body.cwd = path
+
     # Janela do modelo escolhido, pra entrar no env do motor (Task 3). O número já está no cache do
     # catálogo do provedor (_engine_models); vir do navegador seria deixar um terceiro escolher uma
     # variável de ambiente — e ainda ficaria None justamente nos provedores que não reportam
@@ -2075,14 +2123,19 @@ async def _criar_sessao(body: CreateBody):
         nonlocal codex_lease
         def create():
             info = registry.create(body.name, body.cwd, body.config_dir, **kwargs)
+            worktree["session_created"] = True
             # O mesmo nome pode estar no snapshot com o transcript da sessão encerrada.
             with _list_lock:
                 _list_snap["snap"] = None
             return info
 
-        if codex_lease is None:
-            return await asyncio.to_thread(create)
         worker = asyncio.create_task(asyncio.to_thread(create))
+        if codex_lease is None:
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                await asyncio.shield(worker)
+                raise
         try:
             info = await asyncio.shield(worker)
         except asyncio.CancelledError:
@@ -2151,7 +2204,7 @@ async def _criar_sessao(body: CreateBody):
                         if body.headless:
                             _kw["headless"] = True
                         _passo(body.name, "criando")
-                        info = await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw)
+                        info = await _create_registry(_kw)
                         if body.headless:
                             # Hooks de SessionStart rodam enquanto a pessoa digita, não no 1º envio.
                             get_adapter(CLAUDE_HEADLESS).acordar(info.name)
@@ -7773,6 +7826,15 @@ def fs_scan(root: str, path: str | None = None):
         return scan_dir(root, path)
     except FsError as e:
         raise HTTPException(e.status, e.detail)
+
+
+@app.get("/api/fs/branches", dependencies=[Depends(require_auth)])
+def fs_branches(root: str, path: str | None = None):
+    try:
+        scan_dir(root, path)
+        return list_branches(str(Path(os.path.realpath(os.path.expanduser(path or root)))))
+    except (FsError, GitError) as exc:
+        raise HTTPException(exc.status, detail=erro("erro_criacao_sessao", exc.detail)) from None
 
 
 # ── Preview: expoe um projeto local (porta) via tailscale serve, pro app ver num iframe ──

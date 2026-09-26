@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -259,6 +260,55 @@ def switch_branch(cwd: str, branch: str) -> dict:
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "switch falhou").strip() or "switch falhou")
     return {"current": branch, "output": (p.stdout + p.stderr).strip()}
+
+
+# ponytail: trava global; usar uma por repo se criação concorrente virar gargalo.
+_worktree_lock = threading.Lock()
+
+
+def create_worktree(cwd: str, branch: str, name: str, allowed_root: Path) -> tuple[str, bool]:
+    """Resolve a branch escolhida sem trocar a árvore de origem."""
+    with _worktree_lock:
+        p = _run(cwd, "rev-parse", "--show-toplevel")
+        if p.returncode != 0:
+            raise GitError(409, "pasta sem repositório Git")
+        repo = Path(os.path.realpath(p.stdout.strip()))
+        if not repo.is_relative_to(allowed_root):
+            raise GitError(400, "repositório fora da raiz autorizada")
+
+        info = list_branches(cwd)
+        if branch not in set(info["branches"]) | set(info["remotes"]):
+            raise GitError(400, "branch inexistente")
+        if branch == info["current"]:
+            return cwd, False
+
+        target = repo.parent / f"{repo.name}-{name}"
+        if not target.is_relative_to(allowed_root):
+            raise GitError(400, "worktree fora da raiz autorizada")
+        if target.exists() or target.is_symlink():
+            raise GitError(409, "destino da worktree já existe")
+
+        if branch in info["branches"]:
+            args = ("worktree", "add", str(target), branch)
+        else:
+            r = _run(cwd, "for-each-ref", "--format=%(refname:short)", "refs/remotes")
+            if r.returncode != 0:
+                raise GitError(409, "não consegui consultar as branches remotas")
+            matches = [ref for ref in r.stdout.splitlines()
+                       if "/" in ref and ref.split("/", 1)[1] == branch]
+            if len(matches) != 1:
+                raise GitError(409, "branch remota ambígua")
+            args = ("worktree", "add", "--track", "-b", branch, str(target), matches[0])
+        created = _run(cwd, *args)
+        if created.returncode != 0:
+            raise GitError(409, _scrub(created.stderr.strip()) or "não consegui criar a worktree")
+        return str(target), True
+
+
+def remove_worktree(cwd: str, path: str) -> None:
+    removed = _run(cwd, "worktree", "remove", path)
+    if removed.returncode != 0:
+        raise GitError(500, _scrub(removed.stderr.strip()) or "não consegui remover a worktree")
 
 
 # Allowlist de acoes sem argumento -> argv fixo, zero entrada do usuario no comando.
