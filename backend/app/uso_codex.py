@@ -20,7 +20,7 @@ from pathlib import Path
 
 from app import uso_areas
 from app.costs_claude_transcript import LOCAL
-from app.uso_claude import Acumulador, UsoLinha, comando_bash
+from app.uso_claude import Acumulador, UsoLinha, _int, comando_bash
 
 _CHAMADA = re.compile(r"tools\.(\w+)\(")
 _TEXTO_JS = r"""("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)"""
@@ -116,7 +116,12 @@ class AcumuladorCodex(Acumulador):
             total = info.get("total_token_usage") if isinstance(info, dict) else None
             if isinstance(total, dict) and total != self._contador:
                 self._contador = total
-                self._resposta_nova()
+                # O peso da resposta sai do uso DELA: no Codex o cache lido vem dentro do input.
+                ultima = info.get("last_token_usage")
+                ultima = ultima if isinstance(ultima, dict) else {}
+                lido = _int(ultima.get("cached_input_tokens"))
+                self._resposta_nova({"input_tokens": max(0, _int(ultima.get("input_tokens")) - lido),
+                                     "cache_read_input_tokens": lido})
             return
         if tipo != "response_item":
             return
