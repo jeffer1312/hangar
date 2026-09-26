@@ -15,12 +15,13 @@ pub enum Item {
     Tasks { id: String, tasks: Vec<Task> },
 }
 
-/// Escolhas de Aparência que mudam quais linhas a conversa tem.
+/// Escolhas de Aparência que mudam quais linhas a conversa tem. `merge_thinking` (visual Árvore): raciocínio e
+/// chamadas seguidas viram um grupo só, de qualquer tamanho, e o `thinking` deixa de valer.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct View { pub thinking: ThinkingTools, pub tasks: bool }
+pub struct View { pub thinking: ThinkingTools, pub tasks: bool, pub merge_thinking: bool }
 
 impl Default for View {
-    fn default() -> Self { Self { thinking: ThinkingTools::Search, tasks: false } }
+    fn default() -> Self { Self { thinking: ThinkingTools::Search, tasks: false, merge_thinking: false } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,6 +48,8 @@ pub fn is_search(name: Option<&str>) -> bool {
 }
 
 fn is_task_call(name: Option<&str>) -> bool { matches!(name, Some("TaskCreate" | "TaskUpdate")) }
+
+fn is_agent_call(name: Option<&str>) -> bool { matches!(name, Some("Agent" | "AgentSwarm")) }
 
 // Como no web: as chamadas de tarefa nunca entram no pensamento, nem no "Tudo"; o bloco de tarefas as substitui.
 fn joins_thinking(mode: ThinkingTools, name: Option<&str>) -> bool {
@@ -86,7 +89,7 @@ pub fn build(events: &[ChatEvent], view: View, pinned: &HashSet<usize>) -> Vec<I
     // Posição e id do bloco de tarefas: onde estava a última chamada de tarefa, com o id da primeira.
     let mut tasks: Option<(usize, String)> = None;
     let flush_run = |run: &mut Vec<Tool>, items: &mut Vec<Item>| {
-        if run.len() >= GROUP_MIN {
+        if run.len() >= GROUP_MIN || view.merge_thinking && !run.is_empty() {
             let id = format!("g-{}", events[run[0].call].id);
             items.push(Item::Group { id, tools: std::mem::take(run) });
         } else { items.extend(run.drain(..).map(Item::Tool)); }
@@ -102,6 +105,8 @@ pub fn build(events: &[ChatEvent], view: View, pinned: &HashSet<usize>) -> Vec<I
             "tool_result" if !orphans.contains(&i) => continue,
             // Sinal sintético de fim de tarefa em segundo plano: não é saída de ferramenta.
             "tool_result" if tool_key(event).is_some_and(|key| key.starts_with("task:")) => continue,
+            // No grupo da Árvore o raciocínio é mais uma linha; o desenho o separa pelo `kind`.
+            "thinking" if view.merge_thinking => { run.push(Tool { call: i, result: None }); continue; }
             "thinking" => { flush_run(&mut run, &mut items); thinking.push(i); continue; }
             "tool_use" if view.tasks && is_task_call(event.tool_name.as_deref()) => {
                 flush_thinking(&mut thinking, &mut items);
@@ -115,7 +120,12 @@ pub fn build(events: &[ChatEvent], view: View, pinned: &HashSet<usize>) -> Vec<I
         }
         flush_thinking(&mut thinking, &mut items);
         if event.kind == "tool_use" {
-            run.push(Tool { call: i, result: paired.get(&i).copied() });
+            let tool = Tool { call: i, result: paired.get(&i).copied() };
+            // Na Árvore o subagente fica fora do grupo: o cartão dele abre a conversa própria.
+            if view.merge_thinking && is_agent_call(event.tool_name.as_deref()) {
+                flush_run(&mut run, &mut items);
+                items.push(Item::Tool(tool));
+            } else { run.push(tool); }
             continue;
         }
         flush_run(&mut run, &mut items);
@@ -564,7 +574,7 @@ mod tests {
     #[test]
     fn thinking_mode_decides_which_calls_fold_in() {
         let events = vec![ev("thinking", "t1"), call("s", "1", "WebSearch"), call("b", "2", "Bash"), call("k", "3", "TaskCreate")];
-        let parts = |mode| match &super::build(&events, View { thinking: mode, tasks: false }, &HashSet::new())[0] {
+        let parts = |mode| match &super::build(&events, View { thinking: mode, ..View::default() }, &HashSet::new())[0] {
             Item::Thinking { parts, .. } => parts.clone(),
             other => panic!("{other:?}"),
         };
@@ -572,6 +582,20 @@ mod tests {
         assert_eq!(parts(ThinkingTools::Search), vec![0, 1]);
         // Tudo leva o Bash, mas nunca a chamada de tarefa.
         assert_eq!(parts(ThinkingTools::All), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn tree_groups_thinking_with_calls_from_one_call_and_leaves_agents_out() {
+        let events = vec![ev("thinking", "t"), call("s", "1", "WebSearch"), result("r", "1"), ev("assistant_msg", "a"),
+            call("b", "2", "Bash"), call("g", "3", "Agent"), ev("thinking", "t2")];
+        let tool = |call, result| Tool { call, result };
+        // O "Nada" do pensamento não vale na Árvore: o raciocínio entra no grupo de qualquer jeito.
+        let view = View { thinking: ThinkingTools::None, merge_thinking: true, ..View::default() };
+        assert_eq!(super::build(&events, view, &HashSet::new()), vec![
+            Item::Group { id: "g-t".into(), tools: vec![tool(0, None), tool(1, Some(2))] }, Item::Event(3),
+            Item::Group { id: "g-b".into(), tools: vec![tool(4, None)] }, Item::Tool(tool(5, None)),
+            Item::Group { id: "g-t2".into(), tools: vec![tool(6, None)] },
+        ]);
     }
 
     #[test]

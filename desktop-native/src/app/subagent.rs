@@ -4,6 +4,7 @@
 use super::*;
 
 fn chips() -> bool { appearance::get().tool_look == appearance::ToolLook::Chips }
+fn tree() -> bool { appearance::get().tool_look == appearance::ToolLook::Tree }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Tone { Muted, Accent, Warning }
@@ -65,7 +66,7 @@ fn tool_row(events: &[ChatEvent], call: usize, result: Option<usize>, finished: 
 }
 
 fn prepare(events: &[ChatEvent], finished: bool) -> Vec<Row> {
-    let view = conversation::View { thinking: appearance::get().thinking_tools, tasks: false };
+    let view = conversation::View { thinking: appearance::get().thinking_tools, tasks: false, merge_thinking: tree() };
     let items = conversation::build(events, view, &HashSet::new());
     let paired = conversation::pair_results(events).0;
     let last = events.iter().rposition(|e| e.kind == "assistant_msg" || e.kind == "user_msg");
@@ -89,15 +90,18 @@ fn prepare(events: &[ChatEvent], finished: bool) -> Vec<Row> {
         }
         Item::Group { id, tools } => {
             let rows: Vec<ToolRow> = tools.iter().map(tool).collect();
-            let mut distinct: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+            // A Árvore põe o raciocínio no grupo: título, resumo e estado guardados contam só as chamadas.
+            let calls: Vec<Tool> = tools.iter().copied().filter(|t| events[t.call].kind != "thinking").collect();
+            let counted: Vec<&ToolRow> = rows.iter().filter(|r| events[r.call].kind != "thinking").collect();
+            let mut distinct: Vec<&str> = counted.iter().map(|r| r.name.as_str()).collect();
             distinct.dedup();
             // O título conta por família, como o dos Chips: "Rodou 2 comandos · leu 1 arquivo".
-            let label = super::rows::family_title(events, tools);
-            let summary = if distinct.len() == 1 { rows.last().map(|r| r.summary.clone()).unwrap_or_default() }
+            let label = super::rows::family_title(events, &calls);
+            let summary = if distinct.len() == 1 { counted.last().map(|r| r.summary.clone()).unwrap_or_default() }
                 else { conversation::one_line(&distinct.join(", "), 96) };
-            let errors = rows.iter().filter(|r| r.tone == Tone::Warning).count();
+            let errors = counted.iter().filter(|r| r.tone == Tone::Warning).count();
             let (status, tone) = if errors > 0 { (super::rows::failed_count(errors), Tone::Warning) }
-                else if rows.iter().any(|r| r.tone == Tone::Accent) { (tr("tool_running"), Tone::Accent) } else { (String::new(), Tone::Muted) };
+                else if counted.iter().any(|r| r.tone == Tone::Accent) { (tr("tool_running"), Tone::Accent) } else { (String::new(), Tone::Muted) };
             Row::Group { id: id.clone(), label, summary, status, tone, tools: rows }
         }
         Item::Thinking { id, parts } => {
@@ -252,6 +256,29 @@ impl SubConversation {
         div().flex().flex_col().child(button).children(body).into_any_element()
     }
 
+    /// Uma linha do grupo da Árvore, como na conversa principal: raciocínio com o texto embaixo, ou chamada.
+    fn render_tree_part(&mut self, tool: &ToolRow, last: bool, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.expanded.contains(&tool.key);
+        let key = tool.key.clone();
+        let toggle = cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle(key.clone(), cx));
+        let event = &self.events[tool.call];
+        let id = format!("sub-tree-{}", tool.key);
+        if event.kind == "thinking" {
+            let text = event.text.clone().unwrap_or_default();
+            let below = if open {
+                let view = self.text(format!("{}:thought", tool.key), safe_markdown(&text), cx);
+                chat_text(&view, cx).text_color(theme::muted()).into_any_element()
+            } else { super::rows::thought_preview(&text) };
+            return super::rows::tree_row(last, super::rows::tree_thought_line(id, cx).on_click(toggle), Some(below)).into_any_element();
+        }
+        let failed = tool.tone == Tone::Warning;
+        let running = tool.result.is_none() && tool.tone == Tone::Accent;
+        let ending = (failed || running).then(|| super::rows::chip_ending(event, tool.result.map(|i| &self.events[i]), running, count_lines));
+        let line = super::rows::tree_call_line(id, event, ending, failed, cx).on_click(toggle);
+        let body = open.then(|| self.tool_body(tool, cx).into_any_element());
+        super::rows::tree_row(last, line, body).into_any_element()
+    }
+
     /// Entrada e resultado da chamada aberta, o mesmo no Clássico e nos Chips.
     fn tool_body(&mut self, tool: &ToolRow, cx: &mut Context<Self>) -> Div {
         let error = tool.tone == Tone::Warning;
@@ -289,6 +316,18 @@ impl SubConversation {
                     .into_any_element()
             }
             Row::Tool(tool) => self.render_tool(&tool, cx),
+            // A conversa do subagente é lida depois: o grupo da Árvore abre só no clique.
+            Row::Group { id, tools, .. } if tree() => {
+                let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();
+                let thinking = |t: &ToolRow| self.events[t.call].kind == "thinking";
+                let failed = tools.iter().filter(|t| !thinking(t) && t.tone == Tone::Warning).count();
+                let running = tools.iter().any(|t| !thinking(t) && t.result.is_none() && t.tone == Tone::Accent);
+                let header = super::rows::tree_header(self.header(&id, cx), super::rows::tree_title(&self.events, &calls), failed, running);
+                let lines: Vec<AnyElement> = if self.expanded.contains(&id) {
+                    tools.iter().enumerate().map(|(n, t)| self.render_tree_part(t, n + 1 == tools.len(), cx)).collect()
+                } else { Vec::new() };
+                div().flex().flex_col().child(header).children(lines).into_any_element()
+            }
             Row::Group { id, tools, .. } if chips() => {
                 let open = super::rows::chip_group_open(tools.len(), self.expanded.contains(&id));
                 let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();

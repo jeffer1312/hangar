@@ -54,10 +54,11 @@ pub enum Wallpaper { Window, Glass }
 #[serde(rename_all = "snake_case")]
 pub enum Reading { Auto, None, Text, Sheet }
 
-/// Como a chamada de ferramenta aparece na conversa: linha com nome e resumo, ou verbo e chip.
+/// Como a chamada de ferramenta aparece na conversa: linha com nome e resumo, verbo e chip, ou árvore com o
+/// raciocínio dentro do grupo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolLook { Classic, Chips }
+pub enum ToolLook { Classic, Chips, Tree }
 
 /// Que chamadas feitas no meio do raciocínio ficam dentro do bloco do pensamento.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
