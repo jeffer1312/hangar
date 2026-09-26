@@ -1011,7 +1011,14 @@
       <div class="kpi">
         <dt>{m.custos_tokens_novos()}</dt>
         <dd>{tok(freshTokens(foco))}</dd>
-        <div class="foot">{m.custos_tokens_novos_pe({ brutos: tok(brutos(foco)), relidos: tok(foco.cache_read) })}</div>
+        <div class="foot">{m.custos_tokens_novos_pe()}</div>
+      </div>
+      <!-- Mesmo tamanho, peso menor: o total com cache continua à vista pra quem conhecia o número
+           antigo, mas não disputa com o que de fato foi trabalho novo. -->
+      <div class="kpi secundario">
+        <dt>{m.custos_tokens_processados()}</dt>
+        <dd>{tok(brutos(foco))}</dd>
+        <div class="foot">{m.custos_tokens_processados_pe({ relidos: tok(foco.cache_read), pct: pct(foco.cache_read, brutos(foco)) })}</div>
       </div>
       <div class="kpi">
         <dt>{m.custos_cache_na_entrada()}</dt>
@@ -1631,6 +1638,7 @@
   .overview .kpi { background: transparent; border: 0; border-radius: 0; padding: var(--space-2); }
   .overview .kpi dd { font-size: 28px; font-variant-numeric: tabular-nums; }
   .overview .kpi dd.hero { color: var(--text-primary); font-size: 30px; }
+  .overview .kpi.secundario dd { color: var(--text-secondary); font-weight: 450; }
   .muted { color: var(--text-secondary); }
   .loading-status { color: var(--text-secondary); font-size: var(--text-sm); margin-bottom: var(--space-3); }
   .aquecendo { margin-bottom: var(--space-3); font-size: var(--text-sm); color: var(--text-secondary); }
