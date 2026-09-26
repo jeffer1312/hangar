@@ -26,6 +26,7 @@ gpui-pre = { path = "vendor/gpui-pre-0.3.6" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu-0.3.6" }
 gpui-pre-macos = { path = "vendor/gpui-pre-macos-0.3.6" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple-0.3.6" }
+gpui-pre-windows = { path = "vendor/gpui-pre-windows-0.3.6" }
 
 [profile.dev]
 debug = 0
