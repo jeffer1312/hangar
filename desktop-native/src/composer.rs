@@ -172,6 +172,24 @@ pub fn cited_paths(text: &str) -> Vec<String> {
     out
 }
 
+/// URLs http(s) de imagem (`parseMediaUrls` do core, só imagem): a miniatura é buscada sem o token do servidor.
+pub fn image_urls(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut skip_to = 0;
+    for (i, _) in text.match_indices("http") {
+        let rest = &text[i..];
+        if i < skip_to || !(rest.starts_with("http://") || rest.starts_with("https://")) { continue; }
+        let end = rest.find(|c: char| c.is_whitespace() || "<>\"'`])".contains(c)).unwrap_or(rest.len());
+        skip_to = i + end;
+        let url = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if image_format(url_name(url)).is_some() && !out.iter().any(|u| u == url) { out.push(url.to_owned()); }
+    }
+    out
+}
+
+/// Nome do arquivo de uma URL, sem consulta nem âncora.
+pub fn url_name(url: &str) -> &str { basename(url.split(['?', '#']).next().unwrap_or(url)) }
+
 /// Nome do comando digitado enquanto ainda não há argumento (`/nom` → `nom`).
 pub fn slash_query(text: &str) -> Option<&str> {
     let rest = text.trim_start().strip_prefix('/')?;
@@ -238,6 +256,15 @@ mod tests {
         assert_eq!(cited_paths(text), vec!["/tmp/a b.png", "/tmp/x.jpg", "./out/r.pdf", "~/d/v.MP4"]);
         assert_eq!(cited_paths("sub/dir/f.html fim"), vec!["sub/dir/f.html"]);
         assert!(cited_paths("veja /tmp/a.óculos e ./b.çã e /x/y.ó").is_empty());
+        // Imagem em markdown: o caminho local vira anexo; a URL fica para `image_urls`.
+        assert_eq!(cited_paths("![a](/tmp/a.png) ![](out/b.gif) ![r](https://h/r.png)"), vec!["/tmp/a.png", "out/b.gif"]);
+    }
+
+    #[test]
+    fn image_urls_take_only_remote_images() {
+        let text = "![r](https://h.io/a/r.png?x=1). Veja http://h.io/b.GIF, https://h.io/doc.pdf e /tmp/c.png; de novo https://h.io/a/r.png?x=1";
+        assert_eq!(image_urls(text), vec!["https://h.io/a/r.png?x=1", "http://h.io/b.GIF"]);
+        assert!(image_urls("httpx://h/a.png e http:/a.png").is_empty());
     }
 
     #[test]

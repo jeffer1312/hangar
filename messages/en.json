@@ -3762,7 +3762,6 @@
   "native_untracked": "This session does not have a reliable conversation link yet.",
   "native_starting": "Waiting for the session transcript…",
   "native_session_gone": "The session was closed or removed.",
-  "native_unsupported": "Open this content in Hangar Electron for now.",
   "native_stop_requested": "Stop requested.",
   "native_retry": "Retry",
   "native_interrupted": "Response interrupted.",

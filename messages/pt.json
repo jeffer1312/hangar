@@ -3762,7 +3762,6 @@
   "native_untracked": "Esta sessão ainda não tem um vínculo confiável com a conversa.",
   "native_starting": "Aguardando o histórico da sessão…",
   "native_session_gone": "A sessão foi encerrada ou removida.",
-  "native_unsupported": "Este conteúdo ainda deve ser aberto no Hangar Electron.",
   "native_stop_requested": "Interrupção solicitada.",
   "native_retry": "Tentar novamente",
   "native_interrupted": "Resposta interrompida.",
