@@ -11,10 +11,11 @@ pub const MAX_BYTES: u64 = 100 * 1024 * 1024;
 const UPLOAD_SECONDS: u64 = 180;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum Source { Upload(String), Cited(String), Transcript(String, usize) }
+pub enum Source { Upload(String), Cited(String), Transcript(String, usize), Remote(String) }
 
+// `plain` busca mídia de terceiros: nunca leva o token do servidor.
 #[derive(Clone)]
-pub struct Api { client: Client, base: Url }
+pub struct Api { client: Client, plain: Client, base: Url }
 
 #[derive(Clone, Debug)]
 pub struct Failure {
@@ -61,7 +62,9 @@ impl Api {
         headers.insert(header::AUTHORIZATION, value);
         let client = Client::builder().default_headers(headers).connect_timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| Failure::local("network_error"))?;
-        Ok(Self { client, base })
+        let plain = Client::builder().connect_timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::limited(3))
+            .build().map_err(|_| Failure::local("network_error"))?;
+        Ok(Self { client, plain, base })
     }
 
     pub fn identity(&self) -> String { self.base.as_str().to_owned() }
@@ -146,9 +149,10 @@ impl Api {
         Ok(listing.files)
     }
 
-    // Bytes autenticados de um anexo: do cofre, de caminho citado ou de imagem do transcript.
+    // Bytes de um anexo: do cofre, de caminho citado ou de imagem do transcript, autenticados; remoto, sem token.
     pub async fn fetch(&self, name: &str, source: &Source) -> Result<Vec<u8>, Failure> {
         let mut url = self.endpoint(Some(name), None);
+        let mut client = &self.client;
         match source {
             Source::Upload(file) => { url.path_segments_mut().expect("validated HTTP base").extend(["uploads", file]); }
             Source::Cited(path) => {
@@ -156,13 +160,28 @@ impl Api {
                 url.query_pairs_mut().append_pair("path", path);
             }
             Source::Transcript(id, index) => { url.path_segments_mut().expect("validated HTTP base").extend(["transcript-image", id, &index.to_string()]); }
+            Source::Remote(address) => {
+                url = Url::parse(address).ok().filter(|url| matches!(url.scheme(), "http" | "https")).ok_or_else(|| Failure::local("invalid_url"))?;
+                client = &self.plain;
+            }
         }
-        let r = self.client.get(url).timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(false))?;
+        let r = client.get(url).timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(false))?;
+        // Erro de terceiro não tem o corpo lido: nem memória, nem texto escolhido por ele na tela.
+        if matches!(source, Source::Remote(_)) && !r.status().is_success() {
+            let status = r.status().as_u16();
+            return Err(Failure { status: Some(status), detail: failure_detail(None, status), retry_after: None, uncertain: false });
+        }
         let r = Self::checked(r, false).await?;
         if r.content_length().is_some_and(|n| n > MAX_BYTES) { return Err(Failure::local("attach_too_big")); }
-        let bytes = r.bytes().await.map_err(|_| Failure::transport(false))?;
-        if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
-        Ok(bytes.to_vec())
+        // Resposta sem tamanho declarado para no teto enquanto chega.
+        let mut body = Vec::new();
+        let mut chunks = std::pin::pin!(r.bytes_stream());
+        use futures::StreamExt;
+        while let Some(chunk) = chunks.next().await {
+            body.extend_from_slice(&chunk.map_err(|_| Failure::transport(false))?);
+            if body.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
+        }
+        Ok(body)
     }
 
     pub async fn interrupt(&self, name: &str, clear: bool) -> Result<(), Failure> {

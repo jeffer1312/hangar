@@ -145,7 +145,7 @@ enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Que
 #[derive(Clone)]
 enum Prepared {
     /// `card`: o cartão já lido, para o desenho não reler o texto a cada quadro.
-    Message { markdown: String, blank: bool, unsupported: bool, card: Option<cards::Card> },
+    Message { markdown: String, blank: bool, card: Option<cards::Card> },
     Lines(usize),
     Detail { fenced: String, total: usize, clipped: bool, full: SharedString },
 }
@@ -1977,6 +1977,16 @@ impl Hangar {
         let input_key = format!("{key}:input");
         let input = self.prepared_detail(&input_key, || conversation::pretty_input(call.tool_input.as_ref()));
         let mut body = div().flex().flex_col().gap_2().pt_1().pb_2();
+        // Imagem que o Read leu: o transcript não traz os bytes, o caminho citado vem pelo `/file` (regra do web).
+        if call.tool_name.as_deref().is_some_and(|name| name.eq_ignore_ascii_case("read")) {
+            let path = call.tool_input.as_ref().and_then(|input| input.get("file_path").or_else(|| input.get("path"))).and_then(|path| path.as_str()).unwrap_or("");
+            let refs: Vec<_> = composer::cited_paths(path).into_iter().map(|path| {
+                let name = composer::basename(&path).to_owned();
+                let image = composer::image_format(&name).is_some();
+                (Source::Cited(path), name, image)
+            }).collect();
+            if !refs.is_empty() { body = body.child(self.render_refs(&format!("{row}-read"), refs, cx)); }
+        }
         if matches!(input, Prepared::Detail { total, .. } if total > 0) {
             body = body.child(self.detail(row, &input_key, input, tr("tool_input"), tr("copy_input"), false, cx));
         }
@@ -2348,7 +2358,9 @@ impl Hangar {
                 let state = key.as_ref().and_then(|key| self.media.get(&(key.clone(), source.clone())));
                 let thumb = match state {
                     Some(MediaState::Image(picture)) => div().max_w(px(320.)).max_h(px(240.)).rounded_md().overflow_hidden()
-                        .child(img(picture.clone()).max_w(px(320.)).max_h(px(240.)).object_fit(ObjectFit::Contain)).into_any_element(),
+                        // O id guarda o quadro corrente: sem ele a GPUI não anima o GIF. Fora da tela não é desenhado e para.
+                        .child(img(picture.clone()).max_w(px(320.)).max_h(px(240.)).object_fit(ObjectFit::Contain)
+                            .id(SharedString::from(format!("thumb-image-{row}-{n}")))).into_any_element(),
                     Some(MediaState::Failed(reason)) => div().text_xs().text_color(theme::warning())
                         .child(tr("media_failed").replace("{name}", &name).replace("{reason}", reason)).into_any_element(),
                     _ => div().w(px(160.)).h(px(96.)).rounded_md().bg(theme::raised()).flex().items_center().justify_center()
@@ -2819,7 +2831,6 @@ impl Hangar {
             if event.desistiu == Some(true) { discard = event.id.strip_prefix("queued-").map(str::to_owned); }
             else if event.queued() { notes.push(tr(if event.queued_delivered == Some(true) { "delivering" } else { "queued" })); }
             if event.is_error == Some(true) { notes.push(tr("tool_error")); }
-            if matches!(self.prepared.get(&id), Some(Prepared::Message { unsupported: true, .. })) { notes.push(tr("unsupported")); }
             (label, (!notes.is_empty()).then(|| notes.join(" · ")), event.kind == "user_msg", event.is_error == Some(true))
         };
         let busy = self.selected_key().is_some_and(|key| self.flight.busy(&key));
@@ -2936,11 +2947,14 @@ fn attachment_refs(event: &ChatEvent) -> Vec<(Source, String, bool)> {
             }
             for i in 0..pasted { refs.push((Source::Transcript(event.id.clone(), i), format!("imagem-{}.png", i + 1), true)); }
         }
-        "assistant_msg" => for path in composer::cited_paths(&body) {
-            let name = composer::basename(&path).to_owned();
-            let image = composer::image_format(&name).is_some();
-            refs.push((Source::Cited(path), name, image));
-        },
+        "assistant_msg" => {
+            for path in composer::cited_paths(&body) {
+                let name = composer::basename(&path).to_owned();
+                let image = composer::image_format(&name).is_some();
+                refs.push((Source::Cited(path), name, image));
+            }
+            for url in composer::image_urls(&body) { refs.push((Source::Remote(url.clone()), composer::url_name(&url).to_owned(), true)); }
+        }
         _ => {}
     }
     refs
@@ -3350,8 +3364,7 @@ fn prepare_detail(full: String) -> Prepared {
 fn prepare_message(event: &ChatEvent) -> Prepared {
     let card = message_card(event);
     let body = display_body(event);
-    let unsupported = body.contains("![") || !matches!(event.kind.as_str(), "user_msg" | "assistant_msg" | "tool_use" | "tool_result" | "thinking" | "notice");
-    Prepared::Message { markdown: safe_markdown(&body), blank: body.trim().is_empty(), unsupported, card }
+    Prepared::Message { markdown: safe_markdown(&body), blank: body.trim().is_empty(), card }
 }
 
 // Identidade do conteúdo de uma linha que não é mensagem: muda quando chega resultado ou o grupo cresce.
@@ -3404,21 +3417,46 @@ fn safe_markdown(source: &str) -> String {
             continue;
         }
         if fence.is_some() { output.push_str(line); continue; }
-        let mut chars = line.chars().peekable();
-        while let Some(ch) = chars.next() {
+        let mut chars = line.char_indices().peekable();
+        while let Some((at, ch)) = chars.next() {
             if ch == '`' {
                 let mut run = 1;
-                while chars.peek() == Some(&'`') { chars.next(); run += 1; }
+                while chars.peek().is_some_and(|&(_, next)| next == '`') { chars.next(); run += 1; }
                 inline = match inline { Some(open) if open == run => None, None => Some(run), other => other };
                 for _ in 0..run { output.push('`'); }
-            } else if inline.is_none() && ch == '<' && chars.peek().is_some_and(|next| next.is_ascii_alphabetic() || matches!(next, '/' | '!')) {
+            } else if inline.is_none() && ch == '<' && chars.peek().is_some_and(|&(_, next)| next.is_ascii_alphabetic() || matches!(next, '/' | '!')) {
                 output.push_str("&lt;");
-            } else if inline.is_none() && ch == '!' && chars.peek() == Some(&'[') {
-                output.push_str("\\!");
+            } else if inline.is_none() && ch == '!' && chars.peek().is_some_and(|&(_, next)| next == '[') {
+                match image_markdown(&line[at + 1..]) {
+                    Some((text, used)) => {
+                        output.push_str(&text);
+                        while chars.peek().is_some_and(|&(next, _)| next <= at + used) { chars.next(); }
+                    }
+                    None => output.push_str("\\!"),
+                }
             } else { output.push(ch); }
         }
     }
     output
+}
+
+/// `[alt](alvo)` depois do `!`: a miniatura sai como anexo da bolha, e no texto fica o link (remoto) ou só o rótulo
+/// (local, como no web). Devolve o texto e quantos bytes consumiu; `None` = não é imagem em markdown.
+fn image_markdown(rest: &str) -> Option<(String, usize)> {
+    let close = rest.find("](")?;
+    let alt = &rest[1..close];
+    let len = rest[close + 2..].find(')')?;
+    let target = &rest[close + 2..close + 2 + len];
+    if alt.contains(['[', ']', '\n']) || target.is_empty() || target.contains(|c: char| c.is_whitespace() || c == '<' || c == '>') { return None; }
+    let alt = alt.trim().replace('<', "&lt;");
+    let remote = target.starts_with("http://") || target.starts_with("https://");
+    let text = match (remote, alt.is_empty()) {
+        (true, true) => format!("[{target}]({target})"),
+        (true, false) => format!("[{alt}]({target})"),
+        (false, true) => composer::basename(target).replace('<', "&lt;"),
+        (false, false) => alt,
+    };
+    Some((text, close + 3 + len))
 }
 
 async fn forward_stream(api: Api, name: Option<String>, connection: u64, selection: Option<u64>, target: async_channel::Sender<Envelope>) {
@@ -3666,9 +3704,18 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{message_card, preview_step, stream_motion};
+    use super::{message_card, preview_step, safe_markdown, stream_motion};
     use crate::{api::dto::ChatEvent, cards::Card};
     use std::time::Duration;
+
+    #[test]
+    fn markdown_image_becomes_label_or_remote_link() {
+        assert_eq!(safe_markdown("veja ![gráfico](/tmp/g.png) e ![](out/b.gif)\n"), "veja gráfico e b.gif\n");
+        assert_eq!(safe_markdown("![logo](https://h.io/l.png). ![](http://h.io/a.png)"), "[logo](https://h.io/l.png). [http://h.io/a.png](http://h.io/a.png)");
+        // Sem forma de imagem, alvo com `<` ou dentro de código: o `!` continua escapado ou intocado.
+        assert_eq!(safe_markdown("![só texto] e ![x](https://h/<b>)"), "\\![só texto] e \\![x](https://h/&lt;b>)");
+        assert_eq!(safe_markdown("`![a](/t/a.png)`"), "`![a](/t/a.png)`");
+    }
 
     #[test]
     fn only_the_live_reply_fades_word_by_word() {

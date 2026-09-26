@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash, io::Cursor, sync::Arc};
 use gpui_kit::RenderImage;
-use image::{DynamicImage, Frame, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
+use image::{AnimationDecoder, Delay, DynamicImage, Frame, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage, codecs::gif::GifDecoder};
 
 // Prévia mostrada em até 320×240; o dobro mantém nítido em tela com escala até 2.
 const THUMB_W: u32 = 640;
@@ -8,6 +8,12 @@ const THUMB_H: u32 = 480;
 // ponytail: teto em bytes das miniaturas decodificadas (~27 de 640×480); a cópia no atlas da GPU é só das desenhadas.
 // O que está na tela não sai: se as visíveis sozinhas passam do teto, ele fica acima até elas saírem da tela.
 pub const BUDGET: usize = 32 * 1024 * 1024;
+// ponytail: GIF anima só até este peso somado dos quadros (~35 de 400×300, o bastante até escala 1,25); acima fica parado no 1º.
+const GIF_W: u32 = 400;
+const GIF_H: u32 = 300;
+const GIF_BUDGET: usize = 16 * 1024 * 1024;
+// Quadros minúsculos não pesam no teto de bytes, mas cada um custa decodificação: o número também tem teto.
+const GIF_FRAMES: usize = 240;
 
 pub enum MediaState { Loading, Image(Arc<RenderImage>), Failed(String) }
 
@@ -27,16 +33,20 @@ fn sniff(bytes: &[u8]) -> Option<ImageFormat> {
     })
 }
 
-/// Decodifica com limite de memória e reduz ao lado pedido; `None` = bytes que não são imagem legível.
-fn decode(bytes: &[u8], w: u32, h: u32) -> Option<Arc<RenderImage>> {
-    let format = sniff(bytes)?;
+fn limits() -> Limits {
     let mut limits = Limits::default();
     limits.max_image_width = Some(16_384);
     limits.max_image_height = Some(16_384);
     limits.max_alloc = Some(256 * 1024 * 1024);
-    // GIF guarda só o 1º quadro: a prévia não anima (a `img` da conversa não tem id).
+    limits
+}
+
+/// Decodifica com limite de memória e reduz ao lado pedido; `None` = bytes que não são imagem legível.
+fn decode(bytes: &[u8], w: u32, h: u32) -> Option<Arc<RenderImage>> {
+    let format = sniff(bytes)?;
+    // GIF aqui guarda só o 1º quadro; quem anima é `animated`.
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-    reader.limits(limits);
+    reader.limits(limits());
     let mut decoder = reader.into_decoder().ok()?;
     let orientation = decoder.orientation().ok()?;
     let mut picture = DynamicImage::from_decoder(decoder).ok()?;
@@ -44,8 +54,28 @@ fn decode(bytes: &[u8], w: u32, h: u32) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(vec![Frame::new(fit(picture, w, h))])))
 }
 
-/// Guarda só a miniatura; o original é buscado de novo em Abrir/Salvar.
-pub fn thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> { decode(bytes, THUMB_W, THUMB_H) }
+/// Guarda só a miniatura; o original é buscado de novo em Abrir/Salvar. GIF dentro do teto anima.
+pub fn thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> {
+    if sniff(bytes) == Some(ImageFormat::Gif) && let Some(frames) = animated(bytes) { return Some(Arc::new(RenderImage::new(frames))); }
+    decode(bytes, THUMB_W, THUMB_H)
+}
+
+/// Quadros do GIF reduzidos, com o atraso de cada um; `None` = um quadro só, ilegível ou acima do teto (fica o 1º quadro).
+fn animated(bytes: &[u8]) -> Option<Vec<Frame>> {
+    let mut decoder = GifDecoder::new(Cursor::new(bytes)).ok()?;
+    decoder.set_limits(limits()).ok()?;
+    let (mut frames, mut total) = (Vec::new(), 0);
+    for frame in decoder.into_frames() {
+        let frame = frame.ok()?;
+        // Atraso quase zero corre como o navegador corre: 100 ms.
+        let delay = match frame.delay().numer_denom_ms() { (n, d) if n < 20 * d.max(1) => Delay::from_numer_denom_ms(100, 1), _ => frame.delay() };
+        let pixels = fit(DynamicImage::ImageRgba8(frame.into_buffer()), GIF_W, GIF_H);
+        total += pixels.len();
+        if total > GIF_BUDGET || frames.len() >= GIF_FRAMES { return None; }
+        frames.push(Frame::from_parts(pixels, 0, 0, delay));
+    }
+    (frames.len() > 1).then_some(frames)
+}
 
 /// Imagem de fundo ou papel de parede, reduzida ao tamanho de uma tela grande.
 pub fn backdrop(bytes: &[u8]) -> Option<Arc<RenderImage>> { decode(bytes, BACKDROP_SIDE, BACKDROP_SIDE) }
@@ -177,16 +207,27 @@ mod tests {
     }
 
     #[test]
-    fn gif_shows_first_frame() {
-        let mut gif = Vec::new();
-        {
+    fn gif_animates_within_budget_and_stays_still_above_it() {
+        let gif = |count: u8, w: u32, h: u32| {
+            let mut gif = Vec::new();
             let mut encoder = image::codecs::gif::GifEncoder::new(&mut gif);
-            let frames = (0..2).map(|n| Frame::new(RgbaImage::from_pixel(1280, 960, image::Rgba([n * 200, 0, 0, 255]))));
+            let frames = (0..count).map(|n| Frame::from_parts(RgbaImage::from_pixel(w, h, image::Rgba([n.wrapping_mul(6), 0, 0, 255])), 0, 0, Delay::from_numer_denom_ms(0, 1)));
             encoder.encode_frames(frames).unwrap();
-        }
-        let thumb = thumbnail(&gif).unwrap();
-        assert_eq!(thumb.frame_count(), 1);
-        assert_eq!((thumb.size(0).width.0, thumb.size(0).height.0), (640, 480));
+            drop(encoder);
+            gif
+        };
+        let small = thumbnail(&gif(2, 1280, 960)).unwrap();
+        assert_eq!(small.frame_count(), 2);
+        assert_eq!((small.size(1).width.0, small.size(1).height.0), (400, 300));
+        // Atraso zero vira o dos navegadores.
+        assert_eq!(small.delay(0).numer_denom_ms(), (100, 1));
+        // 40 quadros de 400×300 passam do teto: parado no 1º, na miniatura de sempre.
+        let heavy = thumbnail(&gif(40, 400, 300)).unwrap();
+        assert_eq!(heavy.frame_count(), 1);
+        assert_eq!((heavy.size(0).width.0, heavy.size(0).height.0), (400, 300));
+        // Muitos quadros de 1×1 não passam do teto de bytes, mas passam do de quadros.
+        assert_eq!(thumbnail(&gif(241, 1, 1)).unwrap().frame_count(), 1);
+        assert_eq!(thumbnail(&gif(240, 1, 1)).unwrap().frame_count(), 240);
     }
 
     #[test]
