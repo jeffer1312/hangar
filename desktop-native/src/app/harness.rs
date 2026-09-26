@@ -4,6 +4,7 @@ use super::*;
 use super::chrome::Skeleton;
 use super::server_config::chip;
 use super::settings::{Disclosure, Page, settings_box};
+use gpui_kit::component::progress::Progress;
 use serde::Deserialize;
 
 #[derive(Clone, Deserialize)]
@@ -27,6 +28,27 @@ struct Repaired { feito: String, harnesses: Vec<Cli> }
 /// Conserto em curso ou o desfecho dele, preso ao item (CLI, item) onde o botão estava.
 struct Repair { cli: String, item: String, started: Instant, outcome: Option<Result<String, String>> }
 
+/// `/api/harness/instalar`, lido por polling: a instalação vive no servidor, sair da página não a perde.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct Install {
+    fase: String,
+    harness: Option<String>,
+    etapa: Option<String>,
+    passo: u32,
+    total: u32,
+    log: Vec<String>,
+    avisos: Vec<String>,
+    ok: Option<bool>,
+    erro: Option<String>,
+    comandos: HashMap<String, String>,
+    manual: HashMap<String, String>,
+}
+
+impl Install {
+    fn running(&self) -> bool { self.fase == "rodando" }
+}
+
 #[derive(Default)]
 pub(in crate::app) struct Harnesses {
     /// A última lista lida; uma releitura que falha não a apaga (o erro aparece em cima dela).
@@ -38,11 +60,20 @@ pub(in crate::app) struct Harnesses {
     repair_seq: u64,
     why: Vec<(String, String)>,
     _clock: Option<Task<()>>,
+    install: Option<Install>,
+    install_seq: u64,
+    /// O CLI cujo pedido de instalar ainda não voltou: trava o botão contra o clique duplo.
+    starting: Option<String>,
+    /// Erro de instalar e o CLI dono dele; sem dono na lista, vai ao pé da página.
+    install_error: Option<(Option<String>, String)>,
+    install_log: ScrollHandle,
+    _install_poll: Option<Task<()>>,
 }
 
 pub(super) enum HarnessReply {
     Loaded(u64, Result<Value, Failure>),
     Repaired(u64, Result<Value, Failure>),
+    Install(u64, Option<String>, Result<Value, Failure>),
 }
 
 /// Código do servidor → frase do web; código que o app não conhece aparece cru em vez de sumir.
@@ -77,6 +108,20 @@ fn explained(item: &Item, cli: &str) -> bool {
 
 fn web(key: &str) -> String { crate::i18n::tr_web(key, &HashMap::new()).unwrap_or_else(|| key.to_owned()) }
 
+fn web_with(key: &str, params: &[(&str, String)]) -> String {
+    let params = params.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect();
+    crate::i18n::tr_web(key, &params).unwrap_or_else(|| key.to_owned())
+}
+
+/// Etapa que o app não conhece aparece pela chave crua, como no web.
+fn install_step(key: Option<&str>) -> String {
+    let key = key.unwrap_or_default();
+    crate::i18n::tr_web(&format!("harness_inst_etapa_{key}"), &HashMap::new()).unwrap_or_else(|| key.to_owned())
+}
+
+/// A caixa só acompanha a última linha de quem já está no fim: quem rolou para cima está lendo.
+fn near_bottom(handle: &ScrollHandle) -> bool { handle.max_offset().y + handle.offset().y < px(40.) }
+
 impl Hangar {
     fn harness_send_later(&self) -> impl Fn(HarnessReply) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static {
         let (tx, connection) = (self.tx.clone(), self.connection);
@@ -89,9 +134,55 @@ impl Hangar {
     /// Conserto em curso sobrevive a sair e voltar: a resposta dele ainda é desta conexão.
     pub(super) fn harness_opened(&mut self, cx: &mut Context<Self>) {
         let h = &mut self.harness;
-        (h.error, h.why) = (None, Vec::new());
+        (h.error, h.why, h.install_error) = (None, Vec::new(), None);
         if h.repair.as_ref().is_some_and(|r| r.outcome.is_some()) { h.repair = None; }
         self.load_harness(cx);
+        self.poll_install(None, cx);
+    }
+
+    /// Sem `cli`, lê o estado; com ele, pede a instalação. Só a resposta do pedido mais novo vale.
+    fn poll_install(&mut self, cli: Option<String>, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let h = &mut self.harness;
+        h.install_seq += 1;
+        let seq = h.install_seq;
+        if cli.is_some() { (h.install_error, h.starting) = (None, cli.clone()); }
+        let done = self.harness_send_later();
+        self.runtime.spawn(async move {
+            let result = match &cli {
+                Some(cli) => api.server_post(&["harness", "instalar", cli], 30).await,
+                None => api.server_read(&["harness", "instalar"], &[], 15).await,
+            };
+            done(HarnessReply::Install(seq, cli, result)).await
+        });
+        cx.notify();
+    }
+
+    fn schedule_install_poll(&mut self, cx: &mut Context<Self>) {
+        self.harness._install_poll = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(1200)).await;
+            // Página fechada não consulta; reabrir relê e retoma o ciclo.
+            let _ = this.update(cx, |this, cx| if this.settings == Some(Page::Harnesses) { this.poll_install(None, cx) });
+        }));
+    }
+
+    fn confirm_install(&mut self, cli: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(command) = self.harness.install.as_ref().and_then(|i| i.comandos.get(&cli).cloned()) else { return };
+        let this = cx.entity().downgrade();
+        let body = format!("{}\n\n{command}\n\n{}", web("harness_inst_conf_corpo"), web("harness_inst_conf_depois"));
+        chrome::confirm_alert(window, cx, web_with("harness_inst_conf_titulo", &[("nome", name)]), body, web("harness_inst_botao"),
+            ButtonVariant::Primary, move |_, cx| { let _ = this.update(cx, |this, cx| this.start_install(cli.clone(), cx)); true });
+    }
+
+    /// Outra instalação pode ter começado (noutro aparelho) com a confirmação aberta: diz o porquê em vez de não fazer nada.
+    fn start_install(&mut self, cli: String, cx: &mut Context<Self>) {
+        if self.harness.install.as_ref().is_some_and(Install::running) || self.harness.starting.is_some() {
+            self.harness.install_error = Some((Some(cli), web("harness_inst_ocupado")));
+            cx.notify();
+            return;
+        }
+        self.harness._install_poll = None;
+        self.poll_install(Some(cli), cx);
     }
 
     fn load_harness(&mut self, cx: &mut Context<Self>) {
@@ -160,6 +251,35 @@ impl Hangar {
                 };
                 if let Some(repair) = &mut self.harness.repair { repair.outcome = Some(outcome); }
             }
+            HarnessReply::Install(seq, cli, result) => {
+                let h = &mut self.harness;
+                if seq != h.install_seq { return; }
+                h.starting = None;
+                let parsed = result.map_err(|error| match error.status {
+                    Some(409) => web("harness_inst_ocupado"),
+                    Some(400) => web_with("erro_harness_sem_instalador", &[("cli", cli.clone().unwrap_or_default())]),
+                    _ => Self::fetch_failure(&error),
+                }).and_then(|value| serde_json::from_value::<Install>(value).map_err(|_| tr("invalid_response")));
+                match parsed {
+                    Ok(state) => {
+                        // Só uma instalação andando apaga o erro: o que a impediu de começar fica à vista.
+                        if state.running() { h.install_error = None; }
+                        let before = h.install.as_ref();
+                        let finished = before.is_some_and(Install::running) && state.fase == "pronto";
+                        if before.is_none_or(|b| b.log != state.log) && near_bottom(&h.install_log) { h.install_log.scroll_to_bottom(); }
+                        let running = state.running();
+                        h.install = Some(state);
+                        // Quem diz se instalou é o disco relido, não o fim do comando.
+                        if running { self.schedule_install_poll(cx); } else if finished { self.load_harness(cx); }
+                    }
+                    Err(error) => {
+                        let owner = cli.clone().or_else(|| h.install.as_ref().and_then(|i| i.harness.clone()));
+                        h.install_error = Some((owner, error));
+                        // O trabalho vive no servidor: resposta perdida não congela a tela, a próxima leitura desempata.
+                        if h.install.as_ref().is_some_and(Install::running) || cli.is_some() { self.schedule_install_poll(cx); }
+                    }
+                }
+            }
         }
         cx.notify();
     }
@@ -213,7 +333,7 @@ impl Hangar {
             .child(div().flex_1())
             .when(self.api.is_some(), |el| el.child(Button::new("harness-reload").ghost().small().icon(IconName::RefreshCw)
                 .label(tr("reload")).loading(self.harness.loading).disabled(self.harness.loading || running)
-                .on_click(cx.listener(|this, _, _, cx| this.load_harness(cx)))));
+                .on_click(cx.listener(|this, _, _, cx| { this.load_harness(cx); this.poll_install(None, cx); }))));
         let mut page = div().flex().flex_col().gap_4().child(title)
             .child(self.mark(div().rounded(px(6.)).text_sm().text_color(theme::muted()).whitespace_normal()
                 .child(tr("harness_legend")), "harness_legend"));
@@ -258,9 +378,85 @@ impl Hangar {
                     .child(div().min_w_0().truncate().text_sm().text_color(theme::muted()).font_family(theme::MONO).child(version)))
                 .children(h.itens.iter().map(|item| self.render_harness_item(&h.id, item, cx)))
                 .children(orphan.map(|r| repair_line(r, &item_label(&r.item))))
+                .children((!h.instalado).then(|| self.install_offer(h, cx)).flatten())
+                .children(self.harness.install_error.as_ref().filter(|(owner, _)| owner.as_deref() == Some(h.id.as_str()))
+                    .map(|(_, error)| install_alert(error)))
+                .children(self.install_progress(&h.id))
         }).collect();
-        page.child(div().flex().flex_col().gap_3().children(cards)).into_any_element()
+        let loose = self.harness.install_error.as_ref()
+            .filter(|(owner, _)| !owner.as_ref().is_some_and(|o| list.iter().any(|h| h.id == *o))).map(|(_, error)| install_alert(error));
+        page.child(div().flex().flex_col().gap_3().children(cards)).children(loose).into_any_element()
     }
+
+    /// CLI ausente: botão quando o servidor tem comando conferido para este sistema, senão o endereço do fornecedor.
+    fn install_offer(&self, h: &Cli, cx: &mut Context<Self>) -> Option<Div> {
+        let install = self.harness.install.as_ref()?;
+        let text = |key: &str| div().text_sm().whitespace_normal().text_color(theme::muted()).child(web(key));
+        let row = div().flex().items_start().gap_2().py(px(3.))
+            .child(div().w(px(14.)).flex_shrink_0().text_sm().font_weight(FontWeight::BOLD).text_color(theme::muted()).child("·"));
+        if install.comandos.contains_key(&h.id) {
+            let busy = install.running() || self.harness.starting.is_some();
+            let (cli, name) = (h.id.clone(), h.nome.clone());
+            return Some(row.child(text("harness_inst_disponivel").flex_1().min_w_0())
+                .child(Button::new(SharedString::from(format!("harness-{}-install", h.id))).outline().small().flex_shrink_0()
+                    .label(web("harness_inst_botao")).loading(self.harness.starting.as_deref() == Some(h.id.as_str())).disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| this.confirm_install(cli.clone(), name.clone(), window, cx)))));
+        }
+        // Só http(s): o endereço vem do servidor e vira clique que abre o navegador.
+        let url = install.manual.get(&h.id).filter(|u| u.starts_with("https://") || u.starts_with("http://")).cloned();
+        Some(row.child(div().flex_1().min_w_0().flex().flex_col().items_start().gap(px(2.)).child(text("harness_inst_manual"))
+            .children(url.map(|url| {
+                let open = url.clone();
+                Button::new(SharedString::from(format!("harness-{}-manual", h.id))).link().small().label(url)
+                    .on_click(move |_, _, cx| cx.open_url(&open))
+            }))))
+    }
+
+    /// Andamento e desfecho da instalação deste CLI, com a saída do instalador.
+    fn install_progress(&self, cli: &str) -> Option<Div> {
+        let install = self.harness.install.as_ref().filter(|i| i.harness.as_deref() == Some(cli) && (i.running() || i.fase == "pronto"))?;
+        let step = install_step(install.etapa.as_deref());
+        let (headline, color) = if install.running() {
+            (web_with("harness_inst_andamento", &[("passo", install.passo.to_string()), ("total", install.total.to_string()), ("etapa", step)]),
+                theme::muted())
+        } else if install.ok == Some(true) {
+            (web("harness_inst_pronto"), theme::success())
+        } else {
+            (web_with("harness_inst_falhou", &[("etapa", step)]), theme::danger())
+        };
+        let line = || div().text_size(px(12.5)).whitespace_normal();
+        Some(div().pl(px(22.)).pt(px(4.)).flex().flex_col().gap_2()
+            .child(line().id("harness-install-status").role(Role::Status).text_color(color).child(headline))
+            .when(install.running(), |el| el.child(Progress::new("harness-install-progress").accessibility_label(web("harness_inst_progresso"))
+                .map(|bar| if install.total > 0 { bar.value(install.passo as f32 * 100. / install.total as f32) } else { bar.loading(true) })))
+            .children(install.erro.clone().map(|error| line().id("harness-install-error").role(Role::Alert).text_color(theme::danger()).child(error)))
+            // Etapa pulada não vive só no log: a manchete promete "ligado ao app".
+            .when(!install.avisos.is_empty(), |el| el.child(line().id("harness-install-warnings").role(Role::Status).text_color(theme::warning())
+                .flex().flex_col().gap_1().children(install.avisos.iter().map(|aviso| div().child(aviso.clone())))))
+            .when(!install.log.is_empty(), |el| el.child(div().rounded(px(6.)).bg(theme::raised()).p_2()
+                .child(scrolled("harness-install-log", &self.harness.install_log, 220., div().id("harness-install-log-text")
+                    .aria_label(web("harness_inst_log")).font_family(theme::MONO).text_size(px(11.5)).text_color(theme::muted())
+                    .whitespace_normal().children(install.log.iter().map(|l| div().child(l.clone()))))))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Install;
+
+    #[test]
+    fn install_state_reads_backend_shape_and_tolerates_missing_fields() {
+        let full: Install = serde_json::from_value(serde_json::json!({"fase": "rodando", "harness": "kimi", "etapa": "comando",
+            "passo": 1, "total": 4, "log": ["$ curl"], "avisos": [], "ok": null, "erro": null,
+            "comandos": {"kimi": "curl -fsSL x | bash"}, "manual": {"omp": "https://example.com"}})).unwrap();
+        assert!(full.running() && full.comandos.contains_key("kimi") && full.log.len() == 1);
+        let old: Install = serde_json::from_value(serde_json::json!({"fase": "ocioso"})).unwrap();
+        assert!(!old.running() && old.log.is_empty() && old.comandos.is_empty());
+    }
+}
+
+fn install_alert(error: &str) -> Stateful<Div> {
+    div().id("harness-install-failure").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.to_owned())
 }
 
 /// "Consertando X… Ns" enquanto roda; depois, o que o servidor fez ou o motivo da falha.
