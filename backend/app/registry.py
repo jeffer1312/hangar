@@ -7,6 +7,7 @@ import shutil
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Optional
 from app import atomico, diag, tmux
@@ -67,11 +68,14 @@ _MAX_PLAN_TASK_SEGMENTS = 9
 # anterior — erro nunca vira "repositorio limpo" no card.
 _git_ultimo: dict[str, tuple[dict | None, dict | None]] = {}
 _git_em_voo: set[str] = set()
+# Pool próprio: git lento não pode deixar na fila a captura do tmux e o resto do pool padrão.
+_git_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hangar-git")
 
 
 async def _atualizar_git(cwd: str) -> None:
     try:
-        summary, diffstat = await asyncio.to_thread(lambda: (git_summary(cwd), git_diffstat(cwd)))
+        summary, diffstat = await asyncio.get_running_loop().run_in_executor(
+            _git_pool, lambda: (git_summary(cwd), git_diffstat(cwd)))
         antes = _git_ultimo.get(cwd, (None, None))
         _git_ultimo[cwd] = (summary if summary is not None else antes[0],
                             diffstat if diffstat is not None else antes[1])

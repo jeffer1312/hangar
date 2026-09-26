@@ -16,6 +16,7 @@ export function criarArquivosMudados(quantos = 3) {
   let ultima = '';
   let ultimaSessao = '';
   let geracao = 0;
+  let emVoo = false;
 
   return {
     get itens() {
@@ -44,20 +45,37 @@ export function criarArquivosMudados(quantos = 3) {
       }
       if (!chave || chave === ultima) return;
       ultima = chave;
-      const minha = ++geracao;
-      try {
-        const r = await getChangedFiles(sessionName);
-        if (minha !== geracao) return;   // outra carga passou na frente
-        itens = r.files
-          .map((f) => ({ path: f.path, added: f.added ?? 0, total: (f.added ?? 0) + (f.removed ?? 0) }))
-          .filter((f) => f.total > 0)
-          .sort((a, b) => b.total - a.total)
-          .slice(0, quantos);
-      } catch {
-        // Bloco acessório: o painel inteiro não pode cair porque o git não respondeu. O erro de
-        // git aparece no painel de git, que é quem fala disso.
-        if (minha === geracao) itens = [];
-      }
+      // Um pedido por vez: chave que muda com o pedido no ar só é buscada quando ele volta, e
+      // sempre a mais recente. Sem isto, git lento no backend empilhava um pedido por mudança.
+      if (!emVoo) await buscar();
     },
   };
+
+  async function buscar(): Promise<void> {
+    emVoo = true;
+    let feita = '';
+    try {
+      while (ultima && ultima !== feita) {
+        const chave = ultima;
+        const minha = ++geracao;
+        try {
+          const r = await getChangedFiles(ultimaSessao);
+          if (minha !== geracao) continue;   // trocou de sessão no meio: descarta
+          itens = r.files
+            .map((f) => ({ path: f.path, added: f.added ?? 0, total: (f.added ?? 0) + (f.removed ?? 0) }))
+            .filter((f) => f.total > 0)
+            .sort((a, b) => b.total - a.total)
+            .slice(0, quantos);
+        } catch {
+          // Bloco acessório: o painel inteiro não pode cair porque o git não respondeu. O erro de
+          // git aparece no painel de git, que é quem fala disso.
+          if (minha === geracao) itens = [];
+        } finally {
+          feita = chave;
+        }
+      }
+    } finally {
+      emVoo = false;
+    }
+  }
 }

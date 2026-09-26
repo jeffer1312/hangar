@@ -1,6 +1,7 @@
 """Cobertura do git_ops: list/switch/action contra um repo temporario + rejeicoes e erro de binario."""
 import os
 import subprocess
+import sys
 import time
 
 import pytest
@@ -176,7 +177,7 @@ def test_run_git_not_found(tmp_path, monkeypatch):
     # FileNotFoundError (git ausente) -> GitError 500, nao traceback cru.
     def boom(*a, **k):
         raise FileNotFoundError("no git")
-    monkeypatch.setattr(git_ops.subprocess, "run", boom)
+    monkeypatch.setattr(git_ops.subprocess, "Popen", boom)
     with pytest.raises(GitError) as e:
         git_ops._run(str(tmp_path), "status")
     assert e.value.status == 500
@@ -185,13 +186,30 @@ def test_run_git_not_found(tmp_path, monkeypatch):
 def test_run_desliga_travas_opcionais(tmp_path, monkeypatch):
     # status morto pelo timeout nao pode deixar .git/index.lock orfao no repo da sessao.
     visto = {}
+    popen = subprocess.Popen
 
     def fake(*a, **k):
         visto.update(k["env"])
-        return subprocess.CompletedProcess(a[0], 0, "", "")
-    monkeypatch.setattr(git_ops.subprocess, "run", fake)
+        return popen([sys.executable, "-c", "pass"], **k)
+    monkeypatch.setattr(git_ops.subprocess, "Popen", fake)
     git_ops._run(str(tmp_path), "status", "--porcelain")
     assert visto["GIT_OPTIONAL_LOCKS"] == "0"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="git falso em sh")
+def test_run_timeout_libera_mesmo_com_neto_segurando_o_pipe(tmp_path, monkeypatch):
+    # Imita o lançador do Git for Windows: o processo morto deixa um neto com o stdout aberto.
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "git"
+    fake.write_text("#!/bin/sh\nsleep 30 &\nwait\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    inicio = time.monotonic()
+    with pytest.raises(GitError) as e:
+        git_ops._run(str(tmp_path), "status", timeout=0.5)
+    assert e.value.status == 504
+    assert time.monotonic() - inicio < 5
 
 
 def test_commit_amend_reescreve_e_dobra(tmp_path):
