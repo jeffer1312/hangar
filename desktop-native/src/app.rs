@@ -492,6 +492,9 @@ impl Hangar {
 
     // Leitura de arquivo: 403/404 é a política de caminho do backend, e o motivo dele é o que se mostra.
     fn fetch_failure(error: &Failure) -> String {
+        if error.detail.starts_with("erro_arq_") {
+            if let Some(message) = crate::i18n::tr_web(&error.detail, &HashMap::new()) { return message; }
+        }
         match error.status { Some(401) => tr("auth_error"), Some(_) => tr(&error.detail), None => Self::setting_failure(error) }
     }
 

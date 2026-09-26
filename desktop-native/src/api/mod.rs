@@ -37,8 +37,10 @@ impl Failure {
 fn failure_detail(body: Option<Value>, status: u16) -> String {
     body.and_then(|value| value.get("detail").and_then(|detail| match detail {
         Value::String(message) => Some(message.clone()),
-        Value::Object(fields) => fields.get("msg").and_then(Value::as_str)
-            .filter(|message| !message.is_empty())
+        Value::Object(fields) => fields.get("code").and_then(Value::as_str)
+            // A busca depende de params.msg; sem transportar parâmetros, conserva a mensagem.
+            .filter(|code| code.starts_with("erro_arq_") && *code != "erro_arq_busca_falhou")
+            .or_else(|| fields.get("msg").and_then(Value::as_str).filter(|message| !message.is_empty()))
             .or_else(|| fields.get("code").and_then(Value::as_str)).map(str::to_owned),
         // Recusa de validação (422): uma lista de `{msg}`, uma por campo.
         Value::Array(items) => Some(items.iter().filter_map(|item| item.get("msg").and_then(Value::as_str)).collect::<Vec<_>>().join("; "))
@@ -327,5 +329,16 @@ mod tests {
         assert_eq!(failure_detail(Some(json!({"detail": {"code": "turn_missing", "params": {}, "msg": "Nenhum turno ativo"}})), 409), "Nenhum turno ativo");
         assert_eq!(failure_detail(Some(json!({"detail": {"code": "turn_missing", "params": {}}})), 409), "turn_missing");
         assert_eq!(failure_detail(Some(json!({"detail": [{"msg": "at most 40 characters"}]})), 422), "at most 40 characters");
+    }
+
+    #[test]
+    fn file_errors_keep_the_reason_but_search_keeps_its_message() {
+        for (status, code) in [(409, "erro_arq_mudou_no_disco"), (409, "erro_arq_em_uso"),
+            (409, "erro_arq_sumiu"), (409, "erro_arq_escrita_falhou"),
+            (413, "erro_arq_grande_demais"), (415, "erro_arq_binario"), (403, "erro_arq_area_do_git")] {
+            assert_eq!(failure_detail(Some(json!({"detail": {"code": code, "params": {"msg": "fixed"}, "msg": "fixed"}})), status), code);
+        }
+        assert_eq!(failure_detail(Some(json!({"detail": {"code": "erro_arq_busca_falhou",
+            "params": {"msg": "search failed"}, "msg": "search failed"}})), 500), "search failed");
     }
 }
