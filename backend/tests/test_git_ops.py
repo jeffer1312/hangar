@@ -1,7 +1,9 @@
 """Cobertura do git_ops: list/switch/action contra um repo temporario + rejeicoes e erro de binario."""
 import os
 import subprocess
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -87,6 +89,149 @@ def test_switch_remote_dwim_creates_local(tmp_path):
     d = _with_remote(tmp_path)
     assert git_ops.switch_branch(d, "only-remote")["current"] == "only-remote"
     assert "only-remote" in git_ops.list_branches(d)["branches"]  # DWIM criou a local
+
+
+def test_create_worktree_from_dirty_repo_and_remove(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    d = _repo(repo)
+    (repo / "untracked.txt").write_text("keep")
+    assert git_ops.create_worktree(d, "main", "same", tmp_path) == (d, False)
+
+    path, created = git_ops.create_worktree(d, "feature", "chat", tmp_path)
+    assert created and path == str(tmp_path / "repo-chat")
+    assert git_ops.branch_of(path) == "feature"
+    assert (repo / "untracked.txt").read_text() == "keep"
+    git_ops.remove_worktree(d, path)
+    assert not (tmp_path / "repo-chat").exists()
+
+
+def test_create_worktree_rejects_occupied_or_outside_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    d = _repo(repo)
+    (tmp_path / "repo-chat").mkdir()
+    with pytest.raises(GitError) as occupied:
+        git_ops.create_worktree(d, "feature", "chat", tmp_path)
+    assert occupied.value.status == 409
+    with pytest.raises(GitError) as outside:
+        git_ops.create_worktree(d, "feature", "other", repo)
+    assert outside.value.status == 400
+    with pytest.raises(GitError) as missing:
+        git_ops.create_worktree(d, "nao-existe", "x", tmp_path)
+    assert missing.value.status == 400
+    assert not (tmp_path / "repo-x").exists()
+    assert git_ops.branch_of(d) == "main"
+
+
+def test_create_worktree_serializes_same_branch(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    d = _repo(repo)
+    barrier = threading.Barrier(2)
+    observed = threading.Lock()
+    active = peak = 0
+    run = git_ops._run
+
+    def slow_add(cwd, *args, **kwargs):
+        nonlocal active, peak
+        if args[:2] != ("worktree", "add"):
+            return run(cwd, *args, **kwargs)
+        with observed:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.05)
+            return run(cwd, *args, **kwargs)
+        finally:
+            with observed:
+                active -= 1
+
+    monkeypatch.setattr(git_ops, "_run", slow_add)
+
+    def attempt(name):
+        barrier.wait()
+        try:
+            return git_ops.create_worktree(d, "feature", name, tmp_path)
+        except GitError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, ("a", "b")))
+    made = [result for result in results if isinstance(result, tuple)]
+    refused = [result for result in results if isinstance(result, GitError)]
+    assert peak == 1
+    assert len(made) == 1 and made[0][1] is True
+    assert len(refused) == 1 and refused[0].status == 409
+    worktrees = run(d, "worktree", "list", "--porcelain").stdout
+    assert worktrees.count("branch refs/heads/feature") == 1
+    git_ops.remove_worktree(d, made[0][0])
+
+
+def test_create_worktree_from_remote_branch(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    d = _with_remote(repo)
+    path, created = git_ops.create_worktree(d, "only-remote", "chat", tmp_path)
+    assert created and git_ops.branch_of(path) == "only-remote"
+    git_ops.remove_worktree(d, path)
+
+
+def test_fs_branches_and_create_session_worktree(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import api, fs
+    from app.models import SessionInfo
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    d = _repo(repo)
+    monkeypatch.setattr(fs, "resolve_scan_roots", lambda _settings: [tmp_path])
+    monkeypatch.setattr(api, "resolve_scan_roots", lambda _settings: [tmp_path])
+    monkeypatch.setattr(api.settings, "auth_token", "test-token")
+    calls = []
+
+    def create(name, cwd, config_dir, **kwargs):
+        calls.append(cwd)
+        return SessionInfo(name=name, cwd=cwd, provider="claude")
+
+    monkeypatch.setattr(api.registry, "create", create)
+    client = TestClient(api.app)
+    auth = {"Authorization": "Bearer test-token"}
+    branches = client.get("/api/fs/branches", params={"root": str(tmp_path), "path": d}, headers=auth)
+    assert branches.status_code == 200
+    assert set(branches.json()["branches"]) == {"main", "feature"}
+    assert client.get("/api/fs/branches", params={"root": str(repo), "path": d},
+                      headers=auth).status_code == 403
+
+    result = client.post("/api/sessions", json={"name": "chat", "cwd": d,
+                                                 "branch": "feature"}, headers=auth)
+    assert result.status_code == 200, result.text
+    assert result.json()["cwd"] == str(tmp_path / "repo-chat")
+    assert result.json()["branch"] == "feature"
+    assert calls == [str(tmp_path / "repo-chat")]
+    git_ops.remove_worktree(d, calls[0])
+
+
+def test_create_session_rolls_back_worktree_when_registry_fails(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import api, fs
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    d = _repo(repo)
+    monkeypatch.setattr(fs, "resolve_scan_roots", lambda _settings: [tmp_path])
+    monkeypatch.setattr(api, "resolve_scan_roots", lambda _settings: [tmp_path])
+    monkeypatch.setattr(api.settings, "auth_token", "test-token")
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("ja existe uma sessao com esse nome")
+
+    monkeypatch.setattr(api.registry, "create", fail)
+    response = TestClient(api.app).post("/api/sessions", json={"name": "chat", "cwd": d,
+                                                              "branch": "feature"},
+                                        headers={"Authorization": "Bearer test-token"})
+    assert response.status_code == 409
+    assert not (tmp_path / "repo-chat").exists()
 
 
 def _repo_with_file(tmp_path):
