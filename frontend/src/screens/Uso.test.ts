@@ -18,9 +18,9 @@ const report = (period: string): Partial<UsoReport> => ({
   // Skills pesam pelos tokens que OCUPARAM: "muitas" ocupa mais no total; "pesada" é maior por
   // carga (15 × a mediana).
   by_skill: [
-    { ...zeroUso('muitas'), plugin: 'superpowers', sessions: 2, chamadas: 10, pedidas: 2, ctx_tokens_est: 10000, ocupados_tokens_est: 100000, respostas: 40 },
-    { ...zeroUso('pesada'), plugin: '@repo', sessions: 1, chamadas: 3, ctx_tokens_est: 4500, ocupados_tokens_est: 45000, respostas: 10 },
-    ...Array.from({ length: 20 }, (_, i) => ({ ...zeroUso(`s${String(i).padStart(2, '0')}`), sessions: 1, chamadas: 5, ctx_tokens_est: 500, ocupados_tokens_est: 500, respostas: 1 })),
+    { ...zeroUso('muitas'), plugin: 'superpowers', sessions: 2, chamadas: 10, pedidas: 2, ctx_tokens_est: 10000, ocupados_tokens_est: 100000, ocupados_eq_tokens_est: 100000, respostas: 40 },
+    { ...zeroUso('pesada'), plugin: '@repo', sessions: 1, chamadas: 3, ctx_tokens_est: 4500, ocupados_tokens_est: 45000, ocupados_eq_tokens_est: 45000, respostas: 10 },
+    ...Array.from({ length: 20 }, (_, i) => ({ ...zeroUso(`s${String(i).padStart(2, '0')}`), sessions: 1, chamadas: 5, ctx_tokens_est: 500, ocupados_tokens_est: 500, ocupados_eq_tokens_est: 500, respostas: 1 })),
   ],
   by_agente: [{ ...zeroUso('Explore'), sessions: 1, chamadas: 7, pedidas: 3, input: 21000,
                 output: 3000, cache_read: 40000, cost: 4, cost_input: 1, cost_output: 2, cost_cache_read: 1 },

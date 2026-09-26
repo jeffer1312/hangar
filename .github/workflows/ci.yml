@@ -100,10 +100,24 @@ jobs:
       - run: npm run check -w frontend
       - run: npm run test -w @hangar/core
       - run: npm run test -w frontend
+
+  # Build em job proprio: teste vermelho no `frontend` nao pode segurar a tela publicada, senao
+  # quem atualiza recebe o codigo novo com a tela do ultimo commit verde.
+  dist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --workspace=@hangar/core --workspace=frontend
       - run: npm run build -w frontend
-      # O build ja acontecia aqui e ia pro lixo. Guardado, ele vira o dist que o instalador baixa
-      # em vez de compilar na maquina de quem instala — que e o passo mais lento e o mais fragil
-      # (dois bugs de `--silent` em agosto/2026 morreram exatamente ai).
+      # Vira o dist que o instalador baixa em vez de compilar na maquina de quem instala — que e o
+      # passo mais lento e o mais fragil (dois bugs de `--silent` em agosto/2026 morreram ai).
       - uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -111,10 +125,10 @@ jobs:
           retention-days: 1
 
   # Publica o dist numa release FIXA (`dist-latest`), reescrita a cada push na main. Job separado
-  # do `frontend` de proposito: os jobs de teste sao `contents: read` e devem continuar sendo — so
+  # do `dist` de proposito: os outros jobs sao `contents: read` e devem continuar sendo — so
   # este escreve. Nao roda em pull_request (nao ha o que publicar de um fork, e o token la e read).
   publica-dist:
-    needs: frontend
+    needs: dist
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
