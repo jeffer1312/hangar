@@ -4100,6 +4100,7 @@ class PapelBody(_StrictBody):
     motor: str = ""
     jev: bool = False
     subagente: str = ""
+    perfil: str = ""
     mtime: float
 
 
@@ -4168,6 +4169,7 @@ class PapelItem(_StrictBody):
     motor: str = ""
     jev: bool = False
     subagente: str = ""
+    perfil: str = ""
     # Teto de contexto do papel, em % da janela da sessão ("" = 50%). O vigia lê daqui.
     # None = cliente que não conhece o campo: mantém o valor gravado em vez de apagá-lo.
     janela: str | None = None
@@ -4203,6 +4205,15 @@ async def _validar_abertura(p: orq_papeis.Papel) -> None:
         try:
             model_args.validar("claude", p.subagente, None)
         except ValueError as e:
+            recusa("erro_orq_celula_invalida", str(e))
+    if p.perfil:
+        if p.provider != "omp":
+            recusa("erro_perfil_so_omp", "perfil so vale para provider omp")
+        # A mesma regra de nome do omp que a criação de sessão usa.
+        from app.omp_plugin_sync import InventoryError, resolve_omp_directories
+        try:
+            resolve_omp_directories(Path.home(), {"OMP_PROFILE": p.perfil}, Path.home())
+        except InventoryError as e:
             recusa("erro_orq_celula_invalida", str(e))
 
 
@@ -4242,7 +4253,7 @@ async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float,
                                     it.provider.strip().lower(), it.conta.strip(),
                                     it.modelo.strip(), it.esforco.strip(), vez,
                                     it.headless, it.permissao.strip(), it.motor.strip(), it.jev,
-                                    it.subagente.strip(),
+                                    it.subagente.strip(), perfil=it.perfil.strip(),
                                     abertura_extra=atual.abertura_extra if atual else "",
                                     janela=(atual.janela if atual else "") if it.janela is None
                                     else it.janela.strip().rstrip("%").strip())

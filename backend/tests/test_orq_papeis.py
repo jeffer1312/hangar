@@ -103,6 +103,13 @@ def test_janela_vira_coluna_antes_da_abertura_e_recusa_fora_da_faixa():
         op.escrever_papel(REGRAS, op.Papel("executor", "pm1-t*", "claude", "200-01", "opus", "high", janela="5"))
 
 
+def test_perfil_do_omp_vira_profile_na_abertura_e_volta_igual():
+    p = op.Papel("executor", "pm1-t*", "omp", "omp-1", "", "", perfil="trabalho")
+    t = op.escrever_papel(REGRAS, p)
+    assert "| --profile trabalho |" in t
+    assert op.ler(t)[1] == p and op.ler(t)[1].abertura_extra == ""
+
+
 def test_abertura_escrita_a_mao_sobrevive_ao_salvar_do_painel():
     """Flag que o painel não conhece (o `--read-only` de um revisor, escrito pelo árbitro) volta
     intacta na célula quando o painel salva só o que conhece."""

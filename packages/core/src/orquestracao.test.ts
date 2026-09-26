@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compararModelo, compararEsforco, compararConta, estadoDoPapel, casarViva, familiaDe, agruparPorPapel, contaDaTask, type Papel } from './orquestracao';
+import { compararModelo, compararEsforco, compararConta, estadoDoPapel, casarViva, familiaDe, agruparPorPapel, contaDaTask, contasEmUso, etapasDoTime, faixaDe, mudancasDe, rotuloModelo, type Papel } from './orquestracao';
 import type { SessionInfo } from './types';
 
 const papel = (p: Partial<Papel> = {}): Papel => ({
@@ -104,5 +104,40 @@ describe('casarViva', () => {
     expect(casarViva('pm-t*', vivas)?.name).toBe('pm-t9');
     expect(casarViva('nada*', vivas)).toBeNull();
     expect(casarViva('', vivas)).toBeNull();
+  });
+});
+
+describe('etapas do time', () => {
+  const time = [
+    papel({ papel: 'revisor faixa A', conta: 'c1' }), papel({ papel: 'árbitro', conta: 'c1' }),
+    papel({ papel: 'executor faixa A', conta: 'c1' }), papel({ papel: 'executor faixa B', provider: 'codex', conta: 'c2' }),
+    papel({ papel: 'meu papel', conta: 'c3' }), papel({ papel: 'revisão final', conta: 'c3' }),
+  ];
+
+  it('junta as faixas no papel-base e segue a ordem do trabalho', () => {
+    expect(faixaDe('executor faixa b')).toEqual({ base: 'executor', faixa: 'B' });
+    expect(faixaDe('revisão final')).toEqual({ base: 'revisão final', faixa: null });
+    expect(etapasDoTime(time).map((e) => [e.base, e.linhas.length])).toEqual([
+      ['árbitro', 1], ['executor', 2], ['revisor', 1], ['revisão final', 1], ['meu papel', 1],
+    ]);
+  });
+
+  it('conta quantas linhas dividem cada conta, por provider', () => {
+    const uso = contasEmUso(time);
+    expect(uso.get('claude::c1')).toBe(3);
+    expect(uso.get('codex::c2')).toBe(1);
+  });
+
+  it('rótulo curto de modelo do Claude; o resto passa como veio', () => {
+    expect(rotuloModelo('claude-opus-5-5')).toBe('Opus 5.5');
+    expect(rotuloModelo('opus[1m]')).toBe('Opus 1M');
+    expect(rotuloModelo('gpt-6-sol')).toBe('gpt-6-sol');
+  });
+
+  it('mudanças do rascunho: só o que difere, provider vazio vale claude', () => {
+    const orig = papel({ provider: '' });
+    expect(mudancasDe(orig, { ...orig, provider: 'claude' })).toEqual([]);
+    expect(mudancasDe(orig, { ...orig, provider: 'claude', conta: 'x', headless: true }))
+      .toEqual([{ campo: 'conta', de: '200-01', para: 'x' }, { campo: 'headless', de: '', para: '1' }]);
   });
 });

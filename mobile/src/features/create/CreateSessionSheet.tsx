@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { createSession, createSessionForServer, getArchivePorCwd, getCodexAccountsForServer,
   getEngines, getSessions, listClaudeConfigs, listarCotasResumo, modelOptions,
   modelOptionsForServer, resumeArchivedConversation } from '@hangar/core';
-import { basename, providerName, cotaDaConta, cotaParada, resumoCota } from '@hangar/core';
+import { basename, providerName, cotaDaConta, cotaParada, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS } from '@hangar/core';
 import type { ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo } from '@hangar/core';
 import { MenuView } from '@react-native-menu/menu';
 import { useServers } from '../../stores/servers';
@@ -14,12 +14,6 @@ import { ProviderPicker } from './ProviderPicker';
 import { CodexContextControl } from './CodexContextControl';
 import * as m from '../../paraglide/messages';
 
-const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
-const NIVEIS: Record<string, string[]> = {
-  claude: ['low', 'medium', 'high', 'xhigh', 'max'],
-  pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
-};
-const MODOS_PERMISSAO = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
 
 function uniqueName(base: string, taken: Set<string>): string {
   const clean = base.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'sessao';
@@ -117,7 +111,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
     const selected = modelos.find((model) => valorModelo(model) === value || model.id === value);
     return selected?.efforts ?? [];
   };
-  const niveisEsforco = provider === 'codex' ? esforcosDoModelo(modelo) : (NIVEIS[provider] ?? []);
+  const niveisEsforco = provider === 'codex' ? esforcosDoModelo(modelo) : (EFFORT_LEVELS[provider] ?? []);
 
   useEffect(() => {
     mounted.current = true;
@@ -529,7 +523,7 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
                 <Text style={styles.label}>{m.criar_permissao()}</Text>
                 <MenuSelect
                   value={permissao}
-                  options={[{ value: '', label: m.criar_permissao_padrao() }, ...MODOS_PERMISSAO.map((n) => ({ value: n, label: n }))]}
+                  options={[{ value: '', label: m.criar_permissao_padrao() }, ...CLAUDE_PERMISSION_MODES.map((n) => ({ value: n, label: n }))]}
                   onChange={(v) => setPermissao(v)}
                 />
               </View>

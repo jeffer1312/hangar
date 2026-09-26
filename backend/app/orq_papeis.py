@@ -53,6 +53,7 @@ class Papel:
     motor: str = ""
     jev: bool = False
     subagente: str = ""
+    perfil: str = ""        # perfil do omp (`--profile`)
     # Trecho da célula que o painel não edita (ex.: `--read-only` escrito pelo árbitro): volta
     # intacto no fim da célula, senão salvar pelo painel apagaria a proteção sem ninguém ver.
     abertura_extra: str = ""
@@ -88,7 +89,8 @@ def chave_da_linha(cab: tuple[str, ...], papel: str, vez: str) -> str | tuple[st
 def abertura_texto(p: Papel) -> str:
     """As flags do `hangar-send --new` que o árbitro põe no comando, na ordem fixa."""
     partes = ["--headless"] if p.headless else []
-    for flag, valor in (("--permissao", p.permissao), ("--engine", p.motor), ("--subagente", p.subagente)):
+    for flag, valor in (("--permissao", p.permissao), ("--engine", p.motor), ("--subagente", p.subagente),
+                        ("--profile", p.perfil)):
         if valor:
             partes += [flag, valor]
     if p.jev:
@@ -98,11 +100,13 @@ def abertura_texto(p: Papel) -> str:
     return " ".join(partes)
 
 
-_FLAGS_COM_VALOR = {"--permissao": "permissao", "--engine": "motor", "--subagente": "subagente"}
+_FLAGS_COM_VALOR = {"--permissao": "permissao", "--engine": "motor", "--subagente": "subagente",
+                    "--profile": "perfil"}
 
 
 def _ler_abertura(celula: str) -> dict:
-    campos: dict = {"headless": False, "permissao": "", "motor": "", "jev": False, "subagente": ""}
+    campos: dict = {"headless": False, "permissao": "", "motor": "", "jev": False, "subagente": "",
+                    "perfil": ""}
     toks = [] if celula.strip() in ("", "-") else celula.split()
     extra: list[str] = []
     i = 0

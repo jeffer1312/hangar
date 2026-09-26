@@ -12,9 +12,9 @@
            getArchivePorCwd, resumeArchivedConversation, getArchiveHistory, getBastao, passarBastao,
            getCreationProgress, type CreationProgress,
            type ModelOption, type Motor, type ArchiveEntry } from '@hangar/core';
-  import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
-  import { MODOS_PERMISSAO_CODEX_HEADLESS } from '../lib/permissaoRotulo';
-  import { basename, providerName, relativeTime, cotaDaConta, resumoCota } from '@hangar/core';
+  import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo } from '../lib/modelosPorConta';
+  import { basename, providerName, relativeTime, cotaDaConta, resumoCota, effortLevels, SESSION_PROVIDERS } from '@hangar/core';
+  import SessionOpeningFields from './SessionOpeningFields.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { segredos } from '../lib/segredos.svelte';
@@ -54,7 +54,7 @@
   // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir), Pi,
   // Kimi ou OMP (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor
   // fora do Claude com 400, entao os pickers abaixo seguem Claude-only).
-  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi', 'omp'];
+  const PROVIDERS = SESSION_PROVIDERS;
   let provider = $state<Provider>('claude');
   let providers = $state<Record<string, { disponivel: boolean; motivo: string | null }>>({});
   let providersCarregando = $state(true);
@@ -225,28 +225,6 @@
   let listaReduzida = $state(false);
   let erroModelos = $state('');
 
-  // Listas FECHADAS por provider, as mesmas do backend (model_args.py). Sem entrada 'kimi' DE
-  // PROPÓSITO: o Kimi escolhe modelo mas não tem nível de esforço nenhum — um `NIVEIS['kimi']`
-  // seria undefined e o `.map` derrubaria a folha inteira. Por isso a lista explícita dos dois.
-  const NIVEIS: Record<string, string[]> = {
-    claude: ['low', 'medium', 'high', 'xhigh', 'max'],
-    pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
-  };
-  // OMP é o fork do Pi — mesmos níveis de esforço.
-  NIVEIS.omp = NIVEIS.pi;
-
-  // O Codex é o terceiro caso: os níveis dele são POR MODELO e vêm do provedor (`model/list` —
-  // medido em 30/08/2026, `gpt-5.6-sol` aceita `ultra` e `gpt-5.5` não aceita nem `max`). Sem
-  // modelo escolhido, lista vazia — e aí o campo nem aparece: o padrão do Codex é o do config.toml
-  // dele, e inventar uma lista ofereceria nível que aquele modelo pode não aceitar.
-  const niveisDe = (id: string) =>
-    provider === 'codex'
-      ? (modelos.find((mod) => mod.id === id)?.efforts ?? [])
-      : (NIVEIS[provider] ?? []);
-  const niveis = $derived(niveisDe(modelo));
-
-  // Modos de permissão do Claude Code (--permission-mode), mesma lista do backend (model_args.py).
-  const MODOS_PERMISSAO = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
   let permissao = $state('');
   // Claude/Codex sem terminal: processo gerenciado pelo backend, sem tmux. Fora do modo bastão e
   // sem retomar conversa (a retomada nasce por outro caminho).
@@ -306,7 +284,7 @@
       // contra a lista (modelosPorConta), mas o nível não era: com o modelo fora do catálogo o
       // campo de esforço nem aparece (`niveis.length > 0`) e o valor antigo ia pro create assim
       // mesmo — a sessão nascia com um `-c model_reasoning_effort=` que ninguém escolheu nem viu.
-      esforco = niveisDe(modelo).includes(r.esforcoLembrado) ? r.esforcoLembrado : '';
+      esforco = effortLevels(provider, modelos, modelo).includes(r.esforcoLembrado) ? r.esforcoLembrado : '';
     } catch (e) {
       if (seq !== modSeq) return;
       erroModelos = e instanceof Error ? e.message : m.criar_modelos_erro();
@@ -644,7 +622,6 @@
       retSeq++;
       retomando = null;
       retomaveis = []; conversaEscolhida = ''; querRetomar = false;
-      diferencaAberta = false; maisAberto = false;
       previa = []; previaCarregando = false;
       // Feedback da criação de conta não pode vazar entre aberturas: o botão liberado, o aviso
       // limpo e a conta criada esquecida — o cfgSeq do loadConfigs abaixo invalida qualquer
@@ -754,10 +731,6 @@
     !!conversaAlvo && conversaAlvo.provider === 'claude' && !!conversaAlvo.config_dir
     && !!selectedConfig && conversaAlvo.config_dir !== selectedConfig);
 
-  let diferencaAberta = $state(false);
-  let maisAberto = $state(false);
-  const temMotor = $derived(provider === 'claude' && Object.keys(motores).length > 0);
-  const temSubagente = $derived(!conversaAlvo && !bastao && provider === 'claude' && !engine && modelos.length > 0);
   // Sem chave cadastrada o interruptor não é um botão que falha, é um botão que não devia estar
   // ali — mesmo critério do chip "Ouvir" (lib/segredos).
   const temJev = $derived(!bastao && segredos.temChave('jev_api_key'));
@@ -784,11 +757,6 @@
       console.error('jev-padrao-salvar', e);
     }
   }
-  const rotuloMotor = $derived(engine ? (motores[engine]?.label ?? engine) : m.criar_claude_sua_conta());
-  const rotuloSubagente = $derived(subagente
-    ? (modelos.find((mod) => valorModelo(mod) === subagente)?.name ?? subagente)
-    : m.criar_subagente_padrao());
-
   $effect(() => {
     // `selectedConfig` fica de fora de proposito: a lista vem de TODAS as contas (a conversa que
     // se procura pode estar em qualquer uma), e escolher uma conversa muda a conta selecionada —
@@ -1300,213 +1268,58 @@
         </div>
       {/if}
 
-      <!-- Vale no bastão também: a sessão que recebe o trabalho é nova e nasce onde a pessoa
-           escolher — ficar presa ao modo da origem não era regra de nada. -->
-      {#if !conversaAlvo && (provider === 'claude' || provider === 'codex')}
-        <!-- Onde a sessão roda, logo abaixo da conta: decide se vai existir painel de terminal, e
-             "Sem terminal" é novo — num select no fim do formulário ninguém o encontrava. -->
-        <div class="field">
-          <span class="field-label" id="modo-exec-rotulo">{m.criar_modo_exec()}</span>
-          <div class="modos" role="group" aria-labelledby="modo-exec-rotulo">
-            <button type="button" class="modo" class:on={!semTerminal} aria-pressed={!semTerminal}
-              onclick={() => (semTerminal = false)}>
-              <span class="modo-radio" aria-hidden="true"></span>
-              <span class="modo-nome">{m.criar_modo_exec_tmux()}</span>
-              <span class="modo-resumo">{provider === 'codex' ? m.criar_modo_exec_tmux_resumo_codex() : m.criar_modo_exec_tmux_resumo()}</span>
-            </button>
-            <button type="button" class="modo" class:on={semTerminal} aria-pressed={semTerminal}
-              onclick={() => (semTerminal = true)}>
-              <span class="modo-radio" aria-hidden="true"></span>
-              <span class="modo-nome">{m.criar_modo_exec_headless()} <span class="modo-beta">{m.comum_beta()}</span></span>
-              <span class="modo-resumo">{provider === 'codex' ? m.criar_modo_exec_headless_resumo_codex() : m.criar_modo_exec_headless_resumo()}</span>
-            </button>
-          </div>
-          <button type="button" class="modo-diferenca" aria-expanded={diferencaAberta}
-            onclick={() => (diferencaAberta = !diferencaAberta)}>
-            {m.criar_modo_exec_diferenca()}
-            <span class="chevron" class:chevron--open={diferencaAberta} aria-hidden="true">›</span>
-          </button>
-          {#if diferencaAberta}
-            <p class="hint">{provider === 'codex'
-              ? (semTerminal ? m.criar_modo_exec_headless_ajuda_codex() : m.criar_modo_exec_tmux_ajuda_codex())
-              : (semTerminal ? m.criar_modo_exec_headless_ajuda() : m.criar_modo_exec_tmux_ajuda())}</p>
-          {/if}
-        </div>
-      {/if}
-
-      {#if retomaveis.length}
-        <!-- Comecar do zero e o caminho normal; continuar uma conversa da pasta e a excecao,
-             entao ela fica atras de um check e so entao mostra o seletor.
-             O rotulo de cada conversa e a ULTIMA msg — a 1a nao identifica nada meses depois. -->
-        <div class="field">
-          <label class="retomar-check">
-            <input type="checkbox" bind:checked={querRetomar} />
-            <span>{m.criar_retomar()}</span>
-          </label>
-          {#if querRetomar}
-            <!-- Caixa de altura fixa que rola: a lista inteira aberta empurrava modelo, esforco e
-                 permissao pra fora da tela. -->
-            <!-- Lista emoldurada com divisorias, nao cards soltos: numa caixa que rola, a linha
-                 cortada no fim so parece "rolagem" quando ha moldura; solta, parece bug. -->
-            <div class="conversas" role="group" aria-label={m.criar_retomar_escolha()}>
-              {#each retomaveis as c (c.session_id)}
-                {@const on = conversaEscolhida === c.session_id}
-                <button type="button" class="conversa" class:on aria-pressed={on}
-                  disabled={retomando !== null} onclick={() => escolherConversa(c)}>
-                  <span class="conversa-main">
-                    <span class="conversa-txt">{c.ultima || c.preview || m.arquivo_sem_mensagens()}</span>
-                    <span class="conversa-meta">
-                      <!-- O separador vai numa expressao: " · " solto no template perde o espaco no
-                           build e vira "Conta·agora". -->
-                      {#if c.conta}<span class="conversa-conta">{c.conta}</span>{' · '}{/if}{relativeTime(c.mtime)}
-                    </span>
-                  </span>
-                  <span class="conversa-check" aria-hidden="true">{on ? '✓' : ''}</span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-          <!-- No desktop a previa vai pro painel da esquerda, que e maior: aqui ela espremeria os
-               campos do formulario. No celular nao ha painel esquerdo, entao fica no fluxo. -->
-          {#if conversaAlvo && !isDesktop}
-            {@render previaConversa()}
-          {/if}
-        </div>
-      {/if}
-
-      {#if provider === 'omp' && !conversaAlvo}
-        <div class="field">
-          <label class="field-label" for="omp-profile">{m.criar_perfil_omp()}</label>
-          <input id="omp-profile" class="field-input" type="text" bind:value={perfilOmp}
-                 placeholder={m.criar_perfil_omp_dica()} autocomplete="off" spellcheck="false" />
-        </div>
-      {/if}
-
-      <!-- Modelo, esforço e permissão lado a lado: cada um numa linha só gastava três alturas de
-           campo com três palavras. `auto-fit`+`minmax` faz a conta sozinho — no painel largo dá três
-           colunas, num estreito (celular, ou só um dos três visível) volta a empilhar sem media
-           query, que aqui seria errada: quem aperta é a largura do PAINEL, não a da janela. -->
-      <div class="trio">
-      {#if !conversaAlvo && temEscolhaDeModelo(provider)}
-        <div class="field">
-          <label class="field-label" for="model-pick">{m.composer_modelo()}</label>
-          <Select id="model-pick" class="field-input" ariaLabel={m.composer_modelo()} value={modelo}
-            opcoes={[{ value: '', label: m.criar_padrao() },
-                     // `default` do picker do Claude é o mesmo que o campo vazio (sem --model):
-                     // as duas linhas juntas viravam "Padrão" e "Default" uma em cima da outra.
-                     ...modelos.filter((mod) => mod.id !== 'default').map((mod) => ({
-                       value: valorModelo(mod),
-                       label: mod.name ?? mod.id,
-                       // Quatro formatos do campo `models` (Task 4): pi traz provider/context/
-                       // images, motor traz context_length/vision, cache do Claude traz name, e os
-                       // aliases reduzidos não trazem nada. Campos ausentes simplesmente somem do
-                       // hint (.filter(Boolean)) — nenhum formato pode quebrar a linha.
-                       // O id (a chave) abre o hint quando o label é o NOME: com nome repetido na
-                       // lista (duas contas com o mesmo modelo) o hint é o único lugar que os
-                       // distingue. Quando label já é o id, mostrá-lo de novo seria redundância.
-                       hint: [(mod.name && mod.name !== mod.id) ? mod.id : null,
-                              mod.provider,
-                              mod.context ?? (mod.context_length ? `${Math.round(mod.context_length / 1000)}K` : null),
-                              (mod.vision ?? mod.images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
-            onchange={(v) => {
-              // Trocar de modelo pode tirar o nível escolhido do mapa (só o Codex: os níveis dele
-              // são por modelo). Deixar ficar faria a sessão nascer pedindo um nível que aquele
-              // modelo não lista, e o combo mostraria um valor fora das próprias opções.
-              modelo = v;
-              if (esforco && !niveisDe(v).includes(esforco)) esforco = '';
-            }} />
-          {#if listaReduzida}
-            <p class="model-hint" role="status" aria-live="polite" aria-atomic="true">{m.criar_lista_reduzida()}</p>
-          {/if}
-          {#if erroModelos}
-            <p class="model-hint" role="alert">{m.criar_abre_padrao({ erro: erroModelos })}</p>
-          {/if}
-        </div>
-      {/if}
-
-      {#if !conversaAlvo && niveis.length > 0}
-        <!-- Esforço fica FORA do if de cima de propósito: o Kimi tem modelo mas NÃO tem nível
-             (o CLI não tem flag; mora no [thinking] do config.toml, global), e o Codex só tem
-             níveis depois de o modelo estar escolhido (eles vêm dele). Quem decide é `niveis`. -->
-        <div class="field">
-          <label class="field-label" for="effort-pick">{(provider === 'pi' || provider === 'omp') ? m.criar_raciocinio() : m.composer_esforco()}</label>
-          <Select id="effort-pick" class="field-input" ariaLabel={(provider === 'pi' || provider === 'omp') ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
-            opcoes={[{ value: '', label: m.criar_padrao() },
-                     ...niveis.map((n) => ({ value: n, label: n }))]}
-            onchange={(v) => (esforco = v)} />
-        </div>
-      {/if}
-
-      {#if !conversaAlvo && (provider === 'claude' || (provider === 'codex' && semTerminal))}
-        <div class="field">
-          <label class="field-label" for="perm-pick">{m.criar_permissao()}</label>
-          <Select id="perm-pick" class="field-input" ariaLabel={m.criar_permissao()} value={permissao}
-            opcoes={[{ value: '', label: m.criar_permissao_padrao() },
-                     ...(provider === 'codex'
-                       ? MODOS_PERMISSAO_CODEX_HEADLESS
-                       : MODOS_PERMISSAO).map((n) => ({ value: n, label: n }))]}
-            onchange={(v) => (permissao = v)} />
-        </div>
-      {/if}
-
-      </div>
-
-      {#if !conversaAlvo && provider === 'codex'}
-        <CodexContextControl server={servers.find((s) => s.id === targetServer) ?? null} bind:busy={contextBusy} />
-      {/if}
-
-      {#if temMotor || temSubagente || temJev}
-        <!-- O que quase ninguém muda fica recolhido, mas o resumo mostra o valor de cada um: a
-             escolha nunca fica escondida, só a edição dela. -->
-        <div class="mais" class:aberto={maisAberto}>
-          <button type="button" class="mais-cab" aria-expanded={maisAberto}
-            onclick={() => (maisAberto = !maisAberto)}>
-            <span class="mais-nome">{m.criar_mais_opcoes()}</span>
-            {#if !maisAberto}
-              <span class="mais-resumo">
-                {#if temMotor}<span class="mais-pill">{m.comum_motor()} <em>{rotuloMotor}</em></span>{/if}
-                {#if temSubagente}<span class="mais-pill">{m.criar_mais_subagentes()} <em>{rotuloSubagente}</em></span>{/if}
-                {#if temJev && jev}<span class="mais-pill">{m.criar_jev()}</span>{/if}
-              </span>
-            {/if}
-            <span class="chevron" class:chevron--open={maisAberto} aria-hidden="true">›</span>
-          </button>
-          {#if maisAberto}
-            <div class="mais-corpo">
-              {#if temMotor}
-                <div class="field">
-                  <label class="field-label" for="engine-pick">{m.comum_motor()}</label>
-                  <Select id="engine-pick" ariaLabel={m.comum_motor()} value={engine}
-                    opcoes={[{ value: '', label: m.criar_claude_sua_conta() },
-                             ...Object.entries(motores).map(([nome, motor]) => ({
-                               value: nome, label: motor.label ?? nome, hint: motor.model }))]}
-                    onchange={(v) => { engine = v; carregarModelos(); }} />
+      <SessionOpeningFields {provider} models={modelos} engines={motores} reducedList={listaReduzida}
+        modelError={erroModelos} resuming={!!conversaAlvo} allowSubagent={!bastao} showJev={temJev}
+        bind:headless={semTerminal} bind:model={modelo} bind:effort={esforco} bind:permission={permissao}
+        bind:engine bind:subagent={subagente} bind:jev bind:ompProfile={perfilOmp}
+        onEngineChange={() => carregarModelos()} onJevChange={() => (jevTocado = true)}>
+        {#snippet afterExecution()}
+          {#if retomaveis.length}
+            <!-- Comecar do zero e o caminho normal; continuar uma conversa da pasta e a excecao,
+                 entao ela fica atras de um check e so entao mostra o seletor.
+                 O rotulo de cada conversa e a ULTIMA msg — a 1a nao identifica nada meses depois. -->
+            <div class="field">
+              <label class="retomar-check">
+                <input type="checkbox" bind:checked={querRetomar} />
+                <span>{m.criar_retomar()}</span>
+              </label>
+              {#if querRetomar}
+                <!-- Caixa de altura fixa que rola: a lista inteira aberta empurrava modelo, esforco e
+                     permissao pra fora da tela. -->
+                <!-- Lista emoldurada com divisorias, nao cards soltos: numa caixa que rola, a linha
+                     cortada no fim so parece "rolagem" quando ha moldura; solta, parece bug. -->
+                <div class="conversas" role="group" aria-label={m.criar_retomar_escolha()}>
+                  {#each retomaveis as c (c.session_id)}
+                    {@const on = conversaEscolhida === c.session_id}
+                    <button type="button" class="conversa" class:on aria-pressed={on}
+                      disabled={retomando !== null} onclick={() => escolherConversa(c)}>
+                      <span class="conversa-main">
+                        <span class="conversa-txt">{c.ultima || c.preview || m.arquivo_sem_mensagens()}</span>
+                        <span class="conversa-meta">
+                          <!-- O separador vai numa expressao: " · " solto no template perde o espaco no
+                               build e vira "Conta·agora". -->
+                          {#if c.conta}<span class="conversa-conta">{c.conta}</span>{' · '}{/if}{relativeTime(c.mtime)}
+                        </span>
+                      </span>
+                      <span class="conversa-check" aria-hidden="true">{on ? '✓' : ''}</span>
+                    </button>
+                  {/each}
                 </div>
               {/if}
-              {#if temSubagente}
-                <div class="field">
-                  <label class="field-label" for="subagent-pick">{m.criar_subagente()}</label>
-                  <Select id="subagent-pick" class="field-input" ariaLabel={m.criar_subagente()} value={subagente}
-                    opcoes={[{ value: '', label: m.criar_subagente_padrao() },
-                             ...modelos.filter((mod) => mod.id !== 'default').map((mod) => ({
-                               value: valorModelo(mod), label: mod.name ?? mod.id }))]}
-                    onchange={(v) => (subagente = v)} />
-                  <p class="hint">{m.criar_subagente_ajuda()}</p>
-                </div>
-              {/if}
-              {#if temJev}
-                <div class="field">
-                  <label class="retomar-check">
-                    <input type="checkbox" bind:checked={jev} onchange={() => (jevTocado = true)} />
-                    <span>{m.criar_jev()}</span>
-                  </label>
-                  <p class="hint">{m.criar_jev_ajuda()}</p>
-                </div>
+              <!-- No desktop a previa vai pro painel da esquerda, que e maior: aqui ela espremeria os
+                   campos do formulario. No celular nao ha painel esquerdo, entao fica no fluxo. -->
+              {#if conversaAlvo && !isDesktop}
+                {@render previaConversa()}
               {/if}
             </div>
           {/if}
-        </div>
-      {/if}
+        {/snippet}
+        {#snippet afterChoices()}
+          {#if !conversaAlvo && provider === 'codex'}
+            <CodexContextControl server={servers.find((s) => s.id === targetServer) ?? null} bind:busy={contextBusy} />
+          {/if}
+        {/snippet}
+      </SessionOpeningFields>
 
       {#if bastao}
         <!-- Quem escreve o resumo. O padrão monta por código: cita literal e funciona mesmo com a
@@ -1837,14 +1650,6 @@
     margin-bottom: var(--space-3);
   }
 
-  /* Avisos do campo de modelo: lista reduzida (cache do Claude frio) e erro de listagem. O erro
-     termina com o caminho de saída (a sessão abre no padrão) — o usuário nunca fica sem ação. */
-  .model-hint {
-    margin: 6px 0 0;
-    font-size: 12px;
-    opacity: 0.75;
-  }
-
   /* ── Campos / botoes ───────────────────────────────────────────────────── */
   .retomar-check {
     display: flex;
@@ -2022,16 +1827,7 @@
   .previa-doc :global(p), .previa-doc :global(ul), .previa-doc :global(ol) { margin: 0 0 var(--space-2); }
   .previa-doc :global(pre) { overflow-x: auto; }
 
-  .trio {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-    gap: var(--space-3);
-  }
-  /* O .field já traz a margem de baixo; dentro do grid quem espaça é o gap. */
-  .trio > .field { margin-bottom: var(--space-4); }
-  .trio:empty { display: none; }
-
-  /* ── Onde roda: dois cartões com resumo; a explicação longa fica atrás de "Qual a diferença?" ── */
+  /* ── Cartões de escolha do bastão (quem escreve o resumo) ──────────────── */
   .modos {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -2070,84 +1866,6 @@
     font-size: var(--text-xs);
     line-height: 1.45;
     color: var(--text-muted);
-  }
-  .modo-radio {
-    position: absolute;
-    top: var(--space-3);
-    right: var(--space-3);
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    border: 1.5px solid var(--text-muted);
-  }
-  .modo.on .modo-radio {
-    border-color: var(--accent);
-    background: radial-gradient(circle, var(--accent) 0 4px, transparent 4.5px);
-  }
-  .modo-beta {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    background: var(--warning, #f2b64d);
-    color: #1c1406;
-  }
-  .modo-diferenca {
-    align-self: flex-start;
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: 2px 0;
-    font-size: var(--text-xs);
-    color: var(--accent);
-  }
-
-  /* ── Mais opções: recolhido mostra o valor de cada escolha ─────────────── */
-  .mais {
-    margin-bottom: var(--space-4);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-  }
-  .mais-cab {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    min-height: 44px;
-    padding: var(--space-2) var(--space-3);
-    text-align: left;
-  }
-  .mais-nome {
-    flex-shrink: 0;
-    font-size: var(--text-sm);
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-  .mais-resumo {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-1);
-  }
-  .mais-pill {
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-    background: var(--surface-inset, var(--bg-surface));
-    border-radius: 999px;
-    padding: 2px var(--space-2);
-    white-space: nowrap;
-  }
-  .mais-pill em { font-style: normal; color: var(--text-secondary); }
-  .mais-cab .chevron { margin-left: auto; }
-  .mais-corpo {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    column-gap: var(--space-3);
-    padding: var(--space-3) var(--space-3) 0;
-    border-top: 1px solid var(--border-subtle);
   }
 
   /* O combo de config é o <button> dentro do Select.svelte: CSS escopado não o alcança (o atributo

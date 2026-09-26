@@ -25,16 +25,79 @@ export interface Papel {
   motor?: string;          // '' = conta Anthropic
   jev?: boolean;
   subagente?: string;      // '' = o mesmo da sessão
-  janela?: string;         // teto de contexto do papel, em % da janela; '' = 50
+  perfil?: string;         // perfil do omp; '' = sem perfil
+  janela?: string;        // teto de contexto do papel, em % da janela; '' = 50
 }
 
 /** Campos de abertura de sessão de um papel, na forma que as rotas de gravação aceitam. */
-export type AberturaPapel = Required<Pick<Papel, 'headless' | 'permissao' | 'motor' | 'jev' | 'subagente'>>;
+export type AberturaPapel = Required<Pick<Papel, 'headless' | 'permissao' | 'motor' | 'jev' | 'subagente' | 'perfil'>>;
 
 // Dois modos, e não três: "rodar Tasks em paralelo" é outra coisa e já existe na skill (Tasks
 // independentes, uma worktree cada, cada uma com seu executor e seu revisor). Aquilo se declara no
 // PLANO — ver references/paralelo-worktree.md —, não na configuração de um papel.
 export type ModoPapel = 'unica' | 'reveza';
+
+// Faixa = a letra da Task no plano, quando Tasks correm em paralelo. O contrato não tem coluna
+// para ela: o árbitro escreve no nome do papel ("executor faixa A").
+const FAIXA = /^(.*?)\s+faixa\s+(\S+)$/i;
+
+export function faixaDe(papel: string): { base: string; faixa: string | null } {
+  const m = FAIXA.exec(papel.trim());
+  return m ? { base: m[1].trim(), faixa: m[2].toUpperCase() } : { base: papel.trim(), faixa: null };
+}
+
+// Ordem em que as etapas acontecem num trabalho da skill `orquestrar`.
+export const ORDEM_ETAPAS = ['árbitro', 'par de research', 'executor', 'revisor', 'revisão final', 'retrospectiva'];
+
+export interface Etapa { base: string; linhas: Papel[] }
+
+/** Uma etapa por papel-base: junta as faixas ("executor faixa A/B") e o rodízio (várias linhas de
+ * mesmo papel). Papéis da skill na ordem do trabalho; os de nome livre depois, na ordem do arquivo. */
+export function etapasDoTime(papeis: Papel[]): Etapa[] {
+  const mapa = new Map<string, Etapa>();
+  for (const p of papeis) {
+    const base = faixaDe(p.papel).base;
+    const k = base.toLowerCase();
+    if (!mapa.has(k)) mapa.set(k, { base, linhas: [] });
+    mapa.get(k)!.linhas.push(p);
+  }
+  const pos = (e: Etapa) => {
+    const i = ORDEM_ETAPAS.indexOf(e.base.toLowerCase());
+    return i < 0 ? ORDEM_ETAPAS.length : i;
+  };
+  return [...mapa.values()].map((e, i) => ({ e, i }))
+    .sort((a, b) => pos(a.e) - pos(b.e) || a.i - b.i).map(({ e }) => e);
+}
+
+/** Quantas linhas do time usam cada conta (`provider::conta`). */
+export function contasEmUso(papeis: Papel[]): Map<string, number> {
+  const uso = new Map<string, number>();
+  for (const p of papeis) {
+    if (!p.conta) continue;
+    const k = `${p.provider || 'claude'}::${p.conta}`;
+    uso.set(k, (uso.get(k) ?? 0) + 1);
+  }
+  return uso;
+}
+
+export type CampoMudado = 'provider' | 'conta' | 'modelo' | 'esforco' | 'janela' | 'headless'
+  | 'permissao' | 'motor' | 'subagente' | 'jev' | 'perfil' | 'sessao';
+export interface Mudanca { campo: CampoMudado; de: string; para: string }
+
+/** O que um rascunho muda numa linha do contrato, campo a campo (vazio = nada muda). */
+export function mudancasDe(orig: Papel | null, novo: Omit<Papel, 'viva'>): Mudanca[] {
+  const txt = (v: unknown) => (typeof v === 'boolean' ? (v ? '1' : '') : String(v ?? ''));
+  const campos: CampoMudado[] = ['provider', 'conta', 'modelo', 'esforco', 'janela', 'headless',
+    'permissao', 'motor', 'subagente', 'jev', 'perfil', 'sessao'];
+  return campos
+    .map((campo) => ({
+      campo,
+      // Provider vazio no contrato é claude (formato antigo): não conta como mudança.
+      de: campo === 'provider' ? (orig ? orig.provider || 'claude' : '') : txt(orig?.[campo]),
+      para: campo === 'provider' ? novo.provider || 'claude' : txt(novo[campo]),
+    }))
+    .filter((c) => c.de !== c.para);
+}
 
 /** Agrupa as linhas de um mesmo papel: o contrato tem uma linha por conta quando há rodízio. */
 export function agruparPorPapel(papeis: Papel[]): { papel: string; linhas: Papel[]; modo: ModoPapel }[] {
@@ -156,6 +219,16 @@ export function familiaDe(modelo: string): { familia: string; um: boolean } | nu
   const m = semProvider.match(/[a-z]+/);
   if (!m) return null;
   return { familia: m[0], um };
+}
+
+/** Rótulo curto de um id do Claude quando o catálogo não traz nome: `claude-opus-5-5` → `Opus 5.5`,
+ * `opus[1m]` → `Opus 1M`. Id de outro formato volta como veio. */
+export function rotuloModelo(id: string): string {
+  const m = /^(?:claude-)?(opus|sonnet|haiku|fable)(?:-(\d+)(?:-(\d+))?)?(\[1m\])?$/i.exec(id.trim());
+  if (!m) return id;
+  const nome = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+  const versao = m[2] ? ` ${m[2]}${m[3] ? `.${m[3]}` : ''}` : '';
+  return `${nome}${versao}${m[4] ? ' 1M' : ''}`;
 }
 
 const ESFORCO_ALIAS: Record<string, string> = { med: 'medium', min: 'minimal' };

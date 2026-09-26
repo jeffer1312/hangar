@@ -4,9 +4,8 @@
   // os que só existem na criação (dontAsk isolado, bypassPermissions fora do ciclo).
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
-  import {
-    rotuloPermissao, descricaoPermissao, permissaoSemFreio, MODOS_PERMISSAO,
-  } from '../lib/permissaoRotulo';
+  import { CLAUDE_PERMISSION_MODES as MODOS_PERMISSAO } from '@hangar/core';
+  import { rotuloPermissao, descricaoPermissao, permissaoSemFreio } from '../lib/permissaoRotulo';
   import IconPermissao from './icons/IconPermissao.svelte';
 
   interface Props {
