@@ -429,6 +429,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   config_sync_unknown_item: (p) => m.config_sync_unknown_item({ items: String(p.items ?? '') }),
   config_sync_bundle_too_big: (p) => m.config_sync_bundle_too_big({ largest: String(p.largest ?? '') }),
   config_sync_busy: () => m.config_sync_busy(),
+  config_sync_invalid_keys: () => m.config_sync_invalid_keys(),
   config_sync_invalid_bundle: () => m.config_sync_invalid_bundle(),
   config_sync_version: () => m.config_sync_version(),
 };

@@ -102,6 +102,28 @@ it('destino com Hangar antigo pede atualização na comparação', async () => {
     m.shared_config_diff_line({ added: 0, changed: 0, same: 1, onlyTarget: 0 }));
 });
 
+it('depois de comparar, o envio leva só as entradas marcadas', async () => {
+  const origin = { version: 1, machine: '', items: { claude_env: { ok: true, hashes: { A: '1', B: '2' }, bytes: 0, warnings: [],
+    descriptions: { A: 'variável A' } } } };
+  vi.mocked(getConfigSyncManifestForServer).mockImplementation(async (s) =>
+    s.id === 'casa' ? origin : { version: 1, machine: '', items: {} });
+  vi.mocked(getConfigSyncBundleForServer).mockResolvedValue(new Blob(['x']));
+  vi.mocked(applyConfigSyncForServer).mockResolvedValue({ items: {}, backup: '' });
+  await render();
+  await toggle('VPS');
+  button(m.shared_config_compare())!.click();
+  await flush();
+  expect(document.body.textContent).toContain('variável A');
+  const a = [...document.querySelectorAll<HTMLLabelElement>('label.entrada')].find((l) => l.textContent?.includes('A'))!;
+  a.querySelector('input')!.click();
+  await flush();
+  button(m.shared_config_send())!.click();
+  await flush();
+  document.querySelector<HTMLButtonElement>('.btn-confirm')!.click();
+  await flush();
+  expect(vi.mocked(getConfigSyncBundleForServer).mock.calls[0][3]).toEqual({ claude_env: ['B'] });
+});
+
 it('trocar a origem apaga a comparação feita com a origem anterior', async () => {
   const manifest = { version: 1, machine: '', items: { claude_env: { ok: true, hashes: { A: '1' }, bytes: 0, warnings: [] } } };
   vi.mocked(getConfigSyncManifestForServer).mockResolvedValue(manifest);

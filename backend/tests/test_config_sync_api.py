@@ -57,6 +57,15 @@ def test_bundle_rejects_unknown_item(cli, ana):
     assert r.json()["detail"]["code"] == "config_sync_unknown_item"
 
 
+def test_bundle_keys_filter_and_reject_malformed(cli, ana):
+    keys = json.dumps({"claude_env": []})
+    r = cli.get("/api/config-sync/bundle", params={"items": "claude_env", "keys": keys}, headers=AUTH)
+    assert r.status_code == 200 and b"segredo-jira" not in r.content
+    for bad in ("{x", json.dumps({"nada": []}), json.dumps({"claude_env": "JIRA_TOKEN"})):
+        r = cli.get("/api/config-sync/bundle", params={"items": "claude_env", "keys": bad}, headers=AUTH)
+        assert r.status_code == 400 and r.json()["detail"]["code"] == "config_sync_invalid_keys"
+
+
 def test_bundle_too_big_is_413(cli, ana, monkeypatch):
     monkeypatch.setattr(config_sync, "MAX_BUNDLE", 1)
     r = cli.get("/api/config-sync/bundle?items=claude_instructions", headers=AUTH)

@@ -3925,5 +3925,20 @@
   "shared_config_status_applied": "aplicado",
   "shared_config_status_same": "já estava igual",
   "shared_config_status_failed": "falhou",
-  "shared_config_backup": "Cópia do que foi trocado: {path}"
+  "shared_config_backup": "Cópia do que foi trocado: {path}",
+  "shared_config_group_settings": "No settings.json",
+  "shared_config_group_settings_hint": "Cada evento marcado substitui a lista desse evento no destino. Os hooks do Hangar de lá continuam.",
+  "shared_config_group_files": "Pasta hooks/",
+  "shared_config_group_refs": "Arquivos que os comandos usam",
+  "shared_config_group_refs_hint": "Vão junto com o evento marcado que os chama. Marque aqui para levar só o arquivo.",
+  "shared_config_row_added": "novo",
+  "shared_config_row_changed": "alterado",
+  "shared_config_same": "Iguais ({count})",
+  "shared_config_only_target": "Só no destino ({count}): ficam como estão",
+  "shared_config_picked": "{picked} de {total} marcados",
+  "shared_config_pick_all": "Marcar todos",
+  "shared_config_pick_none": "Desmarcar todos",
+  "shared_config_translating": "Traduzindo as descrições…",
+  "shared_config_translate_failed": "Descrições no idioma original: {error}",
+  "config_sync_invalid_keys": "A escolha de entradas veio inválida. Compare de novo."
 }

@@ -2666,11 +2666,23 @@ export function getConfigSyncManifestForServer(s: Server, signal?: AbortSignal):
   return apiFetchForServer(s, '/api/config-sync/manifest', { signal: comTeto(signal, 60_000) }, 60_000);
 }
 
-export async function getConfigSyncBundleForServer(s: Server, items: readonly ConfigSyncItem[], signal?: AbortSignal): Promise<Blob> {
-  const res = await apiFetchRes(`/api/config-sync/bundle?items=${encodeURIComponent(items.join(','))}`,
+export async function getConfigSyncBundleForServer(s: Server, items: readonly ConfigSyncItem[], signal?: AbortSignal,
+  keys?: Partial<Record<ConfigSyncItem, string[]>>): Promise<Blob> {
+  const escolha = keys && Object.keys(keys).length ? `&keys=${encodeURIComponent(JSON.stringify(keys))}` : '';
+  const res = await apiFetchRes(`/api/config-sync/bundle?items=${encodeURIComponent(items.join(','))}${escolha}`,
     { signal: comTeto(signal, 180_000) }, s);
   if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
   return res.blob();
+}
+
+// Lote inteiro numa chamada ao provedor: o prazo é o de uma tradução longa, não o de uma leitura.
+export function translateConfigSyncTextsForServer(s: Server, texts: string[], lang: 'pt' | 'en', signal?: AbortSignal): Promise<{ texts: string[]; error: string }> {
+  return apiFetchForServer(s, '/api/config-sync/translate', {
+    method: 'POST',
+    body: JSON.stringify({ texts, lang }),
+    headers: { 'Content-Type': 'application/json' },
+    signal: comTeto(signal, 300_000),
+  }, 300_000);
 }
 
 export async function applyConfigSyncForServer(s: Server, items: readonly ConfigSyncItem[], bundle: Blob, signal?: AbortSignal): Promise<ConfigSyncReport> {

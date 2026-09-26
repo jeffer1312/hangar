@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { configSyncItemLabel, configSyncWarningText, diffManifests, type ConfigSyncManifest } from './configSync';
+import { configSyncItemLabel, configSyncPath, configSyncRows, configSyncWarningText, diffManifests, type ConfigSyncManifest } from './configSync';
 import { mensagemDeErro } from './errosApi';
 
 const manifest = (hashes: Record<string, string>): ConfigSyncManifest => ({
@@ -17,6 +17,26 @@ describe('diffManifests', () => {
   it('destino sem o item conta tudo como novo', () => {
     const d = diffManifests(manifest({ A: '1' }), { version: 1, machine: '', items: {} }, ['claude_env']);
     expect(d.claude_env).toEqual({ added: ['A'], changed: [], same: [], onlyTarget: [] });
+  });
+});
+
+describe('configSyncRows', () => {
+  it('junta destinos, agrupa hooks e descreve cada script do evento', () => {
+    const rows = configSyncRows('claude_hooks', [
+      { added: ['hooks:Stop'], changed: [], same: ['hooks/tts.py'], onlyTarget: ['hooks/velho.sh'] },
+      { added: [], changed: ['hooks/tts.py'], same: ['hooks:Stop'], onlyTarget: [] },
+    ], { labels: { 'hooks:Stop': ['tts.py'] }, descriptions: { 'hooks/tts.py': 'Lê a resposta.' } });
+    expect(rows.map((r) => [r.key, r.group, r.status, r.selectable])).toEqual([
+      ['hooks:Stop', 'settings', 'added', true],
+      ['hooks/tts.py', 'files', 'changed', true],
+      ['hooks/velho.sh', 'files', 'onlyTarget', false],
+    ]);
+    expect(rows[0].scripts).toEqual([{ name: 'tts.py', description: 'Lê a resposta.' }]);
+    expect(rows[1].description).toBe('Lê a resposta.');
+  });
+
+  it('caminho com marcador aparece como a pessoa escreveria', () => {
+    expect(configSyncPath('⟦HOME⟧/.orca/x.sh')).toBe('~/.orca/x.sh');
   });
 });
 

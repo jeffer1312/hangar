@@ -148,3 +148,37 @@ def test_bundle_too_big_names_largest_items(ana, monkeypatch):
     with pytest.raises(config_sync.BundleTooBig) as exc:
         config_sync.export_bundle(ana, ["claude_skills", "claude_instructions"])
     assert exc.value.largest[0][0] == "claude_skills"
+
+
+def test_keep_sends_only_the_chosen_hook_entries(ana):
+    keep = {"claude_hooks": ["statusLine", f"ref:{H}/.orca/agent-hooks/claude-hook.sh"]}
+    data = config_sync.export_bundle(ana, ["claude_hooks"], keep=keep).items["claude_hooks"]
+    assert data["hooks"] == {} and data["entries"] == {}
+    assert data["statusLine"]["command"].endswith(f"'{G}/scripts/statusline.js'")
+    # O arquivo marcado sozinho vai, o vizinho dele (lib.sh) não foi marcado e fica.
+    assert set(data["refs"]) == {f"{G}/scripts/statusline.js", f"{H}/.orca/agent-hooks/claude-hook.sh"}
+
+
+def test_keep_event_carries_the_files_its_commands_use(ana):
+    data = config_sync.export_bundle(ana, ["claude_hooks"],
+                                     keep={"claude_hooks": ["hooks:PreToolUse"]}).items["claude_hooks"]
+    assert list(data["hooks"]) == ["PreToolUse"] and "statusLine" not in data
+    assert f"{C}/hooks/lembrete.py" in data["refs"]
+
+
+def test_keep_filters_every_item_and_plugin_brings_its_marketplace(ana):
+    keep = {"claude_env": [], "claude_plugins": ["plugin:ponytail@ponytail"], "codex": ["config:model"],
+            "claude_skills": []}
+    items = config_sync.export_bundle(ana, list(keep), keep=keep).items
+    assert items["claude_env"]["env"] == {} and items["claude_skills"]["entries"] == {}
+    assert list(items["claude_plugins"]["extraKnownMarketplaces"]) == ["ponytail"]
+    assert "agents_md" not in items["codex"] and items["codex"]["config"] == {"model": "gpt-6"}
+
+
+def test_manifest_describes_entries_from_their_own_files(ana):
+    hooks = Path(ana.claude) / "hooks"
+    (hooks / "lembrete.py").write_text('"""Lembra de anotar.\n\nDetalhe."""\nprint(1)\n')
+    items = config_sync.manifest(ana)["items"]
+    assert items["claude_skills"]["descriptions"]["skills/minha"] == "skill em repo"
+    assert items["claude_hooks"]["descriptions"]["hooks/lembrete.py"] == "Lembra de anotar."
+    assert items["claude_hooks"]["labels"]["statusLine"] == ["statusline.js"]

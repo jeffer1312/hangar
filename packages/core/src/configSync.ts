@@ -9,7 +9,13 @@ export const CONFIG_SYNC_ITEMS = [
 export type ConfigSyncItem = (typeof CONFIG_SYNC_ITEMS)[number];
 
 export interface ConfigSyncWarning { code: string; params: Record<string, string> }
-export interface ConfigSyncManifestItem { ok: boolean; hashes: Record<string, string>; bytes: number; warnings: ConfigSyncWarning[] }
+export interface ConfigSyncManifestItem {
+  ok: boolean; hashes: Record<string, string>; bytes: number; warnings: ConfigSyncWarning[];
+  /** Scripts que cada evento de hook roda; servidor antigo não manda. */
+  labels?: Record<string, string[]>;
+  /** O que cada entrada faz, lido do próprio arquivo; servidor antigo não manda. */
+  descriptions?: Record<string, string>;
+}
 export interface ConfigSyncManifest { version: number; machine: string; items: Partial<Record<ConfigSyncItem, ConfigSyncManifestItem>> }
 export interface ConfigSyncItemResult { status: 'applied' | 'same' | 'failed'; changed: string[]; warnings: ConfigSyncWarning[] }
 export interface ConfigSyncReport { items: Partial<Record<ConfigSyncItem, ConfigSyncItemResult>>; backup: string }
@@ -37,6 +43,61 @@ export function diffManifests(
     out[item] = diff;
   }
   return out;
+}
+
+export type ConfigSyncRowStatus = 'added' | 'changed' | 'same' | 'onlyTarget';
+export type ConfigSyncGroup = 'settings' | 'files' | 'refs' | 'entries';
+export interface ConfigSyncScript { name: string; description: string }
+export interface ConfigSyncRow {
+  key: string; name: string; group: ConfigSyncGroup; status: ConfigSyncRowStatus;
+  description: string; scripts: ConfigSyncScript[]; selectable: boolean;
+}
+
+const MARKERS: Record<string, string> = { HOME: '~', CLAUDE: '~/.claude', CODEX: '~/.codex', HANGAR: 'hangar' };
+
+/** `⟦HOME⟧/x` como a pessoa escreveria: `~/x`. */
+export function configSyncPath(marked: string): string {
+  return marked.replace(/⟦([A-Z]+)⟧/g, (all, name: string) => MARKERS[name] ?? all);
+}
+
+function rowOf(item: ConfigSyncItem, key: string): Pick<ConfigSyncRow, 'name' | 'group'> {
+  if (key.startsWith('ref:')) return { name: configSyncPath(key.slice(4)), group: 'refs' };
+  if (item === 'claude_skills') return { name: key.replace(/^skills\//, ''), group: 'entries' };
+  if (item !== 'claude_hooks') return { name: key, group: 'entries' };
+  if (key === 'statusLine') return { name: key, group: 'settings' };
+  if (key.startsWith('hooks:')) return { name: key.slice(6), group: 'settings' };
+  return { name: key.replace(/^hooks\//, ''), group: 'files' };
+}
+
+const RANK: Record<ConfigSyncRowStatus, number> = { added: 0, changed: 1, same: 2, onlyTarget: 3 };
+
+/** Uma linha por entrada, juntando os destinos: basta um destino sem a entrada para ela ser
+ * "novo" (e alterada em um para ser "alterado"), porque é o que o envio muda em algum lugar. */
+export function configSyncRows(
+  item: ConfigSyncItem,
+  diffs: readonly ConfigSyncDiff[],
+  meta: Pick<ConfigSyncManifestItem, 'labels' | 'descriptions'> = {},
+): ConfigSyncRow[] {
+  const descriptions = meta.descriptions ?? {};
+  // Script de um evento: a descrição é a do arquivo com o mesmo nome (pasta hooks/ ou ref).
+  const scriptText = (name: string) =>
+    Object.entries(descriptions).find(([k]) => k.endsWith(`/${name}`))?.[1] ?? '';
+  const status = new Map<string, ConfigSyncRowStatus>();
+  const mark = (key: string, s: ConfigSyncRowStatus) => {
+    const now = status.get(key);
+    if (now === undefined || RANK[s] < RANK[now]) status.set(key, s);
+  };
+  for (const d of diffs) {
+    d.added.forEach((k) => mark(k, 'added'));
+    d.changed.forEach((k) => mark(k, 'changed'));
+    d.same.forEach((k) => mark(k, 'same'));
+  }
+  for (const d of diffs) d.onlyTarget.forEach((k) => { if (!status.has(k)) status.set(k, 'onlyTarget'); });
+  return [...status].map(([key, s]) => {
+    const { name, group } = rowOf(item, key);
+    const scripts = (meta.labels?.[key] ?? []).map((n) => ({ name: n, description: scriptText(n) }));
+    return { key, name, group, status: s, description: descriptions[key] ?? '', scripts, selectable: s !== 'onlyTarget' };
+  }).sort((a, b) => RANK[a.status] - RANK[b.status] || a.name.localeCompare(b.name));
 }
 
 const ITEM_LABEL: Record<ConfigSyncItem, () => string> = {

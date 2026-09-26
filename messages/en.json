@@ -3925,5 +3925,20 @@
   "shared_config_status_applied": "applied",
   "shared_config_status_same": "already the same",
   "shared_config_status_failed": "failed",
-  "shared_config_backup": "Copy of what was replaced: {path}"
+  "shared_config_backup": "Copy of what was replaced: {path}",
+  "shared_config_group_settings": "In settings.json",
+  "shared_config_group_settings_hint": "Each checked event replaces that event's list on the destination. Hangar's own hooks there stay.",
+  "shared_config_group_files": "hooks/ folder",
+  "shared_config_group_refs": "Files the commands use",
+  "shared_config_group_refs_hint": "They go along with the checked event that calls them. Check one here to send just the file.",
+  "shared_config_row_added": "new",
+  "shared_config_row_changed": "changed",
+  "shared_config_same": "Same ({count})",
+  "shared_config_only_target": "Only on the destination ({count}): left as they are",
+  "shared_config_picked": "{picked} of {total} checked",
+  "shared_config_pick_all": "Check all",
+  "shared_config_pick_none": "Uncheck all",
+  "shared_config_translating": "Translating the descriptions…",
+  "shared_config_translate_failed": "Descriptions in their original language: {error}",
+  "config_sync_invalid_keys": "The entry selection was invalid. Compare again."
 }

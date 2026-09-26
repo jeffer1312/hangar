@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from app import (atomico, codex_arquivos, codex_contas_sync, hook_installer, runtime_config,
                  skill_bridge)
 from app.codex_importador import CodexNativo
+from app.config_sync_describe import describe, plugin_descriptions
 from app.config_sync_paths import (HEAVY_DIRS, PROGRAMS, Roots, canonicalize, fix_programs,
                                    local_path, map_strings, mark, marked_paths, resolve)
 
@@ -225,7 +226,7 @@ def _entries(roots: Roots, item: str, warnings: list[dict]) -> dict[str, Path]:
         if not base.is_dir():
             continue
         for path in sorted(base.iterdir()):
-            if path.name.startswith("."):
+            if path.name.startswith(".") or path.name in HEAVY_DIRS:
                 continue
             if folder == "skills" and path.name in own_skills:
                 continue
@@ -238,16 +239,27 @@ def _entries(roots: Roots, item: str, warnings: list[dict]) -> dict[str, Path]:
     return found
 
 
-def _export_dir_item(roots: Roots, item: str, bundle: Bundle) -> dict:
+def _export_dir_item(roots: Roots, item: str, bundle: Bundle, keep: set[str] | None = None) -> dict:
     warnings = bundle.warnings.setdefault(item, [])
     entries: dict[str, dict] = {}
+    descriptions: dict[str, str] = {}
     for name, path in _entries(roots, item, warnings).items():
+        if keep is not None and name not in keep:
+            continue
         files, texts = _walk(path, roots, name, warnings)
         for rel, blob in files.items():
             bundle.files[_member(item, name, rel)] = blob
         entries[name] = {"kind": "file" if "" in files else "dir", "files": sorted(files),
                          "text": texts, "hash": _files_hash(files)}
-    return {"entries": entries, "hashes": {n: e["hash"] for n, e in entries.items()}}
+        if text := describe(path):
+            descriptions[name] = text
+    return {"entries": entries, "hashes": {n: e["hash"] for n, e in entries.items()},
+            "descriptions": descriptions}
+
+
+def _ref_descriptions(refs: dict[str, dict], roots: Roots) -> dict[str, str]:
+    return {f"ref:{ref}": text for ref, r in refs.items()
+            if r["member"] and (text := describe(local_path(ref, roots)))}
 
 
 def _ref_files(marked: str, local: Path, roots: Roots) -> dict[str, Path]:
@@ -290,7 +302,8 @@ def _never_ref(marked: str) -> bool:
             or path in _MERGED_FILES)
 
 
-def _export_refs(roots: Roots, commands: list[str], bundle: Bundle) -> dict[str, dict]:
+def _export_refs(roots: Roots, commands: list[str], bundle: Bundle,
+                 want=lambda ref: True) -> dict[str, dict]:
     refs: dict[str, dict] = {}
     for command in commands:
         for marked in marked_paths(command):
@@ -302,7 +315,7 @@ def _export_refs(roots: Roots, commands: list[str], bundle: Bundle) -> dict[str,
             if name in PROGRAMS or not local.is_file() or _never_ref(marked):
                 continue   # programa, pasta, caminho inexistente ou proibido: nada para levar
             for ref, path in _ref_files(marked, local, roots).items():
-                if ref in refs or _never_ref(ref):
+                if ref in refs or _never_ref(ref) or not want(ref):
                     continue
                 blob, text = _read_blob(path, roots)
                 member = "refs/" + hashlib.sha1(ref.encode("utf-8")).hexdigest()
@@ -318,34 +331,73 @@ def _ref_hashes(refs: dict[str, dict], bundle: Bundle) -> dict[str, str]:
             for ref, r in refs.items() if r["member"]}
 
 
-def _export_hooks(roots: Roots, bundle: Bundle) -> dict:
-    data = _export_dir_item(roots, "claude_hooks", bundle)
+def _script_names(commands: list[str]) -> list[str]:
+    """O que a prévia mostra de cada comando: o nome do arquivo que ele roda, nunca o comando
+    inteiro (pode levar token)."""
+    names = []
+    for command in commands:
+        found = [PurePosixPath(p.replace("\\", "/").strip("'\"")).name
+                 for p in marked_paths(command) or command.split()]
+        names += [n for n in found if n.removesuffix(".exe").lower() not in PROGRAMS][:1]
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def _export_hooks(roots: Roots, bundle: Bundle, keep: set[str] | None = None) -> dict:
+    """`keep` = chaves do manifesto escolhidas na prévia. Arquivo que um comando usa vai junto do
+    evento marcado que o chama, ou sozinho quando a própria chave `ref:` foi marcada: script que
+    mudou por dentro não muda o hash do evento."""
+    data = _export_dir_item(roots, "claude_hooks", bundle, keep)
     settings = _settings(roots)
     own = _hangar_hook_names(roots)
-    hooks = {}
+    every = {}
     for event, groups in (settings.get("hooks") or {}).items():
         mine = _split_hooks(groups, own, hangar=False)
         if mine:
-            hooks[event] = _canon(mine, roots)
+            every[event] = _canon(mine, roots)
+    status = settings.get("statusLine")
+    status = _canon(status, roots) if isinstance(status, dict) else None
+    status_command = [str(status.get("command") or "")] if status else []
+
+    def kept(key: str) -> bool:
+        return keep is None or key in keep
+
+    hooks = {event: g for event, g in every.items() if kept(f"hooks:{event}")}
     data["hooks"] = hooks
+    data["labels"] = {f"hooks:{event}": _script_names(_hook_commands({event: g}))
+                      for event, g in hooks.items()}
     commands = _hook_commands(hooks)
-    if isinstance(settings.get("statusLine"), dict):
-        data["statusLine"] = _canon(settings["statusLine"], roots)
-        commands.append(str(data["statusLine"].get("command") or ""))
-        data["hashes"]["statusLine"] = _hash(data["statusLine"])
+    if status and kept("statusLine"):
+        data["statusLine"] = status
+        commands += status_command
+        data["hashes"]["statusLine"] = _hash(status)
+        data["labels"]["statusLine"] = _script_names(status_command)
     data["hashes"].update({f"hooks:{event}": _hash(g) for event, g in hooks.items()})
     data["refs"] = _export_refs(roots, commands, bundle)
+    if keep is not None:
+        alone = _export_refs(roots, _hook_commands(every) + status_command, bundle,
+                             want=lambda ref: f"ref:{ref}" in keep and ref not in data["refs"])
+        data["refs"].update({ref: r for ref, r in alone.items() if r["member"]})
     data["hashes"].update(_ref_hashes(data["refs"], bundle))
+    data["descriptions"].update(_ref_descriptions(data["refs"], roots))
     return data
 
 
-def _export_plugins(roots: Roots, bundle: Bundle) -> dict:
+def _pick(values: dict, keep: set[str] | None, prefix: str = "") -> dict:
+    """Só as chaves marcadas na prévia (`keep` usa as chaves do manifesto, com o prefixo)."""
+    return values if keep is None else {k: v for k, v in values.items() if f"{prefix}{k}" in keep}
+
+
+def _export_plugins(roots: Roots, bundle: Bundle, keep: set[str] | None = None) -> dict:
+    """Plugin marcado leva o marketplace dele junto: sem ele o destino não consegue instalar."""
     warnings = bundle.warnings.setdefault("claude_plugins", [])
     settings = _settings(roots)
     enabled = settings.get("enabledPlugins")
-    enabled = enabled if isinstance(enabled, dict) else {}
+    enabled = _pick(enabled if isinstance(enabled, dict) else {}, keep, "plugin:")
     extra = settings.get("extraKnownMarketplaces")
     extra = extra if isinstance(extra, dict) else {}
+    if keep is not None:
+        needed = {p.split("@", 1)[1] for p in enabled if "@" in p}
+        extra = {n: v for n, v in extra.items() if n in needed or f"marketplace:{n}" in keep}
     known = _read_json(Path(roots.claude) / "plugins" / "known_marketplaces.json")
     sources = {}
     for name in sorted({p.split("@", 1)[1] for p in enabled if "@" in p} | set(extra)):
@@ -359,29 +411,41 @@ def _export_plugins(roots: Roots, bundle: Bundle) -> dict:
     hashes = {f"plugin:{p}": _hash(v) for p, v in enabled.items()}
     hashes.update({f"marketplace:{n}": _hash(s) for n, s in sources.items()})
     return {"enabledPlugins": enabled, "extraKnownMarketplaces": _canon(extra, roots),
-            "sources": sources, "hashes": hashes}
+            "sources": sources, "hashes": hashes,
+            "descriptions": {k: v for k, v in plugin_descriptions(Path(roots.claude)).items()
+                             if k in hashes}}
 
 
-def _export_mcp(roots: Roots, bundle: Bundle) -> dict:
+def _export_mcp(roots: Roots, bundle: Bundle, keep: set[str] | None = None) -> dict:
     data = _read_json(Path(roots.home) / ".claude.json")
     servers = data.get("mcpServers") if isinstance(data.get("mcpServers"), dict) else {}
-    servers = _canon({k: v for k, v in servers.items() if k != _HANGAR_MCP}, roots)
-    commands = [" ".join([str(s.get("command") or "")]
+    every = _canon({k: v for k, v in servers.items() if k != _HANGAR_MCP}, roots)
+    servers = _pick(every, keep)
+
+    def commands_of(chosen: dict) -> list[str]:
+        return [" ".join([str(s.get("command") or "")]
                          + [a for a in s.get("args") or [] if isinstance(a, str)])
-                for s in servers.values() if isinstance(s, dict)]
-    refs = _export_refs(roots, commands, bundle)
+                for s in chosen.values() if isinstance(s, dict)]
+
+    refs = _export_refs(roots, commands_of(servers), bundle)
+    if keep is not None:
+        alone = _export_refs(roots, commands_of(every), bundle,
+                             want=lambda ref: f"ref:{ref}" in keep and ref not in refs)
+        refs.update({ref: r for ref, r in alone.items() if r["member"]})
     return {"servers": servers, "refs": refs,
-            "hashes": {k: _hash(v) for k, v in servers.items()} | _ref_hashes(refs, bundle)}
+            "hashes": {k: _hash(v) for k, v in servers.items()} | _ref_hashes(refs, bundle),
+            "descriptions": _ref_descriptions(refs, roots)}
 
 
-def _export_env(roots: Roots, bundle: Bundle) -> dict:
+def _export_env(roots: Roots, bundle: Bundle, keep: set[str] | None = None) -> dict:
     env = _settings(roots).get("env")
-    env = _canon(env if isinstance(env, dict) else {}, roots)
+    env = _canon(_pick(env if isinstance(env, dict) else {}, keep), roots)
     return {"env": env, "hashes": {k: _hash(v) for k, v in env.items()}}
 
 
-def _export_settings(roots: Roots, bundle: Bundle) -> dict:
-    rest = _canon({k: v for k, v in _settings(roots).items() if k not in _OWNED_SETTINGS}, roots)
+def _export_settings(roots: Roots, bundle: Bundle, keep: set[str] | None = None) -> dict:
+    rest = _canon(_pick({k: v for k, v in _settings(roots).items() if k not in _OWNED_SETTINGS},
+                        keep), roots)
     return {"settings": rest, "hashes": {k: _hash(v) for k, v in rest.items()}}
 
 
@@ -389,14 +453,15 @@ def _engines_path(roots: Roots) -> Path:
     return Path(os.environ.get("CP_ENGINES_FILE") or Path(roots.claude) / "engines.json")
 
 
-def _export_engines(roots: Roots, bundle: Bundle) -> dict:
-    engines = _canon(_read_json(_engines_path(roots)), roots)
+def _export_engines(roots: Roots, bundle: Bundle, keep: set[str] | None = None) -> dict:
+    engines = _canon(_pick(_read_json(_engines_path(roots)), keep), roots)
     return {"engines": engines, "hashes": {k: _hash(v) for k, v in engines.items()}}
 
 
-def _export_prefs(roots: Roots, bundle: Bundle) -> dict:
-    prefs = _canon({k: v for k, v in runtime_config._carregar().items()
-                    if k in runtime_config.EDITAVEIS and k not in _MACHINE_PREFS}, roots)
+def _export_prefs(roots: Roots, bundle: Bundle, keep: set[str] | None = None) -> dict:
+    prefs = _canon(_pick({k: v for k, v in runtime_config._carregar().items()
+                          if k in runtime_config.EDITAVEIS and k not in _MACHINE_PREFS}, keep),
+                   roots)
     return {"prefs": prefs, "hashes": {k: _hash(v) for k, v in prefs.items()}}
 
 
@@ -408,12 +473,12 @@ def _jsonable(value) -> bool:
     return True
 
 
-def _export_codex(roots: Roots, bundle: Bundle) -> dict:
+def _export_codex(roots: Roots, bundle: Bundle, keep: set[str] | None = None) -> dict:
     warnings = bundle.warnings.setdefault("codex", [])
     codex = Path(roots.codex)
     data: dict = {"hashes": {}}
     agents = codex / "AGENTS.md"
-    if agents.is_file():
+    if agents.is_file() and (keep is None or "AGENTS.md" in keep):
         blob, text = _read_blob(agents, roots)
         bundle.files["files/codex/AGENTS.md"] = blob
         data["agents_md"] = {"member": "files/codex/AGENTS.md", "text": text}
@@ -430,15 +495,16 @@ def _export_codex(roots: Roots, bundle: Bundle) -> dict:
             warnings.append(_warn("config_sync_unsupported_value", key=key))
             continue
         prefs[key] = value
-    data["config"] = _canon(prefs, roots)
+    data["config"] = _canon(_pick(prefs, keep, "config:"), roots)
     data["hashes"].update({f"config:{k}": _hash(v) for k, v in data["config"].items()})
     return data
 
 
+# Todos recebem `keep` (as chaves marcadas na prévia); sem ele o item vai inteiro.
 _EXPORTERS = {
-    "claude_instructions": lambda r, b: _export_dir_item(r, "claude_instructions", b),
-    "claude_skills": lambda r, b: _export_dir_item(r, "claude_skills", b),
-    "claude_agents": lambda r, b: _export_dir_item(r, "claude_agents", b),
+    "claude_instructions": lambda r, b, k=None: _export_dir_item(r, "claude_instructions", b, k),
+    "claude_skills": lambda r, b, k=None: _export_dir_item(r, "claude_skills", b, k),
+    "claude_agents": lambda r, b, k=None: _export_dir_item(r, "claude_agents", b, k),
     "claude_hooks": _export_hooks,
     "claude_plugins": _export_plugins,
     "claude_mcp": _export_mcp,
@@ -457,11 +523,13 @@ def _item_bytes(bundle: Bundle, item: str) -> int:
     return sum(len(bundle.files[m].data) for m in members if m in bundle.files)
 
 
-def export_bundle(roots: Roots, items, *, limit: bool = True) -> Bundle:
+def export_bundle(roots: Roots, items, *, limit: bool = True,
+                  keep: dict[str, list[str]] | None = None) -> Bundle:
     bundle = Bundle()
     for item in items:
         try:
-            bundle.items[item] = _EXPORTERS[item](roots, bundle)
+            chosen = set(keep[item]) if keep and item in keep else None
+            bundle.items[item] = _EXPORTERS[item](roots, bundle, chosen)
         except Exception as exc:  # noqa: BLE001 — um item quebrado não derruba o manifesto
             for member in [m for m in bundle.files if m.startswith(f"files/{item}/")]:
                 del bundle.files[member]
@@ -481,6 +549,8 @@ def manifest(roots: Roots) -> dict:
     return {"version": VERSION, "items": {
         item: {"ok": item in bundle.items,
                "hashes": (bundle.items.get(item) or {}).get("hashes", {}),
+               "labels": (bundle.items.get(item) or {}).get("labels", {}),
+               "descriptions": (bundle.items.get(item) or {}).get("descriptions", {}),
                "bytes": _item_bytes(bundle, item),
                "warnings": bundle.warnings.get(item, [])}
         for item in ITEMS}}
