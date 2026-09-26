@@ -4,6 +4,7 @@
   import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase, toolVerbo } from '@hangar/core';
   import { getBashOutput, getToolProgress, nomeFerramenta, separarComando, type EtapaFerramenta } from '@hangar/core';
   import { copyText } from '../lib/clipboard';
+  import { pollSequential } from '../lib/pollSequential';
   import { fmtDur } from '../lib/fmt';
   import FileIcon from './files/FileIcon.svelte';
   import { toolLook } from '../lib/toolLook.svelte';
@@ -198,10 +199,8 @@
     const cmd = comandoInteiro;
     if (!cmd || !expanded || phase !== 'pending') return;
     let vivo = true;
-    const ler = () => getBashOutput(sessionName, cmd).then((t) => { if (vivo) saidaViva = t; }).catch(() => {});
-    void ler();
-    const timer = setInterval(ler, 2000);
-    return () => { vivo = false; clearInterval(timer); };
+    const parar = pollSequential(() => getBashOutput(sessionName, cmd).then((t) => { if (vivo) saidaViva = t; }), 2000);
+    return () => { vivo = false; parar(); };
   });
   $effect(() => {
     if (caixaViva && saidaViva) caixaViva.scrollTop = caixaViva.scrollHeight;
@@ -232,10 +231,13 @@
     const id = event.tool_use_id;
     if (!ehMcp || !expanded || !id) return;
     let vivo = true;
-    const ler = () => getToolProgress(sessionName, id).then((e) => { if (vivo) etapas = e; }).catch(() => {});
-    void ler();
-    const timer = phase === 'pending' ? setInterval(ler, 2000) : undefined;
-    return () => { vivo = false; clearInterval(timer); };
+    const ler = () => getToolProgress(sessionName, id).then((e) => { if (vivo) etapas = e; });
+    if (phase !== 'pending') {
+      void ler().catch(() => {});
+      return () => { vivo = false; };
+    }
+    const parar = pollSequential(ler, 2000);
+    return () => { vivo = false; parar(); };
   });
 </script>
 
