@@ -26,6 +26,7 @@ mod orchestration;
 mod panes;
 mod popup;
 mod rows;
+mod files;
 mod settings;
 mod server_config;
 mod shortcuts;
@@ -116,6 +117,7 @@ enum Payload {
     Sidebar(sidebar::SidebarReply),
     // Aba Atividade: a conta de subagentes no disco e a lista da aba.
     Activity(activity::ActivityReply),
+    FileView(files::FileReply),
     // Resumo do bastão (`GET …/bastao/dossie`), amarrado ao estado da tela que o pediu e ao número do pedido.
     Dossier(EntityId, u64, Result<String, Failure>),
 }
@@ -302,6 +304,7 @@ pub struct Hangar {
     ctl_search: Entity<InputState>,
     act: activity::ActivityState,
     panes: panes::Panes,
+    files: files::Files,
     dossier: Option<Entity<baton::Dossier>>,
     /// Quando vimos o turno começar ao vivo; a sessão aberta já trabalhando conta do último envio.
     turn_seen: Option<Instant>,
@@ -397,7 +400,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), shortcuts: shortcuts::Shortcuts::default(),
             server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), new_session: None, sidebar,
-            act: activity::ActivityState::new(cx), ctl_search: controls::search_field(window, cx), panes, dossier: None, turn_seen: None, sent_until: None,
+            act: activity::ActivityState::new(cx), files: files::Files::new(window, cx), ctl_search: controls::search_field(window, cx), panes, dossier: None, turn_seen: None, sent_until: None,
         }
     }
 
@@ -851,6 +854,7 @@ impl Hangar {
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
             Payload::Sidebar(reply) => { self.receive_sidebar(reply, window, cx); return; }
             Payload::Activity(reply) => { self.receive_activity(reply, cx); return; }
+            Payload::FileView(reply) => { self.receive_file_view(reply, window, cx); return; }
             Payload::Dossier(key, seq, result) => { self.receive_dossier(key, seq, result, cx); return; }
             Payload::DesktopPalette(seq, result) => { self.receive_desktop_palette(seq, result, window, cx); return; }
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
@@ -3785,7 +3789,7 @@ impl Render for Hangar {
         let limited_now = self.chat.state.limited.or(self.selected.as_ref().and_then(|s| s.limited)) == Some(true);
         let chip_state = if limited_now && session_chip { "limited".to_owned() } else { header_state.clone() };
         let place = self.selected.as_ref().map(|s| place(s, &self.server_label(cx)));
-        let content = div().flex_1().min_w_0().h_full().flex().flex_col()
+        let content = div().relative().flex_1().min_w_0().h_full().flex().flex_col()
             .child(div().h(px(44.)).pl(px(20.)).pr(px(12.)).flex_shrink_0().flex().items_center().gap(px(10.)).when(floating, |el| el.mx(px(4.)))
                 .when_some(self.selected.as_ref(), |el, s| el.child(chrome::provider_glyph(&s.provider, 18.)))
                 .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).child(selected_name.clone().unwrap_or_else(|| tr("title"))))
@@ -3801,7 +3805,8 @@ impl Render for Hangar {
             .child(self.pane_element(panes::Area::Conversation, StyleRefinement::default().w_full().flex_1().min_h_0(), cx))
             // Entre a conversa e a faixa de baixo: o que a faixa abre por cima (comandos, sugestões) cobre a marca.
             .when(page.is_none(), |el| el.child(self.working_mark_float(panes::Area::Conversation, WORKING_FADE, cx.reduce_motion())))
-            .child(self.pane_element(panes::Area::Bottom, StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())), cx));
+            .child(self.pane_element(panes::Area::Bottom, StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())), cx))
+            .children(self.render_file_view(cx));
         let nav = if page.is_some() { None }
             else if tabs { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w_full().h(px(44.)).flex_shrink_0(), cx)) }
             else { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w(px(284.)).h_full().flex_shrink_0(), cx)) };
@@ -3852,6 +3857,7 @@ impl Render for Hangar {
                 // Com a confirmação aberta, o Esc é dela: fecha só o diálogo.
                 if event.keystroke.key != "escape" || this.connection_dialog || this.search_focused(window, cx) || window.has_active_dialog(cx) { return; }
                 if this.shortcuts_escape(window, cx) { cx.stop_propagation(); return; }
+                if this.files_escape(window, cx) { cx.stop_propagation(); return; }
                 if this.settings.is_some() {
                     this.close_settings(window, cx);
                     cx.stop_propagation();
