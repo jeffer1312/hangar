@@ -24,7 +24,13 @@ pub(super) enum PlanOutcome {
     Sent(bool),
 }
 
+#[derive(Clone)]
 pub(super) struct Open { key: SessionKey, ctl: Ctl, catalog: Option<Result<Value, String>> }
+
+impl Open {
+    /// Id do gatilho do painel, a pílula do controle.
+    pub(super) fn anchor(&self) -> String { format!("ctl-{}", self.ctl.key()) }
+}
 
 #[derive(Default)]
 pub(super) struct Controls {
@@ -98,6 +104,15 @@ fn claude_effort_current(status: &str) -> Option<&'static str> {
 impl Hangar {
     pub(super) fn controls_open(&self) -> bool { self.controls.open.is_some() }
     pub(super) fn close_controls(&mut self) { self.controls.open = None; }
+    pub(super) fn ctl_snapshot(&self) -> Option<Open> { self.controls.open.clone() }
+
+    /// Desenha o painel de `open` mesmo já fechado: a saída animada mostra o que estava na tela.
+    pub(super) fn render_ctl_panel_for(&mut self, open: Open, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let live = self.controls.open.replace(open);
+        let panel = self.render_ctl_panel(cx);
+        self.controls.open = live;
+        panel
+    }
 
     // Quais controles cada provider tem; o Claude esconde o esforço no Haiku, como o web.
     fn ctl_list(&self) -> Vec<Ctl> {
@@ -379,20 +394,20 @@ impl Hangar {
             let listener = cx.listener(move |this, _, _, cx| this.open_ctl(ctl, false, cx));
             if ctl == Ctl::Mode {
                 let plan = self.ctl_label(ctl).as_deref() == Some("plan");
-                mode = Some(chrome::pill_button(id, cx).pl(px(10.)).gap(px(6.)).selected(open == Some(ctl)).disabled(!self.chat_online)
+                mode = Some(popup::anchor(div(), id.clone()).child(chrome::pill_button(id, cx).pl(px(10.)).gap(px(6.)).selected(open == Some(ctl)).disabled(!self.chat_online)
                     .tooltip(name.clone()).accessibility_label(format!("{name}: {text}"))
                     .child(div().max_w(px(160.)).truncate().text_xs().text_color(if plan { theme::accent() } else { theme::muted() })
                         .when(plan, |el| el.font_weight(FontWeight::SEMIBOLD)).child(text))
                     .child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint()))
-                    .on_click(listener).into_any_element());
+                    .on_click(listener)).into_any_element());
                 continue;
             }
             let glyph = ctl == Ctl::Effort && claude;
-            pills.push(chrome::pill_button(id, cx).gap(px(4.)).selected(open == Some(ctl)).disabled(!self.chat_online)
+            pills.push(popup::anchor(div(), id.clone()).child(chrome::pill_button(id, cx).gap(px(4.)).selected(open == Some(ctl)).disabled(!self.chat_online)
                 .tooltip(name.clone()).accessibility_label(format!("{name}: {text}"))
                 .when(glyph, |el| el.child(div().text_size(px(10.)).text_color(theme::faint()).child("✦")))
                 .child(div().max_w(px(130.)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).child(text))
-                .on_click(listener).into_any_element());
+                .on_click(listener)).into_any_element());
         }
         (pills, mode)
     }
@@ -409,8 +424,8 @@ impl Hangar {
             _ => None,
         };
         let body = match &open.catalog {
-            None => div().text_sm().text_color(theme::muted()).child(tr("ctl_loading")).into_any_element(),
-            Some(Err(reason)) => div().flex().items_center().gap_2().text_sm().text_color(theme::warning())
+            None => popup::skeleton("ctl-loading", 3).into_any_element(),
+            Some(Err(reason)) => div().px(px(8.)).flex().items_center().gap_2().text_sm().text_color(theme::warning())
                 .child(div().flex_1().min_w_0().child(tr("ctl_failed").replace("{reason}", reason)))
                 .child(Button::new("ctl-retry").ghost().xsmall().flex_shrink_0().label(tr("retry")).on_click(cx.listener(move |this, _, _, cx| {
                     this.close_controls();
@@ -422,15 +437,13 @@ impl Hangar {
                 let needs_probe = probe_note.is_some() && (catalog.is_null() || choices.iter().all(|c| !c.enabled) || choices.is_empty());
                 let mut list = div().flex().flex_col();
                 if choices.is_empty() && !needs_probe {
-                    list = list.child(div().text_sm().text_color(theme::muted()).child(tr("ctl_empty")));
+                    list = list.child(div().px(px(8.)).text_sm().text_color(theme::muted()).child(tr("ctl_empty")));
                 }
                 // Linha do popover do web: atual com fundo accent e tique à direita, detalhe na segunda linha.
                 for (n, c) in choices.into_iter().enumerate() {
                     let (path, body, label, current) = (c.path, c.body, c.label.clone(), c.current);
                     let shown = if ctl == Ctl::Effort { capitalized(&c.label) } else { c.label.clone() };
-                    list = list.child(Button::new(SharedString::from(format!("ctl-choice-{n}"))).ghost().w_full().h_auto()
-                        .px(px(10.)).py(px(if ctl == Ctl::Effort { 6. } else { 7. })).rounded(px(8.))
-                        .when(current, |el| el.bg(theme::accent_dim())).disabled(busy || !c.enabled)
+                    list = list.child(popup::row(SharedString::from(format!("ctl-choice-{n}")), current).disabled(busy || !c.enabled)
                         .child(div().w_full().flex().items_center().gap_2()
                             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
                                 .child(div().truncate().text_sm().text_color(theme::text()).child(shown))
@@ -442,19 +455,19 @@ impl Hangar {
                             this.apply_ctl(ctl, path.clone(), body.clone(), label.clone(), cx)
                         })));
                 }
-                div().flex().flex_col().gap_2()
+                div().flex().flex_col().gap(px(2.))
                     .child(div().id("ctl-list").max_h(px(260.)).overflow_y_scroll().child(list))
-                    .when(ctl == Ctl::Effort, |el| el.child(div().border_t_1().border_color(theme::border()).px(px(10.)).pt(px(6.)).pb(px(2.))
-                        .text_xs().text_color(theme::muted()).child(tr("effort_hint"))))
-                    .when_some(probe_note.filter(|_| needs_probe), |el, note| el.child(div().flex().items_center().gap_2()
+                    .when(ctl == Ctl::Effort, |el| el.child(popup::separator())
+                        .child(div().px(px(8.)).pt(px(4.)).pb(px(2.)).text_xs().text_color(theme::muted()).child(tr("effort_hint"))))
+                    .when_some(probe_note.filter(|_| needs_probe), |el, note| el.child(div().px(px(8.)).flex().items_center().gap_2()
                         .child(div().flex_1().min_w_0().text_xs().text_color(theme::muted()).child(tr(note)))
                         .child(Button::new("ctl-probe").xsmall().flex_shrink_0().label(tr("ctl_probe")).disabled(busy)
                             .on_click(cx.listener(move |this, _, _, cx| this.open_ctl(ctl, true, cx))))))
                     .into_any_element()
             }
         };
-        Some(div().p_3().rounded_md().bg(theme::raised()).flex().flex_col().gap_2()
-            .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(tr(&format!("ctl_{}_title", ctl.key()))))
+        Some(div().p(px(popup::INSET)).rounded_md().bg(theme::raised()).flex().flex_col().gap(px(2.))
+            .child(popup::title(tr(&format!("ctl_{}_title", ctl.key())), Some("esc")))
             .child(body).into_any_element())
     }
 
