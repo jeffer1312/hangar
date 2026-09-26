@@ -1733,7 +1733,8 @@ impl Hangar {
         self.activity = conversation::fold_activity(&self.chat.events);
         self.pinned = self.activity.running_agents().map(|agent| agent.call).collect();
         self.sync_activity(cx);
-        self.items = conversation::build(&self.chat.events, conversation::View { thinking: a.thinking_tools, tasks: a.task_list }, &self.pinned);
+        self.items = conversation::build(&self.chat.events, conversation::View { thinking: a.thinking_tools, tasks: a.task_list,
+            merge_thinking: a.tool_look == appearance::ToolLook::Tree }, &self.pinned);
         self.paired = conversation::pair_results(&self.chat.events).0;
         self.sync_tables(a.table_chart);
         self.sync_row_ids(true, cx);
@@ -2116,7 +2117,8 @@ impl Hangar {
         for item in &self.items {
             match item {
                 Item::Tool(tool) => tools.push(*tool),
-                Item::Group { tools: group, .. } => tools.extend(group.iter().copied()),
+                // O raciocínio que a Árvore põe no grupo não tem entrada nem resultado a preparar.
+                Item::Group { tools: group, .. } => tools.extend(group.iter().copied().filter(|t| events[t.call].kind != "thinking")),
                 Item::Thinking { parts, .. } => tools.extend(parts.iter().filter(|&&i| events[i].kind != "thinking")
                     .map(|&i| Tool { call: i, result: self.paired.get(&i).copied() })),
                 Item::Orphan(i) => orphans.push(*i),
@@ -2179,6 +2181,7 @@ impl Hangar {
 
     fn render_group(&mut self, row: &str, tools: &[Tool], cx: &mut Context<Self>) -> AnyElement {
         if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_chip_group(row, tools, cx); }
+        if appearance::get().tool_look == appearance::ToolLook::Tree { return self.render_tree_group(row, tools, cx); }
         let events = &self.chat.events;
         let names: Vec<String> = tools.iter().map(|t| events[t.call].tool_name.clone().unwrap_or_else(|| tr("tool"))).collect();
         let mut distinct = names.clone();
@@ -3545,7 +3548,9 @@ fn prepare_message(event: &ChatEvent) -> Prepared {
 
 // Identidade do conteúdo de uma linha que não é mensagem: muda quando chega resultado ou o grupo cresce.
 fn signature(item: &Item, events: &[ChatEvent]) -> String {
-    let tool = |t: &Tool| format!("{}>{}", events[t.call].id, t.result.map(|i| events[i].id.as_str()).unwrap_or(""));
+    // O raciocínio dentro do grupo da Árvore conta pelo tamanho do texto, como no bloco de pensamento.
+    let tool = |t: &Tool| format!("{}>{}:{}", events[t.call].id, t.result.map(|i| events[i].id.as_str()).unwrap_or(""),
+        events[t.call].text.as_deref().filter(|_| events[t.call].kind == "thinking").map_or(0, str::len));
     match item {
         Item::Event(_) => String::new(),
         Item::Orphan(i) => events[*i].result.as_deref().map(str::len).unwrap_or(0).to_string(),

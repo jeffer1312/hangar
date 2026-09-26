@@ -136,6 +136,85 @@ pub(super) fn chip_group_header(button: Button, events: &[ChatEvent], tools: &[T
         .when(errors > 0, |el| el.child(div().flex_shrink_0().text_color(theme::warning()).child(tr("tools_errors").replace("{n}", &errors.to_string()))))
 }
 
+// Árvore, nas medidas do Zeron: o tronco sai do centro do chevron do cabeçalho (botão small: 8 de recuo + ícone de 14),
+// curva de raio 6 até o fim do ramo, onde começa a linha de 32.
+const TREE_TRUNK: f32 = 14.5;
+const TREE_BRANCH_END: f32 = 30.;
+const TREE_LINE: f32 = 32.;
+/// Do fim do ramo até o rótulo: recuo do botão, ícone de 16 e o vão de 8. O texto sob a linha começa ali.
+const TREE_TEXT: f32 = 28.;
+
+/// Título do grupo da Árvore: o raciocínio primeiro, depois a contagem por família ("Raciocínio · fez 1 busca").
+pub(super) fn tree_title(events: &[ChatEvent], parts: &[Tool]) -> String {
+    let calls: Vec<Tool> = parts.iter().copied().filter(|t| events[t.call].kind != "thinking").collect();
+    let thought = match parts.len() - calls.len() { 0 => None, 1 => Some(tr("thinking")), n => Some(tr("tree_thoughts").replace("{n}", &n.to_string())) };
+    let counts = (!calls.is_empty()).then(|| family_title(events, &calls));
+    match (thought, counts) {
+        // A contagem vem com maiúscula; depois do raciocínio volta à minúscula da chave.
+        (Some(thought), Some(counts)) => {
+            let mut chars = counts.chars();
+            format!("{thought} · {}", chars.next().map(|c| c.to_lowercase().chain(chars).collect::<String>()).unwrap_or_default())
+        }
+        (thought, counts) => thought.or(counts).unwrap_or_default(),
+    }
+}
+
+/// Cabeçalho do grupo da Árvore no botão de abrir de quem chama: título sem caixa, falhas e "rodando" em texto.
+pub(super) fn tree_header(button: Button, title: String, failed: usize, running: bool) -> Button {
+    let failed = (failed > 0).then(|| failed_count(failed));
+    button.accessibility_label(failed.as_ref().map_or_else(|| title.clone(), |f| format!("{title} · {f}")))
+        .child(div().min_w_0().truncate().text_color(theme::muted()).child(title))
+        .when_some(failed, |el, failed| el.child(div().flex_shrink_0().text_color(theme::warning()).child(format!("· {failed}"))))
+        .when(running, |el| el.child(div().flex_shrink_0().text_color(theme::accent()).child(tr("chip_running"))))
+        .child(div().flex_1())
+}
+
+/// Uma linha da árvore: ícone, rótulo e detalhe; o fim só aparece para falha e "rodando". Quem chama liga o clique.
+fn tree_line(id: String, icon: IconName, label: String, detail: String, ending: Option<AnyElement>, failed: bool, cx: &App) -> Button {
+    let color = if failed { theme::warning() } else { theme::muted() };
+    Button::new(SharedString::from(id))
+        .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+        .w_full().h(px(TREE_LINE)).px(px(4.)).rounded(px(6.))
+        .accessibility_label(format!("{label} {detail}"))
+        .child(div().w_full().min_w_0().flex().items_center().gap(px(8.)).text_size(px(13.))
+            .child(chrome::small_icon(icon, 16., color))
+            .child(div().flex_shrink_0().text_color(if failed { theme::warning() } else { theme::text() }).child(label))
+            .child(div().flex_1().min_w_0().truncate().text_color(color).child(detail))
+            .children(ending))
+}
+
+/// Linha de chamada da árvore: ícone da família, verbo e o resumo do chip.
+pub(super) fn tree_call_line(id: String, call: &ChatEvent, ending: Option<AnyElement>, failed: bool, cx: &App) -> Button {
+    let name = call.tool_name.as_deref();
+    tree_line(id, family_icon(conversation::family(name)), verb(name), chip_text(call), ending, failed, cx)
+}
+
+/// Linha de raciocínio da árvore; o texto vai embaixo, pelo `tree_row`.
+pub(super) fn tree_thought_line(id: String, cx: &App) -> Button {
+    tree_line(id, IconName::MessageCircle, tr("thinking"), String::new(), None, false, cx)
+}
+
+/// Raciocínio fechado sob a linha: texto corrido cortado em três linhas, como no Zeron.
+pub(super) fn thought_preview(text: &str) -> AnyElement {
+    // Três linhas cabem em bem menos que 120 palavras; o resto nem é juntado.
+    let flat = text.split_whitespace().take(120).collect::<Vec<_>>().join(" ");
+    // Sem o `text_ellipsis` a gpui não corta a terceira linha: ela passa da coluna.
+    div().text_size(px(13.)).line_height(px(20.)).text_color(theme::muted()).line_clamp(3).text_ellipsis().child(flat).into_any_element()
+}
+
+/// Linha pendurada no tronco: a curva até ela e, fora a última, o tronco seguindo até a próxima. `below` (texto do
+/// raciocínio, entrada e resultado) fica alinhado ao rótulo.
+pub(super) fn tree_row(last: bool, line: Button, below: Option<AnyElement>) -> Div {
+    // A borda comum some no fundo; a forte fica perto do traço do Zeron.
+    let stroke = theme::border_strong();
+    div().relative().pl(px(TREE_BRANCH_END))
+        .when(!last, |el| el.child(div().absolute().top_0().bottom_0().left(px(TREE_TRUNK)).w(px(1.)).bg(stroke)))
+        .child(div().absolute().top_0().left(px(TREE_TRUNK)).w(px(TREE_BRANCH_END - TREE_TRUNK)).h(px(TREE_LINE / 2.))
+            .border_l_1().border_b_1().border_color(stroke).rounded_bl(px(6.)))
+        .child(line)
+        .when_some(below, |el, below| el.child(div().pl(px(TREE_TEXT)).pb(px(6.)).child(below)))
+}
+
 /// As linhas do grupo aberto numa tabela com borda.
 pub(super) fn chip_table(rows: Vec<AnyElement>) -> Div {
     chip_box().children(rows.into_iter().enumerate().map(|(n, row)| div().when(n > 0, |el| el.border_t_1().border_color(theme::border())).child(row)))
@@ -185,6 +264,49 @@ impl Hangar {
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
         let rows: Vec<AnyElement> = if open { tools.iter().map(|&tool| self.render_chip(tool, row, cx)).collect() } else { Vec::new() };
         div().flex().flex_col().gap_1().child(header).when(open, |el| el.child(chip_table(rows))).into_any_element()
+    }
+
+    /// Grupo da Árvore: título e as linhas no tronco. Aberto enquanto é a cauda do turno, como no Zeron, mesmo entre uma
+    /// chamada e a próxima; o clique inverte.
+    pub(super) fn render_tree_group(&mut self, row: &str, parts: &[Tool], cx: &mut Context<Self>) -> AnyElement {
+        let events = &self.chat.events;
+        let calls = parts.iter().filter(|t| events[t.call].kind != "thinking");
+        let failed = calls.clone().filter(|t| t.result.is_some_and(|i| events[i].is_error == Some(true))).count();
+        let running = calls.clone().any(|t| t.result.is_none() && self.running(t.call));
+        // Texto fecha grupo no `build`: a primeira parte "roda" enquanto nenhuma mensagem veio depois e a sessão trabalha.
+        let live = parts.first().is_some_and(|t| self.running(t.call));
+        let open = live != self.expanded.contains(row);
+        let toggle_key = row.to_owned();
+        let header = tree_header(self.disclosure(row, open), tree_title(events, parts), failed, running)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
+        let lines: Vec<AnyElement> = if open {
+            parts.iter().enumerate().map(|(n, &tool)| self.render_tree_part(tool, row, n + 1 == parts.len(), cx)).collect()
+        } else { Vec::new() };
+        div().flex().flex_col().child(header).children(lines).into_any_element()
+    }
+
+    /// Uma linha do grupo da Árvore: raciocínio (texto cortado embaixo, inteiro ao abrir) ou chamada (entrada e resultado).
+    fn render_tree_part(&mut self, tool: Tool, row: &str, last: bool, cx: &mut Context<Self>) -> AnyElement {
+        let events = &self.chat.events;
+        let event = &events[tool.call];
+        let key = event.id.clone();
+        let open = self.expanded.contains(&key);
+        let toggle_key = key.clone();
+        let toggle = cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle(toggle_key.clone(), cx));
+        if event.kind == "thinking" {
+            let text = event.text.clone().unwrap_or_default();
+            let below = if open {
+                let view = self.text_view(&format!("{key}:thought"), row, safe_markdown(&text), cx);
+                chat_text(&view, cx).text_color(theme::muted()).into_any_element()
+            } else { thought_preview(&text) };
+            return tree_row(last, tree_thought_line(format!("tree-{key}"), cx).on_click(toggle), Some(below)).into_any_element();
+        }
+        let failed = tool.result.is_some_and(|i| events[i].is_error == Some(true));
+        let running = tool.result.is_none() && self.running(tool.call);
+        let ending = (failed || running).then(|| chip_ending(event, tool.result.map(|i| &events[i]), running, |result| self.result_lines(result)));
+        let line = tree_call_line(format!("tree-{key}"), event, ending, failed, cx).on_click(toggle);
+        let body = open.then(|| self.tool_body(tool, row, cx).into_any_element());
+        tree_row(last, line, body).into_any_element()
     }
 
     /// Lista de tarefas do agente, no lugar das chamadas TaskCreate/TaskUpdate: anel de progresso, quanto falta

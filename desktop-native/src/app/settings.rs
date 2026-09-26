@@ -801,16 +801,20 @@ impl Hangar {
             .child(self.slider_row(IconName::PanelLeft, "settings_column", None, Knob::Column, true, &a, cx));
 
         const THINKING: [ThinkingTools; 3] = [ThinkingTools::None, ThinkingTools::Search, ThinkingTools::All];
+        const LOOKS: [ToolLook; 3] = [ToolLook::Classic, ToolLook::Chips, ToolLook::Tree];
+        // Na Árvore o raciocínio já entra no grupo com todas as chamadas: a escolha do pensamento fica sem efeito.
+        let thinking_on = a.tool_look != ToolLook::Tree;
         let conversation_box = settings_box()
             .child(self.row(IconName::Wrench, "settings_tool_calls", None, true,
-                segmented("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips")], (a.tool_look == ToolLook::Chips) as usize, true,
-                    |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.tool_look = if index == 1 { ToolLook::Chips } else { ToolLook::Classic }; this.apply_appearance(next, true, cx); }, cx)))
+                segmented("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips"), tr("settings_tool_calls_tree")],
+                    LOOKS.iter().position(|l| *l == a.tool_look).unwrap_or(0), true,
+                    |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.tool_look = LOOKS[index]; this.apply_appearance(next, true, cx); }, cx)))
             .child(self.row(IconName::ListChecks, "settings_task_list", None, true,
                 segmented("task-list", &[tr("settings_task_list_hide"), tr("settings_task_list_progress")], a.task_list as usize, true,
                     |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.task_list = index == 1; this.apply_appearance(next, true, cx); }, cx)))
-            .child(self.row(IconName::Activity, "settings_thinking", None, true,
+            .child(self.row(IconName::Activity, "settings_thinking", (!thinking_on).then(|| tr("settings_thinking_tree")), thinking_on,
                 segmented("thinking", &[tr("settings_thinking_none"), tr("settings_thinking_search"), tr("settings_thinking_all")],
-                    THINKING.iter().position(|t| *t == a.thinking_tools).unwrap_or(1), true,
+                    THINKING.iter().position(|t| *t == a.thinking_tools).unwrap_or(1), thinking_on,
                     |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.thinking_tools = THINKING[index]; this.apply_appearance(next, true, cx); }, cx)))
             .child(self.row(IconName::ChartColumn, "settings_table_chart", None, true,
                 segmented("table-chart", &[tr("settings_table_chart_hide"), tr("settings_table_chart_show")], a.table_chart as usize, true,
