@@ -15,6 +15,7 @@ mod backdrop;
 mod baton;
 mod accounts;
 mod chrome;
+mod computer;
 mod controls;
 mod create;
 mod device;
@@ -109,6 +110,7 @@ enum Payload {
     Sync(sync::SyncReply),
     // Máquinas: identificador, alcance e reinício do servidor conectado.
     Machines(machines::MachinesReply),
+    Computer(computer::ComputerReply),
     // Diálogo Nova sessão: a resposta vai ao diálogo que a pediu, se ele ainda for o aberto.
     Create(EntityId, create::CreateReply),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
@@ -296,6 +298,7 @@ pub struct Hangar {
     server_config: server_config::ServerConfig,
     sync: sync::Sync,
     machines: machines::Machines,
+    computer: computer::Computer,
     new_session: Option<Entity<create::NewSession>>,
     sidebar: sidebar::Sidebar,
     // Busca do seletor de modelo quando a lista é longa.
@@ -396,7 +399,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), shortcuts: shortcuts::Shortcuts::default(),
-            server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), new_session: None, sidebar,
+            server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), computer: computer::Computer::default(), new_session: None, sidebar,
             act: activity::ActivityState::new(cx), ctl_search: controls::search_field(window, cx), panes, dossier: None, turn_seen: None, sent_until: None,
         }
     }
@@ -587,6 +590,7 @@ impl Hangar {
         self.shortcuts = shortcuts::Shortcuts::default();
         self.harness = harness::Harnesses::default();
         self.machines = machines::Machines::default();
+        self.computer = computer::Computer::default();
     }
 
     fn select(&mut self, session: SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
@@ -848,6 +852,7 @@ impl Hangar {
             Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
             Payload::Sync(reply) => { self.receive_sync(reply, window, cx); return; }
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
+            Payload::Computer(reply) => { self.receive_computer(reply, window, cx); return; }
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
             Payload::Sidebar(reply) => { self.receive_sidebar(reply, window, cx); return; }
             Payload::Activity(reply) => { self.receive_activity(reply, cx); return; }
