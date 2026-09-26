@@ -81,7 +81,8 @@
     report: {
       totals: vazio(), by_day: [], by_provider: [], by_source: [], by_project: [], by_model: [],
       by_servidor: [], by_kind: [], rates: [], sem_tarifa: [], custo_sem_cache: 0,
-      equivalente_cobrado: 0, anterior: null, combos: [], sessoes: [], applied: { period: 'all' }, usd_brl: null,
+      equivalente_cobrado: 0, anterior: null, combos: [], sessoes: [], cache_detalhado: true,
+      applied: { period: 'all' }, usd_brl: null,
     },
   });
 
@@ -1039,13 +1040,20 @@
       </div>
       <div class="kpi" title={m.custos_cache_perdido_ajuda()}>
         <dt>{m.custos_cache_perdido()}</dt>
-        <dd>{mFoco(foco.custo_regravado ?? 0)}</dd>
-        <div class="foot">{m.custos_cache_perdido_pe({ tokens: tok(foco.regravado ?? 0) })}</div>
+        {#if report.cache_detalhado}
+          <dd>{mFoco(foco.custo_regravado ?? 0)}</dd>
+          <div class="foot">{m.custos_cache_perdido_pe({ tokens: tok(foco.regravado ?? 0) })}</div>
+        {:else}
+          <dd>—</dd>
+          <div class="foot">{m.custos_cache_sem_dado()}</div>
+        {/if}
       </div>
       <div class="kpi">
         <dt>{m.custos_cache_1h()}</dt>
-        <dd>{pct(foco.cache_write_1h ?? 0, foco.cache_write)}</dd>
-        {#if foco.cache_write > 0}
+        <dd>{report.cache_detalhado ? pct(foco.cache_write_1h ?? 0, foco.cache_write) : '—'}</dd>
+        {#if !report.cache_detalhado}
+          <div class="foot">{m.custos_cache_sem_dado()}</div>
+        {:else if foco.cache_write > 0}
           <div class="foot">{m.custos_cache_1h_pe({ h1: tok(foco.cache_write_1h ?? 0), total: tok(foco.cache_write) })}</div>
         {/if}
       </div>

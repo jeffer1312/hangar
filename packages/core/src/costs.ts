@@ -21,6 +21,9 @@ export interface RelatorioMesclado extends Omit<CostReport, 'combos' | 'sessoes'
   combos: ComboLocal[];
   sessoes: SessaoLocal[];
   by_servidor: DimBucket[];
+  // Falso quando algum servidor somado não manda cache de 1 h nem cache perdido (versão antiga):
+  // a soma desses dois sairia baixa parecendo completa.
+  cache_detalhado: boolean;
 }
 
 export interface MergedReport {
@@ -102,6 +105,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
   let semCache = 0;
   let equivalente = 0;
   let detalhamentoCompleto = true;
+  let cacheDetalhado = true;
   let usdBrl: number | null = null;
 
   results.forEach((res, i) => {
@@ -150,6 +154,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
       .some((valor) => valor > 0)) detalhamentoCompleto = false;
     for (const cb of r.combos ?? []) combos.push({ ...cb, servidor: sid });
     for (const se of r.sessoes ?? []) sessoes.push({ ...se, servidor: sid });
+    if (r.totals?.regravado === undefined && bs.cache_write > 0) cacheDetalhado = false;
     semCache += r.custo_sem_cache ?? 0;
     equivalente += r.equivalente_cobrado ?? 0;
     if (r.anterior) { somarBucket(anterior, r.anterior); comAnterior += 1; }
@@ -179,6 +184,7 @@ export function mergeReports(results: ServerResult[], period: string): MergedRep
       // Cada servidor já manda as SUAS mais caras; juntas, a ordem volta a ser por custo.
       sessoes: sessoes.sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0)),
       by_servidor: [...servidores].sort((a, b) => b.cost - a.cost || a.key.localeCompare(b.key)),
+      cache_detalhado: cacheDetalhado,
       applied: { period },
       usd_brl: usdBrl,
     },

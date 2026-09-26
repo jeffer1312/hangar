@@ -3762,6 +3762,7 @@
   "custos_cache_perdido_ajuda": "Quanto se pagou a mais porque o cache expirou (pausa maior que a validade dele) ou o contexto mudou, em vez de ler do cache.",
   "custos_cache_1h": "cache de 1 h",
   "custos_cache_1h_pe": "{h1} de {total} gravados valem 2× o token novo, os de 5 min 1,25×",
+  "custos_cache_sem_dado": "uma máquina está em versão antiga e não manda este dado; atualize-a",
   "custos_cache_lido_desligado": "O cache lido começa desligado porque é muito maior que o resto; toque nele na legenda para ligar.",
   "custos_dia_reuso": "{pct} da entrada veio do cache",
   "custos_sessoes_caras": "Sessões mais caras",

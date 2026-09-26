@@ -158,10 +158,18 @@ def ler_completo(path: Path) -> Leitura:
                 cache_write_1h=min(max(0, cache_1h), max(0, _int(u.get("cache_creation_input_tokens")))),
                 fast=u.get("speed") == "fast")
     grupos: dict[tuple, UsoSessao] = {}
-    for n, (chave, uso) in enumerate(respostas.items()):
-        # Gravou mais do que releu: o prefixo da conversa não estava mais no cache.
-        if n > 0 and chave not in depois_de_compactar and uso.cache_write > uso.cache_read:
-            uso = replace(uso, regravado=uso.cache_write, regravado_1h=uso.cache_write_1h)
+    contexto_antes = None
+    for chave, uso in respostas.items():
+        # Perdido = o contexto da resposta anterior que NÃO veio do cache e teve de ser gravado de
+        # novo. Comparar com o cache lido da própria resposta confundia conteúdo novo grande
+        # (arquivo lido, diff) com cache expirado.
+        if contexto_antes is not None and chave not in depois_de_compactar and uso.cache_write:
+            perdido = min(uso.cache_write, max(0, contexto_antes - uso.cache_read))
+            # Expirar leva o prefixo quase inteiro; sobra pequena é lembrete que mudou no meio.
+            if perdido * 2 >= contexto_antes:
+                uso = replace(uso, regravado=perdido,
+                              regravado_1h=uso.cache_write_1h * perdido // uso.cache_write)
+        contexto_antes = uso.input + uso.cache_write + uso.cache_read
         # `fast` entra na chave porque é o que decide a TARIFA: somado com o padrão, o grupo
         # inteiro seria cobrado por uma das duas e a outra metade sairia errada.
         key = (uso.ts.date(), uso.model, uso.cwd, uso.fast)

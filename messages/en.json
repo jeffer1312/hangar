@@ -3762,6 +3762,7 @@
   "custos_cache_perdido_ajuda": "Extra paid because the cache expired (a pause longer than its lifetime) or the context changed, instead of reading from cache.",
   "custos_cache_1h": "1 h cache",
   "custos_cache_1h_pe": "{h1} of {total} written cost 2× a new token, 5-min ones 1.25×",
+  "custos_cache_sem_dado": "a machine runs an older version and does not send this; update it",
   "custos_cache_lido_desligado": "Cache read starts hidden because it dwarfs the rest; tap it in the legend to show it.",
   "custos_dia_reuso": "{pct} of input came from cache",
   "custos_sessoes_caras": "Most expensive sessions",
