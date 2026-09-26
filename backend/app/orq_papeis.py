@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,9 +96,9 @@ def abertura_texto(p: Papel) -> str:
             partes += [flag, valor]
     if p.jev:
         partes.append("--jev")
-    if p.abertura_extra:
-        partes.append(p.abertura_extra)
-    return " ".join(partes)
+    # O árbitro cola a célula num comando de shell: valor com espaço ("Full Access") precisa de aspas.
+    texto = shlex.join(partes)
+    return f"{texto} {p.abertura_extra}".strip() if p.abertura_extra else texto
 
 
 _FLAGS_COM_VALOR = {"--permissao": "permissao", "--engine": "motor", "--subagente": "subagente",
@@ -107,7 +108,11 @@ _FLAGS_COM_VALOR = {"--permissao": "permissao", "--engine": "motor", "--subagent
 def _ler_abertura(celula: str) -> dict:
     campos: dict = {"headless": False, "permissao": "", "motor": "", "jev": False, "subagente": "",
                     "perfil": ""}
-    toks = [] if celula.strip() in ("", "-") else celula.split()
+    try:
+        toks = [] if celula.strip() in ("", "-") else shlex.split(celula)
+    except ValueError:  # aspas sem par, de linha gravada antes das aspas existirem
+        _log.warning("abertura com aspas sem par, lida por espaço: %r", celula)
+        toks = celula.split()
     extra: list[str] = []
     i = 0
     while i < len(toks):
@@ -120,7 +125,7 @@ def _ler_abertura(celula: str) -> dict:
         else:
             extra.append(t)
         i += 1
-    campos["abertura_extra"] = " ".join(extra)
+    campos["abertura_extra"] = shlex.join(extra)
     return campos
 
 

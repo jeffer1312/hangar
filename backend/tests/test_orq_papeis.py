@@ -110,6 +110,18 @@ def test_perfil_do_omp_vira_profile_na_abertura_e_volta_igual():
     assert op.ler(t)[1] == p and op.ler(t)[1].abertura_extra == ""
 
 
+def test_permissao_com_espaco_vai_entre_aspas_e_volta_igual():
+    """"Full Access" do Codex: separar a célula por espaço cortava o valor e a sobra se acumulava
+    como flag desconhecida a cada salvamento."""
+    p = op.Papel("executor", "pm1-t*", "codex", "openai-codex", "gpt-6-astra", "high",
+                 headless=True, permissao="Full Access")
+    t = op.escrever_papel(REGRAS, p)
+    assert "| --headless --permissao 'Full Access' |" in t
+    lido = op.ler(t)[1]
+    assert lido == p and lido.abertura_extra == ""
+    assert op.escrever_papel(t, lido) == t
+
+
 def test_abertura_escrita_a_mao_sobrevive_ao_salvar_do_painel():
     """Flag que o painel não conhece (o `--read-only` de um revisor, escrito pelo árbitro) volta
     intacta na célula quando o painel salva só o que conhece."""
