@@ -88,6 +88,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     (Page::Notifications, &[("server_notify_finished", Some("server_notify_finished_help")), ("server_short_turn", Some("server_short_turn_help")),
         ("server_notify_dead", Some("server_notify_dead_help")), ("server_stall", Some("server_stall_help")), ("server_quiet", Some("server_quiet_why"))]),
     (Page::Attachments, &[("server_keep_attachments", Some("server_keep_attachments_help"))]),
+    (Page::Windows, &[("computer_control_enable", Some("computer_control_enable_hint")),
+        ("computer_control_install", None), ("computer_control_dir", None), ("computer_control_target", Some("computer_control_target_hint"))]),
     (Page::Advanced, &[("server_automations", Some("server_automations_help")), ("server_thinking", Some("server_thinking_help")),
         ("server_translate_thinking", Some("server_translate_thinking_help")), ("server_editor", Some("server_editor_help")),
         ("server_jev_key", Some("server_jev_key_help")), ("server_jev_default", Some("server_jev_default_help")),
@@ -488,7 +490,7 @@ impl Hangar {
             Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             Page::Servers => self.render_machines(cx),
             Page::Sync => self.render_sync(cx),
-            Page::Windows => self.render_page_soon(page),
+            Page::Windows => self.render_computer(cx),
         };
         let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
             .child(div().w_full().flex().justify_center().child(div().w(px(720.)).max_w_full().px_4().pt(px(44.)).pb(px(40.)).child(body)));
