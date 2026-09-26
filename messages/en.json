@@ -3970,6 +3970,8 @@
   "native_shortcuts_text_hint": "E.g. /my-skill or a full prompt",
   "native_shortcuts_command": "Command",
   "native_shortcuts_command_hint": "Runs on the server machine, in the session directory",
+  "native_ctl_search": "Search",
+  "native_ctl_no_results": "Nothing matches this search.",
   "native_shortcuts_send_direct": "Send immediately",
   "native_shortcuts_send_direct_help": "Off, the text lands in the message box for you to finish",
   "native_shortcuts_confirm": "Confirm before running",
