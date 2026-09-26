@@ -168,7 +168,8 @@ impl SubConversation {
         self.rows = rows;
         let ids: HashSet<&str> = self.rows.iter().map(Row::id).collect();
         self.rich.retain(|key, _| ids.iter().any(|id| key.starts_with(id)));
-        self.expanded.retain(|key| self.events.iter().any(|e| &e.id == key) || ids.contains(key.as_str()));
+        self.expanded.retain(|key| self.events.iter().any(|e| &e.id == key)
+            || ids.contains(key.strip_suffix(":more").unwrap_or(key)));
         cx.notify();
     }
 
@@ -274,14 +275,17 @@ impl SubConversation {
         let row_id = SharedString::from(format!("sub-row-{}", row.id()));
         let inner = match row {
             Row::Message { id, markdown, user, label } => {
+                let (long, more_key) = (user && long_message(&markdown), format!("{id}:more"));
+                let open = self.expanded.contains(&more_key);
                 let view = self.text(id.clone(), markdown, cx);
                 let content = conversation_text(div().flex().flex_col().gap_2())
                     .when_some(label, |el, (label, error)| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD)
                         .text_color(if error { theme::warning() } else { theme::muted() }).child(label)))
-                    .child(chat_text(&view, cx).on_link_click(open_web_link));
-                div().w_full().flex().flex_col().map(|el| if user {
-                    el.items_end().child(div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content))
-                } else { el.child(content) }).into_any_element()
+                    .child(collapse(chat_text(&view, cx).on_link_click(open_web_link), long, open))
+                    .when(long, |el| el.child(more_button(SharedString::from(format!("sub-more-{id}")), open)
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle(more_key.clone(), cx)))));
+                div().w_full().flex().flex_col().map(|el| if user { el.items_end().child(user_bubble(content)) } else { el.child(content) })
+                    .into_any_element()
             }
             Row::Tool(tool) => self.render_tool(&tool, cx),
             Row::Group { id, tools, .. } if chips() => {

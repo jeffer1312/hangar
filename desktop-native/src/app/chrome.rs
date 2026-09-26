@@ -402,10 +402,35 @@ pub fn working_chip(key: impl Into<ElementId>, label: String) -> AnyElement {
 }
 
 pub fn meter(pct: f64) -> AnyElement {
-    let color = if pct >= 90. { theme::danger() } else if pct >= 70. { theme::warning() } else { theme::accent() };
+    let color = meter_color(pct);
     div().h(px(4.)).w_full().rounded_full().bg(theme::raised())
         .child(div().h_full().rounded_full().bg(color).w(relative((pct.clamp(0., 100.) / 100.) as f32)))
         .into_any_element()
+}
+
+/// Anel de uso do rodapé (16 px, traço 1,8), com a cor do `meter`. Só quads: o `PathBuilder` soma alfa na janela
+/// transparente. O trilho é um quad só de borda; o arco, pontos redondos opacos que se cobrem. Sem dado, só o trilho.
+pub fn ring(pct: Option<f64>) -> AnyElement {
+    const SIZE: f32 = 16.;
+    const STROKE: f32 = 1.8;
+    let track = theme::raised();
+    let arc = pct.map(|pct| (pct.clamp(0., 100.) as f32 / 100., meter_color(pct)));
+    div().size(px(SIZE)).flex_shrink_0().child(canvas(|_, _, _| (), move |bounds, _, window, _| {
+        window.paint_quad(outline(bounds, track, BorderStyle::Solid).border_widths(px(STROKE)).corner_radii(px(SIZE / 2.)));
+        let Some((share, color)) = arc.filter(|(share, _)| *share > 0.) else { return };
+        let (center, radius) = (bounds.center(), (SIZE - STROKE) / 2.);
+        // Um ponto a cada meio pixel de arco, do topo em sentido horário.
+        let steps = (std::f32::consts::TAU * radius * share / 0.5).ceil().max(1.) as usize;
+        for step in 0..=steps {
+            let angle = std::f32::consts::TAU * share * step as f32 / steps as f32 - std::f32::consts::FRAC_PI_2;
+            let at = point(center.x + px(radius * angle.cos()), center.y + px(radius * angle.sin()));
+            window.paint_quad(fill(Bounds::centered_at(at, size(px(STROKE), px(STROKE))), color).corner_radii(px(STROKE / 2.)));
+        }
+    }).size_full()).into_any_element()
+}
+
+fn meter_color(pct: f64) -> Hsla {
+    if pct >= 90. { theme::danger() } else if pct >= 70. { theme::warning() } else { theme::accent() }
 }
 
 /// Marca do Hangar (dois arcos), tingida pela cor do estado.

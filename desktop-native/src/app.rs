@@ -2695,7 +2695,16 @@ impl Hangar {
             let folder = repo.clone().or_else(|| session.as_ref().and_then(folder_name));
             let cost = status.as_ref().and_then(|s| s.cost_usd).map(|usd| self.money(usd));
             let stats = self.stats.as_ref().filter(|_| readable).map(side::stats_line);
-            let right = [ctx_pct.map(|p| tr("composer_ctx").replace("{n}", &p.round().to_string())), cost].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            // Anéis de contexto e de uso da conta (janela de 5h); sem dado dizem isso, nunca 0%.
+            let percent = |pct: Option<f64>| pct.map(|p| format!("{}%", p.round())).unwrap_or_else(|| tr("no_data"));
+            let limits = status.as_ref().filter(|_| readable).map(|s| [(tr("limit_5h"), s.five_hour_pct), (tr("limit_7d"), s.weekly_pct)]
+                .into_iter().map(|(label, pct)| format!("{label} {}", percent(pct))).collect::<Vec<_>>().join(" · "));
+            let account = status.as_ref().and_then(|s| s.five_hour_pct).filter(|_| readable);
+            let ring = |id: &'static str, pct: Option<f64>, tip: String| div().id(id).flex_shrink_0().flex().items_center().gap(px(5.))
+                .child(chrome::ring(pct)).child(percent(pct))
+                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx));
+            let ctx_tip = [Some(format!("{} {}", tr("ring_context"), percent(ctx_pct))), stats].into_iter().flatten().collect::<Vec<_>>().join("\n");
+            let account_tip = format!("{}: {}", tr("ring_account"), limits.unwrap_or_else(|| tr("no_data")));
             div().pt(px(7.)).px(px(6.)).flex().items_center().gap(px(6.)).text_xs().text_color(theme::faint())
                 .when_some(folder, |el, f| el.child(chrome::small_icon(IconName::Folder, 14., theme::faint())).child(div().max_w(px(200.)).truncate().child(f)))
                 .when(!branch.is_empty(), |el| el.child(div().ml(px(4.)).flex().items_center().gap(px(4.)).min_w_0()
@@ -2705,9 +2714,10 @@ impl Hangar {
                 .when_some(added, |el, a| el.child(div().text_color(theme::success()).child(format!("+{a}"))))
                 .when_some(removed, |el, r| el.child(div().text_color(theme::removed()).child(format!("−{r}"))))
                 .child(div().flex_1())
-                // A linha de estatísticas do turno fica na dica: o rodapé mostra só contexto e custo, como no mock.
-                .when(!right.is_empty(), |el| el.child(div().id("composer-ctx").flex_shrink_0().child(right)
-                    .when_some(stats, |el, line| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(line.clone()).build(window, cx)))))
+                // A linha de estatísticas do turno fica na dica do anel de contexto.
+                .child(ring("composer-ctx", ctx_pct, ctx_tip))
+                .child(div().ml(px(6.)).child(ring("composer-account", account, account_tip)))
+                .when_some(cost, |el, cost| el.child(div().flex_shrink_0().child("·")).child(div().flex_shrink_0().child(cost)))
         });
 
         let send_label = tr(if sending || uploading.is_some() { "sending" } else { "send" });
@@ -2930,25 +2940,42 @@ impl Hangar {
             _ => Vec::new(),
         };
         let files = (!refs.is_empty()).then(|| self.render_refs(&id, refs, cx));
+        let more_key = format!("{id}#more");
+        let long = user && long_message(&markdown);
+        let open = self.expanded.contains(&more_key);
         let text: Vec<AnyElement> = match charted {
             Some(tables) => self.render_charted(&id, &markdown, &tables, cx),
             None if !blank || files.is_none() => {
                 let view = self.text_view(&id, &id, markdown, cx);
-                vec![chat_text(&view, cx).motion(stream_motion(id == PREVIEW)).on_link_click(open_web_link).into_any_element()]
+                let text = chat_text(&view, cx).motion(stream_motion(id == PREVIEW)).on_link_click(open_web_link);
+                vec![collapse(text, long, open).into_any_element()]
             }
             None => Vec::new(),
         };
+        let more = long.then(|| more_button(format!("more-{id}"), open)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(more_key.clone(), cx))));
+        // Hora e copiar sob a mensagem, só ao passar o mouse; a faixa é reservada para a lista não remedir.
+        let actions = (id != PREVIEW && (user || plain)).then(|| {
+            let ts = match self.items.get(index) { Some(Item::Event(i)) => self.chat.events[*i].ts, _ => None };
+            let (view, copy_id) = (cx.weak_entity(), id.clone());
+            div().h(px(24.)).flex().items_center().gap_1().opacity(0.).group_hover(ROW_GROUP, |s| s.opacity(1.))
+                .when_some(stamp(ts), |el, at| el.child(div().text_xs().text_color(theme::faint()).child(at)))
+                .child(CopyButton {
+                    id: SharedString::from(format!("copy-{id}")).into(),
+                    value: std::rc::Rc::new(move |cx| view.upgrade().and_then(|view| view.read(cx).copy_text(&copy_id)).unwrap_or_default()),
+                })
+        });
         let content = conversation_text(div().flex().flex_col().gap_2())
             .when(!user && !plain, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label)))
             .children(text)
+            .when_some(more, |el, more| el.child(more))
             .when_some(files, |el, files| el.child(files));
-        let row = div().id(SharedString::from(format!("message-{id}"))).w_full().flex().flex_col().gap_2()
-            .map(|el| if user {
-                el.items_end().child(div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content))
-            } else { el.child(content) })
+        let row = div().id(SharedString::from(format!("message-{id}"))).group(ROW_GROUP).w_full().flex().flex_col().gap_2()
+            .map(|el| if user { el.items_end().child(user_bubble(content)) } else { el.child(content) })
             .when_some(note, |el, note| el.child(div().flex().items_center().gap_2().when(user, |el| el.justify_end())
                 .child(div().min_w_0().text_sm().text_color(theme::warning()).child(note))
-                .when_some(discard, |el, button| el.child(button))));
+                .when_some(discard, |el, button| el.child(button))))
+            .when_some(actions, |el, actions| el.child(actions));
         with_copy_menu(row, id, cx.weak_entity())
     }
 }
@@ -2976,6 +3003,62 @@ fn open_web_link(url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut Ap
 fn chat_text(view: &Entity<TextViewState>, cx: &App) -> gpui_kit::base::TextView {
     gpui_kit::base::TextView::new(view).selectable(true).scrollable(false).style(theme::conversation_markdown(cx))
         .code_block_actions(copy_code)
+}
+
+/// Grupo de hover da linha da mensagem: a faixa de hora e copiar acende com ele.
+const ROW_GROUP: &str = "message-row";
+
+/// Bolha do usuário, na conversa e no subagente.
+fn user_bubble(content: impl IntoElement) -> Div {
+    div().max_w(relative(0.78)).px(px(14.)).py(px(10.)).rounded(px(18.)).bg(theme::user_bubble()).child(content)
+}
+
+/// Mensagem longa do usuário (mais de 5 linhas ou 400 caracteres) recolhe, para um log colado não virar bloco sem fim.
+fn long_message(source: &str) -> bool { source.lines().count() > 5 || source.chars().count() > 400 }
+
+/// Texto recolhido em 5 linhas enquanto a mensagem longa está fechada.
+fn collapse(text: gpui_kit::base::TextView, long: bool, open: bool) -> gpui_kit::base::TextView {
+    if long && !open { text.max_lines(5) } else { text }
+}
+
+fn more_button(id: impl Into<ElementId>, open: bool) -> Button {
+    Button::new(id).ghost().xsmall().label(tr(if open { "show_less" } else { "show_more" }))
+        .icon(if open { IconName::ChevronUp } else { IconName::ChevronDown })
+}
+
+/// Copiar da faixa de hover: o comportamento do `Clipboard` do kit (✓ por 2 s), mas fora da ordem do Tab, porque a faixa só aparece com o mouse (pelo
+/// teclado, copiar segue no menu de contexto e no Ctrl+Shift+C). O texto é lido no clique.
+#[derive(IntoElement)]
+struct CopyButton { id: ElementId, value: std::rc::Rc<dyn Fn(&App) -> String> }
+
+impl RenderOnce for CopyButton {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let copied = window.use_keyed_state(self.id.clone(), cx, |_, _| false);
+        let done = *copied.read(cx);
+        let value = self.value;
+        Button::new(self.id).ghost().xsmall().tab_stop(false).tooltip(tr("copy_message"))
+            .icon(if done { IconName::Check } else { IconName::Copy })
+            .when(!done, |el| el.on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                cx.write_to_clipboard(ClipboardItem::new_string(value(cx)));
+                copied.update(cx, |copied, cx| { *copied = true; cx.notify(); });
+                let copied = copied.clone();
+                cx.spawn(async move |cx| {
+                    cx.background_executor().timer(Duration::from_secs(2)).await;
+                    _ = copied.update(cx, |copied, cx| { *copied = false; cx.notify(); });
+                }).detach();
+            }))
+    }
+}
+
+/// Hora da mensagem: só "HH:MM" se for de hoje, com o dia antes se não for.
+fn stamp(ts: Option<f64>) -> Option<String> {
+    use chrono::{Datelike, Local, TimeZone, Timelike};
+    let at = Local.timestamp_opt(ts.filter(|ts| ts.is_finite() && *ts > 0.)? as i64, 0).single()?;
+    let time = format!("{:02}:{:02}", at.hour(), at.minute());
+    if at.date_naive() == Local::now().date_naive() { return Some(time); }
+    let day = tr("message_date").replace("{d}", &format!("{:02}", at.day())).replace("{m}", &format!("{:02}", at.month()));
+    Some(format!("{day} {time}"))
 }
 
 fn copy_code(block: &gpui_kit::base::text::CodeBlock, _: &mut Window, _: &mut App) -> gpui_kit::component::clipboard::Clipboard {
@@ -3799,6 +3882,18 @@ mod tests {
         assert_eq!(working_verb(None), tr("working_line"));
         let at = |s| super::chrome::format_elapsed(Duration::from_secs(s));
         assert_eq!((at(6), at(65), at(3725)), ("6s".into(), "1m 5s".into(), "1h 2m".into()));
+    }
+
+    #[test]
+    fn long_user_message_collapses_past_five_lines_or_400_chars_and_time_skips_unknown() {
+        assert!(!super::long_message("1\n2\n3\n4\n5"));
+        assert!(super::long_message("1\n2\n3\n4\n5\n6"));
+        assert!(!super::long_message(&"a".repeat(400)));
+        assert!(super::long_message(&"á".repeat(401)));
+        assert_eq!(super::stamp(None), None);
+        let now = chrono::Local::now().timestamp() as f64;
+        assert_eq!(super::stamp(Some(now)), super::clock(Some(now)));
+        assert!(super::stamp(Some(now - 3. * 86_400.)).is_some_and(|s| s.len() > 5));
     }
 
     #[test]
