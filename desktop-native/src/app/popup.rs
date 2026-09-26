@@ -92,7 +92,7 @@ impl Hangar {
         let (shown, visible, leaving) = presence.update(cx, |presence, _| presence.frame(live, still))?;
         if visible < 1. { window.request_animation_frame(); }
         let (anchor, align, narrow, content) = match shown {
-            Floating::Controls(open) => (open.anchor(), Align::End, true, self.render_ctl_panel_for(open, cx)),
+            Floating::Controls(open) => (open.anchor(), Align::End, true, self.render_ctl_panel_for(open, window, cx)),
             Floating::Commands => ("composer".to_owned(), Align::Start, false, Some(self.render_command_panel(cx))),
             Floating::Recent(recent) => {
                 let live = self.recent.replace(recent);

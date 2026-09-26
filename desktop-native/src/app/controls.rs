@@ -45,6 +45,13 @@ pub(super) struct Controls {
     plans_done: HashSet<String>,
     planning: HashSet<SessionKey>,
     preselect: Option<SessionKey>,
+    // Linha sob o teclado; `None` é a atual (ou a primeira livre) até ↑↓ ou o ponteiro moverem.
+    highlight: Option<usize>,
+    scroll: ScrollHandle,
+    // O painel toma o foco ao abrir: ↑↓ Enter chegam a ele, e o Esc sobe até o braço da raiz.
+    focus: Option<(FocusHandle, Subscription)>,
+    // A lista rola até a linha destacada uma vez por abertura, no primeiro desenho com ela.
+    revealed: std::cell::Cell<bool>,
 }
 
 impl Controls {
@@ -101,15 +108,26 @@ fn claude_effort_current(status: &str) -> Option<&'static str> {
     CLAUDE_EFFORTS.iter().find(|e| **e == status).or_else(|| CLAUDE_EFFORTS.iter().find(|e| e.starts_with(&status))).copied()
 }
 
+// ↑↓ andam só pelas linhas livres e dão a volta nas pontas; de fora da lista, o sentido escolhe a ponta.
+fn step_free(free: &[bool], now: usize, step: isize) -> Option<usize> {
+    let free: Vec<usize> = free.iter().enumerate().filter(|(_, f)| **f).map(|(n, _)| n).collect();
+    let last = *free.last()?;
+    Some(match free.iter().position(|&n| n == now) {
+        Some(at) => free[(at as isize + step).rem_euclid(free.len() as isize) as usize],
+        None if step > 0 => free[0],
+        None => last,
+    })
+}
+
 impl Hangar {
     pub(super) fn controls_open(&self) -> bool { self.controls.open.is_some() }
     pub(super) fn close_controls(&mut self) { self.controls.open = None; }
     pub(super) fn ctl_snapshot(&self) -> Option<Open> { self.controls.open.clone() }
 
     /// Desenha o painel de `open` mesmo já fechado: a saída animada mostra o que estava na tela.
-    pub(super) fn render_ctl_panel_for(&mut self, open: Open, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_ctl_panel_for(&mut self, open: Open, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let live = self.controls.open.replace(open);
-        let panel = self.render_ctl_panel(cx);
+        let panel = self.render_ctl_panel(window, cx);
         self.controls.open = live;
         panel
     }
@@ -174,6 +192,9 @@ impl Hangar {
         };
         let loaded = read.is_none().then(|| Ok(Value::Null));
         self.controls.open = Some(Open { key: key.clone(), ctl, catalog: loaded });
+        self.controls.highlight = None;
+        self.controls.scroll = ScrollHandle::new();
+        self.controls.revealed.set(false);
         if let Some((path, query)) = read {
             let (connection, tx) = (self.connection, self.tx.clone());
             // `sondar` passa por todos os modos no terminal: timeout maior que a volta completa.
@@ -391,7 +412,10 @@ impl Hangar {
             let value = self.ctl_label(ctl).map(|v| shown(ctl, v));
             let text = if busy == Some(ctl) { tr("ctl_applying").replace("{what}", &name) } else { value.clone().unwrap_or_else(|| name.clone()) };
             let id = SharedString::from(format!("ctl-{}", ctl.key()));
-            let listener = cx.listener(move |this, _, _, cx| this.open_ctl(ctl, false, cx));
+            let listener = cx.listener(move |this, _, window, cx| {
+                this.open_ctl(ctl, false, cx);
+                this.focus_ctl_panel(window, cx);
+            });
             if ctl == Ctl::Mode {
                 let plan = self.ctl_label(ctl).as_deref() == Some("plan");
                 mode = Some(popup::anchor(div(), id.clone()).child(chrome::pill_button(id, cx).pl(px(10.)).gap(px(6.)).selected(open == Some(ctl)).disabled(!self.chat_online)
@@ -412,7 +436,57 @@ impl Hangar {
         (pills, mode)
     }
 
-    pub(super) fn render_ctl_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn focus_ctl_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.controls_open() { return; }
+        if self.controls.focus.is_none() {
+            let handle = cx.focus_handle();
+            let out = cx.on_focus_out(&handle, window, |this, _, window, cx| {
+                // O painel saiu da árvore com o foco (clique fora, troca de sessão, sessão ilegível): o foco volta à raiz.
+                let stranded = window.focused(cx).is_none_or(|f| this.controls.focus.as_ref().is_some_and(|(h, _)| *h == f));
+                if window.is_window_active() && stranded { this.root_focus.focus(window, cx); }
+            });
+            self.controls.focus = Some((handle, out));
+        }
+        if let Some((handle, _)) = &self.controls.focus { handle.clone().focus(window, cx); }
+    }
+
+    /// Opções do painel aberto, quando a lista já chegou.
+    fn open_choices(&self) -> Option<(Ctl, Vec<Choice>)> {
+        let open = self.controls.open.as_ref()?;
+        let Some(Ok(catalog)) = &open.catalog else { return None; };
+        Some((open.ctl, self.choices(open.ctl, catalog)))
+    }
+
+    fn ctl_highlight(&self, choices: &[Choice]) -> usize {
+        self.controls.highlight.filter(|&n| choices.get(n).is_some_and(|c| c.enabled))
+            .or_else(|| choices.iter().position(|c| c.current && c.enabled))
+            .or_else(|| choices.iter().position(|c| c.enabled)).unwrap_or(0)
+    }
+
+    // `edge`: Home/End, a primeira ou a última livre conforme o sentido.
+    fn move_ctl(&mut self, step: isize, edge: bool, cx: &mut Context<Self>) {
+        let Some((_, choices)) = self.open_choices() else { return; };
+        let free: Vec<bool> = choices.iter().map(|c| c.enabled).collect();
+        let now = if edge { usize::MAX } else { self.ctl_highlight(&choices) };
+        let Some(next) = step_free(&free, now, step) else { return; };
+        self.controls.highlight = Some(next);
+        self.controls.scroll.scroll_to_item(next);
+        cx.notify();
+    }
+
+    /// Clique ou Enter numa linha (`None` = a destacada). A atual só fecha: reaplicar dispararia a troca de novo.
+    /// O foco volta ao campo, para quem trocou seguir digitando.
+    fn pick_ctl(&mut self, row: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((ctl, choices)) = self.open_choices() else { return; };
+        if self.selected_key().is_some_and(|key| self.controls.busy.contains_key(&key)) { return; }
+        let n = row.unwrap_or_else(|| self.ctl_highlight(&choices));
+        let Some(choice) = choices.into_iter().nth(n).filter(|c| c.enabled) else { return; };
+        self.composer.update(cx, |input, cx| input.focus(window, cx));
+        if choice.current { self.close_controls(); cx.notify(); return; }
+        self.apply_ctl(ctl, choice.path, choice.body, choice.label, cx);
+    }
+
+    pub(super) fn render_ctl_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let key = self.selected_key()?;
         let open = self.controls.open.as_ref().filter(|o| o.key == key)?;
         let ctl = open.ctl;
@@ -424,49 +498,84 @@ impl Hangar {
             _ => None,
         };
         let body = match &open.catalog {
-            None => popup::skeleton("ctl-loading", 3).into_any_element(),
-            Some(Err(reason)) => div().px(px(8.)).flex().items_center().gap_2().text_sm().text_color(theme::warning())
-                .child(div().flex_1().min_w_0().child(tr("ctl_failed").replace("{reason}", reason)))
-                .child(Button::new("ctl-retry").ghost().xsmall().flex_shrink_0().label(tr("retry")).on_click(cx.listener(move |this, _, _, cx| {
+            None => popup::skeleton("ctl-loading", 5).into_any_element(),
+            Some(Err(reason)) => div().p(px(8.)).flex().flex_col().items_start().gap(px(6.)).text_size(px(12.)).text_color(theme::danger())
+                .child(tr("ctl_failed").replace("{reason}", reason))
+                .child(Button::new("ctl-retry").outline().xsmall().label(tr("ctl_retry")).on_click(cx.listener(move |this, _, window, cx| {
                     this.close_controls();
                     this.open_ctl(ctl, false, cx);
+                    this.focus_ctl_panel(window, cx);
                 })))
                 .into_any_element(),
             Some(Ok(catalog)) => {
                 let choices = self.choices(ctl, catalog);
                 let needs_probe = probe_note.is_some() && (catalog.is_null() || choices.iter().all(|c| !c.enabled) || choices.is_empty());
-                let mut list = div().flex().flex_col();
-                if choices.is_empty() && !needs_probe {
-                    list = list.child(div().px(px(8.)).text_sm().text_color(theme::muted()).child(tr("ctl_empty")));
+                let pick = self.ctl_highlight(&choices);
+                // A GPUI mede a área da lista depois de aplicar o `scroll_to_item`: no primeiro quadro o pedido se perderia.
+                // Sem medida ainda, só pede outro quadro.
+                if !choices.is_empty() && !self.controls.revealed.get() {
+                    if self.controls.scroll.bounds().size.height > px(0.) {
+                        self.controls.revealed.set(true);
+                        self.controls.scroll.scroll_to_item(pick);
+                    } else { window.request_animation_frame(); }
                 }
-                // Linha do popover do web: atual com fundo accent e tique à direita, detalhe na segunda linha.
+                // Filhos diretos são as linhas: o índice do `scroll_to_item` é o da opção.
+                let mut list = div().id("ctl-list").max_h(px(260.)).overflow_y_scroll().track_scroll(&self.controls.scroll).flex().flex_col();
+                if choices.is_empty() && !needs_probe {
+                    list = list.child(div().px(px(8.)).py(px(24.)).text_size(px(12.)).text_color(theme::muted()).text_center().child(tr("ctl_empty")));
+                }
+                // Um destaque só: o ponteiro move o do teclado. A atual leva o fundo accent e o tique; o modelo cabe numa
+                // linha, com a origem ao lado.
                 for (n, c) in choices.into_iter().enumerate() {
-                    let (path, body, label, current) = (c.path, c.body, c.label.clone(), c.current);
-                    let shown = if ctl == Ctl::Effort { capitalized(&c.label) } else { c.label.clone() };
-                    list = list.child(popup::row(SharedString::from(format!("ctl-choice-{n}")), current).disabled(busy || !c.enabled)
-                        .child(div().w_full().flex().items_center().gap_2()
-                            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
-                                .child(div().truncate().text_sm().text_color(theme::text()).child(shown))
-                                .when(!c.detail.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(c.detail))))
+                    let (current, lit) = (c.current, n == pick && c.enabled);
+                    let shown = if ctl == Ctl::Effort { capitalized(&c.label) } else { c.label };
+                    let name = div().truncate().text_sm().text_color(theme::text()).child(shown);
+                    let text = if ctl == Ctl::Model {
+                        div().flex_1().min_w_0().flex().items_center().gap(px(6.)).child(name.flex_none().max_w_full().font_weight(FontWeight::MEDIUM))
+                            .when(!c.detail.is_empty(), |el| el.child(div().min_w_0().truncate().text_xs().text_color(theme::muted()).child(c.detail)))
+                    } else {
+                        div().flex_1().min_w_0().flex().flex_col().gap(px(1.)).child(name)
+                            .when(!c.detail.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(c.detail)))
+                    };
+                    let enabled = c.enabled;
+                    list = list.child(popup::row(SharedString::from(format!("ctl-choice-{n}")), current).disabled(busy || !enabled)
+                        // Véu do texto, como o do Zeron: `theme::hover()` sólido tem a cor do cartão no clássico escuro.
+                        .when(lit && !current, |el| el.bg(theme::text().opacity(0.06)))
+                        .child(div().w_full().flex().items_center().gap_2().child(text)
                             .when(current, |el| el.child(chrome::small_icon(IconName::Check, 16., theme::accent()))))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            // A atual só fecha: reaplicar dispararia a troca de novo.
-                            if current { this.close_controls(); cx.notify(); return; }
-                            this.apply_ctl(ctl, path.clone(), body.clone(), label.clone(), cx)
-                        })));
+                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                            if *hovered && enabled && this.controls.highlight != Some(n) { this.controls.highlight = Some(n); cx.notify(); }
+                        }))
+                        .on_click(cx.listener(move |this, _, window, cx| this.pick_ctl(Some(n), window, cx))));
                 }
                 div().flex().flex_col().gap(px(2.))
-                    .child(div().id("ctl-list").max_h(px(260.)).overflow_y_scroll().child(list))
+                    .child(list)
                     .when(ctl == Ctl::Effort, |el| el.child(popup::separator())
                         .child(div().px(px(8.)).pt(px(4.)).pb(px(2.)).text_xs().text_color(theme::muted()).child(tr("effort_hint"))))
                     .when_some(probe_note.filter(|_| needs_probe), |el, note| el.child(div().px(px(8.)).flex().items_center().gap_2()
                         .child(div().flex_1().min_w_0().text_xs().text_color(theme::muted()).child(tr(note)))
                         .child(Button::new("ctl-probe").xsmall().flex_shrink_0().label(tr("ctl_probe")).disabled(busy)
-                            .on_click(cx.listener(move |this, _, _, cx| this.open_ctl(ctl, true, cx))))))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_ctl(ctl, true, cx);
+                                this.focus_ctl_panel(window, cx);
+                            })))))
                     .into_any_element()
             }
         };
+        let keys = cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            match event.keystroke.key.as_str() {
+                "up" => this.move_ctl(-1, false, cx),
+                "down" => this.move_ctl(1, false, cx),
+                // Entrando de fora da lista: para a frente cai na primeira, para trás na última.
+                "home" => this.move_ctl(1, true, cx),
+                "end" => this.move_ctl(-1, true, cx),
+                "enter" => this.pick_ctl(None, window, cx),
+                _ => return,
+            }
+            cx.stop_propagation();
+        });
         Some(div().p(px(popup::INSET)).rounded_md().bg(theme::raised()).flex().flex_col().gap(px(2.))
+            .when_some(self.controls.focus.as_ref(), |el, focus| el.track_focus(&focus.0).on_key_down(keys))
             .child(popup::title(tr(&format!("ctl_{}_title", ctl.key())), Some("esc")))
             .child(body).into_any_element())
     }
@@ -675,7 +784,15 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
-    use super::{claude_effort_current, claude_model_current, only_match};
+    use super::{claude_effort_current, claude_model_current, only_match, step_free};
+
+    #[test]
+    fn arrows_skip_locked_rows_and_wrap() {
+        let free = [true, false, true, true];
+        assert_eq!((step_free(&free, 0, 1), step_free(&free, 3, 1), step_free(&free, 0, -1)), (Some(2), Some(0), Some(3)));
+        assert_eq!((step_free(&free, usize::MAX, 1), step_free(&free, usize::MAX, -1)), (Some(0), Some(3)));
+        assert_eq!(step_free(&[false, false], 0, 1), None);
+    }
 
     fn names(list: &[&str]) -> Vec<String> { list.iter().map(|s| (*s).to_owned()).collect() }
 

@@ -3994,6 +3994,7 @@
   "native_ctl_mode_title": "Modo desta sessão",
   "native_ctl_permission_title": "Permissão desta sessão",
   "native_ctl_loading": "Lendo opções…",
+  "native_ctl_retry": "Tentar de novo",
   "native_ctl_failed": "Não deu para ler as opções: {reason}",
   "native_ctl_empty": "Nenhuma opção disponível.",
   "native_effort_hint": "Do mais rápido ao mais inteligente.",
