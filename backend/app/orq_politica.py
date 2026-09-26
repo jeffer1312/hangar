@@ -16,7 +16,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import apelidos, codex_contas, config, contas, cotas, kimi_models, model_args, orq_md, pi_catalog
+from . import apelidos, codex_contas, codex_models, config, contas, cotas, kimi_models, model_args, orq_md, pi_catalog
 
 _log = logging.getLogger("hangar.orq_politica")
 
@@ -153,8 +153,16 @@ def inventario(catalogo_claude=_modelos_claude_reduzidos) -> list[ContaInventari
             # A padrão mantém o nome `openai-codex`: é o que as políticas já gravadas usam.
             chave = f"codex:{c.home.expanduser().resolve(strict=False)}"
             padrao = nomes.get("codex", "OpenAI Codex") if c.is_default else c.id
+            try:
+                ms = tuple({"id": m["id"], "name": m["name"], "efforts": m["efforts"]}
+                           for m in codex_models.listar(codex_home=None if c.is_default else c.home))
+            except (codex_models.CodexAusente, codex_models.CodexIndisponivel, codex_models.CodexRecusado,
+                    codex_models.CodexRespostaInvalida, RuntimeError, OSError):
+                # model/list fora do ar deixa só "Padrão", não some a conta
+                _log.warning("catálogo Codex de %s indisponível", c.id, exc_info=True)
+                ms = ()
             out.append(ContaInventario(CONTA_CODEX if c.is_default else c.id, "codex",
-                                       nomes.get(chave) or padrao, None, ()))
+                                       nomes.get(chave) or padrao, None, ms))
     except Exception:  # noqa: BLE001 — pasta de conta Codex ilegível não cega as outras contas
         _log.warning("contas Codex fora do inventário", exc_info=True)
     return out
