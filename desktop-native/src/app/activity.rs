@@ -6,6 +6,7 @@ use super::*;
 use super::subagent::SubConversation;
 use crate::conversation::{Activity, AgentRun, TaskStatus};
 use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::tab::{Tab, TabBar};
 
 /// Recontagem dos subagentes no disco enquanto a sessão trabalha.
 const COUNT_EVERY: Duration = Duration::from_secs(5);
@@ -15,6 +16,7 @@ const CLOCK_EVERY: Duration = Duration::from_secs(20);
 const DETAIL_EVERY: Duration = Duration::from_millis(2500);
 /// Falhas seguidas que param a consulta; o 404 para na primeira.
 const DETAIL_FAILS: u32 = 3;
+const TAB_CROSS: IconName = IconName::Close;
 
 pub(super) enum ActivityReply {
     /// Quantos subagentes a sessão tem no disco, amarrado à sessão e ao pedido.
@@ -23,6 +25,7 @@ pub(super) enum ActivityReply {
     List(u64, Result<Vec<SubRun>, Failure>),
     /// O subagente aberto (`…/subagents/{id}?events=200`), com o número do pedido.
     Detail(u64, Result<Value, Failure>),
+    TabDetail(u64, u64, Result<Value, Failure>),
 }
 
 /// Um subagente do disco (`GET …/subagents`), só com o que a lista mostra e casa.
@@ -175,6 +178,7 @@ pub(super) struct ActivityPanel {
     back_focus: FocusHandle,
     /// Lugares da marca desta view, que é guardada dentro do painel: ela limpa os seus a cada desenho.
     marks: super::panes::MarkPlaces,
+    tab_id: Option<u64>,
 }
 
 impl ActivityPanel {
@@ -182,7 +186,7 @@ impl ActivityPanel {
         Self { link: None, key: None, shown: false, activity: Activity::default(), processes: Vec::new(), subs: Vec::new(), seq: 0,
             loading: false, failed: false, lines: Lines::default(), clock: None, scroll: ScrollHandle::new(), opened: None, detail_seq: 0,
             poll: None, notice: None, pending: None, conversation: cx.new(|_| SubConversation::new()), back_focus: cx.focus_handle().tab_stop(true),
-            marks: Default::default() }
+            marks: Default::default(), tab_id: None }
     }
 
     /// Refaz as linhas; `true` quando mudou algo que aparece.
@@ -351,10 +355,11 @@ impl ActivityPanel {
         let (Some(link), Some(key)) = (self.link.clone(), self.key.clone()) else { return };
         let Some(opened) = self.opened.as_mut().filter(|o| !o.busy) else { return };
         opened.busy = true;
-        let (seq, id) = (self.detail_seq, opened.run.agent_id.clone());
+        let (seq, id, tab) = (self.detail_seq, opened.run.agent_id.clone(), self.tab_id);
         link.runtime.spawn(async move {
             let result = link.api.read(&key.name, &["subagents", &id], &[("events", "200")], 15).await;
-            let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(ActivityReply::Detail(seq, result)) }).await;
+            let reply = match tab { Some(tab) => ActivityReply::TabDetail(tab, seq, result), None => ActivityReply::Detail(seq, result) };
+            let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(reply) }).await;
         });
     }
 
@@ -569,7 +574,7 @@ impl ActivityPanel {
         let session = self.key.as_ref().map(|k| k.name.clone()).unwrap_or_default();
         div().size_full().flex().flex_col()
             .child(div().flex_shrink_0().px(px(10.)).pt(px(10.)).pb(px(4.)).flex().items_center().gap_1()
-                .child(div().id("act-back").track_focus(&self.back_focus).size(px(28.)).flex_shrink_0().rounded(px(6.))
+                .when(self.tab_id.is_none(), |el| el.child(div().id("act-back").track_focus(&self.back_focus).size(px(28.)).flex_shrink_0().rounded(px(6.))
                     .flex().items_center().justify_center().cursor_pointer().hover(|el| el.bg(theme::hover()))
                     .when(self.back_focus.is_focused(window), |el| el.focus_ring_style(window, cx))
                     .role(Role::Button).aria_label(back.clone())
@@ -578,7 +583,7 @@ impl ActivityPanel {
                     .on_click(cx.listener(|this, _, _, cx| this.back(cx)))
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                         if matches!(event.keystroke.key.as_str(), "enter" | "space") { this.back(cx); cx.stop_propagation(); }
-                    })))
+                    }))))
                 .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(title)))
             .when_some(self.notice.clone(), |el, notice| el.child(div().flex_shrink_0().px_4().pb_2().child(warning_line(notice))))
             .child(div().flex_shrink_0().px_4().pb(px(10.)).flex().flex_wrap().gap_x(px(10.)).gap_y(px(2.)).text_xs().children(meta))
@@ -605,12 +610,26 @@ pub(super) struct ActivityState {
     count_timer: Option<Task<()>>,
     /// Sessões em que a aba escolhida é Atividade.
     chosen: HashSet<SessionKey>,
+    tabs: Vec<SubagentTab>,
+    active_tab: Option<u64>,
+    tab_seq: u64,
+    pending_tab: Option<(Option<String>, String)>,
+    tab_error: Option<String>,
+    tab_scroll: ScrollHandle,
+}
+
+struct SubagentTab { id: u64, agent_id: String, title: String, view: Entity<ActivityPanel>, previous: Option<u64> }
+
+fn tab_after_close(active: Option<u64>, closed: u64, previous: Option<u64>, remaining: &[u64]) -> Option<u64> {
+    if active != Some(closed) { return active; }
+    previous.filter(|id| remaining.contains(id))
 }
 
 impl ActivityState {
     pub fn new(cx: &mut App) -> Self {
         Self { view: cx.new(ActivityPanel::new), count: 0, count_seq: 0, count_busy: false, subs: Vec::new(), count_timer: None,
-            chosen: HashSet::new() }
+            chosen: HashSet::new(), tabs: Vec::new(), active_tab: None, tab_seq: 0, pending_tab: None, tab_error: None,
+            tab_scroll: ScrollHandle::new() }
     }
 }
 
@@ -622,7 +641,7 @@ impl Hangar {
     }
 
     pub(super) fn activity_tab(&self) -> bool {
-        self.selected_key().is_some_and(|key| self.act.chosen.contains(&key)) && self.has_activity()
+        self.act.active_tab.is_none() && self.selected_key().is_some_and(|key| self.act.chosen.contains(&key)) && self.has_activity()
     }
 
     fn activity_link(&self) -> Option<Link> {
@@ -633,14 +652,19 @@ impl Hangar {
     /// os dados e, se passou a aparecer, relê a lista. Antes de a conversa chegar não há como saber, e a escolha fica.
     pub(super) fn sync_activity(&mut self, cx: &mut Context<Self>) {
         let key = self.selected_key();
+        if !self.side.open { self.act.pending_tab = None; }
         if let Some(key) = &key { if self.history_installed && !self.has_activity() { self.act.chosen.remove(key); } }
-        let target = key.filter(|_| self.side.open && self.activity_tab()).zip(self.activity_link());
+        let target = key.filter(|key| self.side.open && self.act.chosen.contains(key) && self.has_activity()).zip(self.activity_link());
         let (activity, processes) = (&self.activity, &self.chat.state.shells);
         self.act.view.update(cx, |view, cx| { view.set_data(activity, processes, cx); view.show(target, cx); });
+        for tab in &self.act.tabs { tab.view.update(cx, |view, cx| view.set_data(activity, processes, cx)); }
     }
 
     pub(super) fn choose_side_tab(&mut self, activity: bool, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key() else { return };
+        self.act.active_tab = None;
+        self.act.pending_tab = None;
+        self.act.tab_error = None;
         if activity { self.act.chosen.insert(key); } else { self.act.chosen.remove(&key); }
         self.sync_activity(cx);
         cx.notify();
@@ -654,6 +678,10 @@ impl Hangar {
 
     /// Sessão nova: a conta recomeça e o pedido em voo da anterior é descartado.
     pub(super) fn reset_subagent_count(&mut self) {
+        self.act.tabs.clear();
+        self.act.active_tab = None;
+        self.act.pending_tab = None;
+        self.act.tab_error = None;
         self.act.count = 0;
         self.act.subs.clear();
         self.act.count_seq += 1;
@@ -689,19 +717,34 @@ impl Hangar {
             ActivityReply::Count(key, seq, result) => {
                 if seq != self.act.count_seq || self.selected_key().as_ref() != Some(&key) { return; }
                 self.act.count_busy = false;
-                let Ok(subs) = result else { return };
+                let Ok(subs) = result else {
+                    if self.act.pending_tab.take().is_some() { self.act.tab_error = Some(web("atividade_erro_vivo")); cx.notify(); }
+                    return;
+                };
                 let before = self.has_activity();
                 self.act.count = subs.len();
                 // Redesenha só quando muda quem falhou: a batida de 5 s não refaz a conversa a cada chamada contada.
                 let failed_ids = |subs: &[SubRun]| subs.iter().filter(|s| s.failed).map(|s| s.agent_id.clone()).collect::<Vec<_>>();
                 let changed = failed_ids(&subs) != failed_ids(&self.act.subs);
                 self.act.subs = subs;
+                if let Some(request) = self.act.pending_tab.take() { self.resolve_agent_tab(request, cx); }
                 if changed { cx.notify(); }
                 // Só a presença da aba e do botão depende da conta: o número dela não aparece.
                 if self.has_activity() != before { self.sync_activity(cx); cx.notify(); }
             }
             ActivityReply::List(seq, result) => self.act.view.update(cx, |view, cx| view.receive(seq, result, cx)),
             ActivityReply::Detail(seq, result) => self.act.view.update(cx, |view, cx| view.receive_detail(seq, result, cx)),
+            ActivityReply::TabDetail(id, seq, result) => {
+                if let Some(tab) = self.act.tabs.iter().find(|t| t.id == id) {
+                    let changed = tab.view.update(cx, |view, cx| {
+                        let status = |v: &ActivityPanel| (v.opened.as_ref().map(|o| (o.done, o.run.failed, o.run.unreadable)), v.notice.is_some());
+                        let before = status(view);
+                        view.receive_detail(seq, result, cx);
+                        before != status(view)
+                    });
+                    if changed { self.redraw(super::panes::Area::Side, cx); }
+                }
+            }
         }
     }
 
@@ -709,6 +752,10 @@ impl Hangar {
     pub(super) fn restyle_subagent(&mut self, cx: &mut Context<Self>) {
         let conversation = self.act.view.read(cx).conversation.clone();
         conversation.update(cx, |view, cx| view.restyle(cx));
+        for tab in &self.act.tabs {
+            let conversation = tab.view.read(cx).conversation.clone();
+            conversation.update(cx, |view, cx| view.restyle(cx));
+        }
     }
 
     /// O Agent desta chamada lançou um subagente que falhou: casado pelo `agentId` do resultado ou pelo prompt.
@@ -721,11 +768,101 @@ impl Hangar {
         super::panes::float_marks(self.act.view.read(cx).marks.clone(), super::panes::Area::Side, WORKING_FADE, cx.reduce_motion())
     }
 
-    /// Clique no cartão Agent da conversa: abre o painel na aba Atividade, já na conversa desse agente. Cada clique é um
-    /// pedido novo, então clicar de novo no mesmo agente depois do ‹ reabre.
-    pub(super) fn open_agent(&mut self, (prompt, title): (Option<String>, String), cx: &mut Context<Self>) {
-        self.open_activity(cx);
-        self.act.view.update(cx, |view, cx| view.request_agent(prompt, title, cx));
+    /// O cartão abre uma aba por identidade do subagente, sem substituir a lista da Atividade.
+    pub(super) fn open_agent(&mut self, request: (Option<String>, String), cx: &mut Context<Self>) {
+        self.side.open = true;
+        self.act.tab_error = None;
+        self.act.pending_tab = Some(request);
+        self.count_subagents();
+        cx.notify();
+    }
+
+    fn resolve_agent_tab(&mut self, (prompt, title): (Option<String>, String), cx: &mut Context<Self>) {
+        let Some(run) = match_sub(&self.act.subs, prompt.as_deref()).cloned() else {
+            self.act.tab_error = Some(web("atividade_agente_nao_achado"));
+            cx.notify();
+            return;
+        };
+        let id = if let Some(tab) = self.act.tabs.iter().find(|t| t.agent_id == run.agent_id) { tab.id } else {
+            let (Some(key), Some(link)) = (self.selected_key(), self.activity_link()) else { return };
+            self.act.tab_seq += 1;
+            let id = self.act.tab_seq;
+            let view = cx.new(ActivityPanel::new);
+            view.update(cx, |view, cx| {
+                view.tab_id = Some(id);
+                view.key = Some(key);
+                view.link = Some(link);
+                view.subs = self.act.subs.clone();
+                view.set_data(&self.activity, &self.chat.state.shells, cx);
+                view.request_agent(prompt.clone(), title.clone(), cx);
+            });
+            self.act.tabs.push(SubagentTab { id, agent_id: run.agent_id, title, view, previous: self.act.active_tab });
+            id
+        };
+        self.select_agent_tab(id, cx);
+    }
+
+    fn select_agent_tab(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.act.tabs.iter_mut().find(|t| t.id == id) else { return; };
+        if self.act.active_tab != Some(id) { tab.previous = self.act.active_tab; }
+        self.act.active_tab = Some(id);
+        if let Some(index) = self.act.tabs.iter().position(|t| t.id == id) { self.act.tab_scroll.scroll_to_item(index); }
+        self.act.pending_tab = None;
+        self.act.tab_error = None;
+        self.sync_activity(cx);
+        cx.notify();
+    }
+
+    fn close_agent_tab(&mut self, id: u64, cx: &mut Context<Self>) {
+        let previous = self.act.tabs.iter().find(|t| t.id == id).and_then(|t| t.previous);
+        self.act.tabs.retain(|t| t.id != id);
+        self.act.active_tab = tab_after_close(self.act.active_tab, id, previous, &self.act.tabs.iter().map(|t| t.id).collect::<Vec<_>>());
+        if let Some(index) = self.act.tabs.iter().position(|t| Some(t.id) == self.act.active_tab) { self.act.tab_scroll.scroll_to_item(index); }
+        self.act.pending_tab = None;
+        self.sync_activity(cx);
+        cx.notify();
+    }
+
+    pub(super) fn subagent_mark_float(&self, cx: &App) -> AnyElement {
+        div().absolute().size_0().child(self.working_mark_float(super::panes::Area::Side, WORKING_FADE, cx.reduce_motion()))
+            .when_some(self.act.active_tab.and_then(|id| self.act.tabs.iter().find(|t| t.id == id)), |el, tab| {
+                el.child(super::panes::float_marks(tab.view.read(cx).marks.clone(), super::panes::Area::Side, WORKING_FADE, cx.reduce_motion()))
+            }).into_any_element()
+    }
+
+    pub(super) fn subagent_tab_view(&self, cx: &App) -> Option<AnyElement> {
+        let tab = self.act.tabs.iter().find(|t| Some(t.id) == self.act.active_tab)?;
+        Some(super::panes::cached_selectable(tab.view.clone().into(), tab.view.read(cx).views(), StyleRefinement::default().size_full()))
+    }
+
+    pub(super) fn render_subagent_tabs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let note = self.act.tab_error.clone().or_else(|| self.act.pending_tab.as_ref().map(|_| tr("subagent_loading")));
+        if self.act.tabs.is_empty() && note.is_none() { return None; }
+        let tabs = self.act.tabs.iter().map(|tab| {
+            let id = tab.id;
+            let view = tab.view.read(cx);
+            let opened = view.opened.as_ref();
+            let unavailable = view.notice.is_some() || opened.is_some_and(|o| o.run.unreadable);
+            let running = !unavailable && opened.is_some_and(|o| !o.done);
+            let failed = opened.is_some_and(|o| o.run.failed);
+            let icon = if running { self.working_mark_slot(super::panes::Area::Side, format!("subagent-tab-{id}"), 12., theme::accent()) }
+                else { chrome::small_icon(if unavailable { IconName::Info } else if failed { TAB_CROSS } else { IconName::Check }, 12.,
+                    if failed || unavailable { theme::warning() } else { theme::success() }).into_any_element() };
+            Tab::new().label(tab.title.clone()).prefix(icon)
+                .suffix(Button::new(SharedString::from(format!("subagent-tab-close-{id}"))).ghost().xsmall()
+                    .icon(TAB_CROSS).accessibility_label(tr("subagent_tab_close").replace("{name}", &tab.title))
+                    .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.close_agent_tab(id, cx); })))
+        }).collect::<Vec<_>>();
+        let ids: Vec<u64> = self.act.tabs.iter().map(|t| t.id).collect();
+        Some(div().flex_shrink_0().min_w_0().border_b_1().border_color(theme::border())
+            .when(!tabs.is_empty(), |el| el.child(TabBar::new("subagent-tabs").underline().small().menu(true).max_width(px(160.))
+                .track_scroll(&self.act.tab_scroll)
+                .when_some(self.act.tabs.iter().position(|t| Some(t.id) == self.act.active_tab), |bar, i| bar.selected_index(i)).children(tabs)
+                .on_click(cx.listener(move |this, index: &usize, _, cx| {
+                    if let Some(id) = ids.get(*index) { this.select_agent_tab(*id, cx); }
+                }))))
+            .when_some(note, |el, note| el.child(div().px_4().py_2().text_xs().text_color(theme::muted()).child(note)))
+            .into_any_element())
     }
 }
 
@@ -746,8 +883,9 @@ impl Hangar {
 
     /// A aba Atividade e as views guardadas dentro dela, que o painel guardado leva junto.
     pub(super) fn activity_views(&self, cx: &App) -> Vec<EntityId> {
-        let mut views = self.act.view.read(cx).views();
-        views.push(self.act.view.entity_id());
+        let view = self.act.tabs.iter().find(|t| Some(t.id) == self.act.active_tab).map(|t| &t.view).unwrap_or(&self.act.view);
+        let mut views = view.read(cx).views();
+        views.push(view.entity_id());
         views
     }
 
@@ -764,7 +902,7 @@ impl Hangar {
                     .on_click(cx.listener(move |this, _, _, cx| this.choose_side_tab(activity, cx))))
         };
         div().h_full().flex().items_center().gap(px(2.)).ml(px(-10.))
-            .child(tab("side-tab-context", tr("side_context"), !on_activity, false, cx))
+            .child(tab("side-tab-context", tr("side_context"), !on_activity && self.act.active_tab.is_none(), false, cx))
             .child(tab("side-tab-activity", web("ctx_atividade"), on_activity, true, cx))
             .into_any_element()
     }
@@ -796,6 +934,24 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     use super::{AgentRun, SubRun, agent_failed, base_title, interval, match_sub, sub_done, sub_title};
+
+    #[test]
+    fn tab_status_and_close_icons_are_embedded() {
+        use gpui_kit::AssetSource;
+        for icon in [super::TAB_CROSS, super::IconName::Check, super::IconName::Info] {
+            assert!(crate::AppAssets.load(icon.path().as_ref()).unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn closing_a_tab_preserves_a_newer_selection_and_never_restores_a_closed_tab() {
+        use super::tab_after_close;
+        assert_eq!(tab_after_close(Some(3), 2, Some(1), &[1, 3]), Some(3));
+        assert_eq!(tab_after_close(Some(3), 3, Some(2), &[1, 2]), Some(2));
+        assert_eq!(tab_after_close(Some(3), 3, Some(2), &[1]), None);
+        assert_eq!(tab_after_close(Some(1), 1, None, &[]), None);
+        assert_eq!(tab_after_close(None, 1, None, &[2]), None);
+    }
 
     fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
         AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
