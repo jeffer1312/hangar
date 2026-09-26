@@ -3163,7 +3163,9 @@ fn citation_extensions(row: &str, owner: WeakEntity<Hangar>) -> gpui_kit::base::
             let label = format!("{}{}", composer::basename(&path), line.map(|n| format!(":{n}")).unwrap_or_default());
             let title = tr("citation_open").replace("{path}", node.as_text());
             Button::new(format!("citation-{}-{}", self.row, node.source_range().map_or(0, |range| range.start)))
-                .small().outline().label(label).tooltip(title.clone()).accessibility_label(title)
+                .small().outline().tooltip(title.clone()).accessibility_label(title)
+                .child(crate::fileicons::citation_icon(composer::basename(&path)))
+                .child(div().min_w_0().whitespace_nowrap().text_ellipsis().child(label))
                 .on_click(move |_, window, cx| {
                     let _ = owner.update(cx, |this, cx| this.open_file(path.clone(), line, window, cx));
                 })
