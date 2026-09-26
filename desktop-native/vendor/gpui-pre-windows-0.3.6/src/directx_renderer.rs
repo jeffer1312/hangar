@@ -361,12 +361,30 @@ impl DirectXRenderer {
         })?;
         self.upload_scene_buffers(scene)?;
 
+        {
+            let resources = self.resources.as_mut().context("resources missing")?;
+            if resources
+                .backdrop
+                .as_mut()
+                .is_some_and(|backdrop| backdrop.expire())
+            {
+                resources.backdrop = None;
+            }
+        }
+        let mut blurs = scene.backdrop_blurs.iter().peekable();
+
         let annotation = self
             .devices
             .as_ref()
             .and_then(|devices| devices.annotation.clone())
             .filter(|annotation| unsafe { annotation.GetStatus().as_bool() });
         for batch in scene.batches() {
+            if blurs.peek().is_some() {
+                let order = batch.first_order(scene);
+                while blurs.peek().is_some_and(|blur| blur.order <= order) {
+                    self.draw_backdrop_blur(blurs.next().unwrap())?;
+                }
+            }
             let _annotation = annotation
                 .as_ref()
                 .map(|annotation| Annotation::new(annotation, HSTRING::from(batch.label())));
@@ -404,6 +422,9 @@ impl DirectXRenderer {
                     scene.surfaces.len(),
                 )
             })?;
+        }
+        for blur in blurs {
+            self.draw_backdrop_blur(blur)?;
         }
         Ok(())
     }
@@ -499,6 +520,7 @@ impl DirectXRenderer {
         let devices = self.devices.as_ref().context("devices missing")?;
         unsafe { devices.device_context.OMSetRenderTargets(None, None) };
         let resources = self.resources.as_mut().context("resources missing")?;
+        resources.backdrop = None;
         resources.render_target.take();
         resources.render_target_view.take();
 

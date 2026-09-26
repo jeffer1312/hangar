@@ -101,11 +101,6 @@ pub(super) struct BackdropResources {
 }
 
 impl BackdropResources {
-    #[cfg(test)]
-    pub(super) fn snapshot(&self) -> &ID3D11Texture2D {
-        &self.scratch.as_ref().unwrap().snapshot.texture
-    }
-
     fn new(device: &ID3D11Device) -> Result<Self> {
         let pass = Shaders::new(device, ShaderModule::BackdropPass)?;
         let composite = Shaders::new(device, ShaderModule::BackdropComposite)?;
@@ -227,4 +222,211 @@ impl BackdropResources {
         }
         Ok(())
     }
+}
+
+impl DirectXRenderer {
+    pub(super) fn draw_backdrop_blur(&mut self, blur: &BackdropBlur) -> Result<()> {
+        if !blur.blur_radius.0.is_finite()
+            || !valid_bounds(blur.bounds)
+            || !valid_bounds(blur.content_mask.bounds)
+            || ![
+                blur.corner_radii.top_left.0,
+                blur.corner_radii.top_right.0,
+                blur.corner_radii.bottom_right.0,
+                blur.corner_radii.bottom_left.0,
+            ]
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.)
+        {
+            return Ok(());
+        }
+        let visible = blur
+            .bounds
+            .intersect(&blur.content_mask.bounds)
+            .intersect(&Bounds::new(
+                point(ScaledPixels(0.), ScaledPixels(0.)),
+                size(
+                    ScaledPixels(self.width as f32),
+                    ScaledPixels(self.height as f32),
+                ),
+            ));
+        if visible.size.width.0 <= 0. || visible.size.height.0 <= 0. {
+            return Ok(());
+        }
+        let sigma = blur.blur_radius.0.clamp(1., MAX_SIGMA);
+        let padding = (sigma * 3.).ceil() + 2.;
+        let x0 = (visible.origin.x.0 - padding).floor().max(0.) as u32;
+        let y0 = (visible.origin.y.0 - padding).floor().max(0.) as u32;
+        let x1 = (visible.origin.x.0 + visible.size.width.0 + padding)
+            .ceil()
+            .min(self.width as f32) as u32;
+        let y1 = (visible.origin.y.0 + visible.size.height.0 + padding)
+            .ceil()
+            .min(self.height as f32) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            return Ok(());
+        }
+        let downsample = ((sigma / 8.) as u32).clamp(1, 4);
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_mut().context("resources missing")?;
+        if resources.backdrop.is_none() {
+            resources.backdrop = Some(BackdropResources::new(&devices.device)?);
+        }
+        let backdrop = resources.backdrop.as_mut().unwrap();
+        backdrop.ensure_scratch(
+            &devices.device,
+            x1 - x0,
+            y1 - y0,
+            downsample,
+            [self.width, self.height],
+        )?;
+        let scratch = backdrop.scratch.as_ref().unwrap();
+        let copy_x = x0.min(self.width - scratch.width);
+        let copy_y = y0.min(self.height - scratch.height);
+        let render_target = resources
+            .render_target
+            .as_ref()
+            .context("missing render target")?;
+        let context = &devices.device_context;
+        unsafe {
+            // A blur can be the first (or only) operation of the frame.
+            context
+                .VSSetConstantBuffers(0, Some(slice::from_ref(&self.globals.global_params_buffer)));
+            context
+                .PSSetConstantBuffers(0, Some(slice::from_ref(&self.globals.global_params_buffer)));
+            // Unbind before copying or changing a texture from RTV to SRV.
+            // D3D11 otherwise silently nulls conflicting SRV bindings.
+            context.VSSetShaderResources(0, Some(&[None]));
+            context.PSSetShaderResources(0, Some(&[None]));
+            context.OMSetRenderTargets(None, None);
+            context.CopySubresourceRegion(
+                &scratch.snapshot.texture,
+                0,
+                0,
+                0,
+                0,
+                render_target,
+                0,
+                Some(&D3D11_BOX {
+                    left: copy_x,
+                    top: copy_y,
+                    front: 0,
+                    right: copy_x + scratch.width,
+                    bottom: copy_y + scratch.height,
+                    back: 1,
+                }),
+            );
+        }
+        // Filter native pixels before reducing either axis to avoid aliasing fine detail.
+        let sigma_texels = sigma;
+        let mut params = Params {
+            bounds: rect(blur.bounds),
+            corners: [
+                blur.corner_radii.top_left.0,
+                blur.corner_radii.top_right.0,
+                blur.corner_radii.bottom_right.0,
+                blur.corner_radii.bottom_left.0,
+            ],
+            clip: rect(blur.content_mask.bounds),
+            source: [
+                copy_x as f32,
+                copy_y as f32,
+                scratch.width as f32,
+                scratch.height as f32,
+            ],
+            kernel: [
+                1. / scratch.width as f32,
+                0.,
+                sigma_texels,
+                downsample as f32,
+            ],
+            weights: gaussian_weights(sigma_texels),
+        };
+        let viewport = D3D11_VIEWPORT {
+            Width: scratch.width.div_ceil(downsample) as f32,
+            Height: scratch.height as f32,
+            MaxDepth: 1.,
+            ..Default::default()
+        };
+        // Always restore the main target and unbind owned resources, also on
+        // Map failure. The context must not retain cache resources after expiry.
+        let result = (|| {
+            backdrop.draw_pass(
+                context,
+                &backdrop.pass,
+                &scratch.snapshot,
+                &scratch.horizontal.rtv,
+                viewport,
+                params,
+            )?;
+            params.kernel = [0., 1. / viewport.Height, sigma_texels, downsample as f32];
+            let viewport = D3D11_VIEWPORT {
+                Height: scratch.height.div_ceil(downsample) as f32,
+                ..viewport
+            };
+            backdrop.draw_pass(
+                context,
+                &backdrop.pass,
+                &scratch.horizontal,
+                &scratch.vertical.rtv,
+                viewport,
+                params,
+            )?;
+            backdrop.draw_pass(
+                context,
+                &backdrop.composite,
+                &scratch.vertical,
+                &resources.render_target_view,
+                resources.viewport,
+                params,
+            )
+        })();
+        unsafe {
+            context.PSSetShaderResources(0, Some(&[None]));
+            context.VSSetConstantBuffers(2, Some(&[None]));
+            context.PSSetConstantBuffers(2, Some(&[None]));
+            context.PSSetSamplers(0, Some(&[None]));
+            context.VSSetShader(None, None);
+            context.PSSetShader(None, None);
+            context.OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
+            context.RSSetViewports(Some(&[resources.viewport]));
+        }
+        result.context("Drawing backdrop blur")
+    }
+}
+
+fn rect(bounds: Bounds<ScaledPixels>) -> [f32; 4] {
+    [
+        bounds.origin.x.0,
+        bounds.origin.y.0,
+        bounds.size.width.0,
+        bounds.size.height.0,
+    ]
+}
+
+fn valid_bounds(bounds: Bounds<ScaledPixels>) -> bool {
+    rect(bounds).iter().all(|value| value.is_finite())
+        && bounds.size.width.0 >= 0.
+        && bounds.size.height.0 >= 0.
+        && bounds.right().0.is_finite()
+        && bounds.bottom().0.is_finite()
+}
+
+fn gaussian_weights(sigma: f32) -> [[f32; 4]; KERNEL_VECTORS] {
+    let mut weights = [[0.; 4]; KERNEL_VECTORS];
+    let radius = (sigma * 3.).ceil() as usize;
+    if radius > 128 {
+        return weights;
+    }
+    let mut total = 0.;
+    for k in -(radius as i32)..=radius as i32 {
+        let weight = (-(k as f32) * k as f32 / (2. * sigma * sigma)).exp();
+        total += weight;
+        let k = k.unsigned_abs() as usize;
+        weights[k / 4][k % 4] = weight;
+    }
+    for weight in weights.iter_mut().flatten() {
+        *weight /= total;
+    }
+    weights
 }
