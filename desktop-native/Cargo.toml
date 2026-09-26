@@ -22,6 +22,8 @@ base64 = "=0.22.1"
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component-0.6.6" }
 gpui-base = { path = "vendor/gpui-base-0.6.6" }
+gpui-pre = { path = "vendor/gpui-pre-0.3.6" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu-0.3.6" }
 
 [profile.dev]
 debug = 0
