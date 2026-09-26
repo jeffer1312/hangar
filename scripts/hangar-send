@@ -3,8 +3,7 @@
 #
 #   hangar-send --list                 lista sessões vivas (nome, estado, harness, cwd) — locais e remotas
 #   hangar-send <sessao> <mensagem...> orienta o turno atual quando suportado; senão, mantém na fila
-#                                  RECUSA (código 3) quando o caminho NATIVO do Claude Code alcança
-#                                  os dois lados — ver "Caminho nativo" abaixo. --tmux força este.
+#                                  (como o recado chega: ver "TRANSPORTE" abaixo).
 #   hangar-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
 #   hangar-send --pair <sessao> [tarefa...] [--substituir-tarefa]  pareia ESTA sessão com outra
 #                                        (registra no app: badge 🤝 na UI + protocolo injetado nos
@@ -17,12 +16,10 @@
 #   hangar-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
 #   hangar-send --close <sessao>       fecha OUTRA sessão desta máquina, com ou sem terminal (o
 #                                  grupo dela é avisado). Nunca a própria.
-#   hangar-send --group [--tmux] <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei",
+#   hangar-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei",
 #                                  "contrato atualizado"). Chega como [grupo: X]. UNIDIRECIONAL —
 #                                  nunca responda um [grupo:] com --group (evita loop); responda 1:1.
-#                                  Peer com caminho nativo NÃO recebe pelo tmux: o script sai com
-#                                  código 3 listando a quem mandar por SendMessage, com o texto
-#                                  exato. --tmux força o caminho antigo.
+#                                  O backend entrega a cada membro pelo mesmo caminho do 1:1.
 #   hangar-send --new <nome> [cwd]     cria sessão nova, com terminal gerenciado ou headless.
 #                                  cwd default = home.
 #   hangar-send --new <servidor>::<nome> [cwd]  idem, NOUTRO servidor (peers.json), com as mesmas
@@ -529,8 +526,7 @@ if [[ "$1" == "--group" ]]; then
     nativo=false; [[ -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}" ]] && nativo=true
     body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "remetente_nativo": sys.argv[2] == "true", "forcar_tmux": sys.argv[3] == "true"}))' "$*" "$nativo" "$forcar_tmux")
     resp=$(api POST "/api/sessions/$eu/group-message" "$body")
-    # Resumo no stdout (pulados NÃO entram aqui — quem chegou pelo tmux) e a lista de pulados,
-    # separada, pro código 3 abaixo — dois python3 em vez de /dev/tty (ruling do controlador).
+    # `pulados` vem vazio: o backend entrega a todos. O filtro fica pra servidor antigo da malha.
     python3 -c 'import json,sys
 d = json.loads(sys.argv[1])
 pul = d.get("pulados", [])

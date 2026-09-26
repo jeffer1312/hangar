@@ -103,8 +103,8 @@ async def sessions(ctx: Context) -> list[dict[str, Any]]:
 
 @mcp.tool(description="Manda um recado 1:1 pra outra sessão, como `hangar-send <sessao> <msg>`: "
                       "chega lá como `[de: <você>] texto`. `alvo` aceita `servidor::sessao` "
-                      "pra outro servidor. Recusa alvo Claude local com caminho nativo "
-                      "(use SendMessage) a menos que `tmux=true`.")
+                      "pra outro servidor. O backend escolhe o transporte (socket nativo, plugin, "
+                      "tmux ou fila) e diz se entregou.")
 async def send(ctx: Context, alvo: str, texto: str, tmux: bool = False) -> dict[str, Any]:
     from app import api
     eu = await _eu(ctx)
