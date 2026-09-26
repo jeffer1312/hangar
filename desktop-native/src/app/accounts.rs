@@ -695,16 +695,21 @@ impl Hangar {
         let (id, sign_out, remove, cookie_set) = (row.id.clone(), row.can_sign_out, row.remove.is_some(), row.cookie == Some(true));
         // Uma escrita em voo (nome, saída, remoção, login) segura as outras em toda linha.
         let busy = self.accounts_busy();
+        let menu_title = row.name.clone();
         let menu = Button::new(SharedString::from(format!("accounts-menu-{}", row.id))).ghost().small().icon(IconName::Ellipsis)
             .accessibility_label(tr("accounts_more").replace("{name}", &row.name))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                 let item = |key: &str, action: fn(&mut Hangar, String, &mut Window, &mut Context<Hangar>)| {
                     let (this, id) = (this.clone(), id.clone());
                     PopupMenuItem::new(tr(key)).disabled(busy).on_click(move |_, window, cx| {
-                        let _ = this.update(cx, |this, cx| action(this, id.clone(), window, cx));
+                        let _ = this.update(cx, |this, cx| {
+                            this.root_focus.focus(window, cx);
+                            action(this, id.clone(), window, cx);
+                        });
                     })
                 };
-                menu.item(item("accounts_rename", |this, id, window, cx| this.start_rename(id, window, cx)))
+                sidebar::menu_style(menu).min_w(px(220.)).label(menu_title.clone()).item(item("accounts_rename", |this, id, window, cx| this.start_rename(id, window, cx)))
+                    .when(sign_out || cookie_set || remove, |m| m.separator())
                     .when(sign_out, |m| m.item(item("accounts_sign_out", |this, id, window, cx| this.confirm_change(id, ChangeKind::SignOut, window, cx))))
                     .when(cookie_set, |m| m.item(item("accounts_cookie_clear", |this, id, window, cx| this.confirm_clear_cookie(id, window, cx))))
                     .when(remove, |m| m.item(item("accounts_remove", |this, id, window, cx| this.confirm_change(id, ChangeKind::Remove, window, cx))))

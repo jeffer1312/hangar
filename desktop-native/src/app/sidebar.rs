@@ -850,7 +850,7 @@ impl Hangar {
                         let _ = weak.update(cx, |this, cx| this.set_group(value, cx));
                     })
                 };
-                menu.label(tr("sidebar_group_by")).item(pick("sidebar_group_none", false)).item(pick("sidebar_group_project", true))
+                menu_style(menu).label(tr("sidebar_group_by")).item(pick("sidebar_group_none", false)).item(pick("sidebar_group_project", true))
             })
     }
 
@@ -867,8 +867,21 @@ impl Hangar {
     }
 }
 
-/// O menu da sessão, o mesmo no clique direito da linha, no ⋯ e na aba. Na ordem do web; Copiar e Abrir só com cwd.
-/// O item Silenciar acompanha a leitura: o menu se refaz quando ela chega.
+/// Apresentação da T37; teclado, foco e submenus continuam pertencendo ao kit.
+pub(super) fn menu_style(menu: PopupMenu) -> PopupMenu {
+    use gpui_kit::component::menu::PopupMenuAppearance;
+    menu.appearance(PopupMenuAppearance::default()
+        .surface_style(StyleRefinement::default().rounded(px(12.)).border_1().border_color(theme::glass_border())
+            .bg(theme::raised()).text_color(theme::text()).shadow(theme::popover_shadow()))
+        .list_style(StyleRefinement::default().p(px(popup::INSET)).gap(px(2.)))
+        .item_height(px(28.25))
+        .item_style(StyleRefinement::default().px(px(8.)).rounded(px(7.)).text_size(px(13.)).line_height(relative(1.25)))
+        .separator_style(StyleRefinement::default().border_b_0().h(px(1.)).mx(px(-popup::INSET)).my(px(2.)).bg(theme::border()))
+        .label_renderer(|label, _, _| popup::title(label.to_string(), Some("esc")).w_full())
+        .key_renderer(|key, _, _| popup::key_hint("").child(key.appearance(false))))
+}
+
+/// O mesmo menu no clique direito da linha, no ⋯ e na aba.
 pub(super) fn session_menu(hangar: WeakEntity<Hangar>, session: SessionInfo) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
     move |menu, window, cx| {
         let Some(entity) = hangar.upgrade() else { return menu };
@@ -878,18 +891,31 @@ pub(super) fn session_menu(hangar: WeakEntity<Hangar>, session: SessionInfo) -> 
             let l = layout(&hangar.sessions, "", Hangar::by_project(), &hangar.sidebar.deleting);
             l.waiting.iter().chain(l.groups.iter().flat_map(|g| g.sessions.iter())).filter(|s| s.name != name).map(|s| s.name.clone()).collect()
         };
-        let seen = Rc::new(RefCell::new(entity.read(cx).sidebar.menu_for(&session.name)));
-        let (weak, again, seen_now) = (hangar.clone(), session.clone(), seen.clone());
-        cx.observe_in(&entity, window, move |menu, entity, window, cx| {
+        let seen = RefCell::new(entity.read(cx).sidebar.menu_for(&session.name));
+        let (weak, again) = (hangar.clone(), session.clone());
+        cx.observe_in(&entity, window, move |menu, entity, _, cx| {
             let now = entity.read(cx).sidebar.menu_for(&again.name);
-            if *seen_now.borrow() == now { return; }
-            *seen_now.borrow_mut() = now.clone();
-            let (weak, again, list) = (weak.clone(), again.clone(), others(entity.read(cx), &again.name));
-            menu.rebuild(window, cx, move |menu, window, cx| fill_menu(menu, &weak, &again, now, list, window, cx));
+            if *seen.borrow() == now { return; }
+            *seen.borrow_mut() = now.clone();
+            // Atualiza só Silenciar: o submenu aberto mantém entidade, seleção e foco.
+            menu.replace_item(2, mute_item(&weak, &again.name, now), cx);
         }).detach();
-        let view = seen.borrow().clone();
+        let view = entity.read(cx).sidebar.menu_for(&session.name);
         let list = others(entity.read(cx), &session.name);
         fill_menu(menu, &hangar, &session, view, list, window, cx)
+    }
+}
+
+fn mute_item(hangar: &WeakEntity<Hangar>, name: &str, mute: Option<Mute>) -> PopupMenuItem {
+    match mute {
+        Some(Mute::Known(muted)) => {
+            let (hangar, name) = (hangar.clone(), name.to_owned());
+            PopupMenuItem::new(tr(if muted { "sidebar_unmute" } else { "sidebar_mute" }))
+                .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.write(name.clone(), Write::Mute(!muted), cx)); })
+        }
+        // Sem leitura confirmada o item não grava: carregando mostra "…", falha mostra o motivo.
+        Some(Mute::Failed(reason)) => PopupMenuItem::new(tr("sidebar_mute_unread").replace("{n}", &reason)).disabled(true),
+        Some(Mute::Loading) | None => PopupMenuItem::new(format!("{}…", tr("sidebar_mute"))).disabled(true),
     }
 }
 
@@ -898,16 +924,6 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, session: &SessionInfo
     let item = |label: String, act: fn(&mut Hangar, String, &mut Window, &mut Context<Hangar>)| {
         let (hangar, name) = (hangar.clone(), session.name.clone());
         PopupMenuItem::new(label).on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| act(this, name.clone(), window, cx)); })
-    };
-    let mute_item = match mute {
-        Some(Mute::Known(muted)) => {
-            let (hangar, name) = (hangar.clone(), session.name.clone());
-            PopupMenuItem::new(tr(if muted { "sidebar_unmute" } else { "sidebar_mute" }))
-                .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.write(name.clone(), Write::Mute(!muted), cx)); })
-        }
-        // Sem leitura confirmada o item não grava: carregando mostra "…", falha mostra o motivo.
-        Some(Mute::Failed(reason)) => PopupMenuItem::new(tr("sidebar_mute_unread").replace("{n}", &reason)).disabled(true),
-        Some(Mute::Loading) | None => PopupMenuItem::new(format!("{}…", tr("sidebar_mute"))).disabled(true),
     };
     let cwd = session.cwd.clone().filter(|c| !c.is_empty());
     let close = {
@@ -932,9 +948,9 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, session: &SessionInfo
             });
         })
     };
-    menu.min_w(px(200.))
+    menu_style(menu).min_w(px(240.)).label(session.name.clone())
         .item(item(tr("sidebar_rename"), |this, name, window, cx| this.start_session_rename(name, window, cx)))
-        .item(mute_item)
+        .item(mute_item(hangar, &session.name, mute))
         .when_some(cwd, |menu, cwd| menu
             .item(PopupMenuItem::new(tr("sidebar_copy_cwd")).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(cwd.clone()))))
             .item(item(tr("sidebar_open_editor"), |this, name, _, cx| this.write(name, Write::Editor, cx))))
@@ -971,6 +987,7 @@ fn branch_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, name: &str, window:
 
 /// Submenu "Trocar branch": o estado da leitura feita ao abrir o menu; a atual com ✓ e sem ação.
 fn fill_branches(menu: PopupMenu, hangar: &WeakEntity<Hangar>, name: &str, branches: Option<Branches>) -> PopupMenu {
+    let menu = menu_style(menu).min_w(px(240.)).label(tr("sidebar_switch_branch"));
     let list = match branches {
         Some(Branches::Known(list)) => list,
         // Falha em vermelho, não no cinza do "carregando…": é um estado, não uma espera.
@@ -993,12 +1010,13 @@ fn fill_branches(menu: PopupMenu, hangar: &WeakEntity<Hangar>, name: &str, branc
 
 /// Nome de branch ou de sessão em fonte mono, como o web; o atual com ✓ e na cor de destaque.
 fn mono_item(text: String, current: bool) -> PopupMenuItem {
-    PopupMenuItem::element(move |_, _| div().font_family(theme::MONO).text_sm().when(current, |el| el.text_color(theme::accent_text())).child(text.clone()))
+    PopupMenuItem::element(move |_, _| div().font_family(theme::MONO).text_size(px(13.)).when(current, |el| el.text_color(theme::accent_text())).child(text.clone()))
         .checked(current)
 }
 
 /// Submenu do encadear: as outras sessões (✓ no alvo atual) e, com alvo, o Remover vínculo.
 fn fill_chain(menu: PopupMenu, hangar: &WeakEntity<Hangar>, name: &str, current: Option<String>, others: &[String]) -> PopupMenu {
+    let menu = menu_style(menu).label(tr("sidebar_chain"));
     let menu = if others.is_empty() { menu.item(PopupMenuItem::new(tr("sidebar_no_other")).disabled(true)) } else {
         others.iter().fold(menu.min_w(px(220.)).max_h(px(260.)).scrollable(true), |menu, target| {
             let (hangar, name, target) = (hangar.clone(), name.to_owned(), target.clone());
