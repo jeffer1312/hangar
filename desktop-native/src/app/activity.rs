@@ -18,7 +18,7 @@ const DETAIL_FAILS: u32 = 3;
 
 pub(super) enum ActivityReply {
     /// Quantos subagentes a sessão tem no disco, amarrado à sessão e ao pedido.
-    Count(SessionKey, u64, Result<usize, Failure>),
+    Count(SessionKey, u64, Result<Vec<SubRun>, Failure>),
     /// A lista da aba, com o número do pedido.
     List(u64, Result<Vec<SubRun>, Failure>),
     /// O subagente aberto (`…/subagents/{id}?events=200`), com o número do pedido.
@@ -30,6 +30,8 @@ pub(super) enum ActivityReply {
 pub(super) struct SubRun {
     agent_id: String, agent_type: Option<String>, prompt: Option<String>, calls: u64, last_tool: Option<String>,
     finished: bool, unreadable: bool, tools: Vec<(String, u64)>,
+    /// Erro de API no fim do registro (campo `failed` do Claude); servidor sem o campo, `false`.
+    failed: bool,
 }
 
 fn parse_sub(item: &Value) -> Option<SubRun> {
@@ -44,6 +46,7 @@ fn parse_sub(item: &Value) -> Option<SubRun> {
         unreadable: item.get("ilegivel").and_then(Value::as_bool).unwrap_or(false),
         tools: item.get("tools").and_then(Value::as_array).map(|tools| tools.iter()
             .filter_map(|t| Some((text(t, "name")?, t.get("count").and_then(Value::as_u64).unwrap_or(0)))).collect()).unwrap_or_default(),
+        failed: item.get("failed").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -84,7 +87,7 @@ fn match_sub<'a>(subs: &'a [SubRun], prompt: Option<&str>) -> Option<&'a SubRun>
 /// `finished`. O Agent é achado pelo `agentId` do resultado; sem ele, pelo prompt, e só quando um Agent e um subagente
 /// casam um com o outro e mais ninguém: ambíguo não afirma o fim.
 fn sub_done(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
-    if run.finished { return true; }
+    if run.finished || run.failed { return true; }
     if let Some(agent) = agents.iter().find(|a| a.agent_id.as_deref() == Some(run.agent_id.as_str())) { return !agent.running; }
     let subs_of = |prompt: Option<&str>| subs.iter().filter(|s| match_sub(std::slice::from_ref(*s), prompt).is_some()).count();
     let mut by_prompt = agents.iter().filter(|a| a.agent_id.is_none() && match_sub(std::slice::from_ref(run), a.prompt.as_deref()).is_some());
@@ -92,6 +95,18 @@ fn sub_done(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
         (Some(agent), None) => !agent.running && subs_of(agent.prompt.as_deref()) == 1,
         _ => false,
     }
+}
+
+/// O subagente do Agent da chamada `call` falhou. A posse é a de `sub_done`: o `agentId` do resultado decide; sem ele,
+/// pelo prompt, só quando um subagente sem dono e este Agent casam um com o outro e mais ninguém.
+fn agent_failed(agents: &[AgentRun], subs: &[SubRun], call: usize) -> bool {
+    let Some(agent) = agents.iter().find(|a| a.call == call) else { return false };
+    if let Some(id) = &agent.agent_id { return subs.iter().any(|s| &s.agent_id == id && s.failed); }
+    let owned = |s: &SubRun| agents.iter().any(|a| a.agent_id.as_deref() == Some(s.agent_id.as_str()));
+    let mut candidates = subs.iter().filter(|s| !owned(s) && match_sub(std::slice::from_ref(*s), agent.prompt.as_deref()).is_some());
+    let (Some(sub), None) = (candidates.next(), candidates.next()) else { return false };
+    let claimants = agents.iter().filter(|a| a.agent_id.is_none() && match_sub(std::slice::from_ref(sub), a.prompt.as_deref()).is_some()).count();
+    claimants == 1 && sub.failed
 }
 
 /// Primeira linha útil do prompt (pula o cabeçalho de skill e títulos), até 90 caracteres.
@@ -118,7 +133,7 @@ fn calls_line(sub: &SubRun) -> String {
 #[derive(Clone, Debug, PartialEq)]
 struct AgentLine { key: String, description: String, tags: Vec<(String, bool)>, now: Option<String>, sub: Option<String> }
 #[derive(Clone, Debug, PartialEq)]
-struct OrphanLine { key: String, title: String, tag: Option<String>, now: String, done: bool }
+struct OrphanLine { key: String, title: String, tag: Option<String>, now: String, done: bool, failed: bool }
 #[derive(Clone, Debug, PartialEq)]
 struct ShellLine { key: String, label: String, raw: String, now: String }
 #[derive(Clone, Debug, PartialEq)]
@@ -158,13 +173,16 @@ pub(super) struct ActivityPanel {
     conversation: Entity<SubConversation>,
     /// O ‹ do detalhe: quem abriu pelo teclado cai nele, e Enter volta.
     back_focus: FocusHandle,
+    /// Lugares da marca desta view, que é guardada dentro do painel: ela limpa os seus a cada desenho.
+    marks: super::panes::MarkPlaces,
 }
 
 impl ActivityPanel {
     fn new(cx: &mut Context<Self>) -> Self {
         Self { link: None, key: None, shown: false, activity: Activity::default(), processes: Vec::new(), subs: Vec::new(), seq: 0,
             loading: false, failed: false, lines: Lines::default(), clock: None, scroll: ScrollHandle::new(), opened: None, detail_seq: 0,
-            poll: None, notice: None, pending: None, conversation: cx.new(|_| SubConversation::new()), back_focus: cx.focus_handle().tab_stop(true) }
+            poll: None, notice: None, pending: None, conversation: cx.new(|_| SubConversation::new()), back_focus: cx.focus_handle().tab_stop(true),
+            marks: Default::default() }
     }
 
     /// Refaz as linhas; `true` quando mudou algo que aparece.
@@ -181,9 +199,10 @@ impl ActivityPanel {
         let listed: HashSet<&str> = self.activity.agents.iter()
             .filter_map(|a| match_sub(&self.subs, a.prompt.as_deref())).map(|s| s.agent_id.as_str()).collect();
         let orphans = self.subs.iter().filter(|s| !listed.contains(s.agent_id.as_str())).map(|s| OrphanLine {
-            key: s.agent_id.clone(), title: sub_title(&self.subs, s), tag: s.agent_type.clone(), done: s.finished,
+            key: s.agent_id.clone(), title: sub_title(&self.subs, s), tag: s.agent_type.clone(), done: s.finished || s.failed, failed: s.failed,
             // Ilegível não diz "0 chamadas": os campos vêm zerados porque o registro não foi lido.
             now: if s.unreadable { web("atividade_sub_ilegivel") }
+                else if s.failed { format!("{} · {}", tr("tool_failed"), calls_line(s)) }
                 else if s.finished { format!("{} · {}", web("atividade_sub_concluido"), calls_line(s)) } else { calls_line(s) },
         }).collect();
         let shells = self.activity.running_shells().map(|s| {
@@ -396,6 +415,10 @@ fn now_text(text: String) -> AnyElement {
     div().font_family(theme::MONO).text_size(px(10.)).text_color(theme::faint()).child(text).into_any_element()
 }
 
+fn warning_text(text: String) -> AnyElement {
+    div().font_family(theme::MONO).text_size(px(10.)).text_color(theme::warning()).child(text).into_any_element()
+}
+
 fn shell_row(prefix: &str, line: &ShellLine) -> AnyElement {
     let raw = line.raw.clone();
     div().id(SharedString::from(format!("{prefix}-{}", line.key))).flex().items_start().gap_2()
@@ -415,6 +438,7 @@ impl ActivityPanel {
 impl Render for ActivityPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         super::panes::rendered(cx.entity_id(), window, cx);
+        self.marks.borrow_mut().clear();
         if self.opened.is_some() { return self.render_detail(window, cx); }
         let lines = &self.lines;
         let mut body = div().px_4().py(px(14.)).flex().flex_col().gap_4();
@@ -440,11 +464,11 @@ impl Render for ActivityPanel {
         }
         if !lines.orphans.is_empty() {
             let rows: Vec<AnyElement> = lines.orphans.iter().map(|s| {
-                let content = div().flex().flex_col().gap(px(3.)).when(s.done, |el| el.opacity(0.6))
+                let content = div().flex().flex_col().gap(px(3.)).when(s.done && !s.failed, |el| el.opacity(0.6))
                     .child(div().flex().items_center().gap_1().min_w_0()
                         .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(s.title.clone()))
                         .when_some(s.tag.clone(), |el, t| el.child(tag(t, false))))
-                    .child(now_text(s.now.clone()));
+                    .child(if s.failed { warning_text(s.now.clone()) } else { now_text(s.now.clone()) });
                 openable(format!("act-orphan-{}", s.key), s.key.clone(), s.title.clone(), content, window, cx)
             }).collect();
             body = body.child(section(web("atividade_subagentes"), None).children(rows));
@@ -519,8 +543,13 @@ impl ActivityPanel {
         let small = |text: String, color: Hsla| div().child(text).text_color(color).into_any_element();
         let meta: Vec<AnyElement> = if run.unreadable { vec![small(web("atividade_sub_ilegivel"), theme::muted())] } else {
             let mut meta = vec![
-                if opened.done { small(format!("✓ {}", web("atividade_sub_concluido")), theme::success()) }
-                else { small(format!("◐ {}", web("atividade_rodando")), theme::accent()) },
+                if run.failed { small(format!("✕ {}", tr("tool_failed")), theme::warning()) }
+                else if opened.done { small(format!("✓ {}", web("atividade_sub_concluido")), theme::success()) }
+                else {
+                    div().flex().items_center().gap_1()
+                        .child(super::panes::mark_slot(&self.marks, super::panes::Area::Side, "act-detail-mark", 12., theme::accent()))
+                        .child(div().text_color(theme::accent()).child(web("atividade_rodando"))).into_any_element()
+                },
                 small(web_with("atividade_chamadas", "n", run.calls.to_string()), theme::muted()),
             ];
             if let Some(t) = &run.agent_type { meta.push(small(t.clone(), theme::muted())); }
@@ -571,6 +600,8 @@ pub(super) struct ActivityState {
     count: usize,
     count_seq: u64,
     count_busy: bool,
+    /// A lista da mesma leitura da conta: o cartão Agent do pai sabe da falha do seu subagente sem a aba aberta.
+    subs: Vec<SubRun>,
     count_timer: Option<Task<()>>,
     /// Sessões em que a aba escolhida é Atividade.
     chosen: HashSet<SessionKey>,
@@ -578,7 +609,8 @@ pub(super) struct ActivityState {
 
 impl ActivityState {
     pub fn new(cx: &mut App) -> Self {
-        Self { view: cx.new(ActivityPanel::new), count: 0, count_seq: 0, count_busy: false, count_timer: None, chosen: HashSet::new() }
+        Self { view: cx.new(ActivityPanel::new), count: 0, count_seq: 0, count_busy: false, subs: Vec::new(), count_timer: None,
+            chosen: HashSet::new() }
     }
 }
 
@@ -623,6 +655,7 @@ impl Hangar {
     /// Sessão nova: a conta recomeça e o pedido em voo da anterior é descartado.
     pub(super) fn reset_subagent_count(&mut self) {
         self.act.count = 0;
+        self.act.subs.clear();
         self.act.count_seq += 1;
         self.act.count_busy = false;
         self.act.count_timer = None;
@@ -646,7 +679,7 @@ impl Hangar {
         self.act.count_busy = true;
         let seq = self.act.count_seq;
         self.runtime.spawn(async move {
-            let result = link.api.read(&key.name, &["subagents"], &[], 15).await.map(|value| value.as_array().map_or(0, Vec::len));
+            let result = link.api.read(&key.name, &["subagents"], &[], 15).await.map(|value| parse_subs(&value));
             let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(ActivityReply::Count(key, seq, result)) }).await;
         });
     }
@@ -656,9 +689,14 @@ impl Hangar {
             ActivityReply::Count(key, seq, result) => {
                 if seq != self.act.count_seq || self.selected_key().as_ref() != Some(&key) { return; }
                 self.act.count_busy = false;
-                let Ok(count) = result else { return };
+                let Ok(subs) = result else { return };
                 let before = self.has_activity();
-                self.act.count = count;
+                self.act.count = subs.len();
+                // Redesenha só quando muda quem falhou: a batida de 5 s não refaz a conversa a cada chamada contada.
+                let failed_ids = |subs: &[SubRun]| subs.iter().filter(|s| s.failed).map(|s| s.agent_id.clone()).collect::<Vec<_>>();
+                let changed = failed_ids(&subs) != failed_ids(&self.act.subs);
+                self.act.subs = subs;
+                if changed { cx.notify(); }
                 // Só a presença da aba e do botão depende da conta: o número dela não aparece.
                 if self.has_activity() != before { self.sync_activity(cx); cx.notify(); }
             }
@@ -671,6 +709,16 @@ impl Hangar {
     pub(super) fn restyle_subagent(&mut self, cx: &mut Context<Self>) {
         let conversation = self.act.view.read(cx).conversation.clone();
         conversation.update(cx, |view, cx| view.restyle(cx));
+    }
+
+    /// O Agent desta chamada lançou um subagente que falhou: casado pelo `agentId` do resultado ou pelo prompt.
+    pub(super) fn agent_failed(&self, call: usize) -> bool {
+        self.act.subs.iter().any(|s| s.failed) && agent_failed(&self.activity.agents, &self.act.subs, call)
+    }
+
+    /// A marca da aba Atividade, pintada fora dela e do painel.
+    pub(super) fn activity_mark_float(&self, cx: &App) -> AnyElement {
+        super::panes::float_marks(self.act.view.read(cx).marks.clone(), super::panes::Area::Side, WORKING_FADE, cx.reduce_motion())
     }
 
     /// Clique no cartão Agent da conversa: abre o painel na aba Atividade, já na conversa desse agente. Cada clique é um
@@ -747,7 +795,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentRun, SubRun, base_title, interval, match_sub, sub_done, sub_title};
+    use super::{AgentRun, SubRun, agent_failed, base_title, interval, match_sub, sub_done, sub_title};
 
     fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
         AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
@@ -768,10 +816,31 @@ mod tests {
         // Agent que já se sabe de outro subagente não fecha este; o `finished` do backend fecha sozinho.
         assert!(!sub_done(&[parent("t1", "tarefa um", Some("z"), false)], &subs, &subs[0]));
         assert!(sub_done(&[], &subs, &SubRun { finished: true, ..sub("k", "kimi") }));
+        assert!(sub_done(&[], &subs, &SubRun { failed: true, ..sub("f", "falhou") }));
+    }
+
+    #[test]
+    fn agent_card_fails_only_for_its_own_subagent() {
+        let failed = vec![SubRun { failed: true, ..sub("f", "rode a suíte") }];
+        let at = |call, prompt: &str, id: Option<&str>| AgentRun { call, ..parent("t", prompt, id, false) };
+        assert!(agent_failed(&[at(1, "rode a suíte", None)], &failed, 1));
+        assert!(agent_failed(&[at(1, "outra coisa", Some("f"))], &failed, 1));
+        // O agentId de outro subagente vence o prompt igual.
+        assert!(!agent_failed(&[at(1, "rode a suíte", Some("g"))], &failed, 1));
+        // Prompt repetido em dois Agent: nenhum dos dois afirma a falha.
+        assert!(!agent_failed(&[at(1, "rode a suíte", None), at(2, "rode a suíte", None)], &failed, 1));
+        assert!(!agent_failed(&[at(1, "outra coisa", None)], &failed, 1));
+        // Subagente que já tem dono pelo agentId não é casado pelo prompt de outro Agent.
+        let both = vec![SubRun { failed: true, ..sub("f", "rode a suíte") }, sub("g", "rode a suíte")];
+        let agents = [at(1, "rode a suíte", Some("f")), at(2, "rode a suíte", None)];
+        assert!(agent_failed(&agents, &both, 1));
+        assert!(!agent_failed(&agents, &both, 2));
+        // Dois subagentes sem dono com o mesmo prompt: ambíguo, não afirma.
+        assert!(!agent_failed(&[at(1, "rode a suíte", None)], &both, 1));
     }
 
     fn sub(id: &str, prompt: &str) -> SubRun {
-        SubRun { agent_id: id.into(), agent_type: None, prompt: Some(prompt.into()), calls: 0, last_tool: None, finished: false, unreadable: false, tools: Vec::new() }
+        SubRun { agent_id: id.into(), agent_type: None, prompt: Some(prompt.into()), calls: 0, last_tool: None, finished: false, unreadable: false, tools: Vec::new(), failed: false }
     }
 
     #[test]

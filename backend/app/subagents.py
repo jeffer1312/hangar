@@ -71,6 +71,7 @@ def _read_agent(f: Path, tail: int) -> dict | None:
     last_text = ""
     started = ""
     updated = ""
+    failed = False
 
     for line in lines:
         try:
@@ -84,6 +85,10 @@ def _read_agent(f: Path, tail: int) -> dict | None:
             updated = ts
         msg = r.get("message") or {}
         content = msg.get("content")
+        if r.get("type") == "assistant":
+            # O Claude Code grava o erro de API como a última resposta quando esgota as tentativas (529, 429); uma
+            # resposta normal depois dele desfaz a falha.
+            failed = r.get("isApiErrorMessage") is True
         if r.get("type") == "user" and prompt is None:
             t = _text_of(content)
             if t:
@@ -129,6 +134,8 @@ def _read_agent(f: Path, tail: int) -> dict | None:
         # Cauda: as últimas chamadas, que é o "o que ele está fazendo agora" de fato.
         "recent": calls[-tail:],
         "lastText": last_text[:2000],
+        # Só a falha: quem diz que terminou continua sendo o tool_result no pai.
+        "failed": failed,
     }
 
 

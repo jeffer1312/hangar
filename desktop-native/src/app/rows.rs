@@ -52,8 +52,7 @@ pub(super) fn chip_ending(call: &ChatEvent, result: Option<&ChatEvent>, running:
     let raw = result.result.as_deref().unwrap_or("").trim();
     if result.is_error == Some(true) {
         let first = raw.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| conversation::one_line(l, 72)).unwrap_or_else(|| tr("tool_failed"));
-        return div().flex_shrink_0().flex().items_center().gap_1().child(chrome::small_icon(IconName::CircleX, 13., theme::warning()))
-            .child(text(first, theme::warning())).into_any_element();
+        return warning_ending(first);
     }
     if let Some((added, removed)) = conversation::edit_counts(name, call.tool_input.as_ref()) {
         return div().flex_shrink_0().flex().gap(px(6.)).font_family(theme::MONO).text_size(px(12.))
@@ -73,12 +72,24 @@ pub(super) fn chip_ending(call: &ChatEvent, result: Option<&ChatEvent>, running:
         .child(text(outcome, theme::muted())).into_any_element()
 }
 
+fn warning_ending(text: String) -> AnyElement {
+    div().flex_shrink_0().flex().items_center().gap_1().child(chrome::small_icon(IconName::CircleX, 13., theme::warning()))
+        .child(div().flex_shrink_0().max_w(px(260.)).truncate().text_size(px(12.5)).text_color(theme::warning()).child(text))
+        .into_any_element()
+}
+
+/// Fim da linha de um subagente que acabou em erro de API.
+fn failed_ending() -> AnyElement { warning_ending(tr("tool_failed")) }
+
 /// Uma chamada no modo Chips: linha da tabela com verbo, resumo em mono e desfecho à direita. Quem chama liga o clique;
 /// `label` troca o rótulo acessível quando o clique faz outra coisa que abrir.
 pub(super) fn chip_button(id: String, call: &ChatEvent, ending: AnyElement, open: bool, label: Option<String>, cx: &App) -> Button {
     let verb = verb(call.tool_name.as_deref());
     let chip = chip_text(call);
     let label = label.unwrap_or_else(|| format!("{verb} {chip}"));
+    // O Agent abre a conversa noutro lugar, não expande aqui.
+    let trailing = if super::activity::agent_request(call).is_some() { IconName::ExternalLink }
+        else if open { IconName::ChevronDown } else { IconName::ChevronRight };
     Button::new(SharedString::from(id))
         .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
         .w_full().h(px(34.)).px(px(12.)).rounded(px(0.))
@@ -89,22 +100,31 @@ pub(super) fn chip_button(id: String, call: &ChatEvent, ending: AnyElement, open
             .child(div().min_w(px(64.)).flex_shrink_0().text_color(theme::muted()).child(verb))
             .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).text_size(px(12.5)).child(chip))
             .child(ending)
-            .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint())))
+            .child(chrome::small_icon(trailing, 14., theme::faint())))
 }
 
 /// Grupo pequeno nasce aberto nos Chips; o clique inverte.
 pub(super) fn chip_group_open(tools: usize, toggled: bool) -> bool { (tools <= CHIPS_OPEN_UP_TO) != toggled }
 
-/// Cabeçalho do grupo nos Chips, no botão de abrir de quem chama: título pela contagem por família, chamadas, rodando
-/// e erros.
-pub(super) fn chip_group_header(button: Button, events: &[ChatEvent], tools: &[Tool], running: bool) -> Button {
+/// Resumo do grupo pela contagem por família, com a primeira letra maiúscula: "Rodou 2 comandos · leu 1 arquivo".
+pub(super) fn family_title(events: &[ChatEvent], tools: &[Tool]) -> String {
     let text = conversation::family_counts(events, tools).into_iter().map(|(family, n)| counted(match family {
         Family::Read => "chip_title_read", Family::Search => "chip_title_search", Family::Edit => "chip_title_edit",
         Family::Create => "chip_title_create", Family::Run => "chip_title_run", Family::Other => "chip_title_other",
     }, n)).collect::<Vec<_>>().join(" · ");
     let mut chars = text.chars();
-    let title: String = chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default();
-    let errors = tools.iter().filter(|t| t.result.is_some_and(|i| events[i].is_error == Some(true))).count();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// "1 falhou" / "N falharam".
+pub(super) fn failed_count(n: usize) -> String { counted("tools_failed", n) }
+
+/// Cabeçalho do grupo nos Chips, no botão de abrir de quem chama: título pela contagem por família, chamadas, rodando
+/// e erros.
+/// `failed` diz se a chamada falhou além do resultado marcado como erro (o Agent cujo subagente falhou).
+pub(super) fn chip_group_header(button: Button, events: &[ChatEvent], tools: &[Tool], running: bool, failed: impl Fn(usize) -> bool) -> Button {
+    let title = family_title(events, tools);
+    let errors = tools.iter().filter(|t| t.result.is_some_and(|i| events[i].is_error == Some(true)) || failed(t.call)).count();
     let last = tools.last().map(|t| conversation::family(events[t.call].tool_name.as_deref())).unwrap_or(Family::Other);
     let calls = counted("chip_calls", tools.len());
     button.accessibility_label(format!("{title} · {calls}"))
@@ -128,10 +148,18 @@ impl Hangar {
         let call = &events[tool.call];
         let key = call.id.clone();
         let open = self.expanded.contains(&key);
-        let ending = chip_ending(call, tool.result.map(|i| &events[i]), self.running(tool.call), |result| self.result_lines(result));
-        let toggle_key = key.clone();
-        // O cartão Agent abre a conversa dele na aba Atividade em vez de expandir.
+        // O cartão Agent abre a conversa dele na aba Atividade em vez de expandir; o subagente que acabou em erro de API
+        // fica em aviso, e o que roda leva a marca animada.
         let agent = super::activity::agent_request(call);
+        let failed = agent.is_some() && self.agent_failed(tool.call);
+        let running = self.running(tool.call);
+        let ending = if failed { failed_ending() } else { chip_ending(call, tool.result.map(|i| &events[i]), running, |result| self.result_lines(result)) };
+        let ending = if agent.is_some() && running && tool.result.is_none() && !failed {
+            div().flex_shrink_0().flex().items_center().gap(px(6.))
+                .child(self.working_mark_slot(super::panes::Area::Conversation, format!("agent-{key}"), 12., theme::accent())).child(ending)
+                .into_any_element()
+        } else { ending };
+        let toggle_key = key.clone();
         let label = agent.is_some().then(|| format!("{}: {}", super::activity::web("tool_abrir_agente"), chip_text(call)));
         let button = chip_button(format!("chip-{key}"), call, ending, open, label, cx)
             .on_click(cx.listener(move |this, _, _, cx| match &agent {
@@ -153,7 +181,7 @@ impl Hangar {
         let running = tools.iter().any(|t| t.result.is_none() && self.running(t.call));
         let open = chip_group_open(tools.len(), self.expanded.contains(row));
         let toggle_key = row.to_owned();
-        let header = chip_group_header(self.disclosure(row, open), &self.chat.events, tools, running)
+        let header = chip_group_header(self.disclosure(row, open), &self.chat.events, tools, running, |call| self.agent_failed(call))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
         let rows: Vec<AnyElement> = if open { tools.iter().map(|&tool| self.render_chip(tool, row, cx)).collect() } else { Vec::new() };
         div().flex().flex_col().gap_1().child(header).when(open, |el| el.child(chip_table(rows))).into_any_element()

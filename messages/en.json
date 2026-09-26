@@ -3718,6 +3718,8 @@
   "native_chip_working": "running",
   "native_chip_awaiting_input": "waiting",
   "native_chip_idle": "ready",
+  "native_tools_failed_1": "1 failed",
+  "native_tools_failed": "{n} failed",
   "native_chip_dead": "ended",
   "native_chip_limited": "usage limit",
   "native_untracked_badge": "no id",

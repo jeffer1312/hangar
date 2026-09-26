@@ -91,11 +91,12 @@ fn prepare(events: &[ChatEvent], finished: bool) -> Vec<Row> {
             let rows: Vec<ToolRow> = tools.iter().map(tool).collect();
             let mut distinct: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
             distinct.dedup();
-            let (label, summary) = if distinct.len() == 1 {
-                (format!("{} · {}", rows[0].name, rows.len()), rows.last().map(|r| r.summary.clone()).unwrap_or_default())
-            } else { (tr("tools_count").replace("{n}", &rows.len().to_string()), conversation::one_line(&distinct.join(", "), 96)) };
+            // O título conta por família, como o dos Chips: "Rodou 2 comandos · leu 1 arquivo".
+            let label = super::rows::family_title(events, tools);
+            let summary = if distinct.len() == 1 { rows.last().map(|r| r.summary.clone()).unwrap_or_default() }
+                else { conversation::one_line(&distinct.join(", "), 96) };
             let errors = rows.iter().filter(|r| r.tone == Tone::Warning).count();
-            let (status, tone) = if errors > 0 { (tr("tools_errors").replace("{n}", &errors.to_string()), Tone::Warning) }
+            let (status, tone) = if errors > 0 { (super::rows::failed_count(errors), Tone::Warning) }
                 else if rows.iter().any(|r| r.tone == Tone::Accent) { (tr("tool_running"), Tone::Accent) } else { (String::new(), Tone::Muted) };
             Row::Group { id: id.clone(), label, summary, status, tone, tools: rows }
         }
@@ -295,7 +296,7 @@ impl SubConversation {
                 let toggle = id.clone();
                 let button = Button::new(SharedString::from(format!("sub-toggle-{id}"))).ghost().small().w_full().toggled(open)
                     .icon(if open { IconName::ChevronDown } else { IconName::ChevronRight });
-                let header = super::rows::chip_group_header(button, &self.events, &calls, running)
+                let header = super::rows::chip_group_header(button, &self.events, &calls, running, |_| false)
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle.clone(), cx)));
                 let rows: Vec<AnyElement> = if open { tools.iter().map(|t| self.render_chip(t, cx)).collect() } else { Vec::new() };
                 div().flex().flex_col().gap_1().child(header).when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
