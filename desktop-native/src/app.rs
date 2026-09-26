@@ -29,6 +29,7 @@ mod shortcuts;
 mod side;
 mod sidebar;
 mod subagent;
+mod sync;
 
 actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, NextSession, PreviousSession]);
 
@@ -97,6 +98,7 @@ enum Payload {
     Shortcuts(shortcuts::ShortcutsReply),
     // Notificações e Anexos: rascunho do servidor e horas silenciosas da conexão atual.
     ServerConfig(server_config::ServerConfigReply),
+    Sync(sync::SyncReply),
     // Máquinas: identificador, alcance e reinício do servidor conectado.
     Machines(machines::MachinesReply),
     // Diálogo Nova sessão: a resposta vai ao diálogo que a pediu, se ele ainda for o aberto.
@@ -281,6 +283,7 @@ pub struct Hangar {
     accounts: accounts::Accounts,
     shortcuts: shortcuts::Shortcuts,
     server_config: server_config::ServerConfig,
+    sync: sync::Sync,
     machines: machines::Machines,
     new_session: Option<Entity<create::NewSession>>,
     sidebar: sidebar::Sidebar,
@@ -376,7 +379,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), shortcuts: shortcuts::Shortcuts::default(),
-            server_config: server_config::ServerConfig::default(), machines: machines::Machines::default(), new_session: None, sidebar,
+            server_config: server_config::ServerConfig::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), new_session: None, sidebar,
             act: activity::ActivityState::new(cx), panes, dossier: None,
         }
     }
@@ -559,6 +562,7 @@ impl Hangar {
         self.sync_rows(cx);
         self.side.reset_server();
         self.sidebar.reset_server();
+        self.sync = sync::Sync::default();
         self.controls = controls::Controls::default();
         self.accounts = accounts::Accounts::default();
         self.shortcuts = shortcuts::Shortcuts::default();
@@ -819,6 +823,7 @@ impl Hangar {
             Payload::Accounts(reply) => { self.receive_accounts(reply, window, cx); return; }
             Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, cx); return; }
             Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
+            Payload::Sync(reply) => { self.receive_sync(reply, window, cx); return; }
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
             Payload::Sidebar(reply) => { self.receive_sidebar(reply, window, cx); return; }
