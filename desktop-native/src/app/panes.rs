@@ -1,6 +1,6 @@
 // Áreas da janela em views próprias: o que se mexe numa área (streaming, rolagem, digitação, animação do diálogo) não
 // redesenha as outras. O estado continua no `Hangar`; cada view só guarda o desenho dela entre quadros.
-use std::{cell::Cell, rc::Rc, sync::OnceLock, time::Duration};
+use std::{cell::{Cell, RefCell}, rc::Rc, sync::OnceLock, time::{Duration, Instant}};
 use gpui_kit::{component::Root, *};
 use super::Hangar;
 
@@ -17,13 +17,20 @@ pub(super) struct Panes {
     pub overlay: Entity<Pane>,
     /// Altura medida da faixa de baixo: a view guardada precisa de altura definida, e o compositor cresce com o texto.
     pub bottom_height: Rc<Cell<f32>>,
-    /// Onde a linha "trabalhando" deixou o lugar da marca no último desenho da conversa (`MarkSlot`).
-    pub working_mark: MarkSlot,
+    /// Lugares que as áreas guardadas deixaram para o que anima dentro delas (`MarkPlace`).
+    pub marks: MarkPlaces,
 }
 
-/// Lugar da marca: posição, recorte da lista e quando a linha nasceu. A conversa guardada não repinta, então o valor
-/// do último desenho dela continua certo; a conversa que redesenha zera e a linha, se aparecer, grava de novo.
-pub(super) type MarkSlot = Rc<Cell<Option<(Bounds<Pixels>, Bounds<Pixels>, std::time::Instant)>>>;
+/// O que se pinta num lugar: a marca animada ou os segundos da linha "trabalhando".
+#[derive(Clone, Copy)]
+pub(super) enum Floating { Mark(Hsla), Elapsed(Instant) }
+
+/// Um lugar vazio deixado por uma área guardada: posição, recorte dela e quando o lugar nasceu. A área que não repinta
+/// deixa os lugares do último desenho, que continuam certos; a que redesenha apaga os seus e grava os que aparecerem.
+#[derive(Clone)]
+pub(super) struct MarkPlace { area: Area, key: SharedString, at: Bounds<Pixels>, clip: Bounds<Pixels>, born: Instant, draw: Floating }
+
+pub(super) type MarkPlaces = Rc<RefCell<Vec<MarkPlace>>>;
 
 impl Panes {
     pub fn new(cx: &mut Context<Hangar>) -> Self {
@@ -36,7 +43,7 @@ impl Panes {
         });
         Self {
             nav: pane(Area::Nav), conversation: pane(Area::Conversation), bottom: pane(Area::Bottom), side: pane(Area::Side),
-            overlay: pane(Area::Overlay), bottom_height: Rc::new(Cell::new(120.)), working_mark: Rc::default(),
+            overlay: pane(Area::Overlay), bottom_height: Rc::new(Cell::new(120.)), marks: Rc::default(),
         }
     }
 }
@@ -54,7 +61,7 @@ impl Render for Pane {
         rendered(cx.entity_id(), window, cx);
         let Some(hangar) = self.hangar.upgrade() else { return div().into_any_element() };
         hangar.update(cx, |this, cx| {
-            if area == Area::Conversation { this.panes.working_mark.set(None); }
+            this.panes.marks.borrow_mut().retain(|place| place.area != area);
             this.render_area(area, window, cx)
         })
     }
@@ -134,40 +141,48 @@ pub(super) fn rendered(view: EntityId, window: &Window, cx: &mut App) {
     base::TextSelection::view_rendered(view, window, cx);
 }
 
+/// Largura do lugar dos segundos: cabe "59m 59s" sem a linha mudar de medida a cada tique.
+const ELAPSED_WIDTH: f32 = 52.;
+
 impl Hangar {
-    /// O lugar vazio da marca na linha "trabalhando": grava onde ficou para a marca de fora da conversa.
-    pub(super) fn working_mark_slot(&self, size: f32) -> AnyElement {
-        let slot = self.panes.working_mark.clone();
-        div().size(px(size)).flex_shrink_0().child(canvas(move |bounds, window, _| {
-            // O nascimento da linha, para a marca entrar junto com o fade dela.
-            let born = window.with_global_id("working-mark-born".into(), |id, window| {
-                window.with_element_state(id, |born: Option<std::time::Instant>, _| {
-                    let born = born.unwrap_or_else(std::time::Instant::now);
+    /// O lugar vazio da marca animada `key` na área `area`: a marca é pintada fora da view guardada, no lugar que esta
+    /// caixa gravou, pelo `working_mark_float` da mesma área.
+    pub(super) fn working_mark_slot(&self, area: Area, key: impl Into<SharedString>, size: f32, color: Hsla) -> AnyElement {
+        div().size(px(size)).flex_shrink_0().child(self.mark_place(area, key.into(), Floating::Mark(color))).into_any_element()
+    }
+
+    /// O lugar dos segundos contados desde `since`, pintados fora da view guardada: o tique de 1 s não redesenha a área.
+    pub(super) fn elapsed_slot(&self, area: Area, key: impl Into<SharedString>, since: Instant) -> AnyElement {
+        div().w(px(ELAPSED_WIDTH)).h_full().flex_shrink_0().child(self.mark_place(area, key.into(), Floating::Elapsed(since)))
+            .into_any_element()
+    }
+
+    fn mark_place(&self, area: Area, key: SharedString, draw: Floating) -> impl IntoElement {
+        let places = self.panes.marks.clone();
+        canvas(move |bounds, window, _| {
+            // O nascimento do lugar, para o que se pinta nele entrar junto com o fade da linha.
+            let born = window.with_global_id(ElementId::Name(format!("{key}-born").into()), |id, window| {
+                window.with_element_state(id, |born: Option<Instant>, _| {
+                    let born = born.unwrap_or_else(Instant::now);
                     (born, born)
                 })
             });
-            slot.set(Some((bounds, window.content_mask().bounds, born)));
-        }, |_, _, _, _| {}).size_full()).into_any_element()
+            let mut places = places.borrow_mut();
+            places.retain(|place| place.area != area || place.key != key);
+            places.push(MarkPlace { area, key, at: bounds, clip: window.content_mask().bounds, born, draw });
+        }, |_, _, _, _| {}).size_full()
     }
 
-    /// A marca animada da linha "trabalhando", desenhada fora da conversa guardada: a batida dela suja só ela e a
-    /// raiz, que redesenha em todo quadro, e a conversa segue reusada do cache.
-    pub(super) fn working_mark_float(&self, fade: Duration, reduce_motion: bool) -> AnyElement {
-        // O nascimento é o do último desenho da conversa; o lugar é lido só no prepaint, depois dela.
-        let t = match self.panes.working_mark.get() {
-            _ if reduce_motion => 1.,
-            Some((_, _, born)) => super::chrome::ease_out((born.elapsed().as_secs_f32() / fade.as_secs_f32()).min(1.)),
-            None => 0.,
-        };
-        FloatingMark { slot: self.panes.working_mark.clone(), child: Some(div().size_full().opacity(t)
-            .child(super::chrome::WorkingMark::new("working-line", 22., super::theme::accent())).into_any_element()) }
-            .into_any_element()
+    /// O que anima nos lugares da área, desenhado fora da view guardada: a batida suja só isso e a raiz, que redesenha
+    /// em todo quadro, e a área segue reusada do cache. Fica depois da área na árvore, para ler os lugares já gravados.
+    pub(super) fn working_mark_float(&self, area: Area, fade: Duration, reduce_motion: bool) -> AnyElement {
+        FloatingMark { places: self.panes.marks.clone(), area, fade, reduce_motion }.into_any_element()
     }
 }
 
-/// Desenha o filho no lugar e no recorte gravados neste quadro pela conversa, ou no último desenho dela se foi reusada.
-/// Fica depois da conversa na árvore, então lê o lugar já atualizado; posição absoluta, fora do fluxo da janela.
-struct FloatingMark { slot: MarkSlot, child: Option<AnyElement> }
+/// Desenha, em cada lugar da área, o que ele pede, no recorte gravado neste quadro pela área, ou no último desenho dela
+/// se foi reusada. Posição absoluta, fora do fluxo da janela.
+struct FloatingMark { places: MarkPlaces, area: Area, fade: Duration, reduce_motion: bool }
 
 impl IntoElement for FloatingMark {
     type Element = Self;
@@ -176,7 +191,7 @@ impl IntoElement for FloatingMark {
 
 impl Element for FloatingMark {
     type RequestLayoutState = ();
-    type PrepaintState = Option<(AnyElement, Bounds<Pixels>)>;
+    type PrepaintState = Vec<(AnyElement, Bounds<Pixels>)>;
 
     fn id(&self) -> Option<ElementId> { None }
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> { None }
@@ -190,19 +205,28 @@ impl Element for FloatingMark {
 
     fn prepaint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (),
         window: &mut Window, cx: &mut App) -> Self::PrepaintState {
-        // O lugar deste quadro, se a conversa acabou de redesenhar; senão o que ela deixou.
-        let (at, clip, _) = self.slot.get()?;
-        let mut child = self.child.take()?;
-        window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-            child.layout_as_root(at.size.map(AvailableSpace::Definite), window, cx);
-            child.prepaint_at(at.origin, window, cx);
-        });
-        Some((child, clip))
+        // Cópia dos lugares: desenhar o filho não pode achar a lista emprestada.
+        let places: Vec<MarkPlace> = self.places.borrow().iter().filter(|place| place.area == self.area).cloned().collect();
+        places.into_iter().map(|place| {
+            let t = if self.reduce_motion { 1. }
+                else { super::chrome::ease_out((place.born.elapsed().as_secs_f32() / self.fade.as_secs_f32()).min(1.)) };
+            let inner = match place.draw {
+                Floating::Mark(color) => super::chrome::WorkingMark::new(place.key.clone(), f32::from(place.at.size.width), color)
+                    .into_any_element(),
+                Floating::Elapsed(since) => super::chrome::Elapsed::new(place.key.clone(), since).into_any_element(),
+            };
+            let mut child = div().size_full().opacity(t).child(inner).into_any_element();
+            window.with_content_mask(Some(ContentMask { bounds: place.clip }), |window| {
+                child.layout_as_root(place.at.size.map(AvailableSpace::Definite), window, cx);
+                child.prepaint_at(place.at.origin, window, cx);
+            });
+            (child, place.clip)
+        }).collect()
     }
 
     fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (),
         state: &mut Self::PrepaintState, window: &mut Window, cx: &mut App) {
-        if let Some((child, clip)) = state {
+        for (child, clip) in state {
             window.with_content_mask(Some(ContentMask { bounds: *clip }), |window| child.paint(window, cx));
         }
     }

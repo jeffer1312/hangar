@@ -19,6 +19,8 @@ const SETTLE_GRACE: Duration = Duration::from_millis(500);
 const AT_BOTTOM: f32 = 2.;
 /// Descendo por gesto a menos disso do fim, a lista volta a acompanhar.
 const STICK_BAND: f32 = 70.;
+/// Distância do fim a partir da qual a pílula "Ir para o fim" aparece, a do Zeron.
+const JUMP_MIN: f32 = 320.;
 /// Salto maior que isso (em alturas da janela) teleporta até essa distância e desliza o resto.
 const GLIDE_MAX_VIEWPORTS: f32 = 2.5;
 /// Mesmo passo por linha que a lista usa, para a roda andar a mesma distância, só que animada.
@@ -98,6 +100,9 @@ impl Hangar {
         let max = f32::from(self.list_state.max_offset_for_scrollbar().y);
         (max + f32::from(self.list_state.scroll_px_offset_for_scrollbar().y)).max(0.)
     }
+
+    /// Solta do fim e longe dele: a pílula "Ir para o fim" aparece. Perto do fim ela cobriria o próprio texto que falta.
+    pub(super) fn follow_detached(&self) -> bool { !self.follow.pinned && self.distance_from_bottom() > JUMP_MIN }
 
     fn visible_top(&self) -> f32 { f32::from(self.list_state.max_offset_for_scrollbar().y) - self.distance_from_bottom() }
 
@@ -213,10 +218,14 @@ impl Hangar {
     fn scroll_frame(&mut self, cx: &mut Context<Self>) {
         self.follow.scheduled = false;
         self.follow.kick = false;
+        let detached = self.follow_detached();
         let now = Instant::now();
         if self.follow.wheel != 0. { self.wheel_frame(now); }
         if self.follow.pinned && self.follow.wheel == 0. { self.spring_frame(now); }
-        if self.follow.wheel != 0. || self.follow.pinned && self.distance_from_bottom() > 0.5 { self.redraw(Area::Conversation, cx); }
+        // O último passo da roda não pede quadro; se ele cruzou a distância da pílula, a conversa redesenha para mostrá-la.
+        if self.follow.wheel != 0. || self.follow.pinned && self.distance_from_bottom() > 0.5 || detached != self.follow_detached() {
+            self.redraw(Area::Conversation, cx);
+        }
     }
 
     fn wheel_frame(&mut self, now: Instant) {

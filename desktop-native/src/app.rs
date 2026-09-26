@@ -40,6 +40,8 @@ const PREVIEW: &str = "__preview__";
 const WORKING: &str = "__working__";
 /// Entrada da linha "trabalhando"; a marca, desenhada fora da conversa, entra no mesmo tempo.
 const WORKING_FADE: Duration = Duration::from_millis(200);
+/// Quanto "Enviando…" espera o turno começar depois da entrega; passou disso, a sessão não vai trabalhar.
+const SENT_BRIDGE: Duration = Duration::from_secs(5);
 /// Prefixo da linha do cartão fixo de um agente rodando, seguido do id do tool_use.
 const PINNED: &str = "pin:";
 const COLUMN: f32 = 780.;
@@ -293,6 +295,10 @@ pub struct Hangar {
     act: activity::ActivityState,
     panes: panes::Panes,
     dossier: Option<Entity<baton::Dossier>>,
+    /// Quando vimos o turno começar ao vivo; a sessão aberta já trabalhando conta do último envio.
+    turn_seen: Option<Instant>,
+    /// Envio entregue que o turno ainda não pegou: "Enviando…" segue até o estado virar trabalhando ou o prazo passar.
+    sent_until: Option<(SessionKey, Instant)>,
 }
 
 impl Drop for Hangar {
@@ -383,7 +389,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), shortcuts: shortcuts::Shortcuts::default(),
             server_config: server_config::ServerConfig::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), new_session: None, sidebar,
-            act: activity::ActivityState::new(cx), panes, dossier: None,
+            act: activity::ActivityState::new(cx), panes, dossier: None, turn_seen: None, sent_until: None,
         }
     }
 
@@ -546,6 +552,7 @@ impl Hangar {
         self.selected = None;
         self.sessions.clear();
         self.chat = Chat::default();
+        self.turn_seen = None;
         self.stats = None;
         self.reset_details();
         self.cancel_preview_drop();
@@ -582,6 +589,7 @@ impl Hangar {
         if let Some(t) = self.session_task.take() { t.abort(); }
         if let Some(t) = self.history_task.take() { t.abort(); }
         self.chat = Chat::default();
+        self.turn_seen = None;
         self.stats = None;
         self.reset_details();
         self.cancel_preview_drop();
@@ -857,6 +865,8 @@ impl Hangar {
             Err(error) => SendOutcome::Rejected(Self::failure(error)),
         };
         if !self.delivery.complete(&key, &text, outcome) { return; }
+        if result.is_ok() { self.bridge_sending(key.clone(), cx); }
+        self.sync_working_row(cx);
         let current = self.selected_key().as_ref() == Some(&key);
         let confirmed = self.delivery.outcome(&key).is_none();
         if result.is_ok() || confirmed {
@@ -920,6 +930,7 @@ impl Hangar {
                     if let Some(task) = self.history_task.take() { task.abort(); }
                     self.selected = None;
                     self.chat = Chat::default();
+                    self.turn_seen = None;
                     self.reset_details();
                     self.cancel_preview_drop();
                     self.clear_visible_preview();
@@ -1015,6 +1026,9 @@ impl Hangar {
                 let finished = self.chat.state.state == "working" && state.state != "working";
                 let resumed = self.chat.state.state == "awaiting_input" && state.state == "working";
                 let turned = (self.chat.state.state == "working") != (state.state == "working");
+                // Estado vazio é a conversa recém-aberta: o turno já corria, e quem conta é o último envio.
+                if turned { self.turn_seen = (state.state == "working" && !self.chat.state.state.is_empty()).then(Instant::now); }
+                if state.state == "working" { self.sent_until = None; }
                 self.chat.update_state(state);
                 self.sync_working_row(cx);
                 if turned { self.restart_subagent_count(cx); }
@@ -1048,6 +1062,7 @@ impl Hangar {
                 self.terminal_suggestion.clear();
                 if let Some(task) = self.history_task.take() { task.abort(); }
                 self.chat = Chat::default();
+                self.turn_seen = None;
                 self.stats = None;
                 self.controls.clear_plan_preview();
                 self.reset_details();
@@ -1258,6 +1273,7 @@ impl Hangar {
             return;
         };
         if !self.delivery.begin(key.clone(), text.clone(), known) { cx.notify(); return; }
+        self.sync_working_row(cx);
         self.error = None;
         self.stop_feedback.remove(&key);
         let (connection, tx) = (self.connection, self.tx.clone());
@@ -1914,10 +1930,35 @@ impl Hangar {
         self.activity.running_agents().map(|agent| agent.call).find(|&call| self.chat.events[call].id == event_id)
     }
 
-    /// A linha de trabalhando: sessão trabalhando sem pensamento, ferramenta ou prévia ao vivo (a prévia já diz "Trabalhando").
-    fn working_row_shown(&self) -> bool {
-        self.chat.state.state == "working" && self.chat.live_thinking.is_empty() && self.chat.live_tool.is_none()
-            && self.visible_preview.text.is_empty()
+    /// A linha de trabalhando fica sob a última linha durante todo o turno, com pensamento, ferramenta ou texto chegando,
+    /// e já no envio.
+    fn working_row_shown(&self) -> bool { self.chat.state.state == "working" || self.sending_shown() }
+
+    /// Envio pendente, ou entregue há pouco e ainda sem o turno: sem esta ponte a linha sairia e voltaria no meio.
+    fn sending_shown(&self) -> bool {
+        let Some(key) = self.selected_key() else { return false };
+        self.chat.state.state != "working" && (self.delivery.pending(&key)
+            || self.sent_until.as_ref().is_some_and(|(sent, until)| *sent == key && Instant::now() < *until))
+    }
+
+    /// O relógio só confere a linha no fim do prazo; um envio mais novo que troque o prazo não é desfeito por ele.
+    fn bridge_sending(&mut self, key: SessionKey, cx: &mut Context<Self>) {
+        self.sent_until = Some((key, Instant::now() + SENT_BRIDGE));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SENT_BRIDGE).await;
+            this.update(cx, |this, cx| { this.sync_working_row(cx); cx.notify(); }).ok();
+        }).detach();
+    }
+
+    /// Começo do turno: o que vier por último entre o último envio gravado e a virada vista ao vivo. Sem nenhum dos
+    /// dois (conversa aberta no meio de um turno sem envio), não há o que contar.
+    fn turn_start(&self) -> Option<Instant> {
+        let sent = self.chat.events.iter().rev().find(|event| event.kind == "user_msg" && !event.queued()).and_then(|event| event.ts)
+            .and_then(|ts| {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs_f64();
+                Instant::now().checked_sub(Duration::from_secs_f64((now - ts).max(0.)))
+            });
+        match (sent, self.turn_seen) { (Some(sent), Some(seen)) => Some(sent.max(seen)), (sent, seen) => sent.or(seen) }
     }
 
     /// Estado que chega pelo SSE não refaz a conversa: a linha de trabalhando entra ou sai por um splice, antes dos cartões fixos.
@@ -1940,17 +1981,38 @@ impl Hangar {
         }
     }
 
-    /// Marca animada e o rótulo do estado (o texto do terminal) numa linha só, de altura fixa: o rótulo que muda a cada
-    /// segundo não remede a lista.
+    /// Marca, verbo e segundos numa linha só, de altura fixa: o texto que muda não remede a lista. Marca e segundos
+    /// animam fora da conversa guardada (`working_mark_float`); aqui ficam só os lugares deles.
     fn render_working(&self, cx: &mut Context<Self>) -> AnyElement {
-        let label = self.chat.state.label.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| tr("working_line"));
-        let row = div().relative().h(px(38.)).px(px(4.)).flex().items_center().gap(px(8.))
-            // A marca anima fora da conversa guardada (`working_mark_float`); aqui fica só o lugar dela.
-            .child(self.working_mark_slot(22.))
-            .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::muted()).child(label));
+        let sending = self.sending_shown();
+        let verb = if sending { tr("sending") } else { working_verb(self.chat.state.label.as_deref()) };
+        let since = if sending { None } else { self.turn_start() };
+        // Sem recuo: a marca começa na borda da coluna, alinhada com o texto das mensagens.
+        let row = div().relative().h(px(38.)).flex().items_center().gap(px(8.))
+            .child(self.working_mark_slot(panes::Area::Conversation, "working-line", 14., theme::accent()))
+            .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(verb))
+            .when_some(since, |el, since| el.child(self.elapsed_slot(panes::Area::Conversation, "working-elapsed", since)));
         if cx.reduce_motion() { return row.into_any_element(); }
         row.with_animation("working-line-in", Animation::new(WORKING_FADE).with_easing(chrome::ease_out),
             |el, t| el.opacity(t).top(px(6. * (1. - t)))).into_any_element()
+    }
+
+    /// "Ir para o fim" flutuando no pé da conversa, centrada na coluna, só enquanto ela está solta e longe do fim.
+    fn render_jump_pill(&self, cx: &mut Context<Self>) -> AnyElement {
+        // Hover opaco também, um toque da cor do texto sobre o fundo: o `hover()` do tema é translúcido na caixa solta.
+        let hover = theme::elevated().blend(theme::text().alpha(0.06));
+        let pill = Button::new("jump-latest")
+            .custom(ButtonCustomVariant::new(cx).color(theme::elevated()).foreground(theme::text()).hover(hover).active(hover))
+            // O variante pinta a cor misturada com transparente; opaco vem daqui, senão o texto da conversa aparece através.
+            // `elevated`, um degrau acima da conversa: com `raised` a pílula sumia no fundo.
+            .bg(theme::elevated()).h(px(30.)).pl(px(11.)).pr(px(13.)).rounded(px(15.)).border_1().border_color(theme::border_strong())
+            .shadow(theme::popover_shadow()).text_size(px(13.))
+            .icon(Icon::new(IconName::ArrowDown).size(px(13.)).text_color(theme::faint())).label(tr("latest"))
+            .on_click(cx.listener(|this, _, _, cx| this.follow_engage(cx)));
+        let wrap = div().absolute().left_0().right_0().bottom(px(16.)).flex().justify_center().child(pill);
+        if cx.reduce_motion() { return wrap.into_any_element(); }
+        wrap.with_animation("jump-latest-in", Animation::new(WORKING_FADE).with_easing(chrome::ease_out),
+            |el, t| el.opacity(t).bottom(px(10. + 6. * t))).into_any_element()
     }
 
     fn render_tool(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -2824,7 +2886,8 @@ impl Hangar {
             (markdown.clone(), *blank)
         };
         let (label, note, user, error) = if id == PREVIEW {
-            (tr("assistant"), Some(tr("working")), false, false)
+            // "Trabalhando" é da linha de baixo, que segue sob o texto chegando.
+            (tr("assistant"), None, false, false)
         } else {
             let Some(Item::Event(event_index)) = self.items.get(index) else { return div().into_any_element(); };
             let event = &self.chat.events[*event_index];
@@ -3390,6 +3453,13 @@ fn signature(item: &Item, events: &[ChatEvent]) -> String {
     }
 }
 
+/// O verbo do spinner do terminal ("Sketching… (6s · esc to interrupt)" → "Sketching…"); rótulo sem ele, "Trabalhando…".
+/// Os segundos são contados por nós, então os do terminal saem junto com o resto dos parênteses.
+fn working_verb(label: Option<&str>) -> String {
+    label.and_then(|label| label.split(" (").next()).map(str::trim).filter(|verb| verb.ends_with('…'))
+        .map(str::to_owned).unwrap_or_else(|| tr("working_line"))
+}
+
 fn preview_source(preview: &Preview) -> String {
     if preview.md { return safe_markdown(&crate::mend::close_hanging(&preview.text)); }
     let line_count = preview.text.lines().count();
@@ -3507,13 +3577,13 @@ impl Hangar {
             } else if !selected.readable() {
                 content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr(if selected.tracked == Some(false) { "untracked" } else { "starting" })));
             } else {
-                content = content.child(in_column(div().py_2().flex().gap_2().items_center()
-                    .when(self.has_older, |el| el.child(Button::new("older").small().outline().label(tr("older")).disabled(self.loading)
-                        .on_click(cx.listener(|this, _, _, cx| { this.history_limit = this.history_limit.saturating_add(400); this.etag = None; this.load_history(cx); }))))
-                    .when(self.has_older, |el| el.child(div().text_xs().text_color(theme::muted()).child(format!("{} {}", tr("history_window"), self.history_limit))))
-                    .when(self.loading, |el| el.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))))
-                    .child(div().flex_1())
-                    .child(Button::new("latest").small().outline().icon(IconName::ArrowDown).label(tr("latest")).on_click(cx.listener(|this, _, _, cx| this.follow_engage(cx))))));
+                if self.has_older || self.loading {
+                    content = content.child(in_column(div().py_2().flex().gap_2().items_center()
+                        .when(self.has_older, |el| el.child(Button::new("older").small().outline().label(tr("older")).disabled(self.loading)
+                            .on_click(cx.listener(|this, _, _, cx| { this.history_limit = this.history_limit.saturating_add(400); this.etag = None; this.load_history(cx); }))))
+                        .when(self.has_older, |el| el.child(div().text_xs().text_color(theme::muted()).child(format!("{} {}", tr("history_window"), self.history_limit))))
+                        .when(self.loading, |el| el.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))))));
+                }
                 if self.row_ids.is_empty() && !self.loading && self.error.is_none() {
                     content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr("empty_chat")));
                 } else {
@@ -3528,7 +3598,8 @@ impl Hangar {
                         .child(list(self.list_state.clone(), move |i, window, cx| {
                             view.update(cx, |this, cx| this.render_row(i, window, cx)).unwrap_or_else(|_| div().into_any_element())
                         }).flex_1().min_h_0())
-                        .child(self.wheel_layer(cx)));
+                        .child(self.wheel_layer(cx))
+                        .when(self.follow_detached(), |el| el.child(self.render_jump_pill(cx))));
                     self.schedule_scroll(window, cx);
                 }
             }
@@ -3542,7 +3613,8 @@ impl Hangar {
         let sending = selected_key.as_ref().is_some_and(|key| self.delivery.pending(key));
         let stopping = selected_key.as_ref().is_some_and(|key| self.stopping.contains(key));
         let delivery_note = selected_key.as_ref().and_then(|key| {
-            if self.delivery.pending(key) { return Some((tr("sending"), false)); }
+            // "Enviando…" é da linha de trabalhando, sob a conversa.
+            if self.delivery.pending(key) { return None; }
             self.delivery.outcome(key).map(|outcome| match outcome {
                 SendOutcome::Delivered => (tr("delivered"), false),
                 SendOutcome::Queued => (tr("queued"), false),
@@ -3619,7 +3691,7 @@ impl Render for Hangar {
             // Cada área é uma view própria, guardada entre quadros quando pode (`panes.rs`).
             .child(self.pane_element(panes::Area::Conversation, StyleRefinement::default().w_full().flex_1().min_h_0(), cx))
             // Entre a conversa e a faixa de baixo: o que a faixa abre por cima (comandos, sugestões) cobre a marca.
-            .when(page.is_none(), |el| el.child(self.working_mark_float(WORKING_FADE, cx.reduce_motion())))
+            .when(page.is_none(), |el| el.child(self.working_mark_float(panes::Area::Conversation, WORKING_FADE, cx.reduce_motion())))
             .child(self.pane_element(panes::Area::Bottom, StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())), cx));
         let nav = if page.is_some() { None }
             else if tabs { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w_full().h(px(44.)).flex_shrink_0(), cx)) }
@@ -3714,9 +3786,20 @@ impl Render for Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{message_card, preview_step, safe_markdown, stream_motion};
-    use crate::{api::dto::ChatEvent, cards::Card};
+    use super::{message_card, preview_step, safe_markdown, stream_motion, working_verb};
+    use crate::{api::dto::ChatEvent, cards::Card, i18n::tr};
     use std::time::Duration;
+
+    #[test]
+    fn working_line_takes_the_terminal_verb_and_counts_its_own_seconds() {
+        assert_eq!(working_verb(Some("Sketching… (6s · esc to interrupt)")), "Sketching…");
+        assert_eq!(working_verb(Some("Writing tests…")), "Writing tests…");
+        // Rótulo sem verbo (outro harness) ou ausente: a palavra nossa.
+        assert_eq!(working_verb(Some("Running")), tr("working_line"));
+        assert_eq!(working_verb(None), tr("working_line"));
+        let at = |s| super::chrome::format_elapsed(Duration::from_secs(s));
+        assert_eq!((at(6), at(65), at(3725)), ("6s".into(), "1m 5s".into(), "1h 2m".into()));
+    }
 
     #[test]
     fn markdown_image_becomes_label_or_remote_link() {
