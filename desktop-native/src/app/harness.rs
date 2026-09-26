@@ -4,8 +4,15 @@ use super::*;
 use super::chrome::Skeleton;
 use super::server_config::chip;
 use super::settings::{Disclosure, Page, settings_box};
-use gpui_kit::component::progress::Progress;
+use gpui_kit::component::{progress::Progress, switch::Switch};
 use serde::Deserialize;
+use serde_json::Map;
+
+/// Opções do Claude no `/api/config`, na ordem do card: (chave, rótulo, ajuda), textos do web.
+const CLAUDE_OPTIONS: [(&str, &str, &str); 2] = [
+    ("claude_statusline_update", "harness_claude_statusline_atualizar", "harness_claude_statusline_ajuda"),
+    ("claude_function_hooks", "harness_claude_function_hooks", "harness_claude_function_hooks_ajuda"),
+];
 
 #[derive(Clone, Deserialize)]
 struct Item {
@@ -68,12 +75,21 @@ pub(in crate::app) struct Harnesses {
     install_error: Option<(Option<String>, String)>,
     install_log: ScrollHandle,
     _install_poll: Option<Task<()>>,
+    /// `campos` da última leitura ou gravação boa do `/api/config`; o interruptor mostra isso, nunca o clique.
+    options: Option<Map<String, Value>>,
+    /// Leituras e gravações numa fila só: um ↻ que responde depois da gravação não repõe o valor velho.
+    options_seq: u64,
+    options_error: Option<String>,
+    /// Chaves cuja gravação ainda não voltou: o interruptor delas fica travado contra o clique duplo.
+    toggling: Vec<&'static str>,
 }
 
 pub(super) enum HarnessReply {
     Loaded(u64, Result<Value, Failure>),
     Repaired(u64, Result<Value, Failure>),
     Install(u64, Option<String>, Result<Value, Failure>),
+    /// Número na fila, a chave gravada (nenhuma = leitura) e a resposta.
+    Options(u64, Option<&'static str>, Result<Value, Failure>),
 }
 
 /// Código do servidor → frase do web; código que o app não conhece aparece cru em vez de sumir.
@@ -134,10 +150,36 @@ impl Hangar {
     /// Conserto em curso sobrevive a sair e voltar: a resposta dele ainda é desta conexão.
     pub(super) fn harness_opened(&mut self, cx: &mut Context<Self>) {
         let h = &mut self.harness;
-        (h.error, h.why, h.install_error) = (None, Vec::new(), None);
+        (h.error, h.why, h.install_error, h.options_error) = (None, Vec::new(), None, None);
         if h.repair.as_ref().is_some_and(|r| r.outcome.is_some()) { h.repair = None; }
         self.load_harness(cx);
         self.poll_install(None, cx);
+        self.load_options(cx);
+    }
+
+    /// Sem `write`, lê o `/api/config`; com ele, grava a chave. Os dois devolvem `campos`, e só o mais novo da fila os aplica.
+    fn load_options(&mut self, cx: &mut Context<Self>) { self.send_options(None, cx); }
+
+    fn toggle_option(&mut self, key: &'static str, on: bool, cx: &mut Context<Self>) {
+        if self.api.is_none() || self.harness.toggling.contains(&key) { return; }
+        self.harness.options_error = None;
+        self.harness.toggling.push(key);
+        self.send_options(Some((key, on)), cx);
+    }
+
+    fn send_options(&mut self, write: Option<(&'static str, bool)>, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        self.harness.options_seq += 1;
+        let seq = self.harness.options_seq;
+        let done = self.harness_send_later();
+        self.runtime.spawn(async move {
+            let result = match write {
+                Some((key, on)) => api.server_send(reqwest::Method::POST, &["config"], Some(serde_json::json!({ key: on })), 8).await,
+                None => api.config().await,
+            };
+            done(HarnessReply::Options(seq, write.map(|(key, _)| key), result)).await
+        });
+        cx.notify();
     }
 
     /// Sem `cli`, lê o estado; com ele, pede a instalação. Só a resposta do pedido mais novo vale.
@@ -280,8 +322,49 @@ impl Hangar {
                     }
                 }
             }
+            HarnessReply::Options(seq, key, result) => {
+                let h = &mut self.harness;
+                if let Some(key) = key { h.toggling.retain(|k| *k != key); }
+                let parsed = result.map_err(|error| Self::fetch_failure(&error))
+                    .and_then(|value| match value.get("campos") { Some(Value::Object(campos)) => Ok(campos.clone()), _ => Err(tr("invalid_response")) });
+                match parsed {
+                    Ok(campos) => if seq == h.options_seq { h.options = Some(campos); }
+                        // Gravação boa passada por uma leitura mais nova, que pode ter lido antes dela: relê.
+                        else if key.is_some() { self.load_options(cx); },
+                    // Gravar que falhou fala mesmo atrasada; a leitura atrasada cala. A última leitura boa fica à vista.
+                    Err(error) => if key.is_some() || seq == h.options_seq {
+                        h.options_error = Some(error);
+                        // A gravação pode ter pegado antes da falha: o servidor relido desempata.
+                        if key.is_some() { self.load_options(cx); }
+                    },
+                }
+            }
         }
         cx.notify();
+    }
+
+    /// Interruptores do card do Claude (`HarnessSettings.svelte`): o valor é o do servidor, e o clique grava na hora.
+    fn claude_options(&self, cx: &mut Context<Self>) -> Div {
+        let h = &self.harness;
+        let rows = h.options.iter().flat_map(|campos| CLAUDE_OPTIONS.iter().filter(|(key, ..)| campos.contains_key(*key)).map(|&(key, label, help)| {
+            let on = campos.get(key).and_then(|f| f.get("valor")) == Some(&Value::Bool(true));
+            div().id(SharedString::from(format!("harness-claude-{key}"))).flex().items_center().gap_3().py(px(6.))
+                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(web(label)))
+                    .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(web(help))))
+                .child(Switch::new(SharedString::from(format!("harness-claude-{key}-switch"))).checked(on)
+                    .accessibility_label(web(label)).disabled(h.toggling.contains(&key))
+                    .on_click(cx.listener(move |this, on: &bool, _, cx| this.toggle_option(key, *on, cx))))
+        })).collect::<Vec<_>>();
+        // Servidor que não conhece a chave diz o porquê: calado, a opção sumiria sem explicação.
+        let old = h.options.as_ref().is_some_and(|campos| !campos.contains_key(CLAUDE_OPTIONS[0].0));
+        div().flex().flex_col().when(!rows.is_empty() || old || h.options_error.is_some(), |el| el.mt(px(6.)).pt(px(4.))
+                .border_t_1().border_color(theme::border()))
+            .children(rows)
+            .when(old, |el| el.child(div().id("harness-claude-options-old").role(Role::Status).py(px(4.)).text_size(px(12.5))
+                .text_color(theme::muted()).whitespace_normal().child(web("harness_opcoes_indisponiveis"))))
+            .children(h.options_error.clone().map(|error| div().id("harness-claude-options-error").role(Role::Alert).py(px(4.))
+                .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error)))
     }
 
     fn render_harness_item(&self, cli: &str, item: &Item, cx: &mut Context<Self>) -> Div {
@@ -333,7 +416,12 @@ impl Hangar {
             .child(div().flex_1())
             .when(self.api.is_some(), |el| el.child(Button::new("harness-reload").ghost().small().icon(IconName::RefreshCw)
                 .label(tr("reload")).loading(self.harness.loading).disabled(self.harness.loading || running)
-                .on_click(cx.listener(|this, _, _, cx| { this.load_harness(cx); this.poll_install(None, cx); }))));
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.harness.options_error = None;
+                    this.load_harness(cx);
+                    this.poll_install(None, cx);
+                    this.load_options(cx);
+                }))));
         let mut page = div().flex().flex_col().gap_4().child(title)
             .child(self.mark(div().rounded(px(6.)).text_sm().text_color(theme::muted()).whitespace_normal()
                 .child(tr("harness_legend")), "harness_legend"));
@@ -378,6 +466,7 @@ impl Hangar {
                     .child(div().min_w_0().truncate().text_sm().text_color(theme::muted()).font_family(theme::MONO).child(version)))
                 .children(h.itens.iter().map(|item| self.render_harness_item(&h.id, item, cx)))
                 .children(orphan.map(|r| repair_line(r, &item_label(&r.item))))
+                .when(h.id == "claude", |el| el.child(self.claude_options(cx)))
                 .children((!h.instalado).then(|| self.install_offer(h, cx)).flatten())
                 .children(self.harness.install_error.as_ref().filter(|(owner, _)| owner.as_deref() == Some(h.id.as_str()))
                     .map(|(_, error)| install_alert(error)))
