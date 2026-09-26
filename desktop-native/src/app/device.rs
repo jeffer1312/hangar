@@ -163,6 +163,7 @@ impl Hangar {
             Page::Diary => self.load_diary(cx),
             Page::About if !self.device.about.loading => self.load_about(false, cx),
             Page::Accounts => self.accounts_opened(cx),
+            Page::Orchestration => self.orchestration_opened(cx),
             Page::Shortcuts => self.shortcuts_opened(cx),
             Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.server_config_opened(page, cx),
             // As origens do terminal moram no Avançado do detalhe e usam o rascunho do servidor.

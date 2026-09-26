@@ -71,6 +71,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     (Page::About, &[("settings_about_app", None), ("settings_about_server", None), ("settings_about_update", Some("settings_about_update_desc"))]),
     (Page::Accounts, &[("accounts_subscriptions", Some("accounts_menu_note")), ("accounts_models", None),
         ("accounts_others", Some("accounts_others_empty")), ("accounts_density", None), ("accounts_refresh", None)]),
+    (Page::Orchestration, &[("orchestration_intro", None), ("orchestration_unrestricted", None)]),
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help"))]),
     (Page::Voice, &[("voice_transcribe", Some("voice_transcribe_help")), ("voice_groq", Some("voice_groq_help")),
         ("voice_transcription_endpoint", Some("voice_transcription_endpoint_help")), ("voice_transcription_model", Some("voice_transcription_model_help")),
@@ -480,11 +481,12 @@ impl Hangar {
             Page::Diary => self.render_diary(cx),
             Page::About => self.render_about(cx),
             Page::Accounts => self.render_accounts(cx),
+            Page::Orchestration => self.render_orchestration(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             Page::Servers => self.render_machines(cx),
             Page::Sync => self.render_sync(cx),
-            Page::Orchestration | Page::Harnesses | Page::Windows => self.render_page_soon(page),
+            Page::Harnesses | Page::Windows => self.render_page_soon(page),
         };
         let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
             .child(div().w_full().flex().justify_center().child(div().w(px(720.)).max_w_full().px_4().pt(px(44.)).pb(px(40.)).child(body)));
