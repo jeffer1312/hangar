@@ -103,6 +103,54 @@ const CODEX_SWITCHES: [(&str, &str, &str); 2] = [
     ("codex_memory_import", "harness_codex_memoria", "harness_codex_memoria_ajuda"),
 ];
 
+#[derive(Clone, Deserialize)]
+struct AccountSync { status: String, #[serde(default)] trust_pending: bool, #[serde(default)] issues: Vec<AccountIssue> }
+
+#[derive(Clone, Deserialize)]
+struct AccountIssue { code: String, #[serde(default)] params: HashMap<String, String> }
+
+#[derive(Clone, Deserialize)]
+struct CodexAccount { id: String, name: String, #[serde(default)] is_default: bool, #[serde(default)] auth: AccountAuth, sync: AccountSync }
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct AccountAuth { email: Option<String> }
+
+#[derive(Clone, Deserialize)]
+struct CodexOptions { contexto_estendido: bool, codex_voice_beta: bool, compactacao: Option<u64>, #[serde(default)] modelos: Vec<CodexModel> }
+
+#[derive(Clone, Deserialize)]
+struct CodexModel { model: String, max: u64 }
+
+fn account_choice_path() -> Option<std::path::PathBuf> {
+    crate::appearance::image_path().map(|path| path.with_file_name("harness-codex-accounts.json"))
+}
+
+fn account_choices() -> Result<HashMap<String, String>, String> {
+    let path = account_choice_path().ok_or_else(|| web("native_harness_codex_preference_error"))?;
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| web("native_harness_codex_preference_error")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(_) => Err(web("native_harness_codex_preference_error")),
+    }
+}
+
+fn remembered_account(server: &str) -> Result<String, String> {
+    Ok(account_choices()?.get(server).cloned().unwrap_or_else(|| "default".to_owned()))
+}
+
+fn remember_account(server: &str, account: &str) -> Result<(), String> {
+    let path = account_choice_path().ok_or_else(|| web("native_harness_codex_preference_error"))?;
+    let mut saved = account_choices()?;
+    saved.insert(server.to_owned(), account.to_owned());
+    std::fs::create_dir_all(path.parent().expect("choice file has parent")).and_then(|_| std::fs::write(&path,
+        serde_json::to_vec(&saved).map_err(std::io::Error::other)?)).map_err(|_| web("native_harness_codex_preference_error"))
+}
+
+fn account_issue_text(issue: &AccountIssue) -> String {
+    crate::i18n::tr_web(&issue.code, &issue.params).unwrap_or_else(|| web("codex_account_error_unknown"))
+}
+
 #[derive(Default)]
 pub(in crate::app) struct Harnesses {
     /// A última lista lida; uma releitura que falha não a apaga (o erro aparece em cima dela).
@@ -138,6 +186,20 @@ pub(in crate::app) struct Harnesses {
     /// Interruptores da integração cuja gravação não voltou.
     integration_toggling: Vec<&'static str>,
     _integration_poll: Option<Task<()>>,
+    accounts: Option<Vec<CodexAccount>>,
+    accounts_seq: u64,
+    accounts_error: Option<String>,
+    account: String,
+    account_seq: u64,
+    account_sync: Option<AccountSync>,
+    account_error: Option<String>,
+    preference_error: Option<String>,
+    account_reconciling: bool,
+    _account_poll: Option<Task<()>>,
+    codex_options: Option<CodexOptions>,
+    codex_options_seq: u64,
+    codex_options_toggling: bool,
+    codex_options_error: Option<String>,
 }
 
 pub(super) enum HarnessReply {
@@ -150,6 +212,9 @@ pub(super) enum HarnessReply {
     Integration(u64, Result<Value, Failure>),
     /// Interruptor da integração gravado no `/api/config`.
     IntegrationSwitch(&'static str, Result<Value, Failure>),
+    Accounts(u64, u64, Result<String, String>, Result<Value, Failure>),
+    Account(u64, String, bool, Result<Value, Failure>),
+    CodexOptions(u64, bool, Result<Value, Failure>),
 }
 
 /// Código do servidor → frase do web; código que o app não conhece aparece cru em vez de sumir.
@@ -218,6 +283,14 @@ fn codex_date(value: Option<&str>) -> String {
     at.format(if crate::i18n::english() { "%-m/%-d/%Y, %-I:%M:%S %p" } else { "%d/%m/%Y, %H:%M:%S" }).to_string()
 }
 
+fn grouped_number(n: u64) -> String {
+    let mut text = n.to_string();
+    let separator = if crate::i18n::english() { ',' } else { '.' };
+    let mut at = text.len();
+    while at > 3 { at -= 3; text.insert(at, separator); }
+    text
+}
+
 /// A caixa só acompanha a última linha de quem já está no fim: quem rolou para cima está lendo.
 fn near_bottom(handle: &ScrollHandle) -> bool { handle.max_offset().y + handle.offset().y < px(40.) }
 
@@ -234,11 +307,102 @@ impl Hangar {
     pub(super) fn harness_opened(&mut self, cx: &mut Context<Self>) {
         let h = &mut self.harness;
         (h.error, h.why, h.install_error, h.options_error) = (None, Vec::new(), None, None);
+        h.codex_options_error = None;
+        if h.account.is_empty() { h.account = "default".to_owned(); }
+        h.preference_error = None;
         if h.repair.as_ref().is_some_and(|r| r.outcome.is_some()) { h.repair = None; }
         self.load_harness(cx);
         self.poll_install(None, cx);
         self.load_options(cx);
         if !self.harness.reconciling { self.read_integration(false, true, cx); }
+        self.load_harness_accounts(cx);
+    }
+
+    fn load_harness_accounts(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        self.harness.accounts_seq += 1;
+        let seq = self.harness.accounts_seq;
+        let picked = self.harness.account_seq;
+        let server = self.server.clone().unwrap_or_default();
+        let done = self.harness_send_later();
+        self.runtime.spawn(async move {
+            let chosen = tokio::task::spawn_blocking(move || remembered_account(&server)).await
+                .unwrap_or_else(|_| Err(web("native_harness_codex_preference_error")));
+            done(HarnessReply::Accounts(seq, picked, chosen, api.server_read(&["codex-contas"], &[], 8).await)).await
+        });
+        cx.notify();
+    }
+
+    fn select_account(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.integration_busy() || self.harness.accounts.as_ref().is_none_or(|accounts| !accounts.iter().any(|a| a.id == id)) { return; }
+        self.harness.account_seq += 1;
+        self.harness.account = id.clone();
+        self.harness.account_sync = self.harness.accounts.as_ref().and_then(|accounts| accounts.iter().find(|a| a.id == id)).map(|a| a.sync.clone());
+        self.harness.account_error = None;
+        if let Some(server) = self.server.clone() {
+            let chosen = id.clone();
+            self.runtime.spawn_blocking(move || if let Err(error) = remember_account(&server, &chosen) { eprintln!("{error}"); });
+        }
+        if id != "default" { self.read_account(false, cx); }
+        cx.notify();
+    }
+
+    fn read_account(&mut self, reconcile: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let id = self.harness.account.clone();
+        if id == "default" { return; }
+        self.harness.account_seq += 1;
+        let seq = self.harness.account_seq;
+        if reconcile { self.harness.account_reconciling = true; }
+        self.harness.account_error = None;
+        let done = self.harness_send_later();
+        self.runtime.spawn(async move {
+            let path = ["codex-contas", id.as_str(), "prepare"];
+            let result = if reconcile { api.server_post_query(&path, &[("forcar", "true")], 8).await }
+                else { api.server_read(&path, &[], 8).await };
+            done(HarnessReply::Account(seq, id, reconcile, result)).await
+        });
+        cx.notify();
+    }
+
+    fn schedule_account_poll(&mut self, seq: u64, cx: &mut Context<Self>) {
+        self.harness._account_poll = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(1500)).await;
+            let _ = this.update(cx, |this, cx| if this.settings == Some(Page::Harnesses) && this.harness.account_seq == seq {
+                this.read_account(false, cx)
+            });
+        }));
+    }
+
+    fn read_codex_options(&mut self, clear_error: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        if clear_error { self.harness.codex_options_error = None; }
+        self.harness.codex_options_seq += 1;
+        let seq = self.harness.codex_options_seq;
+        let done = self.harness_send_later();
+        self.runtime.spawn(async move {
+            done(HarnessReply::CodexOptions(seq, false, api.server_read(&["harness", "codex", "opcoes"], &[], 8).await)).await
+        });
+        cx.notify();
+    }
+
+    fn toggle_codex_option(&mut self, key: &'static str, on: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let Some(current) = self.harness.codex_options.as_ref() else { return };
+        if self.harness.codex_options_toggling { return; }
+        let mut body = serde_json::json!({ "contexto_estendido": current.contexto_estendido,
+            "codex_voice_beta": current.codex_voice_beta });
+        body[key] = Value::Bool(on);
+        self.harness.codex_options_toggling = true;
+        self.harness.codex_options_error = None;
+        self.harness.codex_options_seq += 1;
+        let seq = self.harness.codex_options_seq;
+        let done = self.harness_send_later();
+        self.runtime.spawn(async move {
+            done(HarnessReply::CodexOptions(seq, true, api.server_send(reqwest::Method::POST,
+                &["harness", "codex", "opcoes"], Some(body), 8).await)).await
+        });
+        cx.notify();
     }
 
     /// Lê a integração, ou (`reconcile`) pede uma rodada agora. `clear`: gesto novo, o erro anterior sai.
@@ -261,11 +425,16 @@ impl Hangar {
     /// Ocupada: reconciliando, ou rodando sem erro. Erro quer dizer que ninguém sabe mais se roda, e aí o botão destrava.
     fn integration_busy(&self) -> bool {
         let h = &self.harness;
-        h.reconciling || (h.integration_error.is_none() && h.integration.as_ref().is_some_and(|i| i.estado == "executando"))
+        h.reconciling || h.account_reconciling || if h.account == "default" {
+            h.integration_error.is_none() && h.integration.as_ref().is_some_and(|i| i.estado == "executando")
+        } else { h.account_error.is_none() && h.account_sync.as_ref().is_some_and(|s| s.status == "running") }
     }
 
     fn reconcile_integration(&mut self, cx: &mut Context<Self>) {
-        if !self.integration_busy() { self.read_integration(true, true, cx); }
+        if !self.integration_busy() {
+            if self.harness.account == "default" { self.read_integration(true, true, cx); }
+            else { self.read_account(true, cx); }
+        }
     }
 
     /// O interruptor mostra o servidor: grava a chave e é a releitura da integração que muda a tela.
@@ -405,7 +574,11 @@ impl Hangar {
                 self.harness.loading = false;
                 match result.map_err(|error| Self::fetch_failure(&error))
                     .and_then(|value| serde_json::from_value::<Vec<Cli>>(value).map_err(|_| tr("invalid_response"))) {
-                    Ok(list) => (self.harness.list, self.harness.error) = (Some(list), None),
+                    Ok(list) => {
+                        let codex_installed = list.iter().any(|cli| cli.id == "codex" && cli.instalado);
+                        (self.harness.list, self.harness.error) = (Some(list), None);
+                        if codex_installed { self.read_codex_options(false, cx); }
+                    }
                     Err(error) => self.harness.error = Some(error),
                 }
             }
@@ -495,6 +668,74 @@ impl Hangar {
                 if let Err(error) = result { self.harness.integration_error = Some(Self::setting_failure(&error)); }
                 self.read_integration(false, false, cx);
             }
+            HarnessReply::Accounts(seq, picked, chosen, result) => {
+                if seq != self.harness.accounts_seq { return; }
+                if picked == self.harness.account_seq {
+                    match chosen {
+                        Ok(id) => { self.harness.account = id; self.harness.preference_error = None; }
+                        Err(error) => { self.harness.account = "default".to_owned(); self.harness.preference_error = Some(error); }
+                    }
+                }
+                match result.map_err(|error| Self::fetch_failure(&error))
+                    .and_then(|value| serde_json::from_value::<Vec<CodexAccount>>(value).map_err(|_| tr("invalid_response"))) {
+                    Ok(accounts) => {
+                        let selected = accounts.iter().find(|a| a.id == self.harness.account);
+                        let selected = selected.or_else(|| accounts.iter().find(|a| a.id == "default"));
+                        let id = selected.map_or("default", |a| a.id.as_str()).to_owned();
+                        let changed = id != self.harness.account;
+                        self.harness.account = id;
+                        if !self.harness.account_reconciling || changed { self.harness.account_sync = selected.map(|a| a.sync.clone()); }
+                        self.harness.accounts = Some(accounts);
+                        self.harness.accounts_error = None;
+                        if changed {
+                            self.harness.account_seq += 1;
+                            self.harness.account_reconciling = false;
+                        }
+                        if self.harness.account != "default" && !self.harness.account_reconciling { self.read_account(false, cx); }
+                    }
+                    Err(error) => self.harness.accounts_error = Some(error),
+                }
+            }
+            HarnessReply::Account(seq, id, reconcile, result) => {
+                if seq != self.harness.account_seq || id != self.harness.account {
+                    if reconcile {
+                        self.harness.account_reconciling = false;
+                        if id == self.harness.account { self.read_account(false, cx); }
+                    }
+                    return;
+                }
+                self.harness.account_reconciling = false;
+                match result.map_err(|error| Self::fetch_failure(&error))
+                    .and_then(|value| serde_json::from_value::<AccountSync>(value).map_err(|_| tr("invalid_response"))) {
+                    Ok(sync) => {
+                        let running = sync.status == "running";
+                        self.harness.account_sync = Some(sync);
+                        if running { self.schedule_account_poll(seq, cx); }
+                    }
+                    Err(error) => self.harness.account_error = Some(error),
+                }
+            }
+            HarnessReply::CodexOptions(seq, write, result) => {
+                if write { self.harness.codex_options_toggling = false; }
+                let parsed = result.map_err(|error| if write && error.status == Some(409) {
+                    web("erro_codex_opcoes")
+                } else { Self::setting_failure(&error) })
+                    .and_then(|value| serde_json::from_value::<CodexOptions>(value).map_err(|_| tr("invalid_response")));
+                match parsed {
+                    Ok(options) if seq == self.harness.codex_options_seq => {
+                        self.harness.codex_options = Some(options);
+                    }
+                    Ok(_) if write => self.read_codex_options(true, cx),
+                    Err(error) if write => {
+                        self.harness.codex_options_error = Some(error);
+                        self.read_codex_options(false, cx);
+                    }
+                    Err(error) if seq == self.harness.codex_options_seq && self.harness.codex_options_error.is_none() => {
+                        self.harness.codex_options_error = Some(error);
+                    }
+                    _ => {}
+                }
+            }
         }
         cx.notify();
     }
@@ -534,7 +775,8 @@ impl Hangar {
                 .label(web(if busy { "harness_codex_executando" } else { "harness_codex_reconciliar" })).loading(busy).disabled(busy)
                 .on_click(cx.listener(|this, _, _, cx| this.reconcile_integration(cx))));
         let mut block = div().flex().flex_col().mt(px(6.)).pt(px(4.)).border_t_1().border_color(theme::border()).child(header)
-            .child(self.codex_why("reconcile", "harness_codex_reconciliar", "harness_codex_reconciliar_vered", "harness_codex_reconciliar_porque", cx));
+            .child(self.codex_why("reconcile", "harness_codex_reconciliar", "harness_codex_reconciliar_vered", "harness_codex_reconciliar_porque", cx))
+            .child(self.codex_account_choice(cx));
         if let Some(state) = &h.integration {
             block = block.children(CODEX_SWITCHES.iter().map(|&(key, label, help)| {
                 let on = if key == "codex_sync" { state.automatica } else { state.memoria };
@@ -548,10 +790,95 @@ impl Hangar {
             }))
                 // O prazo é lido antes de ligar: quem liga achando que já vale é o engano que ele evita.
                 .child(self.codex_why("memory", "harness_codex_memoria", "harness_codex_memoria_vered", "harness_codex_memoria_prazo", cx))
-                .child(codex_status(state));
+                .when(h.account == "default", |el| el.child(codex_status(state)));
         }
+        if h.account != "default" { block = block.child(self.codex_account_status()); }
         block.children(h.integration_error.clone().map(|error| div().id("harness-codex-error").role(Role::Alert).py(px(4.))
             .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error)))
+    }
+
+    fn codex_account_choice(&self, cx: &mut Context<Self>) -> Div {
+        let h = &self.harness;
+        let label = web("codex_ui_account");
+        let mut section = div().flex().flex_col().gap(px(4.)).py(px(6.))
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(label.clone()))
+            .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal()
+                .child(if h.accounts.is_none() && h.accounts_error.is_none() { tr("loading") }
+                    else { web(if h.accounts.as_ref().is_some_and(|a| a.len() > 1) { "harness_codex_conta_ajuda" }
+                        else { "harness_codex_conta_so_padrao" }) }));
+        if let Some(accounts) = &h.accounts && !accounts.is_empty() {
+            let disabled = self.integration_busy() || accounts.len() <= 1;
+            section = section.child(div().flex().flex_wrap().gap_2().children(accounts.iter().map(|account| {
+                let id = account.id.clone();
+                let name = if account.is_default { format!("{} · {}", account.name, web("criar_padrao")) } else { account.name.clone() };
+                Radio::new(SharedString::from(format!("harness-codex-account-{id}"))).label(name)
+                    .checked(h.account == id).disabled(disabled)
+                    .on_click(cx.listener(move |this, _: &bool, _, cx| this.select_account(id.clone(), cx)))
+            })));
+        } else {
+            section = section.child(Radio::new("harness-codex-account-default").label(web("criar_padrao")).checked(true).disabled(true));
+        }
+        section.children(h.accounts_error.as_ref().map(|error| div().id("harness-codex-accounts-error").role(Role::Alert)
+            .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal()
+            .child(web_with("harness_codex_conta_erro", &[("erro", error.clone())]))))
+            .children(h.preference_error.as_ref().map(|error| div().id("harness-codex-preference-error").role(Role::Alert)
+                .text_size(px(12.5)).text_color(theme::danger()).child(error.clone())))
+    }
+
+    fn codex_account_status(&self) -> Div {
+        let h = &self.harness;
+        let line = || div().text_size(px(12.5)).whitespace_normal().text_color(theme::muted());
+        let mut block = div().flex().flex_col().gap(px(3.)).pt(px(4.)).pb(px(6.));
+        if let Some(account) = h.accounts.as_ref().and_then(|accounts| accounts.iter().find(|a| a.id == h.account)) {
+            block = block.children(account.auth.email.as_ref().map(|email| line().child(email.clone())));
+        }
+        if let Some(sync) = &h.account_sync {
+            let status = match sync.status.as_str() {
+                "idle" => "harness_codex_ocioso", "running" => "harness_codex_executando",
+                "ready" => "harness_codex_ok", "partial" => "harness_codex_parcial", "error" => "harness_codex_erro",
+                _ => "harness_codex_indisponivel",
+            };
+            block = block.child(line().id("harness-codex-account-status").role(Role::Status).text_color(theme::text()).child(web(status)))
+                .when(sync.trust_pending, |el| el.child(line().id("harness-codex-account-trust").role(Role::Status).child(web("harness_codex_confianca"))))
+                .children(sync.issues.iter().enumerate().map(|(i, issue)| line().id(("harness-codex-account-issue", i))
+                    .when(sync.status == "error", |el| el.role(Role::Alert).text_color(theme::danger()))
+                    .child(account_issue_text(issue))));
+        }
+        block.children(h.account_error.as_ref().map(|error| line().id("harness-codex-account-error").role(Role::Alert)
+            .text_color(theme::danger()).child(error.clone())))
+    }
+
+    fn codex_options(&self, cx: &mut Context<Self>) -> Div {
+        let h = &self.harness;
+        let mut block = div().flex().flex_col().mt(px(6.)).pt(px(4.)).border_t_1().border_color(theme::border());
+        if h.codex_options.is_none() && h.codex_options_error.is_none() {
+            block = block.child(div().id("harness-codex-options-loading").role(Role::Status).text_size(px(12.5)).text_color(theme::muted()).child(tr("loading")));
+        }
+        if let Some(options) = &h.codex_options {
+            for (key, label, help, on) in [
+                ("contexto_estendido", "codex_contexto_titulo", "codex_contexto_ajuda", options.contexto_estendido),
+                ("codex_voice_beta", "codex_voice_config_title", "codex_voice_config_help", options.codex_voice_beta),
+            ] {
+                let title = if key == "codex_voice_beta" { format!("{} · {}", web(label), web("comum_beta")) } else { web(label) };
+                block = block.child(div().flex().items_center().gap_3().py(px(6.)).border_b_1().border_color(theme::border())
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(title.clone()))
+                        .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(web(help))))
+                    .child(Switch::new(SharedString::from(format!("harness-codex-{key}"))).checked(on)
+                        .accessibility_label(title).disabled(h.codex_options_toggling)
+                        .on_click(cx.listener(move |this, on: &bool, _, cx| this.toggle_codex_option(key, *on, cx)))));
+            }
+            block = block.child(div().pt(px(8.)).text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(web("codex_contexto_novas")))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(web(if options.modelos.is_empty() {
+                    "codex_contexto_sem_catalogo" } else { "codex_contexto_limites" })))
+                .children(options.modelos.iter().map(|model| div().flex().child(div().rounded(px(4.)).bg(theme::raised())
+                    .px(px(6.)).py(px(3.)).font_family(theme::MONO).text_size(px(12.5)).text_color(theme::muted())
+                    .child(format!("{}: {}", model.model, grouped_number(model.max))))))
+                .children(options.compactacao.map(|n| div().text_size(px(12.5)).text_color(theme::muted())
+                    .child(web_with("codex_contexto_compactacao", &[("n", grouped_number(n))]))));
+        }
+        block.children(h.codex_options_error.as_ref().map(|error| div().id("harness-codex-options-error").role(Role::Alert)
+            .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error.clone())))
     }
 
     /// Veredito curto e o "por quê?" que abre a explicação, como o `cfg-porque` do web.
@@ -623,10 +950,12 @@ impl Hangar {
                 .label(tr("reload")).loading(self.harness.loading).disabled(self.harness.loading || running)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.harness.options_error = None;
+                    this.harness.codex_options_error = None;
                     this.load_harness(cx);
                     this.poll_install(None, cx);
                     this.load_options(cx);
                     if !this.harness.reconciling { this.read_integration(false, true, cx); }
+                    this.load_harness_accounts(cx);
                 }))));
         let mut page = div().flex().flex_col().gap_4().child(title)
             .child(self.mark(div().rounded(px(6.)).text_sm().text_color(theme::muted()).whitespace_normal()
@@ -674,6 +1003,7 @@ impl Hangar {
                 .children(orphan.map(|r| repair_line(r, &item_label(&r.item))))
                 .when(h.id == "claude", |el| el.child(self.claude_options(cx)))
                 .when(h.id == "codex", |el| el.child(self.codex_integration(cx)))
+                .when(h.id == "codex" && h.instalado, |el| el.child(self.codex_options(cx)))
                 .children((!h.instalado).then(|| self.install_offer(h, cx)).flatten())
                 .children(self.harness.install_error.as_ref().filter(|(owner, _)| owner.as_deref() == Some(h.id.as_str()))
                     .map(|(_, error)| install_alert(error)))
