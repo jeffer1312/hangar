@@ -56,6 +56,53 @@ impl Install {
     fn running(&self) -> bool { self.fase == "rodando" }
 }
 
+/// `/api/harness/codex/integracao`: a cópia do Claude Code para o Codex, com os dois interruptores do `/api/config` junto.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct Integration {
+    estado: String,
+    etapa: Option<Value>,
+    ultima_execucao: Option<String>,
+    proxima_atualizacao: Option<String>,
+    plugins: Vec<Plugin>,
+    avisos: Vec<Value>,
+    erros: Vec<Value>,
+    confianca_pendente: bool,
+    progresso: Option<Steps>,
+    etapa_segundos: Option<u64>,
+    skills: Option<Skills>,
+    automatica: bool,
+    memoria: bool,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct Plugin { id: String, versao: String, origem: String }
+
+#[derive(Clone, Deserialize)]
+struct Steps { passo: u32, total: u32, sub: Option<Sub> }
+
+#[derive(Clone, Deserialize)]
+struct Sub { atual: u32, total: u32 }
+
+#[derive(Clone, Deserialize)]
+struct Skills { ponte: u64, nativas: u64 }
+
+impl Steps {
+    /// Etapas concluídas mais a fração que o sub-andamento mede; sem ele a etapa em curso conta zero, como no web.
+    fn percent(&self) -> f32 {
+        let inside = self.sub.as_ref().filter(|s| s.total > 0).map_or(0., |s| (s.atual as f32 - 1.) / s.total as f32);
+        if self.total == 0 { return 0.; }
+        ((self.passo as f32 - 1. + inside) / self.total as f32).clamp(0., 1.) * 100.
+    }
+}
+
+/// Os interruptores da integração: (chave do `/api/config`, rótulo, ajuda), textos do web.
+const CODEX_SWITCHES: [(&str, &str, &str); 2] = [
+    ("codex_sync", "harness_codex_automatica", "harness_codex_automatica_ajuda"),
+    ("codex_memory_import", "harness_codex_memoria", "harness_codex_memoria_ajuda"),
+];
+
 #[derive(Default)]
 pub(in crate::app) struct Harnesses {
     /// A última lista lida; uma releitura que falha não a apaga (o erro aparece em cima dela).
@@ -82,6 +129,15 @@ pub(in crate::app) struct Harnesses {
     options_error: Option<String>,
     /// Chaves cuja gravação ainda não voltou: o interruptor delas fica travado contra o clique duplo.
     toggling: Vec<&'static str>,
+    /// A última leitura boa da integração do Codex; uma que falha não a apaga.
+    integration: Option<Integration>,
+    integration_seq: u64,
+    /// O pedido de reconciliar ainda não voltou.
+    reconciling: bool,
+    integration_error: Option<String>,
+    /// Interruptores da integração cuja gravação não voltou.
+    integration_toggling: Vec<&'static str>,
+    _integration_poll: Option<Task<()>>,
 }
 
 pub(super) enum HarnessReply {
@@ -90,6 +146,10 @@ pub(super) enum HarnessReply {
     Install(u64, Option<String>, Result<Value, Failure>),
     /// Número na fila, a chave gravada (nenhuma = leitura) e a resposta.
     Options(u64, Option<&'static str>, Result<Value, Failure>),
+    /// Número na fila da integração e a resposta (leitura ou reconciliar).
+    Integration(u64, Result<Value, Failure>),
+    /// Interruptor da integração gravado no `/api/config`.
+    IntegrationSwitch(&'static str, Result<Value, Failure>),
 }
 
 /// Código do servidor → frase do web; código que o app não conhece aparece cru em vez de sumir.
@@ -135,6 +195,29 @@ fn install_step(key: Option<&str>) -> String {
     crate::i18n::tr_web(&format!("harness_inst_etapa_{key}"), &HashMap::new()).unwrap_or_else(|| key.to_owned())
 }
 
+/// Mensagem da integração: código do servidor → frase do web (`harness_codex_m_<código>`); código desconhecido mostra o
+/// `texto` que veio junto em vez de sumir.
+fn codex_text(message: Option<&Value>) -> String {
+    match message {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Object(fields)) => {
+            let params: HashMap<String, String> = fields.get("params").and_then(Value::as_object).map(|p| p.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect()).unwrap_or_default();
+            fields.get("codigo").and_then(Value::as_str).and_then(|code| crate::i18n::tr_web(&format!("harness_codex_m_{code}"), &params))
+                .or_else(|| fields.get("texto").and_then(Value::as_str).map(str::to_owned)).unwrap_or_default()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Data do servidor na hora local, no formato do `toLocaleString` do web; nenhuma é "nenhuma", ilegível vai crua.
+fn codex_date(value: Option<&str>) -> String {
+    let Some(value) = value else { return web("harness_codex_nunca") };
+    let Ok(at) = chrono::DateTime::parse_from_rfc3339(value) else { return value.to_owned() };
+    let at = at.with_timezone(&chrono::Local);
+    at.format(if crate::i18n::english() { "%-m/%-d/%Y, %-I:%M:%S %p" } else { "%d/%m/%Y, %H:%M:%S" }).to_string()
+}
+
 /// A caixa só acompanha a última linha de quem já está no fim: quem rolou para cima está lendo.
 fn near_bottom(handle: &ScrollHandle) -> bool { handle.max_offset().y + handle.offset().y < px(40.) }
 
@@ -155,6 +238,48 @@ impl Hangar {
         self.load_harness(cx);
         self.poll_install(None, cx);
         self.load_options(cx);
+        if !self.harness.reconciling { self.read_integration(false, true, cx); }
+    }
+
+    /// Lê a integração, ou (`reconcile`) pede uma rodada agora. `clear`: gesto novo, o erro anterior sai.
+    fn read_integration(&mut self, reconcile: bool, clear: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let h = &mut self.harness;
+        h.integration_seq += 1;
+        let seq = h.integration_seq;
+        if reconcile { h.reconciling = true; }
+        if clear { h.integration_error = None; }
+        let done = self.harness_send_later();
+        self.runtime.spawn(async move {
+            let result = if reconcile { api.server_post(&["harness", "codex", "integracao"], 30).await }
+                else { api.server_read(&["harness", "codex", "integracao"], &[], 15).await };
+            done(HarnessReply::Integration(seq, result)).await
+        });
+        cx.notify();
+    }
+
+    /// Ocupada: reconciliando, ou rodando sem erro. Erro quer dizer que ninguém sabe mais se roda, e aí o botão destrava.
+    fn integration_busy(&self) -> bool {
+        let h = &self.harness;
+        h.reconciling || (h.integration_error.is_none() && h.integration.as_ref().is_some_and(|i| i.estado == "executando"))
+    }
+
+    fn reconcile_integration(&mut self, cx: &mut Context<Self>) {
+        if !self.integration_busy() { self.read_integration(true, true, cx); }
+    }
+
+    /// O interruptor mostra o servidor: grava a chave e é a releitura da integração que muda a tela.
+    fn toggle_integration(&mut self, key: &'static str, on: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        if self.harness.integration_toggling.contains(&key) { return; }
+        self.harness.integration_error = None;
+        self.harness.integration_toggling.push(key);
+        let done = self.harness_send_later();
+        self.runtime.spawn(async move {
+            let result = api.server_send(reqwest::Method::POST, &["config"], Some(serde_json::json!({ key: on })), 8).await;
+            done(HarnessReply::IntegrationSwitch(key, result)).await
+        });
+        cx.notify();
     }
 
     /// Sem `write`, lê o `/api/config`; com ele, grava a chave. Os dois devolvem `campos`, e só o mais novo da fila os aplica.
@@ -205,6 +330,16 @@ impl Hangar {
             cx.background_executor().timer(Duration::from_millis(1200)).await;
             // Página fechada não consulta; reabrir relê e retoma o ciclo.
             let _ = this.update(cx, |this, cx| if this.settings == Some(Page::Harnesses) { this.poll_install(None, cx) });
+        }));
+    }
+
+    /// Relê a rodada em curso daqui a 1,5 s, se nada mais novo saiu e a página segue aberta.
+    fn schedule_integration_poll(&mut self, seq: u64, cx: &mut Context<Self>) {
+        self.harness._integration_poll = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(1500)).await;
+            let _ = this.update(cx, |this, cx| if this.settings == Some(Page::Harnesses) && this.harness.integration_seq == seq {
+                this.read_integration(false, false, cx)
+            });
         }));
     }
 
@@ -339,6 +474,27 @@ impl Hangar {
                     },
                 }
             }
+            HarnessReply::Integration(seq, result) => {
+                let h = &mut self.harness;
+                if seq != h.integration_seq { return; }
+                h.reconciling = false;
+                match result.map_err(|error| Self::fetch_failure(&error))
+                    .and_then(|value| serde_json::from_value::<Integration>(value).map_err(|_| tr("invalid_response"))) {
+                    Ok(state) => {
+                        let running = state.estado == "executando";
+                        h.integration = Some(state);
+                        if running { self.schedule_integration_poll(seq, cx); }
+                    }
+                    // A última leitura boa fica; sem nova leitura agendada, o botão destrava pelo erro.
+                    Err(error) => h.integration_error = Some(error),
+                }
+            }
+            HarnessReply::IntegrationSwitch(key, result) => {
+                self.harness.integration_toggling.retain(|k| *k != key);
+                // A gravação pode ter pegado antes da falha: a releitura mostra o valor real, e o erro fica à vista.
+                if let Err(error) = result { self.harness.integration_error = Some(Self::setting_failure(&error)); }
+                self.read_integration(false, false, cx);
+            }
         }
         cx.notify();
     }
@@ -365,6 +521,55 @@ impl Hangar {
                 .text_color(theme::muted()).whitespace_normal().child(web("harness_opcoes_indisponiveis"))))
             .children(h.options_error.clone().map(|error| div().id("harness-claude-options-error").role(Role::Alert).py(px(4.))
                 .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error)))
+    }
+
+    /// Integração do Codex (`HarnessSettings.svelte`): reconciliar, os dois interruptores e o andamento da última rodada.
+    fn codex_integration(&self, cx: &mut Context<Self>) -> Div {
+        let h = &self.harness;
+        let busy = self.integration_busy();
+        let header = div().flex().items_center().gap_3().py(px(6.))
+            .child(div().flex_1().min_w_0().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text())
+                .whitespace_normal().child(web("harness_codex_integracao")))
+            .child(Button::new("harness-codex-reconcile").outline().small().flex_shrink_0()
+                .label(web(if busy { "harness_codex_executando" } else { "harness_codex_reconciliar" })).loading(busy).disabled(busy)
+                .on_click(cx.listener(|this, _, _, cx| this.reconcile_integration(cx))));
+        let mut block = div().flex().flex_col().mt(px(6.)).pt(px(4.)).border_t_1().border_color(theme::border()).child(header)
+            .child(self.codex_why("reconcile", "harness_codex_reconciliar", "harness_codex_reconciliar_vered", "harness_codex_reconciliar_porque", cx));
+        if let Some(state) = &h.integration {
+            block = block.children(CODEX_SWITCHES.iter().map(|&(key, label, help)| {
+                let on = if key == "codex_sync" { state.automatica } else { state.memoria };
+                div().id(SharedString::from(format!("harness-{key}"))).flex().items_center().gap_3().py(px(6.))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(web(label)))
+                        .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(web(help))))
+                    .child(Switch::new(SharedString::from(format!("harness-{key}-switch"))).checked(on)
+                        .accessibility_label(web(label)).disabled(h.integration_toggling.contains(&key))
+                        .on_click(cx.listener(move |this, on: &bool, _, cx| this.toggle_integration(key, *on, cx))))
+            }))
+                // O prazo é lido antes de ligar: quem liga achando que já vale é o engano que ele evita.
+                .child(self.codex_why("memory", "harness_codex_memoria", "harness_codex_memoria_vered", "harness_codex_memoria_prazo", cx))
+                .child(codex_status(state));
+        }
+        block.children(h.integration_error.clone().map(|error| div().id("harness-codex-error").role(Role::Alert).py(px(4.))
+            .text_size(px(12.5)).text_color(theme::danger()).whitespace_normal().child(error)))
+    }
+
+    /// Veredito curto e o "por quê?" que abre a explicação, como o `cfg-porque` do web.
+    fn codex_why(&self, topic: &'static str, name: &str, verdict: &str, reason: &str, cx: &mut Context<Self>) -> Div {
+        let key = ("codex".to_owned(), format!("integration-{topic}"));
+        let open = self.harness.why.contains(&key);
+        let this = cx.entity().downgrade();
+        div().pb(px(4.)).flex().flex_col().gap(px(4.))
+            .child(div().flex().items_center().gap(px(6.)).text_size(px(12.5))
+                .child(div().text_color(theme::muted()).child(web(verdict)))
+                .child(Disclosure::new(format!("harness-codex-{topic}-why"), open, tr("accounts_engine_why"), true)
+                    .name(tr("accounts_engine_why_of").replace("{name}", &web(name)))
+                    .on_change(move |open, cx| { let _ = this.update(cx, |this, cx| {
+                        this.harness.why.retain(|k| *k != key);
+                        if open { this.harness.why.push(key.clone()); }
+                        cx.notify();
+                    }); })))
+            .when(open, |el| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(web(reason))))
     }
 
     fn render_harness_item(&self, cli: &str, item: &Item, cx: &mut Context<Self>) -> Div {
@@ -421,6 +626,7 @@ impl Hangar {
                     this.load_harness(cx);
                     this.poll_install(None, cx);
                     this.load_options(cx);
+                    if !this.harness.reconciling { this.read_integration(false, true, cx); }
                 }))));
         let mut page = div().flex().flex_col().gap_4().child(title)
             .child(self.mark(div().rounded(px(6.)).text_sm().text_color(theme::muted()).whitespace_normal()
@@ -467,6 +673,7 @@ impl Hangar {
                 .children(h.itens.iter().map(|item| self.render_harness_item(&h.id, item, cx)))
                 .children(orphan.map(|r| repair_line(r, &item_label(&r.item))))
                 .when(h.id == "claude", |el| el.child(self.claude_options(cx)))
+                .when(h.id == "codex", |el| el.child(self.codex_integration(cx)))
                 .children((!h.instalado).then(|| self.install_offer(h, cx)).flatten())
                 .children(self.harness.install_error.as_ref().filter(|(owner, _)| owner.as_deref() == Some(h.id.as_str()))
                     .map(|(_, error)| install_alert(error)))
@@ -531,7 +738,21 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::Install;
+    use super::{Install, Integration};
+
+    #[test]
+    fn integration_reads_backend_shape_and_measures_progress() {
+        let running: Integration = serde_json::from_value(serde_json::json!({"estado": "executando",
+            "etapa": {"codigo": "etapa_inventariando", "params": {}, "texto": "Inventariando configuração"},
+            "ultima_execucao": null, "proxima_atualizacao": null, "plugins": [{"id": "p@m", "versao": "1.0", "origem": "claude"}],
+            "erros": [], "avisos": [], "confianca_pendente": false, "progresso": {"passo": 3, "total": 5, "sub": {"atual": 2, "total": 4}},
+            "etapa_segundos": 7, "skills": {"ponte": 2, "nativas": 1}, "automatica": true, "memoria": false})).unwrap();
+        let steps = running.progresso.as_ref().unwrap();
+        // (3 - 1 + (2 - 1) / 4) / 5 = 45%: a etapa em curso conta só o que o sub-andamento mediu.
+        assert!((steps.percent() - 45.).abs() < 0.01 && running.automatica && !running.memoria && running.plugins.len() == 1);
+        let old: Integration = serde_json::from_value(serde_json::json!({"estado": "ocioso"})).unwrap();
+        assert!(old.progresso.is_none() && old.plugins.is_empty() && old.skills.is_none() && !old.automatica);
+    }
 
     #[test]
     fn install_state_reads_backend_shape_and_tolerates_missing_fields() {
@@ -557,4 +778,40 @@ fn repair_line(repair: &Repair, label: &str) -> Stateful<Div> {
         Some(Ok(done)) => line.id("harness-repaired").role(Role::Status).text_color(theme::success()).child(done.clone()),
         Some(Err(error)) => line.id("harness-repair-error").role(Role::Alert).text_color(theme::danger()).child(error.clone()),
     }
+}
+
+/// Estado da última rodada da integração: manchete, andamento, datas, o que ela gerencia, avisos e erros.
+fn codex_status(state: &Integration) -> Div {
+    let line = || div().text_size(px(12.5)).whitespace_normal().text_color(theme::muted());
+    let name = match state.estado.as_str() {
+        known @ ("ocioso" | "executando" | "ok" | "parcial" | "erro" | "indisponivel") => web(&format!("harness_codex_{known}")),
+        other => other.to_owned(),
+    };
+    let stage = codex_text(state.etapa.as_ref());
+    let headline = if stage.is_empty() { name } else { format!("{name} · {stage}") };
+    let progress = state.progresso.as_ref().filter(|_| state.estado == "executando").map(|steps| {
+        let mut text = web_with("harness_codex_progresso", &[("passo", steps.passo.to_string()), ("total", steps.total.to_string())]);
+        if let Some(sub) = &steps.sub {
+            text += &format!(" · {}", web_with("harness_codex_progresso_sub", &[("atual", sub.atual.to_string()), ("total", sub.total.to_string())]));
+        }
+        if let Some(seconds) = state.etapa_segundos { text += &format!(" · {}", web_with("harness_codex_etapa_tempo", &[("s", seconds.to_string())])); }
+        div().flex().flex_col().gap(px(4.)).child(line().child(text))
+            .child(Progress::new("harness-codex-progress").accessibility_label(web("harness_codex_integracao")).value(steps.percent()))
+    });
+    div().flex().flex_col().gap(px(3.)).pt(px(4.)).pb(px(6.))
+        .child(line().id("harness-codex-status").role(Role::Status).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text())
+            .child(headline))
+        .children(progress)
+        .child(line().child(web_with("harness_codex_ultima", &[("data", codex_date(state.ultima_execucao.as_deref()))])))
+        .children(state.proxima_atualizacao.as_deref().map(|at| line().child(web_with("harness_codex_proxima", &[("data", codex_date(Some(at)))]))))
+        .child(line().child(web_with("harness_codex_plugins", &[("n", state.plugins.len().to_string())])))
+        .children(state.skills.as_ref().map(|s| line().child(web_with("harness_codex_skills",
+            &[("ponte", s.ponte.to_string()), ("nativas", s.nativas.to_string())]))))
+        .when(!state.plugins.is_empty(), |el| el.child(div().pl(px(12.)).flex().flex_col().gap(px(2.))
+            .children(state.plugins.iter().map(|p| line().child(StyledText::new(format!("{} · {} · {}", p.id, p.versao, p.origem))
+                .with_highlights([(0..p.id.len(), HighlightStyle { color: Some(theme::text()), font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() })]))))))
+        .when(state.confianca_pendente, |el| el.child(line().id("harness-codex-trust").role(Role::Status).child(web("harness_codex_confianca"))))
+        .children(state.avisos.iter().map(|aviso| line().child(codex_text(Some(aviso)))))
+        .children(state.erros.iter().enumerate().map(|(i, falha)| line().id(("harness-codex-failure", i)).role(Role::Alert)
+            .text_color(theme::danger()).child(codex_text(Some(falha)))))
 }
