@@ -26,9 +26,10 @@ def _registro(d: Path, *linhas: tuple[datetime, str]) -> None:
     (d / "registro.md").write_text("".join(f"- {_iso(t)} · {c}\n" for t, c in linhas), encoding="utf-8")
 
 
-def _batimento(d: Path, idade_s: int, pid: int | None = None, intervalo: int = 60) -> None:
+def _batimento(d: Path, idade_s: int, pid: int | None = None, intervalo: int = 60,
+               agora: datetime = AGORA) -> None:
     (d / "vigia.json").write_text(json.dumps({
-        "ts": _iso(AGORA - timedelta(seconds=idade_s)), "pid": pid or os.getpid(), "unit": "vigia-g1",
+        "ts": _iso(agora - timedelta(seconds=idade_s)), "pid": pid or os.getpid(), "unit": "vigia-g1",
         "arbiter": "arb", "watching": ["rev1", "arb"], "states": {"rev1": "idle", "arb": "idle"},
         "interval_s": intervalo}), encoding="utf-8")
 
@@ -288,7 +289,8 @@ def test_rota_do_condutor_e_a_lista_com_o_chip(cli, tmp_path):
     d.mkdir()
     (d / "eventos.jsonl").write_text(json.dumps({"ts": _iso(AGORA), "tipo": "execucao_inicio",
                                                  "plano": "p", "branch": "b", "gid": "g1"}) + "\n")
-    _batimento(d, idade_s=10)
+    # A rota lê o relógio real; AGORA é da importação e a suíte inteira passa da folga de 150 s.
+    _batimento(d, idade_s=10, agora=datetime.now().astimezone())
     r = cli.get("/api/orq/2026-09-25-g1/conductor", headers=H)
     assert r.status_code == 200, r.text
     body = r.json()
