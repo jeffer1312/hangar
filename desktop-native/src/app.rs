@@ -96,7 +96,8 @@ enum Payload {
     BackdropRemoved(Result<(), String>),
     // Resposta amarrada à sessão e ao pedido capturados no gesto, não ao que está na tela na volta.
     Reply(SessionKey, Reply, Result<Value, Failure>),
-    Config(Result<Value, Failure>),
+    Config(u64, Result<Value, Failure>),
+    PushSettings(u64, Result<Value, Failure>),
     // Cotação, diário e atualização da conexão atual (páginas Geral, Diário de uso e Sobre).
     Device(device::DeviceReply),
     // Contas e modelos da conexão atual.
@@ -155,6 +156,62 @@ struct Recent { key: SessionKey, files: Option<Result<Vec<UploadFile>, String>> 
 struct Envelope { connection: u64, selection: Option<u64>, payload: Payload }
 struct RichText { source: String, view: Entity<TextViewState>, _observer: Subscription, touched: u64, row: String }
 enum ChatUpdate { Message(ChatEvent), Preview(Preview), State(SessionState), Question(Option<Ask>), Thinking(String), LiveTool(Option<LiveTool>), Reset }
+
+#[derive(Default)]
+struct SystemNotifications {
+    seq: u64,
+    prefs: Option<PushPreferences>,
+    finished: Option<(bool, u64)>,
+    state: Option<String>,
+    started: Option<Instant>,
+}
+
+struct PushPreferences { muted: Vec<String>, quiet: Option<(chrono::NaiveTime, chrono::NaiveTime)> }
+
+impl PushPreferences {
+    fn parse(value: Value) -> Option<Self> {
+        let muted = value.get("muted")?.as_array()?.iter().map(|v| v.as_str().map(str::to_owned)).collect::<Option<_>>()?;
+        let quiet = match value.get("quiet_hours")? {
+            Value::Null => None,
+            q => {
+                let time = |key| {
+                    let text = q.get(key)?.as_str()?;
+                    chrono::NaiveTime::parse_from_str(text, "%H:%M:%S%.f")
+                        .or_else(|_| chrono::NaiveTime::parse_from_str(text, "%H:%M")).ok()
+                };
+                Some((time("start")?, time("end")?))
+            }
+        };
+        Some(Self { muted, quiet })
+    }
+
+    fn suppressed(&self, name: &str, now: chrono::NaiveTime) -> bool {
+        self.muted.iter().any(|muted| muted == name) || self.quiet.is_some_and(|(start, end)| {
+            if start <= end { start <= now && now < end } else { now >= start || now < end }
+        })
+    }
+}
+
+impl SystemNotifications {
+    fn reset_stream(&mut self) { self.state = None; self.started = None; }
+
+    fn advance(&mut self, state: &str, now: Instant) -> Option<&'static str> {
+        let previous = self.state.replace(state.to_owned());
+        if previous.as_deref() == Some(state) { return None; }
+        // O primeiro retrato não prova quando o turno começou, nem uma transição ao vivo.
+        previous?;
+        match state {
+            "working" => { self.started = Some(now); None }
+            "awaiting_input" => Some("notify_awaiting"),
+            "idle" => {
+                let started = self.started.take();
+                let (enabled, minimum) = self.finished?;
+                (enabled && started.is_some_and(|start| now.duration_since(start).as_secs() >= minimum)).then_some("notify_finished")
+            }
+            _ => { self.started = None; None }
+        }
+    }
+}
 /// Texto preparado de uma linha: a mensagem pronta para o `TextView`, as linhas do resultado de uma chamada ou o
 /// detalhe aberto (entrada/saída) de uma chamada.
 #[derive(Clone)]
@@ -300,6 +357,7 @@ pub struct Hangar {
     server_config: server_config::ServerConfig,
     sync: sync::Sync,
     machines: machines::Machines,
+    system_notifications: SystemNotifications,
     computer: computer::Computer,
     new_session: Option<Entity<create::NewSession>>,
     sidebar: sidebar::Sidebar,
@@ -403,6 +461,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), shortcuts: shortcuts::Shortcuts::default(),
             server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), computer: computer::Computer::default(), new_session: None, sidebar,
+            system_notifications: SystemNotifications::default(),
             act: activity::ActivityState::new(cx), files: files::Files::new(window, cx), ctl_search: controls::search_field(window, cx), panes, dossier: None, turn_seen: None, sent_until: None,
         }
     }
@@ -545,18 +604,25 @@ impl Hangar {
         self.server_config.reconnected(format!("{}\n{}", self.server.as_deref().unwrap_or(""), self.token.read(cx).value()));
         // Página do servidor aberta na troca: relê do servidor novo.
         if let Some(page) = self.settings { self.settings_opened(page, cx); }
-        if let Some(api) = self.api.clone() {
-            let tx = self.tx.clone();
-            // Só leitura: a fileira de atalhos vem da config do servidor.
-            self.runtime.spawn(async move {
-                let result = api.config().await;
-                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Config(result) }).await;
-            });
-        }
+        self.load_notification_preferences();
         self.refresh_desktop_palette(cx);
         let a = appearance::get();
         if a.background == appearance::Background::Desktop && a.wallpaper == appearance::Wallpaper::Glass { self.refresh_backdrop(window, cx); }
         cx.notify();
+    }
+
+    fn load_notification_preferences(&mut self) {
+        let Some(api) = self.api.clone() else { return };
+        let n = &mut self.system_notifications;
+        n.seq += 1;
+        n.prefs = None;
+        n.finished = None;
+        let (seq, connection, tx) = (n.seq, self.connection, self.tx.clone());
+        self.runtime.spawn(async move {
+            let (config, prefs) = tokio::join!(api.config(), api.server_read(&["push", "settings"], &[], 15));
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Config(seq, config) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::PushSettings(seq, prefs) }).await;
+        });
     }
 
     /// O que é da conexão atual sai da tela e os pedidos em voo passam a ser descartados. Serve à troca de servidor e ao Sair.
@@ -596,6 +662,7 @@ impl Hangar {
         self.shortcuts = shortcuts::Shortcuts::default();
         self.harness = harness::Harnesses::default();
         self.machines = machines::Machines::default();
+        self.system_notifications = SystemNotifications::default();
         self.computer = computer::Computer::default();
     }
 
@@ -608,6 +675,7 @@ impl Hangar {
         if let Some(t) = self.session_task.take() { t.abort(); }
         if let Some(t) = self.history_task.take() { t.abort(); }
         self.chat = Chat::default();
+        self.system_notifications.reset_stream();
         self.turn_seen = None;
         self.stats = None;
         self.reset_details();
@@ -759,6 +827,8 @@ impl Hangar {
             }
             Payload::Stream(Update::Online) => {
                 if is_chat {
+                    self.system_notifications.reset_stream();
+                    self.pending_chat.retain(|update| !matches!(update, ChatUpdate::State(_)));
                     self.chat_online = true;
                     self.error = None;
                     if !self.history_started { self.load_history(cx); }
@@ -849,18 +919,40 @@ impl Hangar {
                 let rows = self.row_ids.len();
                 if rows > 0 { self.follow_content_changed(cx); self.list_state.remeasure_items(0..rows); }
             }
-            Payload::Config(result) => self.side.receive_config(result.map_err(|error| Self::failure(&error))),
+            Payload::Config(seq, result) => {
+                if seq != self.system_notifications.seq { return; }
+                self.system_notifications.finished = result.as_ref().ok().and_then(|v| Some((
+                    v.pointer("/campos/notify_finished/valor")?.as_bool()?,
+                    v.pointer("/campos/finish_min_seconds/valor")?.as_u64()?,
+                )));
+                self.side.receive_config(result.map_err(|error| Self::failure(&error)));
+            }
+            Payload::PushSettings(seq, result) => {
+                if seq != self.system_notifications.seq { return; }
+                self.system_notifications.prefs = result.ok().and_then(PushPreferences::parse);
+                if self.system_notifications.prefs.is_none() || self.system_notifications.finished.is_none() {
+                    window.push_notification(Notification::warning(tr("notify_settings_failed")), cx);
+                }
+            }
             Payload::Device(reply) => { self.receive_device(reply, cx); return; }
             Payload::Accounts(reply) => { self.receive_accounts(reply, window, cx); return; }
             Payload::Orchestration(reply) => { self.receive_orchestration(reply, cx); return; }
             Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, cx); return; }
             Payload::Harness(reply) => { self.receive_harness(reply, cx); return; }
-            Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
+            Payload::ServerConfig(reply) => {
+                if matches!(&reply, server_config::ServerConfigReply::QuietSaved(..) | server_config::ServerConfigReply::Saved(..)) {
+                    self.load_notification_preferences();
+                }
+                self.receive_server_config(reply, window, cx); return;
+            }
             Payload::Sync(reply) => { self.receive_sync(reply, window, cx); return; }
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
             Payload::Computer(reply) => { self.receive_computer(reply, window, cx); return; }
             Payload::Create(dialog, reply) => { self.receive_create(dialog, reply, window, cx); return; }
-            Payload::Sidebar(reply) => { self.receive_sidebar(reply, window, cx); return; }
+            Payload::Sidebar(reply) => {
+                if matches!(&reply, sidebar::SidebarReply::Wrote(_, sidebar::Write::Mute(_), _)) { self.load_notification_preferences(); }
+                self.receive_sidebar(reply, window, cx); return;
+            }
             Payload::Activity(reply) => { self.receive_activity(reply, cx); return; }
             Payload::FileView(reply) => { self.receive_file_view(reply, window, cx); return; }
             Payload::Dossier(key, seq, result) => { self.receive_dossier(key, seq, result, cx); return; }
@@ -1044,6 +1136,21 @@ impl Hangar {
                 if self.chat.state.state != "working" { self.defer_preview_drop(cx); }
             }
             ChatUpdate::State(state) => {
+                let notice = self.system_notifications.advance(&state.state, Instant::now());
+                if self.history_installed && self.chat_online && self.system_notifications.finished.is_some() && !window.is_window_active() {
+                    if let (Some(message), Some(session), Some(prefs)) = (notice, &self.selected, &self.system_notifications.prefs) {
+                        if !prefs.suppressed(&session.name, chrono::Local::now().time()) {
+                            let (title, body) = (format!("Hangar · {}", session.name), tr(message));
+                            self.runtime.spawn_blocking(move || {
+                                match std::process::Command::new("notify-send").args(["--app-name=Hangar", "--", &title, &body]).status() {
+                                    Ok(status) if status.success() => {},
+                                    Ok(_) => eprintln!("notify-send: envio recusado"),
+                                    Err(error) => eprintln!("notify-send: {error}"),
+                                }
+                            });
+                        }
+                    }
+                }
                 // Turno terminou: o plano do Claude com terminal pode ter mudado de arquivo.
                 let finished = self.chat.state.state == "working" && state.state != "working";
                 let resumed = self.chat.state.state == "awaiting_input" && state.state == "working";
@@ -1075,6 +1182,7 @@ impl Hangar {
                 None => self.defer_live_clear(Live::Tool, cx),
             },
             ChatUpdate::Reset => {
+                self.system_notifications.reset_stream();
                 // Transcript trocado: as perguntas respondidas desta sessão não valem mais.
                 if let Some(key) = self.selected_key() {
                     self.answered_tools.retain(|(owner, _)| owner != &key);
@@ -3947,6 +4055,46 @@ mod tests {
     use super::{message_card, preview_step, safe_markdown, stream_motion, working_verb};
     use crate::{api::dto::ChatEvent, cards::Card, i18n::tr};
     use std::time::Duration;
+
+    #[test]
+    fn system_notifications_require_live_transitions_and_confirmed_preferences() {
+        use super::{PushPreferences, SystemNotifications};
+        use chrono::NaiveTime;
+        use serde_json::json;
+        use std::time::Instant;
+        let time = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let prefs = PushPreferences::parse(json!({"muted": ["muted"], "quiet_hours": {"start": "22:00", "end": "07:00"}})).unwrap();
+        assert!(prefs.suppressed("muted", time(12, 0)));
+        for now in [time(22, 0), time(23, 59), time(0, 0), time(6, 59)] { assert!(prefs.suppressed("open", now)); }
+        assert!(!prefs.suppressed("open", time(7, 0)));
+        let equal = PushPreferences::parse(json!({"muted": [], "quiet_hours": {"start": "12:00", "end": "12:00"}})).unwrap();
+        assert!(!equal.suppressed("open", time(12, 0)));
+        assert!(PushPreferences::parse(json!({"muted": [], "quiet_hours": {"start": "bad", "end": "07:00"}})).is_none());
+        assert!(PushPreferences::parse(json!({})).is_none());
+        let now = Instant::now();
+        let mut n = SystemNotifications { finished: Some((true, 45)), ..Default::default() };
+        assert_eq!(n.advance("working", now), None);
+        assert_eq!(n.advance("idle", now + Duration::from_secs(90)), None);
+        assert_eq!(n.advance("working", now), None);
+        assert_eq!(n.advance("idle", now + Duration::from_secs(44)), None);
+        assert_eq!(n.advance("working", now), None);
+        assert_eq!(n.advance("idle", now + Duration::from_secs(45)), Some("notify_finished"));
+        assert_eq!(n.advance("idle", now + Duration::from_secs(46)), None);
+        assert_eq!(n.advance("awaiting_input", now), Some("notify_awaiting"));
+        assert_eq!(n.advance("awaiting_input", now), None);
+        assert_eq!(n.advance("working", now), None);
+        assert_eq!(n.advance("awaiting_input", now), Some("notify_awaiting"));
+        assert_eq!(n.advance("idle", now + Duration::from_secs(45)), Some("notify_finished"));
+        assert_eq!(n.advance("working", now), None);
+        assert_eq!(n.advance("awaiting_input", now), Some("notify_awaiting"));
+        assert_eq!(n.advance("working", now + Duration::from_secs(100)), None);
+        assert_eq!(n.advance("idle", now + Duration::from_secs(110)), None);
+        n.finished = Some((false, 0));
+        assert_eq!(n.advance("working", now), None);
+        assert_eq!(n.advance("idle", now), None);
+        n.reset_stream();
+        assert_eq!(n.advance("awaiting_input", now), None);
+    }
 
     #[test]
     fn working_line_takes_the_terminal_verb_and_counts_its_own_seconds() {
