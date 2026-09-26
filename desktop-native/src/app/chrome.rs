@@ -257,6 +257,60 @@ impl RenderOnce for WorkingMark {
     }
 }
 
+/// Segundos desde `since` ("6s", "1m 5s", "1h 2m"), numa view própria com chave que se redesenha só na virada de cada
+/// segundo, como a `WorkingMark`: a área em volta não acorda.
+#[derive(IntoElement)]
+pub struct Elapsed { key: ElementId, since: Instant }
+
+impl Elapsed {
+    pub fn new(key: impl Into<ElementId>, since: Instant) -> Self { Self { key: key.into(), since } }
+}
+
+struct ElapsedView { since: Instant }
+
+impl Render for ElapsedView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().flex().items_center().pt(px(1.)).text_size(px(11.)).text_color(theme::faint())
+            .child(format_elapsed(self.since.elapsed()))
+    }
+}
+
+impl RenderOnce for Elapsed {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let since = self.since;
+        let view = keyed_view(self.key, window, cx, |cx| {
+            cx.spawn(async move |view, cx| loop {
+                let Ok(since) = view.read_with(cx, |view: &ElapsedView, _| view.since) else { break };
+                let into = Duration::from_nanos((since.elapsed().as_nanos() % 1_000_000_000) as u64);
+                // Vira o segundo na batida seguinte da grade comum: com a marca animando, sai no mesmo quadro que ela.
+                let turn = Duration::from_secs(1) - into;
+                let off = (pulse_epoch().elapsed() + turn).as_nanos() % PULSE_TICK.as_nanos();
+                let turn = turn + Duration::from_nanos(((PULSE_TICK.as_nanos() - off) % PULSE_TICK.as_nanos()) as u64);
+                cx.background_executor().timer(turn).await;
+                if view.update(cx, |_, cx| cx.notify()).is_err() { break; }
+            }).detach();
+            ElapsedView { since }
+        });
+        // O começo vem de um horário de parede convertido a cada desenho e varia em microssegundos: só um salto conta.
+        view.update(cx, |view, cx| {
+            if since.saturating_duration_since(view.since).max(view.since.saturating_duration_since(since)) > Duration::from_millis(500) {
+                view.since = since;
+                cx.notify();
+            }
+        });
+        view.cached(StyleRefinement::default().size_full())
+    }
+}
+
+pub fn format_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}m {}s", secs / 60, secs % 60),
+        _ => format!("{}h {}m", secs / 3600, secs % 3600 / 60),
+    }
+}
+
 /// Botão só com ícone (`.btn.icon` do mock): 28×28, raio 6, ícone 16.
 pub fn icon_button(id: impl Into<ElementId>, icon: IconName, tip: String, cx: &App) -> Button {
     Button::new(id).custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
