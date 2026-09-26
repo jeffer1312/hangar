@@ -19,6 +19,7 @@ mod controls;
 mod create;
 mod device;
 mod follow;
+mod viewer;
 mod machines;
 mod panes;
 mod rows;
@@ -2338,19 +2339,31 @@ impl Hangar {
 
     fn render_refs(&mut self, row: &str, refs: Vec<(Source, String, bool)>, cx: &mut Context<Self>) -> AnyElement {
         let key = self.selected_key();
+        let images: Vec<Source> = refs.iter().filter(|(_, _, image)| *image).map(|(source, _, _)| source.clone()).collect();
         let mut list = div().flex().flex_col().gap_2();
+        let mut shown = 0;
         for (n, (source, name, image)) in refs.into_iter().enumerate() {
             let preview = if image {
                 self.ensure_media(&source);
                 let state = key.as_ref().and_then(|key| self.media.get(&(key.clone(), source.clone())));
-                Some(match state {
+                let thumb = match state {
                     Some(MediaState::Image(picture)) => div().max_w(px(320.)).max_h(px(240.)).rounded_md().overflow_hidden()
                         .child(img(picture.clone()).max_w(px(320.)).max_h(px(240.)).object_fit(ObjectFit::Contain)).into_any_element(),
                     Some(MediaState::Failed(reason)) => div().text_xs().text_color(theme::warning())
                         .child(tr("media_failed").replace("{name}", &name).replace("{reason}", reason)).into_any_element(),
                     _ => div().w(px(160.)).h(px(96.)).rounded_md().bg(theme::raised()).flex().items_center().justify_center()
                         .text_xs().text_color(theme::muted()).child(tr("media_loading")).into_any_element(),
-                })
+                };
+                // Focável para o Esc do visor devolver o foco aqui; Enter abre como o clique.
+                let (open_key, sources, index) = (key.clone(), images.clone(), shown);
+                shown += 1;
+                Some(div().id(SharedString::from(format!("thumb-{row}-{n}"))).focusable().tab_stop(true).cursor_pointer()
+                    .self_start().rounded_md().border_1().border_color(transparent_black())
+                    .focus_visible(|el| el.border_color(theme::accent_focus()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(key) = open_key.clone() { this.open_image(key, sources.clone(), index, window, cx); }
+                    }))
+                    .child(thumb))
             } else { None };
             let (open_source, open_name) = (source.clone(), name.clone());
             let (save_source, save_name) = (source, name.clone());
