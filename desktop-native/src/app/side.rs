@@ -487,10 +487,7 @@ impl Hangar {
             _ if session.git_dirty.is_some_and(|n| n > 0) => div().text_xs().text_color(theme::faint()).child(tr("side_changes_local")).into_any_element(),
             _ => div().text_xs().text_color(theme::faint()).child(if session.git_dirty.is_some() { tr("side_changes_none") } else { String::new() }).into_any_element(),
         };
-        body = body.child(changes)
-            .child(Input::new(&self.files.path).small().aria_label(tr("file_path")))
-            .child(Button::new("file-open").small().ghost().label(tr("file_open"))
-                .on_click(cx.listener(|this, _, window, cx| this.open_file_input(window, cx))));
+        body = body.child(changes);
         let open = self.side.files.as_ref().is_some_and(|(owner, _)| owner == &key);
         body = body.child(div().flex().gap_1()
             .child(Button::new("side-files").xsmall().ghost().selected(open).label(tr(if open { "side_files_reload" } else { "side_files" }))

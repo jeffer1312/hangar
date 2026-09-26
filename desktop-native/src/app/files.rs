@@ -5,7 +5,6 @@ use gpui_kit::component::input::{Editor, EditorState, Position, RopeExt};
 actions!(file_view, [CloseFile, NextFile, PreviousFile, SaveFile]);
 
 pub(super) struct Files {
-    pub path: Entity<InputState>,
     owner: (u64, u64),
     hidden: bool,
     tabs: Vec<FileTab>,
@@ -70,22 +69,17 @@ impl Files {
         ]);
         let focus = cx.focus_handle();
         let lost = cx.on_focus_lost(window, |this, window, cx| this.files_focus_lost(window, cx));
-        Self { path: cx.new(|cx| InputState::new(window, cx).placeholder(tr("file_path"))),
-            owner: (0, 0), hidden: false, tabs: Vec::new(), active: 0, serial: 0,
+        Self { owner: (0, 0), hidden: false, tabs: Vec::new(), active: 0, serial: 0,
             focus, return_focus: None, _focus_lost: lost }
     }
 }
 
-fn path_line(raw: &str) -> (String, Option<u32>) {
-    let raw = raw.trim();
-    match raw.rsplit_once(':').and_then(|(path, line)| line.parse::<u32>().ok().filter(|n| *n > 0).map(|n| (path, n))) {
-        Some((path, line)) => (path.to_owned(), Some(line)),
-        None => (raw.to_owned(), None),
+async fn read_file(api: Api, name: String, mut path: String, candidates: Vec<String>) -> Result<Content, Failure> {
+    let mut resolved = api.act(&name, &["files", "resolver"], Some(json!({"caminhos": [&path]})), false, 30).await?;
+    if resolved.get("ok").and_then(|v| v.get(&path)).is_none() && !candidates.is_empty() {
+        resolved = api.act(&name, &["files", "resolver"], Some(json!({"caminhos": candidates})), false, 30).await?;
+        if let Some(found) = candidates.into_iter().find(|candidate| resolved.get("ok").and_then(|v| v.get(candidate)).is_some()) { path = found; }
     }
-}
-
-async fn read_file(api: Api, name: String, path: String) -> Result<Content, Failure> {
-    let resolved = api.act(&name, &["files", "resolver"], Some(json!({"caminhos": [&path]})), false, 30).await?;
     let entry = resolved.get("ok").and_then(|v| v.get(&path)).ok_or_else(|| Failure::local("file_missing"))?;
     let (route, requested) = match entry.get("relativo") {
         Some(Value::String(relative)) => (["files", "read"], relative.as_str()),
@@ -102,11 +96,6 @@ impl Hangar {
     fn files_visible(&self) -> bool {
         self.files.owner == (self.connection, self.selection) && !self.files.tabs.is_empty() && !self.files.hidden
             && (self.settings.is_none() || self.settings_live())
-    }
-
-    pub(super) fn open_file_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (path, line) = path_line(self.files.path.read(cx).value().as_ref());
-        if !path.is_empty() { self.open_file(path, line, window, cx); }
     }
 
     pub(super) fn open_file(&mut self, path: String, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
@@ -129,8 +118,22 @@ impl Hangar {
         self.files.active = self.files.tabs.len() - 1;
         self.focus_file(window, cx);
         let (connection, selection, tx) = (self.connection, Some(self.selection), self.tx.clone());
+        let mut candidates = Vec::new();
+        if !path.contains('/') {
+            fn collect(value: &Value, name: &str, out: &mut Vec<String>) {
+                match value {
+                    Value::String(text) => for reference in composer::code_references(text) {
+                        if reference.path.ends_with(&format!("/{name}")) && !out.contains(&reference.path) { out.push(reference.path); }
+                    },
+                    Value::Array(items) => for item in items { collect(item, name, out); },
+                    Value::Object(items) => for item in items.values() { collect(item, name, out); },
+                    _ => {},
+                }
+            }
+            for event in &self.chat.events { collect(&json!([event.text, event.tool_input, event.result]), &path, &mut candidates); }
+        }
         self.runtime.spawn(async move {
-            let result = read_file(api, key.name, path).await;
+            let result = read_file(api, key.name, path, candidates).await;
             let _ = tx.send(Envelope { connection, selection, payload: Payload::FileView(FileReply::Read(id, result)) }).await;
         });
     }
@@ -366,7 +369,6 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::path_line;
     #[test]
     fn editing_requires_a_complete_read_and_digest() {
         let mut content: super::Content = serde_json::from_value(serde_json::json!({
@@ -380,11 +382,5 @@ mod tests {
         assert!(!content.editable());
         content.digest = Some(String::new());
         assert!(!content.editable());
-    }
-    #[test]
-    fn file_line_suffix_preserves_windows_drive() {
-        assert_eq!(path_line("C:\\src\\main.rs:120"), ("C:\\src\\main.rs".into(), Some(120)));
-        assert_eq!(path_line("C:\\src\\main.rs"), ("C:\\src\\main.rs".into(), None));
-        assert_eq!(path_line("src/demo.rs:0"), ("src/demo.rs:0".into(), None));
     }
 }

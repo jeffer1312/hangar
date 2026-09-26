@@ -172,6 +172,140 @@ pub fn cited_paths(text: &str) -> Vec<String> {
     out
 }
 
+const CODE_EXTS: &str = "svelte|tsx|ts|jsx|js|mjs|cjs|py|pas|dfm|cs|dart|md|json|yaml|yml|toml|scss|css|html|sql|sh|fish|ps1|env|lock|txt|csv|xml|ini|cfg|conf";
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CodeReference { pub path: String, pub line: Option<u32>, pub start: usize, pub end: usize }
+
+fn code_path(path: &str, absolute: bool) -> bool {
+    if path.contains("://") || path.split('/').any(|part| matches!(part, ".git" | "node_modules")) { return false; }
+    let name = basename(path);
+    if matches!(name, "Dockerfile" | "Makefile") { return true; }
+    let Some((stem, ext)) = name.rsplit_once('.') else { return false; };
+    ((absolute || !stem.is_empty()) && CODE_EXTS.split('|').any(|known| ext == known)) || (absolute && !stem.is_empty() && !stem.ends_with('.')
+        && (1..=12).contains(&ext.len()) && ext.starts_with(|c: char| c.is_ascii_alphabetic())
+        && ext.chars().all(|c| c.is_ascii_alphanumeric() || "_-".contains(c)))
+}
+
+/// Posições e ocorrências do core; nome puro só é reconhecido em código ou destino de link.
+pub fn code_references(text: &str) -> Vec<CodeReference> {
+    let mut out = Vec::new();
+    let mut consumed = 0;
+    for (start, ch) in text.char_indices() {
+        if start < consumed { continue; }
+        let previous = text[..start].chars().next_back();
+        let absolute = ch == '/' || (ch == '~' && text[start..].starts_with("~/"));
+        let word = |c: char| c.is_ascii_alphanumeric() || "_.-".contains(c);
+        if absolute {
+            if previous.is_some_and(|c| c.is_alphanumeric() || "_.~:/*".contains(c)) { continue; }
+        } else if !word(ch) || previous.is_some_and(|c| c.is_alphanumeric() || "_/~.:*-".contains(c)) { continue; }
+        for (offset, next) in text[start..].char_indices().skip(1).chain(std::iter::once((text.len() - start, ' '))) {
+            let end = start + offset;
+            let path = &text[start..end];
+            if ends_path(text, end) && code_path(path, absolute)
+                && (absolute || (path.contains('/') && !path.contains("//") && path.chars().all(|c| word(c) || c == '/'))) {
+                let (line, suffix) = citation_line(&text[end..]);
+                consumed = end + suffix;
+                out.push(CodeReference { path: path.to_owned(), line, start, end: consumed });
+                break;
+            }
+            if next.is_whitespace() || "\"'`)]".contains(next) { break; }
+        }
+    }
+    out
+}
+
+fn citation_line(tail: &str) -> (Option<u32>, usize) {
+    let digits = |s: &str| s.bytes().take_while(u8::is_ascii_digit).count();
+    let Some(rest) = tail.strip_prefix(':') else { return (None, 0); };
+    let count = digits(rest);
+    if count == 0 { return (None, 0); }
+    let mut used = count + 1;
+    if let Some(column) = tail[used..].strip_prefix(':') {
+        let count = digits(column);
+        if count > 0 { used += count + 1; }
+    }
+    (rest[..count].parse::<u32>().ok().filter(|line| *line > 0), used)
+}
+
+fn inline_reference(value: &str, link: bool) -> Option<CodeReference> {
+    let value = value.strip_prefix('<').and_then(|s| s.strip_suffix('>')).unwrap_or(value);
+    if value.is_empty() || value.starts_with(['#', '?']) || value.contains("://") { return None; }
+    let suffix = value.rfind(':').and_then(|_| value.char_indices().find_map(|(at, c)| {
+        let (line, used) = citation_line(&value[at..]);
+        (c == ':' && used > 0 && at + used == value.len()).then_some((at, line))
+    }));
+    let (path, line) = suffix.map_or((value, None), |(at, line)| (&value[..at], line));
+    if path.contains(':') || (path.starts_with('.') && !path.contains('/') && path != ".env") { return None; }
+    if !link && path.contains(char::is_whitespace) && !path.starts_with('/') && !path.starts_with("~/") { return None; }
+    if !link {
+        let candidate = format!("{}{}", if path.starts_with('/') || path.starts_with("~/") { "" } else { "/" }, path.replace(' ', "%20"));
+        if !code_references(&candidate).first().is_some_and(|r| r.start == 0 && r.end == candidate.len()) { return None; }
+    }
+    Some(CodeReference { path: path.to_owned(), line, start: 0, end: value.len() })
+}
+
+/// Isola as citações para o plugin inline do kit sem transformar código cercado ou URLs.
+pub fn citation_markdown(source: &str) -> String {
+    let mut output = String::with_capacity(source.len());
+    let mut fence = None;
+    for line in source.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let marker = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'));
+        if let Some(marker) = marker {
+            let count = trimmed.chars().take_while(|c| *c == marker).count();
+            if count >= 3 && line.len() - trimmed.len() <= 3 {
+                match fence {
+                    None => fence = Some((marker, count)),
+                    Some((open, length)) if marker == open && count >= length && trimmed[count..].trim().is_empty() => fence = None,
+                    _ => {},
+                }
+                output.push_str(line); continue;
+            }
+        }
+        if fence.is_some() || line.starts_with("    ") || line.starts_with('\t') { output.push_str(line); continue; }
+        let refs = code_references(line);
+        let mut at = 0;
+        while at < line.len() {
+            let rest = &line[at..];
+            let code = rest.starts_with('`').then(|| {
+                let run = rest.bytes().take_while(|b| *b == b'`').count();
+                rest[run..].find(&rest[..run]).map(|end| (run + end + run, &rest[run..run + end]))
+            }).flatten();
+            let link = rest.starts_with('[').then(|| {
+                let close = rest.find(']')?;
+                if !rest[close..].starts_with("](") { return None; }
+                let end = rest[close + 2..].find(')')? + close + 2;
+                Some((end + 1, &rest[close + 2..end]))
+            }).flatten();
+            let protected = code.or(link);
+            let reference = match protected {
+                Some((_, value)) => inline_reference(value, link.is_some()),
+                None => refs.iter().find(|reference| reference.start == at).cloned(),
+            };
+            let used = protected.map(|(used, _)| used).or_else(|| reference.as_ref().map(|reference| reference.end - at));
+            if let Some(used) = used {
+                if let Some(reference) = reference.filter(|r| {
+                    let ext = extension(&r.path);
+                    !EXTS.contains(&ext.as_str()) || matches!(ext.as_str(), "json" | "tif" | "tiff")
+                })
+                    .filter(|_| at == 0 || !line[..at].ends_with('!')) {
+                    let suffix = reference.line.map(|n| format!(":{n}")).unwrap_or_default();
+                    output.push_str(&format!("[{}{}](hangar-file:?path={}&line={})", basename(&reference.path).replace('[', "\\[").replace(']', "\\]"), suffix,
+                        encode_component(&reference.path).replace('(', "%28").replace(')', "%29"), reference.line.unwrap_or(0)));
+                } else { output.push_str(&rest[..used]); }
+                at += used;
+            } else if rest.starts_with("http://") || rest.starts_with("https://") {
+                let used = rest.find(|c: char| c.is_whitespace() || c == '<').unwrap_or(rest.len());
+                output.push_str(&rest[..used]); at += used;
+            } else {
+                let ch = rest.chars().next().unwrap(); output.push(ch); at += ch.len_utf8();
+            }
+        }
+    }
+    output
+}
+
 /// URLs http(s) de imagem (`parseMediaUrls` do core, só imagem): a miniatura é buscada sem o token do servidor.
 pub fn image_urls(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -221,6 +355,30 @@ pub fn needs_other_surface(provider: &str, command: &CommandInfo) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn citations_preserve_web_boundaries_lines_and_markdown() {
+        let text = "é /tmp/a.rs:12:3, src/a.ts:7 e src/a.rs; /tmp/b.service.";
+        let refs = code_references(text);
+        assert_eq!(refs.iter().map(|r| (r.path.as_str(), r.line)).collect::<Vec<_>>(),
+            [("/tmp/a.rs", Some(12)), ("src/a.ts", Some(7)), ("/tmp/b.service", None)]);
+        assert_eq!(&text[refs[0].start..refs[0].end], "/tmp/a.rs:12:3");
+        assert!(code_references("https://h/repo.git /a/node_modules/x.ts /a/.git/config.py ~/.hangar config.py").is_empty());
+        let source = "Veja `main.rs:12`, /tmp/a.rs:7 e [arquivo](<src/a b.ts:3>). `settings.json`";
+        let converted = citation_markdown(source);
+        assert_eq!(converted.matches("hangar-file:").count(), 4);
+        assert!(converted.contains("path=main.rs&line=12"));
+        assert!(converted.contains("path=src%2Fa%20b.ts&line=3"));
+        for source in ["```rust\n/tmp/a.rs\n```", "~~~\n/tmp/a.rs\n~~~", "    /tmp/a.rs\n",
+            "https://h/a.ts", "[site](https://h/a.ts)", "![foto](/tmp/a.png)", "`foto.png`", "`word two.txt`", "`.gitignore`"] {
+            assert_eq!(citation_markdown(source), source);
+        }
+        assert_eq!(citation_markdown("`/a/(b).rs` /a/x.ts /a/x.ts").matches("hangar-file:").count(), 2);
+        assert!(citation_markdown("[run](bin/run) `.env`").contains("path=bin%2Frun"));
+        assert!(citation_markdown("[nota] veja [arquivo](src/a.ts)").starts_with("[nota] veja [a.ts]"));
+        let fenced = "````rust\n```\n/tmp/a.rs\n````\n";
+        assert_eq!(citation_markdown(fenced), fenced);
+    }
 
     fn command(name: &str) -> CommandInfo { CommandInfo { name: name.into(), ..Default::default() } }
 
