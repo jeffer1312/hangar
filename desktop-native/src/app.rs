@@ -3010,7 +3010,7 @@ fn with_copy_menu(row: Stateful<Div>, id: String, view: WeakEntity<Hangar>) -> A
     let copy_label = tr("copy_message");
     row.context_menu(move |menu, _, _| {
         let (view, id) = (view.clone(), id.clone());
-        menu.item(PopupMenuItem::new(copy_label.clone()).icon(IconName::Copy)
+        sidebar::menu_style(menu).item(PopupMenuItem::new(copy_label.clone()).icon(IconName::Copy)
             .on_click(move |_, _, cx| {
                 let text = view.upgrade().and_then(|view| view.read(cx).copy_text(&id));
                 if let Some(text) = text { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
