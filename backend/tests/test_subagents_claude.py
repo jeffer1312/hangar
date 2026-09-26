@@ -66,6 +66,51 @@ def test_agente_que_nao_existe_continua_sendo_404(tmp_path):
     assert get_subagent(main, "naoexiste") is None
 
 
+def _erro_de_api(agent: str) -> str:
+    return json.dumps({"type": "assistant", "timestamp": "2026-08-24T17:00:09Z", "isApiErrorMessage": True,
+                       "error": "server_error", "apiErrorStatus": 529,
+                       "message": {"content": [{"type": "text", "text": f"API Error: 529 Overloaded ({agent})"}]}}) + "\n"
+
+
+def test_falha_vem_do_erro_de_api_na_ultima_resposta(tmp_path):
+    main = _sessao(tmp_path, ["ok01", "falha01", "voltou01", "depois01", "texto01"])
+    d = tmp_path / "s" / "subagents"
+    with (d / "agent-falha01.jsonl").open("a", encoding="utf-8") as f:
+        f.write(_erro_de_api("falha01"))
+    # Registro que não é resposta depois do erro não desfaz a falha.
+    with (d / "agent-depois01.jsonl").open("a", encoding="utf-8") as f:
+        f.write(_erro_de_api("depois01"))
+        f.write(json.dumps({"type": "user", "timestamp": "2026-08-24T17:00:30Z", "message": {"content": "ok"}}) + "\n")
+    # Só o booleano do Claude Code conta; texto "true" não é falha.
+    with (d / "agent-texto01.jsonl").open("a", encoding="utf-8") as f:
+        f.write(_erro_de_api("texto01").replace('"isApiErrorMessage": true', '"isApiErrorMessage": "true"'))
+    # Erro no meio e uma resposta normal depois: o agente seguiu, não falhou.
+    with (d / "agent-voltou01.jsonl").open("a", encoding="utf-8") as f:
+        f.write(_erro_de_api("voltou01"))
+        f.write(json.dumps({"type": "assistant", "timestamp": "2026-08-24T17:00:20Z",
+                            "message": {"content": [{"type": "text", "text": "Retomei."}]}}) + "\n")
+    ags = {a["agentId"]: a for a in list_subagents(main)}
+    assert ags["ok01"]["failed"] is False
+    assert ags["falha01"]["failed"] is True
+    assert ags["voltou01"]["failed"] is False
+    assert ags["depois01"]["failed"] is True
+    assert ags["texto01"]["failed"] is False
+    assert get_subagent(main, "falha01")["failed"] is True
+    # O campo diz só a falha: "terminou" continua sendo do tool_result no pai.
+    assert "finished" not in ags["falha01"]
+
+
+def test_ilegivel_nao_afirma_falha(tmp_path):
+    main = _sessao(tmp_path, ["aa01"])
+    alvo = tmp_path / "s" / "subagents" / "agent-aa01.jsonl"
+    alvo.chmod(0o000)
+    try:
+        ags = list_subagents(main)
+    finally:
+        alvo.chmod(0o644)
+    assert "failed" not in ags[0]
+
+
 def test_pasta_subagents_sumida_devolve_lista_vazia(tmp_path):
     jsonl = tmp_path / "s.jsonl"
     jsonl.write_text("", encoding="utf-8")

@@ -148,36 +148,46 @@ impl Hangar {
     /// O lugar vazio da marca animada `key` na área `area`: a marca é pintada fora da view guardada, no lugar que esta
     /// caixa gravou, pelo `working_mark_float` da mesma área.
     pub(super) fn working_mark_slot(&self, area: Area, key: impl Into<SharedString>, size: f32, color: Hsla) -> AnyElement {
-        div().size(px(size)).flex_shrink_0().child(self.mark_place(area, key.into(), Floating::Mark(color))).into_any_element()
+        mark_slot(&self.panes.marks, area, key, size, color)
     }
 
     /// O lugar dos segundos contados desde `since`, pintados fora da view guardada: o tique de 1 s não redesenha a área.
     pub(super) fn elapsed_slot(&self, area: Area, key: impl Into<SharedString>, since: Instant) -> AnyElement {
-        div().w(px(ELAPSED_WIDTH)).h_full().flex_shrink_0().child(self.mark_place(area, key.into(), Floating::Elapsed(since)))
+        div().w(px(ELAPSED_WIDTH)).h_full().flex_shrink_0().child(mark_place(self.panes.marks.clone(), area, key.into(), Floating::Elapsed(since)))
             .into_any_element()
-    }
-
-    fn mark_place(&self, area: Area, key: SharedString, draw: Floating) -> impl IntoElement {
-        let places = self.panes.marks.clone();
-        canvas(move |bounds, window, _| {
-            // O nascimento do lugar, para o que se pinta nele entrar junto com o fade da linha.
-            let born = window.with_global_id(ElementId::Name(format!("{key}-born").into()), |id, window| {
-                window.with_element_state(id, |born: Option<Instant>, _| {
-                    let born = born.unwrap_or_else(Instant::now);
-                    (born, born)
-                })
-            });
-            let mut places = places.borrow_mut();
-            places.retain(|place| place.area != area || place.key != key);
-            places.push(MarkPlace { area, key, at: bounds, clip: window.content_mask().bounds, born, draw });
-        }, |_, _, _, _| {}).size_full()
     }
 
     /// O que anima nos lugares da área, desenhado fora da view guardada: a batida suja só isso e a raiz, que redesenha
     /// em todo quadro, e a área segue reusada do cache. Fica depois da área na árvore, para ler os lugares já gravados.
     pub(super) fn working_mark_float(&self, area: Area, fade: Duration, reduce_motion: bool) -> AnyElement {
-        FloatingMark { places: self.panes.marks.clone(), area, fade, reduce_motion }.into_any_element()
+        float_marks(self.panes.marks.clone(), area, fade, reduce_motion)
     }
+}
+
+/// O `working_mark_float` de uma lista de lugares própria: a view guardada dentro de uma área (a aba Atividade) guarda
+/// e limpa os seus, e o painel que redesenha sem ela não os apaga.
+pub(super) fn float_marks(places: MarkPlaces, area: Area, fade: Duration, reduce_motion: bool) -> AnyElement {
+    FloatingMark { places, area, fade, reduce_motion }.into_any_element()
+}
+
+/// O mesmo lugar de `working_mark_slot`, na lista de lugares de quem chama.
+pub(super) fn mark_slot(places: &MarkPlaces, area: Area, key: impl Into<SharedString>, size: f32, color: Hsla) -> AnyElement {
+    div().size(px(size)).flex_shrink_0().child(mark_place(places.clone(), area, key.into(), Floating::Mark(color))).into_any_element()
+}
+
+fn mark_place(places: MarkPlaces, area: Area, key: SharedString, draw: Floating) -> impl IntoElement {
+    canvas(move |bounds, window, _| {
+        // O nascimento do lugar, para o que se pinta nele entrar junto com o fade da linha.
+        let born = window.with_global_id(ElementId::Name(format!("{key}-born").into()), |id, window| {
+            window.with_element_state(id, |born: Option<Instant>, _| {
+                let born = born.unwrap_or_else(Instant::now);
+                (born, born)
+            })
+        });
+        let mut places = places.borrow_mut();
+        places.retain(|place| place.area != area || place.key != key);
+        places.push(MarkPlace { area, key, at: bounds, clip: window.content_mask().bounds, born, draw });
+    }, |_, _, _, _| {}).size_full()
 }
 
 /// Desenha, em cada lugar da área, o que ele pede, no recorte gravado neste quadro pela área, ou no último desenho dela

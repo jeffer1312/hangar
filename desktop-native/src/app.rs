@@ -1909,6 +1909,8 @@ impl Hangar {
                 let line = result.result.as_deref().and_then(|r| r.lines().map(str::trim).find(|l| !l.is_empty()));
                 (line.map(|l| conversation::one_line(l, 72)).unwrap_or_else(|| tr("tool_failed")), theme::warning())
             }
+            // O subagente acabou num erro de API: o resultado do Agent no pai não vem marcado como erro.
+            _ if self.agent_failed(tool.call) => (tr("tool_failed"), theme::warning()),
             Some(result) => {
                 let label = match self.result_lines(result) {
                     0 => tr("tool_done"), 1 => tr("tool_line"), lines => tr("tool_lines").replace("{n}", &lines.to_string()),
@@ -2022,21 +2024,32 @@ impl Hangar {
         let name = call.tool_name.clone().unwrap_or_else(|| tr("tool"));
         let summary = conversation::summarize_input(call.tool_name.as_deref(), call.tool_input.as_ref());
         let (status, status_color) = self.tool_status(tool);
-        let error = tool.result.is_some_and(|i| self.chat.events[i].is_error == Some(true));
+        let error = tool.result.is_some_and(|i| self.chat.events[i].is_error == Some(true)) || self.agent_failed(tool.call);
         let open = self.expanded.contains(&key);
         let toggle_key = key.clone();
-        // O cartão Agent abre a conversa dele na aba Atividade em vez de expandir.
+        // O cartão Agent abre a conversa dele na aba Atividade em vez de expandir: ↗ no lugar da seta de abrir, e a
+        // marca animada enquanto o subagente roda.
         let agent = activity::agent_request(call);
-        let label = if agent.is_some() { format!("{}: {summary}", activity::web("tool_abrir_agente")) } else { format!("{name}: {summary}. {status}") };
-        let header = self.disclosure(&key, open)
+        let is_agent = agent.is_some();
+        let running = is_agent && tool.result.is_none() && !error && self.running(tool.call);
+        let label = if agent.is_some() { format!("{}: {summary}. {status}", activity::web("tool_abrir_agente")) } else { format!("{name}: {summary}. {status}") };
+        let button = if agent.is_some() {
+            Button::new(SharedString::from(format!("toggle-{key}"))).ghost().small().w_full().h(px(34.)).px(px(10.)).rounded(px(0.))
+                .child(chrome::small_icon(IconName::Bot, 14., if error { theme::warning() } else { theme::muted() }))
+        } else { self.disclosure(&key, open) };
+        let header = button
             .accessibility_label(label)
             .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::text() }).child(name))
             .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(summary))
+            .when(running, |el| el.child(self.working_mark_slot(panes::Area::Conversation, format!("agent-{key}"), 12., theme::accent())))
             .child(div().flex_shrink_0().max_w(px(320.)).truncate().text_color(status_color).child(status))
+            .when(agent.is_some(), |el| el.child(chrome::small_icon(IconName::ExternalLink, 14., theme::faint())))
             .on_click(cx.listener(move |this, _, _, cx| match &agent {
                 Some(request) => this.open_agent(request.clone(), cx),
                 None => this.toggle(toggle_key.clone(), cx),
             }));
+        // O cartão Agent é um objeto próprio, em caixa como no modo Chips; as outras chamadas seguem linha.
+        if is_agent { return rows::chip_box().child(header).into_any_element(); }
         let body = open.then(|| self.tool_body(tool, row, cx).pl_6());
         div().flex().flex_col().child(header).children(body).into_any_element()
     }
@@ -2168,7 +2181,8 @@ impl Hangar {
         let summary = if distinct.len() == 1 {
             tools.last().map(|t| conversation::summarize_input(events[t.call].tool_name.as_deref(), events[t.call].tool_input.as_ref())).unwrap_or_default()
         } else { conversation::one_line(&distinct.join(", "), 96) };
-        let errors = tools.iter().filter(|t| t.result.is_some_and(|i| events[i].is_error == Some(true))).count();
+        // O Agent cujo subagente falhou conta como erro, como no cartão dele.
+        let errors = tools.iter().filter(|t| t.result.is_some_and(|i| events[i].is_error == Some(true)) || self.agent_failed(t.call)).count();
         let running = tools.iter().any(|t| t.result.is_none() && self.running(t.call));
         let (status, color) = if errors > 0 { (tr("tools_errors").replace("{n}", &errors.to_string()), theme::warning()) }
             else if running { (tr("tool_running"), theme::accent()) }
@@ -3780,7 +3794,11 @@ impl Render for Hangar {
             else if tabs { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w_full().h(px(44.)).flex_shrink_0(), cx)) }
             else { Some(self.pane_element(panes::Area::Nav, StyleRefinement::default().w(px(284.)).h_full().flex_shrink_0(), cx)) };
         self.sync_side_cost(window);
-        let side = self.side_width(window).map(|width| self.pane_element(panes::Area::Side, StyleRefinement::default().w(px(width)).h_full().flex_shrink_0(), cx));
+        // A marca da aba Atividade anima fora das duas views guardadas (painel e aba), depois delas na árvore.
+        let side = self.side_width(window).map(|width| div().h_full().flex_shrink_0()
+            .child(self.pane_element(panes::Area::Side, StyleRefinement::default().w(px(width)).h_full().flex_shrink_0(), cx))
+            // Só com a aba à vista: fora dela a view não redesenha e não limpa os próprios lugares.
+            .when(self.activity_tab(), |el| el.child(self.activity_mark_float(cx))).into_any_element());
         let dialog = div().w(px(480.)).p_6().bg(theme::surface()).border_1().border_color(theme::border()).rounded_xl().flex().flex_col().gap_4()
             .child(div().text_xl().font_weight(FontWeight::BOLD).child(tr("connection")))
             .child(div().text_sm().text_color(theme::muted()).child(tr("connection_hint")))
