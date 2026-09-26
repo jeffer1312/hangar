@@ -62,6 +62,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     (Page::Servers, &[("machines_others", None), ("machines_id", Some("machines_id_legend")),
         ("server_term_origins", Some("server_term_origins_help")), ("machines_sign_out_title", None), ("machines_reconnect", None),
         ("machines_search_tailscale", Some("machines_search_tailscale_help"))]),
+    (Page::Sync, &[("sync_config_ativa", Some("sync_config_ganho")), ("sync_config_ativar", Some("sync_config_direta")),
+        ("sync_config_desativar", Some("sync_config_desativar_aviso")), ("sync_config_copiar", None)]),
     (Page::Appearance, &APPEARANCE_ROWS),
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
@@ -279,6 +281,7 @@ impl Hangar {
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.take().is_some() {
             self.accounts_page_left();
+            self.sync_page_left();
             let ui = &mut self.settings_ui;
             (ui.live, ui.hit, ui.drag) = (false, None, None);
             self.root_focus.focus(window, cx);
@@ -480,7 +483,8 @@ impl Hangar {
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.render_server_page(page, cx),
             Page::Servers => self.render_machines(cx),
-            Page::Sync | Page::Orchestration | Page::Harnesses | Page::Windows => self.render_page_soon(page),
+            Page::Sync => self.render_sync(cx),
+            Page::Orchestration | Page::Harnesses | Page::Windows => self.render_page_soon(page),
         };
         let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
             .child(div().w_full().flex().justify_center().child(div().w(px(720.)).max_w_full().px_4().pt(px(44.)).pb(px(40.)).child(body)));

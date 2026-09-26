@@ -157,6 +157,7 @@ impl Hangar {
     pub(super) fn settings_opened(&mut self, page: Page, cx: &mut Context<Self>) {
         // Outra página: a tentativa de login perde a tela (a navegação e a busca passam por aqui).
         if page != Page::Accounts { self.accounts_page_left(); }
+        if page != Page::Sync { self.sync_page_left(); }
         match page {
             Page::General if !self.device.rate.loading && self.device.rate_value().is_none() => self.load_rate(cx),
             Page::Diary => self.load_diary(cx),
@@ -166,6 +167,7 @@ impl Hangar {
             Page::Voice | Page::Notifications | Page::Attachments | Page::Advanced => self.server_config_opened(page, cx),
             // As origens do terminal moram no Avançado do detalhe e usam o rascunho do servidor.
             Page::Servers => { self.machines_opened(cx); self.server_config_opened(page, cx); }
+            Page::Sync => self.sync_opened(cx),
             _ => {}
         }
     }
