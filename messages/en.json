@@ -4574,6 +4574,7 @@
   "native_accounts_codex_start_uncertain": "No response from the server: the code may have been requested. Try again.",
   "native_accounts_codex_import_question": "Import the Claude Code settings now?",
   "native_accounts_codex_import_desc": "Claude's plugins, hooks, skills and MCPs start working in Codex. It can take a few minutes. You can do it later in Settings → Harnesses.",
+  "native_harness_codex_preference_error": "Couldn't read or save the selected account on this device.",
   "native_accounts_codex_import_now": "Import now",
   "native_accounts_codex_inherit_question": "Inherit the default account's settings now?",
   "native_accounts_codex_inherit_desc": "The default account's plugins, hooks, skills and MCPs are copied to this one. It can take a few minutes. You can do it later with the account's Inherit button.",
