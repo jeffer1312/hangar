@@ -19,6 +19,7 @@ mod controls;
 mod create;
 mod device;
 mod follow;
+mod harness;
 mod viewer;
 mod machines;
 mod orchestration;
@@ -100,6 +101,8 @@ enum Payload {
     Orchestration(orchestration::OrchestrationReply),
     // Página Atalhos da conexão atual.
     Shortcuts(shortcuts::ShortcutsReply),
+    // Harnesses: saúde dos CLIs e consertos do servidor conectado.
+    Harness(harness::HarnessReply),
     // Notificações e Anexos: rascunho do servidor e horas silenciosas da conexão atual.
     ServerConfig(server_config::ServerConfigReply),
     Sync(sync::SyncReply),
@@ -287,6 +290,7 @@ pub struct Hangar {
     accounts: accounts::Accounts,
     orchestration: orchestration::Orchestration,
     shortcuts: shortcuts::Shortcuts,
+    harness: harness::Harnesses,
     server_config: server_config::ServerConfig,
     sync: sync::Sync,
     machines: machines::Machines,
@@ -388,7 +392,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), shortcuts: shortcuts::Shortcuts::default(),
-            server_config: server_config::ServerConfig::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), new_session: None, sidebar,
+            server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), new_session: None, sidebar,
             act: activity::ActivityState::new(cx), panes, dossier: None, turn_seen: None, sent_until: None,
         }
     }
@@ -577,6 +581,7 @@ impl Hangar {
         self.accounts = accounts::Accounts::default();
         self.orchestration = orchestration::Orchestration::default();
         self.shortcuts = shortcuts::Shortcuts::default();
+        self.harness = harness::Harnesses::default();
         self.machines = machines::Machines::default();
     }
 
@@ -835,6 +840,7 @@ impl Hangar {
             Payload::Accounts(reply) => { self.receive_accounts(reply, window, cx); return; }
             Payload::Orchestration(reply) => { self.receive_orchestration(reply, cx); return; }
             Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, cx); return; }
+            Payload::Harness(reply) => { self.receive_harness(reply, cx); return; }
             Payload::ServerConfig(reply) => { self.receive_server_config(reply, window, cx); return; }
             Payload::Sync(reply) => { self.receive_sync(reply, window, cx); return; }
             Payload::Machines(reply) => { self.receive_machines(reply, window, cx); return; }
