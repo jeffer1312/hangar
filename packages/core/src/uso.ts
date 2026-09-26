@@ -28,6 +28,8 @@ export interface UsoBucket {
   // Skill/plugin: tokens que o texto ocupou (tamanho × respostas no contexto) e quantas respostas.
   // Opcionais: servidor antigo da malha não manda.
   ocupados_tokens_est?: number;
+  // O mesmo pesado pelo que cada resposta pagou (releitura de cache vale 0,1 do token novo).
+  ocupados_eq_tokens_est?: number;
   respostas?: number;
   // Sessões de subagente, fora de `sessions`.
   subagentes?: number;
@@ -95,7 +97,7 @@ export interface MergedUso {
 
 export const zeroUso = (key: string): UsoBucket => ({
   key, label: null, plugin: '', sessions: 0, chamadas: 0, pedidas: 0, ctx_chars: 0, ctx_tokens_est: 0,
-  input: 0, output: 0, cache_write: 0, cache_read: 0, cost: 0, ocupados_tokens_est: 0, respostas: 0, subagentes: 0,
+  input: 0, output: 0, cache_write: 0, cache_read: 0, cost: 0, ocupados_tokens_est: 0, ocupados_eq_tokens_est: 0, respostas: 0, subagentes: 0,
   cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0,
 });
 
@@ -116,6 +118,7 @@ function somar(alvo: UsoBucket, b: Partial<UsoBucket>): void {
   alvo.cost_cache_write += b.cost_cache_write ?? 0;
   alvo.cost_cache_read += b.cost_cache_read ?? 0;
   alvo.ocupados_tokens_est = (alvo.ocupados_tokens_est ?? 0) + (b.ocupados_tokens_est ?? 0);
+  alvo.ocupados_eq_tokens_est = (alvo.ocupados_eq_tokens_est ?? 0) + (b.ocupados_eq_tokens_est ?? 0);
   alvo.respostas = (alvo.respostas ?? 0) + (b.respostas ?? 0);
   alvo.subagentes = (alvo.subagentes ?? 0) + (b.subagentes ?? 0);
 }

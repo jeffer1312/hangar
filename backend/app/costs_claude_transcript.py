@@ -35,7 +35,7 @@ from app.uso_claude import UsoLinha
 LOCAL = timezone(timedelta(hours=-3))
 
 # Suba isto ao mudar o formato do resumo, senão o cache velho é servido pra sempre.
-CACHE_VERSAO = 10
+CACHE_VERSAO = 11
 
 # Marcador do subagente. O caminho é `<projeto>/<sessionId>/subagents/agent-*.jsonl`.
 # Medido em 01/08/2026: 2.714 arquivos assim, contra 446 de conversa — cresce toda semana.
@@ -55,6 +55,10 @@ class UsoSessao:
     cache_read: int
     cache_write_1h: int = 0
     fast: bool = False     # `usage.speed == "fast"`: a Anthropic cobra o dobro nesse modo.
+    # Cache escrito em respostas que PERDERAM o cache (expirou na pausa ou o contexto mudou):
+    # o que foi regravado e poderia ter sido relido.
+    regravado: int = 0
+    regravado_1h: int = 0
 
 
 def raiz_projetos(config_dir: Path | None = None) -> Path:
@@ -103,6 +107,10 @@ def ler_completo(path: Path) -> Leitura:
     """Uso por resposta, separado por dia/modelo; blocos da mesma resposta não somam novamente.
     Na mesma passada, o acumulador de uso vê toda linha de assistant/user/attachment."""
     respostas: dict[tuple, UsoSessao] = {}
+    # Respostas depois das quais a próxima gravação grande é esperada, não perda de cache: a
+    # primeira do arquivo e a primeira depois de compactar.
+    depois_de_compactar: set[tuple] = set()
+    compactou = False
     acumulador = uso_claude.Acumulador()
     try:
         f = path.open(encoding="utf-8", errors="replace")
@@ -127,6 +135,8 @@ def ler_completo(path: Path) -> Leitura:
             if isinstance(m, str) and m.strip() in pricing.IGNORADOS:
                 continue
             acumulador.linha(d, quando.strftime("%Y-%m-%d") if quando else "")
+            if d.get("subtype") == "compact_boundary":
+                compactou = True
             if d.get("type") != "assistant":
                 continue
             u = msg.get("usage") if isinstance(msg, dict) else None
@@ -134,6 +144,9 @@ def ler_completo(path: Path) -> Leitura:
                 continue
             # Sem identidade não há prova de repetição: preserva as linhas antigas.
             key = (d.get("requestId"), msg["id"]) if msg.get("id") else (numero,)
+            if compactou and key not in respostas:
+                depois_de_compactar.add(key)
+                compactou = False
             criacao = u.get("cache_creation")
             cache_1h = _int(criacao.get("ephemeral_1h_input_tokens")) if isinstance(criacao, dict) else 0
             respostas[key] = UsoSessao(
@@ -145,7 +158,10 @@ def ler_completo(path: Path) -> Leitura:
                 cache_write_1h=min(max(0, cache_1h), max(0, _int(u.get("cache_creation_input_tokens")))),
                 fast=u.get("speed") == "fast")
     grupos: dict[tuple, UsoSessao] = {}
-    for uso in respostas.values():
+    for n, (chave, uso) in enumerate(respostas.items()):
+        # Gravou mais do que releu: o prefixo da conversa não estava mais no cache.
+        if n > 0 and chave not in depois_de_compactar and uso.cache_write > uso.cache_read:
+            uso = replace(uso, regravado=uso.cache_write, regravado_1h=uso.cache_write_1h)
         # `fast` entra na chave porque é o que decide a TARIFA: somado com o padrão, o grupo
         # inteiro seria cobrado por uma das duas e a outra metade sairia errada.
         key = (uso.ts.date(), uso.model, uso.cwd, uso.fast)
@@ -154,7 +170,9 @@ def ler_completo(path: Path) -> Leitura:
             antes, input=antes.input + uso.input, output=antes.output + uso.output,
             cache_write=antes.cache_write + uso.cache_write,
             cache_read=antes.cache_read + uso.cache_read,
-            cache_write_1h=antes.cache_write_1h + uso.cache_write_1h)
+            cache_write_1h=antes.cache_write_1h + uso.cache_write_1h,
+            regravado=antes.regravado + uso.regravado,
+            regravado_1h=antes.regravado_1h + uso.regravado_1h)
     return Leitura(sorted(grupos.values(), key=lambda u: (u.ts, u.model, u.cwd)),
                    acumulador.resultado())
 
@@ -182,7 +200,8 @@ def _serializar(u: UsoSessao) -> dict:
     return {"ts": u.ts.isoformat(), "model": u.model, "cwd": u.cwd,
             "subagente": u.subagente, "input": u.input, "output": u.output,
             "cache_write": u.cache_write, "cache_read": u.cache_read,
-            "cache_write_1h": u.cache_write_1h, "fast": u.fast}
+            "cache_write_1h": u.cache_write_1h, "fast": u.fast,
+            "regravado": u.regravado, "regravado_1h": u.regravado_1h}
 
 
 def _desserializar(d: dict) -> UsoSessao | None:
@@ -193,7 +212,9 @@ def _desserializar(d: dict) -> UsoSessao | None:
                          input=int(d["input"]), output=int(d["output"]),
                          cache_write=int(d["cache_write"]), cache_read=int(d["cache_read"]),
                          cache_write_1h=int(d.get("cache_write_1h", 0)),
-                         fast=bool(d.get("fast")))
+                         fast=bool(d.get("fast")),
+                         regravado=int(d.get("regravado", 0)),
+                         regravado_1h=int(d.get("regravado_1h", 0)))
     except (KeyError, TypeError, ValueError):
         return None
 

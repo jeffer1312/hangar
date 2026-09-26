@@ -80,7 +80,7 @@ def _zero() -> dict:
             "input": 0, "output": 0, "cache_write": 0, "cache_read": 0, "cost": 0.0,
             "cost_input": 0.0, "cost_output": 0.0, "cost_cache_write": 0.0,
             "cost_cache_read": 0.0, "plugin": "",
-            "ocupados": 0, "respostas": 0, "regua": _CHARS_POR_TOKEN}
+            "ocupados": 0, "ocupados_eq": 0, "respostas": 0, "regua": _CHARS_POR_TOKEN}
 
 
 def _sessao(b: dict, l: UsoLinha) -> None:
@@ -153,12 +153,13 @@ def _bucket(key: str, v: dict) -> UsoBucket:
                      cost_input=v["cost_input"], cost_output=v["cost_output"],
                      cost_cache_write=v["cost_cache_write"], cost_cache_read=v["cost_cache_read"],
                      ocupados_tokens_est=int(v["ocupados"] / _CHARS_POR_TOKEN_SKILL),
+                     ocupados_eq_tokens_est=int(v["ocupados_eq"] / _CHARS_POR_TOKEN_SKILL),
                      respostas=v["respostas"])
 
 
 def _ordenar(agg: dict[str, dict]) -> list[UsoBucket]:
     return sorted((_bucket(k, v) for k, v in agg.items()),
-                  key=lambda b: (-b.ocupados_tokens_est, -b.cost, -b.ctx_chars, -b.chamadas, b.key))
+                  key=lambda b: (-b.ocupados_eq_tokens_est, -b.ocupados_tokens_est, -b.cost, -b.ctx_chars, -b.chamadas, b.key))
 
 
 def _conta_no_total(l: UsoLinha) -> bool:
@@ -192,6 +193,7 @@ def _somar_em(b: dict, l: UsoLinha, agentes: dict[str, dict], do_item: bool = Fa
         b[k] += v
     if do_item:
         b["ocupados"] += l.ocupados
+        b["ocupados_eq"] += l.ocupados_eq
         b["respostas"] += l.respostas
         fonte =(agentes.get(l.detalhe) if l.tipo == "agente" and l.detalhe
                  else {k: getattr(l, k) for k in _CAMPOS_TOKENS} if l.tipo == "skill" else None)
@@ -310,6 +312,7 @@ def montar(uso: list[UsoLinha], tokens: list[UsageRow], period: str = "all",
         if l.tipo == "skill":
             b["regua"] = _CHARS_POR_TOKEN_SKILL
             b["ocupados"] += l.ocupados
+            b["ocupados_eq"] += l.ocupados_eq
             b["respostas"] += l.respostas
         if l.tipo in ("skill", "area"):
             b["input"] += l.input
@@ -333,6 +336,7 @@ def montar(uso: list[UsoLinha], tokens: list[UsageRow], period: str = "all",
             p["chamadas"] += l.chamadas
             p["ctx_chars"] += l.ctx_chars
             p["ocupados"] += l.ocupados
+            p["ocupados_eq"] += l.ocupados_eq
             p["respostas"] += l.respostas
             if l.tipo == "skill":
                 p["input"] += l.input

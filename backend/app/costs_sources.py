@@ -51,6 +51,9 @@ class UsageRow:
     codex_long_context: bool = False
     cache_write_1h: int = 0
     fast: bool = False        # modo rápido do Claude: a mesma resposta custa o dobro
+    # Parte do cache_write gravada de novo porque o cache tinha expirado (só o Claude sabe).
+    regravado: int = 0
+    regravado_1h: int = 0
 
     def para_dict(self) -> dict:
         d = asdict(self)
@@ -134,6 +137,7 @@ def linhas_claude(config_dir: Path, account_id: str) -> list[UsageRow]:
             input=u.input, output=u.output,
             cache_write=u.cache_write, cache_read=u.cache_read,
             cache_write_1h=u.cache_write_1h,
+            regravado=u.regravado, regravado_1h=u.regravado_1h,
             subagente=u.subagente,
             fast=u.fast,
         ))

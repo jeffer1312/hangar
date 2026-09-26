@@ -205,11 +205,11 @@
     { id: 'imagem', label: m.uso_aba_imagens(), medida: 'ctx' },
   ];
   const principal = (b: UsoBucket, md: Medida) =>
-    md === 'ocupados' ? (b.ocupados_tokens_est ?? 0) : md === 'tokens' ? tokensSemCache(b) : b.ctx_tokens_est;
+    md === 'ocupados' ? (b.ocupados_eq_tokens_est ?? 0) : md === 'tokens' ? tokensSemCache(b) : b.ctx_tokens_est;
   // Por chamada: skill mostra o TAMANHO de cada carga; contexto, a média por sessão.
   const porChamadaDe = (b: UsoBucket, a: Aba, md: Medida) =>
     a === 'contexto' ? porSessao(b) : md === 'ocupados' ? ctxPorChamada(b) : b.chamadas > 0 ? principal(b, md) / b.chamadas : 0;
-  const rotuloMedida = (md: Medida) => (md === 'ocupados' ? m.uso_col_ocupados() : md === 'tokens' ? m.uso_col_tokens_sem_cache() : m.uso_col_ctx());
+  const rotuloMedida = (md: Medida) => (md === 'ocupados' ? m.uso_col_ocupados_eq() : md === 'tokens' ? m.uso_col_tokens_sem_cache() : m.uso_col_ctx());
   function listaDa(a: Aba): UsoBucket[] {
     if (!report) return [];
     return ({ skill: report.by_skill, agente: report.by_agente, plugin: report.by_plugin, tool: report.by_tool,
@@ -252,7 +252,7 @@
     { col: 'nome', rotulo: m.uso_col_nome() },
     { col: 'chamadas', rotulo: abaAtual.medida === 'ocupados' ? m.uso_col_cargas() : m.uso_col_chamadas(), n: true },
     { col: 'principal', rotulo: rotuloMedida(abaAtual.medida), n: true,
-      titulo: abaAtual.medida === 'ocupados' ? m.uso_ocupados_nota() : undefined },
+      titulo: abaAtual.medida === 'ocupados' ? m.uso_ocupados_eq_nota() : undefined },
     { col: 'porChamada', n: true, rotulo: aba === 'contexto' ? m.uso_col_media()
       : abaAtual.medida === 'ocupados' ? m.uso_col_tamanho() : abaAtual.medida === 'tokens' ? m.uso_col_tok_chamada() : m.uso_col_ctx_chamada() },
     ...(abaAtual.medida === 'ocupados' ? [{ col: 'respostas' as Col, rotulo: m.uso_col_respostas(), n: true }] : []),
@@ -269,7 +269,7 @@
     '@embutida': m.uso_grupo_embutida, '@nativo': m.uso_grupo_nativo, '': m.uso_grupo_sem,
   };
   const nomeGrupo = (p: string) => GRUPOS[p]?.() ?? p;
-  const pesoSkill = (b: UsoBucket) => b.ocupados_tokens_est ?? 0;
+  const pesoSkill = (b: UsoBucket) => b.ocupados_eq_tokens_est ?? 0;
   const gruposSkill = $derived(agruparPorPlugin(report?.by_skill ?? [], pesoSkill));
   type Chave = 'peso' | 'vezes';
   let ordemGrupo = $state<Chave>('peso');
@@ -555,7 +555,7 @@
           <div class="cab">
             <div>
               <h2>{m.uso_sec_por_plugin()}</h2>
-              <p class="hint" title={m.uso_ocupados_nota()}>
+              <p class="hint" title={m.uso_ocupados_eq_nota()}>
                 <span class="swatch peso"></span> {m.uso_legenda_peso()}
                 <span class="swatch vezes"></span> {m.uso_legenda_vezes()}
               </p>
@@ -842,6 +842,7 @@
         <div><dt>{m.uso_col_tok_sem_cache_chamada()}</dt><dd>{tok(porChamadaDe(b, selecionado!.aba, 'tokens'))}</dd></div>
       {/if}
       {#if abaAtual.medida === 'ocupados'}
+        <div title={m.uso_ocupados_eq_nota()}><dt>{m.uso_col_ocupados_eq()}</dt><dd>≈ {tok(b.ocupados_eq_tokens_est ?? 0)}</dd></div>
         <div title={m.uso_ocupados_nota()}><dt>{m.uso_col_ocupados()}</dt><dd>≈ {tok(b.ocupados_tokens_est ?? 0)}</dd></div>
         <div><dt>{m.uso_col_respostas()}</dt><dd>{dec(b.respostas ?? 0, 0)}</dd></div>
       {/if}

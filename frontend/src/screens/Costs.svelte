@@ -10,7 +10,7 @@
     custoSemCacheDe, equivalenteDe, isFree, Aquecendo, mergeUso,
     type ServerResult, type MergedReport, type CostReport, type UsoBucket, type UsoReport,
   } from '@hangar/core';
-  import { agruparPor, aplicar, filtrar, somar, valores, type Filtro } from '../lib/cubo';
+  import { agruparPor, aplicar, casa, filtrar, somar, valores, type Filtro } from '../lib/cubo';
   import {
     brutos, contaInflada, serieComparada, totaisComparados, valorDe, type Metrica,
   } from '../lib/comparar';
@@ -40,6 +40,10 @@
   const custoDe = (b: DimBucket, t: Tipo) =>
     t === 'input' ? b.cost_input : t === 'output' ? b.cost_output
       : t === 'cache_write' ? b.cost_cache_write : b.cost_cache_read;
+  // Tokens que o modelo viu pela primeira vez. O cache lido fica de fora: numa conversa longa ele
+  // é quase todo o volume, e somado ao resto o número do topo virava "6 Bi" com 100 Mi de trabalho.
+  const freshTokens = (b: { input: number; output: number; cache_write: number }) =>
+    (b.input ?? 0) + (b.cache_write ?? 0) + (b.output ?? 0);
 
   // ── Estado ──────────────────────────────────────────────────────────────────
   type Periodo = '1d' | '7d' | '30d' | '90d' | 'all';
@@ -77,7 +81,7 @@
     report: {
       totals: vazio(), by_day: [], by_provider: [], by_source: [], by_project: [], by_model: [],
       by_servidor: [], by_kind: [], rates: [], sem_tarifa: [], custo_sem_cache: 0,
-      equivalente_cobrado: 0, anterior: null, combos: [], applied: { period: 'all' }, usd_brl: null,
+      equivalente_cobrado: 0, anterior: null, combos: [], sessoes: [], applied: { period: 'all' }, usd_brl: null,
     },
   });
 
@@ -232,16 +236,23 @@
   const base = $derived<ComboLocal[]>(report.combos ?? []);
   const temCombos = $derived(base.length > 0);
 
-  // `camadasOff` guarda ids de DOIS vocabulários diferentes: fonte (claude/codex/pi) com
-  // detalhamento, tipo de token (input/output/…) sem. Se o modo virar no meio da sessão (troca
-  // de período que muda `temCombos`), ids do vocabulário velho ficavam no Set e a heurística de
-  // reset em "clique" (`s.size === camadas.length`) podia nunca disparar — uma camada sumia do
-  // gráfico até o usuário clicar em "limpar filtros". Zera aqui, na troca de modo em si.
-  let modoAnterior: boolean | null = null;
-  $effect(() => {
-    if (modoAnterior !== null && modoAnterior !== temCombos) camadasOff = new Set();
-    modoAnterior = temCombos;
+  // Em tokens o gráfico empilha por TIPO mesmo com detalhamento: a pergunta ali é "quanto foi
+  // trabalho novo e quanto foi releitura", e por fonte o cache lido escondia tudo. Em custo, com
+  // detalhamento, segue por fonte; sem ele, os `by_*` só sabem a quebra por tipo.
+  const porTipo = $derived(!temCombos || dailyMetric === 'tokens');
+  const modoCamadas = $derived(porTipo ? (dailyMetric === 'tokens' ? 'tipo-tokens' : 'tipo-custo') : 'fonte');
+  // O cache lido nasce desligado em tokens: é dezenas de vezes o resto e achataria as outras
+  // camadas numa linha no chão. A legenda liga de volta.
+  const camadasPadrao = (modo: string) => new Set<string>(modo === 'tipo-tokens' ? ['cache_read'] : []);
+  const legendaNoPadrao = $derived.by(() => {
+    const p = camadasPadrao(modoCamadas);
+    return camadasOff.size === p.size && [...p].every((x) => camadasOff.has(x));
   });
+  // `camadasOff` guarda ids de vocabulários diferentes: fonte (claude/codex/pi) ou tipo de token
+  // (input/output/…). Se o modo virar no meio da sessão, ids do vocabulário velho ficavam no Set e
+  // a heurística de reset em clique (`s.size === camadas.length`) podia nunca disparar — uma
+  // camada sumia do gráfico até o usuário clicar em limpar filtros. Volta ao padrão do modo novo.
+  $effect(() => { camadasOff = camadasPadrao(modoCamadas); });
 
   const listaCrua = (d: Dim): DimBucket[] =>
     d === 'provider' ? report.by_provider : d === 'source' ? report.by_source
@@ -424,7 +435,7 @@
   }
   function limpar() {
     filtro = {};
-    camadasOff = new Set();
+    camadasOff = camadasPadrao(modoCamadas);
   }
 
   // `sessions` é +1 por LINHA de transcript (backend/app/costs.py:_somar), e desde a fase 2 cada
@@ -466,15 +477,16 @@
   });
 
   // ── Série do gráfico ────────────────────────────────────────────────────────
-  // Com detalhamento, cada dia é empilhado por FONTE — o cruzamento dia × fonte, que os `by_*`
-  // não carregavam (é por isso que a tela empilhava por tipo de token). Sem detalhamento, o
-  // `by_day` sozinho só responde a quebra por tipo, e é nela que o gráfico cai.
+  // Custo com detalhamento: cada dia empilhado por FONTE — o cruzamento dia × fonte, que os
+  // `by_*` não carregavam. Tokens, ou sem detalhamento: por tipo de token (ver `porTipo`).
   const camadas = $derived(
-    temCombos
-      ? agruparPor(recorte, 'source')
-          .map((b) => ({ id: b.key, label: sourceName(b.key), slot: corDaFonte(b.key) }))
-      : TIPOS.map((t) => ({ id: t.id as string, label: t.label, slot: t.slot })),
+    porTipo
+      ? TIPOS.map((t) => ({ id: t.id as string, label: t.label, slot: t.slot }))
+      : agruparPor(recorte, 'source')
+          .map((b) => ({ id: b.key, label: sourceName(b.key), slot: corDaFonte(b.key) })),
   );
+  const porTipoDoDia = (b: DimBucket) =>
+    new Map<string, number>(TIPOS.map((t) => [t.id as string, dailyMetric === 'tokens' ? tokensDe(b, t.id) : custoDe(b, t.id)]));
   const camadasVisiveis = $derived(camadas.filter((c) => !camadasOff.has(c.id)));
 
   interface DiaSerie { key: string; bucket: DimBucket; custos: Map<string, number> }
@@ -489,15 +501,16 @@
         const l = porDia.get(c.dia);
         if (l) l.push(c); else porDia.set(c.dia, [c]);
       }
-      dias = [...porDia].map(([key, linhas]) => ({
-        key, bucket: { ...somar(linhas), key },
-        custos: new Map(agruparPor(linhas, 'source').map((b) => [b.key, valorDe(b, dailyMetric)])),
-      })).sort((a, b) => b.key.localeCompare(a.key));
+      dias = [...porDia].map(([key, linhas]) => {
+        const bucket = { ...somar(linhas), key };
+        return {
+          key, bucket,
+          custos: porTipo ? porTipoDoDia(bucket)
+            : new Map(agruparPor(linhas, 'source').map((b) => [b.key, valorDe(b, dailyMetric)])),
+        };
+      }).sort((a, b) => b.key.localeCompare(a.key));
     } else {
-      dias = report.by_day.map((b) => ({
-        key: b.key, bucket: b,
-        custos: new Map<string, number>(TIPOS.map((t) => [t.id as string, dailyMetric === 'tokens' ? tokensDe(b, t.id) : custoDe(b, t.id)])),
-      }));
+      dias = report.by_day.map((b) => ({ key: b.key, bucket: b, custos: porTipoDoDia(b) }));
     }
     const mapa = new Map(dias.map((d) => [d.key, d]));
     const zeroDia = (key: string): DiaSerie =>
@@ -564,6 +577,21 @@
   const fontes = $derived(listaDa('source'));
   const projetos = $derived(listaDa('project'));
   const modelos = $derived(listaDa('model'));
+
+  // Sessões mais caras: o servidor já manda cada uma somada (subagentes dentro), então o recorte é
+  // só "o campo dela está na lista marcada". O filtro de subagente não se aplica — a sessão já
+  // carrega os dois lados juntos.
+  const sessoesRecorte = $derived(report.sessoes.filter((s) =>
+    casa(filtroAtivo.provider, s.provider) && casa(filtroAtivo.source, s.source)
+    && casa(filtroAtivo.project, s.project) && casa(filtroAtivo.model, s.model)
+    && casa(filtroAtivo.servidor, s.servidor)));
+  let maisSessoes = $state(false);
+  const sessoesVisiveis = $derived(sessoesRecorte.slice(0, maisSessoes ? 30 : 10));
+  const diasDaSessao = (inicio: string, fim: string) =>
+    inicio === fim ? rotuloDia(inicio) : `${rotuloDia(inicio)}–${rotuloDia(fim)}`;
+  // Mesma regra do `custoDesconhecido`: volume com custo zero é "sem tarifa", não "de graça".
+  const custoSessao = (s: { cost: number; model: string; input: number; output: number; cache_write: number; cache_read: number }) =>
+    s.cost === 0 && brutos(s) > 0 && !isFree(s.model) ? '—' : m2(s.cost);
 
   const fatias = $derived(
     TIPOS.map((t) => ({ ...t, cost: custoDe(foco, t.id), toks: tokensDe(foco, t.id) })),
@@ -870,7 +898,7 @@
       </span>
     {/if}
 
-    <button class="clear" disabled={!temFiltro && !camadasOff.size} onclick={limpar}>{m.custos_limpar_filtros()}</button>
+    <button class="clear" disabled={!temFiltro && legendaNoPadrao} onclick={limpar}>{m.custos_limpar_filtros()}</button>
     </div>
   </details>
 
@@ -945,7 +973,7 @@
       {#each opcoesFonte as source (source.key)}
         <button aria-pressed={marcado('source', source.key)} onclick={() => alternar('source', source.key)}>
           <span class="swatch" style="background: var({corDaFonte(source.key)})"></span>
-          {sourceName(source.key)} <span class="dim">{tok(brutos(source))}</span>
+          {sourceName(source.key)} <span class="dim">{tok(freshTokens(source))}</span>
         </button>
       {/each}
     </div>
@@ -980,14 +1008,16 @@
         {/if}
       </div>
       <div class="kpi">
-        <dt>{m.custos_tokens_brutos()}</dt>
-        <dd>{tok(brutos(foco))}</dd>
-        <div class="foot">{m.custos_passaram_modelo()}</div>
+        <dt>{m.custos_tokens_novos()}</dt>
+        <dd>{tok(freshTokens(foco))}</dd>
+        <div class="foot">{m.custos_tokens_novos_pe({ brutos: tok(brutos(foco)), relidos: tok(foco.cache_read) })}</div>
       </div>
       <div class="kpi">
         <dt>{m.custos_cache_na_entrada()}</dt>
         <dd>{pct(foco.cache_read, foco.input + foco.cache_read + foco.cache_write)}</dd>
-        <div class="foot">{tok(foco.cache_read)} {m.custos_tokens_reutilizados()}</div>
+        {#if foco.cache_write > 0}
+          <div class="foot">{m.custos_cada_gravado_lido({ x: dec(foco.cache_read / foco.cache_write, 1) })}</div>
+        {/if}
       </div>
       <div class="kpi">
         <dt>{m.custos_economia_cache()}</dt>
@@ -1000,6 +1030,25 @@
             : m.custos_abaixo_preco_cheio({ n: 0 })}{/if}
         </div>
       </div>
+      <div class="kpi">
+        <dt>{m.custos_custo_por_milhao()}</dt>
+        <dd>{brutos(foco) > 0 ? mFoco((foco.cost / brutos(foco)) * 1e6) : '—'}</dd>
+        {#if freshTokens(foco) > 0}
+          <div class="foot">{m.custos_por_milhao_novos({ valor: mFoco((foco.cost / freshTokens(foco)) * 1e6) })}</div>
+        {/if}
+      </div>
+      <div class="kpi" title={m.custos_cache_perdido_ajuda()}>
+        <dt>{m.custos_cache_perdido()}</dt>
+        <dd>{mFoco(foco.custo_regravado ?? 0)}</dd>
+        <div class="foot">{m.custos_cache_perdido_pe({ tokens: tok(foco.regravado ?? 0) })}</div>
+      </div>
+      <div class="kpi">
+        <dt>{m.custos_cache_1h()}</dt>
+        <dd>{pct(foco.cache_write_1h ?? 0, foco.cache_write)}</dd>
+        {#if foco.cache_write > 0}
+          <div class="foot">{m.custos_cache_1h_pe({ h1: tok(foco.cache_write_1h ?? 0), total: tok(foco.cache_write) })}</div>
+        {/if}
+      </div>
     </dl>
 
     <div class="card">
@@ -1011,7 +1060,7 @@
         </span>
       </div>
       <p class="hint">
-        {m.custos_empilhado_por({ modo: temCombos ? m.custos_dim_fonte() : m.custos_tipo_token() })}{#if temFiltro}{RESSALVA}{/if}
+        {m.custos_empilhado_por({ modo: porTipo ? m.custos_tipo_token() : m.custos_dim_fonte() })}{#if dailyMetric === 'tokens'}{' ' + m.custos_cache_lido_desligado()}{/if}{#if temFiltro}{RESSALVA}{/if}
       </p>
       <div class="legend">
         {#each camadas as c}
@@ -1066,7 +1115,10 @@
       <p class="caption">
         {#if diaSobHover !== null && grafico.barras[diaSobHover]}
           {@const b = grafico.barras[diaSobHover]}
-          <b>{rotuloDia(b.dia.key)}</b> · {dailyMetric === 'tokens' ? tok(b.total) : m2(b.total)} · {sess(b.dia.bucket)}
+          {@const bk = b.dia.bucket}
+          {@const entrada = bk.input + bk.cache_read + bk.cache_write}
+          <b>{rotuloDia(b.dia.key)}</b> · {dailyMetric === 'tokens' ? tok(b.total) : m2(b.total)} · {sess(bk)}
+          {#if entrada > 0}<span>{m.custos_dia_reuso({ pct: pct(bk.cache_read, entrada) })}</span>{/if}
           {#each b.segs as s}<span class="cap-seg"><i class="swatch" style="background: var({s.slot})"></i>{s.label} {dailyMetric === 'tokens' ? tok(s.cost) : m2(s.cost)}</span>{/each}
         {:else}
           {m.custos_hover_detalhe()}
@@ -1283,6 +1335,40 @@
           </div>
         {/if}
       </div>
+    </div>
+
+    <div class="card">
+      <h2>{m.custos_sessoes_caras()}</h2>
+      <p class="hint">{m.custos_sessoes_hint()}</p>
+      <!-- Lista em duas linhas, não tabela: sete colunas não cabem a 390px, e a tabela rolando de
+           lado esconderia justamente o custo. -->
+      {#if !report.sessoes.length && report.totals.sessions > 0}
+        <p class="empty">{m.custos_sessoes_atualize()}</p>
+      {:else if !sessoesRecorte.length}
+        <p class="empty">{m.custos_sessoes_vazio()}</p>
+      {:else}
+        <ol class="sessoes">
+          {#each sessoesVisiveis as s (`${s.servidor}|${s.session_id}`)}
+            <li>
+              <span class="nm" title={s.project}>{projectLabel(s.project)}</span>
+              <span class="vl">{custoSessao(s)}</span>
+              <span class="meta">
+                <span>{sourceName(s.source)}</span>
+                <span>{s.model}</span>
+                <span>{diasDaSessao(s.inicio, s.fim)}</span>
+                <span>{m.custos_sessao_tokens_novos({ tokens: tok(freshTokens(s)) })}</span>
+                {#if (s.custo_regravado ?? 0) > 0}<span>{m.custos_sessao_cache_perdido({ valor: m2(s.custo_regravado) })}</span>{/if}
+                {#if s.subagentes > 0}<span>+{s.subagentes} {s.subagentes === 1 ? m.custos_subagente() : m.custos_subagentes()}</span>{/if}
+              </span>
+            </li>
+          {/each}
+        </ol>
+        {#if sessoesRecorte.length > 10}
+          <button class="sessoes-mais" aria-expanded={maisSessoes} onclick={() => (maisSessoes = !maisSessoes)}>
+            {maisSessoes ? m.custos_mostrar_menos() : m.custos_ver_sessoes({ n: Math.min(30, sessoesRecorte.length) })}
+          </button>
+        {/if}
+      {/if}
     </div>
 
     <!-- Largura cheia: 8 colunas numéricas em meia tela obrigavam rolagem lateral num monitor de
@@ -1758,6 +1844,26 @@
     cursor: pointer;
   }
   .hiddenbar button:hover { background: var(--bg-hover); }
+
+  /* ── sessões mais caras ── */
+  .sessoes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .sessoes li {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-3);
+    align-items: baseline; padding: 6px 6px; border-top: 1px solid var(--border-subtle);
+  }
+  .sessoes li:first-child { border-top: 0; }
+  .sessoes .nm { font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sessoes .vl { font-size: var(--text-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sessoes .meta {
+    grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px var(--space-3);
+    font-size: var(--text-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums;
+  }
+  .sessoes .meta > span { min-width: 0; overflow-wrap: anywhere; }
+  .sessoes-mais {
+    display: block; width: 100%; min-height: 44px; background: none; border: 0; border-radius: 6px;
+    color: var(--accent); font: inherit; font-size: var(--text-sm); cursor: pointer;
+  }
+  .sessoes-mais:hover { background: var(--bg-hover); }
 
   /* ── tabela por modelo ── */
   .twrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }

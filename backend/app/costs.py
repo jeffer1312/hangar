@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from app import pricing
 from app.costs_sources import LOCAL, UsageRow, coletar_ou_aquecendo, rotulo_de_provedor
-from app.models import Applied, ComboRow, CostReport, DimBucket, KindBucket, RateInfo
+from app.models import Applied, ComboRow, CostReport, DimBucket, KindBucket, RateInfo, SessaoCusto
 
 TIPOS = ("input", "output", "cache_write", "cache_read")
 PERIODOS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
@@ -50,6 +50,20 @@ def _custo_da_linha(r: UsageRow) -> dict[str, float] | None:
     return custo
 
 
+def _custo_regravado(r: UsageRow) -> float:
+    """Quanto a mais custou regravar o que tinha saído do cache, contra reler do cache."""
+    if not r.regravado:
+        return 0.0
+    base = pricing.rate_for(r.model)
+    if base is None:
+        return 0.0
+    rate = _ajustar(r, base)
+    extra = r.regravado / 1e6 * (rate.cache_write - rate.cache_read)
+    if rate.provider == "anthropic" and rate.origin != "override":
+        extra += r.regravado_1h / 1e6 * (rate.input * 2 - rate.cache_write)
+    return extra
+
+
 def _somar(b: dict, r: UsageRow, c: dict[str, float] | None) -> None:
     identidade = json.dumps([r.source, r.account_id or r.provider, r.session_id, r.subagente])
     b["session_ids"].add(identidade)
@@ -58,6 +72,9 @@ def _somar(b: dict, r: UsageRow, c: dict[str, float] | None) -> None:
     b["output"] += r.output
     b["cache_write"] += r.cache_write
     b["cache_read"] += r.cache_read
+    b["cache_write_1h"] += r.cache_write_1h
+    b["regravado"] += r.regravado
+    b["custo_regravado"] += _custo_regravado(r)
     if c:
         for t in TIPOS:
             b[f"cost_{t}"] += c[t]
@@ -66,7 +83,8 @@ def _somar(b: dict, r: UsageRow, c: dict[str, float] | None) -> None:
 
 def _zero() -> dict:
     z = {"sessions": 0, "session_ids": set(), "cost": 0.0,
-         "custo_sem_cache": 0.0, "equivalente_cobrado": 0.0}
+         "custo_sem_cache": 0.0, "equivalente_cobrado": 0.0,
+         "cache_write_1h": 0, "regravado": 0, "custo_regravado": 0.0}
     for t in TIPOS:
         z[t] = 0
         z[f"cost_{t}"] = 0.0
@@ -110,6 +128,40 @@ def _janela_anterior(todas: list[UsageRow], dias: int, now: datetime) -> DimBuck
     if cobertos * 3 < dias:
         return None
     return DimBucket(key="anterior", **_totais(janela))
+
+
+_TOP_SESSOES = 100
+
+
+def _top_sessoes(linhas: list[UsageRow], custos: dict[int, dict | None]) -> list[SessaoCusto]:
+    """As sessões mais caras do período, com os subagentes somados na conversa que os disparou
+    (o id do subagente é `<sessão>/subagents/agent-…`). O modelo é o que mais custou nela."""
+    agg: dict[tuple, dict] = {}
+    for i, r in enumerate(linhas):
+        pai = r.session_id.split("/subagents/", 1)[0]
+        s = agg.setdefault((r.source, r.provider, pai), {
+            "project": r.project, "inicio": r.ts, "fim": r.ts, "subs": set(), "modelos": defaultdict(float),
+            "input": 0, "output": 0, "cache_write": 0, "cache_read": 0, "cost": 0.0,
+            "custo_regravado": 0.0})
+        if r.subagente:
+            s["subs"].add(r.session_id)
+        else:
+            s["project"] = r.project
+        s["inicio"] = min(s["inicio"], r.ts)
+        s["fim"] = max(s["fim"], r.ts)
+        custo = sum(custos[i].values()) if custos[i] else 0.0
+        s["modelos"][pricing.canonizar(r.model)] += custo
+        for t in TIPOS:
+            s[t] += getattr(r, t)
+        s["cost"] += custo
+        s["custo_regravado"] += _custo_regravado(r)
+    top = sorted(agg.items(), key=lambda kv: -kv[1]["cost"])[:_TOP_SESSOES]
+    return [SessaoCusto(
+        session_id=k[2], source=k[0], provider=k[1], project=v["project"],
+        model=max(v["modelos"], key=v["modelos"].get),
+        inicio=v["inicio"].strftime("%Y-%m-%d"), fim=v["fim"].strftime("%Y-%m-%d"),
+        subagentes=len(v["subs"]), **{t: v[t] for t in TIPOS}, cost=v["cost"],
+        custo_regravado=v["custo_regravado"]) for k, v in top]
 
 
 def montar(linhas: list[UsageRow], period: str = "all",
@@ -199,6 +251,7 @@ def montar(linhas: list[UsageRow], period: str = "all",
         combos=[ComboRow(dia=k[0], provider=k[1], source=k[2], project=k[3], model=k[4],
                          subagente=k[5], **{**v, "session_ids": sorted(v["session_ids"])})
                 for k, v in sorted(combos_agg.items(), key=lambda kv: (kv[0][0], -kv[1]["cost"]))],
+        sessoes=_top_sessoes(linhas, custos),
     )
 
 

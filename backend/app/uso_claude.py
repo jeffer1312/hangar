@@ -10,7 +10,8 @@ O que é medido de verdade e o que é estimado:
   compactação — pela ferramenta Skill, por barra, pelo hook que cola a skill na abertura, por
   Read/Bash no `SKILL.md`, ou pela reinjeção depois de compactar. Arquivos da pasta da skill lidos
   DEPOIS da carga (references/) somam a ela. `ocupados` = chars × respostas em que o texto esteve
-  no contexto (exato em chars e em respostas; vira tokens no agregador).
+  no contexto (exato em chars e em respostas; vira tokens no agregador). `ocupados_eq` pesa cada
+  resposta pela mistura real de entrada, cache escrito e cache lido dela.
 - `ctx_chars` (resultado de tool, texto injetado por hook/skill/instruções): caracteres do que
   entrou no contexto; vira "tokens estimados" na tela, nunca dólar. O transcript não carrega
   contagem de tokens por bloco, e tokenizador de outro provedor erraria mais do que chars/4.
@@ -30,6 +31,9 @@ from app import uso_areas
 # Um tool_use `Bash` vira `bash:<comando>`; estes prefixos não são o comando.
 _PREFIXOS_BASH = {"sudo", "env", "time", "timeout", "rtk", "command", "exec", "nohup", "nice"}
 _ROTULO_HOOK_CHARS = 60
+# Proporção de preço da Anthropic em relação ao token de entrada novo.
+_PESO_CACHE_WRITE = 1.25
+_PESO_CACHE_READ = 0.1
 _CAMPOS_USAGE = ("input_tokens", "output_tokens", "cache_creation_input_tokens",
                  "cache_read_input_tokens", "cache_1h")
 
@@ -61,6 +65,8 @@ class UsoLinha:
     # skill: chars × respostas com o texto no contexto, e quantas respostas foram.
     ocupados: int = 0
     respostas: int = 0
+    # skill: o mesmo, pesado pelo que cada resposta pagou (cache lido vale 0,1 do token novo).
+    ocupados_eq: int = 0
     fonte: str = "claude"   # claude | codex — decide a tarifa no custo
     subagente: bool = False  # transcript/rollout de subagente: não conta como sessão
     session_id: str = ""
@@ -252,11 +258,19 @@ class Acumulador:
             self._cargas.append([chave, chars])
         self._carregadas[nome] = chave
 
-    def _resposta_nova(self) -> None:
+    def _resposta_nova(self, u: dict) -> None:
+        # A skill paga a mistura da resposta: quase sempre releitura de cache, e regravação
+        # inteira quando o cache expirou na espera.
+        i = _int(u.get("input_tokens"))
+        cw = _int(u.get("cache_creation_input_tokens"))
+        cr = _int(u.get("cache_read_input_tokens"))
+        total = i + cw + cr
+        peso = (i + _PESO_CACHE_WRITE * cw + _PESO_CACHE_READ * cr) / total if total else 1.0
         vistas = set()
         for chave, chars in self._cargas:
             l = self._linhas[chave]
             self._linhas[chave] = replace(l, ocupados=l.ocupados + chars,
+                                          ocupados_eq=l.ocupados_eq + round(chars * peso),
                                           respostas=l.respostas + (chave not in vistas))
             vistas.add(chave)
 
@@ -311,7 +325,7 @@ class Acumulador:
         if usage:
             self._turno_somar(usage, ident)
             if ident is None or ident not in self._respostas_vistas:
-                self._resposta_nova()
+                self._resposta_nova(usage)
         if ident:
             self._respostas_vistas.add(ident)
         for b in msg.get("content") or []:

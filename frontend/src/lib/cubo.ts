@@ -19,7 +19,7 @@ export interface Filtro {
 }
 
 export const valores = (v: ValorFiltro): string[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
-const casa = (v: ValorFiltro, x: string) => { const l = valores(v); return l.length === 0 || l.includes(x); };
+export const casa = (v: ValorFiltro, x: string) => { const l = valores(v); return l.length === 0 || l.includes(x); };
 
 // As quatro dimensões que viram um filtro na tela. 'dia' é do eixo do gráfico, não do recorte.
 export type DimFiltro = Exclude<Dim, 'dia'>;
@@ -52,6 +52,7 @@ export function filtrar(combos: ComboLocal[], f: Filtro): ComboLocal[] {
 const zero = (key: string): DimBucket => ({
   key, sessions: 0, subagentes: 0, input: 0, output: 0, cache_write: 0, cache_read: 0,
   cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0,
+  cache_write_1h: 0, regravado: 0, custo_regravado: 0,
 });
 
 // `?? 0` em toda entrada: servidor antigo da malha pode não mandar um campo, e
@@ -83,6 +84,9 @@ function acumular(alvo: DimBucket, c: ComboLocal, sessoes: Set<string>): void {
   alvo.cost_output += c.cost_output ?? 0;
   alvo.cost_cache_write += c.cost_cache_write ?? 0;
   alvo.cost_cache_read += c.cost_cache_read ?? 0;
+  alvo.cache_write_1h = (alvo.cache_write_1h ?? 0) + (c.cache_write_1h ?? 0);
+  alvo.regravado = (alvo.regravado ?? 0) + (c.regravado ?? 0);
+  alvo.custo_regravado = (alvo.custo_regravado ?? 0) + (c.custo_regravado ?? 0);
 }
 
 export function somar(combos: ComboLocal[]): DimBucket {

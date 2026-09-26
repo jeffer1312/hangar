@@ -413,6 +413,14 @@ export interface DimBucket {
   cost_output: number;
   cost_cache_write: number;
   cost_cache_read: number;
+  // Os três abaixo são opcionais porque servidor antigo da malha não manda: leia com `?? 0`.
+  // Parte do cache_write gravada com validade de 1 h (custa 2× a entrada; a de 5 min, 1,25×).
+  cache_write_1h?: number;
+  // cache_write de respostas que PERDERAM o cache (expirou ou o contexto mudou) — fora a primeira
+  // resposta do transcript e a logo depois de uma compactação, que gravariam de qualquer jeito.
+  regravado?: number;
+  // O que esses tokens custaram A MAIS do que se tivessem sido lidos do cache.
+  custo_regravado?: number;
 }
 
 // Uma linha por combinação que REALMENTE aconteceu (dia × provedor × fonte × projeto × modelo ×
@@ -440,6 +448,9 @@ export interface ComboRow {
   cost_output: number;
   cost_cache_write: number;
   cost_cache_read: number;
+  cache_write_1h?: number;
+  regravado?: number;
+  custo_regravado?: number;
 }
 
 // A MESMA linha, depois de carimbada com a máquina de onde veio. O carimbo é do CLIENTE: nenhum
@@ -448,6 +459,30 @@ export interface ComboRow {
 // propósito: aquele é o formato do fio, e pôr nele um campo que servidor nenhum manda apagaria a
 // fronteira que o resto deste módulo se esforça pra manter.
 export interface ComboLocal extends ComboRow {
+  servidor: string;
+}
+
+// Uma sessão do período, com os transcripts de subagente somados na conversa que os disparou. O
+// servidor manda só as 100 mais caras dele; `model` é o id canônico do modelo que mais custou.
+export interface SessaoCusto {
+  session_id: string;
+  source: string;
+  provider: string;
+  project: string;
+  model: string;
+  inicio: string; // YYYY-MM-DD
+  fim: string;    // YYYY-MM-DD
+  subagentes: number;
+  input: number;
+  output: number;
+  cache_write: number;
+  cache_read: number;
+  cost: number;
+  custo_regravado: number;
+}
+
+// Mesmo carimbo de máquina do ComboLocal, pelo mesmo motivo.
+export interface SessaoLocal extends SessaoCusto {
   servidor: string;
 }
 
@@ -499,6 +534,8 @@ export interface CostReport {
   // Detalhamento cruzado. OPCIONAL porque servidor da malha em versão antiga não manda: sem ele a
   // tela cai no recorte de uma dimensão só, a partir dos `by_*`.
   combos?: ComboRow[];
+  // Sessões mais caras do período. Opcional pelo mesmo motivo do `combos`.
+  sessoes?: SessaoCusto[];
   applied: Applied;
   usd_brl: number | null;
 }

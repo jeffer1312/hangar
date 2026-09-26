@@ -381,6 +381,29 @@ class DimBucket(BaseModel):
     cost_output: float = 0.0
     cost_cache_write: float = 0.0
     cost_cache_read: float = 0.0
+    # Parte do cache_write gravada com validade de 1 h (custa 2× o input; a de 5 min, 1,25×).
+    cache_write_1h: int = 0
+    # Cache regravado porque tinha expirado, e quanto isso custou a mais que reler.
+    regravado: int = 0
+    custo_regravado: float = 0.0
+
+
+class SessaoCusto(BaseModel):
+    """Uma sessão entre as mais caras do período, com os subagentes dela somados."""
+    session_id: str
+    source: str
+    provider: str
+    project: str
+    model: str            # canônico, o que mais custou na sessão
+    inicio: str           # YYYY-MM-DD
+    fim: str
+    subagentes: int = 0
+    input: int = 0
+    output: int = 0
+    cache_write: int = 0
+    cache_read: int = 0
+    cost: float = 0.0
+    custo_regravado: float = 0.0
 
 
 class RateInfo(BaseModel):
@@ -425,6 +448,9 @@ class ComboRow(BaseModel):
     cost_output: float = 0.0
     cost_cache_write: float = 0.0
     cost_cache_read: float = 0.0
+    cache_write_1h: int = 0
+    regravado: int = 0
+    custo_regravado: float = 0.0
 
 
 class Applied(BaseModel):
@@ -465,6 +491,8 @@ class UsoBucket(BaseModel):
     # Skill: tokens que o texto dela ocupou (tamanho × respostas em que esteve no contexto, até o
     # fim da sessão ou a compactação) e quantas respostas foram. Tamanho estimado, respostas exatas.
     ocupados_tokens_est: int = 0
+    # O mesmo pesado pelo que cada resposta pagou: releitura de cache vale 0,1 do token novo.
+    ocupados_eq_tokens_est: int = 0
     respostas: int = 0
 
 
@@ -527,6 +555,7 @@ class CostReport(BaseModel):
     applied: Optional[Applied] = None
     usd_brl: Optional[float] = None
     combos: list[ComboRow] = []
+    sessoes: list[SessaoCusto] = []
 
 
 class Runner(BaseModel):
