@@ -16,6 +16,7 @@
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { segredos } from '../lib/segredos.svelte';
   import SessionOpeningFields from './SessionOpeningFields.svelte';
+  import CodexContextControl from './CodexContextControl.svelte';
   import {
     agruparPorPapel, casarViva, contasEmUso, contasLiberadas, estadoDoPapel, etapasDoTime, faixaDe,
     modelosLiberados, mudancasDe, politicaDe, rotuloModelo,
@@ -482,12 +483,17 @@
   // árbitro sai uma vez, no fim — antes, cada papel salvo acordava ele com meia configuração.
   async function salvar(avisar = true) {
     guardarRascunho();
+    const aberta = typeof sel === 'number' ? papeis[sel] : null;
+    // Vez trocada muda a chave da linha: ela é gravada noutra posição e `sel` apontaria a antiga.
+    const mesmaLinha = !!aberta && (rascunhos[chaveDe(sel as number)]?.vez ?? aberta.vez ?? '') === (aberta.vez ?? '');
     const itens = Object.values(rascunhos).filter((r) => r.papel && r.conta);
     const ultimo = await gravar(itens, avisar);
     if (ultimo < 0) return;
     rascunhos = {};
     // Salvou sem avisar = ainda está montando o time: volta pra lista, pronto pro próximo papel.
-    sel = avisar ? ultimo : null;
+    // Avisando, fica na MESMA linha: o formulário guarda os valores dela, e apontar `sel` pra
+    // outra linha fazia o efeito do rascunho gravar esses valores como edição da outra.
+    if (!avisar || !mesmaLinha) sel = null;
   }
 </script>
 
@@ -750,7 +756,7 @@
       {#if contasDoProvider.length}
         <Select id="orq-conta" class="field-input" ariaLabel={m.orqcfg_conta()} value={fConta}
           opcoes={contasDoProvider.map((c) => ({ value: c.conta, label: c.apelido || c.conta, hint: c.apelido ? c.conta : undefined }))}
-          onchange={(v) => { fConta = v; fModelo = ''; }} />
+          onchange={(v) => { fModelo = modeloQueSegue(fProvider, v, fModelo); fConta = v; }} />
       {:else}
         <p class="os-hint" role="status">{m.orqcfg_nenhuma_conta()}</p>
       {/if}
@@ -779,6 +785,11 @@
         </div>
       {/snippet}
     </SessionOpeningFields>
+
+    {#if fProvider === 'codex'}
+      <!-- Configuração do Codex da máquina, não do papel: o mesmo interruptor da folha de nova sessão. -->
+      <CodexContextControl server={null} />
+    {/if}
 
     {#if estadoAtual?.viva && papelAtual}
       <div class="os-agora" class:bad={estadoAtual.divergente}>
