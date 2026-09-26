@@ -37,6 +37,15 @@ def test_rate_limit_waits_and_then_reports_how_far_it_got(monkeypatch, tmp_path)
     assert len(calls) == 5
 
 
+def test_cache_that_cannot_be_written_still_translates_and_says_why(monkeypatch, tmp_path):
+    _fake(monkeypatch, tmp_path, [lambda batch: json.dumps([f"pt:{t}" for t in batch])])
+    def falha(cache):
+        raise OSError("disco cheio")
+    monkeypatch.setattr(tr, "_save", falha)
+    out, error = tr.translate(["Runs the tests for the file."], "pt")
+    assert out == ["pt:Runs the tests for the file."] and "disco cheio" in error
+
+
 def test_wrong_sized_answer_keeps_the_originals(monkeypatch, tmp_path):
     _fake(monkeypatch, tmp_path, [lambda batch: "[]"])
     out, error = tr.translate(["Runs the tests for the file."], "pt")

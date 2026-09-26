@@ -125,5 +125,9 @@ def translate(texts: list[str], lang: str) -> tuple[list[str], str]:
                          if "429" in exc.detail else exc.detail)
                 break
             cache.update({_key(lang, t): d for t, d in zip(batch, done)})
-            _save(cache)
+            try:
+                _save(cache)
+            except OSError as exc:
+                # A tradução desta vez vale; só a próxima comparação vai pedir de novo.
+                error = f"não consegui gravar o cache de tradução: {exc}"
         return [cache.get(_key(lang, t), t) if t else t for t in texts], error
