@@ -3908,6 +3908,7 @@
   "native_side_session_time": "Session time",
   "native_side_limits": "Usage limits",
   "native_side_limited": "Usage limit reached",
+  "native_subagent_tab_close": "Close {name} tab",
   "native_side_limited_until": "Usage limit reached · back {reset}",
   "native_side_limit_reset": "{pct}% · resets {reset}",
   "native_limit_5h": "5 hours",

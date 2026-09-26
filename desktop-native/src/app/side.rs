@@ -646,7 +646,9 @@ impl Hangar {
                 .map(|el| if floating { el.rounded(px(18.)).border_1().border_color(theme::border()).shadow(theme::panel_shadow()) }
                     else { el.border_l_1().border_color(theme::border()) })
                 .child(header)
-                .child(if on_activity { div().flex_1().min_h_0().child(self.activity_view(cx)).into_any_element() }
+                .children(self.render_subagent_tabs(cx))
+                .child(if let Some(view) = self.subagent_tab_view(cx) { div().flex_1().min_h_0().child(view).into_any_element() }
+                    else if on_activity { div().flex_1().min_h_0().child(self.activity_view(cx)).into_any_element() }
                     else { div().id("side-scroll").flex_1().min_h_0().overflow_y_scroll().child(content).into_any_element() })
                 .child(div().flex_shrink_0().px_4().py_3().flex().items_center().justify_between().gap_2().border_t_1().border_color(theme::border()).text_size(px(11.))
                     .child(div().min_w_0().truncate().text_color(theme::faint()).child(format!("{} · {server}", agent_label(&session.provider))))

@@ -3908,6 +3908,7 @@
   "native_side_session_time": "Tempo de sessão",
   "native_side_limits": "Limites de uso",
   "native_side_limited": "Limite de uso atingido",
+  "native_subagent_tab_close": "Fechar aba de {name}",
   "native_side_limited_until": "Limite de uso atingido · volta {reset}",
   "native_side_limit_reset": "{pct}% · volta {reset}",
   "native_limit_5h": "5 horas",

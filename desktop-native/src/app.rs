@@ -3962,7 +3962,8 @@ impl Render for Hangar {
         let side = self.side_width(window).map(|width| div().h_full().flex_shrink_0()
             .child(self.pane_element(panes::Area::Side, StyleRefinement::default().w(px(width)).h_full().flex_shrink_0(), cx))
             // Só com a aba à vista: fora dela a view não redesenha e não limpa os próprios lugares.
-            .when(self.activity_tab(), |el| el.child(self.activity_mark_float(cx))).into_any_element());
+            .when(self.activity_tab(), |el| el.child(self.activity_mark_float(cx)))
+            .child(self.subagent_mark_float(cx)).into_any_element());
         let dialog = div().w(px(480.)).p_6().bg(theme::surface()).border_1().border_color(theme::border()).rounded_xl().flex().flex_col().gap_4()
             .child(div().text_xl().font_weight(FontWeight::BOLD).child(tr("connection")))
             .child(div().text_sm().text_color(theme::muted()).child(tr("connection_hint")))
