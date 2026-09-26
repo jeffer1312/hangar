@@ -6,6 +6,7 @@ mod chat;
 mod composer;
 mod conversation;
 mod delivery;
+mod fileicons;
 mod i18n;
 mod interaction;
 mod media;
@@ -28,6 +29,7 @@ struct AppAssets;
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if path == HANGAR_MARK { return Ok(Some(Cow::Borrowed(include_bytes!("../assets/hangar-mark.svg")))); }
+        if let Some(bytes) = fileicons::load(path) { return Ok(Some(Cow::Borrowed(bytes))); }
         if let Some(bytes) = ExtraIcons.load(path)? { return Ok(Some(bytes)); }
         gpui_kit::assets::Assets.load(path)
     }
