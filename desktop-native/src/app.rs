@@ -24,6 +24,7 @@ mod viewer;
 mod machines;
 mod orchestration;
 mod panes;
+mod popup;
 mod rows;
 mod settings;
 mod server_config;
@@ -144,6 +145,7 @@ enum AttachState { Waiting, Uploading, Uploaded(Uploaded), Failed(String) }
 #[derive(Clone, PartialEq)]
 enum Confirm { Stop, Destructive(String), Replace(String), Prefill(String), Shortcut(String, side::Shortcut), Reload }
 
+#[derive(Clone)]
 struct Recent { key: SessionKey, files: Option<Result<Vec<UploadFile>, String>> }
 
 struct Envelope { connection: u64, selection: Option<u64>, payload: Payload }
@@ -1437,6 +1439,8 @@ impl Hangar {
     fn open_recent(&mut self, cx: &mut Context<Self>) {
         let (Some(api), Some(key)) = (self.api.clone(), self.selected_key()) else { return; };
         if self.recent.as_ref().is_some_and(|recent| recent.key == key) { self.recent = None; cx.notify(); return; }
+        self.command_panel = false;
+        self.close_controls();
         self.recent = Some(Recent { key: key.clone(), files: None });
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
@@ -2528,19 +2532,19 @@ impl Hangar {
     fn render_recent(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let recent = self.recent.as_ref().filter(|recent| Some(&recent.key) == self.selected_key().as_ref())?;
         let body = match &recent.files {
-            None => div().text_sm().text_color(theme::muted()).child(tr("recent_loading")).into_any_element(),
-            Some(Err(reason)) => div().text_sm().text_color(theme::warning()).child(reason.clone()).into_any_element(),
-            Some(Ok(files)) if files.is_empty() => div().text_sm().text_color(theme::muted()).child(tr("recent_empty")).into_any_element(),
+            None => popup::skeleton("recent-loading", 3).into_any_element(),
+            Some(Err(reason)) => div().px(px(8.)).text_sm().text_color(theme::warning()).child(reason.clone()).into_any_element(),
+            Some(Ok(files)) if files.is_empty() => div().px(px(8.)).text_sm().text_color(theme::muted()).child(tr("recent_empty")).into_any_element(),
             Some(Ok(files)) => div().flex().flex_col().children(files.iter().enumerate().map(|(n, file)| {
                 let name = file.filename.clone();
-                Button::new(SharedString::from(format!("recent-{n}"))).ghost().small().w_full()
+                popup::row(SharedString::from(format!("recent-{n}")), false)
                     .child(div().flex_1().min_w_0().truncate().child(file.filename.clone()))
                     .child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(human_size(file.size)))
                     .on_click(cx.listener(move |this, _, _, cx| this.reattach(name.clone(), cx)))
             })).into_any_element(),
         };
-        Some(div().p_3().rounded_md().bg(theme::raised()).flex().flex_col().gap_2()
-            .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(tr("recent_title")))
+        Some(div().p(px(popup::INSET)).rounded_md().bg(theme::raised()).flex().flex_col().gap(px(2.))
+            .child(popup::title(tr("recent_title"), Some("esc")))
             .child(div().id("recent-list").max_h(px(220.)).overflow_y_scroll().child(body))
             .into_any_element())
     }
@@ -2549,28 +2553,27 @@ impl Hangar {
         let query = self.command_search.read(cx).value().to_lowercase();
         let cache = self.commands_key().and_then(|key| self.commands.get(&key));
         let body = match cache {
-            None => div().text_sm().text_color(theme::muted()).child(tr("commands_loading")).into_any_element(),
-            Some(Err(reason)) => div().flex().items_center().gap_2().text_sm().text_color(theme::warning())
+            None => popup::skeleton("commands-loading", 4).into_any_element(),
+            Some(Err(reason)) => div().px(px(8.)).flex().items_center().gap_2().text_sm().text_color(theme::warning())
                 .child(div().flex_1().min_w_0().child(tr("commands_failed").replace("{reason}", reason)))
                 .child(Button::new("commands-retry").ghost().xsmall().flex_shrink_0().label(tr("retry")).on_click(cx.listener(|this, _, _, cx| { this.ensure_commands(true); cx.notify(); })))
                 .into_any_element(),
             Some(Ok(list)) => {
                 let matches: Vec<&CommandInfo> = list.iter().filter(|c| query.is_empty() || c.name.to_lowercase().contains(&query)
                     || c.description.as_deref().is_some_and(|d| d.to_lowercase().contains(&query))).collect();
-                if matches.is_empty() { div().text_sm().text_color(theme::muted()).child(tr("commands_empty")).into_any_element() }
+                if matches.is_empty() { div().px(px(8.)).text_sm().text_color(theme::muted()).child(tr("commands_empty")).into_any_element() }
                 else {
-                    let mut groups = div().flex().flex_col().gap_2();
+                    let mut groups = div().flex().flex_col().gap(px(2.));
                     for source in ["builtin", "skill", "plugin"] {
                         let items: Vec<&&CommandInfo> = matches.iter().filter(|c| c.source == source || source == "plugin" && !matches!(c.source.as_str(), "builtin" | "skill")).collect();
                         if items.is_empty() { continue; }
                         let group = tr(&format!("commands_{source}"));
-                        groups = groups.child(div().pt_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(group.clone()));
+                        groups = groups.child(popup::title(group.clone(), None));
                         // Linha do web: nome em mono e descrição embaixo; argumentos e selo da origem à direita.
                         for command in items {
                             let picked = (*command).clone();
                             let description = command.description.clone().unwrap_or_default();
-                            groups = groups.child(Button::new(SharedString::from(format!("command-{}", command.name))).ghost().w_full().h_auto()
-                                .px_3().py_2().rounded(px(8.))
+                            groups = groups.child(popup::row(SharedString::from(format!("command-{}", command.name)), false)
                                 .child(div().w_full().flex().items_center().gap_3()
                                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
                                         .child(div().truncate().font_family(crate::theme::MONO).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text())
@@ -2588,9 +2591,9 @@ impl Hangar {
                 }
             }
         };
-        div().p_4().rounded_md().bg(theme::raised()).flex().flex_col().gap_3()
-            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(tr("commands")))
-            .child(Input::new(&self.command_search))
+        div().p(px(popup::INSET)).rounded_md().bg(theme::raised()).flex().flex_col().gap(px(2.))
+            .child(popup::title(tr("commands"), Some("esc")))
+            .child(div().px(px(4.)).pb(px(4.)).child(Input::new(&self.command_search)))
             .child(div().id("command-list").max_h(px(360.)).overflow_y_scroll().child(body))
             .into_any_element()
     }
@@ -2659,11 +2662,8 @@ impl Hangar {
         let suggestions = if readable { self.visible_suggestions(cx) } else { Vec::new() };
         if self.suggest_pick >= suggestions.len() { self.suggest_pick = 0; }
         let tray = key.as_ref().and_then(|key| self.render_attachments(key, cx));
-        let recent = self.render_recent(cx);
-        let panel = (readable && self.command_panel).then(|| self.render_command_panel(cx));
         let confirm = self.render_confirm(cx);
         let (pills, mode) = self.render_ctl_pills(readable, cx);
-        let ctl_panel = if readable { self.render_ctl_panel(cx) } else { None };
         let (provider, headless) = self.provider();
         let provider = provider.to_owned();
         let provider = provider.as_str();
@@ -2691,10 +2691,9 @@ impl Hangar {
             .capture_action(cx.listener(|this, _: &Escape, _, cx| this.escape(cx)))
             .child(textarea);
 
-        // Painéis do compositor flutuam sobre a conversa, presos à borda de cima, como os popovers do web.
-        let narrow = |el: Option<AnyElement>| el.map(|el| chrome::popover(el, true));
-        let wide = |el: Option<AnyElement>| el.map(|el| chrome::popover(el, false));
-        let floating: Vec<AnyElement> = [wide(confirm), narrow(ctl_panel), wide(panel), narrow(recent)].into_iter().flatten()
+        // Aviso e sugestões seguem o que se digita: ficam presos à borda de cima, sem cortina. Os painéis abertos por
+        // botão moram na camada da raiz (`popup.rs`), presos ao botão.
+        let floating: Vec<AnyElement> = confirm.map(|el| chrome::popover(el, false)).into_iter()
             .chain((!suggestions.is_empty()).then(|| chrome::popover(self.render_suggestions(&suggestions, cx), false)))
             .collect();
         let status = self.status();
@@ -2775,8 +2774,8 @@ impl Hangar {
             }));
         let attach = chrome::icon_button("attach", IconName::Paperclip, tr("attach"), cx).disabled(!readable || uploading.is_some())
             .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx)));
-        let recent_btn = chrome::icon_button("attach-recent", IconName::RotateCcwClock, tr("attach_recent"), cx).disabled(!readable || uploading.is_some())
-            .selected(self.recent.is_some()).on_click(cx.listener(|this, _, _, cx| this.open_recent(cx)));
+        let recent_btn = popup::anchor(div(), "attach-recent").child(chrome::icon_button("attach-recent", IconName::RotateCcwClock, tr("attach_recent"), cx)
+            .disabled(!readable || uploading.is_some()).selected(self.recent.is_some()).on_click(cx.listener(|this, _, _, cx| this.open_recent(cx))));
         let control_row = div().flex().items_center().gap_1()
             .child(commands).child(attach).child(recent_btn)
             .child(div().flex_1())
@@ -2795,7 +2794,7 @@ impl Hangar {
         div().id("composer").relative().flex_shrink_0().w_full().px(px(36.)).pb(px(10.)).flex().justify_center()
             .when(readable, |el| el.drag_over::<ExternalPaths>(|style, _, _, _| style.bg(theme::accent_dim()))
                 .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.read_paths(paths.paths().to_vec(), cx))))
-            .child(div().relative().w_full().max_w(px(column_width())).flex().flex_col()
+            .child(popup::anchor(div().relative().w_full().max_w(px(column_width())).flex().flex_col(), "composer")
                 .when(!floating.is_empty(), |el| el.child(div().absolute().left_0().right_0().bottom(relative(1.)).pb_2().flex().flex_col().gap_2()
                     .occlude().children(floating)))
                 .children(queue_row)
@@ -2831,7 +2830,7 @@ impl Hangar {
     fn escape(&mut self, cx: &mut Context<Self>) {
         if self.confirm.is_some() { self.confirm = None; }
         else if !self.visible_suggestions(cx).is_empty() { self.suggest_dismissed = Some(self.composer.read(cx).value().to_string()); }
-        else if self.command_panel || self.recent.is_some() || self.controls_open() { self.command_panel = false; self.recent = None; self.close_controls(); }
+        else if self.close_popups() {}
         else if self.can_interrupt() { self.confirm = Some(Confirm::Stop); }
         else { return; }
         cx.stop_propagation();
@@ -3856,10 +3855,9 @@ impl Render for Hangar {
                     cx.stop_propagation();
                     return;
                 }
-                if this.controls_open() || this.command_panel || this.recent.is_some() {
-                    this.close_controls();
-                    this.command_panel = false;
-                    this.recent = None;
+                // O painel preso a um botão fecha e o foco volta ao campo, o próximo alvo de quem digitava.
+                if this.close_popups() {
+                    this.composer.update(cx, |input, cx| input.focus(window, cx));
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -3889,6 +3887,7 @@ impl Render for Hangar {
             })
             .children(live)
             .children(self.render_preview(window))
+            .children(self.render_popup(window, cx))
             .when(self.connection_dialog, |el| el.child(div().absolute().inset_0().bg(theme::scrim()).flex().items_center().justify_center()
                 .child(dialog.focus_trap("connection-dialog", &self.connection_focus))))
             // Diálogos e avisos numa view própria: a animação deles redesenha só ela, não as áreas guardadas.
