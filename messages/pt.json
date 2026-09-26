@@ -3970,6 +3970,8 @@
   "native_shortcuts_text_hint": "Ex.: /minha-skill ou um prompt inteiro",
   "native_shortcuts_command": "Comando",
   "native_shortcuts_command_hint": "Roda na máquina do servidor, no diretório da sessão",
+  "native_ctl_search": "Buscar",
+  "native_ctl_no_results": "Nada encontrado com essa busca.",
   "native_shortcuts_send_direct": "Enviar direto",
   "native_shortcuts_send_direct_help": "Desligado, o texto chega no campo de mensagem para você completar",
   "native_shortcuts_confirm": "Confirmar antes de executar",

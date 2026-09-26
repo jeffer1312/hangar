@@ -298,6 +298,8 @@ pub struct Hangar {
     machines: machines::Machines,
     new_session: Option<Entity<create::NewSession>>,
     sidebar: sidebar::Sidebar,
+    // Busca do seletor de modelo quando a lista é longa.
+    ctl_search: Entity<InputState>,
     act: activity::ActivityState,
     panes: panes::Panes,
     dossier: Option<Entity<baton::Dossier>>,
@@ -395,7 +397,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::default(), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), shortcuts: shortcuts::Shortcuts::default(),
             server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), machines: machines::Machines::default(), new_session: None, sidebar,
-            act: activity::ActivityState::new(cx), panes, dossier: None, turn_seen: None, sent_until: None,
+            act: activity::ActivityState::new(cx), ctl_search: controls::search_field(window, cx), panes, dossier: None, turn_seen: None, sent_until: None,
         }
     }
 
