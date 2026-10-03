@@ -150,7 +150,7 @@ def _numstat(cwd: str) -> dict[str, tuple[int, int]]:
         partes = linha.split("\t")
         if len(partes) != 3 or partes[0] == "-":       # "-" = binario
             continue
-        cam = partes[2]
+        cam = git_ops._desescapa(partes[2])
         if pref:
             if not cam.startswith(pref):
                 continue
@@ -192,9 +192,10 @@ def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> 
         except OSError:                      # symlink quebrado: aparece, sem tamanho
             tam = 0
         rel = os.path.relpath(e.path, raiz)   # caminho LOGICO: o nome do link, nao o do alvo
+        rel_git = rel.replace("\\", "/") if os.name == "nt" else rel
         # Pasta herda a marca e SOMA o +N -M dos descendentes.
-        dentro = [p for p in marcas if p == rel or p.startswith(rel + "/")]
-        marca = marcas.get(rel) or (marcas[dentro[0]] if e.is_dir() and dentro else None)
+        dentro = [p for p in marcas if p == rel_git or p.startswith(rel_git + "/")]
+        marca = marcas.get(rel_git) or (marcas[dentro[0]] if e.is_dir() and dentro else None)
         add = sum(nums.get(p, (0, 0))[0] for p in dentro)
         rem = sum(nums.get(p, (0, 0))[1] for p in dentro)
         if so_modificados and marca is None:
@@ -338,3 +339,12 @@ def write_at(alvo: Path, path: str, texto: str, digest_lido: str | None) -> dict
         os.unlink(tmp)
         raise FileError(409, "erro_arq_escrita_falhou", f"nao consegui gravar: {e}") from e
     return {"path": path, "size": len(novo), "digest": _digest(novo)}
+
+
+from app.workspace_bridge import delegate as _workspace_delegate
+
+list_dir = _workspace_delegate("list_dir", FileError)(list_dir)
+read_file = _workspace_delegate("read_file", FileError)(read_file)
+read_at = _workspace_delegate("read_at", FileError)(read_at)
+write_file = _workspace_delegate("write_file", FileError, mutation=True)(write_file)
+write_at = _workspace_delegate("write_at", FileError, mutation=True)(write_at)

@@ -133,3 +133,18 @@ def scan_dir(root: str, path: str | None = None) -> FsScanResult:
 
     entries.sort(key=lambda x: x.mtime or 0.0, reverse=True)
     return FsScanResult(entries=entries, error=None)
+
+
+from app.workspace_bridge import delegate as _workspace_delegate
+
+
+def _workspace_roots(arguments):
+    return {**arguments, "roots": [str(root) for root in allowed_roots()]}
+
+
+list_roots = _workspace_delegate("list_roots", FsError, prepare=_workspace_roots,
+                               decode=lambda value: [FsRoot.model_validate(v) for v in value])(list_roots)
+scan_dir = _workspace_delegate("scan_dir", FsError, prepare=_workspace_roots,
+                             decode=FsScanResult.model_validate)(scan_dir)
+make_dir = _workspace_delegate("make_dir", FsError, mutation=True, prepare=_workspace_roots,
+                             decode=FsEntry.model_validate)(make_dir)

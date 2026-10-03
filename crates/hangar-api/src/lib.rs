@@ -5,3 +5,4 @@ pub mod ask;
 pub mod chat;
 pub mod preview;
 pub mod state;
+pub mod workspace;

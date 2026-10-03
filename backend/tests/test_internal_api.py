@@ -61,6 +61,21 @@ def test_unknown_session_404():
     assert r.status_code == 404
 
 
+def test_workspace_context_contains_only_registry_metadata(tmp_path):
+    with patch("app.api._guardar_snap", return_value=[_info()]), patch("app.fs.allowed_roots", return_value=[tmp_path]):
+        response = _client().get("/internal/workspace/context?name=s1", headers={"X-Hangar-Internal": SECRET})
+    assert response.status_code == 200
+    assert response.json() == {"roots":[str(tmp_path)], "sessions":[{"name":"s1","cwd":"/p"}],
+                               "session":{"name":"s1","cwd":"/p","jsonl":"/p/abc-123.jsonl"}}
+
+
+def test_workspace_context_refuses_before_reading_the_registry():
+    with patch("app.api._guardar_snap") as snapshot:
+        response = _client("203.0.113.7").get("/internal/workspace/context", headers={"X-Hangar-Internal":SECRET})
+    assert response.status_code == 404
+    snapshot.assert_not_called()
+
+
 @pytest.mark.parametrize("headers", [{}, {"X-Hangar-Internal": "errado"}, {"X-Hangar-Internal": ""}])
 def test_wrong_secret_404(headers):
     assert _get(_client(), headers=headers).status_code == 404

@@ -10,7 +10,7 @@ import GitTabs from './GitTabs.svelte';
 import GitTabsHarness from './GitTabsHarness.svelte';
 import { createGitStore } from '../../lib/gitStore.svelte';
 import { filesStores } from '../../lib/filesStore.svelte';
-import { readFile } from '@hangar/core';
+import { readFile, writeFile } from '@hangar/core';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 
 vi.mock('@hangar/core', async (importOriginal) => ({
@@ -22,6 +22,7 @@ vi.mock('@hangar/core', async (importOriginal) => ({
     truncated: false,
   })),
   readFile: vi.fn(async () => ({ path: 'a.txt', text: 'A', size: 1, truncated: false, digest: 'abc' })),
+  writeFile: vi.fn(async () => ({ path: 'a.txt', size: 10, digest: 'novo-digest' })),
   searchFiles: vi.fn(async () => ({ hits: [], truncated: false, mode: 'names' })),
   pathDiff: vi.fn(async () => ({
     path: 'a.txt', diff: '', truncated: false,
@@ -64,6 +65,25 @@ beforeEach(() => {
 });
 
 describe('GitTabs — aba Arquivos no celular (Task 12)', () => {
+  it('conecta o rascunho ao salvamento com o digest da leitura', async () => {
+    const { el, comp } = montar();
+    await tick(); await tick();
+    clica([...el.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Files'));
+    await tick(); await tick();
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    await store.abrir('a.txt');
+    await tick(); await tick();
+    store.anotarRascunho('a.txt', 'Alteração');
+    await tick(); await tick();
+    const salvar = el.querySelector<HTMLButtonElement>('.visor .acao.primaria');
+    expect(salvar).not.toBeNull();
+    clica(salvar);
+    await tick(); await tick(); await tick();
+    expect(writeFile).toHaveBeenCalledWith('sess', 'a.txt', 'Alteração', 'abc');
+    expect(store.rascunhos.has('a.txt')).toBe(false);
+    unmount(comp);
+    filesStores.release('srv-test::sess');
+  });
   it('aba files: arvore no nivel 0, clique no arquivo sobe o nivel e fechar volta', async () => {
     const { el, comp } = montar();
     await tick();

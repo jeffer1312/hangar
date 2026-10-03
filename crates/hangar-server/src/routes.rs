@@ -40,6 +40,9 @@ pub struct AppState {
     pub side: SideCtx,
     pub terminal: crate::terminal_control::TerminalPool,
     pub terminal_address: Option<SocketAddr>,
+    pub workspace_slots: Arc<tokio::sync::Semaphore>,
+    pub workspace_read_slots: Arc<tokio::sync::Semaphore>,
+    pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -57,7 +60,10 @@ impl AppState {
             hubs: Hubs::default(),
             infos: Default::default(),
         };
-        AppState { auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None }
+        AppState { auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None,
+            workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            workspace_read_slots: Arc::new(tokio::sync::Semaphore::new(8)),
+            workspace_meta_slots: Arc::new(tokio::sync::Semaphore::new(4)) }
     }
 
     /// `info` da sessão com cache curto: várias telas abrindo juntas viram uma consulta só. Só o
@@ -145,6 +151,7 @@ pub async fn serve_with_terminal_pool(listener: TcpListener, cfg: Config, pool: 
 pub fn terminal_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/__hangar_server/terminal", axum::routing::post(crate::terminal_routes::terminal))
+        .route("/__hangar_server/workspace", axum::routing::post(crate::workspace_routes::private))
         .with_state(state)
 }
 
@@ -152,6 +159,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/__hangar_server/health", get(health))
         .route("/__hangar_server/terminal", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/workspace", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
         .route("/api/sessions/{name}/history", get(history).fallback(pass_any))
         .route("/api/sessions/{name}/events", get(events).fallback(pass_any))
@@ -195,6 +203,15 @@ async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
+    if crate::workspace_routes::matches(req.method(), req.uri().path()) {
+        let (forward, owner) = gate(&st, peer, &req);
+        if owner {
+            let headers = req.headers().clone();
+            let mut response = crate::workspace_routes::public(st, req, forward).await;
+            cors(&headers, response.headers_mut());
+            return response;
+        }
+    }
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     pass(&st, req, &Forward { client_ip, https }).await
 }

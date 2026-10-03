@@ -167,3 +167,9 @@ def _por_conteudo(cwd: str, q: str) -> list[dict]:
         texto, sep, resto = resto.partition("\n")
         fora.append({"path": path, "line": int(linha), "text": texto})
     return fora
+
+
+from app.workspace_bridge import delegate as _workspace_delegate
+
+search = _workspace_delegate("search", SearchError)(search)
+resolver = _workspace_delegate("resolver", SearchError)(resolver)

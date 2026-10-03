@@ -218,6 +218,10 @@
             onEscopo={(e) => filesStore?.trocarEscopo(e)}
             onFechar={fecharArquivo}
             rotuloVoltar={m.comum_voltar()}
+            rascunho={filesStore?.rascunhos.get(arquivoAberto) ?? null}
+            salvando={filesStore?.salvandoEm.has(arquivoAberto) ?? false}
+            erroSalvar={filesStore?.errosSalvar.get(arquivoAberto) ?? null}
+            onRascunho={(t) => filesStore?.anotarRascunho(arquivoAberto, t)}
             onSalvar={filesStore ? (t) => filesStore!.salvar(arquivoAberto, t) : null}
           />
         {:else}

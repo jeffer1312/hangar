@@ -15,6 +15,7 @@ um pull nela traz a documentação em qualquer máquina.
 | `parte2b/` | Análise, spec e plano da 2B (sem terminal no Rust) — aguardando aprovação |
 | `parte2c/` | Análise, desenho, planos, revisões e provas da 2C (com terminal no Rust) |
 | `parte3/` | Análise, spec e plano da parte 3 (custos e uso no Rust) |
+| `git-arquivos/` | Núcleo compartilhado de Git/arquivos, ponte privada, integração e evidências de validação |
 | `parte2-descartada-lista-pi-kimi/` | Primeiro escopo da parte 2 (lista + Pi/Kimi/omp/orq), trocado pelo dono |
 | `pedidos/` | Pedidos enviados às sessões Codex e os achados de revisão da 2C |
 

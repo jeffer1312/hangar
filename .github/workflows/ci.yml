@@ -72,6 +72,19 @@ jobs:
           sha256sum --check --ignore-missing SHA256SUMS.txt
           sudo install -m 755 omp-linux-x64 /usr/local/bin/omp
       - run: uv sync
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target
+          key: backend-rust-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: backend-rust-${{ runner.os }}-
+      - name: Compilar contratos Rust usados pelo pytest
+        working-directory: crates
+        run: |
+          cargo build --locked -p hangar-server
+          cargo build --locked -p hangar-workspace --example workspace_contract
       - run: uv run pytest -q
 
   frontend:

@@ -3539,6 +3539,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre-wgpu",
  "hangar-api",
+ "hangar-workspace",
  "image",
  "libc",
  "notify",
@@ -3554,6 +3555,22 @@ dependencies = [
  "webview2-com",
  "windows 0.61.3",
  "wry",
+]
+
+[[package]]
+name = "hangar-workspace"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hangar-api",
+ "libc",
+ "regex",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -14,7 +14,10 @@ def _make_client(tmp_path, monkeypatch, bind_ip="127.0.0.1", **extra_env):
     for k, v in extra_env.items():
         monkeypatch.setenv(k, str(v))
     import app.config as config
-    importlib.reload(config)
+    fresh = config.Settings()
+    # Preserva o objeto compartilhado: reload deixava os outros módulos com configurações diferentes.
+    for name in ("sync", "sync_bootstrap", "sync_data", "sync_session_secret", "sync_rate_max", "sync_rate_window", "lan_bind_ip", "auth_token"):
+        monkeypatch.setattr(config.settings, name, getattr(fresh, name))
     from app import auth, runtime_config
     monkeypatch.setattr(auth, "settings", config.settings)
     monkeypatch.setattr(runtime_config, "settings", config.settings)

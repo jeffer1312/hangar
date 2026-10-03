@@ -1,14 +1,12 @@
 //! De onde a árvore de arquivos lê: o disco desta máquina quando o servidor é ela mesma, as rotas do backend quando
 //! não é. No disco valem as travas do `filetree.py` do backend: nada fora da raiz da sessão (caminho já resolvido, sem
 //! fuga por atalho) e nada que passe por uma pasta `.git`.
-use std::{collections::HashMap, path::{Path, PathBuf}, process::Command};
+use std::{collections::HashMap, path::{Path, PathBuf}};
 use serde_json::Value;
 use crate::api::{Api, Failure};
 
 /// Os mesmos tetos do backend: itens por pasta, resultados de busca e bytes lidos de um arquivo.
-const MAX_ENTRIES: usize = 1000;
 const MAX_HITS: usize = 200;
-const MAX_BYTES: usize = 512 * 1024;
 
 #[derive(Clone)]
 pub(crate) enum FileSource {
@@ -25,6 +23,10 @@ pub(crate) struct Listing { pub entries: Vec<Entry>, pub truncated: bool }
 pub(crate) struct Read { pub text: String, pub truncated: bool, pub digest: Option<String> }
 
 fn refuse(code: &str) -> Failure { Failure::local(code) }
+
+fn workspace_failure(error: hangar_workspace::WorkspaceError) -> Failure {
+    Failure { status: Some(error.status), ..Failure::local(error.code.unwrap_or_else(|| "invalid_response".into())) }
+}
 
 impl FileSource {
     /// Disco direto só com o servidor em loopback, a pasta da sessão existindo aqui e a raiz dela igual à que o servidor
@@ -50,7 +52,18 @@ impl FileSource {
                 let root = root.clone();
                 tokio::task::spawn_blocking(move || {
                     let marks = git_marks(&root);
-                    dirs.into_iter().map(|dir| { let listing = list_local(&root, &dir, &marks); (dir, listing) }).collect()
+                    let state = hangar_workspace::files::directory_state(&root);
+                    dirs.into_iter().map(|dir| {
+                        let listing = match &state {
+                            Ok(state) => hangar_workspace::files::list_with_state(&root, Some(&dir), false, state).map_err(workspace_failure).map(|value| {
+                                let mut listing = remote_listing(&value);
+                                for entry in &mut listing.entries { entry.mark = marks.get(&entry.path).copied(); }
+                                listing
+                            }),
+                            Err(error) => Err(workspace_failure(error.clone())),
+                        };
+                        (dir, listing)
+                    }).collect()
                 }).await.unwrap_or_default()
             }
             FileSource::Remote { api, name } => {
@@ -127,70 +140,27 @@ fn remote_listing(value: &Value) -> Listing {
 
 /// Caminho relativo à raiz, provado dentro dela depois de resolvido e sem nenhum componente `.git`.
 pub(crate) fn resolve(root: &Path, rel: &str) -> Result<PathBuf, Failure> {
-    if rel.starts_with('-') || rel.contains('\0') || Path::new(rel).is_absolute() { return Err(refuse("erro_arq_caminho_invalido")); }
-    let target = if rel.is_empty() { root.to_path_buf() } else {
-        std::fs::canonicalize(root.join(rel)).map_err(|_| refuse("erro_arq_inexistente"))?
-    };
-    let inside = target.strip_prefix(root).map_err(|_| refuse("erro_arq_fora_da_raiz"))?;
-    if inside.components().any(|part| part.as_os_str() == ".git") { return Err(refuse("erro_arq_area_do_git")); }
-    Ok(target)
-}
-
-fn list_local(root: &Path, dir: &str, marks: &HashMap<String, char>) -> Result<Listing, Failure> {
-    let target = resolve(root, dir)?;
-    if !target.is_dir() { return Err(refuse("erro_arq_nao_e_pasta")); }
-    let read = std::fs::read_dir(&target).map_err(|error| refuse(match error.kind() {
-        std::io::ErrorKind::PermissionDenied => "erro_arq_sem_permissao",
-        std::io::ErrorKind::NotFound => "erro_arq_inexistente",
-        _ => "erro_arq_lista_falhou",
-    }))?;
-    let mut entries: Vec<Entry> = read.filter_map(Result::ok).filter_map(|item| {
-        let name = item.file_name().to_string_lossy().into_owned();
-        let path = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
-        // Atalho para fora da raiz ou para dentro de um `.git` não aparece; atalho quebrado aparece, como no backend.
-        let broken = std::fs::canonicalize(item.path()).is_err();
-        if !broken && resolve(root, &path).is_err() { return None; }
-        if name == ".git" { return None; }
-        let dir = std::fs::metadata(item.path()).is_ok_and(|meta| meta.is_dir());
-        Some(Entry { mark: marks.get(&path).copied(), name, path, dir })
-    }).collect();
-    entries.sort_by_key(|entry| (!entry.dir, entry.name.to_lowercase()));
-    let truncated = entries.len() > MAX_ENTRIES;
-    entries.truncate(MAX_ENTRIES);
-    Ok(Listing { entries, truncated })
+    hangar_workspace::files::resolve(root, rel).map_err(workspace_failure)
 }
 
 /// Lê um arquivo da raiz como o `read_at` do backend: binário recusado, corte em 512 KB e a impressão SHA-256 do que
 /// foi lido, que a gravação pelo servidor confere.
 pub(crate) fn read_local(root: &Path, rel: &str) -> Result<Read, Failure> {
-    use std::io::Read as _;
-    let target = resolve(root, rel)?;
-    if target.is_dir() { return Err(refuse("erro_arq_e_pasta")); }
-    if !target.is_file() { return Err(refuse("erro_arq_nao_e_arquivo")); }
-    let file = std::fs::File::open(&target).map_err(|_| refuse("erro_arq_sem_permissao"))?;
-    let mut bytes = Vec::new();
-    file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|_| refuse("erro_arq_lista_falhou"))?;
-    if bytes.contains(&0) { return Err(Failure { status: Some(415), ..refuse("erro_arq_binario") }); }
-    let truncated = bytes.len() > MAX_BYTES;
-    let digest = (!truncated).then(|| ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref().iter().map(|b| format!("{b:02x}")).collect());
-    bytes.truncate(MAX_BYTES);
-    Ok(Read { text: String::from_utf8_lossy(&bytes).into_owned(), truncated, digest })
+    let result = hangar_workspace::files::read(&hangar_workspace::files::resolve(root, rel).map_err(workspace_failure)?, rel).map_err(workspace_failure)?;
+    let read: hangar_api::workspace::FileContent = serde_json::from_value(result).map_err(|_| refuse("invalid_response"))?;
+    Ok(Read { text: read.text, truncated: read.truncated, digest: read.digest })
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<String> {
-    let mut command = Command::new("git");
-    // App de janela no Windows: sem isto cada git abre um console piscando.
-    #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x0800_0000); }
-    let out = command.arg("-C").arg(root).args(["-c", "core.quotePath=false"]).args(args).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let mut command = vec!["-c", "core.quotePath=false"];
+    command.extend_from_slice(args);
+    hangar_workspace::git::command(root, &command).ok().filter(|out| out.code == 0).map(|out| out.stdout)
 }
 
 /// Arquivos do repositório relativos à raiz (rastreados e novos, sem os ignorados). Fora de repositório, o mesmo erro
 /// da busca do backend.
 fn repo_files(root: &Path) -> Result<Vec<String>, Failure> {
-    let out = git(root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).ok_or_else(|| refuse("erro_arq_nao_e_repo_git"))?;
-    let mut seen = std::collections::HashSet::new();
-    Ok(out.split('\0').filter(|path| !path.is_empty() && seen.insert(*path)).map(str::to_owned).collect())
+    hangar_workspace::files::repo_files(root).map_err(workspace_failure)
 }
 
 /// Letra de cada arquivo mudado e, em cada pasta acima dele, a mais grave entre as de dentro. Fora de repositório,
@@ -270,7 +240,7 @@ mod tests {
         assert!(read_local(&root, "escape/secret").is_err());
 
         // A listagem não mostra `.git`, nem atalho para fora ou para dentro dele.
-        let listing = list_local(&root, "", &HashMap::new()).unwrap();
+        let listing = remote_listing(&hangar_workspace::files::list(&root, Some(""), false).unwrap());
         let names: Vec<&str> = listing.entries.iter().map(|entry| entry.name.as_str()).collect();
         assert_eq!(names, ["src"]);
         let _ = std::fs::remove_dir_all(&base);

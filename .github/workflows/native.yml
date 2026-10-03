@@ -9,6 +9,7 @@ on:
     paths:
       - "desktop-native/**"
       - "crates/hangar-api/**"
+      - "crates/hangar-workspace/**"
       # As versões do hangar-api vêm do [workspace.dependencies] daqui.
       - "crates/Cargo.toml"
       - "messages/**"
@@ -143,7 +144,7 @@ jobs:
           }
           changes=""
           if test -n "$previous" && git cat-file -e "$previous^{commit}" 2>/dev/null; then
-            changes=$(git log --no-merges -n 40 --format='- %s' "$previous..$GITHUB_SHA" -- desktop-native crates/hangar-api VERSION .github/workflows/native.yml)
+            changes=$(git log --no-merges -n 40 --format='- %s' "$previous..$GITHUB_SHA" -- desktop-native crates/hangar-api crates/hangar-workspace VERSION .github/workflows/native.yml)
           fi
           notes=$(cat <<'EOF'
           ## Hangar para desktop

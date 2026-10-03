@@ -3554,6 +3554,7 @@
   "arq_trocar_escopo": "Trocar o ponto de comparação",
   "erro_arq_sumiu": "O arquivo sumiu do disco.",
   "erro_arq_escrita_falhou": "Não consegui gravar o arquivo.",
+  "workspace_action_uncertain": "Não foi possível confirmar o resultado. Confira o estado antes de repetir.",
   "composer_transcrever_de_novo": "Transcrever de novo",
   "config_server_endpoint_llm_briefing": "Endpoint do LLM do briefing",
   "config_server_endpoint_llm_briefing_ajuda": "Serviço usado SÓ pelo estilo Briefing do ditado. Vazio = o mesmo endpoint acima. Ex.: https://opencode.ai/zen/v1.",

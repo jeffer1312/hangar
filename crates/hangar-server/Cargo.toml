@@ -8,6 +8,7 @@ publish = false
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 hangar-api.workspace = true
+hangar-workspace = { path = "../hangar-workspace" }
 regex.workspace = true
 md-5.workspace = true
 sha1_smol.workspace = true
@@ -21,7 +22,7 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 subtle = { workspace = true }
 # io-std: o stdin é o cano que avisa a morte do Python.
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
@@ -29,6 +30,8 @@ eventsource-stream = { workspace = true }
 http-body-util = { workspace = true }
 notify = { workspace = true }
 percent-encoding = { workspace = true }
+mime_guess = "=2.0.5"
+base64 = "=0.23.1"
 
 [dev-dependencies]
 tempfile.workspace = true

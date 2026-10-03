@@ -6731,9 +6731,9 @@ def git_commit_branches(name: str, sha: str):
 # a API exporia segredo. O detalhe vai SO para o log, passando pelo _scrub (redige
 # userinfo de remote). O front mostra a chave traduzida; o `msg` do envelope e a rede
 # quando o front nao conhece o code — e ele tambem e fixo, por isso.
-_MSG_ARQ = "Nao deu pra acessar esse arquivo ou pasta."
-_MSG_BUSCA = "Nao deu pra completar a busca."
-_MSG_DIFF = "Nao deu pra montar o diff."
+_MSG_ARQ = "Não deu para acessar esse arquivo ou pasta."
+_MSG_BUSCA = "Não deu para completar a busca."
+_MSG_DIFF = "Não deu para montar o diff."
 
 
 def _erro_arq(e: FileError | SearchError) -> HTTPException:
@@ -6741,7 +6741,7 @@ def _erro_arq(e: FileError | SearchError) -> HTTPException:
     # funcao do paraglide exige o argumento — sem ele o front renderiza `undefined` ou
     # nem compila. O `erro()` tem `msg` como parametro nomeado, entao o valor entra no
     # dict de params DEPOIS, por chave.
-    fixo = _MSG_BUSCA if isinstance(e, SearchError) else _MSG_ARQ
+    fixo = e.msg if e.code == "workspace_action_uncertain" else (_MSG_BUSCA if isinstance(e, SearchError) else _MSG_ARQ)
     _log.warning("files: %s", git_ops._scrub(e.msg))
     d = erro(e.code, fixo)
     d["params"]["msg"] = fixo
@@ -7836,6 +7836,10 @@ def _cited_elsewhere(jsonl: str, cwd: str | None, path: str, worked: list[str], 
     return None
 
 
+from app.workspace_bridge import delegate as _workspace_delegate
+_cited_elsewhere = _workspace_delegate("find_elsewhere", GitError)(_cited_elsewhere)
+
+
 def _resolver_citado(name: str, path: str, *, write: bool = False) -> str:
     """Devolve o caminho REAL de um arquivo citado no transcript desta sessao.
 
@@ -7849,6 +7853,18 @@ def _resolver_citado(name: str, path: str, *, write: bool = False) -> str:
     info = _cached_info_sync(name)
     if info is None or not info.jsonl:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
+    from app import workspace_bridge
+    if info.cwd or os.path.isabs(os.path.expanduser(path)):
+        result = workspace_bridge.request("resolve_cited", {"cwd": info.cwd or "", "jsonl": info.jsonl,
+            "path": path, "write": write})
+        if result is not None:
+            if result["ok"]:
+                return result["result"]
+            failure = result["error"]
+            detail = failure["detail"]
+            if failure.get("code"):
+                detail = erro(failure["code"], str(detail))
+            raise HTTPException(failure["status"], detail=detail)
     from app.transcript import citation_cwds
     cited = citation_cwds(info.jsonl, [path])
     if path not in cited:

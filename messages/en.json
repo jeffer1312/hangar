@@ -3554,6 +3554,7 @@
   "arq_trocar_escopo": "Change what it compares against",
   "erro_arq_sumiu": "The file is gone from disk.",
   "erro_arq_escrita_falhou": "Could not write the file.",
+  "workspace_action_uncertain": "Could not confirm the result. Check the state before repeating the action.",
   "composer_transcrever_de_novo": "Transcribe again",
   "config_server_endpoint_llm_briefing": "Briefing LLM endpoint",
   "config_server_endpoint_llm_briefing_ajuda": "Service used ONLY by the dictation Briefing style. Empty = the same endpoint above. E.g. https://opencode.ai/zen/v1.",
