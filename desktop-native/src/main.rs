@@ -35,7 +35,7 @@ gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, 
     SquarePen, FilePlus, Wrench, Circle, CircleDashed, ChartColumn, Table, ListChecks, Download, Clock, Languages, Banknote,
     Zap, Rocket, MessageCircle, Key, Pencil, GripVertical, AudioLines, Volume2, Hash, LogOut, Smartphone, FolderTree, ChevronsDownUp, FileCode,
     RotateCcw, CornerDownRight, MessageSquare, Sparkles, CircleAlert, CircleCheck, TriangleAlert, Link, Wifi,
-    CircleStop, Upload, Workflow]);
+    CircleStop, Upload, Workflow, CloudDownload, ArrowDownToLine, ArrowUpFromLine]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
 pub const GROUP_GLYPH: &str = "brand/group-glyph.svg";

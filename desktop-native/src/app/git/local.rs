@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 use std::{collections::{HashMap, HashSet}, io::Read, path::Path, process::{Command, Stdio}, time::{Duration, Instant}};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// Fetch, pull e push falam com o remoto: o `_FETCH_TIMEOUT` do backend.
+const NET_TIMEOUT: Duration = Duration::from_secs(120);
 /// Teto do diff, o `_DIFF_MAX` do backend.
 const DIFF_MAX: usize = 200_000;
 /// O `_LOG_FMT` do backend: campos por \x1f, commits por \x1e.
@@ -27,7 +29,9 @@ pub(super) fn toplevel(cwd: &Path) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(out.stdout.trim())).filter(|p| !p.as_os_str().is_empty())
 }
 
-fn run(cwd: &Path, args: &[&str]) -> Result<Out, Refusal> {
+fn run(cwd: &Path, args: &[&str]) -> Result<Out, Refusal> { run_for(cwd, args, TIMEOUT) }
+
+fn run_for(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Out, Refusal> {
     let mut command = Command::new("git");
     // App de janela no Windows: sem isto cada git abre um console piscando.
     #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x0800_0000); }
@@ -47,7 +51,7 @@ fn run(cwd: &Path, args: &[&str]) -> Result<Out, Refusal> {
     let start = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|error| (500, format!("git falhou: {error}")))? { break status; }
-        if start.elapsed() > TIMEOUT {
+        if start.elapsed() > timeout {
             // ponytail: mata só o git; um ssh filho de push fica até fechar o cano. Matar o grupo quando isso aparecer.
             let _ = child.kill();
             let _ = child.wait();
@@ -180,17 +184,23 @@ fn push(cwd: &Path) -> Result<Value, Refusal> {
     let branch = run(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?.stdout.trim().to_owned();
     if branch.is_empty() || branch == "HEAD" { return Err((409, "sem branch atual (detached HEAD)".into())); }
     let upstream = run(cwd, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])?;
-    let out = if upstream.code == 0 && !upstream.stdout.trim().is_empty() { run(cwd, &["push"])? } else {
+    let out = if upstream.code == 0 && !upstream.stdout.trim().is_empty() { run_for(cwd, &["push"], NET_TIMEOUT)? } else {
         if !run(cwd, &["remote"])?.stdout.split_whitespace().any(|r| r == "origin") {
             return Err((409, "branch sem upstream e sem remote 'origin' — configure um remote antes".into()));
         }
-        run(cwd, &["push", "-u", "origin", &branch])?
+        run_for(cwd, &["push", "-u", "origin", &branch], NET_TIMEOUT)?
     };
     if out.code != 0 {
         let reason = Some(out.stderr.trim()).filter(|s| !s.is_empty()).or(Some(out.stdout.trim()).filter(|s| !s.is_empty())).unwrap_or("push falhou");
         return Err((409, scrub(reason)));
     }
     Ok(json!({"ok": true, "output": scrub(&out.both())}))
+}
+
+/// Fetch e pull do `_ACTIONS` do backend: recusa do git volta 200 com `ok: false`. Pull só avança (`--ff-only`).
+fn remote_action(cwd: &Path, args: &[&str]) -> Result<Value, Refusal> {
+    let out = run_for(cwd, args, NET_TIMEOUT)?;
+    Ok(json!({"ok": out.code == 0, "output": scrub(&out.both())}))
 }
 
 fn log(cwd: &Path, n: usize) -> Result<Value, Refusal> {
@@ -272,6 +282,8 @@ pub(super) fn call(cwd: &Path, op: &super::Op) -> Result<Value, Refusal> {
         Op::Discard(path) => discard(cwd, path),
         Op::Commit { message, paths, amend } => commit(cwd, message, paths, *amend),
         Op::Push => push(cwd),
+        Op::Fetch => remote_action(cwd, &["fetch", "--all", "--prune"]),
+        Op::Pull => remote_action(cwd, &["pull", "--ff-only"]),
         Op::LastMessage => last_message(cwd),
         Op::Log(n) => log(cwd, *n),
         Op::CommitDiff(sha) => commit_diff(cwd, sha),

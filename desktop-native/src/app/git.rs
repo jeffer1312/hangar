@@ -32,7 +32,7 @@ mod local;
 
 /// O que o painel pede ao git. As duas fontes respondem o mesmo JSON das rotas `/git*` do backend.
 pub(super) enum Op {
-    Branches, Files, Diff(String), Discard(String), Commit { message: String, paths: Vec<String>, amend: bool }, Push, LastMessage,
+    Branches, Files, Diff(String), Discard(String), Commit { message: String, paths: Vec<String>, amend: bool }, Push, Fetch, Pull, LastMessage,
     Log(usize), CommitDiff(String), Checkout(String), Stash, CreateBranch(String),
 }
 
@@ -58,6 +58,8 @@ impl Source {
             Op::Commit { message, paths, amend } =>
                 api.act(name, &["git", "commit"], Some(json!({"message": message, "paths": paths, "amend": amend})), false, 60).await,
             Op::Push => api.act(name, &["git", "push"], None, false, 120).await,
+            Op::Fetch => api.act(name, &["git"], Some(json!({"action": "fetch"})), false, 130).await,
+            Op::Pull => api.act(name, &["git"], Some(json!({"action": "pull"})), false, 130).await,
             Op::LastMessage => api.read(name, &["git", "last-message"], &[], 15).await,
             Op::Log(n) => api.read(name, &["git", "log"], &[("n", n.to_string().as_str())], 30).await,
             Op::CommitDiff(sha) => api.read(name, &["git", "commit", &sha, "diff-full"], &[], 30).await,
@@ -70,6 +72,19 @@ impl Source {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Pane { #[default] Changes, History, Commit }
+
+/// Os três botões de sincronização do cabeçalho.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sync { Fetch, Pull, Push }
+
+impl Sync {
+    /// Também é a marca do `busy` enquanto roda.
+    fn key(self) -> &'static str { match self { Sync::Fetch => "fetch", Sync::Pull => "pull", Sync::Push => "push" } }
+    fn label(self) -> String { tr(match self { Sync::Fetch => "git_fetch", Sync::Pull => "git_pull", Sync::Push => "git_push" }) }
+    fn hint(self) -> String { tr(match self { Sync::Fetch => "git_fetch_hint", Sync::Pull => "git_pull_hint", Sync::Push => "git_push_hint" }) }
+    fn done(self) -> &'static str { match self { Sync::Fetch => "git_fetched", Sync::Pull => "git_pulled", Sync::Push => "git_pushed" } }
+    fn icon(self) -> IconName { match self { Sync::Fetch => IconName::CloudDownload, Sync::Pull => IconName::ArrowDownToLine, Sync::Push => IconName::ArrowUpFromLine } }
+}
 
 #[derive(Clone, Debug, Default)]
 struct Repo { files: Vec<(String, String)>, current: Option<String>, branches: Vec<String>, remotes: Vec<String>, dirty: bool }
@@ -242,6 +257,11 @@ fn output(value: &Value) -> Option<String> {
     value.get("output").and_then(Value::as_str).map(str::trim).filter(|o| !o.is_empty()).map(str::to_owned)
 }
 
+/// As linhas `hint:` do git ensinam comando de terminal e empurram o motivo da recusa para fora da faixa de erro.
+fn without_hints(text: &str) -> String {
+    text.lines().filter(|line| !line.starts_with("hint:")).collect::<Vec<_>>().join("\n").trim().to_owned()
+}
+
 // ── Histórico ──
 
 #[derive(Clone, Debug)]
@@ -360,8 +380,17 @@ impl GitPanel {
             if !this.repo.finish(seq, result.map_err(|error| failure(&error))) { return; }
             if let Some(files) = this.repo.ok().map(|r| r.files.clone()) { this.read_patches(files, window, cx); }
         });
-        if self.log.value.is_some() { self.load_log(window, cx); }
+        if self.log.value.is_some() { self.load_log(window, cx); } else { self.load_counts(window, cx); }
         cx.notify();
+    }
+
+    /// Sem o histórico aberto, só o à frente/atrás dos botões de pull e push: o log de um commit traz os dois.
+    fn load_counts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let source = self.source.clone();
+        self.spawn(async move { source.call(Op::Log(1)).await }, window, cx, |this, result, _, _| {
+            let Ok(value) = result else { return };
+            this.ahead_behind = (value.get("ahead").and_then(Value::as_i64), value.get("behind").and_then(Value::as_i64));
+        });
     }
 
     fn read_patches(&mut self, files: Vec<(String, String)>, window: &mut Window, cx: &mut Context<Self>) {
@@ -563,6 +592,25 @@ impl GitPanel {
                     this.amend = false;
                     this.message.update(cx, |input, cx| input.set_value("", window, cx));
                 }
+            }
+            this.load(window, cx);
+        });
+        cx.notify();
+    }
+
+    /// Fetch, pull ou push avulsos; depois relê a lista e o à frente/atrás.
+    fn sync(&mut self, kind: Sync, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.start(kind.key().into()) { return; }
+        let source = self.source.clone();
+        let op = match kind { Sync::Fetch => Op::Fetch, Sync::Pull => Op::Pull, Sync::Push => Op::Push };
+        self.spawn(async move { source.call(op).await }, window, cx, move |this, result, window, cx| {
+            this.busy = None;
+            match result {
+                // Fetch e pull recusados pelo git voltam 200 com `ok: false` e o motivo na saída.
+                Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(false) => this.error = Some(output(&value).map(|o| without_hints(&o))
+                    .filter(|o| !o.is_empty()).unwrap_or_else(|| tr("git_sync_failed").replace("{op}", &kind.label()))),
+                Ok(value) => this.output = Some(output(&value).unwrap_or_else(|| tr(kind.done()))),
+                Err(error) => this.error = Some(without_hints(&failure(&error))),
             }
             this.load(window, cx);
         });
@@ -943,17 +991,50 @@ impl GitPanel {
             .content(move |_, _, cx| panel.update(cx, |this, cx| this.render_picker(cx)))
     }
 
-    fn ahead_behind(&self, el: Div) -> Div {
-        el.when_some(self.ahead_behind.0.filter(|n| *n > 0), |el, n| el.child(div().flex_shrink_0().text_size(px(11.)).text_color(theme::accent()).child(tr("git_ahead").replace("{n}", &n.to_string()))))
-            .when_some(self.ahead_behind.1.filter(|n| *n > 0), |el, n| el.child(div().flex_shrink_0().text_size(px(11.)).text_color(theme::warning()).child(tr("git_behind").replace("{n}", &n.to_string()))))
+    /// Commits a trazer (pull) ou a enviar (push); só com upstream e acima de zero.
+    fn sync_count(&self, kind: Sync) -> Option<i64> {
+        match kind { Sync::Fetch => None, Sync::Pull => self.ahead_behind.1, Sync::Push => self.ahead_behind.0 }.filter(|n| *n > 0)
+    }
+
+    /// Fetch, Pull e Push: no diálogo com rótulo e o contador dentro; na aba estreita só o ícone, contador no canto.
+    fn sync_buttons(&self, compact: bool, cx: &mut Context<Self>) -> Div {
+        let disabled = self.busy.is_some() || self.repo.ok().is_none();
+        let mut row = div().flex_shrink_0().flex().items_center().gap(px(if compact { 2. } else { 6. }));
+        for kind in [Sync::Fetch, Sync::Pull, Sync::Push] {
+            let id = SharedString::from(format!("git-{}{}", if compact { "side-" } else { "" }, kind.key()));
+            let running = self.busy.as_deref() == Some(kind.key());
+            let count = self.sync_count(kind);
+            let color = if kind == Sync::Pull { theme::warning() } else { theme::accent() };
+            let tip = match count {
+                Some(n) => format!("{} · {}", kind.hint(), tr(if kind == Sync::Pull { "git_behind" } else { "git_ahead" }).replace("{n}", &n.to_string())),
+                None => kind.hint(),
+            };
+            let click = cx.listener(move |this, _, window, cx| this.sync(kind, window, cx));
+            row = row.child(if compact {
+                div().relative().flex_shrink_0()
+                    .child(chrome::icon_button(id, kind.icon(), tip, cx).loading(running).disabled(disabled).on_click(click))
+                    .when_some(count.filter(|_| !running), |el, n| el.child(div().absolute().top(px(-3.)).right(px(-4.)).h(px(14.)).min_w(px(14.))
+                        .px(px(3.)).flex().items_center().justify_center().rounded_full().bg(color).font_family(theme::MONO).text_size(px(9.5))
+                        .text_color(theme::background()).child(n.to_string())))
+                    .into_any_element()
+            } else {
+                Button::new(id).small().outline().icon(kind.icon()).label(kind.label()).tooltip(tip).loading(running).disabled(disabled)
+                    .when_some(count, |button, n| button.child(div().px(px(5.)).rounded_full().bg(color.opacity(0.14)).font_family(theme::MONO)
+                        .text_size(px(11.)).text_color(color).child(n.to_string())))
+                    .on_click(click)
+                    .into_any_element()
+            });
+        }
+        row
     }
 
     /// A aba Git do painel direito: branch, arquivos alterados com a marca do commit e a barra de commit empilhada. O diff
     /// não cabe na largura do painel; ele e o histórico abrem no diálogo grande.
     fn render_compact(&mut self, expand: Rc<dyn Fn(&mut Window, &mut App)>, cx: &mut Context<Self>) -> AnyElement {
         let open = expand.clone();
-        let header = self.ahead_behind(div().flex_shrink_0().flex().items_center().gap_1().px_3().pb_2()
-            .child(div().flex_1().min_w_0().flex().child(self.branch_picker(150., cx))))
+        let header = div().flex_shrink_0().flex().items_center().gap_1().px_3().pb_2()
+            .child(div().flex_1().min_w_0().flex().child(self.branch_picker(150., cx)))
+            .child(self.sync_buttons(true, cx))
             .child(chrome::icon_button("git-side-reload", IconName::RefreshCw, tr("git_reload"), cx).disabled(self.repo.loading)
                 .on_click(cx.listener(|this, _, window, cx| this.load(window, cx))))
             .child(chrome::icon_button("git-side-expand", IconName::Maximize, tr("git_expand"), cx)
@@ -1040,10 +1121,11 @@ impl Render for GitPanel {
         if let Some(expand) = self.expand.clone() { return self.render_compact(expand, cx); }
         let height = (f32::from(window.viewport_size().height) * 0.78).min(MAX_H);
         let repo = self.repo.ok().cloned();
-        let header = self.ahead_behind(div().flex().items_center().gap_2().pr(px(36.)).h(px(28.))
+        let header = div().flex().items_center().gap_2().pr(px(36.)).h(px(28.))
             .child(div().flex_shrink_0().max_w(px(260.)).truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(self.title.clone()))
-            .child(self.branch_picker(220., cx)))
+            .child(self.branch_picker(220., cx))
             .child(div().flex_1())
+            .child(self.sync_buttons(false, cx))
             .child(chrome::icon_button("git-reload", IconName::RefreshCw, tr("git_reload"), cx).disabled(self.repo.loading)
                 .on_click(cx.listener(|this, _, window, cx| this.load(window, cx))));
         let count = |n: usize| div().ml_1().px(px(6.)).rounded_full().bg(theme::hover()).font_family(theme::MONO).text_size(px(10.)).text_color(theme::muted()).child(n.to_string());
@@ -1155,7 +1237,14 @@ pub(super) fn open_folder_git(cwd: std::path::PathBuf, title: String, runtime: A
 
 #[cfg(test)]
 mod tests {
-    use super::{Body, Kind, parse_patch};
+    use super::{Body, Kind, parse_patch, without_hints};
+
+    #[test]
+    fn refusal_keeps_the_reason_without_git_hints() {
+        let text = "hint: Diverging branches can't be fast-forwarded\nhint:\nhint:   git rebase\nfatal: Not possible to fast-forward, aborting.\n";
+        assert_eq!(without_hints(text), "fatal: Not possible to fast-forward, aborting.");
+        assert_eq!(without_hints("hint: só dica\n"), "");
+    }
 
     #[test]
     fn patch_numbers_lines_and_marks_new_files() {

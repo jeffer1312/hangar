@@ -522,7 +522,8 @@ def git_action(cwd: str, action: str) -> dict:
     argv = _ACTIONS.get(action)
     if argv is None:
         raise GitError(400, "acao invalida")
-    p = _run(cwd, *argv)
+    # Fetch e pull falam com o remoto: o prazo curto mataria um fetch lento no meio.
+    p = _run(cwd, *argv, timeout=_FETCH_TIMEOUT if action in ("fetch", "pull") else None)
     return {"ok": p.returncode == 0, "output": (p.stdout + p.stderr).strip()}
 
 
