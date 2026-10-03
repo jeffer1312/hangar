@@ -33,6 +33,7 @@ from app.askquestion import clear_pending_askq, pergunta_aberta
 from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
                        aprovacao_kimi, codex_turno_aberto, menu_codex,
                        status_line as _pane_status)
+from app import claude_context
 from app.statusline import read as _sidecar_status, escolhas as _escolhas_status
 from app.adapters.codex.adapter import status_line_do_rollout as _codex_status_line
 from app.hook_state import hook_state
@@ -836,6 +837,12 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
 
 # Cadencia do cache de statusline da lista (list_with_state): TTL por sessao + teto de capturas de
 # pane por chamada (o custo real e o fork do tmux).
+def _claude_config_dir(info) -> Optional[str]:
+    """Pasta de configuração da conta da sessão Claude (`conta` = "claude:<pasta>")."""
+    conta = getattr(info, "conta", None) or ""
+    return conta.split(":", 1)[1] if conta.startswith("claude:") else None
+
+
 _STATUS_TTL = 20.0
 _STATUS_BUDGET = 2
 
@@ -872,6 +879,8 @@ class SessionRegistry:
     # Statusline por sessao: name -> (monotonic da captura, linha crua ou None). De classe
     # (compartilhado entre api.registry e as instancias do sse) — uma captura serve todos.
     _status_cache: dict[str, tuple[float, Optional[str]]] = {}
+    # Contexto da sessao Claude lido do transcript: name -> (monotonic da leitura, {used, window}).
+    _context_cache: dict[str, tuple[float, Optional[dict]]] = {}
     # Texto do spinner ("Hyperspacing… (1m51s · ↓2.1k tokens)") extraido da MESMA captura do sweep:
     # o fast-path de marcador deixa label=None e o card nunca mostrava a barrinha de "trabalhando".
     _label_cache: dict[str, Optional[str]] = {}
@@ -1098,6 +1107,7 @@ class SessionRegistry:
         # Nome pode ser reusado por outra sessao: sem isto a nova herdaria a statusline da morta
         # por ate _STATUS_TTL (e o dict cresceria sem poda a cada create/kill).
         self._status_cache.pop(name, None)
+        self._context_cache.pop(name, None)
         self._label_cache.pop(name, None)
         self._limit_cache.pop(name, None)
         self._reply_cache.pop(name, None)
@@ -1749,6 +1759,21 @@ class SessionRegistry:
                 # getattr: fakes de teste nao tem o campo.
                 if info.state == "working" and getattr(info, "label", None) is None:
                     info.label = self._label_cache.get(info.name)
+        # Contexto das sessoes Claude pelo transcript, que nao depende de a statusline ser a do
+        # Hangar. Mesmo TTL da statusline: e leitura do fim de um arquivo, no threadpool.
+        claudes = [i for i in infos
+                   if getattr(i, "provider", "claude") == "claude" and i.jsonl
+                   and now_m - self._context_cache.get(i.name, (0.0, None))[0] > _STATUS_TTL]
+        if claudes:
+            lidos = await asyncio.gather(*[
+                asyncio.to_thread(claude_context.from_transcript, i.jsonl, _claude_config_dir(i))
+                for i in claudes])
+            for info, ctx in zip(claudes, lidos):
+                anterior = self._context_cache.get(info.name, (0.0, None))[1]
+                self._context_cache[info.name] = (time.monotonic(), ctx or anterior)
+        for info in infos:
+            if getattr(info, "provider", "claude") == "claude":
+                info.context = self._context_cache.get(info.name, (0.0, None))[1]
         # Travada (feature #7): "working" ha mais de CP_STALL_SECONDS sem o transcript avancar. So o
         # bool derivado pra UI/sig — o push (1x, com dedupe) e responsabilidade do stall_watch, nao daqui.
         now = time.time()

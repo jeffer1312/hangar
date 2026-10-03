@@ -332,6 +332,13 @@ def _status_sig(s):
     )
 
 
+def _context_sig(ctx) -> int | None:
+    """Contexto em baldes de 5%, como o da statusline: cada resposta muda o uso em alguns tokens."""
+    if not isinstance(ctx, dict) or not ctx.get("window"):
+        return None
+    return int(ctx.get("used", 0) * 20 // ctx["window"])
+
+
 def _list_sig(infos) -> str:
     # Dedup IGNORA last_activity: e o mtime do jsonl (float sub-segundo) que muda a CADA escrita de uma
     # sessao ativa -> sem isto a lista inteira re-emitia a cada poll sem nada visivel mudar = flicker.
@@ -355,6 +362,7 @@ def _list_sig(infos) -> str:
           getattr(i, "last_reply", None), getattr(i, "last_reply_at", None),
           getattr(i, "pending_questions", 0),
           i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
+          _context_sig(getattr(i, "context", None)),
           (getattr(i, "label", None) if getattr(i, "provider", None) == "codex" and not i.tracked
            else bool(getattr(i, "label", None))),
           getattr(i, "startup_steps", []),

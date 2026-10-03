@@ -3,6 +3,12 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct ContextUse {
+    pub used: f64,
+    pub window: f64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct SessionInfo {
     pub name: String,
     pub cwd: Option<String>,
@@ -27,6 +33,8 @@ pub struct SessionInfo {
     pub git_ahead: Option<i64>,
     pub git_behind: Option<i64>,
     pub status_line: Option<String>,
+    /// Contexto da sessão Claude lido do transcript pelo backend; vale quando a linha não o traz.
+    #[serde(default)] pub context: Option<ContextUse>,
     pub loop_status: Option<String>,
     pub loop_iter: Option<u32>,
     pub loop_max: Option<u32>,

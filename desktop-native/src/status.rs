@@ -126,7 +126,8 @@ pub fn parse(raw: Option<&str>, session: Option<&SessionInfo>) -> Option<StatusF
         Some((basename(s.cwd.as_deref()?).to_owned(), s.branch.clone()?, s.git_dirty.map(|n| n > 0)))
     });
     let raw = raw.unwrap_or("");
-    if raw.is_empty() && git.is_none() { return None; }
+    let context = session.and_then(|s| s.context.as_ref()).filter(|c| c.window > 0.0);
+    if raw.is_empty() && git.is_none() && context.is_none() { return None; }
     let mut out = StatusFields::default();
 
     if let Some(i) = raw.find('🤖') {
@@ -207,6 +208,12 @@ pub fn parse(raw: Option<&str>, session: Option<&SessionInfo>) -> Option<StatusF
         out.branch = Some(branch);
         out.dirty = dirty;
     }
+    // A linha só traz o contexto quando é a do Hangar; sem ele vale o que o backend leu do transcript.
+    if out.ctx_pct.is_none() && let Some(c) = context {
+        out.ctx_used = Some(c.used);
+        out.ctx_total = Some(c.window);
+        out.ctx_pct = pct(c.used / c.window * 100.0);
+    }
     Some(out)
 }
 
@@ -219,6 +226,18 @@ mod tests {
     fn codex(branch: Option<&str>, dirty: Option<i64>) -> SessionInfo {
         SessionInfo { name: "cx".into(), provider: "codex".into(), cwd: Some("C:\\Projetos\\hangar".into()),
             branch: branch.map(str::to_owned), git_dirty: dirty, ..Default::default() }
+    }
+
+    #[test]
+    fn context_from_the_transcript_fills_a_line_without_it() {
+        let session = SessionInfo { name: "s".into(), provider: "claude".into(),
+            context: Some(crate::api::dto::ContextUse { used: 250_000.0, window: 1_000_000.0 }), ..Default::default() };
+        let f = parse(Some(".../hangar | [main*] | Opus | 7d:99%"), Some(&session)).unwrap();
+        assert_eq!((f.ctx_used, f.ctx_total, f.ctx_pct), (Some(250_000.0), Some(1_000_000.0), Some(25.0)));
+        // A linha do Hangar, quando traz o contexto, vence.
+        let f = parse(Some("🤖 Opus │ 💬 1k/2k 40k/200k"), Some(&session)).unwrap();
+        assert_eq!(f.ctx_pct, Some(20.0));
+        assert_eq!(parse(None, Some(&session)).and_then(|f| f.ctx_pct), Some(25.0));
     }
 
     #[test]

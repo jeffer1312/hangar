@@ -157,6 +157,9 @@ class SessionInfo(BaseModel):
     # contexto/rate sem SSE por sessao. Vem de um cache com TTL em list_with_state (cadencia ~20s,
     # max 2 capturas de pane por chamada) — pode atrasar; o Chat continua com a versao ao vivo.
     status_line: Optional[str] = None
+    # Contexto da sessão Claude lido do transcript ({"used", "window"}, em tokens): a statusline só
+    # traz o contexto quando é a do Hangar, e o app usa este quando ela não traz.
+    context: Optional[dict] = None
     # Pareamento ativo (feature "trabalhando juntas"): os OUTROS membros do grupo, ou None.
     # Grupo de 2 = lista de 1 (o antigo 1:1 é caso particular). Badge/chip na UI.
     pair_peers: Optional[list[str]] = None

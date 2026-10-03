@@ -3743,7 +3743,9 @@ impl Hangar {
             // Anéis de contexto e de uso da conta; sem dado dizem isso, nunca 0%.
             let percent = |pct: Option<f64>| pct.map(|p| format!("{}%", p.round())).unwrap_or_else(|| tr("no_data"));
             // O anel mostra a janela de 5 h; conta que só publica a semanal (Codex, alguns planos) mostra a semanal.
-            let account = status.as_ref().filter(|_| readable).and_then(|s| s.five_hour_pct.or(s.weekly_pct).or(s.monthly_pct));
+            // Sem a cota na linha (linha que não é a do Hangar), vale a da API de uso, a mesma da pílula do topo.
+            let account = status.as_ref().filter(|_| readable).and_then(|s| s.five_hour_pct.or(s.weekly_pct).or(s.monthly_pct))
+                .or_else(|| self.focused_account().filter(|_| readable).and_then(|(_, _, window)| window.map(|(_, pct)| pct)));
             // Anel, nome curto e número com a mesma geometria nos dois; o detalhe de cada um abre num cartão, não numa dica.
             let ring = |id: &'static str, name: String, pct: Option<f64>, open: bool| Button::new(id)
                 .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::faint()).hover(theme::hover()).active(theme::hover()))
