@@ -41,6 +41,9 @@ case "$1 $2" in
       alvo="${3#=}"
       grep -qx "$alvo" <<< "$SESSOES_FAKE" ;;
   "display-message -p") printf '%s\n' "$SESSAO_ATUAL" ;;
+  "list-clients -F")
+      [[ "${CLIENTES_RC:-0}" == 0 ]] || exit "$CLIENTES_RC"
+      printf '%s\n' "${CLIENTES_FAKE:-}" ;;
   *) exit 1 ;;
 esac
 FAKE
@@ -74,12 +77,31 @@ checa "pane ambíguo cai no carimbo" "nome-novo" "$(me 2>/dev/null)"
 
 # 4) Sem pane E com carimbo obsoleto: último recurso é o cliente anexado, e tem que AVISAR.
 export TMUX_PANE="" CP_SESSION_NAME="nome-do-nascimento" SESSAO_ATUAL="outra" PANES_FAKE=""
+export CLIENTES_FAKE=$'0\toutra'
 checa "degradação final" "outra" "$(me 2>/dev/null)"
 if me 2>&1 >/dev/null | grep -q "identidade caiu"; then
     echo "ok   degradação avisa no stderr"
 else
     echo "FALHA degradação silenciosa — o dono não fica sabendo"; falhas=$((falhas + 1))
 fi
+
+export SESSAO_ATUAL="observada" CLIENTES_FAKE=$'1\tobservada'
+checa "observador não assina recado" "cli" "$(me 2>/dev/null)"
+export CLIENTES_FAKE=$'1\tobservada\n0\thumana'
+checa "humano vence observador" "humana" "$(me 2>/dev/null)"
+export CLIENTES_FAKE=$'0\thumana\n0\thumana'
+checa "dois clientes da mesma sessão" "humana" "$(me 2>/dev/null)"
+export CLIENTES_FAKE=$'0\thumana\n0\toutra'
+checa "clientes de sessões distintas são ambíguos" "cli" "$(me 2>/dev/null)"
+export CLIENTES_FAKE=$'0\tnome com espaco'
+checa "fallback preserva espaço" "nome com espaco" "$(me 2>/dev/null)"
+export CLIENTES_FAKE=$'\thumana'
+checa "modo desconhecido não fornece identidade" "cli" "$(me 2>/dev/null)"
+export CLIENTES_FAKE=$'0\thumana' CLIENTES_RC=1
+checa "consulta falha não fornece identidade" "cli" "$(me 2>/dev/null)"
+unset CLIENTES_RC
+export CLIENTES_FAKE='/dev/pts/0: observada: powershell [200x50] (utf8)'
+checa "psmux sem formato não fornece identidade" "cli" "$(me 2>/dev/null)"
 
 # 5) Sessão SEM terminal: a chave do sidecar vence tudo — inclusive um pane herdado do
 #    operador que subiu o backend de dentro de um tmux, e um carimbo obsoleto pós-rename.

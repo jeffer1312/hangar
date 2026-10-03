@@ -55,7 +55,7 @@ fn haystack(event: &ChatEvent) -> String {
         }
     }
     let mut parts = vec![event.text.clone().unwrap_or_default()];
-    if let Some(input) = &event.tool_input { values(input, &mut parts); }
+    if let Some(input) = &event.tool_input { for value in input.values() { values(value, &mut parts); } }
     parts.push(event.result.clone().unwrap_or_default());
     parts.join("\n").to_lowercase()
 }

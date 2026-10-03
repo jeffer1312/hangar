@@ -67,6 +67,11 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory) {
         if (-not $task.Settings.Enabled) { throw "A tarefa $name esta desabilitada" }
         $rows = Get-HangarProcessTable
         $candidates = @(Get-HangarTaskProcesses $rows $name $directory)
+        # O hangar-server e filho do backend e segura a porta publica: entra na parada depois do
+        # pai (ele sai sozinho quando o cano do stdin fecha; se ainda estiver vivo, cai aqui).
+        $candidates = @($candidates) + @($rows | Where-Object {
+            $_.Name -eq 'hangar-server.exe' -and [int]$_.ParentProcessId -in @($candidates.ProcessId)
+        })
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {

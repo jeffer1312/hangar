@@ -77,6 +77,20 @@ try {
     $script:live[10].StartTime = $old.AddTicks(5)
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
     Assert ('start' -in $script:events) 'Precisao de WMI recusou o mesmo processo'
+    Reset-State
+    $script:processRows = @($rows) + @(Row 12 11 'hangar-server.exe' 'C:\Users\u\.hangar\bin\hangar-server.exe')
+    $filho = [pscustomobject]@{ Id = 12; StartTime = $old }
+    $filho | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+    $script:live[12] = $filho
+    $script:owner = 12
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
+    Assert (($script:events -join ',') -eq 'stop:10,stop:11,stop:12,start') 'hangar-server do backend travou ou desordenou o reinicio'
+    Reset-State
+    $script:processRows = @($rows) + @(Row 13 40 'hangar-server.exe' 'C:\other\hangar-server.exe')
+    $script:owner = 13
+    $failed = $false
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' } catch { $failed = $true }
+    Assert ($failed -and 'start' -notin $script:events) 'hangar-server de outro checkout tratado como do backend'
     foreach ($scenario in @('port', 'identity', 'wmi', 'stop', 'launcher', 'disabled')) {
         Reset-State
         switch ($scenario) {

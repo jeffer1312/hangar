@@ -32,8 +32,9 @@ from app.hook_state import hook_state
 from app.models import session_key
 from app.procinfo import pid_vivo
 from app.adapters.preview_push import PushPreviewSource
+from app.adapters.stream_buffer import StreamBuffer, error_frames
 from app.adapters.codex.rollout import parse_rollout_line
-from app import codex_contas
+from app import codex_contas, diag
 from app import tmux
 from app.pqueue import PromptQueue
 from app.send_executor import send_thread
@@ -457,6 +458,7 @@ class CodexAdapter:
             sub = self._subscribers.pop(name, None)
             if sub is not None:
                 sub.cancel()
+            self._invalidate_preview(sess)
             bomba = sess.get("bomba")
             if bomba is not None:
                 bomba.cancel()
@@ -596,6 +598,7 @@ class CodexAdapter:
         except RuntimeError:
             pass
         anterior = self._sessions.get(name)
+        self._invalidate_preview(anterior)
         if anterior is not None and anterior.get("bomba") is not None:
             anterior["bomba"].cancel()
         sess = {"client": client, "thread_id": thread_id,
@@ -694,6 +697,7 @@ class CodexAdapter:
                 return await self._ligar_sem_terminal(name, meta)
             if sess is not None:
                 # A TUI trocou de conversa; só a conexão antiga termina, nunca o app-server do pane.
+                self._invalidate_preview(sess)
                 self._sessions.pop(name, None)
                 tasks = [self._tmux_watchers.pop(name, None), self._subscribers.pop(name, None), sess.get("bomba")]
                 tasks = [task for task in tasks if task is not None and task is not asyncio.current_task()]
@@ -1176,6 +1180,7 @@ class CodexAdapter:
         self._falhas_subida.pop(name, None)
         self._problemas.pop(name, None)
         sess = self._sessions.pop(name, None)
+        self._invalidate_preview(sess)
         watcher = self._tmux_watchers.pop(name, None)
         if watcher is not None:
             watcher.cancel()
@@ -1193,6 +1198,22 @@ class CodexAdapter:
         if callable(term):
             term()
 
+    def _invalidate_preview(self, sess: dict | None) -> None:
+        buffer = sess.get("preview_buffer") if sess is not None else None
+        if buffer is None:
+            return
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            buffer.invalidate()
+        else:
+            loop.call_soon_threadsafe(buffer.invalidate)
+
     def delivery_lock(self, name: str) -> asyncio.Lock:
         return self._delivery_locks.setdefault(name, asyncio.Lock())
 
@@ -1203,6 +1224,7 @@ class CodexAdapter:
                     task.cancel()
             PushPreviewSource._sources.pop(old, None)
             sess = self._sessions.pop(old, None)
+            self._invalidate_preview(sess)
             lock = self._locks.pop(old, None)
             if lock is not None:
                 self._locks[new] = lock
@@ -1264,10 +1286,14 @@ class CodexAdapter:
     async def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
         while True:
             client = (self._sessions.get(name) or {}).get("client")
-            async for event in self._state_stream(name):
-                if client is None:
-                    client = (self._sessions.get(name) or {}).get("client")
-                yield event
+            source = self._state_stream(name)
+            try:
+                async for event in source:
+                    if client is None:
+                        client = (self._sessions.get(name) or {}).get("client")
+                    yield event
+            finally:
+                await source.aclose()
             lock = self._locks.get(name)
             current = self._sessions.get(name)
             # Trocar o transporte encerra a fonte antiga; os ouvintes continuam na mesma sessão.
@@ -1367,6 +1393,7 @@ class CodexAdapter:
             meta = codex_sessions.update(name, permission_mode=nome) or meta
             sess = self._sessions.pop(name, None)
             if sess is not None:
+                self._invalidate_preview(sess)
                 bomba = sess.get("bomba")
                 if bomba is not None:
                     bomba.cancel()
@@ -1527,160 +1554,184 @@ class CodexAdapter:
             espalhar(None)
 
     async def _consumir(self, name: str, client: AppServerClient, sess: dict, espalhar) -> None:
-        # Buffer do turno em voo (deltas sao INCREMENTAIS -- concatena; ver docs/codex-app-server-
-        # contract.md).
-        buf = ""
-        async for notif in client.notifications():
-            if self._sessions.get(name) is not sess:
-                return
-            params = notif.get("params") or {}
-            if notif.get("method") == "thread/started" and sess.get("app_pid"):
-                thread = params.get("thread") or {}
-                if thread.get("id") != sess["thread_id"]:
-                    await asyncio.to_thread(codex_sessions.switch_thread, name, thread, sess["thread_id"],
-                                            endpoint=sess["endpoint"], app_pid=sess["app_pid"])
-            # O app-server também publica estados de outras threads, inclusive subagentes.
-            if params.get("threadId") is not None and params["threadId"] != sess["thread_id"]:
-                continue
-            if sess.get("voice_events") is not None:
-                from app.codex_voice import forward
-                forward(sess, notif)
-            if sess.get("headless") and notif.get("id") is not None:
-                # Pedido do servidor: na TUI quem responde é ela; aqui é o cartão do app.
-                if notif["method"] in sem_terminal.APROVACOES:
-                    espalhar(self._question_state(name, sess))
-                    continue
-                if notif["method"] != "item/tool/requestUserInput":
-                    await self._recusar_pedido(name, client, notif)
-                    continue
-            mapped = map_state(notif)
-            method = notif.get("method")
-            compact_updated = method in {"item/started", "item/completed"} and \
-                (params.get("item") or {}).get("type") == "contextCompaction"
-            if compact_updated:
-                sess["compacting"] = method == "item/started"
-            elif method == "turn/completed":
-                sess.pop("compacting", None)
-            current_turn = not sess.get("turn_id") or params.get("turnId") in (None, sess["turn_id"])
-            response_started = current_turn and (bool(mapped.preview_delta) or (
-                method == "item/completed" and (params.get("item") or {}).get("type") == "agentMessage"
-                and bool((params.get("item") or {}).get("text"))
-            ))
-            if method == "turn/started" or mapped.state == "idle":
-                sess.pop("codex_response_started", None)
-            elif response_started:
-                sess["codex_response_started"] = True
-            buffering_updated = False
-            if mapped.buffering is not None:
-                if params.get("threadId") != sess["thread_id"] or not sess["in_progress"] or sess.get("codex_response_started"):
-                    continue
-                if sess.get("turn_id") and params.get("turnId") != sess["turn_id"]:
-                    continue
-                buffering_updated = sess.get("codex_buffering", False) != mapped.buffering
-                sess["codex_buffering"] = mapped.buffering
-            elif method == "turn/started" or mapped.state == "idle" or response_started:
-                buffering_updated = bool(sess.pop("codex_buffering", False))
-            async_updated = method in {"item/started", "item/completed"} and \
-                sess["async_questions"].observe(params.get("item") or {})
-            if mapped.state is not None:
-                sess["state_revision"] = sess.get("state_revision", 0) + 1
-            settings_updated = method == "thread/settings/updated"
-            if settings_updated:
-                if params.get("threadId") != sess["thread_id"]:
-                    continue
-                settings = params.get("threadSettings") or {}
-                sess["model"] = settings.get("model")
-                sess["effort"] = sess["default_effort"] = settings.get("effort")
-                sess["mode"] = (settings.get("collaborationMode") or {}).get("mode", "default")
-                sess["settings_revision"] = sess.get("settings_revision", 0) + 1
-            turn_problem = _turn_problem(notif) if current_turn else None
-            problem_updated = False
-            if turn_problem is not None:
-                problem_updated = sess.get("turn_problem") != turn_problem
-                sess["turn_problem"] = turn_problem
-            elif method == "turn/started" or response_started or \
-                    (current_turn and method == "item/started"
-                     and (params.get("item") or {}).get("type") != "userMessage") or \
-                    (method == "turn/completed" and sess.get("turn_problem", ("",))[0] == "codex_sem_conexao"):
-                # Reconectou (chegou resposta ou qualquer item novo, inclusive só ferramenta) ou o
-                # turno fechou sem erro: o aviso não vale mais.
-                problem_updated = sess.pop("turn_problem", None) is not None
-            if method == "turn/started":
-                buf = ""  # novo turno -- zera pra nao vazar o texto do turno anterior
-                # guarda o turnId do turno em voo (turn/interrupt exige threadId+turnId).
-                turn_id = ((notif.get("params") or {}).get("turn") or {}).get("id")
-                if turn_id:
-                    sess["turn_id"] = turn_id
-            elif mapped.preview_delta is not None:
-                buf += mapped.preview_delta
-                await PushPreviewSource.get(name).push(buf)
-            elif method in ("item/started", "item/completed") and \
-                    ((notif.get("params") or {}).get("item") or {}).get("type") == "agentMessage":
-                # Um turno pode ter varios agentMessage (preambulo "Vou conferir…" + resposta). O
-                # completado vira bolha propria pelo rollout; se ficasse no buffer, a previa
-                # mostrava "Vou conferir.Resposta" ate o turno fechar.
-                buf = ""
-                await PushPreviewSource.get(name).push("")
-            elif method == "turn/completed":
-                # o texto final ja caiu no rollout -> vira ChatEvent autoritativo via
-                # transcript_stream; o sse.py tambem suprime via _already_committed. Limpa aqui pra
-                # nao deixar o ultimo delta pendurado ate o proximo turno.
-                await PushPreviewSource.get(name).push("")
-                # Marca idle ANTES de drenar (nao depender do thread/status/changed idle ter chegado
-                # antes -- a ordem das notifications do app-server nao e garantida). A drain chama
-                # send_prompt -> deliverable(), que le in_progress: se ficasse True aqui, deliverable
-                # daria False, send_prompt viraria "deferred", a drain reverteria e a entrada
-                # enfileirada ficaria presa pra sempre (perda silenciosa). Tambem zera o turn_id: o
-                # turno morreu -> interrupt vira no-op em vez de mandar turn/interrupt de turno morto.
-                sess["state"] = "idle"
-                sess["in_progress"] = False
-                sess["turn_id"] = None
-                # Turno terminou: a bomba única e permanente entrega a fila mesmo sem SSE aberto.
-                # Best-effort: falha aqui nunca derruba o consumidor do app-server.
-                try:
-                    await self.drain(name, "")
-                except Exception:
-                    _log.exception("codex drain-on-complete falhou name=%s", name)
+        async def publish(text: str) -> None:
+            if self._sessions.get(name) is sess and sess.get("client") is client:
+                await PushPreviewSource.get(name).push(text)
+
+        def failed(exc: Exception) -> None:
+            if self._sessions.get(name) is sess:
+                _log.warning("codex: publicação da prévia falhou name=%s tipo=%s frames=%s",
+                             name, type(exc).__name__, error_frames(exc))
+                diag.registrar("codex.previa_falhou", "erro", sessao=name,
+                               provider="codex", **diag.erro_campos(exc))
+                espalhar(self._question_state(name, sess))
+
+        buffer = StreamBuffer(publish, on_error=failed)
+        sess["preview_buffer"] = buffer
+        try:
+            async for notif in client.notifications():
                 if self._sessions.get(name) is not sess:
                     return
-            if mapped.state is not None:
-                sess["state"] = mapped.state
-                was = sess["in_progress"]
-                sess["in_progress"] = mapped.state == "working"
-                sess["turn_state_known"] = not sess["in_progress"] or bool(sess.get("turn_id"))
-                # Carimba QUANDO o turno comecou. O TTL de deliverable() mede a partir daqui; sem
-                # isto um in_progress vindo do stream (nao do send_prompt) ficava com marco 0 e
-                # expirava de imediato, liberando envio no meio de um turno vivo.
-                if sess["in_progress"] and not was:
-                    sess["in_progress_since"] = time.monotonic()
-            # Task D: acumula tokenUsage/rateLimits por sessao (snapshot mais recente de cada) --
-            # sao notifications esparsas, nao vem toda hora, entao guarda no dict quente pra
-            # sobreviver ate o proximo StateEvent emitido (mesmo que seja por outro motivo, tipo
-            # turn/started).
-            if mapped.token_usage is not None:
-                sess["token_usage"] = mapped.token_usage
-            if mapped.rate_limits is not None:
-                sess["rate_limits"] = mapped.rate_limits
-            question_updated = async_updated or method in ("item/tool/requestUserInput", "serverRequest/resolved")
-            if mapped.state is None and mapped.token_usage is None and mapped.rate_limits is None and not settings_updated and not question_updated and not buffering_updated and not problem_updated and not compact_updated:
-                # Neutro (method desconhecido) ou so preview_delta: StateEvent nao tem campo de
-                # preview -> nada a emitir aqui (o preview ja foi empurrado acima, fora do
-                # StateEvent -- efeito colateral adicional, nao substitui).
-                continue
-            # status_line SEMPRE montado com o que ha de mais recente acumulado (model/effort do
-            # dict quente + token_usage/rate_limits guardados acima) -- nao so quando ESTE notif
-            # trouxe token/limite novo, senao o front perderia contexto/limites em StateEvents de
-            # working/idle puros (a maioria).
-            espalhar(self._question_state(name, sess))
-        # notifications() terminou = EOF do app-server (o read loop empurra o sentinela ao morrer).
-        # Dead-detection (backlog T4-m2): emite dead pra o front + limpa a sessao da memoria (o
-        # sidecar duravel fica; ensure_running reabre num acesso futuro). getattr: um client FAKE de
-        # teste sem `closed` termina o stream sem simular morte -> nao emite dead.
-        if getattr(client, "closed", False) and self._sessions.get(name) is sess:
-            sess["state"] = "dead"
-            self._sessions.pop(name, None)
-            PushPreviewSource._sources.pop(name, None)
-            espalhar(StateEvent(session=name, state="dead"))
+                params = notif.get("params") or {}
+                if notif.get("method") == "thread/started" and sess.get("app_pid"):
+                    thread = params.get("thread") or {}
+                    if thread.get("id") != sess["thread_id"]:
+                        await buffer.discard()
+                        await publish("")
+                        await asyncio.to_thread(codex_sessions.switch_thread, name, thread, sess["thread_id"],
+                                                endpoint=sess["endpoint"], app_pid=sess["app_pid"])
+                # O app-server também publica estados de outras threads, inclusive subagentes.
+                if params.get("threadId") is not None and params["threadId"] != sess["thread_id"]:
+                    continue
+                if sess.get("voice_events") is not None:
+                    from app.codex_voice import forward
+                    forward(sess, notif)
+                if sess.get("headless") and notif.get("id") is not None:
+                    # Pedido do servidor: na TUI quem responde é ela; aqui é o cartão do app.
+                    if notif["method"] in sem_terminal.APROVACOES:
+                        espalhar(self._question_state(name, sess))
+                        continue
+                    if notif["method"] != "item/tool/requestUserInput":
+                        await self._recusar_pedido(name, client, notif)
+                        continue
+                mapped = map_state(notif)
+                method = notif.get("method")
+                compact_updated = method in {"item/started", "item/completed"} and \
+                    (params.get("item") or {}).get("type") == "contextCompaction"
+                if compact_updated:
+                    sess["compacting"] = method == "item/started"
+                elif method == "turn/completed":
+                    sess.pop("compacting", None)
+                current_turn = not sess.get("turn_id") or params.get("turnId") in (None, sess["turn_id"])
+                response_started = current_turn and (bool(mapped.preview_delta) or (
+                    method == "item/completed" and (params.get("item") or {}).get("type") == "agentMessage"
+                    and bool((params.get("item") or {}).get("text"))
+                ))
+                if method == "turn/started" or mapped.state == "idle":
+                    sess.pop("codex_response_started", None)
+                elif response_started:
+                    sess["codex_response_started"] = True
+                buffering_updated = False
+                if mapped.buffering is not None:
+                    if params.get("threadId") != sess["thread_id"] or not sess["in_progress"] or sess.get("codex_response_started"):
+                        continue
+                    if sess.get("turn_id") and params.get("turnId") != sess["turn_id"]:
+                        continue
+                    buffering_updated = sess.get("codex_buffering", False) != mapped.buffering
+                    sess["codex_buffering"] = mapped.buffering
+                elif method == "turn/started" or mapped.state == "idle" or response_started:
+                    buffering_updated = bool(sess.pop("codex_buffering", False))
+                async_updated = method in {"item/started", "item/completed"} and \
+                    sess["async_questions"].observe(params.get("item") or {})
+                if mapped.state is not None:
+                    sess["state_revision"] = sess.get("state_revision", 0) + 1
+                settings_updated = method == "thread/settings/updated"
+                if settings_updated:
+                    if params.get("threadId") != sess["thread_id"]:
+                        continue
+                    settings = params.get("threadSettings") or {}
+                    sess["model"] = settings.get("model")
+                    sess["effort"] = sess["default_effort"] = settings.get("effort")
+                    sess["mode"] = (settings.get("collaborationMode") or {}).get("mode", "default")
+                    sess["settings_revision"] = sess.get("settings_revision", 0) + 1
+                turn_problem = _turn_problem(notif) if current_turn else None
+                problem_updated = False
+                if turn_problem is not None:
+                    problem_updated = sess.get("turn_problem") != turn_problem
+                    sess["turn_problem"] = turn_problem
+                elif method == "turn/started" or response_started or \
+                        (current_turn and method == "item/started"
+                         and (params.get("item") or {}).get("type") != "userMessage") or \
+                        (method == "turn/completed" and sess.get("turn_problem", ("",))[0] == "codex_sem_conexao"):
+                    # Reconectou (chegou resposta ou qualquer item novo, inclusive só ferramenta) ou o
+                    # turno fechou sem erro: o aviso não vale mais.
+                    problem_updated = sess.pop("turn_problem", None) is not None
+                if method == "turn/started":
+                    await buffer.reset()
+                    await publish("")
+                    # guarda o turnId do turno em voo (turn/interrupt exige threadId+turnId).
+                    turn_id = ((notif.get("params") or {}).get("turn") or {}).get("id")
+                    if turn_id:
+                        sess["turn_id"] = turn_id
+                elif mapped.preview_delta is not None:
+                    await buffer.append(mapped.preview_delta)
+                elif method in ("item/started", "item/completed") and \
+                        ((notif.get("params") or {}).get("item") or {}).get("type") == "agentMessage":
+                    # Um turno pode ter varios agentMessage (preambulo "Vou conferir…" + resposta). O
+                    # completado vira bolha propria pelo rollout; se ficasse no buffer, a previa
+                    # mostrava "Vou conferir.Resposta" ate o turno fechar.
+                    await buffer.discard()
+                    await publish("")
+                elif method == "turn/completed":
+                    # o texto final ja caiu no rollout -> vira ChatEvent autoritativo via
+                    # transcript_stream; o sse.py tambem suprime via _already_committed. Limpa aqui pra
+                    # nao deixar o ultimo delta pendurado ate o proximo turno.
+                    await buffer.discard()
+                    await publish("")
+                    # Marca idle ANTES de drenar (nao depender do thread/status/changed idle ter chegado
+                    # antes -- a ordem das notifications do app-server nao e garantida). A drain chama
+                    # send_prompt -> deliverable(), que le in_progress: se ficasse True aqui, deliverable
+                    # daria False, send_prompt viraria "deferred", a drain reverteria e a entrada
+                    # enfileirada ficaria presa pra sempre (perda silenciosa). Tambem zera o turn_id: o
+                    # turno morreu -> interrupt vira no-op em vez de mandar turn/interrupt de turno morto.
+                    sess["state"] = "idle"
+                    sess["in_progress"] = False
+                    sess["turn_id"] = None
+                    # Turno terminou: a bomba única e permanente entrega a fila mesmo sem SSE aberto.
+                    # Best-effort: falha aqui nunca derruba o consumidor do app-server.
+                    try:
+                        await self.drain(name, "")
+                    except Exception:
+                        _log.exception("codex drain-on-complete falhou name=%s", name)
+                    if self._sessions.get(name) is not sess:
+                        return
+                if mapped.state is not None:
+                    sess["state"] = mapped.state
+                    was = sess["in_progress"]
+                    sess["in_progress"] = mapped.state == "working"
+                    sess["turn_state_known"] = not sess["in_progress"] or bool(sess.get("turn_id"))
+                    # Carimba QUANDO o turno comecou. O TTL de deliverable() mede a partir daqui; sem
+                    # isto um in_progress vindo do stream (nao do send_prompt) ficava com marco 0 e
+                    # expirava de imediato, liberando envio no meio de um turno vivo.
+                    if sess["in_progress"] and not was:
+                        sess["in_progress_since"] = time.monotonic()
+                # Task D: acumula tokenUsage/rateLimits por sessao (snapshot mais recente de cada) --
+                # sao notifications esparsas, nao vem toda hora, entao guarda no dict quente pra
+                # sobreviver ate o proximo StateEvent emitido (mesmo que seja por outro motivo, tipo
+                # turn/started).
+                if mapped.token_usage is not None:
+                    sess["token_usage"] = mapped.token_usage
+                if mapped.rate_limits is not None:
+                    sess["rate_limits"] = mapped.rate_limits
+                question_updated = async_updated or method in ("item/tool/requestUserInput", "serverRequest/resolved")
+                if mapped.state is None and mapped.token_usage is None and mapped.rate_limits is None and not settings_updated and not question_updated and not buffering_updated and not problem_updated and not compact_updated:
+                    # Neutro (method desconhecido) ou so preview_delta: StateEvent nao tem campo de
+                    # preview -> nada a emitir aqui (o preview ja foi empurrado acima, fora do
+                    # StateEvent -- efeito colateral adicional, nao substitui).
+                    continue
+                # status_line SEMPRE montado com o que ha de mais recente acumulado (model/effort do
+                # dict quente + token_usage/rate_limits guardados acima) -- nao so quando ESTE notif
+                # trouxe token/limite novo, senao o front perderia contexto/limites em StateEvents de
+                # working/idle puros (a maioria).
+                espalhar(self._question_state(name, sess))
+            # notifications() terminou = EOF do app-server (o read loop empurra o sentinela ao morrer).
+            # Dead-detection (backlog T4-m2): emite dead pra o front + limpa a sessao da memoria (o
+            # sidecar duravel fica; ensure_running reabre num acesso futuro). getattr: um client FAKE de
+            # teste sem `closed` termina o stream sem simular morte -> nao emite dead.
+            if getattr(client, "closed", False) and self._sessions.get(name) is sess:
+                await buffer.discard()
+                await publish("")
+                sess["state"] = "dead"
+                self._sessions.pop(name, None)
+                PushPreviewSource._sources.pop(name, None)
+                espalhar(StateEvent(session=name, state="dead"))
+
+            elif self._sessions.get(name) is sess:
+                await buffer.flush()
+        finally:
+            await buffer.discard()
+            if sess.get("preview_buffer") is buffer:
+                sess.pop("preview_buffer", None)
 
     async def send_prompt(self, name: str, text: str) -> str:
         """Envia o prompt como `turn/start` no app-server — NAO digitando no pane do tmux.

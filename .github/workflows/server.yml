@@ -1,0 +1,192 @@
+# hangar-server e hangar-cano (crates/, Rust): testa e compila Linux, Windows e macOS e publica numa release FIXA
+# `server-latest`, reescrita a cada push na main, como o `native-latest` do native.yml. O instalador e a atualização
+# leem o `server-latest.json` dessa release e conferem o sha256 de cada binário antes de usar.
+# Push em outra branch publica na pré-release `server-<branch>` (fora de [A-Za-z0-9._-] vira `-`), que é a que o
+# backend/app/rust_release.py procura quando o checkout está nessa branch. O manifesto mantém o nome em toda release.
+name: Server
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "crates/**"
+      - "backend/tests/fixtures/**"
+      # A suíte de contrato do cano roda aqui contra o binário: mudar o cano.py ou ela também testa o Rust.
+      - "backend/app/adapters/claude_headless/cano.py"
+      - "backend/tests/test_claude_headless_cano.py"
+      - ".github/workflows/server.yml"
+  workflow_dispatch:
+
+# Dois pushes seguidos não publicam ao mesmo tempo: o segundo espera, e a release termina no commit mais novo.
+concurrency:
+  group: ${{ github.ref_name == 'main' && 'server-latest' || format('server-{0}', github.ref_name) }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc 2.28 via cargo-zigbuild: o gnu comum do ubuntu-latest exige a glibc do runner e não abre em
+          # sistema mais antigo (Debian 10/11, RHEL 8). O zigbuild linka contra a 2.28 e mantém o alocador do gnu.
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            exe: ""
+            target: x86_64-unknown-linux-gnu
+            zigbuild: true
+            bindir: target/x86_64-unknown-linux-gnu/release
+            experimental: false
+          # Como no native.yml: falha de Windows ou macOS não segura a release do Linux.
+          - os: windows-latest
+            platform: windows-x86_64
+            exe: ".exe"
+            target: ""
+            bindir: target/release
+            experimental: true
+          - os: macos-latest
+            platform: macos-aarch64
+            exe: ""
+            target: ""
+            bindir: target/release
+            experimental: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: crates
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preparar terminal no macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install tmux
+          # Darwin exige o alias para o teste de bind público distinto do loopback privado.
+          sudo ifconfig lo0 alias 127.0.0.2 up
+      - name: Conferir tmux nos testes Unix
+        if: runner.os != 'Windows'
+        run: tmux -V
+      # O rustup do runner lê o crates/rust-toolchain.toml (1.98.1) no primeiro cargo.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target
+          key: server-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-${{ runner.os }}-
+      # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
+      - run: cargo test --locked --workspace
+      - if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+      # Zig baixado direto (sha256 do index.json do ziglang.org): o repositório só libera actions da GitHub,
+      # de criador verificado e o setup-uv, e uma action fora da lista derruba o workflow antes de começar.
+      - if: matrix.zigbuild
+        run: |
+          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/zig.tar.xz -C /tmp
+          echo /tmp/zig-x86_64-linux-0.16.0 >> "$GITHUB_PATH"
+      - if: matrix.zigbuild
+        run: cargo install cargo-zigbuild --locked --version =0.23.4
+      # O sufixo .2.28 fixa a glibc mínima; o diretório de saída continua sem ele (target/<triplo>/release).
+      - run: cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --locked --release --workspace ${{ matrix.target && format('--target {0}{1}', matrix.target, matrix.zigbuild && '.2.28' || '') || '' }}
+        env:
+          CARGO_PROFILE_RELEASE_LTO: fat
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+      # Guarda: se o zigbuild deixar de fixar a glibc, o binário passa a exigir mais que o prometido.
+      - name: glibc máxima exigida
+        if: matrix.zigbuild
+        run: |
+          for bin in hangar-server hangar-cano; do
+            top=$(objdump -T "${{ matrix.bindir }}/$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            echo "$bin exige $top"
+            test "$(printf '%s\n' "$top" GLIBC_2.28 | sort -V | tail -1)" = GLIBC_2.28
+          done
+      # A suíte de contrato do cano contra o binário que vai ser publicado. Só no Linux: é o único
+      # lugar em que ela roda contra o hangar-cano (o ci.yml não compila Rust). Setup igual ao do ci.yml.
+      - if: matrix.platform == 'linux-x86_64'
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+      - if: matrix.platform == 'linux-x86_64'
+        working-directory: backend
+        run: uv sync
+      - name: Contrato do cano contra o hangar-cano
+        if: matrix.platform == 'linux-x86_64'
+        working-directory: backend
+        run: |
+          # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro.
+          test -x "$GITHUB_WORKSPACE/crates/${{ matrix.bindir }}/hangar-cano"
+          CP_RUST_CANO_BIN=$GITHUB_WORKSPACE/crates/${{ matrix.bindir }}/hangar-cano uv run pytest tests/test_claude_headless_cano.py
+      - name: Empacotar
+        run: |
+          mkdir -p out
+          for bin in hangar-server hangar-cano; do
+            cp "${{ matrix.bindir }}/$bin${{ matrix.exe }}" "out/$bin-${{ matrix.platform }}${{ matrix.exe }}"
+          done
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.platform }}
+          path: crates/out/*
+          retention-days: 1
+
+  # Só este job escreve.
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: server-*
+          path: out
+          merge-multiple: true
+      # Chave `<plataforma>/<bin>` sem `.exe`; o `name` é o asset exato a baixar.
+      - name: sha256 e manifesto
+        working-directory: out
+        run: |
+          for need in hangar-server-linux-x86_64 hangar-cano-linux-x86_64; do
+            test -f "$need" || { echo "sem $need, nada a publicar"; exit 1; }
+          done
+          files='{}'
+          for f in hangar-server-* hangar-cano-*; do
+            base=${f%.exe}
+            case "$base" in hangar-server-*) bin=hangar-server ;; *) bin=hangar-cano ;; esac
+            platform=${base#"$bin"-}
+            sha=$(sha256sum "$f" | cut -d' ' -f1)
+            files=$(jq --arg k "$platform/$bin" --arg n "$f" --arg s "$sha" '.[$k] = {name: $n, sha256: $s}' <<<"$files")
+          done
+          jq -n --arg commit "$GITHUB_SHA" --argjson files "$files" '{commit: $commit, files: $files}' > server-latest.json
+          cat server-latest.json
+      # O manifesto sobe por ÚLTIMO: até ele trocar, quem baixa ainda vê o sha antigo e recusa o binário novo em vez
+      # de usar um par trocado. Sistema que não compilou desta vez fica com o arquivo anterior e fora do manifesto.
+      - working-directory: out
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Mesma limpeza do release_tag() do backend/app/rust_release.py: mudar uma exige mudar a outra.
+          if [ "$GITHUB_REF_NAME" = main ]; then
+            tag=server-latest
+            criar=(--title 'hangar-server e hangar-cano (topo da main)'
+                   --notes 'Reescrita a cada push na main. O instalador e a atualização do Hangar baixam daqui e conferem o sha256 pelo server-latest.json.')
+          else
+            tag="server-${GITHUB_REF_NAME//[^A-Za-z0-9._-]/-}"
+            if [ "$tag" = server-latest ]; then
+              echo "::error::a branch '$GITHUB_REF_NAME' vira o tag server-latest, que é a release da main; renomeie a branch"
+              exit 1
+            fi
+            criar=(--prerelease --title "hangar-server e hangar-cano (branch $GITHUB_REF_NAME)"
+                   --notes "Reescrita a cada push na branch $GITHUB_REF_NAME. A atualização baixa daqui quando o checkout está nessa branch.")
+          fi
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false "${criar[@]}"
+          gh release upload "$tag" hangar-server-* hangar-cano-* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$tag" server-latest.json --repo "$GITHUB_REPOSITORY" --clobber
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$GITHUB_SHA" -F force=true >/dev/null

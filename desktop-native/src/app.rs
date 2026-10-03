@@ -3153,7 +3153,7 @@ impl Hangar {
 
     fn render_live_tool(&self) -> AnyElement {
         let Some(tool) = &self.chat.live_tool else { return div().into_any_element(); };
-        let summary = conversation::summarize_input(Some(&tool.name), Some(&tool.input));
+        let summary = conversation::summarize_input(Some(&tool.name), tool.input.as_object());
         div().flex().items_center().gap_2().px_3().py_1().text_sm()
             .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).child(tool.name.clone()))
             .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(summary))
@@ -3286,7 +3286,7 @@ impl Hangar {
         // depois de enviar, este seletor piscava por cima).
         if interaction::ask_picker(&options) { return None; }
         let snapshot = select_snapshot(state);
-        let plan = state.claude_plan_pending.clone().filter(|p| !p.plan.trim().is_empty());
+        let plan = plan_pending(state).filter(|p| !p.plan.trim().is_empty());
         let multi = options.iter().any(|o| interaction::checkbox(o).is_some());
         let marked = options.iter().filter(|o| interaction::checkbox(o).is_some_and(|(on, _)| on)).count();
         let mut body = div().flex().flex_col().gap_2();
@@ -3983,8 +3983,8 @@ impl Hangar {
             let label = match event.kind.as_str() {
                 "user_msg" => tr("you"), "assistant_msg" => tr("assistant"), "thinking" => tr("thinking"),
                 "tool_use" | "tool_result" => event.tool_name.clone().unwrap_or_else(|| tr("tool")),
-                "notice" => event.skill.as_ref()
-                    .and_then(|skill| crate::i18n::tr_web("notice_skill_loaded", &HashMap::from([("name".to_owned(), skill.name.clone())])))
+                "notice" => event.loaded_skill()
+                    .and_then(|skill| crate::i18n::tr_web("notice_skill_loaded", &HashMap::from([("name".to_owned(), skill.name)])))
                     .unwrap_or_else(|| tr("notice")),
                 _ => tr("unknown"),
             };
@@ -4958,7 +4958,7 @@ fn select_snapshot(state: &SessionState) -> String { json!([state.question, stat
 fn display_body(event: &ChatEvent) -> String {
     match event.kind.as_str() {
         // Skill injetada: o corpo é o SKILL.md, que a linha recolhida só mostra ao abrir.
-        "notice" => event.skill.as_ref().map(|skill| skill.body.clone()).unwrap_or_else(|| tr(&event.body())),
+        "notice" => event.loaded_skill().map(|skill| skill.body).unwrap_or_else(|| tr(&event.body())),
         "assistant_msg" => interaction::plan_display(&event.body()),
         // Anexos viram cartões próprios; o texto mostra só a legenda.
         "user_msg" => {
@@ -5313,7 +5313,7 @@ impl Hangar {
             .and_then(|ask| ask.tool_use_id).is_some_and(|id| self.tool_answered(&id));
         // Menu do AskUserQuestion sem o card ainda (ou já respondido): o card nativo é quem responde, sem aviso de terminal.
         let ask_pane = self.chat.state.options.as_deref().is_some_and(interaction::ask_picker);
-        let pending = card.is_none() && !answered && !ask_pane && !prethread_open && (self.chat.state.state == "awaiting_input" || self.chat.state.login == Some(true));
+        let pending = card.is_none() && !answered && !ask_pane && !prethread_open && (self.chat.state.state == "awaiting_input" || self.chat.state.login);
         // Faixas e avisos entre a conversa e o compositor ficam na mesma coluna das mensagens.
         content = content
             .when_some(card, |el, card| el.child(card))
@@ -5388,7 +5388,7 @@ impl Render for Hangar {
             else if self.selected.is_some() { "reconnecting".to_owned() }
             else if self.list_online { "connected".to_owned() } else { "disconnected".to_owned() };
         let session_chip = matches!(header_state.as_str(), "working" | "idle" | "awaiting_input" | "dead");
-        let limited_now = self.chat.state.limited.or(self.selected.as_ref().and_then(|s| s.limited)) == Some(true);
+        let limited_now = if self.chat.state.state.is_empty() { self.selected.as_ref().and_then(|s| s.limited) == Some(true) } else { self.chat.state.limited };
         let chip_state = if limited_now && session_chip { "limited".to_owned() } else { header_state.clone() };
         let place = self.selected.as_ref().map(|s| place(s, &self.session_label(cx)));
         let landing::Frame { drop, shown, rise } = self.landing_frame(window, cx);

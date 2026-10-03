@@ -330,7 +330,11 @@ me() {
     # usada por QUALQUER um: o recado sairia assinado por quem não mandou.
     local atual=""
     if [[ -n "${TMUX:-}" ]]; then
-        atual=$(tmux display-message -p '#S' 2>/dev/null) || atual=""
+        # O observador não é o remetente; vários terminais só dão identidade se concordarem.
+        atual=$(tmux list-clients -F $'#{client_control_mode}\t#{session_name}' 2>/dev/null |
+            awk -F '\t' 'NF != 2 || ($1 != "0" && $1 != "1") { bad = 1 }
+                         $1 == "0" && NF == 2 && $2 != "" { names[$2] = 1; name = $2 }
+                         END { for (s in names) n++; if (!bad && n == 1) print name }') || atual=""
         echo "aviso: sessão sem CP_SESSION_NAME válido (wrapper antigo ou sessão renomeada) —" \
              "identidade caiu no 'cliente anexado' e pode sair errada ('${atual:-cli}')." \
              "Reabra a sessão pelo wrapper atualizado pra corrigir." >&2

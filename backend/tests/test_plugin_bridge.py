@@ -522,3 +522,41 @@ def test_recusa_loga_uma_vez_por_instancia_mesmo_com_o_dono_puxando(monkeypatch,
         with pytest.raises(HTTPException):
             asyncio.run(pb.pull(_pull(instance="b", session_id="outra-conversa")))
     assert sum("pull recusado" in r.getMessage() for r in caplog.records) == 1
+
+
+@pytest.mark.parametrize("stdout,returncode,expected", [
+    ("", 0, False),
+    ("1\t\n", 0, False),
+    ("1\t\n1\t\n", 0, False),
+    ("0\t/dev/pts/7\n", 0, True),
+    ("1\t\n0\t/dev/pts/7\n", 0, True),
+    ("\t/dev/pts/7\n", 0, True),
+    ("\t\n", 0, True),
+    ("#{client_control_mode}\t\n", 0, True),
+    ("1\n", 0, True),
+    ("", 1, True),
+])
+def test_terminal_presenca_filtra_somente_controle_comprovado(monkeypatch, stdout, returncode, expected):
+    from app import tmux
+    from types import SimpleNamespace
+    def run(args):
+        assert args == ["tmux", "list-clients", "-t", "=s1", "-F", "#{client_control_mode}\t#{client_tty}"]
+        return SimpleNamespace(stdout=stdout, returncode=returncode)
+    monkeypatch.setattr(tmux, "_run", run)
+    assert pb.terminal_preso("s1") is expected
+
+
+def test_terminal_presenca_erro_do_multiplexador_e_conservador(monkeypatch):
+    from app import tmux
+    def run(args):
+        raise OSError("fixture")
+    monkeypatch.setattr(tmux, "_run", run)
+    assert pb.terminal_preso("s1") is True
+
+
+@pytest.mark.parametrize("stdout,expected", [(b"1\t\n", False), (b"\xff\t\n", True), (None, True), ("\n", True), ("1\t\textra\n", True)])
+def test_terminal_presenca_bytes_e_formato_invalido(monkeypatch, stdout, expected):
+    from app import tmux
+    from types import SimpleNamespace
+    monkeypatch.setattr(tmux, "_run", lambda args: SimpleNamespace(stdout=stdout, returncode=0))
+    assert pb.terminal_preso("s1") is expected

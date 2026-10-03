@@ -60,12 +60,13 @@ def fetch_projects(base_url: str, token: str) -> tuple[list, str]:
 
 
 def attached_locally() -> set[str]:
-    """Sessões tmux DESTA máquina com pelo menos um cliente. Diz ao painel se o clique vai focar
+    """Sessões tmux DESTA máquina com pelo menos um cliente de terminal. Diz se o clique vai focar
     um terminal já aberto ou abrir um novo. Só faz sentido local — sessão remota abre a web UI."""
     try:
-        out = subprocess.run(["tmux", "list-clients", "-F", "#{session_name}"],
+        out = subprocess.run(["tmux", "list-clients", "-F", "#{client_control_mode}\t#{session_name}"],
                              capture_output=True, text=True, timeout=3, check=True).stdout
-        return {line.strip() for line in out.splitlines() if line.strip()}
+        return {fields[1] for line in out.splitlines()
+                if len(fields := line.split("\t")) == 2 and fields[0] == "0" and fields[1]}
     except (OSError, subprocess.SubprocessError):
         return set()      # sem tmux/servidor: ninguém attachado, não é erro pro painel.
 

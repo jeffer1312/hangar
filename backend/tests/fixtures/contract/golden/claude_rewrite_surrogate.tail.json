@@ -1,0 +1,75 @@
+[
+ {
+  "offset": 0,
+  "event": {
+   "kind": "user_msg",
+   "id": "r-001",
+   "text": "antes",
+   "tool_name": null,
+   "tool_input": null,
+   "tool_use_id": null,
+   "result": null,
+   "is_error": null,
+   "ts": null,
+   "cache_read": null,
+   "cache_ttl_s": null,
+   "desistiu": null,
+   "hook_error": null,
+   "skill": null,
+   "orq": null,
+   "queued_delivered": null,
+   "queued_ts": null,
+   "queued_confirmed": null,
+   "image_count": null
+  }
+ },
+ {
+  "offset": 114,
+  "event": {
+   "kind": "assistant_msg",
+   "id": "r-002",
+   "text": "meio \ufffd emoji",
+   "tool_name": null,
+   "tool_input": null,
+   "tool_use_id": null,
+   "result": null,
+   "is_error": null,
+   "ts": 1788256801.0,
+   "cache_read": null,
+   "cache_ttl_s": null,
+   "desistiu": null,
+   "hook_error": null,
+   "skill": null,
+   "orq": null,
+   "queued_delivered": null,
+   "queued_ts": null,
+   "queued_confirmed": null,
+   "image_count": null
+  },
+  "python_error": "UnicodeEncodeError"
+ },
+ {
+  "offset": 275,
+  "event": {
+   "kind": "user_msg",
+   "id": "r-003",
+   "text": "depois",
+   "tool_name": null,
+   "tool_input": null,
+   "tool_use_id": null,
+   "result": null,
+   "is_error": null,
+   "ts": null,
+   "cache_read": null,
+   "cache_ttl_s": null,
+   "desistiu": null,
+   "hook_error": null,
+   "skill": null,
+   "orq": null,
+   "queued_delivered": null,
+   "queued_ts": null,
+   "queued_confirmed": null,
+   "image_count": null
+  }
+ }
+]

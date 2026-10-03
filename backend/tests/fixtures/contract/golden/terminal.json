@@ -1,0 +1,3042 @@
+[
+  {
+    "name": "pane_askuserquestion.txt",
+    "pane": "\n● Você já tá testando sem saber: você fala comigo pelo app dirigindo esta sessão (teus textos chegam via POST no pane). Então o teste é direto — eu disparo uma AskUserQuestion agora, nesta sessão que você\n  já está vendo:\n\n  - Se aparecer como botões no app → a feature já funciona (era só o 401). Toca a opção.\n  - Se NÃO aparecer (fica só o composer normal) → o classificador não pegou o formato dela. Aí você aperta o Stop (manda ESC, cancela o picker) ou me manda qualquer texto dizendo \"não apareceu\" — e eu\n  ajusto o parser (state.py) pra reconhecer.\n\n  Disparando o teste:\n\n● User answered Claude's questions:\n  ⎿  · TESTE — você está vendo isto como BOTÕES no app (não no terminal)? → nao vejo nd nem o input parecendo q ta tentando renderiza algo mas nao vejo nd\n\n● Importante: a AskUserQuestion não vira botões no app, mas o teu texto chegou (via free-text). Então: input passa, mas o classificador não extrai as opções dela. \"Tentando renderizar e nada\" = ele detecta\n  algo mas não acha o formato ❯ N..\n\n  Pra consertar o parser, preciso ver como ela renderiza no pane. Vou capturar em background enquanto disparo mais uma — você só digita qualquer coisa pra dispensar (não precisa acertar nada), que eu pego\n  o screenshot do pane e ajusto o state.py.\n\n  Ran 1 shell command\n\n● Captura rodando. Disparando o teste pra capturar o render — digita qualquer coisa pra dispensar:\n─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n ☐ Captura\n\nCaptura de formato — digita qualquer coisa pra dispensar (estou fotografando o pane).\n\n❯ 1. Opção Alpha\n     Opção de teste A — só pra render ter 2 itens.\n  2. Opção Bravo\n     Opção de teste B — ignora, digita qualquer coisa pra fechar.\n  3. Type something.\n─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n\n  6 tasks (5 done, 1 open)\n  ◻ P4.6: Verificação no aparelho\n  ✔ P4.1: RateChips.svelte (5h/7d)\n  ✔ P4.2: UsageSheet.svelte\n  ✔ P4.3: ConfirmSheet.svelte\n  ✔ P4.4: Spinner (renomeia ActivityBadge)\n   … +1 completed\n",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "Captura de formato — digita qualquer coisa pra dispensar (estou fotografando o pane).",
+      "options": [
+        "Opção Alpha",
+        "Opção Bravo",
+        "Type something.",
+        "Chat about this"
+      ],
+      "spinner": null,
+      "status_line": "  4. Chat about this\nEnter to select · ↑/↓ to navigate · Esc to cancel\n  6 tasks (5 done, 1 open)\n  ◻ P4.6: Verificação no aparelho\n  ✔ P4.1: RateChips.svelte (5h/7d)\n  ✔ P4.2: UsageSheet.svelte\n  ✔ P4.3: ConfirmSheet.svelte\n  ✔ P4.4: Spinner (renomeia ActivityBadge)\n   … +1 completed",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_auto_mode_dialog.txt",
+    "pane": " ▐▛███▛█   Claude Code v2.1.280\n\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Make auto mode your default permission mode?\n\n   Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and\n   blocks the rest.\n\n   ❯ Yes, set auto mode as my default permission mode\n     No, keep bypass permissions\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "Make auto mode your default permission mode?",
+      "options": [
+        "Yes, set auto mode as my default permission mode",
+        "No, keep bypass permissions"
+      ],
+      "spinner": null,
+      "status_line": " Make auto mode your default permission mode?\n   Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and\n   blocks the rest.\n   ❯ Yes, set auto mode as my default permission mode\n     No, keep bypass permissions",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_awaiting_input.txt",
+    "pane": "  ────────────────────────────────────────────────────────────────────────────────\n   Claude has written up a plan and is ready to execute. Would you like to proceed?\n\n   ❯ 1. Yes, and bypass permissions\n     2. Yes, manually approve edits\n     3. No, refine with Ultraplan on Claude Code on the web\n     4. Tell Claude what to change\n        shift+tab to approve with this feedback\n\n   ctrl+g to edit in  VS Code  · ~/.claude/plans/plano-de-uma-linha-effervescent-spark.md\n",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "Claude has written up a plan and is ready to execute. Would you like to proceed?",
+      "options": [
+        "Yes, and bypass permissions",
+        "Yes, manually approve edits",
+        "No, refine with Ultraplan on Claude Code on the web",
+        "Tell Claude what to change"
+      ],
+      "spinner": null,
+      "status_line": "   Claude has written up a plan and is ready to execute. Would you like to proceed?\n   ❯ 1. Yes, and bypass permissions\n     2. Yes, manually approve edits\n     3. No, refine with Ultraplan on Claude Code on the web\n     4. Tell Claude what to change\n        shift+tab to approve with this feedback\n   ctrl+g to edit in  VS Code  · ~/.claude/plans/plano-de-uma-linha-effervescent-spark.md",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_codex_hooks.txt",
+    "pane": "hangar-codex-tui: Hooks alterados: confira a aprovação dos hooks no Codex antes de usá-los.\nhangar-codex-tui: há itens aguardando sua confirmação de confiança no Codex\n\n  Hooks need review\n  29 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n\n› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n\n  Press enter to confirm or esc to go back\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  3. Continue without trusting (hooks won't run)\n  Press enter to confirm or esc to go back",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": {
+        "question": "Hooks can run outside the sandbox after you trust them.",
+        "options": [
+          "Review hooks",
+          "Trust all and continue",
+          "Continue without trusting (hooks won't run)"
+        ]
+      }
+    }
+  },
+  {
+    "name": "pane_codex_permissions.txt",
+    "pane": "╭──────────────────────────────────────────────────╮\n│ >_ OpenAI Codex (v0.153.4)                       │\n│                                                  │\n│ model:       gpt-5.6-luna max   /model to change │\n│ directory:   /tmp/claude-1000/…/scratchpad/probe │\n│ permissions: YOLO mode                           │\n╰──────────────────────────────────────────────────╯\n\n  Tip: New Use /fast to enable our fastest inference with increased plan usage.\n\n• You have 3 usage limit resets available. Run /usage to use one.\n\n\n  Update Model Permissions\n\n  1. Ask for approval       Codex can read and edit files in the current workspace, and run\n                            commands. Approval is required to access the internet or edit other\n                            files.\n  2. Approve for me         Only ask for actions detected as potentially unsafe.\n› 3. Full Access (current)  Codex can edit files outside this workspace and access the internet\n                            without asking for approval. Exercise caution when using.\n\n  Press enter to confirm or esc to go back\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  Tip: New Use /fast to enable our fastest inference with increased plan usage.\n• You have 3 usage limit resets available. Run /usage to use one.\n  Update Model Permissions\n  1. Ask for approval       Codex can read and edit files in the current workspace, and run\n                            commands. Approval is required to access the internet or edit other\n                            files.\n  2. Approve for me         Only ask for actions detected as potentially unsafe.\n› 3. Full Access (current)  Codex can edit files outside this workspace and access the internet\n                            without asking for approval. Exercise caution when using.\n  Press enter to confirm or esc to go back",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_codex_permissions_confirma.txt",
+    "pane": "╭──────────────────────────────────────────────────╮\n│ >_ OpenAI Codex (v0.153.4)                       │\n│                                                  │\n│ model:       gpt-5.6-luna max   /model to change │\n│ directory:   /tmp/claude-1000/…/scratchpad/probe │\n│ permissions: YOLO mode                           │\n╰──────────────────────────────────────────────────╯\n\n  Tip: New Use /fast to enable our fastest inference with increased plan usage.\n\n• You have 3 usage limit resets available. Run /usage to use one.\n\n\n  Enable full access?\n  When Codex runs with full access, it can edit any file on your computer and run commands with\n  network, without your approval. Exercise caution when enabling full access. This significantly\n  increases the risk of data loss, leaks, or unexpected behavior.\n\n› 1. Yes, continue anyway  Apply full access for this session\n  2. Cancel                Go back without enabling full access\n\n  Press enter to confirm or esc to go back\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  Tip: New Use /fast to enable our fastest inference with increased plan usage.\n• You have 3 usage limit resets available. Run /usage to use one.\n  Enable full access?\n  When Codex runs with full access, it can edit any file on your computer and run commands with\n  network, without your approval. Exercise caution when enabling full access. This significantly\n  increases the risk of data loss, leaks, or unexpected behavior.\n› 1. Yes, continue anyway  Apply full access for this session\n  2. Cancel                Go back without enabling full access\n  Press enter to confirm or esc to go back",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": {
+        "question": "increases the risk of data loss, leaks, or unexpected behavior.",
+        "options": [
+          "Yes, continue anyway  Apply full access for this session",
+          "Cancel                Go back without enabling full access"
+        ]
+      }
+    }
+  },
+  {
+    "name": "pane_codex_update.txt",
+    "pane": "hangar-codex-tui: preparando as instruções do Codex…\nhangar-codex-tui: verificando a integração do Codex…\nhangar-codex-tui: Hooks alterados: confira a aprovação dos hooks no Codex antes de usá-los.\nhangar-codex-tui: há itens aguardando sua confirmação de confiança no Codex\nhangar-codex-tui: subindo o app-server do Codex…\n  ✨ Update available! 0.153.4 -> 0.154.0\n  Release notes: https://github.com/openai/codex/releases/latest\n› 1. Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'`)\n  2. Skip\n  3. Skip until next version\n  Press enter to continue\n\n\n\n\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  3. Skip until next version\n  Press enter to continue",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": {
+        "question": "Release notes: https://github.com/openai/codex/releases/latest",
+        "options": [
+          "Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'`)",
+          "Skip",
+          "Skip until next version"
+        ]
+      }
+    }
+  },
+  {
+    "name": "pane_idle.txt",
+    "pane": "\n╭─── Claude Code v2.1.191 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n│                                                    │ Tips for getting started                                                                                           │\n│                    Welcome back!                   │ Run /init to create a CLAUDE.md file with instructions for Claude                                                  │\n│                                                    │ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │\n│                       ▐▛███▜▌                      │ What's new                                                                                                         │\n│                      ▝▜█████▛▘                     │ Added `/rewind` support for resuming a conversation from before `/clear` was run                                   │\n│                        ▘▘ ▝▝                       │ Fixed scroll position jumping to the bottom while reading earlier output during a streaming response               │\n│   Opus 4.8 (1M context) with hi… · Claude Max ·    │ Fixed background agents resurrecting after being stopped — stopping an agent from the tasks panel is now permanent │\n│   dev@example.com's Organization                   │ /release-notes for more                                                                                            │\n│              ~/Projetos/claude-pocket              │                                                                                                                    │\n╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ \n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  Opus 4.8 (1M context) ~high 📁 claude-pocket master ⊙6m ↑0↓0 │  🧠4.9G\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  Opus 4.8 (1M context) ~high 📁 claude-pocket master ⊙6m ↑0↓0 │  🧠4.9G\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_kimi_eco_e_dica.txt",
+    "pane": "\n ● Resposta curta: não, só parcialmente. Sou o Kimi Code CLI, não o Claude — então as configurações dele não vêm automaticamente. O que existe:\n\n   Skills que eu realmente tenho carregadas (escopo User, em ~/.agents/skills/):\n   • agent-browser, emil-design-eng, falar, find-skills, humanizer, impeccable\n\n   Skills suas em ~/.claude/skills/ que eu NÃO vejo (o Claude tem, eu não):\n   • conselho-5-agentes, design-sprint, graphify, handoff, hooked-ux, ios-hig-design, learned, orchestrating-idea-to-push, orquestrar, refactoring-ui, scout-fix, supply-chain-hardening, ux-heuristics\n\n   Hooks (~/.claude/hooks/): não tenho acesso — são específicos do Claude Code. O Kimi Code tem um sistema próprio de hooks configurável no config.toml, mas seus scripts (skill-suggester.py,\n   guard_tmux.py, etc.) não estão conectados a ele. Aliás, vejo que existe um sync-skills.sh lá — talvez seja justamente pra isso.\n\n   Se quiser, posso:\n   1. Ler o sync-skills.sh e ver se ele já faz a ponte ~/.claude/skills → ~/.agents/skills (e rodá-lo, se fizer sentido), ou\n   2. Criar symlinks das skills faltantes para o diretório que eu leio.\n\n   Qual prefere?\n\n ✨ onde ta esse sync-skills.sh?\n\n ● It's in ~/.claude/hooks/sync-skills.sh. Let me confirm path and maybe show it briefly.\n\n ● Ran a command\n   $ ls -la ~/.claude/hooks/sync-skills.sh && head -30 ~/.claude/hooks/sync-skills.sh\n   lrwxrwxrwx 1 jefferson jefferson 52 jul 15 11:55 /home/jefferson/.claude/hooks/sync-skills.sh -> /home/jefferson/Projetos/skills/hooks/sync-skills.sh\n   #!/usr/bin/env bash\n   # Pulls jeffer1312/skills repo and syncs symlinks into ~/.claude/skills/\n   ... (28 more lines, ctrl+o to expand)\n\n ● Está em ~/.claude/hooks/sync-skills.sh, que é um symlink para /home/jefferson/Projetos/skills/hooks/sync-skills.sh.\n\n   O que ele faz (pelo início do script):\n\n   • Faz git pull do repo ~/Projetos/skills (seu repo de skills, jeffer1312/skills)\n   • Cria symlinks de cada pasta com SKILL.md para ~/.claude/skills/\n   • Sincroniza scripts de hooks (*.sh, *.py) para ~/.claude/hooks/\n   • É disparado como hook SessionStart do Claude Code\n\n   Ou seja: ele sincroniza só para o Claude — nada aponta para ~/.agents/skills/ (onde eu leio skills). Por isso eu só vejo as 6 que já existem lá.\n\n   Se quiser que eu também enxergue as outras, dá pra estender o script com um segundo destino (~/.agents/skills/) ou só criar os symlinks manualmente agora. Quer que eu faça?\n\n ✨ sim\n\n  🌓 · Tip: Try /dance for a hidden Easter egg\n ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n │ >                                                                                                                                                                                                  │\n ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n 🤖 K3 │ 📁 projeto-exemplo [ABC-123] │ ⚡5h:25% ↺1h25m │ 📅7d:30% ↺seg 14h·5d22h │ 🕐 16:34\n                                                                                                                                                                                 context: 3% (23.5k/1M)\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": " 🤖 K3 │ 📁 projeto-exemplo [ABC-123] │ ⚡5h:25% ↺1h25m │ 📅7d:30% ↺seg 14h·5d22h │ 🕐 16:34\n                                                                                                                                                                                 context: 3% (23.5k/1M)",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Está em ~/.claude/hooks/sync-skills.sh, que é um symlink para /home/jefferson/Projetos/skills/hooks/sync-skills.sh.\n\n   O que ele faz (pelo início do script):\n\n   • Faz git pull do repo ~/Projetos/skills (seu repo de skills, jeffer1312/skills)\n   • Cria symlinks de cada pasta com SKILL.md para ~/.claude/skills/\n   • Sincroniza scripts de hooks (*.sh, *.py) para ~/.claude/hooks/\n   • É disparado como hook SessionStart do Claude Code\n\n   Ou seja: ele sincroniza só para o Claude — nada aponta para ~/.agents/skills/ (onde eu leio skills). Por isso eu só vejo as 6 que já existem lá.\n\n   Se quiser que eu também enxergue as outras, dá pra estender o script com um segundo destino (~/.agents/skills/) ou só criar os symlinks manualmente agora. Quer que eu faça?\n\n ✨ sim\n\n  🌓 · Tip: Try /dance for a hidden Easter egg\n ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n │ >                                                                                                                                                                                                  │\n ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n 🤖 K3 │ 📁 projeto-exemplo [ABC-123] │ ⚡5h:25% ↺1h25m │ 📅7d:30% ↺seg 14h·5d22h │ 🕐 16:34\n                                                                                                                                                                                 context: 3% (23.5k/1M)",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_limite_uso.txt",
+    "pane": "● Background command \"Ver se esse Chrome tem o bundle antigo (animação no path)\" was stopped because the\nsystem is running low on memory\n  ⎿  You've hit your session limit · resets 9:10pm (America/Sao_Paulo)\n     Continuing automatically at 9:10pm · esc to cancel\n     /usage-credits to continue now\n\n✻ Sautéed for 1s · done 19:58\n\n╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮\n│ ✻ Bug report drafted: Respostas ao usuário escritas dentro do bloco de thinking em vez de texto      │\n│ 1 to review · 2 to send · 0 to dismiss                                                               │\n╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\n\n───────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\n───────────────────────────────────────────────────────────────────────────────────────────────────────\n  ⚠ Usage limit reached · continuing automatically at 9:10pm · esc to cancel\n  ⚠ /usage-credits to continue now\n  🤖 Opus5·1M (high✦) │ 📁 hangar [main*] │ 📟 hangar-3 │ ⎈ k8s-dev │ 💬 263k/130 260k/1M │ 💵 $19.31 │ ⚡5h:100% ↺48m │ 📅7d:58% ↺seg 8h·1d11h │ 🕐 20:21 ⏱ 2h19m\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 3 agents · /diff to hide diff · 1 feedback draft\n",
+    "expected": {
+      "state": "working",
+      "label": "Sautéed for 1s · done 19:58",
+      "question": null,
+      "options": null,
+      "spinner": "✻ Sautéed for 1s · done 19:58",
+      "status_line": "  ⚠ Usage limit reached · continuing automatically at 9:10pm · esc to cancel\n  ⚠ /usage-credits to continue now\n  🤖 Opus5·1M (high✦) │ 📁 hangar [main*] │ 📟 hangar-3 │ ⎈ k8s-dev │ 💬 263k/130 260k/1M │ 💵 $19.31 │ ⚡5h:100% ↺48m │ 📅7d:58% ↺seg 8h·1d11h │ 🕐 20:21 ⏱ 2h19m\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 3 agents · /diff to hide diff · 1 feedback draft",
+      "overlay": false,
+      "login": false,
+      "limit_reset": "9:10pm",
+      "preview": "Background command \"Ver se esse Chrome tem o bundle antigo (animação no path)\" was stopped because the\nsystem is running low on memory",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_model_picker_fable.txt",
+    "pane": "   Select model\n   Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.\n\n     1. Default (recommended)  Opus 5 with 1M context · Best for everyday, complex tasks\n   ❯ 2. Opus (1M context) ✔    Opus 5 with 1M context · Best for everyday, complex tasks\n     3. Fable                  Fable 5 · Most capable for your hardest and longest-running tasks\n     4. Sonnet                 Sonnet 5 · Efficient for routine tasks\n     5. Haiku                  Haiku 4.5 · Fastest for quick answers\n\n   ● High effort (default) ←/→ to adjust\n\n   Enter to set as default · s to use this session only · Esc to cancel\n",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.",
+      "options": [
+        "Default (recommended)  Opus 5 with 1M context · Best for everyday, complex tasks",
+        "Opus (1M context) ✔",
+        "Fable",
+        "Sonnet",
+        "Haiku"
+      ],
+      "spinner": null,
+      "status_line": "   ● High effort (default) ←/→ to adjust\n   Enter to set as default · s to use this session only · Esc to cancel",
+      "overlay": true,
+      "login": false,
+      "limit_reset": null,
+      "preview": "High effort (default) ←/→ to adjust\n\n   Enter to set as default · s to use this session only · Esc to cancel",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_model_picker_haiku.txt",
+    "pane": "\n❯ /model\n  ⎿  Kept model as Opus 4.8\n\n❯ /model\n  ⎿  Set model to Sonnet 4.6 and saved as your default for new sessions\n▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\n   Select model\n   Switch between Claude models. Your pick becomes the default for new sessions. For\n   other/previous model names, specify with --model.\n\n     1. Default (recommended)  Opus 4.8 with 1M context · Best for everyday, complex tasks\n     2. Opus ✔                 Opus 4.8 with 1M context · Best for everyday, complex tasks\n     3. Sonnet                 Sonnet 4.6 · Efficient for routine tasks\n   ❯ 4. Haiku                  Haiku 4.5 · Fastest for quick answers\n\n   ○ Effort not supported for Haiku\n\n   Enter to set as default · s to use this session only · Esc to cancel\n",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "other/previous model names, specify with --model.",
+      "options": [
+        "Default (recommended)  Opus 4.8 with 1M context · Best for everyday, complex tasks",
+        "Opus ✔",
+        "Sonnet",
+        "Haiku"
+      ],
+      "spinner": null,
+      "status_line": "   ○ Effort not supported for Haiku\n   Enter to set as default · s to use this session only · Esc to cancel",
+      "overlay": true,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_model_picker_opus.txt",
+    "pane": "\n❯ /model\n  ⎿  Kept model as Opus 4.8\n\n❯ /model\n  ⎿  Set model to Sonnet 4.6 and saved as your default for new sessions\n▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\n   Select model\n   Switch between Claude models. Your pick becomes the default for new sessions. For\n   other/previous model names, specify with --model.\n\n     1. Default (recommended)  Opus 4.8 with 1M context · Best for everyday, complex tasks\n   ❯ 2. Opus ✔                 Opus 4.8 with 1M context · Best for everyday, complex tasks\n     3. Sonnet                 Sonnet 4.6 · Efficient for routine tasks\n   ↓ 4. Haiku                  Haiku 4.5 · Fastest for quick answers\n\n   ◉ xHigh effort ←/→ to adjust\n\n   Enter to set as default · s to use this session only · Esc to cancel\n",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "other/previous model names, specify with --model.",
+      "options": [
+        "Default (recommended)  Opus 4.8 with 1M context · Best for everyday, complex tasks",
+        "Opus ✔",
+        "Sonnet"
+      ],
+      "spinner": null,
+      "status_line": "   ◉ xHigh effort ←/→ to adjust\n   Enter to set as default · s to use this session only · Esc to cancel",
+      "overlay": true,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_omp_ask_picker.txt",
+    "pane": "\n Connected to MCP servers: chrome-devtools, node_repl.\n\n\n Use a ferramenta ask para me perguntar qual cor prefiro, com as opcoes Azul e Verde. So isso.\n\n\nAsk tool was cancelled by the user\n\n\n Respondendo à pergunta: Verde\n\n\n User answered Verde and cancelled ask. Just acknowledge briefly.\n\n Preferência registrada: Verde.\n\n\n De novo: use a ferramenta ask para perguntar qual cor prefiro, opcoes Azul e Verde.\n\n\n╭─── Ask 1 questions ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n├─── [cor] · options:2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n│  Qual cor você prefere?                                                                                                                                      │\n│   Azul                                                                                                                                                      │\n│    ↳ Tons de azul                                                                                                                                            │\n│   Verde                                                                                                                                                     │\n│    ↳ Tons de verde                                                                                                                                           │\n╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\n  󱊷 Perguntando cor preferida\n\n╭─ Ask ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n│ Qual cor você prefere?                                                                                                                                       │\n├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n│    Azul                                                                                                                                                     │\n│       Tons de azul                                                                                                                                           │\n│   Verde (Recommended)                                                                                                                                      │\n│       Tons de verde                                                                                                                                          │\n│    Other (type your own)                                                                                                                                    │\n│                                                                                                                                                              │\n├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n│ Enter select · n note · ↑/↓ move · Esc cancel                                                                                                                │\n╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n ⠏ 11s  · 󰪟 DeepSeek V4 Flash ·  …-8f05-f53ea5d4b4da/scratchpad/omp-teste ·  4.5%/1M 󰁨 · $0.00\n",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "Qual cor você prefere?",
+      "options": [
+        "Azul",
+        "Verde (Recommended)",
+        "Other (type your own)"
+      ],
+      "spinner": null,
+      "status_line": " ⠏ 11s  · 󰪟 DeepSeek V4 Flash ·  …-8f05-f53ea5d4b4da/scratchpad/omp-teste ·  4.5%/1M 󰁨 · $0.00",
+      "overlay": true,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_pi_idle.txt",
+    "pane": "   ◉ leia <arquivo> ou read <arquivo> — ler conteúdo de arquivos\n   ◉ edite <arquivo> ou edit <arquivo> — alterar código\n   ◉ escreva <arquivo> ou write <arquivo> — criar novos arquivos\n   ◉ grep <padrão> / find <padrão> — buscar no projeto\n\n   Execução\n   ◉ execute <comando> ou bash <comando> — rodar comandos no terminal\n   ◉ npm run, python, git, etc. funcionam diretamente\n\n   Pesquisa\n   ◉ web_search <pergunta> ou pesquise <pergunta> — buscar na web\n   ◉ fetch_content <url> — extrair conteúdo de páginas\n   ◉ source_check <afirmação> — verificar uma afirmação com fontes\n\n   Subagentes e skills\n   ◉ skill <nome> ou mencione uma tarefa qualificada para ativar uma skill especializada (ex: UI, segurança, produto)\n   ◉ subagent <agente> <tarefa> — delegar trabalho para agentes especializados\n\n   Outros\n   ◉ /clear — limpar contexto da conversa\n   ◉ /help — mostrar esta ajuda\n\n   Como posso te ajudar agora?\n\n   ✻ Turn took 13s (Total time 13s · 1 turn)\n\n╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n\n╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n🤖 kimi-for-coding (high) │ 📁 pisandbox │ 📟 cp-probe-pi │ 💬 sessão 135in/470out · cache 12k · total 13k ctx 13k/26...\n",
+    "expected": {
+      "state": "working",
+      "label": "Turn took 13s (Total time 13s · 1 turn)",
+      "question": null,
+      "options": null,
+      "spinner": "✻ Turn took 13s (Total time 13s · 1 turn)",
+      "status_line": "🤖 kimi-for-coding (high) │ 📁 pisandbox │ 📟 cp-probe-pi │ 💬 sessão 135in/470out · cache 12k · total 13k ctx 13k/26...",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_pi_working.txt",
+    "pane": "\n   Na teoria são complementares, mas na prática dois pacotes que mexem na interface do pi podem sim\n   pisar um no outro. A documentação pode estar otimista.\n\n   A única forma de ter certeza é testar. Se você acha que são concorrentes, acho justo remover os\n   dois e instalar de um em um:\n\n   ╭· bash ······················································································ ╮\n   │   pi remove npm:pi-claude-code-tui                                                           │\n   │   pi remove npm:pi-claude-code-ui                                                            │\n   ╰······························································································╯\n\n   Reinicia o pi. Aí instala só um deles:\n\n   ╭· bash ······················································································ ╮\n   │   pi install npm:pi-claude-code-tui                                                          │\n   ╰······························································································╯\n\n   Testa. Se ainda não resolver, remove e instala só o outro:\n\n   ╭· bash ······················································································ ╮\n   │   pi remove npm:pi-claude-code-tui                                                           │\n   │   pi install npm:pi-claude-code-ui                                                           │\n   ╰······························································································╯\n\n   Quer fazer esse teste? Posso te acompanhar nos comandos.\n\n   ✻ Turn took 17s (Total time 18m 5s · 10 turns)\n\n›  eu nao consigo copiar do conteudo do pi?\n\n   Thought for 3s\n\n ● Tem sim, algumas formas:\n\n   Copiar a última resposta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho: Ctrl+X\n\n   Copiar uma mensagem antiga específica:\n\n╭─────────────────────────────────────────────────────────────────────────────────────────────────╮\n\n╰─────────────────────────────────────────────────────────────────────────────────────────────────╯\n🤖 kimi-for-coding (high) │ 📁 jefferson │ 📟 jefferson-2 │ 💬 sessão 44kin/16kout · cache 1.1M ...",
+    "expected": {
+      "state": "working",
+      "label": "Turn took 17s (Total time 18m 5s · 10 turns)",
+      "question": null,
+      "options": null,
+      "spinner": "✻ Turn took 17s (Total time 18m 5s · 10 turns)",
+      "status_line": "🤖 kimi-for-coding (high) │ 📁 jefferson │ 📟 jefferson-2 │ 💬 sessão 44kin/16kout · cache 1.1M ...",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Tem sim, algumas formas:\n\n   Copiar a última resposta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho: Ctrl+X\n\n   Copiar uma mensagem antiga específica:\n\n╭─────────────────────────────────────────────────────────────────────────────────────────────────╮\n\n╰─────────────────────────────────────────────────────────────────────────────────────────────────╯\n🤖 kimi-for-coding (high) │ 📁 jefferson │ 📟 jefferson-2 │ 💬 sessão 44kin/16kout · cache 1.1M ...",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_quoted_menu_scrollback.txt",
+    "pane": "\n● Manual funciona: High→xHigh, picker fica aberto. Vou confirmar com s e ver linha de resultado.\n\n  Ran 1 shell command\n\n● Root cause achado. Confirmar effort dispara dialog de follow-up que o pocket não trata:\n\n  This conversation is cached for the current effort level. Switching to xhigh means\n  the full history gets re-read on your next message.\n  ❯ 1. Yes, switch to xhigh\n    2. No, go back\n\n  Picker fecha, mas esse menu numerado fica bloqueando. Driver só procura \"Set model to\" / picker_open → não acha → retorna sem aplicar, sessão presa. E o menu nativo não aparece no celular → \"dá\n  erro\". Vou cancelar (No) pra restaurar effort do user.\n\n  Ran 1 shell command\n\n● \"No\" voltou pro picker com effort em High. Vou Esc pra fechar limpo.\n\n  Ran 1 shell command\n\n● Restaurado (high✦, composer limpo). Agora o fix. Ver resto do driver.\n\n  Read 1 file\n\n● Plano de fix claro. Vou adicionar detector do dialog de follow-up + confirmar com Enter no driver. Ver testes existentes do picker.\n\n  Searched for 1 pattern, listed 1 directory, ran 1 shell command\n  ⎿  Interrupted · What should Claude do instead?\n\n❯ Não consigo mudar o effort pelo pocket, tentei inúmeras vezes agr na sessão do my-org , mas ele dá erro,\n\n● Já diagnostiquei. Root cause:\n\n  Trocar effort dispara um dialog de confirmação que o pocket não trata. Quando o novo effort invalida o cache da conversa, o Claude Code mostra:\n  ❯ 1. Yes, switch to xhigh\n    2. No, go back\n  O picker fecha, mas esse menu numerado fica bloqueando. O driver (set_model_effort) só procura \"Set model to\" / picker aberto → não acha → retorna sem aplicar e deixa a sessão presa nesse menu. E\n  menu nativo não renderiza no celular → \"dá erro\". (Trocar só o modelo às vezes não dispara, por isso effort falha mais.)\n\n  Vou corrigir: detectar o dialog e confirmar com Enter (cursor já em \"Yes\").\n\n  Read 1 file\n  ⎿  Interrupted · What should Claude do instead?\n\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ \n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  🤖 Opus4.8·1M (high✦) │ 📁 claude-pocket [main] │ ⎈ k8s-dev │ 💬 82k/613 80k/1M │ 💵 $1.77 │ ⚡5h:3% ↺4h21m │ 📅7d:39% ↺sab 18h·4d11h │ 🕐 06:38 ⏱ 6m\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  🤖 Opus4.8·1M (high✦) │ 📁 claude-pocket [main] │ ⎈ k8s-dev │ 💬 82k/613 80k/1M │ 💵 $1.77 │ ⚡5h:3% ↺4h21m │ 📅7d:39% ↺sab 18h·4d11h │ 🕐 06:38 ⏱ 6m\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_thinking.txt",
+    "pane": "❯ diga apenas a palavra PONG, nada mais\n\n\n✽ Elucidating…\n\n────────────────────────────────────────────────────────────────────────────────\n❯\n────────────────────────────────────────────────────────────────────────────────\n  Opus 4.8 (1M context) ~high 📁 claude-pocket master ⊙6m ↑0↓0 │  🧠4.9G\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n",
+    "expected": {
+      "state": "working",
+      "label": "Elucidating…",
+      "question": null,
+      "options": null,
+      "spinner": "✽ Elucidating…",
+      "status_line": "  Opus 4.8 (1M context) ~high 📁 claude-pocket master ⊙6m ↑0↓0 │  🧠4.9G\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "pane_trust_dialog.txt",
+    "pane": "\n────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /var/tmp/hg-trust-probe-fix\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a\n well-known open source project, or work from your team). If not, take a moment to review what's in\n this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "Accessing workspace:",
+      "options": [
+        "No, exit",
+        "Yes, I trust this folder"
+      ],
+      "spinner": null,
+      "status_line": " Accessing workspace:\n /var/tmp/hg-trust-probe-fix\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a\n well-known open source project, or work from your team). If not, take a moment to review what's in\n this folder first.\n Claude Code'll be able to read, edit, and execute files here.\n Security guide\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel",
+      "overlay": true,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "empty",
+    "pane": "",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": null,
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "prose_utf8",
+    "pane": "❯ teste\n● Olá, ação 🐍\n  continuação 漢字\n────────────\n❯\n────────────\nmodelo truncado",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "modelo truncado",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Olá, ação 🐍\n  continuação 漢字",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "tools_keep_prose",
+    "pane": "● Resposta\n  texto\n● Bash(ls)\n⎿ output\n● Reading 4 files…\n✻ Thinking…",
+    "expected": {
+      "state": "working",
+      "label": "Thinking…",
+      "question": null,
+      "options": null,
+      "spinner": "✻ Thinking…",
+      "status_line": "● Reading 4 files…\n✻ Thinking…",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta\n  texto",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "plugin_reset",
+    "pane": "❯ teste\n● Resposta anterior\n● ecc: hooks.json: unknown keys\n────────────",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": null,
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "banner",
+    "pane": "Claude Code v2\n● aviso\n────────────",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": null,
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "subagent",
+    "pane": "● Resposta\n  continuação\n● Subagent reviewer\n\n └ conferindo\n────────────",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": null,
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta\n  continuação",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "agent_finished",
+    "pane": "● Resposta\n● Agent \"reviewer\" finished · 9s\nSearched, ran 2 shell commands",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "● Agent \"reviewer\" finished · 9s\nSearched, ran 2 shell commands",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "mcp",
+    "pane": "● Resposta\nCalling chrome-devtools…\nfora",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "Calling chrome-devtools…\nfora",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "mcp_prose",
+    "pane": "● Calling this an edge case, veja.\n  continuação",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "● Calling this an edge case, veja.\n  continuação",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Calling this an edge case, veja.\n  continuação",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "activity",
+    "pane": "● Resposta\n  resumo ran 2 shell commands\nfora",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  resumo ran 2 shell commands\nfora",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "ascii_spinner",
+    "pane": "● Resposta\n* Thinking…\nfora",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "* Thinking…\nfora",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "todo",
+    "pane": "● Resposta\n○ Todos (1/2)\nfora",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "○ Todos (1/2)\nfora",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "draft",
+    "pane": "✻ Worked for 1s\n────────────\n❯ 1. pode editar 2. mostre a data\n────────────",
+    "expected": {
+      "state": "working",
+      "label": "Worked for 1s",
+      "question": null,
+      "options": null,
+      "spinner": "✻ Worked for 1s",
+      "status_line": null,
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "preview_numbered",
+    "pane": "☐ Escolha\nQual?\n❯ 1. ação 🐍          ┌───────────\n  2. outra             │ 1. exemplo 2. segundo\nEnter to select",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "Qual?",
+      "options": [
+        "ação 🐍",
+        "outra"
+      ],
+      "spinner": null,
+      "status_line": "  2. outra             │ 1. exemplo 2. segundo\nEnter to select",
+      "overlay": true,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "login",
+    "pane": "Choose the text style\n\n\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "Choose the text style",
+      "overlay": false,
+      "login": true,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "quoted_login",
+    "pane": "● /oauth/authorize\n────────────\n❯\n────────────\n⏵⏵ bypass",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "⏵⏵ bypass",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "/oauth/authorize",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "overlay_padded",
+    "pane": "painel\nEsc to cancel\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "painel\nEsc to cancel",
+      "overlay": true,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "overlay_old",
+    "pane": "Esc to cancel\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "texto\ntexto",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "limit_old",
+    "pane": "Usage limit reached resets 9:10pm\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\ntexto\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "texto\ntexto",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "codex_wrap",
+    "pane": "Aprovar?\n› 1. Opção ação\n     continua 🐍\n  2. Outra\nPress enter to confirm\n\n",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  2. Outra\nPress enter to confirm",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": {
+        "question": "Aprovar?",
+        "options": [
+          "Opção ação continua 🐍",
+          "Outra"
+        ]
+      }
+    }
+  },
+  {
+    "name": "codex_invalid",
+    "pane": "Aprovar?\n› 1. Um\n  3. Três\nPress enter to confirm",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  3. Três\nPress enter to confirm",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "subagent_prose",
+    "pane": "● Subagent reviewer pode ajudar\n  explique",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "● Subagent reviewer pode ajudar\n  explique",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Subagent reviewer pode ajudar\n  explique",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "prose_box",
+    "pane": "● Texto\n╭────────╮\n│ exemplo │\n╰────────╯",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": null,
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Texto\n╭────────╮\n│ exemplo │\n╰────────╯",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "unicode_columns",
+    "pane": "Título\n  ❯ Sim 🐍\n    Não 漢字\nEsc to cancel",
+    "expected": {
+      "state": "awaiting_input",
+      "label": null,
+      "question": "Título",
+      "options": [
+        "Sim 🐍",
+        "Não 漢字"
+      ],
+      "spinner": null,
+      "status_line": "    Não 漢字\nEsc to cancel",
+      "overlay": true,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "unicode_numbering",
+    "pane": "Aprovar?\n› ١. Um\n  ٢. Dois\nPress enter to confirm",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  ٢. Dois\nPress enter to confirm",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": {
+        "question": "Aprovar?",
+        "options": [
+          "Um",
+          "Dois"
+        ]
+      }
+    }
+  },
+  {
+    "name": "unicode_word_boundary",
+    "pane": "● Runninǵ palavras\n  continuação",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "● Runninǵ palavras\n  continuação",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "unicode_plugin_word",
+    "pane": "● ecć: hooks.json: unknown keys\n  continuação",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "● ecć: hooks.json: unknown keys\n  continuação",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "ecć: hooks.json: unknown keys\n  continuação",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "combining_running",
+    "pane": "● Runningͅ palavras\n  continuação",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "● Runningͅ palavras\n  continuação",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "combining_calling",
+    "pane": "● Callingְ serviço…\n  continuação",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "● Callingְ serviço…\n  continuação",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "combining_finished",
+    "pane": "● Resposta\n● Agent \"worker\" finishedͅ\n  atividade",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "● Agent \"worker\" finishedͅ\n  atividade",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "combining_summary",
+    "pane": "● Resposta\n  ְran 2 shell commands\n  fora",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "  ְran 2 shell commands\n  fora",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "Resposta",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "login_dotless",
+    "pane": "Select logın method",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "Select logın method",
+      "overlay": false,
+      "login": true,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "login_dotted",
+    "pane": "Select logİn method",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "Select logİn method",
+      "overlay": false,
+      "login": true,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "limit_dotless",
+    "pane": "Usage lımıt reached · continuing automatically at 9:10pm",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "Usage lımıt reached · continuing automatically at 9:10pm",
+      "overlay": false,
+      "login": false,
+      "limit_reset": "9:10pm",
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "limit_dotted",
+    "pane": "Usage lİmİt reached · contİnuİng automatİcally at 9:10pm",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "Usage lİmİt reached · contİnuİng automatİcally at 9:10pm",
+      "overlay": false,
+      "login": false,
+      "limit_reset": "9:10pm",
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "login_long_s",
+    "pane": "ſelect login method",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "ſelect login method",
+      "overlay": false,
+      "login": true,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "login_ordinary",
+    "pane": "Select LOGIN method",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "Select LOGIN method",
+      "overlay": false,
+      "login": true,
+      "limit_reset": null,
+      "preview": "",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "information_whitespace",
+    "pane": "● texto\n\u001f\u001f\n────────────\n\u001f",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": null,
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "texto",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "line_separators",
+    "pane": "● texto\rcontinuação\u000blinha\fquadro\u001cregistro\u001dgrupo\u001earquivopróxima separador parágrafo",
+    "expected": {
+      "state": "idle",
+      "label": null,
+      "question": null,
+      "options": null,
+      "spinner": null,
+      "status_line": "separador\nparágrafo",
+      "overlay": false,
+      "login": false,
+      "limit_reset": null,
+      "preview": "texto\ncontinuação\nlinha\nquadro\nregistro\ngrupo\narquivo\npróxima\nseparador\nparágrafo",
+      "codex_menu": null
+    }
+  },
+  {
+    "name": "frozen_four",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 1,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 2,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "idle",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 3,
+          "no_spinner": 0,
+          "held_state": "idle",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "missing_four",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {}
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 1,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 2,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 3,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "idle",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 4,
+          "held_state": "idle",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "hook_grace_eight",
+    "sequence": [
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working"
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 1,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 2,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 3,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 4,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 5,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 6,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 7,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "idle",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 8,
+          "held_state": "idle",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "idle",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 9,
+          "held_state": "idle",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "idle",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 10,
+          "held_state": "idle",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "hook_no_grace",
+    "sequence": [
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "working",
+          "hook_grace": null
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 1,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 2,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 3,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 4,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 5,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 6,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 7,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 8,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 9,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 10,
+          "held_state": "working",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "menu_immediate",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "☐ Escolha\nQual?\n❯ 1. ação 🐍          ┌───────────\n  2. outra             │ 1. exemplo 2. segundo\nEnter to select",
+        "facts": {
+          "plugin_state": "working",
+          "hook_state": "working"
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "awaiting_input",
+          "label": null,
+          "question": "Qual?",
+          "options": [
+            "ação 🐍",
+            "outra"
+          ],
+          "spinner": null,
+          "status_line": "  2. outra             │ 1. exemplo 2. segundo\nEnter to select",
+          "overlay": true,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "awaiting_input",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "plugin_idle_animation",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "✽ Thinking…\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle"
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✽ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✽ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      }
+    ]
+  },
+  {
+    "name": "hook_idle_animation",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "✽ Thinking…\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "idle"
+        }
+      },
+      {
+        "pane": "✽ Thinking…\n────────────\n❯\n────────────",
+        "facts": {
+          "hook_state": "idle"
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✽ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✽ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "idle",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": "✽ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✽ Thinking…",
+          "frozen": 1,
+          "no_spinner": 0,
+          "held_state": "idle",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "plugin_then_hook",
+    "sequence": [
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "idle",
+          "hook_state": "working"
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "plugin_working_resets",
+    "sequence": [
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      },
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_state": "working"
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "statusline_truthy",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {
+          "status_line": "modelo inteiro 🐍"
+        }
+      },
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {
+          "status_line": ""
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": "modelo inteiro 🐍",
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 1,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      }
+    ]
+  },
+  {
+    "name": "offscreen_question",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {
+          "open_question": {
+            "question": "Qual?",
+            "options": [
+              "Um",
+              "Dois"
+            ]
+          }
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "awaiting_input",
+          "label": null,
+          "question": "Qual?",
+          "options": [
+            "Um",
+            "Dois"
+          ],
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "awaiting_input",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "pane_question_wins",
+    "sequence": [
+      {
+        "pane": "☐ Escolha\nQual?\n❯ 1. ação 🐍          ┌───────────\n  2. outra             │ 1. exemplo 2. segundo\nEnter to select",
+        "facts": {
+          "open_question": {
+            "question": "Outro?",
+            "options": [
+              "X",
+              "Y"
+            ]
+          },
+          "plugin_question": {
+            "id": "perm:a",
+            "tool": "Bash",
+            "resumo": "ls"
+          }
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "awaiting_input",
+          "label": null,
+          "question": "Qual?",
+          "options": [
+            "ação 🐍",
+            "outra"
+          ],
+          "spinner": null,
+          "status_line": "  2. outra             │ 1. exemplo 2. segundo\nEnter to select",
+          "overlay": true,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "awaiting_input",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "plugin_permission",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_question": {
+            "id": "perm:a",
+            "tool": "Bash",
+            "resumo": "ls"
+          }
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "awaiting_input",
+          "label": null,
+          "question": "Bash: ls",
+          "options": [
+            "Yes",
+            "No"
+          ],
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "awaiting_input",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "plugin_question",
+    "sequence": [
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_question": {
+            "id": "q",
+            "questions": [
+              {
+                "question": "Qual?",
+                "options": [
+                  {
+                    "label": "Um"
+                  },
+                  {
+                    "label": "Dois"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "awaiting_input",
+          "label": null,
+          "question": "Qual?",
+          "options": [
+            "Um",
+            "Dois"
+          ],
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "awaiting_input",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "plugin_empty_question",
+    "sequence": [
+      {
+        "pane": "● Resposta\n────────────\n❯\n────────────",
+        "facts": {
+          "plugin_question": {
+            "id": "q",
+            "questions": []
+          }
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "idle",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": null,
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "Resposta",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": null,
+          "frozen": 0,
+          "no_spinner": 1,
+          "held_state": "idle",
+          "held_label": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "non_animated_change",
+    "sequence": [
+      {
+        "pane": "✻ Thinking…\n────────────\n❯\n────────────",
+        "facts": {}
+      },
+      {
+        "pane": "✽ Worked for 3s",
+        "facts": {
+          "hook_state": "idle"
+        }
+      }
+    ],
+    "expected_sequence": [
+      {
+        "analysis": {
+          "state": "working",
+          "label": "Thinking…",
+          "question": null,
+          "options": null,
+          "spinner": "✻ Thinking…",
+          "status_line": null,
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✻ Thinking…",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "working",
+          "held_label": "Thinking…"
+        }
+      },
+      {
+        "analysis": {
+          "state": "idle",
+          "label": null,
+          "question": null,
+          "options": null,
+          "spinner": "✽ Worked for 3s",
+          "status_line": "✽ Worked for 3s",
+          "overlay": false,
+          "login": false,
+          "limit_reset": null,
+          "preview": "",
+          "codex_menu": null
+        },
+        "memory": {
+          "prev_spinner": "✽ Worked for 3s",
+          "frozen": 0,
+          "no_spinner": 0,
+          "held_state": "idle",
+          "held_label": null
+        }
+      }
+    ]
+  }
+]

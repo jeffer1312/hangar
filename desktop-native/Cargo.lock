@@ -3517,6 +3517,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hangar-native"
 version = "0.1.0"
 dependencies = [
@@ -3530,6 +3538,7 @@ dependencies = [
  "futures",
  "gpui-kit",
  "gpui-pre-wgpu",
+ "hangar-api",
  "image",
  "libc",
  "notify",

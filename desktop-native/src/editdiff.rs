@@ -165,7 +165,7 @@ pub fn of(call: &ChatEvent) -> Option<Rc<[Edit]>> {
         let mut cache = cache.borrow_mut();
         if let Some(found) = cache.get(&call.id) { return found.clone(); }
         if cache.len() >= 512 { cache.clear(); }
-        let found: Option<Rc<[Edit]>> = edits(call.tool_name.as_deref(), call.tool_input.as_ref()).map(Into::into);
+        let found: Option<Rc<[Edit]>> = edits(call.tool_name.as_deref(), call.tool_input.clone().map(Value::Object).as_ref()).map(Into::into);
         cache.insert(call.id.clone(), found.clone());
         found
     })

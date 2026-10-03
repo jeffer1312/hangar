@@ -1,0 +1,14 @@
+{"id": "q-absorvida", "text": "ok", "ts": 1788256818.5, "delivered": true}
+{"id": "q-segundo-ok", "text": "ok", "ts": 1788256819.5, "delivered": true}
+{"id": "q-legenda", "text": "legenda da foto — 📎 imagem: /tmp/foto.png", "ts": 1788256822.9, "delivered": true}
+{"id": "q-confirmada", "text": "já confirmada", "ts": 1788256805.0, "delivered": true, "confirmed": true}
+{"id": "q-local", "text": "Saída do /cost", "ts": 1788256806.5, "delivered": true, "confirmed": true, "papel": "assistant"}
+{"id": "q-velha", "text": "de outra vida", "ts": 1788253200.0, "delivered": true}
+{"id": "q-bastao", "text": "kick-off do bastão", "ts": 1788256200.0, "delivered": false, "pre_transcript": true}
+{"id": "q-desistiu", "text": "não chegou", "ts": 1788256809.0, "delivered": true, "desistiu": true, "desistiu_ts": 1788256820.0}
+{"id": "q-sem-ts", "text": "sem relógio", "delivered": false}
+{"id": "q-vazia", "text": "   ", "ts": 1788256810.0}
+não é json {
+{"id": "q-quebrada", "text": "antes depois", "ts": 1788256812.0, "delivered": false}
+{"id": 42, "text": "id numérico", "ts": 1788256812.0, "delivered": "sim"}
+{"id": "q-pendente", "text": "ainda na fila", "ts": 1788256824.1, "delivered": false}

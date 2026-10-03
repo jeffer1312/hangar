@@ -26,7 +26,7 @@ from sse_starlette.sse import EventSourceResponse
 from app import (agentes_sync, atomico, atualizacoes, atualizar, btw, diag, harness_api,
                  loop_monitor, pensamento_pt, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
-from app import external_pair_api, external_pairs, update_channel
+from app import external_pair_api, external_pairs, internal_api, update_channel
 from app.auth import require_auth, require_loopback
 from app.send_executor import send_thread as _send_thread
 from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
@@ -636,6 +636,7 @@ app.include_router(config_sync_api.config_sync_router)
 app.include_router(share_api.router)
 app.include_router(share_guest_api.router)
 app.include_router(external_pair_api.router)
+app.include_router(internal_api.router)
 registry = SessionRegistry()
 registry_mod.apos_saida_codex = _codex_lease_released
 registry_mod.apos_renomear_codex = _codex_lease_renamed

@@ -1,8 +1,13 @@
+# backend/tests/test_claude_headless_cano.py
 """Cano da sessão sem terminal: o processo sobrevive ao cliente e o snapshot diz o que está em
 aberto. O `claude` é um script falso que fala stream-json: responde initialize, e a cada prompt
-pede uma permissão e só fecha o turno quando ela é respondida."""
+pede uma permissão e só fecha o turno quando ela é respondida.
+
+Cada teste que sobe um cano roda duas vezes: contra o `cano.py` e contra o `hangar-cano` (Rust).
+"""
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -11,6 +16,9 @@ import uuid
 from pathlib import Path
 
 import pytest
+
+from app import rust_bins
+from app.adapters.claude_headless import cano as cano_mod
 
 CANO = Path(__file__).resolve().parents[1] / "app" / "adapters" / "claude_headless" / "cano.py"
 
@@ -42,15 +50,27 @@ sys.stderr.write("tchau\n")
 '''
 
 
+@pytest.fixture(params=["cano.py", "hangar-cano"])
+def cano_cmd(request) -> list[str]:
+    """Lançador do cano. Os mesmos testes provam as duas implementações do mesmo contrato."""
+    if request.param == "cano.py":
+        return [sys.executable, str(CANO)]
+    exe = rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN")
+    if exe is None:
+        pytest.skip("hangar-cano não compilado: rode `cargo build --release -p hangar-cano` em crates/ "
+                    "ou aponte CP_RUST_CANO_BIN para o binário")
+    return [str(exe)]
+
+
 @pytest.fixture
-def cano(tmp_path):
+def cano(tmp_path, cano_cmd):
     if os.name == "nt":
         pytest.skip("socket unix")
     falso = tmp_path / "claude_falso.py"
     falso.write_text(_CLAUDE_FALSO, encoding="utf-8")
     sock = tmp_path / "c.sock"
     log = tmp_path / "cano.log"
-    p = subprocess.Popen([sys.executable, str(CANO), "--escuta", f"unix:{sock}", "--log", str(log),
+    p = subprocess.Popen([*cano_cmd, "--escuta", f"unix:{sock}", "--log", str(log),
                           "--cwd", str(tmp_path), "--", sys.executable, str(falso)],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(100):
@@ -86,6 +106,19 @@ class _Cliente:
     def fecha(self) -> None:
         self.arq.close()   # o makefile segura o socket: só o close dele entrega o EOF ao cano
         self.s.close()
+
+
+def test_snapshot_tem_os_campos_e_a_versao_do_cano_py(cano):
+    # O adapter compara `versao` com `cano_mod.VERSAO` para decidir se reabre: as duas
+    # implementações precisam falar a mesma.
+    sock, proc, log = cano
+    a = _Cliente(sock)
+    snap = a.le()
+    assert set(snap) == {"type", "versao", "pid", "init", "aberto", "pendentes", "ultimo_result",
+                         "rate_limit", "stderr_tail", "saiu"}
+    assert snap["versao"] == cano_mod.VERSAO and isinstance(snap["pid"], int)
+    assert snap["pendentes"] == [] and snap["stderr_tail"] == [] and snap["saiu"] is None
+    a.fecha()
 
 
 def test_snapshot_reconstroi_turno_aberto_e_permissao_pendente(cano):
@@ -173,6 +206,39 @@ def test_saida_do_claude_sem_cliente_fica_no_snapshot(cano):
     proc.wait(timeout=5)
 
 
+def test_sigterm_encerra_o_filho_e_limpa_o_socket(cano):
+    if not Path("/proc").exists():
+        pytest.skip("confere o filho pelo /proc")
+    sock, proc, log = cano
+    a = _Cliente(sock)
+    filho = a.le()["pid"]
+    a.fecha()
+    proc.send_signal(signal.SIGTERM)
+    assert proc.wait(timeout=5) == 0
+    assert not sock.exists()
+    for _ in range(100):
+        if not _vivo(filho):
+            break
+        time.sleep(0.05)
+    assert not _vivo(filho)
+
+
+def test_codigos_de_saida(cano_cmd, tmp_path):
+    if os.name == "nt":
+        pytest.skip("socket unix")
+    sem_comando = subprocess.run([*cano_cmd, "--escuta", f"unix:{tmp_path / 'a.sock'}"],
+                                 capture_output=True, timeout=10)
+    assert sem_comando.returncode == 2
+    log = tmp_path / "cano.log"
+    longo = f"unix:{tmp_path / ('x' * 120 + '.sock')}"     # passa do limite do kernel para socket unix
+    r = subprocess.run([*cano_cmd, "--escuta", longo, "--log", str(log), "--", sys.executable, "-c", "pass"],
+                       capture_output=True, timeout=10)
+    assert r.returncode == 1 and "não consegui escutar" in log.read_text(encoding="utf-8")
+    r = subprocess.run([*cano_cmd, "--escuta", f"unix:{tmp_path / 'b.sock'}", "--log", str(log),
+                        "--", str(tmp_path / "nao-existe")], capture_output=True, timeout=10)
+    assert r.returncode == 1 and "claude não subiu" in log.read_text(encoding="utf-8")
+
+
 _APP_SERVER_FALSO = r'''
 import json, sys
 def out(o):
@@ -195,13 +261,13 @@ for linha in sys.stdin:
 '''
 
 
-def test_pedido_jsonrpc_do_servidor_fica_pendente_no_snapshot(tmp_path):
+def test_pedido_jsonrpc_do_servidor_fica_pendente_no_snapshot(tmp_path, cano_cmd):
     if os.name == "nt":
         pytest.skip("socket unix")
     falso = tmp_path / "app_server_falso.py"
     falso.write_text(_APP_SERVER_FALSO, encoding="utf-8")
     sock = tmp_path / "c.sock"
-    p = subprocess.Popen([sys.executable, str(CANO), "--escuta", f"unix:{sock}", "--log", str(tmp_path / "cano.log"),
+    p = subprocess.Popen([*cano_cmd, "--escuta", f"unix:{sock}", "--log", str(tmp_path / "cano.log"),
                           "--cwd", str(tmp_path), "--", sys.executable, str(falso)],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -237,14 +303,14 @@ def test_pedido_jsonrpc_do_servidor_fica_pendente_no_snapshot(tmp_path):
         p.wait()
 
 
-def test_token_errado_e_recusado(tmp_path):
+def test_token_errado_e_recusado(tmp_path, cano_cmd):
     if os.name == "nt":
         pytest.skip("socket unix")
     falso = tmp_path / "claude_falso.py"
     falso.write_text(_CLAUDE_FALSO, encoding="utf-8")
     porta = _porta_livre()
     token = uuid.uuid4().hex
-    p = subprocess.Popen([sys.executable, str(CANO), "--escuta", f"tcp:127.0.0.1:{porta}", "--token", token,
+    p = subprocess.Popen([*cano_cmd, "--escuta", f"tcp:127.0.0.1:{porta}", "--token", token,
                           "--cwd", str(tmp_path), "--", sys.executable, str(falso)],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -260,13 +326,13 @@ def test_token_errado_e_recusado(tmp_path):
         p.wait()
 
 
-def test_cliente_novo_substitui_o_ligado_em_tcp(tmp_path):
+def test_cliente_novo_substitui_o_ligado_em_tcp(tmp_path, cano_cmd):
     # Roda também no Windows (TCP + token). Com o accept em série, o segundo cliente não recebia
     # snapshot enquanto o primeiro seguia ligado — e quem conecta sem snapshot mata o cano.
     falso = tmp_path / "claude_falso.py"
     falso.write_text(_CLAUDE_FALSO, encoding="utf-8")
     porta, token = _porta_livre(), uuid.uuid4().hex
-    p = subprocess.Popen([sys.executable, str(CANO), "--escuta", f"tcp:127.0.0.1:{porta}", "--token", token,
+    p = subprocess.Popen([*cano_cmd, "--escuta", f"tcp:127.0.0.1:{porta}", "--token", token,
                           "--cwd", str(tmp_path), "--", sys.executable, str(falso)],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -306,6 +372,15 @@ def test_suite_nunca_le_os_sidecars_reais():
     from app.adapters.claude_headless import sessions
     real = Path.home() / ".hangar" / "claude-headless"
     assert sessions._dir() != real and real not in sessions._dir().parents
+
+
+def _vivo(pid: int) -> bool:
+    # Zumbi conta como morto: quem colhe o filho do cano é o init, no tempo dele.
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii") as f:
+            return f.read().rsplit(") ", 1)[1][0] != "Z"
+    except FileNotFoundError:
+        return False
 
 
 def _porta_livre() -> int:

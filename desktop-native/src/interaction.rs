@@ -50,7 +50,7 @@ pub fn ask_from_events(events: &[ChatEvent], provider: &str) -> Option<Ask> {
     let questions: Vec<AskItem> = questions.into_iter().filter(|q| !q.question.is_empty() && !q.options.is_empty()).collect();
     if questions.is_empty() { return None; }
     let id = event.tool_use_id.clone()?;
-    Some(Ask { fingerprint: format!("tool:{id}:{input}"), payload: AskPayload { provider: None, request_id: None, is_async: false, questions }, tool_use_id: Some(id) })
+    Some(Ask { fingerprint: format!("tool:{id}:{}", serde_json::to_string(input).unwrap_or_default()), payload: AskPayload { provider: None, request_id: None, is_async: false, questions }, tool_use_id: Some(id) })
 }
 
 pub fn toggle(item: &AskItem, pick: &Pick, index: usize) -> Pick {
@@ -219,7 +219,7 @@ mod tests {
 
     fn tool(kind: &str, id: &str, name: &str, input: Value) -> ChatEvent {
         ChatEvent { kind: kind.into(), id: format!("e-{kind}-{id}"), tool_use_id: Some(id.into()), tool_name: Some(name.into()),
-            tool_input: Some(input), ..Default::default() }
+            tool_input: input.as_object().cloned(), ..Default::default() }
     }
 
     #[test]

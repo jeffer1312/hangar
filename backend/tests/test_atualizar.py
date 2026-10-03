@@ -376,7 +376,7 @@ def test_aviso_do_instalador_chega_no_estado(repo, monkeypatch):
 
 
 def _preparo_gravado(repo, monkeypatch, *, lock_igual: bool, node_modules: bool,
-                     topologia: str = "systemd"):
+                     topologia: str = "systemd", fetch=lambda: []):
     chamadas = []
     class P:
         returncode = 0
@@ -384,6 +384,7 @@ def _preparo_gravado(repo, monkeypatch, *, lock_igual: bool, node_modules: bool,
         stderr = ""
     monkeypatch.setattr(atualizar, "_rodar", lambda args, **kw: (chamadas.append(args), P())[1])
     monkeypatch.setattr(atualizar, "_atualizar_dist", lambda: None)
+    monkeypatch.setattr(atualizar.rust_release, "fetch", fetch)
     monkeypatch.setattr(atualizar, "_renovar_chromium", lambda: None)
     monkeypatch.setattr(atualizar.shutil, "which", lambda nome: f"/bin/{nome}")
     (repo / "backend").mkdir(exist_ok=True)
@@ -450,6 +451,7 @@ def test_preparar_sem_marca_assume_o_node_modules_do_instalador(repo, monkeypatc
         stderr = ""
     monkeypatch.setattr(atualizar, "_rodar", lambda args, **kw: (chamadas.append(args), P())[1])
     monkeypatch.setattr(atualizar, "_atualizar_dist", lambda: None)
+    monkeypatch.setattr(atualizar.rust_release, "fetch", lambda: [])
     monkeypatch.setattr(atualizar, "_renovar_chromium", lambda: None)
     monkeypatch.setattr(atualizar.shutil, "which", lambda nome: f"/bin/{nome}")
     (repo / "backend").mkdir(exist_ok=True)
@@ -466,6 +468,33 @@ def test_preparar_sem_node_modules_nao_instala_front(repo, monkeypatch):
     de 400 MB só porque o lock mudou."""
     cmds = _preparo_gravado(repo, monkeypatch, lock_igual=False, node_modules=False)
     assert not any("npm ci" in c for c in cmds)
+
+
+def test_preparar_baixa_os_binarios_e_a_falha_vira_aviso(repo, monkeypatch):
+    """Sem os binários o Python atende sozinho: o download que falha avisa e não para o `uv sync`."""
+    cmds = _preparo_gravado(repo, monkeypatch, lock_igual=True, node_modules=True,
+                            fetch=lambda: ["binários Rust não baixados: rede fora"])
+    assert any(c.endswith("uv sync") for c in cmds)
+    assert "binários Rust não baixados: rede fora" in atualizar.estado()["avisos"]
+
+
+def test_preparar_sem_build_para_a_maquina_nao_avisa(repo, monkeypatch):
+    _preparo_gravado(repo, monkeypatch, lock_igual=True, node_modules=True, fetch=lambda: None)
+    assert not atualizar.estado().get("avisos")
+
+
+def test_volta_para_a_versao_anterior_nao_troca_binario(repo, monkeypatch):
+    """O `_voltar` roda `_preparar(dist=False)`: a release é a mais nova, não a do commit de antes."""
+    class P:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr(atualizar, "_rodar", lambda args, **kw: P())
+    monkeypatch.setattr(atualizar.shutil, "which", lambda nome: f"/bin/{nome}")
+    monkeypatch.setattr(atualizar.rust_release, "fetch",
+                        lambda: pytest.fail("a volta não baixa binário"))
+    (repo / "backend").mkdir(exist_ok=True)
+    atualizar._preparar("systemd", dist=False)
 
 
 def test_falha_do_instalador_mostra_o_motivo_marcado_nao_a_cauda(repo, monkeypatch):

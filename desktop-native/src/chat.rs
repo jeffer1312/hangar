@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use serde_json::Value;
-use crate::{api::dto::{ChatEvent, Preview, SessionState}, interaction::Ask};
+use crate::{api::dto::{ChatEvent, ChatEventExt, Preview, SessionState}, interaction::Ask};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveTool { pub name: String, pub input: Value }
@@ -103,7 +103,7 @@ impl Chat {
                 self.settled_thinking = text;
             }
             "tool_use" => {
-                let durable = LiveTool { name: event.tool_name.clone().unwrap_or_default(), input: event.tool_input.clone().unwrap_or(Value::Null) };
+                let durable = LiveTool { name: event.tool_name.clone().unwrap_or_default(), input: event.tool_input.clone().map(Value::Object).unwrap_or(Value::Null) };
                 if self.live_tool.as_ref().is_some_and(|live| tool_matches(live, &durable)) { self.live_tool = None; }
                 self.settled_tool = Some((durable, event.tool_use_id.clone()));
             }
@@ -527,7 +527,7 @@ mod tests {
     fn shorter_preview_from_a_new_source_is_accepted() {
         let mut chat = Chat::default();
         chat.update_preview(Preview { text: "long pane preview".into(), ..Default::default() });
-        chat.update_preview(Preview { text: "long".into(), md: true, full: true, vivo: true });
+        chat.update_preview(Preview { text: "long".into(), md: true, full: true, vivo: true, ..Default::default() });
         assert_eq!(chat.preview.text, "long");
     }
 
@@ -618,7 +618,7 @@ mod tests {
         let tool = LiveTool { name: "Bash".into(), input: serde_json::json!({"command": "ls"}) };
         chat.update_live_tool(tool.clone());
         chat.apply(ChatEvent { kind: "tool_use".into(), id: "u".into(), tool_name: Some("Bash".into()),
-            tool_input: Some(serde_json::json!({"command": "ls"})), tool_use_id: Some("x".into()), ..Default::default() });
+            tool_input: serde_json::json!({"command": "ls"}).as_object().cloned(), tool_use_id: Some("x".into()), ..Default::default() });
         assert!(chat.live_tool.is_none());
         assert!(!chat.update_live_tool(tool.clone()));
         chat.apply(ChatEvent { kind: "tool_result".into(), id: "r".into(), tool_use_id: Some("x".into()), ..Default::default() });

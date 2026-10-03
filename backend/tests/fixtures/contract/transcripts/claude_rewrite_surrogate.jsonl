@@ -1,0 +1,3 @@
+{"type":"user","uuid":"r-001","timestamp":"2026-09-01T10:00:00.000Z","message":{"role":"user","content":"antes"}}
+{"type":"assistant","uuid":"r-002","timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"meio \ud83d emoji"}]}}
+{"type":"user","uuid":"r-003","timestamp":"2026-09-01T10:00:02.000Z","message":{"role":"user","content":"depois"}}

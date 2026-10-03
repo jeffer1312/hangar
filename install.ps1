@@ -1219,6 +1219,30 @@ if (-not $SoChecar) {
     }
 }
 
+# -- Binarios Rust (hangar-server e hangar-cano, release server-latest) -------
+# Sem eles o backend em Python atende sozinho: falha aqui nunca para a instalacao.
+if (-not $SoChecar) {
+    Titulo 'Binarios Rust'
+    $pyRust = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
+    if (-not (Test-Path $pyRust)) {
+        $rcRust = -1
+    } else {
+        Push-Location (Join-Path $raiz 'backend')
+        $rcRust = Nativo $pyRust -m app.rust_release
+        Pop-Location
+    }
+    if ($rcRust -eq 0) {
+        Ok 'hangar-server e hangar-cano em ~\.hangar\bin'
+    } elseif ($rcRust -eq 2) {
+        Nota 'sem binarios Rust para esta maquina; o backend em Python atende sozinho'
+    } else {
+        $motivo = if ($rcRust -eq -1) { 'sem o python do venv' } else { 'download ou conferencia falhou' }
+        Falta "binarios Rust nao baixaram ($motivo) - o backend em Python atende sozinho"
+        $script:pendencias += 'binarios Rust'
+        Write-Host '##HANGAR-AVISO## binarios Rust nao baixaram; o backend em Python atende sozinho'
+    }
+}
+
 # -- 5/8 Wrapper do claude ---------------------------------------------------
 # Sem ele um `claude` que VOCE abre no terminal e invisivel pro app: nao tem --session-id (o
 # backend nao sabe qual transcript e daquela sessao) e nao vive num pane (nao ha estado nem

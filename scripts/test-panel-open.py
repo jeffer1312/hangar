@@ -12,6 +12,8 @@ import importlib.util
 import io
 import shlex
 import sys
+from unittest.mock import patch
+from subprocess import CalledProcessError, CompletedProcess, TimeoutExpired
 from pathlib import Path
 
 CAMINHO = Path(__file__).with_name("hangar-panel-open")
@@ -59,6 +61,29 @@ def montar(mod, janelas, clientes=None, titulos=None):
 
 def main() -> int:
     mod = carregar()
+
+    # O observador não tem janela; o fallback por título casaria OUTRA sessão.
+    def fake_tmux(rows):
+        def run(argv, **kwargs):
+            assert argv[:4] == ["tmux", "list-clients", "-t", "observada"]
+            fields = argv[-1].split("\t")
+            return CompletedProcess(argv, 0, "\n".join(
+                "\t".join(row[field] for field in fields) for row in rows), "")
+        return run
+
+    observer = {"#{client_pid}": "999", "#{client_control_mode}": "1"}
+    human = {"#{client_pid}": "900001", "#{client_control_mode}": "0"}
+    with patch.object(mod.subprocess, "run", fake_tmux([observer])):
+        mod.hypr_clients = lambda: [{"pid": 71001, "class": "kitty", "title": "observada", "address": "0xOTHER"}]
+        mod.ppid_of = lambda pid: ARVORE.get(pid, 0)
+        assert mod.find_window("observada") is None, "observador não pode ativar fallback por título"
+    with patch.object(mod.subprocess, "run", fake_tmux([observer, human])):
+        assert mod.find_window("observada") == "0xOTHER", "cliente humano continua resolvendo por pid"
+    with patch.object(mod.subprocess, "run", fake_tmux([{**human, "#{client_control_mode}": ""}])):
+        assert mod.find_window("observada") is None, "modo desconhecido não comprova janela"
+    for error in (CalledProcessError(1, "tmux"), TimeoutExpired("tmux", 5), FileNotFoundError("tmux")):
+        with patch.object(mod.subprocess, "run", side_effect=error):
+            assert mod.find_window("observada") is None, "consulta falha não pode ativar fallback por título"
 
     # 1. O bug: 4 janelas num pid só, cada sessão tem que achar a SUA.
     montar(mod, JANELAS_KITTY1)
@@ -119,7 +144,7 @@ def main() -> int:
     assert capturado[0][1] == mod.comando_terminal("kitty", "morta"), \
         f"main() não usa comando_terminal: {capturado[0]!r}"
 
-    print("ok: 7 casos")
+    print("ok: 13 casos")
     return 0
 
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import collections
+import functools
 import hashlib
 import json
 import logging
@@ -29,17 +30,20 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
-from app import atomico, cotas, log_paths, model_args, pensamento, runtime_config
+from app import atomico, cotas, diag, log_paths, model_args, pensamento, runtime_config, rust_bins
 from app.adapters.claude_headless import cano as cano_mod
 from app.adapters.claude_headless import sessions as hl_sessions
 from app.adapters.codex.adapter import _fmt_tok, _format_reset
 from app.adapters.preview_push import PushPreviewSource, fonte_ferramenta, fonte_pensamento
+from app.adapters.stream_buffer import StreamBuffer, error_frames
 from app.config import settings
 from app.pqueue import PromptQueue
 from app.procinfo import pid_vivo
@@ -191,6 +195,11 @@ class _Sessao:
         # Pedidos de permissão em aberto, na ordem em que chegaram: request_id -> request.
         self.pending: dict[str, dict] = {}
         self.question: dict | None = None      # AskUserQuestion pendente (payload pro front)
+        self.live_active: Callable[[], bool] = lambda: True
+        self.live_error_handler: Callable[[Exception], None] | None = None
+        self.preview_buffer = StreamBuffer(self._publish_preview, on_error=self._live_failed)
+        self.thinking_buffer = StreamBuffer(self._publish_thinking, on_error=self._live_failed)
+        self.tool_buffer = StreamBuffer(self._publish_tool_input, on_error=self._live_failed)
         self.previa = ""
         self.pensamento = ""       # resumo do raciocínio em voo (só chega com --thinking-display)
         self.version = 0
@@ -233,6 +242,69 @@ class _Sessao:
         # Lista do `/` vinda da própria CLI: nomes+descrição do initialize; os só-de-TUI do init.
         self.comandos: list[dict] | None = None
         self.comandos_terminal: frozenset[str] = frozenset()
+
+    @property
+    def previa(self) -> str:
+        return self.preview_buffer.value
+
+    @previa.setter
+    def previa(self, value: str) -> None:
+        self.preview_buffer.invalidate(value)
+
+    @property
+    def pensamento(self) -> str:
+        return self.thinking_buffer.value
+
+    @pensamento.setter
+    def pensamento(self, value: str) -> None:
+        self.thinking_buffer.invalidate(value)
+
+    @property
+    def tool_json(self) -> str:
+        return self.tool_buffer.value
+
+    @tool_json.setter
+    def tool_json(self, value: str) -> None:
+        self.tool_buffer.invalidate(value)
+
+    async def notify(self) -> None:
+        async with self.cond:
+            self.version += 1
+            self.cond.notify_all()
+
+    def _live_failed(self, error: Exception) -> None:
+        if self.live_error_handler is not None:
+            self.live_error_handler(error)
+        else:
+            _log.warning("claude headless: publicação parcial falhou name=%s error_type=%s frames=%s",
+                         self.name, type(error).__name__, error_frames(error))
+
+    async def _publish_preview(self, value: str) -> None:
+        if self.live_active():
+            await PushPreviewSource.get(self.name).push(value)
+
+    async def _publish_thinking(self, value: str) -> None:
+        if self.live_active():
+            await fonte_pensamento(self.name).push(value)
+
+    async def _publish_tool_input(self, value: str) -> None:
+        name, tool = self.name, self.tool_nome
+        generation = self.tool_buffer._generation
+        def current() -> bool:
+            return (self.live_active() and self.name == name and self.tool_nome == tool
+                    and self.tool_buffer._generation == generation)
+        if tool is None or not current():
+            return
+        partial = _input_parcial(value)
+        if not current():
+            return
+        await fonte_ferramenta(name).push(json.dumps({"nome": tool, "input": partial}))
+        if not current():
+            return
+        label = _rotulo_tool(tool, partial)
+        if label != self.label:
+            self.label = label
+            await self.notify()
 
     def iniciar_turno(self) -> None:
         self.turno_inicio = time.monotonic()
@@ -473,6 +545,10 @@ class ClaudeHeadlessAdapter:
         except Exception:
             _log.exception("claude headless: interrupt falhou name=%s", name)
             return False
+        await self._clear_preview(sess)
+        await self._limpar_pensamento(sess)
+        await self._limpar_ferramenta(sess)
+        sess.tool_nome = None
         return True
 
     async def select(self, name: str, option: int) -> bool:
@@ -794,6 +870,7 @@ class ClaudeHeadlessAdapter:
     def desligar_todas(self) -> None:
         """Backend saindo: fecha as conexões e deixa os canos vivos pro próximo backend."""
         for sess in list(self._sessions.values()):
+            self._invalidate_streams(sess)
             sess.desligando = True
             if sess.proc is not None:
                 try:
@@ -1097,7 +1174,7 @@ class ClaudeHeadlessAdapter:
             elif sess.state == "awaiting_input":
                 self._gravar_marcador(sess, "idle")
             sess.state = "dead"
-            await PushPreviewSource.get(sess.name).push("")
+            await self._clear_preview(sess)
             await self._limpar_pensamento(sess)
             await self._limpar_ferramenta(sess)
             await self._notify(sess)
@@ -1182,8 +1259,7 @@ class ClaudeHeadlessAdapter:
                 sess.label = _rotulo_tool(tools[-1].get("name"), tools[-1].get("input"))
             if any(isinstance(b, dict) and b.get("type") == "text" for b in blocos):
                 # O bloco fechou: o .jsonl já tem a mensagem, a prévia sai de cena.
-                sess.previa = ""
-                await PushPreviewSource.get(sess.name).push("")
+                await self._clear_preview(sess)
             if any(isinstance(b, dict) and b.get("type") == "thinking" for b in blocos):
                 # Mesmo raciocínio: o bloco já está no .jsonl e vira o ThinkingBlock da conversa.
                 await self._limpar_pensamento(sess)
@@ -1224,7 +1300,6 @@ class ClaudeHeadlessAdapter:
             sess.question = None
             sess.label = None
             sess.tarefas.clear()
-            sess.previa = ""
             sub = ev.get("subtype") or ""
             if ev.get("local_command"):
                 # Comando local não vira linha `user` no .jsonl (só `<command-name>`, às vezes com
@@ -1250,7 +1325,7 @@ class ClaudeHeadlessAdapter:
             # .jsonl como tool_result com o motivo, e o card da ferramenta mostra igual ao terminal.
             self._aplicar_uso(sess, ev)
             self._recalcular_estado(sess)
-            await PushPreviewSource.get(sess.name).push("")
+            await self._clear_preview(sess)
             await self._limpar_pensamento(sess)
             await self._limpar_ferramenta(sess)
             await self._notify(sess)
@@ -1279,7 +1354,13 @@ class ClaudeHeadlessAdapter:
             sess.limit_reset = _hora_local(info.get("resetsAt")) if sess.limited else None
             await self._notify(sess)
             return
-        if t in ("keep_alive", "conversation_reset", "tool_progress"):
+        if t == "conversation_reset":
+            await self._clear_preview(sess)
+            await self._limpar_pensamento(sess)
+            await self._limpar_ferramenta(sess)
+            sess.tool_nome = None
+            return
+        if t in ("keep_alive", "tool_progress"):
             return
         await self._gravar_desconhecido(sess, str(t), ev)
         if t not in sess.tipos_desconhecidos:
@@ -1375,15 +1456,6 @@ class ClaudeHeadlessAdapter:
             return
         await self._notify(sess)
 
-    @staticmethod
-    async def _limpar_pensamento(sess: _Sessao) -> None:
-        sess.pensamento = ""
-        await fonte_pensamento(sess.name).push("")
-
-    @staticmethod
-    async def _limpar_ferramenta(sess: _Sessao) -> None:
-        await fonte_ferramenta(sess.name).push("")
-
     def _rotulo_tarefas(self, sess: _Sessao) -> str | None:
         vivas = list(sess.tarefas.values())
         if not vivas:
@@ -1396,55 +1468,51 @@ class ClaudeHeadlessAdapter:
         return rotulo[:120]
 
     async def _on_stream(self, sess: _Sessao, e: dict) -> None:
-        tipo = e.get("type")
-        if tipo == "content_block_start":
-            bloco = e.get("content_block") or {}
-            if bloco.get("type") == "text":
-                sess.previa = ""
+        sess.live_active = lambda: self._sessions.get(sess.name) is sess
+        sess.live_error_handler = lambda error: self._stream_error(sess, error)
+        kind = e.get("type")
+        if kind == "content_block_start":
+            block = e.get("content_block") or {}
+            if block.get("type") == "text":
+                await self._clear_preview(sess)
                 sess.label = None
-            elif bloco.get("type") in ("tool_use", "server_tool_use", "mcp_tool_use"):
-                sess.tool_nome, sess.tool_json = bloco.get("name"), ""
+            elif block.get("type") in ("tool_use", "server_tool_use", "mcp_tool_use"):
+                await sess.tool_buffer.reset()
+                sess.tool_nome = block.get("name")
                 sess.label = _rotulo_tool(sess.tool_nome, None)
                 await fonte_ferramenta(sess.name).push(json.dumps({"nome": sess.tool_nome or "tool", "input": {}}))
-            elif bloco.get("type") == "thinking":
+            elif block.get("type") == "thinking":
                 sess.label = "Pensando…"
                 sess.pensando_desde = time.monotonic()
             await self._notify(sess)
-        elif tipo == "content_block_delta":
-            d = e.get("delta") or {}
-            pedaco = d.get("text") or d.get("thinking") or d.get("partial_json") or ""
-            # Estimativa enquanto a mensagem escreve (o `output_tokens` real só chega no fim dela);
-            # o tique de 1s do stream leva o número pra tela, sem notificar a cada delta.
-            sess.tokens_msg_chars += len(pedaco)
-            if d.get("type") == "text_delta" and d.get("text"):
-                sess.previa += d["text"]
-                await PushPreviewSource.get(sess.name).push(sess.previa)
-            elif d.get("type") == "thinking_delta" and d.get("thinking"):
-                sess.pensamento += d["thinking"]
-                await fonte_pensamento(sess.name).push(sess.pensamento)
-            elif d.get("type") == "input_json_delta" and sess.tool_nome is not None:
-                sess.tool_json += d.get("partial_json") or ""
-                parcial = _input_parcial(sess.tool_json)
-                await fonte_ferramenta(sess.name).push(json.dumps({"nome": sess.tool_nome, "input": parcial}))
-                rotulo = _rotulo_tool(sess.tool_nome, parcial)
-                if rotulo != sess.label:
-                    sess.label = rotulo
-                    await self._notify(sess)
-        elif tipo == "content_block_stop":
-            sess.tool_nome, sess.tool_json = None, ""
+        elif kind == "content_block_delta":
+            delta = e.get("delta") or {}
+            piece = delta.get("text") or delta.get("thinking") or delta.get("partial_json") or ""
+            sess.tokens_msg_chars += len(piece)
+            if delta.get("type") == "text_delta" and delta.get("text"):
+                await sess.preview_buffer.append(delta["text"])
+            elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                await sess.thinking_buffer.append(delta["thinking"])
+            elif delta.get("type") == "input_json_delta" and sess.tool_nome is not None:
+                await sess.tool_buffer.append(delta.get("partial_json") or "")
+        elif kind == "content_block_stop":
+            await sess.preview_buffer.flush()
+            await sess.thinking_buffer.flush()
+            await sess.tool_buffer.flush()
+            sess.tool_nome = None
+            sess.tool_json = ""
             if sess.pensando_desde is not None:
                 sess.pensou_s += time.monotonic() - sess.pensando_desde
                 sess.pensando_desde = None
-        elif tipo == "message_delta":
+        elif kind == "message_delta":
             real = (e.get("usage") or {}).get("output_tokens")
             if isinstance(real, int):
                 sess.tokens_msg = real
-        elif tipo == "message_start":
+        elif kind == "message_start":
             sess.fechar_mensagem()
             if sess.turno_inicio is None:
                 sess.iniciar_turno()
             if not sess.in_progress:
-                # Turno iniciado por outro caminho (steer, hook): o estado acompanha o stream.
                 sess.in_progress = True
                 sess.state = "working"
                 await self._notify(sess)
@@ -1531,9 +1599,49 @@ class ClaudeHeadlessAdapter:
             _log.warning("claude headless: marcador de estado não gravado name=%s", sess.name, exc_info=True)
 
     async def _notify(self, sess: _Sessao) -> None:
-        async with sess.cond:
-            sess.version += 1
-            sess.cond.notify_all()
+        await sess.notify()
+
+    def _stream_error(self, sess: _Sessao, error: Exception) -> None:
+        if self._sessions.get(sess.name) is not sess:
+            return
+        _log.warning("claude headless: prévia falhou name=%s error_type=%s frames=%s",
+                     sess.name, type(error).__name__, error_frames(error))
+        diag.registrar("headless.previa_falhou", "erro", sessao=sess.name,
+                       provider="claude", **diag.erro_campos(error))
+        task = asyncio.get_running_loop().create_task(self._notify(sess))
+        self._tarefas.add(task)
+        def notified(done: asyncio.Task) -> None:
+            self._tarefas.discard(done)
+            if done.cancelled():
+                return
+            error = done.exception()
+            if error is not None:
+                _log.warning("claude headless: aviso da prévia falhou name=%s error_type=%s frames=%s",
+                             sess.name, type(error).__name__, error_frames(error))
+                diag.registrar("headless.previa_aviso_falhou", "erro", sessao=sess.name,
+                               provider="claude", **diag.erro_campos(error))
+        task.add_done_callback(notified)
+
+    @staticmethod
+    def _invalidate_streams(sess: _Sessao) -> None:
+        sess.preview_buffer.invalidate()
+        sess.thinking_buffer.invalidate()
+        sess.tool_buffer.invalidate()
+
+    async def _clear_preview(self, sess: _Sessao) -> None:
+        await sess.preview_buffer.discard()
+        if self._sessions.get(sess.name) is sess:
+            await PushPreviewSource.get(sess.name).push("")
+
+    async def _limpar_pensamento(self, sess: _Sessao) -> None:
+        await sess.thinking_buffer.discard()
+        if self._sessions.get(sess.name) is sess:
+            await fonte_pensamento(sess.name).push("")
+
+    async def _limpar_ferramenta(self, sess: _Sessao) -> None:
+        await sess.tool_buffer.discard()
+        if self._sessions.get(sess.name) is sess:
+            await fonte_ferramenta(sess.name).push("")
 
     # ── estado pro SSE ─────────────────────────────────────────────────────────────────────
 
@@ -1786,6 +1894,7 @@ class ClaudeHeadlessAdapter:
         _limpar_rastros_do_cano(meta)
 
         def _retirar() -> None:
+            self._invalidate_streams(sess)
             if self._sessions.get(name) is sess:
                 self._sessions.pop(name, None)
             PushPreviewSource._sources.pop(name, None)
@@ -1803,15 +1912,47 @@ class ClaudeHeadlessAdapter:
             loop.call_soon_threadsafe(_retirar)
 
     def rename(self, old: str, new: str) -> None:
-        sess = self._sessions.pop(old, None)
-        if sess is not None:
-            sess.name = new
-            sess.meta["name"] = new
-            self._sessions[new] = sess
-        lock = self._delivery_locks.pop(old, None)
-        if lock is not None:
-            self._delivery_locks[new] = lock
+        current = self._sessions.get(old)
 
+        def rename_on_loop() -> None:
+            sess = self._sessions.get(old)
+            if sess is not None:
+                for buffer in (sess.preview_buffer, sess.thinking_buffer, sess.tool_buffer):
+                    buffer.rebind()
+                for key in (old, f"{old}#pensamento", f"{old}#ferramenta"):
+                    source = PushPreviewSource._sources.get(key)
+                    if source is not None:
+                        source.reset()
+                self._sessions.pop(old, None)
+                sess.name = new
+                sess.meta["name"] = new
+                self._sessions[new] = sess
+            lock = self._delivery_locks.pop(old, None)
+            if lock is not None:
+                self._delivery_locks[new] = lock
+
+        loop = current.loop if current is not None else None
+        try:
+            same_loop = loop is not None and asyncio.get_running_loop() is loop
+        except RuntimeError:
+            same_loop = False
+        if loop is None or not loop.is_running() or same_loop:
+            rename_on_loop()
+            return
+        done = threading.Event()
+        errors: list[BaseException] = []
+        def apply() -> None:
+            try:
+                rename_on_loop()
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                done.set()
+        loop.call_soon_threadsafe(apply)
+        if not done.wait(5):
+            raise RuntimeError("timeout ao renomear buffer da sessão Claude")
+        if errors:
+            raise errors[0]
 
 # Anexo de imagem do composer ("legenda — 📎 imagem: <path>"). No terminal a TUI reconhece o path
 # e anexa a imagem de verdade; aqui é o adapter que anexa, como bloco `image` ao lado do texto.
@@ -2154,6 +2295,38 @@ async def conectar_cano(cano: dict, *, esperar: float = 0.0) -> tuple[_Ligacao, 
     return _Ligacao(reader, writer, snap.get("pid")), snap
 
 
+_cano_probe_lock = threading.Lock()
+
+
+@functools.cache
+def _probe_cano_bin() -> Path | None:
+    exe = rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN")
+    if exe is None:
+        return None
+    # Binário que existe mas não roda nesta máquina (glibc antiga, arquitetura errada) derrubaria
+    # toda sessão sem terminal calado: o stderr do cano é DEVNULL. Sem argumentos o contrato do
+    # cano é sair com 2; qualquer outra coisa volta para o cano.py.
+    try:
+        ret = subprocess.run([str(exe)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, timeout=5).returncode
+    except subprocess.TimeoutExpired:
+        diag.registrar("hangar_cano.indisponivel", "aviso", codigo="timeout")
+        return None
+    except OSError as e:
+        diag.registrar("hangar_cano.indisponivel", "aviso", codigo="exec", **diag.erro_campos(e))
+        return None
+    if ret != 2:
+        diag.registrar("hangar_cano.indisponivel", "aviso", codigo="retorno", retorno=ret)
+        return None
+    return exe
+
+
+def _usable_cano_bin() -> Path | None:
+    """O hangar-cano, se ele roda aqui; sondado uma vez por processo."""
+    with _cano_probe_lock:
+        return _probe_cano_bin()
+
+
 async def subir_cano_processo(argv: list[str], *, cwd: str, env: dict, key: str, log: Path,
                               tarefas: set | None = None) -> tuple[dict, asyncio.subprocess.Process]:
     """Sobe um cano com `argv` como filho, fora do cgroup do backend. Devolve o dict `cano` do
@@ -2165,7 +2338,12 @@ async def subir_cano_processo(argv: list[str], *, cwd: str, env: dict, key: str,
     # acha o nome sem extensão (WinError 2) — sessão com motor não subia.
     argv = [exe, *argv[1:]]
     escuta, token = _escuta_nova(key, log.parent)
-    cmd = [sys.executable, str(_CANO_PY), "--escuta", escuta, "--log", str(log), "--cwd", cwd]
+    # Mesmo contrato do cano.py num processo nativo; sem o binário, o cano.py segue valendo.
+    cano_bin = await asyncio.to_thread(_usable_cano_bin)
+    lancador = [str(cano_bin)] if cano_bin else [sys.executable, str(_CANO_PY)]
+    # A chave da sessão chega ao cmdline pelo `--log` (cano-<chave>.log): é por ela que
+    # registry.cwd_atual reconhece o processo.
+    cmd = [*lancador, "--escuta", escuta, "--log", str(log), "--cwd", cwd]
     if token:
         cmd += ["--token", token]
     cmd += ["--", *argv]

@@ -17,7 +17,7 @@ from app.hook_installer import (
     ensure_subagent_hook_installed,
     ensure_state_hooks_installed,
 )
-from app import migracao_sidecars, orq_politica, resilient_accept
+from app import migracao_sidecars, orq_politica, resilient_accept, rust_server
 from app.hook_state import hook_state
 from app.pi_inbox import escrever_endpoint
 from app.share_tunnel import GUEST_PORT, port_clash
@@ -234,14 +234,21 @@ def main():
         # O reload recria o processo e só religa o endereço da config: no dev não há porta de convite.
         uvicorn.run("app.api:app", reload=True, **kw)
         return
-    # Um Server com dois sockets: um lifespan só (dois Server rodariam watchers e hooks em dobro).
-    config = uvicorn.Config("app.api:app", **kw)
+    rust_bin = rust_server.wanted_binary(settings.rust_server)
     try:
         main_sock = _tcp_socket(bind, settings.port)
     except OSError as e:
         print(f"[hangar] ERRO: porta {settings.port} indisponível ({e})", file=sys.stderr)
         sys.exit(1)
     extras = [s for s in (_guest_socket(), _connect_socket()) if s]
+    if rust_bin is not None:
+        # A porta pública fica com o hangar-server; o bind acima só provou que ela estava livre.
+        main_sock.close()
+        sys.exit(rust_server.run("app.api:app", kw, rust_bin, settings.auth_token,
+                                 [_tcp_socket("127.0.0.1", 0)] + extras,
+                                 lambda: _tcp_socket(bind, settings.port)))
+    # Um Server com dois sockets: um lifespan só (dois Server rodariam watchers e hooks em dobro).
+    config = uvicorn.Config("app.api:app", **kw)
     server = uvicorn.Server(config)
     server.run(sockets=[main_sock] + extras)
     if not server.started:

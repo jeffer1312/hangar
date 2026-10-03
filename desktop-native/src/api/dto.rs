@@ -2,6 +2,12 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
+// Os formatos da conversa vêm do crate que o hangar-server também usa; os nomes antigos ficam para o
+// resto do app não mudar.
+pub use hangar_api::chat::ChatEvent;
+pub use hangar_api::preview::PreviewEvent as Preview;
+pub use hangar_api::state::{ShellVivo as ShellAlive, StateEvent as SessionState};
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct SessionInfo {
     pub name: String,
@@ -95,32 +101,6 @@ impl PairResult {
         });
         Self { warning }
     }
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ChatEvent {
-    pub kind: String,
-    pub id: String,
-    pub text: Option<String>,
-    pub tool_name: Option<String>,
-    pub tool_input: Option<Value>,
-    pub tool_use_id: Option<String>,
-    pub result: Option<String>,
-    pub is_error: Option<bool>,
-    pub ts: Option<f64>,
-    pub queued_delivered: Option<bool>,
-    pub queued_confirmed: Option<bool>,
-    pub queued_ts: Option<f64>,
-    pub desistiu: Option<bool>,
-    pub hook_error: Option<String>,
-    pub image_count: Option<u32>,
-    /// Só em notice `skill_loaded`: a skill que o harness injetou como fala do usuário.
-    pub skill: Option<SkillLoaded>,
-    /// Cache de prompt do turno (só `assistant_msg`): tokens lidos dele e a janela medida em segundos (3600 ou 300).
-    pub cache_read: Option<u64>,
-    pub cache_ttl_s: Option<u64>,
-    /// Só na linha do tempo de uma sessão `orq`: a entrada já interpretada pelo backend.
-    pub orq: Option<OrqEntry>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -407,45 +387,32 @@ pub struct OrqDeliveryChecks {
     #[serde(default)] pub failing: Vec<u32>,
 }
 
-impl ChatEvent {
-    pub fn queued(&self) -> bool { self.id.starts_with("queued-") }
-    pub fn body(&self) -> String {
+/// O que o desktop tira de uma mensagem; o formato em si é o do `hangar-api`.
+pub trait ChatEventExt {
+    fn queued(&self) -> bool;
+    fn body(&self) -> String;
+    /// Skill de um notice `skill_loaded`; sem `name` em texto fica sem skill, sem derrubar a mensagem.
+    fn loaded_skill(&self) -> Option<SkillLoaded>;
+    /// Entrada da linha do tempo de uma sessão `orq`; formato que este app não lê fica sem entrada.
+    fn orq_entry(&self) -> Option<OrqEntry>;
+}
+
+impl ChatEventExt for ChatEvent {
+    fn queued(&self) -> bool { self.id.starts_with("queued-") }
+    fn body(&self) -> String {
         self.text.clone().or_else(|| self.result.clone()).unwrap_or_else(|| {
             self.tool_input.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default()).unwrap_or_default()
         })
     }
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct SessionState {
-    #[serde(default)] pub state: String,
-    pub label: Option<String>,
-    pub question: Option<String>,
-    pub options: Option<Vec<String>>,
-    pub problema: Option<String>,
-    pub problema_detalhe: Option<String>,
-    pub login: Option<bool>,
-    pub claude_plan_pending: Option<PlanPending>,
-    pub status_line: Option<String>,
-    pub codex_mode: Option<String>,
-    pub claude_permission_mode: Option<String>,
-    pub claude_previous_non_plan: Option<String>,
-    pub recarregar_motivo: Option<String>,
-    pub limited: Option<bool>,
-    pub limit_reset: Option<String>,
-    pub loop_status: Option<String>,
-    pub loop_iter: Option<u32>,
-    pub loop_max: Option<u32>,
-    // Processos de fundo que a sessão deixou vivos, lidos do sistema pelo backend.
-    #[serde(default)] pub shells: Vec<ShellAlive>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct ShellAlive {
-    pub pid: i64,
-    #[serde(default)] pub cmd: String,
-    /// Epoch em segundos; ausente quando o sistema não soube dizer.
-    pub desde: Option<f64>,
+    fn loaded_skill(&self) -> Option<SkillLoaded> {
+        let skill = self.skill.as_ref()?;
+        let name = skill.get("name")?.as_str()?.to_owned();
+        let body = skill.get("body").and_then(Value::as_str).unwrap_or_default().to_owned();
+        Some(SkillLoaded { name, body })
+    }
+    fn orq_entry(&self) -> Option<OrqEntry> {
+        serde_json::from_value(Value::Object(self.orq.clone()?)).ok()
+    }
 }
 
 /// Evento SSE `stats`: só turns/steps/in/out são garantidos; o resto aparece quando o backend mede.
@@ -466,6 +433,13 @@ pub struct Stats {
 pub struct PlanPending {
     #[serde(default)] pub plan: String,
     pub path: Option<String>,
+}
+
+/// Plano do Claude sem terminal esperando aprovação, lido do mapa que o estado traz.
+pub fn plan_pending(state: &SessionState) -> Option<PlanPending> {
+    let pending = state.claude_plan_pending.as_ref()?;
+    let text = |key: &str| pending.get(key).and_then(Value::as_str).map(str::to_owned);
+    Some(PlanPending { plan: text("plan").unwrap_or_default(), path: text("path") })
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -494,14 +468,6 @@ pub struct AskPayload {
     pub request_id: Option<Value>,
     #[serde(default)] pub is_async: bool,
     #[serde(default)] pub questions: Vec<AskItem>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct Preview {
-    #[serde(default)] pub text: String,
-    #[serde(default)] pub md: bool,
-    #[serde(default)] pub full: bool,
-    #[serde(default)] pub vivo: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -544,7 +510,7 @@ pub struct Steered {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatEvent, OrqEntry, OrqLine, OrqPanel, SessionInfo};
+    use super::{ChatEvent, ChatEventExt, OrqEntry, OrqLine, OrqPanel, SessionInfo, SessionState, plan_pending};
     use serde_json::json;
 
     #[test]
@@ -658,7 +624,7 @@ mod tests {
         assert_eq!(event.body(), "aviso");
         let with: ChatEvent = serde_json::from_value(json!({"kind": "notice", "id": "n2", "text": "x",
             "orq": {"kind": "notice", "body": "x"}})).unwrap();
-        assert_eq!(with.orq.unwrap().kind, "notice");
+        assert_eq!(with.orq_entry().unwrap().kind, "notice");
     }
 
     #[test]
@@ -704,5 +670,21 @@ mod tests {
         let ro = SessionInfo { guest_kind: Some("pair".into()), ..chat.clone() };
         assert!(ro.read_only() && !ro.takes_messages());
         assert!(!SessionInfo { guest_kind: Some("share".into()), ..chat }.read_only());
+    }
+
+    #[test]
+    fn chat_event_from_the_crate_keeps_the_desktop_reading() {
+        let event: ChatEvent = serde_json::from_value(json!({"kind": "tipo_futuro", "id": "k1",
+            "skill": {"name": "pdf", "path": "/s/pdf/SKILL.md", "body": "# PDF"}, "tool_input": {"command": "ls"}})).unwrap();
+        assert_eq!(event.kind, "tipo_futuro");
+        assert_eq!(event.loaded_skill().map(|s| (s.name, s.body)), Some(("pdf".to_owned(), "# PDF".to_owned())));
+        assert_eq!(event.body(), "{\n  \"command\": \"ls\"\n}");
+        let bad_skill: ChatEvent = serde_json::from_value(json!({"kind": "notice", "id": "n", "skill": {"body": "x"}})).unwrap();
+        assert!(bad_skill.loaded_skill().is_none(), "skill sem nome não derruba a mensagem");
+        let state: SessionState = serde_json::from_value(json!({"session": "s", "state": "idle",
+            "claude_plan_pending": {"plan": "# Plano", "path": "/p.md", "tool_use_id": "t"}})).unwrap();
+        let plan = plan_pending(&state).unwrap();
+        assert_eq!((plan.plan.as_str(), plan.path.as_deref()), ("# Plano", Some("/p.md")));
+        assert!(plan_pending(&SessionState::default()).is_none());
     }
 }

@@ -12,3 +12,6 @@
 # vez de depender de cada consumidor lembrar de normalizar.
 *.sh    text eol=lf
 *.hook  text eol=lf
+# Fixtures do contrato da conversa: os testes comparam offsets em bytes e há um 0xFF de propósito.
+backend/tests/fixtures/contract/transcripts/** -text
+backend/tests/fixtures/contract/queue/** -text

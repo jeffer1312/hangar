@@ -5,6 +5,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Observação terminal tem uma captura canônica por rodada, sem grade auxiliar.** O controle
+  tmux confere sessão/pane a cada leitura; a análise acompanha esse quadro e o estado temporal
+  permanece no Python, sem outro HTTP. O cliente da ponte usa somente HTTP sem proxy/redirect
+  e não carrega certificados por pedido. Medição:
+  [custo da observação terminal](#custo-da-observação-terminal).
+
+- **Deltas Claude/Codex acumulam antes de publicar.** Prévia, pensamento e input em voo têm
+  buffer por sessão/geração: primeiro imediato, intermediários em 150 ms e último por timer/flush.
+  Limpeza autoritativa cancela timers, aguarda publicação em voo e reconfere a sessão antes de
+  limpar a fonte. Estado, permissões e fila continuam imediatos. Snapshot completo custa seu
+  tamanho; não reconstruir ou parsear por delta. Medição:
+  [coalescimento dos deltas](#deltas-claudecodex-acumular-antes-de-publicar).
+
 - **Modo de abertura omitido herda a preferência do servidor.** `headless_default` nasce
   ligado para Claude/Codex; a escolha humana do dono na criação passa a ser o padrão.
   `headless=false`/`--terminal` e `headless=true`/`--headless` explícitos prevalecem.
@@ -108,8 +121,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Codex sem terminal: `thread/start` leva o modelo, o esforço não** — não existe campo pra ele
   ali. Sem um `thread/settings/update` depois, o nível escolhido some no `model_reasoning_effort`
   do `config.toml`.
-- **Claude sem terminal: o `claude` é filho do CANO, nunca do backend.** `cano.py` é stdlib, um
-  por sessão, escuta em socket local, nasce no escopo transiente do systemd e sintetiza um
+- **Claude sem terminal: o `claude` é filho do CANO, nunca do backend.** O cano é o binário
+  `hangar-cano` quando o `rust_bins.find_bin` o acha (`CP_RUST_CANO_BIN`, `crates/target/release`,
+  `~/.hangar/bin`), com o `cano.py` (stdlib) de reserva; os dois falam o mesmo protocolo. Um por
+  sessão, escuta em socket local, nasce no escopo transiente do systemd e sintetiza um
   snapshot do que está em aberto; o backend só reconecta. O adapter (que muda sempre) fica no
   backend. Leitura do socket com `limit=16 MB` e embrulhada — leitor pendurado é sessão presa.
   Órfão é cano sem sidecar, não cano de backend anterior.
@@ -2051,3 +2066,144 @@ sidecar para um nome que nunca responde. A recusa vive num ponto só (`_recusa_o
 `runs.find`), e o 409 traz a frase "fale com o árbitro", porque é ele quem decide pela execução.
 O estado da linha sai da atividade: trabalhando com `advance.lock` preso (lido em `/proc/locks`,
 sem pegar a trava) ou com a linha do tempo/trava mexida nos últimos 2 min.
+
+
+### Deltas Claude/Codex: acumular antes de publicar
+
+**03/10/2026 — parte 2A.** Base Python `aa8eec36`, consumidores finais `7149f6d9`;
+Linux/CachyOS, CPython 3.14.6, mesma máquina e venv preexistente. Sem serviço, instalação,
+credencial ou CLI real. Nenhum runtime foi portado para Rust nesta entrega; protocolo e cano
+continuam na versão 1.
+
+O buffer compartilhado usa StringIO, publica primeiro imediatamente e coalesce intermediários
+em 150 ms. Timer entrega a cauda sem outro delta; flush entrega o último no fim de bloco.
+Limpeza cancela timers e aguarda publicação em voo. Claude mantém texto, pensamento e input
+de ferramenta separados; o input parcial e seu rótulo continuam visíveis até o transcript.
+`_input_parcial` permanece idêntico à base. Codex resolve a fonte na publicação e separa
+preâmbulo/resposta. Estado, uso, pergunta, permissão e fim de turno/drain conservam o caminho
+imediato. A limpeza de uma sessão antiga reconfere a identidade depois de esperar o descarte,
+para não apagar os canais de outra sessão criada com o mesmo nome.
+
+**Método.** Consumidores Claude reais `_Sessao`/`_on_stream` da base e da entrega, carregados
+no mesmo interpretador; eventos stream-json sintéticos. JSON compacto UTF-8: Write com
+`file_path=/tmp/ação-😀\synthetic` e content ASCII de 64/128/200 KiB, ou campo prompt ASCII de
+200 KiB. Pedaços medidos em bytes, decoder incremental preservando Unicode. Três repetições
+por combinação; as tabelas mostram medianas. Rajada sem espera entre eventos, usando o relógio
+normal do loop, sem avançá-lo artificialmente. Cada execução confirma o input final completo;
+a instrumentação retém só primeiro/último texto e conta parse/publicação. O frame `{}` do
+início da ferramenta fica fora das contagens abaixo. Sem assinante e com uma assinatura real
+de PushPreviewSource, sem HTTP/SSE/rede. Assinante pode observar só o último frame da rajada:
+isso é a semântica existente de substituição completa, não perda de conteúdo final.
+
+Parede: perf_counter do primeiro delta até block-stop. CPU: process_time no mesmo trecho,
+incluindo parser/serializer/push/rótulo e instrumentação, sem filhos. Maior publicação: máximo
+de cada execução e mediana desses máximos; antes mede o delta inteiro (concatenação, parser,
+push e rótulo), depois o callback de publicação (parser, push e rótulo). A diferença de escopo
+é explícita: não comparar esses máximos como operações idênticas. Atraso do loop: heartbeat
+com sleep de 1 ms, maior excesso sobre esse prazo, mediana dos máximos. Não é CPU do backend
+vivo nem de vários aparelhos. Primeiro frame permaneceu imediato nos dois caminhos.
+
+**Rajadas — antes → depois, tempos em ms.** Parse e publicação têm a mesma contagem em cada
+linha. O conjunto contém 60 execuções (cinco inputs × dois modos de assinatura × duas versões
+× três repetições), com conteúdo final exato em todas.
+
+| Assinante | Input / pedaço | Bytes / pedaços | Parede | CPU | Parse/publicações | Maior publicação | Atraso do loop |
+|---|---|---:|---:|---:|---:|---:|---:|
+| não | Write 64 KiB / 128 B | 65592 / 513 | 19,602 → 2,049 | 19,552 → 2,041 | 513 → 2 | 0,148 → 0,260 | 18,712 → 1,245 |
+| não | Write 128 KiB / 128 B | 131128 / 1025 | 73,710 → 1,724 | 73,578 → 1,718 | 1025 → 2 | 0,319 → 0,268 | 72,911 → 0,910 |
+| não | Write 200 KiB / 128 B | 204856 / 1601 | 163,671 → 2,709 | 163,305 → 2,697 | 1601 → 2 | 0,473 → 0,435 | 162,970 → 2,067 |
+| não | prompt 200 KiB / 128 B | 204813 / 1601 | 5487,248 → 2,116 | 5473,232 → 2,108 | 1601 → 2 | 10,218 → 0,444 | 5486,547 → 1,364 |
+| não | prompt 200 KiB / 32 B | 204813 / 6401 | 21994,111 → 6,758 | 21947,474 → 6,746 | 6401 → 2 | 11,653 → 0,456 | 21993,396 → 6,026 |
+| sim | Write 64 KiB / 128 B | 65592 / 513 | 18,753 → 0,769 | 18,726 → 0,765 | 513 → 2 | 0,141 → 0,152 | 17,866 → 0,938 |
+| sim | Write 128 KiB / 128 B | 131128 / 1025 | 66,450 → 1,464 | 66,351 → 1,458 | 1025 → 2 | 0,277 → 0,278 | 65,650 → 0,639 |
+| sim | Write 200 KiB / 128 B | 204856 / 1601 | 165,035 → 2,232 | 164,725 → 2,224 | 1601 → 2 | 0,448 → 0,411 | 164,340 → 1,487 |
+| sim | prompt 200 KiB / 128 B | 204813 / 1601 | 5508,786 → 2,160 | 5495,128 → 2,155 | 1601 → 2 | 9,971 → 0,448 | 5508,332 → 1,432 |
+| sim | prompt 200 KiB / 32 B | 204813 / 6401 | 21852,820 → 6,821 | 21801,570 → 6,812 | 6401 → 2 | 10,908 → 0,451 | 21852,125 → 6,090 |
+
+
+**Fluxo espaçado.** Prompt de 1 KiB, envelope de 1037 bytes, nove pedaços de 128 B, chegada
+nominal a cada 40 ms, produção com intervalo de 150 ms. Depois do último delta, o consumidor
+novo espera o timer completar a cauda antes de enviar block-stop: o EOS não fabrica essa prova.
+Doze execuções (dois modos × duas versões × três repetições), input final exato em todas.
+Tempos abaixo são medianas; instantes da prévia são de uma repetição representativa (a segunda).
+Parede inclui as esperas de chegada/cauda; a janela da cauda pode aumentar a parede apesar
+de reduzir o processamento. Não apresentar esse tempo como latência de controle.
+Neste input pequeno a CPU total não caiu; a conta inclui temporizadores e heartbeat durante
+a espera mais longa. A cauda é aguardada por Event, sem polling de conteúdo. Não extrapolar
+a redução de publicações da rajada para ganho uniforme de CPU em fluxos pequenos.
+
+| Assinante | Parede antes → depois (ms) | CPU antes → depois (ms) | Publicações antes → depois | Instantes depois (ms) | Atraso do loop antes → depois (ms) |
+|---|---:|---:|---:|---|---:|
+| não | 366,920 → 452,223 | 8,395 → 8,523 | 9 → 4 | 0,042 / 150,635 / 301,181 / 452,175 | 0,221 → 0,180 |
+| sim | 367,690 → 452,229 | 8,238 → 8,844 | 9 → 4 | 0,041 / 151,091 / 302,058 / 452,181 | 0,245 → 0,240 |
+
+
+**Conferência e limites.** 200 testes focados passaram: test_stream_buffer,
+test_claude_headless, test_codex_adapter e test_preview_push. Cobrem primeiro/periódico/cauda,
+Unicode/escapes, publicação bloqueada, erro de timer, EOS/result/assistant, reset/interrupção,
+EOF antigo durante substituição, rename de outra thread, fonte recriada por unsubscribe,
+separação de agentMessage, geração substituída, preserve_preview e controles/permissão/pergunta/
+drain com prévia pendente. Revisão independente apontou a limpeza pelo EOF antigo; regressão
+falhou antes e passou após reconferir identidade nos três canais.
+
+Uso real no app, dois aparelhos, Claude terminal, Codex nos dois modos com CLI real e Windows
+não foram conferidos: a Task 4, Step 2 permanece pendente para o canal de testes do dono.
+Nenhum serviço foi iniciado/reiniciado/parado. A medição cobre processamento Python sintético,
+não transporte cano, API, UI, rede ou produção. A rajada reduz milhares de prefixos a primeiro
+e final; o fluxo espaçado mantém atualizações intermediárias. Snapshot full-replace continua
+custando seu tamanho. Não afirmar linearidade de todo o pipeline nem usar decode-final-only
+como ganho equivalente de UI. A versão anterior também pode publicar em cada chegada quando
+os pedaços são lentos; o ganho depende da cadência, tamanho e campo do input.
+
+## Custo da observação terminal
+
+(03/10/2026, Linux 7.1.3, i5-13400F, Python 3.14.6, tmux 3.7b, Rust release.) A 2C original
+`d21a445b` fazia 12 comandos tmux e dois HTTP por captura; a grade analisava o mesmo texto
+que o capture. O estado temporal foi devolvido ao Python, sem outro RPC; o observador usa
+`no-output`, confere sessão/pane a cada rodada e captura uma vez, sem grade/checkpoint ANSI.
+A captura e sua conferência mantêm as duas molduras de nonce: seis comandos tmux por rodada.
+
+O maior excesso estava em `_http`: `build_opener()` incluía HTTPS e carregava certificados
+por pedido, mesmo em HTTP loopback. Mil construções consumiram 3,386 ms CPU/construção;
+cProfile de 100 chamadas atribuiu 0,315 de 0,354 s à criação do contexto HTTPS. O opener
+final é reutilizado e monta somente os handlers HTTP, sem proxy ou redirect.
+
+| Chats simultâneos | Python anterior, CPU/chat/rodada | 2C original, CPU/chat/rodada | Final, CPU/chat/rodada | Redução contra Python reexecutado |
+|---:|---:|---:|---:|---:|
+| 1 | 2,803 ms | 10,404 ms | 1,668 ms | 40,50% |
+| 4 | 2,745 ms | 15,327 ms | 1,784 ms | 35,02% |
+
+Método: quatro lotes independentes de 700 capturas/chat por caminho, ordem alternada,
+20 rodadas de aquecimento excluídas; mesmos panes sintéticos 100×40, 180 linhas e spinner
+congelado, mesmos classificador e valores de hook/plugin/sidecar. O `StateMonitor.stream`
+Python e a rota Rust de produção rodaram completos; nenhum backend/provedor/conversa real.
+Fixture HTTP de loopback com segredo sintético e tmux privado `-S`, configuração `/dev/null`.
+O poll/cache foi acelerado para cobrar uma captura por rodada. Todos os lotes finais
+exigiram zero fallback, exatamente um HTTP capture por rodada e paridade exata dos eventos.
+
+CPU = delta `utime+stime` de `/proc` do Python produtor, Rust, servidor tmux, clientes
+residentes e panes + `RUSAGE_CHILDREN` dos clientes tmux encerrados. Dividido por 700×chats;
+ticks de 10 ms, lotes com segundos de CPU. Com um chat, Python/Rust/tmux finais custam
+1,261/0,200/0,207 ms por captura; quatro chats, 1,347/0,229/0,207 ms. Clientes vivos/panes
+ficaram abaixo de um tick. O Python anterior cria um processo por captura; final cria zero
+durante o lote e conserva um cliente de controle por chat aberto, mais o Rust já existente.
+A fixture inicia um Rust por lote, contabilizado separadamente.
+
+A contagem separada do protocolo provou dez capturas = 63 comandos (três iniciais +
+seis por captura), um cliente criado, attach `no-output`; CPU sem o wrapper de contagem.
+Sessenta ciclos acquire+release custaram 2,000 ms CPU/ciclo (inclui filhos encerrados),
+120 HTTP e 60 observadores; não entram nas médias contínuas. Amortizado em 700 rodadas,
+é 1/700 criação de cliente por chat/rodada, contra um subprocesso a cada rodada Python.
+
+Parede por rodada: um chat, Python 2,803 ms/final 1,655 ms; quatro chats, Python 4,804 ms/
+final 5,072 ms. O ganho medido é de CPU e processos novos; a rodada concorrente ficou
+0,268 ms mais longa. Intervalos entre os quatro lotes finais: 1,629–1,700 ms com um chat
+e 1,779–1,789 ms/chat com quatro, sem sobreposição aos lotes Python. Redução =
+1 − CPU final ÷ CPU Python reexecutado no mesmo ensaio.
+
+Agregados por lote e fontes de reprodução ficam em
+`.superpowers/sdd/2026-10-03-hangar-server-parte2c-revision/perf-baseline.md` e nos auxiliares
+`perf-final-*.py` do mesmo diretório. Os snapshots/binários/socket privados foram temporários;
+o relatório não contém conversa real. O cálculo puro Rust segue conferido pelas fixtures
+Python. Remover a operação privada `reduce` sobe ambos os protocolos para 3; a coordenação
+com `rust-parte2` reservou 4 ao contrato posterior da 2B.

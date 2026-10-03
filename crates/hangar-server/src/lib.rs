@@ -1,0 +1,134 @@
+//! Servidor do Hangar: lê as conversas do Claude e do Codex e repassa o resto ao backend Python.
+pub mod auth;
+pub mod config;
+pub mod proxy;
+pub mod routes;
+pub mod side;
+pub mod tail;
+pub mod terminal_state;
+pub mod terminal_control;
+pub mod terminal_routes;
+pub mod transcript;
+
+/// Versão do contrato com o Python (rotas `/internal`, eventos do side-events, ambiente). O
+/// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
+pub const INTERNAL_PROTOCOL: u32 = 3;
+
+/// Lê o cano até o fim ou erro. O Python segura a outra ponta; fechou = pai morreu.
+pub async fn parent_gone<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 64];
+    while let Ok(n) = pipe.read(&mut buf).await {
+        if n == 0 {
+            return;
+        }
+    }
+}
+
+/// `routes::serve` até `stop` terminar. Sem esperar as conexões abertas: SSE nunca fecha sozinho.
+/// `Ok(())` só quando parou por `stop`.
+pub async fn serve_until(
+    listener: tokio::net::TcpListener,
+    cfg: config::Config,
+    stop: impl std::future::Future<Output = ()>,
+) -> std::io::Result<()> {
+    tokio::select! {
+        r = routes::serve(listener, cfg) => r,
+        () = stop => Ok(()),
+    }
+}
+
+/// Linha do log de um pânico: só local e thread. A mensagem do pânico pode citar texto de conversa.
+fn panic_line(loc: Option<&std::panic::Location<'_>>, thread: Option<&str>) -> String {
+    let at = loc.map_or_else(|| "?".to_string(), |l| format!("{}:{}", l.file(), l.line()));
+    format!("pânico em {at} (thread {})", thread.unwrap_or("?"))
+}
+
+/// Troca o hook padrão, que imprime a mensagem no stderr (o Python o herda) mesmo quando o
+/// pânico é capturado. Chamar depois de `init_log`, para a linha sair no mesmo destino.
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let t = std::thread::current();
+        tracing::error!("{}", panic_line(info.location(), t.name()));
+    }));
+}
+
+const LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const LOG_BACKUPS: u32 = 3;
+
+/// Log em arquivo (HANGAR_SERVER_LOG) ou no stderr. Nunca recebe texto de conversa.
+pub fn init_log(path: Option<&std::path::Path>) {
+    if let Some(p) = path {
+        rotate_log(p, LOG_MAX_BYTES);
+    }
+    // Sem estes avisos, o log ia para o stderr (o Python o herda) sem dizer por quê.
+    let file = path.and_then(|p| match std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("hangar-server: log em {} não abriu ({e}); segue no stderr", p.display());
+            None
+        }
+    });
+    let builder = tracing_subscriber::fmt().with_target(false);
+    let init = match file {
+        Some(f) => builder.with_writer(std::sync::Mutex::new(f)).try_init(),
+        None => builder.with_writer(std::io::stderr).try_init(),
+    };
+    if let Err(e) = init {
+        eprintln!("hangar-server: log não iniciou: {e}");
+    }
+}
+
+/// Mesmo teto dos logs privados do Python (4 MB, três cópias `.1`..`.3`), conferido ao subir.
+// ponytail: só na subida; um processo que viva muito pode passar do teto até o próximo início.
+// Girar em execução pede um writer próprio, se o arquivo crescer assim na prática.
+fn rotate_log(path: &std::path::Path, max: u64) {
+    if std::fs::metadata(path).map_or(true, |m| m.len() < max) {
+        return;
+    }
+    let numbered = |i: u32| {
+        let mut s = path.as_os_str().to_owned();
+        s.push(format!(".{i}"));
+        std::path::PathBuf::from(s)
+    };
+    // remove antes do rename: no Windows o rename não sobrescreve.
+    let _ = std::fs::remove_file(numbered(LOG_BACKUPS));
+    for i in (1..LOG_BACKUPS).rev() {
+        let _ = std::fs::rename(numbered(i), numbered(i + 1));
+    }
+    let _ = std::fs::rename(path, numbered(1));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panic_line_has_location_and_thread_only() {
+        let loc = std::panic::Location::caller();
+        let line = panic_line(Some(loc), Some("worker"));
+        assert!(line.contains(&format!("{}:{}", loc.file(), loc.line())));
+        assert!(line.contains("worker"));
+        let secret = "texto-da-conversa-xyz";
+        assert!(!line.contains(secret));
+        assert_eq!(panic_line(None, None), "pânico em ? (thread ?)");
+    }
+
+    #[test]
+    fn log_rotates_past_the_limit_keeping_three_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("hangar-server.log");
+        let read = |n: &str| std::fs::read_to_string(dir.path().join(n)).ok();
+        std::fs::write(&p, "abc").unwrap();
+        rotate_log(&p, 10);
+        assert_eq!(read("hangar-server.log").as_deref(), Some("abc"), "abaixo do teto fica");
+        for round in ["g1", "g2", "g3", "g4"] {
+            std::fs::write(&p, format!("{round}-cheio-demais")).unwrap();
+            rotate_log(&p, 10);
+        }
+        assert_eq!(read("hangar-server.log"), None);
+        assert_eq!(read("hangar-server.log.1").as_deref(), Some("g4-cheio-demais"));
+        assert_eq!(read("hangar-server.log.3").as_deref(), Some("g2-cheio-demais"));
+        assert_eq!(read("hangar-server.log.4"), None);
+    }
+}

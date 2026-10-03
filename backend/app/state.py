@@ -721,47 +721,68 @@ async def run_tmux(fn, *args):
 _frames: dict[str, tuple[float, str]] = {}
 # nome -> (início, captura em voo)
 _frames_inflight: dict[str, tuple[float, asyncio.Future]] = {}
+_frame_tags: dict[str, tuple] = {}
+_inflight_tags: dict[str, tuple] = {}
 # Sessão que morre fora do monitor (kill por outra rota, sumiço do tmux) não passa por forget_frame.
 _FRAME_EVICT_AGE = 60.0
 
 
 async def _capture_and_store(name: str, started: float) -> str:
+    from app import terminal_observer
+    tag = terminal_observer.stamp(name)
     # Idade conta do INÍCIO da captura: o quadro pode ser até isso mais velho, nunca mais novo.
     # Um argumento só, como antes: há dublê de teste com essa assinatura.
-    pane = await run_tmux(tmux.capture_pane, name)
+    result = await terminal_observer.capture(name, started)
+    if tag != terminal_observer.stamp(name):
+        return ""
+    pane = result["text"] if result is not None else await run_tmux(tmux.capture_pane, name)
+    if tag != terminal_observer.stamp(name):
+        return ""
     if pane:
         prev = _frames.get(name)
         if prev is None or prev[0] <= started:   # captura antiga que terminou depois não sobrescreve
             _frames[name] = (started, pane)
+            _frame_tags[name] = tag
         for n in [n for n, (t, _) in _frames.items() if started - t > _FRAME_EVICT_AGE]:
+            # Expirar cache de outra sessão não troca a época do transcript dela.
             _frames.pop(n, None)
+            _frame_tags.pop(n, None)
+            terminal_observer._analysis.pop(n, None)
     return pane
 
 
 async def shared_capture(name: str, max_age: float) -> str:
     """Quadro do pane com no máximo `max_age` s; senão captura (ou espera a captura em voo)."""
     now = time.monotonic()
+    from app import terminal_observer
+    tag = terminal_observer.stamp(name)
     hit = _frames.get(name)
-    if hit is not None and now - hit[0] <= max_age:
+    if hit is not None and _frame_tags.get(name) == tag and now - hit[0] <= max_age:
         return hit[1]
     inflight = _frames_inflight.get(name)
     # Captura em voo que começou antes da janela pedida (max_age=0 depois de um wake do plugin)
     # traria o pane de antes do evento: começa outra.
-    if (inflight is None or inflight[0] < now - max_age or inflight[1].done()
+    if (inflight is None or _inflight_tags.get(name) != tag or inflight[0] < now - max_age or inflight[1].done()
             or inflight[1].get_loop() is not asyncio.get_running_loop()):
         fut = asyncio.ensure_future(_capture_and_store(name, now))
         _frames_inflight[name] = (now, fut)
+        _inflight_tags[name] = tag
         fut.add_done_callback(
             lambda f: _frames_inflight.pop(name, None)
             if (_frames_inflight.get(name) or (0, None))[1] is f else None)
     else:
         fut = inflight[1]
     # shield: quem desiste (conexão caiu) não cancela a captura que o outro consumidor espera.
-    return await asyncio.shield(fut)
+    pane = await asyncio.shield(fut)
+    return pane if tag == terminal_observer.stamp(name) else ""
 
 
 def forget_frame(name: str) -> None:
     _frames.pop(name, None)
+    _frame_tags.pop(name, None)
+    _inflight_tags.pop(name, None)
+    from app import terminal_observer
+    terminal_observer.forget(name)
 
 
 class StateMonitor:
@@ -783,7 +804,7 @@ class StateMonitor:
                  sid_get: Optional[Callable[[], Optional[str]]] = None,
                  hook_grace: Optional[int] = HOOK_WORKING_GRACE,
                  transcript_get: Optional[Callable[[], Optional[str]]] = None,
-                 observe_permission: bool = False):
+                 observe_permission: bool = False, provider: Optional[str] = None):
         self.name = name
         self.poll = poll
         # hook_grace: apos quantos polls SEM SPINNER o marcador "working" deixa de valer. None =
@@ -802,6 +823,7 @@ class StateMonitor:
         # um turno vindo da fila da TUI (ver a docstring da funcao). None = comportamento de sempre.
         self.transcript_get = transcript_get
         self.observe_permission = observe_permission
+        self.provider = provider
 
     def _marcador(self):
         """Marcador do hook, ja corrigido quando ha transcript pra contradizer um idle velho."""
@@ -811,6 +833,23 @@ class StateMonitor:
         return corrige_ocioso_kimi(m, self.transcript_get())
 
     async def stream(self) -> AsyncIterator[StateEvent]:
+        from app import terminal_observer
+        source = terminal_observer.lease(self.name, self.provider, self.sid_get or (lambda: None))
+        inner = self._stream()
+        try:
+            await source.start()
+            while True:
+                with terminal_observer.use(source):
+                    try:
+                        event = await anext(inner)
+                    except StopAsyncIteration:
+                        return
+                yield event
+        finally:
+            await inner.aclose()
+            await source.close()
+
+    async def _stream(self) -> AsyncIterator[StateEvent]:
         last_key = object()
         prev_spinner = None
         frozen = 0          # polls com o mesmo spinner (congelado = turn acabou)
@@ -821,11 +860,20 @@ class StateMonitor:
         permission_mode = None
         previous_non_plan = None
         max_age = self.FRAME_MAX_AGE
+        from app import terminal_observer
         while True:
+            if terminal_observer.retired(self.name):
+                # As conexões SSE podem reconhecer o /clear em rodadas diferentes.
+                await asyncio.sleep(self.poll)
+                continue
             # Um spawn por tick, nao dois: o capture-pane de uma sessao sumida devolve "" (rc != 0),
             # e so ai vale pagar o has-session pra separar "morreu" de "pane em branco". No psmux
             # cada comando custa ~50ms (medido na VM), e isto roda a 0,75s por chat aberto.
+            frame_tag = terminal_observer.stamp(self.name)
             pane = await shared_capture(self.name, max_age)
+            if frame_tag != terminal_observer.stamp(self.name) or terminal_observer.retired(self.name):
+                await asyncio.sleep(self.poll)
+                continue
             if not pane:
                 # None = tmux nao respondeu: nao e morte (o watcher do Codex ja matou app-servers
                 # vivos lendo timeout como sessao sumida); espera o proximo tick.
@@ -979,6 +1027,8 @@ class StateMonitor:
             key = (state, label, question, tuple(options or ()), status, overlay, login,
                    limited, limit_reset, loop_status, loop_iter, loop_max,
                    permission_mode, previous_non_plan, tuple(s["pid"] for s in shells))
+            if frame_tag != terminal_observer.stamp(self.name):
+                continue
             if key != last_key:
                 last_key = key
                 held_state, held_label = state, label

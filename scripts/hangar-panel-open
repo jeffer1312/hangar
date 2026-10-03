@@ -98,14 +98,20 @@ def pick_by_title(clients: list[dict], addrs: list[str], name: str) -> str | Non
 
 
 def tmux_client_pids(name: str) -> list[int]:
-    """Pids dos clientes attachados na sessão (vazio se sessão não existe/sem cliente)."""
+    """Pids dos clientes de terminal (observador de controle não tem janela para focar)."""
     try:
-        out = subprocess.run(["tmux", "list-clients", "-t", name, "-F", "#{client_pid}"],
-                             capture_output=True, text=True, timeout=5).stdout
-        return [int(p) for p in out.split()]
+        out = subprocess.run(["tmux", "list-clients", "-t", name, "-F", "#{client_control_mode}\t#{client_pid}"],
+                             capture_output=True, text=True, timeout=5, check=True).stdout
+        pids = []
+        for line in out.splitlines():
+            fields = line.split("\t")
+            if len(fields) != 2 or fields[0] not in ("0", "1"):
+                raise ValueError("formato de cliente desconhecido")
+            if fields[0] == "0":
+                pids.append(int(fields[1]))
+        return pids
     except (OSError, subprocess.SubprocessError, ValueError) as e:
-        # Falha de invocação ≠ "sem cliente", mas o degrade é o mesmo (abrir terminal) — só não
-        # pode ser mudo. Sessão inexistente NÃO cai aqui (tmux sai !=0 com stdout vazio, sem check).
+        # Sem confirmação do cliente, focar por título poderia escolher outra sessão.
         print(f"hangar-panel-open: tmux list-clients falhou ({e})", file=sys.stderr)
         return []
 

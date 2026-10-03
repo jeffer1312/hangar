@@ -38,7 +38,7 @@
 // webContents está aberto. `open` e `list` continuam fora do servidor: `open` passa pelo backend
 // (quem monta o painel na tela) e `list` só lê os sidecares de sessão — os dois têm que funcionar
 // mesmo com o shell fora do ar.
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -152,8 +152,15 @@ function nomeSessao() {
   }
   if (process.env.TMUX) {
     try {
-      const nome = execSync('tmux display-message -p "#S"').toString().trim();
-      if (nome) return nome;
+      const out = execFileSync('tmux', ['list-clients', '-F', '#{client_control_mode}\t#{session_name}'])
+        .toString();
+      const names = new Set();
+      for (const line of out.split('\n').filter(Boolean)) {
+        const fields = line.split('\t');
+        if (fields.length !== 2 || !['0', '1'].includes(fields[0])) return null;
+        if (fields[0] === '0' && fields[1]) names.add(fields[1]);
+      }
+      if (names.size === 1) return [...names][0];
     } catch { /* tmux indisponível */ }
   }
   return null;

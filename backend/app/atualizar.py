@@ -41,7 +41,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from app import atomico, config, procinfo, tmux
+from app import atomico, config, procinfo, rust_release, tmux
 
 _log = logging.getLogger("hangar.atualizar")
 
@@ -712,6 +712,11 @@ def _preparar(topologia: str, *, dist: bool = True) -> None:
         if aviso:
             _escrever(avisos=list(estado().get("avisos") or []) + [aviso])
             _log.warning(aviso)
+        # Sem o hangar-server o Python atende sozinho: falha aqui é aviso, nunca etapa quebrada.
+        # A volta (`dist=False`) não baixa: a release é a mais nova, não a do commit de antes.
+        binarios = rust_release.fetch() or []
+        if binarios:
+            _escrever(avisos=list(estado().get("avisos") or []) + binarios)
         _renovar_chromium()
 
 

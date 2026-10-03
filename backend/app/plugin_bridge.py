@@ -418,12 +418,24 @@ def terminal_preso(name: str) -> bool:
     para o não esconderia o pedido de permissão de quem está olhando o terminal."""
     from app import tmux
     try:
-        cp = tmux._run(["tmux", "list-clients", "-t", f"={name}", "-F", "#{client_tty}"])
+        cp = tmux._run(["tmux", "list-clients", "-t", f"={name}", "-F", "#{client_control_mode}\t#{client_tty}"])
     except Exception:
         return True
     if cp.returncode != 0:
         return True
-    return bool((cp.stdout or b"").strip())
+    raw = cp.stdout
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return True
+    if not isinstance(raw, str):
+        return True
+    for line in raw.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 2 or fields[0] != "1":
+            return True
+    return False
 
 
 # Última batida do long-poll de entrada, por sessão: é o pulso que diz que o plugin está vivo.

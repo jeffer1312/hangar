@@ -256,6 +256,9 @@ class Settings(BaseSettings):
     # IP (rate limiter) and the https scheme (cookie Secure) are seen behind a TLS proxy. "*" trusts any
     # upstream (only safe when nothing untrusted can reach the port directly).
     forwarded_allow_ips: str = "127.0.0.1"
+    # CP_RUST_SERVER: 0 desliga o hangar-server (Rust) na porta pública e o Python atende sozinho.
+    # Campo do Settings, e não os.environ, pra valer também escrito no backend/.env.
+    rust_server: bool = True
     # CP_DEPLOY_SECRET: shared secret do webhook do GitHub (HMAC-SHA256). Vazio = endpoint de auto-deploy
     # desligado (retorna 404). O push na main dispara /api/deploy/github-webhook -> valida a assinatura ->
     # start (nao-bloqueante) da unit systemd 'hangar-deploy.service' (pull + build + restart).
@@ -366,6 +369,7 @@ DESCRICAO_DE_CAMPO: dict[str, str] = {
     "sync_rate_window": "sync_rate_window",
     "forwarded_allow_ips": "forwarded_allow_ips",
     "deploy_secret": "deploy_secret",
+    "rust_server": "rust_server",
     "update_branch": "update_branch",
     "update_last_branch": "update_last_branch",
 }

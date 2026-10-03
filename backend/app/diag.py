@@ -117,6 +117,8 @@ _CAMPOS: dict[str, type] = {
     "tentativa": int,
     "quantidade": int,
     "espera_ms": int,
+    "commit": str,      # hash do manifesto da release do hangar-server
+    "tag": str,         # release do hangar-server (server-latest ou server-<branch>)
 }
 
 

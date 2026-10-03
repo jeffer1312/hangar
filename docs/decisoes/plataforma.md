@@ -1002,3 +1002,141 @@ resolveria — as máquinas seguiriam no mesmo site entre si. Por isso o `cp_tok
 só vale o `__Host-cp_token`, que outra máquina não consegue gravar; o PWA grava o prefixado e
 apaga o antigo. O sync recusa ação com `Sec-Fetch-Site: same-site`/`cross-site`. O `cp_sync`
 mantém o nome por ora: o `hub()` do app nativo só guarda `Set-Cookie` começando com `cp_sync=`.
+
+## hangar-server: a porta pública em Rust, o Python atrás
+
+O serviço continua subindo `python -m app.main`. Com o binário e sem `CP_RUST_SERVER=0`, o
+uvicorn escuta numa porta livre de `127.0.0.1` e o `hangar-server` assume a porta pública como
+filho (`app/rust_server.py`), com a porta interna, o token, a lista `forwarded_allow_ips` do dono
+e um segredo novo a cada subida. O segredo vai só no ambiente do filho; no Python ele mora na
+memória de `internal_api` (`set_secret`), porque no `os.environ` vazaria para toda sessão que o
+backend sobe. O filho morre com o Python por um mecanismo só, em Linux, Windows e macOS: o
+Python segura o stdin dele como cano, e o binário sai quando o cano fecha. Sem `preexec_fn`, que
+não é seguro com threads vivas. No Windows o `Restart-HangarTask` reconhece o `hangar-server.exe`
+filho do backend: sem isso, a porta "de outro processo" barrava todo reinício.
+
+A reserva é no mesmo processo, sem novo lifespan: dois lifespans rodariam watchers e hooks em
+dobro. O motivo vai ao diário como `hangar_server.reserva` (`sem_binario`, `sem_resposta`,
+`protocolo`, `quedas`, `erro`, `porta_ocupada`); cada queda, como `hangar_server.caiu`. A saúde
+traz `protocol`, e o Python só aceita o mesmo `RUST_SERVER_PROTOCOL`: a `server-latest` é sempre a
+mais nova, e uma máquina atrasada pode baixar um binário que fala outro contrato interno. Com o
+Rust na frente, todo pedido chega ao uvicorn interno por `127.0.0.1`: o `forwarded_allow_ips`
+dele sempre inclui esse endereço, senão a LAN passaria por loopback e escaparia do limite de
+tentativas. O Rust põe no `X-Forwarded-For` o cliente já resolvido, nunca o que veio de fora.
+
+Os binários vêm da release `server-latest` para `~/.hangar/bin/`, pelo instalador, pelo botão
+Atualizar (`_preparar`) e pelo passo `2026-10-02-hangar-server-binarios`; falha vira aviso.
+
+### O contrato interno é versionado à mão
+
+Não há comparação de commit entre o binário e o Python: a `server-latest` acompanha a main, e
+uma máquina atrasada pode ter um `hangar-server` mais novo que as rotas `/internal` dela. Quem
+barra isso é o número. Qualquer mudança nas rotas `/internal`, no conjunto de eventos do
+`side-events` ou nas variáveis de ambiente passadas ao filho sobe `RUST_SERVER_PROTOCOL`
+(`backend/app/rust_server.py`) e `INTERNAL_PROTOCOL` (`crates/hangar-server/src/lib.rs`) juntos,
+no mesmo commit. Subir só um dos dois faz o Python recusar o binário e assumir a porta (visível
+no diário); não subir nenhum não dá aviso: o Python aceita um binário que fala outro contrato, e
+o defeito só aparece no comportamento. O `hangar-cano` segue o mesmo raciocínio com
+o `versao` do snapshot, que acompanha o `VERSAO` de `cano.py`
+(`backend/app/adapters/claude_headless/cano.py`; `VERSION` em `crates/hangar-cano/src/protocol.rs`).
+O download registra no diário o commit do manifesto, só para diagnóstico.
+
+### Linha de base (02/10/2026, antes da troca)
+
+Fonte: backend vivo (3 sessões, 4 conexões) e benchmarks avulsos em Python 3.14, nesta máquina
+(16 núcleos, 31 GB).
+
+| Métrica | Antes |
+|---|---|
+| Memória do backend | 232–312 MB de RSS, 247 MB anônimos, 20 threads |
+| CPU média | ~1,1% de um núcleo |
+| `cano.py` por sessão sem terminal | 22 MB de RSS, 6 threads, 22 ms para subir |
+| `/history` (Claude 0,9 MB / Codex 3 MB / Codex 35 MB) | 5–8 ms / 15–20 ms / 80–110 ms |
+| `/history` completo, Claude 300 MB / `limit=200` | 362 ms / 45 ms |
+| Atraso do laço com 8 leituras de histórico em paralelo | p99 9,6 ms, máx. 16 ms |
+| Recursos presos por chat aberto | 2 threads do pool do anyio (limite 200) e 2 inotify |
+
+### Depois da troca
+
+Preenchida na verificação manual com o dono, mesma máquina e mesmas sessões da linha de base.
+O `MainPID` do serviço é o `uv`, não o Python: o backend é o filho dele e o `hangar-server` é
+filho do backend.
+
+- Backend e `hangar-server` (RSS em KB):
+  `PY=$(pgrep -P $(systemctl --user show -p MainPID --value hangar-backend.service))`,
+  `RS=$(pgrep -f .hangar/bin/hangar-server)`, `ps -o pid,rss,nlwp,args -p $PY,$RS` e
+  `grep RssAnon /proc/$PY/status`.
+- `hangar-cano`: `ps -o pid,rss,nlwp,args -p $(pgrep -f hangar-cano | head -1)`.
+- `/history`, cinco vezes por sessão, mediana (`ls -l` do `jsonl` confere o tamanho):
+  `for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8765/api/sessions/<nome>/history"; done`;
+  na sessão Claude de 300 MB, sem e com `?limit=200`, se ela ainda existir.
+- Chats abertos: com nenhum aberto, `nlwp` do `$PY` e `ls -l /proc/$PY/fd | grep -c inotify`;
+  abrir 4 chats (2 sessões × celular e web) e repetir.
+
+Anotar valor e unidade, a sessão de cada `/history`, e o que não deu para medir e por quê.
+
+| Métrica | Depois |
+|---|---|
+| Backend Python (RSS, anônimos, threads) | |
+| `hangar-server` (RSS, threads) | |
+| `hangar-cano` por sessão sem terminal (RSS, threads) | |
+| `/history` (Claude 0,9 MB / Codex 3 MB / Codex 35 MB), mediana de 5 | |
+| `/history` completo, Claude 300 MB / `limit=200` | |
+| Threads e inotify do Python com 4 chats abertos, contra 0 abertos | |
+
+## Observação terminal Rust com reserva Python
+
+(03/10/2026, Parte 2C, ensaios isolados.) O `hangar-server` abre uma segunda porta em
+`127.0.0.1:0`, no mesmo processo e sob a mesma parada do listener público. Isso cobre também
+um bind público em IP LAN específico, que não aceita conexões destinadas a `127.0.0.1`.
+A saúde anuncia `terminal_address`; o Supervisor só o usa depois de confirmar o protocolo e
+conferir IP literal de loopback e porta válida. Endereço ausente/torto desliga a ponte com
+aviso. A porta pública recusa o endpoint terminal e a privada só monta esse endpoint.
+
+`POST /__hangar_server/terminal` confere origem TCP de loopback e segredo interno em tempo
+constante antes de ler o corpo. Cabeçalho encaminhado externo, inclusive duplicado ou inválido,
+recusa com 404; token do dono/convidado não serve. O corpo tem teto de 16 MiB e prazo de 6 s,
+operações tipadas `acquire`, `capture`, `release`, sem comando livre. Corpo inválido
+responde frase fixa com 400; falha do controle responde 503, nunca pane vazio com sucesso.
+O pool mantém os limites da Parte 2C/Task 2 e a captura exata do alvo que `tmux._pane_target`
+resolveu. `acquire` inicial confere o alvo; renovações não recapturam. O cliente anexa com
+`read-only,ignore-size,no-output` e `-E`, sem grade auxiliar. Cada rodada confere a sessão/pane
+e lê um único `capture-pane`; duas molduras identificam cada comando. Mudança de alvo continua
+invalidando a leitura, e panes maiores não pagam um limite de células de outra grade.
+
+A ponte Python usa um opener `urllib` somente HTTP, sem proxy/redirect, em thread dedicada,
+corpo/UTF-8/JSON limitados, sem dependência
+runtime de `httpx`. Endereço e segredo ficam em memória, fora do ambiente global, e somem
+antes da nova geração do filho, na saída e no `stop`, inclusive sem processo guardado.
+A configuração recebe geração própria. Cache, captura em voo e análise acompanham provider,
+vínculo da conversa, época local, geração da ponte e início da leitura. `/clear` invalida tudo;
+mesmo texto e mesmo nome não autorizam reaproveitar uma análise velha. O contexto do produtor
+não vaza para quem consome eventos do monitor.
+
+Claude mantém uma lease por monitor e uma por produtor de prévia; a prévia renova mesmo
+quando recebe só sidecar. `None` no sidecar cai no pane; `""` publica vazio com markdown/full.
+Análise Rust do pane só fornece spinner/texto no mesmo quadro, com markdown/full desligados.
+O estado temporal, debounce e a precedência das perguntas/plugin/hooks permanecem no bloco
+Python original, sobre o texto já capturado. Não existe outro HTTP para o cálculo puro, nem
+coleta antecipada de fatos que esse estado não usa. O cálculo puro Rust permanece como
+referência testada contra as fixtures Python, sem operação privada. Permissão, loop, shells,
+dedupe, drain e SSE continuam no Python.
+
+Codex terminal não abre observador tmux sem consumidor de captura. Estado, pergunta, prévia
+por push e app-server continuam nativos. Kimi/Pi/omp seguem o caminho anterior.
+Windows usa captura/reducer Python, sem tentar controle tmux/psmux.
+
+Prova isolada: listener público em `127.0.0.2`, privado em `127.0.0.1` com porta efêmera;
+processador privado respondeu 200 e ambas as portas fecharam na parada. Executável fake provou
+um PID compartilhado entre dois produtores, renovação sem recaptura e reap na última liberação.
+A suíte focada cobre reserva, estado temporal Python, `/clear` em voo com vínculo/texto idênticos,
+troca de geração, sidecar vazio, autenticação antes do corpo e eventos Codex durante HTTP lento.
+O gerador das fixtures força a referência Python: não compara Rust contra Rust.
+
+`RUST_SERVER_PROTOCOL` e `INTERNAL_PROTOCOL` ficam em 3 após retirar a operação privada `reduce`.
+`side-events` permanece igual. Em 03/10/2026 a coordenação com `rust-parte2` combinou 3 nesta 2C
+e 4 para o contrato posterior da Parte 2B; não reutilizar 3 para dois contratos diferentes.
+Não houve reinício/instalação nem validação no app ou backend vivo. Windows não foi executado.
+Uma rodada vermelha tentou leitura real `tmux capture-pane -p -t %8 -S -200` em alvo fictício e
+recebeu `can't find pane: %8`; nenhuma conversa foi lida. A guarda dos novos testes passou a
+bloquear `_run`/`RUN` antes de I/O e conferir no teardown se alguma chamada bloqueada foi engolida.

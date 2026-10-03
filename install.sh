@@ -433,6 +433,17 @@ else
   anota_problema "o app nativo não instalou — use o Hangar pelo navegador (tente: ./scripts/install-native.sh)"
 fi
 
+# ── Binários Rust (hangar-server e hangar-cano, release server-latest) ───────
+# Sem eles o backend em Python atende sozinho: falha aqui nunca para a instalação.
+say "Binários Rust"
+RUST_RC=0
+(cd backend && uv run --quiet --no-sync python -m app.rust_release) || RUST_RC=$?
+case "$RUST_RC" in
+  0) ok "hangar-server e hangar-cano em ~/.hangar/bin" ;;
+  2) falta "sem binários Rust para esta máquina — o backend em Python atende sozinho" ;;
+  *) anota_problema "binários Rust não baixaram — o backend em Python atende sozinho (tente: cd backend && uv run python -m app.rust_release)" ;;
+esac
+
 # ── 5/8 Wrappers do claude e do codex ────────────────────────────────────────
 # Sem eles um `claude` que VOCÊ abre no terminal é invisível pro app: sem --session-id o backend
 # não sabe qual transcript é daquela sessão, e fora do tmux não há pane pra ler estado nem

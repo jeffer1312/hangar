@@ -4,7 +4,7 @@ use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde_json::Value;
 use tokio::sync::oneshot;
-use super::{Api, Failure, dto::ChatEvent};
+use super::{Api, Failure, dto::{ChatEvent, ChatEventExt}};
 
 pub struct Frame {
     pub event: String,

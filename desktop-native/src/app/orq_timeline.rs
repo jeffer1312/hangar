@@ -149,7 +149,7 @@ impl Hangar {
     pub(super) fn render_orq_event(&mut self, id: &str, event_index: usize, cx: &mut Context<Self>) -> AnyElement {
         let event = &self.chat.events[event_index];
         let (ts, raw) = (event.ts, event.text.clone().unwrap_or_default());
-        let Some(orq) = event.orq.clone() else { return div().into_any_element() };
+        let Some(orq) = event.orq_entry() else { return div().into_any_element() };
         let day = self.orq_days.contains(id).then(|| day_label(ts)).flatten();
         let time = clock(ts);
         let is_line = matches!(orq.kind.as_str(), "advance" | "notice" | "");

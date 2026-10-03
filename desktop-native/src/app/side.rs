@@ -705,7 +705,8 @@ impl Hangar {
     }
 
     fn render_limits(&self, status: Option<&StatusFields>) -> Option<AnyElement> {
-        let limited = self.chat.state.limited.or(self.selected.as_ref().and_then(|s| s.limited)) == Some(true);
+        // Antes do primeiro `state` da conversa vale o que a lista de sessões diz.
+        let limited = if self.chat.state.state.is_empty() { self.selected.as_ref().and_then(|s| s.limited) == Some(true) } else { self.chat.state.limited };
         let reset = self.chat.state.limit_reset.clone().or_else(|| self.selected.as_ref().and_then(|s| s.limit_reset.clone()));
         let windows: Vec<(String, f64, Option<String>)> = status.map(|s| [
             (tr("limit_5h"), s.five_hour_pct, s.five_hour_reset.clone()),
