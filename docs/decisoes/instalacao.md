@@ -37,9 +37,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **CI do Rust: conferir em toda branch, compilar release e publicar só na main e no canal de testes.**
   `native.yml` e `server.yml` testam em debug em todo push e PR de fork; `build --release` e
   `publish` só rodam na main (Linux, Windows, macOS) e no canal (`hangar-server-parte1`, Linux e
-  Windows). Trocar o canal é trocar esse nome nos dois arquivos. O `publish` do server só leva o
-  sistema cujo `test` passou na mesma rodada, e o do nativo espera o `check`. Cache só é gravado
-  pela main e pelo canal; as outras branches leem o da main.
+  Windows). Trocar o canal é trocar esse nome nos dois arquivos. O `publish` segue como antes da
+  separação: o manifesto leva todo sistema que compilou, e só o Linux é obrigatório; teste
+  vermelho de Windows/macOS não tira o binário dele. Cache só é gravado pela main e pelo canal;
+  as outras branches leem o da main.
   [Medição](#ci-do-rust-conferir-em-toda-branch-publicar-só-na-main-e-no-canal).
 - **O botão Atualizar NÃO roda o instalador.** Sozinho ele faz dist do CI, `uv sync`, `npm ci` por
   hash do lock, restart e prova de vida por **pid** (HTTP o processo velho também responde).
@@ -457,10 +458,14 @@ A coluna main/canal veio de `workflow_dispatch` nesta branch, que compila sem pu
   `native-check-Linux` com 788 MiB.
 - **Teste e build do server não são reaproveitados de um perfil para o outro.** Rodar a suíte no
   perfil publicado passaria cada binário de teste pelo LTO fat. Os dois correm em jobs paralelos, e o
-  custo do paralelismo é que um teste vermelho no Windows não impede mais o build do Windows. Por
-  isso o `publish` exige a marca `tested-<sistema>` da mesma rodada e tira da release o sistema sem
-  ela. Isso foi exercitado: na segunda rodada o `costs_origins.rs:86` (prazo de 5 s) falhou no
-  Windows, e numa branch que publica o binário dele teria ficado de fora.
+  custo do paralelismo é que um teste vermelho no Windows não impede mais o build do Windows, e o
+  binário dele sobe mesmo assim.
+- **A marca `tested-<sistema>` como condição de publicar saiu no mesmo dia.** Ela tirava do
+  manifesto o sistema cujo teste falhou, e o manifesto é reescrito inteiro: em 05/10/2026 o `test`
+  do Windows falhou na rodada 37349100589 (commit 92047343), o `server-latest.json` do canal saiu só
+  com `linux-x86_64`, e no Windows o `rust_release.fetch()` respondeu "a release não traz build
+  para windows-x86_64" e o Rust não subiu. O dono mandou voltar ao comportamento anterior: publica
+  todo sistema que compilou. O `publish` do nativo voltou a esperar só o `build`, sem o `check`.
 - **O `check` do nativo usa `cargo build`, não `cargo check`.** O perfil dev otimiza as dependências
   (`opt-level = 3`). O `check` as refazia só em metadados, 373 s a frio, além do `test`. O `build`
   confere o mesmo binário e deixa pronto o que o `test` usa: o `test` caiu de 525 s para 28 s.

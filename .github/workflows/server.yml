@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   # Testes em debug, não no perfil publicado: com LTO fat cada binário de teste passaria pela otimização do programa
-  # inteiro. Correm ao lado do `build`, e o `publish` só leva o sistema cujo `test` passou nesta rodada.
+  # inteiro. Correm ao lado do `build`; o manifesto leva todo sistema que compilou, como antes da separação.
   # PR de branch deste repositório já roda pelo push; aqui só os de fork.
   test:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
@@ -50,7 +50,7 @@ jobs:
         # macOS só na main: as máquinas do canal de testes são Linux e Windows.
         os: ${{ fromJSON(github.ref_name == 'main' && '["ubuntu-latest","windows-latest","macos-latest"]' || '["ubuntu-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
-    # Falha de Windows ou macOS não segura a release do Linux; o binário daquele sistema é que fica de fora.
+    # Falha de Windows ou macOS não segura a release do Linux.
     continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -59,7 +59,6 @@ jobs:
         working-directory: crates
         shell: bash
     env:
-      PLATFORM: ${{ fromJSON('{"ubuntu-latest":"linux-x86_64","windows-latest":"windows-x86_64","macos-latest":"macos-aarch64"}')[matrix.os] }}
       # Sem incremental e sem debuginfo: encolhem o target que vai ao cache, e o CI não usa nenhum dos dois.
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -110,13 +109,6 @@ jobs:
       - name: Contenção e regressões da entrega terminal
         working-directory: backend
         run: uv run pytest tests/test_runtime_process.py tests/test_runtime_queue_terminal_v2.py tests/test_runtime_terminal_fix.py tests/test_runtime_terminal_fix2.py tests/test_runtime_terminal_failure_policy.py tests/test_runtime_final_fixes.py -q
-      # Marca lida pelo `publish`: sem ela, o binário deste sistema não sobe.
-      - run: mkdir -p tested && touch "tested/$PLATFORM"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tested-${{ env.PLATFORM }}
-          path: crates/tested/*
-          retention-days: 1
 
   build:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'hangar-server-parte1'))
@@ -232,25 +224,10 @@ jobs:
           pattern: server-*
           path: out
           merge-multiple: true
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: tested-*
-          path: tested
-          merge-multiple: true
       # Chave `<plataforma>/<bin>` sem `.exe`; o `name` é o asset exato a baixar.
       - name: sha256 e manifesto
         working-directory: out
         run: |
-          # Teste e build correm em paralelo: binário de sistema cujo `test` não passou nesta rodada não sobe.
-          for f in hangar-server-* hangar-cano-*; do
-            base=${f%.exe}
-            platform=${base#hangar-server-}
-            platform=${platform#hangar-cano-}
-            if ! test -f "../tested/$platform"; then
-              echo "::warning::$platform sem teste verde nesta rodada; $f fica fora da release"
-              rm "$f"
-            fi
-          done
           for need in hangar-server-linux-x86_64 hangar-cano-linux-x86_64; do
             test -f "$need" || { echo "sem $need, nada a publicar"; exit 1; }
           done

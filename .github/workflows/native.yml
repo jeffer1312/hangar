@@ -156,9 +156,9 @@ jobs:
           path: desktop-native/out/*
           retention-days: 1
 
-  # Só este job escreve, como o `publica-dist` do ci.yml. Teste vermelho no `check` segura a publicação.
+  # Só este job escreve, como o `publica-dist` do ci.yml.
   publish:
-    needs: [check, build]
+    needs: build
     if: startsWith(github.ref, 'refs/heads/') && (github.ref_name == 'main' || github.ref_name == 'hangar-server-parte1')
     runs-on: ubuntu-latest
     permissions:
