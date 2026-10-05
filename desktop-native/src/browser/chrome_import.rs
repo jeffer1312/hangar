@@ -90,7 +90,8 @@ fn endpoint_from_profile(root: &PathBuf) -> Option<String> {
 fn url_from_port(port: u16) -> Result<Option<String>, ImportError> {
     let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else { return Ok(None) };
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    if stream.write_all(b"GET /json/version HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n").is_err() {
+    // HTTP/1.1 com `Connection: close`: o servidor de DevTools do Chrome ignora pedidos HTTP/1.0 (responde nada).
+    if stream.write_all(b"GET /json/version HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").is_err() {
         return Ok(None);
     }
     // Teto na resposta de um processo local qualquer que esteja na porta.
@@ -105,7 +106,10 @@ fn url_from_port(port: u16) -> Result<Option<String>, ImportError> {
     if v["User-Agent"].as_str().unwrap_or("").to_lowercase().contains("headless") {
         return Err(ImportError::Headless);
     }
-    Ok(v["webSocketDebuggerUrl"].as_str().map(str::to_owned))
+    // O Chrome monta o host:porta do `webSocketDebuggerUrl` a partir do header Host; reconstrói com a porta conhecida
+    // (só o caminho interessa) para não depender desse eco.
+    Ok(v["webSocketDebuggerUrl"].as_str().and_then(|ws| url::Url::parse(ws).ok())
+        .map(|u| format!("ws://127.0.0.1:{port}{}", u.path())))
 }
 
 /// Cookie do `Storage.getCookies` -> `CookieParam` do `Storage.setCookies`: só os campos que viajam.
@@ -574,6 +578,23 @@ mod tests {
         // Fronteira do comprimento estendido de 16 bits.
         assert_eq!(masked_text(&vec![0u8; 126], [0; 4])[1], 0x80 | 126);
         assert_eq!(masked_text(&vec![0u8; 125], [0; 4])[1], 0x80 | 125);
+    }
+
+    // Integração real: contra um Chrome headful com depuração na porta HANGAR_TEST_CDP_PORT. Rode com
+    // XDG_CONFIG_HOME vazio para `profile_roots` não achar o Chrome do usuário e cair na porta fixa.
+    #[test]
+    #[ignore = "precisa de um Chrome com depuração em HANGAR_TEST_CDP_PORT"]
+    fn fetch_cookies_against_a_live_chrome() {
+        let port: u16 = std::env::var("HANGAR_TEST_CDP_PORT").expect("HANGAR_TEST_CDP_PORT").parse().unwrap();
+        let cookies = match fetch_cookies(Some(port)) {
+            Ok(c) => c,
+            Err(e) => panic!("fetch_cookies falhou: {} {}", e.status_key(), e.detail()),
+        };
+        eprintln!("importou {} cookies do Chrome real", cookies.len());
+        assert!(
+            cookies.iter().any(|c| c["name"] == "hangar_test" && c["value"] == "abc123"),
+            "esperava o cookie de teste hangar_test=abc123; veio: {cookies:?}"
+        );
     }
 
     #[test]
