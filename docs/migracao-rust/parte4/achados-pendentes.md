@@ -40,6 +40,11 @@ Achados médios e baixos das revisões por Task que entraram na `feat/parte4` se
   ele, cada poll de permissão segurada captura o pane de novo (um processo por poll, só enquanto há
   permissão segurada). Ler o modo do `Monitor` do Rust ou do retrato dos fatos.
 
+- VM DELPHI-02 roda um `hangar-server` compilado nela (`crates/target/release`, de `641838a3`)
+  porque o binário Windows da `feat/parte4` não foi publicado (CI do Windows caindo em testes de
+  tempo do #82 e dos custos). Quando a release tiver o Windows da versão juntada: apagar o
+  `crates/target` da VM, Atualizar, e voltar o `CP_UPDATE_BRANCH` dela para `hangar-server-parte1`.
+
 ## Fora da parte 4, achados pela prova (Task 12)
 
 - ~~`/select` no Codex sem terminal responde 500~~: corrigido em `427eb0d5d` (a rota do terminal
