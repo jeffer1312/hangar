@@ -5,26 +5,9 @@
 # backend/app/rust_release.py procura quando o checkout está nessa branch. O manifesto mantém o nome em toda release.
 name: Server
 
+# TESTE de CI (passos paralelos): roda só no PR contra a parte1, lê o cache dela sem gravar e não publica.
 on:
-  push:
-    branches: ["**"]
-    paths:
-      - "crates/**"
-      - "backend/tests/fixtures/**"
-      # A suíte de contrato do cano roda aqui contra o binário: mudar o cano.py ou ela também testa o Rust.
-      - "backend/app/adapters/claude_headless/cano.py"
-      - "backend/tests/test_claude_headless_cano.py"
-      - "backend/app/runtime_process.py"
-      - "backend/app/runtime_terminal.py"
-      - "backend/app/runtime_coordinator.py"
-      - "backend/app/rust_server.py"
-      - "backend/tests/test_runtime_process.py"
-      - "backend/tests/test_runtime_queue_terminal_v2.py"
-      - "backend/tests/test_runtime_terminal_fix*.py"
-      - "backend/tests/test_runtime_terminal_failure_policy.py"
-      - "backend/tests/test_runtime_final_fixes.py"
-      - "plugins/hangar/hooks/**"
-      - ".github/workflows/server.yml"
+  pull_request:
   workflow_dispatch:
 
 # Dois pushes seguidos não publicam ao mesmo tempo: o segundo espera, e a release termina no commit mais novo.
@@ -90,7 +73,7 @@ jobs:
         if: runner.os != 'Windows'
         run: tmux -V
       # O rustup do runner lê o crates/rust-toolchain.toml (1.98.1) no primeiro cargo.
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -153,7 +136,7 @@ jobs:
       # Cada sistema publica assim que o PRÓPRIO build passa: o Linux não espera Windows e macOS. Build que falha não
       # publica nada, e a release segue com o binário e a entrada anteriores daquele sistema.
       - name: Publicar na release
-        if: startsWith(github.ref, 'refs/heads/')
+        if: false
         working-directory: crates/out
         env:
           GH_TOKEN: ${{ github.token }}
@@ -264,7 +247,7 @@ jobs:
   # depois de começar (binário novo com manifesto velho) não pode passar calada por isso.
   publish-check:
     needs: build
-    if: always() && startsWith(github.ref, 'refs/heads/')
+    if: false
     runs-on: ubuntu-latest
     permissions:
       actions: read

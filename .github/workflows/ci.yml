@@ -1,10 +1,9 @@
 # CI: os mesmos gates que rodam localmente (pytest / svelte-check+tsc / vitest / build).
 name: CI
 
+# TESTE de CI: desligado nesta branch de medição.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   # Mudança em instalador/script sem passo declarado em docs/atualizacoes/. O pre-commit faz o
