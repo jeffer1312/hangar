@@ -1,8 +1,9 @@
 # backend/app/rust_bins.py
 """Onde estão os binários Rust do Hangar (`hangar-server`, `hangar-cano`).
 
-Ordem: a variável de ambiente (escolha explícita, vence e não cai para as outras), o build
-do checkout (`crates/target/release`, desenvolvimento) e o baixado em `~/.hangar/bin`.
+Ordem: a variável de ambiente (escolha explícita, vence e não cai para as outras); sem ela, o
+mais novo entre o build do checkout (`crates/target/release`, desenvolvimento) e o baixado em
+`~/.hangar/bin`.
 """
 from __future__ import annotations
 
@@ -28,7 +29,8 @@ def find_bin(name: str, env_var: str) -> Path | None:
         # Caminho errado não pode virar outro binário calado: a escolha some e aparece no log.
         _log.warning("rust_bins: %s=%s não é executável; seguindo sem %s", env_var, escolhido, name)
         return None
-    for p in (_REPO / "crates" / "target" / "release" / exe, Path.home() / ".hangar" / "bin" / exe):
-        if _executavel(p):
-            return p
-    return None
+    achados = [p for p in (_REPO / "crates" / "target" / "release" / exe, Path.home() / ".hangar" / "bin" / exe)
+               if _executavel(p)]
+    # O mais novo vence: um build do checkout esquecido depois do `git pull` fala o protocolo antigo,
+    # e o Python desligaria o Rust em vez de usar o baixado em dia. Empate fica com o checkout.
+    return max(achados, key=lambda p: p.stat().st_mtime, default=None)

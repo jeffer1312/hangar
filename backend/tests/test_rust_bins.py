@@ -1,6 +1,6 @@
 # backend/tests/test_rust_bins.py
-"""Busca dos binários Rust: a variável vence e não cai para outro lugar; sem ela, o build do
-checkout vem antes do baixado; arquivo que não executa não conta."""
+"""Busca dos binários Rust: a variável vence e não cai para outro lugar; sem ela, o mais novo
+entre o build do checkout e o baixado (empate fica com o checkout); arquivo que não executa não conta."""
 import os
 import stat
 from pathlib import Path
@@ -33,11 +33,17 @@ def test_sem_nada_devolve_none(locais):
     assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") is None
 
 
-def test_build_do_checkout_vem_antes_do_baixado(locais):
+def test_o_mais_novo_vence_e_empate_fica_com_o_checkout(locais):
     build, baixado = locais
     _executavel(baixado)
     assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") == baixado
     _executavel(build)
+    os.utime(build, (1_000, 1_000))
+    os.utime(baixado, (1_000, 1_000))
+    assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") == build
+    os.utime(baixado, (2_000, 2_000))
+    assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") == baixado
+    os.utime(build, (3_000, 3_000))
     assert rust_bins.find_bin("hangar-cano", "CP_RUST_CANO_BIN") == build
 
 

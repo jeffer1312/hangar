@@ -36,6 +36,7 @@ pub fn resolve_lenient(path: &Path) -> PathBuf {
     // O link é seguido antes do `..`, como no `resolve`; só o pedaço que não existe é lexical.
     for base in abs.ancestors() {
         if let Ok(real) = std::fs::canonicalize(base) {
+            let real = without_verbatim(real);
             return match abs.strip_prefix(base) {
                 Ok(rest) if !rest.as_os_str().is_empty() => normpath(&real.join(rest)),
                 _ => real,
@@ -43,6 +44,18 @@ pub fn resolve_lenient(path: &Path) -> PathBuf {
         }
     }
     normpath(&abs)
+}
+
+/// O `canonicalize` do Windows devolve `\\?\C:\...`; o Python escreve `C:\...`, e a conta da sessão
+/// (`claude:<pasta>`) precisa bater letra a letra com o id da credencial que ele monta.
+fn without_verbatim(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) { return path; }
+    path.to_str().and_then(verbatim_stripped).map_or(path, PathBuf::from)
+}
+
+fn verbatim_stripped(text: &str) -> Option<String> {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") { return Some(format!(r"\\{rest}")); }
+    text.strip_prefix(r"\\?\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map(str::to_owned)
 }
 
 /// `pqueue._sanitize`: nome do sidecar de vínculo (mantém o ponto, ao contrário do da sessão).
@@ -775,6 +788,24 @@ mod tests {
         // Aspa sem par não casa, como o `\1` do Python.
         assert_eq!(paths("cd \"/x y\""), Vec::<String>::new());
         assert_eq!(paths("echo cd /nao"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn verbatim_prefix_is_written_like_python() {
+        assert_eq!(verbatim_stripped(r"\\?\C:\Users\u\.claude-x").as_deref(), Some(r"C:\Users\u\.claude-x"));
+        assert_eq!(verbatim_stripped(r"\\?\UNC\srv\share\d").as_deref(), Some(r"\\srv\share\d"));
+        // Volume sem letra não tem forma curta: fica como veio.
+        assert_eq!(verbatim_stripped(r"\\?\Volume{abc}\d"), None);
+        assert_eq!(verbatim_stripped(r"C:\Users\u"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolved_account_dir_has_no_verbatim_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let resolved = resolve_lenient(&tmp.path().join("ainda-nao-existe")).to_string_lossy().into_owned();
+        assert!(!resolved.starts_with(r"\\?\"), "{resolved}");
+        assert!(resolved.ends_with(r"\ainda-nao-existe"), "{resolved}");
     }
 
     fn dirs_at(home: &Path) -> Dirs {
