@@ -97,6 +97,8 @@ jobs:
       # O sufixo .2.28 fixa a glibc mínima; o diretório de saída continua sem ele (target/<triplo>/release).
       # Compila os testes junto com o release (o LTO fat é quase todo de um núcleo só); os testes
       # executam depois, sozinhos, sem disputar CPU com o build.
+      # Instala o toolchain antes: dois cargo em paralelo disputam o auto-install do rustup.
+      - run: cargo --version
       - parallel:
           - name: Compilar testes
             run: cargo test --locked --workspace --no-run
