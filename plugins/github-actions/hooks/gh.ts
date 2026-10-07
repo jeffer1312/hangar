@@ -85,6 +85,15 @@ export function lembrarCommit(lista: readonly Empurrado[], novo: Empurrado, max:
 /** Só `git push` registra commit; `gh pr|run|workflow` só pede consulta. */
 export const ehPush = (cmd: string) => /\bgit\s+push\b/.test(cmd)
 
+/** O PR de cada `gh pr merge` do comando: número, URL ou branch; '' é o da branch atual. */
+export function alvosMerge(cmd: string): string[] {
+  return [...cmd.matchAll(/\bgh\s+pr\s+merge\b([^;&|\n]*)/g)].map(m => {
+    const args = (m[1] ?? '').trim().split(/\s+/).filter(Boolean)
+    // Número ou URL primeiro: uma flag com valor (`--subject x`) não vira o PR.
+    return args.find(a => /^\d+$|^https?:\/\//.test(a)) ?? (args.some(a => a.startsWith('-')) ? '' : args[0] ?? '')
+  })
+}
+
 type CheckGh = { __typename?: string; status?: string; conclusion?: string | null; state?: string }
 
 export function checks(rollup: readonly CheckGh[] | null | undefined): Checks {

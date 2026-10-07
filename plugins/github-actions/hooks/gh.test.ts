@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { checks, classificarFalha, piorErro, textoAviso, disparaRun, ehGithub, ehPush, iso, jobs, lembrarCommit, ms, precisaConsultar, runsVisiveis, situacao } from './gh'
+import { alvosMerge, checks, classificarFalha, piorErro, textoAviso, disparaRun, ehGithub, ehPush, iso, jobs, lembrarCommit, ms, precisaConsultar, runsVisiveis, situacao } from './gh'
 import type { GhView, RunGh, Situacao } from './gh'
 import { barra, chavesJobs, contar, duracao, nomeJob, nomesJobs, passoCurto, progresso, rotulosAnteriores, separarPorCommit } from './faixa'
 
@@ -59,6 +59,14 @@ describe('gh', () => {
   test('outra falha mostra a primeira linha do erro', () => {
     expect(classificarFalha('dial tcp: lookup api.github.com: no such host')).toBe('outra')
     expect(textoAviso('outra', 'Error: dial tcp: no such host\nmais', null)).toBe('gh falhou: dial tcp: no such host')
+  })
+
+  test('alvos do gh pr merge', () => {
+    expect(alvosMerge('gh pr merge 106 --merge && gh pr merge 104 --merge --admin')).toEqual(['106', '104'])
+    expect(alvosMerge('gh pr merge --squash --subject x')).toEqual([''])
+    expect(alvosMerge('gh pr merge https://github.com/a/b/pull/7')).toEqual(['https://github.com/a/b/pull/7'])
+    expect(alvosMerge('gh pr merge feat/x')).toEqual(['feat/x'])
+    expect(alvosMerge('gh pr view 3')).toEqual([])
   })
 
   test('só git push registra commit', () => {

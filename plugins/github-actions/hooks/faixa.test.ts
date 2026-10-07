@@ -84,3 +84,31 @@ test('faixa aberta detalha o run mais novo de cada workflow; ▾ recolhe numa li
   expect(recolhida.join('|')).not.toContain('passos')
   expect(recolhida).toContain('✕1')
 })
+
+test('gh pr merge feito pela sessão passa a mostrar o build do commit de merge na base', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  mock.store(on, {})
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 'sid' }) as never)
+  on('ui.render', () => ({ type: 'Box', props: {}, children: [] }) as never)
+  on('tool.call', () => ({ result: 'merged', isError: false }) as never)
+  on('process.run', (_, e) => {
+    const a = e.argv.join(' ')
+    const out = a === 'git remote get-url origin' ? 'https://github.com/a/b'
+      : a === 'git branch --show-current' ? 'main'
+        : a === 'git rev-parse HEAD' ? 'aaaaaaaa'
+          : a.startsWith('gh pr view 106') ? JSON.stringify({ state: 'MERGED', mergeCommit: { oid: 'dddddddd' }, baseRefName: 'main' })
+            : a.startsWith('gh run list --commit dddddddd') ? JSON.stringify([run(9, 'Native', 'dddddddd', 'in_progress')])
+              : a.startsWith('gh run view 9') ? JSON.stringify({ jobs: [] })
+                : null
+    return { value: { exitCode: out === null ? 1 : 0, stdout: out ?? '', stderr: out === null ? 'no pull requests found' : '' } } as never
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'gh pr merge 106 --merge' } as never)
+  await clock.advance(5_000)
+  const ui = await $.ui.mount({ plugin: 'github-actions', surface: 'desktop', component: 'AbovePrompt', props: ABOVE })
+  for (let i = 0; i < 50 && !textos(await ui.drawn()).join('|').includes('Native'); i++) await ui.redraw()
+  const t = textos(await ui.drawn()).join('|')
+  expect(t).toContain('▸ Native')
+  expect(t).toContain('ddddddd')
+})

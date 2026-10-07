@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import { classificarFalha, disparaRun, piorErro, ehGithub, ehPush, emAndamento, textoAviso, iso, jobs, lembrarCommit, ms, pr, precisaConsultar, runsVisiveis, situacao } from './gh'
+import { alvosMerge, classificarFalha, disparaRun, piorErro, ehGithub, ehPush, emAndamento, textoAviso, iso, jobs, lembrarCommit, ms, pr, precisaConsultar, runsVisiveis, situacao } from './gh'
 import type { Empurrado, Falha, Situacao } from './gh'
 import type { GhView, Job, JobGh, PrGh, RunGh, Workflow } from './gh'
 import { desenharFaixa } from './faixa'
@@ -285,6 +285,20 @@ export const register: Register = on => {
         }
       } catch (err) {
         $.ui.log(`github-actions: não guardei o commit empurrado: ${String(err)}`, { to: 'debug' })
+      }
+    }
+    // Merge feito pela sessão: o commit nasce no GitHub, e os runs dele na base passam a ser acompanhados.
+    // Vale o que o gh diz do PR, não o código de saída: `a && b` pode juntar um e falhar no outro.
+    for (const alvo of alvosMerge(e.command)) {
+      const argv = ['gh', 'pr', 'view', ...(alvo ? [alvo] : []), '--json', 'state,mergeCommit,baseRefName']
+      try {
+        const p = lerJson<{ state: string; mergeCommit: { oid: string } | null; baseRefName: string }>(await sh($, argv), argv)
+        if (p.state === 'MERGED' && p.mergeCommit?.oid) {
+          aguardando = { sha: p.mergeCommit.oid, ate: (await $.clock.now()) + PRAZO_PUSH_MS }
+          await guardarCommit($, { sha: p.mergeCommit.oid, branch: p.baseRefName })
+        }
+      } catch (err) {
+        $.ui.log(`github-actions: não guardei o commit do merge: ${String(err)}`, { to: 'debug' })
       }
     }
     agendar($, ESPERA_PUSH_MS)
