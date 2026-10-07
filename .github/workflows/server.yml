@@ -5,26 +5,9 @@
 # backend/app/rust_release.py procura quando o checkout está nessa branch. O manifesto mantém o nome em toda release.
 name: Server
 
+# TESTE de CI (passos paralelos): roda só no PR contra a parte1, lê o cache dela sem gravar e não publica.
 on:
-  push:
-    branches: ["**"]
-    paths:
-      - "crates/**"
-      - "backend/tests/fixtures/**"
-      # A suíte de contrato do cano roda aqui contra o binário: mudar o cano.py ou ela também testa o Rust.
-      - "backend/app/adapters/claude_headless/cano.py"
-      - "backend/tests/test_claude_headless_cano.py"
-      - "backend/app/runtime_process.py"
-      - "backend/app/runtime_terminal.py"
-      - "backend/app/runtime_coordinator.py"
-      - "backend/app/rust_server.py"
-      - "backend/tests/test_runtime_process.py"
-      - "backend/tests/test_runtime_queue_terminal_v2.py"
-      - "backend/tests/test_runtime_terminal_fix*.py"
-      - "backend/tests/test_runtime_terminal_failure_policy.py"
-      - "backend/tests/test_runtime_final_fixes.py"
-      - "plugins/hangar/hooks/**"
-      - ".github/workflows/server.yml"
+  pull_request:
   workflow_dispatch:
 
 # Dois pushes seguidos não publicam ao mesmo tempo: o segundo espera, e a release termina no commit mais novo.
@@ -90,7 +73,7 @@ jobs:
         if: runner.os != 'Windows'
         run: tmux -V
       # O rustup do runner lê o crates/rust-toolchain.toml (1.98.1) no primeiro cargo.
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -99,7 +82,6 @@ jobs:
           key: server-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
           restore-keys: server-${{ runner.os }}-
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
-      - run: cargo test --locked --workspace
       - if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
       # Zig baixado direto (sha256 do index.json do ziglang.org): o repositório só libera actions da GitHub,
@@ -113,10 +95,17 @@ jobs:
       - if: matrix.zigbuild
         run: cargo install cargo-zigbuild --locked --version =0.23.4
       # O sufixo .2.28 fixa a glibc mínima; o diretório de saída continua sem ele (target/<triplo>/release).
-      - run: cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --locked --release --workspace ${{ matrix.target && format('--target {0}{1}', matrix.target, matrix.zigbuild && '.2.28' || '') || '' }}
-        env:
-          CARGO_PROFILE_RELEASE_LTO: fat
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+      # Compila os testes junto com o release (o LTO fat é quase todo de um núcleo só); os testes
+      # executam depois, sozinhos, sem disputar CPU com o build.
+      - parallel:
+          - name: Compilar testes
+            run: cargo test --locked --workspace --no-run
+          - name: Build release
+            run: cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --locked --release --workspace ${{ matrix.target && format('--target {0}{1}', matrix.target, matrix.zigbuild && '.2.28' || '') || '' }}
+            env:
+              CARGO_PROFILE_RELEASE_LTO: fat
+              CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+      - run: cargo test --locked --workspace
       # Guarda: se o zigbuild deixar de fixar a glibc, o binário passa a exigir mais que o prometido.
       - name: glibc máxima exigida
         if: matrix.zigbuild
@@ -153,7 +142,7 @@ jobs:
       # Cada sistema publica assim que o PRÓPRIO build passa: o Linux não espera Windows e macOS. Build que falha não
       # publica nada, e a release segue com o binário e a entrada anteriores daquele sistema.
       - name: Publicar na release
-        if: startsWith(github.ref, 'refs/heads/')
+        if: false
         working-directory: crates/out
         env:
           GH_TOKEN: ${{ github.token }}
@@ -264,7 +253,7 @@ jobs:
   # depois de começar (binário novo com manifesto velho) não pode passar calada por isso.
   publish-check:
     needs: build
-    if: always() && startsWith(github.ref, 'refs/heads/')
+    if: false
     runs-on: ubuntu-latest
     permissions:
       actions: read
