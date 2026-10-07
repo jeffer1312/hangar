@@ -2505,6 +2505,9 @@ async def _criar_sessao(body: CreateBody, worktree: dict):
         try:
             root = await asyncio.to_thread(_allowed_scan_root, body.cwd)
             source = body.cwd
+            # Recusa antes de criar a worktree, em vez de criar e desfazer no registry.create.
+            if not sanitize_session_name(body.name):
+                raise GitError(400, "nome de sessão inválido")
             worker = asyncio.create_task(asyncio.to_thread(
                 git_ops.create_branch_worktree, source, body.branch, root,
                 new_branch=body.new_branch, base=body.base))

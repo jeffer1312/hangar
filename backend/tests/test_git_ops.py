@@ -162,6 +162,14 @@ def test_branch_worktree_is_named_after_branch_and_skips_occupied(tmp_path):
     with pytest.raises(GitError) as taken:
         git_ops.create_branch_worktree(d, "PM-1", tmp_path, new_branch=True)
     assert taken.value.detail == "já existe uma branch com esse nome"
+    path, _ = git_ops.create_branch_worktree(d, "日本", tmp_path, new_branch=True)
+    assert path == str(tmp_path / "repo-worktree")
+
+
+def test_worktree_target_taken_text_matches_rust():
+    # O retry compara o texto: a ponte repassa o `detail` do Rust sem código.
+    git_rs = Path(__file__).parents[2] / "crates/hangar-workspace/src/git.rs"
+    assert f'"{git_ops.WORKTREE_TARGET_TAKEN}"' in git_rs.read_text(encoding="utf-8")
 
 
 def test_create_worktree_rejects_occupied_or_outside_root(tmp_path):

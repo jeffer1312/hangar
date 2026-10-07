@@ -448,9 +448,8 @@ def create_worktree(cwd: str, branch: str, name: str, allowed_root: Path, *,
 def create_branch_worktree(cwd: str, branch: str, allowed_root: Path, *,
                            new_branch: bool = False, base: str | None = None) -> tuple[str, bool]:
     """A pasta leva o nome da branch, que é o que a tela mostra; ocupada, ganha `-2`, `-3`…"""
-    stem = sanitize_session_name(branch)
-    if not stem:
-        raise GitError(400, "nome de branch inválido")
+    # Branch só com letras fora do ASCII sanitiza para vazio; a pasta não pode recusar uma branch válida.
+    stem = sanitize_session_name(branch) or "worktree"
     for n in range(1, 100):
         try:
             return create_worktree(cwd, branch, stem if n == 1 else f"{stem}-{n}", allowed_root,
