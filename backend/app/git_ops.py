@@ -9,8 +9,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from app.mensagens import erro
+from app.names import sanitize_session_name
 
 _log = logging.getLogger("hangar.git_ops")
+WORKTREE_TARGET_TAKEN = "destino da worktree já existe"
 
 # Git pela sessao (cwd da sessao tmux). Tudo via argv list -> nunca string de shell (sem injecao).
 # Acoes fixas: listar/trocar branch, status/pull/fetch/stash, e o write-path (commit/push) + navegacao
@@ -418,7 +420,7 @@ def create_worktree(cwd: str, branch: str, name: str, allowed_root: Path, *,
         if not target.is_relative_to(allowed_root):
             raise GitError(400, "worktree fora da raiz autorizada")
         if target.exists() or target.is_symlink():
-            raise GitError(409, "destino da worktree já existe")
+            raise GitError(409, WORKTREE_TARGET_TAKEN)
 
         if new_branch:
             start = base if base in info["branches"] else _remote_ref(cwd, base)
@@ -441,6 +443,23 @@ def create_worktree(cwd: str, branch: str, name: str, allowed_root: Path, *,
                 _log.warning("hangar-base de %s não gravada: %s", branch, e.detail)
         copy_ignored(_main_root(cwd, repo, allowed_root), str(target))
         return str(target), True
+
+
+def create_branch_worktree(cwd: str, branch: str, allowed_root: Path, *,
+                           new_branch: bool = False, base: str | None = None) -> tuple[str, bool]:
+    """A pasta leva o nome da branch, que é o que a tela mostra; ocupada, ganha `-2`, `-3`…"""
+    stem = sanitize_session_name(branch)
+    if not stem:
+        raise GitError(400, "nome de branch inválido")
+    for n in range(1, 100):
+        try:
+            return create_worktree(cwd, branch, stem if n == 1 else f"{stem}-{n}", allowed_root,
+                                   new_branch=new_branch, base=base)
+        except GitError as e:
+            # O Rust devolve o mesmo texto: é ele que separa "pasta ocupada" das outras recusas 409.
+            if e.detail != WORKTREE_TARGET_TAKEN:
+                raise
+    raise GitError(409, WORKTREE_TARGET_TAKEN)
 
 
 def _main_root(cwd: str, repo: Path, allowed_root: Path) -> str:

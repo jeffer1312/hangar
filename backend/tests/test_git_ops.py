@@ -149,6 +149,21 @@ def test_create_worktree_from_dirty_repo_and_remove(tmp_path):
     assert not (tmp_path / "repo-chat").exists()
 
 
+def test_branch_worktree_is_named_after_branch_and_skips_occupied(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    d = _repo(repo)
+    (tmp_path / "repo-PM-1").mkdir()
+    path, created = git_ops.create_branch_worktree(d, "PM-1", tmp_path, new_branch=True)
+    assert created and path == str(tmp_path / "repo-PM-1-2")
+    assert git_ops.branch_of(path) == "PM-1"
+    path, _ = git_ops.create_branch_worktree(d, "feat/x", tmp_path, new_branch=True)
+    assert path == str(tmp_path / "repo-feat-x")
+    with pytest.raises(GitError) as taken:
+        git_ops.create_branch_worktree(d, "PM-1", tmp_path, new_branch=True)
+    assert taken.value.detail == "já existe uma branch com esse nome"
+
+
 def test_create_worktree_rejects_occupied_or_outside_root(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

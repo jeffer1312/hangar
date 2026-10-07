@@ -2505,11 +2505,8 @@ async def _criar_sessao(body: CreateBody, worktree: dict):
         try:
             root = await asyncio.to_thread(_allowed_scan_root, body.cwd)
             source = body.cwd
-            name = sanitize_session_name(body.name)
-            if not name:
-                raise GitError(400, "nome de sessão inválido")
             worker = asyncio.create_task(asyncio.to_thread(
-                create_worktree, source, body.branch, name, root,
+                git_ops.create_branch_worktree, source, body.branch, root,
                 new_branch=body.new_branch, base=body.base))
             try:
                 path, created = await asyncio.shield(worker)
