@@ -264,9 +264,9 @@ def test_fs_branches_and_create_session_worktree(tmp_path, monkeypatch):
     result = client.post("/api/sessions", json={"name": "chat", "cwd": d,
                                                  "branch": "feature"}, headers=auth)
     assert result.status_code == 200, result.text
-    assert result.json()["cwd"] == str(tmp_path / "repo-chat")
+    assert result.json()["cwd"] == str(tmp_path / "repo-feature")
     assert result.json()["branch"] == "feature"
-    assert calls == [str(tmp_path / "repo-chat")]
+    assert calls == [str(tmp_path / "repo-feature")]
     git_ops.remove_worktree(d, calls[0])
 
 
