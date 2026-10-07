@@ -85,12 +85,35 @@ export function lembrarCommit(lista: readonly Empurrado[], novo: Empurrado, max:
 /** Só `git push` registra commit; `gh pr|run|workflow` só pede consulta. */
 export const ehPush = (cmd: string) => /\bgit\s+push\b/.test(cmd)
 
-/** O PR de cada `gh pr merge` do comando: número, URL ou branch; '' é o da branch atual. */
-export function alvosMerge(cmd: string): string[] {
-  return [...cmd.matchAll(/\bgh\s+pr\s+merge\b([^;&|\n]*)/g)].map(m => {
-    const args = (m[1] ?? '').trim().split(/\s+/).filter(Boolean)
-    // Número ou URL primeiro: uma flag com valor (`--subject x`) não vira o PR.
-    return args.find(a => /^\d+$|^https?:\/\//.test(a)) ?? (args.some(a => a.startsWith('-')) ? '' : args[0] ?? '')
+// Flags do `gh pr merge` que levam valor: o valor não é o PR.
+const COM_VALOR = new Set(['-t', '--subject', '-b', '--body', '-F', '--body-file', '--match-head-commit', '-R', '--repo', '-A', '--author-email'])
+const FIM = /^(;|&&|\|\||\||&)$/
+
+export type AlvoMerge = { alvo: string; repo: string | null }
+
+/** O PR de cada `gh pr merge` do comando (número, URL ou branch; '' é o da branch atual) e o `-R` dele. */
+export function alvosMerge(cmd: string): AlvoMerge[] {
+  return [...cmd.matchAll(/\bgh\s+pr\s+merge\b/g)].map(m => {
+    // Palavra a palavra, com aspas inteiras: `--subject "fix 12; ok" 106` é o 106.
+    const palavras = [...cmd.slice((m.index ?? 0) + m[0].length).matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)]
+    let alvo: string | null = null
+    let repo: string | null = null
+    for (let i = 0; i < palavras.length; i++) {
+      const p = palavras[i]!
+      const solto = p[3]
+      if (solto !== undefined && FIM.test(solto)) break
+      const valor = p[1] ?? p[2] ?? solto ?? ''
+      if (solto?.startsWith('-')) {
+        const [flag, junto] = solto.split('=', 2)
+        const v = junto ?? (COM_VALOR.has(flag ?? '') ? palavras[++i]?.slice(1).find(x => x !== undefined) ?? '' : null)
+        if (flag === '-R' || flag === '--repo') repo = v
+        continue
+      }
+      const fimColado = solto?.endsWith(';') ?? false
+      alvo ??= fimColado ? valor.slice(0, -1) : valor
+      if (fimColado) break
+    }
+    return { alvo: alvo ?? '', repo }
   })
 }
 

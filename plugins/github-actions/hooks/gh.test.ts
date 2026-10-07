@@ -62,11 +62,19 @@ describe('gh', () => {
   })
 
   test('alvos do gh pr merge', () => {
-    expect(alvosMerge('gh pr merge 106 --merge && gh pr merge 104 --merge --admin')).toEqual(['106', '104'])
-    expect(alvosMerge('gh pr merge --squash --subject x')).toEqual([''])
-    expect(alvosMerge('gh pr merge https://github.com/a/b/pull/7')).toEqual(['https://github.com/a/b/pull/7'])
-    expect(alvosMerge('gh pr merge feat/x')).toEqual(['feat/x'])
-    expect(alvosMerge('gh pr view 3')).toEqual([])
+    const so = (cmd: string) => alvosMerge(cmd).map(a => a.alvo)
+    expect(so('gh pr merge 106 --merge && gh pr merge 104 --merge --admin')).toEqual(['106', '104'])
+    expect(so('gh pr merge --squash --subject x')).toEqual([''])
+    expect(so('gh pr merge https://github.com/a/b/pull/7')).toEqual(['https://github.com/a/b/pull/7'])
+    expect(so('gh pr merge feat/x')).toEqual(['feat/x'])
+    // Branch depois ou antes de flag, e valor de flag entre aspas, não viram outro PR.
+    expect(so('gh pr merge feat/x --squash')).toEqual(['feat/x'])
+    expect(so('gh pr merge --squash feat/x')).toEqual(['feat/x'])
+    expect(so('gh pr merge --subject "fix 12; ok" 106')).toEqual(['106'])
+    expect(so('gh pr merge --subject=x 106; echo fim')).toEqual(['106'])
+    expect(so('gh pr merge 106; gh pr merge')).toEqual(['106', ''])
+    expect(alvosMerge('gh pr merge -R a/b 106')).toEqual([{ alvo: '106', repo: 'a/b' }])
+    expect(so('gh pr view 3')).toEqual([])
   })
 
   test('só git push registra commit', () => {

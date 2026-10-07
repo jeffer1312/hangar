@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import { alvosMerge, classificarFalha, disparaRun, piorErro, ehGithub, ehPush, emAndamento, textoAviso, iso, jobs, lembrarCommit, ms, pr, precisaConsultar, runsVisiveis, situacao } from './gh'
-import type { Empurrado, Falha, Situacao } from './gh'
+import type { AlvoMerge, Empurrado, Falha, Situacao } from './gh'
 import type { GhView, Job, JobGh, PrGh, RunGh, Workflow } from './gh'
 import { desenharFaixa } from './faixa'
 
@@ -246,6 +246,34 @@ async function atualizar($: EngineInterface): Promise<void> {
   }
 }
 
+// Merge feito pela sessão: o commit nasce no GitHub, e os runs dele na base passam a ser acompanhados.
+// Vale o que o gh diz do PR, não o código de saída: `a && b` pode juntar um e falhar no outro.
+// Fora do hook do Bash: as consultas ao gh não seguram o resultado do comando.
+async function guardarMerges($: EngineInterface, merges: readonly AlvoMerge[]): Promise<void> {
+  const atual = await texto($, ['git', 'branch', '--show-current']).catch(() => null)
+  for (const { alvo, repo } of merges) {
+    if (repo) {
+      $.ui.log(`github-actions: merge em ${repo} fica de fora: a faixa só lê o repositório da pasta`, { to: 'debug' })
+      continue
+    }
+    const argv = ['gh', 'pr', 'view', ...(alvo ? [alvo] : []), '--json', 'number,state,mergeCommit,baseRefName']
+    try {
+      const p = lerJson<{ number: number; state: string; mergeCommit: { oid: string } | null; baseRefName: string }>(await sh($, argv), argv)
+      if (p.state !== 'MERGED' || !p.mergeCommit?.oid) {
+        $.ui.log(`github-actions: PR #${p.number} ainda não juntado (${p.state}); o build dele não entra`, { to: 'debug' })
+        continue
+      }
+      await guardarCommit($, { sha: p.mergeCommit.oid, branch: p.baseRefName })
+      // A faixa mostra a branch atual: em outra, o build do merge só aparece depois de trocar para a base.
+      if (atual === p.baseRefName) aguardando = { sha: p.mergeCommit.oid, ate: (await $.clock.now()) + PRAZO_PUSH_MS }
+      else $.ui.toast(`Build do merge do #${p.number} aparece na faixa quando a sessão estiver na ${p.baseRefName}`)
+    } catch (err) {
+      $.ui.log(`github-actions: não guardei o commit do merge: ${String(err)}`, { to: 'debug' })
+    }
+  }
+  agendar($, ESPERA_PUSH_MS)
+}
+
 async function headAtual($: EngineInterface): Promise<string> {
   return `${await texto($, ['git', 'branch', '--show-current'])}@${await texto($, ['git', 'rev-parse', 'HEAD'])}`
 }
@@ -287,21 +315,9 @@ export const register: Register = on => {
         $.ui.log(`github-actions: não guardei o commit empurrado: ${String(err)}`, { to: 'debug' })
       }
     }
-    // Merge feito pela sessão: o commit nasce no GitHub, e os runs dele na base passam a ser acompanhados.
-    // Vale o que o gh diz do PR, não o código de saída: `a && b` pode juntar um e falhar no outro.
-    for (const alvo of alvosMerge(e.command)) {
-      const argv = ['gh', 'pr', 'view', ...(alvo ? [alvo] : []), '--json', 'state,mergeCommit,baseRefName']
-      try {
-        const p = lerJson<{ state: string; mergeCommit: { oid: string } | null; baseRefName: string }>(await sh($, argv), argv)
-        if (p.state === 'MERGED' && p.mergeCommit?.oid) {
-          aguardando = { sha: p.mergeCommit.oid, ate: (await $.clock.now()) + PRAZO_PUSH_MS }
-          await guardarCommit($, { sha: p.mergeCommit.oid, branch: p.baseRefName })
-        }
-      } catch (err) {
-        $.ui.log(`github-actions: não guardei o commit do merge: ${String(err)}`, { to: 'debug' })
-      }
-    }
-    agendar($, ESPERA_PUSH_MS)
+    const merges = alvosMerge(e.command)
+    if (merges.length) void guardarMerges($, merges)
+    else agendar($, ESPERA_PUSH_MS)
     return r
     // Só observa: falha aqui nunca segura o comando.
   }).catch(($, e, next) => next(e))
