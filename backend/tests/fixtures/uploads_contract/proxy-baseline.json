@@ -1,0 +1,19 @@
+{
+  "status": 503,
+  "headers": {
+    "date": "Thu, 08 Oct 2026 05:37:15 GMT",
+    "server": "uvicorn",
+    "content-length": "107",
+    "content-type": "application/json"
+  },
+  "body_base64": "eyJkZXRhaWwiOnsiY29kaWdvIjoiZml4dHVyZV91cHN0cmVhbV9ibG9ja2VkIiwibWVuc2FnZW0iOiJoYW5kbGVyIFB5dGhvbiBkZSB1cGxvYWQgYmxvcXVlYWRvIHBlbGEgcHJvdmEifX0=",
+  "json": {
+    "detail": {
+      "codigo": "fixture_upstream_blocked",
+      "mensagem": "handler Python de upload bloqueado pela prova"
+    }
+  },
+  "upstream_requests": 1,
+  "upstream_body_bytes": 23,
+  "request_body_bytes": 23
+}
