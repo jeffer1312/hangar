@@ -1,0 +1,338 @@
+"""Referência isolada dos contratos de contas e prova de autoria da migração."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from json import dumps
+import os
+from pathlib import Path
+import queue
+import subprocess
+import sys
+import threading
+import tomllib
+from urllib.error import HTTPError
+from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "accounts_contract"
+_BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.other_quotas", "bridge.propagate_device_login"})
+
+
+def assert_rust_ownership(calls: list[dict]) -> None:
+    """Confere que nenhum handler de conta Python atendeu ao pedido."""
+    forbidden = [call["operation"] for call in calls if call["operation"] not in _BRIDGE_OPERATIONS]
+    assert not forbidden, f"operação de conta ainda executada pelo Python: {forbidden}"
+
+
+class ContractResponse:
+    def __init__(self, status_code: int, body: bytes):
+        self.status_code = status_code
+        self.body = body
+
+    def json(self):
+        return json.loads(self.body)
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        return None
+
+
+class HttpTransport:
+    """Transporte reutilizável contra a porta pública de uma instância isolada."""
+
+    def __init__(self, base_url: str, token: str):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.opener = build_opener(ProxyHandler({}), _NoRedirect())
+
+    def request(self, method: str, path: str, json=None) -> ContractResponse:
+        if not path.startswith("/") or path.startswith("//"):
+            raise ValueError("a rota deve ser relativa à instância de teste")
+        payload = None if json is None else dumps(json).encode("utf-8")
+        request = Request(self.base_url + path, data=payload, method=method,
+                          headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
+        try:
+            response = self.opener.open(request, timeout=30)
+        except HTTPError as error:
+            response = error
+        with response:
+            return ContractResponse(response.status, response.read())
+
+
+def normalize(value, *, root: Path):
+    """Normaliza só a raiz declarada; mantém campos, ordem, nulos e tipos."""
+    roots = {str(root), root.as_posix()}
+    if isinstance(value, str):
+        for candidate in sorted(roots, key=len, reverse=True):
+            value = value.replace(candidate, "<HOME>")
+        # Separadores variam por sistema apenas em caminhos da raiz isolada.
+        if "<HOME>" in value:
+            value = value.replace("\\", "/")
+        return value
+    if isinstance(value, list):
+        return [normalize(item, root=root) for item in value]
+    if isinstance(value, dict):
+        return {normalize(key, root=root): normalize(item, root=root) for key, item in value.items()}
+    return value
+
+
+def isolated_environment(root: Path) -> dict[str, str]:
+    """Não herda identidade, configuração, sessão nem proxies da máquina."""
+    allowed = {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "LANG", "LC_ALL"}
+    result = {key: value for key, value in os.environ.items() if key.upper() in allowed}
+    drive, tail = os.path.splitdrive(str(root))
+    result.update({"HOME": str(root), "USERPROFILE": str(root), "HOMEDRIVE": drive,
+                   "HOMEPATH": tail, "CLAUDE_CONFIG_DIR": str(root / ".claude"),
+                   "CODEX_HOME": str(root / ".codex"), "CP_AUTH_TOKEN": "contract-only",
+                   "CP_RUST_SERVER": "0", "CP_CODEX_SYNC_ENABLED": "0",
+                   "CP_PROJECTS_DIR": str(root / ".claude" / "projects"),
+                   "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+                   "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
+    for key, directory in {"XDG_CONFIG_HOME": ".config", "XDG_CACHE_HOME": ".cache",
+                           "XDG_DATA_HOME": ".local/share", "XDG_STATE_HOME": ".local/state",
+                           "APPDATA": "appdata", "LOCALAPPDATA": "localappdata"}.items():
+        result[key] = str(root / directory)
+    return result
+
+
+class PythonReference(HttpTransport):
+    """Filho com rotas reais, sem lifespan do servidor nem CLI/rede real."""
+
+    def __init__(self, root: Path, *, block_handlers: bool = False):
+        self.root = root
+        root.mkdir(parents=True, exist_ok=True)
+        self.log = (root / "worker.log").open("w", encoding="utf-8")
+        arguments = [sys.executable, str(Path(__file__).resolve()), "--worker"]
+        if block_handlers:
+            arguments.append("--block-handlers")
+        self.process = subprocess.Popen(arguments, cwd=root, env=isolated_environment(root),
+                                        stdout=subprocess.PIPE, stderr=self.log, text=True,
+                                        encoding="utf-8", errors="strict")
+        ready = queue.Queue()
+        threading.Thread(target=lambda: ready.put(self.process.stdout.readline()), daemon=True).start()
+        try:
+            notice = json.loads(ready.get(timeout=30))
+            super().__init__(notice["base_url"], "contract-only")
+        except Exception:
+            self.close()
+            raise RuntimeError("a referência Python não iniciou; confira worker.log no diretório isolado") from None
+
+    def calls(self) -> list[dict]:
+        return self.request("GET", "/__contract__/calls").json()
+
+    def tree(self, account: str) -> dict:
+        return self.request("GET", f"/__contract__/tree/{account}").json()
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=10)
+        self.process.stdout.close()
+        self.log.close()
+
+
+def _worker(block_handlers: bool) -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from unittest.mock import patch
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+    from fastapi.routing import APIRoute
+    from fastapi.testclient import TestClient
+    from app import api, conta_estado, codex_contas_api, codex_contas_login, cotas, credenciais
+
+    root = Path.home()
+    assert root == Path(os.environ["CLAUDE_CONFIG_DIR"]).parent
+    assert root == Path(os.environ["CODEX_HOME"]).parent
+    (root / ".claude").mkdir(exist_ok=True)
+    (root / ".codex").mkdir(exist_ok=True)
+    work = root / ".claude-work"
+    work.mkdir(exist_ok=True)
+    (work / ".hangar-conta").write_text("", encoding="utf-8")
+    (work / "projects").mkdir(exist_ok=True)
+    recent = work / "projects" / "recent.jsonl"
+    recent.write_text("", encoding="utf-8")
+    os.utime(recent, (200, 200))
+    backup = root / ".claude-backup"
+    backup.mkdir(exist_ok=True)
+    (backup / ".credentials.json").write_text("{}", encoding="utf-8")
+    (backup / "projects").mkdir(exist_ok=True)
+    older = backup / "projects" / "older.jsonl"
+    older.write_text("", encoding="utf-8")
+    os.utime(older, (100, 100))
+    (root / ".claude" / ".hangar-apelidos.json").write_text(
+        json.dumps({f"claude:{work.resolve()}": "Trabalho de revisão"}, ensure_ascii=False), encoding="utf-8")
+    for name in ("zeta", "alpha"):
+        target = root / f".codex-{name}"
+        target.mkdir(exist_ok=True)
+        (target / ".hangar-codex-conta").write_text(json.dumps({"version": 1, "id": name}), encoding="utf-8")
+        (target / "config.toml").write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
+
+    class DisconnectedNative:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            await self.close()
+
+        async def close(self):
+            pass
+
+        async def request(self, method, params=None, **kwargs):
+            assert method == "account/read", f"chamada nativa não prevista: {method}"
+            return {"account": None}
+
+    service = codex_contas_login.CodexContasLogin(native=DisconnectedNative, account_in_use=lambda account: False)
+    app = FastAPI()
+    app.state.codex_contas_login = service
+    prefixes = {"/api/claude-configs": "claude", "/api/conta-estado": "claude",
+                "/api/codex-contas": "codex", "/api/cotas": "quotas",
+                "/api/credenciais/codex": "device"}
+    calls = []
+    for route in api.app.routes:
+        if isinstance(route, APIRoute) and route.path.startswith("/api/claude-configs"):
+            app.router.routes.append(route)
+    app.include_router(conta_estado.conta_estado_router)
+    app.include_router(codex_contas_api.codex_contas_router)
+    app.include_router(cotas.cotas_router)
+    app.include_router(credenciais.credenciais_router)
+
+    @app.middleware("http")
+    async def record(request, call_next):
+        prefix = next((prefix for prefix in prefixes if request.url.path.startswith(prefix)), None)
+        if prefix:
+            suffix = "catalog" if request.url.path == prefix else "operation"
+            operation = f"{prefixes[prefix]}.{suffix}"
+            entry = {"operation": operation, "method": request.method, "path": request.url.path}
+            calls.append(entry)
+            if block_handlers:
+                entry["status"] = 503
+                return JSONResponse({"detail": {"code": "contract_python_handler_blocked", "operation": operation}}, status_code=503)
+            response = await call_next(request)
+            entry["status"] = response.status_code
+            return response
+        return await call_next(request)
+
+    @app.get("/__contract__/calls")
+    def journal():
+        return calls
+
+    @app.get("/__contract__/tree/{account}")
+    def tree(account: str):
+        assert account in {"fresh", "alpha", "zeta"}
+        target = root / f".codex-{account}"
+        result = {}
+        for path in sorted(target.rglob("*")):
+            if not path.is_file():
+                continue
+            name = str(path.relative_to(target)).replace("\\", "/")
+            text = path.read_text(encoding="utf-8")
+            if name == ".hangar-codex-conta":
+                result[name] = json.loads(text)
+            elif name == "config.toml":
+                result[name] = tomllib.loads(text)
+            else:
+                result[name] = text
+        return result
+
+    def deny_external(*args, **kwargs):
+        raise AssertionError("uma operação de contrato tentou executar CLI ou acessar rede real")
+
+    with patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
+            patch("subprocess.Popen", side_effect=deny_external), \
+            patch("socket.create_connection", side_effect=deny_external), TestClient(app) as client:
+        client.portal.call(service.aquecer)
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _handle(self):
+                size = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(size) if size else None
+                response = client.request(self.command, self.path, content=body,
+                                          headers={"Authorization": self.headers.get("Authorization", ""),
+                                                   "Content-Type": "application/json"})
+                self.send_response(response.status_code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response.content)))
+                self.end_headers()
+                self.wfile.write(response.content)
+
+            do_GET = do_POST = do_DELETE = _handle
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+            print(json.dumps({"base_url": f"http://127.0.0.1:{server.server_port}"}), flush=True)
+            server.serve_forever()
+
+
+REFERENCE_CASES = (
+    ("claude_catalog", "GET", "/api/claude-configs", None),
+    ("claude_state", "GET", "/api/conta-estado", None),
+    ("claude_invalid_name", "POST", "/api/claude-configs", {"nome": "conta\n"}),
+    ("claude_extra_field", "POST", "/api/claude-configs", {"nome": "valid", "extra": True}),
+    ("claude_missing_login", "POST", "/api/conta-estado/absent/login", None),
+    ("claude_login_idle", "GET", "/api/conta-estado/work/login/passo", None),
+    ("claude_login_cancel_idle", "POST", "/api/conta-estado/work/login/cancelar", None),
+    ("claude_logout_missing", "POST", "/api/claude-configs/absent/logout", None),
+    ("codex_catalog", "GET", "/api/codex-contas", None),
+    ("codex_missing", "DELETE", "/api/codex-contas/absent", None),
+    ("codex_protected", "DELETE", "/api/codex-contas/default", None),
+    ("codex_invalid_name", "POST", "/api/codex-contas", {"name": "conta\n"}),
+    ("codex_extra_field", "POST", "/api/codex-contas", {"name": "valid", "extra": True}),
+    ("codex_create", "POST", "/api/codex-contas", {"name": "fresh"}),
+    ("codex_duplicate", "POST", "/api/codex-contas", {"name": "fresh"}),
+    ("codex_prepare_idle", "GET", "/api/codex-contas/fresh/prepare", None),
+    ("codex_login_null", "GET", "/api/codex-contas/fresh/login", None),
+    ("codex_cancel_requires_attempt", "DELETE", "/api/codex-contas/fresh/login", None),
+    ("codex_cancel_old_attempt", "DELETE", "/api/codex-contas/fresh/login?attempt_id=old", None),
+    ("codex_reset_invalid_uuid", "POST", "/api/codex-contas/fresh/rate-limit-reset", {"idempotency_key": "invalid"}),
+    ("device_state", "GET", "/api/credenciais/codex", None),
+    ("device_login_idle", "GET", "/api/credenciais/codex/login", None),
+    ("device_cancel_idle", "DELETE", "/api/credenciais/codex/login", None),
+    ("quotas_disconnected", "GET", "/api/cotas", None),
+    ("quota_suggestion_empty", "GET", "/api/cotas/sugestao", None),
+    ("codex_delete", "DELETE", "/api/codex-contas/fresh", None),
+)
+
+
+def capture_reference(reference: PythonReference) -> dict:
+    result = {}
+    for name, method, path, payload in REFERENCE_CASES:
+        response = reference.request(method, path, json=payload)
+        if response.status_code == 404:
+            assert isinstance(response.json().get("detail"), dict) or name == "quota_suggestion_empty", \
+                f"rota de referência não montada: {method} {path}"
+        result[name] = {"method": method, "path": path, "status": response.status_code,
+                        "body": normalize(response.json(), root=reference.root)}
+        if name == "codex_create":
+            result[name]["tree"] = reference.tree("fresh")
+    return result
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Referência Python isolada de contas")
+    parser.add_argument("--worker", action="store_true")
+    parser.add_argument("--block-handlers", action="store_true")
+    parser.add_argument("--capture", type=Path)
+    arguments = parser.parse_args()
+    if arguments.worker:
+        _worker(arguments.block_handlers)
+    elif arguments.capture:
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="hangar-accounts-contract-") as temporary:
+            reference = PythonReference(Path(temporary))
+            try:
+                result = capture_reference(reference)
+                arguments.capture.parent.mkdir(parents=True, exist_ok=True)
+                arguments.capture.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+            finally:
+                reference.close()
