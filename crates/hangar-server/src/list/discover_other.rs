@@ -232,11 +232,16 @@ fn sessions_root(provider: &str, profile: Option<&str>, dirs: &Dirs) -> PathBuf 
 static OMP_PROFILE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9._-]{0,63}$").unwrap());
 static WINDOWS_RESERVED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)").unwrap());
 
+/// Forma aceita pelo `omp_dirs` do Python, sem nome reservado do Windows.
+pub(crate) fn valid_omp_profile(p: &str) -> bool {
+    p != "." && p != ".." && !p.ends_with('.') && OMP_PROFILE_RE.is_match(p) && !WINDOWS_RESERVED.is_match(p)
+}
+
 /// Perfil do omp daquela sessão (`omp_plugin_sync.resolve_omp_directories`). Perfil inválido cai no
 /// diretório do backend, com aviso, como o `omp_dirs.agent_dir` de quem só lê.
 fn omp_agent_dir(profile: Option<&str>, dirs: &Dirs) -> PathBuf {
     let Some(p) = profile.map(str::trim).filter(|p| !p.is_empty() && *p != "default") else { return dirs.omp_agent.clone() };
-    if p == "." || p == ".." || p.ends_with('.') || !OMP_PROFILE_RE.is_match(p) || WINDOWS_RESERVED.is_match(p) {
+    if !valid_omp_profile(p) {
         warn_limited(p, "list_omp_profile_invalid", "OMP_PROFILE");
         return dirs.omp_agent.clone();
     }

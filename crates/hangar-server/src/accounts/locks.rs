@@ -1,10 +1,26 @@
 use super::{AccountKey, GuardMode};
 use std::{
+    collections::HashMap,
     fs::{File, OpenOptions, TryLockError},
     io,
     path::PathBuf,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+/// Fila por conta dentro do processo; entre processos quem protege é a trava de arquivo.
+#[derive(Clone, Default)]
+pub struct KeyedGates(Arc<Mutex<HashMap<AccountKey, Arc<tokio::sync::Mutex<()>>>>>);
+impl KeyedGates {
+    pub fn gate(&self, key: &AccountKey) -> Arc<tokio::sync::Mutex<()>> {
+        self.0
+            .lock()
+            .unwrap()
+            .entry(key.clone())
+            .or_default()
+            .clone()
+    }
+}
 
 #[derive(Debug)]
 pub enum LockError {
@@ -56,6 +72,11 @@ impl AccountLocks {
 
     pub fn path(&self, key: &AccountKey) -> io::Result<PathBuf> {
         Ok(self.root.join(format!("{}.lock", key.digest()?)))
+    }
+
+    /// Registros da conta ao lado da trava: mesmo volume, publicação atômica possível.
+    pub fn sidecar(&self, key: &AccountKey, extension: &str) -> io::Result<PathBuf> {
+        Ok(self.path(key)?.with_extension(extension))
     }
 
     pub fn try_acquire(

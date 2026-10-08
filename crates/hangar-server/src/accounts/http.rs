@@ -1,5 +1,5 @@
 use super::{
-    AccountKey, GuardMode, Provider, UsageFacts,
+    AccountKey, GuardMode, Provider,
     bridge::AccountsBridge,
     catalog::{AccountError, codex_dto, disconnected_auth, idle_sync},
 };
@@ -47,12 +47,13 @@ pub fn matches(method: &Method, path: &str) -> bool {
                         .is_some_and(|tail| !tail.is_empty() && !tail.contains('/'))
                 }))
 }
-fn error(error: AccountError) -> Response {
-    (
+pub(super) fn error(error: AccountError) -> Response {
+    crate::session_write::detail(
         StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        Json(json!({"detail":{"code":error.code,"params":error.params,"msg":error.message}})),
+        error.code,
+        &error.message,
+        error.params,
     )
-        .into_response()
 }
 pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Response {
     let method = request.method().clone();
@@ -102,16 +103,14 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
             form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
                 .into_owned()
                 .collect();
-        let mut force = false;
-        if method == Method::POST {
-            if let Some(value) = query.get("forcar") {
-                force = match value.to_ascii_lowercase().as_str() {
-                    "true" | "1" | "yes" | "y" | "on" | "t" => true,
-                    "false" | "0" | "no" | "n" | "off" | "f" => false,
-                    _ => return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"detail":[{"type":"bool_parsing","loc":["query","forcar"],"msg":"Input should be a valid boolean, unable to interpret input","input":value}]}))).into_response(),
-                };
+        let force = if method == Method::POST {
+            match crate::query::bool_param(&query, "forcar") {
+                Ok(force) => force,
+                Err(response) => return response,
             }
-        }
+        } else {
+            false
+        };
         if method == Method::GET
             && query
                 .get("cwd")
@@ -137,11 +136,12 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
             Ok(accounts) => accounts,
             Err(err) => return error(err),
         };
-        let mut result = vec![];
-        for account in accounts {
-            let sync = service.preparation_status(&account, &bridge).await;
-            result.push(service.codex_snapshot(&account, sync).await);
-        }
+        // Uma leitura por conta, em paralelo e na ordem: em série a tela esperava a soma.
+        let result = futures_util::future::join_all(accounts.iter().map(|account| async {
+            let sync = service.preparation_status(account, &bridge).await;
+            service.codex_snapshot(account, sync).await
+        }))
+        .await;
         return Json(json!(result)).into_response();
     }
     if method == Method::GET {
@@ -300,14 +300,9 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
         Ok(bridge) => bridge,
         Err(_) => return error(AccountError::io()),
     };
-    let mut facts = match bridge.facts(std::slice::from_ref(&key)).await {
-        Ok(mut rows) => rows.remove(0).facts,
-        Err(_) => UsageFacts::default(),
-    };
-    facts.merge(match state.state.runtime.get() {
-        Some(runtime) => runtime.account_usage(&key).await,
-        None => UsageFacts::default(),
-    });
+    let facts = service
+        .usage(&bridge, state.state.runtime.get().map(|r| &**r), &key)
+        .await;
     match tokio::task::spawn_blocking(move || service.delete(provider, &account, &guard, &facts))
         .await
     {
@@ -601,10 +596,10 @@ pub async fn private_claude(
                         })
                     })
                 {
-                    match state
-                        .accounts
-                        .claude_by_label(row["label"].as_str().unwrap())
-                    {
+                    match super::claude_auth::catalog_account(
+                        rows.as_array().unwrap(),
+                        row["label"].as_str().unwrap(),
+                    ) {
                         Ok(account) => Ok(state.accounts.read_claude_auth(&account).await),
                         Err(error) => Err(error),
                     }

@@ -80,24 +80,18 @@ pub fn credential_error() -> AccountError {
 }
 impl AccountService {
     pub fn claude_by_label(&self, label: &str) -> Result<Account, AccountError> {
-        self.claude_catalog()?
-            .as_array()
-            .and_then(|rows| rows.iter().find(|row| row["label"] == label))
-            .and_then(|row| {
-                row["path"].as_str().map(|path| Account {
-                    id: label.into(),
-                    home: path.into(),
-                    is_default: row["active"] == true,
-                })
+        catalog_account(self.claude_catalog()?.as_array().unwrap_or(&vec![]), label)
+    }
+    /// Uma leitura do catálogo para o laço inteiro; cada linha resolve como `claude_by_label`.
+    pub fn claude_accounts(&self) -> Result<Vec<(Value, Account)>, AccountError> {
+        let catalog = self.claude_catalog()?;
+        let rows = catalog.as_array().ok_or_else(AccountError::io)?;
+        rows.iter()
+            .map(|row| {
+                let label = row["label"].as_str().ok_or_else(AccountError::io)?;
+                Ok((row.clone(), catalog_account(rows, label)?))
             })
-            .ok_or_else(|| {
-                AccountError::new(
-                    404,
-                    "erro_conta_inexistente",
-                    format!("conta {label} não existe"),
-                    json!({"nome":label}),
-                )
-            })
+            .collect()
     }
     pub fn validate_claude(&self, account: &Account, key: &AccountKey) -> Result<(), AccountError> {
         let current = self.claude_by_label(&account.id)?;
@@ -341,26 +335,44 @@ impl AccountService {
         }
     }
     pub async fn claude_states(&self) -> Result<Value, AccountError> {
-        let mut output = vec![];
-        for row in self
-            .claude_catalog()?
-            .as_array()
-            .ok_or_else(AccountError::io)?
-        {
-            let account =
-                self.claude_by_label(row["label"].as_str().ok_or_else(AccountError::io)?)?;
-            if !account.is_default
-                && !super::storage::real_file(&account.home.join(super::storage::CLAUDE_MARKER))
-            {
-                continue;
-            }
-            let mut row = row.clone();
-            row["login"] = self.read_claude_auth(&account).await;
-            row["limite"] = limit(&account.home);
-            output.push(row);
-        }
+        use futures_util::StreamExt;
+        let accounts = self.claude_accounts()?.into_iter().filter(|(_, account)| {
+            account.is_default
+                || super::storage::real_file(&account.home.join(super::storage::CLAUDE_MARKER))
+        });
+        // Cada leitura pode subir a CLI; em paralelo a tela espera a mais lenta, não a soma.
+        let output: Vec<Value> = futures_util::stream::iter(accounts)
+            .map(|(mut row, account)| async move {
+                row["login"] = self.read_claude_auth(&account).await;
+                row["limite"] = limit(&account.home);
+                row
+            })
+            .buffered(4)
+            .collect()
+            .await;
         Ok(json!(output))
     }
+}
+
+/// Rótulo repetido resolve para a primeira linha, como sempre fez a busca por rótulo.
+pub fn catalog_account(rows: &[Value], label: &str) -> Result<Account, AccountError> {
+    rows.iter()
+        .find(|row| row["label"] == label)
+        .and_then(|row| {
+            row["path"].as_str().map(|path| Account {
+                id: label.into(),
+                home: path.into(),
+                is_default: row["active"] == true,
+            })
+        })
+        .ok_or_else(|| {
+            AccountError::new(
+                404,
+                "erro_conta_inexistente",
+                format!("conta {label} não existe"),
+                json!({"nome":label}),
+            )
+        })
 }
 fn limit(path: &Path) -> Value {
     let mut best: Option<(f64, String)> = None;

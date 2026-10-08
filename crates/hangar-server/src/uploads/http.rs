@@ -3,13 +3,14 @@ use super::{
     media,
     store::{UploadStore, project_key},
 };
-use crate::routes::AppState;
+use crate::{accounts::quotas::now, routes::AppState};
 use axum::{
     extract::{ConnectInfo, Path, Request, State},
     http::{Method, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
+use http_body_util::BodyExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
@@ -24,17 +25,14 @@ pub struct Facts {
 }
 
 fn response(value: Value, status: u16) -> Response {
-    (
-        StatusCode::from_u16(status).unwrap(),
-        [("content-type", "application/json")],
-        value.to_string(),
-    )
-        .into_response()
+    crate::session_write::json_response(StatusCode::from_u16(status).unwrap(), value)
 }
 fn failure(status: u16, code: &str, message: &str) -> Response {
-    response(
-        json!({"detail":{"code":code,"params":{},"msg":message}}),
-        status,
+    crate::session_write::detail(
+        StatusCode::from_u16(status).unwrap(),
+        code,
+        message,
+        json!({}),
     )
 }
 fn storage_error(error: std::io::Error, upload: bool) -> Response {
@@ -82,46 +80,36 @@ async fn facts(
     filename: &str,
     writing: bool,
 ) -> Result<Facts, Box<Response>> {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|_| {
-            Box::new(failure(
-                503,
-                "upload_facts_unavailable",
-                "dados da sessão indisponíveis",
-            ))
-        })?;
-    let encoded = percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
-    let query = form_urlencoded::Serializer::new(String::new())
-        .append_pair("filename", filename)
-        .append_pair("writing", if writing { "true" } else { "false" })
-        .finish();
-    let result = client
-        .get(format!(
-            "http://{}/internal/sessions/{encoded}/uploads-facts?{query}",
-            st.cfg.upstream
-        ))
-        .header("x-hangar-internal", &st.cfg.internal_secret)
-        .send()
-        .await
-        .map_err(|_| {
-            Box::new(failure(
-                503,
-                "upload_facts_unavailable",
-                "dados da sessão indisponíveis",
-            ))
-        })?;
-    let status = result.status().as_u16();
-    let bytes = result.bytes().await.map_err(|_| {
+    let unavailable = || {
         Box::new(failure(
             503,
             "upload_facts_unavailable",
             "dados da sessão indisponíveis",
         ))
-    })?;
+    };
+    let encoded = percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("filename", filename)
+        .append_pair("writing", if writing { "true" } else { "false" })
+        .finish();
+    let request = axum::http::Request::get(format!(
+        "http://{}/internal/sessions/{encoded}/uploads-facts?{query}",
+        st.cfg.upstream
+    ))
+    .header("x-hangar-internal", &st.cfg.internal_secret)
+    .body(axum::body::Body::empty())
+    .map_err(|_| unavailable())?;
+    // O pool do servidor: um cliente por pedido abria conexão nova a cada GET/Range de anexo.
+    let (status, bytes) = tokio::time::timeout(Duration::from_secs(15), async {
+        let response = st.http.request(request).await.ok()?;
+        let status = response.status().as_u16();
+        let bytes = response.into_body().collect().await.ok()?.to_bytes();
+        Some((status, bytes))
+    })
+    .await
+    .ok()
+    .flatten()
+    .ok_or_else(unavailable)?;
     if !(200..300).contains(&status) {
         return Err(Box::new(response(
             serde_json::from_slice(&bytes)
@@ -221,6 +209,15 @@ async fn handle(st: &AppState, name: &str, tail: &str, req: Request) -> Response
     execute(st, name, tail, req, facts, &filename, query).await
 }
 
+/// A verificação de identidade do cofre faz dezenas de syscalls por arquivo: fora do worker async.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> std::io::Result<T> + Send + 'static,
+) -> std::io::Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(std::io::Error::other)?
+}
+
 async fn execute(
     st: &AppState,
     name: &str,
@@ -260,7 +257,11 @@ async fn execute(
             Ok(path) => path,
             Err(e) => return storage_error(e, true),
         };
-        if store.prune(&project, facts.retention, now()).is_err() {
+        let prune = {
+            let (store, project, retention) = (store.clone(), project.clone(), facts.retention);
+            blocking(move || store.prune(&project, retention, now())).await
+        };
+        if prune.is_err() {
             tracing::warn!(
                 code = "upload_prune_failed",
                 "poda de anexos falhou após o upload"
@@ -281,14 +282,20 @@ async fn execute(
         );
     }
     if tail == "uploads" {
-        return match store.list(&project, &facts.session, facts.retention, now()) {
+        let (session, retention) = (facts.session.clone(), facts.retention);
+        return match blocking(move || store.list(&project, &session, retention, now())).await {
             Ok(files) => response(json!({"files":files}), 200),
             Err(e) => storage_error(e, false),
         };
     }
     if tail == "resolve" {
         let allow_absolute = query.get("allow_absolute").is_some_and(|s| s == "true");
-        return match store.resolve_audio(&project, &facts.session, filename, allow_absolute) {
+        let (session, filename) = (facts.session.clone(), filename.to_owned());
+        return match blocking(move || {
+            store.resolve_audio(&project, &session, &filename, allow_absolute)
+        })
+        .await
+        {
             Ok(path) => response(json!({"path":path}), 200),
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => failure(
                 403,
@@ -302,7 +309,8 @@ async fn execute(
         Ok(v) => v,
         Err(()) => return response(json!({"detail":"valor booleano inválido"}), 422),
     };
-    let (path, file) = match store.open(&project, &facts.session, filename) {
+    let (session, name) = (facts.session.clone(), filename.to_owned());
+    let (path, file) = match blocking(move || store.open(&project, &session, &name)).await {
         Ok(v) => v,
         Err(e) => return storage_error(e, false),
     };
@@ -319,6 +327,12 @@ async fn execute(
         *response.body_mut() = axum::body::Body::empty();
     }
     response
+}
+
+fn boolean(value: Option<&String>) -> Result<bool, ()> {
+    value
+        .map_or(Some(false), |v| crate::query::fastapi_bool(v))
+        .ok_or(())
 }
 
 #[cfg(test)]
@@ -567,19 +581,5 @@ mod tests {
             .status(),
             StatusCode::BAD_REQUEST
         );
-    }
-}
-fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64()
-}
-fn boolean(value: Option<&String>) -> Result<bool, ()> {
-    match value.map(|v| v.to_ascii_lowercase()) {
-        None => Ok(false),
-        Some(v) if matches!(v.as_str(), "1" | "true" | "on" | "yes" | "y" | "t") => Ok(true),
-        Some(v) if matches!(v.as_str(), "0" | "false" | "off" | "no" | "n" | "f") => Ok(false),
-        _ => Err(()),
     }
 }

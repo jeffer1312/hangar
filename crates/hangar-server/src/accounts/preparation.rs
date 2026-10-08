@@ -32,7 +32,7 @@ pub struct PreparationState {
     pub result: Value,
 }
 pub type Preparations = Arc<Mutex<HashMap<AccountKey, PreparationState>>>;
-pub type PreparationGates = Arc<Mutex<HashMap<AccountKey, Arc<tokio::sync::Mutex<()>>>>>;
+pub type PreparationGates = super::locks::KeyedGates;
 
 pub fn running() -> Value {
     json!({"status":"running","trust_pending":false,"issues":[],"etapa":null})
@@ -49,33 +49,25 @@ fn complete(value: &Value) -> bool {
 
 impl AccountService {
     fn preparation_gate(&self, key: &AccountKey) -> Arc<tokio::sync::Mutex<()>> {
-        self.preparation_gates
-            .lock()
-            .unwrap()
-            .entry(key.clone())
-            .or_default()
-            .clone()
+        self.preparation_gates.gate(key)
+    }
+    pub(crate) fn sidecar(
+        &self,
+        key: &AccountKey,
+        extension: &str,
+    ) -> Result<PathBuf, AccountError> {
+        self.locks
+            .sidecar(key, extension)
+            .map_err(|_| AccountError::io())
     }
     pub fn preparation_path(&self, key: &AccountKey) -> Result<PathBuf, AccountError> {
-        Ok(self
-            .locks
-            .path(key)
-            .map_err(|_| AccountError::io())?
-            .with_extension("prepare.json"))
+        self.sidecar(key, "prepare.json")
     }
     pub(crate) fn result_path(&self, key: &AccountKey) -> Result<PathBuf, AccountError> {
-        Ok(self
-            .locks
-            .path(key)
-            .map_err(|_| AccountError::io())?
-            .with_extension("prepare-result.json"))
+        self.sidecar(key, "prepare-result.json")
     }
     pub(crate) fn force_path(&self, key: &AccountKey) -> Result<PathBuf, AccountError> {
-        Ok(self
-            .locks
-            .path(key)
-            .map_err(|_| AccountError::io())?
-            .with_extension("prepare-force.json"))
+        self.sidecar(key, "prepare-force.json")
     }
     pub(crate) fn persist(path: &Path, value: &Value) -> Result<(), AccountError> {
         // A publicação atômica usa o mesmo volume e não remove o lock de existência.
@@ -376,11 +368,8 @@ impl AccountService {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return Err(AccountError::io()),
         }
-        let mut nonce = [0u8; 16];
-        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
-            .map_err(|_| AccountError::io())?;
         let request = PrepareRequest {
-            operation: nonce.iter().map(|byte| format!("{byte:02x}")).collect(),
+            operation: super::claude_login::nonce().map_err(|_| AccountError::io())?,
             instance: bridge.instance().into(),
             key,
             account_id: account.id.clone(),

@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import json
 import os
+import re
+import urllib.error
+import urllib.request
 
 try:
     import psutil
@@ -29,6 +33,8 @@ class UsageFacts:
 _HOSTS = {"node", "bun", "python", "python3", "python3.14", "hangar-cano",
           "bash", "sh", "zsh", "fish", "cmd", "powershell", "pwsh"}
 _CLIENTS = {"claude", "codex", "pi", "omp"}
+_INSPECTED = _CLIENTS | _HOSTS
+_CLIENT_WORD = re.compile(r"\b(?:claude|codex|pi|omp)\b")
 
 
 _GONE = (FileNotFoundError, ProcessLookupError) + ((psutil.NoSuchProcess, psutil.ZombieProcess) if psutil else ())
@@ -79,13 +85,12 @@ def inspect_processes(key: AccountKey, *, processes=None, process_factory=None) 
         for process in processes if processes is not None else system_processes():
             try:
                 name = process.name().lower().removesuffix(".exe")
-                if name not in _CLIENTS | _HOSTS:
+                if name not in _INSPECTED:
                     continue
                 before = process.create_time()
                 argv = process.cmdline()
-                import re
                 names = {Path(item).name.lower().removesuffix(".exe") for item in argv}
-                names.update(re.findall(r"\b(?:claude|codex|pi|omp)\b", " ".join(argv).lower()))
+                names.update(_CLIENT_WORD.findall(" ".join(argv).lower()))
                 pertinent = name in _CLIENTS or bool(names & _CLIENTS) or any(
                     "cano.py" in item or "hangar-cano" in item or "codex.js" in item or "claude-code" in item
                     for item in argv)
@@ -164,7 +169,6 @@ def inspect_usage(key: AccountKey) -> UsageFacts:
 
     facts = inspect_processes(key)
     try:
-        import json
         from app import account_lifecycle
         births = account_lifecycle.default_lock_root() / "births"
         if births.exists():
@@ -224,9 +228,6 @@ class PreparationJobs:
 
     @staticmethod
     def validate(body):
-        import json
-        import re
-        from pathlib import Path
         from app import runtime_coordinator, account_lifecycle, contas, codex_contas
         coordinator = runtime_coordinator.current()
         if coordinator is None or coordinator.instance != body["instance"]:
@@ -257,7 +258,6 @@ class PreparationJobs:
 
     async def start(self, body):
         import asyncio
-        import re
         if (not isinstance(body, dict) or set(body) != {"operation", "instance", "key", "account_id", "seed", "force", "cwd"}
                 or not isinstance(body["operation"], str) or not re.fullmatch(r"[a-f0-9]{32}", body["operation"])
                 or type(body["seed"]) is not bool or type(body["force"]) is not bool
@@ -297,7 +297,6 @@ class PreparationJobs:
 
     async def run(self, body):
         import asyncio
-        from pathlib import Path
         from app import account_lifecycle, codex_contas, codex_contas_sync, contas
         key = account_lifecycle.AccountKey.new(body["key"]["provider"], Path(body["key"]["canonical_home"]))
 
@@ -359,6 +358,42 @@ class PreparationJobs:
 _preparation_transport = None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+# Sem proxy nem redirect: o segredo interno só vai ao loopback configurado.
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+
+
+def owner_mode() -> str:
+    from app import runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    return "python" if coordinator is None else getattr(coordinator, "mode", "python")
+
+
+def private_transport():
+    """Endereço e segredo da porta privada do Rust, ou None antes da configuração."""
+    return _preparation_transport
+
+
+def _post(config, path, body, *, timeout, limit):
+    request = urllib.request.Request(f"http://{config[0]}{path}", data=json.dumps(body).encode(),
+                                     headers={"content-type": "application/json", "x-hangar-internal": config[1]},
+                                     method="POST")
+    with _opener.open(request, timeout=timeout) as response:
+        return json.loads(response.read(limit))
+
+
+def _error_detail(error, default):
+    try:
+        body = json.loads(error.read(16384))
+    except (OSError, ValueError):
+        return default
+    return body.get("detail") if isinstance(body, dict) else default
+
+
 def configure_preparation(address, secret):
     import ipaddress
     global _preparation_transport
@@ -373,10 +408,8 @@ def configure_preparation(address, secret):
 
 def publish_preparation_result(account, result):
     """Publica a operação completa no registro compartilhado com o coordenador Rust."""
-    import json
     import os
     import tempfile
-    from pathlib import Path
     from app import account_lifecycle, atomico
     if result.get("status") not in {"ready", "partial", "error"}:
         raise ValueError("resultado de preparo ainda não concluído")
@@ -403,25 +436,16 @@ def publish_preparation_result(account, result):
         Path(temporary.name).unlink(missing_ok=True)
 
 def request_preparation(account, *, prepare=False, force=False, cwd=None):
-    import json
-    import urllib.request
-    from app import runtime_coordinator, codex_contas
-    coordinator = runtime_coordinator.current()
-    if coordinator is None or getattr(coordinator, "mode", "python") == "python":
+    from app import codex_contas
+    if owner_mode() == "python":
         return None
     config = _preparation_transport
     if config is None:
         raise codex_contas.AccountError(503, "account_prepare_bridge_unavailable", {})
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    request = urllib.request.Request(f"http://{config[0]}/__hangar_server/accounts",
-        data=json.dumps({"account_id": account.id, "prepare": prepare, "force": force, "cwd": cwd}).encode(),
-        headers={"content-type": "application/json", "x-hangar-internal": config[1]}, method="POST")
     try:
-        with opener.open(request, timeout=15) as response:
-            result = json.loads(response.read(64 * 1024))
+        result = _post(config, "/__hangar_server/accounts",
+                       {"account_id": account.id, "prepare": prepare, "force": force, "cwd": cwd},
+                       timeout=15, limit=64 * 1024)
         if not isinstance(result, dict) or result.get("status") not in {"idle", "running", "ready", "partial", "error"}:
             raise ValueError("resposta de preparo inválida")
         return result
@@ -437,7 +461,6 @@ class ClaudeWindows:
         self.closed = set()
 
     def run(self, body):
-        import re
         from app import login_conta, conta_estado, runtime_coordinator
         if not isinstance(body, dict) or set(body) != {"instance", "key", "operation", "action", "code"}:
             raise ValueError("pedido inválido")
@@ -532,168 +555,100 @@ claude_windows = ClaudeWindows()
 
 def request_claude(action, *, label=None, path=None, code=None):
     """Encaminha consumidores Python ao dono Rust; pending nunca usa reserva Python."""
-    import json
-    import urllib.request
-    import urllib.error
     from fastapi import HTTPException
-    from app import runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    if coordinator is None or getattr(coordinator, "mode", "python") == "python":
+    if owner_mode() == "python":
         return None
+    unavailable = {"code": "account_auth_bridge_unavailable"}
     config = _preparation_transport
     if config is None:
-        raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"})
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    request = urllib.request.Request("http://" + config[0] + "/__hangar_server/accounts/claude",
-        data=json.dumps({"action": action, "label": label, "path": path, "code": code}).encode(),
-        headers={"content-type": "application/json", "x-hangar-internal": config[1]}, method="POST")
+        raise HTTPException(503, detail=unavailable)
     try:
-        with opener.open(request, timeout=320 if action == "code" else 30) as response:
-            return json.loads(response.read(256 * 1024))
+        return _post(config, "/__hangar_server/accounts/claude",
+                     {"action": action, "label": label, "path": path, "code": code},
+                     timeout=320 if action == "code" else 30, limit=256 * 1024)
     except urllib.error.HTTPError as error:
-        try:
-            detail = json.loads(error.read(16384)).get("detail")
-        except (ValueError, OSError):
-            detail = {"code": "account_auth_bridge_unavailable"}
-        raise HTTPException(error.code, detail=detail) from None
+        raise HTTPException(error.code, detail=_error_detail(error, unavailable)) from None
     except (OSError, ValueError):
-        raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"}) from None
+        raise HTTPException(503, detail=unavailable) from None
 
 
 def request_codex(action, account, *, attempt_id=None, refresh=False):
     """Ponte de consumidores internos; pending recusa sem abrir um escritor Python."""
-    import json
-    import urllib.request
-    import urllib.error
     from fastapi import HTTPException
-    from app import runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    if coordinator is None or getattr(coordinator, "mode", "python") == "python":
+    if owner_mode() == "python":
         return None, False
+    unavailable = {"code": "account_auth_bridge_unavailable"}
     config = _preparation_transport
     if config is None:
-        raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"})
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    request = urllib.request.Request("http://" + config[0] + "/__hangar_server/accounts",
-        data=json.dumps({"action": action, "account_id": account.id,
-                         "attempt_id": attempt_id, "refresh": refresh}).encode(),
-        headers={"content-type": "application/json", "x-hangar-internal": config[1]}, method="POST")
+        raise HTTPException(503, detail=unavailable)
     try:
-        with opener.open(request, timeout=45) as response:
-            return json.loads(response.read(256 * 1024)), True
+        return _post(config, "/__hangar_server/accounts",
+                     {"action": action, "account_id": account.id, "attempt_id": attempt_id, "refresh": refresh},
+                     timeout=45, limit=256 * 1024), True
     except urllib.error.HTTPError as error:
-        try:
-            detail = json.loads(error.read(16384)).get("detail")
-        except (ValueError, OSError):
-            detail = {"code": "account_auth_bridge_unavailable"}
+        detail = _error_detail(error, unavailable)
         if isinstance(detail, dict) and "code" in detail:
             from app.codex_contas import AccountError
             raise AccountError(error.code, detail["code"], detail.get("params", {})) from None
         raise HTTPException(error.code, detail=detail) from None
     except (OSError, ValueError):
-        raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"}) from None
+        raise HTTPException(503, detail=unavailable) from None
 
 
 def request_quotas(*, force=False, cached_only=False, invalidate=None):
     """Encaminha cotas ao único escritor; falha em pending não ativa leitura Python."""
-    import json
-    import urllib.request
     from fastapi import HTTPException
-    from app import runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    if coordinator is None or getattr(coordinator, "mode", "python") == "python":
+    if owner_mode() == "python":
         return None
+    unavailable = {"code": "quota_bridge_unavailable"}
     config = _preparation_transport
     if config is None:
-        raise HTTPException(503, detail={"code":"quota_bridge_unavailable"})
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    body = {"force":force, "cached_only":cached_only, "invalidate":invalidate}
-    request = urllib.request.Request("http://" + config[0] + "/__hangar_server/quotas",
-        data=json.dumps(body).encode(), headers={"content-type":"application/json",
-        "x-hangar-internal":config[1]}, method="POST")
+        raise HTTPException(503, detail=unavailable)
     try:
-        with opener.open(request, timeout=45) as response:
-            return json.loads(response.read(1024 * 1024))
+        return _post(config, "/__hangar_server/quotas",
+                     {"force": force, "cached_only": cached_only, "invalidate": invalidate},
+                     timeout=45, limit=1024 * 1024)
     except (OSError, ValueError):
-        raise HTTPException(503, detail={"code":"quota_bridge_unavailable"}) from None
+        raise HTTPException(503, detail=unavailable) from None
 
 
 def request_reset(account, credit_id, idempotency_key):
     """O consumo no Rust conserva a tentativa antes de enviar qualquer pedido ao provedor."""
-    import json
-    import urllib.request
-    import urllib.error
     from fastapi import HTTPException
-    from app import runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    if coordinator is None or getattr(coordinator, "mode", "python") == "python":
+    if owner_mode() == "python":
         return None
+    unavailable = {"code": "codex_reset_failed"}
     config = _preparation_transport
     if config is None:
-        raise HTTPException(503, detail={"code":"codex_reset_failed"})
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    body = {"reset_account_id":account.id, "credit_id":credit_id,
-            "idempotency_key":str(idempotency_key)}
-    request = urllib.request.Request("http://" + config[0] + "/__hangar_server/accounts",
-        data=json.dumps(body).encode(), headers={"content-type":"application/json",
-        "x-hangar-internal":config[1]}, method="POST")
+        raise HTTPException(503, detail=unavailable)
     try:
-        with opener.open(request, timeout=70) as response:
-            return json.loads(response.read(65536))
+        return _post(config, "/__hangar_server/accounts",
+                     {"reset_account_id": account.id, "credit_id": credit_id,
+                      "idempotency_key": str(idempotency_key)},
+                     timeout=70, limit=65536)
     except urllib.error.HTTPError as error:
-        try:
-            detail = json.loads(error.read(16384)).get("detail")
-        except (OSError, ValueError):
-            detail = {"code":"codex_reset_failed"}
-        raise HTTPException(error.code, detail=detail) from None
+        raise HTTPException(error.code, detail=_error_detail(error, unavailable)) from None
     except (OSError, ValueError):
-        raise HTTPException(503, detail={"code":"codex_reset_failed"}) from None
+        raise HTTPException(503, detail=unavailable) from None
 
 
 def request_device(action):
     """Encaminha somente a operação; credenciais permanecem no cofre local."""
-    import json
-    import urllib.request
-    import urllib.error
     from fastapi import HTTPException
-    from app import runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    mode = getattr(coordinator, "mode", "python") if coordinator else "python"
+    mode = owner_mode()
     if mode == "python":
         return None, False
+    unavailable = {"code": "account_device_bridge_unavailable"}
     config = _preparation_transport
     if mode != "rust" or config is None:
-        raise HTTPException(503, detail={"code": "account_device_bridge_unavailable"})
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    request = urllib.request.Request("http://" + config[0] + "/__hangar_server/accounts",
-        data=json.dumps({"device_action": action}).encode(),
-        headers={"content-type": "application/json", "x-hangar-internal": config[1]}, method="POST")
+        raise HTTPException(503, detail=unavailable)
     try:
-        with opener.open(request, timeout=45) as response:
-            return json.loads(response.read(256 * 1024)), True
+        return _post(config, "/__hangar_server/accounts", {"device_action": action},
+                     timeout=45, limit=256 * 1024), True
     except urllib.error.HTTPError as error:
-        try:
-            detail = json.loads(error.read(16384)).get("detail")
-        except (ValueError, OSError):
-            detail = {"code": "account_device_bridge_unavailable"}
-        raise HTTPException(error.code, detail=detail) from None
+        raise HTTPException(error.code, detail=_error_detail(error, unavailable)) from None
     except (OSError, ValueError):
-        raise HTTPException(503, detail={"code": "account_device_bridge_unavailable"}) from None
+        raise HTTPException(503, detail=unavailable) from None
 
 
 preparation_jobs = PreparationJobs()

@@ -1,5 +1,5 @@
 use super::{
-    AccountKey, GuardMode, Provider, UsageFacts,
+    AccountKey, GuardMode, Provider,
     bridge::AccountsBridge,
     catalog::{Account, AccountService},
     claude_login::WindowClient,
@@ -94,17 +94,10 @@ impl AccountService {
             .map_err(|_| "sessao-viva")?;
         self.validate_claude(&account, &key)
             .map_err(|_| "renovacao-falhou")?;
-        let mut facts = bridge
-            .facts(std::slice::from_ref(&key))
+        self.usage(&bridge, runtime.as_deref(), &key)
             .await
-            .map_err(|_| "sessao-viva")?
-            .remove(0)
-            .facts;
-        facts.merge(match runtime {
-            Some(runtime) => runtime.account_usage(&key).await,
-            None => UsageFacts::default(),
-        });
-        facts.ensure_unused().map_err(|_| "sessao-viva")?;
+            .ensure_unused()
+            .map_err(|_| "sessao-viva")?;
         let before = oauth(&account.home);
         let _ = self.claude_cli(&account, &["mcp", "list"]).await;
         if renewed(&before, &oauth(&account.home)) {
@@ -181,19 +174,13 @@ pub fn start(
                 _=stopped.changed()=>break,
                 _=interval.tick()=>{},
             }
-            let Ok(rows) = service.claude_catalog() else {
+            let Ok(accounts) = service.claude_accounts() else {
                 continue;
             };
-            for row in rows.as_array().into_iter().flatten() {
+            for (_, account) in accounts {
                 if *stopped.borrow() {
                     break;
                 }
-                let Some(label) = row["label"].as_str() else {
-                    continue;
-                };
-                let Ok(account) = service.claude_by_label(label) else {
-                    continue;
-                };
                 if !account.is_default
                     && !super::storage::real_file(&account.home.join(super::storage::CLAUDE_MARKER))
                 {

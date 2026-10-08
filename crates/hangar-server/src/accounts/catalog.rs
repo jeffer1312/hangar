@@ -520,21 +520,46 @@ impl AccountService {
     }
 }
 
+/// A varredura só ordena a lista por recência: um minuto de atraso na ordem não aparece, a
+/// varredura inteira a cada busca de conta sim. O Python guarda o mesmo minuto.
 fn projects_mtime(path: &Path) -> std::time::SystemTime {
+    use std::{
+        collections::HashMap,
+        sync::{LazyLock, Mutex},
+        time::{Duration, Instant, SystemTime},
+    };
+    static CACHE: LazyLock<Mutex<HashMap<PathBuf, (Instant, SystemTime)>>> =
+        LazyLock::new(Default::default);
+    if let Some((at, value)) = CACHE.lock().unwrap().get(path)
+        && at.elapsed() < Duration::from_secs(60)
+    {
+        return *value;
+    }
+    // Pasta ilegível não entra no cache: congelaria a ordem errada por um minuto.
+    let Ok(entries) = fs::read_dir(path) else {
+        return std::time::UNIX_EPOCH;
+    };
+    let value = latest_mtime(entries);
+    CACHE
+        .lock()
+        .unwrap()
+        .insert(path.to_owned(), (Instant::now(), value));
+    value
+}
+
+fn latest_mtime(entries: fs::ReadDir) -> std::time::SystemTime {
     let mut latest = std::time::UNIX_EPOCH;
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if let Ok(meta) = fs::symlink_metadata(entry.path()) {
-                if meta.file_type().is_symlink() {
-                    continue;
-                }
-                let time = if meta.is_dir() {
-                    projects_mtime(&entry.path())
-                } else {
-                    meta.modified().unwrap_or(latest)
-                };
-                latest = latest.max(time);
+    for entry in entries.flatten() {
+        if let Ok(meta) = fs::symlink_metadata(entry.path()) {
+            if meta.file_type().is_symlink() {
+                continue;
             }
+            let time = if meta.is_dir() {
+                fs::read_dir(entry.path()).map_or(latest, latest_mtime)
+            } else {
+                meta.modified().unwrap_or(latest)
+            };
+            latest = latest.max(time);
         }
     }
     latest

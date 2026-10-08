@@ -230,39 +230,34 @@ pub fn frame_positions(duration: f64) -> Vec<f64> {
 }
 pub async fn transcribe(st: &crate::routes::AppState, name: &str, audio: Vec<u8>) -> String {
     use base64::Engine;
-    let Ok(client) = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(120))
-        .build()
-    else {
-        return String::new();
-    };
+    use http_body_util::BodyExt;
     let name = percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
-    let response = client
-        .post(format!(
-            "http://{}/internal/sessions/{name}/upload-transcript",
-            st.cfg.upstream
-        ))
-        .header("x-hangar-internal", &st.cfg.internal_secret)
-        .header("content-type", "application/json")
-        .body(
-            serde_json::json!({"audio":base64::engine::general_purpose::STANDARD.encode(audio)})
-                .to_string(),
-        )
-        .send()
-        .await;
-    let Ok(response) = response else {
+    // Base64 não tem caractere a escapar em JSON: o corpo sai sem cópia intermediária.
+    let body = format!(
+        r#"{{"audio":"{}"}}"#,
+        base64::engine::general_purpose::STANDARD.encode(audio)
+    );
+    let Ok(request) = axum::http::Request::post(format!(
+        "http://{}/internal/sessions/{name}/upload-transcript",
+        st.cfg.upstream
+    ))
+    .header("x-hangar-internal", &st.cfg.internal_secret)
+    .header("content-type", "application/json")
+    .body(axum::body::Body::from(body)) else {
         return String::new();
     };
-    if !response.status().is_success() {
-        return String::new();
-    }
-    let Ok(bytes) = response.bytes().await else {
-        return String::new();
-    };
-    serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
+    let bytes = tokio::time::timeout(Duration::from_secs(120), async {
+        let response = st.http.request(request).await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        Some(response.into_body().collect().await.ok()?.to_bytes())
+    })
+    .await
+    .ok()
+    .flatten();
+    bytes
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|v| v["text"].as_str().map(str::to_owned))
         .unwrap_or_default()
 }

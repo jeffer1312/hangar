@@ -7,6 +7,8 @@ pub const RATE_LIMIT_WAIT: f64 = 600.0;
 #[derive(Default)]
 pub struct QuotaCache {
     entries: Map<String, Value>,
+    /// Gravar sem mudança custava dois fsync a cada consulta.
+    dirty: bool,
 }
 
 impl QuotaCache {
@@ -16,7 +18,10 @@ impl QuotaCache {
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
-        Self { entries }
+        Self {
+            entries,
+            dirty: false,
+        }
     }
 
     pub fn needs_refresh(&self, id: &str, now: f64, force: bool) -> bool {
@@ -69,10 +74,11 @@ impl QuotaCache {
             json!({"gravado_em": now, "cota": value,
             "retry_at": if limited { Some(now + RATE_LIMIT_WAIT) } else { None }}),
         );
+        self.dirty = true;
     }
 
     pub fn remove(&mut self, id: &str) {
-        self.entries.remove(id);
+        self.dirty |= self.entries.remove(id).is_some();
     }
 
     pub fn credential_changed(&self, id: &str, signature: &Value) -> bool {
@@ -89,13 +95,23 @@ impl QuotaCache {
     }
 
     pub fn set_credential(&mut self, id: &str, signature: Value) {
-        if let Some(entry) = self.entries.get_mut(id) {
+        // Ausente e nulo não são iguais: a chave gravada distingue o cache antigo.
+        if let Some(entry) = self.entries.get_mut(id)
+            && entry.get("credential_signature") != Some(&signature)
+        {
             entry["credential_signature"] = signature;
+            self.dirty = true;
         }
     }
 
-    pub fn save(&self, path: &Path) -> io::Result<()> {
-        crate::runtime::queue::atomic_write(path, &serde_json::to_vec(&self.entries)?)
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn save(&mut self, path: &Path) -> io::Result<()> {
+        crate::runtime::queue::atomic_write(path, &serde_json::to_vec(&self.entries)?)?;
+        self.dirty = false;
+        Ok(())
     }
 }
 

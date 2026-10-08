@@ -402,7 +402,6 @@ def _managed_device(action):
 
 def _require_python_writer():
     from fastapi import HTTPException
-    from app import runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    if coordinator is not None and getattr(coordinator, "mode", "python") != "python":
+    from app.account_bridge import owner_mode
+    if owner_mode() != "python":
         raise HTTPException(503, detail={"code": "account_device_python_writer_disabled"})

@@ -14,11 +14,10 @@ use std::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 
-type Gate = Arc<AsyncMutex<()>>;
 #[derive(Clone, Default)]
 pub struct ClaudeLogins {
     attempts: Arc<AsyncMutex<HashMap<AccountKey, Arc<Attempt>>>>,
-    gates: Arc<Mutex<HashMap<AccountKey, Gate>>>,
+    gates: super::locks::KeyedGates,
 }
 struct Attempt {
     account: Account,
@@ -26,16 +25,6 @@ struct Attempt {
     operation: String,
     old_token: Option<Vec<u8>>,
     guard: Mutex<Option<AccountGuard>>,
-}
-impl ClaudeLogins {
-    fn gate(&self, key: &AccountKey) -> Gate {
-        self.gates
-            .lock()
-            .unwrap()
-            .entry(key.clone())
-            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-            .clone()
-    }
 }
 pub fn nonce() -> io::Result<String> {
     let mut bytes = [0u8; 16];
@@ -112,13 +101,7 @@ fn cancelled(label: &str) -> AccountError {
 }
 impl AccountService {
     pub async fn recover_claude_logins(&self, client: WindowClient) -> Result<(), AccountError> {
-        for row in self
-            .claude_catalog()?
-            .as_array()
-            .ok_or_else(AccountError::io)?
-        {
-            let account =
-                self.claude_by_label(row["label"].as_str().ok_or_else(AccountError::io)?)?;
+        for (_, account) in self.claude_accounts()? {
             let key =
                 AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
             let record = self.login_record(&key)?;
@@ -149,11 +132,11 @@ impl AccountService {
         }
         Ok(())
     }
-    pub(super) fn login_record(&self, key: &AccountKey) -> Result<std::path::PathBuf, AccountError> {
-        self.locks
-            .path(key)
-            .map(|path| path.with_extension("claude-login.json"))
-            .map_err(|_| AccountError::io())
+    pub(super) fn login_record(
+        &self,
+        key: &AccountKey,
+    ) -> Result<std::path::PathBuf, AccountError> {
+        self.sidecar(key, "claude-login.json")
     }
     pub async fn start_claude_login(
         &self,
@@ -174,7 +157,7 @@ impl AccountService {
         let account = self.claude_by_label(label)?;
         let key =
             AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
-        let gate = self.claude_logins.gate(&key);
+        let gate = self.claude_logins.gates.gate(&key);
         let _gate = gate.lock().await;
         if self.claude_logins.attempts.lock().await.contains_key(&key) {
             return Err(AccountError::new(
@@ -208,9 +191,11 @@ impl AccountService {
             fs::remove_file(&record).map_err(|_| AccountError::io())?;
         }
         let operation = nonce().map_err(|_| AccountError::io())?;
-        fs::write(
+        crate::runtime::queue::atomic_write(
             &record,
-            json!({"key":key,"operation":operation}).to_string(),
+            json!({"key":key,"operation":operation})
+                .to_string()
+                .as_bytes(),
         )
         .map_err(|_| AccountError::io())?;
         let attempt = Arc::new(Attempt {
@@ -331,7 +316,7 @@ impl AccountService {
                 Err(_) => return Ok(json!({"etapa":"idle","url":null,"email":null,"plano":null})),
             };
             let key = AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
-            let gate = service.claude_logins.gate(&key); let _gate = gate.lock().await;
+            let gate = service.claude_logins.gates.gate(&key); let _gate = gate.lock().await;
             let Some(attempt) = service.claude_logins.attempts.lock().await.get(&key).cloned() else {
                 return Ok(json!({"etapa":"idle","url":null,"email":null,"plano":null}));
             };
@@ -358,7 +343,7 @@ impl AccountService {
             let account = service.claude_by_label(&label)?;
             let key =
                 AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
-            let gate = service.claude_logins.gate(&key);
+            let gate = service.claude_logins.gates.gate(&key);
             let attempt;
             {
                 let _gate = gate.lock().await;
@@ -415,7 +400,7 @@ impl AccountService {
             };
             let key =
                 AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
-            let gate = service.claude_logins.gate(&key);
+            let gate = service.claude_logins.gates.gate(&key);
             let _gate = gate.lock().await;
             let attempt = service
                 .claude_logins
@@ -443,7 +428,7 @@ impl AccountService {
             let account = service.claude_by_label(&label)?;
             let key =
                 AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
-            let gate = service.claude_logins.gate(&key);
+            let gate = service.claude_logins.gates.gate(&key);
             let _gate = gate.lock().await;
             let attempt = service
                 .claude_logins
@@ -585,7 +570,7 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
-        let gate = service.claude_logins.gate(&key);
+        let gate = service.claude_logins.gates.gate(&key);
         let control = gate.lock().await;
         assert!(observed.is_empty());
         tokio::time::pause();

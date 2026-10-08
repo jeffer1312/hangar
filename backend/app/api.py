@@ -2333,7 +2333,9 @@ async def create_session(body: CreateBody) -> CreatedSessionInfo:
         # Sem conta pedida, a herdada ou a padrão só vale se não estiver acabando; senão nasce na de
         # mais folga, e a resposta diz que trocou.
         from app import cotas
-        config_dir, aviso = await asyncio.to_thread(cotas.conta_com_cota, body.config_dir, cotas.cotas_claude())
+        # cotas_claude() consulta a ponte do Rust por HTTP síncrono: fica fora do event loop.
+        config_dir, aviso = await asyncio.to_thread(
+            lambda: cotas.conta_com_cota(body.config_dir, cotas.cotas_claude()))
         if aviso:
             _log.warning("create_session %s: %s", body.name, aviso)
             body = body.model_copy(update={"config_dir": config_dir})

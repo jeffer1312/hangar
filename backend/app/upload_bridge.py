@@ -9,13 +9,18 @@ import urllib.request
 from fastapi import HTTPException
 from starlette.responses import StreamingResponse
 
+from app.uploads import MAX_BYTES
+
+
+def _too_large():
+    return HTTPException(413, detail={"code": "erro_arquivo_grande", "params": {}, "msg": "arquivo maior que 100 MiB"})
+
 
 def transport():
-    from app import account_bridge, runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    if coordinator is None or getattr(coordinator, "mode", "python") == "python":
+    from app import account_bridge
+    if account_bridge.owner_mode() == "python":
         return None
-    config = account_bridge._preparation_transport
+    config = account_bridge.private_transport()
     if config is None:
         raise HTTPException(503, detail={"code": "upload_bridge_unavailable"})
     return config
@@ -32,15 +37,12 @@ def request_json(name, action, *, data=None, filename="", allow_absolute=False):
         return None
     params = {"action": action, "filename": filename, "allow_absolute": str(allow_absolute).lower(),
               "audio_only": "true"}
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    from app.account_bridge import _opener
     request = urllib.request.Request(endpoint(config, name, params), data=data,
                                      headers={"x-hangar-internal": config[1], "x-filename": urllib.parse.quote(filename, safe="")},
                                      method="POST" if data is not None else "GET")
     try:
-        with opener.open(request, timeout=60) as response:
+        with _opener.open(request, timeout=60) as response:
             return json.loads(response.read(4 * 1024 * 1024))
     except urllib.error.HTTPError as error:
         try:
@@ -59,8 +61,8 @@ async def forward(name, action, request, *, filename="", audio_only=False, downl
         return None
     if action == "save":
         length = request.headers.get("content-length", "")
-        if length.isdigit() and int(length) > 100 * 1024 * 1024:
-            raise HTTPException(413, detail={"code": "erro_arquivo_grande", "params": {}, "msg": "arquivo maior que 100 MiB"})
+        if length.isdigit() and int(length) > MAX_BYTES:
+            raise _too_large()
     import asyncio
     import http.client
     connection = http.client.HTTPConnection(config[0], timeout=480)
@@ -91,8 +93,8 @@ async def forward(name, action, request, *, filename="", audio_only=False, downl
             size = 0
             async for chunk in request.stream():
                 size += len(chunk)
-                if size > 100 * 1024 * 1024:
-                    raise HTTPException(413, detail={"code": "erro_arquivo_grande", "params": {}, "msg": "arquivo maior que 100 MiB"})
+                if size > MAX_BYTES:
+                    raise _too_large()
                 if not chunk:
                     continue
                 block = (f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n") if chunked else chunk

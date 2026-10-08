@@ -68,20 +68,27 @@ router = APIRouter(prefix="/internal", dependencies=[Depends(require_internal)],
 _policy_calls = {}
 
 
-@router.post("/accounts/quotas")
-async def quota_facts(request: Request):
-    from app import cotas, runtime_coordinator
+async def _instance_body(request: Request, limit: int, *, modes=None):
+    """Só a instância viva do coordenador fala por aqui; o corpo tem teto antes do JSON."""
+    from app import runtime_coordinator
     coordinator = runtime_coordinator.current()
     instance = request.headers.get("x-hangar-runtime-instance", "")
     if (coordinator is None or not coordinator.instance
-            or getattr(coordinator, "mode", "python") not in {"rust", "pending"}
+            or (modes is not None and getattr(coordinator, "mode", "python") not in modes)
             or not secrets.compare_digest(instance, coordinator.instance)):
         raise HTTPException(404)
     raw = bytearray()
     async for chunk in request.stream():
         raw.extend(chunk)
-        if len(raw) > 65536:
+        if len(raw) > limit:
             raise HTTPException(413)
+    return coordinator, instance, raw
+
+
+@router.post("/accounts/quotas")
+async def quota_facts(request: Request):
+    from app import cotas
+    _, _, raw = await _instance_body(request, 65536, modes={"rust", "pending"})
     try:
         body = json.loads(raw)
         if (not isinstance(body, dict) or set(body) != {"action", "ids"}
@@ -98,17 +105,9 @@ async def quota_facts(request: Request):
 async def account_facts(request: Request):
     from dataclasses import asdict
     from pathlib import Path
-    from app import account_bridge, runtime_coordinator
+    from app import account_bridge
     from app.account_lifecycle import AccountKey
-    coordinator = runtime_coordinator.current()
-    instance = request.headers.get("x-hangar-runtime-instance", "")
-    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
-        raise HTTPException(404)
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > 64 * 1024:
-            raise HTTPException(413)
+    _, _, raw = await _instance_body(request, 64 * 1024)
     try:
         body = json.loads(raw)
         if not isinstance(body, dict) or set(body) != {"keys"} or not isinstance(body["keys"], list) or len(body["keys"]) > 128:
@@ -131,17 +130,8 @@ async def account_facts(request: Request):
 @router.post("/accounts/codex-invalidate")
 async def codex_invalidate(request: Request):
     from pathlib import Path
-    from app import runtime_coordinator
     from app.account_lifecycle import AccountKey
-    coordinator = runtime_coordinator.current()
-    instance = request.headers.get("x-hangar-runtime-instance", "")
-    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
-        raise HTTPException(404)
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > 16384:
-            raise HTTPException(413)
+    _, _, raw = await _instance_body(request, 16384)
     try:
         body = json.loads(raw)
         item = body["key"]
@@ -162,16 +152,8 @@ async def codex_invalidate(request: Request):
 @router.post("/accounts/prepare")
 @router.post("/accounts/prepare/wait")
 async def account_prepare(request: Request):
-    from app import account_bridge, runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    instance = request.headers.get("x-hangar-runtime-instance", "")
-    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
-        raise HTTPException(404)
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > 16 * 1024:
-            raise HTTPException(413)
+    from app import account_bridge
+    _, instance, raw = await _instance_body(request, 16 * 1024)
     try:
         body = json.loads(raw)
         if request.url.path.endswith("/wait"):
@@ -186,16 +168,8 @@ async def account_prepare(request: Request):
 
 @router.post("/accounts/claude-window")
 async def claude_window(request: Request):
-    from app import account_bridge, runtime_coordinator
-    coordinator = runtime_coordinator.current()
-    instance = request.headers.get("x-hangar-runtime-instance", "")
-    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
-        raise HTTPException(404)
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > 16 * 1024:
-            raise HTTPException(413)
+    from app import account_bridge
+    _, _, raw = await _instance_body(request, 16 * 1024)
     try:
         body = json.loads(raw)
         return await asyncio.to_thread(account_bridge.claude_windows.run, body)
@@ -206,15 +180,7 @@ async def claude_window(request: Request):
 @router.post("/runtime/policy")
 async def runtime_policy(request: Request):
     from app import runtime_coordinator, runtime_policy as service
-    coordinator = runtime_coordinator.current()
-    instance = request.headers.get("x-hangar-runtime-instance", "")
-    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
-        raise HTTPException(404)
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > (32 << 20) + 1024:
-            raise HTTPException(413)
+    coordinator, instance, raw = await _instance_body(request, (32 << 20) + 1024)
     try:
         body = json.loads(raw)
         if (not isinstance(body, dict) or set(body) != {"key", "generation", "request_id", "phase_id", "kind", "payload"}

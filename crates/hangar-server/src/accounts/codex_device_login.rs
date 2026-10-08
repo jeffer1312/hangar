@@ -1,6 +1,6 @@
 //! Cofre, Codex e destinos Pi/omp são gravados aqui, sem largar a guarda da conta antes do fim do I/O.
 use super::{
-    AccountGuard, AccountKey, GuardMode, Provider, UsageFacts,
+    AccountGuard, AccountKey, GuardMode, Provider,
     bridge::AccountsBridge,
     catalog::{Account, AccountError, AccountService},
     storage,
@@ -163,29 +163,15 @@ impl DeviceLogins {
             wait_done(&attempt).await;
         }
         for done in active {
-            let mut done = done.subscribe();
-            while !*done.borrow_and_update() {
-                if done.changed().await.is_err() {
-                    break;
-                }
-            }
+            let _ = done.subscribe().wait_for(|done| *done).await;
         }
     }
 }
 async fn wait_done(attempt: &Attempt) {
-    let mut done = attempt.done.subscribe();
-    while !*done.borrow_and_update() {
-        if done.changed().await.is_err() {
-            break;
-        }
-    }
+    let _ = attempt.done.subscribe().wait_for(|done| *done).await;
 }
 async fn cancelled(cancel: &mut watch::Receiver<bool>) {
-    while !*cancel.borrow_and_update() {
-        if cancel.changed().await.is_err() {
-            break;
-        }
-    }
+    let _ = cancel.wait_for(|cancelled| *cancelled).await;
 }
 
 /// Só o aviso de invalidação do Codex ainda vai ao Python; Pi/omp não passam por aqui.
@@ -278,7 +264,6 @@ pub(super) fn atomic_json_linked(path: &Path, value: &Value) -> Result<(), &'sta
     write_atomic(path, value, false)
 }
 fn write_atomic(path: &Path, value: &Value, strict: bool) -> Result<(), &'static str> {
-    use std::io::Write;
     let parent = path.parent().ok_or("device_storage_failed")?;
     if strict && path.exists() && !storage::real_file(path) {
         return Err("device_storage_failed");
@@ -287,45 +272,8 @@ fn write_atomic(path: &Path, value: &Value, strict: bool) -> Result<(), &'static
     if !(if strict { storage::real_dir(parent) } else { parent.is_dir() }) {
         return Err("device_storage_failed");
     }
-    let tmp = parent.join(format!(
-        ".device-{}.tmp",
-        super::claude_login::nonce().map_err(|_| "device_storage_failed")?
-    ));
-    let result = (|| {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&tmp).map_err(|_| "device_storage_failed")?;
-        file.write_all(value.to_string().as_bytes())
-            .map_err(|_| "device_storage_failed")?;
-        file.sync_all().map_err(|_| "device_storage_failed")?;
-        drop(file);
-        // A substituição também precisa aceitar um destino existente no Windows.
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStrExt;
-            #[link(name = "kernel32")]
-            unsafe extern "system" {
-                fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
-            }
-            let from: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
-            let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-            if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0x1 | 0x8) } == 0 {
-                return Err("device_storage_failed");
-            }
-        }
-        #[cfg(not(windows))]
-        std::fs::rename(&tmp, path).map_err(|_| "device_storage_failed")?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(tmp);
-    }
-    result
+    crate::runtime::queue::atomic_write(path, value.to_string().as_bytes())
+        .map_err(|_| "device_storage_failed")
 }
 
 impl AccountService {
@@ -362,15 +310,7 @@ impl AccountService {
                 ));
             }
         }
-        let mut facts = facts_bridge
-            .facts(std::slice::from_ref(&key))
-            .await
-            .map(|mut rows| rows.remove(0).facts)
-            .unwrap_or_default();
-        facts.merge(match runtime {
-            Some(runtime) => runtime.account_usage(&key).await,
-            None => UsageFacts::default(),
-        });
+        let facts = self.usage(facts_bridge, runtime.map(|r| &**r), &key).await;
         facts.ensure_unused().map_err(|code| {
             AccountError::codex(
                 409,
@@ -483,13 +423,13 @@ impl AccountService {
             worker.status.send_replace(status);
             worker.done.send_replace(true);
         });
-        let mut status = attempt.status.subscribe();
-        while status.borrow_and_update()["etapa"] == "iniciando" {
-            if status.changed().await.is_err() {
-                return Err(AccountError::io());
-            }
-        }
-        let value = status.borrow().clone();
+        let value = attempt
+            .status
+            .subscribe()
+            .wait_for(|status| status["etapa"] != "iniciando")
+            .await
+            .map_err(|_| AccountError::io())?
+            .clone();
         Ok(value)
     }
     async fn run_device(&self, attempt: &Attempt) -> Result<Value, &'static str> {

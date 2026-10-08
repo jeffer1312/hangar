@@ -34,7 +34,7 @@ def test_other_provider_bridge_never_reads_or_writes_account_cache(monkeypatch):
                            lambda: pytest.fail("leitor Claude pertence ao Rust")),
                cotas._Fonte("kimi:test", "Kimi", "kimi",
                            lambda: ("lida", [cotas.JanelaCota(rotulo="5h", pct=25)], None))]
-    monkeypatch.setattr(cotas, "_fontes", lambda: sources)
+    monkeypatch.setattr(cotas, "_other_sources", lambda: sources)
     monkeypatch.setattr(cotas.apelidos, "ler", lambda: {"kimi:test": "Minha chave"})
     monkeypatch.setattr(cotas, "_gravar_cache", lambda: pytest.fail("só o Rust grava o cache"))
     facts = cotas.quota_facts("sources", [])

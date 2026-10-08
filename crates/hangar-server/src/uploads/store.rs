@@ -798,7 +798,11 @@ impl UploadStore {
         if size == 0 {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        partial.file.as_ref().unwrap().sync_all()?;
+        // O fsync de até 100 MiB prendia o worker async; o clone do descritor fecha antes de publicar.
+        let file = partial.file.as_ref().unwrap().try_clone()?;
+        tokio::task::spawn_blocking(move || file.sync_all())
+            .await
+            .map_err(io::Error::other)??;
         let ext = extension(filename);
         let timestamp = chrono::Utc::now().timestamp();
         for _ in 0..128 {

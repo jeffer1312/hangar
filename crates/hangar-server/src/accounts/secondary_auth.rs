@@ -88,23 +88,7 @@ fn profile(value: Option<&str>) -> Result<Option<String>, &'static str> {
     if profile.is_empty() || profile == "default" {
         return Ok(None);
     }
-    let bytes = profile.as_bytes();
-    let allowed = |b: &u8| b.is_ascii_lowercase() || b.is_ascii_digit();
-    let shape = bytes.len() <= 64
-        && allowed(&bytes[0])
-        && bytes[1..]
-            .iter()
-            .all(|b| allowed(b) || matches!(b, b'.' | b'_' | b'-'));
-    let stem = profile
-        .split('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.as_bytes()[3].is_ascii_digit());
-    if !shape || profile.ends_with('.') || reserved {
+    if !crate::list::discover_other::valid_omp_profile(profile) {
         return Err("omp_profile_invalid");
     }
     Ok(Some(profile.into()))
@@ -174,23 +158,12 @@ fn barrier(env: &AccountEnvironment, path: &Path) {
     }
 }
 
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(items) => !items.is_empty(),
-    }
-}
-
 fn pi_logged(path: &Path) -> bool {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|value| value.get(PROVIDER).cloned())
-        .is_some_and(|entry| entry.is_object() && entry["type"] == "oauth" && truthy(&entry["refresh"]))
+        .is_some_and(|entry| entry.is_object() && entry["type"] == "oauth" && crate::costs::accumulator::truthy(entry.get("refresh")))
 }
 
 fn write_pi(env: &AccountEnvironment, tokens: &Value) -> (bool, String) {
@@ -232,39 +205,13 @@ fn has_oauth(connection: &Connection) -> rusqlite::Result<bool> {
     )
 }
 
-/// Mesmo texto do `json.dumps` do Python: separadores com espaço e só ASCII.
+/// Mesmo texto do `json.dumps` do Python, na ordem dada: separadores com espaço e só ASCII.
 fn python_dumps(entries: &[(&str, &Value)]) -> String {
-    fn text(value: &str, out: &mut String) {
-        out.push('"');
-        for unit in value.encode_utf16() {
-            match unit {
-                0x22 => out.push_str("\\\""),
-                0x5c => out.push_str("\\\\"),
-                0x0a => out.push_str("\\n"),
-                0x0d => out.push_str("\\r"),
-                0x09 => out.push_str("\\t"),
-                0x08 => out.push_str("\\b"),
-                0x0c => out.push_str("\\f"),
-                0x20..=0x7e => out.push(unit as u8 as char),
-                _ => out.push_str(&format!("\\u{unit:04x}")),
-            }
-        }
-        out.push('"');
-    }
-    let mut out = String::from("{");
-    for (index, (key, value)) in entries.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        text(key, &mut out);
-        out.push_str(": ");
-        match value {
-            Value::String(value) => text(value, &mut out),
-            other => out.push_str(&other.to_string()),
-        }
-    }
-    out.push('}');
-    out
+    let object: Map<String, Value> = entries
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).clone()))
+        .collect();
+    crate::transcript::pyjson::dumps(&Value::Object(object), false)
 }
 
 fn insert_omp(db: &Path, tokens: &Value) -> rusqlite::Result<bool> {

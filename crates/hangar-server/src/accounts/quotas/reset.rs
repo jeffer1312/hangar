@@ -58,6 +58,14 @@ fn failure(status: u16, code: &'static str, message: &str) -> AccountError {
     AccountError::new(status, code, message, json!({}))
 }
 
+fn reset_failed() -> AccountError {
+    failure(
+        502,
+        "codex_reset_failed",
+        "não foi possível redefinir a cota do Codex",
+    )
+}
+
 pub fn canonical_uuid(raw: &str) -> Option<String> {
     let raw = raw
         .strip_prefix("urn:uuid:")
@@ -146,21 +154,11 @@ impl AccountService {
         {
             return Ok(json!({"outcome":outcome}));
         }
-        let mut process = NativeProcess::open(self, &account).await.map_err(|_| {
-            failure(
-                502,
-                "codex_reset_failed",
-                "não foi possível redefinir a cota do Codex",
-            )
-        })?;
+        let mut process = NativeProcess::open(self, &account)
+            .await
+            .map_err(|_| reset_failed())?;
         let result = tokio::time::timeout(Duration::from_secs(60), async {
-            process.initialize().await.map_err(|_| {
-                failure(
-                    502,
-                    "codex_reset_failed",
-                    "não foi possível redefinir a cota do Codex",
-                )
-            })?;
+            process.initialize().await.map_err(|_| reset_failed())?;
             let current: Value = process
                 .client
                 .request(
@@ -203,13 +201,7 @@ impl AccountService {
                     Duration::from_secs(30),
                 )
                 .await
-                .map_err(|_| {
-                    failure(
-                        502,
-                        "codex_reset_failed",
-                        "não foi possível redefinir a cota do Codex",
-                    )
-                })?;
+                .map_err(|_| reset_failed())?;
             let outcome = response["outcome"]
                 .as_str()
                 .filter(|s| {
@@ -271,13 +263,7 @@ impl AccountService {
             Ok(json!({"outcome":outcome}))
         })
         .await
-        .unwrap_or_else(|_| {
-            Err(failure(
-                502,
-                "codex_reset_failed",
-                "não foi possível redefinir a cota do Codex",
-            ))
-        });
+        .unwrap_or_else(|_| Err(reset_failed()));
         process.close().await;
         result
     }

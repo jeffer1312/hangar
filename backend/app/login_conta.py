@@ -112,7 +112,7 @@ def _shell_matar(nome: str) -> None:
     if not tmux.kill_session(nome):
         raise RuntimeError("a janela de login continua aberta")
     probe = tmux._run(["tmux", "has-session", "-t", "=" + nome])
-    if probe.returncode not in (0, 1) or probe.returncode == 0:
+    if probe.returncode != 1:
         raise RuntimeError("não consegui confirmar o fim da janela de login")
 
 

@@ -876,6 +876,12 @@ def _fontes() -> list[_Fonte]:
             f"codex:{raiz}", "Codex" if account.is_default else account.id, "codex",
             lambda raiz=raiz: _ler_codex_detalhada(raiz),
         ))
+    return out + _other_sources()
+
+
+def _other_sources() -> list[_Fonte]:
+    """Fontes fora de Claude/Codex; com o Rust dono das contas, só estas passam pela ponte."""
+    out: list[_Fonte] = []
     for nome, key, base in _providers_kimi():
         # CommandCode plugado como provider do Kimi Code: o `<base>/usages` dele é 403 — a rota
         # de cota é a do CommandCode, escolhida pela base_url, igual ao ramo das chaves abaixo.
@@ -963,7 +969,7 @@ def _atualizar(fontes: list[_Fonte], forcar: bool = False) -> None:
 
 def quota_facts(action: str, ids: list[str]) -> dict:
     """Fornece leitores dos outros provedores; o cache compartilhado pertence ao Rust."""
-    sources = [source for source in _fontes() if source.provedor not in {"claude", "codex"}]
+    sources = [source for source in _other_sources() if source.provedor not in {"claude", "codex"}]
     if action == "sources":
         return {"sources": [{"id":source.chave, "label":source.label,
                              "provedor":source.provedor, "ativa":source.ativa}

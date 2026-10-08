@@ -458,9 +458,8 @@ async def laco(intervalo_s: float = _INTERVALO_S, margem_s: float = _MARGEM_S) -
     import asyncio
     while True:
         try:
-            from app import runtime_coordinator
-            coordinator = runtime_coordinator.current()
-            if coordinator is not None and getattr(coordinator, "mode", "python") in {"rust", "pending"}:
+            from app.account_bridge import owner_mode
+            if owner_mode() != "python":
                 await asyncio.sleep(intervalo_s)
                 continue
             rel = await asyncio.to_thread(rodada, margem_s)

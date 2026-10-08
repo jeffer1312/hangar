@@ -57,7 +57,9 @@ impl AccountEnvironment {
     }
 
     pub fn codex(&self, account: &Account) -> BTreeMap<String, String> {
-        let auth = regex::Regex::new(r"^(?:OPENAI|CODEX|CHATGPT)_.+(?:(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(?:_FILE)?|ACCOUNT_ID|ORG_ID|PROJECT_ID)$").unwrap();
+        static AUTH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r"^(?:OPENAI|CODEX|CHATGPT)_.+(?:(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(?:_FILE)?|ACCOUNT_ID|ORG_ID|PROJECT_ID)$").unwrap()
+        });
         let mut env = self.base.clone();
         env.retain(|key, _| {
             !matches!(
@@ -72,7 +74,7 @@ impl AccountEnvironment {
         if !account.is_default {
             env.retain(|key, _| {
                 let key = key.to_ascii_uppercase();
-                !auth.is_match(&key)
+                !AUTH.is_match(&key)
                     && !matches!(
                         key.as_str(),
                         "OPENAI_BASE_URL"

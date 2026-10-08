@@ -138,3 +138,25 @@ impl AccountsBridge {
         Ok(usage)
     }
 }
+
+impl super::AccountService {
+    /// Fatos do Python somados aos do runtime Rust. Ponte que falha ou runtime ausente deixam os
+    /// fatos incompletos: nunca provam que a conta está livre.
+    pub(crate) async fn usage(
+        &self,
+        bridge: &AccountsBridge,
+        runtime: Option<&crate::runtime::gateway::RuntimeRegistry>,
+        key: &AccountKey,
+    ) -> UsageFacts {
+        let mut facts = bridge
+            .facts(std::slice::from_ref(key))
+            .await
+            .map(|mut rows| rows.remove(0).facts)
+            .unwrap_or_default();
+        facts.merge(match runtime {
+            Some(runtime) => runtime.account_usage(key).await,
+            None => UsageFacts::default(),
+        });
+        facts
+    }
+}

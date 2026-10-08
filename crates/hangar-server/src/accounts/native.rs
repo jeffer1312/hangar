@@ -131,21 +131,12 @@ impl NativeReaders {
             reader.cancel.send_replace(true);
         }
         for reader in readers {
-            let mut done = reader.done.subscribe();
-            while !*done.borrow_and_update() {
-                if done.changed().await.is_err() {
-                    break;
-                }
-            }
+            let _ = reader.done.subscribe().wait_for(|done| *done).await;
         }
     }
 }
 async fn reader_cancelled(cancel: &mut watch::Receiver<bool>) {
-    while !*cancel.borrow_and_update() {
-        if cancel.changed().await.is_err() {
-            break;
-        }
-    }
+    let _ = cancel.wait_for(|cancelled| *cancelled).await;
 }
 
 /// O auxiliar conserva árvore e transporte até a limpeza confirmar o término.

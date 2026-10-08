@@ -370,23 +370,19 @@ async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
-    if crate::uploads::http::matches(req.method(), req.uri().path()) {
-        let (_, owner) = gate(&st, peer, &req);
-        if owner {
-            let headers = req.headers().clone();
-            let mut response = crate::uploads::http::public(st, req).await;
-            cors(&headers, response.headers_mut());
-            return response;
-        }
-    }
-    if crate::accounts::http::matches(req.method(), req.uri().path()) {
-        let (_, owner) = gate(&st, peer, &req);
-        if owner {
-            let headers = req.headers().clone();
-            let mut response = crate::accounts::http::public(st, req).await;
-            cors(&headers, response.headers_mut());
-            return response;
-        }
+    // Anexos e contas do dono são do Rust; o convidado segue ao Python.
+    let uploads = crate::uploads::http::matches(req.method(), req.uri().path());
+    if (uploads || crate::accounts::http::matches(req.method(), req.uri().path()))
+        && gate(&st, peer, &req).1
+    {
+        let headers = req.headers().clone();
+        let mut response = if uploads {
+            crate::uploads::http::public(st, req).await
+        } else {
+            crate::accounts::http::public(st, req).await
+        };
+        cors(&headers, response.headers_mut());
+        return response;
     }
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
         let (forward, owner) = gate(&st, peer, &req);

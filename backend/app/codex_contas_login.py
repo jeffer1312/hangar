@@ -639,8 +639,15 @@ class CodexContasLogin:
     def preparation_status(self, account: accounts.Account) -> dict:
         from app.account_bridge import request_preparation
         delegated = request_preparation(account)
-        if delegated is not None:
-            return delegated
+        return delegated if delegated is not None else self._local_preparation_status(account)
+
+    async def preparation_status_async(self, account: accounts.Account) -> dict:
+        """Só a ida HTTP à ponte vai para thread; o estado local é lido no loop."""
+        from app.account_bridge import request_preparation
+        delegated = await asyncio.to_thread(request_preparation, account)
+        return delegated if delegated is not None else self._local_preparation_status(account)
+
+    def _local_preparation_status(self, account: accounts.Account) -> dict:
         task = self._preparations.get(self._key(account))
         gravado = codex_contas_sync.preparation_status(account)
         if task is not None and not task.done():
@@ -690,7 +697,8 @@ class CodexContasLogin:
 
     async def account_snapshot(self, account: accounts.Account, *, read_auth: bool = True,
                                sync: dict | None = None) -> dict:
-        sync = sync if sync is not None else self.preparation_status(account)
+        if sync is None:
+            sync = await self.preparation_status_async(account)
         if read_auth:
             auth = await self.read_auth_rapido(account)
         elif sync.get("status") == "running":
@@ -700,12 +708,12 @@ class CodexContasLogin:
         home = str(account.home.expanduser().resolve(strict=False))
         return {"id": account.id, "credential_id": f"codex:{home}", "name": account.id,
                 "home": home, "is_default": account.is_default, "auth": auth,
-                "sync": self.preparation_status(account),
+                "sync": await self.preparation_status_async(account),
                 "has_settings": self._has_settings(account)}
 
     async def accounts_snapshot(self) -> list[dict]:
         async def one(account: accounts.Account) -> dict:
-            sync = self.preparation_status(account)
+            sync = await self.preparation_status_async(account)
             return await self.account_snapshot(
                 account, read_auth=sync.get("status") != "running", sync=sync)
         # Uma leitura de auth por conta, em paralelo: em série a tela esperava a soma delas.

@@ -1,6 +1,6 @@
 //! O evento de sucesso inicia confirmação; identidade legível é quem conclui o login.
 use super::{
-    AccountKey, GuardMode, Provider, UsageFacts,
+    AccountKey, GuardMode, Provider,
     catalog::{Account, AccountError, AccountService},
     native::{AuthCache, NativeProcess},
 };
@@ -19,7 +19,6 @@ use tokio::{
     time::Instant,
 };
 
-type Gate = Arc<AsyncMutex<()>>;
 #[derive(Clone)]
 pub struct CodexInvalidator {
     client: reqwest::Client,
@@ -82,7 +81,7 @@ impl CodexInvalidator {
 #[derive(Clone, Default)]
 pub struct CodexLogins {
     attempts: Arc<Mutex<HashMap<AccountKey, Arc<Attempt>>>>,
-    gates: Arc<Mutex<HashMap<AccountKey, Gate>>>,
+    gates: super::locks::KeyedGates,
     closing: Arc<std::sync::atomic::AtomicBool>,
 }
 struct Attempt {
@@ -92,13 +91,8 @@ struct Attempt {
     done: watch::Sender<bool>,
 }
 impl CodexLogins {
-    fn gate(&self, key: &AccountKey) -> Gate {
-        self.gates
-            .lock()
-            .unwrap()
-            .entry(key.clone())
-            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-            .clone()
+    fn gate(&self, key: &AccountKey) -> Arc<AsyncMutex<()>> {
+        self.gates.gate(key)
     }
     fn attempt(&self, key: &AccountKey) -> Option<Arc<Attempt>> {
         self.attempts.lock().unwrap().get(key).cloned()
@@ -117,19 +111,10 @@ impl CodexLogins {
     }
 }
 async fn wait_done(attempt: &Attempt) {
-    let mut done = attempt.done.subscribe();
-    while !*done.borrow_and_update() {
-        if done.changed().await.is_err() {
-            break;
-        }
-    }
+    let _ = attempt.done.subscribe().wait_for(|done| *done).await;
 }
 async fn cancelled(cancel: &mut watch::Receiver<bool>) {
-    while !*cancel.borrow_and_update() {
-        if cancel.changed().await.is_err() {
-            break;
-        }
-    }
+    let _ = cancel.wait_for(|cancelled| *cancelled).await;
 }
 fn issue(code: &str) -> Value {
     json!({"code":code,"params":{}})
@@ -214,15 +199,7 @@ impl AccountService {
             return Err(AccountError::io());
         }
         validate_storage(&current)?;
-        let mut facts = bridge
-            .facts(std::slice::from_ref(&key))
-            .await
-            .map(|mut rows| rows.remove(0).facts)
-            .unwrap_or_default();
-        facts.merge(match runtime {
-            Some(runtime) => runtime.account_usage(&key).await,
-            None => UsageFacts::default(),
-        });
+        let facts = self.usage(&bridge, runtime.as_deref(), &key).await;
         facts.ensure_unused().map_err(|code| {
             AccountError::codex(
                 409,
@@ -311,12 +288,12 @@ impl AccountService {
             worker.status.send_replace(public);
             worker.done.send_replace(true);
         });
-        let mut state = attempt.status.subscribe();
-        while state.borrow_and_update()["status"] == "starting" {
-            if state.changed().await.is_err() {
-                return Err(AccountError::io());
-            }
-        }
+        attempt
+            .status
+            .subscribe()
+            .wait_for(|state| state["status"] != "starting")
+            .await
+            .map_err(|_| AccountError::io())?;
         Ok(public_attempt(&attempt))
     }
     async fn run_codex_login(

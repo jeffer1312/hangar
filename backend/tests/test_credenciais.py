@@ -6,6 +6,7 @@ Nada de rede nem de disco real: `list_config_dirs`, `engines.listar`, `logins` e
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -200,7 +201,7 @@ async def test_endpoint_reusa_auth_publica_sem_esperar_preparo(casa, monkeypatch
     account = codex_contas.Account("default", casa / ".codex", True)
     monkeypatch.setattr(codex_contas, "list_accounts", lambda: [account])
     service = SimpleNamespace(
-        preparation_status=lambda a: {"status": "running"},
+        preparation_status_async=AsyncMock(return_value={"status": "running"}),
         cached_auth=lambda a: {"method": "oauth", "status": "connected", "email": "x@example.test", "plan": "pro"},
     )
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(codex_contas_login=service)))
@@ -212,13 +213,12 @@ async def test_endpoint_reusa_auth_publica_sem_esperar_preparo(casa, monkeypatch
 @pytest.mark.parametrize("method,status", [("oauth", "connected"), ("none", "disconnected"),
                                            ("unknown", "unavailable")])
 async def test_endpoint_le_identidade_nativa_sem_cota(casa, monkeypatch, method, status):
-    from unittest.mock import AsyncMock
 
     _monta(monkeypatch)
     account = codex_contas.Account("default", casa / ".codex", True)
     monkeypatch.setattr(codex_contas, "list_accounts", lambda: [account])
     read = AsyncMock(return_value={"method": method, "status": status, "email": None, "plan": None})
-    service = SimpleNamespace(preparation_status=lambda a: {"status": "ready"},
+    service = SimpleNamespace(preparation_status_async=AsyncMock(return_value={"status": "ready"}),
                               cached_auth=lambda a: None, read_auth=read)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(codex_contas_login=service)))
     rows = await credenciais.listar_endpoint(request, forcar=True)

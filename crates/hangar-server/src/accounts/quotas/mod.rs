@@ -25,11 +25,7 @@ use tokio::sync::Mutex;
 fn response(result: Result<Value, AccountError>) -> Response {
     match result {
         Ok(value) => Json(value).into_response(),
-        Err(error) => (
-            StatusCode::from_u16(error.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
-            Json(json!({"detail":{"code":error.code,"params":error.params,"msg":error.message}})),
-        )
-            .into_response(),
+        Err(error) => super::http::error(error),
     }
 }
 
@@ -39,12 +35,9 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
         form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
             .into_owned()
             .collect();
-    let force = match query.get("forcar").map(|v|v.to_ascii_lowercase()) {
-        None => false,
-        Some(v) if matches!(v.as_str(),"true"|"1"|"yes"|"y"|"on"|"t") => true,
-        Some(v) if matches!(v.as_str(),"false"|"0"|"no"|"n"|"off"|"f") => false,
-        _ => return (StatusCode::UNPROCESSABLE_ENTITY,Json(json!({"detail":[{"type":"bool_parsing","loc":["query","forcar"],
-            "msg":"Input should be a valid boolean, unable to interpret input","input":query["forcar"]}]}))).into_response(),
+    let force = match crate::query::bool_param(&query, "forcar") {
+        Ok(force) => force,
+        Err(response) => return response,
     };
     let bridge = match super::http::bridge(&state) {
         Ok(bridge) => bridge,
@@ -211,14 +204,8 @@ impl AccountService {
             .await
             .map_err(|_| AccountError::io())?;
         let mut sources = vec![];
-        for row in self
-            .claude_catalog()?
-            .as_array()
-            .ok_or_else(AccountError::io)?
-        {
+        for (row, account) in self.claude_accounts()? {
             let path = row["path"].as_str().ok_or_else(AccountError::io)?;
-            let account =
-                self.claude_by_label(row["label"].as_str().ok_or_else(AccountError::io)?)?;
             if !account.is_default
                 && !crate::accounts::storage::real_file(
                     &account.home.join(crate::accounts::storage::CLAUDE_MARKER),
@@ -323,7 +310,7 @@ impl AccountService {
                     cache.set_credential(&id, signature);
                 }
             }
-            if cache.save(&self.quota_path()).is_err() {
+            if cache.dirty() && cache.save(&self.quota_path()).is_err() {
                 tracing::warn!(
                     code = "quota_cache_write_failed",
                     "cache de cotas não gravado"
