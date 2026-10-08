@@ -1,14 +1,17 @@
 """Captura respostas integrais dos handlers de anexos sem tocar sessões reais."""
 import base64
-from contextlib import ExitStack, closing
-from dataclasses import dataclass, asdict
+import hashlib
 import ipaddress
 import json
+import mimetypes
 import os
 import re
-from pathlib import Path
 import socket
 import sys
+from contextlib import ExitStack, closing
+from dataclasses import asdict, dataclass
+from importlib.metadata import version
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
@@ -30,6 +33,88 @@ FIXTURE_NAMES = (
 class UploadCapture:
     normalized_response: list[dict]
     normalized_tree: list[dict]
+
+
+class UploadReferenceSelection:
+    """Congela a entrada MIME antes de observar qualquer resposta HTTP."""
+
+    def __init__(self, fixtures=FIXTURES):
+        self.fixtures = Path(fixtures)
+        self.environment = upload_reference_environment()
+        self.platform = self.environment["platform"]
+        xml = self.environment["suffixes"][".xml"]["mime"]
+        self.profile_id = {
+            ("linux", "application/xml"): "linux-application-xml",
+            ("linux", "text/xml"): "linux-text-xml",
+            ("win32", "text/xml"): "windows-text-xml",
+        }.get((self.platform, xml))
+        if self.profile_id is None:
+            raise ValueError(f"perfil MIME desconhecido: {self.platform}, .xml={xml!r}")
+        manifest_path = self.fixtures / "profiles.json"
+        try:
+            self.manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.profile = self.manifest["profiles"][self.profile_id]
+            if self.manifest["version"] != 1 or self.profile["platform"] != self.platform or self.profile["xml"] != xml:
+                raise ValueError("manifesto de perfis MIME incompatível")
+        except (OSError, KeyError, json.JSONDecodeError) as exc:
+            raise ValueError("manifesto de perfis MIME ausente ou inválido") from exc
+        self.manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    def verify_environment(self):
+        if upload_reference_environment() != self.environment:
+            raise ValueError("ambiente MIME mudou depois da seleção da referência")
+        if hashlib.sha256((self.fixtures / "profiles.json").read_bytes()).hexdigest() != self.manifest_hash:
+            raise ValueError("manifesto MIME mudou depois da seleção da referência")
+
+    def read(self, name):
+        self.verify_environment()
+        if name not in FIXTURE_NAMES:
+            raise ValueError(f"fixture desconhecida: {name}")
+        try:
+            entry = self.profile["fixtures"][name]
+            relative = Path(entry["file"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("caminho inválido no manifesto de referência")
+            path = (self.fixtures / relative).resolve()
+            if not path.is_relative_to(self.fixtures.resolve()):
+                raise ValueError("referência fora do diretório de fixtures")
+            content = path.read_bytes()
+            if hashlib.sha256(content).hexdigest() != entry["sha256"]:
+                raise ValueError(f"hash da referência divergiu: {name}")
+            return json.loads(content)
+        except (KeyError, OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"referência ausente ou inválida: {name}") from exc
+
+
+def select_upload_reference(*, fixtures=FIXTURES):
+    return UploadReferenceSelection(fixtures)
+
+
+def upload_reference_environment():
+    """Registra a tabela efetiva e as origens legíveis, sem presumir distribuição."""
+    if not mimetypes.inited:
+        mimetypes.init()
+    suffixes = {}
+    for suffix in (".bin", ".txt", ".webm", ".mp4", ".html", ".svg", ".xml"):
+        mime, encoding = mimetypes.guess_type("reference" + suffix)
+        suffixes[suffix] = {"mime": mime, "encoding": encoding}
+    sources = []
+    for filename in mimetypes.knownfiles:
+        path = Path(filename)
+        try:
+            content = path.read_bytes()
+            sources.append({"path": str(path), "status": "readable", "sha256": hashlib.sha256(content).hexdigest()})
+        except FileNotFoundError:
+            sources.append({"path": str(path), "status": "absent", "sha256": None})
+        except OSError as exc:
+            sources.append({"path": str(path), "status": "unreadable", "error": type(exc).__name__, "sha256": None})
+    return {
+        "platform": sys.platform, "python": sys.version,
+        "starlette": version("starlette"), "fastapi": version("fastapi"),
+        "suffixes": suffixes, "sources": sources,
+        "registry": {"available": getattr(mimetypes, "_winreg", None) is not None,
+                     "sha256": None, "status": "não é uma origem de arquivo"},
+    }
 
 
 def assert_native_upload(observation: dict) -> None:

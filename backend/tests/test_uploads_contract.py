@@ -1,14 +1,14 @@
 """Referência real de HTTP e disco para comparar a migração dos anexos."""
 import base64
-from dataclasses import asdict
 import json
 import os
 import socket
 import sys
+from dataclasses import asdict
 
 import pytest
 
-from tests.uploads_contract import FIXTURES, FIXTURE_NAMES, UploadReference
+from tests.uploads_contract import FIXTURE_NAMES, FIXTURES, UploadReference
 
 
 @pytest.fixture
@@ -26,8 +26,67 @@ def test_reference_is_repeatable(upload_reference):
 
 @pytest.mark.parametrize("name", FIXTURE_NAMES)
 def test_complete_response_and_tree_match_frozen_reference(upload_reference, name):
-    expected = json.loads((FIXTURES / sys.platform / f"{name}.json").read_text(encoding="utf-8"))
+    from tests.uploads_contract import select_upload_reference
+
+    selection = select_upload_reference()
+    expected = selection.read(name)
     assert asdict(upload_reference.run_fixture(name)) == expected
+    assert selection.read(name) == expected
+
+
+@pytest.fixture
+def xml_mapping(monkeypatch):
+    import mimetypes
+
+    mimetypes.init()
+    database = mimetypes.MimeTypes()
+    monkeypatch.setattr(mimetypes, "_db", database)
+    return lambda value: database.add_type(value, ".xml")
+
+
+@pytest.mark.parametrize("mime", ["application/xml", "text/xml"] if sys.platform == "linux" else ["text/xml"])
+def test_xml_mapping_selects_complete_independent_reference(upload_reference, xml_mapping, mime):
+    from tests.uploads_contract import select_upload_reference
+
+    xml_mapping(mime)
+    directory = "linux-text-xml" if sys.platform == "linux" and mime == "text/xml" else sys.platform
+    expected = json.loads((FIXTURES / directory / "active-content-range.json").read_text(encoding="utf-8"))
+    selection = select_upload_reference()
+    assert selection.read("active-content-range") == expected
+    assert asdict(upload_reference.run_fixture("active-content-range")) == expected
+
+
+def test_unknown_xml_mapping_refuses_comparison_before_request(xml_mapping):
+    from tests.uploads_contract import select_upload_reference
+
+    xml_mapping("application/x-unsupported-xml")
+    with pytest.raises(ValueError, match="perfil MIME desconhecido"):
+        select_upload_reference().read("active-content-range")
+
+
+def test_reference_selection_rejects_environment_change(xml_mapping):
+    from tests.uploads_contract import select_upload_reference
+
+    xml_mapping("text/xml")
+    selection = select_upload_reference()
+    selection.read("active-content-range")
+    xml_mapping("application/x-changed-xml")
+    with pytest.raises(ValueError, match="ambiente MIME mudou"):
+        selection.read("active-content-range")
+
+
+def test_reference_selection_rejects_corrupted_golden_before_request(tmp_path, xml_mapping):
+    import shutil
+
+    from tests.uploads_contract import select_upload_reference
+
+    xml_mapping("text/xml")
+    fixtures = tmp_path / "fixtures"
+    shutil.copytree(FIXTURES, fixtures)
+    path = fixtures / ("linux-text-xml" if sys.platform == "linux" else "win32") / "active-content-range.json"
+    path.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="hash da referência divergiu"):
+        select_upload_reference(fixtures=fixtures).read("active-content-range")
 
 
 def test_retention_disabled_keeps_files_and_null_expiry(upload_reference):
@@ -137,8 +196,10 @@ def test_native_detector_requires_success_and_zero_upstream_bytes(status, upstre
 def test_json_wire_preserves_nonvolatile_representation(upload_reference, tmp_path, wire):
     from contextlib import closing
     from unittest.mock import patch
+
     from fastapi.testclient import TestClient
     from starlette.responses import JSONResponse
+
     from app import api
 
     with upload_reference.environment(tmp_path / "wire"), closing(TestClient(api.app, headers={"accept-encoding": "identity"})) as client:
@@ -158,8 +219,10 @@ def test_json_wire_preserves_nonvolatile_representation(upload_reference, tmp_pa
 def test_json_wire_preserves_nonvolatile_escapes_inside_normalized_path(upload_reference, tmp_path):
     from contextlib import closing
     from unittest.mock import patch
+
     from fastapi.testclient import TestClient
     from starlette.responses import JSONResponse
+
     from app import api
 
     def render_with_escapes(response, content):
