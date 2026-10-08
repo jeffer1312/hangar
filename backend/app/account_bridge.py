@@ -96,6 +96,14 @@ def inspect_processes(key: AccountKey, *, processes=None, process_factory=None) 
                     facts.complete = False
                     continue
                 home = env.get(variable)
+                if key.provider == Provider.CODEX:
+                    for index, argument in enumerate(argv):
+                        if argument == "--codex-home":
+                            home = argv[index + 1]
+                        elif argument.startswith("--codex-home="):
+                            home = argument.split("=", 1)[1]
+                    if home == "":
+                        raise ValueError("caminho de conta vazio no lançador")
                 if not home:
                     # Ambiente pode conter as duas contas herdadas; só o provider pertinente usa o padrão.
                     expected = {"codex"} if key.provider == Provider.CODEX else {"claude", "pi", "omp"}
@@ -123,15 +131,29 @@ def inspect_processes(key: AccountKey, *, processes=None, process_factory=None) 
 
 
 def terminal_sessions() -> set[str]:
+    return set(terminal_instances())
+
+
+def terminal_instances() -> dict[str, str]:
     from app import tmux
-    result = tmux._run(["tmux", "list-sessions", "-F", "#{session_name}"])
+    result = tmux._run(["tmux", "list-sessions", "-F",
+                       "#{session_name}\t#{pid}:#{session_id}:#{session_created}"])
     if result.returncode == 0 and "\ufffd" not in result.stdout:
-        return {name for name in result.stdout.splitlines() if name}
+        instances = {}
+        for line in result.stdout.splitlines():
+            name, identity = line.split("\t")
+            parts = identity.split(":")
+            if (not name or len(parts) != 3 or not parts[0].isdigit()
+                    or not parts[1].startswith("$") or not parts[1][1:].isdigit()
+                    or not parts[2].isdigit()):
+                raise RuntimeError("account_mux_unknown")
+            instances[name] = identity
+        return instances
     error = result.stderr.strip()
     absent = error.startswith(("no server", "no sessions")) or (
         error.startswith("error connecting to ") and error.endswith("(No such file or directory)"))
     if result.returncode == 1 and absent:
-        return set()
+        return {}
     raise RuntimeError("account_mux_unknown")
 
 
@@ -143,6 +165,27 @@ def inspect_usage(key: AccountKey) -> UsageFacts:
     facts = inspect_processes(key)
     try:
         import json
+        from app import account_lifecycle
+        births = account_lifecycle.default_lock_root() / "births"
+        if births.exists():
+            instances = None
+            for path in births.iterdir():
+                if path.suffix != ".json":
+                    continue
+                pending = json.loads(path.read_text(encoding="utf-8"))
+                owner = AccountKey.new(pending["provider"], Path(pending["canonical_home"]))
+                if not pending.get("name") or "instance" not in pending:
+                    raise ValueError("registro de nascimento incompleto")
+                if owner != key:
+                    continue
+                if instances is None:
+                    instances = terminal_instances()
+                current = instances.get(pending["name"])
+                if current is not None:
+                    if pending["instance"] is None:
+                        facts.complete = False
+                    elif current == pending["instance"]:
+                        facts.sessions.append(pending["name"])
         directory = (codex_sessions if key.provider == Provider.CODEX else headless_sessions)._dir()
         rows = []
         if directory.exists():

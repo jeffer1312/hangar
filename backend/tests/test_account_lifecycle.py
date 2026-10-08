@@ -394,6 +394,106 @@ def test_old_terminal_sidecar_needs_live_or_pending_birth(tmp_path, monkeypatch)
     assert facts.complete and facts.sessions == ["old"]
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_terminal_birth_is_published_before_real_lease_release(tmp_path, rust_probe, cancel):
+    from tests.accounts_contract import PythonReference
+    reference = PythonReference(tmp_path / "reference")
+    before = reference.block("session_before_registration")
+    launcher = reference.block("launcher_before_publication")
+    birth = reference.start_session_async(provider="codex", account_id="alpha")
+    try:
+        assert before.entered.wait()
+        if cancel:
+            assert reference.cancel_birth().json()["cancelled"]
+            assert reference.cancel_birth().json()["cancelled"]
+        before.release.set()
+        assert birth.result(timeout=20).status_code == (499 if cancel else 200)
+        assert launcher.entered.wait()
+        path = lock_path(reference.root / ".hangar/account-locks", "codex", reference.root / ".codex-alpha")
+        for _ in range(2):
+            with RustProbe(rust_probe, path) as exclusion:
+                assert exclusion.state == "acquired", "o nascimento publicado não deve reter FD pela sessão inteira"
+                facts = reference.request("GET", "/__contract__/usage").json()
+                assert facts["complete"]
+                assert facts["sessions"] == ["birth"], "liberou a guarda antes da publicação durável do nascimento"
+                assert facts["pids"], "o lançador com --codex-home também usa a conta antes de publicar o ambiente"
+        assert reference.request("POST", "/__contract__/stop-launcher").status_code == 200
+        facts = reference.request("GET", "/__contract__/usage").json()
+        assert facts == {"complete": True, "sessions": [], "pids": []}
+        assert reference.request("POST", "/__contract__/retire-birth").status_code == 200
+        assert not list((reference.root / ".hangar/account-locks/births").glob("*.json"))
+    finally:
+        before.release.set()
+        launcher.release.set()
+        reference.close()
+
+
+def test_terminal_pending_birth_retires_after_verified_launcher_binding(tmp_path, rust_probe):
+    from tests.accounts_contract import PythonReference
+    reference = PythonReference(tmp_path / "reference")
+    launcher = reference.block("launcher_before_publication")
+    birth = reference.start_session_async(provider="codex", account_id="alpha")
+    try:
+        assert birth.result(timeout=20).status_code == 200
+        assert launcher.entered.wait()
+        directory = reference.root / ".hangar/account-locks/births"
+        assert len(list(directory.glob("*.json"))) == 1
+        launcher.release.set()
+        assert reference.request("GET", "/__contract__/published").json()["published"]
+        assert reference.request("POST", "/__contract__/retire-birth").status_code == 200
+        assert not list(directory.glob("*.json"))
+        facts = reference.request("GET", "/__contract__/usage").json()
+        assert facts["complete"] and facts["sessions"] == ["birth"] and facts["pids"]
+        path = lock_path(reference.root / ".hangar/account-locks", "codex", reference.root / ".codex-alpha")
+        with RustProbe(rust_probe, path) as exclusion:
+            assert exclusion.state == "acquired"
+    finally:
+        launcher.release.set()
+        reference.close()
+
+
+def test_terminal_pending_identity_and_uncertainty_are_not_absence(tmp_path, monkeypatch):
+    from app import account_lifecycle, account_bridge
+    from app.adapters.codex import sessions
+    monkeypatch.setattr(account_lifecycle, "default_lock_root", lambda: tmp_path / "locks")
+    monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "sidecars")
+    monkeypatch.setattr(account_bridge, "inspect_processes",
+                        lambda key: account_bridge.UsageFacts(complete=True))
+    monkeypatch.setattr(account_bridge, "terminal_instances", lambda: {"birth": "server:old:epoch"})
+    key = account_lifecycle.AccountKey.new("codex", tmp_path / "account")
+    with account_lifecycle.acquire(key) as guard:
+        record = account_lifecycle.publish_terminal_birth(guard, "birth", "token")
+    assert account_bridge.inspect_usage(key).sessions == ["birth"]
+
+    def unavailable():
+        raise RuntimeError("multiplexador indisponível")
+
+    monkeypatch.setattr(account_bridge, "terminal_instances", unavailable)
+    assert not account_bridge.inspect_usage(key).complete
+    assert not account_lifecycle.retire_terminal_birth(record)
+    assert record.exists()
+    monkeypatch.setattr(account_bridge, "terminal_instances", lambda: {"birth": "server:new:epoch"})
+    account_bridge.inspect_usage(key).ensure_unused()
+    assert account_lifecycle.retire_terminal_birth(record)
+    assert not record.exists()
+
+    with account_lifecycle.acquire(key) as guard:
+        record = account_lifecycle.publish_terminal_birth(guard, "birth", "token")
+    record.write_text("{", encoding="utf-8")
+    assert not account_bridge.inspect_usage(key).complete
+    assert not account_lifecycle.retire_terminal_birth(record)
+
+
+def test_terminal_generation_snapshot_rejects_incomplete_mux_format(monkeypatch):
+    from subprocess import CompletedProcess
+    from app import account_bridge, tmux
+    monkeypatch.setattr(tmux, "_run", lambda args: CompletedProcess(args, 0, "birth\t123:$4:567\r\n", ""))
+    assert account_bridge.terminal_instances() == {"birth": "123:$4:567"}
+    monkeypatch.setattr(tmux, "_run", lambda args: CompletedProcess(args, 0, "birth\t#{pid}:$4:567\n", ""))
+    with pytest.raises(RuntimeError, match="account_mux_unknown"):
+        account_bridge.terminal_instances()
+
+
 def test_python_creation_blocks_rust_exclusion_across_restart(tmp_path, monkeypatch, rust_probe):
     root = tmp_path / "locks"
     from app import account_lifecycle

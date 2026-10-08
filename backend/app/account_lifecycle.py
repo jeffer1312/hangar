@@ -108,6 +108,62 @@ class AccountGuard:
         self.close()
 
 
+def publish_terminal_birth(guard: AccountGuard, name: str, token: str) -> Path:
+    """Publica a conta escolhida antes de liberar a proteção entre processos."""
+    import json
+    import tempfile
+    from app import atomico, account_bridge
+    directory = Path(guard._state["file"].name).parent / "births"
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        instance = account_bridge.terminal_instances().get(name)
+    except Exception:
+        instance = None
+    row = {"name": name, "provider": guard.key.provider.value,
+           "canonical_home": str(guard.key.canonical_home), "instance": instance}
+    target = directory / (token + ".json")
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                     suffix=".tmp", delete=False) as temporary:
+        json.dump(row, temporary)
+        temporary.flush()
+        os.fsync(temporary.fileno())
+    try:
+        atomico.substituir(temporary.name, target)
+    finally:
+        Path(temporary.name).unlink(missing_ok=True)
+    return target
+
+
+def retire_terminal_birth(path: Path) -> bool:
+    """Aposenta só após vínculo final verificado ou fim daquela instância do pane."""
+    import json
+    from app import account_bridge
+    from app.adapters.codex import sessions
+    try:
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return True
+        instances = account_bridge.terminal_instances()
+        current = instances.get(row["name"])
+        ended = current is None or (row["instance"] is not None and current != row["instance"])
+        if not ended:
+            meta = sessions.load(row["name"]) or {}
+            key = AccountKey.new(row["provider"], Path(row["canonical_home"]))
+            bound = (meta.get("thread_id") and meta.get("endpoint") and meta.get("app_pid")
+                     and not meta.get("launching") and meta.get("codex_home")
+                     and AccountKey.new("codex", Path(meta["codex_home"])) == key)
+            if not bound:
+                return False
+            facts = account_bridge.inspect_processes(key)
+            if not facts.complete or meta["app_pid"] not in facts.pids:
+                return False
+        path.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
 def _try_lock(file, mode: GuardMode) -> bool:
     if os.name != "nt":
         import fcntl

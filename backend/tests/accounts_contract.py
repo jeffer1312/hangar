@@ -186,7 +186,8 @@ def _worker(block_handlers: bool) -> None:
     from fastapi.responses import JSONResponse
     from fastapi.routing import APIRoute
     from fastapi.testclient import TestClient
-    from app import api, conta_estado, codex_contas_api, codex_contas_login, cotas, credenciais
+    from app import api, conta_estado, codex_contas_api, codex_contas_login, cotas, credenciais, account_bridge
+    import psutil
 
     root = Path.home()
     assert root == Path(os.environ["CLAUDE_CONFIG_DIR"]).parent
@@ -234,21 +235,34 @@ def _worker(block_handlers: bool) -> None:
 
     barriers = {}
     births = {}
+    published = threading.Event()
     children = []
     original_popen = subprocess.Popen
 
     def create_at_barrier(name, cwd, config_dir, **kwargs):
         from app.models import SessionInfo
+        from app.adapters.codex import sessions
         barrier = barriers.get("session_before_registration")
         if barrier:
             barrier[0].set()
             if not barrier[1].wait(25):
                 raise RuntimeError("barreira não foi liberada")
-        # Filho real e isolado; o lançador da CLI é a única fronteira substituída.
-        child = original_popen([sys.executable, "-c", "import sys; sys.stdin.readline()", "--", kwargs["provider"]],
+        home = root / (".codex-" + kwargs.get("codex_account", "alpha"))
+        child = original_popen([sys.executable, "-c", "import sys; sys.stdin.readline()", "--",
+                                kwargs["provider"], "--codex-home", str(home)],
                                cwd=root, env=isolated_environment(root), stdin=subprocess.PIPE,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         children.append(child)
+        launcher = barriers.get("launcher_before_publication")
+        if launcher:
+            def publish():
+                launcher[0].set()
+                if launcher[1].wait(25) and child.poll() is None:
+                    sessions.save(name, "thread-born", "", str(cwd), app_pid=child.pid,
+                                  endpoint="ws://127.0.0.1:1", codex_home=home,
+                                  codex_account=kwargs.get("codex_account", "alpha"))
+                    published.set()
+            threading.Thread(target=publish, daemon=True).start()
         return SessionInfo(name=name, cwd=cwd, provider=kwargs["provider"])
 
     service = codex_contas_login.CodexContasLogin(native=DisconnectedNative, account_in_use=lambda account: False)
@@ -279,7 +293,7 @@ def _worker(block_handlers: bool) -> None:
 
     @app.post("/__contract__/barrier/{name}")
     def block(name: str):
-        assert name in {"session_before_registration"}
+        assert name in {"session_before_registration", "launcher_before_publication"}
         barriers[name] = (threading.Event(), threading.Event())
         return {"ok": True}
 
@@ -298,6 +312,36 @@ def _worker(block_handlers: bool) -> None:
         if task:
             task.cancel()
         return {"cancelled": task is not None}
+
+    @app.get("/__contract__/usage")
+    def usage():
+        from app import account_bridge
+        from app.account_lifecycle import AccountKey
+        from dataclasses import asdict
+        import psutil
+        with patch.object(account_bridge, "system_processes", return_value=[
+                psutil.Process(child.pid) for child in children if child.poll() is None]), \
+                patch.object(account_bridge, "terminal_sessions", return_value={
+                    "birth" for child in children if child.poll() is None}):
+            return asdict(account_bridge.inspect_usage(AccountKey.new("codex", root / ".codex-alpha")))
+
+    @app.get("/__contract__/published")
+    def publication():
+        assert published.wait(20)
+        return {"published": True}
+
+    @app.post("/__contract__/retire-birth")
+    def retire_birth():
+        for state in list(api._codex_live_leases.values()):
+            state["lease"].retire_birth()
+        return {"ok": True}
+
+    @app.post("/__contract__/stop-launcher")
+    def stop_launcher():
+        for child in children:
+            if child.poll() is None:
+                child.communicate(b"release\\n", timeout=10)
+        return {"ok": True}
 
     @app.post("/__contract__/cleanup")
     def cleanup():
@@ -356,7 +400,11 @@ def _worker(block_handlers: bool) -> None:
             patch.object(api.registry, "create", side_effect=create_at_barrier), \
             patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \
-            patch.object(api, "_hold_codex_lease", side_effect=lambda name, lease: api._codex_live_leases.update({name: {"lease": lease}})), \
+            patch.object(api.tmux, "has_session", side_effect=lambda name: any(child.poll() is None for child in children)), \
+            patch.object(account_bridge, "terminal_instances", side_effect=lambda: {
+                "birth": str(child.pid) for child in children if child.poll() is None}), \
+            patch.object(account_bridge, "system_processes", side_effect=lambda: [
+                psutil.Process(child.pid) for child in children if child.poll() is None]), \
             patch("subprocess.Popen", side_effect=deny_external), \
             patch("socket.create_connection", side_effect=deny_external), TestClient(app) as client:
         client.portal.call(service.aquecer)

@@ -159,6 +159,10 @@ def _codex_lease_rename_finished(name: str) -> None:
 
 
 async def _watch_codex_lease(state: dict) -> None:
+    def session_alive(name):
+        state["lease"].retire_birth()
+        return tmux.has_session(name)
+
     try:
         while True:
             if state.get("renaming"):
@@ -167,7 +171,7 @@ async def _watch_codex_lease(state: dict) -> None:
             name = state["name"]
             revision = state.get("revision", 0)
             try:
-                alive = await asyncio.to_thread(tmux.has_session, name)
+                alive = await asyncio.to_thread(session_alive, name)
             except Exception:
                 alive = True
             if (state["name"] != name or state.get("revision", 0) != revision
@@ -183,8 +187,8 @@ async def _watch_codex_lease(state: dict) -> None:
         state["lease"].release()
 
 
-def _hold_codex_lease(name: str, lease) -> None:
-    lease.mark_live(name)
+async def _hold_codex_lease(name: str, lease) -> None:
+    await asyncio.to_thread(lease.mark_live, name)
     state = {"name": name, "lease": lease, "renaming": False, "revision": 0}
     _codex_live_leases[name] = state
     task = asyncio.create_task(_watch_codex_lease(state), name=f"codex-lease-{name}")
@@ -2599,14 +2603,14 @@ async def _create_session_owned(body: CreateBody, worktree: dict):
                 codex_lease.release()
                 codex_lease = None
                 raise
-            _hold_codex_lease(info.name, codex_lease)
+            await _hold_codex_lease(info.name, codex_lease)
             codex_lease = None
             raise
         except BaseException:
             codex_lease.release()
             codex_lease = None
             raise
-        _hold_codex_lease(info.name, codex_lease)
+        await _hold_codex_lease(info.name, codex_lease)
         codex_lease = None
         return info
 

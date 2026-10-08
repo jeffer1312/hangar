@@ -78,10 +78,15 @@ class _Reservation:
     live: bool = False
     identity: dict | None = None
     guard: account_lifecycle.AccountGuard | None = None
+    birth_path: Path | None = None
 
     def mark_live(self, session_name: str, *, pane_id: str | None = None,
                   pid: int | None = None) -> None:
         self.service._mark_live(self, session_name, pane_id=pane_id, pid=pid)
+
+    def retire_birth(self) -> None:
+        if self.birth_path is not None and account_lifecycle.retire_terminal_birth(self.birth_path):
+            self.birth_path = None
 
     def release(self) -> None:
         self.service._release_reservation(self)
@@ -173,6 +178,8 @@ class CodexContasLogin:
                 reservation.kind = "live"
                 reservation.identity = {"name": session_name, "pane_id": pane_id, "pid": pid}
                 if reservation.guard is not None:
+                    reservation.birth_path = account_lifecycle.publish_terminal_birth(
+                        reservation.guard, session_name, reservation.token)
                     reservation.guard.close()
                     reservation.guard = None
 

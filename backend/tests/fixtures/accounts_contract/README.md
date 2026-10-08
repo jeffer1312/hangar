@@ -114,6 +114,12 @@ nascimento pela rota real, cancelamento repetido e reinício apenas do Rust.
 Sidecars sem PID ainda podem representar nascimento pendente; inspeção incompleta
 recusa a exclusão. A integração HTTP de exclusão é da Task 3.
 
+No Codex com terminal, `account-locks/births` registra conta, nome e instância do
+multiplexador antes de soltar o descritor. Esse estado não é sidecar de transporte.
+O registro é aposentado após publicação final com PID conferido ou fim daquela
+instância; reutilizar o nome em outro pane não reativa o nascimento antigo. A
+inspeção também resolve `--codex-home` enquanto o lançador não publicou o ambiente.
+
 Relógio controlável e eventos da CLI serão acrescentados quando login/cota tiverem
 consumidores concretos. Login com identidade conectada, CLI travada, preparo
 ready/partial, 429 e redefinição idempotente ainda precisam das Tasks consumidoras.
