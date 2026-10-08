@@ -386,10 +386,15 @@ pub async fn private(
     #[serde(deny_unknown_fields)]
     struct CodexInput { action:String, account_id:String, attempt_id:Option<String>, refresh:bool }
     if let Ok(body)=serde_json::from_slice::<CodexInput>(&bytes) {
-        if body.action=="auth" {
+        if body.action=="auth" || body.action=="auth_cached" {
             let account=match state.accounts.resolve(Provider::Codex,&body.account_id) {Ok(account)=>account,Err(err)=>return error(err)};
             if body.refresh && let Ok(key)=AccountKey::new(Provider::Codex,&account.home){state.accounts.codex_auth.invalidate(&key);}
-            return Json(state.accounts.read_codex_auth(&account).await).into_response();
+            let value = if body.action == "auth_cached" && !body.refresh {
+                state.accounts.read_codex_auth_fast(&account).await
+            } else {
+                state.accounts.read_codex_auth(&account).await
+            };
+            return Json(value).into_response();
         }
         return codex_operation(&state,&body.action,&body.account_id,body.attempt_id.as_deref().unwrap_or("")).await;
     }

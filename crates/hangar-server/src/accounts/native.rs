@@ -28,6 +28,7 @@ struct Cached {
 struct CacheState {
     entries: HashMap<AccountKey, Cached>,
     generations: HashMap<AccountKey, u64>,
+    refreshing: std::collections::HashSet<AccountKey>,
 }
 #[derive(Clone, Default)]
 pub struct AuthCache(Arc<Mutex<CacheState>>);
@@ -62,6 +63,14 @@ impl AuthCache {
         (row.signature == *signature
             && row.generation == *cache.generations.get(key).unwrap_or(&0)
             && row.at.elapsed() < Duration::from_secs(ttl))
+        .then(|| row.value.clone())
+    }
+    /// Último valor da mesma identidade, vencido ou não; troca de credencial nunca o reaproveita.
+    fn known(&self, key: &AccountKey, signature: &Signature) -> Option<Value> {
+        let cache = self.0.lock().unwrap();
+        let row = cache.entries.get(key)?;
+        (row.signature == *signature
+            && row.generation == *cache.generations.get(key).unwrap_or(&0))
         .then(|| row.value.clone())
     }
     pub(crate) fn generation(&self, key: &AccountKey) -> u64 {
@@ -283,8 +292,33 @@ impl AccountService {
         Ok(accounts)
     }
     /// O estado de preparo vem do coordenador; ausência desse serviço não vira idle.
+    /// Para listar: o último login conhecido na hora e a leitura nova por trás, uma por conta.
+    pub async fn read_codex_auth_fast(&self, account: &Account) -> Value {
+        let known = AccountKey::new(Provider::Codex, &account.home)
+            .ok()
+            .zip(AuthCache::signature(account).ok())
+            .and_then(|(key, signature)| {
+                if self.codex_auth.get(&key, &signature).is_some() {
+                    return None;
+                }
+                self.codex_auth
+                    .known(&key, &signature)
+                    .map(|value| (key, value))
+            });
+        let Some((key, value)) = known else {
+            return self.read_codex_auth(account).await;
+        };
+        if self.codex_auth.0.lock().unwrap().refreshing.insert(key.clone()) {
+            let (service, account) = (self.clone(), account.clone());
+            tokio::spawn(async move {
+                service.read_codex_auth(&account).await;
+                service.codex_auth.0.lock().unwrap().refreshing.remove(&key);
+            });
+        }
+        value
+    }
     pub async fn codex_snapshot(&self, account: &Account, sync: Value) -> Value {
-        codex_dto(account, self.read_codex_auth(account).await, sync)
+        codex_dto(account, self.read_codex_auth_fast(account).await, sync)
     }
     pub async fn read_codex_auth(&self, account: &Account) -> Value {
         // O worker conserva guarda e árvore até o fim, mesmo se a requisição HTTP sumir.
@@ -427,5 +461,40 @@ mod cache_tests {
             None,
             "consulta anterior à invalidação repovoou o cache"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fast_read_returns_last_known_login_after_ttl() {
+        let home = tempfile::tempdir().unwrap();
+        let empty_path = home.path().join("bin");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        std::fs::create_dir_all(home.path().join(".codex")).unwrap();
+        let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
+        let service = AccountService::new(super::super::environment::AccountEnvironment::from_map(
+            [
+                ("HOME".into(), text(home.path())),
+                ("USERPROFILE".into(), text(home.path())),
+                ("PATH".into(), text(&empty_path)),
+            ]
+            .into(),
+        ));
+        let account = service.resolve(Provider::Codex, "default").unwrap();
+        let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
+        let connected = json!({"status":"connected","email":"fixture@example.test"});
+        service.codex_auth.put(
+            &key,
+            AuthCache::signature(&account).unwrap(),
+            0,
+            connected.clone(),
+        );
+        tokio::time::advance(Duration::from_secs(61)).await;
+        assert_eq!(
+            service.read_codex_auth_fast(&account).await,
+            connected,
+            "a listagem espera a CLI em vez de mostrar o último login conhecido"
+        );
+        // Credencial trocada: nada conhecido para esta identidade, a leitura é esperada.
+        std::fs::write(account.home.join("auth.json"), b"{}").unwrap();
+        assert_ne!(service.read_codex_auth_fast(&account).await, connected);
     }
 }

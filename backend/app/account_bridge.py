@@ -307,7 +307,8 @@ class PreparationJobs:
                 if key.provider.value == "claude":
                     def reconcile():
                         contas.compartilhado().mkdir(parents=True, exist_ok=True)
-                        with contas._trava_compartilhada(), contas._trava(target):
+                        lock_file = ".hangar-account-pending" if body["seed"] else contas.MARCADOR
+                        with contas._trava_compartilhada(), contas._trava(target, lock_file):
                             self.validate(body)
                             return contas.prepare_configuration(target, seed=body["seed"])
                     return await account_lifecycle.complete_on_cancel(asyncio.to_thread(reconcile))
@@ -492,7 +493,8 @@ class ClaudeWindows:
             current = runtime_coordinator.current()
             if current is None or current.instance != body["instance"]:
                 raise ValueError("instância inválida")
-            if action != "close" and operation in self.closed:
+            # Invalidar só esquece caches e vem depois do fechamento da janela no login concluído.
+            if action not in {"close", "invalidate"} and operation in self.closed:
                 raise ValueError("operação encerrada")
             previous = self.active.get(operation)
             if previous is not None and (previous[0] != key or (action != "close" and previous[1] != body["instance"])):

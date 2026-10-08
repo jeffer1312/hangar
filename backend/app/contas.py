@@ -125,8 +125,9 @@ def listar() -> list[str]:
 
 
 @contextmanager
-def _trava(dir_conta: Path):
-    """Serializa reconciliações da MESMA conta.
+def _trava(dir_conta: Path, arquivo: str = MARCADOR):
+    """Serializa reconciliações da MESMA conta. Na semeadura a conta ainda não tem marcador: a
+    trava fica no arquivo de pendência, o único que existe até a publicação.
 
     Sem isto, duas criações de sessão simultâneas (o app roda em thread, e o terminal chama o
     `hangar-conta --prep` por fora) caem na janela entre remover e recriar o link: uma leva
@@ -136,7 +137,7 @@ def _trava(dir_conta: Path):
     if fcntl is None:
         yield
         return
-    with open(dir_conta / MARCADOR, "r+", encoding="utf-8") as fh:
+    with open(dir_conta / arquivo, "r+", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield

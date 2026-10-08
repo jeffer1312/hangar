@@ -298,7 +298,7 @@ class CodexContasLogin:
         medidos só pra listar as contas). Sem leitura anterior, ou com a credencial trocada desde
         ela (assinatura/geração diferentes), não há o que mostrar e a leitura é esperada."""
         from app.account_bridge import request_codex
-        result, delegated = await asyncio.to_thread(request_codex, "auth", account)
+        result, delegated = await asyncio.to_thread(request_codex, "auth_cached", account)
         if delegated:
             return result
         key = self._key(account)
