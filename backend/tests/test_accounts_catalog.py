@@ -24,7 +24,7 @@ class RustCatalog(HttpTransport):
         if native_fixture:
             fixture_root = reference.root / "native-fixture"
             script = fixture_root / "node_modules/@openai/codex/bin/codex.js"
-            script.parent.mkdir(parents=True)
+            script.parent.mkdir(parents=True, exist_ok=True)
             source = Path(__file__).parent / "fixtures/disconnected-codex.cjs"
             script.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
             if os.name != "nt":

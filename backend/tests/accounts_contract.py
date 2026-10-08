@@ -238,6 +238,7 @@ def _worker(block_handlers: bool) -> None:
     barriers = {}
     instance = SimpleNamespace(instance="contract-instance", legacy=None, managed_queue=lambda name: False)
     preparation_calls = []
+    preparation_entered = asyncio.Event()
     from app import codex_contas_sync
     original_prepare = codex_contas_sync._prepare_account_guarded
     async def prepare_at_barrier(account, force=False, *, validate=None):
@@ -445,9 +446,30 @@ def _worker(block_handlers: bool) -> None:
         instance.instance = body["instance"]
         return {"ok": True}
 
+    @app.post("/__contract__/source-update")
+    def source_update(body: dict):
+        async def update(_force):
+            preparation_entered.set()
+            if body.get("raise"):
+                raise RuntimeError("falha sintética da atualização principal")
+            return body
+        service.atualizar_principal = update
+        return {"ok": True}
+
+    @app.get("/__contract__/wait-preparations")
+    async def wait_preparations():
+        await asyncio.wait_for(preparation_entered.wait(), 20)
+        jobs = list(account_bridge.preparation_jobs.jobs.values())
+        assert jobs
+        return await jobs[-1][1]
+
     @app.get("/__contract__/preparation-calls")
     def preparation_journal():
         return preparation_calls
+
+    @app.get("/__contract__/preparation-operations")
+    def preparation_operations():
+        return list(account_bridge.preparation_jobs.jobs)
 
     @app.get("/__contract__/calls")
     def journal():

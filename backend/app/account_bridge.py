@@ -370,6 +370,37 @@ def configure_preparation(address, secret):
     _preparation_transport = (address, secret)
 
 
+def publish_preparation_result(account, result):
+    """Publica a operação completa no registro compartilhado com o coordenador Rust."""
+    import json
+    import os
+    import tempfile
+    from pathlib import Path
+    from app import account_lifecycle, atomico
+    if result.get("status") not in {"ready", "partial", "error"}:
+        raise ValueError("resultado de preparo ainda não concluído")
+    key = account_lifecycle.AccountKey.new("codex", account.home)
+    directory = account_lifecycle.default_lock_root()
+    target = directory / (key.digest + ".prepare-result.json")
+    if directory.is_symlink() or target.is_symlink():
+        raise ValueError("registro de preparo é um link")
+    # O chamador conserva a reserva da conta até a publicação atômica do resultado.
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                     suffix=".tmp", delete=False) as temporary:
+        try:
+            os.chmod(temporary.name, 0o600)
+            json.dump(result, temporary, ensure_ascii=False, allow_nan=False)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        except BaseException:
+            temporary.close()
+            Path(temporary.name).unlink(missing_ok=True)
+            raise
+    try:
+        atomico.substituir(temporary.name, target)
+    finally:
+        Path(temporary.name).unlink(missing_ok=True)
+
 def request_preparation(account, *, prepare=False, force=False, cwd=None):
     import json
     import urllib.request

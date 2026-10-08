@@ -557,6 +557,7 @@ class CodexContasLogin:
     @diag.rastrear("conta.preparar", provider="codex")
     async def _prepare_one(self, account: accounts.Account, reservation: _Reservation,
                            forcar: bool) -> dict:
+        from app.account_bridge import publish_preparation_result
         key = self._key(account)
         etapa = "principal"
         diag.registrar("conta.preparar.etapa", provider="codex", etapa=etapa, conta_id=diag.conta_id(key))
@@ -589,6 +590,7 @@ class CodexContasLogin:
                     self._preparation_force.discard(key)
                 if not repetir:
                     self._preparation_results[key] = copy.deepcopy(result)
+                    publish_preparation_result(account, result)
                     status = result.get("status", "unknown")
                     issues = result.get("issues") or []
                     diag.registrar("conta.preparar.concluiu",
@@ -608,6 +610,7 @@ class CodexContasLogin:
                       "issues": [{"code": "codex_account_prepare_failed",
                                   "params": {"error": type(exc).__name__}}]}
             self._preparation_results[key] = copy.deepcopy(result)
+            publish_preparation_result(account, result)
             return result
         finally:
             self._preparing_source.discard(key)
