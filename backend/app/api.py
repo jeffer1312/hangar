@@ -2088,6 +2088,10 @@ async def logout_claude_config(nome: str):
     (se renovar o token em memória, pode regravar a credencial).
 
     `nome` é o rótulo da lista (o apelido, quando a conta foi renomeada), igual ao login."""
+    from app import account_bridge
+    native = await asyncio.to_thread(account_bridge.request_claude, "logout", label=nome)
+    if native is not None:
+        return native
     conta = next((c for c in list_config_dirs() if c.label == nome), None)
     if conta is None:
         raise HTTPException(404, detail=erro("erro_conta_inexistente", f"conta {nome} não existe", nome=nome))

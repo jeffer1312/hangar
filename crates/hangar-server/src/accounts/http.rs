@@ -23,6 +23,9 @@ impl IntoResponse for Json {
 }
 
 pub fn matches(method: &Method, path: &str) -> bool {
+    if claude_matches(method, path) {
+        return true;
+    }
     (matches!(*method, Method::GET | Method::POST)
         && matches!(path, "/api/claude-configs" | "/api/codex-contas"))
         || (matches!(*method, Method::GET | Method::POST)
@@ -49,6 +52,9 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let service = state.accounts.clone();
+    if claude_matches(&method, &path) {
+        return claude_public(state, request).await;
+    }
     if path.ends_with("/prepare") {
         let id = path
             .trim_start_matches("/api/codex-contas/")
@@ -342,4 +348,172 @@ pub async fn private(
         return StatusCode::BAD_REQUEST.into_response();
     };
     prepare_response(&state, &body.account_id, body.prepare, body.force, body.cwd).await
+}
+
+fn claude_matches(method: &Method, path: &str) -> bool {
+    if *method == Method::GET && path == "/api/conta-estado" {
+        return true;
+    }
+    if *method == Method::POST
+        && path
+            .strip_prefix("/api/claude-configs/")
+            .and_then(|tail| tail.strip_suffix("/logout"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+    {
+        return true;
+    }
+    if let Some((label, action)) = path
+        .strip_prefix("/api/conta-estado/")
+        .and_then(|tail| tail.split_once('/'))
+    {
+        return !label.is_empty()
+            && ((*method == Method::GET && action == "login/passo")
+                || (*method == Method::POST
+                    && matches!(action, "login" | "login/codigo" | "login/cancelar")));
+    }
+    false
+}
+fn window_client(
+    state: &crate::routes::AppState,
+) -> Result<super::claude_login::WindowClient, AccountError> {
+    super::claude_login::WindowClient::new(
+        state.cfg.upstream,
+        state.cfg.internal_secret.clone(),
+        crate::config::Config::runtime_instance()
+            .ok()
+            .flatten()
+            .ok_or_else(AccountError::io)?,
+    )
+}
+async fn claude_operation(
+    state: &crate::routes::AppState,
+    action: &str,
+    label: &str,
+    code: String,
+) -> Result<Value, AccountError> {
+    let client = window_client(state)?;
+    match action {
+        "open" => state.accounts.start_claude_login(label, client).await,
+        "step" => state.accounts.claude_step(label, client).await,
+        "code" => state.accounts.confirm_claude(label, code, client).await,
+        "cancel" => state.accounts.cancel_claude(label, client).await,
+        "logout" => state.accounts.logout_claude(label, client).await,
+        _ => Err(AccountError::io()),
+    }
+}
+async fn claude_public(state: Arc<crate::routes::AppState>, request: Request) -> Response {
+    let path = request.uri().path().to_owned();
+    let result = if path == "/api/conta-estado" {
+        state.accounts.claude_states().await
+    } else {
+        let (label, action) = if let Some(tail) = path.strip_prefix("/api/claude-configs/") {
+            (tail.trim_end_matches("/logout"), "logout")
+        } else {
+            let (label, tail) = path
+                .trim_start_matches("/api/conta-estado/")
+                .split_once('/')
+                .unwrap();
+            (
+                label,
+                match tail {
+                    "login" => "open",
+                    "login/passo" => "step",
+                    "login/codigo" => "code",
+                    _ => "cancel",
+                },
+            )
+        };
+        let Ok(label) = percent_encoding::percent_decode_str(label).decode_utf8() else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let mut code = String::new();
+        if action == "code" {
+            let Ok(bytes) = axum::body::to_bytes(request.into_body(), 16384).await else {
+                return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+            };
+            let body: Value = match serde_json::from_slice(&bytes) {
+                Ok(body) => body,
+                Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+            };
+            let Some(value) = body["codigo"].as_str().filter(|s| {
+                !s.is_empty() && s.chars().count() <= 4096 && !s.contains(['\r', '\n', '\0'])
+            }) else {
+                return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"detail":[{"type":"value_error","loc":["body","codigo"],"msg":"Código inválido"}]}))).into_response();
+            };
+            code = value.to_owned();
+        }
+        claude_operation(&state, action, &label, code).await
+    };
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(err) => error(err),
+    }
+}
+
+pub async fn private_claude(
+    axum::extract::State(state): axum::extract::State<Arc<crate::routes::AppState>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: Request,
+) -> Response {
+    if !crate::workspace_routes::private_ok(&state, peer, request.headers()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Ok(bytes) = axum::body::to_bytes(request.into_body(), 16384).await else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        action: String,
+        label: Option<String>,
+        path: Option<String>,
+        code: Option<String>,
+    }
+    let Ok(body) = serde_json::from_slice::<Input>(&bytes) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let result = if body.action == "auth" {
+        let requested = body.path.as_deref().and_then(|path| {
+            AccountKey::new(Provider::Claude, std::path::Path::new(path)).ok()
+        });
+        match state.accounts.claude_catalog() {
+            Ok(rows) => {
+                if let Some(row) = rows
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| {
+                        requested.as_ref().is_some_and(|requested| {
+                            row["path"].as_str().and_then(|path| {
+                                AccountKey::new(Provider::Claude, std::path::Path::new(path)).ok()
+                            }).as_ref() == Some(requested)
+                        })
+                    })
+                {
+                    match state
+                        .accounts
+                        .claude_by_label(row["label"].as_str().unwrap())
+                    {
+                        Ok(account) => Ok(state.accounts.read_claude_auth(&account).await),
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    Err(AccountError::io())
+                }
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        claude_operation(
+            &state,
+            &body.action,
+            body.label.as_deref().unwrap_or(""),
+            body.code.unwrap_or_default(),
+        )
+        .await
+    };
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(err) => error(err),
+    }
 }

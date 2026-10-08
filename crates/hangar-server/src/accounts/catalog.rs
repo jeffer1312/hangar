@@ -90,6 +90,8 @@ pub fn resolved(path: &Path) -> PathBuf {
 
 #[derive(Clone)]
 pub struct AccountService {
+    pub claude_auth: super::claude_auth::AuthCache,
+    pub claude_logins: super::claude_login::ClaudeLogins,
     pub env: AccountEnvironment,
     pub locks: AccountLocks,
     pub preparations: super::preparation::Preparations,
@@ -98,6 +100,8 @@ pub struct AccountService {
 impl AccountService {
     pub fn new(env: AccountEnvironment) -> Self {
         Self {
+            claude_auth: Default::default(),
+            claude_logins: Default::default(),
             locks: AccountLocks::new(env.home.join(".hangar/account-locks")),
             preparations: Default::default(),
             preparation_gates: Default::default(),

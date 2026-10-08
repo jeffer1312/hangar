@@ -79,3 +79,28 @@ def test_worker_cleanup_collects_owned_process(tmp_path):
     reference = PythonReference(tmp_path / "home")
     reference.close()
     assert reference.process.poll() is not None
+
+def test_rust_claude_logout_remains_allowed_with_live_session(tmp_path):
+    from accounts_contract import RustClaude
+    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    server = RustClaude(reference)
+    import json
+    account = reference.root / ".claude-work"
+    (account / "auth-reply.json").write_text('{"loggedIn":true}', encoding="utf-8")
+    (account / ".credentials.json").write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "synthetic-live"}}), encoding="utf-8")
+    try:
+        # Um runtime vivo é fato confirmado, não uma guarda de nascimento eterna.
+        live = reference.request("POST", "/__contract__/launcher-options", {"live_claude": True})
+        assert live.json()["pid"] > 0
+        response = server.request("POST", "/api/claude-configs/Trabalho%20de%20revis%C3%A3o/logout")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        state = server.request("GET", "/api/conta-estado").json()
+        row = next(r for r in state if r["label"] == "Trabalho de revisão")
+        assert row["login"]["estado"] == "ok" and row["login"]["loggedIn"] is False
+        assert not (account / ".credentials.json").exists()
+        assert_rust_ownership(reference.calls())
+    finally:
+        server.close()
+        reference.close()

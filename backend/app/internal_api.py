@@ -120,6 +120,24 @@ async def account_prepare(request: Request):
     except (KeyError, TypeError, ValueError, OSError):
         raise HTTPException(409, detail={"code": "account_prepare_rejected"}) from None
 
+@router.post("/accounts/claude-window")
+async def claude_window(request: Request):
+    from app import account_bridge, runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 16 * 1024:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        return await asyncio.to_thread(account_bridge.claude_windows.run, body)
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError):
+        raise HTTPException(409, detail={"code": "account_claude_window_rejected"}) from None
+
 
 @router.post("/runtime/policy")
 async def runtime_policy(request: Request):

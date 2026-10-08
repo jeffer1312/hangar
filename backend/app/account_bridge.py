@@ -427,5 +427,117 @@ def request_preparation(account, *, prepare=False, force=False, cwd=None):
     except (OSError, ValueError):
         raise codex_contas.AccountError(503, "account_prepare_bridge_unavailable", {}) from None
 
+class ClaudeWindows:
+    """Transporte auxiliar: só janela nativa e invalidação, sem decidir autenticação."""
+    def __init__(self):
+        import threading
+        self.lock = threading.RLock()
+        self.active = {}
+
+    def run(self, body):
+        import re
+        from app import login_conta, conta_estado, runtime_coordinator
+        if not isinstance(body, dict) or set(body) != {"instance", "key", "operation", "action", "code"}:
+            raise ValueError("pedido inválido")
+        coordinator = runtime_coordinator.current()
+        if coordinator is None or body["instance"] != coordinator.instance:
+            raise ValueError("instância inválida")
+        operation, action, code = body["operation"], body["action"], body["code"]
+        if not isinstance(operation, str) or not re.fullmatch("[a-f0-9]{32}", operation):
+            raise ValueError("operação inválida")
+        if action not in {"open", "read", "code", "close", "invalidate"}:
+            raise ValueError("ação inválida")
+        if action == "code":
+            if not isinstance(code, str) or not code or len(code) > 4096 or any(c in code for c in ("\n", "\r", "\x00")):
+                raise ValueError("código inválido")
+        elif code is not None:
+            raise ValueError("entrada inesperada")
+        raw_key = body["key"]
+        if not isinstance(raw_key, dict) or set(raw_key) != {"provider", "canonical_home"} or raw_key["provider"] != "claude":
+            raise ValueError("conta inválida")
+        if not isinstance(raw_key["canonical_home"], str):
+            raise ValueError("caminho inválido")
+        key = AccountKey.new("claude", Path(raw_key["canonical_home"]))
+        from app.config import list_config_dirs
+        if not any(AccountKey.new("claude", Path(c.path)) == key for c in list_config_dirs()):
+            raise ValueError("conta ausente")
+        name = "login-" + operation
+        target = "term-" + name
+        with self.lock:
+            current = runtime_coordinator.current()
+            if current is None or current.instance != body["instance"]:
+                raise ValueError("instância inválida")
+            previous = self.active.get(operation)
+            if previous is not None and (previous[0] != key or (action != "close" and previous[1] != body["instance"])):
+                raise ValueError("operação divergente")
+            # A identidade é da operação: limpar uma tentativa antiga não toca na nova.
+            if action == "close":
+                login_conta._shell_matar(target)
+                self.active.pop(operation, None)
+            elif action == "open":
+                previous = self.active.get(operation)
+                if previous is not None and previous != (key, body["instance"]):
+                    raise ValueError("operação divergente")
+                if previous is None:
+                    created = login_conta._shell_criar(name, str(key.canonical_home), config_dir=str(key.canonical_home))
+                    if created != target:
+                        login_conta._shell_matar(target)
+                        raise RuntimeError("não consegui abrir a janela escondida")
+                    self.active[operation] = (key, body["instance"])
+                    try:
+                        login_conta._shell_submeter(target, "claude auth login --claudeai")
+                    except Exception:
+                        login_conta._shell_matar(target)
+                        self.active.pop(operation, None)
+                        raise
+            elif action == "invalidate":
+                conta_estado.esquecer_conta(str(key.canonical_home))
+            else:
+                if self.active.get(operation) != (key, body["instance"]):
+                    raise ValueError("operação ausente")
+                if action == "read":
+                    match = login_conta._URL_RE.search(login_conta._shell_ler(target))
+                    return {"ok": True, "url": match.group(1) if match else None}
+                if not login_conta._PROMPT_RE.search(login_conta._shell_ler(target)):
+                    raise RuntimeError("a CLI não está aguardando o código de autorização")
+                login_conta._shell_code(target, code)
+        return {"ok": True}
+
+
+claude_windows = ClaudeWindows()
+
+
+def request_claude(action, *, label=None, path=None, code=None):
+    """Encaminha consumidores Python ao dono Rust; pending nunca usa reserva Python."""
+    import json
+    import urllib.request
+    import urllib.error
+    from fastapi import HTTPException
+    from app import runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    if coordinator is None or getattr(coordinator, "mode", "python") == "python":
+        return None
+    config = _preparation_transport
+    if config is None:
+        raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"})
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    request = urllib.request.Request("http://" + config[0] + "/__hangar_server/accounts/claude",
+        data=json.dumps({"action": action, "label": label, "path": path, "code": code}).encode(),
+        headers={"content-type": "application/json", "x-hangar-internal": config[1]}, method="POST")
+    try:
+        with opener.open(request, timeout=320 if action == "code" else 30) as response:
+            return json.loads(response.read(256 * 1024))
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.loads(error.read(16384)).get("detail")
+        except (ValueError, OSError):
+            detail = {"code": "account_auth_bridge_unavailable"}
+        raise HTTPException(error.code, detail=detail) from None
+    except (OSError, ValueError):
+        raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"}) from None
+
 
 preparation_jobs = PreparationJobs()

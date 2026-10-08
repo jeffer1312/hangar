@@ -19,7 +19,7 @@ from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHand
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "accounts_contract"
-_BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.other_quotas", "bridge.propagate_device_login"})
+_BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.claude_window", "bridge.other_quotas", "bridge.propagate_device_login"})
 
 
 def assert_rust_ownership(calls: list[dict]) -> None:
@@ -179,6 +179,66 @@ class PythonReference(HttpTransport):
             self.log.close()
 
 
+class RustClaude(HttpTransport):
+    """Transporte real Rust com CLI sintética em árvore descartável."""
+    _prepared_targets: set[Path] = set()
+
+    def __init__(self, reference):
+        self.reference = reference
+        target = Path(os.environ["CARGO_TARGET_DIR"]) / "debug/deps"
+        candidates = [p for p in target.glob("accounts_claude_login-*")
+                      if p.is_file() and p.suffix in {"", ".exe"}]
+        if target not in self._prepared_targets:
+            # O gate pode reutilizar um target cujo binário veio de outra fonte.
+            build_log = reference.root / "rust-build.log"
+            with build_log.open("w", encoding="utf-8") as output:
+                built = subprocess.run([
+                    "cargo", "test", "--locked", "-p", "hangar-server",
+                    "--test", "accounts_claude_login", "--no-run",
+                ], cwd=Path(__file__).resolve().parents[2] / "crates",
+                    stdout=output, stderr=subprocess.STDOUT, timeout=900)
+            assert built.returncode == 0, f"Falha ao compilar a sonda Rust; log: {build_log}"
+            self._prepared_targets.add(target)
+            candidates = [p for p in target.glob("accounts_claude_login-*")
+                          if p.is_file() and p.suffix in {"", ".exe"}]
+        binary = max(candidates, key=lambda p: p.stat().st_mtime)
+        environment = isolated_environment(reference.root)
+        fixture = reference.root / "claude-native"
+        script = fixture / "node_modules/@anthropic-ai/claude-code/cli.js"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        source = """const fs=require('fs'),p=require('path'),d=process.env.CLAUDE_CONFIG_DIR;
+if(process.argv.slice(-2).join(' ')==='auth logout'){fs.writeFileSync(p.join(d,'auth-reply.json'),JSON.stringify({loggedIn:false}));fs.rmSync(p.join(d,'.credentials.json'),{force:true});process.exit(0);}
+let r;try{r=fs.readFileSync(p.join(d,'auth-reply.json'),'utf8')}catch{r=JSON.stringify({loggedIn:false})}
+process.stdout.write(r);process.exit(r.includes('false')?1:0);"""
+        script.write_text(source, encoding="utf-8")
+        if os.name != "nt":
+            executable = fixture / "claude"
+            executable.write_text("#!/usr/bin/env node\n" + source, encoding="utf-8")
+            executable.chmod(0o700)
+        environment["PATH"] = str(fixture) + os.pathsep + environment["PATH"]
+        environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
+                           HANGAR_RUNTIME_INSTANCE="contract-instance")
+        self.process = subprocess.Popen([str(binary), "--exact", "http_probe_process", "--nocapture"],
+                                        cwd=reference.root, env=environment, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        ready = queue.Queue()
+        def read():
+            for line in self.process.stdout:
+                if line.startswith("ACCOUNT_HTTP:"):
+                    ready.put(line.strip().removeprefix("ACCOUNT_HTTP:"))
+                    return
+            ready.put(None)
+        threading.Thread(target=read, daemon=True).start()
+        address = ready.get(timeout=30)
+        assert address, "a sonda Rust não anunciou HTTP"
+        super().__init__("http://" + address, "contract-only")
+
+    def close(self):
+        self.process.terminate()
+        self.process.wait(timeout=15)
+        self.process.stdout.close()
+        self.process.stderr.close()
+
 def _worker(block_handlers: bool) -> None:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from unittest.mock import patch
@@ -311,6 +371,42 @@ def _worker(block_handlers: bool) -> None:
                 "/api/codex-contas": "codex", "/api/cotas": "quotas",
                 "/api/credenciais/codex": "device"}
     calls = []
+    from app import login_conta
+    windows = {}
+    window_calls = []
+    code_entered = threading.Event()
+    @app.get("/__contract__/wait-claude-code")
+    async def wait_claude_code():
+        return {"entered": await asyncio.to_thread(code_entered.wait, 20)}
+    def window_create(name, cwd, config_dir=None):
+        windows["term-" + name] = True
+        window_calls.append({"action": "open", "name": "term-" + name, "config_dir": config_dir})
+        return "term-" + name
+    def window_send(name, text):
+        window_calls.append({"action": "command", "name": name, "command": text})
+    def window_code(name, text):
+        # A prova guarda somente a classificação da entrada, nunca o código.
+        window_calls.append({"action": "code", "name": name, "protected": True})
+        code_entered.set()
+    def window_close(name):
+        windows.pop(name, None)
+        window_calls.append({"action": "close", "name": name})
+    @app.get("/__contract__/claude-windows")
+    def claude_windows():
+        return {"windows": list(windows), "calls": window_calls}
+
+
+    @app.post("/__contract__/claude-owner")
+    def claude_owner(body: dict):
+        from app import account_bridge
+        account_bridge.configure_preparation(body["address"], "contract-internal")
+        instance.mode = "rust"
+        return {"ok": True}
+
+    @app.get("/__contract__/claude-auth")
+    def claude_auth(path: str):
+        from app import account_bridge
+        return account_bridge.request_claude("auth", path=path)
     for route in api.app.routes:
         if isinstance(route, APIRoute) and route.path.startswith("/api/claude-configs"):
             app.router.routes.append(route)
@@ -337,6 +433,15 @@ def _worker(block_handlers: bool) -> None:
     @app.post("/__contract__/launcher-options")
     def options(body: dict):
         launcher_options.update(body)
+        if body.get("live_claude"):
+            environment = isolated_environment(root)
+            environment["CLAUDE_CONFIG_DIR"] = str(work)
+            child = original_popen([sys.executable, "-c", "import sys; sys.stdin.readline()", "--", "claude"],
+                                   cwd=root, env=environment, stdin=subprocess.PIPE,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            children.append(child)
+            assert child.poll() is None
+            return {"ok": True, "pid": child.pid}
         return {"ok": True}
 
     @app.post("/__contract__/reuse-name/{name}")
@@ -427,6 +532,10 @@ def _worker(block_handlers: bool) -> None:
 
     @app.middleware("http")
     async def record(request, call_next):
+        if request.url.path == "/internal/accounts/claude-window":
+            response = await call_next(request)
+            calls.append({"operation": "bridge.claude_window", "status": response.status_code})
+            return response
         prefix = next((prefix for prefix in prefixes if request.url.path.startswith(prefix)), None)
         if prefix:
             suffix = "catalog" if request.url.path == prefix else "operation"
@@ -496,7 +605,21 @@ def _worker(block_handlers: bool) -> None:
     def deny_external(*args, **kwargs):
         raise AssertionError("uma operação de contrato tentou executar CLI ou acessar rede real")
 
-    with patch.object(runtime_coordinator, "current", return_value=instance), \
+
+    import socket
+    original_connection = socket.create_connection
+    def private_connection(address, *args, **kwargs):
+        transport = account_bridge._preparation_transport
+        if transport is not None:
+            host, port = transport[0].rsplit(":", 1)
+            if address == (host.strip("[]"), int(port)):
+                return original_connection(address, *args, **kwargs)
+        return deny_external()
+
+    with patch.multiple(login_conta, _shell_criar=window_create, _shell_submeter=window_send,
+                        _shell_ler=lambda name: "https://claude.ai/oauth/authorize?fixture=1\nPaste code here if prompted",
+                        _shell_matar=window_close, _shell_code=window_code, create=True), \
+            patch.object(runtime_coordinator, "current", return_value=instance), \
             patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api.registry, "create", side_effect=create_at_barrier), \
@@ -514,7 +637,7 @@ def _worker(block_handlers: bool) -> None:
             patch.object(account_bridge, "system_processes", side_effect=lambda: [
                 psutil.Process(child.pid) for child in children if child.poll() is None]), \
             patch("subprocess.Popen", side_effect=deny_external), \
-            patch("socket.create_connection", side_effect=deny_external), TestClient(app, client=("127.0.0.1", 32123)) as client:
+            patch("socket.create_connection", side_effect=private_connection), TestClient(app, client=("127.0.0.1", 32123)) as client:
         client.portal.call(service.aquecer)
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
