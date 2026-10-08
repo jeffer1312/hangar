@@ -64,8 +64,8 @@ fn route_ownership_waits_for_preparation_coordinator() {
     assert!(rust_route(&Method::POST, "/api/codex-contas"));
     assert!(rust_route(&Method::DELETE, "/api/codex-contas/extra"));
     assert!(rust_route(&Method::DELETE, "/api/claude-configs/extra"));
-    assert!(!rust_route(&Method::GET, "/api/codex-contas"));
-    assert!(!rust_route(&Method::POST, "/api/claude-configs"));
+    assert!(rust_route(&Method::GET, "/api/codex-contas"));
+    assert!(rust_route(&Method::POST, "/api/claude-configs"));
     assert!(!rust_route(
         &Method::DELETE,
         "/api/codex-contas/extra/login"

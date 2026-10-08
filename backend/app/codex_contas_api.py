@@ -250,6 +250,10 @@ async def prepare_codex_account(account_id: str, request: Request,
 def codex_account_preparation(account_id: str, request: Request,
                               cwd: str | None = Query(None, max_length=4096)) -> dict:
     account = _account(account_id)
+    from app.account_bridge import request_preparation
+    delegated = request_preparation(account, cwd=cwd)
+    if delegated is not None:
+        return delegated
     result = _service(request).preparation_status(account)
     if cwd and result.get("status") in ("ready", "partial"):
         from app.adapters.codex import sessions

@@ -215,6 +215,7 @@ pub fn terminal_router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/terminal", axum::routing::post(crate::terminal_routes::terminal))
         .route("/__hangar_server/workspace", axum::routing::post(crate::workspace_routes::private))
         .route("/__hangar_server/list", axum::routing::post(crate::list::bridge::private))
+        .route("/__hangar_server/accounts", axum::routing::post(crate::accounts::http::private))
         .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
     // Painel e canal do estado ficam fora da contagem: conexões longas, não chamadas da ponte.
     router.route("/__hangar_server/term", get(crate::term::private_ws))
@@ -230,6 +231,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/terminal", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/workspace", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/list", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/accounts", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/term", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/state/{name}/events", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.

@@ -1297,7 +1297,7 @@ async def prepare_account(account: Account, force: bool = False) -> dict:
     return await complete_on_cancel(prepare_owned())
 
 
-async def _prepare_account_guarded(account: Account, force: bool = False) -> dict:
+async def _prepare_account_guarded(account: Account, force: bool = False, *, validate=None) -> dict:
     """Prepara uma conta adicional; a conta padrão é deliberadamente no-op."""
     if account.is_default:
         return _status("ready")
@@ -1309,6 +1309,8 @@ async def _prepare_account_guarded(account: Account, force: bool = False) -> dic
         return _status("error", issues=[_issue("codex_account_state_invalid")])
     try:
         async with exclusivo(account.home / ".hangar-integracao.lock"):
+            if validate is not None:
+                validate()
             state = _read_state(account)
             return await _prepare_locked(account, force, state)
     except _PreparationChanged:

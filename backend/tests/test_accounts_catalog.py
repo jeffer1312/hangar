@@ -14,15 +14,26 @@ from accounts_contract import PythonReference, HttpTransport, isolated_environme
 
 
 class RustCatalog(HttpTransport):
-    def __init__(self, reference: PythonReference):
+    def __init__(self, reference: PythonReference, *, instance="contract-instance", native_fixture=False):
         target = Path(os.environ["CARGO_TARGET_DIR"]) / "debug" / "deps"
         candidates = [path for path in target.glob("accounts_catalog-*.exe" if os.name == "nt" else "accounts_catalog-*")
                       if path.is_file() and path.suffix not in {".d", ".pdb", ".lib", ".exp"}]
         assert candidates, "compile accounts_catalog antes desta prova"
         binary = max(candidates, key=lambda path: path.stat().st_mtime)
         environment = isolated_environment(reference.root)
+        if native_fixture:
+            fixture_root = reference.root / "native-fixture"
+            script = fixture_root / "node_modules/@openai/codex/bin/codex.js"
+            script.parent.mkdir(parents=True)
+            source = Path(__file__).parent / "fixtures/disconnected-codex.cjs"
+            script.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            if os.name != "nt":
+                executable = fixture_root / "codex"
+                executable.write_text("#!/usr/bin/env node\n" + source.read_text(encoding="utf-8"), encoding="utf-8")
+                executable.chmod(0o700)
+            environment["PATH"] = str(fixture_root) + os.pathsep + environment["PATH"]
         environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
-                           HANGAR_RUNTIME_INSTANCE="contract-instance")
+                           HANGAR_RUNTIME_INSTANCE=instance)
         self.process = subprocess.Popen([str(binary), "--exact", "http_probe_process", "--nocapture"],
                                         env=environment, cwd=reference.root, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, encoding="utf-8")

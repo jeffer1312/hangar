@@ -92,11 +92,15 @@ pub fn resolved(path: &Path) -> PathBuf {
 pub struct AccountService {
     pub env: AccountEnvironment,
     pub locks: AccountLocks,
+    pub preparations: super::preparation::Preparations,
+    pub preparation_gates: super::preparation::PreparationGates,
 }
 impl AccountService {
     pub fn new(env: AccountEnvironment) -> Self {
         Self {
             locks: AccountLocks::new(env.home.join(".hangar/account-locks")),
+            preparations: Default::default(),
+            preparation_gates: Default::default(),
             env,
         }
     }
@@ -412,6 +416,7 @@ impl AccountService {
                 b"cli_auth_credentials_store = \"file\"\n",
             )
             .map_err(|_| AccountError::codex(500, "codex_account_marker_failed", Some(name)))?;
+            Self::persist(&self.result_path(&key)?, &idle_sync())?;
         }
         seed(&path)?;
         let marker = if provider == Provider::Codex {
@@ -474,8 +479,23 @@ impl AccountService {
                 json!({}),
             )
         })?;
-        storage::remove_tree(&current.home)
-            .map_err(|_| AccountError::codex(500, "codex_account_delete_failed", Some(&account.id)))
+        storage::remove_tree(&current.home).map_err(|_| {
+            AccountError::codex(500, "codex_account_delete_failed", Some(&account.id))
+        })?;
+        self.preparations.lock().unwrap().remove(&key);
+        for path in [
+            self.preparation_path(&key)?,
+            self.result_path(&key)?,
+            self.force_path(&key)?,
+        ] {
+            match fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(AccountError::io());
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 

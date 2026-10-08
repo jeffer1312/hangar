@@ -82,7 +82,7 @@ DRIFT_TETO = 3
 # `.last-update-result.json`) ou o backend (`.hangar-models.json`, cache do picker por config dir)
 # regravam com tmp+rename — o que troca o atalho por arquivo real. Ligados, cada reconciliação
 # achava a "deriva" de novo, gavetava e avisava; a gaveta desta máquina chegou a `telemetry.3`.
-_RUNTIME_DA_CONTA = {"telemetry", "feedback", "image-cache", ".last-update-result.json",
+_RUNTIME_DA_CONTA = {"sessions", "telemetry", "feedback", "image-cache", ".last-update-result.json",
                      ".hangar-models.json"}
 _NAO_LIGAR = {MARCADOR, ".drift", ".claude.json", ".credentials.json", "projects", "settings.json",
               ".hangar-apelidos.json"} | _RUNTIME_DA_CONTA
@@ -532,6 +532,16 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
     diag.registrar("conta.reconciliar.concluiu", "aviso" if avisos else "ok",
                    provider="claude", quantidade=len(avisos), codigo="com_avisos" if avisos else "ok")
     return avisos
+
+def prepare_configuration(account_home: Path, *, seed: bool = False) -> dict:
+    """Reconcilia sob as guardas do chamador, sem publicar conta nem autenticação."""
+    if seed:
+        _semear_claude_json(account_home)
+        (account_home / "projects").mkdir(exist_ok=True)
+    warnings = _reconciliar(account_home, None)
+    return {"status": "partial" if warnings else "ready", "trust_pending": False,
+            "issues": [{"code": "account_prepare_warning", "params": {"warning": warning}}
+                       for warning in warnings]}
 
 
 def reconciliar(nome: str, projeto: str | None = None) -> list[str]:

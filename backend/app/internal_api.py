@@ -95,6 +95,31 @@ async def account_facts(request: Request):
         return [{"key": raw_key, "facts": asdict(account_bridge.inspect_usage(key))} for raw_key, key in keys]
     return await asyncio.to_thread(inspect)
 
+@router.post("/accounts/prepare")
+@router.post("/accounts/prepare/wait")
+async def account_prepare(request: Request):
+    from app import account_bridge, runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 16 * 1024:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        if request.url.path.endswith("/wait"):
+            if not isinstance(body, dict) or set(body) != {"operation"} or not isinstance(body["operation"], str):
+                raise ValueError("operação inválida")
+            return await account_bridge.preparation_jobs.wait(body["operation"])
+        if not isinstance(body, dict) or body.get("instance") != instance:
+            raise ValueError("instância divergente")
+        return await account_bridge.preparation_jobs.start(body)
+    except (KeyError, TypeError, ValueError, OSError):
+        raise HTTPException(409, detail={"code": "account_prepare_rejected"}) from None
+
 
 @router.post("/runtime/policy")
 async def runtime_policy(request: Request):

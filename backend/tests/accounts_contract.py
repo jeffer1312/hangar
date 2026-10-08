@@ -236,6 +236,21 @@ def _worker(block_handlers: bool) -> None:
             return {"account": None}
 
     barriers = {}
+    instance = SimpleNamespace(instance="contract-instance", legacy=None, managed_queue=lambda name: False)
+    preparation_calls = []
+    from app import codex_contas_sync
+    original_prepare = codex_contas_sync._prepare_account_guarded
+    async def prepare_at_barrier(account, force=False, *, validate=None):
+        barrier = barriers.get("account_prepare")
+        if barrier is None:
+            return await original_prepare(account, force, validate=validate)
+        if validate is not None:
+            validate()
+        preparation_calls.append(force)
+        barrier[0].set()
+        if not await asyncio.to_thread(barrier[1].wait, 25):
+            raise RuntimeError("barreira de preparo não foi liberada")
+        return {"status": "ready", "trust_pending": False, "issues": []}
     births = {}
     published = threading.Event()
     children = []
@@ -341,7 +356,7 @@ def _worker(block_handlers: bool) -> None:
 
     @app.post("/__contract__/barrier/{name}")
     def block(name: str):
-        assert name in {"session_before_registration", "launcher_before_publication", "birth_publication"}
+        assert name in {"session_before_registration", "launcher_before_publication", "birth_publication", "account_prepare"}
         barriers[name] = (threading.Event(), threading.Event())
         return {"ok": True}
 
@@ -425,6 +440,15 @@ def _worker(block_handlers: bool) -> None:
             return response
         return await call_next(request)
 
+    @app.post("/__contract__/runtime-instance")
+    def change_instance(body: dict):
+        instance.instance = body["instance"]
+        return {"ok": True}
+
+    @app.get("/__contract__/preparation-calls")
+    def preparation_journal():
+        return preparation_calls
+
     @app.get("/__contract__/calls")
     def journal():
         return calls
@@ -450,13 +474,14 @@ def _worker(block_handlers: bool) -> None:
     def deny_external(*args, **kwargs):
         raise AssertionError("uma operação de contrato tentou executar CLI ou acessar rede real")
 
-    with patch.object(runtime_coordinator, "current", return_value=SimpleNamespace(instance="contract-instance", legacy=None, managed_queue=lambda name: False)), \
+    with patch.object(runtime_coordinator, "current", return_value=instance), \
             patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api.registry, "create", side_effect=create_at_barrier), \
             patch.object(account_lifecycle, "publish_terminal_birth", side_effect=publish_at_barrier), \
             patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \
+            patch.object(codex_contas_sync, "_prepare_account_guarded", side_effect=prepare_at_barrier), \
             patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
             patch.object(api.tmux, "_run", side_effect=mux_command), \
             patch.object(api.tmux, "rename_session", side_effect=rename_mux), \

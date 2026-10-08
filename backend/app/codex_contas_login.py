@@ -533,6 +533,10 @@ class CodexContasLogin:
         return self._public_attempt(attempt)
 
     async def prepare(self, account: accounts.Account, *, forcar: bool = False) -> dict:
+        from app.account_bridge import request_preparation
+        delegated = await asyncio.to_thread(request_preparation, account, prepare=True, force=forcar)
+        if delegated is not None:
+            return delegated
         if account.is_default:
             return {"status": "ready", "trust_pending": False, "issues": []}
         key = self._key(account)
@@ -610,6 +614,10 @@ class CodexContasLogin:
             reservation.release()
 
     def preparation_status(self, account: accounts.Account) -> dict:
+        from app.account_bridge import request_preparation
+        delegated = request_preparation(account)
+        if delegated is not None:
+            return delegated
         task = self._preparations.get(self._key(account))
         gravado = codex_contas_sync.preparation_status(account)
         if task is not None and not task.done():
