@@ -225,6 +225,10 @@ async def delete_codex_account(account_id: str, request: Request) -> dict:
 @codex_contas_router.post("/{account_id}/rate-limit-reset", dependencies=[Depends(require_auth)])
 async def consume_rate_limit_reset(account_id: str, body: ConsumeResetBody) -> dict:
     account = _account(account_id)
+    from app import account_bridge
+    owned = await asyncio.to_thread(account_bridge.request_reset, account, body.credit_id, body.idempotency_key)
+    if owned is not None:
+        return owned
     try:
         return await asyncio.to_thread(_consume_reset, account, body)
     except _ResetError as exc:
@@ -250,6 +254,10 @@ async def prepare_codex_account(account_id: str, request: Request,
 def codex_account_preparation(account_id: str, request: Request,
                               cwd: str | None = Query(None, max_length=4096)) -> dict:
     account = _account(account_id)
+    from app.account_bridge import request_preparation
+    delegated = request_preparation(account, cwd=cwd)
+    if delegated is not None:
+        return delegated
     result = _service(request).preparation_status(account)
     if cwd and result.get("status") in ("ready", "partial"):
         from app.adapters.codex import sessions
@@ -269,7 +277,10 @@ async def start_codex_login(account_id: str, request: Request) -> dict:
 @codex_contas_router.get("/{account_id}/login", dependencies=[Depends(require_auth)])
 def codex_login_status(account_id: str, request: Request) -> dict | None:
     account = _account(account_id)
-    return _service(request).login_status(account)
+    try:
+        return _service(request).login_status(account)
+    except accounts.AccountError as exc:
+        raise _account_error(exc) from None
 
 
 @codex_contas_router.delete("/{account_id}/login", dependencies=[Depends(require_auth)])

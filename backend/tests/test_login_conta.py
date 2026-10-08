@@ -95,6 +95,7 @@ def bateia(monkeypatch):
     monkeypatch.setattr(login_conta, "_shell_criar", b.criar)
     monkeypatch.setattr(login_conta, "_shell_digitar", b.digitar)
     monkeypatch.setattr(login_conta, "_shell_submeter", b.submeter)
+    monkeypatch.setattr(login_conta, "_shell_code", b.submeter)
     monkeypatch.setattr(tmux, "send_keys", b.enviar_enter)
     monkeypatch.setattr(login_conta, "_shell_ler", b.ler)
     monkeypatch.setattr(login_conta, "_shell_matar", b.matar)
@@ -515,6 +516,44 @@ def test_confirmar_antigo_nao_mata_janela_da_tentativa_nova(bateia):
 
 # -------------------------------------------------------------------------- helpers
 
+
+def test_old_confirmation_cannot_complete_replacement_login(bateia, monkeypatch):
+    login_conta.iniciar("conta-a", "/home/u")
+    monkeypatch.setattr(login_conta.renova_token, "_oauth", lambda *a, **k: {"accessToken": "synthetic-new"})
+    def identity(_):
+        login_conta.cancelar("conta-a")
+        login_conta.iniciar("conta-a", "/home/u")
+        return conta_estado._estado_login({"loggedIn": True})
+    with pytest.raises(RuntimeError, match="cancelado"):
+        login_conta.confirmar("conta-a", "synthetic-code", estado_fake=identity)
+    assert login_conta._em_curso("conta-a")
+    assert len(bateia.vivas) == 1
+    login_conta.cancelar("conta-a")
+
+
+@pytest.mark.parametrize("code", ["synthetic\nsecond-command", "synthetic\rsecond-command", "synthetic\x00tail"])
+def test_protected_code_rejects_control_characters_before_io(monkeypatch, code):
+    calls = []
+    monkeypatch.setattr(login_conta.tmux, "paste_via_clipboard", lambda *args: calls.append("clipboard") or True)
+    monkeypatch.setattr(login_conta.tmux, "send_keys", lambda *args: calls.append("keys") or True)
+    monkeypatch.setattr(login_conta.tmux, "_run", lambda *args, **kwargs: calls.append("process"))
+    with pytest.raises(ValueError, match="código inválido"):
+        login_conta._shell_code("own-fixture", code)
+    assert calls == [], "entrada inválida não pode chegar à janela nem ao processo"
+
+
+@pytest.mark.parametrize("code", ["synthetic\nsecond-command", "synthetic\rsecond-command", "synthetic\x00tail"])
+def test_window_bridge_rejects_control_code_before_account_lookup(monkeypatch, code):
+    from types import SimpleNamespace
+    from app import account_bridge, runtime_coordinator, config
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(instance="fixture-instance"))
+    lookups = []
+    monkeypatch.setattr(config, "list_config_dirs", lambda: lookups.append(True) or [])
+    body = {"instance": "fixture-instance", "key": {"provider": "claude", "canonical_home": "unused"},
+            "operation": "a" * 32, "action": "code", "code": code}
+    with pytest.raises(ValueError, match="código inválido"):
+        account_bridge.ClaudeWindows().run(body)
+    assert lookups == [], "entrada inválida deve ser recusada antes de resolver uma conta"
 
 def monkeypatch_poll(dt):
     # Reduz o sleep do poll de confirmação só nos testes que confirmam — a suíte não

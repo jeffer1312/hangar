@@ -871,7 +871,7 @@ fn reconcile(state: &mut State, protected: &BTreeSet<String>, committed: Vec<Str
 }
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
-fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path.parent().ok_or_else(||invalid("arquivo sem diretório"))?;
     let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_|invalid("relógio do arquivo temporário inválido"))?.as_nanos();

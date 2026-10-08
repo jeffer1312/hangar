@@ -21,6 +21,13 @@
 
 ## What it does
 
+A migração do backend é incremental. Com o servidor Rust ativo, contas Claude/Codex
+(catálogo, preparo, login, estado, logout, cotas, renovação Claude e redefinição guardada
+do Codex) e o cofre de anexos de sessão são atendidos por ele. O Python conserva a
+admissão de convidados, os fatos de sessão/configuração, a transcrição e o fallback
+quando o supervisor desativa o Rust. Os contratos e limites estão em
+[contas e anexos](docs/decisoes/accounts-uploads-rust.md).
+
 Hangar is a self-hosted PWA that lets you keep an eye on agent sessions without having to stay at the terminal.
 
 - **Phone chat:** follow live output, send prompts, answer interactive questions, interrupt work, and keep drafts per session.

@@ -25,7 +25,22 @@ impl EntryHandle {
     pub(crate) async fn confirm(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h)=>h.confirm().await,Self::Terminal {handle,..}=>handle.confirm().await}}
     pub(crate) async fn ensure_projection(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h)=>h.ensure_projection().await,Self::Terminal {handle,..}=>handle.ensure_projection().await}}
 }
-struct Entry { generation:u64,handle:EntryHandle,lease_path:std::path::PathBuf,name:String,mods_life:u64,provider:String }
+struct Entry { generation:u64,handle:EntryHandle,lease_path:std::path::PathBuf,name:String,mods_life:u64,provider:String,account_key:Option<crate::accounts::AccountKey> }
+
+async fn runtime_account_guard(provider: &str, metadata: &Value) -> Result<crate::accounts::AccountGuard, RuntimeError> {
+    use crate::accounts::{AccountKey, AccountLocks, GuardMode, Provider};
+    let provider = if provider == "codex" { Provider::Codex } else { Provider::Claude };
+    let field = if provider == Provider::Codex { "codex_home" } else { "config_dir" };
+    let home = metadata[field].as_str().map(std::path::PathBuf::from).or_else(|| {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(|home| std::path::PathBuf::from(home).join(if provider == Provider::Codex { ".codex" } else { ".claude" }))
+    }).ok_or_else(|| failure("account_home_unknown"))?;
+    let key = tokio::task::spawn_blocking(move || AccountKey::new(provider, &home)).await
+        .map_err(|_| failure("account_lock_worker"))?.map_err(|_| failure("account_key_invalid"))?;
+    AccountLocks::system().map_err(|_| failure("account_locks_unavailable"))?
+        .acquire(&key, GuardMode::Shared, std::time::Instant::now() + Duration::from_secs(5)).await
+        .map_err(|_| failure("account_busy"))
+}
 
 /// Entrada aberta de uma sessão, achada por nome, para as rotas de escrita do Rust.
 #[allow(dead_code)] // o `handle` é lido pelas rotas de escrita que entram depois
@@ -235,6 +250,7 @@ impl RuntimeRegistry {
             match handle {EntryHandle::Headless(handle)=>handle,_=>return Err(failure("runtime_provider"))}
         } else {
         if !["claude","codex"].contains(&target.provider.as_str()) || target.binding.versao != 2 { return Err(failure("runtime_provider")); }
+        let account_guard = runtime_account_guard(&target.provider, &target.metadata).await?;
         let lease = wait_lease(&target.lease_path).await?;
         let store = open_store(&target.state_path,&target.projection_dir,&target.key,target.generation,&target.name,lease.clone()).await?;
         let mut metadata = target.metadata.clone();
@@ -284,7 +300,7 @@ impl RuntimeRegistry {
             }
         });
         self.entries.lock().await.insert(target.key.clone(),Entry { generation:target.generation,handle:EntryHandle::Headless(handle.clone()),
-            lease_path:target.lease_path.clone(),name:target.name.clone(),mods_life:life,provider:target.provider.clone() });
+            lease_path:target.lease_path.clone(),name:target.name.clone(),mods_life:life,provider:target.provider.clone(),account_key:Some(account_guard.key.clone()) });
         handle
         };
         let snapshot = match handle.snapshot().await {
@@ -334,7 +350,7 @@ impl RuntimeRegistry {
                     },
                     None=>0,
                 };
-                self.entries.lock().await.insert(target.key.clone(),Entry {generation:target.generation,handle:EntryHandle::Terminal {target:target.clone(),handle:handle.clone()},lease_path:target.lease_path.clone(),name:target.name.clone(),mods_life:life,provider:"claude".into()});handle
+                self.entries.lock().await.insert(target.key.clone(),Entry {generation:target.generation,handle:EntryHandle::Terminal {target:target.clone(),handle:handle.clone()},lease_path:target.lease_path.clone(),name:target.name.clone(),mods_life:life,provider:"claude".into(),account_key:None});handle
             }
         };
         let snapshot=handle.snapshot().await?;
@@ -442,6 +458,14 @@ impl RuntimeRegistry {
     pub async fn terminal_name(&self,key:&str) -> Option<String> {
         match &self.entries.lock().await.get(key)?.handle { EntryHandle::Terminal {target,..}=>Some(target.name.clone()), EntryHandle::Headless(_)=>None }
     }
+    /// Leitura pura: quem exclui já pode segurar exclusividade.
+    pub async fn account_usage(&self, key: &crate::accounts::AccountKey) -> crate::accounts::UsageFacts {
+        let entries = self.entries.lock().await;
+        let sessions = entries.values().filter(|entry| entry.account_key.as_ref().is_some_and(|account| account == key))
+            .map(|entry| entry.name.clone()).collect();
+        crate::accounts::UsageFacts { complete: true, sessions, pids: Vec::new() }
+    }
+
     pub async fn snapshots(&self) -> Result<Vec<RuntimeEvent>,RuntimeError> {
         let entries:Vec<_> = self.entries.lock().await.iter().map(|(key,entry)|(key.clone(),entry.generation,entry.handle.clone())).collect();
         let mut output = Vec::new();

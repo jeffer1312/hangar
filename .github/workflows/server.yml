@@ -80,6 +80,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Preparar CLI Codex para os contratos de contas
+        run: |
+          npm install --global @openai/codex@0.161.0
+          codex --version
       - name: Preparar terminal no macOS
         if: runner.os == 'macOS'
         run: |

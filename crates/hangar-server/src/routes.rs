@@ -35,6 +35,7 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub accounts: crate::accounts::AccountService,
     pub cfg: Config,
     pub auth: Auth,
     pub http: HttpClient,
@@ -102,7 +103,7 @@ impl AppState {
         let state = Arc::new(crate::state::live::StateEnv::new(terminal.clone(), list.clone(),
             crate::state::facts::StateFactsClient::new(cfg.upstream, cfg.internal_secret.clone()), diag.clone()));
         side.monitors = Some(crate::state::live::spawner(state.clone()));
-        AppState { auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
+        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             workspace_read_slots: Arc::new(tokio::sync::Semaphore::new(8)),
             workspace_meta_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -230,6 +231,10 @@ pub fn terminal_router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/workspace", axum::routing::post(crate::workspace_routes::private))
         .route("/__hangar_server/claude/customizations", axum::routing::post(crate::claude_customizations::private))
         .route("/__hangar_server/list", axum::routing::post(crate::list::bridge::private))
+        .route("/__hangar_server/accounts", axum::routing::post(crate::accounts::http::private))
+        .route("/__hangar_server/uploads/{name}", axum::routing::any(crate::uploads::http::private))
+        .route("/__hangar_server/quotas", axum::routing::post(crate::accounts::quotas::private))
+        .route("/__hangar_server/accounts/claude", axum::routing::post(crate::accounts::http::private_claude))
         .route("/__hangar_server/pages", axum::routing::post(crate::pages::routes::publish_bridge))
         .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
     // Painel e canal do estado ficam fora da contagem: conexões longas, não chamadas da ponte.
@@ -247,6 +252,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/workspace", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/claude/customizations", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/list", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/accounts", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/uploads/{name}", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/quotas", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/accounts/claude", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/pages", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/term", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/state/{name}/events", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
@@ -361,6 +370,24 @@ async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
+    if crate::uploads::http::matches(req.method(), req.uri().path()) {
+        let (_, owner) = gate(&st, peer, &req);
+        if owner {
+            let headers = req.headers().clone();
+            let mut response = crate::uploads::http::public(st, req).await;
+            cors(&headers, response.headers_mut());
+            return response;
+        }
+    }
+    if crate::accounts::http::matches(req.method(), req.uri().path()) {
+        let (_, owner) = gate(&st, peer, &req);
+        if owner {
+            let headers = req.headers().clone();
+            let mut response = crate::accounts::http::public(st, req).await;
+            cors(&headers, response.headers_mut());
+            return response;
+        }
+    }
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
         let (forward, owner) = gate(&st, peer, &req);
         // Convidado segue ao Python, que o recusa como antes.

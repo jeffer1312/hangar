@@ -521,7 +521,7 @@ def test_watcher_failure_puts_the_cause_in_the_diary(monkeypatch, events):
 def test_protocol_is_the_same_number_on_both_sides():
     lib = (Path(__file__).resolve().parents[2] / "crates/hangar-server/src/lib.rs").read_text()
     rust = int(re.search(r"pub const INTERNAL_PROTOCOL: u32 = (\d+);", lib).group(1))
-    assert rust == rust_server.RUST_SERVER_PROTOCOL == 39
+    assert rust == rust_server.RUST_SERVER_PROTOCOL == 45
 
 
 # --- Modo do processo (dono único, Task 5) ---

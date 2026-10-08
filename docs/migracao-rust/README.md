@@ -1,6 +1,6 @@
 # Migração do backend para Rust — roteiro e estado
 
-Atualizado em 2026-10-06. Ponto de partida para cada parte nova: ler este arquivo, a análise
+Atualizado em 2026-10-07. Ponto de partida para cada parte nova: ler este arquivo, a análise
 inicial e a spec da parte 1. Tudo desta pasta vive na branch do PR #24 (`hangar-server-parte1`):
 um pull nela traz a documentação em qualquer máquina.
 
@@ -22,6 +22,7 @@ um pull nela traz a documentação em qualquer máquina.
 | `parte4/` | Estado, prévia, pergunta nativa e terminal real no Rust: inventário, desenho, plano, medições (`medicao.md`), prova isolada (`prova-real.md`) e achados sem conserto (`achados-pendentes.md`) |
 | `pedidos/` | Pedidos enviados às sessões Codex e os achados de revisão da 2C |
 | `parte5-codex/` | Parte 5, todo o Codex no Rust: análise (`analise.md`) e spec em subpartes 5A–5I (`spec.md`, aprovada em 07/10), planos da 5A (`plano-5a.md`) e da 5B (`plano-5b.md`) |
+| `../../backend/tests/fixtures/accounts_contract/` | #115: inventário público de rotas, consumidores e autoria de arquivos; goldens Python e harness isolado para a migração de contas Claude/Codex |
 
 Os caminhos absolutos dentro de `pedidos/` e dos documentos das sessões apontam para as pastas de
 trabalho da máquina de origem; nesta pasta os arquivos equivalentes são os da tabela acima.
@@ -50,7 +51,7 @@ trabalho da máquina de origem; nesta pasta os arquivos equivalentes são os da 
   terminal, Pi, Kimi, omp e orq seguem no Python (provedores não migrados).
 - **Contrato interno versionado à mão.** Mudou rota `/internal`, evento do `side-events` ou variável
   passada ao filho → subir `RUST_SERVER_PROTOCOL` (Python) e `INTERNAL_PROTOCOL` (Rust) juntos.
-  Atual: **37** (parte 5-0; a 35 era a parte 4 com as junções da `hangar-server-parte1`).
+  Atual: **44** (a 37 era a parte 5-0; a 35 era a parte 4 com as junções da `hangar-server-parte1`).
   O `versao` do snapshot do `hangar-cano` acompanha o `VERSAO` do `cano.py`.
 - **Paridade provada por golden.** Formato que o cliente lê sai igual ao do Python, conferido por
   fixtures sintéticas geradas pelos parsers Python (`backend/tests/fixtures/contract/`).
@@ -64,7 +65,8 @@ trabalho da máquina de origem; nesta pasta os arquivos equivalentes são os da 
 | 3 | Custos e uso: `/api/costs`, `/api/uso`, `/api/cotacao` e custo de sessão Codex no Rust com índice SQLite próprio; cotas e stats ficam no Python | Feita na branch `hangar-server-parte3` (contrato 8) e juntada ao dono único em `feat/parte3-custos-rust`, contrato **20** (dono único + worktrees no Rust, 19, entraram antes): falha vira 503 com código, sem passagem ao Python. Paridade Python/Rust comprovada; coleta fria 3,270 s, incremental 0,038 s e pico completo 93 MiB. Falta uso real com o dono. [Medidas e isolamento](../decisoes/plataforma.md#custos-e-uso-no-hangar-server) |
 | 4 | Estado e prévia (tmux em modo controle, cópia da tela por sessão) + terminal real (`portable-pty`) | **Feita na `feat/parte4`** (Tasks 1–12, contrato 35). Com o Rust de pé, o `Monitor` do Rust é o único dono do estado ao vivo, da prévia, da pergunta nativa, da sugestão e do `problema` de Claude com terminal em qualquer porta (psmux avulso no Windows), e a lista lê o estado dele; todo PTY do terminal real é do Rust, Windows incluído (ConPTY), e o Python só faz a porta de entrada da 8766/8768. A ponte do observador terminal ficou sem consumidor. Medidas em `parte4/medicao.md` (20 chats trabalhando: Python 176,5 → 29 ms/s; terminal: CPU por MB pela metade), prova isolada em `parte4/prova-real.md`. Falta o uso real com o dono no celular/app/nativo (Task 13, Step 30) e a VM no estado do chat (Step 31; terminal na VM já conferido). [Estado](../decisoes/plataforma.md#estado-ao-vivo-de-claude-com-terminal-no-monitor-do-rust) · [terminal](../decisoes/plataforma.md#hangar-server-a-porta-pública-em-rust-o-python-atrás) |
 | 5 | Adaptadores dos provedores e envio de mensagens (mais mudam com as CLIs; tipos gerados do schema do app-server do Codex) | Metade Codex, **5A feita** (PR #107: tipos do protocolo em `crates/hangar-codex`, motor tipado, aviso de versão, cliente stdio/WebSocket); **5B feita** na branch `hangar-server-parte5b-codex` (Codex sem terminal do nascimento ao fim no Rust, módulo comum de processo do cano, contrato **38**; falta medição e uso real com o dono); 5C–5I na `parte5-codex/spec.md`. Metade Claude, **5-0 feita** na branch `hangar-server-parte5-claude` (contrato 37): as escritas do dono em sessão Claude (`/input`, `/steer`, `/interrupt`, `/keys`, `/select`, `/answer`, fila), com e sem terminal, são do Rust, com porta de entrada por sessão que o Python fecha ao congelar ou transferir. Falta uso real com o dono; [roteiro de medição](parte5-claude/medicao-5-0.md) sem números. Resto da metade Claude e metade Codex: em `parte5-claude/` e `parte5-codex/`. [Decisões](../decisoes/plataforma.md#escritas-do-claude-no-hangar-server) |
-| 6 | Resto da API: contas, convidados/8766, pareamento, MCP (`rmcp`), push (`web-push`), atualização | — |
+| #115 | Contas, autenticação, login, identidade, cotas e anexos de sessão | Implementação em Rust no PR em rascunho: catálogo, preparo protegido, login/estado/logout, renovação Claude, reset Codex idempotente e destinos Pi/omp. Anexos incluem cofre, galeria, download com Range e derivados de vídeo. A admissão, fatos e transcrição permanecem no Python. Falta a revisão independente do dono antes de retirar o rascunho. [Escopo e contratos](../decisoes/accounts-uploads-rust.md) |
+| 6 | Resto da API: criação/troca de conta da sessão, convidados/8766, pareamento, MCP (`rmcp`), push (`web-push`), atualização e outros provedores | — |
 | 7 | Remover o Python: binário único no instalador | — |
 
 Cada parte: spec própria → plano → execução por subagente com revisor por Task → revisão final →
@@ -92,8 +94,10 @@ Com o Rust de pé (07/10/2026, depois da 5-0):
   sugestão pelo canal privado do hub; transcript e fila lidos pelo Python; terminal ligado a
   `/__hangar_server/term`), a Origin do terminal (`/internal/term/origin`) e
   o 409 de painel aberto (pergunta `term.active` ao Rust).
-- **Parte 6:** contas, convidados, pareamento, MCP, push, atualização, uploads, ditado; cotas e
-  stats; mutações de worktree.
+- **#115:** contas, login e cotas Claude/Codex; com a migração ativa, o Rust mantém autoria
+  exclusiva e os reconciliadores Python ficam limitados à preparação de configuração.
+- **Parte 6:** convidados, pareamento, MCP, push, atualização, uploads, ditado; contas/cotas
+  dos outros provedores, stats, criação/troca de conta da sessão e mutações de worktree.
 - **Parte 7:** o Supervisor que sobe o Rust e a reserva do processo inteiro (modo `python`).
 
 ## Testar uma branch no app (canal de testes)

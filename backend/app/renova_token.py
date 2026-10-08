@@ -458,6 +458,11 @@ async def laco(intervalo_s: float = _INTERVALO_S, margem_s: float = _MARGEM_S) -
     import asyncio
     while True:
         try:
+            from app import runtime_coordinator
+            coordinator = runtime_coordinator.current()
+            if coordinator is not None and getattr(coordinator, "mode", "python") in {"rust", "pending"}:
+                await asyncio.sleep(intervalo_s)
+                continue
             rel = await asyncio.to_thread(rodada, margem_s)
             if rel.get("renovadas") or rel.get("falhas"):
                 _log.info("renova_token: %s", rel)

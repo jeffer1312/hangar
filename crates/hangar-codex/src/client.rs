@@ -179,12 +179,16 @@ impl Client {
     }
 
     pub async fn request<R:DeserializeOwned>(&self,request:ClientRequest,timeout:Duration) -> Result<R,ClientError> {
+        let (method,params) = request.into_parts();
+        self.request_method(method,params,timeout).await
+    }
+
+    pub async fn request_method<R:DeserializeOwned>(&self,method:&str,params:Value,timeout:Duration) -> Result<R,ClientError> {
         let id = RequestId::Integer(self.next.fetch_add(1,Ordering::Relaxed));
         let (tx,rx) = oneshot::channel();
         match self.pending.lock().unwrap().as_mut() { Some(map) => { map.insert(id.clone(),tx); }, None => return Err(ClientError::Closed) }
         // Futuro cancelado por quem chama (select!, timeout de fora) não pode deixar a entrada no mapa.
         let _forget = ForgetOnDrop { pending:&self.pending,id:&id };
-        let (method,params) = request.into_parts();
         let line = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}).to_string();
         // O prazo cobre também a fila de saída cheia (escritor parado).
         let exchange = async {

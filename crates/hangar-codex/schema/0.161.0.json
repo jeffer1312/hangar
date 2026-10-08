@@ -1,6 +1,345 @@
 {
   "version": "0.161.0",
   "definitions": {
+    "LoginAccountParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "properties": {
+            "apiKey": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "apiKey"
+              ],
+              "title": "ApiKeyv2::LoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "apiKey",
+            "type"
+          ],
+          "title": "ApiKeyv2::LoginAccountParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "appBrand": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/LoginAppBrand"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "codexStreamlinedLogin": {
+              "type": "boolean"
+            },
+            "type": {
+              "enum": [
+                "chatgpt"
+              ],
+              "title": "Chatgptv2::LoginAccountParamsType",
+              "type": "string"
+            },
+            "useHostedLoginSuccessPage": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "Chatgptv2::LoginAccountParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "chatgptDeviceCode"
+              ],
+              "title": "ChatgptDeviceCodev2::LoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ChatgptDeviceCodev2::LoginAccountParams",
+          "type": "object"
+        },
+        {
+          "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
+          "properties": {
+            "accessToken": {
+              "description": "Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.",
+              "type": "string"
+            },
+            "chatgptAccountId": {
+              "description": "Workspace/account identifier supplied by the client.",
+              "type": "string"
+            },
+            "chatgptPlanType": {
+              "description": "Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "chatgptAuthTokens"
+              ],
+              "title": "ChatgptAuthTokensv2::LoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "accessToken",
+            "chatgptAccountId",
+            "type"
+          ],
+          "title": "ChatgptAuthTokensv2::LoginAccountParams",
+          "type": "object"
+        },
+        {
+          "description": "[UNSTABLE] Managed Amazon Bedrock login is experimental.",
+          "properties": {
+            "apiKey": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "amazonBedrock"
+              ],
+              "title": "AmazonBedrockv2::LoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "apiKey",
+            "region",
+            "type"
+          ],
+          "title": "AmazonBedrockv2::LoginAccountParams",
+          "type": "object"
+        },
+        {
+          "description": "[UNSTABLE] Managed Amazon Bedrock AWS access key login is experimental.",
+          "properties": {
+            "accessKeyId": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "secretAccessKey": {
+              "type": "string"
+            },
+            "sessionToken": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "amazonBedrockAccessKeys"
+              ],
+              "title": "AmazonBedrockAccessKeysv2::LoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "accessKeyId",
+            "region",
+            "secretAccessKey",
+            "type"
+          ],
+          "title": "AmazonBedrockAccessKeysv2::LoginAccountParams",
+          "type": "object"
+        }
+      ],
+      "title": "LoginAccountParams"
+    },
+    "LoginAccountResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "apiKey"
+              ],
+              "title": "ApiKeyv2::LoginAccountResponseType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ApiKeyv2::LoginAccountResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "authUrl": {
+              "description": "URL the client should open in a browser to initiate the OAuth flow.",
+              "type": "string"
+            },
+            "loginId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "chatgpt"
+              ],
+              "title": "Chatgptv2::LoginAccountResponseType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authUrl",
+            "loginId",
+            "type"
+          ],
+          "title": "Chatgptv2::LoginAccountResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "loginId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "chatgptDeviceCode"
+              ],
+              "title": "ChatgptDeviceCodev2::LoginAccountResponseType",
+              "type": "string"
+            },
+            "userCode": {
+              "description": "One-time code the user must enter after signing in.",
+              "type": "string"
+            },
+            "verificationUrl": {
+              "description": "URL the client should open in a browser to complete device code authorization.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loginId",
+            "type",
+            "userCode",
+            "verificationUrl"
+          ],
+          "title": "ChatgptDeviceCodev2::LoginAccountResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "chatgptAuthTokens"
+              ],
+              "title": "ChatgptAuthTokensv2::LoginAccountResponseType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ChatgptAuthTokensv2::LoginAccountResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "amazonBedrock"
+              ],
+              "title": "AmazonBedrockv2::LoginAccountResponseType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "AmazonBedrockv2::LoginAccountResponse",
+          "type": "object"
+        }
+      ],
+      "title": "LoginAccountResponse"
+    },
+    "CancelLoginAccountParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "loginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loginId"
+      ],
+      "title": "CancelLoginAccountParams",
+      "type": "object"
+    },
+    "CancelLoginAccountResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/CancelLoginAccountStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "CancelLoginAccountResponse",
+      "type": "object"
+    },
+    "AccountLoginCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "loginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "onboardingEntrypoint": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DesktopOnboardingEntrypoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "title": "AccountLoginCompletedNotification",
+      "type": "object"
+    },
     "UserInput": {
       "oneOf": [
         {
@@ -8105,6 +8444,17 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "GetAccountParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "refreshToken": {
+          "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
+          "type": "boolean"
+        }
+      },
+      "title": "GetAccountParams",
+      "type": "object"
     },
     "FileChangeRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

@@ -116,6 +116,11 @@ def _ambiente(meta: dict) -> dict:
 
 
 async def subir(meta: dict, tarefas: set | None = None, *, prepared: bool = False) -> dict:
+    from app.account_lifecycle import complete_on_cancel
+    return await complete_on_cancel(_launch_account_cano_owned(meta, tarefas, prepared=prepared))
+
+
+async def _launch_account_cano_owned(meta: dict, tarefas: set | None = None, *, prepared: bool = False) -> dict:
     """Sobe o cano com o app-server dentro e grava `cano` no sidecar. Devolve o dict do cano."""
     if shutil.which("codex") is None:
         raise RuntimeError("binário não encontrado: codex")
@@ -124,7 +129,7 @@ async def subir(meta: dict, tarefas: set | None = None, *, prepared: bool = Fals
     if prepared:
         codex_sessions.update_transfer_runtime(meta["name"], meta["transfer_id"], launching=True)
     cano, _ = await hl_adapter.subir_cano_processo(comando, cwd=meta["cwd"], env=_ambiente(meta),
-                                                   key=meta["key"], log=log, tarefas=tarefas)
+                                                   key=meta["key"], log=log, tarefas=tarefas, account_provider="codex")
     if prepared:
         from app.conversation_transfer import _processes
         codex_sessions.update_transfer_runtime(meta["name"], meta["transfer_id"], cano=cano,

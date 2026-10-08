@@ -202,12 +202,23 @@ _login_lock = threading.Lock()
 
 
 def esquecer_conta(dir_conta: str) -> None:
-    """Login ou logout acabou de mudar a conta: o login e a cota em cache descreveriam a anterior."""
+    """Invalida todas as grafias da mesma conta, inclusive os caminhos normalizados do Rust."""
     from app import cotas
+    from app.account_lifecycle import AccountKey
+    target = AccountKey.new("claude", Path(dir_conta))
+    def same(path):
+        try:
+            return AccountKey.new("claude", Path(path)) == target
+        except OSError:
+            return path == dir_conta
     with _login_lock:
-        _login_cache.pop(dir_conta, None)
+        for path in list(_login_cache):
+            if same(path):
+                _login_cache.pop(path, None)
     with cotas._lock:
-        cotas._cache.pop(f"claude:{dir_conta}", None)
+        for key in list(cotas._cache):
+            if key.startswith("claude:") and same(key.removeprefix("claude:")):
+                cotas._cache.pop(key, None)
 
 
 def concluir_onboarding(dir_conta: str) -> None:
@@ -266,6 +277,10 @@ def _login_de(cfg) -> EstadoLogin:
 
     Login, logout e renovação reescrevem o `.credentials.json`: com ele intacto a resposta vale
     por `_LOGIN_TTL_ARQUIVO`. Sem o arquivo (credencial fora do disco) fica o prazo curto."""
+    from app import account_bridge
+    native = account_bridge.request_claude("auth", path=cfg.path)
+    if native is not None:
+        return EstadoLogin.model_validate(native)
     assinatura = _assinatura_credencial(cfg.path)
     with _login_lock:
         agora = time.monotonic()
@@ -381,6 +396,10 @@ def _conta_por_label(label: str):
 @conta_estado_router.post("/{label}/login", dependencies=[Depends(require_auth)])
 def iniciar_login(label: str) -> dict:
     """Começa o login na conta: janela escondida + comando na CLI. 404 se a conta não existe."""
+    from app import account_bridge
+    native = account_bridge.request_claude("open", label=label)
+    if native is not None:
+        return native
     conta = _conta_por_label(label)
     if conta is None:
         raise HTTPException(404, detail=erro("erro_conta_inexistente",
@@ -398,6 +417,14 @@ def iniciar_login(label: str) -> dict:
 @conta_estado_router.post("/{label}/login/codigo", dependencies=[Depends(require_auth)])
 def confirmar_login(label: str, body: LoginBody) -> dict:
     """Digita o código colado e espera a conta reler logada. Devolve e-mail e plano."""
+    if any(character in body.codigo for character in ("\n", "\r", "\x00")):
+        raise HTTPException(422, detail=[{
+            "type": "value_error", "loc": ["body", "codigo"], "msg": "Código inválido",
+        }])
+    from app import account_bridge
+    native = account_bridge.request_claude("code", label=label, code=body.codigo)
+    if native is not None:
+        return native
     try:
         return login_conta.confirmar(label, body.codigo)
     except RuntimeError as e:
@@ -414,6 +441,10 @@ def confirmar_login(label: str, body: LoginBody) -> dict:
                          response_model=PassoLogin)
 def passo_login(label: str) -> PassoLogin:
     """A etapa atual do fluxo: o link de autorização quando já apareceu no pane."""
+    from app import account_bridge
+    native = account_bridge.request_claude("step", label=label)
+    if native is not None:
+        return PassoLogin.model_validate(native)
     try:
         p = login_conta.passo(label)
     except RuntimeError as e:
@@ -425,4 +456,8 @@ def passo_login(label: str) -> PassoLogin:
 @conta_estado_router.post("/{label}/login/cancelar", dependencies=[Depends(require_auth)])
 def cancelar_login(label: str) -> dict:
     """Cancela a tentativa em voo e mata a janela escondida. No-op sem tentativa."""
+    from app import account_bridge
+    native = account_bridge.request_claude("cancel", label=label)
+    if native is not None:
+        return native
     return login_conta.cancelar(label)

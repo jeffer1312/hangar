@@ -45,11 +45,27 @@ def test_sessoes_diferentes_nao_se_misturam(tmp_path, cofre):
     assert a.parent.parent == b.parent.parent  # mesmo projeto
 
 
-def test_nome_de_sessao_hostil_nao_escapa_do_cofre(tmp_path, cofre):
+@pytest.mark.parametrize("hostil", ["..", "../..", "a/b", "..\\x"])
+def test_nome_de_sessao_hostil_nao_escapa_do_cofre(tmp_path, cofre, hostil):
     # nome de sessao vem de fora (tmux); `..` subiria um nivel se fosse concatenado cru
-    for hostil in ["..", "../..", "a/b", "..\\x"]:
-        p = Path(save_upload(str(tmp_path), hostil, PNG, "x.png"))
-        assert cofre.resolve() in p.resolve().parents
+    projeto = cofre / uploads._projeto(str(tmp_path))
+    if os.name == "nt" and hostil == "../..":
+        # O Windows tira os pontos finais de `..-..`: a pasta criada diverge do destino calculado,
+        # e a gravação é recusada antes de qualquer byte.
+        with pytest.raises(UploadError) as erro:
+            save_upload(str(tmp_path), hostil, PNG, "x.png")
+        assert (erro.value.status, erro.value.detail) == (400, "caminho invalido")
+        assert [p.name for p in projeto.iterdir()] == ["..-"]
+        assert [p for p in cofre.rglob("*") if not p.is_dir()] == []
+        return
+    p = Path(save_upload(str(tmp_path), hostil, PNG, "x.png"))
+    assert p.parent == Path(os.path.realpath(projeto / uploads._slug(hostil)))
+    assert p.read_bytes() == PNG
+    assert [q for q in cofre.rglob("*") if not q.is_dir()] == [projeto / uploads._slug(hostil) / p.name]
+    assert resolve_upload(str(tmp_path), hostil, p.name) == str(p)
+    assert uploads.resolve_session_audio(str(tmp_path), hostil, p.name, allow_absolute=False) == str(p)
+    assert uploads.resolve_session_audio(str(tmp_path), hostil, str(p), allow_absolute=True) == str(p)
+    assert [f["filename"] for f in list_uploads(str(tmp_path), hostil, 30)] == [p.name]
 
 
 def test_acento_no_nome_do_projeto_vira_letra_base(tmp_path, cofre, monkeypatch):

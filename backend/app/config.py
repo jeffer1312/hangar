@@ -34,6 +34,8 @@ def _label_for(path: Path) -> str:
 
 
 def _is_config_dir(p: Path) -> bool:
+    if (p / ".hangar-account-pending").exists():
+        return False
     # Conta recém-criada ainda NÃO tem .credentials.json — quem grava esse arquivo é o /login, e o
     # /login só roda DENTRO de uma sessão dela. Sem o marcador aqui, a conta sumia da lista
     # justamente entre criar e logar, e não havia onde abrir a sessão: impasse.
@@ -120,6 +122,8 @@ def list_config_dirs(ordered: bool = True) -> list[ConfigDirInfo]:
     nomes = apelidos.ler()
     out, seen = [], set()
     for label, p in entries:
+        if (p / ".hangar-account-pending").exists():
+            continue
         s = str(p)
         if s in seen:
             continue

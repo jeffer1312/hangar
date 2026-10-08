@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "profiles": {
+    "linux-application-xml": {
+      "platform": "linux",
+      "xml": "application/xml",
+      "fixtures": {
+        "binary-and-gallery": {
+          "file": "linux/binary-and-gallery.json",
+          "sha256": "e2365fc1f4f5546f1267dc6ed9c0bdd0c3b456cac10657f088c4e31e579a6cc6"
+        },
+        "errors-and-isolation": {
+          "file": "linux/errors-and-isolation.json",
+          "sha256": "e3d5ddef0a8c827551a6e4e1c2045500af2e968b108657df977617a5c13abf53"
+        },
+        "retention-and-audio": {
+          "file": "linux/retention-and-audio.json",
+          "sha256": "07353f60aa2fbdc006bf6acb704ad2a66385e0583f41f4801aa17186d27795c3"
+        },
+        "active-content-range": {
+          "file": "linux/active-content-range.json",
+          "sha256": "e7796894fcd534270d5d21dcaf9b1a26ebf3e2b246d7bb0099a89f2d2c01cce2"
+        },
+        "video-without-ffmpeg": {
+          "file": "linux/video-without-ffmpeg.json",
+          "sha256": "fcae552294d5304b175de53dc72c17d3063824bff7a41eabb827130bb2ece69c"
+        }
+      }
+    },
+    "linux-text-xml": {
+      "platform": "linux",
+      "xml": "text/xml",
+      "fixtures": {
+        "binary-and-gallery": {
+          "file": "linux/binary-and-gallery.json",
+          "sha256": "e2365fc1f4f5546f1267dc6ed9c0bdd0c3b456cac10657f088c4e31e579a6cc6"
+        },
+        "errors-and-isolation": {
+          "file": "linux/errors-and-isolation.json",
+          "sha256": "e3d5ddef0a8c827551a6e4e1c2045500af2e968b108657df977617a5c13abf53"
+        },
+        "retention-and-audio": {
+          "file": "linux/retention-and-audio.json",
+          "sha256": "07353f60aa2fbdc006bf6acb704ad2a66385e0583f41f4801aa17186d27795c3"
+        },
+        "active-content-range": {
+          "file": "linux-text-xml/active-content-range.json",
+          "sha256": "a6ce588ba5d146689407b3689327b89021da5037e56d1a15b75ea9eab3ef4911"
+        },
+        "video-without-ffmpeg": {
+          "file": "linux/video-without-ffmpeg.json",
+          "sha256": "fcae552294d5304b175de53dc72c17d3063824bff7a41eabb827130bb2ece69c"
+        }
+      }
+    },
+    "windows-text-xml": {
+      "platform": "win32",
+      "xml": "text/xml",
+      "fixtures": {
+        "binary-and-gallery": {
+          "file": "win32/binary-and-gallery.json",
+          "sha256": "5ad2d9803d3373dabb54ddc26c0526b4426b5cd2b984b6a2a962477b8aedc2e9"
+        },
+        "errors-and-isolation": {
+          "file": "win32/errors-and-isolation.json",
+          "sha256": "c998c136e1cc2b537b4f9ea205c4cb667c865703fc366931a613dd9f5a8f787f"
+        },
+        "retention-and-audio": {
+          "file": "win32/retention-and-audio.json",
+          "sha256": "ee558ca108a8dadac72953caa1271b0863aea6bffc614a7a146f258fe3e23c2c"
+        },
+        "active-content-range": {
+          "file": "win32/active-content-range.json",
+          "sha256": "1ccfd9ea4251ea753c59d6174dc8edc8bd3e6194a84a8f1efdae92898c884889"
+        },
+        "video-without-ffmpeg": {
+          "file": "win32/video-without-ffmpeg.json",
+          "sha256": "e8fc59e13cfa12025173a32202b00519a4b5625f7837f94de8d64a6245766024"
+        }
+      }
+    }
+  },
+  "provenance": {
+    "linux-text-xml": {
+      "source_head": "edb80f06ddb7f269669fd8b810c00129e369d16b",
+      "source_tree": "5ce64527f838fc7b668be14c8dff5d9317765dfd",
+      "capture_sha256": "a6ce588ba5d146689407b3689327b89021da5037e56d1a15b75ea9eab3ef4911",
+      "repetitions_equal": true,
+      "only_changed_paths": [
+        "normalized_response/11/headers/content-type",
+        "normalized_response/12/headers/content-type",
+        "normalized_response/13/headers/content-type"
+      ],
+      "description": "Captura Linux nativa histórica, preservada integralmente; duas repetições atestadas. Os demais arquivos usam os goldens Linux originais."
+    }
+  }
+}

@@ -4,6 +4,33 @@ use serde_json::{Value,json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
 
+#[tokio::test]
+async fn account_login_preserves_early_completion_and_cancel_id() {
+    let (ours,theirs)=tokio::io::duplex(1<<16);
+    let (read,mut write)=tokio::io::split(theirs);
+    let server=tokio::spawn(async move {
+        let mut lines=BufReader::new(read).lines();
+        let start:Value=serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(start["method"],"account/login/start");
+        assert_eq!(start["params"],json!({"type":"chatgptDeviceCode"}));
+        for value in [json!({"method":"account/login/completed","params":{"loginId":"login-test","success":true,"error":null}}),
+            json!({"id":start["id"],"result":{"type":"chatgptDeviceCode","loginId":"login-test","verificationUrl":"https://example.test/device","userCode":"synthetic"}})] {
+            write.write_all(format!("{value}\n").as_bytes()).await.unwrap();
+        }
+        let cancel:Value=serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(cancel["method"],"account/login/cancel");
+        assert_eq!(cancel["params"],json!({"loginId":"login-test"}));
+        write.write_all(format!("{}\n",json!({"id":cancel["id"],"result":{"status":"canceled"}})).as_bytes()).await.unwrap();
+    });
+    let (r,w)=tokio::io::split(ours);let (client,mut incoming)=Client::over_lines(r,w);
+    let response:LoginAccountResponse=client.request(ClientRequest::AccountLoginStart(LoginAccountParams::ChatgptDeviceCode),Duration::from_secs(3)).await.unwrap();
+    assert!(matches!(response,LoginAccountResponse::ChatgptDeviceCode {login_id,..} if login_id=="login-test"));
+    let Some(Incoming::Notification {method,params})=incoming.recv().await else {panic!("evento antecipado perdido")};
+    assert!(matches!(ServerNotification::decode(&method,&params).unwrap(),ServerNotification::AccountLoginCompleted(n) if n.success && n.login_id.as_deref()==Some("login-test")));
+    let result:CancelLoginAccountResponse=client.request(ClientRequest::AccountLoginCancel(CancelLoginAccountParams {login_id:"login-test".into()}),Duration::from_secs(3)).await.unwrap();
+    assert_eq!(result.status,"canceled");server.await.unwrap();
+}
+
 /// Servidor falso no outro lado de um duplex: responde `model/list`, empurra uma notificação e um pedido.
 async fn fake(stream:tokio::io::DuplexStream) {
     let (read,mut write) = tokio::io::split(stream);

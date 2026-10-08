@@ -68,6 +68,141 @@ router = APIRouter(prefix="/internal", dependencies=[Depends(require_internal)],
 _policy_calls = {}
 
 
+@router.post("/accounts/quotas")
+async def quota_facts(request: Request):
+    from app import cotas, runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if (coordinator is None or not coordinator.instance
+            or getattr(coordinator, "mode", "python") not in {"rust", "pending"}
+            or not secrets.compare_digest(instance, coordinator.instance)):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 65536:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        if (not isinstance(body, dict) or set(body) != {"action", "ids"}
+                or body["action"] not in {"sources", "read"}
+                or not isinstance(body["ids"], list) or len(body["ids"]) > 128
+                or any(not isinstance(item, str) or len(item) > 4096 for item in body["ids"])):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(400) from None
+    return await asyncio.to_thread(cotas.quota_facts, body["action"], body["ids"])
+
+
+@router.post("/accounts/facts")
+async def account_facts(request: Request):
+    from dataclasses import asdict
+    from pathlib import Path
+    from app import account_bridge, runtime_coordinator
+    from app.account_lifecycle import AccountKey
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 64 * 1024:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        if not isinstance(body, dict) or set(body) != {"keys"} or not isinstance(body["keys"], list) or len(body["keys"]) > 128:
+            raise ValueError("pedido de fatos inválido")
+        keys = []
+        for item in body["keys"]:
+            if not isinstance(item, dict) or set(item) != {"provider", "canonical_home"}:
+                raise ValueError("chave inválida")
+            if not isinstance(item["canonical_home"], str) or not Path(item["canonical_home"]).is_absolute():
+                raise ValueError("caminho inválido")
+            key = AccountKey.new(item["provider"], Path(item["canonical_home"]))
+            keys.append((item, key))
+    except (TypeError, ValueError, OSError):
+        raise HTTPException(400) from None
+    def inspect():
+        return [{"key": raw_key, "facts": asdict(account_bridge.inspect_usage(key))} for raw_key, key in keys]
+    return await asyncio.to_thread(inspect)
+
+
+@router.post("/accounts/codex-invalidate")
+async def codex_invalidate(request: Request):
+    from pathlib import Path
+    from app import runtime_coordinator
+    from app.account_lifecycle import AccountKey
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 16384:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        item = body["key"]
+        if set(body) != {"key"} or set(item) != {"provider", "canonical_home"} or item["provider"] != "codex":
+            raise ValueError
+        if not isinstance(item["canonical_home"], str) or not Path(item["canonical_home"]).is_absolute():
+            raise ValueError
+        key = AccountKey.new("codex", Path(item["canonical_home"]))
+    except (KeyError, TypeError, ValueError, OSError):
+        raise HTTPException(400) from None
+    service = getattr(request.app.state, "codex_contas_login", None)
+    if service is None:
+        raise HTTPException(503)
+    service._invalidate_auth(str(key.canonical_home))
+    return {"ok": True}
+
+
+@router.post("/accounts/prepare")
+@router.post("/accounts/prepare/wait")
+async def account_prepare(request: Request):
+    from app import account_bridge, runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 16 * 1024:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        if request.url.path.endswith("/wait"):
+            if not isinstance(body, dict) or set(body) != {"operation"} or not isinstance(body["operation"], str):
+                raise ValueError("operação inválida")
+            return await account_bridge.preparation_jobs.wait(body["operation"])
+        if not isinstance(body, dict) or body.get("instance") != instance:
+            raise ValueError("instância divergente")
+        return await account_bridge.preparation_jobs.start(body)
+    except (KeyError, TypeError, ValueError, OSError):
+        raise HTTPException(409, detail={"code": "account_prepare_rejected"}) from None
+
+@router.post("/accounts/claude-window")
+async def claude_window(request: Request):
+    from app import account_bridge, runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 16 * 1024:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        return await asyncio.to_thread(account_bridge.claude_windows.run, body)
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError):
+        raise HTTPException(409, detail={"code": "account_claude_window_rejected"}) from None
+
+
 @router.post("/runtime/policy")
 async def runtime_policy(request: Request):
     from app import runtime_coordinator, runtime_policy as service
@@ -353,6 +488,43 @@ async def migration_status() -> dict:
     from app import migration_status
     return await asyncio.to_thread(migration_status.facts)
 
+
+@router.get("/sessions/{name}/uploads-facts")
+async def upload_facts(name: str, filename: str = "", writing: bool = False):
+    """Fornece identidade e configuração; o cofre e a resposta HTTP pertencem ao Rust."""
+    import mimetypes
+    from app import api, uploads
+    if writing:
+        await api._transfer_check(name)
+        sessions = await asyncio.to_thread(api.registry.list)
+        info = next((item for item in sessions if item.name == name), None)
+    else:
+        info = await asyncio.to_thread(api._cached_info_sync, name)
+    if info is None:
+        raise HTTPException(404, detail=api.erro("erro_sessao_inexistente", "sessão não encontrada"))
+    if not info.cwd:
+        raise HTTPException(409 if writing else 404, detail=api.erro("erro_cwd_indisponivel", "cwd da sessão indisponível"))
+    return {"cwd": info.cwd, "session": api._id_upload(info),
+            "root": str(uploads._raiz()), "retention": api.runtime_config.get("upload_retention_days"),
+            "media": mimetypes.guess_type(filename)[0] or "application/octet-stream"}
+
+
+@router.post("/sessions/{name}/upload-transcript")
+async def upload_transcript(name: str, request: Request):
+    """A transcrição mantém o provedor configurado e não grava anexos."""
+    from app import api
+    body = await request.json()
+    if not isinstance(body, dict) or set(body) != {"audio"} or not isinstance(body["audio"], str):
+        raise HTTPException(400)
+    try:
+        import base64
+        data = base64.b64decode(body["audio"], validate=True)
+        if len(data) > 100 * 1024 * 1024:
+            raise HTTPException(413)
+        text = await asyncio.to_thread(api.transcribe, data, "audio.m4a")
+        return {"text": text.strip()}
+    except api.TranscribeError:
+        return {"text": ""}
 
 @router.get("/sessions/{name}/transfer")
 async def session_transfer(name: str) -> dict:

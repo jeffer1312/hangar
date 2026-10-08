@@ -961,20 +961,35 @@ def _atualizar(fontes: list[_Fonte], forcar: bool = False) -> None:
         _gravar_cache()
 
 
+def quota_facts(action: str, ids: list[str]) -> dict:
+    """Fornece leitores dos outros provedores; o cache compartilhado pertence ao Rust."""
+    sources = [source for source in _fontes() if source.provedor not in {"claude", "codex"}]
+    if action == "sources":
+        return {"sources": [{"id":source.chave, "label":source.label,
+                             "provedor":source.provedor, "ativa":source.ativa}
+                            for source in sources], "aliases":apelidos.ler()}
+    selected = [source for source in sources if source.chave in ids]
+    readings = {}
+    for source in selected:
+        value = _seguro(source)
+        state, windows, reason = value[:3]
+        readings[source.chave] = CotaConta(id=source.chave, label=source.label,
+            provedor=source.provedor, ativa=source.ativa, estado=state, janelas=windows,
+            ts=time.time() if state == "lida" else None, motivo=reason,
+            reset_credits=value[3] if len(value) > 3 else None).model_dump()
+    return {"readings":readings}
+
+
 @cotas_router.get("", dependencies=[Depends(require_auth)], response_model=list[CotaConta])
 def listar_cotas(forcar: bool = False) -> list[CotaConta]:
-    """Cota de cada credencial da máquina, com no máximo 5 min de idade.
-
-    A rota é síncrona de propósito (o FastAPI já a roda em thread): quem chama é um poll de 60s
-    da faixa, e dentro do TTL ela não toca a rede — o custo real é uma rodada de requisições a
-    cada 5 minutos, em paralelo. `?forcar=true` pula o TTL: é o botão "atualizar" da aba
-    Contas (a faixa segue chamando sem ele).
-    """
+    """Consulta o escritor ativo, com TTL de cinco minutos e espera após 429."""
+    from app import account_bridge
+    owned = account_bridge.request_quotas(force=forcar)
+    if owned is not None:
+        return [CotaConta.model_validate(row) for row in owned]
     fontes = _fontes()
     _atualizar(fontes, forcar)
     agora = time.time()
-    # O nome exibido é o apelido, quando a pessoa deu um: sem isto a faixa mostra o nome que o
-    # disco impôs — foi como uma conta chamada "apikey" foi parar no rodapé.
     nomes = apelidos.ler()
     saida = []
     with _lock:
@@ -992,8 +1007,11 @@ def listar_cotas(forcar: bool = False) -> list[CotaConta]:
 
 
 def cotas_claude(atualizar: bool = False) -> list[CotaConta]:
-    """Leituras das contas Claude. Sem `atualizar`, só o cache: quem chama está no caminho de uma
-    requisição e não pode esperar a rede das outras credenciais."""
+    """Sem atualizar, lê somente o cache do escritor ativo."""
+    from app import account_bridge
+    owned = account_bridge.request_quotas(cached_only=not atualizar)
+    if owned is not None:
+        return [CotaConta.model_validate(row) for row in owned if row.get("provedor") == "claude"]
     fontes = [f for f in _fontes() if f.provedor == "claude"]
     if atualizar:
         _atualizar(fontes)

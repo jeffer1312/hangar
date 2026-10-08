@@ -32,7 +32,7 @@ _log = logging.getLogger("hangar.rust_server")
 HEALTH_PATH = "/__hangar_server/health"
 # Versão do contrato interno (rotas /internal, side-events, ambiente). Tem de casar com o
 # `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o Python atende sozinho.
-RUST_SERVER_PROTOCOL = 39
+RUST_SERVER_PROTOCOL = 45
 START_TIMEOUT = 10.0
 OP_TIMEOUT_S = 75
 CRASH_WINDOW = 60.0
@@ -348,7 +348,8 @@ class Supervisor:
         `address` (endereço privado ausente ou inválido na saúde)."""
         global terminal_panel
         terminal_panel = None
-        from app import list_bridge, pages_bridge, workspace_bridge
+        from app import list_bridge, pages_bridge, workspace_bridge, account_bridge
+        account_bridge.configure_preparation(None, None)
         workspace_bridge.configure(None, None)
         claude_customizations.configure(None, None)
         list_bridge.configure(None, None)
@@ -397,6 +398,7 @@ class Supervisor:
                         raise ValueError("missing terminal address")
                     terminal_observer.configure(address, env["HANGAR_INTERNAL_SECRET"])
                     workspace_bridge.configure(address, env["HANGAR_INTERNAL_SECRET"])
+                    account_bridge.configure_preparation(address, env["HANGAR_INTERNAL_SECRET"])
                     claude_customizations.configure(address, env["HANGAR_INTERNAL_SECRET"])
                     list_bridge.configure(address, env["HANGAR_INTERNAL_SECRET"])
                     pages_bridge.configure(address, env["HANGAR_INTERNAL_SECRET"])
@@ -404,6 +406,7 @@ class Supervisor:
                     # Sem o endereço privado o Rust não tem as pontes: é falha de partida, e o Python
                     # assume a porta inteira em vez de atender metade por trás dele.
                     terminal_observer.configure(None, None)
+                    account_bridge.configure_preparation(None, None)
                     workspace_bridge.configure(None, None)
                     claude_customizations.configure(None, None)
                     list_bridge.configure(None, None)
