@@ -1,0 +1,319 @@
+{
+  "normalized_response": [
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload?audio_only=true",
+      "request": {
+        "headers": {
+          "x-filename": "audio.webm"
+        },
+        "body_base64": "YXVkaW8tZml4dHVyZQ=="
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "95",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDAxLndlYm0iLCJmcmFtZXMiOltdLCJ0cmFuc2NyaXB0IjoiIn0=",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000001.webm",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/neighbor/upload?audio_only=true",
+      "request": {
+        "headers": {
+          "x-filename": "old.webm"
+        },
+        "body_base64": "b2xk"
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "93",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi9uZWlnaGJvci8xNzAwMDAwMDAwLTAwMDAwMi53ZWJtIiwiZnJhbWVzIjpbXSwidHJhbnNjcmlwdCI6IiJ9",
+      "json": {
+        "path": "<root>/vault/<project>/neighbor/1700000000-000002.webm",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/other/upload?audio_only=true",
+      "request": {
+        "headers": {
+          "x-filename": "other.webm"
+        },
+        "body_base64": "b3RoZXI="
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "96",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0LzxvdGhlci1wcm9qZWN0Pi9vdGhlci8xNzAwMDAwMDAwLTAwMDAwMy53ZWJtIiwiZnJhbWVzIjpbXSwidHJhbnNjcmlwdCI6IiJ9",
+      "json": {
+        "path": "<root>/vault/<other-project>/other/1700000000-000003.webm",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "audio-resolver",
+      "case": "own-name",
+      "result": {
+        "status": 200,
+        "path": "<root>/vault/<project>/transcript/1700000000-000001.webm"
+      }
+    },
+    {
+      "kind": "audio-resolver",
+      "case": "previous-transcript",
+      "result": {
+        "status": 200,
+        "path": "<root>/vault/<project>/neighbor/1700000000-000002.webm"
+      }
+    },
+    {
+      "kind": "audio-resolver",
+      "case": "guest-absolute",
+      "result": {
+        "status": 403,
+        "detail": "caminho absoluto so para o dono"
+      }
+    },
+    {
+      "kind": "audio-resolver",
+      "case": "other-project",
+      "result": {
+        "status": 400,
+        "detail": "caminho invalido"
+      }
+    },
+    {
+      "kind": "audio-resolver",
+      "case": "network",
+      "result": {
+        "status": 400,
+        "detail": "caminho de rede recusado"
+      }
+    },
+    {
+      "kind": "audio-resolver",
+      "case": "nul",
+      "result": {
+        "status": 400,
+        "detail": "caminho invalido"
+      }
+    },
+    {
+      "kind": "audio-resolver",
+      "case": "traversal",
+      "result": {
+        "status": 400,
+        "detail": "filename invalido"
+      }
+    },
+    {
+      "kind": "audio-resolver",
+      "case": "missing",
+      "result": {
+        "status": 404,
+        "detail": "arquivo nao encontrado"
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/neighbor/uploads",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "102",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJmaWxlcyI6W3siZmlsZW5hbWUiOiIxNzAwMDAwMDAwLTAwMDAwMi53ZWJtIiwic2l6ZSI6MywibXRpbWUiOjE2OTkzMDg4MDAuMCwiZXhwaXJlc19pbl9kYXlzIjotMS4wfV19",
+      "json": {
+        "files": [
+          {
+            "filename": "1700000000-000002.webm",
+            "size": 3,
+            "mtime": 1699308800.0,
+            "expires_in_days": -1.0
+          }
+        ]
+      }
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload",
+      "request": {
+        "headers": {
+          "x-filename": "trigger.bin"
+        },
+        "body_base64": "dHJpZ2dlcg=="
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDA0LmJpbiIsImZyYW1lcyI6W10sInRyYW5zY3JpcHQiOiIifQ==",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000004.bin",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/neighbor/uploads",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "12",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJmaWxlcyI6W119",
+      "json": {
+        "files": []
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/other/uploads",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "102",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJmaWxlcyI6W3siZmlsZW5hbWUiOiIxNzAwMDAwMDAwLTAwMDAwMy53ZWJtIiwic2l6ZSI6NSwibXRpbWUiOjE2OTkzMDg4MDAuMCwiZXhwaXJlc19pbl9kYXlzIjotMS4wfV19",
+      "json": {
+        "files": [
+          {
+            "filename": "1700000000-000003.webm",
+            "size": 5,
+            "mtime": 1699308800.0,
+            "expires_in_days": -1.0
+          }
+        ]
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "193",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJmaWxlcyI6W3siZmlsZW5hbWUiOiIxNzAwMDAwMDAwLTAwMDAwMS53ZWJtIiwic2l6ZSI6MTMsIm10aW1lIjoxNzAwMDAwMDAwLjAsImV4cGlyZXNfaW5fZGF5cyI6bnVsbH0seyJmaWxlbmFtZSI6IjE3MDAwMDAwMDAtMDAwMDA0LmJpbiIsInNpemUiOjcsIm10aW1lIjoxNzAwMDAwMDAwLjAsImV4cGlyZXNfaW5fZGF5cyI6bnVsbH1dfQ==",
+      "json": {
+        "files": [
+          {
+            "filename": "1700000000-000001.webm",
+            "size": 13,
+            "mtime": 1700000000.0,
+            "expires_in_days": null
+          },
+          {
+            "filename": "1700000000-000004.bin",
+            "size": 7,
+            "mtime": 1700000000.0,
+            "expires_in_days": null
+          }
+        ]
+      }
+    }
+  ],
+  "normalized_tree": [
+    {
+      "path": "<root>/vault/<other-project>",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<other-project>/other",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<other-project>/other/1700000000-000003.webm",
+      "kind": "file",
+      "mtime": 1699308800.0,
+      "mode": 33206,
+      "size": 5,
+      "content_base64": "b3RoZXI="
+    },
+    {
+      "path": "<root>/vault/<project>",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<project>/neighbor",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<project>/transcript",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000001.webm",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33206,
+      "size": 13,
+      "content_base64": "YXVkaW8tZml4dHVyZQ=="
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000004.bin",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33206,
+      "size": 7,
+      "content_base64": "dHJpZ2dlcg=="
+    }
+  ]
+}
