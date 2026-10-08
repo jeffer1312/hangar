@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 from json import dumps
 import os
@@ -120,6 +122,39 @@ class PythonReference(HttpTransport):
             self.close()
             raise RuntimeError("a referência Python não iniciou; confira worker.log no diretório isolado") from None
 
+    def block(self, name: str):
+        assert self.request("POST", "/__contract__/barrier/" + name).status_code == 200
+        reference = self
+        class RemoteEvent:
+            def __init__(self, action):
+                self.action = action
+            def wait(self, timeout=20):
+                response = reference.request("GET", "/__contract__/barrier/" + name)
+                return response.json()["entered"]
+            def set(self):
+                assert reference.request("POST", "/__contract__/release/" + name).status_code == 200
+        class Barrier:
+            entered = RemoteEvent("entered")
+            release = RemoteEvent("release")
+        return Barrier()
+
+    def start_session_async(self, *, provider: str, account_id: str, name="birth"):
+        if not hasattr(self, "_executor"):
+            self._executor = ThreadPoolExecutor()
+        payload = {"name": name, "cwd": str(self.root), "provider": provider,
+                   "headless": False, "remember_provider": False}
+        if provider == "codex":
+            payload["codex_account"] = account_id
+        else:
+            payload["config_dir"] = str(self.root / f".claude-{account_id}")
+        return self._executor.submit(self.request, "POST", "/api/sessions", payload)
+
+    def account_exists(self, provider: str, account_id: str) -> bool:
+        return (self.root / f".{provider}-{account_id}").is_dir()
+
+    def cancel_birth(self):
+        return self.request("POST", "/__contract__/cancel-birth")
+
     def calls(self) -> list[dict]:
         return self.request("GET", "/__contract__/calls").json()
 
@@ -127,15 +162,21 @@ class PythonReference(HttpTransport):
         return self.request("GET", f"/__contract__/tree/{account}").json()
 
     def close(self) -> None:
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=10)
-        self.process.stdout.close()
-        self.log.close()
+        try:
+            if self.process.poll() is None and hasattr(self, "base_url"):
+                self.request("POST", "/__contract__/cleanup")
+        finally:
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=10)
+            if hasattr(self, "_executor"):
+                self._executor.shutdown(wait=True, cancel_futures=True)
+            self.process.stdout.close()
+            self.log.close()
 
 
 def _worker(block_handlers: bool) -> None:
@@ -191,6 +232,25 @@ def _worker(block_handlers: bool) -> None:
             assert method == "account/read", f"chamada nativa não prevista: {method}"
             return {"account": None}
 
+    barriers = {}
+    births = {}
+    children = []
+    original_popen = subprocess.Popen
+
+    def create_at_barrier(name, cwd, config_dir, **kwargs):
+        from app.models import SessionInfo
+        barrier = barriers.get("session_before_registration")
+        if barrier:
+            barrier[0].set()
+            if not barrier[1].wait(25):
+                raise RuntimeError("barreira não foi liberada")
+        # Filho real e isolado; o lançador da CLI é a única fronteira substituída.
+        child = original_popen([sys.executable, "-c", "import sys; sys.stdin.readline()", "--", kwargs["provider"]],
+                               cwd=root, env=isolated_environment(root), stdin=subprocess.PIPE,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        children.append(child)
+        return SessionInfo(name=name, cwd=cwd, provider=kwargs["provider"])
+
     service = codex_contas_login.CodexContasLogin(native=DisconnectedNative, account_in_use=lambda account: False)
     app = FastAPI()
     app.state.codex_contas_login = service
@@ -205,6 +265,50 @@ def _worker(block_handlers: bool) -> None:
     app.include_router(codex_contas_api.codex_contas_router)
     app.include_router(cotas.cotas_router)
     app.include_router(credenciais.credenciais_router)
+
+    @app.post("/api/sessions")
+    async def birth(body: dict):
+        task = asyncio.current_task()
+        births["task"] = task
+        try:
+            return await api.create_session(api.CreateBody.model_validate(body))
+        except asyncio.CancelledError:
+            return JSONResponse({"cancelled": True}, status_code=499)
+        finally:
+            births.pop("task", None)
+
+    @app.post("/__contract__/barrier/{name}")
+    def block(name: str):
+        assert name in {"session_before_registration"}
+        barriers[name] = (threading.Event(), threading.Event())
+        return {"ok": True}
+
+    @app.get("/__contract__/barrier/{name}")
+    def entered(name: str):
+        return {"entered": barriers[name][0].wait(20)}
+
+    @app.post("/__contract__/release/{name}")
+    def release(name: str):
+        barriers[name][1].set()
+        return {"ok": True}
+
+    @app.post("/__contract__/cancel-birth")
+    async def cancel_birth():
+        task = births.get("task")
+        if task:
+            task.cancel()
+        return {"cancelled": task is not None}
+
+    @app.post("/__contract__/cleanup")
+    def cleanup():
+        for _, release in barriers.values():
+            release.set()
+        for child in children:
+            if child.poll() is None:
+                child.communicate(b"release\n", timeout=10)
+        for state in list(api._codex_live_leases.values()):
+            state["lease"].release()
+        return {"ok": True}
 
     @app.middleware("http")
     async def record(request, call_next):
@@ -248,6 +352,11 @@ def _worker(block_handlers: bool) -> None:
         raise AssertionError("uma operação de contrato tentou executar CLI ou acessar rede real")
 
     with patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
+            patch.object(api.app.state, "codex_contas_login", service, create=True), \
+            patch.object(api.registry, "create", side_effect=create_at_barrier), \
+            patch.object(api, "_codex_require_idle_preparation"), \
+            patch.object(api, "_invalidate_lists"), \
+            patch.object(api, "_hold_codex_lease", side_effect=lambda name, lease: api._codex_live_leases.update({name: {"lease": lease}})), \
             patch("subprocess.Popen", side_effect=deny_external), \
             patch("socket.create_connection", side_effect=deny_external), TestClient(app) as client:
         client.portal.call(service.aquecer)

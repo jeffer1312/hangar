@@ -102,9 +102,20 @@ essa referência bloqueada e produzir o contrato esperado sem chamar handlers de
 contas; preparação e outros provedores têm seus próprios diários. A Task 1 prova
 a sonda, não declara que o Rust já atende contas.
 
-Relógio controlável, eventos da CLI, barreiras e reinício Rust serão acrescentados
-quando login/cota/concorrência tiverem consumidores concretos. Não há implementação
-fictícia dessas interfaces. Login com identidade conectada, CLI travada, preparo
+`account-keys.json` fixa a chave de existência nos dois runtimes: SHA-256 de
+provedor, byte NUL e caminho canônico em UTF-8. No Windows, a normalização remove
+o prefixo estendido, uniformiza barras e converte cada caractere para minúsculas.
+Conta inexistente resolve pelo ancestral existente; os descritores ficam fora da
+pasta da conta e seus arquivos nunca são apagados.
+
+`test_account_lifecycle.py` disputa descritores com um processo Rust real e usa
+`start_session_async`, `account_exists` e barreiras do harness para provar o
+nascimento pela rota real, cancelamento repetido e reinício apenas do Rust.
+Sidecars sem PID ainda podem representar nascimento pendente; inspeção incompleta
+recusa a exclusão. A integração HTTP de exclusão é da Task 3.
+
+Relógio controlável e eventos da CLI serão acrescentados quando login/cota tiverem
+consumidores concretos. Login com identidade conectada, CLI travada, preparo
 ready/partial, 429 e redefinição idempotente ainda precisam das Tasks consumidoras.
 `forcar=true` jamais serve para criar golden do desvio conhecido que burla 429.
 

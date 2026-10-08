@@ -2375,6 +2375,11 @@ def _allowed_scan_root(path: str) -> Path:
 
 
 async def _criar_sessao(body: CreateBody, worktree: dict):
+    from app.account_lifecycle import complete_on_cancel
+    return await complete_on_cancel(_create_session_owned(body, worktree))
+
+
+async def _create_session_owned(body: CreateBody, worktree: dict):
     if body.headless is None:
         body = body.model_copy(update={"headless": not body.read_only and body.provider in ("claude", "codex")
                                       and bool(runtime_config.get("headless_default"))})
@@ -2565,7 +2570,14 @@ async def _criar_sessao(body: CreateBody, worktree: dict):
             if body.engine_account is not None:
                 kwargs["engine_account"] = body.engine_account
                 kwargs["engine_models"] = account_models
-            info = registry.create(body.name, body.cwd, body.config_dir, **kwargs)
+            from app.account_lifecycle import AccountKey, acquire
+            from contextlib import nullcontext
+            home = (codex_account_obj.home if body.provider == "codex"
+                    else Path(tmux.config_dir_de(body.config_dir)))
+            guard = (acquire(AccountKey.new("codex" if body.provider == "codex" else "claude", home))
+                     if body.provider in ("claude", "codex", "pi", "omp") else nullcontext())
+            with guard:
+                info = registry.create(body.name, body.cwd, body.config_dir, **kwargs)
             worktree["session_created"] = True
             # O mesmo nome pode estar no snapshot com o transcript da sessão encerrada.
             _invalidate_lists()
@@ -2612,7 +2624,8 @@ async def _criar_sessao(body: CreateBody, worktree: dict):
                 # bloqueia, e no event loop isso congelava o app inteiro quando duas operações de
                 # conta se cruzavam. flock pertence ao descritor aberto, não à thread — tomar e
                 # soltar de threads diferentes é válido.
-                cm = contas.ciclo_conta(nome_conta)
+                from app.account_lifecycle import GuardMode
+                cm = contas.ciclo_conta(nome_conta, mode=GuardMode.SHARED)
                 ciclo = await asyncio.to_thread(cm.__enter__)
                 try:
                     try:

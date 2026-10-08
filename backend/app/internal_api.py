@@ -62,6 +62,40 @@ router = APIRouter(prefix="/internal", dependencies=[Depends(require_internal)],
 _policy_calls = {}
 
 
+@router.post("/accounts/facts")
+async def account_facts(request: Request):
+    from dataclasses import asdict
+    from pathlib import Path
+    from app import account_bridge, runtime_coordinator
+    from app.account_lifecycle import AccountKey
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 64 * 1024:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        if not isinstance(body, dict) or set(body) != {"keys"} or not isinstance(body["keys"], list) or len(body["keys"]) > 128:
+            raise ValueError("pedido de fatos inválido")
+        keys = []
+        for item in body["keys"]:
+            if not isinstance(item, dict) or set(item) != {"provider", "canonical_home"}:
+                raise ValueError("chave inválida")
+            if not isinstance(item["canonical_home"], str) or not Path(item["canonical_home"]).is_absolute():
+                raise ValueError("caminho inválido")
+            key = AccountKey.new(item["provider"], Path(item["canonical_home"]))
+            keys.append((item, key))
+    except (TypeError, ValueError, OSError):
+        raise HTTPException(400) from None
+    def inspect():
+        return [{"key": raw_key, "facts": asdict(account_bridge.inspect_usage(key))} for raw_key, key in keys]
+    return await asyncio.to_thread(inspect)
+
+
 @router.post("/runtime/policy")
 async def runtime_policy(request: Request):
     from app import runtime_coordinator, runtime_policy as service

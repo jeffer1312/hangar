@@ -1110,6 +1110,10 @@ class ClaudeHeadlessAdapter:
         await asyncio.to_thread(_esquecer_cano, name, cano["pid"])
 
     async def _lancar_cano(self, sess: _Sessao) -> tuple[dict, asyncio.subprocess.Process, Path]:
+        from app.account_lifecycle import complete_on_cancel
+        return await complete_on_cancel(self._launch_account_cano_owned(sess))
+
+    async def _launch_account_cano_owned(self, sess: _Sessao) -> tuple[dict, asyncio.subprocess.Process, Path]:
         """argv, ambiente, conta e motor do `claude`, processo do cano em escopo próprio e o sidecar."""
         meta = sess.meta
         transcript = self.transcript_path_de(meta)
@@ -2610,7 +2614,22 @@ def _usable_cano_bin() -> Path | None:
 
 
 async def subir_cano_processo(argv: list[str], *, cwd: str, env: dict, key: str, log: Path,
-                              tarefas: set | None = None) -> tuple[dict, asyncio.subprocess.Process]:
+                              tarefas: set | None = None, account_provider: str = "claude") -> tuple[dict, asyncio.subprocess.Process]:
+    from app.account_lifecycle import AccountKey, acquire, complete_on_cancel
+    variable = "CODEX_HOME" if account_provider == "codex" else "CLAUDE_CONFIG_DIR"
+    default = Path.home() / (".codex" if account_provider == "codex" else ".claude")
+    account_key = AccountKey.new(account_provider, Path(env.get(variable) or default))
+    async def launch_owned():
+        guard = await asyncio.to_thread(acquire, account_key)
+        try:
+            return await _spawn_account_process(argv, cwd=cwd, env=env, key=key, log=log, tarefas=tarefas)
+        finally:
+            guard.close()
+    return await complete_on_cancel(launch_owned())
+
+
+async def _spawn_account_process(argv: list[str], *, cwd: str, env: dict, key: str, log: Path,
+                                 tarefas: set | None = None) -> tuple[dict, asyncio.subprocess.Process]:
     """Sobe um cano com `argv` como filho, fora do cgroup do backend. Devolve o dict `cano` do
     sidecar (pid, escuta, token) e o processo. Serve a qualquer sessão sem terminal (Claude, Codex)."""
     exe = shutil.which(argv[0])

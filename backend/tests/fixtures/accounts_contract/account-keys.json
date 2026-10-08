@@ -1,0 +1,23 @@
+[
+  {
+    "provider": "claude",
+    "windows": true,
+    "inputs": ["C:\\Users\\TEST\\.claude-Revisão", "\\\\?\\C:\\Users\\test\\.CLAUDE-REVISÃO", "c:/users/test/.claude-revisão"],
+    "canonical": "c:/users/test/.claude-revisão",
+    "sha256": "71846d0f6ded05d1acf94c70206cfeef2ba545fe011b39259667d84e93439948"
+  },
+  {
+    "provider": "codex",
+    "windows": true,
+    "inputs": ["\\\\?\\UNC\\SERVER\\Share\\Contas\\.codex-Nova", "//server/share/contas/.codex-nova"],
+    "canonical": "//server/share/contas/.codex-nova",
+    "sha256": "e51728c5841904edd89ced2855a7bbc197709ac4edd5051edb2b120f370500b3"
+  },
+  {
+    "provider": "codex",
+    "windows": false,
+    "inputs": ["/tmp/contas/revisão/nova"],
+    "canonical": "/tmp/contas/revisão/nova",
+    "sha256": "2f6847224d0031f24eaea1aec026ea8c5b7bea1963673f4f726a46178f940fae"
+  }
+]

@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 
 from app import codex_contas as accounts
 from app import codex_contas_sync, diag
+from app import account_lifecycle
 from app.codex_importador import CodexAusente, CodexNativo, CodexNativoErro
 
 
@@ -76,6 +77,7 @@ class _Reservation:
     kind: str
     live: bool = False
     identity: dict | None = None
+    guard: account_lifecycle.AccountGuard | None = None
 
     def mark_live(self, session_name: str, *, pane_id: str | None = None,
                   pid: int | None = None) -> None:
@@ -149,6 +151,13 @@ class CodexContasLogin:
                 }.get(active.kind, "codex_account_creation_in_progress")
                 raise accounts.AccountError(409, code, {"account_id": account.id})
             reservation = _Reservation(self, key, uuid.uuid4().hex, kind)
+            try:
+                reservation.guard = account_lifecycle.acquire(
+                    account_lifecycle.AccountKey.new("codex", account.home),
+                    account_lifecycle.GuardMode.EXCLUSIVE if kind == "login" else account_lifecycle.GuardMode.SHARED,
+                    deadline=time.monotonic())
+            except account_lifecycle.AccountLockError as exc:
+                raise accounts.AccountError(409, "codex_account_in_use", {"account_id": account.id}) from exc
             self._reservations.setdefault(key, []).append(reservation)
             return reservation
 
@@ -163,9 +172,15 @@ class CodexContasLogin:
                 reservation.live = True
                 reservation.kind = "live"
                 reservation.identity = {"name": session_name, "pane_id": pane_id, "pid": pid}
+                if reservation.guard is not None:
+                    reservation.guard.close()
+                    reservation.guard = None
 
     def _release_reservation(self, reservation: _Reservation) -> None:
         with self._lock:
+            if reservation.guard is not None:
+                reservation.guard.close()
+                reservation.guard = None
             reservations = self._reservations.get(reservation.key, [])
             if reservation in reservations:
                 reservations.remove(reservation)
@@ -409,18 +424,21 @@ class CodexContasLogin:
             if attempt.ready is not None and not attempt.ready.done():
                 attempt.ready.set_result(None)
             attempt.native = None
-            if reservation is not None and not reservation.live:
-                self._release_reservation(reservation)
             try:
                 if attempt.queue is not None and native is not None:
                     native.unsubscribe(_LOGIN_COMPLETED, attempt.queue)
             finally:
                 if native is not None:
                     try:
-                        await native.close()
+                        await account_lifecycle.complete_on_cancel(native.close())
                     except Exception as exc:  # noqa: BLE001 - cleanup não pode prender a tentativa
                         diag.registrar("conta.login.limpeza_falhou", "aviso", etapa="fechar_app_server",
                                        **campos, **diag.erro_campos(exc))
+                    finally:
+                        if reservation is not None and not reservation.live:
+                            self._release_reservation(reservation)
+                elif reservation is not None and not reservation.live:
+                    self._release_reservation(reservation)
 
     async def start_login(self, account: accounts.Account) -> dict:
         key = self._key(account)
@@ -531,9 +549,9 @@ class CodexContasLogin:
                 etapa = "herdar_configuracao"
                 diag.registrar("conta.preparar.etapa", provider="codex", etapa=etapa)
                 if forcar:
-                    result = await codex_contas_sync.prepare_account(account, force=True)
+                    result = await account_lifecycle.complete_on_cancel(codex_contas_sync.prepare_account(account, force=True))
                 else:
-                    result = await codex_contas_sync.prepare_account(account)
+                    result = await account_lifecycle.complete_on_cancel(codex_contas_sync.prepare_account(account))
                 if isinstance(principal, dict) and principal.get("estado") not in (None, "ok", "ocioso"):
                     result = copy.deepcopy(result)
                     if result.get("status") == "ready":
@@ -587,7 +605,7 @@ class CodexContasLogin:
         try:
             diag.registrar("conta.apagar.etapa", provider="codex", etapa="remover_pasta",
                            conta_id=diag.conta_id(self._key(account)))
-            await asyncio.to_thread(accounts.delete_account, account)
+            await account_lifecycle.complete_on_cancel(asyncio.to_thread(accounts.delete_account, account))
             key = self._key(account)
             with self._lock:
                 self._auth_cache.pop(key, None)

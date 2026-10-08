@@ -1289,6 +1289,15 @@ async def _prepare_locked(account: Account, force: bool, state: dict) -> dict:
 
 
 async def prepare_account(account: Account, force: bool = False) -> dict:
+    from app.account_lifecycle import AccountKey, acquire, complete_on_cancel
+    async def prepare_owned():
+        guard = await asyncio.to_thread(acquire, AccountKey.new("codex", account.home))
+        with guard:
+            return await _prepare_account_guarded(account, force)
+    return await complete_on_cancel(prepare_owned())
+
+
+async def _prepare_account_guarded(account: Account, force: bool = False) -> dict:
     """Prepara uma conta adicional; a conta padrão é deliberadamente no-op."""
     if account.is_default:
         return _status("ready")

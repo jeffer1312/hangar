@@ -1,4 +1,5 @@
 //! Servidor do Hangar: lê conversas e custos das sessões e repassa o restante ao backend Python.
+pub mod accounts;
 pub mod auth;
 pub mod config;
 pub mod costs;
@@ -28,7 +29,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, eventos do side-events, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 37;
+pub const INTERNAL_PROTOCOL: u32 = 38;
 
 /// Todo socket TCP do servidor, aceito ou aberto. Sem isso o Nagle segura o último pedaço de uma
 /// resposta em pedaços até o ACK atrasado do outro lado; o asyncio do Python já liga sozinho.
