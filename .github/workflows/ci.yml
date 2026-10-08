@@ -40,6 +40,8 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/crates/target
     # So roda teste/build — nao escreve nada no repo. Declarado explicito pra nao herdar
     # o padrao do repositorio, que pode ser write.
     permissions:
@@ -52,6 +54,13 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Preparar CLI Codex para os contratos de contas
+        run: |
+          npm install --global @openai/codex@0.161.0
+          codex --version
       # alguns testes tocam o binario do tmux (mockado na maioria, mas presente por garantia).
       # ripgrep NAO e opcional: a busca entre sessoes (app/search.py) chama `rg` de verdade, e sem
       # ele os testes de busca voltavam ZERO acerto — falha que so aparecia aqui, porque a maquina
@@ -88,6 +97,7 @@ jobs:
         run: |
           cargo build --locked -p hangar-server
           cargo build --locked -p hangar-workspace --example workspace_contract
+          cargo test --locked -p hangar-server --no-run --test accounts_lifecycle --test accounts_catalog --test accounts_preparation
       - uses: actions/cache/save@v4
         if: github.ref == 'refs/heads/main' && steps.cache-rust.outputs.cache-hit != 'true'
         with:
