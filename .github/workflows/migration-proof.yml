@@ -1,0 +1,226 @@
+# Prova nativa macOS da correção do lote 2 (Task 24). Só uma tag de prova dispara: nenhum push de
+# branch, nenhum disparo manual e nenhuma publicação; o resultado são logs e artefatos.
+name: migration-proof
+
+on:
+  push:
+    tags: ['migration-proof-t24-*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-native:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Ambiente privado
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/t24"
+          mkdir -p "$base"/home "$base"/cargo "$base"/rustup "$base"/target "$base"/tmp "$base"/evidence
+          {
+            echo "T24_BASE=$base"
+            echo "T24_EVIDENCE=$base/evidence"
+            echo "HOME=$base/home"
+            echo "CARGO_HOME=$base/cargo"
+            echo "RUSTUP_HOME=$base/rustup"
+            echo "CARGO_TARGET_DIR=$base/target"
+            echo "TMPDIR=$base/tmp"
+            echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only"
+            echo "CARGO_PROFILE_TEST_DEBUG=line-tables-only"
+          } >> "$GITHUB_ENV"
+
+      - name: Identidade do objeto da tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          test "$(git cat-file -t "refs/tags/$tag")" = tag
+          test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
+          test "$(git rev-parse "refs/tags/$tag^{commit}")" = "$GITHUB_SHA"
+          git cat-file tag "refs/tags/$tag" | sed '1,/^$/d' > "$T24_EVIDENCE/manifest.txt"
+          expected_tree="$(sed -n 's/^tree: //p' "$T24_EVIDENCE/manifest.txt")"
+          test -n "$expected_tree"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$expected_tree"
+          ancestors="$(sed -n 's/^ancestor: //p' "$T24_EVIDENCE/manifest.txt")"
+          test -n "$ancestors"
+          for commit in $ancestors; do git merge-base --is-ancestor "$commit" HEAD; done
+          workflow="$(shasum -a 256 .github/workflows/migration-proof.yml | cut -d' ' -f1)"
+          test "$workflow" = "$(sed -n 's/^workflow_sha256: //p' "$T24_EVIDENCE/manifest.txt")"
+          git fsck --full --no-reflogs --no-dangling
+          {
+            echo "tag=$tag"
+            echo "sha=$GITHUB_SHA"
+            echo "tree=$(git rev-parse 'HEAD^{tree}')"
+            echo "workflow_sha256=$workflow"
+            echo "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT event=$GITHUB_EVENT_NAME"
+            sw_vers
+            uname -m
+          } | tee "$T24_EVIDENCE/identity.txt"
+
+      - name: Toolchain
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
+          { rustc -Vv; cargo -V; } | tee "$T24_EVIDENCE/toolchain.txt"
+
+      - name: Casos macOS do store coletados por nome
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          cargo test --locked -p hangar-server --lib --no-run 2>&1 | tee "$T24_EVIDENCE/build-lib.log"
+          binary="$(sed -n 's/.*Executable unittests src\/lib.rs (\(.*\))$/\1/p' "$T24_EVIDENCE/build-lib.log" | tail -1)"
+          case "$binary" in /*) ;; *) binary="$PWD/$binary" ;; esac
+          shasum -a 256 "$binary" | tee "$T24_EVIDENCE/binary.txt"
+          cargo test --locked -p hangar-server --lib uploads::store::removal_tests -- --list | tee "$T24_EVIDENCE/removal-list.txt"
+          cargo test --locked -p hangar-server --lib uploads::store::removal_tests 2>&1 | tee "$T24_EVIDENCE/removal-tests.log"
+          for name in \
+            native_removal_keeps_published_link_and_previous_file \
+            native_claim_restores_divergent_identity_without_overwrite \
+            native_removal_rechecks_modified_time_on_retained_identity \
+            concurrent_swap_before_claim_keeps_substitute_and_moved_original \
+            concurrent_occupant_blocks_prune_rollback_without_overwrite \
+            dropped_upload_removes_only_its_temporary_during_concurrent_publication \
+            concurrent_prune_swap_before_claim_keeps_new_file \
+            concurrent_mtime_at_strict_cutoff_after_claim_keeps_file \
+            concurrent_rollback_failure_is_identifiable_and_preserves_both_identities; do
+            grep -qx "uploads::store::removal_tests::$name: test" "$T24_EVIDENCE/removal-list.txt"
+            grep -q "^test uploads::store::removal_tests::$name \.\.\. ok$" "$T24_EVIDENCE/removal-tests.log"
+          done
+          grep -q '^test result: ok\. 9 passed; 0 failed' "$T24_EVIDENCE/removal-tests.log"
+
+      - name: Store de uploads
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          cargo test --locked -p hangar-server --test uploads_store 2>&1 | tee "$T24_EVIDENCE/uploads-store.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed' "$T24_EVIDENCE/uploads-store.log"
+
+      - name: Contas e Codex
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          cargo test --locked -p hangar-server --test accounts_codex_login 2>&1 | tee "$T24_EVIDENCE/accounts-codex-login.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed' "$T24_EVIDENCE/accounts-codex-login.log"
+          cargo test --locked -p hangar-codex 2>&1 | tee "$T24_EVIDENCE/hangar-codex.log"
+          if grep -E '^test result: ' "$T24_EVIDENCE/hangar-codex.log" | grep -v ' 0 failed'; then exit 1; fi
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$T24_EVIDENCE/hangar-codex.log"
+
+      - name: Sensibilidade por mutação
+        run: |
+          set -euo pipefail
+          cat > "$T24_BASE/store_mutations.py" <<'PY'
+          """Uma cópia por mutação do store; cada mutação tem de derrubar os casos da sua causa."""
+          import argparse
+          import json
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+          import sys
+
+          STORE = "crates/hangar-server/src/uploads/store.rs"
+          PREFIX = "uploads::store::removal_tests::"
+          MUTATIONS = {
+              "identity": (
+                  "metadata.dev() == identity.dev()\n                        && metadata.ino() == identity.ino()\n                        && cutoff",
+                  "cutoff",
+                  ["concurrent_swap_before_claim_keeps_substitute_and_moved_original",
+                   "concurrent_prune_swap_before_claim_keeps_new_file",
+                   "concurrent_rollback_failure_is_identifiable_and_preserves_both_identities"],
+              ),
+              "cutoff": (
+                  "cutoff.is_none_or(|limit| {\n                            modified_seconds(&metadata).is_ok_and(|mtime| mtime < limit)\n                        })",
+                  "true",
+                  ["concurrent_mtime_at_strict_cutoff_after_claim_keeps_file",
+                   "concurrent_occupant_blocks_prune_rollback_without_overwrite"],
+              ),
+              "overwrite": (
+                  "if let Err(error) = rename_exclusive(&area.directory, &captured, self, name) {",
+                  "if let Err(error) = fs::rename(area.directory.path.join(&captured), self.path.join(name)) {",
+                  ["concurrent_occupant_blocks_prune_rollback_without_overwrite",
+                   "concurrent_rollback_failure_is_identifiable_and_preserves_both_identities"],
+              ),
+              "noclaim": (
+                  "            let _ = file;\n            let captured = format!(",
+                  "            let _ = file;\n            if true {\n                let direct = std::ffi::CString::new(name)?;\n"
+                  "                if unsafe { libc::unlinkat(self.handle.as_raw_fd(), direct.as_ptr(), 0) } != 0 {\n"
+                  "                    return Err(io::Error::last_os_error());\n                }\n"
+                  "                return Ok(true);\n            }\n            let captured = format!(",
+                  ["concurrent_swap_before_claim_keeps_substitute_and_moved_original",
+                   "concurrent_prune_swap_before_claim_keeps_new_file",
+                   "concurrent_rollback_failure_is_identifiable_and_preserves_both_identities"],
+              ),
+              "dropall": (
+                  "        // A disposição Windows é decidida antes de soltar o handle.\n        self.file.take();",
+                  "        for other in self.directory.entries().unwrap_or_default() {\n"
+                  "            let _ = fs::remove_file(self.directory.path.join(other));\n        }\n"
+                  "        // A disposição Windows é decidida antes de soltar o handle.\n        self.file.take();",
+                  ["dropped_upload_removes_only_its_temporary_during_concurrent_publication"],
+              ),
+          }
+
+          parser = argparse.ArgumentParser()
+          parser.add_argument("--source", type=Path, required=True)
+          parser.add_argument("--work", type=Path, required=True)
+          parser.add_argument("--report", type=Path, required=True)
+          args = parser.parse_args()
+          tracked = subprocess.check_output(["git", "-C", str(args.source), "ls-files", "-z"]).split(b"\0")
+          report = {}
+          for name, (old, new, expected) in MUTATIONS.items():
+              copy = args.work / f"mut-{name}"
+              if copy.exists():
+                  shutil.rmtree(copy)
+              for raw in filter(None, tracked):
+                  relative = raw.decode()
+                  origin = args.source / relative
+                  if origin.is_file() and not origin.is_symlink():
+                      target = copy / relative
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(origin, target)
+              store = copy / STORE
+              text = store.read_text(encoding="utf-8")
+              assert text.count(old) == 1, f"mutação {name} sem ponto único"
+              store.write_text(text.replace(old, new), encoding="utf-8")
+              run = subprocess.run(["cargo", "test", "--locked", "-p", "hangar-server", "--lib",
+                                    "uploads::store::removal_tests"], cwd=copy / "crates",
+                                   capture_output=True, text=True)
+              output = run.stdout + run.stderr
+              (args.work / f"mut-{name}.log").write_text(output, encoding="utf-8")
+              failed = sorted(set(re.findall(r"^test " + re.escape(PREFIX) + r"(\S+) \.\.\. FAILED", output, re.M)))
+              compiled = "test result:" in output
+              report[name] = {"returncode": run.returncode, "compiled": compiled, "failed": failed,
+                              "expected": expected, "caught": compiled and set(expected) <= set(failed)}
+              shutil.rmtree(copy)
+          args.report.write_text(json.dumps(report, indent=1), encoding="utf-8")
+          print(json.dumps({name: (item["caught"], item["failed"]) for name, item in report.items()}, indent=1))
+          sys.exit(0 if all(item["caught"] for item in report.values()) else 1)
+          PY
+          status=0
+          python3 "$T24_BASE/store_mutations.py" --source "$GITHUB_WORKSPACE" --work "$T24_BASE/mutations" \
+            --report "$T24_EVIDENCE/store-mutations.json" 2>&1 | tee "$T24_EVIDENCE/store-mutations.log" || status=$?
+          mkdir -p "$T24_EVIDENCE/mutations"
+          cp "$T24_BASE"/mutations/mut-*.log "$T24_EVIDENCE/mutations/" || echo "nenhum log de mutação gerado" | tee "$T24_EVIDENCE/mutations/missing.txt"
+          exit "$status"
+
+      - name: Evidência
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-proof-t24-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/t24/evidence
+          if-no-files-found: error

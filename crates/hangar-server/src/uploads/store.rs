@@ -211,6 +211,8 @@ struct Directory {
     path: PathBuf,
     handle: File,
     parent: Option<Arc<Directory>>,
+    #[cfg(test)]
+    probe: Option<removal_tests::Probe>,
 }
 
 impl Directory {
@@ -231,6 +233,8 @@ impl Directory {
             path,
             handle,
             parent: None,
+            #[cfg(test)]
+            probe: None,
         });
         directory.verify()?;
         Ok(directory)
@@ -284,6 +288,8 @@ impl Directory {
             path,
             handle,
             parent: Some(self.clone()),
+            #[cfg(test)]
+            probe: self.probe.clone(),
         });
         directory.verify()?;
         Ok(directory)
@@ -392,7 +398,11 @@ impl Directory {
             use std::os::unix::fs::MetadataExt;
             let _ = file;
             let captured = format!("captured-{}", random_hex(16)?);
+            #[cfg(test)]
+            self.reach(removal_tests::Point::BeforeClaim, name);
             rename_exclusive(self, name, &area.directory, &captured)?;
+            #[cfg(test)]
+            self.reach(removal_tests::Point::AfterClaim, name);
             let captured_file = area.directory.open_file(&captured, false);
             let removable = captured_file
                 .as_ref()
@@ -406,6 +416,8 @@ impl Directory {
                         })
                 });
             if !removable {
+                #[cfg(test)]
+                self.reach(removal_tests::Point::BeforeRestore, name);
                 if let Err(error) = rename_exclusive(&area.directory, &captured, self, name) {
                     tracing::warn!(
                         code = "upload_claim_restore_failed",
@@ -964,6 +976,379 @@ fn prune_directory(directory: &Arc<Directory>, cutoff: f64) -> io::Result<usize>
 #[cfg(test)]
 mod removal_tests {
     use super::*;
+    #[cfg(unix)]
+    use std::sync::{Mutex, mpsc};
+    #[cfg(unix)]
+    use std::time::Duration;
+
+    /// Pontos da remoção real em que um teste pode intercalar outro ator.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(super) enum Point {
+        BeforeClaim,
+        AfterClaim,
+        BeforeRestore,
+    }
+
+    /// Sincronização local ao `Directory` (e aos filhos dele): testes paralelos não se misturam.
+    pub(super) type Probe = Arc<dyn Fn(Point, &str) + Send + Sync>;
+
+    #[cfg(unix)]
+    impl Directory {
+        pub(super) fn reach(&self, point: Point, name: &str) {
+            if let Some(probe) = &self.probe {
+                probe(point, name);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl UploadStore {
+        fn with_probe(root: &Path, probe: Probe) -> io::Result<Self> {
+            let mut store = Self::new(root)?;
+            Arc::get_mut(&mut store.root)
+                .expect("raiz recém-aberta tem um único dono")
+                .probe = Some(probe);
+            Ok(store)
+        }
+    }
+
+    #[cfg(unix)]
+    const HANDSHAKE: Duration = Duration::from_secs(20);
+
+    /// O fluxo real para no ponto, avisa o teste e só segue quando o teste devolver a vez.
+    #[cfg(unix)]
+    struct Rendezvous {
+        reached: mpsc::Receiver<(Point, String)>,
+        resume: mpsc::SyncSender<()>,
+    }
+
+    #[cfg(unix)]
+    impl Rendezvous {
+        fn at(&self, expected: Point) -> String {
+            let (point, name) = self
+                .reached
+                .recv_timeout(HANDSHAKE)
+                .expect("o fluxo de remoção não chegou ao ponto no prazo");
+            assert_eq!(point, expected);
+            name
+        }
+
+        fn release(&self) {
+            self.resume
+                .send(())
+                .expect("o fluxo de remoção desistiu do handshake");
+        }
+    }
+
+    #[cfg(unix)]
+    fn rendezvous(points: &'static [Point]) -> (Probe, Rendezvous) {
+        let (reached_tx, reached) = mpsc::channel();
+        let (resume, resume_rx) = mpsc::sync_channel(1);
+        let resume_rx = Mutex::new(resume_rx);
+        let probe: Probe = Arc::new(move |point, name: &str| {
+            if !points.contains(&point) {
+                return;
+            }
+            reached_tx
+                .send((point, name.to_owned()))
+                .expect("o teste saiu antes do ponto");
+            resume_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(HANDSHAKE)
+                .expect("o teste não devolveu a vez no prazo");
+        });
+        (probe, Rendezvous { reached, resume })
+    }
+
+    #[cfg(unix)]
+    fn probed_root(path: &Path, probe: Probe) -> Arc<Directory> {
+        let mut directory = Directory::open_root(path).unwrap();
+        Arc::get_mut(&mut directory).unwrap().probe = Some(probe);
+        directory
+    }
+
+    #[cfg(unix)]
+    fn set_modified(path: &Path, seconds: u64) {
+        OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(seconds)))
+            .unwrap();
+    }
+
+    /// Arquivos dentro das áreas de captura (`.upload-*.claim`) da raiz.
+    #[cfg(unix)]
+    fn captured_files(root: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name.starts_with(TEMP_PREFIX) && name.ends_with(".claim") {
+                for inner in fs::read_dir(&path).unwrap() {
+                    found.push(inner.unwrap().path());
+                }
+            }
+        }
+        found
+    }
+
+    #[cfg(unix)]
+    fn names(path: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_swap_before_claim_keeps_substitute_and_moved_original() {
+        use std::os::unix::fs::MetadataExt;
+        let fixture = tempfile::tempdir().unwrap();
+        let (probe, meet) = rendezvous(&[Point::BeforeClaim]);
+        let directory = probed_root(fixture.path(), probe);
+        let area = RemovalArea::new(&directory).unwrap();
+        let mut original = directory.open_file("target.bin", true).unwrap();
+        original.write_all(b"original").unwrap();
+        let identity = original.metadata().unwrap();
+        let worker = {
+            let directory = directory.clone();
+            std::thread::spawn(move || {
+                let result =
+                    directory.remove_captured("target.bin", &original, &identity, &area, None);
+                (result.map_err(|e| e.kind()), area)
+            })
+        };
+        assert_eq!(meet.at(Point::BeforeClaim), "target.bin");
+        fs::rename(
+            fixture.path().join("target.bin"),
+            fixture.path().join("moved.bin"),
+        )
+        .unwrap();
+        fs::write(fixture.path().join("target.bin"), b"substituto").unwrap();
+        let foreign = fs::metadata(fixture.path().join("target.bin"))
+            .unwrap()
+            .ino();
+        meet.release();
+        let (result, area) = worker.join().unwrap();
+        assert_eq!(result, Ok(false));
+        assert_eq!(
+            fs::metadata(fixture.path().join("target.bin"))
+                .unwrap()
+                .ino(),
+            foreign
+        );
+        assert_eq!(
+            fs::read(fixture.path().join("target.bin")).unwrap(),
+            b"substituto"
+        );
+        assert_eq!(
+            fs::read(fixture.path().join("moved.bin")).unwrap(),
+            b"original"
+        );
+        drop(area);
+        assert_eq!(names(fixture.path()), ["moved.bin", "target.bin"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_occupant_blocks_prune_rollback_without_overwrite() {
+        let fixture = tempfile::tempdir().unwrap();
+        let (probe, meet) = rendezvous(&[Point::AfterClaim, Point::BeforeRestore]);
+        let directory = probed_root(fixture.path(), probe);
+        fs::write(fixture.path().join("old.bin"), b"original").unwrap();
+        set_modified(&fixture.path().join("old.bin"), 1);
+        let worker =
+            std::thread::spawn(move || prune_directory(&directory, 86400.0).map_err(|e| e.kind()));
+        assert_eq!(meet.at(Point::AfterClaim), "old.bin");
+        let captured = captured_files(fixture.path());
+        assert_eq!(captured.len(), 1);
+        // Recente entre a captura e a decisão: a poda tem de devolver o arquivo.
+        set_modified(&captured[0], 172800);
+        meet.release();
+        assert_eq!(meet.at(Point::BeforeRestore), "old.bin");
+        fs::write(fixture.path().join("old.bin"), b"ocupante").unwrap();
+        meet.release();
+        assert_eq!(worker.join().unwrap(), Ok(0));
+        assert_eq!(
+            fs::read(fixture.path().join("old.bin")).unwrap(),
+            b"ocupante"
+        );
+        assert_eq!(captured_files(fixture.path()), captured);
+        assert_eq!(fs::read(&captured[0]).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropped_upload_removes_only_its_temporary_during_concurrent_publication() {
+        let fixture = tempfile::tempdir().unwrap();
+        let (probe, meet) = rendezvous(&[Point::AfterClaim]);
+        let store = UploadStore::with_probe(fixture.path(), probe).unwrap();
+        let (written_tx, written_rx) = tokio::sync::oneshot::channel::<()>();
+        let stream = futures_util::stream::once(async { Ok(Bytes::from_static(b"cancelado")) })
+            .chain(futures_util::stream::once(async move {
+                let _ = written_tx.send(());
+                futures_util::future::pending::<io::Result<Bytes>>().await
+            }));
+        let mut upload = Box::pin(store.publish("project", "session", "a.bin", None, stream));
+        tokio::select! {
+            _ = &mut upload => panic!("o upload sem fim terminou"),
+            _ = written_rx => {}
+        }
+        let root = fixture.path().to_path_buf();
+        let actor = std::thread::spawn(move || {
+            let name = meet.at(Point::AfterClaim);
+            assert!(
+                name.starts_with(TEMP_PREFIX) && name.ends_with(".tmp"),
+                "{name}"
+            );
+            let other = UploadStore::new(&root).unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let published = runtime
+                .block_on(other.publish(
+                    "project",
+                    "session",
+                    "b.bin",
+                    None,
+                    futures_util::stream::iter([Ok(Bytes::from_static(b"concorrente"))]),
+                ))
+                .unwrap();
+            meet.release();
+            published
+        });
+        drop(upload);
+        let published = actor.join().unwrap();
+        let session = fixture.path().join("project/session");
+        assert_eq!(
+            names(&session),
+            [published
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()]
+        );
+        assert_eq!(fs::read(&published).unwrap(), b"concorrente");
+        assert_eq!(names(fixture.path()), ["project"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_prune_swap_before_claim_keeps_new_file() {
+        let fixture = tempfile::tempdir().unwrap();
+        let (probe, meet) = rendezvous(&[Point::BeforeClaim]);
+        let directory = probed_root(fixture.path(), probe);
+        fs::write(fixture.path().join("old.bin"), b"original").unwrap();
+        set_modified(&fixture.path().join("old.bin"), 1);
+        let worker =
+            std::thread::spawn(move || prune_directory(&directory, 86400.0).map_err(|e| e.kind()));
+        assert_eq!(meet.at(Point::BeforeClaim), "old.bin");
+        fs::rename(
+            fixture.path().join("old.bin"),
+            fixture.path().join("aside.bin"),
+        )
+        .unwrap();
+        fs::write(fixture.path().join("old.bin"), b"novo").unwrap();
+        // Também vencido: só a identidade capturada pode impedir a remoção.
+        set_modified(&fixture.path().join("old.bin"), 1);
+        meet.release();
+        assert_eq!(worker.join().unwrap(), Ok(0));
+        assert_eq!(fs::read(fixture.path().join("old.bin")).unwrap(), b"novo");
+        assert_eq!(
+            fs::read(fixture.path().join("aside.bin")).unwrap(),
+            b"original"
+        );
+        assert_eq!(names(fixture.path()), ["aside.bin", "old.bin"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_mtime_at_strict_cutoff_after_claim_keeps_file() {
+        let fixture = tempfile::tempdir().unwrap();
+        let (probe, meet) = rendezvous(&[Point::AfterClaim]);
+        let directory = probed_root(fixture.path(), probe);
+        fs::write(fixture.path().join("old.bin"), b"original").unwrap();
+        set_modified(&fixture.path().join("old.bin"), 1);
+        let worker =
+            std::thread::spawn(move || prune_directory(&directory, 86400.0).map_err(|e| e.kind()));
+        assert_eq!(meet.at(Point::AfterClaim), "old.bin");
+        let captured = captured_files(fixture.path());
+        assert_eq!(captured.len(), 1);
+        // Exatamente no corte: o limite é estrito, então o arquivo deixa de ser vencido.
+        set_modified(&captured[0], 86400);
+        meet.release();
+        assert_eq!(worker.join().unwrap(), Ok(0));
+        assert_eq!(
+            fs::read(fixture.path().join("old.bin")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            modified_seconds(&fs::metadata(fixture.path().join("old.bin")).unwrap()).unwrap(),
+            86400.0
+        );
+        assert_eq!(names(fixture.path()), ["old.bin"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_rollback_failure_is_identifiable_and_preserves_both_identities() {
+        use std::os::unix::fs::MetadataExt;
+        let fixture = tempfile::tempdir().unwrap();
+        let (probe, meet) = rendezvous(&[Point::BeforeClaim, Point::BeforeRestore]);
+        let directory = probed_root(fixture.path(), probe);
+        let area = RemovalArea::new(&directory).unwrap();
+        let area_path = area.directory.path.clone();
+        let mut original = directory.open_file("target.bin", true).unwrap();
+        original.write_all(b"original").unwrap();
+        let identity = original.metadata().unwrap();
+        let worker = {
+            let directory = directory.clone();
+            std::thread::spawn(move || {
+                let result =
+                    directory.remove_captured("target.bin", &original, &identity, &area, None);
+                (result.map_err(|e| e.kind()), area)
+            })
+        };
+        assert_eq!(meet.at(Point::BeforeClaim), "target.bin");
+        fs::rename(
+            fixture.path().join("target.bin"),
+            fixture.path().join("moved.bin"),
+        )
+        .unwrap();
+        fs::write(fixture.path().join("target.bin"), b"substituto").unwrap();
+        let foreign = fs::metadata(fixture.path().join("target.bin"))
+            .unwrap()
+            .ino();
+        meet.release();
+        assert_eq!(meet.at(Point::BeforeRestore), "target.bin");
+        fs::write(fixture.path().join("target.bin"), b"ocupante").unwrap();
+        meet.release();
+        let (result, area) = worker.join().unwrap();
+        assert_eq!(result, Err(io::ErrorKind::AlreadyExists));
+        assert_eq!(
+            fs::read(fixture.path().join("target.bin")).unwrap(),
+            b"ocupante"
+        );
+        assert_eq!(
+            fs::read(fixture.path().join("moved.bin")).unwrap(),
+            b"original"
+        );
+        let captured = captured_files(fixture.path());
+        assert_eq!(captured.len(), 1);
+        assert_eq!(fs::metadata(&captured[0]).unwrap().ino(), foreign);
+        assert_eq!(fs::read(&captured[0]).unwrap(), b"substituto");
+        drop(area);
+        assert!(
+            area_path.is_dir(),
+            "área com a identidade capturada foi apagada"
+        );
+    }
 
     #[test]
     fn native_removal_keeps_published_link_and_previous_file() {
