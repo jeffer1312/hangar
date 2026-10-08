@@ -45,6 +45,7 @@ rayon.workspace = true
 reqwest = { workspace = true, features = ["rustls"] }
 # Painel de terminal real (`term/`): PTY no Unix, ConPTY no Windows.
 portable-pty = "=0.9.0"
+unicode-normalization = "=0.1.25"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
