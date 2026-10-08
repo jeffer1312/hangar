@@ -3,6 +3,7 @@ pub mod bridge;
 pub mod catalog;
 pub mod claude_auth;
 pub mod claude_login;
+pub mod codex_login;
 pub mod environment;
 pub mod storage;
 pub mod native;

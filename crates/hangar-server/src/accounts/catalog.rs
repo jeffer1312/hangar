@@ -39,6 +39,9 @@ impl AccountError {
             "codex_account_default_protected" => "a conta padrão do Codex não pode ser apagada",
             "codex_account_invalid_marker" => "conta Codex inválida",
             "codex_account_in_use" => "conta Codex está em uso",
+            "codex_account_prepare_required" => "prepare a conta Codex antes do login",
+            "codex_account_auth_storage_invalid" => "a conta Codex precisa usar armazenamento em arquivo",
+            "codex_login_attempt_mismatch" => "a tentativa de login já mudou",
             "codex_account_delete_failed" => "não foi possível apagar a conta Codex",
             _ => "operação de conta Codex recusada",
         };
@@ -92,6 +95,9 @@ pub fn resolved(path: &Path) -> PathBuf {
 pub struct AccountService {
     pub claude_auth: super::claude_auth::AuthCache,
     pub claude_logins: super::claude_login::ClaudeLogins,
+    pub codex_logins: super::codex_login::CodexLogins,
+    pub codex_auth: super::native::AuthCache,
+    pub codex_readers: super::native::NativeReaders,
     pub env: AccountEnvironment,
     pub locks: AccountLocks,
     pub preparations: super::preparation::Preparations,
@@ -102,6 +108,9 @@ impl AccountService {
         Self {
             claude_auth: Default::default(),
             claude_logins: Default::default(),
+            codex_logins: Default::default(),
+            codex_auth: Default::default(),
+            codex_readers: Default::default(),
             locks: AccountLocks::new(env.home.join(".hangar/account-locks")),
             preparations: Default::default(),
             preparation_gates: Default::default(),

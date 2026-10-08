@@ -29,7 +29,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, eventos do side-events, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 40;
+pub const INTERNAL_PROTOCOL: u32 = 41;
 
 /// Todo socket TCP do servidor, aceito ou aberto. Sem isso o Nagle segura o último pedaço de uma
 /// resposta em pedaços até o ACK atrasado do outro lado; o asyncio do Python já liga sozinho.
@@ -66,8 +66,12 @@ pub async fn serve_until_with_state(
     stop: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
     let cfg = state.cfg.clone();
+    let codex_logins=state.accounts.codex_logins.clone();
+    let codex_readers=state.accounts.codex_readers.clone();
+    let mut runtime_registry=None;
     // Abortada na saída: o laço segura a ponte da lista, que sobreviveria ao servidor.
     let _shadow = list::shadow::spawn(state.list.clone(), state.diag.clone()).map(AbortOnDrop);
+    let result=async {
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
         let windows = accounts::claude_login::WindowClient::new(cfg.upstream, cfg.internal_secret.clone(), instance.clone())
             .map_err(|error| std::io::Error::other(error.code))?;
@@ -76,6 +80,7 @@ pub async fn serve_until_with_state(
         let port = private.local_addr()?.port();
         let registry = std::sync::Arc::new(runtime::gateway::RuntimeRegistry::new(cfg.upstream,
             cfg.internal_secret.clone(),instance.clone()).with_mods(state.mods.clone()));
+        runtime_registry=Some(registry.clone());
         state.list.set_runtime(registry.clone());
         let _ = state.state.runtime.set(registry.clone());
         println!("{}",runtime::gateway::startup_line(INTERNAL_PROTOCOL,&instance,port));
@@ -85,13 +90,18 @@ pub async fn serve_until_with_state(
             result = gateway => result,
             () = stop => Ok(()),
         };
-        registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
         return result;
     }
     tokio::select! {
         r = routes::serve_with_state(listener, state) => r,
         () = stop => Ok(()),
     }
+    }.await;
+    tokio::join!(codex_readers.close(),codex_logins.close());
+    if let Some(registry)=runtime_registry {
+        registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
+    }
+    result
 }
 
 pub(crate) struct AbortOnDrop(pub(crate) tokio::task::JoinHandle<()>);

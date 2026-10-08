@@ -297,6 +297,10 @@ class CodexContasLogin:
         Com o cache vencido, abrir a criação de sessão esperava um app-server do Codex subir (2,7s
         medidos só pra listar as contas). Sem leitura anterior, ou com a credencial trocada desde
         ela (assinatura/geração diferentes), não há o que mostrar e a leitura é esperada."""
+        from app.account_bridge import request_codex
+        result, delegated = await asyncio.to_thread(request_codex, "auth", account)
+        if delegated:
+            return result
         key = self._key(account)
         cached = self._auth_cache.get(key)
         if (cached and cached[0] == self._auth_signature(account)
@@ -309,6 +313,10 @@ class CodexContasLogin:
         return await self.read_auth(account)
 
     async def read_auth(self, account: accounts.Account, *, refresh: bool = False) -> dict:
+        from app.account_bridge import request_codex
+        result, delegated = await asyncio.to_thread(request_codex, "auth", account, refresh=refresh)
+        if delegated:
+            return result
         key = self._key(account)
         preparation = self._preparations.get(key)
         if preparation is not None and not preparation.done():
@@ -461,6 +469,10 @@ class CodexContasLogin:
                     self._release_reservation(reservation)
 
     async def start_login(self, account: accounts.Account) -> dict:
+        from app.account_bridge import request_codex
+        result, delegated = await asyncio.to_thread(request_codex, "login", account)
+        if delegated:
+            return result
         key = self._key(account)
         with self._lock:
             current = self._attempts.get(key)
@@ -492,6 +504,10 @@ class CodexContasLogin:
         return result
 
     def login_status(self, account: accounts.Account) -> dict | None:
+        from app.account_bridge import request_codex
+        result, delegated = request_codex("status", account)
+        if delegated:
+            return result
         attempt = self._attempts.get(self._key(account))
         return self._public_attempt(attempt) if attempt is not None else None
 
@@ -521,6 +537,10 @@ class CodexContasLogin:
                                **campos, **diag.erro_campos(exc))
 
     async def cancel_login(self, account: accounts.Account, attempt_id: str) -> dict:
+        from app.account_bridge import request_codex
+        result, delegated = await asyncio.to_thread(request_codex, "cancel", account, attempt_id=attempt_id)
+        if delegated:
+            return result
         attempt = self._attempts.get(self._key(account))
         if attempt is None or attempt.attempt_id != attempt_id:
             raise accounts.AccountError(409, "codex_login_attempt_mismatch", {"account_id": account.id})

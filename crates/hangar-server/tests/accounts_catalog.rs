@@ -57,7 +57,7 @@ async fn owner_catalog_is_not_a_python_proxy() {
 }
 
 #[test]
-fn route_ownership_waits_for_preparation_coordinator() {
+fn catalog_and_native_login_routes_belong_to_rust() {
     use axum::http::Method;
     use hangar_server::migration_status::rust_route;
     assert!(rust_route(&Method::GET, "/api/claude-configs"));
@@ -66,7 +66,7 @@ fn route_ownership_waits_for_preparation_coordinator() {
     assert!(rust_route(&Method::DELETE, "/api/claude-configs/extra"));
     assert!(rust_route(&Method::GET, "/api/codex-contas"));
     assert!(rust_route(&Method::POST, "/api/claude-configs"));
-    assert!(!rust_route(
+    assert!(rust_route(
         &Method::DELETE,
         "/api/codex-contas/extra/login"
     ));
@@ -503,4 +503,157 @@ async fn http_probe_process() {
     hangar_server::serve_until_with_state(listener, state, std::future::pending::<()>())
         .await
         .unwrap();
+}
+
+#[test]
+fn account_guard_remains_held_until_parent_ownership_ends() {
+    use hangar_server::accounts::{AccountKey, AccountLocks, GuardMode, LockError, Provider};
+    let root = tempfile::tempdir().unwrap();
+    let key = AccountKey::new(Provider::Codex, root.path()).unwrap();
+    let locks = AccountLocks::new(root.path().join("locks"));
+    for mode in [GuardMode::Shared, GuardMode::Exclusive] {
+        let guard = locks.try_acquire(&key, mode).unwrap();
+        assert!(
+            matches!(
+                locks.try_acquire(&key, GuardMode::Exclusive),
+                Err(LockError::Busy)
+            ),
+            "guarda viva deixou outra operação adquirir Exclusive"
+        );
+        drop(guard);
+        assert!(
+            locks.try_acquire(&key, GuardMode::Exclusive).is_ok(),
+            "término da guarda não liberou Exclusive"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct PreExecGuardChild {
+    pid: libc::pid_t,
+    release: std::fs::File,
+}
+
+#[cfg(target_os = "linux")]
+impl PreExecGuardChild {
+    fn spawn(lock_path: &std::path::Path, close_in_child: bool) -> Self {
+        use std::{
+            io::Read,
+            os::fd::{AsRawFd, FromRawFd},
+        };
+        let lock_fd = std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| std::fs::read_link(entry.path()).ok().as_deref() == Some(lock_path))
+            .unwrap()
+            .file_name()
+            .to_str()
+            .unwrap()
+            .parse::<libc::c_int>()
+            .unwrap();
+        assert_ne!(
+            unsafe { libc::fcntl(lock_fd, libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        let channel = || {
+            let mut fds = [-1; 2];
+            assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+            unsafe {
+                (
+                    std::fs::File::from_raw_fd(fds[0]),
+                    std::fs::File::from_raw_fd(fds[1]),
+                )
+            }
+        };
+        let (mut ready_read, ready_write) = channel();
+        let (release_read, release_write) = channel();
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            // O filho só fecha descritores; não executa Drop de guarda herdada.
+            unsafe {
+                libc::close(ready_read.as_raw_fd());
+                libc::close(release_write.as_raw_fd());
+                if close_in_child && libc::close(lock_fd) != 0 {
+                    libc::_exit(2);
+                }
+                if libc::write(ready_write.as_raw_fd(), b"R".as_ptr().cast(), 1) != 1 {
+                    libc::_exit(3);
+                }
+                let mut signal = 0_u8;
+                let received =
+                    libc::read(release_read.as_raw_fd(), (&mut signal as *mut u8).cast(), 1);
+                libc::_exit(if received == 1 && signal == b'X' {
+                    0
+                } else {
+                    4
+                });
+            }
+        }
+        drop(ready_write);
+        drop(release_read);
+        let child = Self {
+            pid,
+            release: release_write,
+        };
+        let mut ready = [0];
+        ready_read.read_exact(&mut ready).unwrap();
+        assert_eq!(ready, *b"R");
+        child
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PreExecGuardChild {
+    fn drop(&mut self) {
+        use std::io::Write;
+        let released = self.release.write_all(b"X");
+        let mut status = -1;
+        let waited = unsafe { libc::waitpid(self.pid, &mut status, 0) };
+        if !std::thread::panicking() {
+            assert!(released.is_ok(), "não foi possível liberar o filho próprio");
+            assert_eq!(waited, self.pid, "filho próprio não foi recolhido");
+            assert_eq!(status, 0, "filho próprio não encerrou normalmente");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn account_guard_drop_releases_lock_while_pre_exec_child_is_alive() {
+    use hangar_server::accounts::{AccountKey, AccountLocks, GuardMode, Provider};
+    let root = tempfile::tempdir().unwrap();
+    let key = AccountKey::new(Provider::Codex, root.path()).unwrap();
+    let locks = AccountLocks::new(root.path().join("locks"));
+    let guard = locks.try_acquire(&key, GuardMode::Shared).unwrap();
+    let child = PreExecGuardChild::spawn(&locks.path(&key).unwrap(), false);
+    drop(guard);
+    let exclusive = locks.try_acquire(&key, GuardMode::Exclusive);
+    assert!(
+        exclusive.is_ok(),
+        "término da guarda no pai deixou Exclusive ocupada pelo descritor herdado pré-exec: {exclusive:?}"
+    );
+    drop(exclusive);
+    drop(child);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn account_guard_child_close_preserves_live_parent_ownership() {
+    use hangar_server::accounts::{AccountKey, AccountLocks, GuardMode, LockError, Provider};
+    let root = tempfile::tempdir().unwrap();
+    let key = AccountKey::new(Provider::Codex, root.path()).unwrap();
+    let locks = AccountLocks::new(root.path().join("locks"));
+    let guard = locks.try_acquire(&key, GuardMode::Shared).unwrap();
+    let child = PreExecGuardChild::spawn(&locks.path(&key).unwrap(), true);
+    assert!(
+        matches!(
+            locks.try_acquire(&key, GuardMode::Exclusive),
+            Err(LockError::Busy)
+        ),
+        "fechar descritor no filho liberou a guarda ainda viva do pai"
+    );
+    drop(guard);
+    assert!(locks.try_acquire(&key, GuardMode::Exclusive).is_ok());
+    drop(child);
 }

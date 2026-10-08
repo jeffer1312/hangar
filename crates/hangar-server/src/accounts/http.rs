@@ -23,6 +23,8 @@ impl IntoResponse for Json {
 }
 
 pub fn matches(method: &Method, path: &str) -> bool {
+    if matches!(*method,Method::GET|Method::POST|Method::DELETE) && path.strip_prefix("/api/codex-contas/")
+        .and_then(|tail|tail.strip_suffix("/login")).is_some_and(|id|!id.is_empty() && !id.contains('/')) {return true;}
     if claude_matches(method, path) {
         return true;
     }
@@ -54,6 +56,21 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     let service = state.accounts.clone();
     if claude_matches(&method, &path) {
         return claude_public(state, request).await;
+    }
+    if path.ends_with("/login") {
+        let id=path.trim_start_matches("/api/codex-contas/").trim_end_matches("/login");
+        let Ok(id)=percent_encoding::percent_decode_str(id).decode_utf8() else {return StatusCode::BAD_REQUEST.into_response()};
+        let query:std::collections::HashMap<String,String>=form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()).into_owned().collect();
+        let attempt_id=query.get("attempt_id").map(String::as_str);
+        if method==Method::DELETE && attempt_id.is_none_or(|id|id.is_empty() || id.chars().count()>128) {
+            let issue=match attempt_id {
+                None=>json!({"type":"missing","loc":["query","attempt_id"],"msg":"Field required","input":null}),
+                Some("")=>json!({"type":"string_too_short","loc":["query","attempt_id"],"msg":"String should have at least 1 character","input":"","ctx":{"min_length":1}}),
+                Some(id)=>json!({"type":"string_too_long","loc":["query","attempt_id"],"msg":"String should have at most 128 characters","input":id,"ctx":{"max_length":128}}),
+            };
+            return (StatusCode::UNPROCESSABLE_ENTITY,Json(json!({"detail":[issue]}))).into_response();
+        }
+        return codex_operation(&state,if method==Method::POST{"login"}else if method==Method::DELETE{"cancel"}else{"status"},&id,attempt_id.unwrap_or("" )).await;
     }
     if path.ends_with("/prepare") {
         let id = path
@@ -338,6 +355,17 @@ pub async fn private(
     };
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
+    struct CodexInput { action:String, account_id:String, attempt_id:Option<String>, refresh:bool }
+    if let Ok(body)=serde_json::from_slice::<CodexInput>(&bytes) {
+        if body.action=="auth" {
+            let account=match state.accounts.resolve(Provider::Codex,&body.account_id) {Ok(account)=>account,Err(err)=>return error(err)};
+            if body.refresh && let Ok(key)=AccountKey::new(Provider::Codex,&account.home){state.accounts.codex_auth.invalidate(&key);}
+            return Json(state.accounts.read_codex_auth(&account).await).into_response();
+        }
+        return codex_operation(&state,&body.action,&body.account_id,body.attempt_id.as_deref().unwrap_or("")).await;
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct Input {
         account_id: String,
         prepare: bool,
@@ -348,6 +376,21 @@ pub async fn private(
         return StatusCode::BAD_REQUEST.into_response();
     };
     prepare_response(&state, &body.account_id, body.prepare, body.force, body.cwd).await
+}
+
+async fn codex_operation(state:&crate::routes::AppState,action:&str,id:&str,attempt_id:&str)->Response {
+    let account=match state.accounts.resolve(Provider::Codex,id) {Ok(account)=>account,Err(err)=>return error(err)};
+    let result=match action {
+        "status"=>Ok(state.accounts.codex_login_status(&account)),
+        "login"=>match bridge(state) {
+            Ok(bridge)=>match super::codex_login::CodexInvalidator::new(state.cfg.upstream,state.cfg.internal_secret.clone(),bridge.instance().into()) {
+                Ok(invalidator)=>state.accounts.start_codex_login(&account,bridge,state.state.runtime.get().cloned(),invalidator).await,
+                Err(err)=>Err(err),
+            },Err(err)=>Err(err)},
+        "cancel"=>state.accounts.cancel_codex_login(&account,attempt_id).await,
+        _=>Err(AccountError::io()),
+    };
+    match result {Ok(value)=>Json(value).into_response(),Err(err)=>error(err)}
 }
 
 fn claude_matches(method: &Method, path: &str) -> bool {

@@ -540,4 +540,41 @@ def request_claude(action, *, label=None, path=None, code=None):
         raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"}) from None
 
 
+def request_codex(action, account, *, attempt_id=None, refresh=False):
+    """Ponte de consumidores internos; pending recusa sem abrir um escritor Python."""
+    import json
+    import urllib.request
+    import urllib.error
+    from fastapi import HTTPException
+    from app import runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    if coordinator is None or getattr(coordinator, "mode", "python") == "python":
+        return None, False
+    config = _preparation_transport
+    if config is None:
+        raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"})
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    request = urllib.request.Request("http://" + config[0] + "/__hangar_server/accounts",
+        data=json.dumps({"action": action, "account_id": account.id,
+                         "attempt_id": attempt_id, "refresh": refresh}).encode(),
+        headers={"content-type": "application/json", "x-hangar-internal": config[1]}, method="POST")
+    try:
+        with opener.open(request, timeout=45) as response:
+            return json.loads(response.read(256 * 1024)), True
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.loads(error.read(16384)).get("detail")
+        except (ValueError, OSError):
+            detail = {"code": "account_auth_bridge_unavailable"}
+        if isinstance(detail, dict) and "code" in detail:
+            from app.codex_contas import AccountError
+            raise AccountError(error.code, detail["code"], detail.get("params", {})) from None
+        raise HTTPException(error.code, detail=detail) from None
+    except (OSError, ValueError):
+        raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"}) from None
+
+
 preparation_jobs = PreparationJobs()

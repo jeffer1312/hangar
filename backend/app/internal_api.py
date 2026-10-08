@@ -95,6 +95,37 @@ async def account_facts(request: Request):
         return [{"key": raw_key, "facts": asdict(account_bridge.inspect_usage(key))} for raw_key, key in keys]
     return await asyncio.to_thread(inspect)
 
+
+@router.post("/accounts/codex-invalidate")
+async def codex_invalidate(request: Request):
+    from pathlib import Path
+    from app import runtime_coordinator
+    from app.account_lifecycle import AccountKey
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if coordinator is None or not coordinator.instance or not secrets.compare_digest(instance, coordinator.instance):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 16384:
+            raise HTTPException(413)
+    try:
+        body = json.loads(raw)
+        item = body["key"]
+        if set(body) != {"key"} or set(item) != {"provider", "canonical_home"} or item["provider"] != "codex":
+            raise ValueError
+        if not isinstance(item["canonical_home"], str) or not Path(item["canonical_home"]).is_absolute():
+            raise ValueError
+        key = AccountKey.new("codex", Path(item["canonical_home"]))
+    except (KeyError, TypeError, ValueError, OSError):
+        raise HTTPException(400) from None
+    service = getattr(request.app.state, "codex_contas_login", None)
+    if service is None:
+        raise HTTPException(503)
+    service._invalidate_auth(str(key.canonical_home))
+    return {"ok": True}
+
 @router.post("/accounts/prepare")
 @router.post("/accounts/prepare/wait")
 async def account_prepare(request: Request):

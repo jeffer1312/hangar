@@ -25,6 +25,19 @@ pub struct AccountGuard {
     _file: File,
 }
 
+impl Drop for AccountGuard {
+    fn drop(&mut self) {
+        // Fechar só o descritor mantém a trava quando um filho herdou a referência.
+        if let Err(error) = self._file.unlock() {
+            tracing::warn!(
+                code = "account_unlock_failed",
+                io_kind = ?error.kind(),
+                "não foi possível liberar a trava da conta; o descritor será fechado"
+            );
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AccountLocks {
     root: PathBuf,

@@ -239,6 +239,119 @@ process.stdout.write(r);process.exit(r.includes('false')?1:0);"""
         self.process.stdout.close()
         self.process.stderr.close()
 
+
+class RustCodex(HttpTransport):
+    """CLI JSON-RPC sintética; somente o transporte externo é controlado."""
+    _prepared_targets: set[Path] = set()
+
+    def __init__(self, reference, *, missing_cli=False):
+        self.reference = reference
+        target = Path(os.environ["CARGO_TARGET_DIR"]) / "debug/deps"
+        if target not in self._prepared_targets:
+            with (reference.root / "codex-build.log").open("w", encoding="utf-8") as output:
+                built = subprocess.run(["cargo", "test", "--locked", "-p", "hangar-server",
+                                        "--test", "accounts_codex_login", "--no-run"],
+                                       cwd=Path(__file__).resolve().parents[2] / "crates",
+                                       stdout=output, stderr=subprocess.STDOUT, timeout=900)
+            assert built.returncode == 0, "Falha ao compilar a sonda Codex; confira codex-build.log"
+            self._prepared_targets.add(target)
+        candidates = [p for p in target.glob("accounts_codex_login-*")
+                      if p.is_file() and p.suffix in {"", ".exe"}]
+        binary = max(candidates, key=lambda p: p.stat().st_mtime)
+        self.fixture = reference.root / "codex-native"
+        script = self.fixture / "node_modules/@openai/codex/bin/codex.js"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        source = r"""const fs=require('fs'),p=require('path'),d=process.env.CODEX_HOME;
+const line=require('readline').createInterface({input:process.stdin});
+function send(v){process.stdout.write(JSON.stringify(v)+'\n');}
+function read(n,f){try{return JSON.parse(fs.readFileSync(p.join(d,n),'utf8'))}catch{return f}}
+fs.writeFileSync(p.join(d,'native-pid.json'),JSON.stringify(process.pid));
+if(read('spawn-reader-descendant.json',false)){
+const child=require('child_process').spawn(process.execPath,['-e','require("net").createServer(()=>{}).listen(0,"127.0.0.1")'],{stdio:'ignore'});
+fs.writeFileSync(p.join(d,'reader-pids.json'),JSON.stringify([process.pid,child.pid]));
+}
+let loginReply, readGeneration=0;
+line.on('line',text=>{
+const m=JSON.parse(text);if(!m.id)return;
+if(m.id==='event-barrier' && m.error){send(loginReply);return;}
+fs.appendFileSync(p.join(d,'native-calls.jsonl'),JSON.stringify({method:m.method,params:m.params})+'\n');
+if(m.method==='initialize')send({id:m.id,result:{userAgent:'codex/0.159.3'}});
+else if(m.method==='account/login/start'){
+const id='native-'+process.pid;
+if(read('spawn-descendant.json',false)){
+const child=require('child_process').spawn(process.execPath,['-e','require("net").createServer(()=>{}).listen(0,"127.0.0.1")'],{stdio:'ignore'});
+fs.writeFileSync(p.join(d,'descendant-pid.json'),JSON.stringify(child.pid));
+}
+let notifications='';
+for(let i=0;i<read('obsolete-events.json',1);i++)notifications+=JSON.stringify({method:'account/login/completed',params:{loginId:'obsolete',success:false,error:null}})+'\n';
+process.stdout.write(notifications);
+if(read('emit-success.json',true))send({method:'account/login/completed',params:{loginId:id,success:true,error:null}});
+loginReply={id:m.id,result:{type:'chatgptDeviceCode',loginId:id,verificationUrl:'https://example.test/device',userCode:'fixture-code'}};
+if(read('obsolete-events.json',1)>32)send({id:'event-barrier',method:'fixture/event-barrier',params:{}});
+else send(loginReply);
+}else if(m.method==='account/read'){
+if(read('hold-read.json',false) && !fs.existsSync(p.join(d,'release-read.json'))){
+fs.writeFileSync(p.join(d,'read-entered.json'),'true');
+const watcher=fs.watch(d,()=>{if(fs.existsSync(p.join(d,'release-read.json'))){watcher.close();send({id:m.id,result:{account:read('identity.json',null),requiresOpenaiAuth:true}});}});
+return;
+}
+if(read('mutate-auth-on-read.json',false))fs.writeFileSync(p.join(d,'auth.json'),JSON.stringify({fixtureGeneration:++readGeneration,pid:process.pid}));
+send({id:m.id,result:{account:read('identity.json',null),requiresOpenaiAuth:true}});
+}else if(m.method==='account/login/cancel')send({id:m.id,result:{status:'canceled'}});
+else send({id:m.id,error:{code:-32601,message:'método inesperado'}});
+});
+"""
+        script.write_text(source, encoding="utf-8")
+        if os.name != "nt":
+            executable = self.fixture / "codex"
+            executable.write_text("#!/usr/bin/env node\n" + source, encoding="utf-8")
+            executable.chmod(0o700)
+        else:
+            (self.fixture / "codex.cmd").write_text("@node fixture\r\n", encoding="utf-8")
+        environment = isolated_environment(reference.root)
+        environment["PATH"] = "" if missing_cli else str(self.fixture) + os.pathsep + environment["PATH"]
+        environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
+                           HANGAR_RUNTIME_INSTANCE="contract-instance")
+        self.process = subprocess.Popen([str(binary), "--exact", "http_probe_process", "--nocapture"],
+                                        cwd=reference.root, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        ready = queue.Queue()
+        def read_ready():
+            for line in self.process.stdout:
+                if line.startswith("ACCOUNT_HTTP:"):
+                    ready.put(line.strip().removeprefix("ACCOUNT_HTTP:"))
+                    return
+            ready.put(None)
+        threading.Thread(target=read_ready, daemon=True).start()
+        address = ready.get(timeout=30)
+        assert address, "a sonda Rust não anunciou HTTP"
+        super().__init__("http://" + address, "contract-only")
+
+    def wait_status(self, account_id, status):
+        import time
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            response = self.request("GET", f"/api/codex-contas/{account_id}/login")
+            assert response.status_code == 200
+            if response.json()["status"] == status:
+                return response.json()
+        raise AssertionError(f"login não chegou a {status}")
+
+    def native_calls(self, account_id):
+        path = self.reference.root / f".codex-{account_id}" / "native-calls.jsonl"
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+    def close(self):
+        self.process.stdin.close()
+        try:
+            self.process.wait(timeout=15)
+        finally:
+            if self.process.poll() is None:
+                self.process.kill()
+                self.process.wait(timeout=10)
+            self.process.stdout.close()
+            self.process.stderr.close()
+
 def _worker(block_handlers: bool) -> None:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from unittest.mock import patch
@@ -400,8 +513,21 @@ def _worker(block_handlers: bool) -> None:
     def claude_owner(body: dict):
         from app import account_bridge
         account_bridge.configure_preparation(body["address"], "contract-internal")
-        instance.mode = "rust"
+        instance.mode = body.get("mode", "rust")
         return {"ok": True}
+
+
+    @app.post("/__contract__/codex-model-cache")
+    def codex_model_cache():
+        from app import codex_models
+        key = codex_models._cache_key(root / ".codex-alpha")
+        codex_models._cache[key] = (0, [])
+        return {"cached": key in codex_models._cache}
+
+    @app.get("/__contract__/codex-model-cache")
+    def codex_model_cached():
+        from app import codex_models
+        return {"cached": codex_models._cache_key(root / ".codex-alpha") in codex_models._cache}
 
     @app.get("/__contract__/claude-auth")
     def claude_auth(path: str):

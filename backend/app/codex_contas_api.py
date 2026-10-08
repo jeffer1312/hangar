@@ -273,7 +273,10 @@ async def start_codex_login(account_id: str, request: Request) -> dict:
 @codex_contas_router.get("/{account_id}/login", dependencies=[Depends(require_auth)])
 def codex_login_status(account_id: str, request: Request) -> dict | None:
     account = _account(account_id)
-    return _service(request).login_status(account)
+    try:
+        return _service(request).login_status(account)
+    except accounts.AccountError as exc:
+        raise _account_error(exc) from None
 
 
 @codex_contas_router.delete("/{account_id}/login", dependencies=[Depends(require_auth)])

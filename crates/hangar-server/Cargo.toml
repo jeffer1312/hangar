@@ -10,6 +10,7 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 indexmap.workspace = true
 hangar-api.workspace = true
 hangar-codex.workspace = true
+toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde"] }
 hangar-workspace = { path = "../hangar-workspace" }
 regex.workspace = true
 # Largura em células para cortar o pane na coluna da conversa (`plugin_screen.cell_width`).
