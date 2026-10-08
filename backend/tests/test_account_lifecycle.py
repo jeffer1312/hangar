@@ -280,7 +280,8 @@ def test_real_external_process_is_usage(tmp_path):
     try:
         assert process.stdout.readline().strip() == "ready"
         facts = inspect_processes(AccountKey.new("codex", tmp_path / "account"),
-                                  processes=[psutil.Process(process.pid)])
+                                  processes=[psutil.Process(process.pid)],
+                                  process_factory=psutil.Process)
         assert facts.complete
         assert facts.pids == [process.pid]
     finally:
