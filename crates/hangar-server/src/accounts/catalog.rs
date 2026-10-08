@@ -500,6 +500,15 @@ impl AccountService {
                 json!({}),
             )
         })?;
+        // Apagar por baixo de um tmux ou MCP que carrega a conta deixaria um caminho sumido.
+        if provider == Provider::Claude && !facts.holders.is_empty() {
+            return Err(AccountError::new(
+                409,
+                "erro_processos_usam_conta",
+                format!("processo(s) {:?} estão usando esta conta", facts.holders),
+                json!({"pids":facts.holders}),
+            ));
+        }
         storage::remove_tree(&current.home).map_err(|_| {
             AccountError::codex(500, "codex_account_delete_failed", Some(&account.id))
         })?;
@@ -581,4 +590,34 @@ pub fn codex_dto(account: &Account, auth: Value, sync: Value) -> Value {
             }));
     json!({"id":account.id,"credential_id":format!("codex:{home}"),"name":account.id,"home":home,
         "is_default":account.is_default,"auth":auth,"sync":sync,"has_settings":settings})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_delete_refuses_while_a_process_carries_the_account() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into(),
+        ));
+        let account = service
+            .create(Provider::Claude, "work", |_| Ok(()))
+            .unwrap();
+        let key = AccountKey::new(Provider::Claude, &account.home).unwrap();
+        let guard = service.locks.try_acquire(&key, GuardMode::Exclusive).unwrap();
+        // Um tmux ou MCP que carrega a conta escreveria numa pasta que sumiu.
+        let facts: super::super::UsageFacts = serde_json::from_value(
+            json!({"complete":true,"sessions":[],"pids":[],"holders":[83]}),
+        )
+        .unwrap();
+        let error = service
+            .delete(Provider::Claude, &account, &guard, &facts)
+            .unwrap_err();
+        assert_eq!(error.code, "erro_processos_usam_conta");
+        assert_eq!(error.params, json!({"pids":[83]}));
+        assert!(account.home.exists());
+    }
 }

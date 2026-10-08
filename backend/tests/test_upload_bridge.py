@@ -66,3 +66,27 @@ async def test_forward_closes_failed_request_without_retry(transport, monkeypatc
     assert error.value.status_code == 503
     connection.close.assert_called_once()
     connection.putrequest.assert_called_once()
+
+
+async def test_python_mode_download_reads_session_off_the_event_loop(monkeypatch):
+    import asyncio
+    from app import api
+
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: None)
+    seen = []
+
+    def cached_info(name):
+        # Leitura de sessão pode varrer o tmux: não pode prender o loop de todas as conexões.
+        try:
+            asyncio.get_running_loop()
+            seen.append("loop")
+        except RuntimeError:
+            seen.append("thread")
+        return None
+
+    monkeypatch.setattr(api, "_cached_info_sync", cached_info)
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b""})
+    with pytest.raises(HTTPException) as error:
+        await api.serve_upload("fixture", "a.bin", request)
+    assert error.value.status_code == 404
+    assert seen == ["thread"]

@@ -120,6 +120,9 @@ pub struct UsageFacts {
     pub complete: bool,
     pub sessions: Vec<String>,
     pub pids: Vec<u32>,
+    /// Processos que só herdaram a variável da conta: não a usam, mas impedem apagá-la.
+    #[serde(default)]
+    pub holders: Vec<u32>,
 }
 
 impl UsageFacts {
@@ -137,9 +140,12 @@ impl UsageFacts {
         self.complete &= other.complete;
         self.sessions.extend(other.sessions);
         self.pids.extend(other.pids);
+        self.holders.extend(other.holders);
         self.sessions.sort();
         self.sessions.dedup();
         self.pids.sort();
         self.pids.dedup();
+        self.holders.sort();
+        self.holders.dedup();
     }
 }

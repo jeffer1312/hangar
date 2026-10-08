@@ -159,13 +159,14 @@ impl AccountService {
             AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
         let gate = self.claude_logins.gates.gate(&key);
         let _gate = gate.lock().await;
-        if self.claude_logins.attempts.lock().await.contains_key(&key) {
-            return Err(AccountError::new(
-                409,
-                "erro_login_ja_em_curso",
-                format!("login já em andamento para a conta {label}"),
-                json!({}),
-            ));
+        let previous = self.claude_logins.attempts.lock().await.get(&key).cloned();
+        if let Some(previous) = previous {
+            // A tela que abriu a anterior pode ter sumido sem cancelar: pedir de novo é a saída.
+            tracing::warn!(
+                code = "claude_login_replaced",
+                "tentativa de login anterior substituída"
+            );
+            self.close_attempt(&previous, &client).await?;
         }
         let guard = self
             .locks
@@ -478,6 +479,64 @@ mod tests {
     use super::super::environment::AccountEnvironment;
     use super::*;
     use axum::{Router, routing::post};
+
+    #[tokio::test]
+    async fn new_login_replaces_abandoned_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into(),
+        ));
+        let account = service
+            .create(Provider::Claude, "work", |_| Ok(()))
+            .unwrap();
+        let key = AccountKey::new(Provider::Claude, &account.home).unwrap();
+        let (actions, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let router = Router::new().route(
+            "/internal/accounts/claude-window",
+            post(move |body: axum::body::Bytes| {
+                let value: Value = serde_json::from_slice(&body).unwrap();
+                actions
+                    .send((
+                        value["action"].as_str().unwrap().to_owned(),
+                        value["operation"].as_str().unwrap().to_owned(),
+                    ))
+                    .unwrap();
+                async { json!({"ok":true,"url":null}).to_string() }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = WindowClient::new(
+            listener.local_addr().unwrap(),
+            "synthetic".into(),
+            "test".into(),
+        )
+        .unwrap();
+        let server = tokio::spawn(async { axum::serve(listener, router).await.unwrap() });
+        service
+            .start_claude_login("work", client.clone())
+            .await
+            .unwrap();
+        let (action, first) = observed.recv().await.unwrap();
+        assert_eq!(action, "open");
+        // A tela que abriu a primeira sumiu sem cancelar: pedir de novo é a saída dela.
+        service
+            .start_claude_login("work", client.clone())
+            .await
+            .expect("a nova tentativa substitui a abandonada");
+        assert_eq!(observed.recv().await.unwrap(), ("close".to_owned(), first.clone()));
+        let (action, second) = observed.recv().await.unwrap();
+        assert_eq!(action, "open");
+        assert_ne!(second, first);
+        assert!(
+            service
+                .locks
+                .try_acquire(&key, GuardMode::Exclusive)
+                .is_err(),
+            "a tentativa nova conserva a guarda da conta"
+        );
+        server.abort();
+    }
 
     #[tokio::test]
     async fn confirmation_has_300_seconds_after_protected_code_not_after_open() {

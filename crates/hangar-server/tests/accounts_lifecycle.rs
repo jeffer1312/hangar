@@ -115,12 +115,14 @@ fn incomplete_facts_cannot_authorize_exclusion() {
         complete: true,
         sessions: Vec::new(),
         pids: Vec::new(),
+        holders: Vec::new(),
     };
     assert_eq!(facts.ensure_unused(), Ok(()));
     facts.merge(UsageFacts {
         complete: false,
         sessions: vec!["nascendo".into()],
         pids: vec![17],
+        holders: Vec::new(),
     });
     assert_eq!(facts.ensure_unused(), Err("account_usage_unknown"));
     facts.complete = true;

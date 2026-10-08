@@ -185,6 +185,48 @@ def test_unknown_process_environment_and_reused_pid_refuse_exclusion(tmp_path):
         facts.ensure_unused()
 
 
+class HostFixture:
+    def __init__(self, pid, name, argv, env, *, error=None):
+        self.pid, self._name, self.argv, self.env, self.error = pid, name, argv, env, error
+    def name(self):
+        return self._name
+    def cmdline(self):
+        return self.argv
+    def create_time(self):
+        return 1
+    def cwd(self):
+        return "/"
+    def environ(self):
+        if self.error:
+            raise self.error
+        return self.env
+
+
+def test_inherited_variable_holds_account_but_only_the_cli_uses_it(tmp_path):
+    import psutil
+    from dataclasses import asdict
+    from app.account_bridge import inspect_processes
+    from app.account_lifecycle import AccountKey
+    account = tmp_path / ".claude-work"
+    account.mkdir()
+    key = AccountKey.new("claude", account)
+    env = {"CLAUDE_CONFIG_DIR": str(account)}
+    processes = [
+        HostFixture(81, "node", ["node", str(tmp_path / ".claude/plugins/x/server.js")], env),
+        HostFixture(82, "node", ["node", "mcp.js", "--pi"], env),
+        HostFixture(83, "tmux: server", ["tmux"], env),
+        HostFixture(84, "node", ["node", "--max-old-space-size=64",
+                                 "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"], env),
+        HostFixture(85, "python3", ["python3"], None, error=psutil.AccessDenied(85)),
+    ]
+    facts = inspect_processes(key, processes=processes,
+                              process_factory=lambda pid: next(p for p in processes if p.pid == pid))
+    # Herdeiro da variável carrega a conta, mas só o CLI a usa (renovação e login).
+    assert facts.complete
+    assert facts.pids == [84]
+    assert asdict(facts).get("holders") == [81, 82, 83, 84]
+
+
 def test_pending_headless_birth_counts_before_process_exists(tmp_path, monkeypatch):
     import json
     from app import account_bridge
@@ -314,7 +356,7 @@ def test_private_usage_facts_require_current_instance_and_do_not_relock(tmp_path
         with acquire(key, GuardMode.EXCLUSIVE, root=tmp_path / "locks"):
             response = client.post("/internal/accounts/facts", json=payload, headers=headers)
         assert response.status_code == 200
-        assert response.json() == [{"key": payload["keys"][0], "facts": {"complete": True, "sessions": [], "pids": []}}]
+        assert response.json() == [{"key": payload["keys"][0], "facts": {"complete": True, "sessions": [], "pids": [], "holders": []}}]
 
 
 def test_linux_process_reader_does_not_hide_unreadable_environment(tmp_path):

@@ -106,6 +106,8 @@ pub async fn private(
 #[derive(Clone, Default)]
 pub struct Quotas {
     pub cache: Arc<Mutex<Option<cache::QuotaCache>>>,
+    /// Um refresh de rede por vez; quem só lê o cache não entra nesta fila.
+    pub refresh: Arc<Mutex<()>>,
     pub runtime: Arc<std::sync::OnceLock<Arc<crate::runtime::gateway::RuntimeRegistry>>>,
 }
 
@@ -197,8 +199,11 @@ impl AccountService {
         force: bool,
         cached_only: bool,
     ) -> Result<Value, AccountError> {
-        let mut held = self.quotas.cache.lock().await;
-        let cache = held.get_or_insert_with(|| cache::QuotaCache::load(&self.quota_path()));
+        let _refresh = if cached_only {
+            None
+        } else {
+            Some(self.quotas.refresh.lock().await)
+        };
         let facts = bridge
             .quotas("sources", &[])
             .await
@@ -250,24 +255,31 @@ impl AccountService {
                 ))
             })
             .collect();
-        for (id, signature) in &signatures {
-            // Um logout ou troca de token não pode conservar a cota da identidade anterior.
-            if cache.credential_changed(id, signature) {
-                cache.remove(id);
+        let selected: Vec<_> = {
+            let mut held = self.quotas.cache.lock().await;
+            let cache = held.get_or_insert_with(|| cache::QuotaCache::load(&self.quota_path()));
+            for (id, signature) in &signatures {
+                // Um logout ou troca de token não pode conservar a cota da identidade anterior.
+                if cache.credential_changed(id, signature) {
+                    cache.remove(id);
+                }
+                cache.set_credential(id, signature.clone());
             }
-            cache.set_credential(id, signature.clone());
-        }
-        if !cached_only {
             let at = now();
-            let selected: Vec<_> = sources
+            sources
                 .iter()
                 .filter(|(row, _)| {
-                    row["id"]
-                        .as_str()
-                        .is_some_and(|id| cache.needs_refresh(id, at, force))
+                    !cached_only
+                        && row["id"]
+                            .as_str()
+                            .is_some_and(|id| cache.needs_refresh(id, at, force))
                 })
                 .cloned()
-                .collect();
+                .collect()
+        };
+        // A rede roda sem o cache trancado: a leitura só do cache não espera as outras fontes.
+        let mut readings = vec![];
+        {
             let mut jobs = futures_util::stream::iter(selected)
                 .map(|(source, account)| {
                     let client = client.clone();
@@ -301,21 +313,26 @@ impl AccountService {
                 })
                 .buffer_unordered(8);
             use futures_util::StreamExt;
-            while let Some((id, value, signature)) = jobs.next().await {
-                if value["motivo"] == "credencial-alterada" {
-                    cache.remove(&id);
-                }
-                cache.update(&id, value, now());
-                if let Some(signature) = signature {
-                    cache.set_credential(&id, signature);
-                }
+            while let Some(reading) = jobs.next().await {
+                readings.push((reading, now()));
             }
-            if cache.dirty() && cache.save(&self.quota_path()).is_err() {
-                tracing::warn!(
-                    code = "quota_cache_write_failed",
-                    "cache de cotas não gravado"
-                );
+        }
+        let mut held = self.quotas.cache.lock().await;
+        let cache = held.get_or_insert_with(|| cache::QuotaCache::load(&self.quota_path()));
+        for ((id, value, signature), at) in readings {
+            if value["motivo"] == "credencial-alterada" {
+                cache.remove(&id);
             }
+            cache.update(&id, value, at);
+            if let Some(signature) = signature {
+                cache.set_credential(&id, signature);
+            }
+        }
+        if !cached_only && cache.dirty() && cache.save(&self.quota_path()).is_err() {
+            tracing::warn!(
+                code = "quota_cache_write_failed",
+                "cache de cotas não gravado"
+            );
         }
         let mut output = vec![];
         for (source, account) in sources {
@@ -511,6 +528,60 @@ mod tests {
                 .unwrap()["label"],
             "Chave"
         );
+        server.abort();
+    }
+    #[tokio::test]
+    async fn cached_read_does_not_wait_for_refresh_in_flight() {
+        let (entered, mut in_flight) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let gate = release.clone();
+        let handler = move |body: bytes::Bytes| {
+            let (entered, gate) = (entered.clone(), gate.clone());
+            async move {
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                if body["action"] == "sources" {
+                    return Json(json!({"sources":[{"id":"kimi:test","label":"Kimi",
+                        "provedor":"kimi","ativa":false}],"aliases":{}}));
+                }
+                entered.send(()).unwrap();
+                gate.notified().await;
+                Json(json!({"readings":{"kimi:test":reading("lida",vec![],None)}}))
+            }
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app =
+            axum::Router::new().route("/internal/accounts/quotas", axum::routing::post(handler));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let temp = tempfile::tempdir().unwrap();
+        let mut env =
+            crate::accounts::environment::AccountEnvironment::from_map(Default::default());
+        env.home = temp.path().to_owned();
+        env.claude_base = temp.path().join(".claude");
+        env.codex_default = temp.path().join(".codex");
+        let service = AccountService::new(env);
+        let bridge = AccountsBridge::new(address, "synthetic".into(), "synthetic".into()).unwrap();
+        let refreshing = tokio::spawn({
+            let (service, bridge) = (service.clone(), bridge.clone());
+            async move { service.quotas(bridge, false, false).await }
+        });
+        in_flight.recv().await.unwrap();
+        // Quem escolhe conta ao abrir sessão lê só o cache; a rede das outras fontes não é dele.
+        let cached = tokio::time::timeout(
+            Duration::from_secs(2),
+            service.quotas(bridge.clone(), false, true),
+        )
+        .await
+        .expect("a leitura do cache esperou o refresh em voo");
+        let kimi = |rows: &Value| {
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["id"] == "kimi:test")
+        };
+        assert!(!kimi(&cached.unwrap()), "o cache ainda não tinha a leitura em voo");
+        release.notify_one();
+        assert!(kimi(&refreshing.await.unwrap().unwrap()));
         server.abort();
     }
     #[test]

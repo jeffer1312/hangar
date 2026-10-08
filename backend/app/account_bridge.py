@@ -22,6 +22,8 @@ class UsageFacts:
     complete: bool = False
     sessions: list[str] = field(default_factory=list)
     pids: list[int] = field(default_factory=list)
+    # Herdeiros da variável da conta (tmux, MCP, shell): não a usam, mas a carregam.
+    holders: list[int] = field(default_factory=list)
 
     def ensure_unused(self) -> None:
         if not self.complete:
@@ -34,7 +36,30 @@ _HOSTS = {"node", "bun", "python", "python3", "python3.14", "hangar-cano",
           "bash", "sh", "zsh", "fish", "cmd", "powershell", "pwsh"}
 _CLIENTS = {"claude", "codex", "pi", "omp"}
 _INSPECTED = _CLIENTS | _HOSTS
-_CLIENT_WORD = re.compile(r"\b(?:claude|codex|pi|omp)\b")
+
+
+def _argv_parts(argv) -> tuple[set[str], set[str]]:
+    """Nome final e componentes de cada argumento; a barra invertida também separa."""
+    names, parts = set(), set()
+    for item in argv:
+        pieces = re.split(r"[\\/]", item.lower())
+        parts.update(pieces)
+        names.add(pieces[-1].removesuffix(".exe").removesuffix(".js"))
+    return names, parts
+
+
+def _holds(process, variable: str, key: AccountKey) -> bool:
+    """Processo que não deixa ler o ambiente não carrega a conta para a exclusão."""
+    try:
+        value = (process.environ() or {}).get(variable)
+        if not value:
+            return False
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = Path(process.cwd()) / path
+        return AccountKey.new(key.provider, path) == key
+    except Exception:  # noqa: BLE001 — um processo ilegível não derruba a varredura.
+        return False
 
 
 _GONE = (FileNotFoundError, ProcessLookupError) + ((psutil.NoSuchProcess, psutil.ZombieProcess) if psutil else ())
@@ -83,17 +108,18 @@ def inspect_processes(key: AccountKey, *, processes=None, process_factory=None) 
     default = Path.home() / (".codex" if key.provider == Provider.CODEX else ".claude")
     try:
         for process in processes if processes is not None else system_processes():
+            if _holds(process, variable, key):
+                facts.holders.append(process.pid)
             try:
                 name = process.name().lower().removesuffix(".exe")
                 if name not in _INSPECTED:
                     continue
                 before = process.create_time()
                 argv = process.cmdline()
-                names = {Path(item).name.lower().removesuffix(".exe") for item in argv}
-                names.update(_CLIENT_WORD.findall(" ".join(argv).lower()))
-                pertinent = name in _CLIENTS or bool(names & _CLIENTS) or any(
-                    "cano.py" in item or "hangar-cano" in item or "codex.js" in item or "claude-code" in item
-                    for item in argv)
+                names, parts = _argv_parts(argv)
+                # Só o CLI usa a conta: palavra solta no argv de um MCP ou shell não conta.
+                pertinent = name in _CLIENTS or bool(names & _CLIENTS) or "claude-code" in parts or any(
+                    "cano.py" in item or "hangar-cano" in item for item in argv)
                 if not pertinent:
                     continue
                 env = process.environ()
@@ -132,6 +158,7 @@ def inspect_processes(key: AccountKey, *, processes=None, process_factory=None) 
     except _SCAN_ERRORS:
         facts.complete = False
     facts.pids = sorted(set(facts.pids))
+    facts.holders = sorted(set(facts.holders))
     return facts
 
 
@@ -217,6 +244,7 @@ def inspect_usage(key: AccountKey) -> UsageFacts:
         facts.complete = False
     facts.pids = sorted(set(facts.pids))
     facts.sessions = sorted(set(facts.sessions))
+    facts.holders = sorted(set(facts.holders))
     return facts
 
 class PreparationJobs:

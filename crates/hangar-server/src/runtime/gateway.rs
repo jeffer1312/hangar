@@ -463,7 +463,7 @@ impl RuntimeRegistry {
         let entries = self.entries.lock().await;
         let sessions = entries.values().filter(|entry| entry.account_key.as_ref().is_some_and(|account| account == key))
             .map(|entry| entry.name.clone()).collect();
-        crate::accounts::UsageFacts { complete: true, sessions, pids: Vec::new() }
+        crate::accounts::UsageFacts { complete: true, sessions, ..Default::default() }
     }
 
     pub async fn snapshots(&self) -> Result<Vec<RuntimeEvent>,RuntimeError> {

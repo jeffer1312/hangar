@@ -7540,14 +7540,19 @@ async def serve_upload(name: str, filename: str, request: Request, download: boo
     forwarded = await upload_bridge.forward(name, "download", request, filename=filename, download=download)
     if forwarded is not None:
         return forwarded
-    info = _cached_info_sync(name)
-    if info is None or not info.cwd:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    try:
-        path = resolve_upload(info.cwd, _id_upload(info), filename)
-    except UploadError as e:
-        raise HTTPException(e.status, e.detail)
-    return file_response(path, download=download)
+
+    # O caminho local lê sessão e disco: fora do loop, como quando a rota era síncrona.
+    def local():
+        info = _cached_info_sync(name)
+        if info is None or not info.cwd:
+            raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+        try:
+            path = resolve_upload(info.cwd, _id_upload(info), filename)
+        except UploadError as e:
+            raise HTTPException(e.status, e.detail)
+        return file_response(path, download=download)
+
+    return await asyncio.to_thread(local)
 
 
 @app.get("/api/sessions/{name}/uploads", dependencies=[Depends(require_auth)])
