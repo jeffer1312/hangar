@@ -136,7 +136,7 @@ fn invalid_names_markers_and_default_are_protected() {
     let service = isolated_service(root.path());
     for name in ["name\n", "..", "a/b", "Upper", "default"] {
         assert!(
-            service.create(Provider::Codex, name, |_| Ok(())).is_err(),
+            service.create(hangar_server::accounts::Provider::Codex, name, |_| Ok(())).is_err(),
             "nome indevido: {name:?}"
         );
     }
@@ -656,4 +656,60 @@ fn account_guard_child_close_preserves_live_parent_ownership() {
     drop(guard);
     assert!(locks.try_acquire(&key, GuardMode::Exclusive).is_ok());
     drop(child);
+}
+
+#[tokio::test]
+async fn accounts_named_like_subroutes_reach_deletion() {
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let python = tokio::spawn(async move {
+        axum::serve(
+            upstream,
+            Router::new().fallback(|| async { (StatusCode::SERVICE_UNAVAILABLE, "sem fatos") }),
+        )
+        .await
+        .unwrap();
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut state = AppState::new(Config {
+        listen: addr,
+        upstream: upstream_addr,
+        internal_secret: "contract-internal".into(),
+        auth_token: "contract-only".into(),
+        log_path: None,
+        trusted: TrustedHosts::parse("127.0.0.1"),
+    });
+    state.accounts = isolated_service(root.path());
+    for name in ["login", "prepare", "rate-limit-reset"] {
+        state
+            .accounts
+            .create(hangar_server::accounts::Provider::Codex, name, |_| Ok(()))
+            .unwrap();
+    }
+    let server = tokio::spawn(hangar_server::routes::serve_with_state(listener, state));
+    for name in ["login", "prepare", "rate-limit-reset"] {
+        let response = reqwest::Client::new()
+            .delete(format!("http://{addr}/api/codex-contas/{name}"))
+            .bearer_auth("contract-only")
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.bytes().await.unwrap()).unwrap_or_default();
+        // Sem fatos de uso a exclusão recusa; o que importa é chegar nela e não numa sub-rota.
+        assert_eq!(status, 409, "DELETE da conta {name} caiu em outra rota: {body}");
+        assert!(
+            matches!(
+                body["detail"]["code"].as_str(),
+                Some("account_usage_unknown" | "codex_account_in_use")
+            ),
+            "DELETE da conta {name} não chegou à exclusão: {body}"
+        );
+        assert!(root.path().join(format!(".codex-{name}")).exists());
+    }
+    server.abort();
+    python.abort();
 }

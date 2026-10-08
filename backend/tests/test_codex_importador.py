@@ -711,3 +711,26 @@ async def test_process_tree_cli_failed_membership_query_is_retried_by_close(clie
     await obj.close()
     _assert_tree_gone(own, "close após consulta recusada no cli")
     assert _alive(foreign) and alheio.returncode is None
+
+
+async def test_falha_de_limpeza_nao_esconde_o_erro_do_comando(cliente, monkeypatch):
+    from app import codex_importador
+
+    obj = cliente("cli_timeout", timeout=0.1)
+    calls = []
+    original = codex_importador.shutil.rmtree
+
+    def locked(path):
+        # No Windows a pasta ainda presa pelo filho recusa a remoção.
+        calls.append(path)
+        if len(calls) == 1:
+            raise PermissionError(13, "em uso")
+        original(path)
+
+    monkeypatch.setattr(codex_importador.shutil, "rmtree", locked)
+    with pytest.raises(CodexNativoErro, match="tempo limite"):
+        await obj.cli(["plugin", "add", "plugin@market", "--json"])
+    # A limpeza continua registrada: o encerramento tenta de novo e remove a pasta.
+    await obj.close()
+    assert len(calls) == 2
+    assert not os.path.exists(calls[0])

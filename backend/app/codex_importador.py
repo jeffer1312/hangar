@@ -9,6 +9,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import time
 from typing import TYPE_CHECKING
@@ -601,7 +602,14 @@ class CodexNativo:
             return result
         finally:
             # A mesma limpeza registrada que o close espera; um novo cancelamento não a abandona.
-            await account_lifecycle.complete_on_cancel(self._operation_cleanup(operation))
+            primary = sys.exception()
+            try:
+                await account_lifecycle.complete_on_cancel(self._operation_cleanup(operation))
+            except CodexNativoErro:
+                # A limpeza que falhou fica registrada para o close; o erro do comando é o que vale.
+                if primary is None:
+                    raise
+                _log.warning("limpeza da pasta temporária do Codex adiada após falha do comando")
 
     async def instalar_plugin(self, plugin_id: str) -> dict:
         return await self.cli(["plugin", "add", plugin_id, "--json"])

@@ -478,6 +478,12 @@ def request_preparation(account, *, prepare=False, force=False, cwd=None):
         if not isinstance(result, dict) or result.get("status") not in {"idle", "running", "ready", "partial", "error"}:
             raise ValueError("resposta de preparo inválida")
         return result
+    except urllib.error.HTTPError as error:
+        # Recusa do dono não é ponte indisponível: o código dele segue até quem chamou.
+        detail = _error_detail(error, None)
+        if isinstance(detail, dict) and isinstance(detail.get("code"), str):
+            raise codex_contas.AccountError(error.code, detail["code"], detail.get("params") or {}) from None
+        raise codex_contas.AccountError(503, "account_prepare_bridge_unavailable", {}) from None
     except (OSError, ValueError):
         raise codex_contas.AccountError(503, "account_prepare_bridge_unavailable", {}) from None
 

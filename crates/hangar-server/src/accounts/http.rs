@@ -59,7 +59,13 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let service = state.accounts.clone();
-    if path.ends_with("/rate-limit-reset") {
+    // DELETE de um segmento é sempre exclusão: a conta pode se chamar login, prepare...
+    let deletion = method == Method::DELETE
+        && ["/api/claude-configs/", "/api/codex-contas/"].iter().any(|prefix| {
+            path.strip_prefix(prefix)
+                .is_some_and(|tail| !tail.is_empty() && !tail.contains('/'))
+        });
+    if !deletion && path.ends_with("/rate-limit-reset") {
         let id=path.trim_start_matches("/api/codex-contas/").trim_end_matches("/rate-limit-reset");
         let Ok(id)=percent_encoding::percent_decode_str(id).decode_utf8() else {return StatusCode::BAD_REQUEST.into_response()};
         let Ok(bytes)=axum::body::to_bytes(request.into_body(),16384).await else {return StatusCode::PAYLOAD_TOO_LARGE.into_response()};
@@ -80,7 +86,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     if claude_matches(&method, &path) {
         return claude_public(state, request).await;
     }
-    if path.ends_with("/login") {
+    if !deletion && path.ends_with("/login") {
         let id=path.trim_start_matches("/api/codex-contas/").trim_end_matches("/login");
         let Ok(id)=percent_encoding::percent_decode_str(id).decode_utf8() else {return StatusCode::BAD_REQUEST.into_response()};
         let query:std::collections::HashMap<String,String>=form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()).into_owned().collect();
@@ -95,7 +101,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
         }
         return codex_operation(&state,if method==Method::POST{"login"}else if method==Method::DELETE{"cancel"}else{"status"},&id,attempt_id.unwrap_or("" )).await;
     }
-    if path.ends_with("/prepare") {
+    if !deletion && path.ends_with("/prepare") {
         let id = path
             .trim_start_matches("/api/codex-contas/")
             .trim_end_matches("/prepare");

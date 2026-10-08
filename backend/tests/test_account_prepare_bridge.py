@@ -425,3 +425,23 @@ async def test_real_python_fallback_publishes_complete_result_for_restarted_rust
             rust.close()
         reference.close()
         await service.close()
+
+
+def test_rust_rejection_keeps_its_status_and_code_through_the_bridge(monkeypatch):
+    import io
+    import urllib.error
+    from app import account_bridge, codex_contas
+
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="rust", instance="current"))
+    monkeypatch.setattr(account_bridge, "_preparation_transport", ("127.0.0.1:9", "synthetic"))
+
+    def rejected(*args, **kwargs):
+        body = json.dumps({"detail": {"code": "account_prepare_cwd_invalid", "params": {}, "msg": "pasta"}})
+        raise urllib.error.HTTPError("http://127.0.0.1:9", 400, "Bad Request", {}, io.BytesIO(body.encode()))
+
+    monkeypatch.setattr(account_bridge, "_post", rejected)
+    account = codex_contas.Account("extra", Path("/tmp/extra"), False)
+    with pytest.raises(codex_contas.AccountError) as error:
+        account_bridge.request_preparation(account, cwd="relative")
+    # Recusa do dono não é ponte indisponível: o 400 não pode sugerir tentar de novo.
+    assert (error.value.status, error.value.code) == (400, "account_prepare_cwd_invalid")

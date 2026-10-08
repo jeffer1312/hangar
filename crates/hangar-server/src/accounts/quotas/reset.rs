@@ -11,6 +11,9 @@ use tokio::sync::Mutex;
 #[derive(Clone, Default)]
 pub struct Resets(pub Arc<Mutex<()>>);
 
+/// Mesmo prazo do registro Python: uma retentativa com a mesma chave chega bem antes disso.
+const ATTEMPT_TTL: f64 = 86400.0;
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Attempt {
     pub account_id: String,
@@ -134,18 +137,29 @@ impl AccountService {
                 ));
             }
         };
-        let mut attempts: Vec<Attempt> = raw
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(serde_json::from_str)
-            .collect::<Result<_, _>>()
-            .map_err(|_| {
-                failure(
-                    503,
-                    "codex_reset_failed",
-                    "não foi possível conferir a tentativa anterior",
-                )
-            })?;
+        // Linha ilegível não trava a redefinição, e só a janela vigente fica: o registro não cresce.
+        let at = super::now();
+        let mut attempts = vec![];
+        let mut unreadable = 0;
+        for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+            match serde_json::from_str::<Attempt>(line) {
+                Ok(attempt)
+                    if at - ATTEMPT_TTL <= attempt.accepted_at
+                        && attempt.accepted_at <= at + 300.0 =>
+                {
+                    attempts.push(attempt)
+                }
+                Ok(_) => {}
+                Err(_) => unreadable += 1,
+            }
+        }
+        if unreadable > 0 {
+            tracing::warn!(
+                code = "codex_reset_ledger_unreadable",
+                lines = unreadable,
+                "linhas ilegíveis no registro de redefinição"
+            );
+        }
         let same = attempts.iter().position(|old| {
             old.account_id == account.id && old.credit_id == credit && old.idempotency_key == uuid
         });
@@ -409,5 +423,68 @@ rl.on('line',line=>{
                 .try_acquire(&key, GuardMode::Exclusive)
                 .is_ok()
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unreadable_line_and_expired_attempts_do_not_block_a_new_reset() {
+        use crate::accounts::environment::AccountEnvironment;
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let cli = bin.join("codex");
+        std::fs::write(&cli, r#"#!/usr/bin/env node
+const rl=require('readline').createInterface({input:process.stdin});
+rl.on('line',line=>{
+ const m=JSON.parse(line); if(!m.id)return;
+ let result={};
+ if(m.method==='account/rateLimits/read')result={rateLimits:{secondary:{windowDurationMins:10080,usedPercent:100}},rateLimitResetCredits:{availableCount:1}};
+ if(m.method==='account/rateLimitResetCredit/consume')result={outcome:'reset'};
+ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');
+});
+"#).unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let home = temp.path().to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [
+                ("HOME".into(), home.clone()),
+                ("USERPROFILE".into(), home),
+                ("PATH".into(), path.to_string_lossy().into_owned()),
+            ]
+            .into(),
+        ));
+        let account = service.create(Provider::Codex, "test", |_| Ok(())).unwrap();
+        let ledger = service
+            .quota_path()
+            .with_file_name("codex-reset-attempts.json");
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        let old = serde_json::to_string(&Attempt {
+            account_id: "test".into(),
+            credit_id: None,
+            idempotency_key: "11111111-1111-1111-1111-111111111111".into(),
+            accepted_at: super::super::now() - 2.0 * 86400.0,
+            outcome: Some("reset".into()),
+        })
+        .unwrap();
+        std::fs::write(&ledger, format!("{{corrompida\n{old}\n")).unwrap();
+        let uuid = "22222222-2222-2222-2222-222222222222".to_owned();
+        let result = service
+            .consume_reset(account, None, uuid.clone())
+            .await
+            .expect("uma linha ilegível não pode travar toda redefinição");
+        assert_eq!(result["outcome"], "reset");
+        let rows: Vec<Attempt> = std::fs::read_to_string(&ledger)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        // Só a tentativa vigente fica: o registro não cresce para sempre.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].idempotency_key, uuid);
     }
 }
