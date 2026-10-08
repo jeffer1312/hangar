@@ -353,6 +353,60 @@ fn deletion_removes_readonly_pack_but_keeps_external_link_target() {
     assert!(service.locks.path(&key).unwrap().exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn deletion_unlinks_windows_junction_without_removing_its_target() {
+    use hangar_server::accounts::{AccountKey, GuardMode, Provider, UsageFacts};
+    let root = tempfile::tempdir().unwrap();
+    let service = isolated_service(root.path());
+    let account = service
+        .create(Provider::Codex, "junction", |_| Ok(()))
+        .unwrap();
+    let outside = root.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("keep"), "dados externos").unwrap();
+    let junction = account.home.join("junction");
+    let creation = std::process::Command::new("cmd.exe")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside)
+        .output()
+        .unwrap();
+    assert!(creation.status.success(), "{creation:?}");
+    let kind = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-Item -LiteralPath $env:HANGAR_TEST_JUNCTION).LinkType",
+        ])
+        .env("HANGAR_TEST_JUNCTION", &junction)
+        .output()
+        .unwrap();
+    assert!(kind.status.success());
+    assert_eq!(String::from_utf8_lossy(&kind.stdout).trim(), "Junction");
+    let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
+    let guard = service
+        .locks
+        .try_acquire(&key, GuardMode::Exclusive)
+        .unwrap();
+    service
+        .delete(
+            Provider::Codex,
+            &account,
+            &guard,
+            &UsageFacts {
+                complete: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(!account.home.exists());
+    assert_eq!(
+        std::fs::read_to_string(outside.join("keep")).unwrap(),
+        "dados externos"
+    );
+}
+
 #[tokio::test]
 async fn installed_codex_reads_disconnected_account_in_isolated_home() {
     use hangar_server::accounts::Provider;

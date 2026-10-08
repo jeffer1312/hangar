@@ -239,6 +239,8 @@ def _worker(block_handlers: bool) -> None:
     births = {}
     published = threading.Event()
     children = []
+    mux = {}
+    launcher_options = {}
     original_popen = subprocess.Popen
     from app import account_lifecycle
     original_publish = account_lifecycle.publish_terminal_birth
@@ -249,6 +251,9 @@ def _worker(block_handlers: bool) -> None:
             barrier[0].set()
             if not barrier[1].wait(25):
                 raise RuntimeError("barreira de publicação não foi liberada")
+        if launcher_options.get("unknown_instance"):
+            with patch.object(account_bridge, "terminal_instances", side_effect=RuntimeError("snapshot indisponível")):
+                return original_publish(*args, **kwargs)
         return original_publish(*args, **kwargs)
 
     def create_at_barrier(name, cwd, config_dir, **kwargs):
@@ -260,17 +265,21 @@ def _worker(block_handlers: bool) -> None:
             if not barrier[1].wait(25):
                 raise RuntimeError("barreira não foi liberada")
         home = root / (".codex-" + kwargs.get("codex_account", "alpha"))
-        child = original_popen([sys.executable, "-c", "import sys; sys.stdin.readline()", "--",
-                                kwargs["provider"], "--codex-home", str(home)],
+        command = [sys.executable, "-c", "import sys; sys.stdin.readline()"]
+        if not launcher_options.get("opaque"):
+            command += ["--", kwargs["provider"], "--codex-home", str(home)]
+        child = original_popen(command,
                                cwd=root, env=isolated_environment(root), stdin=subprocess.PIPE,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         children.append(child)
+        mux[name] = str(child.pid)
         launcher = barriers.get("launcher_before_publication")
         if launcher:
             def publish():
                 launcher[0].set()
                 if launcher[1].wait(25) and child.poll() is None:
-                    sessions.save(name, "thread-born", "", str(cwd), app_pid=child.pid,
+                    current_name = next((key for key, value in mux.items() if value == str(child.pid)), name)
+                    sessions.save(current_name, "thread-born", "", str(cwd), app_pid=child.pid,
                                   endpoint="ws://127.0.0.1:1", codex_home=home,
                                   codex_account=kwargs.get("codex_account", "alpha"))
                     published.set()
@@ -304,6 +313,31 @@ def _worker(block_handlers: bool) -> None:
             return JSONResponse({"cancelled": True}, status_code=499)
         finally:
             births.pop("task", None)
+
+    @app.post("/api/sessions/{name}/rename")
+    async def rename(name: str, body: dict):
+        return await api.rename_session(name, api.RenameBody.model_validate(body))
+
+    @app.post("/__contract__/launcher-options")
+    def options(body: dict):
+        launcher_options.update(body)
+        return {"ok": True}
+
+    @app.post("/__contract__/reuse-name/{name}")
+    def reuse(name: str):
+        mux[name] = "replacement-instance"
+        return {"ok": True}
+
+    def mux_command(arguments, **kwargs):
+        if arguments[1] == "display-message" and arguments[-1] == "#{session_created}":
+            return subprocess.CompletedProcess(arguments, 0, "200\n", "")
+        if arguments[1] == "list-sessions" and "@cp_shortcut_owner" in arguments[-1]:
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        raise AssertionError(f"comando do multiplexador não previsto: {arguments}")
+
+    def rename_mux(old, new):
+        mux[new] = mux.pop(old)
+        return True
 
     @app.post("/__contract__/barrier/{name}")
     def block(name: str):
@@ -416,16 +450,20 @@ def _worker(block_handlers: bool) -> None:
     def deny_external(*args, **kwargs):
         raise AssertionError("uma operação de contrato tentou executar CLI ou acessar rede real")
 
-    with patch.object(runtime_coordinator, "current", return_value=SimpleNamespace(instance="contract-instance")), \
+    with patch.object(runtime_coordinator, "current", return_value=SimpleNamespace(instance="contract-instance", legacy=None, managed_queue=lambda name: False)), \
             patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api.registry, "create", side_effect=create_at_barrier), \
             patch.object(account_lifecycle, "publish_terminal_birth", side_effect=publish_at_barrier), \
             patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \
-            patch.object(api.tmux, "has_session", side_effect=lambda name: any(child.poll() is None for child in children)), \
-            patch.object(account_bridge, "terminal_instances", side_effect=lambda: {
-                "birth": str(child.pid) for child in children if child.poll() is None}), \
+            patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
+            patch.object(api.tmux, "_run", side_effect=mux_command), \
+            patch.object(api.tmux, "rename_session", side_effect=rename_mux), \
+            patch.object(api.tmux, "is_hidden", return_value=False), \
+            patch.object(api.registry, "_rename_rust"), \
+            patch.object(account_bridge, "terminal_instances", side_effect=lambda: dict(mux) if any(
+                child.poll() is None for child in children) else {}), \
             patch.object(account_bridge, "system_processes", side_effect=lambda: [
                 psutil.Process(child.pid) for child in children if child.poll() is None]), \
             patch("subprocess.Popen", side_effect=deny_external), \

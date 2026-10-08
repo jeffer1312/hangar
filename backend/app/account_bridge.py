@@ -180,12 +180,12 @@ def inspect_usage(key: AccountKey) -> UsageFacts:
                     continue
                 if instances is None:
                     instances = terminal_instances()
-                current = instances.get(pending["name"])
-                if current is not None:
-                    if pending["instance"] is None:
-                        facts.complete = False
-                    elif current == pending["instance"]:
-                        facts.sessions.append(pending["name"])
+                if pending["instance"] is None:
+                    # Sem identidade, ausência do nome pode ser apenas um rename.
+                    facts.complete = False
+                else:
+                    facts.sessions.extend(name for name, instance in instances.items()
+                                          if instance == pending["instance"])
         directory = (codex_sessions if key.provider == Provider.CODEX else headless_sessions)._dir()
         rows = []
         if directory.exists():

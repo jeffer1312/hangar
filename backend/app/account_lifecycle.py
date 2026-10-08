@@ -144,11 +144,14 @@ def retire_terminal_birth(path: Path) -> bool:
             row = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return True
+        instance = row["instance"]
+        if instance is None:
+            # Nem ausência nem reuso do nome identificam a instância desconhecida.
+            return False
         instances = account_bridge.terminal_instances()
-        current = instances.get(row["name"])
-        ended = current is None or (row["instance"] is not None and current != row["instance"])
-        if not ended:
-            meta = sessions.load(row["name"]) or {}
+        current_name = next((name for name, identity in instances.items() if identity == instance), None)
+        if current_name is not None:
+            meta = sessions.load(current_name) or {}
             key = AccountKey.new(row["provider"], Path(row["canonical_home"]))
             bound = (meta.get("thread_id") and meta.get("endpoint") and meta.get("app_pid")
                      and not meta.get("launching") and meta.get("codex_home")
@@ -157,6 +160,9 @@ def retire_terminal_birth(path: Path) -> bool:
                 return False
             facts = account_bridge.inspect_processes(key)
             if not facts.complete or meta["app_pid"] not in facts.pids:
+                return False
+            # O vínculo lido por nome só vale enquanto esse nome ainda identifica a mesma instância.
+            if account_bridge.terminal_instances().get(current_name) != instance:
                 return False
         path.unlink(missing_ok=True)
         return True

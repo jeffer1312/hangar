@@ -484,6 +484,55 @@ def test_terminal_pending_identity_and_uncertainty_are_not_absence(tmp_path, mon
     assert not account_lifecycle.retire_terminal_birth(record)
 
 
+def test_terminal_birth_follows_instance_and_only_retires_verified_binding(tmp_path, monkeypatch):
+    from app import account_lifecycle, account_bridge
+    from app.adapters.codex import sessions
+    monkeypatch.setattr(account_lifecycle, "default_lock_root", lambda: tmp_path / "locks")
+    monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "sidecars")
+    instances = {"birth": "server:original:epoch"}
+    monkeypatch.setattr(account_bridge, "terminal_instances", lambda: dict(instances))
+    monkeypatch.setattr(account_bridge, "terminal_sessions", lambda: set(instances))
+    monkeypatch.setattr(account_bridge, "inspect_processes",
+                        lambda key: account_bridge.UsageFacts(complete=True, pids=[123]))
+    key = account_lifecycle.AccountKey.new("codex", tmp_path / "account")
+    with account_lifecycle.acquire(key) as guard:
+        record = account_lifecycle.publish_terminal_birth(guard, "birth", "token")
+    instances.clear()
+    instances.update(renamed="server:original:epoch", birth="server:replacement:epoch")
+    sessions.save("birth", "other-thread", "", str(tmp_path), app_pid=123,
+                  endpoint="ws://127.0.0.1:1", codex_home=key.canonical_home)
+    assert not account_lifecycle.retire_terminal_birth(record)
+    assert record.exists()
+    assert "renamed" in account_bridge.inspect_usage(key).sessions
+    sessions.save("renamed", "born-thread", "", str(tmp_path), app_pid=123,
+                  endpoint="ws://127.0.0.1:1", codex_home=key.canonical_home)
+    assert account_lifecycle.retire_terminal_birth(record)
+    assert not record.exists()
+
+
+def test_unknown_terminal_birth_is_not_retired_by_name_absence_or_reuse(tmp_path, monkeypatch):
+    from app import account_lifecycle, account_bridge
+    from app.adapters.codex import sessions
+    monkeypatch.setattr(account_lifecycle, "default_lock_root", lambda: tmp_path / "locks")
+    monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "sidecars")
+    instances = {}
+    monkeypatch.setattr(account_bridge, "terminal_instances", lambda: dict(instances))
+    monkeypatch.setattr(account_bridge, "terminal_sessions", lambda: set(instances))
+    monkeypatch.setattr(account_bridge, "inspect_processes",
+                        lambda key: account_bridge.UsageFacts(complete=True, pids=[123]))
+    key = account_lifecycle.AccountKey.new("codex", tmp_path / "account")
+    with account_lifecycle.acquire(key) as guard:
+        record = account_lifecycle.publish_terminal_birth(guard, "birth", "token")
+    for snapshot in ({"renamed": "server:original:epoch"}, {}, {"birth": "server:replacement:epoch"}):
+        instances.clear()
+        instances.update(snapshot)
+        sessions.save("birth", "other-thread", "", str(tmp_path), app_pid=123,
+                      endpoint="ws://127.0.0.1:1", codex_home=key.canonical_home)
+        assert not account_bridge.inspect_usage(key).complete
+        assert not account_lifecycle.retire_terminal_birth(record)
+        assert record.exists()
+
+
 def test_terminal_generation_snapshot_rejects_incomplete_mux_format(monkeypatch):
     from subprocess import CompletedProcess
     from app import account_bridge, tmux
