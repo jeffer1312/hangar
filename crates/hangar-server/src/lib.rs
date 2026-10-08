@@ -29,7 +29,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, eventos do side-events, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 41;
+pub const INTERNAL_PROTOCOL: u32 = 43;
 
 /// Todo socket TCP do servidor, aceito ou aberto. Sem isso o Nagle segura o último pedaço de uma
 /// resposta em pedaços até o ACK atrasado do outro lado; o asyncio do Python já liga sozinho.
@@ -68,6 +68,7 @@ pub async fn serve_until_with_state(
     let cfg = state.cfg.clone();
     let codex_logins=state.accounts.codex_logins.clone();
     let codex_readers=state.accounts.codex_readers.clone();
+    let device_logins=state.accounts.device_logins.clone();
     let mut runtime_registry=None;
     // Abortada na saída: o laço segura a ponte da lista, que sobreviveria ao servidor.
     let _shadow = list::shadow::spawn(state.list.clone(), state.diag.clone()).map(AbortOnDrop);
@@ -97,7 +98,7 @@ pub async fn serve_until_with_state(
         () = stop => Ok(()),
     }
     }.await;
-    tokio::join!(codex_readers.close(),codex_logins.close());
+    tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());
     if let Some(registry)=runtime_registry {
         registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
     }

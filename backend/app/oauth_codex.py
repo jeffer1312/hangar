@@ -136,6 +136,9 @@ def salvar_cofre(t: Tokens) -> None:
 
 def importar_do_codex(home: Path | None = None) -> Tokens | None:
     """Quem já logou pelo `codex login` não precisa logar de novo: o cofre nasce do auth.json dele."""
+    _, managed = _managed_device("import")
+    if managed:
+        return ler_cofre()
     try:
         d = json.loads((_codex_dir(home) / "auth.json").read_text(encoding="utf-8"))
         tk = d["tokens"]
@@ -191,6 +194,7 @@ def _omp_tem_login(home: Path | None) -> bool:
 
 
 def _para_codex(t: Tokens, home: Path | None) -> tuple[bool, str]:
+    _require_python_writer()
     d = _codex_dir(home)
     if not d.is_dir():
         return False, "nao-instalado"
@@ -248,6 +252,9 @@ def _para_omp(t: Tokens, home: Path | None) -> tuple[bool, str]:
 
 
 def propagar(t: Tokens | None = None, home: Path | None = None) -> dict[str, dict]:
+    response, managed = _managed_device("propagate")
+    if managed:
+        return response
     t = t or ler_cofre()
     if t is None:
         return {a: {"ok": False, "motivo": "sem-login"} for a in ("codex", "pi", "omp")}
@@ -262,6 +269,9 @@ def propagar(t: Tokens | None = None, home: Path | None = None) -> dict[str, dic
 
 
 def estado(home: Path | None = None) -> dict:
+    response, managed = _managed_device("state")
+    if managed:
+        return response
     t = ler_cofre()
     return {
         "cofre": t is not None,
@@ -336,6 +346,9 @@ def _vigiar(t: Tentativa, home: Path | None) -> None:
 
 
 def iniciar(home: Path | None = None) -> dict:
+    response, managed = _managed_device("start")
+    if managed:
+        return response
     global _tentativa
     with _lock:
         if _tentativa and _tentativa.etapa == "aguardando":
@@ -358,6 +371,9 @@ def iniciar(home: Path | None = None) -> dict:
 
 
 def passo() -> dict:
+    response, managed = _managed_device("status")
+    if managed:
+        return response
     t = _tentativa
     if t is None:
         return {"etapa": "idle"}
@@ -366,6 +382,9 @@ def passo() -> dict:
 
 
 def cancelar() -> dict:
+    response, managed = _managed_device("cancel")
+    if managed:
+        return response
     global _tentativa
     with _lock:
         t = _tentativa
@@ -374,3 +393,122 @@ def cancelar() -> dict:
             t.etapa = "cancelado"
         _tentativa = None
     return {"etapa": "idle"}
+
+
+def propagate_secondary() -> dict[str, dict]:
+    """Gancho privado: lê o cofre local e grava somente Pi/omp."""
+    tokens = ler_cofre()
+    result = {}
+    for name, writer in (("pi", _para_pi), ("omp", _para_omp)):
+        if tokens is None:
+            result[name] = {"ok": False, "motivo": "sem-login"}
+            continue
+        try:
+            ok, reason = writer(tokens, None)
+        except (OSError, ValueError):
+            ok, reason = False, "armazenamento-indisponivel"
+        if not ok and reason.startswith("sqlite:"):
+            reason = "sqlite-indisponivel"
+        result[name] = {"ok": ok, "motivo": reason}
+    return result
+
+
+def _managed_device(action):
+    from app.account_bridge import request_device
+    return request_device(action)
+
+
+def _require_python_writer():
+    from fastapi import HTTPException
+    from app import runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    if coordinator is not None and getattr(coordinator, "mode", "python") != "python":
+        raise HTTPException(503, detail={"code": "account_device_python_writer_disabled"})
+
+@dataclass
+class SecondaryJob:
+    key: Any
+    future: Any
+    thread: threading.Thread | None = None
+    acknowledged: bool = False
+
+
+class SecondaryJobs:
+    """O registro sobrevive à resposta HTTP; somente o fim do escritor publica terminal."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.jobs = {}
+        self.closing = set()
+
+    @staticmethod
+    def snapshot(instance, operation, job):
+        response = {"instance": instance, "operation_id": operation, "status": "pending"}
+        if job.future.done():
+            if job.thread is not None:
+                job.thread.join()
+            response.update(status="completed", result=job.future.result())
+        return response
+
+    def start(self, instance, operation):
+        from concurrent.futures import Future
+        from fastapi import HTTPException
+        from app.account_lifecycle import AccountKey, Provider
+        with self.lock:
+            job = self.jobs.get((instance, operation))
+            if job is None:
+                if instance in self.closing:
+                    raise HTTPException(503, detail={"code": "device_writer_closing"})
+                key = AccountKey.new(Provider.CODEX, _codex_dir(None))
+                if any(other.key == key and (not other.future.done() or (other.thread is not None and other.thread.is_alive()))
+                       for other in self.jobs.values()):
+                    raise HTTPException(503, detail={"code": "device_writer_pending"})
+                job = SecondaryJob(key, Future())
+                self.jobs[instance, operation] = job
+                def run():
+                    try:
+                        result = propagate_secondary()
+                    except Exception:
+                        result = {name: {"ok": False, "motivo": "armazenamento-indisponivel"} for name in ("pi", "omp")}
+                    job.future.set_result(result)
+                thread = threading.Thread(target=run, name="device-secondary-writer", daemon=False)
+                try:
+                    thread.start()
+                    job.thread = thread
+                except Exception:
+                    job.future.set_result({name: {"ok": False, "motivo": "armazenamento-indisponivel"} for name in ("pi", "omp")})
+        return self.snapshot(instance, operation, job)
+
+    def acknowledge(self, instance, operation):
+        from fastapi import HTTPException
+        with self.lock:
+            job = self.jobs.get((instance, operation))
+            if job is None or not job.future.done():
+                raise HTTPException(503, detail={"code": "device_writer_pending"})
+            job.acknowledged = True
+        # Resultado conservado até closing: uma resposta de ack perdida não admite outro writer.
+        self.snapshot(instance, operation, job)
+        return {"instance": instance, "operation_id": operation, "status": "acknowledged"}
+
+    def begin_close(self, instance):
+        with self.lock:
+            self.closing.add(instance)
+            return [(key, job) for key, job in self.jobs.items() if key[0] == instance]
+
+    def finish_close(self, instance, jobs):
+        for (_, operation), job in jobs:
+            job.future.result()
+            self.snapshot(instance, operation, job)
+        with self.lock:
+            for key, job in jobs:
+                if job.acknowledged:
+                    self.jobs.pop(key, None)
+        return {"instance": instance, "status": "closed"}
+
+    def in_use(self, key):
+        with self.lock:
+            return any(job.key == key and (not job.future.done() or (job.thread is not None and job.thread.is_alive()))
+                       for job in self.jobs.values())
+
+
+secondary_jobs = SecondaryJobs()

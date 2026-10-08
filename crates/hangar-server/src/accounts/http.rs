@@ -23,6 +23,7 @@ impl IntoResponse for Json {
 }
 
 pub fn matches(method: &Method, path: &str) -> bool {
+    if device_matches(method, path) { return true; }
     if matches!(*method,Method::GET|Method::POST|Method::DELETE) && path.strip_prefix("/api/codex-contas/")
         .and_then(|tail|tail.strip_suffix("/login")).is_some_and(|id|!id.is_empty() && !id.contains('/')) {return true;}
     if claude_matches(method, path) {
@@ -54,6 +55,14 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let service = state.accounts.clone();
+    if device_matches(&method, &path) {
+        let query: std::collections::HashMap<String,String> = form_urlencoded::parse(
+            request.uri().query().unwrap_or("").as_bytes()).into_owned().collect();
+        let action = if path.ends_with("/login") {
+            if method==Method::POST {"start"} else if method==Method::DELETE {"cancel"} else {"status"}
+        } else {"state"};
+        return device_operation(&state, action, query.get("attempt_id").map(String::as_str)).await;
+    }
     if claude_matches(&method, &path) {
         return claude_public(state, request).await;
     }
@@ -355,6 +364,12 @@ pub async fn private(
     };
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
+    struct DeviceInput { device_action: String }
+    if let Ok(body) = serde_json::from_slice::<DeviceInput>(&bytes) {
+        return device_operation(&state, &body.device_action, None).await;
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct CodexInput { action:String, account_id:String, attempt_id:Option<String>, refresh:bool }
     if let Ok(body)=serde_json::from_slice::<CodexInput>(&bytes) {
         if body.action=="auth" {
@@ -388,6 +403,26 @@ async fn codex_operation(state:&crate::routes::AppState,action:&str,id:&str,atte
                 Err(err)=>Err(err),
             },Err(err)=>Err(err)},
         "cancel"=>state.accounts.cancel_codex_login(&account,attempt_id).await,
+        _=>Err(AccountError::io()),
+    };
+    match result {Ok(value)=>Json(value).into_response(),Err(err)=>error(err)}
+}
+
+fn device_matches(method: &Method, path: &str) -> bool {
+    (*method==Method::GET && path=="/api/credenciais/codex") ||
+        (matches!(*method,Method::GET|Method::POST|Method::DELETE) && path=="/api/credenciais/codex/login")
+}
+async fn device_operation(state: &crate::routes::AppState, action: &str, attempt: Option<&str>) -> Response {
+    if action=="status" {return Json(state.accounts.device_logins.status()).into_response();}
+    if action=="cancel" {return match state.accounts.device_logins.cancel(attempt).await {Ok(value)=>Json(value).into_response(),Err(err)=>error(err)};}
+    let facts=match bridge(state) {Ok(facts)=>facts,Err(err)=>return error(err)};
+    let bridge=match super::codex_device_login::DeviceBridge::new(state.cfg.upstream,
+        state.cfg.internal_secret.clone(),facts.instance().into()) {Ok(bridge)=>bridge,Err(err)=>return error(err)};
+    let runtime=state.state.runtime.get().cloned();
+    let result=match action {
+        "start"=>state.accounts.start_device_login(facts,runtime,bridge).await,
+        "propagate"|"import"=>state.accounts.propagate_device(facts,runtime,bridge,action=="import").await,
+        "state"=>state.accounts.device_state(&bridge).await,
         _=>Err(AccountError::io()),
     };
     match result {Ok(value)=>Json(value).into_response(),Err(err)=>error(err)}

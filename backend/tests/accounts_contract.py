@@ -244,7 +244,7 @@ class RustCodex(HttpTransport):
     """CLI JSON-RPC sintética; somente o transporte externo é controlado."""
     _prepared_targets: set[Path] = set()
 
-    def __init__(self, reference, *, missing_cli=False):
+    def __init__(self, reference, *, missing_cli=False, device_url=None):
         self.reference = reference
         target = Path(os.environ["CARGO_TARGET_DIR"]) / "debug/deps"
         if target not in self._prepared_targets:
@@ -312,6 +312,8 @@ else send({id:m.id,error:{code:-32601,message:'método inesperado'}});
         environment["PATH"] = "" if missing_cli else str(self.fixture) + os.pathsep + environment["PATH"]
         environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
                            HANGAR_RUNTIME_INSTANCE="contract-instance")
+        if device_url is not None:
+            environment["ACCOUNT_DEVICE_UPSTREAM"] = device_url
         self.process = subprocess.Popen([str(binary), "--exact", "http_probe_process", "--nocapture"],
                                         cwd=reference.root, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, encoding="utf-8")
@@ -409,6 +411,14 @@ def _worker(block_handlers: bool) -> None:
             return {"account": None}
 
     barriers = {}
+    original_read_text = Path.read_text
+    def read_at_secondary_barrier(path, *args, **kwargs):
+        barrier = barriers.get("secondary_io")
+        if path == root / ".pi/agent/auth.json" and barrier:
+            barrier[0].set()
+            if not barrier[1].wait(40):
+                raise TimeoutError("A leitura privada Pi não foi liberada")
+        return original_read_text(path, *args, **kwargs)
     instance = SimpleNamespace(instance="contract-instance", legacy=None, managed_queue=lambda name: False)
     preparation_calls = []
     preparation_entered = asyncio.Event()
@@ -517,17 +527,25 @@ def _worker(block_handlers: bool) -> None:
         return {"ok": True}
 
 
+    @app.post("/__contract__/device-repair")
+    def device_repair(body: dict):
+        from app import harness_saude
+        return {"result": harness_saude.consertar(body["action"])}
+
+
     @app.post("/__contract__/codex-model-cache")
-    def codex_model_cache():
+    def codex_model_cache(body: dict | None = None):
         from app import codex_models
-        key = codex_models._cache_key(root / ".codex-alpha")
+        account = (body or {}).get("account", "alpha")
+        key = codex_models._cache_key(root / (".codex" if account == "default" else ".codex-" + account))
         codex_models._cache[key] = (0, [])
         return {"cached": key in codex_models._cache}
 
     @app.get("/__contract__/codex-model-cache")
-    def codex_model_cached():
+    def codex_model_cached(account: str = "alpha"):
         from app import codex_models
-        return {"cached": codex_models._cache_key(root / ".codex-alpha") in codex_models._cache}
+        home = root / (".codex" if account == "default" else ".codex-" + account)
+        return {"cached": codex_models._cache_key(home) in codex_models._cache}
 
     @app.get("/__contract__/claude-auth")
     def claude_auth(path: str):
@@ -588,7 +606,7 @@ def _worker(block_handlers: bool) -> None:
 
     @app.post("/__contract__/barrier/{name}")
     def block(name: str):
-        assert name in {"session_before_registration", "launcher_before_publication", "birth_publication", "account_prepare"}
+        assert name in {"session_before_registration", "launcher_before_publication", "birth_publication", "account_prepare", "secondary_io", "secondary_response_loss"}
         barriers[name] = (threading.Event(), threading.Event())
         return {"ok": True}
 
@@ -658,6 +676,15 @@ def _worker(block_handlers: bool) -> None:
 
     @app.middleware("http")
     async def record(request, call_next):
+        if request.url.path in {"/internal/accounts/device-propagate", "/internal/accounts/device-propagate-state"}:
+            response = await call_next(request)
+            calls.append({"operation": "bridge.propagate_device_login", "status": response.status_code,
+                          "operation_id": request.headers.get("x-hangar-operation-id")})
+            loss = barriers.get("secondary_response_loss")
+            if request.url.path == "/internal/accounts/device-propagate" and loss and not loss[0].is_set():
+                loss[0].set()
+                return JSONResponse({"detail": {"code": "fixture_response_lost_after_acceptance"}}, status_code=503)
+            return response
         if request.url.path == "/internal/accounts/claude-window":
             response = await call_next(request)
             calls.append({"operation": "bridge.claude_window", "status": response.status_code})
@@ -745,6 +772,7 @@ def _worker(block_handlers: bool) -> None:
     with patch.multiple(login_conta, _shell_criar=window_create, _shell_submeter=window_send,
                         _shell_ler=lambda name: "https://claude.ai/oauth/authorize?fixture=1\nPaste code here if prompted",
                         _shell_matar=window_close, _shell_code=window_code, create=True), \
+            patch.object(Path, "read_text", read_at_secondary_barrier), \
             patch.object(runtime_coordinator, "current", return_value=instance), \
             patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
@@ -784,7 +812,8 @@ def _worker(block_handlers: bool) -> None:
                                           headers={"Authorization": self.headers.get("Authorization", ""),
                                                    "Content-Type": "application/json",
                                                    "x-hangar-internal": self.headers.get("x-hangar-internal", ""),
-                                                   "x-hangar-runtime-instance": self.headers.get("x-hangar-runtime-instance", "")})
+                                                   "x-hangar-runtime-instance": self.headers.get("x-hangar-runtime-instance", ""),
+                                                   "x-hangar-operation-id": self.headers.get("x-hangar-operation-id", "")})
                 self.send_response(response.status_code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response.content)))

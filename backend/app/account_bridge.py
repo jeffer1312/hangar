@@ -211,6 +211,11 @@ def inspect_usage(key: AccountKey) -> UsageFacts:
                 facts.sessions.append(row["name"])
     except Exception:  # noqa: BLE001 — um leitor parcial não pode autorizar exclusão.
         facts.complete = False
+    # O filho pode trocar de instância enquanto o writer Python anterior ainda encerra o I/O.
+    from app import oauth_codex
+    if oauth_codex.secondary_jobs.in_use(key):
+        facts.pids.append(os.getpid())
+    facts.pids = sorted(set(facts.pids))
     facts.sessions = sorted(set(facts.sessions))
     return facts
 
@@ -575,6 +580,40 @@ def request_codex(action, account, *, attempt_id=None, refresh=False):
         raise HTTPException(error.code, detail=detail) from None
     except (OSError, ValueError):
         raise HTTPException(503, detail={"code": "account_auth_bridge_unavailable"}) from None
+
+
+def request_device(action):
+    """Encaminha somente a operação; credenciais permanecem no cofre local."""
+    import json
+    import urllib.request
+    import urllib.error
+    from fastapi import HTTPException
+    from app import runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    mode = getattr(coordinator, "mode", "python") if coordinator else "python"
+    if mode == "python":
+        return None, False
+    config = _preparation_transport
+    if mode != "rust" or config is None:
+        raise HTTPException(503, detail={"code": "account_device_bridge_unavailable"})
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    request = urllib.request.Request("http://" + config[0] + "/__hangar_server/accounts",
+        data=json.dumps({"device_action": action}).encode(),
+        headers={"content-type": "application/json", "x-hangar-internal": config[1]}, method="POST")
+    try:
+        with opener.open(request, timeout=45) as response:
+            return json.loads(response.read(256 * 1024)), True
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.loads(error.read(16384)).get("detail")
+        except (ValueError, OSError):
+            detail = {"code": "account_device_bridge_unavailable"}
+        raise HTTPException(error.code, detail=detail) from None
+    except (OSError, ValueError):
+        raise HTTPException(503, detail={"code": "account_device_bridge_unavailable"}) from None
 
 
 preparation_jobs = PreparationJobs()

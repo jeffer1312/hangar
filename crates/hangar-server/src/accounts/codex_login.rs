@@ -49,7 +49,7 @@ impl CodexInvalidator {
             instance,
         })
     }
-    async fn invalidate(&self, key: &AccountKey) -> Result<(), &'static str> {
+    pub(crate) async fn invalidate(&self, key: &AccountKey) -> Result<(), &'static str> {
         let response = self
             .client
             .post(format!(

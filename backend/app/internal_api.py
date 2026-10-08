@@ -126,6 +126,63 @@ async def codex_invalidate(request: Request):
     service._invalidate_auth(str(key.canonical_home))
     return {"ok": True}
 
+
+@router.post("/accounts/device-propagate")
+async def device_propagate(request: Request):
+    from app import oauth_codex
+    instance, operation = await _device_job_context(request)
+    return oauth_codex.secondary_jobs.start(instance, operation)
+
+
+async def _device_job_context(request: Request, *, operation=True):
+    from app import runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if (coordinator is None or not coordinator.instance
+            or not secrets.compare_digest(instance, coordinator.instance)):
+        raise HTTPException(404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 128:
+            raise HTTPException(413)
+    if raw != b"{}":
+        raise HTTPException(400)
+    identity = request.headers.get("x-hangar-operation-id", "")
+    if operation and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", identity) is None:
+        raise HTTPException(400)
+    return instance, identity
+
+
+@router.post("/accounts/device-propagate/ack")
+async def device_propagate_ack(request: Request):
+    from app import oauth_codex
+    instance, operation = await _device_job_context(request)
+    return oauth_codex.secondary_jobs.acknowledge(instance, operation)
+
+
+@router.post("/accounts/device-propagate/close")
+async def device_propagate_close(request: Request):
+    from app import oauth_codex
+    instance, _ = await _device_job_context(request, operation=False)
+    jobs = oauth_codex.secondary_jobs.begin_close(instance)
+    return await asyncio.to_thread(oauth_codex.secondary_jobs.finish_close, instance, jobs)
+
+
+@router.post("/accounts/device-propagate-state")
+async def device_propagate_state(request: Request):
+    from app import runtime_coordinator, oauth_codex
+    coordinator = runtime_coordinator.current()
+    instance = request.headers.get("x-hangar-runtime-instance", "")
+    if (coordinator is None or not coordinator.instance
+            or not secrets.compare_digest(instance, coordinator.instance)):
+        raise HTTPException(404)
+    if await request.body() != b"{}":
+        raise HTTPException(400)
+    def inspect():
+        return {"pi": oauth_codex._pi_tem_login(None), "omp": oauth_codex._omp_tem_login(None)}
+    return await asyncio.to_thread(inspect)
+
 @router.post("/accounts/prepare")
 @router.post("/accounts/prepare/wait")
 async def account_prepare(request: Request):

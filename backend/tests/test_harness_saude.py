@@ -1,5 +1,6 @@
 """Painel de saúde dos harnesses (app/harness_saude.py): checagem lê, conserto reusa o instalador."""
 import json
+import pytest
 from pathlib import Path
 
 from app import harness_saude as h
@@ -279,3 +280,26 @@ def test_wrapper_sem_rc_nenhum_nao_acusa_falta(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     item = h._wrapper("pi")
     assert item["ok"] is None and item["codigo"] == "wrapper_sem_shell"
+
+
+@pytest.mark.parametrize("mode", ["rust", "pending"])
+def test_oauth_health_repair_cannot_restore_python_codex_writer(tmp_path, monkeypatch, mode):
+    import json
+    from pathlib import Path
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app import account_bridge, runtime_coordinator, oauth_codex
+    from app import harness_saude
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    (tmp_path / ".codex").mkdir()
+    vault = tmp_path / ".hangar/auth/openai-codex.json"
+    vault.parent.mkdir(parents=True)
+    vault.write_text(json.dumps({"access": "synthetic", "refresh": "synthetic", "id_token": "",
+                                 "expires_ms": 1, "account_id": "fixture", "plano": ""}))
+    monkeypatch.setattr(account_bridge, "_preparation_transport", None)
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode=mode))
+    with pytest.raises(HTTPException) as issue:
+        harness_saude.consertar("oauth")
+    assert issue.value.status_code == 503
+    assert not (tmp_path / ".codex/auth.json").exists()

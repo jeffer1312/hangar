@@ -56,6 +56,16 @@ fn codex_login_routes_are_owned() {
     }
 }
 
+#[test]
+fn legacy_device_routes_are_owned() {
+    use axum::http::Method;
+    for method in [Method::POST, Method::GET, Method::DELETE] {
+        assert!(hangar_server::migration_status::rust_route(&method, "/api/credenciais/codex/login"),
+            "device flow legado ainda passa pelo Python: {method}");
+    }
+    assert!(hangar_server::migration_status::rust_route(&Method::GET, "/api/credenciais/codex"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn http_probe_process() {
     let Ok(upstream) = std::env::var("ACCOUNT_HTTP_UPSTREAM") else {
@@ -63,7 +73,7 @@ async fn http_probe_process() {
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = AppState::new(Config {
+    let mut state = AppState::new(Config {
         listen: addr,
         upstream: upstream.parse().unwrap(),
         internal_secret: "contract-internal".into(),
@@ -71,6 +81,10 @@ async fn http_probe_process() {
         log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
+    if let Ok(base) = std::env::var("ACCOUNT_DEVICE_UPSTREAM") {
+        use hangar_server::accounts::codex_device_login::{DeviceOAuth,DeviceLogins};
+        state.accounts.device_logins=DeviceLogins::new(DeviceOAuth::new(&base).unwrap());
+    }
     println!("ACCOUNT_HTTP:{addr}");
     use std::io::Write;
     std::io::stdout().flush().unwrap();
@@ -221,3 +235,164 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     );
     server.abort();
 }
+
+#[tokio::test]
+async fn legacy_propagation_lost_response_keeps_guard_until_private_write_finishes() {
+    use axum::{Router,routing::post};
+    use hangar_server::accounts::{AccountService, AccountKey, Provider, GuardMode,
+        bridge::AccountsBridge, environment::AccountEnvironment, codex_device_login::DeviceBridge};
+    use serde_json::{Value,json};
+    use std::{sync::Arc,time::Duration};
+    let root=tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".codex")).unwrap();
+    std::fs::create_dir_all(root.path().join(".hangar/auth")).unwrap();
+    std::fs::write(root.path().join(".hangar/auth/openai-codex.json"),
+        json!({"access":"synthetic","refresh":"synthetic","id_token":"","expires_ms":1,"account_id":"fixture","plano":""}).to_string()).unwrap();
+    let entered=Arc::new(tokio::sync::Notify::new());
+    let release=Arc::new(tokio::sync::Notify::new());
+    let router=Router::new()
+        .route("/internal/accounts/facts",post(|body: axum::body::Bytes|async move {
+            let body:Value=serde_json::from_slice(&body).unwrap();
+            json!([{"key":body["keys"][0],"facts":{"complete":true,"sessions":[],"pids":[]}}]).to_string()
+        }))
+        .route("/internal/accounts/codex-invalidate",post(||async{json!({"ok":true}).to_string()}))
+        .route("/internal/accounts/device-propagate/ack",post(|headers: axum::http::HeaderMap|async move{
+            json!({"instance":"fixture","operation_id":headers["x-hangar-operation-id"].to_str().unwrap(),"status":"acknowledged"}).to_string()
+        }))
+        .route("/internal/accounts/device-propagate/close",post(||async{json!({"instance":"fixture","status":"closed"}).to_string()}))
+        .route("/internal/accounts/device-propagate",post({
+            let entered=entered.clone(); let release=release.clone();
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let entered=entered.clone(); let release=release.clone();
+                async move {
+                    assert_eq!(body.as_ref(),b"{}");
+                    entered.notify_one();
+                    release.notified().await;
+                    let id=headers.get("x-hangar-operation-id").and_then(|value|value.to_str().ok()).unwrap_or("r1");
+                    json!({"instance":"fixture","operation_id":id,"status":"completed","result":{
+                        "pi":{"ok":true,"motivo":"ja-logado"},"omp":{"ok":false,"motivo":"nao-instalado"}}}).to_string()
+                }
+            }
+        }));
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address=listener.local_addr().unwrap();
+    let server=tokio::spawn(async move {axum::serve(listener,router).await.unwrap()});
+    let service=AccountService::new(AccountEnvironment::from_map(
+        [("HOME".into(),root.path().to_string_lossy().into()),("USERPROFILE".into(),root.path().to_string_lossy().into())].into()));
+    let key=AccountKey::new(Provider::Codex,&root.path().join(".codex")).unwrap();
+    let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address,"synthetic".into(),"fixture".into()));
+    let facts=AccountsBridge::new(address,"synthetic".into(),"fixture".into()).unwrap();
+    let bridge=DeviceBridge::new(address,"synthetic".into(),"fixture".into()).unwrap();
+    let request=tokio::spawn({
+        let service=service.clone();
+        async move {service.propagate_device(facts,Some(runtime),bridge,false).await}
+    });
+    tokio::time::timeout(Duration::from_secs(5),entered.notified()).await.unwrap();
+    request.abort();
+    let _=request.await;
+    let held=service.locks.try_acquire(&key,GuardMode::Exclusive).is_err();
+    release.notify_one();
+    service.device_logins.close().await;
+    server.abort();
+    assert!(held,"perda da resposta liberou a conta antes da escrita privada terminar");
+    assert!(service.locks.try_acquire(&key,GuardMode::Exclusive).is_ok());
+}
+
+async fn private_deadline_retains_ownership(start: bool, retained: bool) {
+    use axum::{Router, routing::post, http::HeaderMap};
+    use hangar_server::accounts::{AccountService, AccountKey, Provider, GuardMode,
+        bridge::AccountsBridge, environment::AccountEnvironment,
+        codex_device_login::{DeviceBridge, DeviceLogins, DeviceOAuth}};
+    use serde_json::{Value, json};
+    use std::{sync::{Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}}, time::Duration};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".codex")).unwrap();
+    std::fs::create_dir_all(root.path().join(".hangar/auth")).unwrap();
+    if !start {
+        std::fs::write(root.path().join(".hangar/auth/openai-codex.json"),
+            json!({"access":"synthetic","refresh":"synthetic","id_token":"","expires_ms":1,"account_id":"fixture","plano":""}).to_string()).unwrap();
+    }
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let finished = Arc::new(AtomicBool::new(!retained));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let ids = Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let router = Router::new()
+        .route("/api/accounts/deviceauth/usercode", post(|| async { json!({"device_auth_id":"fixture","user_code":"fixture","interval":1}).to_string() }))
+        .route("/api/accounts/deviceauth/token", post(|| async { json!({"authorization_code":"fixture","code_verifier":"fixture"}).to_string() }))
+        .route("/oauth/token", post(|| async { json!({"access_token":"synthetic","refresh_token":"synthetic","id_token":"","expires_in":1}).to_string() }))
+        .route("/internal/accounts/facts", post(|body: axum::body::Bytes| async move {
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            json!([{"key":body["keys"][0],"facts":{"complete":true,"sessions":[],"pids":[]}}]).to_string()
+        }))
+        .route("/internal/accounts/codex-invalidate", post(|| async { json!({"ok":true}).to_string() }))
+        .route("/internal/accounts/device-propagate/ack", post(|headers: HeaderMap| async move {
+            json!({"instance":"fixture","operation_id":headers["x-hangar-operation-id"].to_str().unwrap(),"status":"acknowledged"}).to_string()
+        }))
+        .route("/internal/accounts/device-propagate/close", post(|| async { json!({"instance":"fixture","status":"closed"}).to_string() }))
+        .route("/internal/accounts/device-propagate", post({
+            let entered = entered.clone(); let release = release.clone(); let finished = finished.clone();
+            let calls = calls.clone(); let ids = ids.clone();
+            move |headers: HeaderMap, body: axum::body::Bytes| {
+                let entered = entered.clone(); let release = release.clone(); let finished = finished.clone();
+                let calls = calls.clone(); let ids = ids.clone();
+                async move {
+                    assert_eq!(body.as_ref(), b"{}");
+                    let id = headers.get("x-hangar-operation-id").and_then(|v| v.to_str().ok()).unwrap_or("r1").to_owned();
+                    ids.lock().unwrap().insert(id.clone());
+                    let count = calls.fetch_add(1, Ordering::SeqCst);
+                    // A primeira resposta aparenta conclusão, mas pertence a outra operação/instância.
+                    if retained && count == 0 {
+                        return json!({"instance":"old","operation_id":"old","status":"completed","result":{
+                            "pi":{"ok":true,"motivo":"ja-logado"},"omp":{"ok":true,"motivo":"ja-logado"}}}).to_string();
+                    }
+                    entered.notify_one();
+                    if !finished.load(Ordering::SeqCst) {
+                        release.notified().await;
+                        finished.store(true, Ordering::SeqCst);
+                    }
+                    json!({"instance":"fixture","operation_id":id,"status":"completed","result":{
+                        "pi":{"ok":true,"motivo":"ja-logado"},"omp":{"ok":true,"motivo":"ja-logado"}}}).to_string()
+                }
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut service = AccountService::new(AccountEnvironment::from_map(
+        [("HOME".into(),root.path().to_string_lossy().into()),("USERPROFILE".into(),root.path().to_string_lossy().into())].into()));
+    service.device_logins = DeviceLogins::new(DeviceOAuth::new(&format!("http://{address}")).unwrap());
+    let key = AccountKey::new(Provider::Codex, &root.path().join(".codex")).unwrap();
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address,"synthetic".into(),"fixture".into()));
+    let facts = AccountsBridge::new(address,"synthetic".into(),"fixture".into()).unwrap();
+    let bridge = DeviceBridge::new(address,"synthetic".into(),"fixture".into()).unwrap();
+    let request = tokio::spawn({ let service = service.clone(); async move {
+        if start { service.start_device_login(facts, Some(runtime), bridge).await }
+        else { service.propagate_device(facts, Some(runtime), bridge, false).await }
+    }});
+    if start { assert!(request.await.unwrap().is_ok()); }
+    let closing = tokio::spawn({ let service = service.clone(); async move {
+        entered.notified().await;
+        service.device_logins.close().await;
+    }});
+    let completed = tokio::time::timeout(Duration::from_secs(if retained {13} else {5}), closing).await;
+    let held = service.locks.try_acquire(&key, GuardMode::Exclusive).is_err();
+    let shutdown_held = completed.is_err();
+    finished.store(true, Ordering::SeqCst);
+    release.notify_waiters();
+    tokio::time::timeout(Duration::from_secs(5), service.device_logins.close()).await.unwrap();
+    server.abort();
+    assert_eq!(held, retained, "a expiração/resposta antiga liberou a guarda antes do término confirmado do writer");
+    assert_eq!(shutdown_held, retained, "shutdown não aguardou o writer efetivo");
+    assert_eq!(ids.lock().unwrap().len(), 1, "a retentativa mudou de operação");
+    if retained { assert!(calls.load(Ordering::SeqCst) >= 3, "não houve retentativa após resposta antiga e timeout"); }
+    if start { assert_eq!(service.device_logins.status()["etapa"], "concluido"); }
+    assert!(service.locks.try_acquire(&key, GuardMode::Exclusive).is_ok());
+}
+
+#[tokio::test]
+async fn device_start_retains_guard_and_shutdown_after_private_timeout() { private_deadline_retains_ownership(true, true).await; }
+#[tokio::test]
+async fn device_propagation_retains_guard_and_shutdown_after_private_timeout() { private_deadline_retains_ownership(false, true).await; }
+#[tokio::test]
+async fn completed_private_propagation_releases_guard() { private_deadline_retains_ownership(false, false).await; }
