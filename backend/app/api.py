@@ -188,7 +188,8 @@ async def _watch_codex_lease(state: dict) -> None:
 
 
 async def _hold_codex_lease(name: str, lease) -> None:
-    await asyncio.to_thread(lease.mark_live, name)
+    from app.account_lifecycle import complete_on_cancel
+    await complete_on_cancel(asyncio.to_thread(lease.mark_live, name))
     state = {"name": name, "lease": lease, "renaming": False, "revision": 0}
     _codex_live_leases[name] = state
     task = asyncio.create_task(_watch_codex_lease(state), name=f"codex-lease-{name}")

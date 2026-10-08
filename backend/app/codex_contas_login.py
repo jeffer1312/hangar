@@ -173,15 +173,28 @@ class CodexContasLogin:
     def _mark_live(self, reservation: _Reservation, session_name: str, *,
                    pane_id: str | None = None, pid: int | None = None) -> None:
         with self._lock:
-            if reservation in self._reservations.get(reservation.key, []):
+            if reservation not in self._reservations.get(reservation.key, []):
+                return
+            if reservation.guard is None:
                 reservation.live = True
                 reservation.kind = "live"
                 reservation.identity = {"name": session_name, "pane_id": pane_id, "pid": pid}
-                if reservation.guard is not None:
-                    reservation.birth_path = account_lifecycle.publish_terminal_birth(
-                        reservation.guard, session_name, reservation.token)
-                    reservation.guard.close()
-                    reservation.guard = None
+                return
+            guard = reservation.guard.retain()
+        # O worker possui o descritor, mas consulta e disco não retêm o lock do serviço.
+        with guard:
+            birth_path = account_lifecycle.publish_terminal_birth(guard, session_name, reservation.token)
+            with self._lock:
+                reservation.birth_path = birth_path
+                if reservation not in self._reservations.get(reservation.key, []):
+                    return
+                reservation.live = True
+                reservation.kind = "live"
+                reservation.identity = {"name": session_name, "pane_id": pane_id, "pid": pid}
+                original = reservation.guard
+                reservation.guard = None
+            if original is not None:
+                original.close()
 
     def _release_reservation(self, reservation: _Reservation) -> None:
         with self._lock:

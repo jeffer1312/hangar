@@ -238,6 +238,16 @@ def _worker(block_handlers: bool) -> None:
     published = threading.Event()
     children = []
     original_popen = subprocess.Popen
+    from app import account_lifecycle
+    original_publish = account_lifecycle.publish_terminal_birth
+
+    def publish_at_barrier(*args, **kwargs):
+        barrier = barriers.get("birth_publication")
+        if barrier:
+            barrier[0].set()
+            if not barrier[1].wait(25):
+                raise RuntimeError("barreira de publicação não foi liberada")
+        return original_publish(*args, **kwargs)
 
     def create_at_barrier(name, cwd, config_dir, **kwargs):
         from app.models import SessionInfo
@@ -293,7 +303,7 @@ def _worker(block_handlers: bool) -> None:
 
     @app.post("/__contract__/barrier/{name}")
     def block(name: str):
-        assert name in {"session_before_registration", "launcher_before_publication"}
+        assert name in {"session_before_registration", "launcher_before_publication", "birth_publication"}
         barriers[name] = (threading.Event(), threading.Event())
         return {"ok": True}
 
@@ -312,6 +322,13 @@ def _worker(block_handlers: bool) -> None:
         if task:
             task.cancel()
         return {"cancelled": task is not None}
+
+    @app.post("/__contract__/reserve-other")
+    async def reserve_other():
+        from app import codex_contas
+        lease = service.reserve_creation(codex_contas.resolve_account("zeta"))
+        lease.release()
+        return {"ok": True}
 
     @app.get("/__contract__/usage")
     def usage():
@@ -398,6 +415,7 @@ def _worker(block_handlers: bool) -> None:
     with patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api.registry, "create", side_effect=create_at_barrier), \
+            patch.object(account_lifecycle, "publish_terminal_birth", side_effect=publish_at_barrier), \
             patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \
             patch.object(api.tmux, "has_session", side_effect=lambda name: any(child.poll() is None for child in children)), \
@@ -415,6 +433,14 @@ def _worker(block_handlers: bool) -> None:
             def _handle(self):
                 size = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(size) if size else None
+                # Controle fora do loop testado permite liberar a barreira até se ele travar.
+                if self.command == "POST" and self.path.startswith("/__contract__/release/"):
+                    barriers[self.path.rsplit("/", 1)[1]][1].set()
+                    self.send_response(200)
+                    self.send_header("Content-Length", "2")
+                    self.end_headers()
+                    self.wfile.write(b"{}")
+                    return
                 response = client.request(self.command, self.path, content=body,
                                           headers={"Authorization": self.headers.get("Authorization", ""),
                                                    "Content-Type": "application/json"})

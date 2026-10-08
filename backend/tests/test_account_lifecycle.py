@@ -494,6 +494,79 @@ def test_terminal_generation_snapshot_rejects_incomplete_mux_format(monkeypatch)
         account_bridge.terminal_instances()
 
 
+def test_terminal_publication_does_not_hold_service_lock_or_block_loop(tmp_path, rust_probe):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from tests.accounts_contract import PythonReference
+    reference = PythonReference(tmp_path / "reference")
+    publication = reference.block("birth_publication")
+    birth = reference.start_session_async(provider="codex", account_id="alpha")
+    executor = ThreadPoolExecutor()
+    responsive = False
+    try:
+        assert publication.entered.wait()
+        assert reference.cancel_birth().json()["cancelled"]
+        assert reference.cancel_birth().json()["cancelled"]
+        assert not birth.done()
+        path = lock_path(reference.root / ".hangar/account-locks", "codex", reference.root / ".codex-alpha")
+        with RustProbe(rust_probe, path) as exclusion:
+            assert exclusion.state == "busy"
+        independent = executor.submit(reference.request, "POST", "/__contract__/reserve-other")
+        try:
+            responsive = independent.result(timeout=2).status_code == 200
+        except TimeoutError:
+            responsive = False
+        assert responsive, "a publicação sob lock do serviço bloqueou uma requisição independente"
+    finally:
+        publication.release.set()
+        executor.shutdown(wait=True)
+        response = birth.result(timeout=20)
+        reference.close()
+    assert response.status_code == 499
+
+
+def test_publication_worker_retains_descriptor_after_reservation_release(tmp_path, monkeypatch, rust_probe):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    import threading
+    from app import account_lifecycle, account_bridge
+    root = tmp_path / "locks"
+    monkeypatch.setattr(account_lifecycle, "default_lock_root", lambda: root)
+    monkeypatch.setattr(account_bridge, "terminal_instances", lambda: {"birth": "1:$2:3"})
+    home = tmp_path / ".codex-work"
+    home.mkdir()
+    service = CodexContasLogin(account_in_use=lambda account: False)
+    reservation = service.reserve_creation(accounts.Account("work", home, False))
+    entered, proceed = threading.Event(), threading.Event()
+    original = account_lifecycle.publish_terminal_birth
+
+    def publish(*args):
+        entered.set()
+        assert proceed.wait(20)
+        return original(*args)
+
+    monkeypatch.setattr(account_lifecycle, "publish_terminal_birth", publish)
+    executor = ThreadPoolExecutor()
+    worker = executor.submit(reservation.mark_live, "birth")
+    released = False
+    try:
+        assert entered.wait(20)
+        release = executor.submit(reservation.release)
+        try:
+            release.result(timeout=2)
+            released = True
+        except TimeoutError:
+            released = False
+        assert released, "release esperou o lock de serviço retido durante IO"
+        with RustProbe(rust_probe, lock_path(root, "codex", home)) as exclusion:
+            assert exclusion.state == "busy", "a referência do worker deve sobreviver ao release da reserva"
+    finally:
+        proceed.set()
+        worker.result(timeout=20)
+        executor.shutdown(wait=True)
+    with RustProbe(rust_probe, lock_path(root, "codex", home)) as exclusion:
+        assert exclusion.state == "acquired"
+    assert len(list((root / "births").glob("*.json"))) == 1
+
+
 def test_python_creation_blocks_rust_exclusion_across_restart(tmp_path, monkeypatch, rust_probe):
     root = tmp_path / "locks"
     from app import account_lifecycle
