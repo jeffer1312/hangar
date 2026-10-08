@@ -188,6 +188,8 @@ def _worker(block_handlers: bool) -> None:
     from fastapi.testclient import TestClient
     from app import api, conta_estado, codex_contas_api, codex_contas_login, cotas, credenciais, account_bridge
     import psutil
+    from types import SimpleNamespace
+    from app import internal_api, runtime_coordinator
 
     root = Path.home()
     assert root == Path(os.environ["CLAUDE_CONFIG_DIR"]).parent
@@ -277,6 +279,8 @@ def _worker(block_handlers: bool) -> None:
 
     service = codex_contas_login.CodexContasLogin(native=DisconnectedNative, account_in_use=lambda account: False)
     app = FastAPI()
+    internal_api.set_secret("contract-internal")
+    app.include_router(internal_api.router)
     app.state.codex_contas_login = service
     prefixes = {"/api/claude-configs": "claude", "/api/conta-estado": "claude",
                 "/api/codex-contas": "codex", "/api/cotas": "quotas",
@@ -412,7 +416,8 @@ def _worker(block_handlers: bool) -> None:
     def deny_external(*args, **kwargs):
         raise AssertionError("uma operação de contrato tentou executar CLI ou acessar rede real")
 
-    with patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
+    with patch.object(runtime_coordinator, "current", return_value=SimpleNamespace(instance="contract-instance")), \
+            patch.object(conta_estado, "_auth_status", return_value={"loggedIn": False}), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api.registry, "create", side_effect=create_at_barrier), \
             patch.object(account_lifecycle, "publish_terminal_birth", side_effect=publish_at_barrier), \
@@ -424,7 +429,7 @@ def _worker(block_handlers: bool) -> None:
             patch.object(account_bridge, "system_processes", side_effect=lambda: [
                 psutil.Process(child.pid) for child in children if child.poll() is None]), \
             patch("subprocess.Popen", side_effect=deny_external), \
-            patch("socket.create_connection", side_effect=deny_external), TestClient(app) as client:
+            patch("socket.create_connection", side_effect=deny_external), TestClient(app, client=("127.0.0.1", 32123)) as client:
         client.portal.call(service.aquecer)
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -443,7 +448,9 @@ def _worker(block_handlers: bool) -> None:
                     return
                 response = client.request(self.command, self.path, content=body,
                                           headers={"Authorization": self.headers.get("Authorization", ""),
-                                                   "Content-Type": "application/json"})
+                                                   "Content-Type": "application/json",
+                                                   "x-hangar-internal": self.headers.get("x-hangar-internal", ""),
+                                                   "x-hangar-runtime-instance": self.headers.get("x-hangar-runtime-instance", "")})
                 self.send_response(response.status_code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response.content)))

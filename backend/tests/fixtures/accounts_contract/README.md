@@ -112,7 +112,21 @@ pasta da conta e seus arquivos nunca são apagados.
 `start_session_async`, `account_exists` e barreiras do harness para provar o
 nascimento pela rota real, cancelamento repetido e reinício apenas do Rust.
 Sidecars sem PID ainda podem representar nascimento pendente; inspeção incompleta
-recusa a exclusão. A integração HTTP de exclusão é da Task 3.
+recusa a exclusão. `test_accounts_catalog.py` comprova o DELETE HTTP depois do retorno
+do criador e antes da publicação do lançador, incluindo dois cancelamentos e reinício
+somente do Rust. Os handlers públicos Python ficam bloqueados; fatos internos seguem
+pela rota real com segredo e instância. Goldens completos conferem cadastro, exclusão,
+catálogo Claude e envelopes de validação.
+
+`environment.json` é compartilhado pelos testes Python e Rust: a conta padrão mantém
+a identidade original e a adicional remove autenticação, provedor e diretórios herdados.
+O teste nativo usa o Codex instalado em HOME descartável, com credenciais sintéticas;
+confere conta deslogada e API key sem copiar autenticação. OAuth usa resposta sintética
+pelo cliente JSON-RPC existente, sem afirmar login real.
+
+Na Task 3, GET `/api/codex-contas` ainda depende do coordenador de preparo, e POST
+`/api/claude-configs` ainda depende da semeadura. Essas rotas não são reivindicadas
+pelo classificador até a integração consumidora completar seus ramos.
 
 No Codex com terminal, `account-locks/births` registra conta, nome e instância do
 multiplexador antes de soltar o descritor. Esse estado não é sidecar de transporte.

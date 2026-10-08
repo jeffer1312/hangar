@@ -113,7 +113,7 @@ def e_conta(p: Path) -> bool:
     seria listado como conta, e a reconciliação remexeria — e o apagar destruiria — o diretório
     externo.
     """
-    if p.is_symlink() or not p.is_dir():
+    if p.is_symlink() or not p.is_dir() or (p / ".hangar-account-pending").exists():
         return False
     marcador = p / MARCADOR
     return marcador.is_file() and not marcador.is_symlink()

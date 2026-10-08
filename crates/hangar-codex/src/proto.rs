@@ -38,6 +38,7 @@ macro_rules! wire {
 
 wire!(pub struct ClientInfo { pub name:String, pub title:Option<String>, pub version:String });
 wire!(pub struct InitializeCapabilities { pub experimental_api:bool });
+wire!(pub struct GetAccountParams { pub refresh_token:bool });
 wire!(pub struct InitializeParams { pub client_info:ClientInfo, pub capabilities:Option<InitializeCapabilities> });
 
 wire!(pub struct ThreadStartParams {
@@ -96,12 +97,13 @@ pub enum ClientRequest {
     #[serde(rename = "model/list")] ModelList(ModelListParams),
     #[serde(rename = "skills/list")] SkillsList(SkillsListParams),
     #[serde(rename = "account/rateLimits/read")] AccountRateLimitsRead,
+    #[serde(rename = "account/read")] AccountRead(GetAccountParams),
 }
 
 impl ClientRequest {
     pub const METHODS:&[&str] = &["initialize","thread/start","thread/resume","thread/read","thread/settings/update",
         "thread/compact/start","thread/unsubscribe","thread/backgroundTerminals/terminate","turn/start","turn/steer",
-        "turn/interrupt","model/list","skills/list","account/rateLimits/read"];
+        "turn/interrupt","model/list","skills/list","account/rateLimits/read","account/read"];
 
     pub fn into_parts(self) -> (&'static str,Value) {
         let mut value = serde_json::to_value(&self).expect("pedido serializa");
@@ -415,12 +417,12 @@ mod tests {
             C::ThreadRead(Default::default()),C::ThreadSettingsUpdate(Default::default()),C::ThreadCompactStart(Default::default()),
             C::ThreadUnsubscribe(Default::default()),C::ThreadBackgroundTerminalsTerminate(Default::default()),C::TurnStart(Default::default()),
             C::TurnSteer(Default::default()),C::TurnInterrupt(Default::default()),C::ModelList(Default::default()),
-            C::SkillsList(Default::default()),C::AccountRateLimitsRead];
+            C::SkillsList(Default::default()),C::AccountRateLimitsRead,C::AccountRead(Default::default())];
         // Sem curinga: variante nova não compila até entrar na lista acima.
         for request in &all {
             match request { C::Initialize(_)|C::ThreadStart(_)|C::ThreadResume(_)|C::ThreadRead(_)|C::ThreadSettingsUpdate(_)
                 |C::ThreadCompactStart(_)|C::ThreadUnsubscribe(_)|C::ThreadBackgroundTerminalsTerminate(_)|C::TurnStart(_)
-                |C::TurnSteer(_)|C::TurnInterrupt(_)|C::ModelList(_)|C::SkillsList(_)|C::AccountRateLimitsRead => {} }
+                |C::TurnSteer(_)|C::TurnInterrupt(_)|C::ModelList(_)|C::SkillsList(_)|C::AccountRateLimitsRead|C::AccountRead(_) => {} }
         }
         let methods:Vec<_> = all.into_iter().map(|request|request.into_parts().0).collect();
         assert_eq!(methods,ClientRequest::METHODS);

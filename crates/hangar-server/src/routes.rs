@@ -35,6 +35,7 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub accounts: crate::accounts::AccountService,
     pub cfg: Config,
     pub auth: Auth,
     pub http: HttpClient,
@@ -98,7 +99,7 @@ impl AppState {
         let state = Arc::new(crate::state::live::StateEnv::new(terminal.clone(), list.clone(),
             crate::state::facts::StateFactsClient::new(cfg.upstream, cfg.internal_secret.clone()), diag.clone()));
         side.monitors = Some(crate::state::live::spawner(state.clone()));
-        AppState { auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
+        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             workspace_read_slots: Arc::new(tokio::sync::Semaphore::new(8)),
             workspace_meta_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -314,6 +315,15 @@ async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
+    if crate::accounts::http::matches(req.method(), req.uri().path()) {
+        let (_, owner) = gate(&st, peer, &req);
+        if owner {
+            let headers = req.headers().clone();
+            let mut response = crate::accounts::http::public(st, req).await;
+            cors(&headers, response.headers_mut());
+            return response;
+        }
+    }
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
         let (forward, owner) = gate(&st, peer, &req);
         // Convidado segue ao Python, que o recusa como antes.
