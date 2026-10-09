@@ -174,6 +174,22 @@ mod tests {
 
     #[test]
     fn removal_does_not_follow_a_folder_swapped_for_a_link() {
+        // A troca depende de qual thread anda primeiro: repete até ela acontecer no meio da
+        // remoção, e em toda tentativa que trocou nada de fora pode sumir.
+        for _ in 0..20 {
+            if let Some(kept) = swap_during_removal() {
+                assert_eq!(kept, 4000, "a remoção apagou arquivos fora da conta");
+                return;
+            }
+        }
+        panic!("a troca nunca aconteceu no meio da remoção");
+    }
+
+    /// Remove a conta enquanto outra thread troca `projects` por um link para fora, de forma
+    /// atômica, assim que a pasta muda. Devolve quantos arquivos de fora sobraram, ou nada se a
+    /// remoção terminou antes da troca.
+    fn swap_during_removal() -> Option<usize> {
+        use std::os::unix::fs::MetadataExt;
         let root = tempfile::tempdir().unwrap();
         let account = root.path().join("account");
         let inner = account.join("projects");
@@ -187,35 +203,35 @@ mod tests {
             fs::write(inner.join(name), b"conta").unwrap();
             fs::write(outside.join(name), b"alheio").unwrap();
         }
-        let swapper = {
+        let before = fs::metadata(&inner).unwrap();
+        let (from, to) = (
+            CString::new(inner.as_os_str().as_bytes()).unwrap(),
+            CString::new(link.as_os_str().as_bytes()).unwrap(),
+        );
+        let swapper = std::thread::spawn({
             let inner = inner.clone();
-            let (from, to) = (
-                CString::new(inner.as_os_str().as_bytes()).unwrap(),
-                CString::new(link.as_os_str().as_bytes()).unwrap(),
-            );
-            std::thread::spawn(move || {
-                // Assim que a remoção começa a esvaziar a pasta, ela vira link para fora, numa
-                // troca atômica: o caminho nunca deixa de existir.
-                while fs::read_dir(&inner).map_or(0, |d| d.count()) >= 4000 {
-                    std::hint::spin_loop();
+            move || loop {
+                match fs::metadata(&inner) {
+                    Ok(now) if (now.mtime(), now.mtime_nsec()) == (before.mtime(), before.mtime_nsec()) => {
+                        std::hint::spin_loop()
+                    }
+                    Ok(_) => unsafe {
+                        return libc::renameat2(
+                            libc::AT_FDCWD,
+                            from.as_ptr(),
+                            libc::AT_FDCWD,
+                            to.as_ptr(),
+                            libc::RENAME_EXCHANGE,
+                        ) == 0;
+                    },
+                    Err(_) => return false,
                 }
-                unsafe {
-                    libc::renameat2(
-                        libc::AT_FDCWD,
-                        from.as_ptr(),
-                        libc::AT_FDCWD,
-                        to.as_ptr(),
-                        libc::RENAME_EXCHANGE,
-                    ) == 0
-                }
-            })
-        };
+            }
+        });
         let _ = remove_tree(&account);
-        assert!(swapper.join().unwrap(), "a troca não aconteceu no meio da remoção");
-        let kept = names
-            .iter()
-            .filter(|name| outside.join(name).exists())
-            .count();
-        assert_eq!(kept, names.len(), "a remoção apagou arquivos fora da conta");
+        if !swapper.join().unwrap() {
+            return None;
+        }
+        Some(names.iter().filter(|name| outside.join(name).exists()).count())
     }
 }
