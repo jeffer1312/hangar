@@ -465,6 +465,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_conta_cheia: (p) => m.erro_conta_cheia({ conta: String(p.conta ?? ''), pct: String(Math.round(Number(p.pct ?? 0))) }),
   erro_conversa_ja_na_conta: () => m.erro_conversa_ja_na_conta(),
   erro_troca_conta: (p) => m.erro_troca_conta({ erro: String(p.erro ?? '') }),
+  erro_troca_conta_parada: (p) => m.erro_troca_conta_parada({ erro: String(p.erro ?? '') }),
   erro_mover_conversa: (p) => m.erro_mover_conversa({ erro: String(p.erro ?? '') }),
 
   // Capacidade ausente: extensao do Pi, catalogo, resposta que nao veio

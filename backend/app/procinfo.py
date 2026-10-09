@@ -421,6 +421,19 @@ def _env_var_of(pid: int, nome: str) -> str | None:
     return None
 
 
+def _environ_legivel(pid: int) -> bool:
+    """Se o environ do processo pôde ser lido; o `_env_var_of` devolve None tanto para variável
+    ausente quanto para leitura que falhou."""
+    if not _TEM_PROC:
+        return bool(_env_psutil(pid))
+    try:
+        with open(_proc_environ_path(pid), "rb") as fh:
+            fh.read()
+        return True
+    except OSError:
+        return False
+
+
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # Implementacao psutil — Windows e macOS. Contrato IDENTICO ao de cima, degradacao inclusive:
 # processo morto / sem permissao devolve {} , "" ou None, nunca excecao. `psutil.Error` cobre

@@ -3342,9 +3342,16 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
                 raise HTTPException(500, str(e))
             except (ValueError, OSError) as e:
                 raise HTTPException(409, detail=erro("erro_troca_conta", f"não troquei de conta: {e}", erro=str(e)))
+        # Read-only não roda sem terminal: se o terminal não voltar, ela fica parada, não "segue".
+        read_only = not headless and bool((headless_sessions.load(name) or {}).get("read_only"))
+
+        def parada(motivo: str) -> HTTPException:
+            return HTTPException(409, detail=erro("erro_troca_conta_parada",
+                                                  f"o terminal protegido não voltou ({motivo}); a sessão read-only ficou parada até reabrir no terminal",
+                                                  erro=motivo))
 
         async def reabrir() -> str | None:
-            """Reabre como estava; devolve o motivo quando o terminal não voltou (a sessão segue sem terminal)."""
+            """Reabre como estava; devolve o motivo quando o terminal não voltou (a sessão segue sem terminal, ou parada se read-only)."""
             if headless:
                 if engine_account is not None or info.engine:
                     try:
@@ -3379,14 +3386,15 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
                     if not await asyncio.to_thread(_saiu, new_pids):
                         raise HTTPException(409, detail=erro("erro_troca_conta", "o Claude novo não saiu; restauração recusada para não duplicar a conversa")) from e
                     headless_sessions.restaurar(expected_meta)
-                if engine_account is None and not info.engine:
+                if engine_account is None and not info.engine and not read_only:
                     hl.acordar(name)   # sidecar restaurado: a conversa segue sem terminal
                 return str(e)
 
         # O claude grava as últimas linhas pelo caminho ao sair: mover antes disso recria o arquivo na conta de
         # origem, com o mesmo id, e o processo novo teria companhia no mesmo .jsonl.
         if not await asyncio.to_thread(_saiu, pids):
-            await reabrir()
+            if (motivo := await reabrir()) and read_only:
+                raise parada(motivo)
             raise HTTPException(409, detail=erro("erro_troca_conta", "não troquei de conta: o processo antigo não saiu; a sessão segue na conta de antes",
                                                  erro="processo vivo"))
         falha = None
@@ -3456,7 +3464,7 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
                     await asyncio.to_thread(move_conversation, *movida)
                 headless_sessions.restaurar(original_meta)
                 rollback_error = await reabrir()
-                if rollback_error and not headless:
+                if rollback_error and not headless and not read_only:
                     hl.acordar(name)
             except Exception as exc:
                 rollback_error = str(exc)
@@ -3469,6 +3477,8 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
         await asyncio.to_thread(registry._forget, name)
     if falha:
         raise falha
+    if motivo_terminal and read_only:
+        raise parada(motivo_terminal)
     if motivo_terminal:
         raise HTTPException(409, detail=erro("erro_troca_conta", f"a conversa foi para a conta nova, mas o terminal não voltou ({motivo_terminal}); ela segue sem terminal",
                                              erro=motivo_terminal))

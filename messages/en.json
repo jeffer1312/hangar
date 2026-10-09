@@ -3014,6 +3014,7 @@
   "erro_conta_cheia": "the {conta} account is at {pct}% of its quota: the conversation would run out there on the first turn",
   "erro_conversa_ja_na_conta": "the target account already has this conversation",
   "erro_troca_conta": "account not switched: {erro}",
+  "erro_troca_conta_parada": "the protected terminal did not come back ({erro}); the read-only session is stopped until it is reopened in the terminal",
   "erro_mover_conversa": "could not move the conversation to the other account: {erro}",
   "modo_abrir_no_terminal": "Open in terminal",
   "modo_continuar_sem_terminal": "Continue without terminal",

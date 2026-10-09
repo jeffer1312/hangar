@@ -407,6 +407,19 @@ def test_terminal_passa_por_sem_terminal_e_reabre_o_pane_na_conta_nova(contas, t
     assert visto == {"conta": b, "na_origem": False}
 
 
+def test_read_only_cujo_terminal_nao_volta_fica_parado_sem_acordar(contas, tmp_path):
+    a, b = contas
+    cwd = str(tmp_path / "repo")
+    _conversa(a, cwd)
+    ordem = []
+    ida = MagicMock(side_effect=lambda n, modo, **_: S.save(n, cwd, SID, config_dir=a, permission_mode=modo, read_only=True))
+    volta = MagicMock(side_effect=ValueError("bwrap sumiu"))
+    r = _post("t1", b, headless=False, conta=a, hl=_hl(ordem), ida=ida, volta=volta)
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_troca_conta_parada" and r.json()["detail"]["params"]["erro"] == "bwrap sumiu"
+    assert ordem == [] and S.load("t1")["read_only"] is True
+
+
 @pytest.mark.parametrize("headless", [True, False])
 def test_account_move_trusts_folder_in_new_account_before_reopening(contas, tmp_path, monkeypatch, headless):
     import app.api as api_mod
