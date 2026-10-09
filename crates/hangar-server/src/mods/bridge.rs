@@ -84,6 +84,10 @@ async fn owned_sized<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, 
         Err(_) => serde_json::from_slice::<Value>(&bytes).ok().and_then(|body| body["sessao"].as_str()
             .and_then(|sessao| st.mods.bridge_session(sessao, body["token"].as_str().unwrap_or_default()))),
     };
+    if found.is_none() && matches!(&parsed, Ok(envelope) if envelope.token.contains('.')) {
+        // Normal para sessão do Python; numa do Rust é a chave que faltou no vínculo.
+        tracing::debug!("ponte do plugin: chave sem sessão no Rust; segue ao Python");
+    }
     match (parsed, found) {
         (Ok(envelope), Some(name)) => Ok((envelope, name)),
         (Err(_), Some(_)) => Err(Box::new(invalid(None))),

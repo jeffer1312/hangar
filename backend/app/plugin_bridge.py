@@ -436,8 +436,18 @@ def _entra(body) -> None:
     token que diz qual é ela agora. Token só do nome, ou chave que o runtime não conhece, fica no nome."""
     _confere(body.sessao, body.token)
     key, dot, _ = body.token.partition(".")
-    if dot:
-        body.sessao = _nome_da_chave(key) or body.sessao
+    if not dot:
+        return
+    nome = _nome_da_chave(key)
+    if nome:
+        body.sessao = nome
+    elif key not in _chaves_sem_sessao:
+        # Uma vez por chave: o `/pull` volta a cada 25 s. Sessão fora do runtime cai aqui também.
+        _chaves_sem_sessao.add(key)     # ponytail: cresce uma entrada por lançamento sem runtime
+        _log.info("plugin: chave sem sessão no runtime; segue pelo nome sessao=%s", body.sessao)
+
+
+_chaves_sem_sessao: set[str] = set()
 
 
 def _nome_da_chave(key: str) -> str | None:

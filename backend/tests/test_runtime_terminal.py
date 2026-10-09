@@ -85,7 +85,11 @@ def test_terminal_binding_carries_the_key_of_the_launch_token(monkeypatch, tmp_p
         cwd=str(tmp_path), mux_argv=['tmux'], windows=False, plugin_token='k1.' + '0' * 32)
     monkeypatch.setattr(terminal, '_collect', lambda name: dict(facts))
     monkeypatch.setattr(pqueue, '_queue_dir', lambda: tmp_path)
-    assert terminal.resolve_binding('session').meta['plugin_key'] == 'k1'
+    first = terminal.resolve_binding('session')
+    assert first.meta['plugin_key'] == 'k1'
+    # Leitura do ambiente que falha na mesma vida não tira a chave do vínculo.
+    facts['plugin_token'] = ''
+    assert terminal.resolve_binding('session', first).meta['plugin_key'] == 'k1'
     facts['plugin_token'] = '0' * 32
     assert 'plugin_key' not in terminal.resolve_binding('session').meta
 
