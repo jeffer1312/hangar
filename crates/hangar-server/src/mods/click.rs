@@ -868,10 +868,15 @@ fn back_budget(limits: &Limits, back: &Back) -> Duration {
 }
 
 /// Renova a reserva do pane por `cover` mais a folga e a operação mais lenta do pedido: a última que começa
-/// no fim de `cover` ainda roda no executor depois dele, e o `Release` só chega atrás dela.
-async fn renew(ctx: &Ctx<'_>, cover: Duration) {
-    let millis = u64::try_from((cover + HOLD_MARGIN + ctx.undo.with(|p| p.slowest)).as_millis()).unwrap_or(u64::MAX);
+/// no fim de `cover` ainda roda no executor depois dele, e o `Release` só chega atrás dela. O executor corta
+/// a reserva no teto dele, então `cover` encolhe para a folga caber; devolve o que cobriu, o prazo de quem
+/// age sob ela.
+async fn renew(ctx: &Ctx<'_>, cover: Duration) -> Duration {
+    let margin = HOLD_MARGIN + ctx.undo.with(|p| p.slowest);
+    let cover = cover.min(crate::runtime::terminal::MAX_MODS_HOLD.saturating_sub(margin));
+    let millis = u64::try_from((cover + margin).as_millis()).unwrap_or(u64::MAX);
     let _ = ctx.op(PaneOp::Hold { millis }, ctx.until).await;
+    cover
 }
 
 /// A volta ao prompt falhou com o pane reservado: soltar agora deixaria a fila entregar uma mensagem com o
@@ -881,9 +886,9 @@ async fn keep_trying(ctx: &Ctx<'_>, back: &Back) -> bool {
     let keep_until = Instant::now() + ctx.limits.keep_held;
     let budget = back_budget(ctx.limits, back);
     while Instant::now() < keep_until {
-        renew(&ctx.fresh(), ctx.limits.retry_gap + budget).await;
+        let cover = renew(&ctx.fresh(), ctx.limits.retry_gap + budget).await;
         tokio::time::sleep(ctx.limits.retry_gap).await;
-        if back_to_prompt(&ctx.within(budget), back).await { return true; }
+        if back_to_prompt(&ctx.within(cover.saturating_sub(ctx.limits.retry_gap)), back).await { return true; }
     }
     false
 }
@@ -899,9 +904,9 @@ pub async fn finish(ctx: &Ctx<'_>) {
     let undo = ctx.undo;
     let held = undo.with(|p| p.hold);
     let back = undo.with(|p| p.keyboard.clone());
-    let budget = back.as_ref().map_or(UNDO_MAX, |back| back_budget(ctx.limits, back));
+    let mut budget = back.as_ref().map_or(UNDO_MAX, |back| back_budget(ctx.limits, back));
     // A reserva do pedido conta do começo dele e pode vencer no meio da limpeza.
-    if held { renew(&ctx.fresh(), budget).await; }
+    if held { budget = renew(&ctx.fresh(), budget).await; }
     if let Some(attempt) = undo.with(|p| p.focus.clone()) {
         ctx.mods.disarm_focus(ctx.name, ctx.life, &attempt);
         undo.with(|p| p.focus = None);
@@ -916,9 +921,8 @@ pub async fn finish(ctx: &Ctx<'_>) {
         undo.with(|p| p.keyboard = None);
     }
     if let Some((columns, rows)) = undo.with(|p| p.height) {
-        let clean = ctx.fresh();
         // A reserva renovada no começo cobria a volta ao prompt: a devolução da altura ganha a dela.
-        if held { renew(&clean, UNDO_MAX).await; }
+        let clean = if held { ctx.within(renew(&ctx.fresh(), UNDO_MAX).await) } else { ctx.fresh() };
         give_back(&clean, columns, rows, clean.until).await;
         undo.with(|p| p.height = None);
     }

@@ -246,6 +246,11 @@ struct Inner {
     toast_seq: u64,
     /// Ordem dos avisos de foco e rolagem da sessão com terminal.
     seq: u64,
+    /// Por nome, a trava que segura a gravação da vista e a entrega aos aparelhos juntas: entre duas
+    /// publicações que se cruzam, a que grava por último também entrega por último. Pelo nome, não pela vida,
+    /// porque a limpeza de uma sessão substituída também precisa da vez. Ordem: ela antes de `inner` e dos hubs.
+    /// ponytail: uma entrada por nome visto, nunca removida; nomes de sessão são poucos.
+    publishing: HashMap<String, Arc<Mutex<()>>>,
 }
 
 #[derive(Clone, Default)]
@@ -253,9 +258,6 @@ pub struct Mods {
     inner: Arc<Mutex<Inner>>,
     hubs: Arc<OnceLock<WeakHubs>>,
     lives: Arc<std::sync::atomic::AtomicU64>,
-    /// Segura a gravação da vista e a entrega aos aparelhos juntas: entre duas publicações que se cruzam, a
-    /// que grava por último também entrega por último. Ordem das travas: esta antes de `inner` e dos hubs.
-    publishing: Arc<Mutex<()>>,
     /// Acorda quem espera press, fechar, foco e rolagem da sessão com terminal.
     notify: Arc<Notify>,
 }
@@ -317,7 +319,8 @@ impl Mods {
 
     fn attach_with(&self, name: &str, process: &str, plugin_key: Option<&str>, life: u64, link: Arc<dyn SurfaceLink>, terminal: Option<Terminal>) {
         let source = if terminal.is_some() { "terminal" } else { "surface" };
-        let publishing = self.publishing.lock().unwrap();
+        let lock = self.publishing(name);
+        let publishing = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (replaced, old_probe) = {
             let mut inner = self.inner.lock().unwrap();
             let old = inner.sessions.remove(name);
@@ -343,7 +346,8 @@ impl Mods {
     /// A sessão saiu do Rust (S9): esquece o estado, para o elo da sessão com terminal e limpa a faixa dos
     /// aparelhos. Só a vida `life`: outra sessão com o mesmo nome fica.
     pub fn forget(&self, name: &str, life: u64) {
-        let publishing = self.publishing.lock().unwrap();
+        let lock = self.publishing(name);
+        let publishing = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let removed = {
             let mut inner = self.inner.lock().unwrap();
             inner.sessions.get(name).is_some_and(|session| session.life == life).then(|| inner.sessions.remove(name)).flatten()
@@ -426,7 +430,8 @@ impl Mods {
     /// trava de publicação: a que passou na conferência por último é também a última a chegar aos aparelhos.
     fn publish_if(&self, name: &str, life: u64, data: Value, current: impl Fn(&Session) -> bool) -> bool {
         let raw: Arc<str> = data.to_string().into();
-        let _publishing = self.publishing.lock().unwrap();
+        let lock = self.publishing(name);
+        let _publishing = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         {
             let mut inner = self.inner.lock().unwrap();
             let Some(session) = inner.sessions.get_mut(name).filter(|session| session.life == life && current(session)) else { return false };
@@ -835,6 +840,10 @@ impl Mods {
         true
     }
 
+    fn publishing(&self, name: &str) -> Arc<Mutex<()>> {
+        self.inner.lock().unwrap().publishing.entry(name.to_owned()).or_default().clone()
+    }
+
     fn deliver(&self, name: &str, event: &str, data: &str) {
         if let Some(hubs) = self.hubs.get().and_then(WeakHubs::upgrade) {
             hubs.deliver(name, event, data);
@@ -851,17 +860,20 @@ mod tests {
         fn call(&self, _: ModsCall, _: Instant) -> CallFuture { Box::pin(async { Ok(Value::Null) }) }
     }
 
-    /// Com uma publicação entregando, outra nem grava: a que grava por último é também a última a chegar aos
-    /// aparelhos, e a vista mais velha não fica por último no retrato do hub.
+    /// Com uma publicação entregando, outra da mesma sessão nem grava: a que grava por último é também a última a
+    /// chegar aos aparelhos. A de outra sessão não espera.
     #[test]
     fn a_publication_waits_for_the_one_being_delivered() {
         let mods = Mods::default();
         mods.attach("s", 1, Arc::new(Quiet));
-        let delivering = mods.publishing.lock().unwrap();
+        let lock = mods.publishing("s");
+        let delivering = lock.lock().unwrap();
         let other = std::thread::spawn({
             let mods = mods.clone();
             move || mods.publish_ui("s", 1, json!({"above": null, "panes": [], "source": "surface"}))
         });
+        mods.attach("t", 2, Arc::new(Quiet));
+        assert!(mods.publish_ui("t", 2, json!({"above": null, "panes": [], "source": "surface"})), "outra sessão não espera");
         std::thread::sleep(Duration::from_millis(50));
         assert!(mods.replay("s").is_empty(), "gravou com a entrega da outra em curso");
         drop(delivering);

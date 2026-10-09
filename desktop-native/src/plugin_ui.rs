@@ -436,18 +436,27 @@ pub fn surfaces(mut data: Value) -> Surfaces {
     }
 }
 
-/// A vista inteira a partir da anterior e do `plugin_ui_delta`, por valor: a faixa ausente fica a de antes, e o
-/// painel `{id, same: true}` volta ao de mesmo id na anterior. O servidor só manda a diferença a quem já tem a
-/// vista de que ela parte.
-pub fn apply_delta(above: Value, panes: Vec<Value>, mut delta: Value) -> Value {
-    if !delta.is_object() { return delta; }
+/// A vista inteira a partir da anterior e do `plugin_ui_delta`: a faixa ausente fica a de antes, e o painel
+/// `{id, same: true}` volta ao de mesmo id na anterior, movido. O servidor só manda a diferença a quem já tem a
+/// vista de que ela parte; painel igual que a anterior não tem (ou repetido) é erro, conferido antes de mexer
+/// na vista, que fica como estava.
+pub fn apply_delta(above: &mut Value, panes: &mut Vec<Value>, mut delta: Value) -> Result<Value, &'static str> {
+    if !delta.is_object() { return Err("delta_shape"); }
+    let known: std::collections::HashSet<&str> = panes.iter().filter_map(|pane| pane["id"].as_str()).collect();
+    let mut same = std::collections::HashSet::new();
+    for pane in delta["panes"].as_array().into_iter().flatten().filter(|pane| pane["same"] == true) {
+        match pane["id"].as_str() {
+            Some(id) if known.contains(id) && same.insert(id.to_owned()) => {}
+            _ => return Err("delta_unknown_pane"),
+        }
+    }
     let mut before: std::collections::HashMap<String, Value> =
-        panes.into_iter().filter_map(|pane| Some((pane["id"].as_str()?.to_owned(), pane))).collect();
-    if delta.get("above").is_none() { delta["above"] = above; }
+        std::mem::take(panes).into_iter().filter_map(|pane| Some((pane["id"].as_str()?.to_owned(), pane))).collect();
+    if delta.get("above").is_none() { delta["above"] = std::mem::take(above); }
     for pane in delta["panes"].as_array_mut().into_iter().flatten() {
         if pane["same"] == true && let Some(old) = pane["id"].as_str().and_then(|id| before.remove(id)) { *pane = old; }
     }
-    delta
+    Ok(delta)
 }
 
 pub fn pane_ids(panes: &[Value]) -> Vec<String> { panes.iter().filter_map(|p| p["id"].as_str().map(str::to_owned)).collect() }
@@ -1108,10 +1117,17 @@ mod tests {
     #[test]
     fn delta_keeps_the_band_and_brings_back_unchanged_panes() {
         let a = json!({"id": "a", "tree": {"type": "Text", "children": ["grande"]}});
-        let full = apply_delta(json!({"type": "Text"}), vec![a.clone(), json!({"id": "b"})],
+        let full = apply_delta(&mut json!({"type": "Text"}), &mut vec![a.clone(), json!({"id": "b"})],
             json!({"panes": [{"id": "c", "tree": null}, {"id": "a", "same": true}], "shown_id": "c"}));
-        assert_eq!(full, json!({"above": {"type": "Text"}, "panes": [{"id": "c", "tree": null}, a], "shown_id": "c"}));
-        assert_eq!(apply_delta(json!({"type": "Text"}), vec![a], json!({"above": null, "panes": []})), json!({"above": null, "panes": []}));
+        assert_eq!(full, Ok(json!({"above": {"type": "Text"}, "panes": [{"id": "c", "tree": null}, a.clone()], "shown_id": "c"})));
+        assert_eq!(apply_delta(&mut json!({"type": "Text"}), &mut vec![a.clone()], json!({"above": null, "panes": []})),
+            Ok(json!({"above": null, "panes": []})));
+        // Painel igual que a vista não tem, ou repetido: erro, e a vista fica como estava.
+        let (mut above, mut panes) = (json!({"type": "Text"}), vec![a.clone()]);
+        for delta in [json!({"panes": [{"id": "z", "same": true}]}), json!({"panes": [{"id": "a", "same": true}, {"id": "a", "same": true}]})] {
+            assert!(apply_delta(&mut above, &mut panes, delta).is_err());
+            assert_eq!((&above, &panes), (&json!({"type": "Text"}), &vec![a.clone()]));
+        }
     }
 
     fn amostras() -> Value { serde_json::from_str(include_str!("../../packages/core/src/__fixtures__/plugin-ui-arvores.json")).unwrap() }

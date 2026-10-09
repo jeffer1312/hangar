@@ -12,6 +12,9 @@ use crate::runtime::terminal::ModsAnchor;
 
 /// Prazo da reposição do mínimo pelo vigia: redimensionar e assentar (até 1 s) com o piso das ações.
 const FLOOR_BUDGET: Duration = Duration::from_secs(5);
+/// Depois disto esperando a vez do pane, o vigia avisa no diário e segue esperando: passa do pedido mais longo
+/// (7,5 s) com a limpeza mais longa (~32 s), então é um clique preso.
+const FLOOR_WAIT_WARN: Duration = Duration::from_secs(45);
 /// Prazo da leitura do painel na frente, que não é pedido de app.
 const SHOWN_READ_MAX: Duration = Duration::from_secs(2);
 
@@ -45,10 +48,16 @@ impl TerminalLink {
     /// terminal que se desliga no meio do clique não avisa de novo, e desistir deixaria a janela abaixo do
     /// mínimo. A espera acaba: todo clique solta a vez no fim da limpeza, que tem prazo.
     pub async fn floor(&self) {
-        let _busy = self.parts.busy.lock().await;
+        let _busy = loop {
+            match tokio::time::timeout(FLOOR_WAIT_WARN, self.parts.busy.lock()).await {
+                Ok(busy) => break busy,
+                Err(_) => tracing::warn!(session = %self.parts.name, code = "mods_floor_wait",
+                    "o clique segura o pane além do teto; o tamanho mínimo do terminal segue esperando a vez"),
+            }
+        };
         let undo = Undo::default();
         if let Err(error) = click::floor(&self.parts.ctx(Instant::now() + FLOOR_BUDGET, &undo)).await {
-            tracing::debug!(session = %self.parts.name, code = %error.code, "tamanho mínimo do terminal não reposto");
+            tracing::warn!(session = %self.parts.name, code = %error.code, "tamanho mínimo do terminal não reposto");
         }
     }
 
