@@ -1,4 +1,4 @@
-//! A interface dos mods de ponta a ponta: rota do app, guarda da troca de agente (Python falso), ator
+//! A interface dos mods de ponta a ponta: rota do app, porta de entrada da troca de agente, ator
 //! do runtime, superfície, cano falso com a vitrine gravada e a faixa no SSE dos aparelhos.
 mod fake;
 mod mods_support;
@@ -18,7 +18,7 @@ struct World {
     python: Arc<Fake>,
     server: SocketAddr,
     mods: Mods,
-    registry: RuntimeRegistry,
+    registry: Arc<RuntimeRegistry>,
     seen: Seen,
     cano: tokio::task::JoinHandle<()>,
     _dir: tempfile::TempDir,
@@ -40,9 +40,10 @@ async fn world(swallow: &'static [&'static str]) -> World {
     python.set_info(info_json("claude-headless", &transcript));
     let state = AppState::new(config(upstream, "127.0.0.1"));
     let mods = state.mods.clone();
+    let registry = Arc::new(registry(&mods));
+    let _ = state.state.runtime.set(registry.clone());
     let server = spawn_state(state).await;
     let (escuta, seen, cano) = vitrine_cano(swallow).await;
-    let registry = registry(&mods);
     registry.open(claude_target(dir.path(), escuta, true)).await.unwrap();
     wait_ui(&mods, |ui| ui["above"].to_string().contains("superfície desktop")).await;
     World { python, server, mods, registry, seen, cano, _dir: dir }
@@ -63,24 +64,25 @@ fn pressed(seen: &Seen) -> usize {
 
 #[tokio::test]
 async fn turn_and_guard_that_eat_the_budget_keep_the_press_off_the_mod() {
-    // I1: a vez da sessão e a guarda gastam o orçamento da rota; o que sobra não cobre o prazo do
-    // clique, e o `ui_press` não pode sair (rodaria no mod depois de o app mostrar o erro).
+    // I1: a vez da sessão e a porta (fechada por um congelamento curto) gastam o orçamento da rota; o que
+    // sobra não cobre o prazo do clique, e o `ui_press` não pode sair (rodaria no mod depois de o app
+    // mostrar o erro).
     let world = world(&[]).await;
     let turn = world.mods.link("session").unwrap().lock;
     let held = turn.lock().await;
-    world.python.set_transfer_delay(Duration::from_millis(300));
+    world.registry.ingress().close("session", Duration::from_secs(1)).await.unwrap();
     let start = Instant::now();
     let request = tokio::spawn(press(world.server, "abrir-vitrine-botoes"));
     tokio::time::sleep(Duration::from_millis(4500)).await;
     drop(held);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    world.registry.ingress().open("session");
     let (status, body) = request.await.unwrap();
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_mod_clique_sem_resposta")));
     assert!(start.elapsed() < Duration::from_secs(8), "{:?}", start.elapsed());
-    assert_eq!(world.python.transfer_calls(), 1, "a guarda foi perguntada");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(pressed(&world.seen), 0, "o press não saiu ao mod");
     // Com o orçamento inteiro, o mesmo clique chega ao mod.
-    world.python.set_transfer_delay(Duration::ZERO);
     assert_eq!(press(world.server, "abrir-vitrine-botoes").await.0, 200);
     assert_eq!(pressed(&world.seen), 1);
     world.registry.close("key", 1).await.unwrap();
@@ -88,14 +90,13 @@ async fn turn_and_guard_that_eat_the_budget_keep_the_press_off_the_mod() {
 
 #[tokio::test]
 async fn app_press_goes_through_the_actor_and_the_pane_reaches_the_devices() {
-    // I3 (a): rota → guarda → ator → superfície → cano → resposta HTTP, e o painel aberto pelo clique
+    // I3 (a): rota → porta → ator → superfície → cano → resposta HTTP, e o painel aberto pelo clique
     // chega aos aparelhos pelo `/events`.
     let world = world(&[]).await;
     let mut events = sse(open_events(world.server, "session", "", &[]).await);
     let band: Value = serde_json::from_str(&next_named(&mut events, "plugin_ui").await.data).unwrap();
     assert!(band["above"].to_string().contains("superfície desktop"), "o aparelho nasce com a faixa");
     assert_eq!(press(world.server, "abrir-vitrine-botoes").await, (200, serde_json::json!({"ok": true})));
-    assert_eq!(world.python.transfer_calls(), 1);
     assert_eq!(pressed(&world.seen), 1);
     loop {
         let ui: Value = serde_json::from_str(&next_named(&mut events, "plugin_ui").await.data).unwrap();

@@ -92,7 +92,7 @@ _publications: dict[str, dict] = {}
 
 def publish_terminal(name, conversation, generation, publication, validate):
     """Publica uma vez; aviso perdido conserva a possibilidade de escrita."""
-    if publication.get("mode") not in {"fill", "user"} or not isinstance(publication.get("text"), str):
+    if publication.get("mode") not in {"fill", "user", "focus"} or not isinstance(publication.get("text"), str):
         raise ValueError("publicação inválida")
     validate()
     if tracked_session_id(name) != conversation:
@@ -100,7 +100,7 @@ def publish_terminal(name, conversation, generation, publication, validate):
     with _lock:
         queue, loop = _waiters.get(name), _loop
         modes = (_donos.get(name) or (None, set(), 0))[1]
-        if queue is not None and "receipt_v2" not in modes:
+        if queue is not None and ("receipt_v2" not in modes or publication["mode"] == "focus" and "focus" not in modes):
             return "not_written"
         if queue is None or loop is None:
             return "unavailable"
@@ -130,12 +130,13 @@ def publish_terminal(name, conversation, generation, publication, validate):
             loop.call_soon_threadsafe(enqueue)
         except RuntimeError:
             return "not_written"
-        pending["event"].wait(PUBLICA_S)
+        pending["event"].wait(PUBLICA_FOCO_S if publication["mode"] == "focus" else PUBLICA_S)
         return pending["result"]
     finally:
         with _lock:
             if _publications.get(name) is pending:
-                if pending["result"] != "unknown":
+                # Foco devolvido tarde não deixa entrada incerta: não segura a publicação seguinte.
+                if pending["result"] != "unknown" or pending["mode"] == "focus":
                     del _publications[name]
                 else:
                     pending["returned"] = True
@@ -147,7 +148,8 @@ def _terminal_ack(body, mode):
         if pending is None:
             return body.publication_id is not None
         if (body.publication_id == pending["id"] and body.generation == pending["generation"]
-                and body.session_id == pending["conversation"] and mode == pending["mode"]):
+                and body.session_id == pending["conversation"]
+                and mode == ("fill" if pending["mode"] == "focus" else pending["mode"])):
             pending["result"] = ("filled" if mode == "fill" else "accepted") if body.ok else "unknown"
             pending["event"].set()
             # Aviso tardio só tira a publicação de voo; a entrada segue incerta na fila até o transcript.
@@ -259,34 +261,36 @@ def raizes_dos_plugins() -> list[str]:
     return [str(PLUGIN_SRC), *map(str, outros)]
 
 
-def env_da_sessao(name: str) -> dict[str, str]:
-    """O que o pane precisa para achar a ponte: endereço e o token DESTA sessão.
+def env_da_sessao(name: str, key: str) -> dict[str, str]:
+    """O que o processo precisa para achar a ponte: endereço e o token DESTE processo.
 
-    O bearer do app não entra aqui — quem roda dentro do pane não é o app."""
+    `key` distingue o processo dos outros que nasceram com o mesmo nome; o servidor Rust acha a
+    sessão por ela, também depois de um renomear. O bearer do app não entra aqui — quem roda
+    dentro do pane não é o app."""
     if not ligado():
         return {}
     from app.config import settings
     return {
         "HANGAR_PLUGIN_URL": f"http://127.0.0.1:{settings.port}/api/plugin",
-        "HANGAR_PLUGIN_TOKEN": mint(name),
+        "HANGAR_PLUGIN_TOKEN": mint(name, key),
     }
 
 
-def mint(name: str) -> str:
-    """Token desta sessão, para o `-e` do pane.
+def mint(name: str, key: str | None = None) -> str:
+    """Token da ponte: `<key>.<HMAC(nome, key)>`, ou só o HMAC do nome sem `key`.
 
     DERIVADO, não sorteado: sorteado ele viveria só na memória do backend, e todo restart deixava
-    a sessão viva batendo 403 para sempre — o envio caía no tmux (certo), mas o caminho nativo só
-    voltava recriando a sessão (medido em 18/09/2026). O segredo do servidor é estável, então o
-    valor se refaz igual depois do restart.
+    a sessão viva batendo 403 para sempre. Com a chave dentro do token, a conferência se refaz
+    igual depois do restart sem guardar nada. Não é o bearer do app: é um HMAC dele, de mão única.
 
-    Não é o bearer do app: é um HMAC dele, de mão única, e é ele que vai para o ambiente do pane.
-    Sessão recriada com o MESMO nome recebe o mesmo token, o que é aceitável — quem responde por
-    aquele nome é uma sessão só, e a anterior já morreu.
+    O formato só com o nome é o dos processos lançados antes da chave, e o da cópia do `/ui` que o
+    Rust manda com o nome atual; dois processos com o mesmo nome têm o mesmo token nele.
     """
     from app.config import settings
     segredo = (settings.auth_token or "hangar").encode()
-    return hmac.new(segredo, f"plugin:{name}".encode(), hashlib.sha256).hexdigest()[:32]
+    if key is None:
+        return hmac.new(segredo, f"plugin:{name}".encode(), hashlib.sha256).hexdigest()[:32]
+    return key + "." + hmac.new(segredo, f"plugin:{name}:{key}".encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def machine_key() -> str:
@@ -422,8 +426,44 @@ def esquecer(name: str) -> None:
 
 
 def _confere(name: str, token: str) -> None:
-    if not secrets.compare_digest(mint(name), token):
+    key, dot, _ = token.partition(".")
+    if not secrets.compare_digest(mint(name, key if dot else None), token):
         raise HTTPException(403, detail="token do plugin invalido")
+
+
+def _entra(body) -> None:
+    """Confere o token e põe em `body.sessao` o nome atual da sessão do processo.
+
+    O plugin manda o nome com que o processo nasceu; renomeada a sessão sem relançar, é a chave do
+    token que diz qual é ela agora. Token só do nome, ou chave que o runtime não conhece, fica no nome."""
+    _confere(body.sessao, body.token)
+    key, dot, _ = body.token.partition(".")
+    if not dot:
+        return
+    nome = _nome_da_chave(key)
+    if nome:
+        body.sessao = nome
+    elif key not in _chaves_sem_sessao:
+        # Uma vez por chave: o `/pull` volta a cada 25 s. Sessão fora do runtime cai aqui também.
+        _chaves_sem_sessao.add(key)     # ponytail: cresce uma entrada por lançamento sem runtime
+        _log.info("plugin: chave sem sessão no runtime; segue pelo nome sessao=%s", body.sessao)
+
+
+_chaves_sem_sessao: set[str] = set()
+
+
+def _nome_da_chave(key: str) -> str | None:
+    """A sessão do runtime com essa chave: a dela (sem terminal e wrapper do shell) ou a do token do
+    lançamento (`plugin_key`, sessão com terminal aberta pelo Hangar)."""
+    from app import runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    if coordinator is None:
+        return None
+    for name, slot_key in list(coordinator.names.items()):
+        slot = coordinator.slots.get(slot_key)
+        if slot_key == key or slot is not None and slot.binding.meta.get("plugin_key") == key:
+            return name
+    return None
 
 
 def aguardando(name: str) -> bool:
@@ -510,6 +550,9 @@ CONFIRMA_S = 5.0
 # hooks do UserPromptSubmit, que com a máquina ocupada passam de 5 s. Fica abaixo do teto da
 # política `terminal_publish` no Rust (`PUBLISH_POLICY_TIMEOUT`).
 PUBLICA_S = 30.0
+# A devolução do foco é um `fill` do plugin, de milissegundos; acima disso o clique e a fila seguem pelo
+# `ctrl+x tab`, e a limpeza do clique tem 2 s ao todo.
+PUBLICA_FOCO_S = 1.0
 
 _confirmacoes: dict[str, threading.Event] = {}
 _preenchido: dict[str, bool] = {}
@@ -1079,7 +1122,21 @@ async def whoami(body: WhoamiBody):
                       body.pane, nome, body.session_id, recusa)
             return {"sessao": None}
     _log.info("plugin whoami pane=%s sessao=%s origem=%s", body.pane, nome, origem)
-    return {"sessao": nome, "token": mint(nome), "origem": origem} if nome else {"sessao": None}
+    if not nome:
+        return {"sessao": None}
+    return {"sessao": nome, "token": mint(nome, await asyncio.to_thread(_terminal_key, nome)), "origem": origem}
+
+
+def _terminal_key(name: str) -> str | None:
+    """A chave com que o servidor Rust abre a sessão com terminal (`resolve_binding`): ela vai no
+    token, e a ponte do Rust acha a sessão por ela. Sem vínculo provado, o token só do nome."""
+    from app import runtime_terminal
+    try:
+        binding = runtime_terminal.resolve_binding(name)
+    except Exception as e:
+        _log.info("plugin whoami sem chave sessao=%s: %r", name, e)
+        return None
+    return binding.key if binding else None
 
 
 async def _whoami(body: WhoamiBody) -> tuple[str | None, str]:
@@ -1140,7 +1197,7 @@ async def pull(body: PullBody, request: Request = None):
     Sem `Depends(require_auth)`: quem chama é o pane, que não tem o bearer do
     app. O token por sessão é a credencial daqui.
     """
-    _confere(body.sessao, body.token)
+    _entra(body)
     recusa = await asyncio.to_thread(_conversation_mismatch, body.sessao, body.session_id)
     chave = (body.sessao, body.instance)
     if not recusa:
@@ -1228,7 +1285,7 @@ async def suggest(body: SuggestBody):
 
     Medição antes de virar recurso: só registra, para responder se ela é regerada
     todo turno e o que acontece quando é descartada."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     with _lock:
         # `mostrada=False` é proposta que a TUI não pôs na caixa (diálogo aberto, headless): mostrar
         # no app o que nem o terminal mostrou seria inventar estado.
@@ -1265,7 +1322,7 @@ async def ui(body: BandBody, request: Request):
     Claude Code sem saber de que mod vieram."""
     if int(request.headers.get("content-length") or 0) > MAX_BAND_BYTES:
         raise HTTPException(413, detail="faixa grande demais")
-    _confere(body.sessao, body.token)
+    _entra(body)
     _guardar_faixa(body.sessao, body.above, body.columns, [p.model_dump() for p in body.panes])
     return {"ok": True}
 
@@ -1283,7 +1340,7 @@ async def toast(body: ToastBody):
     """Um mod mostrou um aviso (`$.ui.toast`) no terminal: vai ao app, que o mostra pelo mesmo tempo.
 
     Texto e nome longos são cortados em vez de recusados: recusar faria o aviso sumir do app."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     if body.text.strip():
         _store_toast(body.sessao, body.text, body.timeoutMs, body.plugin)
     return {"ok": True}
@@ -1299,7 +1356,7 @@ class PressBody(BaseModel):
 @plugin_router.post("/pressed")
 async def pressed(body: PressBody):
     """Um botão de mod foi pressionado no terminal: confirma o clique que o app pediu."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     with _lock:
         fila = _pressed.setdefault(body.sessao, [])
         fila.append((time.monotonic(), body.requestId, body.element))
@@ -1318,7 +1375,7 @@ class CopiedBody(BaseModel):
 @plugin_router.post("/copied")
 async def copied(body: CopiedBody):
     """Um mod copiou um texto num clique do app: vai ao app, que copia no aparelho de quem clicou."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     _guardar_efeito("copied", body.sessao, body.attempt, body.text)
     return {"ok": True}
 
@@ -1326,7 +1383,7 @@ async def copied(body: CopiedBody):
 @plugin_router.post("/press-start")
 async def press_start(body: PressBody):
     """O press que começou no terminal é o clique que o app pediu? Responde sim uma vez só."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     tentativa = _do_app(body.sessao, body.requestId, body.element)
     return {"fromApp": tentativa is not None, "attempt": tentativa}
 
@@ -1341,7 +1398,7 @@ class OpenedBody(BaseModel):
 @plugin_router.post("/opened")
 async def opened(body: OpenedBody):
     """Um mod mandou abrir uma URL num clique do app: o app abre no aparelho de quem clicou."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     if not re.match(r"^https?://", body.url, re.IGNORECASE):
         raise HTTPException(400, detail="só http(s)")
     _guardar_efeito("opened", body.sessao, body.attempt, body.url)
@@ -1441,7 +1498,7 @@ class AskBody(BaseModel):
 @plugin_router.post("/ask")
 async def ask(body: AskBody):
     """Long-poll do hook do AskUserQuestion: 200 com a resposta do app, ou vazio na janela."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     global _loop
     # Permissão só fica com o plugin enquanto há alguém no app E ninguém no terminal: segurar
     # esconde o diálogo do terminal. Reavaliado a cada poll do hook, então prender um terminal no
@@ -1503,7 +1560,7 @@ class AskFimBody(BaseModel):
 @plugin_router.post("/ask-fim")
 async def ask_fim(body: AskFimBody):
     """A pergunta fechou. `vencedor=app` é a prova de que a resposta do app valeu."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     with _lock:
         p = _perguntas.get(body.sessao)
         if p is None or p["id"] != body.id:
@@ -1538,7 +1595,7 @@ async def filled(body: FilledBody):
     """O plugin avisa que o rascunho entrou (ou não) no composer.
 
     É o que libera o Enter: sem esse aviso o Hangar não aperta tecla nenhuma."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     if _terminal_ack(body, "fill"):
         return {"ok": True}
     with _lock:
@@ -1561,7 +1618,7 @@ class SubmittedBody(BaseModel):
 @plugin_router.post("/submitted", dependencies=[Depends(require_loopback)])
 async def submitted(body: SubmittedBody):
     """O plugin avisa se o `$.prompt.submit` do modo `user` foi aceito."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     if _terminal_ack(body, "user"):
         return {"ok": True}
     with _lock:
@@ -1580,7 +1637,7 @@ async def state(body: StateBody, request: Request):
     `state.py`, que atende os outros provedores também. Ligar as duas fontes é
     passo separado, e ele não pode nascer junto com a troca do caminho de entrada.
     """
-    _confere(body.sessao, body.token)
+    _entra(body)
     with _lock:
         _estados[body.sessao] = (time.monotonic(), body.estado, body.motivo)
         if body.estado == "working":
@@ -1618,6 +1675,6 @@ class RateBody(BaseModel):
 @plugin_router.post("/rate")
 async def rate(body: RateBody):
     """Velocidade de uma resposta, medida pelo `turn.step` do plugin no próprio processo."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     live_rate(body.sessao).close(body.tokens, body.seconds, body.session_id)
     return {"ok": True}

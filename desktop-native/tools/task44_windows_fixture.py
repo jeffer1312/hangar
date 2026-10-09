@@ -126,8 +126,8 @@ class Handler(T43["Handler"]):
         print("POST /api/computer-control/install", flush=True)
         with LOCK:
             if STATE["install"] == "error":
-                reply = error("erro_computer_control_no_uvx", "o uvx não está no PATH deste servidor (vem com o uv)")
-                status = 400
+                reply = error("erro_computer_control_release", "não consegui baixar a versão publicada", error="HTTP 503")
+                status = 502
             else:
                 skipped = STATE["install"] == "skipped"
                 STATE.update(mode="package", installed_tag="v0.1-sintetica", agent="present", enabled=True,

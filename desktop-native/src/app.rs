@@ -915,6 +915,7 @@ impl Hangar {
             cx.notify();
         }).detach();
         chrome::set_window_active(window.is_window_active());
+        chrome::set_software_gpu(window.gpu_specs().is_some_and(|gpu| gpu.is_software_emulated));
         cx.observe_window_activation(window, |this, window, cx| {
             chrome::set_window_active(window.is_window_active());
             if !window.is_window_active() {
@@ -1956,11 +1957,19 @@ impl Hangar {
                 self.terminal_suggestion = data.get("text").and_then(Value::as_str).unwrap_or("").to_owned();
                 return (true, Changed::Screen);
             }
-            "plugin_ui" => {
-                // A árvore chega por valor: `surfaces` move em vez de copiar centenas de KB por evento.
+            "plugin_ui" | "plugin_ui_delta" => {
+                // A árvore chega por valor: `surfaces` move em vez de copiar centenas de KB por evento. A diferença
+                // (`plugin_ui_delta`) junta-se à vista anterior, também movida.
+                let old_ids = crate::plugin_ui::pane_ids(&self.plugin_panes);
+                let data = if event == "plugin_ui_delta" {
+                    match crate::plugin_ui::apply_delta(&mut self.plugin_band, &mut self.plugin_panes, data) {
+                        Ok(data) => data,
+                        Err(_) => { self.error = Some(tr("invalid_response")); return (false, Changed::Screen); }
+                    }
+                } else { data };
                 let s = crate::plugin_ui::surfaces(data);
-                self.plugin_local_tab = crate::plugin_ui::follow_local(&crate::plugin_ui::pane_ids(&self.plugin_panes),
-                    &crate::plugin_ui::pane_ids(&s.panes), self.plugin_local_tab.as_deref());
+                self.plugin_local_tab = crate::plugin_ui::follow_local(&old_ids, &crate::plugin_ui::pane_ids(&s.panes),
+                    self.plugin_local_tab.as_deref());
                 self.plugin_band = s.above;
                 self.plugin_panes = s.panes;
                 self.plugin_shown = s.shown_id;
@@ -2833,7 +2842,7 @@ impl Hangar {
 
     fn steer_offered(&self) -> bool {
         let (provider, headless) = self.provider();
-        self.chat.state.state == "working" && self.queued_count() > 0 && (headless || matches!(provider, "codex" | "kimi"))
+        self.chat.state.state == "working" && self.queued_count() > 0 && (headless || matches!(provider, "codex" | "kimi" | "claude"))
     }
 
     // Implementar pelo menu da TUI: só Codex com terminal, e só o plano da última resposta.

@@ -620,7 +620,7 @@ def test_create_keeps_plugins_when_starting_or_resuming(tmp_path, monkeypatch, r
     from app import plugin_bridge
     roots = ["/plugins/hangar", "/plugins/outro mod"]
     monkeypatch.setattr(plugin_bridge, "raizes_dos_plugins", lambda: roots)
-    monkeypatch.setattr(plugin_bridge, "env_da_sessao", lambda name: {"HANGAR_PLUGIN_URL": "http://127.0.0.1:1/api/plugin"})
+    monkeypatch.setattr(plugin_bridge, "env_da_sessao", lambda name, key: {"HANGAR_PLUGIN_URL": "http://127.0.0.1:1/api/plugin"})
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "has_session", return_value=False), \
          patch.object(registry.tmux, "new_session", return_value=True) as new_session:
@@ -904,7 +904,7 @@ def test_resume_keeps_plugins_and_session_bridge(tmp_path, monkeypatch):
     (project / f"{_UUID}.jsonl").write_text("{}\n", encoding="utf-8")
     roots = ["/plugins/hangar", "/plugins/outro mod"]
     monkeypatch.setattr(plugin_bridge, "raizes_dos_plugins", lambda: roots)
-    monkeypatch.setattr(plugin_bridge, "env_da_sessao", lambda name: {"HANGAR_PLUGIN_URL": f"http://127.0.0.1:1/{name}"})
+    monkeypatch.setattr(plugin_bridge, "env_da_sessao", lambda name, key: {"HANGAR_PLUGIN_URL": f"http://127.0.0.1:1/{name}"})
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "list_panes_active", return_value=[{"name": "cc", "pid": 111, "cwd": cwd}]), \
          patch.object(registry, "_config_dir_of", return_value=None), \

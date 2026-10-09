@@ -31,6 +31,8 @@ pub enum PaneOp {
     /// `Release` ou o fim do prazo (C6).
     Hold { millis: u64 },
     Release,
+    /// Pede ao plugin do Hangar que devolva o teclado ao prompt, sem andar pelo anel; falha sem plugin.
+    ReturnFocus,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,9 +70,6 @@ pub const HOLD_MARGIN: Duration = Duration::from_millis(500);
 const NEAR_CELLS: usize = 2;
 /// Teto de uma volta ao prompt na limpeza: abaixo dos 10 s de cada reserva no executor, com a folga.
 pub const BACK_MAX: Duration = Duration::from_secs(9);
-/// O mais longo que a limpeza segura o pane: a primeira volta ao prompt, as novas tentativas até
-/// `keep_held` (a última pode começar no fim dele) e as devoluções da altura e do pane.
-pub const CLEANUP_MAX: Duration = Duration::from_secs(9 + 10 + 9 + 2 * 2);
 
 /// Tempos medidos (`medicoes-terminal.md`, `medicoes-psmux.md`), cortados para caber nos 7,5 s do pedido
 /// (fase 2); `quick` para os testes.
@@ -140,7 +139,7 @@ impl Limits {
 struct Back { titles: Vec<String>, anchor: Option<String>, cap: usize }
 
 #[derive(Default)]
-struct Pending { hold: bool, height: Option<(u16, u16)>, focus: Option<String>, keyboard: Option<Back> }
+struct Pending { hold: bool, height: Option<(u16, u16)>, focus: Option<String>, keyboard: Option<Back>, slowest: Duration }
 
 /// O que o pedido deixou para desfazer. Cada item entra antes da ação que o pede, para valer também com o
 /// pedido cortado no meio; `finish` desfaz.
@@ -212,7 +211,9 @@ fn target_of(view: &TerminalView, site: &str, tree: Value) -> Target {
 }
 
 fn target(ctx: &Ctx<'_>, site: &str) -> Result<Target, ModsError> {
-    let view = ctx.mods.terminal_view_in(ctx.name, ctx.life).ok_or_else(pane_missing)?;
+    // Sem a vista ainda, a faixa é botão que não está na tela, como na sessão sem terminal.
+    let view = ctx.mods.terminal_view_in(ctx.name, ctx.life)
+        .ok_or_else(|| if site == BAND_SITE { missing() } else { pane_missing() })?;
     let tree = if site == BAND_SITE { view.above.clone() }
         else { view.panes.iter().find(|p| p.id == site).map(|p| p.tree.clone()).ok_or_else(pane_missing)? };
     Ok(target_of(&view, site, tree))
@@ -248,7 +249,10 @@ impl<'a> Ctx<'a> {
     }
     /// Uma operação no pane, cortada no prazo: a resposta que não vier a tempo é a do mod sem resposta.
     async fn op(&self, op: PaneOp, start_by: Instant) -> Result<PaneReply, ModsError> {
-        tokio::time::timeout_at(self.until.into(), self.pane.op(op, start_by)).await.unwrap_or_else(|_| Err(no_answer()))
+        let started = Instant::now();
+        let reply = tokio::time::timeout_at(self.until.into(), self.pane.op(op, start_by)).await.unwrap_or_else(|_| Err(no_answer()));
+        self.undo.with(|p| p.slowest = p.slowest.max(started.elapsed()));
+        reply
     }
     /// Ação no mod que espera `after` antes do clique final. Conferida a vida logo antes: a sessão que
     /// reabriu no meio do clique não recebe a ação, e o pedido segue para a limpeza.
@@ -839,6 +843,11 @@ async fn back_to_prompt(ctx: &Ctx<'_>, back: &Back) -> bool {
     let (titles, anchor) = (&back.titles, back.anchor.as_deref());
     let Ok(f) = ctx.formats().await else { return false };
     let Ok((mut s, mut last)) = ctx.read_known(titles, anchor, f).await else { return false };
+    // O plugin devolve sem trocar a aba na frente; sem ele, ou com o foco ainda num mod, segue o anel.
+    if s.focus != Some("prompt") && !s.dialog && !s.survey && ctx.op(PaneOp::ReturnFocus, ctx.until).await.is_ok() {
+        let Ok(read) = ctx.read_after(titles, anchor, f, &last, None).await else { return false };
+        (s, last) = read;
+    }
     for _ in 0..=back.cap {
         if s.focus == Some("prompt") && !s.dialog && !s.survey { return true; }
         if s.dialog || s.survey { return false; }
@@ -858,10 +867,16 @@ fn back_budget(limits: &Limits, back: &Back) -> Duration {
     limits.ring_step.saturating_mul(steps).clamp(UNDO_MAX, BACK_MAX)
 }
 
-/// Renova a reserva do pane por `cover` mais a folga. O executor troca a reserva anterior por esta.
-async fn renew(ctx: &Ctx<'_>, cover: Duration) {
-    let millis = u64::try_from((cover + HOLD_MARGIN).as_millis()).unwrap_or(u64::MAX);
+/// Renova a reserva do pane por `cover` mais a folga e a operação mais lenta do pedido: a última que começa
+/// no fim de `cover` ainda roda no executor depois dele, e o `Release` só chega atrás dela. O executor corta
+/// a reserva no teto dele, então `cover` encolhe para a folga caber; devolve o que cobriu, o prazo de quem
+/// age sob ela.
+async fn renew(ctx: &Ctx<'_>, cover: Duration) -> Duration {
+    let margin = HOLD_MARGIN + ctx.undo.with(|p| p.slowest);
+    let cover = cover.min(crate::runtime::terminal::MAX_MODS_HOLD.saturating_sub(margin));
+    let millis = u64::try_from((cover + margin).as_millis()).unwrap_or(u64::MAX);
     let _ = ctx.op(PaneOp::Hold { millis }, ctx.until).await;
+    cover
 }
 
 /// A volta ao prompt falhou com o pane reservado: soltar agora deixaria a fila entregar uma mensagem com o
@@ -871,9 +886,9 @@ async fn keep_trying(ctx: &Ctx<'_>, back: &Back) -> bool {
     let keep_until = Instant::now() + ctx.limits.keep_held;
     let budget = back_budget(ctx.limits, back);
     while Instant::now() < keep_until {
-        renew(&ctx.fresh(), ctx.limits.retry_gap + budget).await;
+        let cover = renew(&ctx.fresh(), ctx.limits.retry_gap + budget).await;
         tokio::time::sleep(ctx.limits.retry_gap).await;
-        if back_to_prompt(&ctx.within(budget), back).await { return true; }
+        if back_to_prompt(&ctx.within(cover.saturating_sub(ctx.limits.retry_gap)), back).await { return true; }
     }
     false
 }
@@ -889,9 +904,9 @@ pub async fn finish(ctx: &Ctx<'_>) {
     let undo = ctx.undo;
     let held = undo.with(|p| p.hold);
     let back = undo.with(|p| p.keyboard.clone());
-    let budget = back.as_ref().map_or(UNDO_MAX, |back| back_budget(ctx.limits, back));
+    let mut budget = back.as_ref().map_or(UNDO_MAX, |back| back_budget(ctx.limits, back));
     // A reserva do pedido conta do começo dele e pode vencer no meio da limpeza.
-    if held { renew(&ctx.fresh(), budget).await; }
+    if held { budget = renew(&ctx.fresh(), budget).await; }
     if let Some(attempt) = undo.with(|p| p.focus.clone()) {
         ctx.mods.disarm_focus(ctx.name, ctx.life, &attempt);
         undo.with(|p| p.focus = None);
@@ -906,9 +921,8 @@ pub async fn finish(ctx: &Ctx<'_>) {
         undo.with(|p| p.keyboard = None);
     }
     if let Some((columns, rows)) = undo.with(|p| p.height) {
-        let clean = ctx.fresh();
         // A reserva renovada no começo cobria a volta ao prompt: a devolução da altura ganha a dela.
-        if held { renew(&clean, UNDO_MAX).await; }
+        let clean = if held { ctx.within(renew(&ctx.fresh(), UNDO_MAX).await) } else { ctx.fresh() };
         give_back(&clean, columns, rows, clean.until).await;
         undo.with(|p| p.height = None);
     }

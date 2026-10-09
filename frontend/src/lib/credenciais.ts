@@ -197,7 +197,8 @@ export interface ComputerControlState {
   llm_key_tail: string;
   jev_key_set: boolean;
   jev_key_tail: string;
-  jev_key_from_settings: boolean;
+  jev_endpoint?: string;   // configuração única do Jev, só leitura aqui
+  jev_model?: string;
   cliproxy: { preset_url: string; has_keys: boolean; key_is_cliproxy: boolean; installed: boolean; running: boolean };
   files: { path: string; enabled: boolean }[];
   migration_skipped?: string[];   // só no retorno do install: alvos da pasta local que não deu pra ler
@@ -212,7 +213,6 @@ export interface ComputerControlRequest {
   llm_model: string;
   llm_effort: string;
   llm_key?: string | null;
-  jev_key?: string | null;
   use_cliproxy_key?: boolean;
 }
 

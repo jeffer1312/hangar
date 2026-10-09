@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activePaneId, buttonControl, followLocalTab, hoverProps, inputControl, isHoverScope, isMissingRoute, isPluginServerFailure, pluginFailureText, tabFollowsServer, decodeRaster, inkColor, isEmptyBand, parsePluginToast, parsePluginUi, textOf, type PluginElement } from './pluginUi';
+import { activePaneId, applyPluginUiDelta, buttonControl, followLocalTab, hoverProps, inputControl, isHoverScope, isMissingRoute, isPluginServerFailure, pluginFailureText, tabFollowsServer, decodeRaster, inkColor, isEmptyBand, parsePluginToast, parsePluginUi, textOf, type PluginElement } from './pluginUi';
 import { mensagemDeErro } from './errosApi';
 import amostras from './__fixtures__/plugin-ui-arvores.json';
 
@@ -227,5 +227,27 @@ describe('hover', () => {
     expect(inputControl({ type: 'Input', props: { key: 'V18-campo' } })).toBeNull();
     expect(inputControl({ type: 'Input', props: {}, press: { plugin: 'vitrine' } })).toBeNull();
     expect(inputControl({ type: 'Button', props: { key: 'x' }, press: { plugin: 'vitrine' } })).toBeNull();
+  });
+});
+
+describe('applyPluginUiDelta', () => {
+  const prev = { above: { type: 'Text', children: ['1'] }, panes: [{ id: 'a', tree: { type: 'Text', children: ['grande'] } },
+    { id: 'b', tree: null }], shown_id: 'a', source: 'terminal' };
+
+  it('mantém a faixa ausente e repõe o painel igual pelo id', () => {
+    const full = applyPluginUiDelta(prev, { panes: [{ id: 'b', tree: { type: 'Text', children: ['novo'] } }, { id: 'a', same: true }],
+      shown_id: 'b', source: 'terminal' });
+    expect(full).toEqual({ above: prev.above, panes: [{ id: 'b', tree: { type: 'Text', children: ['novo'] } }, prev.panes[0]],
+      shown_id: 'b', source: 'terminal' });
+    expect(parsePluginUi(full).panes.map((p) => p.id)).toEqual(['b', 'a']);
+  });
+
+  it('sem a vista anterior, ou com painel igual que ela não tem, lança', () => {
+    expect(() => applyPluginUiDelta(null, { panes: [] })).toThrow();
+    expect(() => applyPluginUiDelta(prev, { panes: [{ id: 'z', same: true }] })).toThrow();
+  });
+
+  it('troca a faixa que veio, inclusive nula, e some com o painel que não veio', () => {
+    expect(applyPluginUiDelta(prev, { above: null, panes: [] })).toEqual({ above: null, panes: [] });
   });
 });

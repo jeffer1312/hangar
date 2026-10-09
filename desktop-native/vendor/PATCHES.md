@@ -24,7 +24,7 @@ fizemos, e só vale se acompanhar a cópia.
 | Ajuste | Onde | Estado | Por quê |
 |---|---|---|---|
 | Desfoque de fundo (vidro) | gpui-pre `scene.rs`/`window.rs`, gpui-pre-wgpu, -apple, -windows | adaptado no wgpu, mantido nos demais | a 0.3.7 dividiu o renderer wgpu em superfície (`WgpuRenderer`) e dispositivo (`WgpuRendererCore`); buffers, scratch e o alvo copiável foram para o núcleo |
-| Redesenho parcial e pular quadro igual | gpui-pre `scene_damage.rs`/`window.rs`/`platform.rs`, gpui-pre-linux, gpui-pre-wgpu | adaptado no wgpu, mantido nos demais | mesma divisão; `render_frame` recebe textura de destino e regiões. O upstream não tem nada equivalente |
+| Redesenho parcial e pular quadro igual | gpui-pre `scene_damage.rs`/`window.rs`/`platform.rs`, gpui-pre-linux, gpui-pre-wgpu, gpui-pre-windows `directx_renderer.rs`/`backdrop.rs`/`window.rs` | adaptado no wgpu e no windows, mantido nos demais | mesma divisão; `render_frame` recebe textura de destino e regiões. No DirectX 11: textura de quadro persistente copiada para o back buffer, um só retângulo de tesoura e `Present1` com esse retângulo sujo (`GPUI_DX_PARTIAL_RENDER=0` desliga). O upstream não tem nada equivalente |
 | Mapa de elementos das provas, `text_input_focused`, `LineCap` | gpui-pre `window.rs`/`element.rs`/`path_builder.rs` | mantido | upstream não mexeu nesses trechos; duas funções nossas em `window.rs` estavam entre a doc e o `#[inline(always)]` de outra e foram movidas |
 | Seleção de texto em view guardada (`retain_cached_view`) | gpui-base `text_selection.rs` | descartado | a 0.7.0 mantém o participante de uma view guardada registrado (`with_rendered_element`, `text_selection.rs:206-245`); o app deixou de chamar o remendo |
 | Coluna do marcador de lista, cor do marcador | gpui-base `text/node.rs`/`style.rs` | adaptado | o marcador passou a usar `list_start`, então a lista numerada que começa em outro número (#3204) vale com a coluna ligada |
@@ -35,7 +35,7 @@ fizemos, e só vale se acompanhar a cópia.
 | Entrada `menu-in` do menu de contexto | gpui-component `menu/context_menu.rs` | adaptado | a 0.7.0 só monta o menu no desenho (`DeferredMenu::build_menu`); a animação foi para lá |
 | Fundo pintado e entrada `dialog-in` do diálogo | gpui-component `dialog/dialog.rs` | adaptado | o cartão agora fica no `Positioner::corner`; a subida de 2 px substitui a descida do `slide-down` |
 
-Não compilados aqui: gpui-pre-windows e gpui-pre-apple/-macos (revisados só por leitura).
+Não compilados aqui: gpui-pre-apple/-macos (revisados só por leitura).
 
 ## Navegador embutido
 

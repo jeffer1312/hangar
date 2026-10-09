@@ -2971,6 +2971,8 @@ export function openEventStream(name: string, lastEventId?: string | null, req =
   if (!isSameOrigin) params.set('token', token ?? '');
   if (lastEventId) params.set('last_event_id', lastEventId);
   if (req) params.set('diag_req', req);
+  // O app junta a diferença da vista dos mods (`plugin_ui_delta`, `applyPluginUiDelta`).
+  params.set('ui_delta', '1');
   const qs = params.toString();
   const url = `${base}${path}${qs ? `?${qs}` : ''}`;
 
@@ -3052,6 +3054,8 @@ export function openEventStreamForServer(s: Server, name: string, req = novoReq(
   if (!isSameOrigin) params.set('token', s.token);
   if (lastEventId) params.set('last_event_id', lastEventId);
   if (req) params.set('diag_req', req);
+  // O app junta a diferença da vista dos mods (`plugin_ui_delta`, `applyPluginUiDelta`).
+  params.set('ui_delta', '1');
   const qs = params.toString();
   const url = `${base}${path}${qs ? `?${qs}` : ''}`;
   return apiEnv().createEventSource(url, { withCredentials: isSameOrigin });

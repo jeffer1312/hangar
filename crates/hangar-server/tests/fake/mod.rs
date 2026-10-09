@@ -46,15 +46,8 @@ pub struct Fake {
     pub list_facts: Mutex<(Value, Duration)>,
     pub list_facts_calls: AtomicUsize,
     pub list_facts_last: Mutex<Value>,
-    /// Resposta da guarda da troca de agente (`/internal/sessions/{name}/transfer`): `None` = livre.
-    transfer: Mutex<Option<StatusCode>>,
-    /// Demora da guarda antes de responder, para o Rust ver o silêncio dela.
-    transfer_delay: Mutex<Duration>,
     /// Demora do `info` antes de responder (Python lento).
     info_delay: Mutex<Duration>,
-    /// Corpo cru que substitui o da guarda (o 409 do Python sem o `detail`).
-    transfer_body: Mutex<Option<String>>,
-    transfer_calls: AtomicUsize,
     /// Corpos que chegaram em `/api/plugin/ui` (a cópia da faixa que o Rust manda).
     plugin_ui: Mutex<Vec<Value>>,
     /// Corpo cru do último pedido de escrita repassado.
@@ -111,25 +104,9 @@ impl Fake {
     pub fn last_hit(&self) -> (String, HeaderMap) {
         self.hits.lock().unwrap().last().cloned().expect("algum pedido repassado")
     }
-    /// A guarda da troca de agente responde este status: 409 é a troca em curso, com o corpo que o Python
-    /// manda; outro status é o backend falhando. `None` volta a "livre".
-    pub fn set_transfer(&self, s: Option<StatusCode>) {
-        *self.transfer.lock().unwrap() = s;
-    }
-    /// A guarda demora isto antes de responder.
+    /// O `info` demora isto antes de responder.
     pub fn set_info_delay(&self, delay: Duration) {
         *self.info_delay.lock().unwrap() = delay;
-    }
-    pub fn set_transfer_delay(&self, delay: Duration) {
-        *self.transfer_delay.lock().unwrap() = delay;
-    }
-    /// A guarda responde este corpo cru, com o status de `set_transfer`.
-    pub fn set_transfer_body(&self, body: Option<&str>) {
-        *self.transfer_body.lock().unwrap() = body.map(str::to_owned);
-    }
-    /// Quantas vezes o Rust perguntou à guarda.
-    pub fn transfer_calls(&self) -> usize {
-        self.transfer_calls.load(SeqCst)
     }
     /// Bytes do corpo do último pedido de escrita repassado.
     pub fn last_body(&self) -> Vec<u8> {
@@ -195,11 +172,7 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
             Duration::ZERO)),
         list_facts_calls: AtomicUsize::new(0),
         list_facts_last: Mutex::new(Value::Null),
-        transfer: Mutex::default(),
-        transfer_delay: Mutex::default(),
         info_delay: Mutex::default(),
-        transfer_body: Mutex::default(),
-        transfer_calls: AtomicUsize::new(0),
         plugin_ui: Mutex::default(),
         last_body: Mutex::default(),
         hold_input: std::sync::atomic::AtomicBool::new(false),
@@ -225,7 +198,6 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
         .route("/internal/sessions/{name}/side-events", get(fake_side))
         .route("/internal/diag", axum::routing::post(fake_diag))
         .route("/internal/list/facts", axum::routing::post(fake_list_facts))
-        .route("/internal/sessions/{name}/transfer", get(fake_transfer))
         .route("/internal/sessions/{name}/plugin", get(fake_plugin_get).post(fake_plugin_post))
         .route("/internal/pair/{op}", axum::routing::post(fake_internal_json))
         .route("/internal/orq/{op}", axum::routing::post(fake_internal_json))
@@ -316,27 +288,6 @@ async fn fake_internal_json(State(f): State<Arc<Fake>>, req: Request) -> Respons
     tokio::time::sleep(delay).await;
     let Some((code, body)) = f.internal_replies.lock().unwrap().get(&path).cloned() else { return status(StatusCode::NOT_FOUND) };
     Response::builder().status(code).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap()
-}
-
-async fn fake_transfer(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
-    if !internal_ok(&headers) {
-        return status(StatusCode::NOT_FOUND);
-    }
-    f.transfer_calls.fetch_add(1, SeqCst);
-    let delay = *f.transfer_delay.lock().unwrap();
-    tokio::time::sleep(delay).await;
-    let answer = *f.transfer.lock().unwrap();
-    if let Some(raw) = f.transfer_body.lock().unwrap().clone() {
-        return Response::builder().status(answer.unwrap_or(StatusCode::OK)).body(Body::from(raw)).unwrap();
-    }
-    let body = match answer {
-        None => json!({"ok": true}),
-        Some(StatusCode::CONFLICT) => json!({"detail": {"code": "session_transfer_busy",
-            "msg": "A sessão está trocando de agente; tente novamente quando terminar.", "params": {}}}),
-        Some(other) => return status(other),
-    };
-    Response::builder().status(answer.unwrap_or(StatusCode::OK)).header("content-type", "application/json")
-        .body(Body::from(body.to_string())).unwrap()
 }
 
 async fn fake_side(
@@ -447,12 +398,23 @@ pub async fn spawn_state(state: hangar_server::routes::AppState) -> SocketAddr {
 /// testes da interface dos mods.
 pub async fn serve_mods(name: &str, link: Arc<dyn hangar_server::mods::state::SurfaceLink>)
     -> (Arc<Fake>, SocketAddr, hangar_server::mods::state::Mods) {
+    let (python, server, mods, _registry) = serve_mods_gated(name, link).await;
+    (python, server, mods)
+}
+
+/// `serve_mods` com o registro do runtime no estado, como no `lib.rs`: dele sai a porta de entrada que a
+/// troca de agente fecha.
+pub async fn serve_mods_gated(name: &str, link: Arc<dyn hangar_server::mods::state::SurfaceLink>)
+    -> (Arc<Fake>, SocketAddr, hangar_server::mods::state::Mods, Arc<hangar_server::runtime::gateway::RuntimeRegistry>) {
     let (python, upstream) = spawn_fake().await;
     let state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
     let mods = state.mods.clone();
+    let registry = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())
+        .with_mods(mods.clone()));
+    let _ = state.state.runtime.set(registry.clone());
     let server = spawn_state(state).await;
     mods.attach(name, 1, link);
-    (python, server, mods)
+    (python, server, mods, registry)
 }
 
 pub fn client() -> reqwest::Client {

@@ -102,6 +102,41 @@ pub(crate) const TOAST_MAX_MS: f64 = 5.0 * 60.0 * 1000.0;
 pub(crate) fn remaining_ms(until: Instant, now: Instant) -> u64 {
     (until.saturating_duration_since(now).as_millis() as u64).max(1)
 }
+/// O `plugin_ui` `now` só com o que mudou desde `prev`: a faixa sai só quando muda (ausente vale nula, como
+/// na vista inteira), e o painel igual ao de mesmo id em `prev` vira `{id, same: true}`. O app junta com a
+/// vista que já tem. Painel sem id, ou com id repetido em `prev`, vai inteiro.
+fn ui_delta(prev: &serde_json::Value, now: &serde_json::Value) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    let (prev, now) = (prev.as_object()?, now.as_object()?);
+    let mut before: HashMap<&str, Option<&Value>> = HashMap::new();
+    for pane in prev.get("panes").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(id) = pane.get("id").and_then(Value::as_str) {
+            before.entry(id).and_modify(|seen| *seen = None).or_insert(Some(pane));
+        }
+    }
+    let mut delta = serde_json::Map::new();
+    // Id repetido em `now` com o mesmo conteúdo: só a primeira ocorrência vira `same`, a outra vai inteira.
+    let mut used = std::collections::HashSet::new();
+    let above = |view: &serde_json::Map<String, Value>| view.get("above").cloned().unwrap_or(Value::Null);
+    if above(prev) != above(now) { delta.insert("above".into(), above(now)); }
+    for (key, value) in now {
+        match key.as_str() {
+            "above" => {}
+            "panes" => {
+                let panes = value.as_array()?.iter().map(|pane| {
+                    let id = pane.get("id").and_then(Value::as_str);
+                    match id.and_then(|id| before.get(id).copied().flatten()) {
+                        Some(old) if old == pane && used.insert(id) => serde_json::json!({"id": id, "same": true}),
+                        _ => pane.clone(),
+                    }
+                });
+                delta.insert(key.clone(), Value::Array(panes.collect()));
+            }
+            _ => { delta.insert(key.clone(), value.clone()); }
+        }
+    }
+    Some(Value::Object(delta))
+}
 const CHANNEL: usize = 1024;
 const SIDE_CONNECT: Duration = Duration::from_secs(10);
 /// O Python manda `ping` a cada 10 s; três calados = conexão morta.
@@ -134,6 +169,11 @@ struct SideCache {
     latest: [Option<Bytes>; 8],
     /// Sobe a cada `plugin_ui` gravado; é o que o marcador `Out::Ui` leva.
     ui_version: u64,
+    /// A vista da versão atual, lida, para calcular a diferença da próxima.
+    ui_prev: Option<serde_json::Value>,
+    /// `plugin_ui_delta` da versão anterior para a atual: o aparelho que anunciou e já tem a anterior
+    /// recebe só o que mudou (`ui_delta`).
+    ui_delta: Option<Bytes>,
     queue: Vec<(String, Bytes)>,
     /// Avisos de mod (`plugin_toast`) ainda vivos: (id, quando vence, dado). A conexão interna é
     /// uma só por sessão, então quem abre o chat depois não os receberia do Python; o retrato os
@@ -155,6 +195,10 @@ impl SideCache {
             self.latest[i] = Some(frame.clone());
             if i == PLUGIN_UI {
                 self.ui_version += 1;
+                let now = serde_json::from_str::<serde_json::Value>(data).ok();
+                self.ui_delta = self.ui_prev.as_ref().zip(now.as_ref()).and_then(|(prev, now)| ui_delta(prev, now))
+                    .map(|delta| sse_frame("plugin_ui_delta", &delta.to_string(), None));
+                self.ui_prev = now;
             }
             if event == "state" && pane_question {
                 let awaiting = serde_json::from_str::<serde_json::Value>(data)
@@ -241,6 +285,8 @@ pub struct Attach {
     pub rx: broadcast::Receiver<Out>,
     pub frames: Vec<Bytes>,
     pub ui: u64,
+    /// O retrato levou o `plugin_ui` da versão `ui`.
+    pub has_ui: bool,
 }
 
 /// Item da fila de envio de um aparelho: quadro pronto, ou o marcador do `plugin_ui`, resolvido pelo
@@ -248,6 +294,8 @@ pub struct Attach {
 pub enum Queued {
     Frame(Bytes),
     Ui(u64),
+    /// A versão do `plugin_ui` que o retrato da entrada levou ao aparelho (`None`: nenhuma); não escreve nada.
+    Has(Option<u64>),
 }
 
 impl From<Bytes> for Queued {
@@ -376,7 +424,7 @@ impl Hub {
         self.bound.lock().unwrap().as_ref()?;
         let events = self.state_events();
         let rx = self.tx.subscribe();
-        let cached = self.cache.lock().unwrap().replay().into_iter().filter(|f| state_frame(f, events)).collect();
+        let cached = self.cache.lock().unwrap().replay().into_iter().filter(|f| private_frame(f, events)).collect();
         Some((rx, cached, events))
     }
 
@@ -443,6 +491,9 @@ impl Hub {
         {
             let mut cache = self.cache.lock().unwrap();
             cache.latest = Default::default();
+            // Sem a vista anterior no retrato, a próxima sai inteira.
+            cache.ui_prev = None;
+            cache.ui_delta = None;
             if let Some((event, data)) = ui {
                 let frame = sse_frame(event, &data, None);
                 cache.record(event, &data, &frame, false);
@@ -485,13 +536,24 @@ impl Hub {
 
     /// O quadro de um item da fila de um aparelho. O marcador do `plugin_ui` vira o quadro só se a versão
     /// dele ainda for a do retrato; vencido, some, porque o marcador da versão nova vem atrás dele na
-    /// mesma fila (ou o retrato dela, depois de um `reset`).
-    pub fn resolve(&self, item: Queued) -> Option<Bytes> {
+    /// mesma fila (ou o retrato dela, depois de um `reset`). `ui` é a versão que o aparelho já tem: com
+    /// `deltas` e a anterior à do retrato, sai só a diferença.
+    pub fn resolve(&self, item: Queued, ui: &mut Option<u64>, deltas: bool) -> Option<Bytes> {
         match item {
             Queued::Frame(frame) => Some(frame),
+            Queued::Has(version) => {
+                *ui = version;
+                None
+            }
             Queued::Ui(version) => {
                 let cache = self.cache.lock().unwrap();
-                if cache.ui_version == version { cache.latest[PLUGIN_UI].clone() } else { None }
+                if cache.ui_version != version { return None; }
+                let frame = match &cache.ui_delta {
+                    Some(delta) if deltas && *ui == version.checked_sub(1) => delta.clone(),
+                    _ => cache.latest[PLUGIN_UI].clone()?,
+                };
+                *ui = Some(version);
+                Some(frame)
             }
         }
     }
@@ -532,9 +594,9 @@ impl Hub {
             if self.bound.lock().unwrap().as_ref().map(|x| x.generation) != Some(b.generation) {
                 continue;
             }
-            let (cached, ui) = {
+            let (cached, ui, has_ui) = {
                 let cache = self.cache.lock().unwrap();
-                (cache.replay(), cache.ui_version)
+                (cache.replay(), cache.ui_version, cache.latest[PLUGIN_UI].is_some())
             };
             let binding = b.binding.clone();
             let resume = resume.clone();
@@ -555,7 +617,7 @@ impl Hub {
                 }
             };
             frames.extend(cached);
-            return Some(Attach { generation: b.generation, rx, frames, ui });
+            return Some(Attach { generation: b.generation, rx, frames, ui, has_ui });
         }
     }
 }
@@ -702,6 +764,11 @@ fn on_side_event(hub: &Arc<Hub>, event: &str, data: &str) -> bool {
     true
 }
 
+/// Quadro que o canal privado leva ao Python: o estado e a faixa dos mods, que o convidado também vê.
+fn private_frame(frame: &[u8], events: &[&str]) -> bool {
+    state_frame(frame, events) || state_frame(frame, &[LATEST[PLUGIN_UI]])
+}
+
 /// Quadro de um dos eventos do estado dados.
 fn state_frame(frame: &[u8], events: &[&str]) -> bool {
     let Some(rest) = frame.strip_prefix(b"event: ") else { return false };
@@ -754,7 +821,8 @@ async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
 }
 
 /// `GET /__hangar_server/state/{name}/events` na porta privada: o Python lê daqui `state`,
-/// `preview`, `ask_question` e `suggest` (sem terminal, Claude ou Codex, também `pensamento` e `ferramenta`) de
+/// `preview`, `ask_question` e `suggest` (sem terminal, Claude ou Codex, também `pensamento` e `ferramenta`),
+/// mais o `plugin_ui`, de
 /// quem entrou pelas portas dele (convite, Connect). Conta
 /// como assinante do hub, então liga o `Monitor` igual a um aparelho do dono.
 pub async fn private_events(
@@ -814,7 +882,11 @@ async fn private_loop(lease: Lease, out: tokio::sync::mpsc::Sender<Bytes>) {
                 _ = ping.tick() => if !send(tail::ping_frame()).await { return },
                 msg = rx.recv() => match msg {
                     Ok(Out::Side(f)) if state_frame(&f, events) => if !send(f).await { return },
-                    Ok(Out::Side(_) | Out::Tail(..) | Out::Rebind | Out::Ui(_)) => {}
+                    // O `/events` do Python repassa a vista inteira ao convidado: sem diferença aqui.
+                    Ok(Out::Ui(version)) => if let Some(f) = hub.resolve(Queued::Ui(version), &mut None, false) {
+                        if !send(f).await { return }
+                    },
+                    Ok(Out::Side(_) | Out::Tail(..) | Out::Rebind) => {}
                     Ok(Out::Close) | Err(broadcast::error::RecvError::Closed) => return,
                     // Atrasado: o retrato de agora repõe o que se perdeu.
                     Err(broadcast::error::RecvError::Lagged(_)) => break,
@@ -1295,6 +1367,18 @@ mod tests {
             assert!(hub.monitor.lock().unwrap().is_some(), "e liga o Monitor");
         }
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // A faixa dos mods sai pelo marcador da versão e chega ao Python como quadro: o convidado a vê.
+        st.side.hubs.deliver("s1", "plugin_ui", "{\"band\":1}");
+        got.clear();
+        let _ = tokio::time::timeout(Duration::from_millis(500), async {
+            loop {
+                let n = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await.unwrap();
+                if n == 0 { return }
+                got.extend_from_slice(&buf[..n]);
+                if String::from_utf8_lossy(&got).contains("event: plugin_ui") { return }
+            }
+        }).await;
+        assert!(String::from_utf8_lossy(&got).contains("event: plugin_ui\r\ndata: {\"band\":1}"), "{}", String::from_utf8_lossy(&got));
         // Só os quatro eventos do estado passam: o Python segue dono do resto para quem entra por ele.
         on_side_event(&st.side.hubs.0.lock().unwrap().get("s1").unwrap().0.clone(), "stats", "{}");
         drop(s);
@@ -1342,10 +1426,10 @@ mod tests {
     }
 
     #[test]
-    fn private_channel_forwards_only_state_events() {
-        for (event, pass) in [("state", true), ("preview", true), ("ask_question", true), ("suggest", true),
+    fn private_channel_forwards_only_state_events_and_the_band() {
+        for (event, pass) in [("state", true), ("preview", true), ("ask_question", true), ("suggest", true), ("plugin_ui", true),
                               ("stats", false), ("message", false), ("plugin_toast", false), ("nav", false)] {
-            assert_eq!(state_frame(&sse_frame(event, "{}", None), &STATE_EVENTS), pass, "{event}");
+            assert_eq!(private_frame(&sse_frame(event, "{}", None), &STATE_EVENTS), pass, "{event}");
         }
     }
 
@@ -1371,6 +1455,15 @@ mod tests {
         lease.hub.seed(stale);
         let kept = lease.hub.cache.lock().unwrap().latest[PLUGIN_UI].clone().unwrap();
         assert!(String::from_utf8_lossy(&kept).contains("nova"), "a faixa nova fica");
+    }
+
+    #[test]
+    fn a_repeated_pane_id_is_same_only_once() {
+        use serde_json::json;
+        let pane = json!({"id": "a", "tree": {"type": "Text"}});
+        let prev = json!({"above": null, "panes": [pane.clone()]});
+        let now = json!({"above": null, "panes": [pane.clone(), pane.clone()]});
+        assert_eq!(ui_delta(&prev, &now), Some(json!({"panes": [{"id": "a", "same": true}, pane]})));
     }
 
     #[tokio::test]

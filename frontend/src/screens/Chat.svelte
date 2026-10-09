@@ -13,7 +13,7 @@
   import { openInNewTab } from '../lib/openTab';
   import { desktop as janela } from '../lib/desktop.svelte';
   import { itemModsCelular, modsCelular, modsNaTela } from '../lib/modsCelular.svelte';
-  import { activePaneId, closePluginPane, fieldSender, followLocalTab, inputPluginField, isMissingRoute, parsePluginToast, pluginFailureText, parsePluginUi, pressPluginButton, safeHref, showPluginPane, tabFollowsServer, type PluginControl, type PluginInputKind, type PluginSource, type PluginNode as PluginTree, type PluginPane as PluginPaneData, type PluginToast } from '@hangar/core';
+  import { activePaneId, applyPluginUiDelta, closePluginPane, fieldSender, followLocalTab, inputPluginField, isMissingRoute, parsePluginToast, pluginFailureText, parsePluginUi, pressPluginButton, safeHref, showPluginPane, tabFollowsServer, type PluginControl, type PluginInputKind, type PluginSource, type PluginNode as PluginTree, type PluginPane as PluginPaneData, type PluginToast } from '@hangar/core';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import UsageSheet from '../components/UsageSheet.svelte';
@@ -466,6 +466,8 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   let pluginSource = $state<PluginSource | null>(null);
   // Escolha local da aba: começa no último painel aberto e sobrevive aos redesenhos.
   let pluginLocalTab = $state<string | null>(null);
+  // Dado cru da última vista, de onde parte o `plugin_ui_delta`. Fora do `$state`: árvore de centenas de KB.
+  let pluginRaw: unknown = null;
   const pluginActivePane = $derived.by(() => {
     const id = activePaneId(pluginPanes.map((p) => p.id), pluginShownId, pluginLocalTab);
     return pluginPanes.find((p) => p.id === id) ?? null;
@@ -2376,11 +2378,14 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       }
     });
 
-    // Árvore crua dos mods: o Hangar não sabe de que mod veio, só desenha os elementos.
-    es.addEventListener('plugin_ui', (e) => {
+    // Árvore crua dos mods: o Hangar não sabe de que mod veio, só desenha os elementos. O servidor manda a vista
+    // inteira, ou só o que mudou (`plugin_ui_delta`) a quem já tem a anterior.
+    const onPluginUi = (e: { data: string }, delta: boolean) => {
       noteAlive();
       try {
-        const s = parsePluginUi(JSON.parse(e.data));
+        const data: unknown = JSON.parse(e.data);
+        pluginRaw = delta ? applyPluginUiDelta(pluginRaw, data) : data;
+        const s = parsePluginUi(pluginRaw);
         pluginLocalTab = followLocalTab(pluginPanes.map((p) => p.id), s.panes.map((p) => p.id), pluginLocalTab);
         pluginBand = s.above;
         pluginPanes = s.panes;
@@ -2388,9 +2393,11 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         pluginColumns = s.columns;
         pluginSource = s.source;
       } catch {
-        quadroFalhou('plugin_ui');
+        quadroFalhou(delta ? 'plugin_ui_delta' : 'plugin_ui');
       }
-    });
+    };
+    es.addEventListener('plugin_ui', (e) => onPluginUi(e, false));
+    es.addEventListener('plugin_ui_delta', (e) => onPluginUi(e, true));
 
     es.addEventListener('plugin_toast', (e) => {
       noteAlive();
@@ -2450,6 +2457,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       events = [];
       sugestao = '';        // era do contexto que o /clear acabou de apagar
       pluginBand = null;    // idem: o mod redesenha para a conversa nova
+      pluginRaw = null;
       pluginPanes = [];
       pluginShownId = undefined;
       pluginColumns = null;
@@ -2656,14 +2664,14 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Medido em 14/08/2026: um envio pelo app vira "queued-" em ~1s e o dedup ali embaixo REMOVE o
   // pending correspondente — contar só o `pending` dava 0 com a bolha na tela e o chip nunca
   // aparecia. `desistiu` fora: aquela não está na fila, está perdida (a TUI engoliu as teclas).
-  // Duas travas de propósito: (1) só Kimi, Codex e Claude sem terminal oferecem o chip; sem isto TODA sessão
+  // Duas travas de propósito: (1) só Kimi, Codex e Claude oferecem o chip; sem isto TODA sessão
   // pagava um scan O(n) sobre `events` a cada evento novo do SSE (o arquivo já trocou o
   // `deriveActivity` por fold incremental pelo mesmo motivo); (2) `kind === 'user_msg'` — o prefixo
   // "queued-" tem DOIS produtores no backend: a fila durável (`pqueue.py`, user_msg) e o aviso de
   // subagente que terminou (`transcript.py`, `queued-task:<id>`, tool_result). Sem o kind, um
   // agente de fundo terminando contaria como mensagem na fila.
   const filaCount = $derived(
-    sessionProvider !== 'kimi' && sessionProvider !== 'codex' && !sessionHeadless
+    sessionProvider !== 'kimi' && sessionProvider !== 'codex' && !(sessionProvider === 'claude' && !desktop) && !sessionHeadless
       ? 0
       : pending.length
         + queuedMessages(events, sessionProvider, sessionHeadless).length,
@@ -3542,7 +3550,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         {lastCache}
         stats={statsEvent}
         onSend={handleSend}
-        onSteer={sessionProvider === 'kimi' || sessionProvider === 'codex' || sessionHeadless ? steerAgora : undefined}
+        onSteer={sessionProvider === 'kimi' || sessionProvider === 'codex' || (sessionProvider === 'claude' && !desktop) || sessionHeadless ? steerAgora : undefined}
         headless={sessionHeadless}
         codexMode={stateEvent?.codex_mode}
         claudePermissionMode={stateEvent?.claude_permission_mode}

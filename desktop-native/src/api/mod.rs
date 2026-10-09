@@ -643,7 +643,10 @@ impl Api {
     }
 
     async fn stream(&self, name: Option<&str>, cursor: &str) -> Result<Response, Failure> {
-        let mut req = self.client.get(self.endpoint(name, Some("events"))).header(header::ACCEPT, "text/event-stream");
+        let mut url = self.endpoint(name, Some("events"));
+        // O app junta a diferença da vista dos mods (`plugin_ui::apply_delta`).
+        if name.is_some() { url.query_pairs_mut().append_pair("ui_delta", "1"); }
+        let mut req = self.client.get(url).header(header::ACCEPT, "text/event-stream");
         if !cursor.is_empty() { req = req.header("Last-Event-ID", cursor); }
         let r = tokio::time::timeout(Duration::from_secs(15), req.send()).await
             .map_err(|_| Failure::transport(false))?.map_err(|_| Failure::transport(false))?;

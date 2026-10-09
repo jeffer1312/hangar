@@ -17,6 +17,7 @@ arquivo, um namespace, um alvo de patch.
 """
 import logging
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -300,6 +301,13 @@ def _pids_com_config_dir(alvo: Path) -> tuple[list[int], bool]:
                     achados.append(int(entrada))
                 break
     return achados, True
+
+
+def taskkill_path() -> str | None:
+    """O `taskkill.exe` do sistema, sem depender do PATH: a tarefa agendada que sobe o backend no
+    Windows pode nascer sem o System32 nele. O PATH fica só de reserva."""
+    exe = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "taskkill.exe")
+    return exe if os.path.isfile(exe) else shutil.which("taskkill")
 
 
 def pid_vivo(pid: int) -> bool:

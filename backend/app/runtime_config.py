@@ -98,9 +98,6 @@ EDITAVEIS: dict[str, type] = {
     # consumidor; o OpenRouter serve o mesmo Jev com o mesmo corpo em outro endereço.
     "jev_endpoint": str,
     "jev_model": str,
-    # O controle do Windows usa a mesma chave do Jev geral. Ausente = ligado só quando o Windows já
-    # tem a mesma (`windows_mesma_chave`); quem tinha outra, ou nenhuma, continua como estava.
-    "jev_windows_mesma_chave": bool,
     # LLM pequeno que escreve o valor de um campo que o chamador nao cobriu — OPCIONAL, e a mesma
     # ordem de precedencia que o CLI ja usa: base_url + api_key + modelo (endpoint compativel com
     # a OpenAI), senao cmd, senao o padrao do proprio CLI.
@@ -123,13 +120,12 @@ EDITAVEIS: dict[str, type] = {
 # Explícito mesmo quando o nome já casaria com `_PALAVRAS_DE_SEGREDO`: depender do acaso do nome
 # quebra calado no dia em que alguém renomeia o campo.
 SEGREDOS = {"groq_api_key", "elevenlabs_api_key", "llm_api_key", "llm_briefing_api_key",
-            "jev_api_key", "jev_texto_api_key", "jev_windows_api_key"}
+            "jev_api_key", "jev_texto_api_key"}
 
 # Campos lidos pelo Claude ao abrir a sessão: ficam nos arquivos dele para não manter
 # duas cópias que divergem quando a pessoa edita a configuração à mão.
 EXTERNOS: dict[str, type] = {
     "mostrar_pensamento": bool,   # settings.json["showThinkingSummaries"]
-    "jev_windows_api_key": str,  # TYPESAFE_API_KEY do MCP Windows, ativo ou guardado
 }
 
 _ARQUIVO = "runtime-config.json"
@@ -189,6 +185,38 @@ _JEV_TEXTO = (
     ("jev_texto_modelo", "JEV_TEXTO_MODELO"),
     ("jev_texto_cmd", "JEV_TEXTO_CMD"),
 )
+# Tudo que o `env_jev` pode pôr além do marcador: quem monta o ambiente tira antes, senão a chave
+# herdada do backend vale numa sessão com o recurso desligado.
+JEV_VARS = ("TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL", *(var for _, var in _JEV_TEXTO))
+
+JEV_TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
+JEV_TYPESAFE_MODELO = "jev-latest"
+JEV_OPENROUTER_URL = "https://openrouter.ai/api/alpha/decisions"
+JEV_OPENROUTER_MODELO = "~typesafe/jev-latest"
+
+
+def destino_jev(chave: str, endpoint: str = "", modelo: str = "") -> tuple[str, str]:
+    """(endereço, modelo) efetivos do Jev. Uma regra para os quatro usos: navegador, orquestração,
+    voz e Computer Use recebem o mesmo par, e não cada um o seu padrão.
+
+    OpenRouter quando o endereço é dele ou, sem endereço, quando a chave é dele (`sk-or-`). Lá,
+    `typesafe/jev-latest` ganha o `~` do apelido, sem o qual o OpenRouter responde "does not exist"."""
+    endpoint, modelo = (endpoint or "").strip(), (modelo or "").strip()
+    if "openrouter.ai" in endpoint or (not endpoint and (chave or "").strip().startswith("sk-or-")):
+        modelo = modelo or JEV_OPENROUTER_MODELO
+        if modelo.startswith("typesafe/") and modelo.endswith("-latest"):
+            modelo = "~" + modelo
+        return endpoint or JEV_OPENROUTER_URL, modelo
+    return endpoint or JEV_TYPESAFE_URL, modelo or JEV_TYPESAFE_MODELO
+
+
+def jev_destino_env() -> dict[str, str]:
+    """Chave, endereço e modelo do Jev com os nomes do ambiente; vazio sem chave."""
+    chave = str(get("jev_api_key") or "").strip()
+    if not chave:
+        return {}
+    endpoint, modelo = destino_jev(chave, str(get("jev_endpoint") or ""), str(get("jev_model") or ""))
+    return {"TYPESAFE_API_KEY": chave, "JEV_ENDPOINT": endpoint, "JEV_MODEL": modelo}
 # Marcador do estado do recurso NA SESSÃO. Vai sempre, ligado ou desligado: sem ele o
 # `hangar-preview objetivo` não separa "desligado nesta sessão" de "nunca configurado", e as duas
 # pedem frases diferentes.
@@ -205,26 +233,6 @@ def env_function_hooks() -> dict[str, str]:
     return {"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"} if get("claude_function_hooks") else {}
 
 
-JEV_OPENROUTER_URL = "https://openrouter.ai/api/alpha/decisions"
-JEV_OPENROUTER_MODELO = "typesafe/jev-1.13-20260917"
-
-
-def destino_jev(chave: str, endpoint: str = "", modelo: str = "") -> tuple[str | None, str | None]:
-    """(endereço, modelo) do Jev para esta chave. Uma regra para todos os usos (sessão, voz, Windows).
-
-    OpenRouter quando o endereço é dele ou, sem endereço, quando a chave é dele (`sk-or-`); aí o
-    modelo vazio vira o padrão de lá (o nome da TypeSafe ele recusa) e `typesafe/jev-latest` ganha o
-    `~` do apelido, sem o qual o OpenRouter responde "does not exist". Na TypeSafe, vazio fica vazio:
-    cada cliente tem o seu padrão."""
-    endpoint, modelo = (endpoint or "").strip(), (modelo or "").strip()
-    if "openrouter.ai" in endpoint or (not endpoint and (chave or "").strip().startswith("sk-or-")):
-        modelo = modelo or JEV_OPENROUTER_MODELO
-        if modelo.startswith("typesafe/") and modelo.endswith("-latest"):
-            modelo = "~" + modelo
-        return endpoint or JEV_OPENROUTER_URL, modelo
-    return endpoint or None, modelo or None
-
-
 def env_jev(ligado: bool) -> dict[str, str]:
     """Ambiente do Jev pra uma sessão. Desligado, só o marcador — a chave não entra no processo.
 
@@ -234,13 +242,7 @@ def env_jev(ligado: bool) -> dict[str, str]:
     env = {MARCA_JEV: "on" if ligado else "off"}
     if not ligado:
         return env
-    chave = str(get("jev_api_key") or "").strip()
-    if chave:
-        env["TYPESAFE_API_KEY"] = chave
-    endpoint, modelo = destino_jev(chave, str(get("jev_endpoint") or ""), str(get("jev_model") or ""))
-    for var, valor in (("JEV_ENDPOINT", endpoint), ("JEV_MODEL", modelo)):
-        if valor:
-            env[var] = valor
+    env.update(jev_destino_env())
     for campo, var in _JEV_TEXTO:
         valor = str(get(campo) or "").strip()
         if valor:
@@ -487,8 +489,6 @@ def aplicar(mudancas: dict[str, Any], *, remover: set[str] | None = None) -> dic
 def _aplicar_travado(mudancas: dict[str, Any], remover: set[str]) -> dict[str, Any]:
     global _cache
     atual = _carregar()
-    # Deduzido antes das mudanças: trocar a chave geral não pode desligar o "mesma chave" de quem a usava.
-    mesma_antes = windows_mesma_chave(copy.deepcopy(atual)) if {"jev_api_key", "jev_windows_mesma_chave"} & mudancas.keys() else False
     for campo in remover:
         if campo in EDITAVEIS:
             atual.pop(campo, None)
@@ -526,18 +526,6 @@ def _aplicar_travado(mudancas: dict[str, Any], remover: set[str]) -> dict[str, A
     # runtime-config e só então descobriria o problema, com a tela dizendo que nada foi salvo.
     for campo, valor in externos.items():
         _gravar_externo(campo, valor)
-    # "Mesma chave" ligado: a chave geral também vale no Windows. Só quando a pessoa mexeu na chave ou
-    # na opção agora: abrir a tela não grava nada no MCP de quem nunca usou o controle do Windows.
-    if {"jev_api_key", "jev_windows_mesma_chave"} & mudancas.keys():
-        geral = str(atual.get("jev_api_key") or "").strip()
-        escolha = atual.get("jev_windows_mesma_chave")
-        if geral and (escolha if isinstance(escolha, bool) else mesma_antes):
-            from app import computer_control
-            try:
-                if computer_control.jev_key() != geral:
-                    computer_control.save_jev_key(geral)
-            except (OSError, computer_control.ComputerControlError) as e:
-                raise ValueError(f"jev_windows_mesma_chave: {e}") from e
     destino = _caminho()
     destino.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(destino.parent), suffix=".tmp")
@@ -557,6 +545,13 @@ def _aplicar_travado(mudancas: dict[str, Any], remover: set[str]) -> dict[str, A
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+    if {"jev_api_key", "jev_endpoint", "jev_model"} & (mudancas.keys() | remover):
+        from app import computer_control
+        try:
+            computer_control.sync_jev()
+        except (OSError, computer_control.ComputerControlError) as e:
+            # Gravado aqui e não lá: a tela mantém o rascunho e salvar de novo repete o repasse.
+            raise ValueError(f"jev: salvo, mas o Computer Use não recebeu a configuração: {e}") from e
     return atual
 
 
@@ -566,15 +561,6 @@ def _gravar_externo(campo: str, valor: Any) -> None:
     Erro de escrita SOBE (vira 400 na tela) em vez de virar log: o interruptor tem que dizer que
     não pegou, senão a pessoa acha que ligou o resumo e a próxima sessão nasce sem ele.
     """
-    if campo == "jev_windows_api_key":
-        from app import computer_control
-        try:
-            key = valor.strip()
-            if key and key != mascarar(computer_control.jev_key()):
-                computer_control.save_jev_key(key)
-        except (OSError, computer_control.ComputerControlError) as e:
-            raise ValueError(f"{campo}: {e}") from e
-        return
     if not isinstance(valor, bool):
         raise ValueError(f"{campo}: esperado true/false")
     from app import pensamento
@@ -582,21 +568,6 @@ def _gravar_externo(campo: str, valor: Any) -> None:
         pensamento.gravar(valor)
     except (OSError, RuntimeError) as e:
         raise ValueError(f"{campo}: {e}") from e
-
-
-def windows_mesma_chave(overrides: dict[str, Any] | None = None) -> bool:
-    """O controle do Windows usa a chave geral? A escolha gravada vale; sem ela, só quando o Windows
-    já tem a mesma. Sem chave no Windows fica desligado: copiar a geral sem pedido mandaria uma chave
-    do OpenRouter a quem só fala com a TypeSafe."""
-    d = _carregar() if overrides is None else overrides
-    if isinstance(d.get("jev_windows_mesma_chave"), bool):
-        return d["jev_windows_mesma_chave"]
-    from app import computer_control
-    try:
-        windows = computer_control.jev_key()
-    except computer_control.ComputerControlError:
-        return False
-    return bool(windows) and windows == str(d.get("jev_api_key") or "").strip()
 
 
 def estado() -> dict[str, Any]:
@@ -626,19 +597,5 @@ def estado() -> dict[str, Any]:
         # "app" = a chave está escrita no settings.json (a tela marca a linha como editada); sem
         # ela o Claude Code trata como desligado, que é o "padrão" desta máquina.
         "origem": "app" if pensamento.definido() else "env",
-    }
-    from app import computer_control
-    try:
-        key = computer_control.jev_key()
-        out["jev_windows_api_key"] = {
-            "valor": mascarar(key), "definido": bool(key), "origem": "app",
-        }
-    except computer_control.ComputerControlError as e:
-        out["jev_windows_api_key"] = {
-            "valor": "", "definido": False, "origem": "app", "erro": str(e),
-        }
-    out["jev_windows_mesma_chave"] = {
-        "valor": windows_mesma_chave(overrides), "definido": True,
-        "origem": "app" if "jev_windows_mesma_chave" in overrides else "env",
     }
     return out

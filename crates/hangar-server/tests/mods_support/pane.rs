@@ -87,6 +87,8 @@ struct State {
     on_keys: VecDeque<(String, Vec<Effect>)>,
     on_wheel: VecDeque<Vec<Effect>>,
     on_resize: Vec<(u16, Vec<Effect>)>,
+    /// O que o plugin faz ao devolver o foco ao prompt; `None` é o plugin que não conhece o pedido.
+    on_return: Option<Vec<Effect>>,
 }
 
 pub struct FakePane { pub name: String, pub mods: Mods, state: Mutex<State> }
@@ -103,6 +105,7 @@ impl FakePane {
     pub fn on_keys(&self, chord: &str, effects: Vec<Effect>) { self.state.lock().unwrap().on_keys.push_back((chord.into(), effects)); }
     pub fn on_wheel(&self, effects: Vec<Effect>) { self.state.lock().unwrap().on_wheel.push_back(effects); }
     pub fn on_resize(&self, rows: u16, effects: Vec<Effect>) { self.state.lock().unwrap().on_resize.push((rows, effects)); }
+    pub fn on_return(&self, effects: Vec<Effect>) { self.state.lock().unwrap().on_return = Some(effects); }
     pub fn cost(&self, each: Duration) { self.state.lock().unwrap().cost = each; }
     pub fn stall_on(&self, prefix: &str) { self.state.lock().unwrap().stall = Some(prefix.into()); }
     /// Ações que mexem no mod (clique, roda, tecla, tamanho), na ordem; leituras e reserva ficam de fora.
@@ -202,6 +205,12 @@ impl FakePane {
                 self.apply(&mut state, &effects);
                 PaneReply::Done
             }
+            PaneOp::ReturnFocus => {
+                let Some(effects) = state.on_return.clone() else { return (Err(pane_failed("plugin_focus")), false) };
+                stalled = Self::act(&mut state, "plugin focus".into());
+                self.apply(&mut state, &effects);
+                PaneReply::Done
+            }
         };
         (Ok(reply), stalled)
     }
@@ -217,7 +226,7 @@ impl Pane for FakePane {
             return Box::pin(async { Err(pane_failed("terminal_gone")) });
         }
         // Reservar e soltar ficam no executor, sem processo do multiplexador.
-        let cost = if matches!(op, PaneOp::Hold { .. } | PaneOp::Release) { Duration::ZERO } else { self.state.lock().unwrap().cost };
+        let cost = if matches!(op, PaneOp::Hold { .. } | PaneOp::Release | PaneOp::ReturnFocus) { Duration::ZERO } else { self.state.lock().unwrap().cost };
         let (result, stalled) = self.handle(op);
         Box::pin(async move {
             if stalled { std::future::pending::<()>().await; }

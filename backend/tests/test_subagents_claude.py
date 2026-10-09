@@ -132,6 +132,17 @@ def test_fork_devolve_a_diretiva_como_prompt(tmp_path):
     assert list_subagents(main)[0]["prompt"] == "Compare as duas telas."
 
 
+def test_colega_de_equipe_devolve_o_prompt_sem_o_envelope(tmp_path):
+    # Agent com `name`: o prompt chega embrulhado no recado do líder e não casava com o Agent do pai.
+    main = _sessao(tmp_path, [])
+    texto = ('<teammate-message teammate_id="team-lead" summary="Painel">\n'
+             'Rode o teste.\nDepois pare.\n</teammate-message>')
+    (tmp_path / "s" / "subagents" / "agent-atm-x.jsonl").write_text(json.dumps(
+        {"type": "user", "timestamp": "2026-10-09T18:19:44Z", "message": {"content": texto}}) + "\n",
+        encoding="utf-8")
+    assert list_subagents(main)[0]["prompt"] == "Rode o teste.\nDepois pare."
+
+
 def test_pasta_subagents_sumida_devolve_lista_vazia(tmp_path):
     jsonl = tmp_path / "s.jsonl"
     jsonl.write_text("", encoding="utf-8")

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use gpui_util::ResultExt;
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, RECT},
         Graphics::{
             Direct3D::*,
             Direct3D11::*,
@@ -57,6 +57,14 @@ pub(crate) struct DirectXRenderer {
     /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
     /// meaning we lost all the allocated gpu textures and scene resources.
     skip_draws: bool,
+
+    /// Hangar: whether the persistent frame texture holds the last drawn scene. Partial frames need it; it is cleared
+    /// on (re)creation, resize, device loss and failed draws, which forces the next frame to be drawn in full.
+    frame_valid: bool,
+    /// Damage not yet presented, accumulated so frames skipped or failed don't lose theirs.
+    pending_damage: SceneDamage,
+    /// The region the frame being rendered redraws; `None` is the whole target.
+    render_region: Option<PixelRect>,
 }
 
 /// Direct3D objects
@@ -68,12 +76,19 @@ pub(crate) struct DirectXRendererDevices {
     pub(crate) device_context: ID3D11DeviceContext,
     dxgi_device: Option<IDXGIDevice>,
     annotation: Option<ID3DUserDefinedAnnotation>,
+    /// For `ClearView` of a partial region; `None` when the device can't, which keeps every frame full.
+    context1: Option<ID3D11DeviceContext1>,
 }
 
 struct DirectXResources {
     backdrop: Option<BackdropResources>,
     // Direct3D rendering objects
     swap_chain: IDXGISwapChain1,
+    /// Hangar: the swap chain's buffer 0, only ever a copy destination. In D3D11 buffer 0 always names the current
+    /// back buffer, also with flip-model rotation.
+    back_buffer: Option<ID3D11Texture2D>,
+    /// Hangar: a persistent texture the size of the back buffer, copied to it on present. Its contents survive across
+    /// frames, so a frame redraws only its damaged region.
     render_target: Option<ID3D11Texture2D>,
     render_target_view: Option<ID3D11RenderTargetView>,
 
@@ -102,6 +117,9 @@ struct DirectXGlobalElements {
     global_params_buffer: Option<ID3D11Buffer>,
     batch_params_buffer: Option<ID3D11Buffer>,
     sampler: Option<ID3D11SamplerState>,
+    /// The context's rasterizer state outside `render` (the color-emoji rasterizer shares the context unscissored).
+    rasterizer_state: ID3D11RasterizerState,
+    scissor_rasterizer_state: ID3D11RasterizerState,
 }
 
 struct Annotation<'a>(&'a ID3DUserDefinedAnnotation);
@@ -142,6 +160,9 @@ impl DirectXRendererDevices {
             Some(device.cast().context("Creating DXGI device")?)
         };
         let annotation = device_context.cast().ok();
+        let context1 = clear_view_supported(device)
+            .then(|| device_context.cast::<ID3D11DeviceContext1>().ok())
+            .flatten();
 
         Ok(Self {
             adapter: adapter.clone(),
@@ -150,6 +171,7 @@ impl DirectXRendererDevices {
             device_context: device_context.clone(),
             dxgi_device,
             annotation,
+            context1,
         })
     }
 }
@@ -198,6 +220,9 @@ impl DirectXRenderer {
             width: 1,
             height: 1,
             skip_draws: false,
+            frame_valid: false,
+            pending_damage: SceneDamage::Full,
+            render_region: None,
         })
     }
 
@@ -224,14 +249,20 @@ impl DirectXRenderer {
                 _pad: [0; 3],
             }],
         )?;
+        let render_target_view = resources
+            .render_target_view
+            .as_ref()
+            .context("missing render target view")?;
+        let context1 = &self.devices.as_ref().expect("devices missing").context1;
         unsafe {
-            device_context.ClearRenderTargetView(
-                resources
-                    .render_target_view
-                    .as_ref()
-                    .context("missing render target view")?,
-                clear_color,
-            );
+            device_context.RSSetState(&self.globals.scissor_rasterizer_state);
+            device_context.RSSetScissorRects(Some(&[self.frame_scissor()]));
+            match (self.render_region, context1) {
+                (Some(region), Some(context1)) => {
+                    context1.ClearView(render_target_view, clear_color, Some(&[region.to_rect()]))
+                }
+                _ => device_context.ClearRenderTargetView(render_target_view, clear_color),
+            }
             device_context
                 .OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
             device_context.RSSetViewports(Some(slice::from_ref(&resources.viewport)));
@@ -245,14 +276,44 @@ impl DirectXRenderer {
         Ok(())
     }
 
-    #[inline]
-    fn present(&mut self) -> Result<()> {
+    /// The scissor rectangle of the frame being rendered: its region, or the whole target.
+    fn frame_scissor(&self) -> RECT {
+        self.render_region.map_or(
+            RECT {
+                left: 0,
+                top: 0,
+                right: self.width as i32,
+                bottom: self.height as i32,
+            },
+            PixelRect::to_rect,
+        )
+    }
+
+    /// Copies the frame texture to the back buffer and presents it. `dirty` tells the compositor that only that
+    /// region changed since the previous present; `None` means everything may have.
+    fn present(&mut self, dirty: Option<PixelRect>) -> Result<()> {
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_ref().context("resources missing")?;
+        let back_buffer = resources.back_buffer.as_ref().context("missing back buffer")?;
+        let render_target = resources
+            .render_target
+            .as_ref()
+            .context("missing render target")?;
+        let mut dirty_rect = dirty.map(PixelRect::to_rect);
+        let parameters = DXGI_PRESENT_PARAMETERS {
+            DirtyRectsCount: dirty_rect.is_some() as u32,
+            pDirtyRects: dirty_rect
+                .as_mut()
+                .map_or(std::ptr::null_mut(), |rect| rect as *mut RECT),
+            pScrollRect: std::ptr::null_mut(),
+            pScrollOffset: std::ptr::null_mut(),
+        };
         let result = unsafe {
-            self.resources
-                .as_ref()
-                .expect("resources missing")
+            devices.device_context.OMSetRenderTargets(None, None);
+            devices.device_context.CopyResource(back_buffer, render_target);
+            resources
                 .swap_chain
-                .Present(0, DXGI_PRESENT(0))
+                .Present1(0, DXGI_PRESENT(0), &parameters)
         };
         result.ok().context("Presenting swap chain failed")
     }
@@ -328,6 +389,7 @@ impl DirectXRenderer {
         self.pipelines = pipelines;
         self.direct_composition = direct_composition;
         self.skip_draws = true;
+        self.frame_valid = false;
         Ok(())
     }
 
@@ -336,13 +398,82 @@ impl DirectXRenderer {
         scene: &Scene,
         background_appearance: WindowBackgroundAppearance,
     ) -> Result<()> {
+        self.draw_with_damage(scene, background_appearance, &SceneDamage::Full)
+    }
+
+    /// Like [`Self::draw`], redrawing only the region `damage` covers (with what earlier frames left pending) into
+    /// the persistent frame texture, then presenting it with that region as the dirty rect.
+    pub(crate) fn draw_with_damage(
+        &mut self,
+        scene: &Scene,
+        background_appearance: WindowBackgroundAppearance,
+        damage: &SceneDamage,
+    ) -> Result<()> {
+        let pending = std::mem::replace(&mut self.pending_damage, SceneDamage::Unchanged);
+        self.pending_damage = pending.union(damage.clone());
         if self.skip_draws {
             // skip drawing this frame, we just recovered from a device lost event
             // and so likely do not have the textures anymore that are required for drawing
             return Ok(());
         }
-        self.render(scene, background_appearance)?;
-        self.present()
+        let plan = self.plan_frame(scene);
+        if log::log_enabled!(log::Level::Trace) {
+            let target_area = (self.width as u64 * self.height as u64).max(1);
+            match plan {
+                RenderPlan::None => log::trace!("partial render: no regions (present only)"),
+                RenderPlan::Full => log::trace!("partial render: full"),
+                RenderPlan::Partial(region) => log::trace!(
+                    "partial render: 1 region covering {:.1}% ({:?})",
+                    100.0 * region.area() as f64 / target_area as f64,
+                    region,
+                ),
+            }
+        }
+        let (region, dirty) = match plan {
+            RenderPlan::None => {
+                // The screen already shows the persistent texture: copying and presenting it again would make
+                // DXGI treat the whole window as dirty (zero dirty rects), which RDP then resends.
+                self.pending_damage = SceneDamage::Unchanged;
+                return Ok(());
+            }
+            RenderPlan::Full => (Some(None), None),
+            RenderPlan::Partial(region) => (Some(Some(region)), Some(region)),
+        };
+        if let Some(region) = region {
+            if let Err(error) = self.render(scene, background_appearance, region) {
+                self.frame_valid = false;
+                return Err(error);
+            }
+            self.frame_valid = true;
+        }
+        self.present(dirty)?;
+        self.pending_damage = SceneDamage::Unchanged;
+        Ok(())
+    }
+
+    /// What this frame redraws, from the pending damage.
+    fn plan_frame(&self, scene: &Scene) -> RenderPlan {
+        if !self.frame_valid
+            || !partial_render_enabled()
+            || self
+                .devices
+                .as_ref()
+                .is_none_or(|devices| devices.context1.is_none())
+        {
+            return RenderPlan::Full;
+        }
+        match &self.pending_damage {
+            SceneDamage::Unchanged => RenderPlan::None,
+            SceneDamage::Full => RenderPlan::Full,
+            SceneDamage::Rects(rects) => {
+                let footprints: Vec<PixelRect> = scene
+                    .backdrop_blurs
+                    .iter()
+                    .filter_map(|blur| backdrop::blur_footprint(blur, self.width, self.height))
+                    .collect();
+                plan_render_region(rects.as_slice(), &footprints, self.width, self.height)
+            }
+        }
     }
 
     /// Clear the render target for `background_appearance` and encode every
@@ -351,6 +482,24 @@ impl DirectXRenderer {
     /// [`render_to_image`](Self::render_to_image) (which reads the target back
     /// instead), so the two cannot drift.
     fn render(
+        &mut self,
+        scene: &Scene,
+        background_appearance: WindowBackgroundAppearance,
+        region: Option<PixelRect>,
+    ) -> Result<()> {
+        self.render_region = region;
+        let result = self.render_scene(scene, background_appearance);
+        if let Some(devices) = &self.devices {
+            unsafe {
+                devices
+                    .device_context
+                    .RSSetState(&self.globals.rasterizer_state)
+            };
+        }
+        result
+    }
+
+    fn render_scene(
         &mut self,
         scene: &Scene,
         background_appearance: WindowBackgroundAppearance,
@@ -382,7 +531,7 @@ impl DirectXRenderer {
             if blurs.peek().is_some() {
                 let order = batch.first_order(scene);
                 while blurs.peek().is_some_and(|blur| blur.order <= order) {
-                    self.draw_backdrop_blur(blurs.next().unwrap())?;
+                    self.draw_backdrop_blur_in_region(blurs.next().unwrap())?;
                 }
             }
             let _annotation = annotation
@@ -424,9 +573,20 @@ impl DirectXRenderer {
             })?;
         }
         for blur in blurs {
-            self.draw_backdrop_blur(blur)?;
+            self.draw_backdrop_blur_in_region(blur)?;
         }
         Ok(())
+    }
+
+    /// A blur whose footprint misses the frame's region can't change a pixel the scissor lets through.
+    fn draw_backdrop_blur_in_region(&mut self, blur: &BackdropBlur) -> Result<()> {
+        if let Some(region) = self.render_region
+            && !backdrop::blur_footprint(blur, self.width, self.height)
+                .is_some_and(|footprint| footprint.intersects(&region))
+        {
+            return Ok(());
+        }
+        self.draw_backdrop_blur(blur)
     }
 
     /// Render `scene` to an offscreen CPU image **without presenting** so
@@ -447,7 +607,9 @@ impl DirectXRenderer {
             !self.skip_draws,
             "render_to_image unavailable while recovering from a lost device"
         );
-        self.render(scene, background_appearance)?;
+        // The frame texture stops matching the last presented scene.
+        self.frame_valid = false;
+        self.render(scene, background_appearance, None)?;
 
         let devices = self.devices.as_ref().context("devices missing")?;
         let device = &devices.device;
@@ -515,12 +677,14 @@ impl DirectXRenderer {
         }
         self.width = width;
         self.height = height;
+        self.frame_valid = false;
 
         // Clear the render target before resizing
         let devices = self.devices.as_ref().context("devices missing")?;
         unsafe { devices.device_context.OMSetRenderTargets(None, None) };
         let resources = self.resources.as_mut().context("resources missing")?;
         resources.backdrop = None;
+        resources.back_buffer.take();
         resources.render_target.take();
         resources.render_target_view.take();
 
@@ -645,12 +809,16 @@ impl DirectXRenderer {
 
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_ref().context("resources missing")?;
-        // Clear intermediate MSAA texture
+        // Clear intermediate MSAA texture. In a partial frame the scissor confines path rasterization and the
+        // composite back to the region, so only the region needs clearing.
+        let msaa_view = resources.path_intermediate_msaa_view.as_ref().unwrap();
         unsafe {
-            devices.device_context.ClearRenderTargetView(
-                resources.path_intermediate_msaa_view.as_ref().unwrap(),
-                &[0.0; 4],
-            );
+            match (self.render_region, &devices.context1) {
+                (Some(region), Some(context1)) => {
+                    context1.ClearView(msaa_view, &[0.0; 4], Some(&[region.to_rect()]))
+                }
+                _ => devices.device_context.ClearRenderTargetView(msaa_view, &[0.0; 4]),
+            }
             // Set intermediate MSAA texture as render target
             devices.device_context.OMSetRenderTargets(
                 Some(slice::from_ref(&resources.path_intermediate_msaa_view)),
@@ -916,6 +1084,7 @@ impl DirectXResources {
         };
 
         let (
+            back_buffer,
             render_target,
             render_target_view,
             path_intermediate_texture,
@@ -929,6 +1098,7 @@ impl DirectXResources {
         Ok(Self {
             backdrop: None,
             swap_chain,
+            back_buffer: Some(back_buffer),
             render_target: Some(render_target),
             render_target_view,
             path_intermediate_texture,
@@ -947,6 +1117,7 @@ impl DirectXResources {
         height: u32,
     ) -> Result<()> {
         let (
+            back_buffer,
             render_target,
             render_target_view,
             path_intermediate_texture,
@@ -955,6 +1126,7 @@ impl DirectXResources {
             path_intermediate_msaa_view,
             viewport,
         ) = create_resources(devices, &self.swap_chain, width, height)?;
+        self.back_buffer = Some(back_buffer);
         self.render_target = Some(render_target);
         self.render_target_view = render_target_view;
         self.path_intermediate_texture = path_intermediate_texture;
@@ -1090,6 +1262,8 @@ impl DirectXGlobalElements {
             global_params_buffer,
             batch_params_buffer,
             sampler,
+            rasterizer_state: create_rasterizer_state(device, false)?,
+            scissor_rasterizer_state: create_rasterizer_state(device, true)?,
         })
     }
 }
@@ -1389,6 +1563,7 @@ fn create_resources(
     height: u32,
 ) -> Result<(
     ID3D11Texture2D,
+    ID3D11Texture2D,
     Option<ID3D11RenderTargetView>,
     ID3D11Texture2D,
     Option<ID3D11ShaderResourceView>,
@@ -1396,7 +1571,7 @@ fn create_resources(
     Option<ID3D11RenderTargetView>,
     D3D11_VIEWPORT,
 )> {
-    let (render_target, render_target_view) =
+    let (back_buffer, render_target, render_target_view) =
         create_render_target_and_its_view(swap_chain, &devices.device)?;
     let (path_intermediate_texture, path_intermediate_srv) =
         create_path_intermediate_texture(&devices.device, width, height)?;
@@ -1411,6 +1586,7 @@ fn create_resources(
         MaxDepth: 1.0,
     };
     Ok((
+        back_buffer,
         render_target,
         render_target_view,
         path_intermediate_texture,
@@ -1421,15 +1597,40 @@ fn create_resources(
     ))
 }
 
+/// The back buffer, and the persistent frame texture the renderer draws into instead, with its view.
 #[inline]
 fn create_render_target_and_its_view(
     swap_chain: &IDXGISwapChain1,
     device: &ID3D11Device,
-) -> Result<(ID3D11Texture2D, Option<ID3D11RenderTargetView>)> {
-    let render_target: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
+) -> Result<(
+    ID3D11Texture2D,
+    ID3D11Texture2D,
+    Option<ID3D11RenderTargetView>,
+)> {
+    let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
+    let mut back_buffer_desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { back_buffer.GetDesc(&mut back_buffer_desc) };
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: back_buffer_desc.Width,
+        Height: back_buffer_desc.Height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: RENDER_TARGET_FORMAT,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let mut render_target = None;
+    unsafe { device.CreateTexture2D(&desc, None, Some(&mut render_target))? };
+    let render_target = render_target.context("creating frame texture")?;
     let mut render_target_view = None;
     unsafe { device.CreateRenderTargetView(&render_target, None, Some(&mut render_target_view))? };
-    Ok((render_target, render_target_view))
+    Ok((back_buffer, render_target, render_target_view))
 }
 
 #[inline]
@@ -1498,6 +1699,13 @@ fn create_path_intermediate_msaa_texture_and_view(
 
 #[inline]
 fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Result<()> {
+    let rasterizer_state = create_rasterizer_state(device, false)?;
+    unsafe { device_context.RSSetState(&rasterizer_state) };
+    Ok(())
+}
+
+/// D3D11 hands back the same object for an identical description, so creating one again is cheap.
+fn create_rasterizer_state(device: &ID3D11Device, scissor: bool) -> Result<ID3D11RasterizerState> {
     let desc = D3D11_RASTERIZER_DESC {
         FillMode: D3D11_FILL_SOLID,
         CullMode: D3D11_CULL_NONE,
@@ -1506,17 +1714,191 @@ fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceCont
         DepthBiasClamp: 0.0,
         SlopeScaledDepthBias: 0.0,
         DepthClipEnable: true.into(),
-        ScissorEnable: false.into(),
+        ScissorEnable: scissor.into(),
         MultisampleEnable: true.into(),
         AntialiasedLineEnable: false.into(),
     };
-    let rasterizer_state = unsafe {
+    unsafe {
         let mut state = None;
         device.CreateRasterizerState(&desc, Some(&mut state))?;
-        state.unwrap()
+        state.context("creating rasterizer state")
+    }
+}
+
+/// Whether the device implements `ID3D11DeviceContext1::ClearView`, which partial frames clear their region with.
+fn clear_view_supported(device: &ID3D11Device) -> bool {
+    let mut options = D3D11_FEATURE_DATA_D3D11_OPTIONS::default();
+    unsafe {
+        device.CheckFeatureSupport(
+            D3D11_FEATURE_D3D11_OPTIONS,
+            &mut options as *mut _ as *mut _,
+            std::mem::size_of_val(&options) as u32,
+        )
+    }
+    .is_ok_and(|()| options.ClearView.as_bool())
+}
+
+/// Hangar: `GPUI_DX_PARTIAL_RENDER=0` draws every frame in full, for A/B measurement.
+fn partial_render_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("GPUI_DX_PARTIAL_RENDER").map_or(true, |value| value != "0"))
+}
+
+/// A pixel-aligned rectangle within the render target, right/bottom exclusive.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PixelRect {
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+}
+
+impl PixelRect {
+    /// `bounds` aligned outward to whole pixels and clamped to the target; `None` when it covers no target pixel.
+    fn from_bounds(bounds: &Bounds<ScaledPixels>, width: u32, height: u32) -> Option<Self> {
+        let edges = [
+            bounds.origin.x.0,
+            bounds.origin.y.0,
+            bounds.origin.x.0 + bounds.size.width.0,
+            bounds.origin.y.0 + bounds.size.height.0,
+        ];
+        if !edges.iter().all(|edge| edge.is_finite()) {
+            return None;
+        }
+        let rect = Self {
+            left: (edges[0].floor().max(0.) as u32).min(width),
+            top: (edges[1].floor().max(0.) as u32).min(height),
+            right: (edges[2].ceil().max(0.) as u32).min(width),
+            bottom: (edges[3].ceil().max(0.) as u32).min(height),
+        };
+        (rect.right > rect.left && rect.bottom > rect.top).then_some(rect)
+    }
+
+    fn area(&self) -> u64 {
+        (self.right - self.left) as u64 * (self.bottom - self.top) as u64
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            left: self.left.min(other.left),
+            top: self.top.min(other.top),
+            right: self.right.max(other.right),
+            bottom: self.bottom.max(other.bottom),
+        }
+    }
+
+    fn intersects(&self, other: &Self) -> bool {
+        self.left < other.right
+            && other.left < self.right
+            && self.top < other.bottom
+            && other.top < self.bottom
+    }
+
+    fn contains(&self, other: &Self) -> bool {
+        self.left <= other.left
+            && self.top <= other.top
+            && other.right <= self.right
+            && other.bottom <= self.bottom
+    }
+
+    fn to_rect(self) -> RECT {
+        RECT {
+            left: self.left as i32,
+            top: self.top as i32,
+            right: self.right as i32,
+            bottom: self.bottom as i32,
+        }
+    }
+}
+
+/// What a frame redraws into the frame texture before presenting it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RenderPlan {
+    /// Nothing; the frame texture already holds the scene.
+    None,
+    Full,
+    Partial(PixelRect),
+}
+
+/// One region bounding all damage, grown until every backdrop blur footprint it touches lies wholly inside it (the
+/// preserved pixels there are already composited, so a blur's input must be redrawn raw in full). A region close to
+/// the whole target is drawn as a full frame.
+// ponytail: one bounding rect, so two distant changes redraw everything between them; per-region draws (as wgpu does)
+// if that shows up in measurements.
+fn plan_render_region(
+    damage: &[Bounds<ScaledPixels>],
+    blur_footprints: &[PixelRect],
+    width: u32,
+    height: u32,
+) -> RenderPlan {
+    let Some(mut region) = damage
+        .iter()
+        .filter_map(|rect| PixelRect::from_bounds(rect, width, height))
+        .reduce(PixelRect::union)
+    else {
+        return RenderPlan::None;
     };
-    unsafe { device_context.RSSetState(&rasterizer_state) };
-    Ok(())
+    while let Some(footprint) = blur_footprints
+        .iter()
+        .find(|footprint| region.intersects(footprint) && !region.contains(footprint))
+    {
+        region = region.union(*footprint);
+    }
+    if region.area() * 10 >= width as u64 * height as u64 * 7 {
+        RenderPlan::Full
+    } else {
+        RenderPlan::Partial(region)
+    }
+}
+
+#[cfg(test)]
+mod partial_render_tests {
+    // Not a glob: `gpui::*` would bring gpui's own `test` attribute in.
+    use super::{PixelRect, RenderPlan, plan_render_region};
+    use gpui::{Bounds, ScaledPixels, point, size};
+
+    fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
+        Bounds::new(point(ScaledPixels(x), ScaledPixels(y)), size(ScaledPixels(w), ScaledPixels(h)))
+    }
+
+    fn rect(left: u32, top: u32, right: u32, bottom: u32) -> PixelRect {
+        PixelRect { left, top, right, bottom }
+    }
+
+    #[test]
+    fn plans_the_pixel_aligned_bounding_box_of_the_damage() {
+        let plan = plan_render_region(
+            &[bounds(10.5, 20.2, 16., 16.), bounds(40., 30., 4., 4.)],
+            &[],
+            1000,
+            800,
+        );
+        assert_eq!(plan, RenderPlan::Partial(rect(10, 20, 44, 37)));
+    }
+
+    #[test]
+    fn grows_over_blur_footprints_to_a_fixpoint_and_ignores_distant_ones() {
+        // The damage touches the first footprint, which in turn touches the second; the third is never reached.
+        let footprints = [rect(0, 0, 50, 50), rect(45, 45, 100, 100), rect(500, 500, 600, 600)];
+        let plan = plan_render_region(&[bounds(40., 40., 5., 5.)], &footprints, 1000, 800);
+        assert_eq!(plan, RenderPlan::Partial(rect(0, 0, 100, 100)));
+    }
+
+    #[test]
+    fn large_or_off_target_damage() {
+        assert_eq!(
+            plan_render_region(&[bounds(0., 0., 900., 700.)], &[], 1000, 800),
+            RenderPlan::Full
+        );
+        assert_eq!(
+            plan_render_region(&[bounds(-50., -50., 10., 10.), bounds(f32::NAN, 0., 1., 1.)], &[], 1000, 800),
+            RenderPlan::None
+        );
+        assert_eq!(
+            plan_render_region(&[bounds(990., 790., 50., 50.)], &[], 1000, 800),
+            RenderPlan::Partial(rect(990, 790, 1000, 800))
+        );
+    }
 }
 
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ns-d3d11-d3d11_blend_desc

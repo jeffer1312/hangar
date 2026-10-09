@@ -54,10 +54,10 @@ EVENT_FIELDS_INT = ("task", "rodada")
 EVENT_FIELDS_STR = ("commit", "resultado", "sessao", "motivo", "titulo", "executor", "par",
                     "de", "para", "plano", "branch", "gid", "fase", "patch", "ate")
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
-JEV_MODEL = "jev-1.13.0"
+JEV_MODEL = "jev-latest"
 # The same Jev served by OpenRouter, for a `sk-or-` key with no endpoint configured.
 OPENROUTER_JEV_URL = "https://openrouter.ai/api/alpha/decisions"
-OPENROUTER_JEV_MODEL = "typesafe/jev-1.13-20260917"
+OPENROUTER_JEV_MODEL = "~typesafe/jev-latest"
 JEV_TIMEOUT_S = 5
 # A hung backend cannot hang the session that called orq.
 SEND_TIMEOUT_S = 30

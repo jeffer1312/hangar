@@ -554,7 +554,7 @@ def test_sombra_consulta_registra_veto_e_acorda_igual(env, tmp_path, jev_server)
     assert linha["would_drop"] is True and linha["mode"] == "shadow"
     assert linha["choice"] == "nothing" and linha["p"] == 0.97
     assert linha["veto"] == {"context": 0.1, "user": 0.2, "problem": 0.1, "deviation": 0.1}
-    assert jev_server["body"]["model"] == "jev-1.13.0"
+    assert jev_server["body"]["model"] == "jev-latest"
     assert jev_server["auth"] == "Bearer k"
 
 
@@ -745,14 +745,23 @@ def test_chave_openrouter_sem_endereco_usa_o_da_openrouter(jev_cfg):
     m, conta = jev_cfg
     _runtime(conta, jev_api_key="sk-or-v1-x", jev_endpoint="", jev_model="")
     assert m.jev_config(auto=True) == {"key": "sk-or-v1-x", "url": "https://openrouter.ai/api/alpha/decisions",
-                              "model": "typesafe/jev-1.13-20260917"}
+                              "model": "~typesafe/jev-latest"}
 
 
 def test_endereco_do_openrouter_nunca_leva_o_nome_da_typesafe(jev_cfg):
     m, conta = jev_cfg
     url = "https://openrouter.ai/api/alpha/decisions"
     _runtime(conta, jev_api_key="sk-or-v1-x", jev_endpoint=url, jev_model="")
-    assert m.jev_config(auto=True)["model"] == "typesafe/jev-1.13-20260917"
+    assert m.jev_config(auto=True)["model"] == "~typesafe/jev-latest"
+    _runtime(conta, jev_api_key="sk-or-v1-x", jev_endpoint=url, jev_model="typesafe/jev-latest")
+    assert m.jev_config(auto=True)["model"] == "~typesafe/jev-latest", "sem o til o OpenRouter recusa"
+
+
+def test_endereco_do_openrouter_nunca_leva_o_nome_da_typesafe(jev_cfg):
+    m, conta = jev_cfg
+    url = "https://openrouter.ai/api/alpha/decisions"
+    _runtime(conta, jev_api_key="sk-or-v1-x", jev_endpoint=url, jev_model="")
+    assert m.jev_config(auto=True)["model"] == "~typesafe/jev-latest"
     _runtime(conta, jev_api_key="sk-or-v1-x", jev_endpoint=url, jev_model="typesafe/jev-latest")
     assert m.jev_config(auto=True)["model"] == "~typesafe/jev-latest", "sem o til o OpenRouter recusa"
 

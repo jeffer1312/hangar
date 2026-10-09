@@ -45,6 +45,38 @@ def test_token_e_por_sessao_e_recusa_o_de_outra():
     assert e.value.status_code == 403
 
 
+def test_token_com_chave_separa_processos_do_mesmo_nome_e_confere_pelo_nome():
+    # Dois processos que nasceram `s1` (um renomeado, outro novo) têm tokens diferentes; a chave vai no
+    # token, e a conferência refaz o HMAC sem nada guardado.
+    a, b = pb.mint("s1", "k1"), pb.mint("s1", "k2")
+    assert a.startswith("k1.") and a != b
+    pb._confere("s1", a)
+    pb._confere("s1", pb.mint("s1"))     # processo lançado antes da chave
+    for nome, token in (("s2", a), ("s1", "k1." + "0" * 32), ("s1", "k2" + a[2:])):
+        with pytest.raises(HTTPException) as e:
+            pb._confere(nome, token)
+        assert e.value.status_code == 403
+
+
+def test_rota_atende_pelo_nome_atual_da_sessao_do_processo(monkeypatch):
+    # Renomeada sem relançar, o plugin segue mandando o nome de nascimento: o `/pull` e as outras rotas
+    # usam o nome de agora, achado pela chave do token (a do runtime ou a do lançamento, `plugin_key`).
+    from types import SimpleNamespace
+    from app import runtime_coordinator
+    slot = lambda meta: SimpleNamespace(binding=SimpleNamespace(meta=meta))
+    fake = SimpleNamespace(names={"novo": "terminal_ab", "outra": "k-outra"},
+                           slots={"terminal_ab": slot({"plugin_key": "lanc"}), "k-outra": slot({})})
+    monkeypatch.setattr(runtime_coordinator, "_current", fake)
+    for token, esperado in ((pb.mint("velho", "lanc"), "novo"), (pb.mint("velho", "terminal_ab"), "novo"),
+                            (pb.mint("velho", "k-outra"), "outra"), (pb.mint("velho", "sumida"), "velho"),
+                            (pb.mint("velho"), "velho")):
+        body = pb.RateBody.model_construct(sessao="velho", token=token)
+        pb._entra(body)
+        assert body.sessao == esperado, token
+    with pytest.raises(HTTPException):
+        pb._entra(pb.RateBody.model_construct(sessao="outro", token=pb.mint("velho", "lanc")))
+
+
 def test_permissao_sem_ninguem_no_app_volta_pro_terminal(monkeypatch):
     # Segurar o `ask` esconde o diálogo do terminal: sem app aberto, não há quem responda.
     monkeypatch.setattr(pb, "terminal_preso", lambda name: False)
@@ -150,7 +182,7 @@ def test_portao_desligado_nao_poe_nada_na_sessao_e_ligado_poe_o_plugin(monkeypat
     # Desligado, a sessão nasce byte a byte como antes: sem flag, sem env. É a promessa do fallback.
     from app.adapters import get_adapter
     monkeypatch.setattr(pb, "ligado", lambda: False)
-    assert pb.raizes_dos_plugins() == [] and pb.env_da_sessao("s1") == {}
+    assert pb.raizes_dos_plugins() == [] and pb.env_da_sessao("s1", "k1") == {}
     assert get_adapter("claude").spawn_command("/tmp/p", "sid") == ["claude", "--session-id", "sid"]
 
     monkeypatch.setattr(pb, "ligado", lambda: True)
@@ -159,8 +191,8 @@ def test_portao_desligado_nao_poe_nada_na_sessao_e_ligado_poe_o_plugin(monkeypat
     assert Path(raiz).parts[-2:] == ("plugins", "hangar")
     assert get_adapter("claude").spawn_command("/tmp/p", "sid")[:5] == [
         "claude", "--session-id", "sid", "--plugin-dir", raiz]
-    env = pb.env_da_sessao("s1")
-    assert env["HANGAR_PLUGIN_TOKEN"] == pb.mint("s1") and env["HANGAR_PLUGIN_URL"].endswith("/api/plugin")
+    env = pb.env_da_sessao("s1", "k1")
+    assert env["HANGAR_PLUGIN_TOKEN"] == pb.mint("s1", "k1") and env["HANGAR_PLUGIN_URL"].endswith("/api/plugin")
 
 
 def test_resposta_sem_ninguem_segurando_nao_e_entrega():
@@ -336,6 +368,17 @@ def test_plugin_dir_file_is_removed_when_mods_are_off(tmp_path, monkeypatch):
 @pytest.fixture
 def ligado(monkeypatch):
     monkeypatch.setattr(pb, "ligado", lambda: True)
+    # Sem vínculo terminal provado nos testes: o token sai só do nome.
+    monkeypatch.setattr(pb, "_terminal_key", lambda nome: None)
+
+
+def test_whoami_poe_no_token_a_chave_do_vinculo_terminal(monkeypatch, ligado):
+    # A ponte do Rust acha a sessão aberta pelo wrapper do shell pela chave com que ele a abre.
+    from app import quem_chama
+    monkeypatch.setattr(quem_chama, "_por_pane", lambda pane: "s1" if pane == "%3" else None)
+    monkeypatch.setattr(pb, "_terminal_key", lambda nome: "terminal_ab" if nome == "s1" else None)
+    r = asyncio.run(pb.whoami(pb.WhoamiBody(chave=pb.machine_key(), pane="%3", session_id=UUID)))
+    assert r == {"sessao": "s1", "token": pb.mint("s1", "terminal_ab"), "origem": "pane"}
 
 
 def test_whoami_resolve_pelo_pane(monkeypatch, ligado):
@@ -1073,6 +1116,60 @@ def test_user_publication_waits_for_ack_after_slow_prompt_hooks(monkeypatch):
         assert asyncio.run(cena()) == "accepted"
     finally:
         pb._publications.clear()
+
+
+def test_focus_publication_needs_the_plugin_mode_and_acks_by_filled(monkeypatch):
+    # O pedido `focus` só vai a um plugin que o declarou; o aviso dele volta pelo `/filled`.
+    monkeypatch.setattr(pb, "tracked_session_id", lambda name: UUID)
+
+    async def cena(modos):
+        pb._loop = asyncio.get_running_loop()
+        fila = pb._waiters["s1"] = asyncio.Queue()
+        pb._donos["s1"] = ("i", set(modos), time.monotonic())
+        envio = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, "s1", UUID, 1,
+            {"id": "pub-f", "mode": "focus", "text": ""}, lambda: None))
+        if "focus" in modos:
+            item = await asyncio.wait_for(fila.get(), 1)
+            assert item["modo"] == "focus"
+            assert pb._terminal_ack(pb.FilledBody(sessao="s1", token="t", ok=True,
+                publication_id="pub-f", generation=1, session_id=UUID), "fill")
+        return await envio
+
+    try:
+        assert asyncio.run(cena({"fill", "user", "receipt_v2"})) == "not_written"
+        assert asyncio.run(cena({"fill", "user", "receipt_v2", "focus"})) == "filled"
+    finally:
+        pb._publications.clear()
+        pb._waiters.pop("s1", None)
+        pb._donos.pop("s1", None)
+
+
+def test_focus_publication_without_ack_does_not_hold_the_next(monkeypatch):
+    # Foco devolvido tarde não deixa entrada incerta: o `fill` seguinte publica normalmente.
+    monkeypatch.setattr(pb, "tracked_session_id", lambda name: UUID)
+    monkeypatch.setattr(pb, "PUBLICA_FOCO_S", .05)
+
+    async def cena():
+        pb._loop = asyncio.get_running_loop()
+        fila = pb._waiters["s1"] = asyncio.Queue()
+        pb._donos["s1"] = ("i", {"fill", "receipt_v2", "focus"}, time.monotonic())
+        foco = await asyncio.to_thread(pb.publish_terminal, "s1", UUID, 1,
+            {"id": "pub-f", "mode": "focus", "text": ""}, lambda: None)
+        await fila.get()
+        assert "s1" not in pb._publications
+        envio = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, "s1", UUID, 1,
+            {"id": "pub-1", "mode": "fill", "text": "oi"}, lambda: None))
+        await asyncio.wait_for(fila.get(), 1)
+        assert pb._terminal_ack(pb.FilledBody(sessao="s1", token="t", ok=True,
+            publication_id="pub-1", generation=1, session_id=UUID), "fill")
+        return foco, await envio
+
+    try:
+        assert asyncio.run(cena()) == ("unknown", "filled")
+    finally:
+        pb._publications.clear()
+        pb._waiters.pop("s1", None)
+        pb._donos.pop("s1", None)
 
 
 def test_publication_wait_stays_below_rust_policy_timeout():

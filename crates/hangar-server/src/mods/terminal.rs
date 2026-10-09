@@ -12,8 +12,9 @@ use crate::runtime::terminal::ModsAnchor;
 
 /// Prazo da reposição do mínimo pelo vigia: redimensionar e assentar (até 1 s) com o piso das ações.
 const FLOOR_BUDGET: Duration = Duration::from_secs(5);
-/// Quanto o vigia espera a vez do pane: um pedido do app inteiro, do orçamento da rota à limpeza mais longa.
-const FLOOR_WAIT: Duration = super::routes::REQUEST_BUDGET.saturating_add(click::CLEANUP_MAX);
+/// Depois disto esperando a vez do pane, o vigia avisa no diário e segue esperando: passa do pedido mais longo
+/// (7,5 s) com a limpeza mais longa (~32 s), então é um clique preso.
+const FLOOR_WAIT_WARN: Duration = Duration::from_secs(45);
 /// Prazo da leitura do painel na frente, que não é pedido de app.
 const SHOWN_READ_MAX: Duration = Duration::from_secs(2);
 
@@ -43,16 +44,20 @@ impl TerminalLink {
     }
 
     /// Repõe o tamanho mínimo quando nenhum terminal de verdade está ligado (T9). Com um pedido do app em
-    /// curso espera a vez dele, até `FLOOR_WAIT`, e só então relê clientes e tamanho: o terminal que se
-    /// desliga no meio do clique não avisa de novo, e desistir deixaria a janela abaixo do mínimo.
+    /// curso espera a vez dele sem prazo, e relê clientes e tamanho assim que o clique solta o pane: o
+    /// terminal que se desliga no meio do clique não avisa de novo, e desistir deixaria a janela abaixo do
+    /// mínimo. A espera acaba: todo clique solta a vez no fim da limpeza, que tem prazo.
     pub async fn floor(&self) {
-        let Ok(_busy) = tokio::time::timeout(FLOOR_WAIT, self.parts.busy.lock()).await else {
-            tracing::debug!(session = %self.parts.name, code = "mods_floor_wait", "tamanho mínimo do terminal não reposto");
-            return;
+        let _busy = loop {
+            match tokio::time::timeout(FLOOR_WAIT_WARN, self.parts.busy.lock()).await {
+                Ok(busy) => break busy,
+                Err(_) => tracing::warn!(session = %self.parts.name, code = "mods_floor_wait",
+                    "o clique segura o pane além do teto; o tamanho mínimo do terminal segue esperando a vez"),
+            }
         };
         let undo = Undo::default();
         if let Err(error) = click::floor(&self.parts.ctx(Instant::now() + FLOOR_BUDGET, &undo)).await {
-            tracing::debug!(session = %self.parts.name, code = %error.code, "tamanho mínimo do terminal não reposto");
+            tracing::warn!(session = %self.parts.name, code = %error.code, "tamanho mínimo do terminal não reposto");
         }
     }
 

@@ -245,29 +245,14 @@ def test_env_jev_ligado_leva_endpoint_e_modelo_do_jev():
     assert env["JEV_MODEL"] == "typesafe/jev-1.13-20260917"
 
 
-def test_destino_do_jev_segue_a_chave_e_o_endereco():
-    or_url, or_model = rc.JEV_OPENROUTER_URL, rc.JEV_OPENROUTER_MODELO
-    # Chave do OpenRouter sem endereço vai ao OpenRouter, com o modelo de lá.
-    assert rc.destino_jev("sk-or-x") == (or_url, or_model)
-    # Endereço do OpenRouter sem modelo: o padrão de lá, nunca o nome da TypeSafe.
-    assert rc.destino_jev("apik-x", or_url, "") == (or_url, or_model)
-    # Sem o til o OpenRouter recusa o apelido.
-    assert rc.destino_jev("sk-or-x", or_url, "typesafe/jev-latest") == (or_url, "~typesafe/jev-latest")
-    assert rc.destino_jev("sk-or-x", or_url, "~typesafe/jev-latest") == (or_url, "~typesafe/jev-latest")
-    # TypeSafe: vazio fica vazio, cada cliente usa o seu padrão.
-    assert rc.destino_jev("apik-x") == (None, None)
-    assert rc.destino_jev("apik-x", "", "jev-1.13.0") == (None, "jev-1.13.0")
-
-
-def test_env_jev_ligado_com_chave_do_openrouter_aponta_para_ele():
-    rc.aplicar({"jev_api_key": "sk-or-x", "jev_endpoint": "https://openrouter.ai/api/alpha/decisions",
-                "jev_model": "typesafe/jev-latest"})
+def test_env_jev_resolve_o_provedor_pela_chave():
+    rc.aplicar({"jev_api_key": "sk-or-x", "jev_endpoint": "", "jev_model": "typesafe/jev-latest"})
     env = rc.env_jev(True)
-    assert env["JEV_ENDPOINT"] == "https://openrouter.ai/api/alpha/decisions"
-    assert env["JEV_MODEL"] == "~typesafe/jev-latest"
-    rc.aplicar({"jev_endpoint": "", "jev_model": ""})
+    assert env["JEV_ENDPOINT"] == rc.JEV_OPENROUTER_URL
+    assert env["JEV_MODEL"] == "~typesafe/jev-latest", "sem o til o OpenRouter recusa"
+    rc.aplicar({"jev_api_key": "apik-x", "jev_model": ""})
     env = rc.env_jev(True)
-    assert (env["JEV_ENDPOINT"], env["JEV_MODEL"]) == (rc.JEV_OPENROUTER_URL, rc.JEV_OPENROUTER_MODELO)
+    assert (env["JEV_ENDPOINT"], env["JEV_MODEL"]) == (rc.JEV_TYPESAFE_URL, "jev-latest")
 
 
 def test_env_jev_desligado_nao_leva_endpoint_nem_modelo():

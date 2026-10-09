@@ -19,9 +19,6 @@ from app.runtime_coordinator import Binding, Phase, WriterLease, _clock
 _log = logging.getLogger("hangar.runtime_terminal")
 
 _writer = contextvars.ContextVar('runtime_terminal_writer', default=None)
-# Pedido de convidado (clique de mod pelo app): não recebe o teclado de uma sessão do Rust. A marca
-# viaja com o contexto até a thread do driver, que a passa adiante ao `run_admin`.
-guest_admin = contextvars.ContextVar('runtime_terminal_guest_admin', default=False)
 
 
 # Teto do teclado emprestado pelo Rust a uma administração (troca de modelo/motor, /btw, modo).
@@ -45,11 +42,6 @@ class TerminalControlError(RuntimeError):
         self.control, self.disposition, self.code = control, disposition, code
         super().__init__('O controle não foi executado; confira a sessão.' if disposition == 'deferred'
             else 'Não foi possível confirmar o controle; confira a sessão antes de repetir.')
-
-
-class GuestRefused(Exception):
-    """Convidado pediu o teclado de uma sessão cujo terminal é do Rust. Não é `RuntimeError` de
-    propósito: quem trata falha de escrita como "sem resposta" não pode engolir a recusa."""
 
 
 def outside_scope(name):
@@ -172,7 +164,8 @@ def _collect(name):
         jsonl=jsonl, session_id=Path(jsonl).stem, config_dir=config_dir, cwd=pane['cwd'],
         mux_argv=['tmux'], windows=os.name == 'nt',
         claude_settings=claude_customizations.from_environment(
-            procinfo._env_var_of(agent, claude_customizations.SESSION_SETTINGS_ENV)))
+            procinfo._env_var_of(agent, claude_customizations.SESSION_SETTINGS_ENV)),
+        plugin_token=procinfo._env_var_of(agent, 'HANGAR_PLUGIN_TOKEN') or '')
 
 
 def resolve_binding(name, previous=None):
@@ -191,6 +184,12 @@ def resolve_binding(name, previous=None):
             and previous.meta.get('session_id') in (None, facts['session_id'])
         or previous.headless and previous.meta.get('session_id') == facts['session_id'])
     key = previous.key if same else 'terminal_' + fingerprint
+    plugin_key = facts.get('plugin_token', '').partition('.')[0] if '.' in facts.get('plugin_token', '') else None
+    kept = previous.meta.get('plugin_key') if same and previous.meta.get('agent_pid') == facts.get('agent_pid') else None
+    if plugin_key is None and kept:
+        # O ambiente do mesmo processo não muda: chave que sumiu é leitura que falhou, não token sem chave.
+        _log.warning('chave da ponte não lida do ambiente; mantida a anterior sessao=%s', name)
+        plugin_key = kept
     directory = _queue_dir()
     state_path = previous.state_path if same else directory / 'runtime' / f'{key}.json'
     generation = previous.generation if same else json.loads(state_path.read_bytes())['generation'] if state_path.exists() else 1
@@ -202,7 +201,9 @@ def resolve_binding(name, previous=None):
         cwd=facts['cwd'], created=previous.meta.get('created', 0) if same else max(facts['created'], facts.get('pane_birth', facts['created'])),
         legacy_import_after=facts.get('pane_birth'), agent_pid=facts.get('agent_pid'),
         agent_birth=facts.get('agent_birth'),
-        **({'claude_settings': facts['claude_settings']} if facts.get('claude_settings') is not None else {})), facts['jsonl'],
+        **({'claude_settings': facts['claude_settings']} if facts.get('claude_settings') is not None else {}),
+        # A chave do token que o processo recebeu no lançamento: a ponte do Rust acha a sessão por ela.
+        **({'plugin_key': plugin_key} if plugin_key else {})), facts['jsonl'],
         previous.projection_dir if same else directory, state_path,
         previous.lock_path if same else directory / 'runtime' / f'{key}.lock', generation)
 
@@ -437,18 +438,15 @@ async def _return_lost_loan(coordinator, name, descriptor, request, request_id):
         diag.registrar('runtime.keyboard_return_failed', 'erro', sessao=name, **failure_reason(exc))
 
 
-async def _borrow_keyboard(coordinator, name, action, *, guest=False):
+async def _borrow_keyboard(coordinator, name, action):
     """Administração que digita no pane de uma sessão do Rust: ele pausa as próprias escritas e
-    empresta o teclado por uma operação, com prazo; fila, trava e estado continuam com ele.
-    `guest`: pedido de convidado, recusado aqui, sob a barreira, com a posse já conferida."""
+    empresta o teclado por uma operação, com prazo; fila, trava e estado continuam com ele."""
     from app import diag
     from app.runtime_coordinator import failure_reason
     slot = coordinator.slot(name)
     async with coordinator._barrier(slot):      # fechar/renomear espera; envios seguem para a fila
         if coordinator.slots.get(coordinator.names.get(name, '')) is not slot or slot.phase != Phase.Rust:
             raise RuntimeError('a sessão mudou de dono antes da administração; tente de novo')
-        if guest:
-            raise GuestRefused('convidado não recebe o teclado de uma sessão do Rust')
         descriptor = slot.binding.descriptor()
         await asyncio.to_thread(validate_binding, descriptor)
         asked = time.monotonic()        # o prazo do Rust começa antes de a resposta chegar aqui
@@ -486,11 +484,11 @@ async def _borrow_keyboard(coordinator, name, action, *, guest=False):
         return result
 
 
-async def run_admin(coordinator, name, operation, payload, action, *, guest=False):
+async def run_admin(coordinator, name, operation, payload, action):
     if not await coordinator.prepare_session(name, 'claude') or not coordinator.slot(name).binding.meta.get('terminal'):
         return await asyncio.to_thread(action)
     if coordinator.slot(name).phase == Phase.Rust:
-        task = asyncio.create_task(_borrow_keyboard(coordinator, name, action, guest=guest))
+        task = asyncio.create_task(_borrow_keyboard(coordinator, name, action))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -999,10 +997,8 @@ def wrap_driver(original, *, control=None, admin=False):
             return original(*args, **kwargs)
         payload = {key:value for key,value in arguments.arguments.items() if key not in {'self','name','provider','pane_id','msg_id','jsonl'}}
         if admin:
-            # Lida aqui, na thread de quem pede: a tarefa no loop do coordenador nasce com outro contexto.
-            guest = guest_admin.get()
             return run_sync(lambda:run_admin(owner, name, original.__name__, payload,
-                lambda:original(*args, **kwargs), guest=guest), owner.loop)
+                lambda:original(*args, **kwargs)), owner.loop)
         if control == 'submit':
             command = {'kind':'submit','text':payload['text']}
         elif control == 'drain':

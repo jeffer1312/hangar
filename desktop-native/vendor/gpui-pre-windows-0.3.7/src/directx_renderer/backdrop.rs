@@ -199,6 +199,7 @@ impl BackdropResources {
         source: &Texture,
         target: &Option<ID3D11RenderTargetView>,
         viewport: D3D11_VIEWPORT,
+        scissor: RECT,
         params: Params,
     ) -> Result<()> {
         // WRITE_DISCARD lets the immediate context rename storage between draws;
@@ -212,6 +213,7 @@ impl BackdropResources {
             context.PSSetConstantBuffers(2, Some(slice::from_ref(&self.params)));
             context.PSSetSamplers(0, Some(slice::from_ref(&self.sampler)));
             context.RSSetViewports(Some(&[viewport]));
+            context.RSSetScissorRects(Some(&[scissor]));
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             context.VSSetShader(&shaders.vertex, None);
             context.PSSetShader(&shaders.fragment, None);
@@ -267,6 +269,7 @@ impl DirectXRenderer {
             return Ok(());
         }
         let downsample = ((sigma / 8.) as u32).clamp(1, 4);
+        let frame_scissor = self.frame_scissor();
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_mut().context("resources missing")?;
         if resources.backdrop.is_none() {
@@ -348,6 +351,13 @@ impl DirectXRenderer {
             MaxDepth: 1.,
             ..Default::default()
         };
+        // Scratch passes fill their whole target; the frame scissor only bounds the composite.
+        let whole = |viewport: D3D11_VIEWPORT| RECT {
+            left: 0,
+            top: 0,
+            right: viewport.Width as i32,
+            bottom: viewport.Height as i32,
+        };
         // Always restore the main target and unbind owned resources, also on
         // Map failure. The context must not retain cache resources after expiry.
         let result = (|| {
@@ -357,6 +367,7 @@ impl DirectXRenderer {
                 &scratch.snapshot,
                 &scratch.horizontal.rtv,
                 viewport,
+                whole(viewport),
                 params,
             )?;
             params.kernel = [0., 1. / viewport.Height, sigma_texels, downsample as f32];
@@ -370,6 +381,7 @@ impl DirectXRenderer {
                 &scratch.horizontal,
                 &scratch.vertical.rtv,
                 viewport,
+                whole(viewport),
                 params,
             )?;
             backdrop.draw_pass(
@@ -378,6 +390,7 @@ impl DirectXRenderer {
                 &scratch.vertical,
                 &resources.render_target_view,
                 resources.viewport,
+                frame_scissor,
                 params,
             )
         })();
@@ -390,9 +403,27 @@ impl DirectXRenderer {
             context.PSSetShader(None, None);
             context.OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
             context.RSSetViewports(Some(&[resources.viewport]));
+            context.RSSetScissorRects(Some(&[frame_scissor]));
         }
         result.context("Drawing backdrop blur")
     }
+}
+
+/// Hangar: every target pixel `draw_backdrop_blur` may read or write for `blur`, for partial rendering. The visible
+/// bounds widened by the copy padding (3 sigma + 2) plus the bilinear taps of the downsampled passes (up to one
+/// downsampled texel in each of the vertical pass and the composite), with a `downsample` texel of slack.
+pub(super) fn blur_footprint(blur: &BackdropBlur, width: u32, height: u32) -> Option<PixelRect> {
+    if !blur.blur_radius.0.is_finite() || !valid_bounds(blur.bounds) || !valid_bounds(blur.content_mask.bounds) {
+        return None;
+    }
+    let sigma = blur.blur_radius.0.clamp(1., MAX_SIGMA);
+    let downsample = ((sigma / 8.) as u32).clamp(1, 4) as f32;
+    let padding = (sigma * 3.).ceil() + 2. + 3. * downsample;
+    let visible = blur.bounds.intersect(&blur.content_mask.bounds);
+    if visible.size.width.0 <= 0. || visible.size.height.0 <= 0. {
+        return None;
+    }
+    PixelRect::from_bounds(&visible.dilate(ScaledPixels(padding)), width, height)
 }
 
 fn rect(bounds: Bounds<ScaledPixels>) -> [f32; 4] {

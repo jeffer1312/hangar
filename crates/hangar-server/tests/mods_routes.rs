@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::http::StatusCode;
 use fake::*;
 use hangar_server::mods::model::*;
 use hangar_server::mods::state::*;
 use hangar_server::routes::AppState;
+use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
 /// Os apps desistem do pedido em 8 s: a resposta da rota, recusa incluída, tem de chegar antes.
@@ -58,6 +58,13 @@ async fn setup(link: FakeLink) -> (Arc<Fake>, std::net::SocketAddr, Mods, FakeLi
     (python, server, mods, link)
 }
 
+async fn setup_gated(link: FakeLink) -> (std::net::SocketAddr, Arc<RuntimeRegistry>, FakeLink) {
+    let (_python, server, _mods, registry) = serve_mods_gated("s", Arc::new(link.clone())).await;
+    (server, registry, link)
+}
+
+fn abrir() -> Value { json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}) }
+
 async fn post(server: std::net::SocketAddr, name: &str, route: &str, body: Value, token: Option<&str>) -> (u16, Value) {
     // O `reqwest` do crate não tem a função `json`: o corpo vai pronto, com o tipo.
     let mut request = client().post(format!("http://{server}/api/sessions/{name}/plugin/{route}"))
@@ -77,7 +84,7 @@ async fn press_and_close_go_to_the_surface() {
     assert_eq!(*link.calls.lock().unwrap(), vec![
         ModsCall::Press { site: "above-prompt".into(), plugin: "vitrine".into(), key: "abrir".into() },
         ModsCall::Close { site: "painel".into() }]);
-    assert_eq!(python.transfer_calls(), 2, "cada operação pergunta à guarda da troca de agente");
+    assert!(python.hits_to("/internal/sessions/s/transfer") == 0, "a guarda da troca de agente não pergunta ao Python");
 }
 
 #[tokio::test]
@@ -100,7 +107,6 @@ async fn other_session_or_guest_goes_to_python() {
     assert_eq!(python.hits_to("/api/sessions/outra/plugin/close"), 1);
     assert_eq!(post(server, "s", "input", json!({"site": "x", "plugin": "vitrine", "key": "y", "kind": "change", "value": ""}), Some("errado")).await.1, "from-python");
     assert!(link.calls.lock().unwrap().is_empty());
-    assert_eq!(python.transfer_calls(), 0, "o que segue ao Python passa pela guarda dele, não pela do Rust");
 }
 
 #[tokio::test]
@@ -113,68 +119,73 @@ async fn input_outside_the_surface_is_refused_in_rust() {
     // B4: a `msg` é a frase nova, que vale para a sessão com terminal e para a sem terminal fora da superfície.
     assert_eq!(body["detail"]["msg"], "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app.");
     assert_eq!(python.hits_to("/api/sessions/outra/plugin/input"), 0);
-    assert_eq!(python.transfer_calls(), 0);
 }
 
 #[tokio::test]
 async fn transfer_in_progress_is_refused_before_the_mod() {
-    let (python, server, _mods, link) = setup(FakeLink::default()).await;
-    python.set_transfer(Some(StatusCode::CONFLICT));
-    for (route, body) in [("press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"})),
-                          ("show", json!({"site": "painel"})),
+    // A troca retém a porta da sessão: toda operação, inclusive cada `change` do campo, é recusada na hora.
+    let (server, registry, link) = setup_gated(FakeLink::default()).await;
+    registry.ingress().hold("s", Duration::from_secs(1)).await.unwrap();
+    for (route, body) in [("press", abrir()), ("show", json!({"site": "painel"})),
                           ("input", json!({"site": "painel", "plugin": "vitrine", "key": "V18-campo", "kind": "change", "value": "o"}))] {
+        let start = Instant::now();
         let (status, answer) = post(server, "s", route, body, Some(OWNER)).await;
         assert_eq!((status, answer["detail"]["code"].as_str()), (409, Some("session_transfer_busy")), "{route}");
+        assert!(start.elapsed() < Duration::from_secs(1), "{route}: {:?}", start.elapsed());
     }
     assert!(link.calls.lock().unwrap().is_empty(), "nada chega ao mod durante a troca");
-    // A12: a guarda é perguntada a cada operação, inclusive a cada `change` do campo.
-    assert_eq!(python.transfer_calls(), 3);
-    python.set_transfer(None);
-    assert_eq!(post(server, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), Some(OWNER)).await.0, 200);
+    registry.ingress().release("s");
+    assert_eq!(post(server, "s", "press", abrir(), Some(OWNER)).await.0, 200);
 }
 
 #[tokio::test]
-async fn guard_without_answer_refuses_with_code() {
-    // Dono único: sem a confirmação do Python o Rust recusa com código; não repassa nem chama o mod.
-    let (python, server, _mods, link) = setup(FakeLink::default()).await;
-    python.set_transfer(Some(StatusCode::INTERNAL_SERVER_ERROR));
-    let (status, body) = post(server, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), Some(OWNER)).await;
-    // B2: a falha da consulta tem código próprio, com tradução (`erro_mod_guarda_indisponivel`).
+async fn transfer_waits_for_the_whole_operation() {
+    // A troca que começa com a operação em curso só fecha a porta depois da resposta: o mod nunca roda com
+    // a troca já começada.
+    let (server, registry, link) = setup_gated(FakeLink::with(FakeInner { delay: Duration::from_millis(400), ..Default::default() })).await;
+    let request = tokio::spawn(post(server, "s", "press", abrir(), Some(OWNER)));
+    while link.active.load(SeqCst) == 0 { tokio::time::sleep(Duration::from_millis(5)).await; }
+    registry.ingress().hold("s", Duration::from_secs(5)).await.unwrap();
+    assert_eq!(link.active.load(SeqCst), 0, "a porta fechou com o mod ainda rodando");
+    assert_eq!(request.await.unwrap().0, 200);
+    assert_eq!(post(server, "s", "show", json!({"site": "painel"}), Some(OWNER)).await.1["detail"]["code"], "session_transfer_busy");
+}
+
+#[tokio::test]
+async fn short_freeze_is_waited_inside_the_budget() {
+    // Fechamento comum (relançar, renomear) não é a troca: a operação espera reabrir; sem reabrir no
+    // orçamento, é a recusa do mod sem resposta, antes de o app desistir.
+    let (server, registry, link) = setup_gated(FakeLink::default()).await;
+    registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
+    let gates = registry.clone();
+    tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(200)).await; gates.ingress().open("s") });
+    assert_eq!(post(server, "s", "press", abrir(), Some(OWNER)).await.0, 200);
+    registry.ingress().close("s", Duration::from_secs(1)).await.unwrap();
+    let start = Instant::now();
+    let (status, body) = post(server, "s", "press", abrir(), Some(OWNER)).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_mod_clique_sem_resposta")));
+    assert!(start.elapsed() < APP_GIVES_UP, "{:?}", start.elapsed());
+    assert_eq!(link.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn server_without_runtime_refuses_with_code() {
+    // Sem o registro do runtime não há porta para conferir: recusa com código, sem chamar o mod.
+    let link = FakeLink::default();
+    let (python, upstream) = spawn_fake().await;
+    let state = AppState::new(config(upstream, "127.0.0.1"));
+    state.mods.attach("s", 1, Arc::new(link.clone()));
+    let server = spawn_state(state).await;
+    let (status, body) = post(server, "s", "press", abrir(), Some(OWNER)).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_guarda_indisponivel")));
     assert!(link.calls.lock().unwrap().is_empty());
     assert_eq!(python.hits_to("/api/sessions/s/plugin/press"), 0);
 }
 
 #[tokio::test]
-async fn conflict_without_detail_is_a_guard_failure() {
-    // Um 409 sem o `detail` do Python não diz o que recusar: vira a falha da guarda, nunca `{"detail": null}`.
-    let (python, server, _mods, link) = setup(FakeLink::default()).await;
-    python.set_transfer(Some(StatusCode::CONFLICT));
-    for raw in ["", "{}", r#"{"detail": "texto"}"#] {
-        python.set_transfer_body(Some(raw));
-        let (status, body) = post(server, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), Some(OWNER)).await;
-        assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_guarda_indisponivel")), "{raw:?}");
-    }
-    assert!(link.calls.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn silent_guard_refuses_quickly_with_code() {
-    // A guarda tem prazo curto e próprio: o silêncio do Python vira a recusa dela, não a espera do app inteiro.
-    let (python, server, _mods, link) = setup(FakeLink::default()).await;
-    python.set_transfer_delay(Duration::from_secs(6));
-    let start = Instant::now();
-    let (status, body) = post(server, "s", "show", json!({"site": "painel"}), Some(OWNER)).await;
-    assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_guarda_indisponivel")));
-    assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
-    assert!(link.calls.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn busy_turn_answers_before_the_app_gives_up_without_the_mod() {
-    // Um pedido preso segura a vez da sessão: o seguinte não passa do prazo do app, não pergunta à guarda e
-    // não chega ao mod.
-    let (python, server, mods, link) = setup(FakeLink::default()).await;
+    // Um pedido preso segura a vez da sessão: o seguinte não passa do prazo do app e não chega ao mod.
+    let (_python, server, mods, link) = setup(FakeLink::default()).await;
     let turn = mods.link("s").unwrap().lock;
     let held = turn.lock().await;
     let start = Instant::now();
@@ -182,7 +193,6 @@ async fn busy_turn_answers_before_the_app_gives_up_without_the_mod() {
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_mod_clique_sem_resposta")));
     assert!(start.elapsed() < APP_GIVES_UP, "{:?}", start.elapsed());
     assert!(link.calls.lock().unwrap().is_empty());
-    assert_eq!(python.transfer_calls(), 0);
     // Solta a vez: o pedido seguinte passa.
     drop(held);
     assert_eq!(post(server, "s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), Some(OWNER)).await.0, 200);
@@ -203,7 +213,7 @@ async fn stuck_mod_is_cut_before_the_app_gives_up_and_frees_the_turn() {
 
 #[tokio::test]
 async fn show_and_input_validate_and_answer() {
-    let (python, server, _mods, link) = setup(FakeLink::default()).await;
+    let (_python, server, _mods, link) = setup(FakeLink::default()).await;
     assert_eq!(post(server, "s", "show", json!({"site": "painel"}), Some(OWNER)).await, (200, json!({"ok": true, "shown_id": "painel"})));
     assert_eq!(post(server, "s", "input", json!({"site": "painel", "plugin": "vitrine", "key": "V18-campo", "kind": "submit", "value": "olá"}), Some(OWNER)).await,
         (200, json!({"ok": true, "value": "olá"})));
@@ -220,8 +230,6 @@ async fn show_and_input_validate_and_answer() {
     for bad in [json!({"site": ""}), json!({"site": "p", "key": "k"})] {
         assert_eq!(post(server, "s", "close", bad, Some(OWNER)).await.0, 422);
     }
-    // Corpo inválido é recusado antes da vez e da guarda: só os dois pedidos válidos a consultaram.
-    assert_eq!(python.transfer_calls(), 2);
     assert_eq!(*link.calls.lock().unwrap(), vec![
         ModsCall::Show { site: "painel".into() },
         ModsCall::Input { site: "painel".into(), plugin: "vitrine".into(), key: "V18-campo".into(), submit: true, value: "olá".into() }]);
@@ -263,6 +271,7 @@ async fn copy_during_the_click_goes_back_to_the_app() {
     let (_python, upstream) = spawn_fake().await;
     let state = AppState::new(config(upstream, "127.0.0.1"));
     let mods = state.mods.clone();
+    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())));
     let server = spawn_state(state).await;
     let link = FakeLink::with(FakeInner { copy: Some((mods.clone(), "Texto copiado pela vitrine (V44)".into())), ..Default::default() });
     mods.attach("s", 1, Arc::new(link.clone()));
@@ -272,4 +281,36 @@ async fn copy_during_the_click_goes_back_to_the_app() {
             "tree": {"type": "Button", "props": {"key": "V44-copiar", "label": "Copiar"}, "press": {"plugin": "vitrine", "handle": 7}}}]}));
     let (status, body) = post(server, "s", "press", json!({"site": "vitrine-botoes", "plugin": "vitrine", "key": "V44-copiar"}), Some(OWNER)).await;
     assert_eq!((status, body["copied"].as_str()), (200, Some("Texto copiado pela vitrine (V44)")));
+}
+
+#[tokio::test]
+async fn bridge_runs_what_python_authenticated() {
+    // O Python autentica o convidado (inclusive o convite da porta 8766) e devolve o pedido pela porta
+    // privada: o mod é acionado como pelo dono. Só a sessão fora do Rust é 404 (o Python a trata).
+    let link = FakeLink::default();
+    let (python, upstream) = spawn_fake().await;
+    let state = AppState::new(config(upstream, "127.0.0.1"));
+    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())));
+    state.mods.attach("s", 1, Arc::new(link.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let private = listener.local_addr().unwrap();
+    let app = hangar_server::routes::terminal_router(Arc::new(state));
+    tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+    let call = |name: &'static str, op: &'static str, body: Value, secret: &'static str| async move {
+        let response = client().post(format!("http://{private}/__hangar_server/mods/{name}/{op}"))
+            .header("content-type", "application/json").header("x-hangar-internal", secret).body(body.to_string()).send().await.unwrap();
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap();
+        (status, serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text)))
+    };
+    assert_eq!(call("s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), SECRET).await, (200, json!({"ok": true})));
+    assert_eq!(call("s", "show", json!({"site": "painel"}), SECRET).await.0, 200);
+    assert_eq!(call("s", "input", json!({"site": "painel", "plugin": "vitrine", "key": "campo", "kind": "submit", "value": "olá"}), SECRET).await.0, 200);
+    assert_eq!(call("s", "close", json!({"site": "painel"}), SECRET).await.0, 200);
+    assert_eq!(link.calls.lock().unwrap().len(), 4);
+    assert_eq!(call("s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), "errado").await.0, 403);
+    assert_eq!(call("s", "outra-op", json!({}), SECRET).await.0, 400);
+    assert_eq!(call("outra", "press", json!({"site": "x", "plugin": "vitrine", "key": "y"}), SECRET).await.0, 404);
+    assert_eq!(link.calls.lock().unwrap().len(), 4, "segredo errado e sessão fora do Rust não acionam nada");
+    assert_eq!(python.hits_to("/api/sessions/outra/plugin/press"), 0, "a ponte nunca volta ao Python");
 }

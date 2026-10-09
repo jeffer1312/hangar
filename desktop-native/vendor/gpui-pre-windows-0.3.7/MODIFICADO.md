@@ -14,10 +14,23 @@ O desfoque usa o registrador b2 porque b1 pertence a `BatchParams` nesta versão
 
 Navegador embutido: `src/directx_renderer.rs` cria o alvo do DirectComposition com `CreateTargetForHwnd(hwnd, false)`
 (topmost=false). Com `true` a composição fica por cima das janelas filhas e esconde o WebView2 embutido; com `false` a
-página aparece e o vidro da janela continua funcionando (provado no protótipo, numa VM Windows; esta cópia não foi compilada). O custo é que o GPUI não desenha
+página aparece e o vidro da janela continua funcionando (provado numa VM Windows). O custo é que o GPUI não desenha
 por cima de janelas filhas.
 
-Não conferido em Windows.
+Compilada e conferida em Windows (VM sem GPU, D3D11 no WARP, via RDP).
+
+Redesenho parcial (`src/directx_renderer.rs`, `src/window.rs`, `src/directx_renderer/backdrop.rs`):
+
+- O quadro é desenhado numa textura persistente (`render_target` passou a ser ela) e copiado para o back buffer, que
+  fica num campo próprio. Sem dano visível desde o último present, nada é copiado nem apresentado.
+- `draw_with_damage` acumula o dano pendente; o plano junta tudo num só retângulo de tesoura, crescido até cobrir a
+  área que cada desfoque de fundo amostra (`blur_footprint`, mesma folga do wgpu). Acima de 70% da janela, ou com a
+  textura inválida (criação, resize, device lost, erro), o quadro é inteiro.
+- Só a região é limpa (`ClearView`, quando o dispositivo declara suporte; sem ele, todo quadro é inteiro), inclusive
+  a textura MSAA dos caminhos. Desfoque fora da região é pulado. A tesoura vale só dentro do `render`, porque o
+  rasterizador de emoji colorido usa o mesmo contexto.
+- `Present1` leva a região como retângulo sujo, o que deixa o DWM e o RDP mandarem só ela.
+- `GPUI_DX_PARTIAL_RENDER=0` força o quadro inteiro, para comparar.
 
 Em 0.3.7 `DirectXAtlas::get_texture_view` passou a devolver `Option`; o desfoque não usa o atlas, então nada mudou aqui.
 
