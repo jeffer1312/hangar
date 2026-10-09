@@ -54,6 +54,38 @@ async fn empty_json_is_a_failure_instead_of_a_message() {
     assert_eq!(error.error.status, 502);
 }
 
+#[test]
+fn vocabulary_keeps_base_and_cuts_unicode_at_the_shared_limit() {
+    let spec: serde_json::Value = serde_json::from_str(include_str!("../../../../resources/dictation-vocabulary.json")).unwrap();
+    let base = spec["base"].as_str().unwrap();
+    assert_eq!(super::vocabulary::assemble("  "), base);
+    assert_eq!(super::vocabulary::assemble("  termo novo  "), format!("{base}, termo novo"));
+    let text = super::vocabulary::assemble(&"á".repeat(1000));
+    assert_eq!(text.chars().count(), spec["max_characters"].as_u64().unwrap() as usize);
+    assert!(text.starts_with(base));
+}
+
+#[tokio::test]
+async fn elevenlabs_uses_its_own_key_and_filtered_vocabulary() {
+    let (url, task) = endpoint(Router::new().route("/", post(|req: Request<Body>| async move {
+        assert_eq!(req.headers()["xi-api-key"], "fixture-eleven");
+        assert!(!req.headers().contains_key("authorization"));
+        let body = axum::body::to_bytes(req.into_body(), 4096).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("name=\"model_id\"\r\n\r\nscribe_v2"));
+        assert!(text.contains("name=\"language_code\"\r\n\r\npt"));
+        assert!(text.contains("name=\"tag_audio_events\"\r\n\r\nfalse"));
+        assert_eq!(text.matches("name=\"keyterms\"").count(), 2);
+        assert!(text.contains("Hangar")); assert!(text.contains("PostgreSQL"));
+        assert!(!text.contains("<inválido>"));
+        "{\"text\":\"Áudio transcrito.\"}"
+    }))).await;
+    let provider = ProviderConfig { kind: "elevenlabs".into(), api_key: "fixture-eleven".into(), ..Default::default() };
+    let result = cloud::transcribe_to(&reqwest::Client::new(), &provider, &url, Bytes::from_static(b"audio"),
+        Some("fala.m4a"), "Hangar, PostgreSQL, Hangar, <inválido>", Duration::from_secs(2)).await;
+    task.abort(); assert_eq!(result.unwrap(), "Áudio transcrito.");
+}
+
 #[tokio::test]
 async fn fallback_is_explicit_and_quota_survives_service_restart() {
     let first_calls = Arc::new(AtomicUsize::new(0));

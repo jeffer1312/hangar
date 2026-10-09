@@ -254,6 +254,34 @@ Este
     volta como cru, igual ao do provedor), e a `_cobertura` continua rejeitando o ditado curto cheio
     de `barra`/`traço traço` — 0,727 contra o piso 0,80 de `limpar`, idêntico pela Groq.
 
+## Transcrição no Rust e envio encerra o ditado
+
+Em 09/10/2026, a issue 116 separou instalação e execução do Whisper: o usuário instala
+whisper.cpp, modelo e FFmpeg, e informa seus caminhos no servidor escolhido. O Hangar inicia
+um processo próprio em loopback, comprova que a porta pertence a ele, serializa inferências e
+encerra sua árvore na saída. WAV PCM mono de 16 kHz não exige conversão; outros formatos usam
+o conversor configurado ou o FFmpeg no PATH. Erro local não cria reserva externa: a lista
+salva é a única ordem de serviços.
+
+O `hangar-server` atende STT pela ponte privada autenticada. Protocolo interno 50 nos dois
+lados. Multipart HTTP, parser JSON, vocabulário, cotas e processo local estão no Rust; o motor
+antigo de `transcribe.py` foi removido. O Python mantém autorização e upload das rotas públicas,
+DTOs e organização LLM, que são capacidades compartilhadas. Sem Rust, transcrição responde 503
+visível; não executa outro motor. Serviços compatíveis com OpenAI aceitam chave opcional,
+ElevenLabs conserva chave própria e o teste de um serviço nunca passa à reserva.
+
+Enviar no nativo e no PWA para a gravação e espera o resultado completo. A intenção guarda
+destino, rascunho e anexos; o resultado só envia se esses dados ainda correspondem ao clique.
+Falha conserva conteúdo, e alteração durante a espera exige um novo envio. O fluxo manual
+suprime a contagem do mãos-livres. No PWA, o último `dataavailable` entra antes de `onstop`,
+as tracks são encerradas antes do resultado e uma permissão tardia não reabre o microfone.
+
+Evidência focada: os testes nativos falharam com `Ready` em vez de `Stop`/`Wait` e os testes
+do Composer falharam por nenhuma chamada de parada ao enviar. Após a mudança, os 19 testes
+de ditado nativo e os sete casos de envio no PWA passaram. Os testes Rust usam um executável
+real de fixture para conferir reutilização, concorrência e encerramento, além de HTTP real
+para conferir multipart, JSON e autenticação da ponte.
+
 ## Transcrição, organização do texto e leitura são capacidades separadas
 
 (`VozSettings.svelte` + `transcribe.py` + `narrar._provedor`, 17/09/2026.) A tela móvel mostrava
