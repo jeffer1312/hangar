@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -6338,64 +6339,87 @@ class PluginCloseBody(_StrictBody):
     site: str = Field(min_length=1, max_length=64)
 
 
-_MOD_CONVIDADO = erro("erro_mod_convidado",
-    "Só o dono da sessão aciona os mods dela pelo app; quem acompanha como convidado vê, mas não clica.")
+_MOD_SEM_RESPOSTA = erro("erro_mod_clique_sem_resposta", "O mod não respondeu a tempo.")
 
 
-def _convidado(request: Request) -> bool:
-    from app import guest_users
-    return guest_of(request) is not None or guest_users.current.get() is not None
+async def _mod_no_rust(name: str, op: str, request: Request) -> Response | None:
+    """Operação de mod de sessão que o Rust atende, pedida por quem entrou pelo Python (convidado, de
+    convite ou com login, e o Connect): a autenticação foi a desta porta, e o Rust aciona pela ponte
+    privada com o mesmo efeito do dono. `None`: a sessão não é dele, e quem trata é o Python."""
+    from app import list_bridge, runtime_coordinator
+    owner = runtime_coordinator.current()
+    endpoint = list_bridge.endpoint()
+    if owner is None or owner.mode not in ("pending", "rust") or endpoint is None:
+        return None
+    address, secret = endpoint
+    body = await request.body()
+
+    def call() -> tuple[int, bytes]:
+        req = urllib.request.Request(
+            f"http://{address}/__hangar_server/mods/{urllib.parse.quote(name, safe='')}/{op}", data=body,
+            headers={"content-type": "application/json", "x-hangar-internal": secret}, method="POST")
+        try:
+            # O Rust responde dentro do prazo dele (7,5 s); este só cobre o Rust mudo.
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=10) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    try:
+        status, raw = await asyncio.to_thread(call)
+    except OSError as exc:
+        _log.warning("ponte dos mods em %s falhou: %s", name, exc)
+        raise HTTPException(503, detail=_MOD_SEM_RESPOSTA) from None
+    if status == 404:
+        return None
+    return Response(raw, status_code=status, media_type="application/json")
 
 
-def _recusa_convidado_no_terminal_do_rust(name: str, request: Request) -> None:
-    """Convidado (com login ou de convite) não clica em mod de sessão cujo terminal é do Rust.
-
-    O pane é do executor do Rust: o `plugin_click` daqui o dirigiria por fora dele. O Rust repassa ao
-    Python todo pedido que não é do dono, e o convite chega pela porta 8766 sem passar pelo Rust, por
-    isso a recusa mora aqui, depois da autenticação. Esta é só a recusa rápida, por uma fotografia da
-    posse; a que vale é a do empréstimo do teclado (`runtime_terminal._borrow_keyboard`), sob a
-    barreira da sessão, que alcança também a sessão aberta no Rust pelo próprio clique.
-    """
-    from app import runtime_coordinator
-    if not _convidado(request):
-        return
-    coordinator = runtime_coordinator.current()
-    if coordinator is not None and coordinator.terminal_in_rust(name):
-        raise HTTPException(403, detail=_MOD_CONVIDADO)
-
-
-@app.post("/api/sessions/{name}/plugin/press", dependencies=[Depends(require_auth),
-    Depends(_recusa_convidado_no_terminal_do_rust), Depends(_transfer_guard)])
+@app.post("/api/sessions/{name}/plugin/press", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
 async def plugin_press(name: str, body: PluginPressBody, request: Request):
     """Clique num botão que um mod desenhou na faixa ou num painel, pedido pelo app."""
     from app import plugin_click
+    if (rust := await _mod_no_rust(name, "press", request)) is not None:
+        return rust
     # O app de antes da rota `close` fechava o painel pelo `press` com a `key` reservada.
     if body.plugin is None and body.key == plugin_click.CLOSE_KEY:
-        return await _acao_de_mod(request, plugin_click.close(name, body.site))
-    return await _acao_de_mod(request, plugin_click.press(name, body.site, body.key, body.plugin))
+        return await _acao_de_mod(plugin_click.close(name, body.site))
+    return await _acao_de_mod(plugin_click.press(name, body.site, body.key, body.plugin))
 
 
-@app.post("/api/sessions/{name}/plugin/close", dependencies=[Depends(require_auth),
-    Depends(_recusa_convidado_no_terminal_do_rust), Depends(_transfer_guard)])
+@app.post("/api/sessions/{name}/plugin/close", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
 async def plugin_close(name: str, body: PluginCloseBody, request: Request):
     """Fecha um painel de mod pelo `✕` do cabeçalho, pedido pelo app."""
     from app import plugin_click
-    return await _acao_de_mod(request, plugin_click.close(name, body.site))
+    if (rust := await _mod_no_rust(name, "close", request)) is not None:
+        return rust
+    return await _acao_de_mod(plugin_click.close(name, body.site))
 
 
-async def _acao_de_mod(request: Request, acao):
-    """Roda o clique pela tela com a marca de convidado e traduz as recusas para o app."""
+@app.post("/api/sessions/{name}/plugin/show", dependencies=[Depends(require_auth)])
+async def plugin_show(name: str, request: Request):
+    """Troca de aba de mod. Fora do Rust ela fica no app, que lê o 404 como "sem a rota"."""
+    if (rust := await _mod_no_rust(name, "show", request)) is not None:
+        return rust
+    raise HTTPException(404, detail=erro("erro_mod_aba_no_app", "Nesta sessão a troca de aba do mod fica no app."))
+
+
+@app.post("/api/sessions/{name}/plugin/input", dependencies=[Depends(require_auth)])
+async def plugin_input(name: str, request: Request):
+    """Digitação num campo de mod: só a sessão sem terminal que o Rust atende a aceita."""
+    if (rust := await _mod_no_rust(name, "input", request)) is not None:
+        return rust
+    raise HTTPException(409, detail=erro("erro_mod_sem_digitacao",
+        "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app."))
+
+
+async def _acao_de_mod(acao):
+    """Roda o clique pela tela e traduz as recusas para o app."""
     from app import plugin_click
-    from app.runtime_terminal import GuestRefused, guest_admin
-    marca = guest_admin.set(_convidado(request))
     try:
         return await acao
     except plugin_click.PressRefused as e:
         raise HTTPException(409, detail=e.detail)
-    except GuestRefused:
-        raise HTTPException(403, detail=_MOD_CONVIDADO) from None
-    finally:
-        guest_admin.reset(marca)
 
 
 @app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth), Depends(_transfer_guard)])

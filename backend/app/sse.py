@@ -712,8 +712,8 @@ def _confirm_codex_queue(name: str, jsonl: str) -> None:
 
 
 # Com o Rust de pé, estes saem do hub: os quatro primeiros do `Monitor` (Claude com terminal), os
-# seis do feed do Claude e do Codex sem terminal.
-_RUST_STATE_EVENTS = ("state", "preview", "ask_question", "suggest", "pensamento", "ferramenta")
+# seis do feed do Claude e do Codex sem terminal, e a faixa dos mods, que o hub junta das duas fontes.
+_RUST_STATE_EVENTS = ("state", "preview", "ask_question", "suggest", "pensamento", "ferramenta", "plugin_ui")
 # O hub pinga o canal a cada 10 s: três calados = conexão morta.
 _RUST_CHANNEL_IDLE_S = 30.0
 _RUST_CHANNEL_LINE = 1 << 20
@@ -1346,7 +1346,10 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 yield {"event": event, "data": json.dumps({"text": slot["text"]})}
                 continue
             if event == "plugin_ui":
-                yield {"event": "plugin_ui", "data": plugin_bridge.band_json(name)}
+                # Com o estado no hub, a faixa vem dele (`__rust__`): a daqui não tem a dos mods que o
+                # Rust atende. A conexão interna segue mandando a daqui, que é a fonte do hub nas outras.
+                if not (rust_state and not side):
+                    yield {"event": "plugin_ui", "data": plugin_bridge.band_json(name)}
                 continue
             if event == "state":
                 # Sugestão do terminal (a frase cinza que o Tab aceita lá): sem fonte própria, ela

@@ -273,3 +273,33 @@ async fn copy_during_the_click_goes_back_to_the_app() {
     let (status, body) = post(server, "s", "press", json!({"site": "vitrine-botoes", "plugin": "vitrine", "key": "V44-copiar"}), Some(OWNER)).await;
     assert_eq!((status, body["copied"].as_str()), (200, Some("Texto copiado pela vitrine (V44)")));
 }
+
+#[tokio::test]
+async fn bridge_runs_what_python_authenticated() {
+    // O Python autentica o convidado (inclusive o convite da porta 8766) e devolve o pedido pela porta
+    // privada: o mod é acionado como pelo dono, e sessão fora do Rust é 404 para o Python tratar.
+    let link = FakeLink::default();
+    let (python, upstream) = spawn_fake().await;
+    let state = AppState::new(config(upstream, "127.0.0.1"));
+    state.mods.attach("s", 1, Arc::new(link.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let private = listener.local_addr().unwrap();
+    let app = hangar_server::routes::terminal_router(Arc::new(state));
+    tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+    let call = |name: &'static str, op: &'static str, body: Value, secret: &'static str| async move {
+        let response = client().post(format!("http://{private}/__hangar_server/mods/{name}/{op}"))
+            .header("content-type", "application/json").header("x-hangar-internal", secret).body(body.to_string()).send().await.unwrap();
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap();
+        (status, serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text)))
+    };
+    assert_eq!(call("s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), SECRET).await, (200, json!({"ok": true})));
+    assert_eq!(call("s", "show", json!({"site": "painel"}), SECRET).await.0, 200);
+    assert_eq!(call("s", "input", json!({"site": "painel", "plugin": "vitrine", "key": "campo", "kind": "submit", "value": "olá"}), SECRET).await.0, 200);
+    assert_eq!(call("s", "close", json!({"site": "painel"}), SECRET).await.0, 200);
+    assert_eq!(link.calls.lock().unwrap().len(), 4);
+    assert_eq!(call("s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), "errado").await.0, 404);
+    assert_eq!(call("outra", "press", json!({"site": "x", "plugin": "vitrine", "key": "y"}), SECRET).await.0, 404);
+    assert_eq!(link.calls.lock().unwrap().len(), 4, "segredo errado e sessão fora do Rust não acionam nada");
+    assert_eq!(python.hits_to("/api/sessions/outra/plugin/press"), 0, "a ponte nunca volta ao Python");
+}

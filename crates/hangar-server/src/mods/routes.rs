@@ -4,8 +4,8 @@
 //! dono, como no `/events`; a digitação, que o Python não tem, é recusada aqui.
 //!
 //! A sessão com terminal que o Rust atende (fase 3) usa as mesmas rotas, com o clique pela tela. O pedido
-//! que não é do dono segue ao Python como nas outras: quem recusa o convidado ali (`erro_mod_convidado`) é
-//! o `plugin_press` e o `plugin_close` dele, que veem também o convite da porta 8766, que nunca passa por aqui. A digitação é
+//! que não é do dono segue ao Python como nas outras: ele autentica o convidado (inclusive o convite da porta
+//! 8766, que nunca passa por aqui) e devolve o pedido pela ponte privada (`bridge`). A digitação é
 //! recusada logo na entrada, sem esperar a vez da sessão nem consultar a guarda da troca de agente.
 //!
 //! Antes de cada operação a rota pergunta ao Python se a troca de agente está em curso
@@ -25,7 +25,7 @@ use axum::body::{Body, to_bytes};
 use axum::extract::rejection::PathRejection;
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use http_body_util::BodyExt;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
@@ -79,13 +79,41 @@ type Done = Box<Response>;
 async fn owned(st: &Arc<AppState>, peer: SocketAddr, path: Result<Path<String>, PathRejection>, req: Request,
     outside: Option<fn() -> ModsError>) -> Result<(String, HeaderMap, Body), Done> {
     let (fwd, owner) = gate(st, peer, &req);
+    let bridged = req.extensions().get::<Bridged>().is_some();
+    let owner = owner || bridged;
     match (path, outside) {
         (Ok(Path(name)), _) if owner && st.mods.owns(&name) => {
             let headers = req.headers().clone();
             Ok((name, headers, req.into_body()))
         }
         (Ok(Path(_)), Some(refusal)) if owner => Err(Box::new(refused(req.headers(), &refusal()))),
+        // Da ponte nunca volta ao Python: ele trata a sessão que não é do Rust.
+        _ if bridged => Err(Box::new(StatusCode::NOT_FOUND.into_response())),
         _ => Err(Box::new(pass(st, req, &fwd).await)),
+    }
+}
+
+/// Pedido que o Python devolveu pela ponte privada depois de autenticar quem não é o dono (convidado,
+/// Connect). Extensão do pedido: nenhum cliente a põe pela rede.
+#[derive(Clone, Copy)]
+struct Bridged;
+
+/// `POST /__hangar_server/mods/{name}/{op}` na porta privada: a operação de mod de quem o Python já
+/// autenticou, com o mesmo efeito da do dono. 404 mudo: segredo errado, ou sessão que o Rust não atende
+/// (o Python a trata).
+pub async fn bridge(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path((name, op)): Path<(String, String)>, mut req: Request) -> Response {
+    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) || !st.mods.owns(&name) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    req.extensions_mut().insert(Bridged);
+    let path = Ok(Path(name));
+    match op.as_str() {
+        "press" => press(State(st), ConnectInfo(peer), path, req).await,
+        "close" => close(State(st), ConnectInfo(peer), path, req).await,
+        "show" => show(State(st), ConnectInfo(peer), path, req).await,
+        "input" => input(State(st), ConnectInfo(peer), path, req).await,
+        _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
