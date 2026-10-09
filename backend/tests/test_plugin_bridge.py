@@ -58,6 +58,25 @@ def test_token_com_chave_separa_processos_do_mesmo_nome_e_confere_pelo_nome():
         assert e.value.status_code == 403
 
 
+def test_rota_atende_pelo_nome_atual_da_sessao_do_processo(monkeypatch):
+    # Renomeada sem relançar, o plugin segue mandando o nome de nascimento: o `/pull` e as outras rotas
+    # usam o nome de agora, achado pela chave do token (a do runtime ou a do lançamento, `plugin_key`).
+    from types import SimpleNamespace
+    from app import runtime_coordinator
+    slot = lambda meta: SimpleNamespace(binding=SimpleNamespace(meta=meta))
+    fake = SimpleNamespace(names={"novo": "terminal_ab", "outra": "k-outra"},
+                           slots={"terminal_ab": slot({"plugin_key": "lanc"}), "k-outra": slot({})})
+    monkeypatch.setattr(runtime_coordinator, "_current", fake)
+    for token, esperado in ((pb.mint("velho", "lanc"), "novo"), (pb.mint("velho", "terminal_ab"), "novo"),
+                            (pb.mint("velho", "k-outra"), "outra"), (pb.mint("velho", "sumida"), "velho"),
+                            (pb.mint("velho"), "velho")):
+        body = pb.RateBody.model_construct(sessao="velho", token=token)
+        pb._entra(body)
+        assert body.sessao == esperado, token
+    with pytest.raises(HTTPException):
+        pb._entra(pb.RateBody.model_construct(sessao="outro", token=pb.mint("velho", "lanc")))
+
+
 def test_permissao_sem_ninguem_no_app_volta_pro_terminal(monkeypatch):
     # Segurar o `ask` esconde o diálogo do terminal: sem app aberto, não há quem responda.
     monkeypatch.setattr(pb, "terminal_preso", lambda name: False)

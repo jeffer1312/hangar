@@ -429,6 +429,31 @@ def _confere(name: str, token: str) -> None:
         raise HTTPException(403, detail="token do plugin invalido")
 
 
+def _entra(body) -> None:
+    """Confere o token e põe em `body.sessao` o nome atual da sessão do processo.
+
+    O plugin manda o nome com que o processo nasceu; renomeada a sessão sem relançar, é a chave do
+    token que diz qual é ela agora. Token só do nome, ou chave que o runtime não conhece, fica no nome."""
+    _confere(body.sessao, body.token)
+    key, dot, _ = body.token.partition(".")
+    if dot:
+        body.sessao = _nome_da_chave(key) or body.sessao
+
+
+def _nome_da_chave(key: str) -> str | None:
+    """A sessão do runtime com essa chave: a dela (sem terminal e wrapper do shell) ou a do token do
+    lançamento (`plugin_key`, sessão com terminal aberta pelo Hangar)."""
+    from app import runtime_coordinator
+    coordinator = runtime_coordinator.current()
+    if coordinator is None:
+        return None
+    for name, slot_key in list(coordinator.names.items()):
+        slot = coordinator.slots.get(slot_key)
+        if slot_key == key or slot is not None and slot.binding.meta.get("plugin_key") == key:
+            return name
+    return None
+
+
 def aguardando(name: str) -> bool:
     """Há um long-poll ABERTO para esta sessão agora?
 
@@ -1157,7 +1182,7 @@ async def pull(body: PullBody, request: Request = None):
     Sem `Depends(require_auth)`: quem chama é o pane, que não tem o bearer do
     app. O token por sessão é a credencial daqui.
     """
-    _confere(body.sessao, body.token)
+    _entra(body)
     recusa = await asyncio.to_thread(_conversation_mismatch, body.sessao, body.session_id)
     chave = (body.sessao, body.instance)
     if not recusa:
@@ -1245,7 +1270,7 @@ async def suggest(body: SuggestBody):
 
     Medição antes de virar recurso: só registra, para responder se ela é regerada
     todo turno e o que acontece quando é descartada."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     with _lock:
         # `mostrada=False` é proposta que a TUI não pôs na caixa (diálogo aberto, headless): mostrar
         # no app o que nem o terminal mostrou seria inventar estado.
@@ -1282,7 +1307,7 @@ async def ui(body: BandBody, request: Request):
     Claude Code sem saber de que mod vieram."""
     if int(request.headers.get("content-length") or 0) > MAX_BAND_BYTES:
         raise HTTPException(413, detail="faixa grande demais")
-    _confere(body.sessao, body.token)
+    _entra(body)
     _guardar_faixa(body.sessao, body.above, body.columns, [p.model_dump() for p in body.panes])
     return {"ok": True}
 
@@ -1300,7 +1325,7 @@ async def toast(body: ToastBody):
     """Um mod mostrou um aviso (`$.ui.toast`) no terminal: vai ao app, que o mostra pelo mesmo tempo.
 
     Texto e nome longos são cortados em vez de recusados: recusar faria o aviso sumir do app."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     if body.text.strip():
         _store_toast(body.sessao, body.text, body.timeoutMs, body.plugin)
     return {"ok": True}
@@ -1316,7 +1341,7 @@ class PressBody(BaseModel):
 @plugin_router.post("/pressed")
 async def pressed(body: PressBody):
     """Um botão de mod foi pressionado no terminal: confirma o clique que o app pediu."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     with _lock:
         fila = _pressed.setdefault(body.sessao, [])
         fila.append((time.monotonic(), body.requestId, body.element))
@@ -1335,7 +1360,7 @@ class CopiedBody(BaseModel):
 @plugin_router.post("/copied")
 async def copied(body: CopiedBody):
     """Um mod copiou um texto num clique do app: vai ao app, que copia no aparelho de quem clicou."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     _guardar_efeito("copied", body.sessao, body.attempt, body.text)
     return {"ok": True}
 
@@ -1343,7 +1368,7 @@ async def copied(body: CopiedBody):
 @plugin_router.post("/press-start")
 async def press_start(body: PressBody):
     """O press que começou no terminal é o clique que o app pediu? Responde sim uma vez só."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     tentativa = _do_app(body.sessao, body.requestId, body.element)
     return {"fromApp": tentativa is not None, "attempt": tentativa}
 
@@ -1358,7 +1383,7 @@ class OpenedBody(BaseModel):
 @plugin_router.post("/opened")
 async def opened(body: OpenedBody):
     """Um mod mandou abrir uma URL num clique do app: o app abre no aparelho de quem clicou."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     if not re.match(r"^https?://", body.url, re.IGNORECASE):
         raise HTTPException(400, detail="só http(s)")
     _guardar_efeito("opened", body.sessao, body.attempt, body.url)
@@ -1458,7 +1483,7 @@ class AskBody(BaseModel):
 @plugin_router.post("/ask")
 async def ask(body: AskBody):
     """Long-poll do hook do AskUserQuestion: 200 com a resposta do app, ou vazio na janela."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     global _loop
     # Permissão só fica com o plugin enquanto há alguém no app E ninguém no terminal: segurar
     # esconde o diálogo do terminal. Reavaliado a cada poll do hook, então prender um terminal no
@@ -1520,7 +1545,7 @@ class AskFimBody(BaseModel):
 @plugin_router.post("/ask-fim")
 async def ask_fim(body: AskFimBody):
     """A pergunta fechou. `vencedor=app` é a prova de que a resposta do app valeu."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     with _lock:
         p = _perguntas.get(body.sessao)
         if p is None or p["id"] != body.id:
@@ -1555,7 +1580,7 @@ async def filled(body: FilledBody):
     """O plugin avisa que o rascunho entrou (ou não) no composer.
 
     É o que libera o Enter: sem esse aviso o Hangar não aperta tecla nenhuma."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     if _terminal_ack(body, "fill"):
         return {"ok": True}
     with _lock:
@@ -1578,7 +1603,7 @@ class SubmittedBody(BaseModel):
 @plugin_router.post("/submitted", dependencies=[Depends(require_loopback)])
 async def submitted(body: SubmittedBody):
     """O plugin avisa se o `$.prompt.submit` do modo `user` foi aceito."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     if _terminal_ack(body, "user"):
         return {"ok": True}
     with _lock:
@@ -1597,7 +1622,7 @@ async def state(body: StateBody, request: Request):
     `state.py`, que atende os outros provedores também. Ligar as duas fontes é
     passo separado, e ele não pode nascer junto com a troca do caminho de entrada.
     """
-    _confere(body.sessao, body.token)
+    _entra(body)
     with _lock:
         _estados[body.sessao] = (time.monotonic(), body.estado, body.motivo)
         if body.estado == "working":
@@ -1635,6 +1660,6 @@ class RateBody(BaseModel):
 @plugin_router.post("/rate")
 async def rate(body: RateBody):
     """Velocidade de uma resposta, medida pelo `turn.step` do plugin no próprio processo."""
-    _confere(body.sessao, body.token)
+    _entra(body)
     live_rate(body.sessao).close(body.tokens, body.seconds, body.session_id)
     return {"ok": True}
