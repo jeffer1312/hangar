@@ -1,7 +1,7 @@
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-windows-0.3.7/MODIFICADO.md gpui-pre-windows-0.3.7/MODIFICADO.md
 --- gpui-pre-windows-0.3.7/MODIFICADO.md
 +++ gpui-pre-windows-0.3.7/MODIFICADO.md
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,40 @@
 +# Cópia do gpui-pre-windows 0.3.7
 +
 +Origem: crate `gpui-pre-windows` 0.3.7 do crates.io, checksum `f05592a6f9e3e6bb7a9f2a0d4779271cf747a948db1c07b02448de777ffff8f3`, licença Apache-2.0.
@@ -18,10 +18,23 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +
 +Navegador embutido: `src/directx_renderer.rs` cria o alvo do DirectComposition com `CreateTargetForHwnd(hwnd, false)`
 +(topmost=false). Com `true` a composição fica por cima das janelas filhas e esconde o WebView2 embutido; com `false` a
-+página aparece e o vidro da janela continua funcionando (provado no protótipo, numa VM Windows; esta cópia não foi compilada). O custo é que o GPUI não desenha
++página aparece e o vidro da janela continua funcionando (provado numa VM Windows). O custo é que o GPUI não desenha
 +por cima de janelas filhas.
 +
-+Não conferido em Windows.
++Compilada e conferida em Windows (VM sem GPU, D3D11 no WARP, via RDP).
++
++Redesenho parcial (`src/directx_renderer.rs`, `src/window.rs`, `src/directx_renderer/backdrop.rs`):
++
++- O quadro é desenhado numa textura persistente (`render_target` passou a ser ela) e copiado para o back buffer, que
++  fica num campo próprio. Sem dano visível desde o último present, nada é copiado nem apresentado.
++- `draw_with_damage` acumula o dano pendente; o plano junta tudo num só retângulo de tesoura, crescido até cobrir a
++  área que cada desfoque de fundo amostra (`blur_footprint`, mesma folga do wgpu). Acima de 70% da janela, ou com a
++  textura inválida (criação, resize, device lost, erro), o quadro é inteiro.
++- Só a região é limpa (`ClearView`, quando o dispositivo declara suporte; sem ele, todo quadro é inteiro), inclusive
++  a textura MSAA dos caminhos. Desfoque fora da região é pulado. A tesoura vale só dentro do `render`, porque o
++  rasterizador de emoji colorido usa o mesmo contexto.
++- `Present1` leva a região como retângulo sujo, o que deixa o DWM e o RDP mandarem só ela.
++- `GPUI_DX_PARTIAL_RENDER=0` força o quadro inteiro, para comparar.
 +
 +Em 0.3.7 `DirectXAtlas::get_texture_view` passou a devolver `Option`; o desfoque não usa o atlas, então nada mudou aqui.
 +
@@ -700,7 +713,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          Ok(())
      }
  
-@@ -332,13 +398,77 @@
+@@ -332,13 +398,82 @@
          scene: &Scene,
          background_appearance: WindowBackgroundAppearance,
      ) -> Result<()> {
@@ -738,7 +751,12 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +            }
 +        }
 +        let (region, dirty) = match plan {
-+            RenderPlan::None => (None, None),
++            RenderPlan::None => {
++                // The screen already shows the persistent texture: copying and presenting it again would make
++                // DXGI treat the whole window as dirty (zero dirty rects), which RDP then resends.
++                self.pending_damage = SceneDamage::Unchanged;
++                return Ok(());
++            }
 +            RenderPlan::Full => (Some(None), None),
 +            RenderPlan::Partial(region) => (Some(Some(region)), Some(region)),
 +        };
@@ -780,7 +798,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      }
  
      /// Clear the render target for `background_appearance` and encode every
-@@ -350,6 +480,24 @@
+@@ -350,6 +485,24 @@
          &mut self,
          scene: &Scene,
          background_appearance: WindowBackgroundAppearance,
@@ -805,7 +823,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      ) -> Result<()> {
          self.pre_draw(&match background_appearance {
              WindowBackgroundAppearance::Opaque => [1.0f32; 4],
-@@ -357,12 +505,30 @@
+@@ -357,12 +510,30 @@
          })?;
          self.upload_scene_buffers(scene)?;
  
@@ -836,7 +854,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              let _annotation = annotation
                  .as_ref()
                  .map(|annotation| Annotation::new(annotation, HSTRING::from(batch.label())));
-@@ -401,9 +567,23 @@
+@@ -401,9 +572,23 @@
                  )
              })?;
          }
@@ -860,7 +878,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Render `scene` to an offscreen CPU image **without presenting** so
      /// the window need never be shown or visible (the macOS headless path
      /// goes through MetalRenderer; this is the Windows analogue). Draws into
-@@ -422,7 +602,9 @@
+@@ -422,7 +607,9 @@
              !self.skip_draws,
              "render_to_image unavailable while recovering from a lost device"
          );
@@ -871,7 +889,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let device = &devices.device;
-@@ -490,11 +672,14 @@
+@@ -490,11 +677,14 @@
          }
          self.width = width;
          self.height = height;
@@ -886,7 +904,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          resources.render_target.take();
          resources.render_target_view.take();
  
-@@ -619,12 +804,16 @@
+@@ -619,12 +809,16 @@
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let resources = self.resources.as_ref().context("resources missing")?;
@@ -908,7 +926,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              // Set intermediate MSAA texture as render target
              devices.device_context.OMSetRenderTargets(
                  Some(slice::from_ref(&resources.path_intermediate_msaa_view)),
-@@ -890,6 +1079,7 @@
+@@ -890,6 +1084,7 @@
          };
  
          let (
@@ -916,7 +934,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              render_target,
              render_target_view,
              path_intermediate_texture,
-@@ -901,7 +1091,9 @@
+@@ -901,7 +1096,9 @@
          set_rasterizer_state(&devices.device, &devices.device_context)?;
  
          Ok(Self {
@@ -926,7 +944,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              render_target: Some(render_target),
              render_target_view,
              path_intermediate_texture,
-@@ -920,6 +1112,7 @@
+@@ -920,6 +1117,7 @@
          height: u32,
      ) -> Result<()> {
          let (
@@ -934,7 +952,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              render_target,
              render_target_view,
              path_intermediate_texture,
-@@ -928,6 +1121,7 @@
+@@ -928,6 +1126,7 @@
              path_intermediate_msaa_view,
              viewport,
          ) = create_resources(devices, &self.swap_chain, width, height)?;
@@ -942,7 +960,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          self.render_target = Some(render_target);
          self.render_target_view = render_target_view;
          self.path_intermediate_texture = path_intermediate_texture;
-@@ -1014,7 +1208,9 @@
+@@ -1014,7 +1213,9 @@
  impl DirectComposition {
      pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
          let comp_device = get_comp_device(dxgi_device)?;
@@ -953,7 +971,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let comp_visual = unsafe { comp_device.CreateVisual() }?;
  
          Ok(Self {
-@@ -1061,6 +1257,8 @@
+@@ -1061,6 +1262,8 @@
              global_params_buffer,
              batch_params_buffer,
              sampler,
@@ -962,7 +980,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          })
      }
  }
-@@ -1360,6 +1558,7 @@
+@@ -1360,6 +1563,7 @@
      height: u32,
  ) -> Result<(
      ID3D11Texture2D,
@@ -970,7 +988,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      Option<ID3D11RenderTargetView>,
      ID3D11Texture2D,
      Option<ID3D11ShaderResourceView>,
-@@ -1367,7 +1566,7 @@
+@@ -1367,7 +1571,7 @@
      Option<ID3D11RenderTargetView>,
      D3D11_VIEWPORT,
  )> {
@@ -979,7 +997,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          create_render_target_and_its_view(swap_chain, &devices.device)?;
      let (path_intermediate_texture, path_intermediate_srv) =
          create_path_intermediate_texture(&devices.device, width, height)?;
-@@ -1382,6 +1581,7 @@
+@@ -1382,6 +1586,7 @@
          MaxDepth: 1.0,
      };
      Ok((
@@ -987,7 +1005,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          render_target,
          render_target_view,
          path_intermediate_texture,
-@@ -1392,15 +1592,40 @@
+@@ -1392,15 +1597,40 @@
      ))
  }
  
@@ -1031,7 +1049,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  }
  
  #[inline]
-@@ -1469,6 +1694,13 @@
+@@ -1469,6 +1699,13 @@
  
  #[inline]
  fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Result<()> {
@@ -1045,7 +1063,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      let desc = D3D11_RASTERIZER_DESC {
          FillMode: D3D11_FILL_SOLID,
          CullMode: D3D11_CULL_NONE,
-@@ -1477,17 +1709,191 @@
+@@ -1477,17 +1714,191 @@
          DepthBiasClamp: 0.0,
          SlopeScaledDepthBias: 0.0,
          DepthClipEnable: true.into(),
@@ -1242,7 +1260,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  }
  
  // https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ns-d3d11-d3d11_blend_desc
-@@ -1708,6 +2114,8 @@
+@@ -1708,6 +2119,8 @@
  
      #[derive(Copy, Clone, Debug, Eq, PartialEq)]
      pub(crate) enum ShaderModule {
@@ -1251,7 +1269,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          Quad,
          Shadow,
          Underline,
-@@ -1758,6 +2166,14 @@
+@@ -1758,6 +2171,14 @@
          #[cfg(not(debug_assertions))]
          fn from_bytes(module: ShaderModule, target: ShaderTarget) -> Self {
              let bytes = match module {
@@ -1266,7 +1284,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  ShaderModule::Quad => match target {
                      ShaderTarget::Vertex => QUAD_VERTEX_BYTES,
                      ShaderTarget::Fragment => QUAD_FRAGMENT_BYTES,
-@@ -1872,6 +2288,8 @@
+@@ -1872,6 +2293,8 @@
      impl ShaderModule {
          pub fn as_str(self) -> &'static str {
              match self {

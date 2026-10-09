@@ -10,6 +10,9 @@ use std::{cell::Cell, rc::Rc, sync::OnceLock, time::{Duration, Instant}};
 /// que pinta as marcas flutuantes, então a cadência é o custo da sessão trabalhando. Relógios próprios,
 /// fora de fase entre si, somariam quadros; na grade, as views que batem juntas saem num quadro só.
 const PULSE_TICK: Duration = Duration::from_micros(66_667);
+/// Com a animação parada (sem foco, movimento reduzido, desenho por software ou fora da tela), de quanto em quanto ela
+/// confere se pode voltar a andar.
+const PULSE_PAUSED_CHECK: Duration = Duration::from_millis(500);
 
 thread_local! {
     /// A janela tem o foco. Sem ele o relógio para: a marca fica parada no último quadro e nada acorda a janela.
@@ -43,7 +46,13 @@ fn pulse<V: 'static>(delay: Duration, awake: fn(&V) -> bool, cx: &mut Context<V>
         loop {
             let into = Duration::from_nanos((pulse_epoch().elapsed().as_nanos() % PULSE_TICK.as_nanos()) as u64);
             cx.background_executor().timer(PULSE_TICK - into).await;
-            if view.update(cx, |view, cx| if !cx.reduce_motion() && WINDOW_ACTIVE.get() && !SOFTWARE_GPU.get() && awake(view) { cx.notify() }).is_err() { break; }
+            let Ok(moving) = view.update(cx, |view, cx| {
+                let moving = !cx.reduce_motion() && WINDOW_ACTIVE.get() && !SOFTWARE_GPU.get() && awake(view);
+                if moving { cx.notify() }
+                moving
+            }) else { break };
+            // Parada, a marca só confere de novo de tempos em tempos: 15 acordadas por segundo à toa custam CPU.
+            if !moving { cx.background_executor().timer(PULSE_PAUSED_CHECK).await; }
         }
     }).detach();
 }

@@ -430,7 +430,12 @@ impl DirectXRenderer {
             }
         }
         let (region, dirty) = match plan {
-            RenderPlan::None => (None, None),
+            RenderPlan::None => {
+                // The screen already shows the persistent texture: copying and presenting it again would make
+                // DXGI treat the whole window as dirty (zero dirty rects), which RDP then resends.
+                self.pending_damage = SceneDamage::Unchanged;
+                return Ok(());
+            }
             RenderPlan::Full => (Some(None), None),
             RenderPlan::Partial(region) => (Some(Some(region)), Some(region)),
         };

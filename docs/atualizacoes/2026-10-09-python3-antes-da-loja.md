@@ -7,5 +7,5 @@ destrutivo: false
 ---
 
 No Windows, o atalho do Python da Microsoft Store vinha antes do `python3` do Hangar no PATH, e
-todo hook do Claude escrito em Python falhava sem aviso. O `~/.local/bin` agora fica na frente;
+os hooks do Claude que chamam `python3` falhavam sem aviso. O `~/.local/bin` agora fica na frente;
 vale nos terminais e sessões abertos depois da atualização.
