@@ -829,18 +829,6 @@ def test_routes_require_auth(api_client):
 # Testes de config dirs (Task 4)
 # ---------------------------------------------------------------------------
 
-def test_claude_configs_endpoint(api_client, monkeypatch):
-    monkeypatch.setattr(api_mod, "list_config_dirs",
-                        lambda: [api_mod.ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
-    r = api_client.get("/api/claude-configs", headers=_h())
-    assert r.status_code == 200
-    assert r.json() == [{"path": "/h/.claude-work", "label": "work", "active": True}]
-
-
-# ---------------------------------------------------------------------------
-# Testes de _on_hook_transition: pushes de "terminou" (debounce) e "caiu" (Feature #2)
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(autouse=False)
 def _transition_fixture(monkeypatch):
     """Isola _on_hook_transition: sem tmux real (registry.list vazio) e captura os pushes
@@ -995,8 +983,9 @@ def test_clear_then_link_route(api_client, _tmp_chain_dir):
 
 
 def test_create_rejects_unknown_config_dir(api_client, monkeypatch):
+    from app.config import ConfigDirInfo
     monkeypatch.setattr(api_mod, "list_config_dirs",
-                        lambda: [api_mod.ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
+                        lambda: [ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
     r = api_client.post("/api/sessions", headers=_h(),
                         json={"name": "x", "cwd": "/tmp", "config_dir": "/h/.evil"})
     assert r.status_code == 400

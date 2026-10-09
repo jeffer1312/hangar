@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import codex_contas, contas, conta_estado, cotas, runtime_coordinator
+from app import codex_contas, conta_estado, contas, cotas, runtime_coordinator
 from app.api import app
 from app.codex_contas_login import CodexContasLogin
 from app.config import list_config_dirs, settings

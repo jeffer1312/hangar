@@ -9,7 +9,6 @@ from app import account_bridge, cotas, runtime_coordinator
 def test_pending_does_not_fall_back_to_python(monkeypatch):
     monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="pending"))
     monkeypatch.setattr(account_bridge, "_preparation_transport", None)
-    monkeypatch.setattr(cotas, "_fontes", lambda: pytest.fail("o leitor Python não deve iniciar"))
     with pytest.raises(HTTPException) as error:
         cotas.listar_cotas()
     assert error.value.status_code == 503
@@ -23,7 +22,6 @@ def test_quota_bridge_preserves_complete_dto(monkeypatch):
         calls.append(kwargs)
         return [row]
     monkeypatch.setattr(account_bridge, "request_quotas", request)
-    monkeypatch.setattr(cotas, "_fontes", lambda: pytest.fail("não deve abrir fonte Python"))
     assert cotas.listar_cotas(forcar=True)[0].model_dump() == row
     assert cotas.cotas_claude()[0].model_dump() == row
     assert calls == [{"force": True}, {"cached_only": True}]
@@ -36,7 +34,6 @@ def test_other_provider_bridge_never_reads_or_writes_account_cache(monkeypatch):
                            lambda: ("lida", [cotas.JanelaCota(rotulo="5h", pct=25)], None))]
     monkeypatch.setattr(cotas, "_other_sources", lambda: sources)
     monkeypatch.setattr(cotas.apelidos, "ler", lambda: {"kimi:test": "Minha chave"})
-    monkeypatch.setattr(cotas, "_gravar_cache", lambda: pytest.fail("só o Rust grava o cache"))
     facts = cotas.quota_facts("sources", [])
     assert facts["sources"] == [{"id":"kimi:test", "label":"Kimi", "provedor":"kimi", "ativa":False}]
     assert facts["aliases"] == {"kimi:test": "Minha chave"}

@@ -29,7 +29,6 @@ from typing import Any
 from app import atomico
 from app.agentes_sync import _codex_dir, _pi_dir
 
-
 _JWT_CLAIM = "https://api.openai.com/auth"
 PROVEDOR = "openai-codex"
 
@@ -236,6 +235,7 @@ def _managed_device(action):
 
 def _require_python_writer():
     from fastapi import HTTPException
+
     from app.account_bridge import owner_mode
     if owner_mode() != "python":
         raise HTTPException(503, detail={"code": "account_device_python_writer_disabled"})
