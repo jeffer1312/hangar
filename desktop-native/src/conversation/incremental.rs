@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use serde_json::Value;
 use super::{Activity, ActivityTask, AgentRun, Item, ShellRun, Task, TaskStatus, Tool, View,
     command_label, fold_tasks, is_agent_call, is_page_call, is_task_call, joins_thinking, loose_id,
-    task_status, tool_key, whole_list, word_after, GROUP_MIN};
+    task_status, tool_key, whole_list, word_after, shown_agent_id, GROUP_MIN};
 use crate::api::dto::ChatEvent;
 
 /// A região anterior a `from` conserva linhas e conteúdo, não apenas os eventos.
@@ -195,7 +195,7 @@ impl ActivityFold {
                     // O campo estruturado vence o texto, que muda entre versões do Claude Code.
                     let text_launch = text.to_lowercase().contains("async agent launched");
                     let launched = event.bg_agent_id.as_deref().or_else(|| if text_launch { word_after(text, "agentId:") } else { None });
-                    if let Some(agent) = launched.or_else(|| word_after(text, "agentId:")) {
+                    if let Some(agent) = shown_agent_id(launched, text) {
                         changed = self.agent_ids.get(id).map(String::as_str) != Some(agent);
                         if changed { self.agent_ids.insert(id.to_owned(), agent.to_owned()); }
                     }

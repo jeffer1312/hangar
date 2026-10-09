@@ -104,8 +104,8 @@ _TEAMMATE_INICIO_RE = re.compile(r"(?:Another Claude session sent a message:\s*)
 _TEAMMATE_BLOCO_RE = re.compile(r'<teammate-message\b([^>]*)>\n?(.*?)\n?</teammate-message>', re.DOTALL)
 
 
-def _teammate_textos(texto) -> Optional[list[str]]:
-    """None = não é recado de colega. Lista (talvez vazia) = os recados a mostrar."""
+def _teammate_textos(texto) -> Optional[tuple[list[str], list[str]]]:
+    """None = não é recado de colega. Senão (recados a mostrar, colegas que ficaram ociosos)."""
     if not isinstance(texto, str):
         return None
     t = texto.lstrip()
@@ -114,26 +114,37 @@ def _teammate_textos(texto) -> Optional[list[str]]:
     blocos = _TEAMMATE_BLOCO_RE.findall(t)
     if not blocos:
         return None  # tag sem bloco válido: segue como texto normal, nada some
-    out = []
+    out, ociosos = [], []
     for attrs, corpo in blocos:
         corpo = corpo.strip()
+        nome = dict(_PEER_ATTR_RE.findall(attrs)).get("teammate_id") or "colega"
         if corpo.startswith("{"):
             try:
-                if isinstance(json.loads(corpo), dict):
-                    continue  # aviso estruturado (colega ocioso etc.), não recado
+                aviso = json.loads(corpo)
             except ValueError:
-                pass
-        nome = dict(_PEER_ATTR_RE.findall(attrs)).get("teammate_id") or "colega"
+                aviso = None
+            if isinstance(aviso, dict):
+                if aviso.get("type") == "idle_notification":
+                    ociosos.append(nome)
+                continue  # aviso estruturado (colega ocioso etc.), não recado
         if corpo:
             out.append(f"[de: {nome}] {corpo}")
-    return out
+    return out, ociosos
 
 
 def _teammate_eventos(texto, id_: str) -> Optional[list[ChatEvent]]:
-    textos = _teammate_textos(texto)
-    if textos is None:
+    lido = _teammate_textos(texto)
+    if lido is None:
         return None
-    return [ChatEvent(kind="user_msg", id=_sub_id(id_, k), text=t) for k, t in enumerate(textos)]
+    textos, ociosos = lido
+    eventos = [ChatEvent(kind="user_msg", id=_sub_id(id_, k), text=t) for k, t in enumerate(textos)]
+    # Colega ocioso fecha o "teammate:<nome>" do spawn (bg_agent_id), como a <task-notification>.
+    # ponytail: fecha no 1o ocioso; colega reacordado por SendMessage nao volta a aparecer rodando.
+    # Pra isso, reabrir no tool_use SendMessage com `to` == nome.
+    eventos += [ChatEvent(kind="tool_result", id=_sub_id(id_, len(eventos) + j),
+                          tool_use_id=f"task:teammate:{nome}", result="task-notification")
+                for j, nome in enumerate(ociosos)]
+    return eventos
 
 
 def _agent_msg(texto, id_: str) -> Optional[list[ChatEvent]]:
@@ -336,7 +347,13 @@ def _patch_hunks(obj: dict) -> Optional[list[dict]]:
 def _bg_agent_id(obj: dict) -> Optional[str]:
     """Id do subagente quando o resultado é o lançamento em segundo plano, não o resultado final."""
     tur = obj.get("toolUseResult")
-    if not isinstance(tur, dict) or tur.get("status") != "async_launched":
+    if not isinstance(tur, dict):
+        return None
+    # Agent com `name` vira colega de equipe: roda até o 1o aviso de ocioso (ver _teammate_eventos).
+    if tur.get("status") == "teammate_spawned":
+        nome = tur.get("name")
+        return f"teammate:{nome}" if isinstance(nome, str) and nome else None
+    if tur.get("status") != "async_launched":
         return None
     aid = tur.get("agentId")
     return aid if isinstance(aid, str) and aid else None

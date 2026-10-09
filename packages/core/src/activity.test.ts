@@ -39,6 +39,13 @@ describe('activity — pareamento de agente background', () => {
     expect(run([launch('tu1'), semTexto, done('aa0777')]).runningAgents).toBe(0);
   });
 
+  it('colega de equipe roda do spawn até o aviso de ocioso', () => {
+    const spawn: ChatEvent = { kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'tu1', result: 'Spawned successfully.\nagent_id: ax-b72\nname: x', bg_agent_id: 'teammate:x' };
+    const ocioso: ChatEvent = { kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'task:teammate:x', result: 'task-notification' };
+    expect(run([launch('tu1'), spawn]).runningAgents).toBe(1);
+    expect(run([launch('tu1'), spawn, ocioso]).runningAgents).toBe(0);
+  });
+
   it('segue rodando enquanto nao chega o evento de fim', () => {
     const s = run([launch('tu1'), launched('tu1', 'aa0777')]);
     expect(s.runningAgents).toBe(1);

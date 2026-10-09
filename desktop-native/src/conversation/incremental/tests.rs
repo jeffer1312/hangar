@@ -37,6 +37,23 @@ fn structured_launch_id_keeps_the_agent_running_without_the_launch_text() {
     assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
 }
 
+#[test]
+fn teammate_runs_until_idle_and_keeps_its_real_agent_id() {
+    let events = [
+        event(json!({"id":"agent","kind":"tool_use","tool_use_id":"a","tool_name":"Agent","tool_input":{"prompt":"Ler","name":"x"}})),
+        event(json!({"id":"spawn","kind":"tool_result","tool_use_id":"a","result":"Spawned successfully.\nagent_id: ax-b72\nname: x","bg_agent_id":"teammate:x"})),
+        event(json!({"id":"idle","kind":"tool_result","tool_use_id":"task:teammate:x","result":"task-notification"})),
+    ];
+    let mut fold = super::ActivityFold::default();
+    for (i, ev) in events.iter().enumerate().take(2) { fold.push(i, ev); }
+    let run = &fold.snapshot().agents[0];
+    assert_eq!((run.running, run.agent_id.as_deref()), (true, Some("ax-b72")));
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events[..2]));
+    fold.push(2, &events[2]);
+    assert!(!fold.snapshot().agents[0].running);
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
+}
+
 fn views() -> Vec<View> {
     [ThinkingTools::None, ThinkingTools::Search, ThinkingTools::All].into_iter().flat_map(|thinking| {
         [false, true].into_iter().flat_map(move |tasks| {
