@@ -50,7 +50,7 @@ const WAIT:Duration=Duration::from_secs(10);
 /// Processo do teste que morre junto com ele, inclusive quando uma asserção falha antes do fim.
 struct KillOnDrop(std::process::Child);
 impl Drop for KillOnDrop {fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}}
-struct Fixture { _dir:tempfile::TempDir,target:TerminalTarget,policy:PolicyClient,io:Arc<Io>, mux:Arc<Mutex<Vec<String>>>, idle:Arc<std::sync::atomic::AtomicBool>, ready:Arc<std::sync::atomic::AtomicBool>, generation:Arc<AtomicU64>, native:Arc<std::sync::atomic::AtomicBool>, control:Arc<Mutex<Value>>, unknown:Arc<std::sync::atomic::AtomicBool>, calls:Arc<Mutex<Vec<Value>>>,server:tokio::task::JoinHandle<()> }
+struct Fixture { _dir:tempfile::TempDir,target:TerminalTarget,policy:PolicyClient,io:Arc<Io>, mux:Arc<Mutex<Vec<String>>>, idle:Arc<std::sync::atomic::AtomicBool>, ready:Arc<std::sync::atomic::AtomicBool>, generation:Arc<AtomicU64>, native:Arc<std::sync::atomic::AtomicBool>, control:Arc<Mutex<Value>>, unknown:Arc<std::sync::atomic::AtomicBool>, focus_plugin:Arc<std::sync::atomic::AtomicBool>, calls:Arc<Mutex<Vec<Value>>>,server:tokio::task::JoinHandle<()> }
 impl Fixture {
     async fn new()->Self {
         let dir=tempfile::tempdir().unwrap(); let io=Arc::new(Io::new()); let conversation=io.conversation.clone();
@@ -59,11 +59,12 @@ impl Fixture {
         let target=TerminalTarget {key:"key".into(),generation:1,name:"session".into(),binding:binding.clone(),lease_path:dir.path().join("lease"),state_path:dir.path().join("state"),projection_dir:dir.path().join("projection"),transcript:dir.path().join("chat.jsonl"),created:1.0,plugin_key:None};
         std::fs::write(&target.transcript,"").unwrap();
         let native=Arc::new(std::sync::atomic::AtomicBool::new(false)); let generation=Arc::new(AtomicU64::new(1)); let control=Arc::new(Mutex::new(json!({"disposition":"unavailable"})));
-        let idle=Arc::new(std::sync::atomic::AtomicBool::new(true)); let ready=Arc::new(std::sync::atomic::AtomicBool::new(true)); let unknown=Arc::new(std::sync::atomic::AtomicBool::new(false)); let calls=Arc::new(Mutex::new(vec![]));
+        let idle=Arc::new(std::sync::atomic::AtomicBool::new(true)); let ready=Arc::new(std::sync::atomic::AtomicBool::new(true)); let unknown=Arc::new(std::sync::atomic::AtomicBool::new(false)); let focus_plugin=Arc::new(std::sync::atomic::AtomicBool::new(false)); let calls=Arc::new(Mutex::new(vec![]));
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address=listener.local_addr().unwrap(); let t0=std::time::Instant::now();
         let state_path=target.state_path.clone();
         let (i,r,u,c,g,control_reply,n)=(idle.clone(),ready.clone(),unknown.clone(),calls.clone(),generation.clone(),control.clone(),native.clone());
-        let router=axum::Router::new().route("/internal/runtime/policy",axum::routing::post(move |body:String| {let (i,r,u,c,mut b,path,g,control_reply,n,conversation,mux)=(i.clone(),r.clone(),u.clone(),c.clone(),binding.clone(),state_path.clone(),g.clone(),control_reply.clone(),n.clone(),conversation.clone(),server_mux.clone()); async move {
+        let (focus_reply,focus_io)=(focus_plugin.clone(),io.clone());
+        let router=axum::Router::new().route("/internal/runtime/policy",axum::routing::post(move |body:String| {let (i,r,u,c,mut b,path,g,control_reply,n,conversation,mux)=(i.clone(),r.clone(),u.clone(),c.clone(),binding.clone(),state_path.clone(),g.clone(),control_reply.clone(),n.clone(),conversation.clone(),server_mux.clone()); let (focus_reply,focus_io)=(focus_reply.clone(),focus_io.clone()); async move {
             let v:Value=serde_json::from_str(&body).unwrap();
             let state:Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
             let phase=&state["operations"][v["phase_id"].as_str().unwrap()];
@@ -77,12 +78,16 @@ impl Fixture {
             b.generation=g.load(std::sync::atomic::Ordering::Acquire); b.conversation=conversation.lock().unwrap().clone();b.mux_argv=mux.lock().unwrap().clone();
             let data=match v["kind"].as_str().unwrap() {
                 "terminal_facts"=>json!({"binding":b,"ready":r.load(std::sync::atomic::Ordering::Acquire),"idle":i.load(std::sync::atomic::Ordering::Acquire),"open_question":false,"plugin_live":u.load(std::sync::atomic::Ordering::Acquire),"plugin_user":true,"native":if n.load(std::sync::atomic::Ordering::Acquire){Some(NativeMessage {socket:"fake".into(),origin:"peer".into(),sender:"peer".into(),mode:"message".into(),message_id:Some(format!("native:{}",v["payload"]["operation_id"].as_str().unwrap()))})}else{None}}),
+                // O pedido `focus` ao plugin: com `focus_plugin`, ele devolve o foco ao prompt; sem, é o plugin
+                // que não conhece o pedido.
+                "terminal_publish" if v["payload"]["publication"]["mode"]=="focus"=>if focus_reply.load(std::sync::atomic::Ordering::Acquire) {
+                    *focus_io.mods_screen.lock().unwrap()=None; json!("filled")} else {json!("not_written")},
                 "terminal_publish"=>json!("unknown"),
                 "terminal_plugin_control"=>control_reply.lock().unwrap().clone(), _=>panic!("unexpected policy")};
             ([("content-type","application/json")],json!({"ok":true,"data":data}).to_string())
         }}));
         let server=tokio::spawn(async move {axum::serve(listener,router).await.unwrap()});
-        Self {_dir:dir,target,policy:PolicyClient::new(address,"test".into(),"instance".into()),io,mux,idle,ready,generation,native,control,unknown,calls,server}
+        Self {_dir:dir,target,policy:PolicyClient::new(address,"test".into(),"instance".into()),io,mux,idle,ready,generation,native,control,unknown,focus_plugin,calls,server}
     }
     fn start(&self)->hangar_server::runtime::terminal::TerminalHandle {
         self.start_with_events(broadcast::channel(128).0)
@@ -1192,6 +1197,47 @@ async fn the_focus_guard_runs_only_when_the_delivery_presses_keys() {
     }
 }
 
+
+/// Os modos das publicações ao plugin, na ordem.
+fn published(f:&Fixture)->Vec<String> {
+    f.calls.lock().unwrap().iter().filter(|v|v["kind"]=="terminal_publish").map(|v|v["payload"]["publication"]["mode"].as_str().unwrap().to_owned()).collect()
+}
+
+/// Com o plugin vivo, o foco esquecido num mod volta pelo pedido a ele, sem o `ctrl+x tab`: também com só a
+/// faixa na tela, onde o anel nunca chega ao prompt. Depois a entrada segue ao plugin (`Fill`).
+async fn the_plugin_returns_the_focus(screen:String,anchor:Option<&str>) {
+    let f=Fixture::new().await; *f.io.mods_screen.lock().unwrap()=Some(screen);
+    f.unknown.store(true,std::sync::atomic::Ordering::Release);
+    f.focus_plugin.store(true,std::sync::atomic::Ordering::Release);
+    f.io.ring_returns.store(true,std::sync::atomic::Ordering::Release);
+    let h=f.start_returning(broadcast::channel(128).0,Duration::from_secs(30),Duration::from_millis(300));
+    *h.anchor().lock().unwrap()=anchor.map(str::to_owned);
+    assert_eq!(h.command(f.command("preso","Com @foco no mod")).await.unwrap().payload["code"],"mods_focus");
+    f.wait_for("a entrada vai ao plugin depois da devolução",||published(&f).contains(&"fill".to_string())).await;
+    assert_eq!(published(&f),["focus","fill"]);
+    assert_eq!(f.io.ring_keys.load(std::sync::atomic::Ordering::SeqCst),0,"nenhum ctrl+x tab");
+    h.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_plugin_returns_the_focus_from_a_pane() {the_plugin_returns_the_focus(pane_focus_screen(),None).await;}
+
+#[tokio::test]
+async fn the_plugin_returns_the_focus_with_only_the_band() {the_plugin_returns_the_focus(full_band_focus_screen(),Some("Revisão do MR")).await;}
+
+/// O plugin que não conhece o pedido (`not_written`) deixa a volta ao `ctrl+x tab`.
+#[tokio::test]
+async fn without_the_plugin_focus_the_ring_returns_it() {
+    let f=Fixture::new().await; *f.io.mods_screen.lock().unwrap()=Some(pane_focus_screen());
+    f.unknown.store(true,std::sync::atomic::Ordering::Release);
+    f.io.ring_returns.store(true,std::sync::atomic::Ordering::Release);
+    let h=f.start_returning(broadcast::channel(128).0,Duration::from_secs(30),Duration::from_millis(300));
+    assert_eq!(h.command(f.command("preso","Com @foco no mod")).await.unwrap().payload["code"],"mods_focus");
+    f.wait_for("a entrada vai ao plugin depois do anel",||published(&f).contains(&"fill".to_string())).await;
+    assert_eq!(published(&f),["focus","fill"]);
+    assert!(f.io.ring_keys.load(std::sync::atomic::Ordering::SeqCst)>=1);
+    h.stop().await.unwrap();
+}
 
 /// A limpeza de um clique desistiu com o teclado num painel e a reserva venceu sozinha: a mensagem guardada
 /// durante o clique não fica presa.

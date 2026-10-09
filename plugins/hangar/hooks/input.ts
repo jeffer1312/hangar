@@ -74,6 +74,15 @@ async function discover($: EngineInterface, attempt = 0) {
   }
 }
 
+/** Devolve o teclado ao prompt, de onde estiver nos mods: um `prompt.fill` com texto tira o foco da faixa
+ *  ou do painel sem trocar a aba na frente, e o vazio não mexe nele (medido). O segundo devolve o rascunho
+ *  como estava; o cursor vai ao fim dele. */
+async function returnFocus($: EngineInterface): Promise<boolean> {
+  const { text } = await $.prompt.read();
+  if (!(await $.prompt.fill({ text: `${text} `, mode: "replace" })).isFilled) return false;
+  return (await $.prompt.fill({ text, mode: "replace" })).isFilled;
+}
+
 async function pull($: EngineInterface, ponte: Bridge) {
   let espera = REARM_MS;
   try {
@@ -83,7 +92,7 @@ async function pull($: EngineInterface, ponte: Bridge) {
       // A conversa vai a cada poll: o `/clear` troca o id sem `session.start`, e o backend só
       // entrega à conversa que ele acompanha (um segundo `claude` no mesmo pane recebe 409).
       body: JSON.stringify({
-        sessao: ponte.sessao, token: ponte.token, instance: instance(), modos: ["fill", "user", "receipt_v2"], estado: lastState(),
+        sessao: ponte.sessao, token: ponte.token, instance: instance(), modos: ["fill", "user", "receipt_v2", "focus"], estado: lastState(),
         session_id: await $.session.id(),
       }),
     });
@@ -97,7 +106,20 @@ async function pull($: EngineInterface, ponte: Bridge) {
       };
       if (faixa === false) askResend();
       const receipt = { publication_id, generation };
-      if (text && modo === "fill") {
+      if (modo === "focus") {
+        let ok = false;
+        try {
+          if (!session_id || await $.session.id() === session_id) ok = await returnFocus($);
+        } catch (err) {
+          $.ui.log(`hangar: devolver o foco falhou: ${String(err)}`, { to: "debug" });
+        }
+        await $.http.fetch(`${ponte.url}/filled`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessao: ponte.sessao, token: ponte.token, ok,
+            ...receipt, session_id: await $.session.id() }),
+        });
+      } else if (text && modo === "fill") {
         let isFilled = false;
         try {
           if (!session_id || await $.session.id() === session_id) {
