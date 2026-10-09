@@ -193,6 +193,8 @@ def _account_error(exc: accounts.AccountError) -> HTTPException:
         "codex_account_default_protected": "a conta padrão do Codex não pode ser apagada",
         "codex_account_invalid_marker": "conta Codex inválida",
         "codex_account_delete_failed": "não foi possível apagar a conta Codex",
+        accounts.account_transcripts.MERGE_FAILED:
+            "não foi possível juntar as conversas na conta padrão; a conta não foi apagada",
         "codex_account_sign_out_failed": "o Codex não conseguiu sair da conta",
         "codex_account_sign_out_unconfirmed": "o Codex saiu, mas não consegui confirmar que a conta ficou deslogada",
     }
@@ -214,14 +216,15 @@ async def create_codex_account(body: CreateAccountBody, request: Request) -> dic
 
 
 @codex_contas_router.delete("/{account_id}", dependencies=[Depends(require_auth)])
-async def delete_codex_account(account_id: str, request: Request) -> dict:
+async def delete_codex_account(account_id: str, request: Request,
+                               keep_transcripts: bool = Query(True)) -> dict:
     account = _account(account_id)
     try:
-        await _service(request).delete_account(account)
+        kept = await _service(request).delete_account(account, keep_transcripts)
     except accounts.AccountError as exc:
         raise _account_error(exc) from None
     # Corpo JSON, nao 204: o apiFetchForServer do core sempre faz res.json().
-    return {"ok": True}
+    return {"ok": True, **(kept or {})}
 
 
 @codex_contas_router.post("/{account_id}/rate-limit-reset", dependencies=[Depends(require_auth)])

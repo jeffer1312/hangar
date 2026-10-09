@@ -53,6 +53,33 @@ def test_delete_removes_managed_account_only(isolated_home):
     assert alheia.exists()
 
 
+def test_delete_keeps_rollouts_in_the_default_home(isolated_home):
+    work = accounts.create_account("work")
+    rollouts = ["sessions/2026/10/09/rollout-1.jsonl", "archived_sessions/rollout-0.jsonl"]
+    for name in rollouts:
+        (work.home / name).parent.mkdir(parents=True)
+        (work.home / name).write_text(name)
+    (work.home / "auth.json").write_text("segredo")
+
+    assert accounts.delete_account(work) == {"merged": 2, "skipped": 0, "renamed": 0}
+
+    assert not work.home.exists()
+    for name in rollouts:
+        assert (isolated_home / ".codex" / name).read_text() == name
+    assert not (isolated_home / ".codex" / "auth.json").exists()
+
+
+def test_delete_without_keep_copies_nothing(isolated_home):
+    work = accounts.create_account("work")
+    (work.home / "sessions").mkdir()
+    (work.home / "sessions" / "rollout-1.jsonl").write_text("x")
+
+    assert accounts.delete_account(work, keep_transcripts=False) is None
+
+    assert not work.home.exists()
+    assert not (isolated_home / ".codex").exists()
+
+
 def test_delete_removes_read_only_git_pack(isolated_home):
     # O Codex clona marketplaces em .tmp/ e o git grava os packs somente-leitura.
     work = accounts.create_account("work")

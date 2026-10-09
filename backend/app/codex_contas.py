@@ -10,6 +10,8 @@ import re
 import shutil
 import stat
 
+from app import account_transcripts
+
 
 _NOME = r"[a-z0-9][a-z0-9_-]{0,31}"
 _MARKER_VERSION = 1
@@ -214,12 +216,21 @@ def _retirar_somente_leitura(func, path, exc: BaseException) -> None:
     func(path)
 
 
-def delete_account(account: Account) -> None:
-    """Apaga a pasta de uma conta ADICIONAL gerenciada. A padrao (~/.codex) nunca e apagada."""
+def delete_account(account: Account, keep_transcripts: bool = True) -> dict[str, int] | None:
+    """Apaga a pasta de uma conta ADICIONAL gerenciada. A padrao (~/.codex) nunca e apagada.
+    Com `keep_transcripts`, os rollouts vão antes para a padrão; falha na cópia mantém a conta."""
     if account.is_default or _canonical(account.home) == _canonical(default_home()):
         raise AccountError(409, "codex_account_default_protected", {"account_id": account.id})
     if not _managed(account.home, account.id):
         raise AccountError(409, "codex_account_invalid_marker", {"account_id": account.id})
+    kept = None
+    if keep_transcripts:
+        try:
+            kept = account_transcripts.keep(account.home, default_home(),
+                                            account_transcripts.CODEX_FOLDERS, account.id)
+        except account_transcripts.MergeError as error:
+            raise AccountError(500, account_transcripts.MERGE_FAILED,
+                               {"account_id": account.id, "error": str(error)}) from error
     try:
         shutil.rmtree(account.home, onexc=_retirar_somente_leitura)
     except OSError as error:

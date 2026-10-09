@@ -273,6 +273,19 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    // Ausente vale guardar: cliente antigo nunca perde conversa ao apagar uma conta.
+    let query: std::collections::HashMap<String, String> =
+        form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
+            .into_owned()
+            .collect();
+    let keep = if query.contains_key("keep_transcripts") {
+        match crate::query::bool_param(&query, "keep_transcripts") {
+            Ok(keep) => keep,
+            Err(response) => return *response,
+        }
+    } else {
+        true
+    };
     let account = match service.resolve(provider, &id) {
         Ok(account) => account,
         Err(err) => return error(err),
@@ -329,10 +342,15 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     let facts = service
         .usage(&bridge, state.state.runtime.get().map(|r| &**r), &key)
         .await;
-    match tokio::task::spawn_blocking(move || service.delete(provider, &account, &guard, &facts))
-        .await
+    match tokio::task::spawn_blocking(move || {
+        service.delete(provider, &account, &guard, &facts, keep)
+    })
+    .await
     {
-        Ok(Ok(())) => Json(json!({"ok":true})).into_response(),
+        Ok(Ok(None)) => Json(json!({"ok":true})).into_response(),
+        Ok(Ok(Some(count))) => Json(json!({"ok":true,"merged":count.merged,
+            "skipped":count.skipped,"renamed":count.renamed}))
+        .into_response(),
         Ok(Err(err)) => error(err),
         Err(_) => error(AccountError::io()),
     }

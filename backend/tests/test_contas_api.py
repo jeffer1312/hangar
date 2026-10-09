@@ -118,8 +118,47 @@ def test_apagar_conta(casa):
     assert (casa / ".claude-cotna2").is_dir()
     resp = cli.delete("/api/claude-configs/cotna2", headers=AUTH)
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
+    assert resp.json() == {"ok": True, "merged": 0, "skipped": 0, "renamed": 0}
     assert not (casa / ".claude-cotna2").exists()
+
+
+def test_apagar_conta_junta_as_conversas_na_padrao(casa):
+    cli = TestClient(app)
+    assert cli.post("/api/claude-configs", json={"nome": "work"}, headers=AUTH).status_code == 200
+    projeto = casa / ".claude-work" / "projects" / "-repo"
+    (projeto / "abc" / "subagents").mkdir(parents=True)
+    (projeto / "abc.jsonl").write_text("conversa", encoding="utf-8")
+    (projeto / "abc" / "subagents" / "x.jsonl").write_text("sub", encoding="utf-8")
+    resp = cli.delete("/api/claude-configs/work", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["merged"] == 2
+    assert (casa / ".claude" / "projects" / "-repo" / "abc.jsonl").read_text(encoding="utf-8") == "conversa"
+    assert (casa / ".claude" / "projects" / "-repo" / "abc" / "subagents" / "x.jsonl").is_file()
+    assert not (casa / ".claude-work").exists()
+
+
+def test_apagar_conta_sem_guardar_nao_copia(casa):
+    cli = TestClient(app)
+    assert cli.post("/api/claude-configs", json={"nome": "work"}, headers=AUTH).status_code == 200
+    (casa / ".claude-work" / "projects" / "-repo").mkdir(parents=True)
+    (casa / ".claude-work" / "projects" / "-repo" / "abc.jsonl").write_text("x", encoding="utf-8")
+    resp = cli.delete("/api/claude-configs/work?keep_transcripts=0", headers=AUTH)
+    assert resp.json() == {"ok": True}
+    assert not (casa / ".claude" / "projects" / "-repo").exists()
+    assert not (casa / ".claude-work").exists()
+
+
+def test_falha_ao_guardar_conversas_mantem_a_conta(casa):
+    cli = TestClient(app)
+    assert cli.post("/api/claude-configs", json={"nome": "work"}, headers=AUTH).status_code == 200
+    (casa / ".claude-work" / "projects" / "-repo").mkdir(parents=True)
+    (casa / ".claude-work" / "projects" / "-repo" / "abc.jsonl").write_text("x", encoding="utf-8")
+    # Um arquivo no lugar da pasta de destino impede a cópia.
+    (casa / ".claude" / "projects" / "-repo").write_text("", encoding="utf-8")
+    resp = cli.delete("/api/claude-configs/work", headers=AUTH)
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["code"] == "account_transcripts_merge_failed"
+    assert (casa / ".claude-work" / "projects" / "-repo" / "abc.jsonl").is_file()
 
 
 @pytest.fixture

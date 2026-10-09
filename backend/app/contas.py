@@ -36,7 +36,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from app import atomico, diag
+from app import account_transcripts, atomico, diag
 
 try:
     import fcntl
@@ -564,9 +564,9 @@ class _Ciclo:
         with self.guard.retain(), _trava_compartilhada(), _trava(self.dir_conta):
             return _reconciliar(self.dir_conta, projeto)
 
-    def apagar(self) -> None:
+    def apagar(self, keep_into: Path | None = None) -> dict[str, int] | None:
         with self.guard.retain(), _trava_compartilhada(), _trava(self.dir_conta):
-            _apagar(self.dir_conta)
+            return _apagar(self.dir_conta, keep_into)
 
 
 @contextmanager
@@ -646,11 +646,19 @@ def criar(nome: str) -> Path:
 
 
 @diag.rastrear("conta.apagar", provider="claude")
-def _apagar(dir_conta: Path) -> None:
-    """rmtree sob a trava — quem chama (o ciclo da conta) já validou e já segura as travas."""
+def _apagar(dir_conta: Path, keep_into: Path | None = None) -> dict[str, int] | None:
+    """rmtree sob a trava — quem chama (o ciclo da conta) já validou e já segura as travas.
+    Com `keep_into`, as conversas vão antes para lá; falha na cópia mantém a conta."""
+    kept = None
+    if keep_into is not None:
+        diag.registrar("conta.apagar.etapa", provider="claude", etapa="guardar_conversas",
+                       conta_id=diag.conta_id(str(dir_conta)))
+        kept = account_transcripts.keep(dir_conta, keep_into, account_transcripts.CLAUDE_FOLDERS,
+                                        dir_conta.name.removeprefix(".claude-"))
     diag.registrar("conta.apagar.etapa", provider="claude", etapa="remover_pasta",
                    conta_id=diag.conta_id(str(dir_conta)))
     shutil.rmtree(dir_conta)
+    return kept
 
 
 def apagar(nome: str) -> None:

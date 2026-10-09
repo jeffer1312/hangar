@@ -527,7 +527,10 @@
     "path": "/api/codex-contas/fresh",
     "status": 200,
     "body": {
-      "ok": true
+      "ok": true,
+      "merged": 0,
+      "skipped": 0,
+      "renamed": 0
     }
   }
 }

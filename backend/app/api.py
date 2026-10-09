@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StrictBool, model_validator
 from sse_starlette.sse import EventSourceResponse
-from app import (agentes_sync, atomico, atualizacoes, atualizar, btw, diag, harness_api,
+from app import (account_transcripts, agentes_sync, atomico, atualizacoes, atualizar, btw, diag, harness_api,
                  loop_monitor, pensamento_pt, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
 from app import external_pair_api, external_pairs, groups_bridge, internal_api, list_bridge, migration_status, update_channel
@@ -2066,8 +2066,9 @@ async def post_claude_config(body: ContaBody):
 
 
 @app.delete("/api/claude-configs/{nome}", dependencies=[Depends(require_auth)])
-async def delete_claude_config(nome: str):
-    """Apaga a conta e os transcripts dela. Recusa se alguma sessão viva estiver usando, se a
+async def delete_claude_config(nome: str, keep_transcripts: bool = Query(True)):
+    """Apaga a conta; com `keep_transcripts` (padrão, para cliente antigo não perder conversa)
+    as conversas vão antes para a conta padrão. Recusa se alguma sessão viva estiver usando, se a
     conta for a configuração ativa do backend, se estiver na lista fixa do ambiente ou se algum
     processo vivo tiver o config dir dela — apagar debaixo de um deles deixa o CLI escrevendo
     num caminho que sumiu."""
@@ -2121,16 +2122,20 @@ async def delete_claude_config(nome: str):
             if pids:
                 raise HTTPException(409, detail=erro("erro_processos_usam_conta",
                                          f"processo(s) {pids} estão usando esta conta", pids=pids))
-            ciclo.apagar()
+            return ciclo.apagar(_backend_config_base() if keep_transcripts else None)
 
     try:
-        await asyncio.to_thread(_checar_e_apagar)
+        kept = await asyncio.to_thread(_checar_e_apagar)
+    except account_transcripts.MergeError as e:
+        raise HTTPException(500, detail=erro(account_transcripts.MERGE_FAILED,
+                                 "não foi possível juntar as conversas na conta padrão; a conta "
+                                 "não foi apagada", error=str(e))) from None
     except contas.ContaError as e:
         # Pasta não carimbada (ou conta que sumiu): mesmo 404 do apagar() antigo, agora como
         # envelope — a mesma chave do login (erro_conta_inexistente) traduz nos dois fluxos.
         raise HTTPException(e.status, detail=erro("erro_conta_inexistente", e.detail,
                                                   nome=nome)) from None
-    return {"ok": True}
+    return {"ok": True, **(kept or {})}
 
 
 @app.post("/api/claude-configs/{nome}/logout", dependencies=[Depends(require_auth)])

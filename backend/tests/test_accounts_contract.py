@@ -39,7 +39,7 @@ def test_python_routes_match_explicit_reference(account_contract):
     assert [row["id"] for row in actual["codex_catalog"]["body"]] == ["default", "alpha", "zeta"]
     assert actual["codex_create"]["status"] == 201
     assert actual["codex_login_null"]["body"] is None
-    assert actual["codex_delete"]["body"] == {"ok": True}
+    assert actual["codex_delete"]["body"] == {"ok": True, "merged": 0, "skipped": 0, "renamed": 0}
     assert actual == expected
 
 

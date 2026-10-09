@@ -664,19 +664,22 @@ class CodexContasLogin:
         return copy.deepcopy(self._preparation_results.get(self._key(account), gravado))
 
     @diag.rastrear("conta.apagar", provider="codex")
-    async def delete_account(self, account: accounts.Account) -> None:
+    async def delete_account(self, account: accounts.Account,
+                             keep_transcripts: bool = True) -> dict[str, int] | None:
         # Mesma trava do login: conta com sessao viva, login ou preparo em andamento nao sai.
         reservation = self._reserve(account, "login")
         try:
             diag.registrar("conta.apagar.etapa", provider="codex", etapa="remover_pasta",
                            conta_id=diag.conta_id(self._key(account)))
-            await account_lifecycle.complete_on_cancel(asyncio.to_thread(accounts.delete_account, account))
+            kept = await account_lifecycle.complete_on_cancel(
+                asyncio.to_thread(accounts.delete_account, account, keep_transcripts))
             key = self._key(account)
             with self._lock:
                 self._auth_cache.pop(key, None)
                 self._preparations.pop(key, None)
                 self._preparation_force.discard(key)
                 self._preparation_results.pop(key, None)
+            return kept
         finally:
             reservation.release()
 
