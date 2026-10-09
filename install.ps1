@@ -2525,11 +2525,22 @@ if (-not $bash) {
     }
 
     # (3) PATH do usuario, pra `hangar-send` funcionar de qualquer terminal (e pro bash achar o shim).
+    # O diretorio vai ANTES do WindowsApps: os hooks do Claude Code rodam no bash com o PATH do
+    # usuario, sem os lancadores acima, e la o python3.exe da Store responderia no lugar do shim.
     $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if ($pathUsuario -notlike "*$binUsuario*") {
-        Grava-PathUsuario "$pathUsuario;$binUsuario"
+    $lista = New-Object System.Collections.Generic.List[string]
+    $entrou = $false
+    foreach ($p in ($pathUsuario -split ';')) {
+        if (-not $p -or $p.TrimEnd('\') -ieq $binUsuario.TrimEnd('\')) { continue }
+        if (-not $entrou -and $p -like '*\Microsoft\WindowsApps*') { $lista.Add($binUsuario); $entrou = $true }
+        $lista.Add($p)
+    }
+    if (-not $entrou) { $lista.Add($binUsuario) }
+    $novo = $lista -join ';'
+    if ($novo -ne $pathUsuario) {
+        Grava-PathUsuario $novo
         Atualiza-Path
-        Ok "$binUsuario adicionado ao PATH do usuario"
+        Ok "$binUsuario no PATH do usuario, antes do atalho do Python da Microsoft Store"
         Nota 'Vale nos terminais NOVOS.'
     } else { Ok 'PATH do usuario ja tem o diretorio' }
 
