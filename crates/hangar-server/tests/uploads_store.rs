@@ -266,17 +266,19 @@ fn absolute_audio_accepts_trusted_root_alias_and_rejects_changed_destination() {
     std::os::unix::fs::symlink(&vault, &alias).unwrap();
     let store = UploadStore::new(&alias).unwrap();
     let reference = alias.join("project/previous/audio.webm");
+    // A resposta é o arquivo real; no macOS o próprio tempdir já fica atrás de um link.
+    let real = fs::canonicalize(&audio).unwrap();
     assert_eq!(
         store
             .resolve_audio("project", "after-clear", reference.to_str().unwrap(), true)
             .unwrap(),
-        audio
+        real
     );
     assert_eq!(
         store
-            .resolve_audio("project", "after-clear", audio.to_str().unwrap(), true)
+            .resolve_audio("project", "after-clear", real.to_str().unwrap(), true)
             .unwrap(),
-        audio
+        real
     );
     assert_eq!(
         store

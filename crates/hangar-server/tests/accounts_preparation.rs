@@ -111,14 +111,13 @@ async fn lost_response_keeps_guard_and_force_waits_for_the_effective_worker() {
     finished.add_permits(1);
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            if service.preparation_status(&account, &bridge).await["status"] == "ready" {
-                if service
+            if service.preparation_status(&account, &bridge).await["status"] == "ready"
+                && service
                     .locks
                     .try_acquire(&key, GuardMode::Exclusive)
                     .is_ok()
-                {
-                    break;
-                }
+            {
+                break;
             }
             tokio::task::yield_now().await;
         }

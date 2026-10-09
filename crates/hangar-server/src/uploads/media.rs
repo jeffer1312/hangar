@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::io::AsyncReadExt;
 
-async fn run(program: &str, args: &[String], timeout: u64) -> Option<Vec<u8>> {
+fn command(program: &str, args: &[String]) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(program);
     command
         .args(args)
@@ -18,6 +18,14 @@ async fn run(program: &str, args: &[String], timeout: u64) -> Option<Vec<u8>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    for key in crate::terminal_process::PRIVATE_ENV_KEYS {
+        command.env_remove(key);
+    }
+    command
+}
+
+async fn run(program: &str, args: &[String], timeout: u64) -> Option<Vec<u8>> {
+    let mut command = command(program, args);
     let mut tree = crate::terminal_process::CommandTree::configure(&mut command).ok()?;
     let mut child = command.spawn().ok()?;
     if tree.attach(&child).is_err() {
@@ -232,7 +240,7 @@ pub async fn transcribe(st: &crate::routes::AppState, name: &str, audio: Vec<u8>
     use base64::Engine;
     use http_body_util::BodyExt;
     let name = percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
-    // Base64 não tem caractere a escapar em JSON: o corpo sai sem cópia intermediária.
+    // Base64 não tem caractere a escapar em JSON: o corpo é montado direto, sem serializar um valor.
     let body = format!(
         r#"{{"audio":"{}"}}"#,
         base64::engine::general_purpose::STANDARD.encode(audio)
@@ -265,6 +273,24 @@ pub async fn transcribe(st: &crate::routes::AppState, name: &str, audio: Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_tools_do_not_inherit_server_authority() {
+        let command = command("ffprobe", &args(&["-v", "error"]));
+        let removed: Vec<_> = command
+            .as_std()
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        for key in [
+            "HANGAR_INTERNAL_SECRET",
+            "CP_AUTH_TOKEN",
+            "HANGAR_RUNTIME_INSTANCE",
+            "HANGAR_PLUGIN_TOKEN",
+        ] {
+            assert!(removed.iter().any(|name| name == key), "{key} chega ao ffmpeg");
+        }
+    }
     #[test]
     fn frames_cover_entire_video_and_unknown_duration_uses_start() {
         assert_eq!(

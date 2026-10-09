@@ -320,7 +320,7 @@ impl AccountService {
                     &tmp,
                     serde_json::to_vec_pretty(&data).map_err(std::io::Error::other)?,
                 )?;
-                let result = fs::rename(&tmp, &path);
+                let result = crate::runtime::queue::replace(&tmp, &path);
                 if result.is_err() {
                     let _ = fs::remove_file(tmp);
                 }
@@ -340,7 +340,7 @@ impl AccountService {
             account.is_default
                 || super::storage::real_file(&account.home.join(super::storage::CLAUDE_MARKER))
         });
-        // Cada leitura pode subir a CLI; em paralelo a tela espera a mais lenta, não a soma.
+        // Cada leitura pode subir a CLI: algumas em paralelo poupam a soma sem subir uma por conta de uma vez.
         let output: Vec<Value> = futures_util::stream::iter(accounts)
             .map(|(mut row, account)| async move {
                 row["login"] = self.read_claude_auth(&account).await;

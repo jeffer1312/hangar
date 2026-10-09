@@ -318,6 +318,44 @@ fn onboarding_updates_both_default_readers_without_losing_configuration() {
     assert_eq!(terminal["existing"], "kept");
 }
 
+#[cfg(windows)]
+#[test]
+fn onboarding_waits_for_a_reader_without_delete_sharing() {
+    use hangar_server::accounts::{
+        AccountService, catalog::Account, environment::AccountEnvironment,
+    };
+    use serde_json::Value;
+    use std::{fs, os::windows::fs::OpenOptionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let account_home = root.path().join(".claude-work");
+    fs::create_dir(&account_home).unwrap();
+    let config = account_home.join(".claude.json");
+    fs::write(&config, r#"{"theme":"dark"}"#).unwrap();
+    let home = root.path().to_string_lossy().into_owned();
+    let service = AccountService::new(AccountEnvironment::from_map(
+        [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into(),
+    ));
+    // Um CLI lendo o arquivo: só FILE_SHARE_READ, como o open() do Python e do Node.
+    let reader = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x1)
+        .open(&config)
+        .unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        drop(reader);
+    });
+    service.complete_claude_onboarding(&Account {
+        id: "work".into(),
+        home: account_home,
+        is_default: false,
+    });
+    release.join().unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert_eq!(saved["hasCompletedOnboarding"], true);
+    assert_eq!(saved["theme"], "dark");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_window_creation_and_missing_cli_release_the_attempt_guard() {
     use axum::{Router, http::StatusCode, routing::post};

@@ -255,15 +255,36 @@ impl AccountService {
         client: &WindowClient,
         strict: bool,
     ) -> Result<Option<Value>, AccountError> {
-        if !self.current_attempt(attempt).await {
+        let current = self.current_attempt(attempt).await;
+        // Substituída: o token novo, se houver, é da tentativa que está no lugar.
+        if !current
+            && self
+                .claude_logins
+                .attempts
+                .lock()
+                .await
+                .contains_key(&attempt.key)
+        {
             return Err(cancelled(&attempt.account.id));
         }
+        // Só cancelada: se a CLI já gravou o token novo, o login aconteceu e ainda precisa fechar
+        // as boas-vindas e o cache; sem ele, não há o que esperar.
+        let waiting = || {
+            if current {
+                Ok(None)
+            } else {
+                Err(cancelled(&attempt.account.id))
+            }
+        };
         self.validate_claude(&attempt.account, &attempt.key)?;
         let signature_before = claude_auth::token_signature(&attempt.account.home, strict)?;
         if !strict && (signature_before.is_none() || signature_before == attempt.old_token) {
-            return Ok(None);
+            return waiting();
         }
         let state = self.claude_auth_guarded(&attempt.account).await;
+        if !current && state["estado"] != "ok" {
+            return waiting();
+        }
         if state["estado"] != "ok" {
             return Err(AccountError::new(
                 409,
@@ -281,14 +302,14 @@ impl AccountService {
             ));
         }
         if state["loggedIn"] != true {
-            return Ok(None);
+            return waiting();
         }
         let signature_after = claude_auth::token_signature(&attempt.account.home, strict)?;
         if signature_after != signature_before
             || signature_after.is_none()
             || signature_after == attempt.old_token
         {
-            return Ok(None);
+            return waiting();
         }
         // A guarda continua viva enquanto a CLI termina e o onboarding é publicado.
         client
@@ -616,6 +637,7 @@ mod tests {
                 .await
         });
         assert_eq!(observed.recv().await.as_deref(), Some("code"));
+        let code_sent = tokio::time::Instant::now();
         let status_called = account.home.join("status-called");
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while !status_called.exists() {
@@ -632,8 +654,9 @@ mod tests {
         let gate = service.claude_logins.gates.gate(&key);
         let control = gate.lock().await;
         assert!(observed.is_empty());
+        // O relógio do prazo também anda com o tempo real da primeira leitura nativa.
         tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(299)).await;
+        tokio::time::advance(Duration::from_secs(299).saturating_sub(code_sent.elapsed())).await;
         tokio::time::resume();
         drop(control);
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -675,6 +698,114 @@ mod tests {
             service.claude_step("work", client).await.unwrap()["etapa"],
             "idle"
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn cancel_after_the_cli_wrote_the_token_still_completes_the_login() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture = root.path().join("native");
+        let script = fixture.join("node_modules/@anthropic-ai/claude-code/cli.js");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        let source = "const fs=require('fs'),p=require('path'),d=process.env.CLAUDE_CONFIG_DIR;fs.appendFileSync(p.join(d,'status-called'),'status\\n');process.stdout.write(fs.readFileSync(p.join(d,'reply.json')));process.exit(1);";
+        fs::write(script, source).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::write(
+                fixture.join("claude"),
+                format!("#!/usr/bin/env node\n{source}"),
+            )
+            .unwrap();
+            fs::set_permissions(fixture.join("claude"), fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let path = format!(
+            "{}{separator}{}",
+            fixture.display(),
+            std::env::var("PATH").unwrap()
+        );
+        let home = root.path().to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [
+                ("HOME".into(), home.clone()),
+                ("USERPROFILE".into(), home),
+                ("PATH".into(), path),
+            ]
+            .into_iter()
+            .chain(
+                std::env::vars()
+                    .filter(|(key, _)| cfg!(windows) && key.eq_ignore_ascii_case("SystemRoot")),
+            )
+            .collect(),
+        ));
+        let account = service
+            .create(Provider::Claude, "work", |_| Ok(()))
+            .unwrap();
+        fs::write(account.home.join("reply.json"), r#"{"loggedIn":false}"#).unwrap();
+        let key = AccountKey::new(Provider::Claude, &account.home).unwrap();
+        let (actions, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let router = Router::new().route(
+            "/internal/accounts/claude-window",
+            post(move |body: axum::body::Bytes| {
+                let value: Value = serde_json::from_slice(&body).unwrap();
+                actions
+                    .send(value["action"].as_str().unwrap().to_owned())
+                    .unwrap();
+                async { json!({"ok":true,"url":null}).to_string() }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = WindowClient::new(
+            listener.local_addr().unwrap(),
+            "synthetic".into(),
+            "test".into(),
+        )
+        .unwrap();
+        let server = tokio::spawn(async { axum::serve(listener, router).await.unwrap() });
+        service
+            .start_claude_login("work", client.clone())
+            .await
+            .unwrap();
+        assert_eq!(observed.recv().await.as_deref(), Some("open"));
+        let confirming = tokio::spawn({
+            let (service, client) = (service.clone(), client.clone());
+            async move {
+                service
+                    .confirm_claude("work", "synthetic-code".into(), client)
+                    .await
+            }
+        });
+        assert_eq!(observed.recv().await.as_deref(), Some("code"));
+        let status_called = account.home.join("status-called");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !status_called.exists() {
+            assert!(std::time::Instant::now() < deadline, "a CLI não foi lida");
+            tokio::task::yield_now().await;
+        }
+        // Entre duas leituras: o navegador concluiu, a CLI gravou o token, e o cancelar chega
+        // antes da leitura seguinte.
+        let gate = service.claude_logins.gates.gate(&key);
+        let control = gate.lock().await;
+        fs::write(
+            account.home.join(".credentials.json"),
+            r#"{"claudeAiOauth":{"accessToken":"synthetic-new"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            account.home.join("reply.json"),
+            r#"{"loggedIn":true,"email":"fixture@example.test","subscriptionType":"pro"}"#,
+        )
+        .unwrap();
+        drop(control);
+        service.cancel_claude("work", client).await.unwrap();
+        assert_eq!(observed.recv().await.as_deref(), Some("close"));
+        let done = confirming.await.unwrap().unwrap();
+        assert_eq!(done["ok"], true);
+        assert_eq!(done["email"], "fixture@example.test");
+        let config: Value =
+            serde_json::from_slice(&fs::read(account.home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(config["hasCompletedOnboarding"], true);
         server.abort();
     }
 }

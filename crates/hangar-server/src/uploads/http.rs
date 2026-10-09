@@ -27,12 +27,15 @@ pub struct Facts {
 fn response(value: Value, status: u16) -> Response {
     crate::session_write::json_response(StatusCode::from_u16(status).unwrap(), value)
 }
-fn failure(status: u16, code: &str, message: &str) -> Response {
-    crate::session_write::detail(
-        StatusCode::from_u16(status).unwrap(),
+fn failure(status: u16, code: &'static str, message: &str) -> Response {
+    crate::diag::coded(
+        crate::session_write::detail(
+            StatusCode::from_u16(status).unwrap(),
+            code,
+            message,
+            json!({}),
+        ),
         code,
-        message,
-        json!({}),
     )
 }
 fn storage_error(error: std::io::Error, upload: bool) -> Response {
@@ -59,7 +62,7 @@ fn storage_error(error: std::io::Error, upload: bool) -> Response {
     }
 }
 
-fn tail(path: &str) -> Option<(&str, &str)> {
+pub(crate) fn tail(path: &str) -> Option<(&str, &str)> {
     path.strip_prefix("/api/sessions/")?.split_once('/')
 }
 pub fn matches(method: &Method, path: &str) -> bool {
@@ -99,7 +102,7 @@ async fn facts(
     .header("x-hangar-internal", &st.cfg.internal_secret)
     .body(axum::body::Body::empty())
     .map_err(|_| unavailable())?;
-    // O pool do servidor: um cliente por pedido abria conexão nova a cada GET/Range de anexo.
+    // Cliente do servidor: os GET/Range de um anexo reaproveitam a conexão.
     let (status, bytes) = tokio::time::timeout(Duration::from_secs(15), async {
         let response = st.http.request(request).await.ok()?;
         let status = response.status().as_u16();
@@ -209,7 +212,8 @@ async fn handle(st: &AppState, name: &str, tail: &str, req: Request) -> Response
     execute(st, name, tail, req, facts, &filename, query).await
 }
 
-/// A verificação de identidade do cofre faz dezenas de syscalls por arquivo: fora do worker async.
+/// A verificação de identidade do cofre faz várias chamadas de sistema por arquivo e espera o disco:
+/// roda fora do worker async.
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> std::io::Result<T> + Send + 'static,
 ) -> std::io::Result<T> {

@@ -110,7 +110,7 @@ impl AccountService {
             }
         }
         // Uma passagem pelo fallback pode publicar estado posterior ao último filho Rust.
-        available.sort_by(|left, right| right.0.cmp(&left.0));
+        available.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
         for (_, path) in available {
             match std::fs::read(&path) {
                 Ok(bytes) => {

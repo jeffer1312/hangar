@@ -201,9 +201,8 @@ struct Installation {
     #[serde(default)]
     notes: Vec<Value>,
 }
-const PRIVATE_ENV_KEYS: [&str; 4] = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_PLUGIN_TOKEN"];
 fn configure_plugin_command(command: &mut tokio::process::Command, cwd: &Path, config_dir: &Path) {
-    for key in PRIVATE_ENV_KEYS { command.env_remove(key); }
+    for key in crate::terminal_process::PRIVATE_ENV_KEYS { command.env_remove(key); }
     command.args(["plugin", "list", "--json"]).current_dir(cwd)
         .env("CLAUDE_CONFIG_DIR", config_dir)
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")

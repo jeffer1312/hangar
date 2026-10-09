@@ -376,11 +376,20 @@ async fn pass_any(
         && gate(&st, peer, &req).1
     {
         let headers = req.headers().clone();
+        let path = req.uri().path().to_owned();
         let mut response = if uploads {
-            crate::uploads::http::public(st, req).await
+            crate::uploads::http::public(st.clone(), req).await
         } else {
-            crate::accounts::http::public(st, req).await
+            crate::accounts::http::public(st.clone(), req).await
         };
+        // Sem o Python nessas rotas, a falha só chega ao diário exportável por aqui.
+        if uploads {
+            let session = crate::uploads::http::tail(&path).map_or("", |(name, _)| name);
+            st.diag.report_response("rust.uploads_failed", session, &response, "a operação de anexo falhou");
+        } else {
+            let scope = crate::accounts::http::journal_scope(&path);
+            st.diag.report_response("rust.accounts_failed", &scope, &response, "a operação de conta falhou");
+        }
         cors(&headers, response.headers_mut());
         return response;
     }

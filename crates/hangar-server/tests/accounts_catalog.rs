@@ -713,3 +713,59 @@ async fn accounts_named_like_subroutes_reach_deletion() {
     server.abort();
     python.abort();
 }
+
+#[tokio::test]
+async fn account_failure_reaches_the_exportable_journal() {
+    let (journal, mut entries) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let python = tokio::spawn(async move {
+        axum::serve(
+            upstream,
+            Router::new()
+                .route(
+                    "/internal/diag",
+                    axum::routing::post(move |body: axum::body::Bytes| {
+                        journal.send(serde_json::from_slice(&body).unwrap()).unwrap();
+                        async { StatusCode::OK }
+                    }),
+                )
+                .fallback(|| async { (StatusCode::SERVICE_UNAVAILABLE, "sem fatos") }),
+        )
+        .await
+        .unwrap();
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut state = AppState::new(Config {
+        listen: addr,
+        upstream: upstream_addr,
+        internal_secret: "contract-internal".into(),
+        auth_token: "contract-only".into(),
+        log_path: None,
+        trusted: TrustedHosts::parse("127.0.0.1"),
+    });
+    state.accounts = isolated_service(root.path());
+    state
+        .accounts
+        .create(hangar_server::accounts::Provider::Codex, "journal", |_| Ok(()))
+        .unwrap();
+    let server = tokio::spawn(hangar_server::routes::serve_with_state(listener, state));
+    let response = reqwest::Client::new()
+        .delete(format!("http://{addr}/api/codex-contas/journal"))
+        .bearer_auth("contract-only")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+    let entry = tokio::time::timeout(std::time::Duration::from_secs(5), entries.recv())
+        .await
+        .expect("a falha da conta não chegou ao diário")
+        .unwrap();
+    assert_eq!(entry["evento"], "rust.accounts_failed");
+    assert_eq!(entry["sessao"], "codex:journal");
+    assert_eq!(entry["codigo"], "account_usage_unknown");
+    server.abort();
+    python.abort();
+}

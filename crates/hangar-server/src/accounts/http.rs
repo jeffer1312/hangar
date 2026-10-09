@@ -22,6 +22,23 @@ impl IntoResponse for Json {
     }
 }
 
+/// Escopo da falha no diário: o provedor e, quando a rota tem, a conta. O diário agrupa por escopo
+/// e código, e duas contas com a mesma falha não podem virar uma linha só.
+pub(crate) fn journal_scope(path: &str) -> String {
+    let mut parts = path.trim_start_matches("/api/").split('/');
+    let kind = match parts.next() {
+        Some("codex-contas") => "codex",
+        Some("cotas") => "cotas",
+        _ => "claude",
+    };
+    match parts.next().filter(|label| !label.is_empty()) {
+        Some(label) => format!(
+            "{kind}:{}",
+            percent_encoding::percent_decode_str(label).decode_utf8_lossy()
+        ),
+        None => kind.to_owned(),
+    }
+}
 pub fn matches(method: &Method, path: &str) -> bool {
     if *method == Method::POST && path.strip_prefix("/api/codex-contas/")
         .and_then(|tail|tail.strip_suffix("/rate-limit-reset")).is_some_and(|id|!id.is_empty() && !id.contains('/')) {return true;}
@@ -48,11 +65,14 @@ pub fn matches(method: &Method, path: &str) -> bool {
                 }))
 }
 pub(super) fn error(error: AccountError) -> Response {
-    crate::session_write::detail(
-        StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+    crate::diag::coded(
+        crate::session_write::detail(
+            StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            error.code,
+            &error.message,
+            error.params,
+        ),
         error.code,
-        &error.message,
-        error.params,
     )
 }
 pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Response {
@@ -112,7 +132,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
         let force = if method == Method::POST {
             match crate::query::bool_param(&query, "forcar") {
                 Ok(force) => force,
-                Err(response) => return response,
+                Err(response) => return *response,
             }
         } else {
             false

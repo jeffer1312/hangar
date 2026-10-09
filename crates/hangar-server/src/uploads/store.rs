@@ -798,7 +798,7 @@ impl UploadStore {
         if size == 0 {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        // O fsync de até 100 MiB prendia o worker async; o clone do descritor fecha antes de publicar.
+        // O fsync espera o disco: roda fora do worker async, num clone do descritor que fecha antes de publicar.
         let file = partial.file.as_ref().unwrap().try_clone()?;
         tokio::task::spawn_blocking(move || file.sync_all())
             .await
@@ -989,6 +989,13 @@ fn prune_directory(directory: &Arc<Directory>, cutoff: f64) -> io::Result<usize>
         }
     }
     Ok(removed)
+}
+
+fn modified_seconds(metadata: &fs::Metadata) -> io::Result<f64> {
+    Ok(match metadata.modified()?.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs_f64(),
+        Err(error) => -error.duration().as_secs_f64(),
+    })
 }
 
 #[cfg(test)]
@@ -1504,11 +1511,4 @@ mod removal_tests {
             172800.0
         );
     }
-}
-
-fn modified_seconds(metadata: &fs::Metadata) -> io::Result<f64> {
-    Ok(match metadata.modified()?.duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs_f64(),
-        Err(error) => -error.duration().as_secs_f64(),
-    })
 }

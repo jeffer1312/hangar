@@ -78,7 +78,7 @@ DRIFT_TETO = 3
 # CÓPIA real deixada de eras antigas numa conta fazia _resolver_colisao "subir" o arquivo velho
 # por cima do compartilhado, apagando os apelidos (aconteceu 19/08 08:52, mesma janela do
 # incidente do settings.json).
-# Runtime POR CONTA, que o próprio CLI (`telemetry`, `feedback`, `image-cache`,
+# Runtime POR CONTA, que o próprio CLI (`sessions`, `telemetry`, `feedback`, `image-cache`,
 # `.last-update-result.json`) ou o backend (`.hangar-models.json`, cache do picker por config dir)
 # regravam com tmp+rename — o que troca o atalho por arquivo real. Ligados, cada reconciliação
 # achava a "deriva" de novo, gavetava e avisava; a gaveta desta máquina chegou a `telemetry.3`.
@@ -488,8 +488,8 @@ def _conferir_plugins(dir_conta: Path) -> list[str]:
 
 @diag.rastrear("conta.reconciliar", provider="claude")
 def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
-    """Corpo da reconciliação, SEM as travas — quem chama (reconciliar público ou o ciclo da
-    conta) já as segura. Validar o projeto aqui também protege o caminho do ciclo, que recebe
+    """Corpo da reconciliação, SEM as travas — quem chama (o ciclo da conta ou o preparo pedido
+    pelo Rust) já as segura. Validar o projeto aqui também protege o caminho do ciclo, que recebe
     o projeto do backend sem passar pelo público."""
     if projeto is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", projeto):
         # projeto entra em caminhos (raiz / projeto / memory): absoluto, `..` ou barra
@@ -553,9 +553,8 @@ def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
 
 
 class _Ciclo:
-    """A conta sob a trava do ciclo: as operações internas que a API roda DENTRO da janela em
-    que a conta não pode sumir. Só o `ciclo_conta` fabrica — a API não adquire `_trava` por
-    conta própria."""
+    """A conta sob a guarda de existência: cada operação retém a guarda e só então pega as
+    travas de configuração, sempre na mesma ordem. Só o `ciclo_conta` fabrica."""
 
     def __init__(self, dir_conta: Path, guard):
         self.dir_conta = dir_conta
@@ -573,7 +572,7 @@ class _Ciclo:
 @contextmanager
 def ciclo_conta(nome: str, *, mode=None):
     """Proteção de existência antes das travas de configuração; exclusão pede exclusividade."""
-    from app.account_lifecycle import AccountKey, GuardMode, AccountLockError, acquire
+    from app.account_lifecycle import AccountKey, AccountLockError, GuardMode, acquire
     dir_conta = caminho(nome)
     try:
         guard = acquire(AccountKey.new("claude", dir_conta), mode or GuardMode.EXCLUSIVE)
@@ -648,8 +647,7 @@ def criar(nome: str) -> Path:
 
 @diag.rastrear("conta.apagar", provider="claude")
 def _apagar(dir_conta: Path) -> None:
-    """rmtree sob a trava — quem chama (apagar público ou o ciclo da conta) já validou e já
-    segura as travas."""
+    """rmtree sob a trava — quem chama (o ciclo da conta) já validou e já segura as travas."""
     diag.registrar("conta.apagar.etapa", provider="claude", etapa="remover_pasta",
                    conta_id=diag.conta_id(str(dir_conta)))
     shutil.rmtree(dir_conta)

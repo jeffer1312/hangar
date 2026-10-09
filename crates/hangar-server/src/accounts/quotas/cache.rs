@@ -7,7 +7,7 @@ pub const RATE_LIMIT_WAIT: f64 = 600.0;
 #[derive(Default)]
 pub struct QuotaCache {
     entries: Map<String, Value>,
-    /// Gravar sem mudança custava dois fsync a cada consulta.
+    /// Só grava o que mudou: cada gravação sincroniza arquivo e pasta, e a consulta comum não muda nada.
     dirty: bool,
 }
 
@@ -109,6 +109,10 @@ impl QuotaCache {
     }
 
     pub fn save(&mut self, path: &Path) -> io::Result<()> {
+        // No Windows a pasta do cache não é a das travas de conta e pode ainda não existir.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         crate::runtime::queue::atomic_write(path, &serde_json::to_vec(&self.entries)?)?;
         self.dirty = false;
         Ok(())
@@ -141,6 +145,16 @@ mod tests {
         assert!(loaded.needs_refresh("claude:test", 1600.0, true));
         assert_eq!(loaded.get("claude:test"), Some(good()));
         assert_eq!(loaded.get("kimi:test"), Some(good()));
+    }
+
+    #[test]
+    fn first_save_creates_the_cache_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("AppData/Local/hangar/cotas-cache.json");
+        let mut cache = QuotaCache::default();
+        cache.update("kimi:test", good(), 1000.0);
+        cache.save(&path).unwrap();
+        assert_eq!(QuotaCache::load(&path).get("kimi:test"), Some(good()));
     }
 
     #[test]

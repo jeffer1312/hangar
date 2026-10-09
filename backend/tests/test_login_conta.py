@@ -531,6 +531,35 @@ def test_old_confirmation_cannot_complete_replacement_login(bateia, monkeypatch)
     login_conta.cancelar("conta-a")
 
 
+def test_cancel_after_token_was_written_still_completes_the_login(bateia, monkeypatch):
+    login_conta.iniciar("conta-a", "/home/u")
+    monkeypatch.setattr(login_conta.renova_token, "_oauth", lambda *a, **k: {"accessToken": "synthetic-new"})
+    finished = []
+    monkeypatch.setattr(conta_estado, "concluir_onboarding", lambda d: finished.append(("onboarding", d)))
+    monkeypatch.setattr(conta_estado, "esquecer_conta", lambda d: finished.append(("forget", d)))
+    def identity(_):
+        # O navegador concluiu e a CLI gravou o token; o cancelar chega logo depois.
+        login_conta.cancelar("conta-a")
+        return conta_estado._estado_login({"loggedIn": True, "email": "a@example.test"})
+    result = login_conta.confirmar("conta-a", "synthetic-code", estado_fake=identity)
+    assert result["ok"] is True
+    assert finished == [("onboarding", "/home/u"), ("forget", "/home/u")]
+    assert not login_conta._em_curso("conta-a")
+
+
+def test_cancel_without_new_token_stops_at_once(bateia, monkeypatch):
+    login_conta.iniciar("conta-a", "/home/u")
+    monkeypatch.setattr(login_conta.renova_token, "_oauth", lambda *a, **k: None)
+    reads = []
+    def identity(_):
+        reads.append(True)
+        login_conta.cancelar("conta-a")
+        return conta_estado._estado_login({"loggedIn": False})
+    with pytest.raises(RuntimeError, match="cancelado"):
+        login_conta.confirmar("conta-a", "synthetic-code", estado_fake=identity, timeout_s=5)
+    assert len(reads) == 1
+
+
 @pytest.mark.parametrize("code", ["synthetic\nsecond-command", "synthetic\rsecond-command", "synthetic\x00tail"])
 def test_protected_code_rejects_control_characters_before_io(monkeypatch, code):
     calls = []
@@ -545,7 +574,8 @@ def test_protected_code_rejects_control_characters_before_io(monkeypatch, code):
 @pytest.mark.parametrize("code", ["synthetic\nsecond-command", "synthetic\rsecond-command", "synthetic\x00tail"])
 def test_window_bridge_rejects_control_code_before_account_lookup(monkeypatch, code):
     from types import SimpleNamespace
-    from app import account_bridge, runtime_coordinator, config
+
+    from app import account_bridge, config, runtime_coordinator
     monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(instance="fixture-instance"))
     lookups = []
     monkeypatch.setattr(config, "list_config_dirs", lambda: lookups.append(True) or [])

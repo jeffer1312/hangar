@@ -132,10 +132,11 @@ impl NewDirectory {
 }
 impl Drop for NewDirectory {
     fn drop(&mut self) {
-        if !self.published && identity(&self.path).is_ok_and(|id| id == self.identity) {
-            if let Err(error) = remove_tree(&self.path) {
-                tracing::warn!(error=?error.kind(), "rollback de cadastro não concluiu");
-            }
+        if !self.published
+            && identity(&self.path).is_ok_and(|id| id == self.identity)
+            && let Err(error) = remove_tree(&self.path)
+        {
+            tracing::warn!(error=?error.kind(), "rollback de cadastro não concluiu");
         }
     }
 }
@@ -153,10 +154,8 @@ pub fn remove_tree(path: &Path) -> io::Result<()> {
         return fs::remove_file(path);
     }
     if meta.is_dir() {
-        for child in fs::read_dir(path)? {
-            remove_tree(&child?.path())?;
-        }
-        fs::remove_dir(path)
+        // Por descritor: uma subpasta trocada por link no meio da remoção não leva o que fica fora.
+        fs::remove_dir_all(path)
     } else {
         #[cfg(windows)]
         if meta.permissions().readonly() {
@@ -165,5 +164,58 @@ pub fn remove_tree(path: &Path) -> io::Result<()> {
             fs::set_permissions(path, permissions)?;
         }
         fs::remove_file(path)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+    #[test]
+    fn removal_does_not_follow_a_folder_swapped_for_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let account = root.path().join("account");
+        let inner = account.join("projects");
+        let outside = root.path().join("outside");
+        let link = root.path().join("link");
+        fs::create_dir_all(&inner).unwrap();
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let names: Vec<_> = (0..4000).map(|i| format!("{i}.jsonl")).collect();
+        for name in &names {
+            fs::write(inner.join(name), b"conta").unwrap();
+            fs::write(outside.join(name), b"alheio").unwrap();
+        }
+        let swapper = {
+            let inner = inner.clone();
+            let (from, to) = (
+                CString::new(inner.as_os_str().as_bytes()).unwrap(),
+                CString::new(link.as_os_str().as_bytes()).unwrap(),
+            );
+            std::thread::spawn(move || {
+                // Assim que a remoção começa a esvaziar a pasta, ela vira link para fora, numa
+                // troca atômica: o caminho nunca deixa de existir.
+                while fs::read_dir(&inner).map_or(0, |d| d.count()) >= 4000 {
+                    std::hint::spin_loop();
+                }
+                unsafe {
+                    libc::renameat2(
+                        libc::AT_FDCWD,
+                        from.as_ptr(),
+                        libc::AT_FDCWD,
+                        to.as_ptr(),
+                        libc::RENAME_EXCHANGE,
+                    ) == 0
+                }
+            })
+        };
+        let _ = remove_tree(&account);
+        assert!(swapper.join().unwrap(), "a troca não aconteceu no meio da remoção");
+        let kept = names
+            .iter()
+            .filter(|name| outside.join(name).exists())
+            .count();
+        assert_eq!(kept, names.len(), "a remoção apagou arquivos fora da conta");
     }
 }

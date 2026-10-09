@@ -871,6 +871,20 @@ fn reconcile(state: &mut State, protected: &BTreeSet<String>, committed: Vec<Str
 }
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// `rename` que sobrevive ao Windows: lá um leitor aberto sem FILE_SHARE_DELETE (o CLI lendo
+/// o JSON) recusa a troca por um instante. No POSIX a troca nunca falha por leitor aberto.
+pub(crate) fn replace(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    for wait in [20,40,60,80,100,120] {
+        match std::fs::rename(from,to) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => std::thread::sleep(std::time::Duration::from_millis(wait)),
+            Err(error) => return Err(error),
+        }
+    }
+    std::fs::rename(from,to)
+}
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path.parent().ok_or_else(||invalid("arquivo sem diretório"))?;
     let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
@@ -884,15 +898,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let mut file = options.open(&temp)?;
         created = true;
         file.write_all(bytes)?; file.sync_all()?; drop(file);
-        #[cfg(windows)]
-        for wait in [20,40,60,80,100,120] {
-            match std::fs::rename(&temp,path) {
-                Ok(()) => return Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => std::thread::sleep(std::time::Duration::from_millis(wait)),
-                Err(error) => return Err(error),
-            }
-        }
-        std::fs::rename(&temp,path)?;
+        replace(&temp,path)?;
         #[cfg(unix)] { File::open(parent)?.sync_all()?; }
         Ok(())
     })();

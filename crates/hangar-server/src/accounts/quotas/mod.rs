@@ -37,7 +37,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
             .collect();
     let force = match crate::query::bool_param(&query, "forcar") {
         Ok(force) => force,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let bridge = match super::http::bridge(&state) {
         Ok(bridge) => bridge,

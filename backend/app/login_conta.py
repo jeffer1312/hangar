@@ -319,9 +319,12 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
             # A CLI ainda diz loggedIn para token vencido ou revogado: espere a troca.
             etapa = "aguardar_token_novo"
             oauth = renova_token._oauth(Path(tentativa.dir_conta), estrito=True)
-            if _tentativas.get(conta) is not tentativa:
+            atual = _tentativas.get(conta)
+            if atual is not None and atual is not tentativa:
                 # Substituída: o token novo, se houver, é da tentativa que está no lugar.
                 raise RuntimeError(f"login da conta {conta} cancelado")
+            # Só cancelada: se a CLI já gravou o token novo, o login aconteceu e precisa fechar
+            # as boas-vindas e o cache; sem ele, a checagem abaixo encerra na hora.
             if estado.estado == "ok" and estado.loggedIn and _token_novo(oauth, tentativa.token_anterior):
                 diag.registrar("conta.login.concluiu", etapa="confirmar_credencial",
                                ms=int((time.monotonic() - tentativa.inicio) * 1000), **campos)

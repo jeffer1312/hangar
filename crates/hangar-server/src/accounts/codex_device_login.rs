@@ -265,7 +265,7 @@ pub(super) fn atomic_json_linked(path: &Path, value: &Value) -> Result<(), &'sta
 }
 fn write_atomic(path: &Path, value: &Value, strict: bool) -> Result<(), &'static str> {
     let parent = path.parent().ok_or("device_storage_failed")?;
-    if strict && path.exists() && !storage::real_file(path) {
+    if strict && std::fs::symlink_metadata(path).is_ok() && !storage::real_file(path) {
         return Err("device_storage_failed");
     }
     std::fs::create_dir_all(parent).map_err(|_| "device_storage_failed")?;
@@ -650,5 +650,28 @@ impl AccountService {
         })
         .await
         .map_err(|_| AccountError::io())?
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_destination_refuses_a_dangling_link() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth.json");
+        std::os::unix::fs::symlink(root.path().join("missing.json"), &path).unwrap();
+        assert_eq!(
+            atomic_json(&path, &serde_json::json!({"ok": true})),
+            Err("device_storage_failed")
+        );
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "o link do destino foi trocado por arquivo"
+        );
     }
 }

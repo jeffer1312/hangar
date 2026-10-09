@@ -13,15 +13,15 @@ pub fn fastapi_bool(value: &str) -> Option<bool> {
 }
 
 /// Ausente é `false`; inválido devolve o mesmo 422 `bool_parsing` do FastAPI.
-pub fn bool_param(query: &HashMap<String, String>, name: &str) -> Result<bool, Response> {
+pub fn bool_param(query: &HashMap<String, String>, name: &str) -> Result<bool, Box<Response>> {
     let Some(value) = query.get(name) else {
         return Ok(false);
     };
     fastapi_bool(value).ok_or_else(|| {
-        crate::session_write::json_response(
+        Box::new(crate::session_write::json_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"detail":[{"type":"bool_parsing","loc":["query",name],
                 "msg":"Input should be a valid boolean, unable to interpret input","input":value}]}),
-        )
+        ))
     })
 }

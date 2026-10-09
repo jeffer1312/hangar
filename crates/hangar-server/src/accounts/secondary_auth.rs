@@ -94,7 +94,8 @@ fn profile(value: Option<&str>) -> Result<Option<String>, &'static str> {
     Ok(Some(profile.into()))
 }
 
-/// Resolução lexical do omp, sem criar diretórios nem seguir links.
+/// Resolução lexical do omp, sem criar diretórios; só a pasta de dados do XDG é conferida no
+/// disco, como no `omp_plugin_sync` do Python.
 pub fn omp_directories(
     home: &Path,
     env: &BTreeMap<String, String>,
