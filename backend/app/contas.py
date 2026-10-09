@@ -652,8 +652,3 @@ def _apagar(dir_conta: Path) -> None:
                    conta_id=diag.conta_id(str(dir_conta)))
     shutil.rmtree(dir_conta)
 
-
-def apagar(nome: str) -> None:
-    """Exclusão disputa existência com criações e preparação, inclusive de outro processo."""
-    with ciclo_conta(nome) as cycle:
-        cycle.apagar()
