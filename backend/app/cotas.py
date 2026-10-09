@@ -85,7 +85,6 @@ class CotaConta(BaseModel):
 
 # Resultado cru de um leitor: (estado, janelas, motivo).
 _Leitura = tuple[Estado, list[JanelaCota], str | None]
-_LeituraDetalhada = tuple[Estado, list[JanelaCota], str | None, ResetCredits | None]
 
 
 @dataclass(frozen=True)
@@ -93,7 +92,7 @@ class _Fonte:
     chave: str
     label: str
     provedor: Provedor
-    ler: Callable[[], _Leitura | _LeituraDetalhada]
+    ler: Callable[[], _Leitura]
     ativa: bool = False
 
 
@@ -294,7 +293,7 @@ def _tem_credencial_codex(home: Path | str | None = None) -> bool:
 
 
 def id_conta_codex(home: Path | str | None = None) -> str | None:
-    """O id desta credencial no `/api/cotas`, ou None quando não há credencial.
+    """O id desta credencial na lista de cotas do Rust, ou None quando não há credencial.
 
     Uma função só porque o id vive em DOIS lugares: a fonte, aqui, e o campo `conta` da sessão
     Codex (`registry.list`). Ids diferentes fariam a pílula do topo procurar uma linha que a faixa
@@ -319,34 +318,6 @@ def _janela_codex(o: object) -> JanelaCota | None:
                       pct=max(0.0, min(100.0, pct)), reset_ts=reset or None)
 
 
-def codex_reset_credits(resposta: object) -> ResetCredits | None:
-    if not isinstance(resposta, dict):
-        return None
-    resumo = resposta.get("rateLimitResetCredits")
-    if not isinstance(resumo, dict):
-        return None
-    quantidade = resumo.get("availableCount")
-    if isinstance(quantidade, bool) or not isinstance(quantidade, int) or quantidade < 0:
-        return None
-    bruto = resumo.get("credits")
-    creditos = None
-    if isinstance(bruto, list):
-        creditos = []
-        for item in bruto:
-            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
-                continue
-            expira = item.get("expiresAt")
-            creditos.append(ResetCredit(
-                id=item["id"],
-                expires_at=expira if isinstance(expira, int) and not isinstance(expira, bool) else None,
-                title=item.get("title") if isinstance(item.get("title"), str) else None,
-                description=item.get("description") if isinstance(item.get("description"), str) else None,
-                status=item.get("status") if item.get("status") in
-                    ("available", "redeeming", "redeemed", "unknown") else "unknown",
-            ))
-    return ResetCredits(available_count=quantidade, credits=creditos)
-
-
 def _janela_http_codex(o: object) -> dict | None:
     if not isinstance(o, dict):
         return None
@@ -361,7 +332,7 @@ class _Http429Codex(Exception):
 
 
 def _rate_limits_http_codex(raiz: Path) -> dict | str | None:
-    """`/wham/usage` (+ a lista de redefinições) no formato do `account/rateLimits/read`.
+    """`/wham/usage` no formato do `account/rateLimits/read`.
 
     None = este caminho não serve agora e o app-server responde no lugar; "http-429" = o backend
     pediu pra parar, e o app-server bate no MESMO backend com o MESMO token — cair nele só
@@ -384,22 +355,6 @@ def _rate_limits_http_codex(raiz: Path) -> dict | str | None:
                                   "secondary": _janela_http_codex(limites.get("secondary_window"))}}
         if not any(_janela_codex(j) for j in r["rateLimits"].values()):
             raise codex_appserver.CodexIndisponivel("formato-desconhecido")
-        resumo = uso.get("rate_limit_reset_credits")
-        quantidade = resumo.get("available_count") if isinstance(resumo, dict) else None
-        if isinstance(quantidade, int) and quantidade > 0:
-            # A tela lista validade e estado de cada redefinição, e isso só vem nesta outra rota.
-            # Só é pedida quando o uso diz que há o que listar: o caso comum paga uma ida só.
-            lista = get("/wham/rate-limit-reset-credits")
-            creditos = lista.get("credits")
-            if not isinstance(creditos, list):
-                raise codex_appserver.CodexIndisponivel("formato-desconhecido")
-            r["rateLimitResetCredits"] = {
-                "availableCount": lista.get("available_count", quantidade),
-                "credits": [{**c, "expiresAt": int(t) if (t := _iso_ts(c.get("expires_at"))) else None}
-                            for c in creditos if isinstance(c, dict)],
-            }
-        elif isinstance(quantidade, int):
-            r["rateLimitResetCredits"] = {"availableCount": quantidade}
     except _Http429Codex:
         return "http-429"
     except codex_appserver.CodexIndisponivel as e:
@@ -410,7 +365,7 @@ def _rate_limits_http_codex(raiz: Path) -> dict | str | None:
     return r
 
 
-def _ler_codex_detalhada(home: Path | str | None = None) -> _LeituraDetalhada:
+def _ler_codex(home: Path | str | None = None) -> _Leitura:
     """Cota da conta do Codex: `/wham/usage` do backend do ChatGPT, com o app-server efêmero
     (`account/rateLimits/read`) de reserva.
 
@@ -422,39 +377,32 @@ def _ler_codex_detalhada(home: Path | str | None = None) -> _LeituraDetalhada:
     Nada aqui levanta, mesma regra do `_get_json`: um provedor que não responde não pode derrubar a
     lista das outras contas.
     """
-    # A fonte só nasce com credencial (ver `_fontes`), então isto cobre a corrida: um logout entre
-    # a montagem da fonte e a leitura pagaria o processo à toa e voltaria "falhou" no lugar de
-    # "não há credencial".
+    # Sem credencial não há o que perguntar: o processo seria pago à toa e voltaria "falhou" no
+    # lugar de "não há credencial".
     raiz = _codex_home(home)
     if not _tem_credencial_codex(raiz):
-        return "sem_credencial", [], None, None
+        return "sem_credencial", [], None
     r = _rate_limits_http_codex(raiz)
     if r == "http-429":
-        return "indisponivel", [], "http-429", None
+        return "indisponivel", [], "http-429"
     if r is None:
         try:
-            # Mesmo teto das fontes HTTP: `_atualizar` espera TODAS as leituras juntas, então uma
-            # fonte com teto maior que as outras vira o tempo de resposta do `/api/cotas` inteiro.
+            # Mesmo teto das fontes HTTP: quem lê espera a resposta antes de seguir.
             kwargs = {"codex_home": raiz} if home is not None else {}
             r = codex_appserver.perguntar("account/rateLimits/read", timeout=_HTTP_TIMEOUT,
                                           **kwargs)
         except codex_appserver.CodexAusente:
-            return "indisponivel", [], "codex-ausente", None
+            return "indisponivel", [], "codex-ausente"
         except (RuntimeError, OSError) as e:
             _log.info("cota: codex nao respondeu: %r", e)
-            return "indisponivel", [], "sem-resposta", None
+            return "indisponivel", [], "sem-resposta"
     limites = r.get("rateLimits")
     limites = limites if isinstance(limites, dict) else {}
     janelas = [j for j in (_janela_codex(limites.get("primary")),
                            _janela_codex(limites.get("secondary"))) if j is not None]
     if not janelas:
-        return "indisponivel", [], "formato-desconhecido", None
-    return "lida", janelas, None, codex_reset_credits(r)
-
-
-def _ler_codex(home: Path | str | None = None) -> _Leitura:
-    estado, janelas, motivo, _ = _ler_codex_detalhada(home)
-    return estado, janelas, motivo
+        return "indisponivel", [], "formato-desconhecido"
+    return "lida", janelas, None
 
 
 def _ler_opencode(cfg: dict[str, str]) -> _Leitura:
@@ -628,7 +576,7 @@ def _other_sources() -> list[_Fonte]:
     return out
 
 
-def _seguro(f: _Fonte) -> _Leitura | _LeituraDetalhada:
+def _seguro(f: _Fonte) -> _Leitura:
     try:
         return f.ler()
     except Exception:                                        # noqa: BLE001 - fail-soft por fonte
@@ -641,7 +589,7 @@ def _seguro(f: _Fonte) -> _Leitura | _LeituraDetalhada:
 
 def quota_facts(action: str, ids: list[str]) -> dict:
     """Fornece leitores dos outros provedores; o cache compartilhado pertence ao Rust."""
-    sources = [source for source in _other_sources() if source.provedor not in {"claude", "codex"}]
+    sources = _other_sources()
     if action == "sources":
         return {"sources": [{"id":source.chave, "label":source.label,
                              "provedor":source.provedor, "ativa":source.ativa}
@@ -649,12 +597,10 @@ def quota_facts(action: str, ids: list[str]) -> dict:
     selected = [source for source in sources if source.chave in ids]
     readings = {}
     for source in selected:
-        value = _seguro(source)
-        state, windows, reason = value[:3]
+        state, windows, reason = _seguro(source)
         readings[source.chave] = CotaConta(id=source.chave, label=source.label,
             provedor=source.provedor, ativa=source.ativa, estado=state, janelas=windows,
-            ts=time.time() if state == "lida" else None, motivo=reason,
-            reset_credits=value[3] if len(value) > 3 else None).model_dump()
+            ts=time.time() if state == "lida" else None, motivo=reason).model_dump()
     return {"readings":readings}
 
 

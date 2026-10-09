@@ -596,8 +596,8 @@ async def _grupos_indisponiveis(request: Request, exc: Exception):
 @app.middleware("http")
 async def _contas_pelo_rust(request: Request, call_next):
     """Contas e cotas têm um dono só, o Rust: Connect e convidado chegam aqui e o pedido
-    autenticado segue para ele pela ponte privada. Sem o Rust não há reserva Python: a rota
-    responde indisponível. O Python só atende o que o Rust disser que não é dele."""
+    autenticado segue para ele pela ponte privada, e a resposta dele volta como veio. Sem o Rust
+    não há reserva Python: a rota responde indisponível."""
     from app import account_bridge
     if not request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES):
         return await call_next(request)
@@ -607,8 +607,7 @@ async def _contas_pelo_rust(request: Request, call_next):
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
     if account_bridge.owner_mode() == "python":
         return JSONResponse({"detail": account_bridge.NEED_RUST}, status_code=503)
-    response = await account_bridge.forward_public(request)
-    return response if response is not None else await call_next(request)
+    return await account_bridge.forward_public(request)
 
 
 @app.middleware("http")
@@ -2540,22 +2539,19 @@ async def _create_session_owned(body: CreateBody, worktree: dict):
             kw["headless"] = True
         return kw
 
-    # Reconciliar e criar a sessão sob a MESMA trava (ciclo_conta), só no caminho que consome o
-    # config dir (Claude/Pi — o Codex tem conta propria e nao le config dir do Claude). Sem o ciclo, um DELETE da
-    # conta no meio via a lista de sessões ainda vazia e apagaria a pasta embaixo da sessão que
-    # está subindo (a criação roda em thread).
+    # Reconciliar e criar a sessão sob a MESMA guarda (ciclo_conta), só no caminho que consome o
+    # config dir (Claude/Pi — o Codex tem conta propria e nao le config dir do Claude). A guarda
+    # compartilhada faz a exclusão da conta, que é do Rust, esperar a sessão que está subindo.
     if body.config_dir is not None and body.provider in ("claude", "pi", "omp"):
         alvo = Path(body.config_dir)
         if contas.e_conta(alvo):
             nome_conta = alvo.name.removeprefix(".claude-")
             _passo(body.name, "conta", conta=nome_conta)
             try:
-                # `ciclo_conta` numa thread pelo mesmo motivo do DELETE: o `flock` do __enter__
-                # bloqueia, e no event loop isso congelava o app inteiro quando duas operações de
-                # conta se cruzavam. flock pertence ao descritor aberto, não à thread — tomar e
-                # soltar de threads diferentes é válido.
-                from app.account_lifecycle import GuardMode
-                cm = contas.ciclo_conta(nome_conta, mode=GuardMode.SHARED)
+                # `ciclo_conta` numa thread: o `flock` do __enter__ bloqueia, e no event loop isso
+                # congelava o app inteiro quando duas operações de conta se cruzavam. flock pertence
+                # ao descritor aberto, não à thread — tomar e soltar de threads diferentes é válido.
+                cm = contas.ciclo_conta(nome_conta)
                 ciclo = await asyncio.to_thread(cm.__enter__)
                 try:
                     try:
@@ -10340,18 +10336,16 @@ def _session_config_dir(name: str) -> Path | None:
         return None
 
 
-def _session_config_dir_strict(name: str) -> tuple[Path | None, bool]:
-    """CLAUDE_CONFIG_DIR da sessão pro DELETE de conta: (Path | None, confiável).
+def _caller_config_dir(name: str) -> tuple[Path | None, bool]:
+    """CLAUDE_CONFIG_DIR de quem PEDE uma sessão nova: (Path | None, confiável).
 
-    A irmã acima (fallback silencioso pro ~/.claude) é certa pra LEITURA e perigosa numa operação
-    DESTRUTIVA: falha de resolução virava None, None não casa com o alvo, e o apagar seguia como
-    se a sessão usasse a conta padrão. Aqui falha devolve confiável=False e quem chama recusa —
-    na dúvida, não apaga. None + True = processo vivo SEM a var no ambiente: usa a conta padrão,
-    não a que está sendo apagada.
+    A irmã acima (fallback silencioso pro ~/.claude) é certa pra LEITURA; aqui, criar na conta
+    errada cobra a conta errada calado. Falha de resolução e pane sem processo devolvem
+    confiável=False e quem chama recusa. None + True = processo vivo SEM a var no ambiente: usa
+    a conta padrão. Sem terminal a conta vem do sidecar, mesmo com o processo estacionado (ele
+    volta com --resume na mesma conta).
     """
     from app import tmux
-    # Sem terminal não há pane: a conta vem do sidecar, mesmo com o processo estacionado (ele
-    # volta com --resume na mesma conta).
     if headless_sessions.exists(name):
         meta = headless_sessions.load(name)
         if not isinstance(meta, dict):
@@ -10363,26 +10357,8 @@ def _session_config_dir_strict(name: str) -> tuple[Path | None, bool]:
     except Exception:
         return None, False
     if not pid:
-        return None, True   # sem processo vivo: ninguém está usando nada
+        return None, False
     return procinfo._config_dir_of_strict(pid)
-
-
-def _caller_config_dir(name: str) -> tuple[Path | None, bool]:
-    """CLAUDE_CONFIG_DIR de quem PEDE uma sessão nova: (Path | None, confiável).
-
-    Difere da irmã do DELETE num ponto só: pane sem processo. Lá "ninguém está usando" libera o
-    apagar; aqui a conta de quem chama ficou desconhecida, e criar assim nasce na conta padrão —
-    a falha calada que cobra a conta errada. Sem terminal e processo vivo sem a var seguem como
-    lá: os dois sabem a conta (a do sidecar, a padrão).
-    """
-    from app import tmux
-    if not headless_sessions.exists(name):
-        try:
-            if not tmux.pane_pid(name):
-                return None, False
-        except Exception:
-            return None, False
-    return _session_config_dir_strict(name)
 
 
 async def _pi_catalog(name: str) -> tuple[dict, str]:

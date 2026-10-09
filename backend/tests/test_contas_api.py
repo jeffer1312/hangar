@@ -149,7 +149,7 @@ def test_engine_invalido_rejeita_antes_de_reconciliar(casa, monkeypatch):
 
 
 def test_conta_de_quem_pede_sessao_nova_recusa_pane_sem_processo(monkeypatch):
-    """Pane sem processo: para o DELETE libera ("ninguém usando"), para CRIAR recusa.
+    """Pane sem processo: a conta de quem pede ficou desconhecida e criar recusa.
 
     Confiar aqui criaria a sessão nova na conta padrão sem ninguém escolher — a cobrança errada e
     calada que a tool `new_session` existe pra não repetir."""
@@ -157,7 +157,6 @@ def test_conta_de_quem_pede_sessao_nova_recusa_pane_sem_processo(monkeypatch):
 
     monkeypatch.setattr(api_mod.headless_sessions, "exists", lambda name: False)
     monkeypatch.setattr(tmux, "pane_pid", lambda name: None)
-    assert api_mod._session_config_dir_strict("morta") == (None, True)
     assert api_mod._caller_config_dir("morta") == (None, False)
 
     monkeypatch.setattr(tmux, "pane_pid", lambda name: (_ for _ in ()).throw(RuntimeError("tmux fora")))

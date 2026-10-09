@@ -281,7 +281,7 @@ def test_claude_preparation_keeps_own_descriptor_after_birth_returns(tmp_path, m
     monkeypatch.setattr(contas, "_reconciliar", prepare)
     with ThreadPoolExecutor() as pool:
         try:
-            with contas.ciclo_conta("work", mode=account_lifecycle.GuardMode.SHARED) as cycle:
+            with contas.ciclo_conta("work") as cycle:
                 preparation = (pool.submit(cycle.reconciliar) if worker_cycle else
                                pool.submit(contas.reconciliar, "work"))
                 assert entered.wait(10), "preparo ficou bloqueado pelo nascimento"

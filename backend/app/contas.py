@@ -547,8 +547,7 @@ def prepare_configuration(account_home: Path, *, seed: bool = False) -> dict:
 
 def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
     """Preparo segura descritor próprio, mesmo se o servidor que pediu reiniciar."""
-    from app.account_lifecycle import GuardMode
-    with ciclo_conta(nome, mode=GuardMode.SHARED) as cycle:
+    with ciclo_conta(nome) as cycle:
         return cycle.reconciliar(projeto)
 
 
@@ -564,18 +563,15 @@ class _Ciclo:
         with self.guard.retain(), _trava_compartilhada(), _trava(self.dir_conta):
             return _reconciliar(self.dir_conta, projeto)
 
-    def apagar(self) -> None:
-        with self.guard.retain(), _trava_compartilhada(), _trava(self.dir_conta):
-            _apagar(self.dir_conta)
-
 
 @contextmanager
-def ciclo_conta(nome: str, *, mode=None):
-    """Proteção de existência antes das travas de configuração; exclusão pede exclusividade."""
+def ciclo_conta(nome: str):
+    """Proteção de existência compartilhada antes das travas de configuração: só a exclusão, que
+    é do Rust, pede exclusividade."""
     from app.account_lifecycle import AccountKey, AccountLockError, GuardMode, acquire
     dir_conta = caminho(nome)
     try:
-        guard = acquire(AccountKey.new("claude", dir_conta), mode or GuardMode.EXCLUSIVE)
+        guard = acquire(AccountKey.new("claude", dir_conta), GuardMode.SHARED)
     except AccountLockError as exc:
         raise ContaError(409, "a conta está ocupada por outra operação") from exc
     with guard:
@@ -643,12 +639,4 @@ def criar(nome: str) -> Path:
                                etapa="remover_pasta_parcial", **diag.erro_campos(exc))
                 raise
             diag.registrar("conta.criar.rollback_concluiu", provider="claude", etapa="remover_pasta_parcial")
-
-
-@diag.rastrear("conta.apagar", provider="claude")
-def _apagar(dir_conta: Path) -> None:
-    """rmtree sob a trava — quem chama (o ciclo da conta) já validou e já segura as travas."""
-    diag.registrar("conta.apagar.etapa", provider="claude", etapa="remover_pasta",
-                   conta_id=diag.conta_id(str(dir_conta)))
-    shutil.rmtree(dir_conta)
 

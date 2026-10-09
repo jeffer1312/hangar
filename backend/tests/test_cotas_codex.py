@@ -11,6 +11,7 @@ import json
 import pytest
 
 from app import codex_appserver, codex_contas, cotas
+import codex_contas_apoio
 
 # Cópia da resposta real desta máquina em 30/08/2026 (campos que não usamos foram cortados).
 # Detalhes que quebram parser ingênuo: o percentual já vem PRONTO (`usedPercent`, não used/cap), a
@@ -76,33 +77,6 @@ def test_le_as_duas_janelas(monkeypatch, com_credencial):
     assert [(j.rotulo, j.pct) for j in janelas] == [("5h", 5.0), ("7d", 1.0)]
     # Segundos, não milissegundos: dividir por 1000 aqui poria o reset em 1970.
     assert janelas[0].reset_ts == 1788107727
-
-
-def test_le_redefinicoes_guardadas_com_expiracao(monkeypatch, com_credencial):
-    resposta = {
-        **_RATE_LIMITS,
-        "rateLimitResetCredits": {
-            "availableCount": 2,
-            "credits": [
-                {"id": "reset-1", "grantedAt": 1789000000, "expiresAt": 1789600000,
-                 "resetType": "codexRateLimits", "status": "available",
-                 "title": "Reset", "description": "Restaura os limites"},
-                {"id": "reset-2", "grantedAt": 1789000100, "expiresAt": None,
-                 "resetType": "codexRateLimits", "status": "available",
-                 "title": None, "description": None},
-            ],
-        },
-    }
-    monkeypatch.setattr(cotas.codex_appserver, "perguntar", lambda m, **kw: resposta)
-
-    estado, _janelas, motivo, redefinicoes = cotas._ler_codex_detalhada()
-
-    assert (estado, motivo) == ("lida", None)
-    assert redefinicoes.available_count == 2
-    assert redefinicoes.credits[0].model_dump() == {
-        "id": "reset-1", "expires_at": 1789600000, "title": "Reset",
-        "description": "Restaura os limites", "status": "available",
-    }
 
 
 def test_pergunta_o_metodo_de_cota(monkeypatch, com_credencial):
@@ -252,7 +226,7 @@ def test_cota_codex_le_roots_com_mesma_assinatura(monkeypatch, tmp_path):
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     _auth(tmp_path)
     work_auth = work.home / "auth.json"
     work_auth.write_text(json.dumps({"tokens": {"access_token": "at-work"}}), encoding="utf-8")
@@ -356,28 +330,27 @@ def _sem_app_server(monkeypatch):
 def test_http_da_o_mesmo_resultado_que_o_app_server(monkeypatch, com_jwt):
     _sem_app_server(monkeypatch)
     pedidos = _backend(monkeypatch, {"/wham/usage": _USO, "/wham/rate-limit-reset-credits": _LISTA})
-    pelo_http = cotas._ler_codex_detalhada()
+    pelo_http = cotas._ler_codex()
 
     monkeypatch.setattr(cotas.codex_appserver, "perguntar", lambda m, **kw: _APP_SERVER)
     monkeypatch.setattr(cotas, "_rate_limits_http_codex", lambda raiz: None)
-    assert pelo_http == cotas._ler_codex_detalhada()
+    assert pelo_http == cotas._ler_codex()
     assert pelo_http[0] == "lida" and pelo_http[1][0].rotulo == "7d"
-    assert pelo_http[3].credits[0].expires_at == 1792701115
     cab = {k.lower(): v for k, v in pedidos[0].header_items()}
     assert cab["chatgpt-account-id"] == "acc-1" and cab["authorization"].startswith("Bearer h.")
     assert cab["user-agent"] == "codex-cli"
 
 
-def test_sem_redefinicao_a_lista_que_falha_nao_derruba(monkeypatch, com_jwt):
+def test_http_pede_so_o_uso(monkeypatch, com_jwt):
+    """As redefinições são da tela de contas, que lê o Rust: a cota daqui paga uma ida só."""
     _sem_app_server(monkeypatch)
-    uso = {**_USO, "rate_limit_reset_credits": {"available_count": 0}}
+    uso = {**_USO, "rate_limit_reset_credits": {"available_count": 2}}
     pedidos = _backend(monkeypatch, {"/wham/usage": uso, "/wham/rate-limit-reset-credits": 500})
-    estado, _janelas, _motivo, redefinicoes = cotas._ler_codex_detalhada()
-    assert estado == "lida" and redefinicoes.available_count == 0
-    assert [p.full_url.rsplit("/", 1)[1] for p in pedidos] == ["usage"], "sem redefinição, sem lista"
+    assert cotas._ler_codex()[0] == "lida"
+    assert [p.full_url.rsplit("/", 1)[1] for p in pedidos] == ["usage"]
 
 
-@pytest.mark.parametrize("caso", ["vencido", "401", "403", "formato", "rede", "lista-falha"])
+@pytest.mark.parametrize("caso", ["vencido", "401", "403", "formato", "rede"])
 def test_http_que_nao_serve_cai_no_app_server(monkeypatch, tmp_path, caso):
     _auth_jwt(tmp_path, time.time() - 10 if caso == "vencido" else time.time() + 3600)
     _home(monkeypatch, tmp_path)
@@ -386,15 +359,13 @@ def test_http_que_nao_serve_cai_no_app_server(monkeypatch, tmp_path, caso):
         rotas["/wham/usage"] = int(caso)
     elif caso == "formato":
         rotas["/wham/usage"] = {"rate_limit": {"primary_window": None, "secondary_window": None}}
-    elif caso == "lista-falha":
-        rotas["/wham/rate-limit-reset-credits"] = 500
     pedidos = _backend(monkeypatch, rotas)
     if caso == "rede":
         def sem_rede(req, timeout):
             raise urllib.error.URLError("offline")
         monkeypatch.setattr(codex_appserver._opener, "open", sem_rede)
     monkeypatch.setattr(cotas.codex_appserver, "perguntar", lambda m, **kw: _RATE_LIMITS)
-    estado, janelas, motivo, _ = cotas._ler_codex_detalhada()
+    estado, janelas, motivo = cotas._ler_codex()
     assert (estado, motivo, [j.rotulo for j in janelas]) == ("lida", None, ["5h", "7d"])
     if caso == "vencido":
         assert pedidos == []   # token vencido nem sai: renovar é do CLI
@@ -404,7 +375,7 @@ def test_429_nao_cai_no_app_server_e_espera(monkeypatch, com_jwt):
     """O app-server bate no mesmo backend com o mesmo token: cair nele só renovaria o 429."""
     _sem_app_server(monkeypatch)
     _backend(monkeypatch, {"/wham/usage": 429, "/wham/rate-limit-reset-credits": _LISTA})
-    assert cotas._ler_codex_detalhada() == ("indisponivel", [], "http-429", None)
+    assert cotas._ler_codex() == ("indisponivel", [], "http-429")
 
 
 class _Servidor:
