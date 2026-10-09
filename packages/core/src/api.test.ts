@@ -1170,6 +1170,19 @@ it('plugin/input sem resposta e sem servidor explícito é cortado em 8 s, e a f
 describe('lista de serviços de transcrição', () => {
   const ELEVEN = { id: 'a', kind: 'elevenlabs' as const, name: '', base_url: '', api_key: 'xi_••••', model: '' };
 
+  it('preserva caminhos e idioma do Whisper local sem exigir chave', () => {
+    const local = { id: 'local', kind: 'whisper_cpp', name: '', base_url: '', api_key: '', model: '',
+      executable_path: '/opt/Whisper local/whisper-server', model_path: '/opt/Whisper local/ggml-small.bin',
+      language: 'pt', converter_path: '' };
+    expect(parseTranscriptionProviders([local])).toEqual([local]);
+  });
+
+  it('aceita serviço compatível sem chave e mantém a exigência do ElevenLabs', () => {
+    const openai = { ...ELEVEN, kind: 'openai' as const, api_key: '', base_url: 'http://localhost:8000/v1' };
+    expect(transcriptionProvidersMissingKey([openai])).toBe(false);
+    expect(transcriptionProvidersMissingKey([{ ...ELEVEN, api_key: '' }])).toBe(true);
+  });
+
   it('lê só itens válidos e completa campos ausentes', () => {
     expect(parseTranscriptionProviders('x')).toEqual([]);
     expect(parseTranscriptionProviders([{ id: 'a', kind: 'elevenlabs', api_key: 'xi_••••' }, { id: 'b', kind: 'outro' }, null]))

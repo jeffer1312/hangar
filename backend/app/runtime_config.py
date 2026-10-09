@@ -244,14 +244,15 @@ def mascarar(valor: str) -> str:
     return f"{valor[:4]}{'•' * 8}{valor[-4:]}"
 
 
-TRANSCRIPTION_KINDS = ("openai", "elevenlabs")
+TRANSCRIPTION_KINDS = ("openai", "elevenlabs", "whisper_cpp")
 _TRANSCRIPTION_FIELDS = ("id", "kind", "name", "base_url", "api_key", "model")
+_LOCAL_TRANSCRIPTION_FIELDS = ("executable_path", "model_path", "language", "converter_path")
 _TRANSCRIPTION_MAX = 10
 
 
 def _validate_transcription_providers(valor: Any) -> list[dict]:
     """Normaliza a lista de serviços de transcrição. Recusa na gravação o que a transcrição teria
-    de pular calada depois: item sem chave, tipo inexistente, endpoint que não é URL."""
+    de pular calada depois: tipo inexistente ou configuração incompleta para o serviço."""
     if not isinstance(valor, list):
         raise ValueError("transcription_providers: esperado uma lista")
     if len(valor) > _TRANSCRIPTION_MAX:
@@ -278,7 +279,7 @@ def _validate_transcription_providers(valor: Any) -> list[dict]:
             raise ValueError(
                 f"{onde}: tipo '{campos['kind']}' nao existe. Use um de: {', '.join(TRANSCRIPTION_KINDS)}."
             )
-        if not campos["api_key"]:
+        if campos["kind"] == "elevenlabs" and not campos["api_key"]:
             raise ValueError(f"{onde} sem chave")
         # Máscara que não casou com a chave guardada do MESMO id (item novo, id trocado) viraria a
         # chave de verdade: o serviço recusaria toda requisição sem a tela dizer por quê.
@@ -286,6 +287,17 @@ def _validate_transcription_providers(valor: Any) -> list[dict]:
             raise ValueError(f"{onde}: a chave esta mascarada; digite a chave de novo")
         if campos["kind"] == "elevenlabs":
             campos["base_url"] = ""
+        elif campos["kind"] == "whisper_cpp":
+            for field in _LOCAL_TRANSCRIPTION_FIELDS:
+                value = item.get(field) or ""
+                if not isinstance(value, str):
+                    raise ValueError(f"{onde}: {field} deve ser texto")
+                campos[field] = value.strip()
+            for field in ("executable_path", "model_path"):
+                if not campos[field]:
+                    raise ValueError(f"{onde}: informe {field}")
+            campos["language"] = campos["language"] or "pt"
+            campos["api_key"] = campos["base_url"] = campos["model"] = ""
         elif campos["base_url"] and not campos["base_url"].startswith(("http://", "https://")):
             raise ValueError(f"{onde}: use endpoint vazio ou uma URL http(s)://")
         out.append(campos)

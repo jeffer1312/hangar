@@ -361,3 +361,29 @@ def test_null_remove_a_lista_e_volta_ao_servico_unico():
     assert rc.estado()["transcription_providers"] == {"valor": [], "definido": False, "origem": "env"}
 
 
+def test_openai_compatible_service_can_be_saved_without_key():
+    item = {**_GROQ, "api_key": "", "base_url": "http://127.0.0.1:8000/v1"}
+    rc.aplicar({"transcription_providers": [item]})
+    assert rc.get("transcription_providers") == [item]
+
+
+def test_whisper_configuration_is_persisted_without_key():
+    item = {
+        "id": "local", "kind": "whisper_cpp", "name": "", "base_url": "",
+        "api_key": "", "model": "", "executable_path": "/opt/Whisper local/whisper-server",
+        "model_path": "/opt/Whisper local/ggml-small.bin", "language": "pt",
+        "converter_path": "",
+    }
+    rc.aplicar({"transcription_providers": [item]})
+    assert rc.get("transcription_providers") == [item]
+    assert rc.estado()["transcription_providers"]["valor"] == [item]
+
+
+@pytest.mark.parametrize("field", ["executable_path", "model_path"])
+def test_whisper_configuration_requires_installed_files(field):
+    item = {"id": "local", "kind": "whisper_cpp", "executable_path": "/opt/whisper-server",
+            "model_path": "/opt/ggml-small.bin", field: ""}
+    with pytest.raises(ValueError, match=field):
+        rc.aplicar({"transcription_providers": [item]})
+
+
