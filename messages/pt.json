@@ -1675,7 +1675,7 @@
   "config_amostra_placeholder": "Mensagem para Claude…",
   "config_ditado_titulo": "Enviar transcrição automaticamente",
   "config_ditado_desc": "Ao perceber que você terminou de falar, encerra a gravação, transcreve e envia após 3 segundos. Clique, toque ou pressione uma tecla para cancelar.",
-  "config_sobre_desc": "Dirija sessões Claude Code, Codex e Pi rodando no seu computador — do celular ou do desktop.",
+  "config_sobre_desc": "Dirija sessões Claude Code, Codex, Pi, omp e Kimi Code rodando no seu computador — do celular ou do desktop.",
   "config_motores_terminal_1": "No terminal você usa",
   "config_motores_terminal_2": ". Minúsculas, sem espaço.",
   "config_motores_nome_curto": "Nome curto",

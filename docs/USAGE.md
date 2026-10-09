@@ -1,21 +1,31 @@
 # Como usar o hangar
 
-Guia de uso ponta-a-ponta: subir, conectar o celular (LAN ou Tailscale), instalar
-como PWA e operar o chat. Pra arquitetura/API ver o [README](../README.md).
+Guia de uso ponta-a-ponta: instalar, conectar o celular (LAN ou Tailscale), instalar
+como PWA e operar o chat. Site: [hangar.dev.br](https://hangar.dev.br). Pra arquitetura ver o
+[README](../README.md).
 
 > **Modelo:** ferramenta pessoal, single-user, **LAN/VPN-only**. Roda o `claude` **como
 > você** (bypass) → um host exposto é execução-remota-como-você. A trava é o **token**.
-> NUNCA faça port-forward pra internet pública. Fora de casa = **VPN (Tailscale)**.
+> A porta principal (8765) NUNCA vai pra internet pública: nada de port-forward nem túnel
+> público. Fora de casa = **VPN (Tailscale)**. A única porta que vai à internet é a do
+> convidado (8766, publicada pelo Tailscale Funnel em 8443) quando você compartilha uma sessão
+> ou aceita um par externo: ela recusa o token do dono e só alcança o que foi compartilhado.
 
 ---
 
 ## 1. Pré-requisitos
 
-- `tmux`, Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
+- `tmux`, Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+ (o instalador põe o que
+  faltar).
 - Pelo menos um agente de código: Claude Code (o padrão), Codex, Pi, omp ou Kimi Code.
 - Celular na **mesma rede** do PC (Wi-Fi) **ou** ambos no **mesmo tailnet** (Tailscale).
 
-**Instalar é uma linha só** — ela clona o repositório em `~/hangar` e chama o instalador:
+**Pelo app (Linux e Windows):** baixe o app de desktop na
+[release `native-latest`](https://github.com/jeffer1312/hangar/releases/tag/native-latest) e abra.
+Numa máquina sem Hangar ele oferece instalar o servidor em poucas telas, sem terminal. Detalhes
+em [App de desktop](#app-de-desktop-nativo).
+
+**Pelo terminal, é uma linha só** — ela clona o repositório em `~/hangar` e chama o instalador:
 
 ```bash
 # Linux/macOS
@@ -67,16 +77,18 @@ está listado em "O que o Windows ainda não tem", mais abaixo.
 O instalador faz duas perguntas no começo (a senha do celular e se você vai usar fora de
 casa) e depois segue sozinho; só pede a senha de administrador avisando antes. No fim ele
 mostra um QR: leia com a câmera do celular.
+O instalador baixa também o app de desktop nativo da sua plataforma (release `native-latest`);
+no Windows ele cria o atalho **Hangar** (para o `Hangar.exe`) no Menu Iniciar e na Área de
+Trabalho, e no Linux o lançador "Hangar". Sem app para a máquina, ou se o download falhar, a
+instalação segue e o Hangar abre no navegador.
 No Windows, pode usar PowerShell comum ou **Executar como administrador**. A instalação elevada
-configura backend, atualização e atalhos do app para usar administrador. A comum pede UAC só
-para o que precisar (firewall, Modo Desenvolvedor). Os atalhos no Menu Iniciar e na Área de
-Trabalho usam o ícone do PWA; no modo elevado, pedem UAC ao abrir. Se o app já estava aberto,
-feche e reabra pelo atalho para aplicar a elevação. Uma instalação elevada também exige
-PowerShell elevado para atualizar manualmente; o botão Atualizar já herda a permissão do backend.
+configura backend e atualização para usar administrador. A comum pede UAC só para o que
+precisar (firewall, Modo Desenvolvedor). Uma instalação elevada também exige PowerShell elevado
+para atualizar manualmente; o botão Atualizar já herda a permissão do backend.
 O backend continua no Agendador, sem serviço do Windows: a tarefa acompanha o Python e tenta
 reiniciar até três vezes, com intervalo de um minuto, quando ele encerra com erro. A vigia
 verifica a resposta HTTP a cada cinco minutos e recupera travamentos, respeitando a instalação
-e a atualização. Fechar o Electron não encerra o backend; ainda é necessário estar logado.
+e a atualização. Fechar o app não encerra o backend; ainda é necessário estar logado.
 Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps1 -Avancado`
 (o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
 Agentes de código: o instalador usa os que já estão no computador e só instala o Claude Code
@@ -102,14 +114,18 @@ falha:
 
 ### O que o Windows ainda não tem
 
-- Wrappers do `codex`, do `pi` e do `kimi`, e a extensão `hangar-state.ts` do Pi. Sessão
-  Codex, Pi ou Kimi aberta por você no terminal não aparece; criada pelo app, funciona.
-- Motor de modelo (Contas e modelos → Modelo e opções / `CP_ENGINE`) funciona: o
+- Wrappers do `pi`, do `omp` e do `kimi`, e a extensão `hangar-state.ts` do Pi. Sessão Pi, omp
+  ou Kimi aberta por você no terminal não aparece; criada pelo app, funciona. (`claude`,
+  `claude-conta` e `codex` têm wrapper no perfil do PowerShell.)
+- Motor de modelo (Contas e provedores → Modelo e opções / `CP_ENGINE`) funciona: o
   `hangar-engine` roda o comando por subprocess no Windows (o `exec` com env crasha lá).
 - Resurrect/continuum (sessões sobreviverem a reboot): são plugins de tmux em bash, e o
   psmux não roda plugin de tmux. Fechou o Windows, as sessões se foram.
 
-## 2. Subir (3 partes)
+## 2. Subir na mão
+
+O instalador já deixa tudo rodando como serviço (systemd de usuário no Linux, Agendador no
+Windows). Isto é para quem roda do checkout sem ele.
 
 **a) Claude ou Codex com terminal, gerenciado dentro do tmux**:
 ```bash
@@ -122,11 +138,22 @@ ao tmux dela; a conversa aparece imediatamente no app. `command codex` ignora o 
 Cores erradas (teal/pink) no tmux? Fix em [tmux-truecolor-setup.md](tmux-truecolor-setup.md).
 Sobreviver a reboot/OOM? `./scripts/tmux-persist-setup.sh` ([doc](tmux-persistence-setup.md)).
 
-**b) Backend** (FastAPI, porta 8765):
+**b) Tela do app** (PWA), buildada uma vez, na raiz do repositório:
+```bash
+npm ci --workspace=@hangar/core --workspace=frontend
+npm run build -w frontend          # gera frontend/dist, servido pelo próprio backend
+```
+
+**c) Backend** (porta 8765):
 ```bash
 cd backend
 CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_LAN_BIND_IP=auto uv run python -m app.main
 ```
+A porta 8765 é do `hangar-server` (Rust), que o backend Python sobe e deixa na frente; o Python
+escuta atrás, numa porta de loopback. Sem o binário do `hangar-server` (o instalador baixa da
+release `server-latest`), o Python atende a 8765 sozinho. A tela vem do `frontend/dist`; quem
+mexe no front pode usar `npm --prefix frontend run dev` (Vite) no lugar do build.
+
 No boot ele imprime um **QR** (URL + token) pra parear o celular. Variáveis (prefixo `CP_`,
 ou em `backend/.env`):
 
@@ -142,13 +169,6 @@ ou em `backend/.env`):
 | `CP_TERMINAL` | — | emulador do botão **terminal nativo** (`wezterm`, `kitty`, `alacritty`, `konsole`, `gnome-terminal`, `xterm`). Vazio = procura nessa ordem no PATH. |
 
 > Guarda de segurança: com `CP_AUTH_TOKEN=change-me` ele **recusa** subir num bind não-loopback.
-
-**c) Frontend** (PWA, Vite):
-```bash
-cd frontend
-npm install
-npm run dev -- --host      # serve em http://<ip>:5173
-```
 
 ## 3. Conectar o celular
 
@@ -185,8 +205,10 @@ tailscale serve status         # mostra a URL exata
 válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à Tela de Início** (PWA).
 
 > Fonte: [Tailscale — Set up HTTPS](https://tailscale.com/docs/how-to/set-up-https-certificates)
-> · [tailscale serve](https://tailscale.com/docs/reference/tailscale-cli/serve). NÃO use
-> `tailscale funnel` (isso expõe à internet pública — fora do modelo LAN/VPN-only).
+> · [tailscale serve](https://tailscale.com/docs/reference/tailscale-cli/serve). NÃO publique a
+> 8765 com `tailscale funnel` (isso a expõe à internet pública). O único Funnel que o Hangar
+> liga é o da porta do convidado, sozinho, enquanto houver convite ativo
+> ([Compartilhar sessão](#compartilhar-sessão)).
 
 > O app fala com o backend **cross-origin** quando preciso (multi-PC): ele aceita o token via
 > header **e** via `?token=` (porque `EventSource`/`<img>` não mandam header). CORS já liberado
@@ -219,6 +241,11 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   - O histórico continua no `.jsonl` do Claude ou no rollout do Codex e pode ser retomado depois.
   - Login e confiança na pasta precisam estar preparados para a conta escolhida; sem isso a sessão
     mostra no chat por que não conseguiu subir.
+- **Numa worktree:** na Nova sessão, marque **Trabalhar numa cópia separada (worktree)** e escolha
+  **+ Branch nova a partir de** uma base. O agente trabalha numa cópia da pasta, numa branch
+  própria, e a sua pasta principal só muda quando você mesclar. A tela **Worktrees** lista cada
+  uma (mesclada ou quantos commits à frente, o que não foi commitado) e apaga as mescladas e
+  limpas; as conversas dela continuam e podem ser retomadas na pasta principal.
 - **Trocar:** toque no título (mobile) / clique na sidebar (desktop).
 - **Renomear:** **toque longo** no nome (sidebar/desktop) → edita inline → Enter salva.
   Não quebra o histórico (resolve por `/proc`, não pelo nome).
@@ -229,10 +256,14 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
 - **Imagem / arquivo:** 📎 no composer (upload) — ou cole no terminal do Claude que o app mostra o thumbnail.
 - **Áudio (transcrição):** 🎤 no composer grava pelo microfone (toque grava, toque ⏹ para); ou anexe
   um arquivo de áudio pelo 📎. Nos dois casos o áudio é gravado e enviado a uma API compatível com
-  a OpenAI; o texto reaparece de uma vez ao final e o áudio não vira anexo. Configure chave,
-  endpoint e modelo em **Configurações → Voz → Transcrição**. Endpoint e modelo vazios usam Groq e
-  `whisper-large-v3-turbo`; a chave padrão também pode vir de `CP_GROQ_API_KEY`/`GROQ_API_KEY` no
-  ambiente do backend. Sem chave, a gravação funciona, mas a transcrição responde 503.
+  a OpenAI; o texto reaparece de uma vez ao final e o áudio não vira anexo. Configure em
+  **Configurações → Voz → Transcrição**: a **Chave da transcrição** e, em **Usar outro serviço de
+  transcrição**, endpoint e modelo. Endpoint e modelo vazios usam Groq e `whisper-large-v3-turbo`;
+  a chave padrão também pode vir de `CP_GROQ_API_KEY`/`GROQ_API_KEY` no ambiente do backend. Para
+  ter reserva, monte **Serviços de transcrição, em ordem** (compatível com OpenAI ou ElevenLabs):
+  o primeiro transcreve e, se falhar ou ficar sem cota, o próximo assume — o aviso do ditado diz
+  qual transcreveu. Com a lista em uso, a transcrição usa só ela. Sem chave nem lista, a gravação
+  funciona, mas a transcrição responde 503.
 - **Conversa por voz com Codex (Beta):** nasce desligada. Ative em **Configurações → Harnesses →
   Codex → Opções → Conversa por voz**. O botão **Voz · Beta** aparece nas sessões Codex daquele
   servidor. A escolha vale só para esse servidor; desligar durante uma chamada encerra o microfone
@@ -246,7 +277,8 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   cru e aparece um aviso explicando o motivo; o botão **↩ original** ao lado do campo repõe o texto
   exatamente como saiu da transcrição. Vale só pra gravação pelo microfone — áudio anexado como
   arquivo não passa por essa limpeza.
-- **Ditado mãos-livres:** chave em Configurações → Ditado, guardada **só neste aparelho** (não vai
+- **Ditado mãos-livres:** chave **Enviar transcrição automaticamente** em Configurações → Voz,
+  guardada **só neste aparelho** (não vai
   pro servidor; se você ligar no celular, o desktop continua sem). Com ela ligada, um toque no 🎤
   começa a gravar e **2 segundos de silêncio** encerram sozinhos — não precisa tocar em ⏹. Depois da
   transcrição, uma contagem de **3 segundos** aparece antes do envio; um toque em qualquer lugar da
@@ -261,12 +293,13 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   enviar e outro mais grave quando não deu pra enviar, pra dar pra saber sem olhar pra tela.
 - **Se estiver ouvindo uma resposta em voz** e você tocar o 🎤, a leitura para sozinha antes da
   gravação começar — sem isso o microfone captaria a própria voz do app.
-- **Provedor da limpeza e da leitura em voz:** por padrão usa a Groq (`llama-3.3-70b-versatile`).
-  Pra apontar pra outro serviço compatível com a API da OpenAI, preencha em Configurações →
-  Avançado: **Endpoint do LLM**, **Chave do LLM** e **Modelo do LLM**. Fora do padrão a **Chave do
-  LLM** é **obrigatória** (sem fallback pra Groq — a chave da Groq não é reaproveitada pra outro
-  host, de propósito). Com o **Endpoint do LLM** vazio (padrão), a **Chave do LLM** não é usada em
-  nada — quem vale é a chave da Groq configurada em Anexos e transcrição.
+- **Provedor da limpeza e da leitura em voz:** por padrão usa a Groq (`openai/gpt-oss-120b`).
+  Pra apontar pra outro serviço compatível com a API da OpenAI, abra Configurações → Voz →
+  **Organização do texto** → **Usar outro serviço para organizar** e preencha **Endpoint da
+  organização**, **Chave da organização** e **Modelo da organização** (o Briefing pode ter um
+  modelo só dele). Fora do padrão essa chave é **obrigatória** (a chave da transcrição não é
+  reaproveitada pra outro host, de propósito). Com o endpoint vazio (padrão), ela não é usada em
+  nada — vale a **Chave da transcrição**, desde que a transcrição também use o serviço padrão.
 - **Furar a fila (só Kimi):** mensagem mandada com a sessão trabalhando fica na fila **do Kimi** —
   ele processa quando o turno atual acabar. Enquanto houver fila, a fileira de cima do composer
   mostra **⏳ N na fila · mandar agora**; tocar manda o `ctrl-s` do Kimi e a fila **inteira** entra no
@@ -313,9 +346,12 @@ no Hangar:
   dele. Clique feito no próprio terminal segue como sempre.
 
 ### Multi-PC
-Cada PC roda backend+vite+`tailscale serve` com o **mesmo** `CP_AUTH_TOKEN`. O app guarda **N
-servidores** e troca entre eles (switcher) — útil pra dirigir o Claude de máquinas diferentes do
-mesmo celular.
+Cada PC tem o próprio Hangar e o **próprio** token. Em **Configurações → Servidores → Adicionar
+servidor**, informe o endereço (ou cole o link de pareamento do QR) e o token dela; **Buscar no
+Tailscale** acha as máquinas da tailnet que respondem. Escolha se a máquina entra na lista deste
+aparelho (**Mostrar as sessões dele**) e/ou se as sessões das duas trocam recados: isso grava
+endereço e token de uma no `backend/peers.json` da outra, e cada uma precisa de `CP_SERVER_ID`.
+As sessões de todas aparecem numa lista só.
 
 ### Compartilhar sessão
 
@@ -335,8 +371,8 @@ um servidor "Convite · <você>", e pode tudo ali: conversar, trocar modelo e pe
   Na mesma rede, sem Tailscale: "Gerar link local" dá `http://<ip-da-rede>:8766/convite/<código>`,
   que só abre de quem está naquela rede (a máquina precisa de `CP_LAN_BIND_IP=0.0.0.0`). No PWA
   aberto por `https` o navegador bloqueia o link `http`; use o app nativo ou o desktop.
-- **Receber:** no app nativo, clique no link (ou "Entrar em sessão compartilhada" na página Máquinas
-  e cole). No web/PWA, Configurações → Máquinas → "Colar convite". No Linux, abrir o app pelo `hangar://`
+- **Receber:** no app nativo, clique no link (ou "Entrar em sessão compartilhada" na página
+  Servidores e cole). No web/PWA, Configurações → Servidores → "Colar convite". No Linux, abrir o app pelo `hangar://`
   depende da versão nativa nova (o `install-linux.sh` do pacote registra o esquema); no Windows o
   registro vem do `.ps1` do repositório.
 - **Encerrar:** "Revogar" num aparelho, "Encerrar todos", ou fechar a sessão. Conexões abertas caem
@@ -376,7 +412,7 @@ de 784.800. Um limite personalizado de compactação menor continua antecipando 
 
 ### Contas Codex (ChatGPT)
 
-Para cadastrar uma conta de assinatura, abra **Configurações → Servidor → Contas e modelos →
+Para cadastrar uma conta de assinatura, abra **Configurações → Servidor → Contas e provedores →
 + Nova conta → Conta por assinatura → Conta do ChatGPT (Codex)**. Dê um nome à conta e conclua o
 login OAuth nativo por código de dispositivo: o Hangar mostra um endereço HTTPS e um código, e só
 marca o login como concluído depois da confirmação do Codex. **Chave de API** segue o caminho
@@ -399,7 +435,7 @@ processo do Codex. O formulário bloqueia uma conta sem login confirmado ou sem 
 OAuth e chave de API aparecem apenas como método de autenticação; a origem da conversa é a conta
 Codex selecionada.
 
-Em **Contas e modelos**, cada janela de cota mostra quando reinicia. Quando o Codex informar
+Em **Contas e provedores**, cada janela de cota mostra quando reinicia. Quando o Codex informar
 redefinições guardadas, a conta mostra quantidade e expiração. O botão só libera quando a janela
 semanal chegar a 100%; antes de gastar, a tela confirma que as janelas elegíveis serão restauradas
 e que a data do reset semanal mudará.
@@ -410,9 +446,9 @@ conta identificada. Esse fluxo não apaga, rotaciona nem migra credenciais ou co
 
 ### Continuar uma sessão Claude no Codex (em validação)
 
-Este recurso está implementado em uma árvore isolada e ainda não foi ativado no serviço nem
-aceito no uso completo. A seleção foi implementada no desktop nativo; estes passos descrevem
-esse fluxo, sem acrescentar um seletor ao PWA ou ao app móvel.
+O código já está na versão principal, mas o recurso segue em validação: ainda não foi aceito no
+uso completo (ver a prova abaixo). A seleção existe só no desktop nativo; estes passos descrevem
+esse fluxo, sem seletor no PWA ou no app móvel.
 
 1. Abra o **anel de contas** da sessão Claude e escolha uma conta **Codex**.
 2. Confira **conta, modelo e esforço**, nos mesmos controles da Nova sessão. **Padrão** deixa o
@@ -451,29 +487,57 @@ permissões, WebSocket/TUI, Arquivo/recarga completos e Windows permanecem pende
 automatizados não rodaram. A [medição](decisoes/harnesses.md#transferência-claude--codex-captura-nativa-em-validação)
 detalha o alcance dessa prova.
 
-### Desktop (≥820px)
-Abrindo a mesma URL num monitor largo, vira **shell de duas colunas**: sidebar de sessões +
-chat largo. O fluxo mobile fica intacto abaixo de 820px.
+### App de desktop (nativo)
 
-A barra lateral tem dois ajustes em **Aparência** (menu da conta), só no desktop:
+No computador, o Hangar é o **app nativo** (`desktop-native/`, em Rust, desenhado na GPU, sem
+navegador por baixo). O instalador já o baixa; para baixar à mão, use a
+[release `native-latest`](https://github.com/jeffer1312/hangar/releases/tag/native-latest):
+
+| Plataforma | Arquivo |
+|---|---|
+| Windows x64 | `Hangar-windows-x86_64.zip` (contém o `Hangar.exe`) |
+| Linux x86_64 | `Hangar-linux-x86_64.tar.gz`, `.deb` ou `.rpm` |
+| macOS Apple Silicon | `Hangar-macos-aarch64.zip` (instale o servidor pelo terminal antes) |
+
+- **Sem assinatura digital.** No Windows o SmartScreen avisa na primeira vez: **Mais informações →
+  Executar assim mesmo**. No macOS, clique com o botão direito → **Abrir** na primeira vez.
+- **Instala o servidor se faltar (Linux e Windows).** Aberto numa máquina onde não acha o Hangar,
+  o app oferece um assistente que instala o servidor em poucas telas, sem terminal; se achar, só
+  conecta.
+- **Atualiza sozinho.** Quando há versão nova do app, a barra de cima oferece **Atualizar**: ele
+  baixa, confere o sha256 da release e reinicia; se a versão nova não abrir, a anterior volta.
+
+**Bandeja (Linux e Windows):** **Configurações → Geral → Manter na bandeja ao fechar** põe um
+ícone do Hangar na bandeja do sistema. Ligada, fechar a janela esconde o app em vez de encerrar:
+ele continua aberto e avisando. Clique no ícone para mostrar ou esconder a janela; o menu dele
+tem **Abrir Hangar** e **Sair**. Sem bandeja no sistema, fechar encerra como sempre.
+
+**Vista de desktop do navegador (congelada):** abrindo a URL do Hangar num navegador largo
+(≥820px), ainda aparece o shell de duas colunas (sidebar + chat), com board e canvas. Ele continua
+funcionando, mas não ganha recurso novo: o desktop evolui no app nativo e a web, no celular (PWA).
+O Electron antigo saiu do instalador. Os ajustes de **Aparência** dessa vista:
 
 - **Barra lateral aberta** — mantém a lista aberta o tempo todo. Desligada (padrão), ela fica no
   trilho de iniciais e só abre enquanto o mouse está por cima.
 - **Altura da barra** — aparece quando a de cima está ligada: **altura total** (de ponta a ponta) ou
   **só o conteúdo** (a barra encolhe até onde as sessões terminam e fica flutuando, centralizada).
 
-No app de desktop (Linux e Windows), **Configurações → Geral → Manter na bandeja ao fechar** põe um
-ícone do Hangar na bandeja do sistema. Ligada, fechar a janela esconde o app em vez de encerrar:
-ele continua aberto e avisando. Clique no ícone para mostrar ou esconder a janela; o menu dele
-tem **Abrir Hangar** e **Sair**. Sem bandeja no sistema, fechar encerra como sempre.
+### Busca e custos
 
-### Terminal de verdade (rodapé, só no desktop)
+- **Buscar em todas as conversas:** no app nativo, **Ctrl+K** (⌘K no macOS) busca por sessões e
+  pelo texto das conversas, vivas e fechadas, em todas as suas máquinas (convites ficam de fora);
+  **Retomar a conversa** abre uma sessão nova com ela. No PWA, a busca fica no seletor de sessões.
+- **Custos e uso:** a tela **Custos** (no nativo também **Ctrl+Alt+C**) mostra tokens e custo
+  estimado por dia, por conta/provedor, por CLI e por projeto. É estimativa com tarifa de API,
+  não a fatura do Claude ou do ChatGPT. A cota de cada conta fica em **Contas e provedores**.
 
-O ícone de terminal no topo do chat abre um **terminal de verdade** no rodapé — não é mais uma foto
-da tela: é a sessão tmux anexada, com cor, seleção de texto e teclado completo. Arraste o canto pra
-mudar a altura, ou use **⤢** pra maximizar; o **✕** fecha. No celular o mesmo ícone segue
-abrindo o espelho de leitura de sempre (o painel é desktop-only, e no Windows o servidor avisa que
-não tem).
+### Terminal de verdade
+
+O ícone de terminal no topo do chat abre um **terminal de verdade** — não é uma foto da tela: é a
+sessão tmux anexada, com cor, seleção de texto e teclado completo. No desktop ele fica no rodapé:
+arraste o canto pra mudar a altura, ou use **⤢** pra maximizar; o **✕** fecha. No celular é o
+mesmo terminal (xterm) em tela cheia, com tamanho de fonte, campo de texto e uma barra de teclas.
+No Windows ele roda sobre o ConPTY.
 
 - **Um painel por sessão.** Abrir o painel da mesma sessão noutra aba/navegador derruba o primeiro,
   que mostra **desconectado · reconectar** em vez de congelar calado. Enquanto o painel está aberto,
@@ -495,21 +559,22 @@ não tem).
   um `systemctl --user restart` a derruba junto. Sem emulador conhecido no PATH ele diz isso; pra
   escolher qual usar, `CP_TERMINAL` (tabela da seção 2).
 
-### Navegador embutido (só no desktop)
+### Navegador embutido
 
-O botão de globo no topo do chat abre um **navegador de verdade dentro do app** — um Chromium por
-sessão, na coluna da direita, ao lado do Contexto. Digite o endereço na barra e a página abre ali:
-serve pra ver o `localhost:3000` do projeto sem sair do Hangar. O agente daquela sessão dirige o
-MESMO navegador pelo `hangar-preview` (`open`, clicar, preencher, tirar print) — quando ele abre
-uma página, o painel aparece sozinho na sua tela.
+No app nativo, a entrada **Navegador** do painel lateral abre um **navegador de verdade dentro do
+app**, um por sessão: no Windows é o WebView2; no Linux, um Chromium sem janela pintado no painel
+(precisa do Google Chrome ou do Chromium instalado). Digite o endereço na barra e a página abre
+ali: serve pra ver o `localhost:3000` do projeto sem sair do Hangar. O agente daquela sessão dirige
+o MESMO navegador pelo `hangar-preview` (`open`, clicar, preencher, tirar print) — quando ele abre
+uma página, o painel aparece sozinho na sua tela. No app nativo não há abas: é um navegador por
+sessão.
 
-**Abas.** Acima da barra de endereço fica a faixa de abas: `×` fecha uma, `+` abre uma "Nova aba"
-e põe o cursor no campo de endereço — a página em si só é carregada quando você dá Enter. Até 8
-abas por sessão; **fechar a última fecha o navegador inteiro**, e o painel some.
+**Pelo celular:** o mesmo navegador da sessão pode ser visto e mexido do PWA — o toque chega no
+mesmo lugar que o clique do agente, e arrastar rola a página.
 
-A aba ativa é uma só, sua e do agente ao mesmo tempo: se você clicar numa aba, é nela que os
-próximos comandos dele caem. Quando ele precisa mexer numa página sem tirar da sua frente a que
-você está olhando, ele usa a aba escondida — a sua tela não muda.
+**Abas (só no Electron antigo):** quem ainda usa o Electron tem a faixa de abas, até 8 por sessão.
+A aba ativa é uma só, sua e do agente ao mesmo tempo; quando ele precisa mexer numa página sem
+tirar da sua frente a que você está olhando, usa uma aba escondida.
 
 ### Checkpoints de código (Pi e OMP)
 
@@ -639,7 +704,7 @@ desconectar sua conta Anthropic. A sessão continua no **mesmo** `~/.claude`: sk
 `CLAUDE.md`, plugins, statusline e histórico, tudo igual — só muda um punhado de variáveis de
 ambiente no processo daquela sessão.
 
-**Configurar:** menu da conta → **Configurações** → **Contas e modelos** → **+ Nova conta**. Preencha o
+**Configurar:** menu da conta → **Configurações** → **Contas e provedores** → **+ Nova conta**. Preencha o
 endereço e a chave e toque em **Testar e listar modelos**: os ids e a janela de contexto vêm do seu
 provedor, com a sua chave — nada de tabela chumbada que envelhece. O mesmo botão serve de checagem
 de conectividade/chave: chave errada volta com a mensagem do próprio provedor, não um "não
@@ -704,9 +769,9 @@ stdout. Use `claude-engine`.)
 Qualquer resposta do assistente — ou só um trecho selecionado — pode ser ouvida em voz alta, útil
 pra acompanhar um plano longo sem ficar rolando a tela.
 
-**Ligar:** menu da conta → **Configurações** → **Anexos e transcrição** → cole a **chave da
-ElevenLabs**. Sem chave, o `🔊` fica sem efeito (o servidor recusa com uma mensagem explicando que
-falta configurar). Na mesma tela: **Voz da leitura** (carrega as vozes da sua conta e deixa escolher
+**Ligar:** menu da conta → **Configurações** → **Voz** → **Ler em voz alta** → **ElevenLabs: vozes
+e ajustes** → cole a **Chave da ElevenLabs**. Sem chave, o `🔊` fica sem efeito (o servidor recusa
+com uma mensagem explicando que falta configurar). Na mesma tela: **Voz** (carrega as vozes da sua conta e deixa escolher
 uma, ou "Padrão do servidor"), **confirmar leitura acima de** (quantos caracteres pedem confirmação
 antes de gerar o áudio — custo de verdade, cobrado na sua conta ElevenLabs) e o **consumo do mês**.
 
@@ -721,8 +786,8 @@ Seleção grande (acima do limite configurado) pede confirmação antes de gasta
 modelo, é recusada mesmo confirmando. O áudio já gerado fica em cache (mesmo texto + mesma voz nunca
 paga duas vezes) e uma barra de player aparece com posição e velocidade.
 
-**Motor local (opcional):** em vez da ElevenLabs, aponte **Comando de voz local** (mesma tela, seção
-Avançado) para um programa que recebe o texto no stdin e devolve áudio (mp3 ou wav) no stdout — Kokoro,
+**Motor local (opcional):** em vez da ElevenLabs, aponte **Comando de voz local** (mesma tela, em
+**Leitor de voz instalado**) para um programa que recebe o texto no stdin e devolve áudio (mp3 ou wav) no stdout — Kokoro,
 piper, ou o que você tiver instalado na máquina do servidor. Com a chave da ElevenLabs vazia e o
 comando configurado, a leitura usa o motor local automaticamente.
 
@@ -733,28 +798,47 @@ comando configurado, a leitura usa o motor local automaticamente.
 do plano, projeto, duração e tarefas. O detalhe reaproveita o painel da execução e indica quando
 o consumo é parcial. O resumo de uso da tela inicial é uma visão separada, por período e modelo.
 
-Sessões Claude da mesma máquina conversam entre si pelo backend via `scripts/hangar-send`:
+As sessões conversam entre si pelo backend via `scripts/hangar-send`, qualquer que seja o agente
+(Claude, Codex, Pi, omp, Kimi). Sessão de outra máquina cadastrada é `servidor::sessao`:
 
 ```bash
-hangar-send --list                    # sessões vivas (nome, estado, harness, cwd)
+hangar-send --list                    # sessões vivas (nome, estado, harness, cwd), locais e remotas
 hangar-send api-fix "mensagem"        # manda prompt pra outra sessão (fila se ocupada)
+hangar-send casa::api-fix "mensagem"  # idem, numa sessão de outro servidor
 hangar-send --pair api-fix "tarefa"   # pareia ESTA sessão com outra num grupo de trabalho
-hangar-send --group "terminei"        # aviso de marco pro grupo todo (unidirecional)
+hangar-send --group "terminei"        # aviso de marco pro grupo todo (unidirecional, só local)
+hangar-send --close api-fix           # fecha OUTRA sessão desta máquina
+hangar-send --aceitar-par <link>      # pareia com a sessão de outra pessoa (link …ts.net:8443/par/…)
 hangar-send --new front ~/repo/front  # cria sessão nova gerenciada pelo app (visível na UI)
 hangar-send --new front ~/repo/front --headless  # Claude sem terminal
 hangar-send --new front ~/repo/front --terminal  # força terminal, sem alterar o padrão
 hangar-send --new api ~/repo/api --provider codex --headless  # Codex sem terminal
+hangar-send --new rev ~/repo --model <id> --effort high --permissao <modo>  # nasce já configurada
+hangar-send --new rev ~/repo --conta <nome>   # outra conta (--conta auto: a de mais folga)
+hangar-send --new rev ~/repo --engine kimi    # num motor de ~/.claude/engines.json
+hangar-send --new rev ~/repo --jev            # liga o Jev (hangar-preview objetivo) na sessão
 ```
 
-**Instalar** (uma vez por máquina; o passo 6/6 do `install.sh` também oferece):
+A sessão criada herda desta o que você omitir (conta, modo de permissão, com/sem terminal).
+Referência completa e sempre atual: `hangar-send --help`.
+
+**Instalar** (uma vez por máquina; o passo 7/8 do `install.sh` também oferece):
 
 ```bash
 ./scripts/install-hangar-send.sh
 ```
 
 O installer symlinka o `hangar-send` em `~/.local/bin`, adiciona o bloco "Sessões-irmãs"
-no `~/.claude/CLAUDE.md` global (toda sessão Claude nova passa a conhecer a ferramenta)
-e symlinka as skills do repo (`skills/*`) em `~/.claude/skills/`.
+no `~/.claude/CLAUDE.md` global (toda sessão Claude nova passa a conhecer a ferramenta),
+symlinka as skills do repo (`skills/*`) em `~/.claude/skills/` e registra o MCP `hangar`.
+
+**MCP `hangar`:** o mesmo `hangar-send` e o `hangar-preview` como ferramentas tipadas, sem shell.
+O instalador o registra no Claude Code (`~/.claude.json` de cada conta) e no Codex (`config.toml`
+de cada `CODEX_HOME`); o token não entra no ambiente da sessão. Ferramentas: `who_am_i`,
+`sessions`, `send`, `group`, `pair`, `unpair`, `new_session`, `close_session`, `browser_open`,
+`browser`, `browser_batch` e `html_render` (mostra uma página HTML dentro da conversa). O que não
+tem ferramenta (`--aceitar-par`, `hangar-preview objetivo`…) continua no CLI. Sessão aberta
+antes do registro, Pi, omp e Kimi usam só o CLI.
 
 **Pareamento:** `--pair` registra um grupo no app (badge 🤝 na lista, PairSheet com a
 conversa do par + contrato compartilhado em markdown) e injeta o protocolo de
@@ -762,15 +846,19 @@ colaboração em cada membro — cada sessão mexe só no próprio repo, recados
 iniciativa própria dentro da tarefa, push/merge continuam com o usuário. Pareando
 N sessões uma a uma os grupos se fundem num só.
 
-**Skill `orquestrar`:** pra tarefa que atravessa vários repos. A sessão em que você
-pedir "orquestra a tarefa X nos repos A e B" vira a **líder**: cria/pareia uma sessão
-visível por repo, escreve o contrato do grupo, distribui o escopo, acompanha os
-reportes de teste e consolida o painel final — você só aprova os marcos (push, MR).
+**Skill `orquestrar`:** conduz um trabalho, em um ou vários repositórios, com revisão
+independente. Só roda quando você pede ("orquestra", "monta o time"). Junto com você, o
+**planejador** escreve o plano e escolhe a rota: **`audit`** (quem planejou escreve e uma revisão
+de contexto limpo confere o diff inteiro) ou **`full`** (um **árbitro** abre o time; para cada Task
+um **executor** escreve e um **revisor** independente aprova antes da próxima, e uma revisão final
+confere a branch). Cada papel é uma sessão própria, até em modelos diferentes; push continua
+dependendo de você. A **`orquestrar-auto`** (só pelo nome) é a mesma esteira com um orquestrador
+sem modelo soltando as Tasks e abrindo executor e revisor; o árbitro só acorda para decidir.
 
 **Painel/tray no desktop (só Hyprland + Quickshell):** painel flutuante de sessões
-(SUPER+SHIFT+U) + ícone na bandeja. O passo 7/7 do `install.sh` oferece quando detecta
-o ambiente; manual: `./scripts/install-hangar-panel.sh`. Outros desktops ainda não têm painel
-— use a view board/canvas do app no navegador.
+(SUPER+SHIFT+U) + ícone na bandeja. O passo 7/8 do `install.sh` oferece quando detecta
+o ambiente; manual: `./scripts/install-hangar-panel.sh`. Nos outros desktops, a bandeja é a do
+próprio app nativo ([App de desktop](#app-de-desktop-nativo)).
 
 ## 6. Sincronização entre aparelhos (opcional)
 
@@ -817,7 +905,7 @@ status, plugins, MCPs, variáveis de ambiente, motores, preferências do Hangar 
 
 - **Contas Claude**: cada `~/.claude-<nome>` criada pelo Hangar chega ao destino com o mesmo nome,
   o apelido e as chaves do `settings.json` que só ela tem. Conta nova nasce sem login (o destino
-  avisa e cada uma entra por Configurações → Contas); conta que já existe lá continua logada como
+  avisa e cada uma entra por Configurações → Contas e provedores); conta que já existe lá continua logada como
   estava. Pasta `~/.claude-<nome>` que não é conta do Hangar fica intocada.
 - **Aparência do app nativo**: tema, cores, fundo (com a imagem), fontes e o jeito da conversa. O
   app aberto no destino aplica sozinho em poucos segundos. Ficam em cada máquina os tamanhos
@@ -862,10 +950,13 @@ o instalador ajusta também os logs dos lançadores e da vigia para essa pasta.
 | Não vejo código novo após mudar | PWA com service worker servindo JS velho → **hard reload** / limpar dados do site / re-adicionar o PWA. |
 | Backend reiniciar | precisa do cwd=`backend` (`python -m app.main` acha `app`). Sem `--reload` (trava SSE no SIGTERM). |
 | Pane de sessão de motor morre na hora, sem chat nenhum | `hangar-engine` não está no PATH do **servidor tmux** (a sessão nasce via `hangar-engine --exec`). Garanta que o PATH usado pelo tmux enxerga `hangar-engine` (mesmo instalado pelo `install-claude-wrapper.sh`). |
-| Contas e modelos avisa que não conseguiu ler o `engines.json` | `~/.claude/engines.json` foi editado à mão e ficou com JSON inválido — corrija-o (ou restaure um backup) antes de adicionar um motor novo; o app se recusa a gravar por cima de um arquivo que não conseguiu ler, pra não apagar os motores que já estavam lá. |
+| Contas e provedores avisa que não conseguiu ler o `engines.json` | `~/.claude/engines.json` foi editado à mão e ficou com JSON inválido — corrija-o (ou restaure um backup) antes de adicionar um motor novo; o app se recusa a gravar por cima de um arquivo que não conseguiu ler, pra não apagar os motores que já estavam lá. |
 
 ## 8. Segurança (resumo)
 
-- Bind só na LAN/VPN, **nunca** interface pública; **nunca** port-forward no roteador.
+- Bind só na LAN/VPN, **nunca** interface pública; **nunca** port-forward no roteador nem túnel
+  público para a 8765.
+- Só a porta do convidado (8766, via Funnel em 8443) vai à internet, enquanto houver convite ou par
+  externo ativo; ela recusa o token do dono.
 - O token é a senha — trate como senha de shell. TLS na frente (Caddy/Tailscale) antes de uso real.
 - Fora de casa = VPN de volta pra LAN (Tailscale/WireGuard).

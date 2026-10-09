@@ -33,7 +33,7 @@ from app.auth import require_auth, require_loopback
 from app.send_executor import send_thread as _send_thread
 from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
 from app.bastao import montar as bastao_montar
-from app.commands import comandos_da_cli, list_commands
+from app.commands import comandos_da_cli, list_commands, sem_os_desligados
 from app.fs import FsError, allowed_roots, list_roots, make_dir, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
@@ -11061,8 +11061,9 @@ def _commands_claude(name: str):
         if not cli:
             cli = comandos_da_cli(meta.get("config_dir"))
         # Sem o `init` ainda, os só-de-TUI conhecidos saem mesmo assim: não rodam sem terminal.
-        return list_commands(meta.get("cwd"), cli, so_tui or frozenset({"color", "doctor", "reload-plugins"}),
-                             com_tui=False)
+        return sem_os_desligados(
+            list_commands(meta.get("cwd"), cli, so_tui or frozenset({"color", "doctor", "reload-plugins"}), com_tui=False),
+            _escolha_da_sessao(name, meta))
     cdir = _session_config_dir(name)
     cli = comandos_da_cli(str(cdir) if cdir else None)
     # cwd vem do registry/tmux; se a sessao nao for achada, ainda devolvemos os built-ins
@@ -11084,7 +11085,24 @@ def _commands_claude(name: str):
         # projeto que nao tem nenhuma.
         _log.warning("commands: sem cwd pra '%s' (tmux e registry nao acharam) — lista sem o que "
                      "e do projeto", name)
-    return list_commands(cwd, cli)
+    return sem_os_desligados(list_commands(cwd, cli), _escolha_da_sessao(name, None))
+
+
+def _escolha_da_sessao(name: str, meta: dict | None) -> dict | None:
+    # Vale o que o processo vivo recebeu: o arquivo guardado pode já ser de outra abertura.
+    try:
+        if meta is not None:
+            return claude_customizations._validated_settings(meta.get("claude_settings"))
+        pane = tmux.pane_pid(name)
+        if pane is None:
+            _log.warning("commands: pane de '%s' não achado; lista sem o filtro das escolhas da sessão", name)
+            return None
+        from app import registry as registry_mod
+        return claude_customizations.from_environment(
+            procinfo._env_var_of(registry_mod._pid_do_agente(pane), claude_customizations.SESSION_SETTINGS_ENV))
+    except ValueError as exc:
+        _log.warning("commands: escolhas de plugins/skills inválidas em '%s' (%s); lista sem filtro", name, exc)
+        return None
 
 
 _TTS_LIMITE_PADRAO = 5000

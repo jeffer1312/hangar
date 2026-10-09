@@ -1,296 +1,224 @@
-# Hangar
-
-**A private control panel for live Claude Code, Codex, Kimi, and Pi sessions** — from your phone or desktop, over your own LAN/VPN.
-
-> Third-party tool. Not affiliated with or endorsed by Anthropic, OpenAI, Moonshot AI, or the Pi project.
-
 <p align="center">
-  <img src="docs/img/mobile-chat-demo.png" width="220" alt="Mobile chat with synthetic demo data" />
-  <img src="docs/img/desktop-board-demo.png" width="620" alt="Desktop board with Claude, Pi, and Codex demo sessions" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo-lockup-dark.svg" />
+    <img src="assets/brand/logo-lockup-light.svg" width="280" alt="Hangar" />
+  </picture>
 </p>
 
 <p align="center">
-  <a href="https://github.com/jeffer1312/hangar/releases/download/demos/hangar-demo-en.mp4">▶ Watch the 70-second demo</a>
+  <b>All your coding agents in one hangar.</b><br />
+  Claude Code, Codex, Pi, omp and Kimi Code in one native window and on your phone.<br />
+  The agents keep running on your machines; Hangar is the control tower.
+</p>
+
+<p align="center">
+  <a href="https://hangar.dev.br"><b>hangar.dev.br</b></a>
   ·
-  <a href="https://github.com/jeffer1312/hangar/releases/download/demos/hangar-tour-en.mp4">▶ App tour: new sessions, terminal↔app continuity, diffs</a>
+  <a href="https://github.com/jeffer1312/hangar/releases/tag/native-latest">Download</a>
   ·
-  <a href="docs/demo/hangar-overview.webm">▶ 40-second overview (webm)</a>
-</p>
-
-> **Screenshots and video use synthetic demo data.** Session names, prompts, states, and costs are synthetic; provider/model labels are either synthetic demo labels or representative public identifiers, never data from a user's account.
-
-## What it does
-
-A migração do backend é incremental. Com o servidor Rust ativo, contas Claude/Codex
-(catálogo, preparo, login, estado, logout, cotas, renovação Claude e redefinição guardada
-do Codex) e o cofre de anexos de sessão são atendidos por ele. O Python conserva a
-admissão de convidados, os fatos de sessão/configuração, a transcrição e o fallback
-quando o supervisor desativa o Rust. Os contratos e limites estão em
-[contas e anexos](docs/decisoes/accounts-uploads-rust.md).
-
-Hangar is a self-hosted PWA that lets you keep an eye on agent sessions without having to stay at the terminal.
-
-- **Phone chat:** follow live output, send prompts, answer interactive questions, interrupt work, and keep drafts per session.
-- **Desktop board:** see Claude Code, Codex, Kimi, and Pi sessions grouped by *needs you*, *working*, and *ready*.
-- **Free-form canvas:** arrange floating session tiles by project, topic, or priority and resize them independently.
-- **Mixed agent workflows:** keep Claude Code, Codex, Kimi, and Pi conversations visible from the same cockpit.
-- **Live status:** streaming previews, model/context badges, plans, workflows, notifications, uploads, and session history.
-- **Claude or Codex without a terminal:** run the agent as a Hangar-managed process instead of a tmux pane. Permissions and questions arrive in chat, and restarting Hangar doesn't cut the turn. Pick **No terminal (Hangar process)** under *How it runs*, or add `--headless` to `hangar-send --new` (`--provider codex` selects Codex).
-- **Pi controls:** choose a Pi model and thinking level for the active session.
-- **Alternative Claude engines:** run a session through another compatible provider while keeping its skills and history in the same Claude environment.
-- **Pairing:** use `hangar-send` to message sibling sessions and coordinate a working group with a shared contract.
-- **Cost view:** inspect usage estimates by day, provider, source, and project. It is an estimate, not an invoice.
-- **Portuguese & English UI:** the interface follows your system language by default; switch it any time in Settings → Language (the app reloads on change).
-
-## See it in action
-
-<p align="center">
-  <img src="docs/img/hangar-chat-pairing.png" width="410" alt="Live chat with a paired-session message and the session context panel" />
-  <img src="docs/img/hangar-shared-contract.png" width="410" alt="Working group sheet with the shared contract two agents negotiated" />
-</p>
-<p align="center">
-  <img src="docs/img/hangar-split-terminal.png" width="410" alt="Two sessions side by side with the embedded real terminal" />
-  <img src="docs/img/hangar-board.png" width="410" alt="Kanban board with Claude, Pi, and Kimi sessions by state" />
-</p>
-<p align="center">
-  <img src="docs/img/hangar-new-session.png" width="410" alt="New session sheet: folder, provider, account, model" />
-  <img src="docs/img/hangar-settings.png" width="410" alt="Appearance settings over a live chat, with the system wallpaper showing through" />
-</p>
-
-### One cockpit for different agents
-
-<p align="center">
-  <img src="docs/img/desktop-board-demo.png" width="760" alt="Board showing a Claude session working and Pi and Codex sessions ready" />
-</p>
-
-The board is the quick triage view: one card is working while the other demo sessions are ready. Open any card to enter the full chat.
-
-### Phone-first follow-up
-
-<p align="center">
-  <img src="docs/img/mobile-chat-demo.png" width="280" alt="Phone chat showing a prompt, background command, and response" />
-  <img src="docs/img/desktop-canvas-demo.png" width="760" alt="Canvas with demo session tiles in different positions and sizes" />
-</p>
-
-Use the phone when you only need to answer or redirect a session. Use the canvas when the desktop board is too rigid for the way you think.
-
-### Pi models, engines, and usage
-
-<p align="center">
-  <img src="docs/img/desktop-pi-demo.png" width="760" alt="Pi session with a Pi-specific composer" />
+  <a href="docs/USAGE.md">User guide</a>
+  ·
+  <a href="LICENSE">MIT</a>
 </p>
 
 <p align="center">
-  <img src="docs/img/desktop-models-demo.png" width="360" alt="Pi model and thinking-level picker with synthetic providers" />
-  <img src="docs/img/desktop-openrouter-free-demo.png" width="260" alt="Pi OpenRouter free-model picker with synthetic model results" />
-  <img src="docs/img/desktop-engines-demo.png" width="520" alt="Alternative model engine settings with placeholder demo values" />
+  <img src="site/media/native-terminal.png" width="900" alt="Hangar native app: sessions in the sidebar, a conversation with code and a table, the real terminal underneath and the context panel on the right" />
 </p>
+
+> Independent tool. Not affiliated with or endorsed by Anthropic, OpenAI, Moonshot AI or the Pi
+> project. Screenshots and clips use synthetic demo data.
+
+## Why
+
+One agent session is easy. Hangar is for when there are ten: some working, some waiting on a
+question, some on another machine, one of them on your phone while you're out for lunch.
+
+- **Your terminal stays your terminal.** Hangar doesn't reimplement any agent. Each session is the
+  original CLI, with your skills, hooks and accounts, running in tmux. Run `claude` in a terminal
+  and it shows up in the app; `tmux attach` and you're back in the same conversation.
+- **Or no terminal at all.** Claude and Codex can run as a Hangar-managed process: permissions and
+  questions arrive as cards, and restarting the app never cuts a turn.
+- **Nothing leaves your machine.** Self-hosted, over your LAN or your VPN. There is no Hangar cloud
+  in the middle.
+
+## What you get
+
+<table>
+  <tr>
+    <td width="50%"><a href="site/media/agents.mp4"><img src="site/media/agents.jpg" alt="Several sessions working at once in the native app" /></a></td>
+    <td width="50%"><a href="site/media/group.jpg"><img src="site/media/group.jpg" alt="A review session receiving a message from its pair and asking before applying the fix" /></a></td>
+  </tr>
+  <tr>
+    <td><b>Many agents, one list.</b> Claude writes the webhook while Pi translates, Kimi runs the tests and Codex calls you from the sidebar. Sessions that need you float to the top.</td>
+    <td><b>Sessions that talk.</b> One agent messages another, agrees on a shared contract and reports when it's done. Pair two sessions or build a working group.</td>
+  </tr>
+  <tr>
+    <td><a href="site/media/orq.mp4"><img src="site/media/orq.jpg" alt="Orchestration panel with tasks, executors, reviewers and a pending decision" /></a></td>
+    <td><a href="site/media/costs-chart.jpg"><img src="site/media/costs-chart.jpg" alt="Daily token usage chart and cache savings" /></a></td>
+  </tr>
+  <tr>
+    <td><b>Orchestration with review.</b> Planner, executor and an independent reviewer, each in its own session, even on different models. A gate between tasks and a final branch review before push.</td>
+    <td><b>What each agent spent.</b> Tokens and estimated cost by day, provider, source and project. An estimate, not an invoice.</td>
+  </tr>
+</table>
 
 <p align="center">
-  <img src="docs/img/desktop-costs-demo.png" width="560" alt="Cost dashboard marked Demo data with synthetic rankings" />
+  <img src="site/media/mobile-ask-question.png" width="230" alt="Answering an agent question on the phone" />
+  &nbsp;&nbsp;
+  <img src="docs/img/mobile-chat-demo.png" width="230" alt="Following a session on the phone" />
 </p>
 
-## Common use cases
+**Left your desk? The session comes along.** Answer the question that blocked the agent, approve a
+permission, interrupt, queue the next prompt or dictate it, on your home Wi-Fi or anywhere over
+Tailscale. The phone uses the installable web app (PWA).
 
-- **On-call or remote follow-up:** start a long task at your desk and answer the next question from your phone.
-- **Multiple agents:** compare a Claude Code implementation, a Pi exploration, and a Codex review without switching terminals.
-- **Multi-session coordination:** pair sessions on the same machine, queue prompts while one is busy, and keep the shared contract visible.
-- **A focused desktop:** use the board for state-based triage or the canvas for a spatial workspace.
-- **Provider experiments:** test a Pi model or an alternative Claude engine without displaying saved credentials in the cockpit.
+### And also
+
+- **Native desktop app in Rust.** GPU-rendered, no browser underneath; tray icon and self-update
+  from the top bar. Linux, Windows and macOS.
+- **A real terminal, built in.** Open the session's tmux pane under the conversation, on desktop or
+  phone.
+- **A browser per session.** The agent opens the page it just changed, clicks, fills the form and
+  takes the screenshot while you watch next to the conversation.
+- **Across machines.** Link your desktop, laptop and server over LAN or Tailscale: every session
+  in one list, and an agent on one machine messages, pairs with or creates a session on another.
+- **Pass the baton.** Out of quota mid-task? One button opens a new session on another account,
+  model or CLI, already knowing what the current one was doing. Each account's quota stays in
+  the top bar.
+- **Git without leaving the chat.** Checkbox staging, per-file discard, history with graph and
+  search, cherry-pick and revert. Start a session in a fresh worktree.
+- **Search every conversation**, live and closed, and resume an old one on the right account.
+- **Speak and listen.** Dictation that keeps file names intact; answers read aloud.
+- **Other models in Claude Code.** Run a Claude session on another provider and keep skills, hooks
+  and history.
+- **Agents drive it too.** Through the `hangar` MCP server and the `hangar-send` CLI, an agent
+  creates sessions, lists its group, messages the others and drives its browser.
+- **Share a session** with someone through a link, without exposing the rest of the machine.
+- **Board and canvas** layouts, stuck-session notifications, plan progress, checkpoints for Pi and
+  omp, and a Portuguese/English interface.
 
 ## Install
 
-The installer sets up the backend and frontend dependencies and can install the session wrappers and user services.
+The installer sets up the Hangar server where your agents run, installs the session shortcuts,
+downloads the native app for your platform and ends with a QR code for your phone. It asks two
+questions (the phone password and whether you'll use it away from home) and installs whatever is
+missing: Python, Node, uv, tmux (psmux on Windows) and, if you have no agent yet, Claude Code.
 
-### Linux or macOS
+### With the app (Linux and Windows)
+
+Download the app from the [latest release](https://github.com/jeffer1312/hangar/releases/tag/native-latest)
+and open it. On a machine without Hangar it offers to install the server for you in a few screens,
+no terminal needed.
+
+| Platform | File |
+| --- | --- |
+| Windows x64 | `Hangar-windows-x86_64.zip` (contains `Hangar.exe`) |
+| Linux x86_64 | `Hangar-linux-x86_64.tar.gz`, `.deb` or `.rpm` |
+| macOS Apple Silicon | `Hangar-macos-aarch64.zip` (install the server from the terminal first) |
+
+Binaries are unsigned. On Windows, SmartScreen warns the first time: *More info → Run anyway*. On
+macOS, right-click → *Open* the first time.
+
+### From the terminal
+
+**Linux or macOS**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.sh | bash
 ```
 
-Or clone first if you want to inspect the files:
+**Windows (PowerShell, regular or admin)**
+
+```powershell
+irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
+```
+
+Both clone into `~/hangar` and run the installer. Other folder: `bash -s -- ~/apps/hangar` on
+Linux/macOS, `$env:CP_DESTINO = 'D:\hangar'` before the command on Windows.
+
+Prefer to read the files first?
 
 ```bash
 git clone https://github.com/jeffer1312/hangar
 cd hangar
-./install.sh
+./install.sh            # Windows: .\install.ps1
 ```
 
-### Windows PowerShell
+Useful options: `--avancado` (pick each extra), `--agentes=codex,pi` (which agents to set up),
+`--check` (only report what's missing), `--update`. On Windows: `-Avancado`, `-Agentes codex`.
+Something didn't start? `hangar-doctor` says what's missing and how to fix it.
 
-Python **3.14+**, Node 20+, Git, `uv`, and at least one coding agent (Claude Code by default, or Codex, Pi, omp, Kimi Code) are required. The Windows installer uses psmux as the tmux-compatible multiplexer.
-
-```powershell
-irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
-```
-
-To choose another local destination:
-
-```powershell
-$env:CP_DESTINO = 'D:\hangar'
-irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
-```
-
-O instalador faz duas perguntas no começo (a senha do celular e se você vai usar fora de
-casa) e depois segue sozinho; só pede a senha de administrador avisando antes. No fim ele
-mostra um QR: leia com a câmera do celular. No Windows, o instalador aceita PowerShell comum
-ou como administrador. Quando elevado, configura o backend, a atualização e os atalhos do app
-para usar administrador; no modo comum, pede UAC só para o que precisar. Cria atalhos no Menu
-Iniciar e na Área de Trabalho com o ícone do PWA.
-Quer escolher cada extra? No checkout: `./install.sh --avancado` / `.\install.ps1 -Avancado`
-(o `bootstrap.ps1` não repassa argumentos; o `bootstrap.sh` aceita `bash -s -- --avancado`).
-Só Codex, ou outro agente? `./install.sh --agentes=codex` / `.\install.ps1 -Agentes codex`;
-sem a opção, ele usa os agentes que já existem e só instala o Claude Code quando não há nenhum.
-Algo não abriu? `hangar-doctor` diz o que falta e como consertar.
-
-For pairing and PWA installation, see [docs/USAGE.md](docs/USAGE.md).
-
-## Run locally
-
-Requirements: `tmux` (or psmux on Windows), Claude Code, a current Codex CLI that supports a local app-server (`app-server --listen` and `--remote`), Python 3.14+, [`uv`](https://docs.astral.sh/uv/), and Node 20+.
-
-Install the wrapper once so sessions receive stable ids and appear reliably in the cockpit:
-
-```bash
-./scripts/install-claude-wrapper.sh
-```
-
-No Linux/macOS, o instalador habilita a extensão fullscreen no Pi na primeira instalação;
-`/fullscreen-off` preserva a escolha de desligá-la. No Oh My Pi (OMP), tarefas e rolagem ficam
-com o núcleo: `claude-todo` e `fullscreen-tui` não são instaladas nem exigidas pelo painel de
-saúde. Atualizações removem somente links dessas duas extensões que apontem para este checkout,
-sem alterar configurações ou extensões personalizadas. As demais integrações do Hangar são
-mantidas; descoberta de skills não substitui execução de hooks CLI nem snapshots de código.
-Para ampliar um painel do tmux, use `Ctrl-b z`.
-
-A ponte Claude respeita `PI_CODING_AGENT_DIR` e `CLAUDE_CONFIG_DIR` (aceitam `~`).
-No OMP, importa agents pessoais de `<claudeDir>/agents` para `<agentDir>/agents`,
-sem espelhar skills ou comandos que o núcleo já descobre. No Pi, mantém as conversões
-e os diretórios de recursos próprios. A configuração fica em `<agentDir>/claude-bridge.json`;
-`enabled: false` desativa também a memória. Agents nativos e arquivos editados manualmente
-são preservados; `/claude-bridge` informa conflitos. A ponte não instala plugins no lugar
-do gerenciador nativo do OMP.
-
-Opcionalmente, `CP_OMP_CLAUDE_CONTEXT_ENABLED=1` configura o OMP para priorizar `CLAUDE.md`,
-com regra explícita e preservação de arquivos/links pessoais. `CP_OMP_PLUGIN_SYNC_ENABLED=1`
-ativa a importação genérica de marketplaces e reconciliação nativa em background (300 s
-por padrão), respeitando o controle global de automações. Ambos ficam desligados por padrão.
-Detalhes, limitações e diagnóstico estão em [`docs/USAGE.md`](docs/USAGE.md).
-
-Start the backend on loopback:
-
-```bash
-cd backend
-CP_AUTH_TOKEN="$(openssl rand -hex 24)" \
-CP_LAN_BIND_IP=127.0.0.1 \
-uv run python -m app.main
-```
-
-Start the frontend in another terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Open the frontend URL shown by Vite, enter the backend URL and token on the login screen, then start Claude Code, Codex, Kimi, or Pi through the installed wrappers.
-
-Run the backend tests with:
-
-```bash
-cd backend && uv run pytest -v
-```
-
-For the production-style user services and Tailscale setup, use [docs/USAGE.md](docs/USAGE.md).
+Requirements: tmux (installed for you) and at least one agent: Claude Code, Codex, Pi, omp or
+Kimi Code. Setup details, Tailscale, the phone and every feature are in the
+[user guide](docs/USAGE.md).
 
 ## How it works
 
 ```text
-Phone or desktop PWA
-        │  HTTP(S)/SSE + authenticated API
-        ▼
-FastAPI backend
-   ├── Claude Code: JSONL + tmux state/input or a managed headless pipe
-   ├── Pi: JSONL transcript + Pi extension sidecars
-   ├── Kimi Code: wire.jsonl transcript + state hooks
-   └── Codex: local app-server + managed tmux TUI or a headless stdio pipe
-        ▼
-Your local agent sessions
+ Native app (desktop)     PWA (phone)
+            │                 │
+            └──── HTTPS / SSE / WebSocket ────┐
+                                               ▼
+                         hangar-server (Rust, :8765)
+                          lists, live state, history, costs, groups,
+                          accounts, session attachments
+                                               │
+                         Python backend (loopback, behind it)
+                          sessions, adapters, MCP
+                                               │
+        ┌──────────────┬──────────────┬────────┴─────┬──────────────┐
+   Claude Code       Codex          Pi / omp       Kimi Code     your browser
+   JSONL + tmux     app-server     JSONL + ext.    wire.jsonl    per session
+   or headless      + TUI or       sidecars        + hooks
+                    headless
 ```
 
-Chat content comes from structured session data rather than scraping the terminal transcript. The terminal multiplexer is used only by sessions with a terminal; headless Claude and Codex sessions use managed pipes and durable sidecars. The backend is the bridge and does not add a vendor relay; the CLIs and providers you configure may still send data according to their own policies.
+Chat content comes from each agent's structured transcript, never from scraping the terminal. The
+tmux pane is used only for live state and input of sessions that have a terminal; headless Claude
+and Codex run as managed processes with durable sidecars. The CLIs and providers you configure may
+still send data according to their own policies.
 
-## Claude → Codex (em validação)
+The backend moves to Rust part by part. With the Rust server up, Claude and Codex accounts
+(catalog, preparation, login, state, logout, quotas, Claude renewal and the guarded Codex reset)
+and the session attachment vault are served by it; Python keeps guest admission, session and
+configuration facts, transcription and the fallback when the supervisor turns Rust off. Contracts
+and limits: [accounts and attachments](docs/decisoes/accounts-uploads-rust.md).
 
-O código da transferência está disponível em uma árvore isolada, sem ativação no serviço ou
-aceitação completa. A entrada implementada fica no anel de contas do desktop nativo: escolher
-uma conta Codex abre conta, modelo e esforço antes da confirmação. A mesma sessão conserva
-nome, cartão, chave, pasta, modo de execução e vínculos. O Hangar compõe o histórico Claude
-preservado com os turnos novos do Codex; a TUI mostra somente os turnos novos. A volta
-Codex → Claude não faz parte do recurso.
-
-A captura com Codex CLI 0.159.3 e API simulada em loopback conferiu conteúdo artificial após
-importação e reinício. Uso com modelo real, interface, WebSocket/TUI e Windows continuam
-pendentes. Veja [uso e recuperação](docs/USAGE.md#continuar-uma-sessão-claude-no-codex-em-validação)
-e [medição e limites](docs/decisoes/harnesses.md#transferência-claude--codex-captura-nativa-em-validação).
-
-Contrato aditivo da API autenticada:
-
-| Método e rota | Corpo / comportamento |
-| --- | --- |
-| `GET /api/sessions/{name}/conta` | Mantém a lista de destinos Claude do fluxo existente. |
-| `POST /api/sessions/{name}/conta` | Legado Claude → Claude: somente `{ "config_dir": "<conta Claude cadastrada>" }`. |
-| `POST /api/sessions/{name}/conta` | Claude → Codex: `{ "credential_id": "<id codex:… cadastrado>", "source_life": "<identidade atual>", "source_jsonl": "<transcript atual>", "model": null, "effort": null }`. |
-| `POST /api/sessions/{name}/recarregar` | Sem corpo. Em `restore_failed`, tenta recuperar a origem da transferência; nos demais casos mantém o comportamento de recarga existente. |
-
-Os dois corpos de `/conta` são exclusivos. `credential_id` identifica uma conta cadastrada no
-servidor da sessão; `source_life` e `source_jsonl` conferem se a origem ainda é a mesma, sem
-autorizar um caminho arbitrário. Modelo/esforço omitidos ou nulos deixam o Codex resolver os
-padrões da conta. A resposta de transferência concluída contém `ok`, `provider: "codex"`,
-`conta`, `model`, `effort` e `transfer_id`; o cliente também relê a sessão e exige
-`transfer_phase: "complete"`. Falhas retornam o erro, inclusive quando a restauração não pôde
-ser confirmada. Recarregar tenta a recuperação; não garante que ela sempre será possível.
+Repository map: `crates/` (Rust server), `backend/` (Python, FastAPI), `desktop-native/` (Rust
+desktop app), `frontend/` (Svelte PWA), `mobile/` (Expo app, in development), `packages/core`
+(shared TypeScript), `site/` (hangar.dev.br), `skills/` (agent skills shipped with Hangar).
 
 ## Security model
 
-This is a LAN/VPN-only tool and should be treated like a remote shell:
+Treat Hangar like a remote shell: whoever holds the token drives your agents with your user's
+permissions.
 
-- The default bind address is loopback (`127.0.0.1`). Set `CP_LAN_BIND_IP` only to a trusted LAN/VPN address when the phone must connect. Local development uses HTTP; add TLS before using it over a shared network.
-- **Never** expose it through a public interface or router port-forward.
-- Protect the API with a strong `CP_AUTH_TOKEN` and put TLS in front when using it beyond loopback.
-- Run it as your own user: the sessions and tools have the same permissions as the account running the backend.
-- Do not put tokens, cookies, provider keys, or private endpoints in screenshots, issues, or README examples.
+- The server binds to loopback by default. Point `CP_LAN_BIND_IP` only at a trusted LAN or VPN
+  address (Tailscale is the easy path). It refuses to bind beyond loopback with the default token.
+- Never expose the main port (8765) through a router port-forward or a public tunnel.
+- Sharing a session uses a separate guest port (8766, published through Tailscale Funnel) that
+  refuses the owner's token and only reaches the shared session.
+- Keep tokens, cookies and provider keys out of screenshots and issues.
 
-## Useful environment variables
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `CP_AUTH_TOKEN` | `change-me` | Bearer token for API routes; use a strong value. |
-| `CP_LAN_BIND_IP` | `127.0.0.1` | Bind address. Use a trusted LAN/VPN address for phone access. |
-| `CP_PORT` | `8765` | Backend port. |
-| `CP_FRONT_PORT` | — | Where the PWA is served (used for the QR/pairing URL). Empty = this backend, which serves `frontend/dist` at the root. Set `5173` only if you keep a separate `vite preview` service. |
-| `CP_PUBLIC_URL` | — | LAN/VPN base URL used for pairing links, if needed. |
-| `CP_TERM_ORIGINS` | — | Extra `Origin`s accepted by the terminal WebSocket, comma-separated (e.g. `https://pocket.example.com`). Needed when the PWA is served from a host that is neither this backend, `CP_PUBLIC_URL`, nor a peer. |
-
-## Pair sibling sessions
-
-Install `hangar-send` to list sessions, send durable prompts, or pair sessions into a working group:
+## Development
 
 ```bash
-./scripts/install-hangar-send.sh
-hangar-send --list
-hangar-send --pair <session-name> "coordinate the demo task"
-hangar-send --pair <session-name> --substituir-tarefa "new task"
-hangar-send --group [--tmux] "milestone for the whole group"
-hangar-send --new <session-name> [cwd] [--provider claude|codex] [--headless|--terminal] [--model <id>]
+# Backend on loopback
+cd backend && CP_AUTH_TOKEN="$(openssl rand -hex 24)" CP_LAN_BIND_IP=127.0.0.1 uv run python -m app.main
+
+# Web app (PWA)
+npm ci --workspace=@hangar/core --workspace=frontend
+npm --prefix frontend run dev
+
+# Checks
+cd backend && uv run pytest
+npm run check                      # svelte-check + tsc for every TypeScript package
+scripts/verificar-local            # what CI would run for the current commit
 ```
 
-Pairing is local to the machine. The app shows the shared contract and conversation, while each session remains independently controlled.
+Contributor notes, architecture rules and the decisions behind them are in
+[`CLAUDE.md`](CLAUDE.md) and [`docs/decisoes/`](docs/decisoes/).
 
-## Documentation and license
+## License
 
-- [User and setup guide](docs/USAGE.md)
-- [Demo storyboard and sanitization contract](docs/demo/README.md)
-- [Synthetic prompts](docs/demo/prompts.md)
-- [MIT License](LICENSE)
+[MIT](LICENSE)

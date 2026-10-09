@@ -178,6 +178,20 @@ def test_commands_route(monkeypatch, tmp_path):
     assert "argumentHint" in data[0]
 
 
+def test_escolha_da_sessao_tira_plugin_e_skill_desligados():
+    from app.commands import sem_os_desligados
+    from app.models import CommandInfo
+    cmds = [CommandInfo(name=n, display="/" + n, source="plugin" if ":" in n else "skill")
+            for n in ("superpowers:brainstorming", "ecc:hookify", "ecc:ecc-guide", "ecc:review", "falar", "clear",
+                      "superpowers", "dup:x")]
+    escolha = {"enabledPlugins": {"superpowers@claude-plugins-official": False, "ecc@market": True,
+                                  "dup@a": False, "dup@b": True},
+               "skillOverrides": {"falar": "off"},
+               "permissions": {"deny": ["Skill(ecc:hookify *)", "Skill(ecc:review)"]}}
+    assert _names(sem_os_desligados(cmds, escolha)) == {"ecc:ecc-guide", "clear", "superpowers", "dup:x"}
+    assert sem_os_desligados(cmds, None) == cmds
+
+
 def test_frontmatter_cache_rele_quando_o_arquivo_muda(tmp_path):
     import os
     from app import commands

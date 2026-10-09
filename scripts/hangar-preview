@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-// hangar-preview — dirige o navegador embutido DA SUA SESSÃO no app desktop (Electron, ou o nativo no Windows).
+// hangar-preview — dirige o navegador embutido DA SUA SESSÃO no app desktop (o nativo no Windows e no Linux, ou o Electron).
 //
-//   hangar-preview open <url>             abre o navegador desta sessão com a url (o painel monta
-//                                          sozinho na tela do usuário; se a sessão estiver fora da
-//                                          tela, abre quando ele abrir ela)
+//   hangar-preview open <url>             abre o navegador desta sessão com a url (só no Electron
+//                                          o painel monta sozinho na tela do usuário)
 //   hangar-preview list                    navegadores vivos (chave, url, vivo/morto)
 //   hangar-preview snapshot                árvore de acessibilidade compacta, com refs @eN
 //   hangar-preview click @eN               clica no elemento da ref
@@ -19,7 +18,7 @@
 //   hangar-preview network                 últimas respostas de rede
 //   hangar-preview text                    texto visível da página (innerText)
 //   hangar-preview url                     URL atual do navegador desta sessão
-//   hangar-preview shot [arquivo.png]      screenshot (default <tmp do sistema>/hangar-preview-<sessao>/<hora>.png)
+//   hangar-preview shot [arquivo.png]      screenshot (default <tmp do sistema>/hangar-preview-<sessao>/<epoch ms>.png)
 //   hangar-preview folha                   junta numa grade os shots sem nome tirados desde a última folha
 //   hangar-preview tab list                lista as abas (* = ativa)
 //   hangar-preview tab new <url>           abre outra aba com a url e torna ativa
@@ -93,8 +92,9 @@ Identidade: sidecar da sessão no modo sem terminal; tmux no modo com terminal.
   network                 últimas respostas de rede
   text                    texto visível da página (innerText), sem árvore
   url                     URL atual
-  shot [arquivo.png]      screenshot (default <tmp do sistema>/hangar-preview-<sessao>/<hora>.png)
+  shot [arquivo.png]      screenshot (default <tmp do sistema>/hangar-preview-<sessao>/<epoch ms>.png)
   folha                   junta numa grade (6 por folha) os shots sem nome desde a última folha
+  abas (só no Electron; o app nativo tem um navegador por sessão e recusa tab e --aba):
   tab list                lista as abas (* = ativa)
   tab new <url>           abre outra aba com a url e torna ativa
   tab <id>                torna a aba ativa (aparece no painel)
@@ -102,6 +102,7 @@ Identidade: sidecar da sessão no modo sem terminal; tmux no modo com terminal.
   --aba <id>              age nessa aba SEM trocar a ativa (vale pros verbos de página)
   close                   fecha o navegador desta sessão (o painel some; terminou de usar, feche)
   batch                   lê várias linhas do stdin, uma por comando
+  objetivo e confere precisam do Jev ligado na sessão (hangar-send --new ... --jev):
   objetivo <texto>        o Jev dirige sozinho até cumprir o objetivo (uma requisição por ciclo)
     --passos <n>          teto de passos (default 15)
     --dados <json>        valores para os campos, com as chaves que você quiser: o Jev casa cada

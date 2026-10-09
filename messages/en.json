@@ -1675,7 +1675,7 @@
   "config_amostra_placeholder": "Message for Claude…",
   "config_ditado_titulo": "Send transcription automatically",
   "config_ditado_desc": "When it detects that you finished speaking, it stops recording, transcribes, and sends after 3 seconds. Click, tap, or press a key to cancel.",
-  "config_sobre_desc": "Drive Claude Code, Codex and Pi sessions running on your computer — from your phone or desktop.",
+  "config_sobre_desc": "Drive Claude Code, Codex, Pi, omp and Kimi Code sessions running on your computer — from your phone or desktop.",
   "config_motores_terminal_1": "In the terminal you use",
   "config_motores_terminal_2": ". Lowercase, no spaces.",
   "config_motores_nome_curto": "Short name",

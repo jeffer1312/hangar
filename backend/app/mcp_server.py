@@ -2,7 +2,8 @@
 
 Quem chama se identifica pelos cabeçalhos X-Hangar-* (app.quem_chama); o token é o mesmo bearer
 do backend, conferido ANTES do sub-app porque `app.mount()` passa por fora do `Depends`.
-Cada tool chama a mesma função de rota que o CLI chama por HTTP — nada de funcionalidade só do MCP.
+Cada tool chama a mesma função de rota que o CLI chama por HTTP. A exceção é `html_render`: a
+página aparece no lugar da chamada da tool, e o CLI não tem esse lugar.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ mcp = MCPServer("hangar")
 # Nomes antigos das tools (português) → nome de hoje. Uma sessão já aberta carregou o catálogo na
 # abertura e vai chamar pelo nome que conhece até ser reiniciada — e sessão de trabalho não fecha
 # porque o servidor renomeou uma tool. Aqui o nome velho continua CHAMÁVEL sem aparecer no
-# catálogo: quem abre agora vê só os dez nomes novos, e quem está no meio de uma tarefa não quebra.
+# catálogo: quem abre agora vê só os nomes novos, e quem está no meio de uma tarefa não quebra.
 #
 # Some quando não houver mais sessão viva de antes do rename — é ponte, não API.
 _NOMES_ANTIGOS = {
@@ -96,7 +97,7 @@ async def sessions(ctx: Context) -> list[dict[str, Any]]:
         eu = await _eu(ctx)
     except ToolError:
         eu = None
-    infos = await api.list_sessions()
+    infos = await api.list_sessions(ctx.request_context.request)
     return [{"name": s.name, "state": s.state, "cwd": s.cwd,
              "provider": s.provider, "headless": s.headless, "voce": s.name == eu,
              "grupo": s.pair_gid} for s in infos]
@@ -112,7 +113,7 @@ async def send(ctx: Context, alvo: str, texto: str, tmux: bool = False) -> dict[
     eu = await _eu(ctx)
     if alvo == eu or (settings.server_id and alvo == f"{settings.server_id}::{eu}"):
         raise ToolError(f"recusado: '{alvo}' é esta sessão — o recado voltaria pra você. "
-                        "Quem é quem: tool `sessoes` (campo `voce`).")
+                        "Quem é quem: tool `sessions` (campo `voce`).")
     # Modelo que escreve "[de: eu] …" por conta própria não ganha o prefixo em dobro — com ou sem o
     # "<servidor>::" na frente, que é como o envio pra outro servidor qualifica o remetente.
     servidor = rf"(?:{re.escape(settings.server_id)}::)?" if settings.server_id else ""
@@ -166,12 +167,15 @@ async def group(ctx: Context, texto: str, tmux: bool = False) -> dict[str, Any]:
                       "<tarefa>`: registra no app e injeta o protocolo nos dois lados. `alvo` aceita "
                       "`servidor::sessao`. `tarefa` é o título do grupo na lista: chave + assunto "
                       "numa linha (ex: `ABC-1234 Tela de login`); o combinado vai por `send`. "
-                      "Só quando o usuário pedir pareamento.")
-async def pair(ctx: Context, alvo: str, tarefa: str = "", substituir_tarefa: bool = False) -> dict[str, Any]:
+                      "Só quando o usuário pedir pareamento. `orq`: grupo de orquestração (skill "
+                      "orquestrar), como `--pair --orq`; com `alvo` vazio o grupo tem só esta sessão.")
+async def pair(ctx: Context, alvo: str = "", tarefa: str = "", substituir_tarefa: bool = False,
+               orq: bool = False) -> dict[str, Any]:
     from app import api
     eu = await _eu(ctx)
     try:
-        return await api.pair_session(eu, api.PairBody(peer=alvo, task=tarefa, replace_task=substituir_tarefa))
+        return await api.pair_session(eu, api.PairBody(peer=alvo, task=tarefa, replace_task=substituir_tarefa,
+                                                       orq=orq))
     except HTTPException as e:
         raise ToolError(_detalhe(e)) from e
 
@@ -199,12 +203,18 @@ async def unpair(ctx: Context) -> dict[str, Any]:
                       "Jev no ambiente, e só aí o `hangar-preview objetivo` (o laço que navega e "
                       "preenche tela sozinho) funciona nela. Omitido, vale o padrão do servidor. "
                       "`service_tier`: `priority` liga o Fast, `default` desliga; só Codex ou "
-                      "Claude com motor GPT no CLIProxyAPI local.")
+                      "Claude com motor GPT no CLIProxyAPI local. Worktree: `branch` com "
+                      "`new_branch: true` e `base` cria uma branch nova numa cópia separada de `cwd`; "
+                      "`branch` sem `new_branch` usa uma branch que já existe. `codex_account`: id "
+                      "da conta Codex cadastrada. `subagent_model`: modelo dos subagentes (claude "
+                      "sem motor).")
 async def new_session(ctx: Context, nome: str, cwd: str, provider: str | None = None, engine: str | None = None,
                       model: str | None = None, effort: str | None = None, permissao: str | None = None,
                       headless: bool | None = None, read_only: bool = False,
                       conta: str | None = None, jev: bool | None = None,
-                      service_tier: Literal["default", "priority"] | None = None) -> dict[str, Any]:
+                      service_tier: Literal["default", "priority"] | None = None,
+                      branch: str | None = None, new_branch: bool = False, base: str | None = None,
+                      codex_account: str | None = None, subagent_model: str | None = None) -> dict[str, Any]:
     from app import api
     eu = await _eu(ctx)
     if provider is None:
@@ -217,7 +227,8 @@ async def new_session(ctx: Context, nome: str, cwd: str, provider: str | None = 
         info = await api.create_session(api.CreateBody(
             name=nome, cwd=cwd, provider=provider, engine=engine, model=model, effort=effort,
             permission_mode=permissao, headless=headless, read_only=read_only,
-            config_dir=conta, jev=jev, service_tier=service_tier, creator=eu))
+            config_dir=conta, jev=jev, service_tier=service_tier, branch=branch or None, new_branch=new_branch,
+            base=base or None, codex_account=codex_account, subagent_model=subagent_model, creator=eu))
     except HTTPException as e:
         raise ToolError(_detalhe(e)) from e
     return {"name": info.name, "cwd": info.cwd, "provider": info.provider, "headless": info.headless,
@@ -226,7 +237,28 @@ async def new_session(ctx: Context, nome: str, cwd: str, provider: str | None = 
             **({"avisos": info.avisos} if info.avisos else {})}
 
 
-VERBOS_NAV = ("snapshot", "click", "fill", "type", "press", "hover", "wait", "eval", "layout", "console",
+@mcp.tool(description="Fecha OUTRA sessão desta máquina, com ou sem terminal, como `hangar-send "
+                      "--close <sessao>`: ela sai do grupo sem aviso. Nunca a própria. Use para a "
+                      "sessão que você abriu e que já terminou o trabalho.")
+async def close_session(ctx: Context, alvo: str) -> dict[str, Any]:
+    from app import api
+    if peers.is_remote(alvo):
+        raise ToolError("close_session só fecha sessão desta máquina")
+    eu = await _eu(ctx)
+    if alvo == eu:
+        raise ToolError(f"recusado: '{alvo}' é esta sessão — peça pra outra fechar")
+    # O DELETE responde ok pra nome que não existe: nome errado não pode virar "fechada".
+    if not await asyncio.to_thread(quem_chama._por_nome, alvo):
+        raise ToolError(f"sessão '{alvo}' não existe (tool `sessions`)")
+    try:
+        # A rota DELETE recusa sessão no meio de uma troca de conta/agente; a chamada direta, não.
+        await api._transfer_check(alvo)
+        return await api.kill_session(alvo)
+    except HTTPException as e:
+        raise ToolError(_detalhe(e)) from e
+
+
+VERBOS_NAV = ("snapshot", "click", "fill", "type", "press", "hover", "wait", "eval", "tema", "layout", "console",
               "network", "text", "url", "shot", "close", "tab-list", "tab-new", "tab-switch", "tab-close")
 # Duas chamadas do mesmo turno não podem intercalar `click` e `snapshot`: o CLI serializa por
 # processo, aqui é uma trava por sessão.
@@ -257,7 +289,9 @@ async def _verbo_nav(sessao: str, verbo: str, args: list[str], aba: int | None) 
 
 
 @mcp.tool(description="Abre o navegador embutido desta sessão no app desktop do Hangar, como "
-                      "`hangar-preview open <url>`. O painel monta na tela do usuário: avise-o.")
+                      "`hangar-preview open <url>`. No app nativo (Windows e Linux) o painel Navegador "
+                      "não monta sozinho: diga que a página está aberta no navegador da sessão, nunca "
+                      "que apareceu na tela do usuário. Só no Electron antigo o painel monta sozinho.")
 async def browser_open(ctx: Context, url: str) -> dict[str, Any]:
     from app import api
     eu = await _eu(ctx)
@@ -265,7 +299,7 @@ async def browser_open(ctx: Context, url: str) -> dict[str, Any]:
         await api.abrir_nav_sessao(eu, api.NavBody(url=url))
     except HTTPException as e:
         raise ToolError(_detalhe(e)) from e
-    return {"ok": True, "aviso": "a janela do usuário muda: o painel do navegador abre agora"}
+    return {"ok": True}
 
 
 _HTML_RENDER = (
@@ -321,9 +355,10 @@ async def html_render(ctx: Context, title: str, html: str | None = None, url: st
                       "Verbos: snapshot (árvore com refs @eN), click/hover <ref>, fill <ref> <texto>, "
                       "type <texto>, press <tecla>, wait [--text|--url] <valor>, eval <js> (só estado "
                       "não-DOM, nunca pra clicar), console, network, text, url, shot (devolve o caminho "
-                      "do PNG), layout [mobile|desktop|<largura> <altura>], close, tab-list, "
-                      "tab-new <url>, tab-switch <id>, tab-close [id]. "
-                      "`aba` age numa aba sem trocar a que o usuário vê.")
+                      "do PNG), tema <claro|escuro|sistema>, layout [mobile|desktop|<largura> <altura>], "
+                      "close. Só no Electron antigo: tab-list, tab-new <url>, tab-switch <id>, "
+                      "tab-close [id] e `aba` (age numa aba sem trocar a que o usuário vê); o app "
+                      "nativo tem um navegador por sessão, sem abas.")
 async def browser(ctx: Context, verbo: str, args: list[str | int] | None = None, aba: int | None = None) -> str:
     eu = await _eu(ctx)
     async with _travas_nav.setdefault(eu, asyncio.Lock()):

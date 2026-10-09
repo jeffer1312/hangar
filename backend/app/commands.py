@@ -393,6 +393,21 @@ def comandos_da_cli(config_dir: Optional[str]) -> Optional[list[dict]]:
     return None
 
 
+def sem_os_desligados(comandos: list[CommandInfo], claude_settings: Optional[dict]) -> list[CommandInfo]:
+    """Tira o que a escolha da sessão desligou: a sonda e os scans são da conta, não da sessão."""
+    if not claude_settings:
+        return comandos
+    escolha = claude_settings.get("enabledPlugins") or {}
+    # O comando leva só o nome do plugin: o mesmo nome ligado noutro marketplace continua aparecendo.
+    plugins = ({pid.split("@", 1)[0] for pid, on in escolha.items() if not on}
+               - {pid.split("@", 1)[0] for pid, on in escolha.items() if on})
+    skills = {nome for nome, estado in (claude_settings.get("skillOverrides") or {}).items() if estado == "off"}
+    skills |= {regra[len("Skill("):-1].removesuffix(" *")
+               for regra in (claude_settings.get("permissions") or {}).get("deny", [])}
+    return [c for c in comandos
+            if c.name not in skills and not (":" in c.name and c.name.split(":", 1)[0] in plugins)]
+
+
 def list_commands(cwd: Optional[str], cli: Optional[list[dict]] = None,
                   excluir: frozenset[str] = frozenset(), com_tui: bool = True) -> list[CommandInfo]:
     """Nomes da CLI (`cli`, quando ja se sabe) ou, sem ela, built-ins fixos + scans. Descricao e

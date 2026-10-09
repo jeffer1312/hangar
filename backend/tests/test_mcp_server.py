@@ -52,7 +52,7 @@ async def test_lista_tools_e_quem_sou(identidade):
     async with sessao_mcp({"X-Hangar-Pane": "%3"}) as s:
         nomes = {t.name for t in (await s.list_tools()).tools}
         assert nomes == {"who_am_i", "sessions", "send", "group", "pair", "unpair", "new_session",
-                         "browser_open", "browser", "browser_batch", "html_render"}
+                         "close_session", "browser_open", "browser", "browser_batch", "html_render"}
         res = await s.call_tool("who_am_i", {})
         assert not res.is_error and res.structured_content == {"name": "eu", "origem": "pane"}
 
@@ -131,7 +131,8 @@ async def test_sessoes_marca_a_propria(identidade, monkeypatch):
     infos = [SimpleNamespace(name=n, state="idle", cwd="/x", provider="claude", headless=False,
                              pair_gid=g)
              for n, g in (("eu", "g1"), ("outra", None))]
-    monkeypatch.setattr(api, "list_sessions", lambda: _coro(infos))
+    # Com a assinatura real da rota: o stub sem `request` escondeu a tool quebrada.
+    monkeypatch.setattr(api, "list_sessions", lambda request: _coro(infos))
     async with sessao_mcp({"X-Hangar-Pane": "%3"}) as s:
         res = await s.call_tool("sessoes", {})
         assert {d["name"]: d["voce"] for d in res.structured_content["result"]} == {"eu": True, "outra": False}
@@ -257,6 +258,24 @@ async def test_grupo_parear_nova_sessao_chamam_as_rotas_como_eu(identidade, monk
         assert res.is_error and "headless só vale" in res.content[0].text
     assert chamadas == {"grupo": ("eu", "marco", False), "parear": ("eu", "outra", "t"), "desparear": "eu",
                         "nova": ("nova", "/tmp", "codex", True, "/home/x/.claude-outra", "eu")}
+
+
+async def test_close_session_recusa_a_propria_remota_e_inexistente(identidade, monkeypatch):
+    from app import api
+    fechadas = []
+
+    async def kill_session(name, by=None):
+        fechadas.append(name); return {"ok": True, "warning": None}
+
+    monkeypatch.setattr(api, "kill_session", kill_session)
+    monkeypatch.setattr(api, "_transfer_check", lambda name: _coro(None))
+    monkeypatch.setattr(quem_chama, "_por_nome", lambda nome: nome if nome == "outra" else None)
+    async with sessao_mcp({"X-Hangar-Pane": "%3"}) as s:
+        for alvo, erro in (("eu", "é esta sessão"), ("srv::outra", "desta máquina"), ("sumiu", "não existe")):
+            res = await s.call_tool("close_session", {"alvo": alvo})
+            assert res.is_error and erro in res.content[0].text
+        assert not (await s.call_tool("close_session", {"alvo": "outra"})).is_error
+    assert fechadas == ["outra"]
 
 
 async def _coro(v):

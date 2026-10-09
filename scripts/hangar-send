@@ -67,6 +67,9 @@
 #                                  tem esforço por flag). SEMPRE prefira nascer no
 #                                  modelo/esforço certo a mandar /model no primeiro recado — a
 #                                  sessão trabalha ANTES de ler o recado.
+#                                  --permissao <modo> nasce nesse modo de permissão, com ou sem
+#                                  terminal. Claude: acceptEdits|auto|bypassPermissions|manual|
+#                                  dontAsk|plan; Codex: o nome do seletor do app (ex. "Full Access").
 #                                  --jev / --sem-jev liga ou desliga o Jev naquela sessão: com ele,
 #                                  `hangar-preview objetivo` navega e preenche tela sozinho. Sem
 #                                  nenhum dos dois vale o padrão do servidor (tela de Configurações).
