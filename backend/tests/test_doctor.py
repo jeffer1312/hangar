@@ -67,15 +67,31 @@ def test_lan_responde_le_o_shape_real_do_alcance(monkeypatch):
     assert doctor._lan_responde(_settings()) is False
 
 
-def test_claude_logado_usa_loggedIn(monkeypatch):
-    import app.conta_estado as ce
-    monkeypatch.setattr(ce, "listar_contas", lambda: [
-        SimpleNamespace(login=SimpleNamespace(estado="ok", loggedIn=False)),
-    ])
+def test_claude_logado_pergunta_a_cli_de_cada_conta(monkeypatch, tmp_path):
+    """O doctor roda sem o backend de pé: o login vem da CLI, com o config dir de cada conta."""
+    import json
+    import subprocess
+    from app import contas
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CP_CLAUDE_CONFIG_DIRS", raising=False)
+    (tmp_path / ".claude").mkdir()
+    conta = tmp_path / ".claude-trabalho"
+    conta.mkdir()
+    (conta / contas.MARCADOR).write_text("", encoding="utf-8")
+    monkeypatch.setattr(doctor, "_binario", lambda nome: "/fake/" + nome)
+    logadas, perguntas = set(), []
+
+    def cli(argv, **kwargs):
+        perguntas.append((argv, kwargs["env"]["CLAUDE_CONFIG_DIR"]))
+        saida = json.dumps({"loggedIn": kwargs["env"]["CLAUDE_CONFIG_DIR"] in logadas})
+        return subprocess.CompletedProcess(argv, 1, saida, "")
+
+    monkeypatch.setattr(subprocess, "run", cli)
     assert doctor._claude_logado() is False
-    monkeypatch.setattr(ce, "listar_contas", lambda: [
-        SimpleNamespace(login=SimpleNamespace(estado="ok", loggedIn=True)),
-    ])
+    assert {pasta for _, pasta in perguntas} == {str((tmp_path / ".claude").resolve()), str(conta.resolve())}
+    assert all(argv == ["/fake/claude", "auth", "status", "--json"] for argv, _ in perguntas)
+    logadas.add(str(conta.resolve()))
     assert doctor._claude_logado() is True
 
 

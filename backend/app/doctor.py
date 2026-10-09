@@ -92,12 +92,28 @@ def _prioridade_backend(porta: int) -> str | None:
 
 
 def _claude_logado() -> bool:
-    import app.conta_estado as ce
-    try:
-        contas = ce.listar_contas()
-    except Exception:
+    """Alguma conta Claude logada, pela CLI: o doctor roda sem o backend (e o Rust) de pé."""
+    import json
+    import subprocess
+    from pathlib import Path
+    from app import contas
+    from app.config import list_config_dirs
+    exe = _binario("claude")
+    if exe is None:
         return False
-    return any(c.login.loggedIn is True for c in contas)
+    for conta in list_config_dirs(ordered=False):
+        if not (conta.active or contas.e_conta(Path(conta.path))):
+            continue
+        try:
+            r = subprocess.run([exe, "auth", "status", "--json"], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=10,
+                               env={**os.environ, "CLAUDE_CONFIG_DIR": conta.path})
+            # rc 1 numa conta deslogada ainda traz o JSON: a resposta vale pelo parse.
+            if json.loads(r.stdout).get("loggedIn") is True:
+                return True
+        except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
+            continue
+    return False
 
 
 def _tailscale() -> tuple[str, str]:
