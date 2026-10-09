@@ -349,6 +349,16 @@ impl<R> MachinePart<R> {
     fn answered(&self) -> bool { !matches!(self.part, Part::Failed(_)) }
 }
 
+/// Todas falharam: a tela mostra o erro em vez de zeros que parecem relatório. Uma só leva o motivo dela; várias, cada uma o seu.
+pub(super) fn all_failed<R>(parts: &[MachinePart<R>]) -> Option<String> {
+    let errors = parts.iter().map(|p| match &p.part { Part::Failed(e) => Some((p.label.as_str(), e.as_str())), _ => None }).collect::<Option<Vec<_>>>()?;
+    match errors.as_slice() {
+        [] => None,
+        [(_, error)] => Some((*error).to_owned()),
+        many => Some(many.iter().map(|(label, error)| format!("{label}: {error}")).collect::<Vec<_>>().join("\n")),
+    }
+}
+
 /// Quem ficou fora da soma, cada causa com os nomes das máquinas.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Partial { failed: Vec<String>, mismatched: Vec<String> }
@@ -754,7 +764,8 @@ impl Hangar {
             api.server_read(&[path], &sent, 120).await
         });
         cx.spawn(async move |this, cx| {
-            let Ok(result) = task.await else { return };
+            // Tarefa que morreu ainda conta como resposta: sem ela a página ficaria carregando para sempre.
+            let result = match task.await { Ok(result) => result.map_err(|e| Self::failure(&e)), Err(_) => Err(tr("connection_failed")) };
             let _ = this.update(cx, |this, cx| {
                 if this.connection != connection || !(read.alive)(this, read.seq) { return; }
                 match result {
@@ -776,7 +787,7 @@ impl Hangar {
                         }
                     }
                     Ok(v) => { (read.warm)(this, &m, None); (read.done)(this, read.seq, &m, Ok(v), cx); }
-                    Err(error) => { (read.warm)(this, &m, None); (read.done)(this, read.seq, &m, Err(Self::failure(&error)), cx); }
+                    Err(error) => { (read.warm)(this, &m, None); (read.done)(this, read.seq, &m, Err(error), cx); }
                 }
                 cx.notify();
             });
@@ -884,14 +895,12 @@ impl Hangar {
         c.partial = Partial::of(&c.parts);
         let done = c.pending == 0;
         if done || c.parts.iter().any(MachinePart::answered) {
-            // Uma máquina só que falhou mostra o motivo dela; com várias, o aviso de total parcial nomeia quem caiu.
-            c.report.value = Some(match c.parts.as_slice() {
-                [MachinePart { part: Part::Failed(error), .. }] if done => Err(error.clone()),
-                parts => Ok(merge_costs(parts)),
-            });
+            c.report.value = Some(all_failed(&c.parts).map_or_else(|| Ok(merge_costs(&c.parts)), Err));
         }
         c.report.loading = !done;
-        if done { self.prune_filter(); self.refresh_areas(cx); }
+        // Com máquina fora do ar, o recorte dela não some: os projetos dela só não chegaram.
+        if done && c.partial.failed.is_empty() { self.prune_filter(); }
+        if done { self.refresh_areas(cx); }
         cx.notify();
     }
 

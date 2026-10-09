@@ -4,7 +4,7 @@
 use super::*;
 use std::collections::BTreeMap;
 use super::costs::{View, Period, web, web_with, dec, tok, money, money2, chart, project_label, card, card_plain, swatch, hint_text,
-    note_box, loading_state, empty_state, error_state, page_frame, Machine, MachinePart, MachineRead, Part, Partial, Warming, set_warming,
+    note_box, loading_state, empty_state, error_state, page_frame, Machine, MachinePart, MachineRead, Part, Partial, Warming, set_warming, all_failed,
     warming_note, partial_note, WARM_TRIES};
 use super::device::Remote;
 use super::settings::segments;
@@ -328,10 +328,7 @@ impl Hangar {
         s.partial = Partial::of(&s.parts);
         let done = s.pending == 0;
         if done || s.parts.iter().any(|p| !matches!(p.part, Part::Failed(_))) {
-            let value = match s.parts.as_slice() {
-                [MachinePart { part: Part::Failed(error), .. }] if done => Err(error.clone()),
-                parts => Ok(merge_usage(parts)),
-            };
+            let value = all_failed(&s.parts).map_or_else(|| Ok(merge_usage(&s.parts)), Err);
             // Os seletores guardam as últimas opções: um recorte vazio não esvazia a escolha.
             if let Ok(r) = &value {
                 for (dim, list) in [(Dim::Account, &r.by_conta), (Dim::Project, &r.by_projeto), (Dim::Model, &r.by_modelo)] {
@@ -377,15 +374,12 @@ impl Hangar {
         s.series_pending = s.series_pending.saturating_sub(1);
         if s.series_pending > 0 { return; }
         s.series_partial = Partial::of(&s.series_parts);
-        let value = match s.series_parts.as_slice() {
-            [MachinePart { part: Part::Failed(error), .. }] => Err(error.clone()),
-            parts => {
-                let mut days = Vec::new();
-                for p in parts { if let Part::Ok(list) = &p.part { join(&mut days, list); } }
-                days.sort_by(|a, b| a.key.cmp(&b.key));
-                Ok(days)
-            }
-        };
+        let value = all_failed(&s.series_parts).map_or_else(|| {
+            let mut days = Vec::new();
+            for p in &s.series_parts { if let Part::Ok(list) = &p.part { join(&mut days, list); } }
+            days.sort_by(|a, b| a.key.cmp(&b.key));
+            Ok(days)
+        }, Err);
         s.series.finish(seq, value);
         cx.notify();
     }
