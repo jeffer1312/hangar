@@ -1,7 +1,6 @@
 import os
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
 import pytest
@@ -73,8 +72,10 @@ def pytest_runtest_teardown(item, nextitem):
         pending = [timer for timer, _ in api._confirm_pend.values()]
         api._confirm_pend.clear()
     for timer in pending:
-        if isinstance(timer, threading.Timer):   # há testes que trocam o Timer por um falso
+        # Como no _agendar_confirmacao: há testes que trocam o Timer por um falso sem esses métodos.
+        if callable(getattr(timer, "cancel", None)):
             timer.cancel()
+        if callable(getattr(timer, "join", None)):
             timer.join(timeout=5)
 
 
