@@ -753,17 +753,26 @@ fn windows_audio_accepts_trusted_junction_and_keeps_transcript_identity() {
     create_directory_junction(&alias, &vault);
     let store = UploadStore::new(&alias).unwrap();
     let reference = alias.join("project/previous/audio.webm");
+    // A resposta é o arquivo real; o tempdir pode vir com nome curto 8.3 (RUNNER~1).
+    let canonical = fs::canonicalize(&audio).unwrap();
+    let real = std::path::PathBuf::from(
+        canonical
+            .to_str()
+            .unwrap()
+            .strip_prefix(r"\\?\")
+            .unwrap_or(canonical.to_str().unwrap()),
+    );
     assert_eq!(
         store
             .resolve_audio("project", "after-clear", reference.to_str().unwrap(), true)
             .unwrap(),
-        audio
+        real
     );
     assert_eq!(
         store
-            .resolve_audio("project", "after-clear", audio.to_str().unwrap(), true)
+            .resolve_audio("project", "after-clear", real.to_str().unwrap(), true)
             .unwrap(),
-        audio
+        real
     );
     assert_eq!(
         store
