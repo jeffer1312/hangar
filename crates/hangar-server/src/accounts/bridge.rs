@@ -139,6 +139,31 @@ impl AccountsBridge {
     }
 }
 
+/// Relê os fatos até a conta ficar livre ou o prazo vencer. Quem chama segura a guarda exclusiva,
+/// então o Hangar não lança nada novo na conta: o `claude` de uma renovação ou janela de login que
+/// acabou de fechar, e os MCPs dele, somem sozinhos em segundos; um deles morrendo no meio da
+/// varredura deixa a leitura incompleta. Sessão é uso de verdade e recusa na hora.
+pub(crate) async fn settle_usage<F, Fut>(mut read: F, budget: Duration) -> UsageFacts
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = UsageFacts>,
+{
+    let deadline = tokio::time::Instant::now() + budget;
+    // Cada leitura varre os processos da máquina: a espera cresce até 2 s.
+    let mut pause = Duration::from_millis(250);
+    loop {
+        let facts = read().await;
+        let passing = facts.sessions.is_empty()
+            && (!facts.complete || !facts.pids.is_empty() || !facts.holders.is_empty());
+        let now = tokio::time::Instant::now();
+        if !passing || now >= deadline {
+            return facts;
+        }
+        tokio::time::sleep(pause.min(deadline - now)).await;
+        pause = (pause * 2).min(Duration::from_secs(2));
+    }
+}
+
 impl super::AccountService {
     /// Fatos do Python somados aos do runtime Rust. Ponte que falha ou runtime ausente deixam os
     /// fatos incompletos: nunca provam que a conta está livre.
@@ -158,5 +183,73 @@ impl super::AccountService {
             None => UsageFacts::default(),
         });
         facts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UsageFacts, settle_usage};
+    use std::{cell::Cell, time::Duration};
+
+    fn facts(sessions: &[&str], pids: &[u32], holders: &[u32]) -> UsageFacts {
+        UsageFacts {
+            complete: true,
+            sessions: sessions.iter().map(|s| (*s).to_owned()).collect(),
+            pids: pids.to_vec(),
+            holders: holders.to_vec(),
+        }
+    }
+
+    /// Entrega as leituras em ordem e repete a última; devolve também quantas foram feitas.
+    async fn settle(readings: Vec<UsageFacts>) -> (UsageFacts, usize) {
+        let reads = Cell::new(0);
+        let result = settle_usage(
+            || {
+                let next = readings[reads.get().min(readings.len() - 1)].clone();
+                reads.set(reads.get() + 1);
+                async move { next }
+            },
+            Duration::from_secs(10),
+        )
+        .await;
+        (result, reads.get())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn passing_processes_of_a_closed_cli_do_not_block_deletion() {
+        // `claude mcp list` da renovação e os MCPs dele somem em segundos: esperar libera a exclusão.
+        let busy = facts(&[], &[2508068], &[2508068, 2508228, 2508229]);
+        let (result, reads) = settle(vec![busy.clone(), busy, facts(&[], &[], &[])]).await;
+        assert_eq!(result, facts(&[], &[], &[]));
+        assert_eq!(reads, 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_live_session_refuses_without_waiting() {
+        let (result, reads) = settle(vec![facts(&["work"], &[7], &[7])]).await;
+        assert_eq!(result.sessions, ["work"]);
+        assert_eq!(reads, 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_process_that_stays_still_refuses_after_the_wait() {
+        let started = tokio::time::Instant::now();
+        let (result, _) = settle(vec![facts(&[], &[], &[83])]).await;
+        assert_eq!(result.holders, [83]);
+        assert!(started.elapsed() >= Duration::from_secs(10));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_incomplete_reading_is_read_again() {
+        // Processo que morre no meio da varredura deixa a leitura incompleta; a seguinte já vem limpa.
+        let incomplete = UsageFacts { complete: false, ..facts(&[], &[], &[]) };
+        let (result, reads) = settle(vec![incomplete, facts(&[], &[], &[])]).await;
+        assert_eq!((result, reads), (facts(&[], &[], &[]), 2));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_free_account_is_read_once() {
+        let (result, reads) = settle(vec![facts(&[], &[], &[])]).await;
+        assert_eq!((result, reads), (facts(&[], &[], &[]), 1));
     }
 }

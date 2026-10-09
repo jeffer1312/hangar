@@ -795,7 +795,7 @@ impl NewSession {
     fn deletable(&self) -> Option<String> {
         let selected = self.configs.ok()?.iter().find(|c| Some(&c.path) == self.config.as_ref())?;
         if selected.active { return None; }
-        basename(&selected.path).strip_prefix(".claude-").filter(|n| !n.is_empty()).map(str::to_owned)
+        crate::app::accounts::claude_folder_name(&selected.path).map(str::to_owned)
     }
 
     fn open_account_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {

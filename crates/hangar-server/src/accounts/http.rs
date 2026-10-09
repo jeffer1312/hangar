@@ -326,9 +326,12 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
         Ok(bridge) => bridge,
         Err(_) => return error(AccountError::io()),
     };
-    let facts = service
-        .usage(&bridge, state.state.runtime.get().map(|r| &**r), &key)
-        .await;
+    let runtime = state.state.runtime.get().map(|r| &**r);
+    let facts = super::bridge::settle_usage(
+        || service.usage(&bridge, runtime, &key),
+        std::time::Duration::from_secs(10),
+    )
+    .await;
     match tokio::task::spawn_blocking(move || service.delete(provider, &account, &guard, &facts))
         .await
     {
