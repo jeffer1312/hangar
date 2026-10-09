@@ -4531,6 +4531,7 @@
   "native_search_no_machines": "Nenhuma máquina própria para buscar: a busca não alcança convites.",
   "native_search_interrupted": "A busca foi interrompida. Tente de novo.",
   "native_costs_hidden_not_saved": "Não gravei a lista de projetos escondidos: {reason}",
+  "native_costs_machines_not_saved": "Não gravei a escolha de máquinas do relatório: {reason}",
   "native_invalid_url": "Use um endereço HTTP ou HTTPS, sem token, usuário ou senha na URL.",
   "native_invalid_token": "Confira o token de acesso.",
   "native_browser": "Navegador",

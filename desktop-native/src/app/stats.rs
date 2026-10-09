@@ -1,16 +1,16 @@
 //! Estatísticas de uso: página irmã de Custos (`Uso.svelte`, `/api/uso`), aberta pelo link do topo de Custos. Os mesmos
-//! cartões, grupos, tabelas e detalhe do web; textos do web por `tr_web`. Um servidor só: sem escolha de máquinas.
+//! cartões, grupos, tabelas e detalhe do web; textos do web por `tr_web`. Soma as mesmas máquinas da página de Custos
+//! (`mergeUso`), com a mesma escolha de quais entram.
 use super::*;
 use std::collections::BTreeMap;
 use super::costs::{View, Period, web, web_with, dec, tok, money, money2, chart, project_label, card, card_plain, swatch, hint_text,
-    note_box, loading_state, empty_state, error_state, page_frame};
+    note_box, loading_state, empty_state, error_state, page_frame, Machine, MachinePart, MachineRead, Part, Partial, Warming, set_warming,
+    warming_note, partial_note, WARM_TRIES};
 use super::device::Remote;
 use super::settings::segments;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use serde::Deserialize;
 
-const WARM_TRIES: u32 = 100;
-const WARM_EVERY: Duration = Duration::from_secs(3);
 /// Linhas da tabela do Avançado antes do "mostrar mais", e ferramentas no ranking.
 const TOP_ROWS: usize = 20;
 const TOP_TOOLS: usize = 12;
@@ -51,6 +51,47 @@ impl Item {
         self.cache_write += b.cache_write; self.cache_read += b.cache_read; self.cost += b.cost; self.cost_input += b.cost_input;
         self.cost_output += b.cost_output; self.cost_cache_write += b.cost_cache_write; self.cost_cache_read += b.cost_cache_read;
     }
+    /// Soma de outra máquina: todos os números, inclusive os de contexto e presença.
+    fn absorb(&mut self, b: &Item) {
+        self.add(b);
+        self.pedidas += b.pedidas; self.ctx_tokens_est += b.ctx_tokens_est; self.ctx_chars += b.ctx_chars;
+        self.ocupados_tokens_est += b.ocupados_tokens_est; self.ocupados_eq_tokens_est += b.ocupados_eq_tokens_est; self.respostas += b.respostas;
+    }
+}
+
+/// Junta pela chave; rótulo e plugin ficam com a primeira máquina que souber dizer.
+fn join(dest: &mut Vec<Item>, list: &[Item]) {
+    let mut at: HashMap<String, usize> = dest.iter().enumerate().map(|(i, b)| (b.key.clone(), i)).collect();
+    for b in list {
+        match at.get(&b.key) {
+            Some(&i) => {
+                let target = &mut dest[i];
+                if target.label.is_none() { target.label = b.label.clone(); }
+                if target.plugin.is_empty() { target.plugin = b.plugin.clone(); }
+                target.absorb(b);
+            }
+            None => { at.insert(b.key.clone(), dest.len()); dest.push(b.clone()); }
+        }
+    }
+}
+
+/// O `mergeUso` do web: cada lista somada pela chave, só das máquinas que responderam no período pedido.
+fn merge_usage(parts: &[MachinePart<Report>]) -> Report {
+    let mut out = Report::default();
+    for p in parts {
+        let r = match &p.part {
+            Part::Ok(r) => r,
+            Part::Mismatched(rate) => { out.usd_brl = out.usd_brl.or(*rate); continue }
+            Part::Failed(_) => continue,
+        };
+        out.usd_brl = out.usd_brl.or(r.usd_brl);
+        out.totals.absorb(&r.totals);
+        for (dest, list) in [(&mut out.by_skill, &r.by_skill), (&mut out.by_tool, &r.by_tool), (&mut out.by_bash, &r.by_bash),
+            (&mut out.by_mcp, &r.by_mcp), (&mut out.by_agente, &r.by_agente), (&mut out.by_contexto, &r.by_contexto),
+            (&mut out.by_plugin, &r.by_plugin), (&mut out.by_imagem, &r.by_imagem), (&mut out.by_conta, &r.by_conta),
+            (&mut out.by_projeto, &r.by_projeto), (&mut out.by_modelo, &r.by_modelo), (&mut out.by_day, &r.by_day)] { join(dest, list); }
+    }
+    out.sorted()
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -203,10 +244,12 @@ fn short_day(key: &str) -> String { key.get(5..).unwrap_or(key).replacen('-', "/
 #[derive(Default)]
 pub(super) struct UsageStats {
     period: Period,
+    /// A soma das máquinas que já responderam; `loading` enquanto falta alguma.
     report: Remote<Report>,
-    warming: Option<(u64, u64)>,
-    tries: u32,
-    mismatched: bool,
+    parts: Vec<MachinePart<Report>>,
+    pending: usize,
+    warming: Vec<Warming>,
+    partial: Partial,
     filters: HashMap<Dim, Vec<String>>,
     /// Opções dos seletores: ficam as últimas que vieram, para um recorte vazio não esvaziar o seletor.
     lists: HashMap<Dim, Vec<Item>>,
@@ -217,6 +260,9 @@ pub(super) struct UsageStats {
     expanded: bool,
     selected: Option<(Tab, String)>,
     series: Remote<Vec<Item>>,
+    series_parts: Vec<MachinePart<Vec<Item>>>,
+    series_pending: usize,
+    series_partial: Partial,
     group_order: GroupOrder,
     /// Grupos de skills abertos; `None` = só o primeiro, até o primeiro clique.
     open_groups: Option<HashSet<String>>,
@@ -249,73 +295,99 @@ impl Hangar {
         if s.report.value.is_none() && !s.report.loading { self.load_usage(false, cx); }
     }
 
-    fn load_usage(&mut self, fresh: bool, cx: &mut Context<Self>) {
+    /// A escolha de máquinas mudou com a página fechada: a próxima abertura relê.
+    pub(super) fn usage_stale(&mut self) { self.usage_stats.report.reset(); }
+
+    pub(super) fn load_usage(&mut self, fresh: bool, cx: &mut Context<Self>) {
+        self.ensure_costs_prefs();
         let seq = self.usage_stats.report.start();
-        (self.usage_stats.warming, self.usage_stats.tries) = (None, 0);
-        self.fetch_usage(seq, fresh, cx);
+        let machines = self.chosen_machines();
+        let s = &mut self.usage_stats;
+        (s.parts, s.pending, s.warming, s.partial) = (Vec::new(), machines.len(), Vec::new(), Partial::default());
+        if machines.is_empty() { s.report.finish(seq, Err(tr("connection_failed"))); }
+        let query = s.query(fresh, None);
+        let read = MachineRead { seq, alive: |this, seq| this.usage_stats.report.seq == seq,
+            warm: |this, m, progress| set_warming(&mut this.usage_stats.warming, m, progress), done: Self::usage_part };
+        for m in machines { self.read_machine(m, "uso", query.clone(), 0, read, cx); }
         self.load_usage_series(cx);
         cx.notify();
     }
 
-    fn fetch_usage(&mut self, seq: u64, fresh: bool, cx: &mut Context<Self>) {
-        let (period, query) = (self.usage_stats.period, self.usage_stats.query(fresh, None));
-        let plugin_filtered = self.usage_stats.filters.get(&Dim::Plugin).is_some_and(|v| !v.is_empty());
-        self.server_get(vec!["uso".into()], query, 120, cx, move |this, result, cx| {
-            let s = &mut this.usage_stats;
-            if seq != s.report.seq { return; }
-            match result {
-                Ok(v) if v.get("aquecendo") == Some(&Value::Bool(true)) => {
-                    let read = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
-                    s.warming = Some((read("lidos"), read("total")));
-                    if s.tries >= WARM_TRIES || this.costs.view != Some(View::Usage) {
-                        s.warming = None;
-                        let label = this.server_label(cx);
-                        this.usage_stats.report.finish(seq, Err(web_with("custos_aquecendo", &[("maquina", label)])));
-                    } else {
-                        s.tries += 1;
-                        cx.spawn(async move |this, cx| {
-                            cx.background_executor().timer(WARM_EVERY).await;
-                            let _ = this.update(cx, |this, cx| if this.usage_stats.report.seq == seq { this.fetch_usage(seq, fresh, cx) });
-                        }).detach();
-                    }
-                }
-                Ok(v) => {
-                    s.warming = None;
-                    s.mismatched = v.pointer("/applied/period").and_then(Value::as_str) != Some(period.key());
-                    let parsed = serde_json::from_value::<Report>(v).map(Report::sorted).map_err(|_| tr("invalid_response"));
-                    if let Ok(r) = &parsed {
-                        for (dim, list) in [(Dim::Account, &r.by_conta), (Dim::Project, &r.by_projeto), (Dim::Model, &r.by_modelo)] {
-                            if !list.is_empty() { s.lists.insert(dim, list.clone()); }
-                        }
-                        if !plugin_filtered && !r.by_plugin.is_empty() { s.lists.insert(Dim::Plugin, r.by_plugin.clone()); }
-                    }
-                    // Servidor que ignorou o período devolveu tudo: fica fora, declarado.
-                    let parsed = if s.mismatched { parsed.map(|r| Report { usd_brl: r.usd_brl, ..Default::default() }) } else { parsed };
-                    s.report.finish(seq, parsed);
-                }
-                Err(error) => { s.warming = None; s.report.finish(seq, Err(Self::failure(&error))); }
-            }
-            cx.notify();
+    /// Uma máquina respondeu: a tela passa a mostrar a soma de quem já respondeu.
+    fn usage_part(&mut self, seq: u64, m: &Machine, result: Result<Value, String>, cx: &mut Context<Self>) {
+        let s = &mut self.usage_stats;
+        if seq != s.report.seq { return; }
+        let period = s.period.key();
+        let parsed = result.and_then(|v| {
+            let in_period = v.pointer("/applied/period").and_then(Value::as_str) == Some(period);
+            serde_json::from_value::<Report>(v).map(|r| (in_period, r)).map_err(|_| tr("invalid_response"))
         });
+        let part = match parsed { Ok((true, r)) => Part::Ok(r), Ok((false, r)) => Part::Mismatched(r.usd_brl), Err(error) => Part::Failed(error) };
+        s.parts.push(MachinePart { id: m.id.clone(), label: m.label.clone(), part });
+        s.pending = s.pending.saturating_sub(1);
+        s.partial = Partial::of(&s.parts);
+        let done = s.pending == 0;
+        if done || s.parts.iter().any(|p| !matches!(p.part, Part::Failed(_))) {
+            let value = match s.parts.as_slice() {
+                [MachinePart { part: Part::Failed(error), .. }] if done => Err(error.clone()),
+                parts => Ok(merge_usage(parts)),
+            };
+            // Os seletores guardam as últimas opções: um recorte vazio não esvazia a escolha.
+            if let Ok(r) = &value {
+                for (dim, list) in [(Dim::Account, &r.by_conta), (Dim::Project, &r.by_projeto), (Dim::Model, &r.by_modelo)] {
+                    if !list.is_empty() { s.lists.insert(dim, list.clone()); }
+                }
+                let plugin_filtered = s.filters.get(&Dim::Plugin).is_some_and(|v| !v.is_empty());
+                if !plugin_filtered && !r.by_plugin.is_empty() { s.lists.insert(Dim::Plugin, r.by_plugin.clone()); }
+            }
+            s.report.value = Some(value);
+        }
+        s.report.loading = !done;
+        cx.notify();
     }
 
     /// Série diária do item escolhido: consulta própria com `foco`, para o clique não refazer a tela.
     fn load_usage_series(&mut self, cx: &mut Context<Self>) {
-        let Some((_, key)) = self.usage_stats.selected.clone() else { self.usage_stats.series = Remote::default(); return };
+        // `reset`, nunca `default`: o número do pedido não pode voltar, senão a resposta da série anterior entra nesta.
+        let Some((_, key)) = self.usage_stats.selected.clone() else { self.usage_stats.series.reset(); return };
         let seq = self.usage_stats.series.start();
-        let period = self.usage_stats.period;
-        let query = self.usage_stats.query(false, Some(&key));
-        self.server_get(vec!["uso".into()], query, 120, cx, move |this, result, cx| {
-            let parsed = match result {
-                Ok(v) if v.get("aquecendo") == Some(&Value::Bool(true)) => Err(web("custos_servidor_nao_respondeu_1")),
-                Ok(v) if v.pointer("/applied/period").and_then(Value::as_str) != Some(period.key()) => Err(web("custos_fora_periodo_1")),
-                Ok(v) => serde_json::from_value::<Vec<Item>>(v.get("by_day").cloned().unwrap_or(Value::Array(Vec::new())))
-                    .map(|mut d| { d.sort_by(|a, b| a.key.cmp(&b.key)); d }).map_err(|_| tr("invalid_response")),
-                Err(error) => Err(Self::failure(&error)),
-            };
-            this.usage_stats.series.finish(seq, parsed);
-            cx.notify();
-        });
+        let machines = self.chosen_machines();
+        let s = &mut self.usage_stats;
+        (s.series_parts, s.series_pending, s.series_partial) = (Vec::new(), machines.len(), Partial::default());
+        if machines.is_empty() { s.series.finish(seq, Err(tr("connection_failed"))); }
+        let query = s.query(false, Some(&key));
+        let read = MachineRead { seq, alive: |this, seq| this.usage_stats.series.seq == seq, warm: |_, _, _| {}, done: Self::series_part };
+        // Sem repetir enquanto a máquina aquece: a série é um detalhe, a máquina entra como "não respondeu".
+        for m in machines { self.read_machine(m, "uso", query.clone(), WARM_TRIES, read, cx); }
+    }
+
+    fn series_part(&mut self, seq: u64, m: &Machine, result: Result<Value, String>, cx: &mut Context<Self>) {
+        let s = &mut self.usage_stats;
+        if seq != s.series.seq { return; }
+        let period = s.period.key();
+        let part = match result {
+            Ok(v) if v.pointer("/applied/period").and_then(Value::as_str) != Some(period) => Part::Mismatched(None),
+            Ok(v) => match serde_json::from_value::<Vec<Item>>(v.get("by_day").cloned().unwrap_or(Value::Array(Vec::new()))) {
+                Ok(days) => Part::Ok(days),
+                Err(_) => Part::Failed(tr("invalid_response")),
+            },
+            Err(error) => Part::Failed(error),
+        };
+        s.series_parts.push(MachinePart { id: m.id.clone(), label: m.label.clone(), part });
+        s.series_pending = s.series_pending.saturating_sub(1);
+        if s.series_pending > 0 { return; }
+        s.series_partial = Partial::of(&s.series_parts);
+        let value = match s.series_parts.as_slice() {
+            [MachinePart { part: Part::Failed(error), .. }] => Err(error.clone()),
+            parts => {
+                let mut days = Vec::new();
+                for p in parts { if let Part::Ok(list) = &p.part { join(&mut days, list); } }
+                days.sort_by(|a, b| a.key.cmp(&b.key));
+                Ok(days)
+            }
+        };
+        s.series.finish(seq, value);
+        cx.notify();
     }
 
     fn usage_select(&mut self, tab: Tab, key: String, cx: &mut Context<Self>) {
@@ -379,21 +451,15 @@ impl Hangar {
                 |this: &mut Hangar, n, _: &mut Window, cx| {
                     if this.usage_stats.period != Period::ALL[n] { this.usage_stats.period = Period::ALL[n]; this.load_usage(false, cx); }
                 }, cx));
-        let mut page = div().flex().flex_col().gap(px(16.)).child(title).child(self.render_usage_filters(cx));
+        let mut page = div().flex().flex_col().gap(px(16.)).child(title).child(self.render_usage_filters(cx)).children(self.machine_chips(cx));
 
         let s = &self.usage_stats;
         if s.report.loading && s.report.value.is_some() {
             page = page.child(div().text_size(px(12.5)).text_color(theme::muted()).child(web("uso_atualizando")));
         }
-        if let Some((read, total)) = s.warming {
-            let label = self.server_label(cx);
-            let text = if total > 0 { web_with("custos_aquecendo_progresso", &[("maquina", label), ("lidos", read.to_string()), ("total", total.to_string())]) }
-                else { web_with("custos_aquecendo", &[("maquina", label)]) };
-            page = page.child(note_box(text, theme::muted()).child(div().mt(px(8.)).h(px(4.)).rounded_full().bg(theme::border_strong())
-                .child(div().h_full().rounded_full().bg(theme::accent()).w(relative(if total > 0 { (read as f32 / total as f32).clamp(0., 1.) } else { 0.1 })))));
-        }
-        if s.mismatched {
-            page = page.child(note_box(format!("⚠ {} {}", web("custos_total_parcial"), web("custos_fora_periodo_1")), theme::warning()));
+        page = page.children(s.warming.iter().map(warming_note));
+        if !s.partial.is_empty() && s.report.ok().is_some() {
+            page = page.child(partial_note("usage-partial-retry", &s.partial,cx.listener(|this, _, _, cx| this.load_usage(true, cx))));
         }
         let report = match &self.usage_stats.report.value {
             None => return page.child(loading_state()),
@@ -469,6 +535,7 @@ impl Hangar {
             row = row.child(div().w(px(220.)).child(Input::new(search).small().aria_label(web("uso_busca"))
                 .prefix(chrome::small_icon(IconName::Search, 14., theme::faint()))));
         }
+        row = row.children(self.machines_button("usage-machines", cx));
         if s.filtering() || !s.search_text(cx).is_empty() {
             row = row.child(Button::new("usage-clear").ghost().small().label(web("uso_limpar")).on_click(cx.listener(|this, _, window, cx| {
                 if let Some(search) = this.usage_stats.search.clone() { search.update(cx, |i, cx| i.set_value("", window, cx)); }
@@ -810,7 +877,7 @@ impl Hangar {
                 .child(div().text_size(px(12.)).text_color(theme::muted())
                     .child(if b.plugin.is_empty() { tab.label() } else { format!("{} · {}", tab.label(), group_name(&b.plugin)) })))
             .child(Button::new("usage-detail-close").ghost().xsmall().label(web("uso_detalhe_fechar"))
-                .on_click(cx.listener(|this, _, _, cx| { this.usage_stats.selected = None; this.usage_stats.series = Remote::default(); cx.notify(); })));
+                .on_click(cx.listener(|this, _, _, cx| { this.usage_stats.selected = None; this.usage_stats.series.reset(); cx.notify(); })));
         let grid = div().flex().flex_col().gap(px(6.)).children(stats.into_iter().map(|(k, v)| div().flex().gap(px(8.)).text_size(px(12.5))
             .child(div().flex_1().text_color(theme::muted()).child(k)).child(div().font_weight(FontWeight::MEDIUM).child(v))));
         let series = &self.usage_stats.series;
@@ -821,9 +888,12 @@ impl Hangar {
             Some(Ok(days)) if !days.is_empty() => day_bars("usage-series", days, |d| main_of(d, m), 90., None, None),
             _ => empty_state(web("uso_detalhe_sem_serie")),
         };
+        let partial = (!series.loading && series.ok().is_some() && !self.usage_stats.series_partial.is_empty())
+            .then(|| partial_note("usage-series-partial-retry", &self.usage_stats.series_partial,cx.listener(|this, _, _, cx| this.load_usage_series(cx))));
         card_plain().child(head).child(grid)
             .child(div().flex().gap(px(6.)).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(web("uso_detalhe_por_dia"))
                 .child(div().font_weight(FontWeight::NORMAL).text_color(theme::muted()).child(format!("({})", measure_label(m)))))
+            .children(partial)
             .child(chart_part)
     }
 }

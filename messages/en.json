@@ -4531,6 +4531,7 @@
   "native_search_no_machines": "No machine of yours to search: search doesn't reach invites.",
   "native_search_interrupted": "The search was interrupted. Try again.",
   "native_costs_hidden_not_saved": "Couldn't save the hidden projects list: {reason}",
+  "native_costs_machines_not_saved": "Couldn't save the report's machine choice: {reason}",
   "native_invalid_url": "Use an HTTP or HTTPS address without a token, username or password in the URL.",
   "native_invalid_token": "Check the access token.",
   "native_browser": "Browser",
