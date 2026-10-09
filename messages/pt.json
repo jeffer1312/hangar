@@ -6065,6 +6065,8 @@
   "native_dictation_again": "Transcrever de novo",
   "native_dictation_cleaning": "Reorganizando ditado",
   "native_dictation_draft_changed": "O rascunho foi editado. Desfaça a edição para trocar a versão sem perder texto.",
+  "composer_dictation_send_changed": "O rascunho ou o destino mudou durante a transcrição. Confira o texto antes de enviar.",
+  "native_dictation_send_changed": "O rascunho ou o destino mudou durante a transcrição. Confira o texto antes de enviar.",
   "native_voice_transcription_model": "Modelo da transcrição",
   "native_voice_transcription_model_help": "Modelo de áudio oferecido pelo serviço escolhido. Vazio usa whisper-large-v3-turbo.",
   "native_voice_providers": "Serviços de transcrição, em ordem",

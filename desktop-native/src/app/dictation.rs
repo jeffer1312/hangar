@@ -846,7 +846,7 @@ impl Hangar {
                 // O texto completo passa novamente pela confirmação de comandos destrutivos.
                 self.submit(intent.steer, false, window, cx);
             } else if requested_send {
-                self.dictation.result_error = Some(tr("dictation_draft_changed"));
+                self.dictation.result_error = Some(tr("dictation_send_changed"));
             }
         }
         cx.notify();

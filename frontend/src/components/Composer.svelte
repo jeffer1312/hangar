@@ -309,6 +309,8 @@ import { cachePrazo } from '../lib/cachePrazo';
   let uploading = $state(false);
   let attachError = $state('');
   let sending = $state(false);
+  type PendingSend = { serverId: string; name: string; jsonl: string | null; draft: string; files: File[]; steer: boolean; entryId: number | null };
+  let pendingSend = $state<PendingSend | null>(null);
   let sendError = $state('');
   let steeringQueue = $state(false);
   let steerFeedback = $state('');
@@ -470,8 +472,9 @@ import { cachePrazo } from '../lib/cachePrazo';
   );
 
   // hasInput: tem texto OU anexo. Usado tb pro botao stop/send (ver control-right).
-  const hasInput = $derived(inputText.trim().length > 0 || attachments.length > 0);
+  const hasInput = $derived(inputText.trim().length > 0 || attachments.length > 0 || recording || transcribing);
   const canSend = $derived(hasInput && !uploading && !sending && !recording && !transcribing);
+  const canRequestSend = $derived(hasInput && !uploading && !sending && !pendingSend);
   const isWorking = $derived(sessionState === 'working');
   // Sem terminal, uma pergunta pendente (awaiting_input) só tem saída por aqui: não há pane
   // pra mandar Esc, e mensagem digitada fica na fila até alguém responder.
@@ -1355,6 +1358,12 @@ import { cachePrazo } from '../lib/cachePrazo';
   // Resultado com a conversa aberta: entra no cursor (ou no fim, se a seleção guardada não vale
   // mais para o texto de agora), abre a barra e decide o envio do mãos-livres.
   async function aplicarTranscricao(e: DictationEntry) {
+    const intent = pendingSend;
+    pendingSend = null;
+    const sendMatches = intent && intent.serverId === dictationServerId && intent.name === sessionName
+      && intent.jsonl === (sessionJsonl ?? null) && intent.draft === inputText
+      && (intent.entryId === null || intent.entryId === e.id)
+      && intent.files.length === attachments.length && intent.files.every((file, index) => file === attachments[index].file);
     const { text, raw, aviso, estilo_aplicado } = e.result!;
     const t = text.trim();
     const { before, after, hadDraft, cursor } = inserirTranscricao(t);
@@ -1367,7 +1376,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     }
     if (aviso) recError = recAviso = aviso;
     else if (e.opts.avisoTeto) recError = m.composer_silencio();
-    if (e.opts.ditado && e.opts.autoEnvio !== false) {
+    if (!intent && e.opts.ditado && e.opts.autoEnvio !== false) {
       if (podeEnviarSozinho({ motivo: e.opts.motivo ?? null, texto: t, aviso, rascunhoAntes: hadDraft })) {
         iniciarContagem();
       } else {
@@ -1381,6 +1390,10 @@ import { cachePrazo } from '../lib/cachePrazo';
     textareaEl?.focus();
     textareaEl?.setSelectionRange(cursor, cursor);
     rememberSelection();
+    if (intent && !destroyed) {
+      if (sendMatches) await submit(intent.steer);
+      else recError = m.composer_dictation_send_changed();
+    }
   }
 
   // Registrado no corpo, não num $effect: o Chat lê o rascunho guardado no mesmo passo síncrono da
@@ -1409,6 +1422,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     const e = ditadoFalhou;
     if (!e || e.id === falhaAvisada) return;
     falhaAvisada = e.id;
+    pendingSend = null;
     cancelarContagem();
     if (e.opts.ditado) { somRecusa(); setTimeout(fecharBipes, 400); }
   });
@@ -1682,13 +1696,15 @@ import { cachePrazo } from '../lib/cachePrazo';
       // onerror dispara stop logo depois -> se ja falhou, nao anexa o audio (truncado). Sem chunk
       // nenhum (gravacao rapida demais / driver sem dado) -> avisa, nao some calado.
       if (recFailed) {
+        pendingSend = null;
         teardownRecording();
       } else if (recChunks.length) {
         // Teto de 3min: transcreve normal; avisoTeto troca a mensagem pelo motivo provavel.
         startTranscription({ file: arquivoDaGravacao(recorder) },
-          { ditado: true, avisoTeto: motivoDoFim === 'teto', motivo: motivoDoFim });
+          { ditado: true, avisoTeto: motivoDoFim === 'teto', motivo: motivoDoFim, autoEnvio: pendingSend ? false : undefined });
         teardownRecording();
       } else {
+        pendingSend = null;
         recError = m.composer_gravacao_vazia();
         teardownRecording();
       }
@@ -1698,6 +1714,7 @@ import { cachePrazo } from '../lib/cachePrazo';
       if (destroyed || mediaRecorder !== recorder) return;
       console.error(m.composer_mediarecorder_erro(), (e as { error?: unknown }).error ?? e);
       recFailed = true;
+      pendingSend = null;
       recError = m.composer_falha_gravacao();
       // Maos-livres: audioCtx ainda esta aberto (teardownRecording so fecha quando !maosLivres) --
       // e o unico caminho de falha do arquivo sem som, entao avisa quem esta dirigindo. Fora do
@@ -1712,7 +1729,7 @@ import { cachePrazo } from '../lib/cachePrazo';
   }
 
   async function toggleRecord() {
-    if (voiceBusy) return;
+    if (voiceBusy || pendingSend) return;
     if (recording) {
       pararPorMotivo('botao');
       return;
@@ -1781,6 +1798,7 @@ import { cachePrazo } from '../lib/cachePrazo';
 
   onDestroy(() => {
     destroyed = true;
+    pendingSend = null;
     if (recording && mediaRecorder?.state === 'recording') {
       handoff = { recorder: mediaRecorder, jsonl: sessionJsonl ?? null };
       mediaRecorder.stop();
@@ -1883,6 +1901,15 @@ import { cachePrazo } from '../lib/cachePrazo';
   });
 
   async function submit(steer = false): Promise<boolean> {
+    if (!canRequestSend) return false;
+    cancelarContagem();
+    if (starting) { recGeracao++; starting = false; }
+    if (recording || transcribing) {
+      pendingSend = { serverId: dictationServerId, name: sessionName, jsonl: sessionJsonl ?? null,
+        draft: inputText, files: attachments.map((item) => item.file), steer, entryId: dictation?.id ?? null };
+      if (recording) pararPorMotivo('botao');
+      return false;
+    }
     if (!canSend) return false;
     cancelarContagem();   // envio manual torna a contagem sem sentido
     const caption = inputText.trim();
@@ -2532,7 +2559,7 @@ import { cachePrazo } from '../lib/cachePrazo';
             onPrepare={prepareVoice} onBusyChange={(busy) => { voiceBusy = busy; }} />
         {/if}
         {#if (isCodex || headless) && isWorking && hasInput && !sendToPair}
-          <button class="model-pill" onclick={() => submit(true)} disabled={!canSend}
+          <button class="model-pill" onclick={() => submit(true)} disabled={!canRequestSend}
             title={m.codex_orientar_ajuda()}>{m.codex_orientar()}</button>
         {/if}
         {#if podeInterromper && !hasInput}
@@ -2544,9 +2571,9 @@ import { cachePrazo } from '../lib/cachePrazo';
         {:else}
           <button
             class="send-btn"
-            class:send-btn--disabled={!canSend}
+            class:send-btn--disabled={!canRequestSend}
             onclick={() => submit()}
-            disabled={!canSend}
+            disabled={!canRequestSend}
             aria-label={temFilaPromovivel && isWorking ? m.composer_enviar_fila_kimi() : m.composer_enviar_mensagem()}
           >
             <IconSend size={18} />

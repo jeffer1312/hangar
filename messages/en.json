@@ -6065,6 +6065,8 @@
   "native_dictation_again": "Transcribe again",
   "native_dictation_cleaning": "Reworking dictation",
   "native_dictation_draft_changed": "The draft was edited. Undo the edit to switch versions without losing text.",
+  "composer_dictation_send_changed": "The draft or destination changed during transcription. Check the text before sending.",
+  "native_dictation_send_changed": "The draft or destination changed during transcription. Check the text before sending.",
   "native_voice_transcription_model": "Transcription model",
   "native_voice_transcription_model_help": "Audio model offered by the selected service. Empty uses whisper-large-v3-turbo.",
   "native_voice_providers": "Transcription services, in order",
