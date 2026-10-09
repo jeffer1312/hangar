@@ -164,8 +164,14 @@ impl ReceiptIndex {
             let recorded_conversation = if self.provider == "codex" { self.meta_conversation.clone() }
                 else { obj["sessionId"].as_str().map(str::to_owned) };
             let identity_unprovable = self.provider == "codex" && recorded_conversation.is_none();
-            self.occurrences.push(Occurrence { id:format!("{}|{id}|{record}",self.conversation),conversation:self.conversation.clone(),
-                file_identity:id.clone(),offset:start,end_offset:offset,text,kind:kind.into(),timestamp,recorded_conversation,identity_unprovable });
+            // Vários recados num registro só: cada um é uma ocorrência, senão o primeiro gasta o registro e os outros nunca confirmam.
+            let peers:Vec<String> = if kind == "user" { crate::transcript::history::peer_bodies(&text).into_iter().map(str::to_owned).collect() } else { Vec::new() };
+            let parts:Vec<(String,String)> = if peers.is_empty() { vec![(String::new(),text)] }
+                else { peers.into_iter().enumerate().map(|(n,body)|(format!("#peer{n}"),body)).collect() };
+            for (suffix,text) in parts {
+                self.occurrences.push(Occurrence { id:format!("{}|{id}|{record}{suffix}",self.conversation),conversation:self.conversation.clone(),
+                    file_identity:id.clone(),offset:start,end_offset:offset,text,kind:kind.into(),timestamp,recorded_conversation:recorded_conversation.clone(),identity_unprovable });
+            }
         }
         drop(reader);
         let current = File::open(path)?;

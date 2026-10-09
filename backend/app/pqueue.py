@@ -301,6 +301,9 @@ _IMG_SOURCE = re.compile(r"\[Image: source: ([^\]]+)\]")
 # `/comando args` digitado vira `<command-name>/comando</command-name>` + `<command-args>` no transcript.
 _COMMAND_NAME = re.compile(r"<command-name>([^<]*)</command-name>")
 _COMMAND_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+# Recados que chegam durante um turno viram UM registro com um bloco por recado: cada corpo é uma entrega.
+_PEER_BODY = re.compile(r"<cross-session-message\b[^>]*>\n?(.*?)\n?</cross-session-message>", re.S)
+_PEER_STARTS = ("<cross-session-message", "Another Claude session sent a message:")
 
 
 def _chaves_de_commit(text: str) -> set[str]:
@@ -325,6 +328,8 @@ def _chaves_de_commit(text: str) -> set[str]:
         comando = f"{nome.group(1).strip()} {args.group(1).strip() if args else ''}".strip()
         if comando:
             out.add(comando)
+    if t.startswith(_PEER_STARTS):
+        out.update(b.strip() for b in _PEER_BODY.findall(t) if b.strip())
     for variant in (t, base, _strip_attach(t), _strip_attach(base), fonte):
         variant = variant.strip()
         if not variant:

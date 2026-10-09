@@ -189,6 +189,19 @@ def test_comando_digitado_casa_com_a_forma_dele_no_transcript():
     assert "/x a\nb" in pqueue._chaves_de_commit(varias_linhas) and "b" not in pqueue._chaves_de_commit(varias_linhas)
 
 
+def test_recados_juntos_num_registro_casam_cada_um_inteiro():
+    """Recados que chegam durante o turno viram um registro só; o de várias linhas tem que casar inteiro,
+    senão a troca de conta o reenvia."""
+    registro = ("Another Claude session sent a message:\n"
+                '<cross-session-message from="uds:a.sock" from-name="a">\n[de: a] pronto\nlinha 2\n</cross-session-message>\n'
+                '<cross-session-message from="uds:b.sock" from-name="b">\n[de: b] feito\n</cross-session-message>\n\n'
+                "This came from another Claude session.")
+    chaves = pqueue._chaves_de_commit(registro)
+    assert "[de: a] pronto\nlinha 2" in chaves and "[de: b] feito" in chaves
+    citando = 'olha: <cross-session-message from="x">\n[de: a] pronto\nlinha 2\n</cross-session-message>'
+    assert "[de: a] pronto\nlinha 2" not in pqueue._chaves_de_commit(citando)
+
+
 def test_saida_local_confirma_o_comando_que_nao_vai_ao_transcript(tmp_path):
     q = PromptQueue("s")
     palavra = q.append("btw", delivered=True)
