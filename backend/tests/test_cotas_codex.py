@@ -190,18 +190,6 @@ def test_sem_auth_json_e_sem_identidade_cacheada_nao_abre_app_server(monkeypatch
     assert cotas._ler_codex() == ("sem_credencial", [], None)
 
 
-def test_o_id_da_conta_e_o_mesmo_da_fonte(monkeypatch, tmp_path):
-    """A pílula do topo procura no `/api/cotas` a linha do `conta` da sessão. Ids diferentes nos
-    dois lugares fariam ela cair no pior-geral numa sessão cuja cota o app sabe ler."""
-    _home(monkeypatch, tmp_path)
-    monkeypatch.setattr(cotas, "_codex_auth_cache",
-                        lambda home: {"method": "none", "status": "disconnected"})
-    assert cotas.id_conta_codex() is None
-    _auth(tmp_path)
-    fonte = next(f for f in cotas._fontes() if f.provedor == "codex")
-    assert fonte.chave == cotas.id_conta_codex()
-
-
 def test_codex_home_manda_no_caminho(monkeypatch, tmp_path):
     """Quem move a pasta do Codex move a credencial junto — o mesmo `CODEX_HOME` que o lançador
     respeita."""
@@ -258,57 +246,6 @@ def test_resposta_boa_continua_passando(monkeypatch):
     assert codex_appserver.perguntar("account/rateLimits/read") == {"rateLimits": {"primary": {}}}
 
 
-def test_a_fonte_so_existe_com_credencial(monkeypatch, tmp_path):
-    """Quem não usa Codex não ganha uma linha vazia no painel — nem paga o processo."""
-    _home(monkeypatch, tmp_path)
-    assert len([f for f in cotas._fontes() if f.provedor == "codex"]) == 1
-    _auth(tmp_path)
-    fontes = [f for f in cotas._fontes() if f.provedor == "codex"]
-    assert len(fontes) == 1
-    assert fontes[0].chave.startswith("codex:")
-
-
-def test_keyring_oauth_sem_auth_json_consulta_cota(monkeypatch, tmp_path):
-    _home(monkeypatch, tmp_path)
-    monkeypatch.setattr(cotas, "_codex_auth_cache",
-                        lambda home: {"method": "oauth", "status": "connected"})
-    vistos = []
-    monkeypatch.setattr(cotas.codex_appserver, "perguntar",
-                        lambda method, **kw: (vistos.append(kw["codex_home"]), _RATE_LIMITS)[1])
-    estado, janelas, motivo = cotas._ler_codex(tmp_path / ".codex")
-    assert (estado, motivo) == ("lida", None)
-    assert vistos == [tmp_path / ".codex"]
-
-
-@pytest.mark.parametrize("arquivo", [False, True])
-def test_identidade_keyring_muda_sem_alterar_disco(monkeypatch, tmp_path, arquivo):
-    _home(monkeypatch, tmp_path)
-    if arquivo:
-        _auth(tmp_path, tokens=False)
-    identidade = {"method": "none", "status": "disconnected"}
-    monkeypatch.setattr(cotas, "_codex_auth_cache", lambda account: identidade)
-    assert not cotas._tem_credencial_codex()
-    identidade.update(method="oauth", status="connected")
-    assert cotas._tem_credencial_codex()
-    identidade.update(method="none", status="disconnected")
-    assert not cotas._tem_credencial_codex()
-
-
-def test_fontes_codex_sao_separadas_mesmo_sem_auth(monkeypatch, tmp_path):
-    monkeypatch.setattr(__import__("pathlib").Path, "home",
-                        classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    monkeypatch.setattr(codex_contas.shutil, "which", lambda nome: "/usr/bin/codex")
-    monkeypatch.setattr(cotas, "_codex_auth_cache",
-                        lambda home: {"method": "none", "status": "disconnected"})
-    work = codex_contas.create_account("work")
-    fontes = [f for f in cotas._fontes() if f.provedor == "codex"]
-    assert {f.chave for f in fontes} == {
-        f"codex:{(tmp_path / '.codex').resolve()}", f"codex:{work.home.resolve()}"
-    }
-    assert all(f.ler()[0] == "sem_credencial" for f in fontes)
-
-
 def test_cota_codex_le_roots_com_mesma_assinatura(monkeypatch, tmp_path):
     # A cota lê o root resolvido; no Windows o tmp_path cru tem outra caixa.
     tmp_path = tmp_path.resolve()
@@ -334,8 +271,8 @@ def test_cota_codex_le_roots_com_mesma_assinatura(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cotas.codex_appserver, "perguntar", perguntar)
     cotas._cred_codex_cache = None
-    fontes = [f for f in cotas._fontes() if f.provedor == "codex"]
-    cotas._atualizar(fontes, forcar=True)
+    for home in (codex_contas.default_home(), work.home):
+        assert cotas._ler_codex(home)[0] == "lida"
     assert {f"{home}" for home in vistos} == {
         str(codex_contas.default_home()), str(work.home),
     }

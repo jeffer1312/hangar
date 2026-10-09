@@ -3,17 +3,7 @@
 import json
 import pytest
 
-from accounts_contract import (FIXTURES, PythonReference, assert_rust_ownership,
-                               capture_reference, isolated_environment, normalize)
-
-
-@pytest.fixture
-def account_contract(tmp_path):
-    reference = PythonReference(tmp_path / "home")
-    try:
-        yield reference
-    finally:
-        reference.close()
+from accounts_contract import PythonReference, assert_rust_ownership, isolated_environment, normalize
 
 
 def test_ownership_rejects_successful_python_proxy():
@@ -23,24 +13,6 @@ def test_ownership_rejects_successful_python_proxy():
 
 def test_ownership_allows_delimited_preparation_bridge():
     assert_rust_ownership([{"operation": "bridge.prepare", "status": 200}])
-
-
-def test_catalogue_keeps_disconnected_base(account_contract):
-    response = account_contract.request("GET", "/api/claude-configs")
-    assert response.status_code == 200
-    assert any(row["active"] for row in response.json())
-    assert any(row["label"] == "Trabalho de revisão" for row in response.json())
-
-
-def test_python_routes_match_explicit_reference(account_contract):
-    expected = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
-    actual = capture_reference(account_contract)
-    assert actual["claude_state"]["status"] == actual["codex_catalog"]["status"] == 200
-    assert [row["id"] for row in actual["codex_catalog"]["body"]] == ["default", "alpha", "zeta"]
-    assert actual["codex_create"]["status"] == 201
-    assert actual["codex_login_null"]["body"] is None
-    assert actual["codex_delete"]["body"] == {"ok": True}
-    assert actual == expected
 
 
 def test_blocked_python_handler_cannot_fake_rust_ownership(tmp_path):
@@ -426,36 +398,6 @@ def test_codex_cache_callback_requires_secret_instance_and_valid_key(tmp_path):
         assert not reference.request("GET", "/__contract__/codex-model-cache").json()["cached"]
     finally:
         reference.close()
-
-def test_codex_python_consumers_delegate_and_pending_does_not_fallback(tmp_path):
-    from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home")
-    account = reference.root / ".codex-alpha"
-    (account / "emit-success.json").write_text("false", encoding="utf-8")
-    server = RustCodex(reference)
-    try:
-        reference.request("POST", "/__contract__/claude-owner", {
-            "address": server.request("GET", "/__hangar_server/health").json()["terminal_address"], "mode": "rust",
-        })
-        assert reference.request("GET", "/api/codex-contas/alpha/login").json() is None
-        attempt = reference.request("POST", "/api/codex-contas/alpha/login").json()
-        assert attempt["status"] == "waiting"
-        assert server.request("GET", "/api/codex-contas/alpha/login").json() == attempt
-        cancelled = reference.request("DELETE", "/api/codex-contas/alpha/login?attempt_id=" + attempt["attempt_id"])
-        assert cancelled.json()["status"] == "cancelled"
-        assert sum(call["method"] == "account/login/start" for call in server.native_calls("alpha")) == 1
-        reference.request("POST", "/__contract__/claude-owner", {
-            "address": "127.0.0.1:1", "mode": "pending",
-        })
-        for method in ("POST", "GET", "DELETE"):
-            response = reference.request(method, "/api/codex-contas/alpha/login?attempt_id=" + attempt["attempt_id"])
-            assert response.status_code == 503
-            assert response.json()["detail"]["code"] == "account_auth_bridge_unavailable"
-        assert sum(call["method"] == "account/login/start" for call in server.native_calls("alpha")) == 1
-    finally:
-        server.close()
-        reference.close()
-
 
 def test_codex_native_identity_cache_is_bound_to_auth_files(tmp_path):
     from accounts_contract import RustCodex

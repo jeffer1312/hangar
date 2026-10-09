@@ -70,7 +70,9 @@ retrato de contas/cotas Rust sem chamada pública recursiva.
 
 ## Referência e prova de autoria
 
-`python-reference.json` contém 26 pedidos executados pelas rotas Python reais:
+`python-reference.json` contém 26 pedidos executados pelas rotas Python reais da
+revisão acima, mais os envelopes de validação e o catálogo Codex com configuração
+compartilhada, capturados das mesmas rotas antes de a reserva Python sair (09/10/2026):
 catálogos deslogados, apelido com acento, filtro de backup na aba de contas,
 ordenação, nulos/omissões, validação, conta padrão protegida, cadastro Codex,
 duplicata, preparo idle, cancelamento antigo, UUID inválido, device flow idle,
@@ -84,7 +86,10 @@ seu conteúdo completo e não recebem essa decodificação adicional.
 HOMEDRIVE/HOMEPATH, XDG, APPDATA, config e cache temporários **antes dos imports**.
 O ambiente é uma lista permitida; não herda identidade, CP de contas, TMUX ou
 proxies. O filho monta os handlers reais numa FastAPI isolada, sem o lifespan que
-recupera sessões da máquina. Autenticação externa é sintética e deslogada; CLI e
+recupera sessões da máquina. Desde 09/10/2026 as rotas de conta e cota não têm
+mais corpo Python: o filho serve as rotas `/internal` que o Rust consome, a criação
+de sessão e `/api/credenciais`; o golden congela o contrato público que o Rust
+cumpre. Autenticação externa é sintética e deslogada; CLI e
 conexões externas inesperadas são recusadas. O teardown recolhe o filho criado.
 
 `HttpTransport.request(method, path, json=None)` funciona contra a porta de teste
@@ -148,12 +153,7 @@ Executar somente em VM Windows de teste ou CI descartável, a partir de `backend
 uv run pytest tests/test_accounts_contract.py -q
 ```
 
-Regeneração explícita após conferir uma mudança de contrato Python:
-
-```bash
-uv run python tests/accounts_contract.py --capture tests/fixtures/accounts_contract/python-reference.json
-```
-
-Golden não é atualizado automaticamente por falha de teste. A prova real de
+Sem rotas Python de conta, o golden não se regenera: mudança de contrato público
+entra à mão no JSON, junto da mudança no Rust. Golden não é atualizado automaticamente por falha de teste. A prova real de
 cadastro/login continua nas interfaces existentes e em contas descartáveis; esta
 referência não usa nem altera contas da máquina principal.

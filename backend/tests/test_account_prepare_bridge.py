@@ -245,24 +245,20 @@ def test_worker_revalidates_instance_after_acquiring_its_descriptor(tmp_path, mo
     asyncio.run(scenario())
 
 def test_http_claude_validation_preserves_real_python_envelopes(tmp_path):
-    from tests.accounts_contract import PythonReference, normalize
+    from tests.accounts_contract import FIXTURES, PythonReference, normalize
     from tests.test_accounts_catalog import RustCatalog
+    golden = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
     reference = PythonReference(tmp_path / "native", block_handlers=True)
-    baseline = PythonReference(tmp_path / "baseline")
     rust = RustCatalog(reference)
     try:
-        for body in ({"nome": "conta\n"}, {"nome": ""}, {"nome": "x" * 33},
-                     {"nome": "fresh", "extra": True}, {"nome": "work"}, {}, {"nome": 17}):
-            actual = rust.request("POST", "/api/claude-configs", body)
-            expected = baseline.request("POST", "/api/claude-configs", body)
+        for expected in golden["claude_validation_envelopes"]:
+            actual = rust.request(expected["method"], expected["path"], expected["body"])
             assert (actual.status_code, normalize(actual.json(), root=reference.root)) == (
-                expected.status_code, normalize(expected.json(), root=baseline.root)), body
+                expected["status"], expected["response"]), expected["body"]
         assert reference.calls() == []
     finally:
         rust.close()
-        baseline.close()
         reference.close()
-
 
 def test_http_pretrust_only_on_explicit_valid_cwd(tmp_path):
     from tests.accounts_contract import PythonReference
@@ -312,27 +308,25 @@ async def test_valid_windows_toml_resource_is_prepared_without_changing_auth(iso
     assert json.loads((account.home / "auth.json").read_text(encoding="utf-8")) == {"token": "synthetic-own"}
 
 def test_http_codex_catalog_reads_native_identity_with_real_preparation_status(tmp_path):
-    from tests.accounts_contract import PythonReference, normalize
+    from tests.accounts_contract import FIXTURES, PythonReference, normalize
     from tests.test_accounts_catalog import RustCatalog
-    roots = [tmp_path / "python", tmp_path / "rust"]
-    for root in roots:
-        system = root / ".codex/skills/.system"
-        system.mkdir(parents=True)
-        (system / "fixture.md").write_text("Configuração compartilhada de referência", encoding="utf-8")
-    reference = PythonReference(roots[0])
-    upstream = PythonReference(roots[1], block_handlers=True)
+    expected = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))[
+        "codex_catalog_with_shared_settings"]
+    root = tmp_path / "rust"
+    system = root / ".codex/skills/.system"
+    system.mkdir(parents=True)
+    (system / "fixture.md").write_text("Configuração compartilhada de referência", encoding="utf-8")
+    upstream = PythonReference(root, block_handlers=True)
     rust = RustCatalog(upstream)
     try:
-        expected = reference.request("GET", "/api/codex-contas")
         response = rust.request("GET", "/api/codex-contas")
-        assert response.status_code == expected.status_code == 200
-        assert normalize(response.json(), root=roots[1]) == normalize(expected.json(), root=roots[0])
+        assert response.status_code == expected["status"] == 200
+        assert normalize(response.json(), root=root) == expected["body"]
         assert upstream.calls() == []
         assert upstream.request("GET", "/__contract__/preparation-calls").json() == []
     finally:
         rust.close()
         upstream.close()
-        reference.close()
 
 
 def test_http_codex_catalog_matches_empty_settings_with_equivalent_native_transport(tmp_path):
@@ -350,82 +344,6 @@ def test_http_codex_catalog_matches_empty_settings_with_equivalent_native_transp
     finally:
         rust.close()
         reference.close()
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["source_error", "cached_success", "exception"])
-async def test_real_python_fallback_publishes_complete_result_for_restarted_rust(isolated, monkeypatch, outcome):
-    import os
-    from types import SimpleNamespace
-    from app import codex_contas_login, codex_contas_sync as sync, runtime_coordinator
-    from tests.accounts_contract import PythonReference, isolated_environment
-    from tests.test_accounts_catalog import RustCatalog
-    root, source, account = isolated
-    target_dir = os.environ.get("CARGO_TARGET_DIR") or str(Path(__file__).resolve().parents[2] / "crates/target")
-    isolated_env = isolated_environment(root)
-    for key in list(os.environ):
-        if key not in isolated_env:
-            monkeypatch.delenv(key)
-    for key, value in isolated_env.items():
-        monkeypatch.setenv(key, value)
-    monkeypatch.setenv("CARGO_TARGET_DIR", target_dir)
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
-    (source / "config.toml").write_text('model = "gpt-5"\n', encoding="utf-8")
-    (account.home / ".hangar-codex-conta").write_text(json.dumps({"version": 1, "id": account.id}), encoding="utf-8")
-    reference = PythonReference(root, block_handlers=True)
-    rust = RustCatalog(reference, native_fixture=True)
-
-    async def update_source(_force):
-        if outcome == "exception":
-            raise RuntimeError("falha sintética da atualização principal")
-        return {"estado": "erro" if outcome == "source_error" else "ok"}
-
-    service = codex_contas_login.CodexContasLogin(atualizar_principal=update_source, account_in_use=lambda account: False)
-    try:
-        if outcome == "cached_success":
-            await service.prepare(account)
-            initial = await service._preparations[service._key(account)]
-            assert initial["status"] == "ready", initial
-            state_path = sync._state_dir(account) / "estado.json"
-            previous_state = (state_path.read_bytes(), state_path.stat().st_mtime_ns)
-            assert reference.request("POST", "/__contract__/source-update", {"raise": True}).status_code == 200
-            assert rust.request("POST", f"/api/codex-contas/{account.id}/prepare").status_code == 202
-            rust_error = reference.request("GET", "/__contract__/wait-preparations").json()
-            assert rust_error["status"] == "error", rust_error
-            import time
-            deadline = time.monotonic() + 20
-            while True:
-                terminal = rust.request("GET", f"/api/codex-contas/{account.id}/prepare").json()
-                if terminal["status"] != "running":
-                    break
-                assert time.monotonic() < deadline, terminal
-            assert terminal["status"] == "error", terminal
-        rust.close()
-        rust = None
-        await service.prepare(account)
-        result = await service._preparations[service._key(account)]
-        assert result["status"] == {"source_error": "partial", "cached_success": "ready", "exception": "error"}[outcome], result
-        if outcome == "source_error":
-            assert result["issues"][0] == {"code": "codex_account_source_sync_incomplete", "params": {"status": "erro"}}
-            assert sync.preparation_status(account)["status"] == "ready"
-        if outcome == "cached_success":
-            assert (state_path.read_bytes(), state_path.stat().st_mtime_ns) == previous_state
-        assert service.preparation_status(account) == result
-        calls_before_restart = reference.request("GET", "/__contract__/preparation-operations").json()
-        rust = RustCatalog(reference, native_fixture=True)
-        response = rust.request("GET", f"/api/codex-contas/{account.id}/prepare")
-        assert response.status_code == 200, response.text
-        assert response.json() == result
-        catalog = rust.request("GET", "/api/codex-contas")
-        assert catalog.status_code == 200, catalog.text
-        assert next(row for row in catalog.json() if row["id"] == account.id)["sync"] == result
-        assert reference.calls() == []
-        assert reference.request("GET", "/__contract__/preparation-operations").json() == calls_before_restart
-    finally:
-        if rust is not None:
-            rust.close()
-        reference.close()
-        await service.close()
-
 
 def test_rust_rejection_keeps_its_status_and_code_through_the_bridge(monkeypatch):
     import io

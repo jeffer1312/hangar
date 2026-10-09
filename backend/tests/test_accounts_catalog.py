@@ -164,33 +164,22 @@ def test_python_readers_do_not_select_pending_accounts(tmp_path, monkeypatch):
     assert config.list_config_dirs() == []
 
 def test_claimed_validation_matches_real_python_envelopes(tmp_path):
-    baseline = PythonReference(tmp_path / "baseline")
+    golden = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
     reference = PythonReference(tmp_path / "native", block_handlers=True)
     server = RustCatalog(reference)
     try:
         differences = []
-        cases = [
-            ("DELETE", "/api/claude-configs/absent", None),
-            ("DELETE", "/api/claude-configs/bad%0A", None),
-            ("POST", "/api/codex-contas", None),
-            ("POST", "/api/codex-contas", []),
-            ("POST", "/api/codex-contas", {}),
-            ("POST", "/api/codex-contas", {"name": None}),
-            ("POST", "/api/codex-contas", {"name": 17}),
-        ]
-        for method, path, payload in cases:
-            expected = baseline.request(method, path, payload)
-            actual = server.request(method, path, payload)
+        for expected in golden["catalog_validation_envelopes"]:
+            actual = server.request(expected["method"], expected["path"], expected["body"])
             left = (actual.status_code, normalize(actual.json(), root=reference.root))
-            right = (expected.status_code, normalize(expected.json(), root=baseline.root))
+            right = (expected["status"], expected["response"])
             if left != right:
-                differences.append((method, path, payload, left, right))
+                differences.append((expected["method"], expected["path"], expected["body"], left, right))
         assert not differences, differences
         assert reference.calls() == []
     finally:
         server.close()
         reference.close()
-        baseline.close()
 
 def test_environment_matches_shared_golden(tmp_path, monkeypatch):
     from app.codex_contas import Account, environment

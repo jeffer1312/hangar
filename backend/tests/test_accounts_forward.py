@@ -1,7 +1,7 @@
 """Contas pelas portas do Python (Connect, convidado): o Rust é o único escritor.
 
 Com o Rust de pé, o pedido de conta que chega ao Python, já autenticado, vai pela ponte privada.
-O Python só atende o que o Rust disser que não é dele, ou quando ele mesmo é o dono (modo python).
+O Python só atende o que o Rust disser que não é dele; sem o Rust (modo python), indisponível.
 """
 import json
 import threading
@@ -78,9 +78,9 @@ def test_owner_refusal_reaches_the_caller_unchanged(rust):
 
 def test_route_the_rust_does_not_own_stays_in_python(rust):
     _Rust.reply = (404, {"code": "account_route_not_owned"})
-    response = TestClient(app).get("/api/claude-configs", headers=AUTH)
-    assert response.status_code == 200
-    assert isinstance(response.json(), list)
+    response = TestClient(app).get("/api/claude-configs/sem-rota", headers=AUTH)
+    assert response.status_code in {404, 405}
+    assert response.json() != {"code": "account_route_not_owned"}
     assert len(_Rust.seen) == 1
 
 
@@ -90,8 +90,9 @@ def test_unauthenticated_request_never_reaches_the_owner(rust):
     assert _Rust.seen == []
 
 
-def test_python_owner_answers_itself(rust, monkeypatch):
+def test_python_mode_answers_unavailable_without_the_owner(rust, monkeypatch):
     monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
     response = TestClient(app).get("/api/claude-configs", headers=AUTH)
-    assert response.status_code == 200
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "accounts_need_rust_server"
     assert _Rust.seen == []

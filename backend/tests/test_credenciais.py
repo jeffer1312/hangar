@@ -196,20 +196,6 @@ def test_codex_sem_snapshot_nao_inventa_autenticacao(casa, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_endpoint_reusa_auth_publica_sem_esperar_preparo(casa, monkeypatch):
-    _monta(monkeypatch)
-    account = codex_contas.Account("default", casa / ".codex", True)
-    monkeypatch.setattr(codex_contas, "list_accounts", lambda: [account])
-    service = SimpleNamespace(
-        preparation_status_async=AsyncMock(return_value={"status": "running"}),
-        cached_auth=lambda a: {"method": "oauth", "status": "connected", "email": "x@example.test", "plan": "pro"},
-    )
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(codex_contas_login=service)))
-    rows = await credenciais.listar_endpoint(request)
-    assert rows[0].auth_method == "oauth"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("method,status", [("oauth", "connected"), ("none", "disconnected"),
                                            ("unknown", "unavailable")])
 async def test_endpoint_le_identidade_nativa_sem_cota(casa, monkeypatch, method, status):
@@ -219,7 +205,7 @@ async def test_endpoint_le_identidade_nativa_sem_cota(casa, monkeypatch, method,
     monkeypatch.setattr(codex_contas, "list_accounts", lambda: [account])
     read = AsyncMock(return_value={"method": method, "status": status, "email": None, "plan": None})
     service = SimpleNamespace(preparation_status_async=AsyncMock(return_value={"status": "ready"}),
-                              cached_auth=lambda a: None, read_auth=read)
+                              read_auth=read)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(codex_contas_login=service)))
     rows = await credenciais.listar_endpoint(request, forcar=True)
     read.assert_awaited_once_with(account, refresh=True)
@@ -246,14 +232,3 @@ def test_cookie_novo_invalida_a_cota_do_dono_rust(casa, monkeypatch):
     monkeypatch.setattr(account_bridge, "request_quotas", lambda **k: pedidos.append(k) or {"ok": True})
     credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie="c"))
     assert pedidos == [{"invalidate": "chave:opencode"}]
-
-
-def test_cookie_novo_no_modo_python_limpa_o_cache_dele(casa, monkeypatch):
-    from app import account_bridge, opencode_cota
-    monkeypatch.setattr(opencode_cota, "definir_config", lambda *a: None)
-    monkeypatch.setattr(opencode_cota, "ler_configs", lambda: {})
-    monkeypatch.setattr(account_bridge, "request_quotas", lambda **k: None)
-    with cotas._lock:
-        cotas._cache["chave:opencode"] = (0.0, None)
-    credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie=""))
-    assert "chave:opencode" not in cotas._cache
