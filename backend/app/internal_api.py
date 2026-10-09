@@ -495,6 +495,21 @@ async def upload_transcript(name: str, request: Request):
         return {"text": ""}
 
 
+@router.get("/transcription/config")
+def transcription_config():
+    """Configuração efetiva exclusiva da ponte privada; chaves nunca vão à resposta pública."""
+    from app import transcribe, runtime_config
+    providers = transcribe.configured_providers()
+    legacy = None
+    key = (runtime_config.get("groq_api_key") or "").strip()
+    if not runtime_config.get("transcription_providers") and key:
+        legacy = {"id": "legacy", "kind": "openai", "api_key": key,
+                  "base_url": runtime_config.get("transcription_base_url") or "",
+                  "model": runtime_config.get("transcription_model") or ""}
+    return {"providers": providers, "legacy": legacy, "vocabulary": transcribe.vocabulario(),
+            "state_path": str(transcribe._state_path())}
+
+
 class _ProtocolText(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["group", "orq", "external"]

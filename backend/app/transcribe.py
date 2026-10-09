@@ -76,10 +76,14 @@ VOCAB_USUARIO_MAX = _VOCAB_MAX - len(VOCAB_BASE) - 2  # 2 = o ", " que junta as 
 
 class TranscribeError(Exception):
     """Erro de transcricao com status HTTP pra o endpoint mapear direto."""
-    def __init__(self, status: int, detail: str):
+    def __init__(self, status: int, detail: str, code: str | None = None):
         super().__init__(detail)
         self.status = status
         self.detail = detail
+        self.code = code
+
+    def payload(self) -> str | dict:
+        return {"code": self.code, "params": {}, "msg": self.detail} if self.code else self.detail
 
 
 @dataclass(frozen=True)
@@ -397,6 +401,14 @@ def transcribe_with_provider(content: bytes, filename: str | None,
     """Percorre `transcription_providers` em ordem, pulando quem está em espera por cota. Lista
     vazia = o serviço único de sempre. Todos falhando: sobe o erro do PRIMEIRO tentado, que é o
     que a pessoa conserta, com o motivo curto de cada um dos seguintes no fim."""
+    from app import transcription_bridge
+    if transcription_bridge.owned_by_rust():
+        profile = "video" if limits == VIDEO_LIMITS else "file" if limits == FILE_LIMITS else "dictation"
+        try:
+            result = transcription_bridge.transcribe(content, filename, profile)
+            return Transcription(result["text"], result["provider"], result.get("aviso"))
+        except transcription_bridge.BridgeError as error:
+            raise TranscribeError(error.status, error.detail, error.code) from None
     per_provider, budget = limits
     providers = configured_providers()
     if not providers:
@@ -444,6 +456,12 @@ def transcribe_with_provider(content: bytes, filename: str | None,
 
 def providers_status() -> list[dict]:
     """Cada serviço da lista e, quando em espera por cota, até quando e por quê."""
+    from app import transcription_bridge
+    if transcription_bridge.owned_by_rust():
+        try:
+            return transcription_bridge.providers_status()["providers"]
+        except transcription_bridge.BridgeError as error:
+            raise TranscribeError(error.status, error.detail, error.code) from None
     waits = _load_waits()
     now = time.time()
     out = []
