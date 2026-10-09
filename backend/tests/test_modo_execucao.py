@@ -89,7 +89,7 @@ def _pane(reg, tmp_path, monkeypatch, *, mata=True):
     from app import registry as R
     jsonl = str(tmp_path / "projects" / "x" / f"{SID}.jsonl")
     monkeypatch.setattr(reg, "_pane_of", lambda n: {"name": n, "cwd": str(tmp_path), "pid": 999})
-    monkeypatch.setattr(R.SessionRegistry, "_refuse_non_claude_resume", staticmethod(lambda p: None))
+    monkeypatch.setattr(R.SessionRegistry, "_refuse_non_claude_resume", staticmethod(lambda p, **_: False))
     monkeypatch.setattr(reg, "resolve_tracked", lambda n, c: (jsonl, True))
     monkeypatch.setattr(R, "_config_dir_of", lambda pid: tmp_path / ".claude-b")
     monkeypatch.setattr(R, "_engine_of", lambda pid: None)

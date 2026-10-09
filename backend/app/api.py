@@ -3336,7 +3336,8 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
             modo = await asyncio.to_thread(perm_mode.ler_modo, name)
             try:
                 extra = {"for_account_move": True} if info.engine else {}
-                await asyncio.to_thread(registry.para_headless, name, modo, **extra)
+                await asyncio.to_thread(registry.para_headless, name, modo,
+                                        target_config_dir=destino or atual, **extra)
             except KillFailed as e:
                 raise HTTPException(500, str(e))
             except (ValueError, OSError) as e:

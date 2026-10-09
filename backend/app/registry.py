@@ -2720,19 +2720,30 @@ class SessionRegistry:
                 engines.service_tier_settings(argv, env, service_tier, cwd=meta["cwd"])
                 pre += ["--service-tier", service_tier]
             cmd = tmux.join_cmd(pre + ["--"]) + " " + cmd
+        if meta.get("read_only"):
+            from app.orq_readonly import prepare
+            # Refeita para a conta em que reabre; sem bwrap, recusa em vez de abrir sem a proteção.
+            prefix = prepare(meta["cwd"], runtime_dirs=(meta.get("config_dir") or "",))
+            cmd = tmux.join_cmd([*prefix, "/bin/sh", "-c", cmd])
         return cmd
 
     def para_headless(self, name: str, permission_mode: str | None, *, transfer_meta: dict | None = None,
-                      for_account_move: bool = False) -> dict:
+                      for_account_move: bool = False, target_config_dir: str | None = None) -> dict:
         """Pane tmux vira sessão sem terminal. Devolve o sidecar gravado; subir o processo é da
-        API (async). `permission_mode` é o que o rodapé mostra agora (lido por quem chama)."""
+        API (async). `permission_mode` é o que o rodapé mostra agora (lido por quem chama).
+        `target_config_dir` é a conta onde o terminal reabre: só com ela uma sessão read-only
+        estaciona, porque o `para_terminal` refaz a proteção nessa conta."""
         if codex_sessions.exists(name) or headless_sessions.exists(name):
             raise ValueError("so sessao Claude no terminal pode ficar sem terminal")
         pane = self._pane_of(name)
         if pane is None:
             raise ValueError("sessao nao encontrada")
-        self._refuse_non_claude_resume(pane)
+        read_only = self._refuse_non_claude_resume(pane, read_only_ok=target_config_dir is not None)
         cwd, pid = pane["cwd"], pane.get("pid")
+        if read_only:
+            from app.orq_readonly import prepare
+            # Antes do kill: sem bwrap utilizável na conta destino, a sessão não pode morrer.
+            prepare(cwd, runtime_dirs=(target_config_dir,))
         jsonl, tracked = self.resolve_tracked(name, cwd)
         if not jsonl or not tracked:
             raise ValueError("sessao sem id: nao sei qual conversa continuar")
@@ -2806,7 +2817,7 @@ class SessionRegistry:
                                           service_tier=service_tier,
                                           context_window=int(janela) if janela and janela.isdigit() else None,
                                           permission_mode=permission_mode, subagent_model=subagente,
-                                          claude_settings=claude_settings, jev=jev,
+                                          claude_settings=claude_settings, jev=jev, read_only=read_only,
                                           **({"key": transfer_meta["key"], "transfer_id": transfer_meta["transfer_id"]}
                                              if transfer_meta else {}),
                                           previous_non_plan=((modo_permissao.session_non_plan_mode(jsonl)
@@ -2817,7 +2828,7 @@ class SessionRegistry:
                     "engine": motor, "model": modelo, "effort": esforco, "permission_mode": permission_mode,
                     "engine_account": engine_account, "engine_credential_id": engine_credential_id,
                     "engine_account_base_url": engine_account_base_url, "service_tier": service_tier,
-                    "claude_settings": claude_settings}
+                    "claude_settings": claude_settings, "read_only": read_only}
             if not tmux.new_session(name, cwd, self._comando_terminal(meta, resume=Path(jsonl).exists()),
                                     meta["config_dir"], provider="claude",
                                     **_env_sessao(subagente, jev, nome=name, claude_settings=claude_settings)):
@@ -3295,11 +3306,13 @@ class SessionRegistry:
         return ""
 
     @staticmethod
-    def _refuse_non_claude_resume(pane: dict) -> None:
-        if pane.get("pid") and any(
+    def _refuse_non_claude_resume(pane: dict, *, read_only_ok: bool = False) -> bool:
+        """Devolve se o pane roda sob a proteção read-only; só quem a refaz passa `read_only_ok`."""
+        read_only = bool(pane.get("pid")) and any(
                 "HANGAR_ORQ_READ_ONLY" in _cmdline(pid)
                 or procinfo._env_var_of(pid, "HANGAR_ORQ_READ_ONLY") == "1"
-                for pid in _descendant_pids(pane["pid"])):
+                for pid in _descendant_pids(pane["pid"]))
+        if read_only and not read_only_ok:
             raise ValueError("sessão read-only: recrie com --read-only; retomar aqui removeria a proteção")
         # O resume e Claude-only de ponta a ponta: os candidatos saem de ~/.claude/projects e o
         # relance e `claude --resume <uuid>` DEPOIS de matar o pane. Numa sessao Pi sem transcript
@@ -3314,6 +3327,7 @@ class SessionRegistry:
             raise ValueError(
                 f"retomar so vale pra sessao Claude (esta e {prov}); "
                 f"feche o pane e abra de novo pelo wrapper `{prov}`")
+        return read_only
 
     def resume_candidates(self, name: str) -> tuple[str, bool, list[dict]]:
         # (cwd, ambiguo, candidatos). ambiguo = ha OUTRA sessao tmux no mesmo cwd -> o "mais recente por

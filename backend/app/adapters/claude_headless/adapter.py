@@ -1113,6 +1113,9 @@ class ClaudeHeadlessAdapter:
     async def _launch_account_cano_owned(self, sess: _Sessao) -> tuple[dict, asyncio.subprocess.Process, Path]:
         """argv, ambiente, conta e motor do `claude`, processo do cano em escopo próprio e o sidecar."""
         meta = sess.meta
+        if meta.get("read_only"):
+            # Sem terminal não há bwrap: o Claude subiria com o código gravável.
+            raise ValueError("sessão read-only só roda no terminal protegido; volte-a para o terminal")
         transcript = self.transcript_path_de(meta)
         resume = Path(transcript).exists()
         service_tier = meta.get("service_tier")

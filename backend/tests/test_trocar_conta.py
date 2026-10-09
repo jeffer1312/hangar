@@ -399,11 +399,11 @@ def test_terminal_passa_por_sem_terminal_e_reabre_o_pane_na_conta_nova(contas, t
     cwd = str(tmp_path / "repo")
     origem = _conversa(a, cwd)
     visto = {}
-    ida = MagicMock(side_effect=lambda n, modo: S.save(n, cwd, SID, config_dir=a, permission_mode=modo))
+    ida = MagicMock(side_effect=lambda n, modo, **_: S.save(n, cwd, SID, config_dir=a, permission_mode=modo))
     volta = MagicMock(side_effect=lambda n: visto.update(conta=S.load(n)["config_dir"], na_origem=origem.exists()))
     r = _post("t1", b, headless=False, conta=a, hl=_hl([]), ida=ida, volta=volta)
     assert r.status_code == 200
-    ida.assert_called_once_with("t1", "manual")
+    ida.assert_called_once_with("t1", "manual", target_config_dir=b)
     assert visto == {"conta": b, "na_origem": False}
 
 
