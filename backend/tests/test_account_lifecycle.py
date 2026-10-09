@@ -162,6 +162,23 @@ class ProcessFixture:
         return {"CODEX_HOME": str(self.home)}
 
 
+def test_identity_recheck_uses_the_same_process_source_as_the_scan(tmp_path):
+    from app.account_bridge import inspect_processes
+    from app.account_lifecycle import AccountKey
+
+    class Injected(ProcessFixture):
+        """Processo de outra fonte (psutil, fixture): o relógio dele não é o do /proc."""
+        pid = 4242
+        def __init__(self, pid):
+            super().__init__(tmp_path, started=1700000000)
+            self.pid = pid
+
+    key = AccountKey.new("codex", tmp_path)
+    facts = inspect_processes(key, processes=[Injected(4242)])
+    assert facts.complete
+    assert facts.pids == [4242]
+
+
 def test_unknown_process_environment_and_reused_pid_refuse_exclusion(tmp_path):
     import psutil
     from app.account_bridge import inspect_processes
@@ -462,7 +479,7 @@ def test_terminal_birth_is_published_before_real_lease_release(tmp_path, rust_pr
                 assert facts["pids"], "o lançador com --codex-home também usa a conta antes de publicar o ambiente"
         assert reference.request("POST", "/__contract__/stop-launcher").status_code == 200
         facts = reference.request("GET", "/__contract__/usage").json()
-        assert facts == {"complete": True, "sessions": [], "pids": []}
+        assert facts == {"complete": True, "sessions": [], "pids": [], "holders": []}
         assert reference.request("POST", "/__contract__/retire-birth").status_code == 200
         assert not list((reference.root / ".hangar/account-locks/births").glob("*.json"))
     finally:

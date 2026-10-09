@@ -91,10 +91,6 @@ class LinuxProcess:
                     for entry in (self.root / "environ").read_bytes().split(b"\0") if b"=" in entry)
 
 
-def system_process(pid: int):
-    return LinuxProcess(pid) if os.name == "posix" and Path("/proc").is_dir() else psutil.Process(pid)
-
-
 def system_processes():
     if os.name == "posix" and Path("/proc").is_dir():
         return (LinuxProcess(int(path.name)) for path in Path("/proc").iterdir() if path.name.isdigit())
@@ -145,7 +141,8 @@ def inspect_processes(key: AccountKey, *, processes=None, process_factory=None) 
                 if not path.is_absolute():
                     path = Path(process.cwd()) / path
                 owner = AccountKey.new(key.provider, path)
-                after = (process_factory or system_process)(process.pid).create_time()
+                # Reabre pela mesma fonte da varredura: relógios de fontes diferentes nunca coincidem.
+                after = (process_factory or type(process))(process.pid).create_time()
                 if before != after:
                     facts.complete = False
                     continue

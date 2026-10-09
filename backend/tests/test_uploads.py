@@ -187,6 +187,19 @@ def test_list_uploads_missing_dir_is_empty(tmp_path):
     assert list_uploads(str(tmp_path), SESSAO, 30) == []
 
 
+def test_list_uploads_same_second_does_not_depend_on_directory_order(tmp_path, cofre, monkeypatch):
+    pasta = _pasta(cofre, tmp_path)
+    pasta.mkdir(parents=True)
+    for nome in ("1700000000-000002.txt", "1700000000-000001.bin", "1700000000-000003.png"):
+        (pasta / nome).write_bytes(b"x")
+        os.utime(pasta / nome, (1700000000, 1700000000))
+    original = Path.iterdir
+    # O sistema de arquivos pode devolver qualquer ordem; aqui a contrária à do nome.
+    monkeypatch.setattr(Path, "iterdir", lambda self: iter(sorted(original(self), reverse=True)))
+    assert [f["filename"] for f in list_uploads(str(tmp_path), SESSAO, 0)] == [
+        "1700000000-000001.bin", "1700000000-000002.txt", "1700000000-000003.png"]
+
+
 def test_list_uploads_newest_first(tmp_path):
     velho = save_upload(str(tmp_path), SESSAO, PNG, "velho.png")
     novo = save_upload(str(tmp_path), SESSAO, PNG, "novo.png")

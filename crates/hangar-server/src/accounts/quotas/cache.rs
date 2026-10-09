@@ -158,6 +158,21 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_cache_is_ignored_and_rewritten_by_the_next_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        for garbage in [&b"{\"kimi:test\":"[..], b"[1,2,3]", b"\xff\xfe", b""] {
+            fs::write(&path, garbage).unwrap();
+            let mut cache = QuotaCache::load(&path);
+            assert!(cache.needs_refresh("kimi:test", 1000.0, false));
+            assert!(!cache.dirty(), "ler não pode regravar o arquivo");
+            cache.update("kimi:test", good(), 1000.0);
+            cache.save(&path).unwrap();
+            assert_eq!(QuotaCache::load(&path).get("kimi:test"), Some(good()));
+        }
+    }
+
+    #[test]
     fn legacy_future_stamp_retains_rate_limit_wait() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache.json");

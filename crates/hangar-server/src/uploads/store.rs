@@ -865,7 +865,12 @@ impl UploadStore {
                 expires_in_days: (days > 0).then_some(days as f64 - (now - mtime) / 86400.0),
             });
         }
-        entries.sort_by(|a, b| b.mtime.total_cmp(&a.mtime));
+        // Mesmo segundo: o nome desempata, senão a ordem dependeria do sistema de arquivos.
+        entries.sort_by(|a, b| {
+            b.mtime
+                .total_cmp(&a.mtime)
+                .then_with(|| a.filename.cmp(&b.filename))
+        });
         Ok(entries)
     }
 

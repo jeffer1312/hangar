@@ -254,7 +254,12 @@ impl AccountService {
             }
         } else {
             let mut found = vec![];
-            for entry in fs::read_dir(&self.env.home).map_err(|_| AccountError::io())? {
+            // HOME ausente não tem conta a listar, como o glob do Python; outro erro é falha.
+            let listing = match fs::read_dir(&self.env.home) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                other => Some(other.map_err(|_| AccountError::io())?),
+            };
+            for entry in listing.into_iter().flatten() {
                 let entry = entry.map_err(|_| AccountError::io())?;
                 let path = entry.path();
                 if !entry.file_name().to_string_lossy().starts_with(".claude")
@@ -595,6 +600,20 @@ pub fn codex_dto(account: &Account, auth: Value, sync: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_home_lists_no_extra_claude_account() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("missing").to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into(),
+        ));
+        let rows = service.claude_catalog().unwrap();
+        assert!(
+            rows.as_array().unwrap().iter().all(|row| row["label"] != "missing"),
+            "{rows}"
+        );
+    }
 
     #[test]
     fn claude_delete_refuses_while_a_process_carries_the_account() {
