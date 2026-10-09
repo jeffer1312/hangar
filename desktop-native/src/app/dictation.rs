@@ -242,6 +242,7 @@ async fn upload_and_transcribe(api: Api, uploads: disk::Uploads, name: String, b
 
 #[derive(Default)]
 pub(super) struct Dictation {
+    pending_send: Option<SendIntent>,
     seq: u64,
     owner: Option<SessionOwner>,
     /// Sessão que recebe o texto; `None` na tela sem sessão, onde sair dela cancela como antes.
@@ -276,8 +277,27 @@ pub(super) struct Dictation {
     countdown: Option<Instant>,
 }
 
+struct SendIntent { owner: Option<SessionOwner>, draft: String, attachments: Vec<String>, steer: bool }
+
+#[derive(Debug, PartialEq, Eq)]
+enum SendPreparation { Ready, Stop, Wait }
+
 impl Dictation {
+    fn prepare_send(&mut self, owner: Option<SessionOwner>, draft: String, attachments: Vec<String>,
+        steer: bool, recording: bool, transcribing: bool) -> SendPreparation {
+        if !recording && !transcribing { return SendPreparation::Ready; }
+        if self.pending_send.is_none() { self.pending_send = Some(SendIntent { owner, draft, attachments, steer }); }
+        self.auto_send = false;
+        self.countdown = None;
+        if recording { SendPreparation::Stop } else { SendPreparation::Wait }
+    }
+
+    fn complete_send(&mut self, owner: &Option<SessionOwner>, draft: &str, attachments: &[String]) -> Option<SendIntent> {
+        self.pending_send.take().filter(|intent| &intent.owner == owner && intent.draft == draft && intent.attachments == attachments)
+    }
     pub(super) fn recording(&self) -> bool { self.recorder.is_some() }
+    pub(super) fn processing(&self) -> bool { self.request.is_some() }
+    pub(super) fn send_pending(&self) -> bool { self.pending_send.is_some() }
 
     fn observe_file_owner(&mut self, owner: Option<SessionOwner>) -> u64 {
         if self.file_owner != owner {
@@ -347,6 +367,7 @@ impl Dictation {
     }
 
     fn cancel(&mut self) {
+        self.pending_send = None;
         self.seq += 1;
         self.owner = None;
         self.target = None;
@@ -375,6 +396,30 @@ impl Dictation {
 impl Drop for Dictation { fn drop(&mut self) { self.cancel(); } }
 
 impl Hangar {
+    fn dictation_attachments(&self) -> Vec<String> {
+        self.composer_key().and_then(|key| self.attachments.get(&key))
+            .map(|items| items.iter().map(|item| item.id.to_string()).collect()).unwrap_or_default()
+    }
+
+    pub(super) fn defer_dictation_send(&mut self, steer: bool, cx: &mut Context<Self>) -> bool {
+        let recording = self.dictation.recording();
+        if !self.dictation_here(cx) {
+            if recording { self.stop_dictation(false, false, cx); }
+            return false;
+        }
+        if recording && self.dictation.recorder.as_ref().is_some_and(|r| r.pcm.lock().unwrap().len() < 2) {
+            self.cancel_dictation();
+            return false;
+        }
+        let owner = self.dictation_owner(cx);
+        let draft = self.composer.read(cx).value().to_string();
+        let attachments = self.dictation_attachments();
+        match self.dictation.prepare_send(owner, draft, attachments, steer, recording, self.dictation.processing()) {
+            SendPreparation::Ready => false,
+            SendPreparation::Stop => { self.stop_dictation(false, false, cx); cx.notify(); true }
+            SendPreparation::Wait => true,
+        }
+    }
     /// Dono do ditado: a sessão aberta ou, sem ela, a tela sem sessão (nome vazio) antes do Enviar.
     pub(super) fn dictation_owner(&self, cx: &App) -> Option<SessionOwner> {
         self.session_owner().or_else(|| {
@@ -419,7 +464,7 @@ impl Hangar {
     }
 
     /// O ditado é da tela aberta: só então barra, estado e Cancelar aparecem e o texto entra no campo.
-    fn dictation_here(&self, cx: &App) -> bool {
+    pub(super) fn dictation_here(&self, cx: &App) -> bool {
         match &self.dictation.target {
             Some(target) => self.dictation_place(target) == Place::Open,
             None => self.dictation.owner.is_none() || self.dictation.owner == self.dictation_owner(cx),
@@ -769,6 +814,13 @@ impl Hangar {
             None => return,
         };
         let auto_send = std::mem::take(&mut self.dictation.auto_send);
+        let requested_send = self.dictation.send_pending();
+        let owner = self.dictation_owner(cx);
+        let draft = self.composer.read(cx).value().to_string();
+        let attachments = self.dictation_attachments();
+        let pending_send = self.dictation.complete_send(&owner, &draft, &attachments);
+        let result_ready = result.as_ref().ok().and_then(|v| v.get("text")).and_then(Value::as_str).is_some_and(|text| !text.trim().is_empty());
+        let here = matches!(&place, Place::Open);
         let timed_out = std::mem::take(&mut self.dictation.timed_out);
         self.dictation.request = None;
         self.dictation.started = None;
@@ -781,12 +833,20 @@ impl Hangar {
         let saved = path.or_else(|| result.as_ref().ok().and_then(|value| value.get("path")).and_then(Value::as_str).map(str::to_owned));
         if saved.is_some() { self.dictation.server_path = saved; }
         match place {
-            Place::Open => self.receive_dictation_here(result, auto_send, timed_out, window, cx),
+            Place::Open => self.receive_dictation_here(result, auto_send && !requested_send, timed_out, window, cx),
             Place::Away(key) => self.receive_dictation_away(key, result, window, cx),
             Place::Gone => {
                 let name = self.dictation.target.as_ref().map(|target| target.key.name.clone()).unwrap_or_default();
                 self.cancel_dictation();
                 window.push_notification(Notification::warning(tr("dictation_target_gone").replace("{session}", &name)), cx);
+            }
+        }
+        if here && result_ready && self.dictation.result_error.is_none() {
+            if let Some(intent) = pending_send {
+                // O texto completo passa novamente pela confirmação de comandos destrutivos.
+                self.submit(intent.steer, false, window, cx);
+            } else if requested_send {
+                self.dictation.result_error = Some(tr("dictation_draft_changed"));
             }
         }
         cx.notify();
@@ -1017,6 +1077,39 @@ fn dictation_insert(value: &str, range: std::ops::Range<usize>, text: &str) -> S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_content_stops_recording_before_send() {
+        for (draft, attachments) in [("", vec![]), ("texto", vec![]), ("", vec!["imagem".to_owned()]), ("", vec!["arquivo".to_owned()])] {
+            let mut dictation = super::Dictation::default();
+            let owner = Some((1, "servidor".into(), "sessao".into()));
+            assert_eq!(dictation.prepare_send(owner, draft.into(), attachments, false, true, false), super::SendPreparation::Stop);
+        }
+    }
+
+    #[test]
+    fn send_intent_is_consumed_once_and_preserves_the_first_click() {
+        let mut dictation = super::Dictation::default();
+        let owner = Some((1, "servidor".into(), "sessao".into()));
+        dictation.prepare_send(owner.clone(), "texto".into(), vec!["imagem".into()], false, true, false);
+        assert_eq!(dictation.prepare_send(owner.clone(), "outro".into(), vec![], true, false, true), super::SendPreparation::Wait);
+        let intent = dictation.complete_send(&owner, "texto", &["imagem".into()]).unwrap();
+        assert!(!intent.steer);
+        assert!(dictation.complete_send(&owner, "texto", &["imagem".into()]).is_none());
+    }
+
+    #[test]
+    fn changed_destination_or_content_cancels_pending_send() {
+        for change in 0..3 {
+            let mut dictation = super::Dictation::default();
+            let owner = Some((1, "servidor".into(), "sessao".into()));
+            dictation.prepare_send(owner.clone(), "texto".into(), vec!["imagem".into()], false, true, false);
+            let current = if change == 0 { Some((1, "servidor".into(), "outra".into())) } else { owner };
+            let draft = if change == 1 { "editado" } else { "texto" };
+            let attachments = if change == 2 { vec![] } else { vec!["imagem".into()] };
+            assert!(dictation.complete_send(&current, draft, &attachments).is_none());
+            assert!(dictation.pending_send.is_none());
+        }
+    }
     use super::{dictation_append, dictation_insert, place, wav, wav_pcm, Dictation, DictationTarget, Downmix, OnLeave, Place, Recorder, Vad};
     use crate::{api::{Api, dto::SessionInfo}, delivery::SessionKey};
     use std::time::{Duration, Instant};
