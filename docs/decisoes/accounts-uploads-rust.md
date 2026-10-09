@@ -33,13 +33,15 @@ Contas e cotas não têm mais reserva Python. No modo `python` (sem binário,
 que o Rust atende respondem 503 com `accounts_need_rust_server`, e os consumidores
 internos (criação de sessão, `loop.py`, política do runtime, credenciais, catálogo de
 provedores) tratam a ponte ausente como "sem cota, sem login conhecido", sem ler
-credencial nem abrir CLI. Manter as duas implementações custava código duplicado e
+credencial nem abrir CLI. O conserto de OAuth da saúde dos harnesses (importar e
+espalhar o login do ChatGPT) também recusa com o mesmo código. Manter as duas implementações custava código duplicado e
 testes que provavam um caminho que quase nunca roda.
 
 Continua no Python, por ser o que o Rust consome ou o que ele não atende:
 
 - as rotas `/internal` de contas: janela escondida do login e da renovação
-  (`ClaudeWindows`), fatos de uso, preparo e invalidação do Codex;
+  (`ClaudeWindows`, em `claude_window.py`), fatos de uso, preparo e invalidação do
+  catálogo de modelos do Codex;
 - as cotas de Kimi, CommandCode e OpenCode (`quota_facts`), pedidas pelo Rust;
 - os leitores de cota Codex que a transferência de conversa usa;
 - as rotas só Python de credenciais: lista, apelido, cookie do OpenCode,
