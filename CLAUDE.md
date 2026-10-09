@@ -450,8 +450,9 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   Ele atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao` e o
   custo de sessão Codex com o token do dono, e o terminal real do dono (só pelo
   `?token=`; a Origin ainda é decidida pelo Python em `/internal/term/origin`). Custos e uso têm índice próprio
-  (`custos-rust.sqlite3`) no cache local; stats continuam no Python. Contas Claude/Codex,
-  cotas e anexos de sessão pertencem ao Rust enquanto o supervisor estiver em `rust` ou
+  (`custos-rust.sqlite3`) no cache local; stats continuam no Python. Contas Claude/Codex e
+  cotas são só do Rust: no modo `python` respondem `accounts_need_rust_server`, sem reserva
+  Python. Anexos de sessão pertencem ao Rust enquanto o supervisor estiver em `rust` ou
   `pending`; nessa fase, falha da ponte não ativa um segundo escritor Python. O resto, convidado
   incluído, é repassado com `X-Forwarded-For`. 8766 e 8768 ficam no Python. Sem binário
   (`CP_RUST_SERVER_BIN`, `crates/target/release`, `~/.hangar/bin`), com `CP_RUST_SERVER=0`, com
