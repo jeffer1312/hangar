@@ -3292,6 +3292,7 @@
   "contas_conectada": "Connected",
   "contas_login_nao_confirmado": "Could not confirm access. Please try again.",
   "contas_login_atualizar_erro": "The account was connected, but its limits could not be refreshed. Use Refresh in the list.",
+  "accounts_need_rust_server": "accounts and quotas need the Rust server, which is not running",
   "erro_conta_inexistente": "account {nome} does not exist",
   "erro_conta_nome_invalido": "invalid name: use lowercase letters, numbers, '-' or '_' (up to 32 characters)",
   "erro_login_ja_em_curso": "a login is already in progress for this account",

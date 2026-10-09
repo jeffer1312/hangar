@@ -3292,6 +3292,7 @@
   "contas_conectada": "Conectada",
   "contas_login_nao_confirmado": "Não foi possível confirmar o acesso. Tente novamente.",
   "contas_login_atualizar_erro": "A conta foi conectada, mas não foi possível atualizar os limites. Use Atualizar na lista.",
+  "accounts_need_rust_server": "contas e cotas precisam do servidor Rust, que não está rodando",
   "erro_conta_inexistente": "conta {nome} não existe",
   "erro_conta_nome_invalido": "nome inválido: use minúsculas, números, '-' ou '_' (até 32 caracteres)",
   "erro_login_ja_em_curso": "já existe um login em andamento para esta conta",
