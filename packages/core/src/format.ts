@@ -221,7 +221,7 @@ export function basename(path: string): string {
 
 // Nome da conta Claude no disco (`~/.claude-<nome>`), o que o DELETE /api/claude-configs/<nome>
 // resolve. O rótulo da lista já vem com o apelido e não serve para isso; a pasta padrão não tem nome.
-export function claudeAccountFolder(path: string | undefined): string | null {
+export function claudeAccountFolder(path: string | null | undefined): string | null {
   return basename(path ?? '').match(/^\.claude-(.+)$/)?.[1] ?? null;
 }
 

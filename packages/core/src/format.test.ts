@@ -304,6 +304,7 @@ describe('claudeAccountFolder', () => {
     expect(claudeAccountFolder('/home/u/.claude')).toBeNull();
     expect(claudeAccountFolder('/home/u/.claude-')).toBeNull();
     expect(claudeAccountFolder(undefined)).toBeNull();
+    expect(claudeAccountFolder(null)).toBeNull();
   });
 });
 
