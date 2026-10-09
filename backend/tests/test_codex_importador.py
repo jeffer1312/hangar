@@ -79,6 +79,10 @@ for line in sys.stdin:
     if scenario == "unsupported":
         send({"id": rid, "error": {"code": -32601, "message": "secret-token"}})
         continue
+    if scenario == "revoked":
+        send({"id": rid, "error": {"code": -32603,
+                                   "message": "workspace routing discovery unauthorized (401) secret-token"}})
+        continue
     if scenario == "readonly":
         send({"id": rid, "error": {"code": -32600, "message": "secret-token", "data": {
             "config_write_error_code": "configLayerReadonly", "config": "secret-token"}}})
@@ -330,6 +334,14 @@ async def test_erro_expoe_apenas_codigo_e_discriminador_publico(cliente):
             await obj.request("config/batchWrite", {})
         assert error.value.code == -32600
         assert error.value.data == {"config_write_error_code": "configLayerReadonly"}
+        assert "secret-token" not in str(error.value)
+
+
+async def test_login_revogado_vira_discriminador_sem_o_texto(cliente):
+    async with cliente("revoked") as obj:
+        with pytest.raises(CodexNativoErro) as error:
+            await obj.request("account/read", {"refreshToken": False})
+        assert error.value.data == {"auth_error": "unauthorized"}
         assert "secret-token" not in str(error.value)
 
 

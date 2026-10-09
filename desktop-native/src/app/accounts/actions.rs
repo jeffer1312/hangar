@@ -379,7 +379,7 @@ impl Hangar {
         // A linha pode ter sumido entre a pergunta e o sim: nada a fazer.
         let Some(row) = self.find_row(&id) else { return };
         let (path, seconds) = match kind {
-            ChangeKind::SignOut => (vec!["claude-configs".to_owned(), row.label.clone(), "logout".to_owned()], 60),
+            ChangeKind::SignOut => match &row.sign_out { Some(path) => (path.clone(), 60), None => return },
             ChangeKind::Remove => match &row.remove { Some((path, seconds, _)) => (path.clone(), *seconds), None => return },
         };
         let name = row.name.clone();
@@ -520,6 +520,7 @@ impl Hangar {
                         ChangeKind::SignOut => for c in list.iter_mut().filter(|c| c.id == id) {
                             c.login = Some(Login { state: "ok".into(), logged_in: Some(false), email: None, plan: None, reason: None, refresh_expires_at: None });
                             c.quota = None;
+                            if c.kind == "codex" { c.auth_method = Some("none".into()); }
                         },
                         ChangeKind::Remove => list.retain(|c| c.id != id),
                     }

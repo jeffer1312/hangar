@@ -193,6 +193,8 @@ def _account_error(exc: accounts.AccountError) -> HTTPException:
         "codex_account_default_protected": "a conta padrão do Codex não pode ser apagada",
         "codex_account_invalid_marker": "conta Codex inválida",
         "codex_account_delete_failed": "não foi possível apagar a conta Codex",
+        "codex_account_sign_out_failed": "o Codex não conseguiu sair da conta",
+        "codex_account_sign_out_unconfirmed": "a conta não apareceu deslogada depois de sair",
     }
     return HTTPException(exc.status, detail=erro(exc.code, messages.get(exc.code, "operação de conta Codex recusada"),
                                                   **exc.params))
@@ -262,6 +264,15 @@ async def start_codex_login(account_id: str, request: Request) -> dict:
     account = _account(account_id)
     try:
         return await _service(request).start_login(account)
+    except accounts.AccountError as exc:
+        raise _account_error(exc) from None
+
+
+@codex_contas_router.post("/{account_id}/logout", dependencies=[Depends(require_auth)])
+async def sign_out_codex_account(account_id: str, request: Request) -> dict:
+    account = _account(account_id)
+    try:
+        return await _service(request).sign_out(account)
     except accounts.AccountError as exc:
         raise _account_error(exc) from None
 

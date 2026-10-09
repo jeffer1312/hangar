@@ -11,7 +11,7 @@ import pytest
 
 from app import codex_contas as accounts
 from app.codex_contas_login import CodexContasLogin
-from app.codex_importador import CodexNativo
+from app.codex_importador import CodexNativo, CodexNativoErro
 
 
 class FakeNative:
@@ -71,6 +71,9 @@ class FakeNative:
             }
         if method == "account/login/cancel":
             return {"status": "canceled"}
+        if method == "account/logout":
+            type(self).auth_by_home[str(self.codex_home)] = {"account": None}
+            return {}
         if method == "account/read":
             if type(self).leituras_vazias > 0:
                 type(self).leituras_vazias -= 1
@@ -279,6 +282,59 @@ async def test_read_auth_falha_mantem_identidade_cacheada(contas, service, monke
     assert result == {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
     assert service._auth_cache == cached
     assert service.cached_auth(default)["email"] == "a@x"
+
+
+async def test_login_revogado_le_como_desconectada(contas, service, monkeypatch):
+    default, _ = contas
+
+    class RevokedNative:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise CodexNativoErro("O Codex recusou a requisição nativa.", code=-32603,
+                                  data={"auth_error": "unauthorized"})
+
+        async def __aexit__(self, *args):
+            return None
+
+    monkeypatch.setattr(service, "native", RevokedNative)
+    result = await service.read_auth(default, refresh=True)
+    assert result == {"method": "none", "status": "disconnected", "email": None, "plan": None,
+                      "reason": "login_revoked"}
+
+
+async def test_sair_desloga_e_esquece_a_identidade(contas, service):
+    _, work = contas
+    assert (await service.read_auth(work))["email"] == "b@x"
+
+    result = await service.sign_out(work)
+
+    assert result["method"] == "none"
+    assert ("account/logout", None, str(work.home)) in FakeNative.instances[-1].requests
+    assert service.cached_auth(work) is None
+    assert (await service.read_auth(work))["status"] == "disconnected"
+
+
+async def test_sair_recusa_conta_viva_e_logout_nao_confirmado(contas, service, monkeypatch):
+    _, work = contas
+    monkeypatch.setattr("app.codex_contas_login.CodexNativo", FakeNative)
+    live = CodexContasLogin(native=FakeNative, account_in_use=lambda account: True)
+    with pytest.raises(accounts.AccountError) as error:
+        await live.sign_out(work)
+    assert error.value.code == "codex_account_in_use"
+    assert not FakeNative.instances
+
+    class StubbornNative(FakeNative):
+        async def request(self, method, params, timeout=None):
+            if method == "account/logout":
+                return {}
+            return await super().request(method, params, timeout)
+
+    monkeypatch.setattr(service, "native", StubbornNative)
+    with pytest.raises(accounts.AccountError) as error:
+        await service.sign_out(work)
+    assert error.value.code == "codex_account_sign_out_unconfirmed"
 
 
 async def test_refresh_substitui_identidade_sem_mudar_arquivo(contas, service):
