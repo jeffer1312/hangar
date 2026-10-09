@@ -81,10 +81,10 @@ describe('chip de fila do Kimi', () => {
     unmount(comp);
   });
 
-  it('Claude não mostra: a tecla não existe naquela TUI', async () => {
+  it('Claude com terminal mostra: ctrl+x ctrl+s manda a fila da TUI', async () => {
     const { comp, chip } = montar({ provider: 'claude' });
     await flush();
-    expect(chip()).toBeNull();
+    expect(chip()).not.toBeNull();
     unmount(comp);
   });
 });
