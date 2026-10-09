@@ -14,9 +14,12 @@ const PULSE_TICK: Duration = Duration::from_micros(66_667);
 thread_local! {
     /// A janela tem o foco. Sem ele o relógio para: a marca fica parada no último quadro e nada acorda a janela.
     static WINDOW_ACTIVE: Cell<bool> = const { Cell::new(true) };
+    /// Adaptador por software (WARP no RDP sem GPU): cada batida rasteriza a janela inteira na CPU, então o relógio para.
+    static SOFTWARE_GPU: Cell<bool> = const { Cell::new(false) };
 }
 
 pub fn set_window_active(active: bool) { WINDOW_ACTIVE.set(active); }
+pub fn set_software_gpu(software: bool) { SOFTWARE_GPU.set(software); }
 /// Resposta que chega antes disso não mostra esqueleto: o espaço fica vazio e a lista entra direto.
 const SKELETON_DELAY: Duration = Duration::from_millis(150);
 
@@ -31,7 +34,7 @@ fn pulse_phase(period: Duration) -> f32 {
 }
 
 /// Redesenha a view a cada batida da grade, a partir de `delay`, até ela sair da tela. Com movimento reduzido, com a
-/// janela sem foco, ou com `awake` dizendo que ela não está à vista, não redesenha.
+/// janela sem foco, com desenho por software, ou com `awake` dizendo que ela não está à vista, não redesenha.
 fn pulse<V: 'static>(delay: Duration, awake: fn(&V) -> bool, cx: &mut Context<V>) {
     cx.spawn(async move |view, cx| {
         cx.background_executor().timer(delay).await;
@@ -40,7 +43,7 @@ fn pulse<V: 'static>(delay: Duration, awake: fn(&V) -> bool, cx: &mut Context<V>
         loop {
             let into = Duration::from_nanos((pulse_epoch().elapsed().as_nanos() % PULSE_TICK.as_nanos()) as u64);
             cx.background_executor().timer(PULSE_TICK - into).await;
-            if view.update(cx, |view, cx| if !cx.reduce_motion() && WINDOW_ACTIVE.get() && awake(view) { cx.notify() }).is_err() { break; }
+            if view.update(cx, |view, cx| if !cx.reduce_motion() && WINDOW_ACTIVE.get() && !SOFTWARE_GPU.get() && awake(view) { cx.notify() }).is_err() { break; }
         }
     }).detach();
 }
@@ -294,7 +297,8 @@ impl RenderOnce for Elapsed {
                 let off = (pulse_epoch().elapsed() + turn).as_nanos() % PULSE_TICK.as_nanos();
                 let turn = turn + Duration::from_nanos(((PULSE_TICK.as_nanos() - off) % PULSE_TICK.as_nanos()) as u64);
                 cx.background_executor().timer(turn).await;
-                if view.update(cx, |_, cx| cx.notify()).is_err() { break; }
+                // Sem foco o segundo não vira: ninguém olha, e cada virada redesenha a raiz.
+                if view.update(cx, |_, cx| if WINDOW_ACTIVE.get() { cx.notify() }).is_err() { break; }
             }).detach();
             ElapsedView { since, suffix: suffix.clone() }
         });

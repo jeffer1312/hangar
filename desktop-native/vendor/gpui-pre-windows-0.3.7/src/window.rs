@@ -1038,6 +1038,14 @@ impl PlatformWindow for WindowsWindow {
             .log_err();
     }
 
+    fn draw_with_damage(&self, scene: &Scene, damage: &SceneDamage) {
+        self.state
+            .renderer
+            .borrow_mut()
+            .draw_with_damage(scene, self.state.background_appearance.get(), damage)
+            .log_err();
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
         self.state
