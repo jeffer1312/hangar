@@ -174,11 +174,14 @@ passo_preparo() {
             cargo test --locked --workspace --no-run) || falhou=1
     fi
     if [[ "$plano" == *" backend "* ]]; then
-        # Os contratos e as sondas de contas que o pytest executa (ci.yml).
+        # Os contratos e as sondas de contas que o pytest executa (ci.yml), só as que a árvore tem.
+        local sonda sondas=()
+        for sonda in accounts_lifecycle accounts_catalog accounts_preparation; do
+            [[ -f "crates/hangar-server/tests/$sonda.rs" ]] && sondas+=(--test "$sonda")
+        done
         (cd crates && cargo build --locked -p hangar-server && \
             cargo build --locked -p hangar-workspace --example workspace_contract && \
-            cargo test --locked -p hangar-server --no-run \
-                --test accounts_lifecycle --test accounts_catalog --test accounts_preparation) || falhou=1
+            { (( ! ${#sondas[@]} )) || cargo test --locked -p hangar-server --no-run "${sondas[@]}"; }) || falhou=1
     fi
     for pid in "${pids[@]}"; do wait "$pid" || falhou=1; done
     return $falhou
