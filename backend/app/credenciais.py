@@ -23,7 +23,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import agentes_sync, apelidos, contas, cotas, engines, oauth_codex, opencode_cota, codex_contas
+from app import agentes_sync, apelidos, contas, cotas, engines, opencode_cota, codex_contas
 from app.auth import require_auth
 from app import engine_probe
 from app.config import list_config_dirs
@@ -113,7 +113,7 @@ def _cota_por_id(forcar: bool = False) -> dict[str, CotaResumo]:
 async def listar_endpoint(request: Request, forcar: bool = False) -> list[Credencial]:
     service = getattr(request.app.state, "codex_contas_login", None)
     async def snapshot(account):
-        auth = service.cached_auth(account)
+        auth = None
         sync = (await service.preparation_status_async(account)).get("status")
         if sync != "running":
             try:
@@ -241,9 +241,7 @@ def definir_cookie(body: CookieBody) -> dict:
     # Invalida a leitura em cache: sem isto o cookie novo só valeria no próximo ciclo de 5 min, e
     # a pessoa acabou de colar justamente pra ver o número aparecer. O cache é de quem lê a cota.
     from app import account_bridge
-    if account_bridge.request_quotas(invalidate=body.id) is None:
-        with cotas._lock:
-            cotas._cache.pop(body.id, None)
+    account_bridge.request_quotas(invalidate=body.id)
     return {"id": body.id, "cookie_definido": body.id in opencode_cota.ler_configs()}
 
 
@@ -288,33 +286,6 @@ def sincronizar_nos_agentes(body: SyncBody) -> dict:
     alvos = tuple(a for a in body.alvos if a in agentes_sync.ALVOS) or agentes_sync.ALVOS
     return {"id": body.id, "modelos": len(modelos),
             "resultado": agentes_sync.sincronizar(nome, base_url, api_key, modelos, alvos)}
-
-
-# ---------------------------------------------------------------- login OAuth do ChatGPT (Codex)
-# O app faz o fluxo de código de dispositivo e espalha o resultado pro Codex, Pi e omp
-# (app/oauth_codex.py). O poll é do front: `GET /codex/login` a cada 2s até `concluido`.
-
-@credenciais_router.get("/codex", dependencies=[Depends(require_auth)])
-def codex_estado() -> dict:
-    return oauth_codex.estado()
-
-
-@credenciais_router.post("/codex/login", dependencies=[Depends(require_auth)])
-def codex_login_iniciar() -> dict:
-    try:
-        return oauth_codex.iniciar()
-    except RuntimeError as e:
-        raise HTTPException(409, detail=erro("erro_codex_login", str(e), motivo=str(e)))
-
-
-@credenciais_router.get("/codex/login", dependencies=[Depends(require_auth)])
-def codex_login_passo() -> dict:
-    return oauth_codex.passo()
-
-
-@credenciais_router.delete("/codex/login", dependencies=[Depends(require_auth)])
-def codex_login_cancelar() -> dict:
-    return oauth_codex.cancelar()
 
 
 @credenciais_router.delete("/kimi/{nome}", dependencies=[Depends(require_auth)])

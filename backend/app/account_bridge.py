@@ -493,7 +493,7 @@ class ClaudeWindows:
         self.closed = set()
 
     def run(self, body):
-        from app import login_conta, conta_estado, runtime_coordinator
+        from app import login_conta, runtime_coordinator
         if not isinstance(body, dict) or set(body) != {"instance", "key", "operation", "action", "code"}:
             raise ValueError("pedido inválido")
         coordinator = runtime_coordinator.current()
@@ -570,7 +570,8 @@ class ClaudeWindows:
                         self.active.pop(operation, None)
                         raise
             elif action == "invalidate":
-                conta_estado.esquecer_conta(str(key.canonical_home))
+                # Os caches de login e cota são do Rust: o Python não guarda nada a esquecer.
+                pass
             else:
                 if self.active.get(operation) != (key, body["instance"]):
                     raise ValueError("operação ausente")
@@ -684,20 +685,20 @@ def request_device(action):
         raise HTTPException(503, detail=unavailable) from None
 
 
-# Rotas de conta que o Rust atende na porta dele; o resto delas segue no Python.
+# Rotas de conta e cota que só o Rust atende; sem ele, respondem NEED_RUST.
 ACCOUNT_PREFIXES = ("/api/claude-configs", "/api/codex-contas", "/api/cotas", "/api/conta-estado",
                     "/api/credenciais/codex")
+NEED_RUST = {"code": "accounts_need_rust_server", "params": {},
+             "msg": "contas e cotas precisam do servidor Rust"}
 
 
 async def forward_public(request):
     """Leva ao Rust o pedido de conta que entrou pelas portas do Python, já autenticado.
 
-    None = o Python atende: ele é o dono (modo python) ou o Rust disse que a rota não é dele.
-    Em pending, sem transporte, recusa: nunca abre um segundo escritor."""
+    None = o Rust disse que a rota não é dele. Em pending, sem transporte, recusa: nunca abre
+    um segundo escritor. Quem chama já respondeu NEED_RUST no modo python."""
     import asyncio
     from starlette.responses import JSONResponse, Response
-    if owner_mode() == "python":
-        return None
     config = _preparation_transport
     if config is None:
         return JSONResponse({"detail": {"code": "account_bridge_unavailable"}}, status_code=503)

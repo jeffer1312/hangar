@@ -67,7 +67,6 @@ from app.planprog import (plan_progress, list_plans, write_pin, is_safe_stem, _p
 from app.pqueue import (PromptQueue, _saida_local, _transcript_start_ts, committed_user_lines,
                         fila_interna_pendente, linha_mais_parecida)
 from app.prune import prune_loop as _prune_loop
-from app.renova_token import laco as _renova_token_loop
 from app.chain import ThenLink
 from app import terminal_input
 from app.terminal_input import TerminalInput, drain
@@ -82,7 +81,7 @@ from app.uploads import (save_upload, resolve_upload, resolve_session_audio, pru
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import (transcribe, transcribe_with_provider, providers_status, Transcription,
                             TranscribeError, DICTATION_LIMITS, FILE_LIMITS)
-from app.config import (list_config_dirs, ConfigDirInfo, _backend_config_base, settings,
+from app.config import (list_config_dirs, _backend_config_base, settings,
                         resolve_scan_roots,
                         automations_enabled, resolve_bind_ip, variaveis_env)
 from app import runtime_config
@@ -118,11 +117,10 @@ from app.askquestion import clear_pending_askq, read_pending_askq
 from app import pair
 from app import pair_texto
 from app import peers
-from app import alcance, conta_estado, cotas, credenciais, peers_api
+from app import alcance, credenciais, peers_api
 from app import config_sync_api
 from app import codex_contas as codex_accounts
-from app import codex_contas_api
-from app.codex_contas_login import CodexContasLogin, codex_session_alive
+from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink, contract_path_for
 from app.hook_state import hook_state
 from app import push
@@ -226,27 +224,6 @@ def _codex_require_idle_preparation(account, service) -> None:
         _log.warning("conta Codex %s com sincronização %s; pendências: %s",
                      account.id, status.get("status"),
                      [issue.get("code") for issue in status.get("issues", [])])
-
-
-def _codex_account_in_use(account) -> bool:
-    """Consulta sessões Codex vivas sem alterar a identidade do processo do backend."""
-    from app.adapters.codex import sessions as codex_sessions
-    wanted = account.home.expanduser().resolve(strict=False)
-    for info in registry.list():
-        if getattr(info, "provider", None) != "codex":
-            continue
-        meta = codex_sessions.load(info.name) or {}
-        if not codex_session_alive(info.name, meta):
-            continue
-        selected = getattr(info, "codex_home", None)
-        if selected and Path(selected).expanduser().resolve(strict=False) == wanted:
-            return True
-        rollout = getattr(info, "jsonl", None)
-        if rollout:
-            owner = codex_accounts.account_for_rollout(Path(rollout))
-            if owner is not None and owner.id == account.id:
-                return True
-    return False
 
 
 class _BodyTooLarge(Exception):
@@ -354,19 +331,6 @@ async def _lifespan(app: FastAPI):
     # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
     # 24h — ver app/prune.py para o criterio conservador (chave de sessao nao viva + idade
     # minima de 7 dias) e o porquê de periodica em vez de so no startup.
-    # Renovação de token das contas PARADAS (Task de 18/08). Sem ela, conta que você não abre há
-    # dias fica com o accessToken vencido: a cota dela some da faixa do rodapé e, no limite do prazo
-    # do refresh (~26 dias), a conta pede login de novo. Abrir a sessão é o que renova — medido.
-    renova_task = asyncio.create_task(_renova_token_loop())
-
-    def _renova_done(t: asyncio.Task) -> None:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                _log.exception("renova_token.laco crashed", exc_info=exc)
-
-    renova_task.add_done_callback(_renova_done)
-
     fetch_task = asyncio.create_task(_fetch_loop())
 
     def _fetch_done(t: asyncio.Task) -> None:
@@ -451,11 +415,9 @@ async def _lifespan(app: FastAPI):
     codex_warm_task = asyncio.create_task(get_adapter("codex").watch_sessions())
     from app.codex_integracao import SERVICO as integracao_codex
     codex_contas_login = CodexContasLogin(
-        account_in_use=_codex_account_in_use,
         atualizar_principal=integracao_codex.atualizar_e_aguardar,
     )
     app.state.codex_contas_login = codex_contas_login
-    cotas.registrar_codex_auth_cache(codex_contas_login.cached_auth)
     # Referência guardada: task sem dono pode ser coletada no meio.
     app.state.codex_auth_aquecer = asyncio.create_task(codex_contas_login.aquecer())
     app.state.codex_creation_tasks = set()
@@ -495,8 +457,6 @@ async def _lifespan(app: FastAPI):
             creation_task.cancel()
         if creation_tasks:
             await asyncio.gather(*creation_tasks, return_exceptions=True)
-        await codex_contas_login.close()
-        cotas.registrar_codex_auth_cache(None)
         try:
             await integracao_codex.fechar()
         except Exception:
@@ -507,7 +467,6 @@ async def _lifespan(app: FastAPI):
         prune_task.cancel()
         share_task.cancel()
         pair_sweep_task.cancel()
-        renova_task.cancel()
         await omp_sync.close()
         try:
             await task
@@ -520,13 +479,6 @@ async def _lifespan(app: FastAPI):
         await asyncio.gather(loop_monitor_task, return_exceptions=True)
         try:
             await prune_task
-        except asyncio.CancelledError:
-            pass
-        # Esperar, e não só cancelar: a rodada de renovação roda em to_thread e abre uma janela
-        # tmux que só morre no `finally` dela. Sair sem esperar deixaria a janela órfã justo no
-        # restart do backend, que aqui é rotina.
-        try:
-            await renova_task
         except asyncio.CancelledError:
             pass
 
@@ -643,17 +595,18 @@ async def _grupos_indisponiveis(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def _contas_pelo_rust(request: Request, call_next):
-    """Connect e convidado chegam aqui, e contas têm um escritor só: com o Rust de pé, o pedido
-    autenticado segue para ele pela ponte privada. A rota Python fica para o modo python e para o
-    que o Rust disser que não é dele."""
+    """Contas e cotas têm um dono só, o Rust: Connect e convidado chegam aqui e o pedido
+    autenticado segue para ele pela ponte privada. Sem o Rust não há reserva Python: a rota
+    responde indisponível. O Python só atende o que o Rust disser que não é dele."""
     from app import account_bridge
-    if (not request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES)
-            or account_bridge.owner_mode() == "python"):
+    if not request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES):
         return await call_next(request)
     try:
         require_auth(request)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
+    if account_bridge.owner_mode() == "python":
+        return JSONResponse({"detail": account_bridge.NEED_RUST}, status_code=503)
     response = await account_bridge.forward_public(request)
     return response if response is not None else await call_next(request)
 
@@ -736,10 +689,7 @@ app.include_router(deploy_router)
 # Roteadores por assunto (Task 1 do plano descoberta-e-configuracao): cada Task do lote escreve
 # só no módulo dela. Última edição de api.py deste plano.
 app.include_router(alcance.alcance_router)
-app.include_router(conta_estado.conta_estado_router)
-app.include_router(cotas.cotas_router)
 app.include_router(credenciais.credenciais_router)
-app.include_router(codex_contas_api.codex_contas_router)
 app.include_router(harness_api.harness_router)
 app.include_router(peers_api.peers_router)
 app.include_router(update_channel.router)
@@ -2049,151 +1999,6 @@ async def diag_arquivo():
     return Response(
         content=texto, media_type="application/x-ndjson",
         headers={"Content-Disposition": 'attachment; filename="hangar-uso.jsonl"'})
-
-
-@app.get("/api/claude-configs", dependencies=[Depends(require_auth)], response_model=list[ConfigDirInfo])
-def claude_configs():
-    return list_config_dirs()
-
-
-class ContaBody(_StrictBody):
-    # pattern com \z (fim absoluto da crate regex do pydantic — o \Z do Python não é aceito lá,
-    # e o $ casaria antes de uma quebra de linha final, deixando 'conta2\n' passar: pasta com
-    # controle de linha no nome). O mesmo padrão do contas._NOME_OK, que é fullmatch; aqui no
-    # schema o pedido inválido nem chega no módulo.
-    nome: str = Field(min_length=1, max_length=32,
-                      pattern=r"^[a-z0-9][a-z0-9_-]{0,31}\z")
-
-
-@app.post("/api/claude-configs", dependencies=[Depends(require_auth)])
-async def post_claude_config(body: ContaBody):
-    """Cria a pasta da conta. NÃO loga: o OAuth abre navegador e é interativo — quem roda o
-    /login é o usuário, dentro da primeira sessão aberta nessa conta."""
-    if os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip():
-        # Com a lista fixa por env, list_config_dirs ignora o auto-scan: a conta seria criada e
-        # nunca apareceria no seletor. Recusar com o motivo é melhor que um 200 inútil.
-        raise HTTPException(409, detail=erro("erro_config_dirs_fixo",
-                                 "CP_CLAUDE_CONFIG_DIRS está setado: a lista de contas é fixa por "
-                                 "ambiente. Remova a variável ou acrescente a conta nela."))
-    try:
-        p = await asyncio.to_thread(contas.criar, body.nome)
-    except contas.ContaError as e:
-        raise HTTPException(e.status, e.detail) from None
-    return {"path": str(p), "label": body.nome, "active": False}
-
-
-@app.delete("/api/claude-configs/{nome}", dependencies=[Depends(require_auth)])
-async def delete_claude_config(nome: str):
-    """Apaga a conta e os transcripts dela. Recusa se alguma sessão viva estiver usando, se a
-    conta for a configuração ativa do backend, se estiver na lista fixa do ambiente ou se algum
-    processo vivo tiver o config dir dela — apagar debaixo de um deles deixa o CLI escrevendo
-    num caminho que sumiu."""
-    try:
-        alvo = contas.caminho(nome)
-    except contas.ContaError as e:
-        # Nome fora do alfabeto da conta (ex: pasta de backup com ponto no nome): envelope pra
-        # o front traduzir no idioma do app, em vez de mostrar a string crua do módulo.
-        raise HTTPException(e.status, detail=erro("erro_conta_nome_invalido", e.detail)) from None
-    if alvo.resolve() == _backend_config_base().resolve():
-        # A config ativa do backend é o ~/.claude (ou o CLAUDE_CONFIG_DIR dele): settings,
-        # custos e transcripts do próprio app moram lá — apagar derrubaria o app em si.
-        raise HTTPException(409, detail=erro("erro_conta_ativa_backend",
-                                 "esta conta é a configuração ativa do backend — não dá pra "
-                                 "apagar por aqui"))
-    if os.environ.get("CP_CLAUDE_CONFIG_DIRS", "").strip():
-        # Com a lista fixa por env, o GET continua devolvendo esta conta MESMO apagada: sobraria
-        # um fantasma no seletor, e a próxima sessão recriaria a pasta sem marcador nem atalhos.
-        if alvo.resolve() in {Path(c.path).resolve() for c in list_config_dirs()}:
-            raise HTTPException(409, detail=erro("erro_conta_lista_fixa",
-                                     "CP_CLAUDE_CONFIG_DIRS está setado: esta conta está na "
-                                     "lista fixa por ambiente. Remova-a da variável antes de "
-                                     "apagar."))
-    # O ciclo segura a trava da conta (a mesma do create_session) ao redor da checagem e do
-    # rmtree: sem ele, o DELETE passaria na janela entre a reconciliação e o registry.create de
-    # uma sessão que está subindo, e apagaria a pasta embaixo dela.
-    def _checar_e_apagar():
-        # TUDO numa thread só: o `ciclo_conta` pega `flock` no __enter__, que BLOQUEIA. Chamado
-        # direto da rota async, uma segunda operação de conta concorrente congelava o event loop
-        # inteiro — todas as rotas do app, não só esta — até a primeira soltar. E a janela é longa:
-        # o laço abaixo roda um `subprocess` do tmux por sessão viva, também síncrono.
-        with contas.ciclo_conta(nome) as ciclo:
-            for s in registry.list():
-                cfg, confiavel = _session_config_dir_strict(s.name)
-                if not confiavel:
-                    raise HTTPException(409, detail=erro("erro_config_dir_sessao",
-                                             f"não consegui confirmar o config dir da sessão "
-                                             f"'{s.name}' — apagar recusado", nome=s.name))
-                if cfg is not None and cfg.resolve() == alvo.resolve():
-                    raise HTTPException(409, detail=erro("erro_sessao_usa_conta",
-                                             f"a sessão '{s.name}' está usando esta conta", nome=s.name))
-            # CLI aberto FORA do tmux não aparece no registry: a varredura por CLAUDE_CONFIG_DIR
-            # no /proc é quem segura o apagar debaixo dele.
-            pids, varredura_ok = procinfo._pids_com_config_dir(alvo)
-            if not varredura_ok:
-                # "Não consegui olhar" não é "olhei e não achei": seguir aqui apagaria a pasta
-                # debaixo de um `claude` vivo que a varredura não chegou a enxergar.
-                raise HTTPException(409, detail=erro("erro_varredura_processos",
-                                         "não consegui varrer os processos da máquina — apagar "
-                                         "recusado (pode haver um claude aberto nesta conta)"))
-            if pids:
-                raise HTTPException(409, detail=erro("erro_processos_usam_conta",
-                                         f"processo(s) {pids} estão usando esta conta", pids=pids))
-            ciclo.apagar()
-
-    try:
-        await asyncio.to_thread(_checar_e_apagar)
-    except contas.ContaError as e:
-        # Pasta não carimbada (ou conta que sumiu): mesmo 404 do apagar() antigo, agora como
-        # envelope — a mesma chave do login (erro_conta_inexistente) traduz nos dois fluxos.
-        raise HTTPException(e.status, detail=erro("erro_conta_inexistente", e.detail,
-                                                  nome=nome)) from None
-    return {"ok": True}
-
-
-@app.post("/api/claude-configs/{nome}/logout", dependencies=[Depends(require_auth)])
-async def logout_claude_config(nome: str):
-    """Sai da conta sem apagar a pasta. Sessão aberta na conta não impede: ela só perde o login
-    (se renovar o token em memória, pode regravar a credencial).
-
-    `nome` é o rótulo da lista (o apelido, quando a conta foi renomeada), igual ao login."""
-    from app import account_bridge
-    native = await asyncio.to_thread(account_bridge.request_claude, "logout", label=nome)
-    if native is not None:
-        return native
-    conta = next((c for c in list_config_dirs() if c.label == nome), None)
-    if conta is None:
-        raise HTTPException(404, detail=erro("erro_conta_inexistente", f"conta {nome} não existe", nome=nome))
-    alvo = Path(conta.path)
-    pasta = alvo.name.removeprefix(".claude-")
-
-    def _sair():
-        try:
-            conta_estado._auth_logout(alvo)
-        except RuntimeError as e:
-            raise HTTPException(502, detail=erro("erro_logout_nao_confirmado", str(e))) from None
-        conta_estado.esquecer_conta(conta.path)
-        estado = conta_estado._estado_login(conta_estado._auth_status(alvo))
-        if estado.estado != "ok" or estado.loggedIn:
-            raise HTTPException(502, detail=erro("erro_logout_nao_confirmado",
-                                     "a conta não apareceu deslogada depois do logout"))
-
-    def _checar_e_sair():
-        # A config ativa do backend (~/.claude) não é conta criada pelo hangar, então não tem
-        # trava de ciclo; sair dela só tira o login, é o caminho pra entrar com outra.
-        if alvo.resolve() == _backend_config_base().resolve():
-            _sair()
-            return
-        with contas.ciclo_conta(pasta):
-            if contas.caminho(pasta).resolve() != alvo.resolve():
-                raise contas.ContaError(404, f"{alvo} não é uma conta criada pelo hangar")
-            _sair()
-
-    try:
-        await asyncio.to_thread(_checar_e_sair)
-    except contas.ContaError as e:
-        raise HTTPException(e.status, detail=erro("erro_conta_inexistente", e.detail,
-                                                  nome=nome)) from None
-    return {"ok": True}
 
 
 @app.get("/api/desktop/palette", dependencies=[Depends(require_auth), Depends(require_loopback)])
