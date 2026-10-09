@@ -88,8 +88,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   passo.** O preparo é o único que compila e instala, e o pytest roda com `pytest-xdist`, um arquivo
   por processo (`git config hangar.verificarProcessos`, padrão 4; `1` = em fila). Um passo que passou
   fica gravado para a árvore, e a rodada seguinte só repete o que falta. O Node é o do `.node-version`
-  da árvore verificada. Teste do backend não pode deixar timer, thread que age ou `sys.modules`
-  alterado para o arquivo seguinte: com a suíte repartida, quem paga é o vizinho. Evidência em
+  da árvore verificada. Teste do backend não pode deixar timer, thread que age, `sys.modules`,
+  módulo recarregado ou tratador de sinal alterado para o arquivo seguinte: com a suíte repartida, quem paga é o vizinho. Evidência em
   [Verificação local em paralelo](#verificação-local-em-paralelo-09102026).
 - **O bloco do MCP `hangar` no `config.toml` do Codex é reconhecido pela TABELA, não só pelos
   marcadores.** O app desktop reescreve o arquivo sem comentários; quem só procura `# >>> hangar`
@@ -641,14 +641,19 @@ e mobile 139 s na mesma faixa; shell, statusline e pi 8 s. Caminho crítico ≈ 
   processos, 95–117 s com 8 a 16. Arquivo inteiro por processo porque há testes com nome fixo de
   sessão tmux (`cp-test-termsock`), que colidiam quando o mesmo arquivo se dividia.
 - **A suíte dependia da ordem dos arquivos.** Em fila, na ordem alfabética do CI, passava; repartida,
-  cada rodada quebrava um arquivo diferente, e cada um passava sozinho. Três origens: o Timer de
+  cada rodada quebrava um arquivo diferente, e cada um passava sozinho. Quatro origens: o Timer de
   confirmação de entrega do `app.api` (~8,5 s) sobrava de um teste e falava com o tmux no meio do
   arquivo seguinte (`test_api.py` → `test_terminal_observer.py`, e por tempo o
   `test_create_modelo_api.py`); e `test_codex_wrapper.py` tirava `app.adapters` do `sys.modules`
   sem devolver, e o pacote reimportado nascia sem o atributo `adapter`; e `test_sync.py` recarregava
   o `app.api` (`importlib.reload`), trocando o `app` global, e o `test_create_modelo_api.py` seguinte
-  perdia o serviço de contas Codex que tinha montado. Detector usado: um plugin de
-  pytest que lista as threads vivas ao fim de cada arquivo; o terceiro, por bissecção da ordem.
+  perdia o serviço de contas Codex que tinha montado; e, na tomada da porta pelo Python, os dois
+  `uvicorn.Server` saíam fora de ordem e deixavam o tratador de `SIGTERM` de um servidor encerrado
+  instalado, com o que o `sse-starlette` ligava o `should_exit` global e toda resposta SSE seguinte
+  saía vazia (`No response returned` no `test_internal_side_events.py`). O conftest restaura os
+  sinais e esse estado ao fim de cada teste. Detector usado: um plugin de
+  pytest que lista as threads vivas ao fim de cada arquivo; o terceiro, por bissecção da ordem; o
+  quarto, imprimindo o tratador de `SIGTERM` ao fim de cada teste.
 - **Preparo único.** Com os passos em paralelo, um `cargo build` de uma faixa reescrevia binário que
   outra executava, e o pytest chegava antes das sondas de contas (~30 falhas falsas). Os passos não
   compilam mais nada no Linux.

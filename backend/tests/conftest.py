@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -59,12 +60,25 @@ if os.name == "nt":
     _instalar_home_do_windows()
 
 
+_SINAIS_DA_SESSAO = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_runtest_teardown(item, nextitem):
+    # Nada que um teste deixa para trás pode alcançar o arquivo seguinte: com a suíte repartida
+    # entre processos, quem pagava era o vizinho. Hook e não fixture autouse: fixture por teste muda
+    # a ordem das outras (ver _instalar_home_do_windows).
+    #
+    # Um uvicorn que sai fora de ordem deixa o tratador de SIGTERM dele instalado; o sse-starlette
+    # vê esse servidor encerrado, liga o should_exit global, e toda resposta SSE seguinte sai vazia.
+    for sig, original in _SINAIS_DA_SESSAO.items():
+        if signal.getsignal(sig) is not original:
+            signal.signal(sig, original)
+    sse = sys.modules.get("sse_starlette.sse")
+    if sse is not None:
+        sse.AppStatus.should_exit = False
     # A confirmação de entrega do app.api é um Timer de segundos: sobrando de um teste, dispara no
-    # seguinte e fala com o tmux no meio dele (com a suíte repartida entre processos, quebrava o
-    # arquivo vizinho). Hook e não fixture autouse: fixture por teste muda a ordem das outras (ver
-    # _instalar_home_do_windows).
+    # seguinte e fala com o tmux no meio dele.
     api = sys.modules.get("app.api")
     if api is None:
         return
