@@ -2663,7 +2663,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // subagente que terminou (`transcript.py`, `queued-task:<id>`, tool_result). Sem o kind, um
   // agente de fundo terminando contaria como mensagem na fila.
   const filaCount = $derived(
-    sessionProvider !== 'kimi' && sessionProvider !== 'codex' && sessionProvider !== 'claude' && !sessionHeadless
+    sessionProvider !== 'kimi' && sessionProvider !== 'codex' && !(sessionProvider === 'claude' && !desktop) && !sessionHeadless
       ? 0
       : pending.length
         + queuedMessages(events, sessionProvider, sessionHeadless).length,
@@ -3542,7 +3542,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         {lastCache}
         stats={statsEvent}
         onSend={handleSend}
-        onSteer={sessionProvider === 'kimi' || sessionProvider === 'codex' || sessionProvider === 'claude' || sessionHeadless ? steerAgora : undefined}
+        onSteer={sessionProvider === 'kimi' || sessionProvider === 'codex' || (sessionProvider === 'claude' && !desktop) || sessionHeadless ? steerAgora : undefined}
         headless={sessionHeadless}
         codexMode={stateEvent?.codex_mode}
         claudePermissionMode={stateEvent?.claude_permission_mode}

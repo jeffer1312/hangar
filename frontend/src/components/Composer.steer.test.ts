@@ -5,7 +5,7 @@
 // Só aparece em Kimi TRABALHANDO e com fila: em Claude a tecla (ctrl-s) não significa isso, e com a
 // sessão parada não há turno pra furar.
 import { describe, it, expect, vi } from 'vitest';
-import { mount, unmount } from 'svelte';
+import { mount, tick, unmount } from 'svelte';
 import Composer from './Composer.svelte';
 import * as m from '../paraglide/messages';
 
@@ -84,6 +84,7 @@ describe('chip de fila do Kimi', () => {
   it('Claude com terminal mostra: ctrl+x ctrl+s manda a fila da TUI', async () => {
     const { comp, chip } = montar({ provider: 'claude' });
     await flush();
+    await tick();
     expect(chip()).not.toBeNull();
     unmount(comp);
   });

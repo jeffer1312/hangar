@@ -1237,7 +1237,7 @@
   "composer_enviar_mensagem": "Send message",
   "composer_parar": "Stop",
   "chat_envio_incerto": "The connection dropped while sending and the message may have arrived. Check the conversation before resending.",
-  "composer_enviar_fila_kimi": "Send (goes into Kimi's queue)",
+  "composer_enviar_fila_kimi": "Send (goes into the queue)",
   "composer_shells_contagem": "{n} shells",
   "composer_shells_titulo": "{n} command(s) running in the background in this session. Tap to see which.",
   "atividade_shells": "Running in the background",

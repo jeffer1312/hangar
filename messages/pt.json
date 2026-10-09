@@ -1237,7 +1237,7 @@
   "composer_enviar_mensagem": "Enviar mensagem",
   "composer_parar": "Parar",
   "chat_envio_incerto": "A conexão caiu durante o envio e a mensagem pode ter chegado. Confira a conversa antes de reenviar.",
-  "composer_enviar_fila_kimi": "Enviar (entra na fila do Kimi)",
+  "composer_enviar_fila_kimi": "Enviar (entra na fila)",
   "composer_shells_contagem": "{n} shells",
   "composer_shells_titulo": "{n} comando(s) rodando em segundo plano nesta sessão. Toque para ver quais.",
   "atividade_shells": "Rodando em segundo plano",

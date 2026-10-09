@@ -2547,7 +2547,7 @@ import { cachePrazo } from '../lib/cachePrazo';
             class:send-btn--disabled={!canSend}
             onclick={() => submit()}
             disabled={!canSend}
-            aria-label={(isKimi || isCodex || headless) && isWorking ? m.composer_enviar_fila_kimi() : m.composer_enviar_mensagem()}
+            aria-label={temFilaPromovivel && isWorking ? m.composer_enviar_fila_kimi() : m.composer_enviar_mensagem()}
           >
             <IconSend size={18} />
           </button>
