@@ -361,7 +361,8 @@ fn queue_operation(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatE
     if obj.get("operation").and_then(Value::as_str) != Some("remove") {
         return Vec::new();
     }
-    let id = format!("queued:{}:{h}", obj.get("timestamp").map_or_else(String::new, py::py_str));
+    let id = delivery_id(obj.get("deliveryId"))
+        .unwrap_or_else(|| format!("queued:{}:{h}", obj.get("timestamp").map_or_else(String::new, py::py_str)));
     if let Some(peer) = wrapped_peer_msg(q, resolve) {
         return vec![text_event(ChatKind::UserMsg, id, peer)];
     }
@@ -377,6 +378,11 @@ fn queue_operation(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatE
         return Vec::new();
     }
     vec![text_event(ChatKind::UserMsg, id, cleaned)]
+}
+
+/// Sem terminal, a mesma entrega grava o anexo `queued_command` e o `remove`: o id comum vira uma bolha só.
+fn delivery_id(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).filter(|v| !v.is_empty()).map(|v| format!("delivery:{v}"))
 }
 
 fn attachment(obj: &Map<String, Value>, uid: &str) -> Vec<ChatEvent> {
@@ -399,7 +405,8 @@ fn attachment(obj: &Map<String, Value>, uid: &str) -> Vec<ChatEvent> {
         }
         let text = strip_meta_blocks(text);
         if !text.is_empty() {
-            return vec![ChatEvent { ts: ts(obj), ..text_event(ChatKind::UserMsg, uid.into(), text) }];
+            let id = delivery_id(att.get("delivery_id")).unwrap_or_else(|| uid.into());
+            return vec![ChatEvent { ts: ts(obj), ..text_event(ChatKind::UserMsg, id, text) }];
         }
     }
     if atype == Some("hook_additional_context") && att.get("hookEvent").and_then(Value::as_str) == Some("Stop") {
@@ -663,6 +670,19 @@ mod tests {
         let [ev] = <[ChatEvent; 1]>::try_from(parse(tool_use_result, vec![], Value::Null)).expect("um evento");
         assert_eq!(ev.kind, ChatKind::ToolResult);
         ev.patch
+    }
+
+    #[test]
+    fn headless_delivery_attachment_and_remove_share_one_id() {
+        let att = json!({"type": "attachment", "uuid": "u-att", "timestamp": "2026-10-09T23:06:03.448Z",
+            "attachment": {"type": "queued_command", "delivery_id": "d-1",
+                "prompt": [{"type": "text", "text": "A DESCULPA ERA B"}]}});
+        let rem = json!({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
+            "reason": "absorbed_mid_turn", "timestamp": "2026-10-09T23:06:10.249Z", "content": "A DESCULPA ERA B"});
+        let ids = |line: Value| LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0)
+            .into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(att), vec!["delivery:d-1".to_string()]);
+        assert_eq!(ids(rem), vec!["delivery:d-1".to_string()]);
     }
 
     #[test]

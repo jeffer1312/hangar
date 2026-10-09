@@ -509,6 +509,17 @@ def test_queued_removed_ids_diferem_no_mesmo_timestamp():
     assert a.id != b.id and a.text != b.text
 
 
+def test_entrega_sem_terminal_anexo_e_remove_viram_uma_bolha():
+    # Sem terminal, a mesma entrega grava `attachment/queued_command` e `queue-operation remove`.
+    att = parse_line(json.dumps({"type": "attachment", "uuid": "u-att", "timestamp": "2026-10-09T23:06:03.448Z",
+                                 "attachment": {"type": "queued_command", "delivery_id": "d-1",
+                                                "prompt": [{"type": "text", "text": "A DESCULPA ERA B"}]}}))
+    rem = parse_line(json.dumps({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
+                                 "reason": "absorbed_mid_turn", "timestamp": "2026-10-09T23:06:10.249Z",
+                                 "content": "A DESCULPA ERA B"}))
+    assert [e.id for e in att] == [e.id for e in rem] == ["delivery:d-1"]
+
+
 def test_queued_dequeue_nao_renderiza_para_nao_duplicar_turno_real():
     # dequeue = virou turno de verdade (tem seu type='user'); renderizar aqui duplicaria a bubble.
     ev = json.dumps({"type": "queue-operation", "operation": "dequeue", "sessionId": "s1",
