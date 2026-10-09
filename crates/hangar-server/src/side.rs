@@ -1321,6 +1321,10 @@ mod tests {
         let python = axum::Router::new().route("/internal/sessions/{name}/info", get(move || {
             let info = info.clone();
             async move { ([(axum::http::header::CONTENT_TYPE, "application/json")], info) }
+        }))
+        // A conexão interna fica aberta como a do Python: um 404 aqui fecharia o hub no meio do teste.
+        .route("/internal/sessions/{name}/side-events", get(|| async {
+            Body::from_stream(futures_util::stream::pending::<Result<Bytes, std::io::Error>>())
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream = listener.local_addr().unwrap();
@@ -1379,6 +1383,7 @@ mod tests {
             }
         }).await;
         assert!(String::from_utf8_lossy(&got).contains("event: plugin_ui\r\ndata: {\"band\":1}"), "{}", String::from_utf8_lossy(&got));
+        tokio::time::sleep(Duration::from_secs(2)).await; // PROVA-TEMPORARIA
         // Só os quatro eventos do estado passam: o Python segue dono do resto para quem entra por ele.
         on_side_event(&st.side.hubs.0.lock().unwrap().get("s1").unwrap().0.clone(), "stats", "{}");
         drop(s);
