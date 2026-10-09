@@ -151,8 +151,8 @@ where
     let deadline = tokio::time::Instant::now() + budget;
     // Cada leitura varre os processos da máquina: a espera cresce até 2 s.
     let mut pause = Duration::from_millis(250);
+    let mut facts = read().await;
     loop {
-        let facts = read().await;
         let passing = facts.sessions.is_empty()
             && (!facts.complete || !facts.pids.is_empty() || !facts.holders.is_empty());
         let now = tokio::time::Instant::now();
@@ -161,6 +161,11 @@ where
         }
         tokio::time::sleep(pause.min(deadline - now)).await;
         pause = (pause * 2).min(Duration::from_secs(2));
+        // A releitura cabe no que sobra do prazo; a que não volta fica com a leitura anterior.
+        match tokio::time::timeout_at(deadline, read()).await {
+            Ok(next) => facts = next,
+            Err(_) => return facts,
+        }
     }
 }
 
@@ -245,6 +250,31 @@ mod tests {
         let incomplete = UsageFacts { complete: false, ..facts(&[], &[], &[]) };
         let (result, reads) = settle(vec![incomplete, facts(&[], &[], &[])]).await;
         assert_eq!((result, reads), (facts(&[], &[], &[]), 2));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reading_that_never_returns_ends_at_the_deadline() {
+        // A releitura não pode esperar o prazo inteiro da ponte depois de vencido o da exclusão.
+        let busy = facts(&[], &[7], &[7]);
+        let reads = Cell::new(0);
+        let started = tokio::time::Instant::now();
+        let result = settle_usage(
+            || {
+                reads.set(reads.get() + 1);
+                let first = reads.get() == 1;
+                let busy = busy.clone();
+                async move {
+                    if !first {
+                        std::future::pending::<()>().await;
+                    }
+                    busy
+                }
+            },
+            Duration::from_secs(10),
+        )
+        .await;
+        assert_eq!(result, busy);
+        assert!(started.elapsed() <= Duration::from_secs(10), "{:?}", started.elapsed());
     }
 
     #[tokio::test(start_paused = true)]
