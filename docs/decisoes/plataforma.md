@@ -293,10 +293,17 @@ tempos são uma amostra, não garantia de latência. O padrão Groq existente co
 Na revisão do PR 141, uma inferência bloqueada revelou que o desligamento esperava o lock
 do processo e podia ultrapassar o prazo do Supervisor. O desligamento agora cancela a
 inferência, a conversão e a espera na fila antes de adquirir esse lock. Cancelamento não
-aciona reserva externa. A configuração também recupera um registro de processo órfão sem
-precisar iniciar outra transcrição. Fixtures com resposta bloqueada comprovaram encerramento
+aciona reserva externa. A inicialização do servidor e a configuração recuperam um registro
+de processo órfão sem precisar iniciar outra transcrição. Fixtures com resposta bloqueada
+comprovaram encerramento
 em menos de 2 s e nenhuma chamada à reserva. O teste de áudio usa prazo de 300 s também na
 mensagem de erro; o seletor do Expo tem trava síncrona até concluir ou cancelar a seleção.
+
+O CI também expôs duas esperas frágeis nas fixtures de contas e estado: o canal interno de
+SSE devolvia 404 para uma sessão declarada viva, e o teste de atualização do login dependia
+de turnos do agendador. A fixture agora mantém o canal aberto e sinaliza o início da leitura
+com um evento. O contrato com o Codex instalado prepara a inicialização fria antes da leitura,
+sem repetir a asserção nem ampliar seu prazo de produção.
 
 ## Transcrição, organização do texto e leitura são capacidades separadas
 

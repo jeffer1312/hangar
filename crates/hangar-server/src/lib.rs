@@ -82,6 +82,9 @@ pub async fn serve_until_with_state(
     // Abortada na saída: o laço segura a ponte da lista, que sobreviveria ao servidor.
     let _shadow = list::shadow::spawn(state.list.clone(), state.diag.clone()).map(AbortOnDrop);
     let result=async {
+    if let Some(home) = std::env::home_dir() {
+        transcription.recover_on_startup(&home).await;
+    }
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
         let windows = accounts::claude_login::WindowClient::new(cfg.upstream, cfg.internal_secret.clone(), instance.clone())
             .map_err(|error| std::io::Error::other(error.code))?;

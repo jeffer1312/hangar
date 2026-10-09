@@ -22,6 +22,11 @@ impl Default for TranscriptionService {
 }
 
 impl TranscriptionService {
+    /// Recupera a posse antes de atender pedidos, inclusive em um servidor sem atividade.
+    pub async fn recover_on_startup(&self, home: &std::path::Path) {
+        self.local.recover_registered(&home.join(".hangar/transcription-wait.json").to_string_lossy()).await;
+    }
+
     pub async fn configure(&self, mut snapshot: ConfigSnapshot) {
         if let Some(extra) = snapshot.user_vocabulary.take() {
             snapshot.vocabulary = super::vocabulary::assemble(&extra);

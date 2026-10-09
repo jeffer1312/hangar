@@ -239,7 +239,18 @@ async fn shutdown_never_activates_the_configured_external_fallback() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn startup_reaps_an_owned_orphan_without_a_configuration_request() {
+    reaps_owned_orphan(true).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn configuration_reaps_an_owned_orphan_without_starting_an_inference() {
+    reaps_owned_orphan(false).await;
+}
+
+#[cfg(unix)]
+async fn reaps_owned_orphan(at_startup: bool) {
     use crate::list::procs::{ProcessView, SystemProcs};
     let (temp, provider) = installed_whisper().await;
     let mut command = tokio::process::Command::new(&provider.executable_path);
@@ -249,13 +260,18 @@ async fn configuration_reaps_an_owned_orphan_without_starting_an_inference() {
     let pid = child.id().unwrap();
     let view = SystemProcs::default(); view.prefetch(&[pid as i64]);
     let birth = view.start_time(pid as i64).unwrap();
-    let record = temp.path().join("transcription-local.json");
+    std::fs::create_dir(temp.path().join(".hangar")).unwrap();
+    let record = temp.path().join(".hangar/transcription-local.json");
     std::fs::write(&record, serde_json::json!({"pid":pid,"birth":birth,"owner":"fixture-owned","parent":0,"parent_birth":0.0}).to_string()).unwrap();
     let service = TranscriptionService::default();
-    service.configure(ConfigSnapshot { state_path: temp.path().join("wait.json").to_string_lossy().into_owned(), ..Default::default() }).await;
+    if at_startup {
+        service.recover_on_startup(temp.path()).await;
+    } else {
+        service.configure(ConfigSnapshot { state_path: temp.path().join(".hangar/wait.json").to_string_lossy().into_owned(), ..Default::default() }).await;
+    }
     let reaped = tokio::time::timeout(Duration::from_secs(2), child.wait()).await.is_ok();
     if !reaped { child.kill().await.unwrap(); }
-    assert!(reaped, "A configuração deixou o processo órfão vivo");
+    assert!(reaped, "A inicialização deixou o processo órfão vivo sem uma chamada de configuração");
     assert!(!record.exists());
 }
 

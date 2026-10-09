@@ -808,20 +808,20 @@ async def test_dispatch_considera_method_antes_de_id():
 
 
 async def test_contas_com_login_vencido_respondem_na_hora_e_atualizam_por_tras(contas, service, monkeypatch):
-    # Com o cache vencido (60s), abrir a criacao de sessao esperava um app-server do Codex subir:
-    # 2,7s medidos em 13/09/2026 so pra listar as contas. O ultimo login conhecido vale na hora e
-    # a leitura nova roda por tras.
+    # O último login conhecido responde enquanto a leitura nova continua bloqueada por trás.
     from app import codex_contas_login as modulo
     default, work = contas
     FakeNative.auth_by_home[str(work.home)] = {"account": {"type": "chatgpt", "email": "a@x", "planType": "plus"}}
     assert (await service.read_auth(work))["email"] == "a@x"
-    await service.read_auth(default)      # sem leitura anterior nao ha o que mostrar: aquece as duas
+    await service.read_auth(default)      # Sem leitura anterior não há o que mostrar: aquece as duas.
     antes = len(FakeNative.instances)
 
     liberar = asyncio.Event()
+    iniciou = asyncio.Event()
     entrar = FakeNative.__aenter__
 
     async def lento(self):
+        iniciou.set()
         await liberar.wait()
         return await entrar(self)
 
@@ -830,11 +830,10 @@ async def test_contas_com_login_vencido_respondem_na_hora_e_atualizam_por_tras(c
 
     snaps = await asyncio.wait_for(service.accounts_snapshot(), timeout=1.0)
     assert next(s for s in snaps if s["id"] == "work")["auth"]["email"] == "a@x"
-    await asyncio.sleep(0)
-    assert len(FakeNative.instances) > antes          # a atualizacao ja esta a caminho
+    await asyncio.wait_for(iniciou.wait(), timeout=1.0)
+    assert len(FakeNative.instances) > antes          # A atualização já está a caminho.
     liberar.set()
-    for _ in range(50):
-        await asyncio.sleep(0)
+    await asyncio.gather(*service._renovando.values())
 
 
 async def test_aquecer_le_o_login_das_contas_visiveis(contas, service, monkeypatch):
