@@ -417,7 +417,9 @@ def _worker(block_handlers: bool) -> None:
 
     barriers = {}
     secondary = {"native_only": False}
-    instance = SimpleNamespace(instance="contract-instance", legacy=None, managed_queue=lambda name: False)
+    # Modo explícito: a ponte de contas já lia "python" pela ausência; a de grupos exige o campo.
+    instance = SimpleNamespace(instance="contract-instance", legacy=None, managed_queue=lambda name: False,
+                               mode="python")
     preparation_calls = []
     preparation_entered = asyncio.Event()
     from app import codex_contas_sync
