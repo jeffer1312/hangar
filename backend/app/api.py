@@ -642,6 +642,23 @@ async def _grupos_indisponiveis(request: Request, exc: Exception):
 
 
 @app.middleware("http")
+async def _contas_pelo_rust(request: Request, call_next):
+    """Connect e convidado chegam aqui, e contas têm um escritor só: com o Rust de pé, o pedido
+    autenticado segue para ele pela ponte privada. A rota Python fica para o modo python e para o
+    que o Rust disser que não é dele."""
+    from app import account_bridge
+    if (not request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES)
+            or account_bridge.owner_mode() == "python"):
+        return await call_next(request)
+    try:
+        require_auth(request)
+    except HTTPException as error:
+        return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
+    response = await account_bridge.forward_public(request)
+    return response if response is not None else await call_next(request)
+
+
+@app.middleware("http")
 async def _correlaciona_diag(request: Request, call_next):
     """Põe o id do front no contexto, pra o diário poder LIGAR as duas pontas.
 

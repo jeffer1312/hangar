@@ -684,4 +684,45 @@ def request_device(action):
         raise HTTPException(503, detail=unavailable) from None
 
 
+# Rotas de conta que o Rust atende na porta dele; o resto delas segue no Python.
+ACCOUNT_PREFIXES = ("/api/claude-configs", "/api/codex-contas", "/api/cotas", "/api/conta-estado",
+                    "/api/credenciais/codex")
+
+
+async def forward_public(request):
+    """Leva ao Rust o pedido de conta que entrou pelas portas do Python, já autenticado.
+
+    None = o Python atende: ele é o dono (modo python) ou o Rust disse que a rota não é dele.
+    Em pending, sem transporte, recusa: nunca abre um segundo escritor."""
+    import asyncio
+    from starlette.responses import JSONResponse, Response
+    if owner_mode() == "python":
+        return None
+    config = _preparation_transport
+    if config is None:
+        return JSONResponse({"detail": {"code": "account_bridge_unavailable"}}, status_code=503)
+    body = await request.body()
+    query = request.url.query
+    forwarded = urllib.request.Request(
+        f"http://{config[0]}/__hangar_server/accounts/public" + (f"?{query}" if query else ""),
+        data=body or None, method=request.method,
+        headers={"content-type": request.headers.get("content-type", "application/json"),
+                 "x-hangar-internal": config[1], "x-hangar-path": request.url.path})
+
+    def send():
+        try:
+            with _opener.open(forwarded, timeout=330) as response:
+                return response.status, response.headers.get("content-type"), response.read(8 * 1024 * 1024)
+        except urllib.error.HTTPError as error:
+            return error.code, error.headers.get("content-type"), error.read(8 * 1024 * 1024)
+
+    try:
+        status, kind, content = await asyncio.to_thread(send)
+    except OSError:
+        return JSONResponse({"detail": {"code": "account_bridge_unavailable"}}, status_code=503)
+    if status == 404 and content and b"account_route_not_owned" in content:
+        return None
+    return Response(content, status_code=status, media_type=kind or "application/json")
+
+
 preparation_jobs = PreparationJobs()

@@ -388,6 +388,41 @@ async fn prepare_response(
     }
 }
 
+/// Pedido de conta que entrou pelas portas do Python (Connect, convidado), já autenticado lá.
+/// O caminho original vem em `x-hangar-path`; fora das rotas de conta do Rust, o Python atende.
+pub async fn private_public(
+    axum::extract::State(state): axum::extract::State<Arc<crate::routes::AppState>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    mut request: Request,
+) -> Response {
+    if !crate::workspace_routes::private_ok(&state, peer, request.headers()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(path) = request
+        .headers()
+        .get("x-hangar-path")
+        .and_then(|value| value.to_str().ok())
+        .filter(|path| path.starts_with("/api/"))
+        .map(str::to_owned)
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if !matches(request.method(), &path) {
+        return (StatusCode::NOT_FOUND, Json(json!({"code":"account_route_not_owned"}))).into_response();
+    }
+    let target = match request.uri().query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path,
+    };
+    let Ok(uri) = target.parse() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    *request.uri_mut() = uri;
+    request.headers_mut().remove("x-hangar-internal");
+    request.headers_mut().remove("x-hangar-path");
+    public(state, request).await
+}
+
 pub async fn private(
     axum::extract::State(state): axum::extract::State<Arc<crate::routes::AppState>>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
