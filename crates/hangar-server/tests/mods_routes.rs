@@ -290,6 +290,7 @@ async fn bridge_runs_what_python_authenticated() {
     let link = FakeLink::default();
     let (python, upstream) = spawn_fake().await;
     let state = AppState::new(config(upstream, "127.0.0.1"));
+    let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())));
     state.mods.attach("s", 1, Arc::new(link.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let private = listener.local_addr().unwrap();
