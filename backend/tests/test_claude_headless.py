@@ -210,6 +210,24 @@ def test_windows_termination_failure_is_reported(monkeypatch, failure):
         A._matar_grupo(4242, "s1")
 
 
+def test_windows_termination_finds_taskkill_without_system32_in_path(monkeypatch, tmp_path):
+    """Backend aberto pela tarefa agendada sem o System32 no PATH ainda encerra a sessão."""
+    import subprocess
+    exe = tmp_path / "System32" / "taskkill.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(A, "os", SimpleNamespace(name="nt"))
+    vivo = iter((True, False))
+    monkeypatch.setattr(A, "pid_vivo", lambda pid: next(vivo))
+    monkeypatch.setattr(A, "_e_cano", lambda pid: True)
+    chamadas = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: chamadas.append(argv) or subprocess.CompletedProcess(argv, 0))
+    A._matar_grupo(4242, "s1")
+    assert chamadas == [[str(exe), "/T", "/F", "/PID", "4242"]]
+
+
 def test_kill_ignores_reused_pid(monkeypatch):
     """Depois de reiniciar a máquina o pid do sidecar pode ser de outro processo vivo."""
     monkeypatch.setattr(A, "_argv", lambda pid: ["/usr/bin/firefox"])
@@ -1638,6 +1656,44 @@ def test_processo_nao_herda_a_ponte_de_outra_sessao(sidecar, monkeypatch, lancad
     _run(ad._spawn(sess))
     assert "HANGAR_PLUGIN_URL" not in visto["env"] and "HANGAR_PLUGIN_TOKEN" not in visto["env"]
     assert "--plugin-dir" not in visto["argv"] and "tok-de-outra" not in " ".join(visto["argv"])
+
+
+@pytest.mark.parametrize("var", ["CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS",
+                                 "TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL", "JEV_TEXTO_API_KEY"])
+def test_processo_nao_herda_do_backend_variavel_da_sessao(sidecar, monkeypatch, lancador_cano, var):
+    """Sessão sem subagente, sem Jev e com o portão de hooks desligado: o valor que o backend herdou
+    de outra sessão não chega ao filho."""
+    monkeypatch.setenv(var, "de-outra-sessao")
+    monkeypatch.setattr(A.runtime_config, "get", lambda campo: None)
+    visto = {}
+
+    async def exec_falso(*argv, env, **kw):
+        visto["env"] = env
+
+        class _P:
+            pid = 1
+            returncode = None
+
+            async def wait(self):
+                return 0
+        return _P()
+
+    async def conectar_falso(cano, **kw):
+        return _ligacao_com([]), {"type": "cano_snapshot", "versao": A.cano_mod.VERSAO, "pid": 2,
+                                  "init": None, "aberto": False, "pendentes": [], "stderr_tail": []}
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", exec_falso)
+    monkeypatch.setattr(A.shutil, "which", lambda b: "/usr/bin/claude")
+    ad = ClaudeHeadlessAdapter()
+    sess = _Sessao("s1", S.load("s1"))
+
+    async def ctrl(s, sub, **kw):
+        return {}
+    ad._conectar = conectar_falso                 # type: ignore[method-assign]
+    ad._ler = lambda s: asyncio.sleep(0)          # type: ignore[method-assign]
+    ad._ctrl = ctrl                               # type: ignore[method-assign]
+    ad._agendar_cota = lambda s: None             # type: ignore[method-assign]
+    _run(ad._spawn(sess))
+    assert var not in visto["env"]
 
 
 @pytest.mark.parametrize("tier,supported", [(None, False), ("default", True), ("priority", True), ("default", False)])

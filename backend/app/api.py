@@ -3466,7 +3466,7 @@ def _saiu(pids: list[int]) -> bool:
     registry_mod._esperar_saida(pids, prazo)
     vivos = [p for p in pids if procinfo.pid_vivo(p)]
     if vivos and windows:
-        taskkill = shutil.which("taskkill")
+        taskkill = procinfo.taskkill_path()
         if not taskkill:
             _log.warning("troca de conta: taskkill não encontrado; processos %s seguem vivos", vivos)
         else:

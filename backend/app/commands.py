@@ -13,7 +13,7 @@ from typing import Optional
 
 import yaml
 
-from app import atomico
+from app import atomico, procinfo
 from app.models import CommandInfo
 
 _log = logging.getLogger("hangar.commands")
@@ -280,7 +280,7 @@ def _matar_arvore(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
     if os.name == "nt":
-        exe = shutil.which("taskkill")
+        exe = procinfo.taskkill_path()
         if exe is None:
             _log.warning("commands: taskkill não encontrado; hooks filhos do pid=%s podem seguir vivos", proc.pid)
             proc.kill()

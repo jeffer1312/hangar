@@ -11,7 +11,6 @@ import logging
 import os
 import platform
 import re
-import shutil
 import signal
 import subprocess
 import tarfile
@@ -224,7 +223,7 @@ _lock = asyncio.Lock()
 
 def _kill(pid: int) -> None:
     if os.name == "nt":
-        exe = shutil.which("taskkill")
+        exe = procinfo.taskkill_path()
         if exe:
             # 128 = já morreu; qualquer outro código só vai ao log, quem decide é o pid_vivo.
             subprocess.run([exe, "/T", "/F", "/PID", str(pid)], capture_output=True, timeout=10,

@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from app import terminal_prompt, tmux
+from app import procinfo, terminal_prompt, tmux
 
 _log = logging.getLogger(__name__)
 
@@ -317,9 +317,9 @@ def output(target: str) -> str:
 
 def _kill_group(pid: int) -> None:
     if _IS_WINDOWS:
-        taskkill = shutil.which("taskkill")
+        taskkill = procinfo.taskkill_path()
         if taskkill is None:
-            _log.warning("shortcut: taskkill nao encontrado no PATH; pid %s segue vivo", pid)
+            _log.warning("shortcut: taskkill nao encontrado; pid %s segue vivo", pid)
             return
         try:
             subprocess.run([taskkill, "/T", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
