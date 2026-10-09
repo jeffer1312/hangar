@@ -294,7 +294,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                     // O campo estruturado vence o texto, que muda entre versões do Claude Code.
                     let text_launch = text.to_lowercase().contains("async agent launched");
                     let launched = event.bg_agent_id.as_deref().or_else(|| if text_launch { word_after(text, "agentId:") } else { None });
-                    if let Some(agent) = launched.or_else(|| word_after(text, "agentId:")) { agent_ids.insert(id, agent); }
+                    if let Some(agent) = shown_agent_id(launched, text) { agent_ids.insert(id, agent); }
                     if text_launch || launched.is_some() {
                         if let Some(agent) = launched {
                             if finished_early.remove(agent) { resulted.insert(id); }
@@ -383,6 +383,15 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
 }
 
 /// A palavra `[A-Za-z0-9_-]+` logo depois do marcador (espaços no meio à vontade).
+/// Id do subagente que o painel casa com o transcript dele. O do colega de equipe ("teammate:<nome>")
+/// só serve pra fechar o par; o id de verdade vem no texto do spawn.
+fn shown_agent_id<'a>(launched: Option<&'a str>, text: &'a str) -> Option<&'a str> {
+    match launched {
+        Some(a) if a.starts_with("teammate:") => word_after(text, "agent_id:"),
+        _ => launched.or_else(|| word_after(text, "agentId:")),
+    }
+}
+
 fn word_after<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
     let rest = text[text.find(marker)? + marker.len()..].trim_start();
     let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).unwrap_or(rest.len());

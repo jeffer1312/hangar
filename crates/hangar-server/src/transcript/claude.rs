@@ -213,8 +213,8 @@ fn attrs(raw: &str) -> HashMap<&str, &str> {
     PEER_ATTR.captures_iter(raw).map(|c| (c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str())).collect()
 }
 
-/// `_teammate_textos` (transcript.py:106).
-fn teammate_texts(text: Option<&Value>) -> Option<Vec<String>> {
+/// `_teammate_textos` (transcript.py:106): (recados a mostrar, colegas que ficaram ociosos).
+fn teammate_texts(text: Option<&Value>) -> Option<(Vec<String>, Vec<String>)> {
     let t = lstrip(text?.as_str()?);
     if !TEAMMATE_START.is_match(t) {
         return None;
@@ -223,23 +223,35 @@ fn teammate_texts(text: Option<&Value>) -> Option<Vec<String>> {
     if blocks.is_empty() {
         return None;
     }
-    let mut out = Vec::new();
+    let (mut out, mut idle) = (Vec::new(), Vec::new());
     for b in blocks {
         let body = strip(&b[2]);
-        if body.starts_with('{') && matches!(pyjson::loads_lossless(body), Some(Value::Object(_))) {
-            continue;
-        }
         let name = attrs(&b[1]).get("teammate_id").copied().filter(|n| !n.is_empty()).unwrap_or("colega");
+        if body.starts_with('{') {
+            if let Some(Value::Object(aviso)) = pyjson::loads_lossless(body) {
+                if aviso.get("type").and_then(Value::as_str) == Some("idle_notification") {
+                    idle.push(name.to_string());
+                }
+                continue;
+            }
+        }
         if !body.is_empty() {
             out.push(format!("[de: {name}] {body}"));
         }
     }
-    Some(out)
+    Some((out, idle))
 }
 
+/// `_teammate_eventos` (transcript.py).
 fn teammate_events(text: Option<&Value>, id: &str) -> Option<Vec<ChatEvent>> {
-    let texts = teammate_texts(text)?;
-    Some(texts.into_iter().enumerate().map(|(k, t)| text_event(ChatKind::UserMsg, sub_id(id, k), t)).collect())
+    let (texts, idle) = teammate_texts(text)?;
+    let mut events: Vec<_> =
+        texts.into_iter().enumerate().map(|(k, t)| text_event(ChatKind::UserMsg, sub_id(id, k), t)).collect();
+    // ponytail: fecha no 1o ocioso; colega reacordado por SendMessage nao volta a aparecer rodando.
+    // Pra isso, reabrir no tool_use SendMessage com `to` == nome.
+    let n = events.len();
+    events.extend(idle.iter().enumerate().map(|(j, name)| task_result(sub_id(id, n + j), &format!("teammate:{name}"))));
+    Some(events)
 }
 
 /// `_agent_msg` (transcript.py:138).
@@ -502,6 +514,9 @@ fn patch_hunks(obj: &Map<String, Value>) -> Option<Vec<PatchHunk>> {
 /// `_bg_agent_id` (transcript.py): o id do subagente só quando o resultado é o lançamento em segundo plano.
 fn bg_agent_id(obj: &Map<String, Value>) -> Option<String> {
     let tur = obj.get("toolUseResult")?.as_object()?;
+    if tur.get("status").and_then(Value::as_str) == Some("teammate_spawned") {
+        return tur.get("name").and_then(Value::as_str).filter(|s| !s.is_empty()).map(|n| format!("teammate:{n}"));
+    }
     if tur.get("status").and_then(Value::as_str) != Some("async_launched") {
         return None;
     }
@@ -753,6 +768,26 @@ mod tests {
         let [fin] = <[ChatEvent; 1]>::try_from(parse(json!({"agentId": "ag1"}), vec![], Value::Null)).unwrap();
         assert_eq!(ev.bg_agent_id.as_deref(), Some("ag1"));
         assert_eq!(fin.bg_agent_id, None);
+    }
+
+    #[test]
+    fn teammate_spawn_runs_until_its_idle_notification() {
+        let spawn = json!({"status": "teammate_spawned", "agentId": "areconf-c-b72", "name": "reconf-c"});
+        let [ev] = <[ChatEvent; 1]>::try_from(parse(spawn, vec![], Value::Null)).unwrap();
+        assert_eq!(ev.bg_agent_id.as_deref(), Some("teammate:reconf-c"));
+
+        let user = |body: &str| {
+            let text = format!("Another Claude session sent a message:\n<teammate-message teammate_id=\"frente-c\"{body}</teammate-message>\n\nThis came from another Claude session.");
+            let line = json!({"type": "user", "uuid": "u2", "message": {"role": "user", "content": text}});
+            LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0)
+        };
+        let idle = user(" color=\"blue\">\n{\"type\":\"idle_notification\",\"from\":\"frente-c\"}\n");
+        let [fim] = <[ChatEvent; 1]>::try_from(idle).unwrap();
+        assert_eq!((fim.kind, fim.tool_use_id.as_deref()), (ChatKind::ToolResult, Some("task:teammate:frente-c")));
+
+        let recado = user(" summary=\"x\">\nfecho a frente agora.\n");
+        assert!(recado.iter().all(|e| e.kind == ChatKind::UserMsg));
+        assert_eq!(recado.len(), 1);
     }
 
     #[test]

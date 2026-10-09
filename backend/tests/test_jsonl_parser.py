@@ -705,6 +705,21 @@ def test_background_agent_launch_carries_the_agent_id():
     assert final.bg_agent_id is None
 
 
+def _colega(bloco: str) -> str:
+    return _user('Another Claude session sent a message:\n<teammate-message teammate_id="frente-c"'
+                 + bloco + '</teammate-message>\n\nThis came from another Claude session.')
+
+
+def test_colega_de_equipe_roda_do_spawn_ate_ficar_ocioso():
+    [ev] = parse_line(_tool_result_line({"status": "teammate_spawned", "agentId": "areconf-c-b72",
+                                         "name": "reconf-c"}))
+    assert ev.bg_agent_id == "teammate:reconf-c"
+    ocioso = parse_line(_colega(' color="blue">\n{"type":"idle_notification","from":"frente-c"}\n'))
+    assert [(e.kind, e.tool_use_id) for e in ocioso] == [("tool_result", "task:teammate:frente-c")]
+    recado = parse_line(_colega(' summary="x">\nfecho a frente agora.\n'))
+    assert [e.kind for e in recado] == ["user_msg"]
+
+
 def test_patch_keeps_exactly_the_line_ceiling():
     full = {**_HUNK, "lines": ["+x"] * 2000}
     [ev] = parse_line(_tool_result_line({"structuredPatch": [full]}))

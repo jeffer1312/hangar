@@ -29,13 +29,22 @@ def test_recado_de_colega_vira_bolha_de_outra_sessao():
     assert _textos(_user(_RECADO)) == [("user_msg", "[de: ana] As 12 pastas de skills são: falar, handoff.")]
 
 
-def test_aviso_de_colega_ocioso_some():
-    assert parse_obj(_user(_OCIOSO)) == []
-    assert parse_obj(_user([{"type": "text", "text": _OCIOSO}])) == []
+_FIM_ANA = [("tool_result", "task:teammate:ana")]
+
+
+def _fins(obj):
+    return [(e.kind, e.tool_use_id) for e in parse_obj(obj)]
+
+
+def test_aviso_de_colega_ocioso_so_fecha_o_colega_no_painel():
+    assert _fins(_user(_OCIOSO)) == _FIM_ANA
+    assert _fins(_user([{"type": "text", "text": _OCIOSO}])) == _FIM_ANA
 
 
 def test_varios_blocos_mostram_so_os_recados():
-    assert _textos(_user(_DOIS)) == [("user_msg", "[de: beto] Versões: git 2.55.0, Python 3.14.7.")]
+    assert _textos(_user(_DOIS)) == [("user_msg", "[de: beto] Versões: git 2.55.0, Python 3.14.7."),
+                                     ("tool_result", None)]
+    assert [e.id for e in parse_obj(_user(_DOIS))] == ["u1", "u1:1"]
 
 
 def test_texto_do_usuario_sobre_colega_continua_dele():
@@ -50,12 +59,12 @@ def test_tag_de_colega_malformada_continua_texto():
 
 def test_colega_pelo_origin_de_recado():
     obj = _user("x", isMeta=True, origin={"kind": "peer", "body": _OCIOSO, "name": "ana"})
-    assert parse_obj(obj) == []
+    assert _fins(obj) == _FIM_ANA
 
 
 def test_colega_enfileirado():
-    assert parse_obj({"type": "queue-operation", "operation": "remove", "content": _OCIOSO,
-                      "timestamp": "2026-10-01T12:00:00Z"}) == []
+    assert _fins({"type": "queue-operation", "operation": "remove", "content": _OCIOSO,
+                  "timestamp": "2026-10-01T12:00:00Z"}) == _FIM_ANA
 
 
 def test_texto_do_usuario_que_cita_a_tag_continua_dele():
