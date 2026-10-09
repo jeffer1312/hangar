@@ -34,7 +34,7 @@ fn terminal_view_is_published_with_source_and_shown() {
     let (mods, _) = setup();
     assert!(mods.owns("t") && mods.is_terminal("t") && mods.terminal_view_in("t", 1).is_none());
     assert_eq!(mods.life("t"), Some(1));
-    assert_eq!(mods.bridge_session("t").as_deref(), Some("t"), "a ponte acha a sessão com terminal pelo nome de nascimento");
+    assert_eq!(mods.bridge_session("t", "proc-t.mac").as_deref(), Some("t"), "a ponte acha a sessão com terminal pela chave do processo");
     assert!(mods.terminal_ui("t", view(&["a", "b"], Some("b"))));
     let ui = last_ui(&mods);
     assert_eq!((ui["shown_id"].as_str(), ui["columns"].as_u64(), ui["source"].as_str()), (Some("b"), Some(82), Some("terminal")));
@@ -218,9 +218,11 @@ fn forget_stops_the_probe_and_keeps_the_birth_name_for_the_same_process() {
     assert!(mods.owns("t") && !probe.stopped.load(SeqCst), "outra vida não esquece esta sessão");
     mods.forget("t", 1);
     assert!(probe.stopped.load(SeqCst) && !mods.owns("t"));
-    // Reaberta com outro nome no mesmo processo (renomear), herda o nome de nascimento.
-    mods.attach_terminal("t2", "proc-t", 2, Arc::new(Probe::default()));
-    assert_eq!(mods.bridge_session("t").as_deref(), Some("t2"));
+    // Reaberta com outro nome no mesmo processo (renomear), a chave do token segue achando a sessão; a do
+    // lançamento (`plugin_key`) também.
+    mods.attach_terminal_keyed("t2", "proc-t", Some("lancada"), 2, Arc::new(Probe::default()));
+    assert_eq!(mods.bridge_session("t", "proc-t.mac").as_deref(), Some("t2"));
+    assert_eq!(mods.bridge_session("t", "lancada.mac").as_deref(), Some("t2"));
 }
 
 #[test]

@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::time::{Duration, Instant};
 
 use fake::*;
-use hangar_server::mods::bridge::mint;
+use hangar_server::mods::bridge::{mint, mint_keyed};
 use hangar_server::mods::state::*;
 use hangar_server::routes::AppState;
 use mods_support::Probe;
@@ -59,13 +59,15 @@ async fn ui_is_mirrored_and_the_screen_decides_the_shown_pane() {
 }
 
 #[tokio::test]
-async fn a_renamed_session_is_found_by_its_birth_name() {
+async fn a_renamed_session_is_found_by_the_key_its_process_was_launched_with() {
     let (python, server, mods, _probe) = setup().await;
     // Renomear sem relançar: o Rust fecha e reabre no mesmo processo, e o plugin segue mandando o nome de
-    // nascimento. O Python falso responde 404 ao `/info` do nome antigo (`named_elsewhere`).
+    // nascimento, com a chave que recebeu no lançamento (`plugin_key` do vínculo).
     mods.forget("t", 1);
-    mods.attach_terminal("novo", "proc-t", 2, Arc::new(Probe::default()));
-    let (status, _) = post(server, "ui", signed("t", json!({"above": {"type": "Box"}, "columns": 87, "bodyColumns": 82, "panes": []}))).await;
+    mods.attach_terminal_keyed("novo", "proc-t", Some("lancada"), 2, Arc::new(Probe::default()));
+    let mut body = json!({"sessao": "t", "token": mint_keyed(OWNER, "t", "lancada")});
+    body.as_object_mut().unwrap().extend(json!({"above": {"type": "Box"}, "columns": 87, "bodyColumns": 82, "panes": []}).as_object().unwrap().clone());
+    let (status, _) = post(server, "ui", body).await;
     assert_eq!(status, 200);
     assert_eq!(last_ui(&mods, "novo")["source"], "terminal");
     // O cache do Python é pelo nome de agora: a cópia leva o nome atual e o token dele.

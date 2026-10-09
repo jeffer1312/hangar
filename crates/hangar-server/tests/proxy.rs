@@ -33,7 +33,7 @@ async fn health_answers_without_token_and_with_cors() {
     assert!(terminal.starts_with("127.0.0.1:"), "{terminal}");
     // Grupos: o Python só passa a pedir ao Rust quando a saúde diz que ele os atende.
     assert!(v["groups"].is_boolean(), "{v}");
-    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 41);
+    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 42);
 }
 
 #[tokio::test]

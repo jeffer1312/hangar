@@ -10,6 +10,8 @@ use tokio::sync::{Mutex,mpsc,oneshot,broadcast};
 pub struct TerminalTarget {
     pub key:String,pub generation:u64,pub name:String,pub binding:TerminalBinding,
     pub lease_path:PathBuf,pub state_path:PathBuf,pub projection_dir:PathBuf,pub transcript:PathBuf,pub created:f64,
+    /// A chave do token da ponte que o processo recebeu no lançamento (`plugin_key` do vínculo).
+    pub plugin_key:Option<String>,
 }
 /// A âncora da faixa dos mods (`mods::tree::anchor`, o começo do primeiro texto dela): o elo do `Mods` a
 /// escreve a cada `/ui` do plugin, e o executor a lê para reconhecer na tela a faixa inteira focada.

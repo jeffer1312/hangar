@@ -63,7 +63,7 @@ def _plugin_do_hangar_fora(monkeypatch):
     testes do plugin trocam."""
     from app import plugin_bridge
     monkeypatch.setattr(plugin_bridge, "raizes_dos_plugins", lambda: [])
-    monkeypatch.setattr(plugin_bridge, "env_da_sessao", lambda name: {})
+    monkeypatch.setattr(plugin_bridge, "env_da_sessao", lambda name, key: {})
 
 
 def _run(coro):
@@ -1543,7 +1543,7 @@ def test_processo_herda_chave_e_nao_o_pane_do_operador(sidecar, monkeypatch, lan
     from app import plugin_bridge
     monkeypatch.setattr(plugin_bridge, "raizes_dos_plugins", lambda: ["/repo/plugins/hangar"])
     monkeypatch.setattr(plugin_bridge, "env_da_sessao",
-                        lambda name: {"HANGAR_PLUGIN_URL": "http://127.0.0.1:1/api/plugin", "HANGAR_PLUGIN_TOKEN": f"tok-{name}"})
+                        lambda name, key: {"HANGAR_PLUGIN_URL": "http://127.0.0.1:1/api/plugin", "HANGAR_PLUGIN_TOKEN": f"tok-{name}"})
     monkeypatch.setenv("TMUX_PANE", "%9")
     monkeypatch.setenv("TMUX", "/tmp/x")
     visto = {}

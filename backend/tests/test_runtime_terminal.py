@@ -77,6 +77,19 @@ def test_terminal_resolver_same_life_rename_and_new_mux_no_inherited_debt(monkey
     assert replacement.jsonl == first.jsonl
 
 
+def test_terminal_binding_carries_the_key_of_the_launch_token(monkeypatch, tmp_path):
+    # O Rust acha pela chave do token a sessão que o Hangar lançou; token só do nome não leva chave.
+    from app import runtime_terminal as terminal, pqueue
+    facts = dict(name='session', pane='%1', created=123, namespace='socket:pid1:born1',
+        jsonl=str(tmp_path / 'sid.jsonl'), session_id='sid', config_dir=str(tmp_path),
+        cwd=str(tmp_path), mux_argv=['tmux'], windows=False, plugin_token='k1.' + '0' * 32)
+    monkeypatch.setattr(terminal, '_collect', lambda name: dict(facts))
+    monkeypatch.setattr(pqueue, '_queue_dir', lambda: tmp_path)
+    assert terminal.resolve_binding('session').meta['plugin_key'] == 'k1'
+    facts['plugin_token'] = '0' * 32
+    assert 'plugin_key' not in terminal.resolve_binding('session').meta
+
+
 def test_terminal_native_slot_never_replaces_2c_observation(tmp_path):
     owner = RuntimeCoordinator()
     slot = owner.register(terminal_binding(tmp_path))

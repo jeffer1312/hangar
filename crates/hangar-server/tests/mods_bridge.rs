@@ -3,7 +3,7 @@ mod fake;
 use std::sync::Arc;
 
 use fake::*;
-use hangar_server::mods::bridge::mint;
+use hangar_server::mods::bridge::{mint, mint_keyed};
 use hangar_server::mods::model::*;
 use hangar_server::mods::state::*;
 use serde_json::{Value, json};
@@ -13,6 +13,8 @@ fn mint_matches_python() {
     // python3 -c "import hmac,hashlib;print(hmac.new(b'dono-token',b'plugin:mods-s',hashlib.sha256).hexdigest()[:32])"
     assert_eq!(mint("dono-token", "mods-s"), "fe9b420d49e252b4c98ce09870cf7747");
     assert_eq!(mint("", "mods-s"), "1d50c42b88fb27d333798979117ec477", "sem token, o segredo é \"hangar\"");
+    // python3 -c "import hmac,hashlib;print(hmac.new(b'dono-token',b'plugin:mods-s:k1',hashlib.sha256).hexdigest()[:32])"
+    assert_eq!(mint_keyed("dono-token", "mods-s", "k1"), "k1.4547ef357a2c0c603e0a916d8764bb86");
 }
 
 /// O `reqwest` do crate não tem a função `json`: o corpo vai pronto, com o tipo.
@@ -36,7 +38,8 @@ impl SurfaceLink for PluginLike {
         let server = *self.server.get().unwrap();
         Box::pin(async move {
             let base = format!("http://{server}/api/plugin");
-            let token = mint(OWNER, "mods-s");
+            // O processo nasceu `mods-s`, com a chave da sessão (`serve_mods` a abre com o processo `mods-s`).
+            let token = mint_keyed(OWNER, "mods-s", "mods-s");
             let start = json_of(post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": token,
                 "requestId": "vitrine-botoes", "element": "V45-url"}), false).await).await;
             assert_eq!(start["fromApp"], true);
@@ -128,84 +131,61 @@ async fn bridge_applies_the_python_limits_before_the_token() {
 }
 
 #[tokio::test]
-async fn renamed_session_is_found_by_the_name_its_process_was_born_with() {
-    // M3: renomear fecha e reabre a sessão no Rust com o mesmo `claude -p`, que segue mandando à ponte o
-    // nome e o token de nascimento. A ponte acha a sessão por esse nome, e a URL volta ao aparelho.
-    let (_python, server, mods, plugin) = setup().await;
+async fn renamed_session_is_found_by_the_key_in_its_token_without_asking_python() {
+    // Renomear fecha e reabre a sessão no Rust com o mesmo `claude -p`, que segue mandando o nome de
+    // nascimento. A sessão reaberta sem nada guardado de antes é também a do servidor que reiniciou depois do
+    // renomear: a chave no token basta, e o Python (lento aqui) nunca é perguntado.
+    let (python, server, mods, plugin) = setup().await;
+    python.set_info_delay(std::time::Duration::from_secs(20));
     mods.forget("mods-s", 1);
     mods.attach_process("renomeada", "mods-s", 2, Arc::new(plugin));
-    assert_eq!(mods.bridge_session("mods-s").as_deref(), Some("renomeada"));
+    assert_eq!(mods.bridge_session("mods-s", &mint_keyed(OWNER, "mods-s", "mods-s")).as_deref(), Some("renomeada"));
+    let started = std::time::Instant::now();
     let response = post(format!("http://{server}/api/sessions/renomeada/plugin/press"),
         json!({"site": "vitrine-botoes", "plugin": "vitrine", "key": "V45-url"}), true).await;
     assert_eq!(json_of(response).await, json!({"ok": true, "opened": "https://example.com/vitrine"}));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(python.hits_to("/internal/sessions/mods-s/info"), 0);
 }
 
 #[tokio::test]
-async fn old_name_token_never_acts_on_a_new_session_with_that_name() {
-    // O token da ponte é derivado só do nome. Renomeada a sessão sem relançar o processo, e criada outra
-    // com o nome antigo, os dois processos vivos têm o mesmo token: a ponte não atende nenhum dos dois, e
-    // o clique em aberto da sessão nova não é tomado nem recebe URL de fora.
+async fn two_processes_born_with_the_same_name_each_reach_only_their_session() {
+    // Renomeada a sessão sem relançar o processo e criada outra com o nome antigo, cada processo tem o
+    // token da própria chave: o antigo não toma o clique da sessão nova, e a nova é atendida.
     let (python, server, mods, plugin) = setup().await;
     mods.forget("mods-s", 1);
     mods.attach_process("renomeada", "mods-s", 2, Arc::new(plugin));
-    mods.attach_process("mods-s", "processo-novo", 3, Arc::new(mods_support_free::Quiet));
+    mods.attach_process("mods-s", "processo-novo:1:2", 3, Arc::new(mods_support_free::Quiet));
     let attempt = mods.begin_click("mods-s", "a", "vitrine", "b");
     let base = format!("http://{server}/api/plugin");
-    let token = mint(OWNER, "mods-s");
-    let start = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": token, "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(start.text().await.unwrap(), "from-python");
-    let opened = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": token, "attempt": attempt, "url": "https://x"}), false).await;
-    assert_eq!(opened.text().await.unwrap(), "from-python");
-    assert_eq!((python.hits_to("/api/plugin/press-start"), python.hits_to("/api/plugin/opened")), (1, 1));
-    assert!(mods.match_click("mods-s", "a", None, "b").is_some(), "o clique da sessão nova segue em aberto, sem dono de fora");
-    // A renomeada sai do Rust: o nome volta a ter um processo vivo só, e a ponte o atende.
-    mods.forget("renomeada", 2);
-    assert_eq!(mods.bridge_session("mods-s").as_deref(), Some("mods-s"));
-}
-
-#[tokio::test]
-async fn old_name_of_a_renamed_session_that_now_names_a_session_outside_rust_goes_to_python() {
-    // N2: renomeada A→B no Rust (o processo nasceu A), e uma sessão de fora do Rust (com terminal, no
-    // Python) chamada A. O plugin dela manda `sessao: A` com um token que vale: as chamadas são dela, não
-    // de B, e vão ao Python. O clique em aberto de B não é tocado.
-    let (python, server, mods, plugin) = setup().await;
-    mods.forget("mods-s", 1);
-    mods.attach_process("renomeada", "mods-s", 2, Arc::new(plugin));
-    python.set_info(json!({"provider": "claude", "jsonl": null, "session_key": "outra"}));
-    let attempt = mods.begin_click("renomeada", "a", "vitrine", "b");
-    let base = format!("http://{server}/api/plugin");
-    let token = mint(OWNER, "mods-s");
-    let start = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": token, "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(start.text().await.unwrap(), "from-python");
-    let opened = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": token, "attempt": attempt, "url": "https://x"}), false).await;
-    assert_eq!(opened.text().await.unwrap(), "from-python");
-    assert_eq!((python.hits_to("/api/plugin/press-start"), python.hits_to("/api/plugin/opened")), (1, 1));
-    assert_eq!(mods.match_click("renomeada", "a", None, "b").as_deref(), Some(attempt.as_str()), "o clique de B segue em aberto");
-    // Sem sessão A no Python, o nome de nascimento volta a levar a B.
-    python.set_info(serde_json::Value::Null);
-    let attempt = mods.begin_click("renomeada", "c", "vitrine", "d");
-    let start = json_of(post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": token, "requestId": "c", "element": "d"}), false).await).await;
+    let old = mint_keyed(OWNER, "mods-s", "mods-s");
+    let start = json_of(post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": old, "requestId": "a", "element": "b"}), false).await).await;
+    assert_eq!(start["fromApp"], false, "o processo antigo cai na própria sessão, sem clique em aberto");
+    let opened = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": old, "attempt": attempt, "url": "https://x"}), false).await;
+    assert_eq!(opened.status().as_u16(), 409, "a URL do antigo não vai ao aparelho da sessão nova");
+    let new = mint_keyed(OWNER, "mods-s", "processo-novo");
+    let start = json_of(post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": new, "requestId": "a", "element": "b"}), false).await).await;
     assert_eq!((start["fromApp"].as_bool(), start["attempt"].as_str()), (Some(true), Some(attempt.as_str())));
-    // Sem resposta do Python, não dá para saber de quem é o nome: vai a ele.
-    python.fail_info(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-    let unsure = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": token, "requestId": "c", "element": "d"}), false).await;
-    assert_eq!(unsure.text().await.unwrap(), "from-python");
+    assert_eq!(python.hits_to("/api/plugin/press-start"), 0);
 }
 
 #[tokio::test]
-async fn slow_python_on_the_old_name_check_answers_within_the_plugin_limit() {
-    // O plugin desiste do `press-start` em 3 s: a pergunta sobre o nome antigo tem prazo de 1 s, e o pedido
-    // vai ao Python na dúvida, sem esperar a resposta lenta do `info`.
+async fn token_without_a_key_goes_by_the_current_name_and_unknown_keys_go_to_python() {
+    // O processo lançado antes da chave manda o token só do nome: vale para a sessão que tem o nome agora.
     let (python, server, mods, plugin) = setup().await;
     mods.forget("mods-s", 1);
     mods.attach_process("renomeada", "mods-s", 2, Arc::new(plugin));
-    python.set_info_delay(std::time::Duration::from_secs(20));
-    let started = std::time::Instant::now();
-    let start = post(format!("http://{server}/api/plugin/press-start"),
-        json!({"sessao": "mods-s", "token": mint(OWNER, "mods-s"), "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(start.text().await.unwrap(), "from-python");
-    let took = started.elapsed();
-    assert!(took >= std::time::Duration::from_millis(900) && took < std::time::Duration::from_secs(2), "{took:?}");
+    let base = format!("http://{server}/api/plugin");
+    let legacy = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": mint(OWNER, "mods-s"), "requestId": "a", "element": "b"}), false).await;
+    assert_eq!(legacy.text().await.unwrap(), "from-python");
+    let current = post(format!("{base}/press-start"), json!({"sessao": "renomeada", "token": mint(OWNER, "renomeada"), "requestId": "a", "element": "b"}), false).await;
+    assert_eq!(current.status().as_u16(), 200);
+    // Chave que nenhuma sessão do Rust tem é de uma sessão do Python; HMAC errado com chave daqui é 403.
+    let unknown = post(format!("{base}/press-start"), json!({"sessao": "x", "token": mint_keyed(OWNER, "x", "outra"), "requestId": "a", "element": "b"}), false).await;
+    assert_eq!(unknown.text().await.unwrap(), "from-python");
+    let forged = post(format!("{base}/press-start"), json!({"sessao": "x", "token": "mods-s.00", "requestId": "a", "element": "b"}), false).await;
+    assert_eq!(forged.status().as_u16(), 403);
+    assert_eq!(python.hits_to("/api/plugin/press-start"), 2);
 }
 
 /// Superfície que não é chamada nos testes da ponte.

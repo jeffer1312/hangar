@@ -45,6 +45,19 @@ def test_token_e_por_sessao_e_recusa_o_de_outra():
     assert e.value.status_code == 403
 
 
+def test_token_com_chave_separa_processos_do_mesmo_nome_e_confere_pelo_nome():
+    # Dois processos que nasceram `s1` (um renomeado, outro novo) têm tokens diferentes; a chave vai no
+    # token, e a conferência refaz o HMAC sem nada guardado.
+    a, b = pb.mint("s1", "k1"), pb.mint("s1", "k2")
+    assert a.startswith("k1.") and a != b
+    pb._confere("s1", a)
+    pb._confere("s1", pb.mint("s1"))     # processo lançado antes da chave
+    for nome, token in (("s2", a), ("s1", "k1." + "0" * 32), ("s1", "k2" + a[2:])):
+        with pytest.raises(HTTPException) as e:
+            pb._confere(nome, token)
+        assert e.value.status_code == 403
+
+
 def test_permissao_sem_ninguem_no_app_volta_pro_terminal(monkeypatch):
     # Segurar o `ask` esconde o diálogo do terminal: sem app aberto, não há quem responda.
     monkeypatch.setattr(pb, "terminal_preso", lambda name: False)
@@ -150,7 +163,7 @@ def test_portao_desligado_nao_poe_nada_na_sessao_e_ligado_poe_o_plugin(monkeypat
     # Desligado, a sessão nasce byte a byte como antes: sem flag, sem env. É a promessa do fallback.
     from app.adapters import get_adapter
     monkeypatch.setattr(pb, "ligado", lambda: False)
-    assert pb.raizes_dos_plugins() == [] and pb.env_da_sessao("s1") == {}
+    assert pb.raizes_dos_plugins() == [] and pb.env_da_sessao("s1", "k1") == {}
     assert get_adapter("claude").spawn_command("/tmp/p", "sid") == ["claude", "--session-id", "sid"]
 
     monkeypatch.setattr(pb, "ligado", lambda: True)
@@ -159,8 +172,8 @@ def test_portao_desligado_nao_poe_nada_na_sessao_e_ligado_poe_o_plugin(monkeypat
     assert Path(raiz).parts[-2:] == ("plugins", "hangar")
     assert get_adapter("claude").spawn_command("/tmp/p", "sid")[:5] == [
         "claude", "--session-id", "sid", "--plugin-dir", raiz]
-    env = pb.env_da_sessao("s1")
-    assert env["HANGAR_PLUGIN_TOKEN"] == pb.mint("s1") and env["HANGAR_PLUGIN_URL"].endswith("/api/plugin")
+    env = pb.env_da_sessao("s1", "k1")
+    assert env["HANGAR_PLUGIN_TOKEN"] == pb.mint("s1", "k1") and env["HANGAR_PLUGIN_URL"].endswith("/api/plugin")
 
 
 def test_resposta_sem_ninguem_segurando_nao_e_entrega():
@@ -336,6 +349,17 @@ def test_plugin_dir_file_is_removed_when_mods_are_off(tmp_path, monkeypatch):
 @pytest.fixture
 def ligado(monkeypatch):
     monkeypatch.setattr(pb, "ligado", lambda: True)
+    # Sem vínculo terminal provado nos testes: o token sai só do nome.
+    monkeypatch.setattr(pb, "_terminal_key", lambda nome: None)
+
+
+def test_whoami_poe_no_token_a_chave_do_vinculo_terminal(monkeypatch, ligado):
+    # A ponte do Rust acha a sessão aberta pelo wrapper do shell pela chave com que ele a abre.
+    from app import quem_chama
+    monkeypatch.setattr(quem_chama, "_por_pane", lambda pane: "s1" if pane == "%3" else None)
+    monkeypatch.setattr(pb, "_terminal_key", lambda nome: "terminal_ab" if nome == "s1" else None)
+    r = asyncio.run(pb.whoami(pb.WhoamiBody(chave=pb.machine_key(), pane="%3", session_id=UUID)))
+    assert r == {"sessao": "s1", "token": pb.mint("s1", "terminal_ab"), "origem": "pane"}
 
 
 def test_whoami_resolve_pelo_pane(monkeypatch, ligado):

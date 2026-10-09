@@ -164,7 +164,8 @@ def _collect(name):
         jsonl=jsonl, session_id=Path(jsonl).stem, config_dir=config_dir, cwd=pane['cwd'],
         mux_argv=['tmux'], windows=os.name == 'nt',
         claude_settings=claude_customizations.from_environment(
-            procinfo._env_var_of(agent, claude_customizations.SESSION_SETTINGS_ENV)))
+            procinfo._env_var_of(agent, claude_customizations.SESSION_SETTINGS_ENV)),
+        plugin_token=procinfo._env_var_of(agent, 'HANGAR_PLUGIN_TOKEN') or '')
 
 
 def resolve_binding(name, previous=None):
@@ -194,7 +195,9 @@ def resolve_binding(name, previous=None):
         cwd=facts['cwd'], created=previous.meta.get('created', 0) if same else max(facts['created'], facts.get('pane_birth', facts['created'])),
         legacy_import_after=facts.get('pane_birth'), agent_pid=facts.get('agent_pid'),
         agent_birth=facts.get('agent_birth'),
-        **({'claude_settings': facts['claude_settings']} if facts.get('claude_settings') is not None else {})), facts['jsonl'],
+        **({'claude_settings': facts['claude_settings']} if facts.get('claude_settings') is not None else {}),
+        # A chave do token que o processo recebeu no lançamento: a ponte do Rust acha a sessão por ela.
+        **({'plugin_key': facts['plugin_token'].partition('.')[0]} if '.' in facts.get('plugin_token', '') else {})), facts['jsonl'],
         previous.projection_dir if same else directory, state_path,
         previous.lock_path if same else directory / 'runtime' / f'{key}.lock', generation)
 

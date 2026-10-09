@@ -164,7 +164,7 @@ async fn open_sick_terminal(registry: &RuntimeRegistry, dir: &Path, name: &str) 
     let transcript = dir.join(format!("{name}.jsonl"));
     std::fs::write(&transcript, "").unwrap();
     registry.open_terminal(TerminalTarget { key: format!("k-{name}"), generation: 1, name: name.into(), binding,
-        lease_path: dir.join(format!("{name}.lease")), state_path, projection_dir, transcript, created: 0.0 }).await.unwrap();
+        lease_path: dir.join(format!("{name}.lease")), state_path, projection_dir, transcript, created: 0.0, plugin_key: None }).await.unwrap();
     for _ in 0..250 {
         if !registry.writable(name).await.unwrap().healthy { return; }
         tokio::time::sleep(Duration::from_millis(20)).await;
