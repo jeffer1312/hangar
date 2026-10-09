@@ -1,8 +1,11 @@
 """Dono da transcrição: Rust ativo nunca recorre ao serviço Python depois da falha."""
-from types import SimpleNamespace
 import urllib.request
+from types import SimpleNamespace
+
 import pytest
-from app import runtime_coordinator, runtime_config, transcribe, transcription_bridge as bridge
+
+from app import runtime_config, runtime_coordinator, transcribe
+from app import transcription_bridge as bridge
 
 
 @pytest.fixture(autouse=True)

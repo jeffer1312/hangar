@@ -97,8 +97,8 @@ impl LocalWhisper {
         let mut current = self.running.lock().await;
         let content = audio::normalize(provider, content, name).await?;
         let dead = current.as_mut().is_some_and(|r| !matches!(r.process.child.try_wait(), Ok(None)));
-        if dead || current.as_ref().is_some_and(|r| r.key != Key::of(provider)) {
-            if let Some(mut old) = current.take() { old.stop().await; }
+        if (dead || current.as_ref().is_some_and(|r| r.key != Key::of(provider)))
+            && let Some(mut old) = current.take() { old.stop().await;
         }
         if current.is_none() {
             self.publish(provider, "starting", None);

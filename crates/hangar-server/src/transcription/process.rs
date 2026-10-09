@@ -49,10 +49,9 @@ impl Drop for ManagedChild {
 }
 
 pub(crate) fn expand_path(value: &str) -> std::path::PathBuf {
-    if let Some(rest) = value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\")) {
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+    if let Some(rest) = value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\"))
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             return std::path::PathBuf::from(home).join(rest);
-        }
     }
     value.into()
 }

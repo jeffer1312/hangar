@@ -81,11 +81,11 @@ def _request(operation: str, content: bytes = b"", **query) -> dict:
                               str(error.get("detail") or "A transcrição falhou."))
         result = value.get("result")
         if not isinstance(result, dict):
-            raise ValueError("resultado inválido")
+            raise TypeError("resultado inválido")
         return result
     except BridgeError:
         raise
-    except (OSError, ValueError, http.client.HTTPException):
+    except (OSError, ValueError, TypeError, http.client.HTTPException):
         diag.registrar("transcription.bridge_failed", "aviso", codigo="transcription_rust_unavailable")
         raise BridgeError(503, "transcription_rust_unavailable",
                           "Não foi possível confirmar a transcrição no Rust. O áudio foi preservado para tentar novamente.") from None

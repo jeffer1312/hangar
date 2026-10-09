@@ -1,6 +1,6 @@
 """Contratos HTTP existentes, delegados ao único motor de transcrição no Rust."""
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from app import transcription_bridge
