@@ -1,7 +1,8 @@
 //! Custos: página própria, fora das Configurações, com o relatório do web (`Costs.svelte`, `/api/costs`) — os mesmos
 //! números, cortes e filtros, no desenho do nativo. A página irmã Estatísticas de uso (`stats.rs`) abre pelo link do topo.
 //! Os textos são os do web (`tr_web`): a tela é a mesma, e copiá-los como `native_*` seria manter dois dicionários.
-//! O nativo fala com um servidor só: o corte por máquina e a escolha de servidores do web não entram.
+//! Como no web, o relatório soma as máquinas próprias e ligadas (`mergeReports`): cada uma é lida à parte, a que não
+//! responde ou devolve outro período fica fora da soma e nomeada no aviso, e a escolha de quais entram é guardada.
 use super::*;
 use std::collections::BTreeMap;
 use super::device::Remote;
@@ -11,7 +12,7 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use serde::Deserialize;
 
 /// Quantas vezes a página repergunta enquanto o servidor ainda lê o histórico (202 `aquecendo`), a cada 3 s: ~5 min.
-const WARM_TRIES: u32 = 100;
+pub(super) const WARM_TRIES: u32 = 100;
 const WARM_EVERY: Duration = Duration::from_secs(3);
 /// Máximo de entidades no Comparar: são quatro cores de gráfico.
 const COMPARE_MAX: usize = 4;
@@ -182,11 +183,15 @@ struct Combo {
     cache_write_1h: f64,
     regravado: f64,
     custo_regravado: f64,
+    /// Id da máquina que mandou a linha, carimbado na soma.
+    #[serde(skip)]
+    machine: String,
 }
 
 impl Combo {
     fn field(&self, dim: Dim) -> &str {
-        match dim { Dim::Provider => &self.provider, Dim::Source => &self.source, Dim::Project => &self.project, Dim::Model => &self.model }
+        match dim { Dim::Provider => &self.provider, Dim::Source => &self.source, Dim::Project => &self.project, Dim::Model => &self.model,
+            Dim::Machine => &self.machine }
     }
 }
 
@@ -207,11 +212,13 @@ struct Session {
     cache_read: f64,
     cost: f64,
     custo_regravado: f64,
+    #[serde(skip)]
+    machine: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-struct Rate { model: String, input: f64, output: f64, cache_read: f64, cache_write: f64, origin: String, cache_estimado: bool }
+struct Rate { provider: String, model: String, input: f64, output: f64, cache_read: f64, cache_write: f64, origin: String, cache_estimado: bool }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -233,6 +240,9 @@ pub(super) struct Report {
     /// Falso quando o servidor não manda cache de 1 h nem cache perdido (versão antiga).
     #[serde(skip)]
     cache_detailed: bool,
+    /// Total de cada máquina somada, chave = id da máquina e rótulo = nome dela.
+    #[serde(skip)]
+    by_machine: Vec<Bucket>,
 }
 
 impl Report {
@@ -242,7 +252,8 @@ impl Report {
         Ok(report)
     }
     fn list(&self, dim: Dim) -> &[Bucket] {
-        match dim { Dim::Provider => &self.by_provider, Dim::Source => &self.by_source, Dim::Project => &self.by_project, Dim::Model => &self.by_model }
+        match dim { Dim::Provider => &self.by_provider, Dim::Source => &self.by_source, Dim::Project => &self.by_project, Dim::Model => &self.by_model,
+            Dim::Machine => &self.by_machine }
     }
     /// Tarifa por modelo: `None` dentro do mapa quando o mesmo modelo tem preço em mais de um provedor.
     fn rates_by_model(&self) -> HashMap<String, Option<Rate>> {
@@ -254,12 +265,195 @@ impl Report {
     }
 }
 
+impl Bucket {
+    fn absorb(&mut self, b: &Bucket) {
+        self.sessions += b.sessions; self.subagentes += b.subagentes;
+        self.input += b.input; self.output += b.output; self.cache_write += b.cache_write; self.cache_read += b.cache_read;
+        self.cost += b.cost; self.cost_input += b.cost_input; self.cost_output += b.cost_output;
+        self.cost_cache_write += b.cost_cache_write; self.cost_cache_read += b.cost_cache_read;
+        self.cache_write_1h += b.cache_write_1h; self.regravado += b.regravado; self.custo_regravado += b.custo_regravado;
+    }
+}
+
+/// O rótulo é do primeiro servidor que souber dizer: máquina antiga manda a linha sem ele.
+fn join(dest: &mut HashMap<String, Bucket>, list: &[Bucket]) {
+    for b in list {
+        let target = dest.entry(b.key.clone()).or_insert_with(|| Bucket::zero(&b.key));
+        if target.label.is_none() { target.label = b.label.clone(); }
+        target.absorb(b);
+    }
+}
+
+fn by_cost(map: HashMap<String, Bucket>) -> Vec<Bucket> {
+    let mut list: Vec<Bucket> = map.into_values().collect();
+    list.sort_by(|a, b| b.cost.total_cmp(&a.cost).then_with(|| a.key.cmp(&b.key)));
+    list
+}
+
+/// O `mergeReports` do web: soma por chave, linhas e sessões carimbadas com a máquina, tarifas por provedor e modelo.
+fn merge_costs(parts: &[MachinePart<Report>]) -> Report {
+    let mut out = Report { totals: Bucket::zero("totals"), cache_detailed: true, ..Default::default() };
+    let mut dims: [HashMap<String, Bucket>; 5] = Default::default();
+    let mut rates: HashMap<(String, String), Rate> = HashMap::new();
+    let mut unpriced = std::collections::BTreeSet::new();
+    let (mut entered, mut with_previous, mut detailed) = (0, 0, true);
+    let mut previous = Bucket::zero("anterior");
+    for p in parts {
+        let r = match &p.part {
+            Part::Ok(r) => r,
+            Part::Mismatched(rate) => { out.usd_brl = out.usd_brl.or(*rate); continue }
+            Part::Failed(_) => continue,
+        };
+        out.usd_brl = out.usd_brl.or(r.usd_brl);
+        entered += 1;
+        out.totals.absorb(&r.totals);
+        let mut own = Bucket { key: p.id.clone(), label: Some(p.label.clone()), ..Default::default() };
+        own.absorb(&r.totals);
+        // Máquina com volume e sem detalhamento: cruzar só as outras tiraria o consumo dela de todo recorte.
+        if r.combos.is_empty() && own.raw() + own.sessions + own.cost > 0. { detailed = false; }
+        out.by_machine.push(own);
+        for (dim, list) in dims.iter_mut().zip([&r.by_day, &r.by_provider, &r.by_source, &r.by_project, &r.by_model]) { join(dim, list); }
+        for rate in &r.rates { rates.insert((rate.provider.clone(), rate.model.clone()), rate.clone()); }
+        unpriced.extend(r.sem_tarifa.iter().cloned());
+        out.combos.extend(r.combos.iter().map(|c| Combo { machine: p.id.clone(), ..c.clone() }));
+        out.sessoes.extend(r.sessoes.iter().map(|s| Session { machine: p.id.clone(), ..s.clone() }));
+        out.cache_detailed &= r.cache_detailed;
+        out.custo_sem_cache += r.custo_sem_cache;
+        out.equivalente_cobrado += r.equivalente_cobrado;
+        if let Some(a) = &r.anterior { previous.absorb(a); with_previous += 1; }
+    }
+    let [day, provider, source, project, model] = dims;
+    out.by_day = day.into_values().collect();
+    out.by_day.sort_by(|a, b| b.key.cmp(&a.key));
+    (out.by_provider, out.by_source, out.by_project, out.by_model) = (by_cost(provider), by_cost(source), by_cost(project), by_cost(model));
+    out.rates = rates.into_values().collect();
+    out.rates.sort_by(|a, b| a.model.cmp(&b.model));
+    out.sem_tarifa = unpriced.into_iter().collect();
+    // Anterior de só parte das máquinas mostraria uma alta que não existe.
+    out.anterior = (entered > 0 && with_previous == entered).then_some(previous);
+    if !detailed { out.combos.clear(); }
+    out.sessoes.sort_by(|a, b| b.cost.total_cmp(&a.cost));
+    out.by_machine.sort_by(|a, b| b.cost.total_cmp(&a.cost).then_with(|| a.key.cmp(&b.key)));
+    out
+}
+
+// ── Várias máquinas ─────────────────────────────────────────────────────────
+
+/// O que uma máquina devolveu. Outro período é servidor antigo que ignora `?period=`: fica fora da soma, declarado, mas a
+/// cotação dele ainda vale (USD/BRL não depende de período).
+pub(super) enum Part<R> { Ok(R), Mismatched(Option<f64>), Failed(String) }
+
+pub(super) struct MachinePart<R> { pub(super) id: String, pub(super) label: String, pub(super) part: Part<R> }
+
+impl<R> MachinePart<R> {
+    fn answered(&self) -> bool { !matches!(self.part, Part::Failed(_)) }
+}
+
+/// Todas falharam: a tela mostra o erro em vez de zeros que parecem relatório. Uma só leva o motivo dela; várias, cada uma o seu.
+pub(super) fn all_failed<R>(parts: &[MachinePart<R>]) -> Option<String> {
+    let errors = parts.iter().map(|p| match &p.part { Part::Failed(e) => Some((p.label.as_str(), e.as_str())), _ => None }).collect::<Option<Vec<_>>>()?;
+    match errors.as_slice() {
+        [] => None,
+        [(_, error)] => Some((*error).to_owned()),
+        many => Some(many.iter().map(|(label, error)| format!("{label}: {error}")).collect::<Vec<_>>().join("\n")),
+    }
+}
+
+/// Quem ficou fora da soma, cada causa com os nomes das máquinas.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Partial { failed: Vec<String>, mismatched: Vec<String> }
+
+impl Partial {
+    pub(super) fn of<R>(parts: &[MachinePart<R>]) -> Partial {
+        let mut out = Partial::default();
+        for p in parts {
+            match p.part { Part::Failed(_) => out.failed.push(p.label.clone()), Part::Mismatched(_) => out.mismatched.push(p.label.clone()), Part::Ok(_) => {} }
+        }
+        out
+    }
+    pub(super) fn is_empty(&self) -> bool { self.failed.is_empty() && self.mismatched.is_empty() }
+    pub(super) fn text(&self) -> String {
+        let mut text = format!("⚠ {}", web("custos_total_parcial"));
+        for (names, one, many) in [(&self.failed, "custos_servidor_nao_respondeu_1", "custos_servidor_nao_respondeu"),
+            (&self.mismatched, "custos_fora_periodo_1", "custos_fora_periodo")] {
+            if names.is_empty() { continue; }
+            let phrase = if names.len() == 1 { web(one) } else { web_with(many, &[("n", names.len().to_string())]) };
+            text.push_str(&format!(" {phrase} ({}).", names.join(", ")));
+        }
+        text
+    }
+}
+
+/// Uma máquina do relatório: o id é a chave do corte e da escolha; o rótulo é editável e pode repetir.
+#[derive(Clone)]
+pub(super) struct Machine { pub(super) id: String, pub(super) label: String, key: String }
+
+/// Máquina na primeira leitura do histórico (202 `aquecendo`): lidos e total.
+pub(super) struct Warming { id: String, label: String, read: u64, total: u64 }
+
+pub(super) fn set_warming(list: &mut Vec<Warming>, m: &Machine, progress: Option<(u64, u64)>) {
+    list.retain(|w| w.id != m.id);
+    if let Some((read, total)) = progress { list.push(Warming { id: m.id.clone(), label: m.label.clone(), read, total }); }
+}
+
+pub(super) fn warming_note(w: &Warming) -> Div {
+    let text = if w.total > 0 { web_with("custos_aquecendo_progresso", &[("maquina", w.label.clone()), ("lidos", w.read.to_string()), ("total", w.total.to_string())]) }
+        else { web_with("custos_aquecendo", &[("maquina", w.label.clone())]) };
+    let done = if w.total > 0 { (w.read as f32 / w.total as f32).clamp(0., 1.) } else { 0.1 };
+    note_box(text, theme::muted()).child(div().mt(px(8.)).h(px(4.)).rounded_full().bg(theme::border_strong())
+        .child(div().h_full().rounded_full().bg(theme::accent()).w(relative(done))))
+}
+
+pub(super) fn partial_note(id: &'static str, partial: &Partial, retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
+    note_box(partial.text(), theme::warning()).child(div().mt(px(6.)).child(Button::new(id).outline().xsmall()
+        .label(web("config_server_tentar_de_novo")).on_click(retry)))
+}
+
+/// Ganchos de uma leitura por máquina: se o pedido ainda vale, o progresso da primeira leitura e a resposta.
+#[derive(Clone, Copy)]
+pub(super) struct MachineRead {
+    pub(super) seq: u64,
+    pub(super) alive: fn(&Hangar, u64) -> bool,
+    pub(super) warm: fn(&mut Hangar, &Machine, Option<(u64, u64)>),
+    pub(super) done: fn(&mut Hangar, u64, &Machine, Result<Value, String>, &mut Context<Hangar>),
+}
+
 /// Área do código do relatório de uso (`/api/uso`, `by_area`).
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct Area { key: String, input: f64, output: f64, cache_write: f64, cache_read: f64, cost: f64 }
 
 impl Area { fn tokens(&self) -> f64 { self.input + self.output + self.cache_write + self.cache_read } }
+
+/// Escolhas guardadas da página: projetos tirados da lista e máquinas tiradas da soma.
+fn prefs_path() -> Option<PathBuf> { Some(saved_connection_path()?.with_file_name("costs.json")) }
+
+fn load_prefs() -> (HashSet<String>, HashSet<String>) {
+    let saved = prefs_path().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    let list = |key: &str| saved.as_ref().and_then(|v| v.get(key)).and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
+    (list("hidden_projects"), list("machines_off"))
+}
+
+fn save_prefs(hidden: &HashSet<String>, off: &HashSet<String>) -> std::io::Result<()> {
+    let path = prefs_path().ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
+    let sorted = |set: &HashSet<String>| { let mut list: Vec<String> = set.iter().cloned().collect(); list.sort(); list };
+    std::fs::create_dir_all(path.parent().ok_or_else(|| std::io::Error::other("caminho sem pasta"))?)?;
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, json!({ "hidden_projects": sorted(hidden), "machines_off": sorted(off) }).to_string())?;
+    std::fs::rename(tmp, path)
+}
+
+fn merge_areas(parts: &[Option<Vec<Area>>]) -> Vec<Area> {
+    let mut out: Vec<Area> = Vec::new();
+    for a in parts.iter().flatten().flatten() {
+        match out.iter_mut().find(|x| x.key == a.key) {
+            Some(x) => { x.input += a.input; x.output += a.output; x.cache_write += a.cache_write; x.cache_read += a.cache_read; x.cost += a.cost; }
+            None => out.push(a.clone()),
+        }
+    }
+    out
+}
 
 // ── Estado da página ────────────────────────────────────────────────────────
 
@@ -284,15 +478,19 @@ impl Period {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Dim { Provider, Source, Project, Model }
+enum Dim { Provider, Source, Project, Model, Machine }
 
 impl Dim {
-    const ALL: [Dim; 4] = [Dim::Provider, Dim::Source, Dim::Project, Dim::Model];
+    const ALL: [Dim; 5] = [Dim::Provider, Dim::Source, Dim::Project, Dim::Model, Dim::Machine];
     fn name(self) -> String {
         web(match self { Dim::Provider => "custos_dim_provedor", Dim::Source => "custos_dim_fonte", Dim::Project => "custos_dim_projeto",
-            Dim::Model => "custos_dim_modelo" })
+            Dim::Model => "custos_dim_modelo", Dim::Machine => "custos_dim_maquina" })
     }
-    fn id(self) -> &'static str { match self { Dim::Provider => "provider", Dim::Source => "source", Dim::Project => "project", Dim::Model => "model" } }
+    fn id(self) -> &'static str {
+        match self { Dim::Provider => "provider", Dim::Source => "source", Dim::Project => "project", Dim::Model => "model", Dim::Machine => "machine" }
+    }
+    /// Com uma máquina só, "qual máquina" não é escolha.
+    fn shown(multi: bool) -> Vec<Dim> { Dim::ALL.into_iter().filter(|d| multi || *d != Dim::Machine).collect() }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -412,12 +610,15 @@ pub(super) struct Costs {
     /// Aberta por cima da janela; `None` é a janela da conversa.
     pub(super) view: Option<View>,
     period: Period,
+    /// A soma das máquinas que já responderam; `loading` enquanto falta alguma.
     report: Remote<Report>,
-    /// Leitura do histórico ainda em curso no servidor: lidos e total.
-    warming: Option<(u64, u64)>,
-    tries: u32,
-    /// O servidor devolveu outro período (versão antiga): o número não é deste recorte.
-    mismatched: bool,
+    parts: Vec<MachinePart<Report>>,
+    pending: usize,
+    warming: Vec<Warming>,
+    partial: Partial,
+    /// Máquinas tiradas da soma, pelo id; lidas do disco junto dos projetos escondidos e valem também nas Estatísticas.
+    pub(super) off: Option<HashSet<String>>,
+    show_machines: bool,
     filter: Filter,
     daily: Metric,
     layers_off: HashSet<String>,
@@ -428,30 +629,16 @@ pub(super) struct Costs {
     all_projects: bool,
     more_sessions: bool,
     areas: Remote<Vec<Area>>,
+    area_parts: Vec<Option<Vec<Area>>>,
+    area_pending: usize,
+    /// Máquinas que falharam nas áreas enquanto outras responderam: o painel soma sem elas e diz quais.
+    area_partial: Partial,
     areas_key: String,
     compare_dim: Option<Dim>,
     compare_metric: Metric,
     compared: Vec<String>,
     method_open: bool,
     scroll: ScrollHandle,
-}
-
-fn hidden_path() -> Option<PathBuf> { Some(saved_connection_path()?.with_file_name("costs.json")) }
-
-fn load_hidden() -> HashSet<String> {
-    hidden_path().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        .and_then(|v| v.get("hidden_projects").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect()))
-        .unwrap_or_default()
-}
-
-fn save_hidden(hidden: &HashSet<String>) -> std::io::Result<()> {
-    let path = hidden_path().ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
-    let mut list: Vec<&String> = hidden.iter().collect();
-    list.sort();
-    std::fs::create_dir_all(path.parent().ok_or_else(|| std::io::Error::other("caminho sem pasta"))?)?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, json!({ "hidden_projects": list }).to_string())?;
-    std::fs::rename(tmp, path)
 }
 
 /// Tudo o que a tela mostra, derivado do relatório e do recorte uma vez por desenho.
@@ -483,6 +670,129 @@ impl Hangar {
         cx.spawn(async move |this, cx| {
             let Ok(result) = task.await else { return };
             let _ = this.update(cx, |this, cx| if this.connection == connection { done(this, result, cx) });
+        }).detach();
+    }
+
+    /// As máquinas do relatório, o `listOwnServers` do web: as ligadas e sem convite. Sem lista guardada, a conexão ativa.
+    pub(super) fn report_machines(&self) -> Vec<Machine> {
+        let own: Vec<Machine> = self.servers.iter().filter(|s| !s.disabled && !s.invite).map(|s| Machine {
+            id: s.id.clone(), key: servers::norm(&s.address),
+            label: if s.label.is_empty() { servers::default_label(&s.address) } else { s.label.clone() },
+        }).collect();
+        if !own.is_empty() || self.active_invite() { return own; }
+        self.server.as_deref().map(|a| vec![Machine { id: servers::norm(a), label: servers::default_label(a), key: servers::norm(a) }]).unwrap_or_default()
+    }
+
+    /// As que entram na soma: as marcadas, ou todas quando nenhuma ficou (relatório vazio pareceria "sem dados").
+    pub(super) fn chosen_machines(&self) -> Vec<Machine> {
+        let all = self.report_machines();
+        let on: Vec<Machine> = all.iter().filter(|m| !self.costs.off.as_ref().is_some_and(|off| off.contains(&m.id))).cloned().collect();
+        if on.is_empty() { all } else { on }
+    }
+
+    pub(super) fn ensure_costs_prefs(&mut self) {
+        if self.costs.hidden.is_some() && self.costs.off.is_some() { return; }
+        let (hidden, off) = load_prefs();
+        self.costs.hidden.get_or_insert(hidden);
+        self.costs.off.get_or_insert(off);
+    }
+
+    fn save_costs_prefs(&mut self, failed_key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_costs_prefs();
+        let (Some(hidden), Some(off)) = (&self.costs.hidden, &self.costs.off) else { return };
+        if let Err(error) = save_prefs(hidden, off) {
+            window.push_notification(Notification::warning(tr(failed_key).replace("{reason}", &error.to_string())), cx);
+        }
+    }
+
+    /// Marca ou tira uma máquina da soma; a última marcada não sai. As duas páginas releem.
+    pub(super) fn toggle_machine(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_costs_prefs();
+        let off = self.costs.off.get_or_insert_default();
+        match id { Some(id) => { if !off.remove(&id) { off.insert(id); } } None => off.clear() }
+        self.save_costs_prefs("costs_machines_not_saved", window, cx);
+        if self.costs.view == Some(View::Usage) {
+            self.costs.report.reset();
+            self.load_usage(false, cx);
+        } else {
+            self.usage_stale();
+            self.load_costs(false, cx);
+        }
+    }
+
+    /// O botão "N de M" que abre a escolha de máquinas; nenhum com uma máquina só.
+    pub(super) fn machines_button(&self, id: &'static str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let all = self.report_machines();
+        if all.len() < 2 { return None; }
+        let on = self.chosen_machines().len();
+        Some(Button::new(id).outline().small().selected(self.costs.show_machines)
+            .label(web_with("custos_de_servidores", &[("n", on.to_string()), ("m", all.len().to_string())]))
+            .on_click(cx.listener(|this, _, _, cx| { this.costs.show_machines = !this.costs.show_machines; cx.notify(); }))
+            .into_any_element())
+    }
+
+    /// Uma pílula por máquina: acesa entra na soma.
+    pub(super) fn machine_chips(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let all = self.report_machines();
+        if !self.costs.show_machines || all.len() < 2 { return None; }
+        // Nenhuma marcada vale como todas (`chosen_machines`): as pílulas mostram o mesmo.
+        let mut off = self.costs.off.clone().unwrap_or_default();
+        if all.iter().all(|m| off.contains(&m.id)) { off.clear(); }
+        let on_count = all.iter().filter(|m| !off.contains(&m.id)).count();
+        let chips = all.iter().map(|m| {
+            let (on, id) = (!off.contains(&m.id), m.id.clone());
+            Button::new(SharedString::from(format!("costs-machine-{id}"))).outline().small().selected(on).disabled(on && on_count == 1)
+                .label(m.label.clone())
+                .on_click(cx.listener(move |this, _, window, cx| this.toggle_machine(Some(id.clone()), window, cx)))
+        }).collect::<Vec<_>>();
+        Some(div().flex().flex_wrap().items_center().gap(px(6.)).child(div().text_size(px(12.)).text_color(theme::muted()).child(web("custos_servidores_relatorio")))
+            .children(chips)
+            .when(on_count < all.len(), |el| el.child(Button::new("costs-machine-all").ghost().small().label(web("custos_todos"))
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_machine(None, window, cx))))))
+    }
+
+    /// Lê `path` de uma máquina, repetindo a cada 3 s enquanto ela ainda lê o histórico (até ~5 min e só com a página aberta).
+    /// Resposta de outra conexão ou de pedido já trocado é descartada.
+    pub(super) fn read_machine(&mut self, m: Machine, path: &'static str, query: Vec<(String, String)>, tries: u32, read: MachineRead,
+        cx: &mut Context<Self>) {
+        let Some(api) = self.machine_api(&m.key) else {
+            let error = self.machine_error(&m.key);
+            (read.done)(self, read.seq, &m, Err(error), cx);
+            return;
+        };
+        let (connection, sent) = (self.connection, query.clone());
+        let task = self.runtime.spawn(async move {
+            let sent: Vec<(&str, &str)> = sent.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            api.server_read(&[path], &sent, 120).await
+        });
+        cx.spawn(async move |this, cx| {
+            // Tarefa que morreu ainda conta como resposta: sem ela a página ficaria carregando para sempre.
+            let result = match task.await { Ok(result) => result.map_err(|e| Self::failure(&e)), Err(_) => Err(tr("connection_failed")) };
+            let _ = this.update(cx, |this, cx| {
+                if this.connection != connection || !(read.alive)(this, read.seq) { return; }
+                match result {
+                    Ok(v) if v.get("aquecendo") == Some(&Value::Bool(true)) => {
+                        if tries >= WARM_TRIES || this.costs.view.is_none() {
+                            (read.warm)(this, &m, None);
+                            let error = web_with("custos_aquecendo", &[("maquina", m.label.clone())]);
+                            (read.done)(this, read.seq, &m, Err(error), cx);
+                        } else {
+                            let count = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+                            (read.warm)(this, &m, Some((count("lidos"), count("total"))));
+                            cx.spawn(async move |this, cx| {
+                                cx.background_executor().timer(WARM_EVERY).await;
+                                // A troca de servidor zera os números de pedido: só o `connection` separa esta espera da leitura nova.
+                                let _ = this.update(cx, |this, cx| if this.connection == connection && (read.alive)(this, read.seq) {
+                                    this.read_machine(m, path, query, tries + 1, read, cx)
+                                });
+                            }).detach();
+                        }
+                    }
+                    Ok(v) => { (read.warm)(this, &m, None); (read.done)(this, read.seq, &m, Ok(v), cx); }
+                    Err(error) => { (read.warm)(this, &m, None); (read.done)(this, read.seq, &m, Err(error), cx); }
+                }
+                cx.notify();
+            });
         }).detach();
     }
 
@@ -545,11 +855,10 @@ impl Hangar {
         true
     }
 
-    /// Outra conexão: o relatório era do servidor anterior. Com a página aberta, relê do novo.
+    /// Outra conexão: as conexões das máquinas mudaram. Com a página aberta, relê.
     pub(super) fn costs_reconnected(&mut self, cx: &mut Context<Self>) {
-        let view = self.costs.view;
-        let hidden = self.costs.hidden.take();
-        self.costs = Costs { view, hidden, ..Default::default() };
+        let (view, hidden, off) = (self.costs.view, self.costs.hidden.take(), self.costs.off.take());
+        self.costs = Costs { view, hidden, off, ..Default::default() };
         self.usage_stats = Default::default();
         match view {
             Some(View::Costs) => self.load_costs(false, cx),
@@ -559,47 +868,43 @@ impl Hangar {
     }
 
     fn load_costs(&mut self, fresh: bool, cx: &mut Context<Self>) {
+        self.ensure_costs_prefs();
         let seq = self.costs.report.start();
-        (self.costs.warming, self.costs.tries, self.costs.mismatched) = (None, 0, false);
-        self.fetch_costs(seq, fresh, cx);
+        let machines = self.chosen_machines();
+        (self.costs.parts, self.costs.pending, self.costs.warming, self.costs.partial) = (Vec::new(), machines.len(), Vec::new(), Partial::default());
+        if machines.is_empty() { self.costs.report.finish(seq, Err(tr("connection_failed"))); }
+        let mut query = vec![("period".to_owned(), self.costs.period.key().to_owned())];
+        if fresh { query.push(("fresco".into(), "true".into())); }
+        let read = MachineRead { seq, alive: |this, seq| this.costs.report.seq == seq,
+            warm: |this, m, progress| set_warming(&mut this.costs.warming, m, progress), done: Self::costs_part };
+        for m in machines { self.read_machine(m, "costs", query.clone(), 0, read, cx); }
+        // "Atualizar" e "Tentar de novo" releem as áreas também: a chave delas não muda numa nova tentativa.
+        if fresh { self.costs.areas_key.clear(); }
+        self.refresh_areas(cx);
         cx.notify();
     }
 
-    fn fetch_costs(&mut self, seq: u64, fresh: bool, cx: &mut Context<Self>) {
-        let period = self.costs.period;
-        let mut query = vec![("period".to_owned(), period.key().to_owned())];
-        if fresh { query.push(("fresco".into(), "true".into())); }
-        self.server_get(vec!["costs".into()], query, 120, cx, move |this, result, cx| this.costs_arrived(seq, period, fresh, result, cx));
-    }
-
-    fn costs_arrived(&mut self, seq: u64, period: Period, fresh: bool, result: Result<Value, Failure>, cx: &mut Context<Self>) {
+    /// Uma máquina respondeu: a tela passa a mostrar a soma de quem já respondeu, sem esperar a mais lenta.
+    fn costs_part(&mut self, seq: u64, m: &Machine, result: Result<Value, String>, cx: &mut Context<Self>) {
         if seq != self.costs.report.seq { return; }
-        match result {
-            Ok(value) if value.get("aquecendo") == Some(&Value::Bool(true)) => {
-                let read = |k: &str| value.get(k).and_then(Value::as_u64).unwrap_or(0);
-                self.costs.warming = Some((read("lidos"), read("total")));
-                if self.costs.tries >= WARM_TRIES || self.costs.view.is_none() {
-                    self.costs.warming = None;
-                    self.costs.report.finish(seq, Err(web_with("custos_aquecendo", &[("maquina", self.server_label(cx))])));
-                } else {
-                    self.costs.tries += 1;
-                    cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(WARM_EVERY).await;
-                        let _ = this.update(cx, |this, cx| if this.costs.report.seq == seq { this.fetch_costs(seq, fresh, cx) });
-                    }).detach();
-                }
-            }
-            Ok(value) => {
-                self.costs.warming = None;
-                let parsed = Report::parse(&value).map(|report| {
-                    // Servidor que ignorou o período devolveu tudo: fica fora, declarado, em vez de somar como se fosse o recorte.
-                    self.costs.mismatched = value.pointer("/applied/period").and_then(Value::as_str) != Some(period.key());
-                    if self.costs.mismatched { Report { usd_brl: report.usd_brl, cache_detailed: true, ..Default::default() } } else { report }
-                });
-                if self.costs.report.finish(seq, parsed) { self.prune_filter(); self.refresh_areas(cx); }
-            }
-            Err(error) => { self.costs.warming = None; self.costs.report.finish(seq, Err(Self::failure(&error))); }
+        let period = self.costs.period.key();
+        let part = match result.and_then(|v| Report::parse(&v).map(|r| (v.pointer("/applied/period").and_then(Value::as_str) == Some(period), r))) {
+            Ok((true, r)) => Part::Ok(r),
+            Ok((false, r)) => Part::Mismatched(r.usd_brl),
+            Err(error) => Part::Failed(error),
+        };
+        let c = &mut self.costs;
+        c.parts.push(MachinePart { id: m.id.clone(), label: m.label.clone(), part });
+        c.pending = c.pending.saturating_sub(1);
+        c.partial = Partial::of(&c.parts);
+        let done = c.pending == 0;
+        if done || c.parts.iter().any(MachinePart::answered) {
+            c.report.value = Some(all_failed(&c.parts).map_or_else(|| Ok(merge_costs(&c.parts)), Err));
         }
+        c.report.loading = !done;
+        // Com máquina fora do ar, o recorte dela não some: os projetos dela só não chegaram.
+        if done && c.partial.failed.is_empty() { self.prune_filter(); }
+        if done { self.refresh_areas(cx); }
         cx.notify();
     }
 
@@ -620,40 +925,54 @@ impl Hangar {
         self.costs.compared.retain(|k| exists(dim, k));
     }
 
-    fn compare_dim(&self, _report: &Report) -> Dim { self.costs.compare_dim.unwrap_or(Dim::Provider) }
+    fn compare_dim(&self, _report: &Report) -> Dim {
+        match self.costs.compare_dim {
+            Some(Dim::Machine) if self.report_machines().len() < 2 => Dim::Provider,
+            dim => dim.unwrap_or(Dim::Provider),
+        }
+    }
 
     /// Áreas do código: o relatório de uso só recorta por projeto e modelo, e é pedido de novo quando esses mudam.
     fn refresh_areas(&mut self, cx: &mut Context<Self>) {
+        let machines = self.chosen_machines();
         let (projects, models) = (self.costs.filter.get(Dim::Project).to_vec(), self.costs.filter.get(Dim::Model).to_vec());
-        let key = format!("{}|{}|{}", self.costs.period.key(), projects.join("\n"), models.join("\n"));
+        let ids: Vec<&str> = machines.iter().map(|m| m.id.as_str()).collect();
+        let key = format!("{}|{}|{}|{}", self.costs.period.key(), projects.join("\n"), models.join("\n"), ids.join("\n"));
         if key == self.costs.areas_key && (self.costs.areas.loading || self.costs.areas.value.is_some()) { return; }
         self.costs.areas_key = key;
         let seq = self.costs.areas.start();
-        self.fetch_areas(seq, 0, cx);
+        (self.costs.area_parts, self.costs.area_pending, self.costs.area_partial) = (Vec::new(), machines.len(), Partial::default());
+        if machines.is_empty() { self.costs.areas.finish(seq, Err(web("custos_areas_erro"))); }
+        let mut query = vec![("period".to_owned(), self.costs.period.key().to_owned())];
+        query.extend(projects.into_iter().map(|p| ("projeto".to_owned(), p)));
+        query.extend(models.into_iter().map(|m| ("modelo".to_owned(), m)));
+        let read = MachineRead { seq, alive: |this, seq| this.costs.areas.seq == seq, warm: |_, _, _| {}, done: Self::areas_part };
+        for m in machines { self.read_machine(m, "uso", query.clone(), 0, read, cx); }
     }
 
-    fn fetch_areas(&mut self, seq: u64, tries: u32, cx: &mut Context<Self>) {
-        let mut query = vec![("period".to_owned(), self.costs.period.key().to_owned())];
-        query.extend(self.costs.filter.get(Dim::Project).iter().map(|p| ("projeto".to_owned(), p.clone())));
-        query.extend(self.costs.filter.get(Dim::Model).iter().map(|m| ("modelo".to_owned(), m.clone())));
-        self.server_get(vec!["uso".into()], query, 120, cx, move |this, result, cx| {
-            if seq != this.costs.areas.seq { return; }
-            match result {
-                Ok(v) if v.get("aquecendo") == Some(&Value::Bool(true)) && tries < WARM_TRIES => {
-                    cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(WARM_EVERY).await;
-                        let _ = this.update(cx, |this, cx| if this.costs.areas.seq == seq { this.fetch_areas(seq, tries + 1, cx) });
-                    }).detach();
-                    return;
-                }
-                Ok(v) => {
-                    let areas = v.get("by_area").cloned().map(serde_json::from_value::<Vec<Area>>);
-                    this.costs.areas.finish(seq, match areas { Some(Ok(list)) => Ok(list), Some(Err(_)) => Err(tr("invalid_response")), None => Ok(Vec::new()) });
-                }
-                Err(_) => { this.costs.areas.finish(seq, Err(web("custos_areas_erro"))); }
-            }
-            cx.notify();
+    /// Áreas só saem quando todas as máquinas responderam; erro só se nenhuma respondeu.
+    fn areas_part(&mut self, seq: u64, m: &Machine, result: Result<Value, String>, cx: &mut Context<Self>) {
+        if seq != self.costs.areas.seq { return; }
+        let period = self.costs.period.key();
+        let in_period = result.as_ref().is_ok_and(|v| v.pointer("/applied/period").and_then(Value::as_str) == Some(period));
+        let part = result.ok().and_then(|v| match in_period {
+            // Fora do período: respondeu, mas não soma.
+            false => Some(Vec::new()),
+            true => v.get("by_area").map_or(Some(Vec::new()), |list| serde_json::from_value::<Vec<Area>>(list.clone()).ok()),
         });
+        let c = &mut self.costs;
+        match &part {
+            None => c.area_partial.failed.push(m.label.clone()),
+            Some(_) if !in_period => c.area_partial.mismatched.push(m.label.clone()),
+            Some(_) => {}
+        }
+        c.area_parts.push(part);
+        c.area_pending = c.area_pending.saturating_sub(1);
+        if c.area_pending == 0 {
+            let value = if c.area_parts.iter().all(Option::is_none) { Err(web("custos_areas_erro")) } else { Ok(merge_areas(&c.area_parts)) };
+            c.areas.finish(seq, value);
+        }
+        cx.notify();
     }
 
     fn set_period(&mut self, period: Period, cx: &mut Context<Self>) {
@@ -684,14 +1003,15 @@ impl Hangar {
         cx.notify();
     }
 
-    fn hidden_projects(&mut self) -> &mut HashSet<String> { self.costs.hidden.get_or_insert_with(load_hidden) }
+    fn hidden_projects(&mut self) -> &mut HashSet<String> {
+        self.ensure_costs_prefs();
+        self.costs.hidden.get_or_insert_default()
+    }
 
     fn set_hidden(&mut self, key: Option<String>, hide: bool, window: &mut Window, cx: &mut Context<Self>) {
         let hidden = self.hidden_projects();
         match key { Some(key) => { if hide { hidden.insert(key); } else { hidden.remove(&key); } } None => hidden.clear() }
-        if let Err(error) = save_hidden(hidden) {
-            window.push_notification(Notification::warning(tr("costs_hidden_not_saved").replace("{reason}", &error.to_string())), cx);
-        }
+        self.save_costs_prefs("costs_hidden_not_saved", window, cx);
         cx.notify();
     }
 
@@ -749,25 +1069,24 @@ impl Hangar {
             }, cx);
         let toolbar = div().flex().flex_wrap().items_center().gap(px(8.)).child(period).child(currency);
         let mut page = div().flex().flex_col().gap(px(16.)).child(intro).child(toolbar);
+        let warming: Vec<Div> = self.costs.warming.iter().map(warming_note).collect();
 
-        if let Some((read, total)) = self.costs.warming {
-            let label = self.server_label(cx);
-            let text = if total > 0 { web_with("custos_aquecendo_progresso", &[("maquina", label), ("lidos", read.to_string()), ("total", total.to_string())]) }
-                else { web_with("custos_aquecendo", &[("maquina", label)]) };
-            page = page.child(note_box(text, theme::muted()).child(div().mt(px(8.)).h(px(4.)).rounded_full().bg(theme::border_strong())
-                .child(div().h_full().rounded_full().bg(theme::accent()).w(relative(if total > 0 { (read as f32 / total as f32).clamp(0., 1.) } else { 0.1 })))));
-        }
         let report = match &self.costs.report.value {
-            None => return page.child(loading_state()),
-            Some(Err(error)) => return page.child(error_state(error.clone(), cx.listener(|this, _, _, cx| this.load_costs(true, cx)))),
+            None => return page.children(warming).child(loading_state()),
+            Some(Err(error)) => return page.children(warming).child(error_state(error.clone(), cx.listener(|this, _, _, cx| this.load_costs(true, cx)))),
             Some(Ok(report)) => report.clone(),
         };
-        if self.costs.mismatched {
-            page = page.child(note_box(format!("⚠ {} {}", web("custos_total_parcial"), web("custos_fora_periodo_1")), theme::warning()));
+        let multi = self.report_machines().len() > 1;
+        page = page.child(self.render_filters(&report, multi, cx)).children(self.machine_chips(cx));
+        if !self.costs.partial.is_empty() {
+            page = page.child(partial_note("costs-partial-retry", &self.costs.partial,cx.listener(|this, _, _, cx| this.load_costs(true, cx))));
         }
-        page = page.child(self.render_filters(&report, cx));
         let d = self.derive(&report);
         if d.filtering { page = page.child(self.render_cut_line(&report, &d, cx)); }
+        page = page.children(warming);
+        if self.costs.pending > 0 && multi {
+            page = page.child(hint_text(web_with("custos_carregando_maquinas", &[("n", self.costs.pending.to_string())])));
+        }
         if report.totals.sessions == 0. {
             return page.child(empty_state(web("custos_sem_dados_periodo")));
         }
@@ -777,11 +1096,12 @@ impl Hangar {
             .child(self.render_daily(&report, &d, rate, window, cx))
             .child(two_cols(self.render_dollar(&d, rate), self.render_cache(&d, rate)))
             .child(two_cols(self.render_rank(&report, &d, Dim::Provider, rate, cx), self.render_rank(&report, &d, Dim::Source, rate, cx)))
-            .child(self.render_areas(&d, rate))
+            .children(multi.then(|| self.render_costs_by_machine(&report, rate, cx)))
+            .child(self.render_areas(&d, rate, cx))
             .child(self.render_projects(&report, &d, rate, cx))
             .child(self.render_sessions(&report, &d, rate, cx))
             .child(self.render_models(&report, &d, rate, cx))
-            .child(self.render_compare(&report, &d, rate, cx))
+            .child(self.render_compare(&report, &d, rate, multi, cx))
             .child(self.render_method(&report, &d, rate, cx))
     }
 
@@ -816,7 +1136,8 @@ impl Hangar {
     /// O que o seletor de uma dimensão oferece: cruzado com os outros filtros, nunca com o próprio, e o que está
     /// marcado continua na lista mesmo sem sobrar nada dele.
     fn options_of(&self, report: &Report, dim: Dim) -> Vec<Bucket> {
-        if report.combos.is_empty() { return report.list(dim).to_vec(); }
+        // Máquina sai do total de cada uma, não do cruzamento: a que respondeu sem detalhamento ficaria impossível de escolher.
+        if report.combos.is_empty() || dim == Dim::Machine { return report.list(dim).to_vec(); }
         let mut list = group(&filtered(&report.combos, &self.costs.filter.without(dim)), dim);
         for key in self.costs.filter.get(dim) {
             if !list.iter().any(|b| &b.key == key) { list.push(Bucket::zero(key)); }
@@ -832,7 +1153,8 @@ impl Hangar {
 
     fn name_of(report: &Report, dim: Dim, key: &str) -> String {
         match dim { Dim::Provider => Self::provider_name(report, key), Dim::Project => project_label(key), Dim::Source => source_name(key),
-            Dim::Model => key.to_owned() }
+            Dim::Model => key.to_owned(),
+            Dim::Machine => report.by_machine.iter().find(|b| b.key == key).and_then(|b| b.label.clone()).unwrap_or_else(|| key.to_owned()) }
     }
 
     /// "N sessões · M subagentes", seguindo os três estados do filtro de subagente.
@@ -847,14 +1169,14 @@ impl Hangar {
         }
     }
 
-    fn render_filters(&self, report: &Report, cx: &mut Context<Self>) -> Div {
+    fn render_filters(&self, report: &Report, multi: bool, cx: &mut Context<Self>) -> Div {
         let has_combos = !report.combos.is_empty();
         let rate = report.usd_brl;
         let mut row = div().flex().flex_wrap().items_end().gap(px(12.));
-        for dim in Dim::ALL {
+        for dim in Dim::shown(multi) {
             let options = self.options_of(report, dim);
             let selected = self.costs.filter.get(dim).to_vec();
-            let all = web_with(if dim == Dim::Source { "custos_todas_n" } else { "custos_todos_n" }, &[("n", options.len().to_string())]);
+            let all = web_with(if matches!(dim, Dim::Source | Dim::Machine) { "custos_todas_n" } else { "custos_todos_n" }, &[("n", options.len().to_string())]);
             let shown = match selected.len() {
                 0 => all.clone(),
                 1 => Self::name_of(report, dim, &selected[0]),
@@ -895,6 +1217,7 @@ impl Hangar {
                 });
             row = row.child(field(dim.name(), button.into_any_element()));
         }
+        if let Some(button) = self.machines_button("costs-machines", cx) { row = row.child(field(web("custos_servidores"), button)); }
         if has_combos {
             let sub = segments("costs-sub", &[web("custos_tudo"), web("custos_so_conversa"), web("custos_so_subagente")],
                 match self.costs.filter.sub { None => 0, Some(false) => 1, Some(true) => 2 }, 3, false, String::new(),
@@ -972,6 +1295,9 @@ impl Hangar {
                 format!("{} {}", if delta > 0. { "▲" } else { "▼" }, web_with("custos_delta_vs", &[("n", dec(delta.abs(), 0)), ("rot", self.costs.period.label())]))
             });
         }
+        // Máquina desmarcada sai da conta: sem esta linha, "parte do gasto" passaria por "o gasto".
+        let (chosen, all) = (self.chosen_machines().len(), self.report_machines().len());
+        if chosen < all { cost_foot.push(web_with("custos_somando_maquinas", &[("n", chosen.to_string()), ("m", all.to_string())])); }
         let raw = f.raw();
         let entry = f.input + f.cache_read + f.cache_write;
         let saved = d.without_cache - f.cost;
@@ -1214,16 +1540,30 @@ impl Hangar {
         card(web(title), Some(hint)).child(if rows.is_empty() { empty_state(web("custos_sem_dados_no_periodo")) } else { div().flex().flex_col().gap(px(2.)).children(rows) })
     }
 
-    fn render_areas(&self, d: &Derived, rate: Option<f64>) -> Div {
+    /// Total de cada máquina no período inteiro, clicável para recortar o resto da tela.
+    fn render_costs_by_machine(&self, report: &Report, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
+        let rows = self.rank_rows(report, Dim::Machine, &report.by_machine, rate, false, cx);
+        card(web("custos_por_maquina"), Some(web("custos_onde_sessao")))
+            .child(if rows.is_empty() { empty_state(web("custos_sem_dados_no_periodo")) } else { div().flex().flex_col().gap(px(2.)).children(rows) })
+    }
+
+    fn render_areas(&self, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
         let filter = &self.costs.filter;
         let mut hint = web("uso_graf_areas_nota");
-        if !filter.get(Dim::Provider).is_empty() || !filter.get(Dim::Source).is_empty() { hint.push(' '); hint.push_str(&web("custos_areas_sem_recorte")); }
+        if [Dim::Provider, Dim::Source, Dim::Machine].iter().any(|d| !filter.get(*d).is_empty()) { hint.push(' '); hint.push_str(&web("custos_areas_sem_recorte")); }
         let body = card(web("uso_graf_areas"), Some(hint));
         let _ = d;
         match &self.costs.areas.value {
             None => body.child(empty_state(web("custos_areas_carregando"))),
             Some(Err(error)) => body.child(empty_state(error.clone())),
             Some(Ok(list)) => {
+                let body = if self.costs.area_partial.is_empty() { body } else {
+                    body.child(partial_note("costs-areas-retry", &self.costs.area_partial, cx.listener(|this, _, _, cx| {
+                        this.costs.areas_key.clear();
+                        this.refresh_areas(cx);
+                        cx.notify();
+                    })))
+                };
                 const ORDER: [&str; 7] = ["front", "back", "banco", "infra", "docs", "outros", "conversa"];
                 let pos = |k: &str| ORDER.iter().position(|o| *o == k).unwrap_or(ORDER.len());
                 let mut items: Vec<&Area> = list.iter().filter(|a| a.tokens() > 0.).collect();
@@ -1276,7 +1616,7 @@ impl Hangar {
     fn render_sessions(&self, report: &Report, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
         let f = &self.costs.filter;
         let cut: Vec<&Session> = report.sessoes.iter().filter(|s| matches(f.get(Dim::Provider), &s.provider) && matches(f.get(Dim::Source), &s.source)
-            && matches(f.get(Dim::Project), &s.project) && matches(f.get(Dim::Model), &s.model)).collect();
+            && matches(f.get(Dim::Project), &s.project) && matches(f.get(Dim::Model), &s.model) && matches(f.get(Dim::Machine), &s.machine)).collect();
         let body = card(web("custos_sessoes_caras"), Some(web("custos_sessoes_hint")));
         let _ = d;
         if report.sessoes.is_empty() && report.totals.sessions > 0. { return body.child(empty_state(web("custos_sessoes_atualize"))); }
@@ -1290,7 +1630,7 @@ impl Hangar {
                 web_with("custos_sessao_tokens_novos", &[("tokens", tok(s.input + s.cache_write + s.output))])];
             if s.custo_regravado > 0. { meta.push(web_with("custos_sessao_cache_perdido", &[("valor", money2(s.custo_regravado, rate))])); }
             if s.subagentes > 0. { meta.push(format!("+{} {}", dec(s.subagentes, 0), web(if s.subagentes == 1. { "custos_subagente" } else { "custos_subagentes" }))); }
-            div().id(SharedString::from(format!("costs-session-{}", s.session_id))).px(px(8.)).py(px(8.)).border_t_1().border_color(theme::border())
+            div().id(SharedString::from(format!("costs-session-{}-{}", s.machine, s.session_id))).px(px(8.)).py(px(8.)).border_t_1().border_color(theme::border())
                 .flex().flex_col().gap(px(3.))
                 .child(div().flex().items_center().gap(px(10.))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(13.5)).child(project_label(&s.project)))
@@ -1360,7 +1700,7 @@ impl Hangar {
         body
     }
 
-    fn render_compare(&self, report: &Report, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
+    fn render_compare(&self, report: &Report, d: &Derived, rate: Option<f64>, multi: bool, cx: &mut Context<Self>) -> Div {
         let dim = self.compare_dim(report);
         let metric = self.costs.compare_metric;
         let marked = self.costs.compared.clone();
@@ -1371,8 +1711,10 @@ impl Hangar {
         let rest: Vec<Bucket> = all.iter().filter(|b| !candidates.iter().any(|c| c.key == b.key)).cloned().collect();
         let fmt = move |v: f64| if metric == Metric::Cost { money(v, rate) } else { tok(v) };
 
-        let dims = segments("costs-compare-dim", &Dim::ALL.map(Dim::name), Dim::ALL.iter().position(|x| *x == dim).unwrap_or(0), 4, false, String::new(),
-            |this: &mut Hangar, n, _: &mut Window, cx| { this.costs.compare_dim = Some(Dim::ALL[n]); this.costs.compared.clear(); cx.notify(); }, cx);
+        let shown = Dim::shown(multi);
+        let labels: Vec<String> = shown.iter().map(|d| d.name()).collect();
+        let dims = segments("costs-compare-dim", &labels, shown.iter().position(|x| *x == dim).unwrap_or(0), shown.len(), false, String::new(),
+            move |this: &mut Hangar, n, _: &mut Window, cx| { this.costs.compare_dim = Some(shown[n]); this.costs.compared.clear(); cx.notify(); }, cx);
         let metrics = segments("costs-compare-metric", &[web("ctx_tokens"), web("custos_custo")], (metric == Metric::Cost) as usize, 2, false, String::new(),
             |this: &mut Hangar, n, _: &mut Window, cx| { this.costs.compare_metric = if n == 1 { Metric::Cost } else { Metric::Tokens }; cx.notify(); }, cx);
         let full = marked.len() >= COMPARE_MAX;
@@ -1663,6 +2005,29 @@ mod tests {
         f.set(Dim::Model, vec!["m".into(), "n".into()], false);
         assert!(f.get(Dim::Source).is_empty() && f.get(Dim::Model) == ["m".to_owned()]);
         assert_eq!(group(&all, Dim::Source)[0].key, "codex");
+    }
+
+    #[test]
+    fn merge_sums_machines_and_names_who_stayed_out() {
+        let report = |cost: f64, id: &str| Report { totals: Bucket { sessions: 1., cost, ..Default::default() },
+            by_model: vec![Bucket { key: "m".into(), cost, ..Default::default() }], combos: vec![combo("2026-09-01", "claude", "m", false, id, cost)],
+            anterior: Some(Bucket { cost: 1., ..Default::default() }), cache_detailed: true, ..Default::default() };
+        let part = |id: &str, label: &str, part| MachinePart { id: id.into(), label: label.into(), part };
+        let parts = vec![part("a", "casa", Part::Ok(report(2., "s1"))), part("b", "notebook", Part::Ok(report(3., "s2"))),
+            part("c", "vps", Part::Failed("x".into())), part("d", "velho", Part::Mismatched(Some(5.)))];
+        let merged = merge_costs(&parts);
+        assert_eq!((merged.totals.cost, merged.by_model.len(), merged.by_model[0].cost, merged.usd_brl), (5., 1, 5., Some(5.)));
+        assert_eq!(merged.by_machine.iter().map(|b| b.key.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+        let mut f = Filter::default();
+        f.set(Dim::Machine, vec!["a".into()], true);
+        assert_eq!(sum(&filtered(&merged.combos, &f)).cost, 2.);
+        assert_eq!(merged.anterior.map(|a| a.cost), Some(2.));
+        let partial = Partial::of(&parts);
+        assert_eq!((partial.failed, partial.mismatched), (vec!["vps".to_owned()], vec!["velho".to_owned()]));
+        // Uma máquina sem detalhamento derruba o cruzamento de todas, e uma sem anterior derruba a comparação.
+        let bare = Report { combos: Vec::new(), anterior: None, ..report(1., "s3") };
+        let merged = merge_costs(&[part("a", "casa", Part::Ok(report(2., "s1"))), part("e", "antiga", Part::Ok(bare))]);
+        assert!(merged.combos.is_empty() && merged.anterior.is_none());
     }
 
     #[test]
