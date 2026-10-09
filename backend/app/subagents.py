@@ -27,6 +27,7 @@ def _subagents_dir(jsonl: str) -> Path:
 
 
 _FORK_DIRETIVA = "\nYour directive: "
+_TEAMMATE_ENVELOPE_RE = re.compile(r"^\s*<teammate-message\b[^>]*>\n?(.*?)\n?</teammate-message>\s*$", re.DOTALL)
 
 
 def _text_of(content) -> str:
@@ -132,6 +133,9 @@ def _parse_agent(f: Path, tail: int) -> dict | None:
                         # marcador. Sem o corte, nada casava com o `prompt` do Agent e o título era o padrão.
                         if t.lstrip().startswith("<fork-boilerplate>") and _FORK_DIRETIVA in t:
                             t = t.split(_FORK_DIRETIVA, 1)[1].strip()
+                        # Colega de equipe (Agent com `name`) recebe o prompt dentro do envelope do líder.
+                        elif m := _TEAMMATE_ENVELOPE_RE.match(t):
+                            t = m.group(1).strip()
                         prompt = t
                 elif r.get("type") == "assistant" and isinstance(content, list):
                     for b in content:
