@@ -27,6 +27,7 @@ impl TranscriptionService {
             snapshot.vocabulary = super::vocabulary::assemble(&extra);
         }
         self.local.reconcile(&snapshot.providers).await;
+        self.local.recover_registered(&snapshot.state_path).await;
         self.quota.lock().await.load(&snapshot.state_path);
         *self.snapshot.write().await = snapshot;
     }
@@ -91,6 +92,7 @@ impl TranscriptionService {
                     return Ok(Transcription { text, provider: name, aviso });
                 }
                 Err(failure) => {
+                    if failure.error.code == "whisper_stopping" { return Err(failure.error); }
                     if first.is_none() {
                         first = Some(TranscriptionError { detail: format!("{name}: {}", failure.error.detail), ..failure.error.clone() });
                     }

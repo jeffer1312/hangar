@@ -21,10 +21,16 @@ import { discardFile, fileAuthHeader, fileUrlNative, getPairContract, getPlans, 
 import type { Server } from './servers';
 import { exportShortcuts } from './api';
 import { fileUrl, uploadUrl, uploadUrlNative } from './api';
-import { editTranscriptionProviderKey, editTranscriptionProviderTarget, moveTranscriptionProvider, parseTranscriptionProviders, transcriptionProviderKeepsKey, transcriptionProviderLabel, transcriptionProvidersMissingKey } from './api';
+import { editTranscriptionProviderKey, editTranscriptionProviderTarget, moveTranscriptionProvider, parseTranscriptionProviders, transcriptionProviderKeepsKey, transcriptionProviderLabel, transcriptionProvidersMissingKey, testTranscriptionProvider } from './api';
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 /** O campo `V18-campo` da vitrine, como o `inputControl` o tira da árvore. */
 const CAMPO = { plugin: 'vitrine', key: 'V18-campo' };
+
+it('teste de transcrição informa o prazo real do servidor selecionado', async () => {
+  vi.spyOn(globalThis, 'fetch').mockRejectedValue(new DOMException('prazo excedido', 'TimeoutError'));
+  await expect(testTranscriptionProvider('p', new Blob(['audio']), 'fala.wav', server))
+    .rejects.toThrow('Servidor A não respondeu em 300s');
+});
 
 it('exportação leva IDs selecionados ao servidor escolhido e distingue seleção vazia', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));

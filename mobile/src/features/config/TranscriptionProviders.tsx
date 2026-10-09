@@ -27,6 +27,7 @@ export function TranscriptionProviders({ cfg }: { cfg: ServerConfig }) {
   const input = useInputStyle();
   const [status, setStatus] = useState<Status>({ state: 'loading' });
   const [tests, setTests] = useState<Record<string, { running: boolean; text: string; error: string }>>({});
+  const selectingAudio = useRef(false);
   const currentServer = useRef(cfg.server);
   currentServer.current = cfg.server;
   const mounted = useRef(true);
@@ -59,9 +60,10 @@ export function TranscriptionProviders({ cfg }: { cfg: ServerConfig }) {
   const kinds = [{ v: 'openai', label: m.native_voice_provider_kind_openai() }, { v: 'elevenlabs', label: m.native_voice_provider_kind_elevenlabs() },
     { v: 'whisper_cpp', label: m.native_voice_provider_kind_whisper() }] as const;
   const testAudio = async (id: string) => {
-    if (!server || tests[id]?.running) return;
+    if (!server || tests[id]?.running || selectingAudio.current) return;
+    selectingAudio.current = true;
     try {
-      const file = await pickFile();
+      const file = await pickFile().finally(() => { selectingAudio.current = false; });
       if (!file || !mounted.current || currentServer.current !== server) return;
       setTests((old) => ({ ...old, [id]: { running: true, text: '', error: '' } }));
       const audio = await fetch(file.uri).then((r) => r.blob());

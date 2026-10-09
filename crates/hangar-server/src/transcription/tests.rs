@@ -185,6 +185,81 @@ async fn local_process_is_reused_and_stopped_by_its_owner() {
 }
 
 #[tokio::test]
+async fn shutdown_stops_a_local_inference_without_waiting_for_its_response() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (temp, provider) = installed_whisper().await;
+    let gate = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    std::fs::write(&provider.model_path, format!("hold:{}", gate.local_addr().unwrap().port())).unwrap();
+    let service = Arc::new(TranscriptionService::default());
+    service.configure(ConfigSnapshot { providers: vec![provider], state_path: temp.path().join("wait.json").to_string_lossy().into_owned(), ..Default::default() }).await;
+    let request = { let service = service.clone(); tokio::spawn(async move {
+        service.transcribe(Bytes::from_static(WAV), None, Profile::File).await
+    }) };
+    let (mut control, _) = gate.accept().await.unwrap();
+    control.read_exact(&mut [0]).await.unwrap();
+    let stopped = tokio::time::timeout(Duration::from_secs(2), service.shutdown()).await.is_ok();
+    if !stopped { control.write_all(b"R").await.unwrap(); }
+    drop(control);
+    let result = request.await.unwrap();
+    service.shutdown().await;
+    assert!(stopped, "O desligamento ficou preso à resposta da inferência");
+    assert!(result.is_err(), "Uma inferência encerrada não pode ser publicada como sucesso");
+    assert!(!temp.path().join("transcription-local.json").exists());
+}
+
+#[tokio::test]
+async fn shutdown_never_activates_the_configured_external_fallback() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (temp, provider) = installed_whisper().await;
+    let gate = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    std::fs::write(&provider.model_path, format!("hold:{}", gate.local_addr().unwrap().port())).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let (url, endpoint_task) = endpoint(Router::new().route("/audio/transcriptions", post(move || {
+        let count = count.clone();
+        async move { count.fetch_add(1, Ordering::SeqCst); "{\"text\":\"Reserva externa.\"}" }
+    }))).await;
+    let service = Arc::new(TranscriptionService::default());
+    service.configure(ConfigSnapshot { providers: vec![provider, ProviderConfig { id: "reserve".into(), kind: "openai".into(), base_url: url, ..Default::default() }],
+        state_path: temp.path().join("wait.json").to_string_lossy().into_owned(), ..Default::default() }).await;
+    let request = { let service = service.clone(); tokio::spawn(async move {
+        service.transcribe(Bytes::from_static(WAV), None, Profile::File).await
+    }) };
+    let (mut control, _) = gate.accept().await.unwrap();
+    control.read_exact(&mut [0]).await.unwrap();
+    let stopped = tokio::time::timeout(Duration::from_secs(2), service.shutdown()).await.is_ok();
+    if !stopped { control.write_all(b"R").await.unwrap(); }
+    drop(control);
+    let result = request.await.unwrap();
+    service.shutdown().await; endpoint_task.abort();
+    assert!(stopped);
+    assert!(result.is_err(), "Cancelar a inferência não autoriza uma nova chamada externa");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn configuration_reaps_an_owned_orphan_without_starting_an_inference() {
+    use crate::list::procs::{ProcessView, SystemProcs};
+    let (temp, provider) = installed_whisper().await;
+    let mut command = tokio::process::Command::new(&provider.executable_path);
+    command.args(["--host", "127.0.0.1", "--port", "0", "--language", "pt", "--no-gpu", "--model"])
+        .arg(&provider.model_path).env("HANGAR_TRANSCRIPTION_OWNER", "fixture-owned").process_group(0).kill_on_drop(true);
+    let mut child = command.spawn().unwrap();
+    let pid = child.id().unwrap();
+    let view = SystemProcs::default(); view.prefetch(&[pid as i64]);
+    let birth = view.start_time(pid as i64).unwrap();
+    let record = temp.path().join("transcription-local.json");
+    std::fs::write(&record, serde_json::json!({"pid":pid,"birth":birth,"owner":"fixture-owned","parent":0,"parent_birth":0.0}).to_string()).unwrap();
+    let service = TranscriptionService::default();
+    service.configure(ConfigSnapshot { state_path: temp.path().join("wait.json").to_string_lossy().into_owned(), ..Default::default() }).await;
+    let reaped = tokio::time::timeout(Duration::from_secs(2), child.wait()).await.is_ok();
+    if !reaped { child.kill().await.unwrap(); }
+    assert!(reaped, "A configuração deixou o processo órfão vivo");
+    assert!(!record.exists());
+}
+
+#[tokio::test]
 async fn missing_local_model_is_a_visible_failure() {
     let (temp, mut provider) = installed_whisper().await;
     provider.model_path = temp.path().join("modelo-ausente.bin").to_string_lossy().into_owned();

@@ -6,7 +6,7 @@ fn argument(name: &str) -> String {
     args.windows(2).find(|pair| pair[0] == name).map(|pair| pair[1].clone()).unwrap()
 }
 
-fn reply(mut stream: TcpStream) {
+fn reply(mut stream: TcpStream, gate: Option<u16>) {
     let mut received = Vec::new();
     let mut buffer = [0; 4096];
     let end;
@@ -27,6 +27,11 @@ fn reply(mut stream: TcpStream) {
     }
     let (status, body) = if headers.starts_with("GET /health ") { (200, "{\"status\":\"ok\"}") }
         else if headers.starts_with("POST /inference ") && received[end..].windows(4).any(|p| p == b"RIFF") {
+            if let Some(port) = gate {
+                let mut control = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                control.write_all(b"I").unwrap();
+                control.read_exact(&mut [0]).unwrap();
+            }
             (200, "{\"text\":\"Transcrição local em português.\"}")
         } else { (400, "{\"error\":\"pedido incompatível\"}") };
     write!(stream, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
@@ -42,5 +47,6 @@ fn main() {
     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(starts).unwrap();
     writeln!(file, "{}", std::process::id()).unwrap();
     let listener = TcpListener::bind(format!("127.0.0.1:{}", argument("--port"))).unwrap();
-    for stream in listener.incoming() { reply(stream.unwrap()); }
+    let gate = std::fs::read_to_string(&model).ok().and_then(|text| text.strip_prefix("hold:")?.parse().ok());
+    for stream in listener.incoming() { reply(stream.unwrap(), gate); }
 }

@@ -290,6 +290,14 @@ fachada Python e pela ponte privada Rust conservaram a frase completa: whisper.c
 tempos são uma amostra, não garantia de latência. O padrão Groq existente continua
 `whisper-large-v3`; migrar a linguagem não troca o modelo escolhido.
 
+Na revisão do PR 141, uma inferência bloqueada revelou que o desligamento esperava o lock
+do processo e podia ultrapassar o prazo do Supervisor. O desligamento agora cancela a
+inferência, a conversão e a espera na fila antes de adquirir esse lock. Cancelamento não
+aciona reserva externa. A configuração também recupera um registro de processo órfão sem
+precisar iniciar outra transcrição. Fixtures com resposta bloqueada comprovaram encerramento
+em menos de 2 s e nenhuma chamada à reserva. O teste de áudio usa prazo de 300 s também na
+mensagem de erro; o seletor do Expo tem trava síncrona até concluir ou cancelar a seleção.
+
 ## Transcrição, organização do texto e leitura são capacidades separadas
 
 (`VozSettings.svelte` + `transcribe.py` + `narrar._provedor`, 17/09/2026.) A tela móvel mostrava

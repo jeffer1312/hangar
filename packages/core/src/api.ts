@@ -1906,9 +1906,9 @@ export function getTranscriptionProvidersStatus(
 
 export function testTranscriptionProvider(id: string, audio: Blob, filename: string, server?: Server | null): Promise<{ text: string; provider: string; aviso?: string }> {
   const path = `/api/transcription/providers/${encodeURIComponent(id)}/test`;
-  const options = { method: 'POST', body: audio, headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(filename) },
-    signal: AbortSignal.timeout(300_000) };
-  return server ? apiFetchForServer(server, path, options) : apiFetch(path, options);
+  const options = { method: 'POST', body: audio, headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(filename) } };
+  return server ? apiFetchForServer(server, path, options, 300_000)
+    : apiFetch(path, { ...options, signal: AbortSignal.timeout(300_000) });
 }
 
 /**

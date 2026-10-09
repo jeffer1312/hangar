@@ -2,8 +2,8 @@ use super::{audio, cloud::{self, AttemptFailure}, model::ProviderConfig, process
 use crate::list::procs::{ProcessView, SystemProcs};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use std::{path::{Path, PathBuf}, sync::Mutex as SyncMutex, time::Duration};
-use tokio::sync::Mutex;
+use std::{path::{Path, PathBuf}, sync::{Mutex as SyncMutex, atomic::{AtomicBool, Ordering}}, time::Duration};
+use tokio::sync::{Mutex, watch};
 
 #[derive(Clone, PartialEq, Eq)]
 struct Key { program: String, model: String, language: String }
@@ -40,11 +40,15 @@ pub(crate) struct LocalWhisper {
     running: Mutex<Option<Running>>,
     view: SyncMutex<View>,
     client: reqwest::Client,
+    stopping: watch::Sender<bool>,
+    shutdown_started: AtomicBool,
+    lifecycle: Mutex<()>,
 }
 
 impl Default for LocalWhisper {
     fn default() -> Self {
         Self { running: Mutex::new(None), view: SyncMutex::new(View::default()),
+            stopping: watch::channel(false).0, shutdown_started: AtomicBool::new(false), lifecycle: Mutex::new(()),
             client: reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
                 .build().expect("Cliente HTTP local com parâmetros válidos") }
     }
@@ -67,24 +71,55 @@ impl LocalWhisper {
             let view = self.view.lock().unwrap_or_else(|e| e.into_inner());
             view.key.is_none() || providers.iter().any(|p| p.kind == "whisper_cpp" && view.key.as_ref() == Some(&Key::of(p)))
         };
-        if !keep { self.shutdown().await; }
+        if !keep { self.stop_current(false).await; }
     }
 
     pub async fn shutdown(&self) {
+        self.stop_current(true).await;
+    }
+
+    async fn stop_current(&self, final_stop: bool) {
+        if final_stop { self.shutdown_started.store(true, Ordering::SeqCst); }
+        let _lifecycle = self.lifecycle.lock().await;
+        // Cancela também a conversão e quem espera a vez, antes de pedir o lock da inferência.
+        self.stopping.send_replace(true);
         if let Some(mut running) = self.running.lock().await.take() { running.stop().await; }
         *self.view.lock().unwrap_or_else(|e| e.into_inner()) = View::default();
+        if !self.shutdown_started.load(Ordering::SeqCst) { self.stopping.send_replace(false); }
+    }
+
+    pub async fn recover_registered(&self, state_path: &str) {
+        if state_path.is_empty() { return; }
+        let Ok(current) = self.running.try_lock() else { return; };
+        if current.is_some() { return; }
+        if let Some(directory) = Path::new(state_path).parent()
+            && let Err(error) = recover(&directory.join("transcription-local.json")).await {
+            tracing::warn!(code = error.error.code, "O registro do Whisper não pôde ser recuperado; a posse será conferida antes de iniciar.");
+        }
     }
 
     pub async fn transcribe(&self, provider: &ProviderConfig, content: Bytes, name: Option<&str>,
         vocabulary: &str, state_path: &str, timeout: Duration) -> Result<String, AttemptFailure> {
+        let mut stopping = self.stopping.subscribe();
+        let cancelled = || AttemptFailure::unavailable("whisper_stopping", "A transcrição local foi encerrada pelo servidor.");
+        if *stopping.borrow() || self.shutdown_started.load(Ordering::SeqCst) { return Err(cancelled()); }
         let deadline = tokio::time::Instant::now() + timeout;
-        let result = tokio::time::timeout_at(deadline, self.run(provider, content, name, vocabulary, state_path, deadline)).await;
+        let result = tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                biased;
+                _ = stopping.changed() => Err(cancelled()),
+                result = self.run(provider, content, name, vocabulary, state_path, deadline) => result,
+            }
+        }).await;
         let result = result.unwrap_or_else(|_| {
             let mut error = AttemptFailure::unavailable("whisper_timeout", "O Whisper não concluiu a transcrição a tempo.");
             error.error.status = 504;
             Err(error)
         });
-        if let Err(error) = &result { self.publish(provider, "failed", Some(error.error.detail.clone())); }
+        if let Err(error) = &result
+            && error.error.code != "whisper_stopping" && !self.shutdown_started.load(Ordering::SeqCst) {
+            self.publish(provider, "failed", Some(error.error.detail.clone()));
+        }
         result
     }
 
