@@ -442,9 +442,11 @@ impl<T> SendGate<T> {
 
 /// O que a voz fala por conta própria (resumo de resultado de sessão) espera o usuário terminar: falar por
 /// cima corta o que ele dizia. Fala pronta com voz no microfone no último `SILENCE` fica guardada e sai, na ordem, no
-/// primeiro silêncio.
+/// primeiro silêncio. Ruído ou eco contínuos no microfone não podem segurar para sempre: depois de `MAX_HOLD` a fila sai.
 #[derive(Default)]
-pub struct SpeechHold { queue: VecDeque<String>, last_voice: Option<Instant> }
+pub struct SpeechHold { queue: VecDeque<String>, since: Option<Instant>, last_voice: Option<Instant> }
+
+pub const MAX_HOLD: Duration = Duration::from_secs(20);
 
 impl SpeechHold {
     pub fn heard_voice(&mut self, now: Instant) { self.last_voice = Some(now); }
@@ -452,14 +454,18 @@ impl SpeechHold {
     /// `Some` = pode falar já; `None` = ficou guardada (atrás das que já esperavam, para não trocar a ordem).
     pub fn offer(&mut self, text: String, now: Instant) -> Option<String> {
         if self.queue.is_empty() && self.quiet(now) { return Some(text); }
+        self.since.get_or_insert(now);
         self.queue.push_back(text);
         None
     }
-    /// As guardadas, quando o usuário parou de falar.
+    /// As guardadas, quando o usuário parou de falar ou a espera passou de `MAX_HOLD`.
     pub fn due(&mut self, now: Instant) -> Vec<String> {
-        if self.queue.is_empty() || !self.quiet(now) { return Vec::new(); }
+        let overdue = self.since.is_some_and(|at| now.saturating_duration_since(at) >= MAX_HOLD);
+        if self.queue.is_empty() || !(self.quiet(now) || overdue) { return Vec::new(); }
+        self.since = None;
         self.queue.drain(..).collect()
     }
+    pub fn pending(&self) -> (usize, usize) { (self.queue.len(), self.queue.iter().map(String::len).sum()) }
 }
 
 /// Turnos que nasceram de uma fala do usuário: só neles o organizador pode pedir envio ou segurar.
@@ -545,6 +551,23 @@ mod tests {
         assert_eq!(hold.offer("outro".into(), now + SILENCE * 2), None, "fila não fura: espera a da frente");
         assert_eq!(hold.due(now + Duration::from_millis(900) + SILENCE), vec!["resultado".to_owned(), "outro".to_owned()], "parou: sai na ordem");
         assert!(hold.due(now + SILENCE * 5).is_empty());
+    }
+
+    #[test]
+    fn noise_never_holds_speech_forever() {
+        let now = Instant::now();
+        let mut hold = SpeechHold::default();
+        hold.heard_voice(now);
+        assert_eq!(hold.offer("resultado".into(), now), None);
+        let mut at = now;
+        while at < now + MAX_HOLD - Duration::from_millis(500) {
+            at += Duration::from_millis(500);
+            hold.heard_voice(at);
+            assert!(hold.due(at).is_empty(), "voz contínua segura até o teto");
+        }
+        hold.heard_voice(now + MAX_HOLD);
+        assert_eq!(hold.due(now + MAX_HOLD), vec!["resultado".to_owned()], "passou do teto: sai mesmo com voz");
+        assert_eq!(hold.pending(), (0, 0));
     }
 
     #[test]

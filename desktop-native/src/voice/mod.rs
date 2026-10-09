@@ -216,10 +216,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
     let mut session_names: Vec<String> = Vec::new();
     let mut hold = SpeechHold::default();
     let outcome = loop {
-        for text in hold.due(Instant::now()) {
-            let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": text})).await;
-            log(format!("held appendSpeech bytes={} ok={}", text.len(), spoke.is_ok()));
-        }
+        for text in hold.due(Instant::now()) { append_speech(&rpc, &thread, &text, "held").await; }
         // No Planejar nada sai pelo gate; ao entrar nele o envio pendente já foi cancelado.
         if planner.mode == Mode::Direct && let Some((id, request)) = gate.due(Instant::now()) {
             log(format!("gate sent words={}", request.split_whitespace().count()));
@@ -544,6 +541,8 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
         }
     };
     stopped.store(true, Ordering::Relaxed);
+    let (held, bytes) = hold.pending();
+    if held > 0 { log(format!("held speech dropped at call end count={held} bytes={bytes}")); }
     let _ = rpc.request("thread/realtime/stop", json!({"threadId": thread})).await;
     if !matches!(tokio::task::spawn_blocking(move || peer.join()).await, Ok(Ok(()))) { log("rtc thread join failed (panic)"); }
     outcome
@@ -591,12 +590,14 @@ async fn apply_models(rpc: &Rpc, thread: &str, applied: &mut ModeModel, models: 
 async fn speak(rpc: &Rpc, thread: &str, hold: &mut SpeechHold, text: String, tag: &str) {
     let bytes = text.len();
     match hold.offer(text, Instant::now()) {
-        Some(text) => {
-            let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": text})).await;
-            log(format!("{tag} appendSpeech bytes={bytes} ok={}", spoke.is_ok()));
-        }
+        Some(text) => append_speech(rpc, thread, &text, tag).await,
         None => log(format!("{tag} speech held bytes={bytes}")),
     }
+}
+
+async fn append_speech(rpc: &Rpc, thread: &str, text: &str, tag: &str) {
+    let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": text})).await;
+    log(format!("{tag} appendSpeech bytes={} ok={}", text.len(), spoke.is_ok()));
 }
 
 async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Results, hold: &mut SpeechHold, organizer_busy: bool) {
