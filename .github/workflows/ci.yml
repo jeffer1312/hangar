@@ -40,16 +40,15 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    # Target enxuto no cache, como no server.yml: sem incremental e com depuração só de linhas.
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/crates/target
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     # So roda teste/build — nao escreve nada no repo. Declarado explicito pra nao herdar
     # o padrao do repositorio, que pode ser write.
     permissions:
       contents: read
-    # Target enxuto no cache, como no server.yml: sem incremental e com depuração só de linhas.
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
         working-directory: backend
