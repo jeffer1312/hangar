@@ -876,6 +876,8 @@ impl Hangar {
         let read = MachineRead { seq, alive: |this, seq| this.costs.report.seq == seq,
             warm: |this, m, progress| set_warming(&mut this.costs.warming, m, progress), done: Self::costs_part };
         for m in machines { self.read_machine(m, "costs", query.clone(), 0, read, cx); }
+        // "Atualizar" e "Tentar de novo" releem as áreas também: a chave delas não muda numa nova tentativa.
+        if fresh { self.costs.areas_key.clear(); }
         self.refresh_areas(cx);
         cx.notify();
     }
