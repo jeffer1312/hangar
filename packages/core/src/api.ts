@@ -1815,6 +1815,7 @@ export interface TranscriptionProviderConfig {
 }
 export interface TranscriptionProviderStatus {
   id: string; name: string; kind: string; waiting_until: number | null; reason: string | null;
+  state?: 'not_started' | 'starting' | 'ready' | 'failed' | null; error?: string | null;
 }
 
 export function parseTranscriptionProviders(v: unknown): TranscriptionProviderConfig[] {
@@ -1901,6 +1902,13 @@ export function getTranscriptionProvidersStatus(
   return server
     ? apiFetchForServer(server, '/api/transcription/providers/status')
     : apiFetch('/api/transcription/providers/status', { signal: AbortSignal.timeout(8000) });
+}
+
+export function testTranscriptionProvider(id: string, audio: Blob, filename: string, server?: Server | null): Promise<{ text: string; provider: string; aviso?: string }> {
+  const path = `/api/transcription/providers/${encodeURIComponent(id)}/test`;
+  const options = { method: 'POST', body: audio, headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(filename) },
+    signal: AbortSignal.timeout(300_000) };
+  return server ? apiFetchForServer(server, path, options) : apiFetch(path, options);
 }
 
 /**
