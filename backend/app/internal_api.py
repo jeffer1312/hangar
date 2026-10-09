@@ -356,21 +356,6 @@ async def migration_status() -> dict:
     return await asyncio.to_thread(migration_status.facts)
 
 
-@router.get("/sessions/{name}/transfer")
-async def session_transfer(name: str) -> dict:
-    """A troca de agente está em curso nesta sessão? O hangar-server pergunta antes de cada operação de
-    mod que atende sozinho numa sessão sem terminal (clique, troca de aba, digitação). É a mesma guarda
-    das rotas do Python (`_transfer_check`): a coordenação da troca mora aqui, e o Rust não a copia.
-
-    Perguntada uma vez, na entrada: ao contrário do `_transfer_guard`, o ingresso não fica seguro
-    durante a operação do Rust, e uma troca que comece depois desta resposta não é vista (limite
-    registrado no `harnesses.md`)."""
-    # Import tardio: api.py importa este módulo no topo.
-    from app import api
-    await api._transfer_check(name)
-    return {"ok": True}
-
-
 class _ProtocolText(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["group", "orq", "external"]

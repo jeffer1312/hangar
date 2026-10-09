@@ -322,30 +322,3 @@ def test_internal_term_origin_same_rules(monkeypatch):
         assert r.status_code == 400
     r = client.post("/internal/term/origin", json={"origin": "x", "host": None}, headers={"X-Hangar-Internal": "errado"})
     assert r.status_code == 404
-
-
-TRANSFER = "/internal/sessions/s1/transfer"
-BUSY = {"code": "session_transfer_busy", "msg": "A sessão está trocando de agente; tente novamente quando terminar.",
-        "params": {}}
-
-
-def test_transfer_livre_responde_ok():
-    with patch("app.conversation_transfer.transfer_active", return_value=False):
-        r = _client().get(TRANSFER, headers={"X-Hangar-Internal": SECRET})
-    assert (r.status_code, r.json()) == (200, {"ok": True})
-
-
-def test_transfer_durante_a_troca_responde_o_erro_do_python():
-    """A guarda das rotas do Python, perguntada pelo hangar-server antes de uma operação de mod: a
-    operação exclusiva da troca já começou (antes de existir registro) ou há registro não terminado."""
-    from app import conversation_transfer
-    with conversation_transfer.session_operation("s1"):
-        comecando = _client().get(TRANSFER, headers={"X-Hangar-Internal": SECRET})
-    with patch("app.conversation_transfer.transfer_active", return_value=True):
-        registrada = _client().get(TRANSFER, headers={"X-Hangar-Internal": SECRET})
-    for r in (comecando, registrada):
-        assert (r.status_code, r.json()) == (409, {"detail": BUSY})
-
-
-def test_transfer_sem_segredo_e_404():
-    assert _client().get(TRANSFER).status_code == 404

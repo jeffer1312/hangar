@@ -32,6 +32,7 @@ async fn terminal_app() -> (Arc<Fake>, std::net::SocketAddr, Mods, Arc<FakePane>
     let (python, upstream) = spawn_fake().await;
     let state = AppState::new(config(upstream, "127.0.0.1"));
     let mods = state.mods.clone();
+    let _ = state.state.runtime.set(Arc::new(registry(&mods)));
     let server = spawn_state(state).await;
     let pane = Arc::new(FakePane::new(&mods, "t", "tmux-01-tres-paineis-150"));
     let life = mods.new_life();
@@ -55,7 +56,7 @@ async fn apps_reach_the_terminal_through_the_link() {
 
 #[tokio::test]
 async fn typing_is_refused_without_waiting_the_turn_or_the_transfer_guard() {
-    let (python, server, mods, pane) = terminal_app().await;
+    let (_python, server, mods, pane) = terminal_app().await;
     // Um clique em curso segura a vez da sessão; a recusa da digitação não espera por ela.
     let turn = mods.link("t").unwrap().lock;
     let _held = turn.lock().await;
@@ -63,7 +64,6 @@ async fn typing_is_refused_without_waiting_the_turn_or_the_transfer_guard() {
     let (status, body) = post_as(server, "input", json!({"site": "pm-mock-mr", "plugin": "pm-mock", "key": "k", "kind": "change", "value": "x"}), OWNER).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_mod_sem_digitacao")));
     assert!(started.elapsed() < Duration::from_secs(2), "a recusa saiu em {:?}", started.elapsed());
-    assert_eq!(python.transfer_calls(), 0, "a guarda da troca de agente não é consultada");
     assert!(pane.actions().is_empty());
 }
 

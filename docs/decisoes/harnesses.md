@@ -2007,11 +2007,18 @@ bootstrap de sessões, hooks, lifespan e proteção dos escritores continuaram r
 
 ### Guarda e erros da interface dos mods
 
-Antes de cada operação de mod, o Rust pergunta ao Python se a troca de agente está em curso
-(`/internal/sessions/{name}/transfer`, contrato interno 28) e devolve a recusa dele
-(`session_transfer_busy`); sem resposta, recusa com `erro_mod_guarda_indisponivel`. Essa guarda
-reaproveita a proteção que já existe no Python, em vez de portar a leitura do registro para o
-Rust.
+A guarda da troca de agente de cada operação de mod é a porta de entrada da sessão no Rust
+(`IngressGates`), a mesma das escritas do Claude (issue #78, contrato interno 42). A troca a fecha
+retida (`transfer_operation`) antes de começar e a mantém assim enquanto o registro não termina;
+o Rust novo a fecha de novo para toda troca incompleta (`_close_ingress_of_incomplete_transfers`).
+A operação de mod entra na porta depois da vez da sessão e segura o passe até a resposta: a troca
+que começa no meio espera ela acabar. Porta retida recusa na hora com `session_transfer_busy`;
+fechada por congelamento curto (relançar, renomear), espera reabrir no orçamento do pedido.
+Nenhuma operação pergunta ao Python, e a rota `/internal/sessions/{name}/transfer` saiu. Sem o
+registro do runtime no servidor (não acontece em produção: é ele que liga as sessões aos mods), a
+recusa é `erro_mod_guarda_indisponivel`. Ler a pasta `conversation-transfers` no Rust duplicaria a
+associação do registro à sessão (`transfer_for_session`), e a porta já reflete a operação
+exclusiva e o registro não terminado.
 
 Códigos de erro novos ou revistos, todos com texto em pt e en, no `ERROS` do core e nas listas de
 teste de recusa do web e do nativo: `erro_mod_fechar_recusado`, `erro_mod_painel_inexistente`
@@ -2024,10 +2031,9 @@ ganhou o botão "Ocultar", que desliga os mods na hora (a mesma preferência do 
 
 Limites conhecidos:
 
-- a guarda é perguntada uma vez, na entrada da operação, enquanto a rota do Python segura o
-  ingresso até o fim; uma troca que comece entre a resposta e o `ui_*` não é vista;
-- cada `change` de um campo paga uma ida ao Python (a guarda), com a falha dela virando
-  `erro_mod_guarda_indisponivel`;
+- se o `hangar-server` reiniciar depois de a troca tomar a operação exclusiva e antes de gravar o
+  primeiro registro, o Rust novo nasce com a porta aberta e não vê a troca até ela terminar; o
+  mesmo limite vale para as escritas do Claude;
 - o convidado não digita em campo de mod nas sessões sem terminal, e também não vê a faixa nem os painéis delas: o `/events` do convidado vai ao Python, que não tem a interface dos mods das sessões que o Rust atende (servir o `plugin_ui` ao convidado pelo hub fica para outra decisão);
 - sem o servidor Rust, o `opened` com bind específico continua sendo limite da ponte; com o
   Rust ativo, a [entrada local](#ponte-local-com-bind-específico-issue-80) mantém a URL anunciada;
