@@ -7,12 +7,17 @@ import json
 
 import pytest
 
+from app import computer_control as cc
 from app import runtime_config as rc
 
 
 @pytest.fixture(autouse=True)
 def _isola(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "_backend_config_base", lambda: tmp_path)
+    # Gravar o Jev repassa ao MCP do Computer Use: sem isto a chave de teste ia para o ~/.claude.json real.
+    monkeypatch.setattr(cc, "_config_files", lambda: [tmp_path / ".claude.json"])
+    monkeypatch.setattr(cc, "_main_file", lambda: tmp_path / ".claude.json")
+    monkeypatch.setattr(cc, "_parked_file", lambda: tmp_path / "computer-control.json")
     yield
 
 
