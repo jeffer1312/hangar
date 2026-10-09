@@ -95,11 +95,18 @@ async fn owned(st: &Arc<AppState>, peer: SocketAddr, path: Result<Path<String>, 
 struct Bridged;
 
 /// `POST /__hangar_server/mods/{name}/{op}` na porta privada: a operação de mod de quem o Python já
-/// autenticou, com o mesmo efeito da do dono. 404 mudo: segredo errado, ou sessão que o Rust não atende
-/// (o Python a trata).
+/// autenticou, com o mesmo efeito da do dono. Cada recusa tem status próprio, porque só o 404 deixa o
+/// Python clicar ele mesmo: 403 segredo ou origem errados, 400 operação desconhecida, 404 sessão que o
+/// Rust não atende.
 pub async fn bridge(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path((name, op)): Path<(String, String)>, mut req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) || !st.mods.owns(&name) {
+    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !matches!(op.as_str(), "press" | "close" | "show" | "input") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !st.mods.owns(&name) {
         return StatusCode::NOT_FOUND.into_response();
     }
     req.extensions_mut().insert(Bridged);
@@ -108,8 +115,7 @@ pub async fn bridge(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         "press" => press(State(st), ConnectInfo(peer), path, req).await,
         "close" => close(State(st), ConnectInfo(peer), path, req).await,
         "show" => show(State(st), ConnectInfo(peer), path, req).await,
-        "input" => input(State(st), ConnectInfo(peer), path, req).await,
-        _ => StatusCode::NOT_FOUND.into_response(),
+        _ => input(State(st), ConnectInfo(peer), path, req).await,
     }
 }
 
