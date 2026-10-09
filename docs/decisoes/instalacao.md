@@ -652,6 +652,11 @@ e mobile 139 s na mesma faixa; shell, statusline e pi 8 s. Caminho crítico ≈ 
 - **Preparo único.** Com os passos em paralelo, um `cargo build` de uma faixa reescrevia binário que
   outra executava, e o pytest chegava antes das sondas de contas (~30 falhas falsas). Os passos não
   compilam mais nada no Linux.
+- **Teto de tamanho no `target` da árvore fixa.** Ela reaproveitava a compilação (0 recompilações
+  na mesma árvore), mas o `crates/target` só crescia: 52 GB em três dias, 20 GB de sessões
+  incrementais e 32 GB de `deps` com hashes que nenhum build seguinte usa. Poda por idade não serve
+  (tudo tinha menos de três dias, e o disco é `noatime`). Acima de `HANGAR_VERIFICAR_TARGET_GB`
+  (padrão 40), o preparo limpa e a rodada compila do zero.
 - **O vitest usa `--maxWorkers`** com os processos configurados: os `vitest.config` limitam a 2 forks
   para várias sessões não encherem a RAM, e aqui a verificação roda sozinha na fila.
 - **Dois testes do `hangar-server` liam a configuração de quem roda:** o tmux isolado lia o
