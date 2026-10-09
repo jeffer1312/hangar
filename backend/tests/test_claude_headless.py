@@ -210,6 +210,24 @@ def test_windows_termination_failure_is_reported(monkeypatch, failure):
         A._matar_grupo(4242, "s1")
 
 
+def test_windows_termination_finds_taskkill_without_system32_in_path(monkeypatch, tmp_path):
+    """Backend aberto pela tarefa agendada sem o System32 no PATH ainda encerra a sessão."""
+    import subprocess
+    exe = tmp_path / "System32" / "taskkill.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(A, "os", SimpleNamespace(name="nt"))
+    vivo = iter((True, False))
+    monkeypatch.setattr(A, "pid_vivo", lambda pid: next(vivo))
+    monkeypatch.setattr(A, "_e_cano", lambda pid: True)
+    chamadas = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: chamadas.append(argv) or subprocess.CompletedProcess(argv, 0))
+    A._matar_grupo(4242, "s1")
+    assert chamadas == [[str(exe), "/T", "/F", "/PID", "4242"]]
+
+
 def test_kill_ignores_reused_pid(monkeypatch):
     """Depois de reiniciar a máquina o pid do sidecar pode ser de outro processo vivo."""
     monkeypatch.setattr(A, "_argv", lambda pid: ["/usr/bin/firefox"])

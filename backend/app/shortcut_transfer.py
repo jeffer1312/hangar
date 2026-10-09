@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import signal
 import subprocess
 import tempfile
@@ -20,7 +19,7 @@ import tempfile
 from app import runtime_config as rc
 from app.config import _PALAVRAS_DE_SEGREDO
 from app.config_sync_paths import Roots, canonicalize, resolve
-from app import shortcut_scripts
+from app import procinfo, shortcut_scripts
 
 _log = logging.getLogger("hangar.shortcut_transfer")
 
@@ -399,7 +398,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     # Matar só o shell deixaria os filhos dele rodando sem dono.
     try:
         if os.name == "nt":
-            taskkill = shutil.which("taskkill")
+            taskkill = procinfo.taskkill_path()
             if not taskkill:
                 _log.warning("verify: taskkill ausente; só o shell %s morre, os filhos podem seguir vivos", proc.pid)
             else:

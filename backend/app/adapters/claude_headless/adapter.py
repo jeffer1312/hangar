@@ -46,7 +46,7 @@ from app.adapters.preview_push import PushPreviewSource, fonte_ferramenta, fonte
 from app.adapters.stream_buffer import StreamBuffer, error_frames
 from app.config import settings
 from app.pqueue import PromptQueue
-from app.procinfo import _argv, pid_vivo
+from app.procinfo import _argv, pid_vivo, taskkill_path
 from app.state import StateEvent
 from app.live_rate import live_rate
 from app.transcript import ChatEvent, TranscriptTailer
@@ -2488,7 +2488,7 @@ def _matar_grupo(pid: int, name: str) -> None:
         import subprocess
         if not pid_vivo(pid):
             return
-        exe = shutil.which("taskkill")
+        exe = taskkill_path()
         if exe is None:
             raise RuntimeError("taskkill não encontrado; o processo da sessão segue vivo")
         try:
