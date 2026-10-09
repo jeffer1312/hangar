@@ -27,6 +27,15 @@ em 100%. O UUID é gravado antes do consumo. Retentativas usam a mesma chave; um
 resultado definitivo fica persistido e não dispara outro consumo. Depois do
 resultado, o cache é invalidado e os limites são relidos.
 
+Apagar uma conta Claude ou Codex copia antes as conversas dela para a conta padrão
+do mesmo provedor (`projects/` do Claude; `sessions/` e `archived_sessions/` do
+Codex), no mesmo caminho relativo e sem sobrescrever: arquivo igual é pulado e
+arquivo diferente vira `<nome>.from-<conta><ext>`. Só depois da cópia gravada no
+disco a pasta é removida; falha na cópia recusa a exclusão com
+`account_transcripts_merge_failed` e mantém a conta. `keep_transcripts=0` volta a
+apagar tudo; ausente vale guardar, para cliente antigo não perder conversa. O
+Python de reserva segue as mesmas regras (`account_transcripts.py`).
+
 ## Anexos
 
 O Rust atende upload, galeria, download e resolução de áudio pelo cofre existente.
