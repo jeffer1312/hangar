@@ -198,6 +198,17 @@ async fn show_clicks_the_title_and_publishes_the_shown_pane() {
 }
 
 #[tokio::test]
+async fn a_band_click_before_the_band_arrives_is_a_missing_button() {
+    // Sem o primeiro `/ui` não há espelho: a faixa responde como a sessão sem terminal, e o painel como painel.
+    let mods = Mods::default();
+    mods.attach_terminal(S, "proc-t", 1, Arc::new(Probe::default()));
+    let pane = FakePane::new(&mods, S, "tmux-01-tres-paineis-150");
+    assert_eq!(code(press(&mods, &pane, BAND_SITE, "pm-a").await), "erro_mod_botao_inexistente");
+    assert_eq!(code(press(&mods, &pane, "pm-mock-mr", "mr-a").await), "erro_mod_painel_inexistente");
+    assert!(pane.actions().is_empty());
+}
+
+#[tokio::test]
 async fn a_click_of_a_replaced_life_does_nothing_in_the_new_one() {
     // A sessão reabriu com outro processo e o mesmo nome: o pedido da vida 1 não lê o espelho nem clica na nova.
     let (mods, pane) = setup("tmux-01-tres-paineis-150", pm());

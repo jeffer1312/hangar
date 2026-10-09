@@ -209,7 +209,9 @@ fn target_of(view: &TerminalView, site: &str, tree: Value) -> Target {
 }
 
 fn target(ctx: &Ctx<'_>, site: &str) -> Result<Target, ModsError> {
-    let view = ctx.mods.terminal_view_in(ctx.name, ctx.life).ok_or_else(pane_missing)?;
+    // Sem a vista ainda, a faixa é botão que não está na tela, como na sessão sem terminal.
+    let view = ctx.mods.terminal_view_in(ctx.name, ctx.life)
+        .ok_or_else(|| if site == BAND_SITE { missing() } else { pane_missing() })?;
     let tree = if site == BAND_SITE { view.above.clone() }
         else { view.panes.iter().find(|p| p.id == site).map(|p| p.tree.clone()).ok_or_else(pane_missing)? };
     Ok(target_of(&view, site, tree))
