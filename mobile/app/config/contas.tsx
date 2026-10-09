@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { codexCliAusente, credentialAuth, credentialGroup, deleteCodexAccountForServer, getCodexAccountsForServer,
-  getCredentialsForServer, type CodexAccount, type Credencial } from '@hangar/core';
+  getCredentialsForServer, mergedTranscripts, type CodexAccount, type Credencial } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader, Pill, type PageAction } from '../../src/features/config/PageHeader';
 import { SectionCard } from '../../src/features/config/SectionCard';
@@ -101,13 +101,20 @@ export default function Contas() {
   const removeAccount = (account: CodexAccount) => {
     if (!server) return;
     const s = server;
-    Alert.alert(m.comum_apagar(), account.name, [
+    const remove = (keepTranscripts: boolean) => {
+      deleteCodexAccountForServer(s, account.id, keepTranscripts)
+        .then((result) => {
+          const merged = mergedTranscripts(result);
+          if (merged) Alert.alert(m.contas_conversas_juntadas({ nome: account.name, n: String(merged) }));
+          load(s);
+        })
+        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : m.codex_account_delete_failed()));
+    };
+    // Alerta nativo não tem caixa de marcar: guardar as conversas é o botão preferido.
+    Alert.alert(m.contas_apagar_pergunta({ nome: account.name }), undefined, [
       { text: m.comum_cancelar(), style: 'cancel' },
-      { text: m.lista_remover(), style: 'destructive', onPress: () => {
-        deleteCodexAccountForServer(s, account.id)
-          .then(() => load(s))
-          .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : m.codex_account_delete_failed()));
-      } },
+      { text: m.contas_apagar_com_conversas(), style: 'destructive', onPress: () => remove(false) },
+      { text: m.contas_apagar_juntando(), isPreferred: true, onPress: () => remove(true) },
     ]);
   };
   const startLogin = (accountId?: string) => {

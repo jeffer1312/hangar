@@ -1043,9 +1043,25 @@ export function getCodexAccountsForServer(server: Server, signal?: AbortSignal):
 export function createCodexAccountForServer(server: Server, name: string): Promise<CodexAccount> {
   return apiFetchForServer(server, '/api/codex-contas', { method: 'POST', body: JSON.stringify({ name }) });
 }
-export function deleteCodexAccountForServer(server: Server, id: string): Promise<void> {
+/** Resposta do DELETE de conta; as contagens só vêm quando as conversas foram para a conta padrão. */
+export interface AccountDeleteResult {
+  ok: boolean;
+  merged?: number;
+  skipped?: number;
+  renamed?: number;
+}
+/** Arquivos de conversa que a conta padrão ganhou; null quando o servidor não juntou nada. */
+export function mergedTranscripts(r: AccountDeleteResult | null | undefined): number | null {
+  if (r?.merged === undefined) return null;
+  return r.merged + (r.renamed ?? 0);
+}
+function keepQuery(keepTranscripts: boolean): string {
+  return `?keep_transcripts=${keepTranscripts ? 1 : 0}`;
+}
+export function deleteCodexAccountForServer(server: Server, id: string, keepTranscripts = true): Promise<AccountDeleteResult> {
   // Apagar a pasta leva segundos: os clones de marketplace do Codex somam milhares de arquivos.
-  return apiFetchForServer(server, `/api/codex-contas/${encodeURIComponent(id)}`, { method: 'DELETE' }, 120_000);
+  return apiFetchForServer(server, `/api/codex-contas/${encodeURIComponent(id)}${keepQuery(keepTranscripts)}`,
+    { method: 'DELETE' }, 120_000);
 }
 function codexAccountPath(id: string, action: string): string {
   return `/api/codex-contas/${encodeURIComponent(id)}/${action}`;
@@ -1300,14 +1316,14 @@ export async function apagarProvedorKimi(alvo: Server | null, nome: string): Pro
   await apiFetch(rota, init);
 }
 
-// Apaga a conta e os transcripts dela no servidor. Recusa 409 se houver sessão viva usando-a.
-export async function apagarConta(alvo: Server | null, nome: string): Promise<void> {
+// Apaga a conta no servidor; com `keepTranscripts` as conversas vão antes para a conta padrão.
+// Recusa 409 se houver sessão viva usando-a.
+export async function apagarConta(alvo: Server | null, nome: string, keepTranscripts = true): Promise<AccountDeleteResult> {
   const init = { method: 'DELETE' };
-  if (alvo) {
-    await apiFetchForServer<void>(alvo, `/api/claude-configs/${encodeURIComponent(nome)}`, init);
-    return;
-  }
-  await apiFetch(`/api/claude-configs/${encodeURIComponent(nome)}`, init);
+  const rota = `/api/claude-configs/${encodeURIComponent(nome)}${keepQuery(keepTranscripts)}`;
+  // Copiar as conversas passa fácil dos 8s padrão.
+  if (alvo) return apiFetchForServer<AccountDeleteResult>(alvo, rota, init, 120_000);
+  return apiFetch<AccountDeleteResult>(rota, init);
 }
 
 // Sai da conta (claude auth logout) mantendo a pasta. Recusa 409 se houver sessão viva usando-a.

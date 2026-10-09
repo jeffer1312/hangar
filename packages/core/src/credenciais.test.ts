@@ -127,7 +127,9 @@ describe('contas e servidor explícito', () => {
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ ok: true }));
     const timeout = vi.spyOn(AbortSignal, 'timeout');
     await deleteCodexAccountForServer(server, 'work');
-    expect(fetcher.mock.calls[0][0]).toBe('https://b.test/api/codex-contas/work');
+    expect(fetcher.mock.calls[0][0]).toBe('https://b.test/api/codex-contas/work?keep_transcripts=1');
+    await deleteCodexAccountForServer(server, 'work', false);
+    expect(fetcher.mock.calls[1][0]).toBe('https://b.test/api/codex-contas/work?keep_transcripts=0');
     expect(fetcher.mock.calls[0][1]?.method).toBe('DELETE');
     expect(timeout).toHaveBeenCalledWith(120_000);
     expect(timeout).not.toHaveBeenCalledWith(8000);
