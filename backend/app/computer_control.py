@@ -263,6 +263,25 @@ def jev_key() -> str:
     return key if isinstance(key, str) and key else _jev_from_settings()
 
 
+def _jev_destination(key: str) -> dict[str, str]:
+    """JEV_ENDPOINT/JEV_MODEL da chave do Windows, pela regra das sessões (`destino_jev`): chave do
+    OpenRouter vai ao OpenRouter. A mesma chave da tela geral leva também o endereço e o modelo de lá.
+    Vazio = a variável sai, e o controle usa a TypeSafe."""
+    from app import runtime_config as rc
+    same = bool(key) and key == str(rc.get("jev_api_key") or "").strip()
+    endpoint, model = rc.destino_jev(key, str(rc.get("jev_endpoint") or "") if same else "",
+                                     str(rc.get("jev_model") or "") if same else "")
+    return {"JEV_ENDPOINT": endpoint or "", "JEV_MODEL": model or ""}
+
+
+def _with_jev(env: dict, key: str) -> dict:
+    """O env com a chave e o destino dela, sem sobra de destino de uma chave anterior."""
+    out = {k: v for k, v in env.items() if k not in ("JEV_ENDPOINT", "JEV_MODEL")}
+    out["TYPESAFE_API_KEY"] = key
+    out.update({k: v for k, v in _jev_destination(key).items() if v})
+    return out
+
+
 def save_jev_key(key: str) -> None:
     """Atualiza só a chave, sem ligar o MCP nem substituir ajustes de cada conta."""
     pending = []
@@ -273,14 +292,14 @@ def save_jev_key(key: str) -> None:
             env = entry.get("env") or {}
             if not isinstance(env, dict):
                 raise ComputerControlError(500, "erro_computer_control_read", f"env em {path} não é um objeto JSON")
-            data["mcpServers"][NAME] = {**entry, "env": {**env, "TYPESAFE_API_KEY": key}}
+            data["mcpServers"][NAME] = {**entry, "env": _with_jev(env, key)}
             pending.append((path, data))
     parked = _read(_parked_file())
     env = parked.get("env") or {}
     if not isinstance(env, dict):
         raise ComputerControlError(500, "erro_computer_control_read", "env do MCP Windows guardado não é um objeto JSON")
     if parked or not pending:
-        _park({**parked, "env": {**env, "TYPESAFE_API_KEY": key}})
+        _park({**parked, "env": _with_jev(env, key)})
     for path, data in pending:
         _write(path, data)
 
@@ -471,7 +490,7 @@ def save(body: dict) -> dict:
     managed = {"PYTHONPATH": pythonpath, "HCC_AGENT_CONFIG": agent, "HCC_AGENTS_DIR": str(agents_dir),
                "LLM_PROXY_URL": url,
                "LLM_MODEL": str(body.get("llm_model") or "").strip(), "LLM_EFFORT": effort,
-               "LLM_PROXY_KEY": llm_key, "TYPESAFE_API_KEY": jev}
+               "LLM_PROXY_KEY": llm_key, "TYPESAFE_API_KEY": jev, **_jev_destination(jev)}
     # O resto do env é de quem montou o MCP e fica como está (o VIRTUAL_ENV vazio de propósito
     # impede herdar o venv do processo que abre a sessão). Das variáveis desta tela, vazia = ausente.
     env = {k: v for k, v in previous.items() if k not in managed}

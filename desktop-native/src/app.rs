@@ -256,6 +256,8 @@ enum Payload {
     VoiceHistory(u64, SessionKey, Result<api::History, Failure>),
     // Resultado de uma ferramenta de sessão da voz (criar, agrupar), com a chamada que espera a resposta.
     VoiceDone(u64, crate::voice::CallId, voice_ui::VoiceDone),
+    // Decisão do Jev sobre uma fala, com as opções que foram perguntadas.
+    VoiceJev(u64, voice_ui::JevAsked, Result<crate::voice::jev::Decision, String>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1448,6 +1450,7 @@ impl Hangar {
             Payload::VoiceHistory(generation, key, result) => { self.voice_history(generation, key, result); return; }
             Payload::VoiceModels(seq, result) => { self.receive_organizer_models(seq, result, window, cx); return; }
             Payload::VoiceDone(generation, call, done) => { self.voice_done(generation, call, done, window, cx); return; }
+            Payload::VoiceJev(generation, asked, result) => { self.voice_jev_result(generation, asked, result, window, cx); return; }
             Payload::Files(key, owner, generation, files) => { self.receive_files(key, owner, generation, files, cx); cx.notify(); return; }
             Payload::UploadStep(key, id, result) => { let key = self.delivery.current(key); self.receive_upload(key, id, result); cx.notify(); return; }
             Payload::UploadsDone(key, draft, steer, known, group) => {
@@ -1769,7 +1772,7 @@ impl Hangar {
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
-                | Payload::Remote(..) | Payload::Lan(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceHistory(..) | Payload::VoiceDone(..) | Payload::VoiceModels(..) => unreachable!(),
+                | Payload::Remote(..) | Payload::Lan(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceHistory(..) | Payload::VoiceDone(..) | Payload::VoiceModels(..) | Payload::VoiceJev(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.
         if rows || self.selection != selection { self.sync_rows(cx); }
@@ -2399,7 +2402,8 @@ impl Hangar {
 
     /// O envio em si, sem mexer na conversa aberta: serve também ao texto que esperava a vez noutra sessão.
     fn post(&mut self, key: SessionKey, text: String, draft: String, steer: bool, known: HashSet<String>, group: Option<Vec<String>>, cx: &mut Context<Self>) -> bool {
-        let Some(api) = self.api_for(&key.server) else {
+        // Sessão fora da tela (envio nomeado pela voz, fila de outra sessão) usa a conexão guardada da máquina dela.
+        let Some(api) = self.api_for(&key.server).or_else(|| self.machine_api(&servers::norm(&key.server))) else {
             self.action_feedback.insert(key, (tr("server_changed"), true));
             cx.notify();
             return false;

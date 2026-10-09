@@ -177,6 +177,62 @@ def test_windows_key_updates_only_key_in_active_and_parked_entries(home, monkeyp
     assert "parked-windows-key" not in json.dumps(rc.estado())
 
 
+def test_windows_key_carries_the_destination_of_its_provider(home, monkeypatch):
+    """Chave do OpenRouter no Windows leva o endereço e o modelo de lá; voltar para a TypeSafe tira os dois.
+    Antes, a chave do OpenRouter ia para a TypeSafe e voltava 401."""
+    from app import runtime_config as rc
+
+    monkeypatch.setattr(rc, "_backend_config_base", lambda: home)
+    cc.save(_pedido(home))
+    rc.aplicar({"jev_windows_api_key": "sk-or-windows"})
+    env = cc._known_entry()["env"]
+    assert (env["JEV_ENDPOINT"], env["JEV_MODEL"]) == (rc.JEV_OPENROUTER_URL, rc.JEV_OPENROUTER_MODELO)
+    # A mesma chave da tela geral leva o modelo escolhido lá, com o til do apelido.
+    rc.aplicar({"jev_api_key": "sk-or-geral", "jev_endpoint": rc.JEV_OPENROUTER_URL, "jev_model": "typesafe/jev-latest"})
+    rc.aplicar({"jev_windows_api_key": "sk-or-geral"})
+    assert cc._known_entry()["env"]["JEV_MODEL"] == "~typesafe/jev-latest"
+    rc.aplicar({"jev_windows_api_key": "apik-typesafe"})
+    env = cc._known_entry()["env"]
+    assert env["TYPESAFE_API_KEY"] == "apik-typesafe" and "JEV_ENDPOINT" not in env and "JEV_MODEL" not in env
+
+
+def test_same_key_option_copies_the_general_key_to_windows(home, monkeypatch):
+    from app import runtime_config as rc
+
+    monkeypatch.setattr(rc, "_backend_config_base", lambda: home)
+    cc.save(_pedido(home))
+    cc.save_jev_key("")
+    # Sem chave no Windows e sem escolha: nada é copiado sem pedido.
+    rc.aplicar({"jev_api_key": "sk-or-geral"})
+    assert cc.jev_key() == "" and rc.estado()["jev_windows_mesma_chave"]["valor"] is False
+    # Ligar a opção copia a geral, com o destino dela.
+    rc.aplicar({"jev_windows_mesma_chave": True})
+    assert cc.jev_key() == "sk-or-geral" and rc.estado()["jev_windows_mesma_chave"]["valor"] is True
+    assert cc._known_entry()["env"]["JEV_ENDPOINT"] == rc.JEV_OPENROUTER_URL
+    # Trocar a chave geral leva a nova junto: era a mesma.
+    rc.aplicar({"jev_api_key": "sk-or-nova"})
+    assert cc.jev_key() == "sk-or-nova"
+    # Desligado, a chave do Windows fica como está.
+    rc.aplicar({"jev_windows_mesma_chave": False})
+    rc.aplicar({"jev_windows_api_key": "apik-windows"})
+    rc.aplicar({"jev_api_key": "sk-or-outra"})
+    assert cc.jev_key() == "apik-windows" and rc.estado()["jev_windows_mesma_chave"]["valor"] is False
+    # Religar copia a geral de novo.
+    rc.aplicar({"jev_windows_mesma_chave": True})
+    assert cc.jev_key() == "sk-or-outra"
+
+
+def test_existing_separate_windows_key_is_kept_without_a_choice(home, monkeypatch):
+    from app import runtime_config as rc
+
+    monkeypatch.setattr(rc, "_backend_config_base", lambda: home)
+    cc.save(_pedido(home))
+    cc.save_jev_key("apik-windows")
+    rc.aplicar({"jev_api_key": "sk-or-geral"})
+    assert cc.jev_key() == "apik-windows", "quem já tinha outra chave no Windows continua com ela"
+    assert rc.estado()["jev_windows_mesma_chave"]["valor"] is False
+
+
 def test_windows_key_reads_legacy_settings_without_copying_global_key(home, monkeypatch):
     from app import runtime_config as rc
 

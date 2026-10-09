@@ -3743,6 +3743,7 @@ dependencies = [
  "sonora",
  "str0m",
  "symphonia",
+ "sysinfo",
  "tokio",
  "tree-sitter",
  "tree-sitter-c-sharp",

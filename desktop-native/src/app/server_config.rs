@@ -88,7 +88,7 @@ const TUNES: [Tune; 4] = [
 struct Field { key: &'static str, label: &'static str, help: &'static str, icon: IconName, kind: Kind, page: Page }
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
-const FIELDS: [Field; 33] = [
+const FIELDS: [Field; 34] = [
     Field { key: "upload_retention_days", label: "server_keep_attachments", help: "server_keep_attachments_help", icon: IconName::Paperclip,
         kind: Kind::Number("server_days"), page: Page::Attachments },
     Field { key: "notify_finished", label: "server_notify_finished", help: "server_notify_finished_help", icon: IconName::CircleCheck,
@@ -120,6 +120,8 @@ const FIELDS: [Field; 33] = [
         page: Page::Jev },
     Field { key: "jev_windows_api_key", label: "server_jev_windows_key", help: "server_jev_windows_key_help", icon: IconName::Key,
         kind: Kind::Secret, page: Page::Jev },
+    Field { key: "jev_windows_mesma_chave", label: "server_jev_same_key", help: "server_jev_same_key_help", icon: IconName::Link,
+        kind: Kind::Toggle, page: Page::Jev },
     // Voz, na ordem do `VozSettings.svelte`; a página as distribui pelas seções dela.
     Field { key: "groq_api_key", label: "voice_groq", help: "voice_groq_help", icon: IconName::Key, kind: Kind::Secret, page: Page::Voice },
     Field { key: "transcription_base_url", label: "voice_transcription_endpoint", help: "voice_transcription_endpoint_help", icon: IconName::Globe,
@@ -307,6 +309,21 @@ impl ServerConfig {
     fn input_text(&self, key: &str, kind: Kind) -> String {
         if kind == Kind::Secret { return self.draft.get(key).map(text_of).unwrap_or_default(); }
         text_of(&self.current(key))
+    }
+
+    /// Para onde a chave do Jev vai e com qual modelo, pela mesma regra do servidor (`destination`): o que foi digitado
+    /// agora, senão o começo da máscara guardada (só ele diz o provedor). `None` sem chave.
+    fn jev_route(&self, key_field: &str, with_settings: bool) -> Option<(bool, String)> {
+        let typed = self.draft.get(key_field).map(text_of).filter(|t| !t.trim().is_empty());
+        let head = typed.or_else(|| self.secret_mask(key_field))?;
+        // A máscara mostra só "sk-o••••": basta para saber que é do OpenRouter.
+        let key = if head.starts_with("sk-o") { "sk-or-".to_owned() } else { head };
+        let setting = |name: &str| with_settings.then(|| text_of(&self.current(name))).filter(|v| !v.trim().is_empty());
+        let (endpoint, model) = crate::voice::jev::destination(&key, setting("jev_endpoint").as_deref(), setting("jev_model").as_deref());
+        let openrouter = endpoint.as_deref().is_some_and(|e| e.contains("openrouter.ai"));
+        let provider = if openrouter { "OpenRouter".to_owned() } else { endpoint.unwrap_or_else(|| "TypeSafe".to_owned()) };
+        let model = model.unwrap_or_else(|| tr("server_jev_route_default_model"));
+        Some((openrouter, tr("server_jev_route").replace("{provider}", &provider).replace("{model}", &model)))
     }
 
     /// Máscara do segredo guardado (`gsk_••••1234`), se há um.
@@ -519,6 +536,22 @@ fn icon_box(icon: IconName) -> Div {
 
 fn text_of(value: &Value) -> String {
     match value { Value::String(s) => s.clone(), Value::Null => String::new(), other => other.to_string() }
+}
+
+/// Qual botão de modelo está escolhido: `Some("")` o recomendado, `Some(mais novo)`, ou `None` para um modelo próprio.
+/// No OpenRouter, `typesafe/jev-latest` sem o til conta como o mais novo: o servidor põe o til.
+fn jev_model_preset(current: &str, openrouter: bool) -> Option<&'static str> {
+    let latest = if openrouter { "~typesafe/jev-latest" } else { "jev-latest" };
+    match current.trim() {
+        "" => Some(""),
+        v if v == latest || (openrouter && v == "typesafe/jev-latest") => Some(latest),
+        _ => None,
+    }
+}
+
+/// Linha curta abaixo de uma caixa: para onde a chave vai e quem a usa.
+fn route_line(text: String, color: Hsla) -> Div {
+    div().px(px(4.)).text_xs().text_color(color).whitespace_normal().child(text)
 }
 
 /// Valor de uma linha só leitura: sim/não, "—" quando vazio.
@@ -1052,13 +1085,37 @@ impl Hangar {
         let heading = |title, help| div().flex().flex_col().gap_1()
             .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(tr_shared(title, &[])))
             .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr_shared(help, &[])));
+        let s = &self.server_config;
+        let main = s.jev_route("jev_api_key", true);
+        let openrouter = main.as_ref().is_some_and(|(openrouter, _)| *openrouter);
+        let title = |text: String, chip_text: Option<String>| div().flex().items_center().gap(px(8.))
+            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(text))
+            .children(chip_text.map(|t| chip(t, theme::accent_text(), theme::accent_dim())));
+        // Uma chave só, com o provedor dito por ela; endereço e modelo personalizados ficam no Avançado.
+        let key_box = settings_box()
+            .child(div().px(px(16.)).pt(px(14.)).child(title(tr("server_jev_key_box"),
+                main.as_ref().map(|(openrouter, _)| (if *openrouter { "OpenRouter" } else { "TypeSafe" }).to_owned()))))
+            .child(self.config_row(field("jev_api_key"), cx))
+            .child(self.render_jev_model(openrouter, cx))
+            .child(self.config_row(field("jev_padrao"), cx));
+        let same = s.current("jev_windows_mesma_chave") == Value::Bool(true);
+        let windows_box = settings_box()
+            .child(div().px(px(16.)).pt(px(14.)).child(title(tr_shared("jev_windows_title", &[]), None)))
+            .child(self.config_row(field("jev_windows_mesma_chave"), cx))
+            .when(!same, |el| el.child(self.config_row(field("jev_windows_api_key"), cx)));
+        let windows_route = s.jev_route(if same { "jev_api_key" } else { "jev_windows_api_key" }, same);
         div().mt_4().flex().flex_col().gap_4()
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr_shared("jev_intro", &[])))
-            .child(heading("jev_browser_title", "jev_browser_help"))
-            .child(settings_box().child(self.config_row(field("jev_api_key"), cx)).child(self.config_row(field("jev_padrao"), cx)))
-            .child(heading("jev_windows_title", "jev_windows_help"))
-            .child(settings_box().child(self.config_row(field("jev_windows_api_key"), cx)))
-            .child(Disclosure::new("jev-advanced", open, tr_shared("jev_advanced", &[]), false)
+            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("server_jev_intro")))
+            .child(key_box)
+            .children(main.map(|(_, route)| route_line(format!("{route} {}", tr("server_jev_route_main_users")), theme::muted())))
+            .child(windows_box)
+            .children(windows_route.map(|(openrouter, route)| {
+                let line = format!("{route} {}", tr("server_jev_route_windows_users"));
+                // O controle do Windows ainda tem a TypeSafe fixa: com chave do OpenRouter ele responde 401.
+                if openrouter { route_line(format!("{line} {}", tr("server_jev_route_windows_openrouter")), theme::warning()) }
+                else { route_line(line, theme::muted()) }
+            }))
+            .child(Disclosure::new("jev-advanced", open, tr("server_jev_advanced"), false)
                 .on_change(move |open, cx| { let _ = owner.update(cx, |this, cx| {
                     this.server_config.jev_advanced = open; cx.notify();
                 }); }))
@@ -1067,6 +1124,37 @@ impl Hangar {
                 .child(heading("jev_text_title", "jev_text_help"))
                 .child(settings_box().children(["jev_texto_base_url", "jev_texto_api_key", "jev_texto_modelo", "jev_texto_cmd"]
                     .into_iter().map(|key| self.config_row(field(key), cx)))))
+    }
+
+    /// Modelo em três botões: o recomendado (vazio, o padrão do provedor), o mais novo e "Outro", que abre o Avançado
+    /// com o campo de modelo personalizado.
+    fn render_jev_model(&self, openrouter: bool, cx: &mut Context<Self>) -> Div {
+        let current = text_of(&self.server_config.current("jev_model"));
+        let picked = jev_model_preset(&current, openrouter);
+        let latest = if openrouter { "~typesafe/jev-latest" } else { "jev-latest" };
+        let options = [("jev-model-recommended", "server_jev_model_recommended", Some("")), ("jev-model-latest", "server_jev_model_latest", Some(latest)),
+            ("jev-model-other", "server_jev_model_other", None)];
+        div().px(px(16.)).py(px(12.)).flex().items_center().justify_between().gap(px(12.))
+            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr("server_jev_model_label")))
+            .child(div().flex().gap(px(6.)).children(options.into_iter().map(|(id, label, value)| {
+                let selected = picked == value;
+                Button::new(id).ghost().small().rounded_full().selected(selected).aria_selected(selected).label(tr(label))
+                    .on_click(cx.listener(move |this, _, window, cx| this.pick_jev_model(value, window, cx)))
+            })))
+    }
+
+    /// `Some(v)` grava o modelo (vazio = o padrão do provedor); `None` ("Outro") só abre o Avançado no campo personalizado.
+    fn pick_jev_model(&mut self, value: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
+        match value {
+            Some(value) => {
+                self.server_config.stage("jev_model", Value::String(value.to_owned()));
+                if let Some((_, input)) = self.server_config.inputs.iter().find(|(k, _)| *k == "jev_model") {
+                    input.update(cx, |state, cx| state.set_value(value, window, cx));
+                }
+            }
+            None => self.server_config.jev_advanced = true,
+        }
+        cx.notify();
     }
 
     /// Chip de onde a linha grava, e "editado" quando o valor veio do app e não do `.env`.
@@ -1634,13 +1722,26 @@ mod tests {
     }
 
     #[test]
+    fn jev_model_buttons_follow_the_provider() {
+        use super::jev_model_preset;
+        assert_eq!(jev_model_preset("", true), Some(""), "vazio = recomendado");
+        assert_eq!(jev_model_preset("~typesafe/jev-latest", true), Some("~typesafe/jev-latest"));
+        assert_eq!(jev_model_preset("typesafe/jev-latest", true), Some("~typesafe/jev-latest"), "sem til conta como o mais novo");
+        assert_eq!(jev_model_preset("jev-latest", false), Some("jev-latest"));
+        assert_eq!(jev_model_preset("typesafe/jev-1.13-20260917", true), None, "modelo próprio = Outro");
+        assert_eq!(jev_model_preset("~typesafe/jev-latest", false), None, "o apelido do OpenRouter não é o da TypeSafe");
+    }
+
+    #[test]
     fn jev_fields_follow_the_web_order_and_labels() {
         let jev: Vec<(&str, &str)> = super::FIELDS.iter().filter(|f| f.key.starts_with("jev_")).map(|f| (f.key, f.label)).collect();
         assert_eq!(jev, [("jev_api_key", "server_jev_key"), ("jev_padrao", "server_jev_default"), ("jev_endpoint", "server_jev_endpoint"),
             ("jev_model", "server_jev_model"), ("jev_texto_base_url", "server_jev_text_endpoint"), ("jev_texto_api_key", "server_jev_text_key"),
-            ("jev_texto_modelo", "server_jev_text_model"), ("jev_texto_cmd", "server_jev_cmd"), ("jev_windows_api_key", "server_jev_windows_key")]);
+            ("jev_texto_modelo", "server_jev_text_model"), ("jev_texto_cmd", "server_jev_cmd"), ("jev_windows_api_key", "server_jev_windows_key"),
+            ("jev_windows_mesma_chave", "server_jev_same_key")]);
         assert!(super::FIELDS.iter().filter(|f| f.key.starts_with("jev_")).all(|f| f.page == super::Page::Jev));
         assert!(super::field("jev_windows_api_key").kind == Kind::Secret);
+        assert!(super::field("jev_windows_mesma_chave").kind == Kind::Toggle);
         let mut s = ServerConfig::default();
         s.reveal("server_jev_text_model");
         assert!(s.jev_advanced, "a busca abre os ajustes avançados do Jev");

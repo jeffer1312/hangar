@@ -1,13 +1,17 @@
 //! Conversa por voz: o Codex local fala, a sessão aberta na tela trabalha.
 pub mod audio;
 pub mod computer;
+pub mod jev;
+pub mod observe;
 pub mod organizer;
 pub mod plan;
 pub mod rpc;
 pub mod rtc;
 pub mod usage;
 
-use organizer::{FinishStep, MIC_VOICE_LEVEL, Mode, ModeModel, ModeModels, Planner, Results, SendGate, SpokenTurns, ToolCall, finish_request, parse_tool, send_allowed, settings_update, tool_reply, organizer_start, ORGANIZER_PROMPT, VOICE_PROMPT};
+use organizer::{Effective, FinishStep, MIC_VOICE_LEVEL, Mode, ModeModel, ModeModels, Planner, REPEAT_NOTE, REPEAT_WINDOW, Results, SEND_UNCONFIRMED, SpeechHold,
+    Consent, SendConsent, SendGate, SpokenTurns, ToolCall, finish_request, parse_tool, repeated_handoff, send_allowed, settings_update, spoken_input, tool_reply,
+    organizer_start, user_speech, ORGANIZER_PROMPT, VOICE_PROMPT};
 use rpc::{Codex, Incoming, Rpc, RpcError, handshake};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
@@ -20,31 +24,63 @@ pub enum VoiceFailure { Microphone, Speaker, AppServer, Realtime(String), Networ
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Activity { #[default] Idle, Thinking, Searching, Working }
 pub enum VoiceEvent {
-    Phase(Phase), Levels(f32, f32), Draft(Option<String>), Activity(Activity), ReadSession(CallId), Send(CallId, String), Failed(VoiceFailure),
+    Phase(Phase), Levels(f32, f32), Draft(Option<String>), Activity(Activity), ReadSession(CallId), Failed(VoiceFailure),
+    /// `turn`: a fala que pediu. A tela não manda duas vezes à mesma sessão no mesmo turno.
+    Send { call: CallId, request: String, session: Option<String>, turn: String },
     Mode(Mode), Plan { path: PathBuf, markdown: String }, AskSession(String), SendPlan { session: String, text: String },
     /// Nome pedido e a fala do turno: a tela só troca quando a fala pede essa sessão.
-    SwitchSession { call: CallId, name: String, spoken: String },
+    SwitchSession { call: CallId, name: String, spoken: String, recent: String },
     /// Ações da tela do Hangar (catálogo e execução) e o `computer` para os outros programas.
     HangarActions(CallId), HangarAction { call: CallId, id: String, arg: Option<String> }, Computer(CallId, String),
     /// Leitura da tela do Hangar pela árvore de acessibilidade; `None` = a tela escolhe a área.
     ReadScreen(CallId, Option<String>),
+    /// Clique pela árvore de acessibilidade; `turn` separa o pedido do sim nos botões arriscados.
+    ClickScreen { call: CallId, id: String, confirmed: bool, turn: String },
+    /// Processos e uso da máquina, lidos fora do isolamento do shell do organizador.
+    Observe(CallId, observe::Request),
     /// Ferramentas de sessão: a tela resolve os nomes falados e responde por `Voice::reply`. `turn` separa o pedido do sim.
     ListSessions(CallId), OpenSession(CallId, organizer::OpenRequest),
     CloseSession { call: CallId, name: String, confirmed: bool, turn: String },
     PairSessions(CallId, String, String), UnpairSession(CallId, String),
+    /// Acompanhar: as respostas da sessão são faladas mesmo fora da tela.
+    FollowSession(CallId, String), UnfollowSession(CallId, String),
+    /// Modelo, esforço e velocidade que a thread do organizador usa de fato.
+    Organizer(Effective),
+    /// Uma linha dos bastidores: o que chegou ao organizador e o que ele respondeu (só tela, nunca diário).
+    Backstage(Backstage),
+    /// Fala nova do usuário no turno `turn`: a tela pergunta ao Jev o que ela pede, em paralelo ao organizador. `recent`: a
+    /// transcrição que veio com ela (falas da voz e do usuário desde a anterior).
+    Heard { turn: String, speech: String, recent: String },
     /// Contexto da thread do organizador (não o da voz, que não é informado): input do último turno e a janela do modelo.
     OrganizerContext { used: u64, window: Option<u64> },
     AccountLimits { five_hour: usage::RateWindow, seven_day: usage::RateWindow },
     /// Só para a tela: pedaço do resumo do raciocínio, a ação em curso e o fim do turno, que limpa os dois.
     Thought(String), Action(Option<organizer::OrganizerAction>), TurnDone,
 }
+#[derive(Debug, Clone, PartialEq)]
+pub enum Backstage { Heard(String), Result(String), Answer(String) }
+
+/// O que entra no organizador vira linha dos bastidores: a fala repassada ou o resultado de uma sessão.
+fn backstage_input(text: &str) -> Backstage {
+    let head = text.trim_start();
+    if let Some(rest) = head.strip_prefix("[RESULTADO DA SESSÃO ") {
+        return Backstage::Result(rest.split_once(']').map_or(rest, |(name, _)| name).to_owned());
+    }
+    if head.starts_with(organizer::ANSWER_PREFIX) { return Backstage::Result(String::new()); }
+    Backstage::Heard(spoken_input(text).to_owned())
+}
+
 /// `cwd`: pasta da sessão na tela quando é desta máquina (o organizador lê o código dela); `target`: nome dessa sessão.
 /// `organizer`: modelo e esforço do organizador por modo; a chamada nasce no Direto.
 pub struct VoiceOptions { pub codex: Codex, pub voice: Option<String>, pub context: String, pub cwd: Option<PathBuf>, pub target: String,
     pub codex_home: Option<PathBuf>, pub organizer: ModeModels }
 
 enum Command { Retarget(String, String, Option<PathBuf>), Result(String, String), Reply(Value, Value), SetMode(Mode), Models(ModeModels), Answer(String), PlanDelivered,
-    Sessions(Vec<String>) }
+    Sessions(Vec<String>), Jev { turn: String, verdict: SendVerdict, speech: Option<String>, note: Option<String> } }
+
+/// O que o Jev, com certeza alta, diz sobre mandar a fala de um turno para a sessão.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SendVerdict { Send, Block, Unsure }
 
 pub struct Voice { commands: mpsc::UnboundedSender<Command>, muted: Arc<AtomicBool>, stopped: Arc<AtomicBool>, stop: Arc<Notify> }
 
@@ -69,6 +105,11 @@ impl Voice {
     pub fn plan_delivered(&self) { let _ = self.commands.send(Command::PlanDelivered); }
     /// Nomes das sessões que a busca enxerga: o `set_mode` recusa quando a fala cita uma delas.
     pub fn set_sessions(&self, names: Vec<String>) { let _ = self.commands.send(Command::Sessions(names)); }
+    /// Veredito do Jev sobre a fala do turno. Quando a tela já agiu (trocou, abriu): `speech` a voz fala na hora e `note`
+    /// diz ao organizador que não repita nem fale.
+    pub fn jev_verdict(&self, turn: String, verdict: SendVerdict, speech: Option<String>, note: Option<String>) {
+        let _ = self.commands.send(Command::Jev { turn, verdict, speech, note });
+    }
     pub fn stop(&mut self) {
         self.stopped.store(true, Ordering::Relaxed);
         // notify_one guarda a licença mesmo sem ninguém esperando ainda.
@@ -152,8 +193,9 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
     }
     let mut models = options.organizer.clone();
     let mut applied = models.direct.clone();
-    let start = organizer_start(&config, &own, options.cwd.as_deref(), &options.context, applied.model.as_deref(), &applied.effort);
-    log(format!("organizer model={} effort={}", if applied.model.is_some() { "chosen" } else { "config" }, applied.effort));
+    let start = organizer_start(&config, &own, options.cwd.as_deref(), &options.context, &applied);
+    log(format!("organizer model={} effort={} tier={}", if applied.model.is_some() { "chosen" } else { "config" }, applied.effort,
+        applied.tier.as_deref().unwrap_or("config")));
     // A conta lida em paralelo, com prazo curto: falhar só deixa os limites ocultos até a primeira atualização.
     let limits = async {
         match tokio::time::timeout(Duration::from_secs(3), rpc.request("account/rateLimits/read", json!({}))).await {
@@ -166,13 +208,20 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
     let started = started.map_err(rpc_failure).map_err(failed("thread/start"))?;
     let thread = started["thread"]["id"].as_str().unwrap_or_default().to_owned();
     // Voltar ao modelo do config pede o nome dele: o do config, senão o que a thread abriu sem escolha.
-    let default_model = config["model"].as_str().or_else(|| started["model"].as_str().filter(|_| applied.model.is_none())).map(str::to_owned);
-    log(format!("thread started id={thread}"));
+    // A velocidade da conta só se sabe pela thread aberta sem escolha.
+    let defaults = Defaults {
+        model: config["model"].as_str().or_else(|| started["model"].as_str().filter(|_| applied.model.is_none())).map(str::to_owned),
+        tier: started["serviceTier"].as_str().filter(|_| applied.tier.is_none()).or_else(|| config["service_tier"].as_str()).map(str::to_owned),
+    };
+    let mut effective = Effective::from_start(&started);
+    log(format!("thread started id={thread} tier={}", effective.tier.as_deref().unwrap_or("none")));
+    let _ = events.send(VoiceEvent::Organizer(effective.clone())).await;
 
     let offer = tokio::task::spawn_blocking(rtc::offer).await.map_err(|_| VoiceFailure::Network)
         .and_then(|offer| offer.map_err(rtc_failure)).map_err(failed("rtc offer"))?;
     let mut realtime = json!({"threadId": thread, "version": "v3", "outputModality": "audio", "prompt": VOICE_PROMPT,
-        "includeStartupContext": false, "delegationAckFiller": false, "clientManagedHandoffs": false,
+        // O aviso curto de que ouviu sai da própria voz; o resumo do raciocínio deixa a voz saber o que o organizador faz.
+        "includeStartupContext": false, "delegationAckFiller": true, "backendReasoningStatus": true, "clientManagedHandoffs": false,
         "realtimeStartInstructions": ORGANIZER_PROMPT, "initialItems": [{"role": "developer", "text": options.context}],
         "transport": {"type": "webrtc", "sdp": offer.sdp.clone()}});
     if let Some(voice) = &options.voice { realtime["voice"] = json!(voice); }
@@ -204,7 +253,8 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
     log("rtc thread started");
     let mut greeted = false;
     let mut results = Results::default();
-    let mut gate: SendGate<Value> = SendGate::default();
+    // Cada pedido leva o destino falado (vazio = a sessão da tela) e o turno da fala que o pediu.
+    let mut gate: SendGate<(Value, Option<String>, String)> = SendGate::default();
     let mut organizer_busy = false;
     let mut spoken = SpokenTurns::default();
     let mut activity = Activity::Idle;
@@ -214,12 +264,26 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
     let mut pending_context: Option<String> = None;
     let mut context_failures = 0u32;
     let mut session_names: Vec<String> = Vec::new();
+    let mut consent = Consent::send();
+    // Edição no projeto: a mesma trava, com os verbos de editar. `edit_pending` é a edição liberada que espera o turno
+    // seguinte (o acesso vale do próximo turno em diante); `edit_turn`, o turno aberto para fazê-la.
+    let mut edit_consent = Consent::edit();
+    let mut edit_pending: Option<(String, PathBuf)> = None;
+    let mut edit_turn: Option<String> = None;
+    // Última fala repassada (para reconhecer a repetida) e os itens de fala já tratados.
+    let mut last_input: Option<(String, Instant)> = None;
+    let mut seen_items: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut hold = SpeechHold::default();
+    // Envio recusado por falta de pedido: se a fala seguinte o completar, o organizador é avisado para tentar de novo.
+    let mut refused_send: Option<Instant> = None;
     let outcome = loop {
+        for text in hold.due(Instant::now()) { append_speech(&rpc, &thread, &text, "held").await; }
         // No Planejar nada sai pelo gate; ao entrar nele o envio pendente já foi cancelado.
-        if planner.mode == Mode::Direct && let Some((id, request)) = gate.due(Instant::now()) {
-            log(format!("gate sent words={}", request.split_whitespace().count()));
+        if planner.mode == Mode::Direct && let Some(((id, session, turn), request)) = gate.due(Instant::now()) {
+            consent.used();
+            log(format!("gate sent words={} named={}", request.split_whitespace().count(), session.is_some()));
             let _ = events.send(VoiceEvent::Draft(None)).await;
-            let _ = events.send(VoiceEvent::Send(CallId(id), request)).await;
+            let _ = events.send(VoiceEvent::Send { call: CallId(id), request, session, turn }).await;
         }
         tokio::select! {
             event = rtc_rx.recv() => match event {
@@ -234,7 +298,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                     }
                 }
                 Ok(rtc::RtcEvent::Levels(i, o)) => {
-                    if i >= MIC_VOICE_LEVEL { gate.heard_voice(Instant::now()); }
+                    if i >= MIC_VOICE_LEVEL { gate.heard_voice(Instant::now()); hold.heard_voice(Instant::now()); }
                     let _ = events.try_send(VoiceEvent::Levels(i, o));
                 }
                 Ok(rtc::RtcEvent::Failed(error)) => { log(format!("rtc failed error={error:?}")); break Err(failed("rtc")(rtc_failure(error))); }
@@ -248,17 +312,18 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                     let _ = events.send(VoiceEvent::Action(Some(organizer::OrganizerAction::Tool(tool.clone())))).await;
                     let outcome = match parse_tool(&params) {
                         ToolCall::ReadSession => { let _ = events.send(VoiceEvent::ReadSession(CallId(id))).await; "read" }
-                        ToolCall::Send(_) | ToolCall::Hold(_) if !spoken.allows(&params) => {
+                        ToolCall::Send { .. } | ToolCall::Hold(_) if !spoken.allows(&params) => {
                             let _ = rpc.respond(id, tool_reply("Pedido recusado: só uma fala do usuário pode gerar envio.", false)).await;
                             "refused-not-spoken"
                         }
                         ToolCall::FinishPlan { .. } | ToolCall::AskSession(_) | ToolCall::SetMode(_) | ToolCall::SwitchSession(_)
                             | ToolCall::OpenSession(_) | ToolCall::CloseSession { .. } | ToolCall::PairSessions(..) | ToolCall::UnpairSession(_)
-                            | ToolCall::HangarAction { .. } | ToolCall::Computer(_) if !spoken.allows(&params) => {
+                            | ToolCall::HangarAction { .. } | ToolCall::Computer(_) | ToolCall::ClickScreen { .. } | ToolCall::EditFiles(_)
+                            if !spoken.allows(&params) => {
                             let _ = rpc.respond(id, tool_reply("Só a pedido falado do usuário.", false)).await;
                             "refused-not-spoken"
                         }
-                        ToolCall::Send(_) | ToolCall::Hold(_) if !send_allowed(planner.mode) => {
+                        ToolCall::Send { .. } | ToolCall::Hold(_) if !send_allowed(planner.mode) => {
                             let _ = rpc.respond(id, tool_reply("Modo Planejar: nada vai à sessão até finish_plan.", false)).await;
                             "refused-plan-mode"
                         }
@@ -336,7 +401,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                                 let session = planner.session().unwrap_or(&target).to_owned();
                                 let _ = events.send(VoiceEvent::SendPlan { session, text }).await;
                                 planner.sent();
-                                let warn = apply_models(&rpc, &thread, &mut applied, &models, Mode::Direct, default_model.as_deref(), events).await;
+                                let warn = apply_models(&rpc, &thread, &mut applied, &models, Mode::Direct, &defaults, &mut effective, events).await;
                                 let reply = format!("Plano enviado à sessão; o resultado chega depois. {}", warn.unwrap_or_default());
                                 let _ = rpc.respond(id, tool_reply(reply.trim_end(), true)).await;
                                 let _ = events.send(VoiceEvent::Mode(Mode::Direct)).await;
@@ -345,13 +410,50 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                         }
                         // A resposta vem da tela (`Voice::reply`), depois de resolver o nome.
                         ToolCall::SwitchSession(name) => {
+                            let recent = spoken.recent(&params).unwrap_or_default().to_owned();
                             let spoken = spoken.text(&params).unwrap_or_default().to_owned();
-                            let _ = events.send(VoiceEvent::SwitchSession { call: CallId(id), name, spoken }).await;
+                            let _ = events.send(VoiceEvent::SwitchSession { call: CallId(id), name, spoken, recent }).await;
                             "switch"
                         }
                         ToolCall::HangarActions => { let _ = events.send(VoiceEvent::HangarActions(CallId(id))).await; "hangar-actions" }
                         ToolCall::HangarAction { id: action, arg } => { let _ = events.send(VoiceEvent::HangarAction { call: CallId(id), id: action, arg }).await; "hangar-action" }
                         ToolCall::ReadScreen(area) => { let _ = events.send(VoiceEvent::ReadScreen(CallId(id), area)).await; "read-screen" }
+                        ToolCall::ClickScreen { id: target, confirmed } => {
+                            let turn = params["turnId"].as_str().unwrap_or_default().to_owned();
+                            let _ = events.send(VoiceEvent::ClickScreen { call: CallId(id), id: target, confirmed, turn }).await;
+                            "click-screen"
+                        }
+                        ToolCall::Observe(request) => { let _ = events.send(VoiceEvent::Observe(CallId(id), request)).await; "observe" }
+                        ToolCall::EditFiles(_) if cfg!(windows) => {
+                            let _ = rpc.respond(id, tool_reply("No Windows você roda sem shell e não consegue editar; mande o pedido à sessão.", false)).await;
+                            "refused-windows"
+                        }
+                        ToolCall::EditFiles(_) if !edit_consent.check(params["turnId"].as_str().unwrap_or_default(), Instant::now()) => {
+                            let _ = rpc.respond(id, tool_reply(organizer::EDIT_UNCONFIRMED, false)).await;
+                            "refused-unconfirmed"
+                        }
+                        ToolCall::EditFiles(request) => {
+                            // Acesso completo, como uma sessão normal: o arquivo pedido pode estar fora do projeto. A pasta de trabalho
+                            // é o projeto da sessão na tela quando ele é desta máquina, senão a pasta pessoal.
+                            let workdir = target_cwd.clone().or_else(std::env::home_dir).unwrap_or_else(|| own.clone());
+                            // O acesso vale do turno seguinte em diante: este termina calado e o Hangar abre o da edição.
+                            let open = json!({"threadId": thread, "sandboxPolicy": {"type": "dangerFullAccess"}, "cwd": workdir});
+                            match rpc.request("thread/settings/update", open).await {
+                                Ok(_) => {
+                                    edit_consent.used();
+                                    edit_pending = Some((request, workdir));
+                                    log(format!("edit access granted in_project={}", target_cwd.is_some()));
+                                    let _ = rpc.respond(id, tool_reply("Edição liberada. Termine este turno sem escrever nada: o Hangar abre em seguida \
+                                        um turno com acesso completo para você fazer a edição.", true)).await;
+                                    "edit-granted"
+                                }
+                                Err(error) => {
+                                    log(format!("edit access failed kind={}", rpc_error_kind(&error)));
+                                    let _ = rpc.respond(id, tool_reply("Não consegui liberar a edição; mande o pedido à sessão.", false)).await;
+                                    "edit-failed"
+                                }
+                            }
+                        }
                         ToolCall::Computer(objective) => { let _ = events.send(VoiceEvent::Computer(CallId(id), objective)).await; "computer" }
                         ToolCall::ListSessions => { let _ = events.send(VoiceEvent::ListSessions(CallId(id))).await; "list" }
                         ToolCall::OpenSession(request) => { let _ = events.send(VoiceEvent::OpenSession(CallId(id), request)).await; "open" }
@@ -362,6 +464,8 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                         }
                         ToolCall::PairSessions(a, b) => { let _ = events.send(VoiceEvent::PairSessions(CallId(id), a, b)).await; "pair" }
                         ToolCall::UnpairSession(name) => { let _ = events.send(VoiceEvent::UnpairSession(CallId(id), name)).await; "unpair" }
+                        ToolCall::FollowSession(name) => { let _ = events.send(VoiceEvent::FollowSession(CallId(id), name)).await; "follow" }
+                        ToolCall::UnfollowSession(name) => { let _ = events.send(VoiceEvent::UnfollowSession(CallId(id), name)).await; "unfollow" }
                         ToolCall::SetMode(_) if let Some(name) = organizer::mode_word_session(spoken.text(&params).unwrap_or_default(), &session_names) => {
                             let reply = format!("'{name}' é o nome de uma sessão, não o modo; use switch_session para ir até ela.");
                             let _ = rpc.respond(id, tool_reply(reply, false)).await;
@@ -369,20 +473,41 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                         }
                         ToolCall::SetMode(mode) => {
                             let mut note = switch_mode(&mut planner, mode, &target, &mut gate, &rpc, events).await;
-                            if let Some(warn) = apply_models(&rpc, &thread, &mut applied, &models, mode, default_model.as_deref(), events).await { note = format!("{note} {warn}"); }
+                            if let Some(warn) = apply_models(&rpc, &thread, &mut applied, &models, mode, &defaults, &mut effective, events).await { note = format!("{note} {warn}"); }
                             let _ = rpc.respond(id, tool_reply(note, true)).await;
                             "mode-set"
                         }
-                        ToolCall::Send(request) => match gate.offer(id, request, Instant::now()) {
-                            Err((id, why)) => { let _ = rpc.respond(id, tool_reply(why, false)).await; "refused-short" }
-                            Ok(Some((old, _))) => { let _ = rpc.respond(old, tool_reply("Substituído por um pedido mais recente; nada foi enviado.", false)).await; "offered-superseded" }
-                            Ok(None) => "offered",
-                        },
+                        ToolCall::Send { request, session } => {
+                            let turn = params["turnId"].as_str().unwrap_or_default().to_owned();
+                            let to = session.clone().unwrap_or_default();
+                            let said = spoken.text(&params).unwrap_or_default().to_owned();
+                            let heard = format!("{said}\n{}", spoken.recent(&params).unwrap_or_default());
+                            let named = session.as_deref().is_some_and(|name| organizer::mentions_session(&heard, name, &session_names));
+                            // Pedido que ainda espera para o mesmo destino: o novo é correção dele, não envio a mais.
+                            let verdict = if gate.waiting_for(&to) { SendConsent::Granted } else { consent.check_to(&turn, &to, named, Instant::now()) };
+                            match verdict {
+                                SendConsent::Granted => match gate.offer((id, session, turn), &to, request, Instant::now()) {
+                                    Err(((id, ..), why)) => { let _ = rpc.respond(id, tool_reply(why, false)).await; "refused-short" }
+                                    Ok(Some(((old, ..), _))) => { let _ = rpc.respond(old, tool_reply("Substituído por um pedido mais recente; nada foi enviado.", false)).await; "offered-superseded" }
+                                    Ok(None) => "offered",
+                                },
+                                refused => {
+                                    // Só contagens: o texto da fala nunca vai ao diário.
+                                    let (verbs, directed, sessions) = organizer::send_signals(&said, &session_names);
+                                    log(format!("send refused why={refused:?} words={} send_verbs={verbs} directed={directed} sessions_named={sessions} named_target={named}",
+                                        said.split_whitespace().count()));
+                                    let reply = match refused { SendConsent::Duplicate => organizer::SEND_DUPLICATE, SendConsent::NotNamed => organizer::SEND_NOT_NAMED, _ => SEND_UNCONFIRMED };
+                                    if refused == SendConsent::Unconfirmed { refused_send = Some(Instant::now()); }
+                                    let _ = rpc.respond(id, tool_reply(reply, false)).await;
+                                    match refused { SendConsent::Duplicate => "refused-duplicate", SendConsent::NotNamed => "refused-not-named", _ => "refused-unconfirmed" }
+                                }
+                            }
+                        }
                         ToolCall::Hold(request) => {
                             // "Segura" dentro da janela de 1,5 s cancela o envio que ainda não saiu.
-                            let cancelled = gate.user_spoke().map(|(old, _)| old);
-                            let outcome = if cancelled.is_some() { "held-cancelled" } else { "held" };
-                            if let Some(old) = cancelled {
+                            let cancelled = gate.user_spoke();
+                            let outcome = if cancelled.is_empty() { "held" } else { "held-cancelled" };
+                            for ((old, ..), _) in cancelled {
                                 let _ = rpc.respond(old, tool_reply("Cancelado: o usuário pediu para segurar; nada foi enviado.", false)).await;
                             }
                             let _ = events.send(VoiceEvent::Draft(Some(request.clone()))).await;
@@ -390,7 +515,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                             outcome
                         }
                         ToolCall::Discard => {
-                            if let Some((old, _)) = gate.user_spoke() {
+                            for ((old, ..), _) in gate.user_spoke() {
                                 let _ = rpc.respond(old, tool_reply("Cancelado: o usuário desistiu; nada foi enviado.", false)).await;
                             }
                             let _ = events.send(VoiceEvent::Draft(None)).await;
@@ -413,27 +538,70 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                     // Limite da conta não leva threadId: tem de passar antes do filtro.
                     if method == "account/rateLimits/updated" { send_limits(events, usage::account_limits(&params["rateLimits"])).await; continue; }
                     if !ours { continue; }
-                    if method == "thread/realtime/transcript/delta" && params["role"] == "user" && let Some(text) = pending_context.take() {
-                        match rpc.request("thread/realtime/appendText", json!({"threadId": thread, "role": "developer", "text": text.clone()})).await {
-                            Ok(_) => { log("context delivered on user speech"); context_failures = 0; }
-                            // Sem o contexto o organizador fala da sessão errada: volta para a próxima fala tentar de novo.
-                            Err(error) => {
-                                context_failures += 1;
-                                log(format!("context delivery failed kind={} attempt={context_failures}", rpc_error_kind(&error)));
-                                // Cada tentativa prende o laço da chamada: na segunda falha avisa e desiste.
-                                if context_failures < 2 { pending_context.get_or_insert(text); }
-                                else { let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await; }
+                    if method == "item/started" || method == "item/completed" { spoken.item_started(&params); }
+                    // Cada fala uma vez: o started pode vir sem texto e o completed repete o item.
+                    let text = organizer::user_message_text(&params).filter(|t| !t.trim().is_empty());
+                    let item_key = params["item"]["id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned).or_else(|| text.clone()).unwrap_or_default();
+                    if (method == "item/started" || method == "item/completed")
+                        && let Some(text) = text.clone()
+                        && !organizer::from_hangar(&text) && !seen_items.contains(&item_key) {
+                        if seen_items.len() >= 256 { seen_items.clear(); }
+                        seen_items.insert(item_key);
+                        let now = Instant::now();
+                        let _ = events.send(VoiceEvent::Backstage(backstage_input(&text))).await;
+                        let input = spoken_input(&text).to_owned();
+                        // A voz encaminha a mesma fala de novo quando a transcrição final fecha: não é o usuário continuando.
+                        let repeat = last_input.as_ref().is_some_and(|(prev, at)| now.saturating_duration_since(*at) < REPEAT_WINDOW && repeated_handoff(prev, &input));
+                        log(format!("handoff repeat={repeat}"));
+                        if repeat {
+                            let steer = json!({"threadId": thread, "expectedTurnId": params["turnId"], "input": [{"type": "text", "text": REPEAT_NOTE}]});
+                            let steered = rpc.request("turn/steer", steer).await;
+                            log(format!("repeat note steered ok={}", steered.is_ok()));
+                        } else {
+                            // Só fala nova vale como pedido de envio: a repetida reabriria um pedido já usado.
+                            let speech = user_speech(&text);
+                            let asked = consent.heard(&speech, &session_names, now);
+                            edit_consent.heard(&speech, &session_names, now);
+                            if asked && refused_send.take().is_some_and(|at| now.saturating_duration_since(at) < organizer::CONFIRM_WINDOW) {
+                                log("send completed by next speech");
+                                let note = organizer::SEND_COMPLETED_NOTE.to_owned();
+                                pending_context = Some(match pending_context.take() { Some(old) => format!("{old}\n{note}"), None => note });
+                            }
+                            if let Some(turn) = params["turnId"].as_str() {
+                                let recent = organizer::transcript_delta(&text).to_owned();
+                                let _ = events.send(VoiceEvent::Heard { turn: turn.to_owned(), speech, recent }).await;
+                            }
+                            last_input = Some((input, now));
+                            // A troca de sessão ou de modo chega ao organizador no turno desta fala. Nunca pela voz: na v3
+                            // o texto acrescentado a ela é falado, e o usuário ouvia o caminho da pasta e as regras.
+                            if let Some(note) = pending_context.take() {
+                                let steer = json!({"threadId": thread, "expectedTurnId": params["turnId"],
+                                    "input": [{"type": "text", "text": format!("{} {note}", organizer::NOTE_PREFIX)}]});
+                                match rpc.request("turn/steer", steer).await {
+                                    Ok(_) => { log("context steered on user speech"); context_failures = 0; }
+                                    // Sem o contexto o organizador fala da sessão errada: volta para a próxima fala tentar de novo.
+                                    Err(error) => {
+                                        context_failures += 1;
+                                        log(format!("context steer failed kind={} attempt={context_failures}", rpc_error_kind(&error)));
+                                        if context_failures < 2 { pending_context.get_or_insert(note); }
+                                        else { let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await; }
+                                    }
+                                }
+                            }
+                            // A transcrição da fala chega atrasada e cancelava o próprio pedido: só uma fala nova
+                            // encaminhada (outro userMessage) prova que o usuário continuou.
+                            for ((id, ..), _) in gate.user_spoke() {
+                                log("gate cancelled: user kept talking");
+                                let _ = rpc.respond(id, tool_reply("O usuário continuou falando; nada foi enviado. Monte o pedido com a fala completa.", false)).await;
                             }
                         }
+                    } else if let Some(text) = text
+                        && method == "item/completed" && organizer::from_hangar(&text) && !text.trim_start().starts_with("[NOTA DO HANGAR]") {
+                        let _ = events.send(VoiceEvent::Backstage(backstage_input(&text))).await;
                     }
-                    // A transcrição da fala chega atrasada e cancelava o próprio pedido: só uma fala nova
-                    // encaminhada (outro userMessage) prova que o usuário continuou.
-                    let user_spoke = method == "item/started" && params["item"]["type"] == "userMessage";
-                    // Só registra a fala; cancelar envio pendente continua só no started e no delta.
-                    if method == "item/started" || method == "item/completed" { spoken.item_started(&params); }
-                    if user_spoke && let Some((id, _)) = gate.user_spoke() {
-                        log("gate cancelled: user kept talking");
-                        let _ = rpc.respond(id, tool_reply("O usuário continuou falando; nada foi enviado. Monte o pedido com a fala completa.", false)).await;
+                    if method == "item/completed" && params["item"]["type"] == "agentMessage"
+                        && let Some(text) = params["item"]["text"].as_str().filter(|t| !t.trim().is_empty()) {
+                        let _ = events.send(VoiceEvent::Backstage(Backstage::Answer(text.to_owned()))).await;
                     }
                     if let Some(action) = organizer::organizer_action(&method, &params["item"]) { let _ = events.send(VoiceEvent::Action(action)).await; }
                     if let Some(delta) = organizer::reasoning_delta(&method, &params) { let _ = events.send(VoiceEvent::Thought(delta)).await; }
@@ -459,21 +627,44 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                             let _ = events.send(VoiceEvent::TurnDone).await;
                             spoken.turn_completed(&params);
                             // Turno interrompido ou falho não pode deixar um envio esperando a janela de 1,5 s.
-                            if params["turn"]["status"] != "completed" && let Some((id, _)) = gate.user_spoke() {
-                                log("gate cancelled: turn interrupted");
-                                let _ = rpc.respond(id, tool_reply("O turno foi interrompido; nada foi enviado.", false)).await;
+                            if params["turn"]["status"] != "completed" {
+                                for ((id, ..), _) in gate.user_spoke() {
+                                    log("gate cancelled: turn interrupted");
+                                    let _ = rpc.respond(id, tool_reply("O turno foi interrompido; nada foi enviado.", false)).await;
+                                }
                             }
                             if params["turn"]["status"] == "failed" {
                                 log(format!("organizer failure: {:?}", VoiceFailure::Organizer));
                                 let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await;
                             }
-                            if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, organizer_busy).await; }
+                            // Acabou o turno da edição (concluído, interrompido ou falho): o acesso ao projeto fecha já.
+                            if edit_turn.is_some() && edit_turn.as_deref() == params["turn"]["id"].as_str() {
+                                edit_turn = None;
+                                close_edit_access(&rpc, &thread, &own, events).await;
+                            }
+                            if let Some((request, project)) = edit_pending.take() {
+                                let text = format!("{} Edição liberada pelo usuário, com acesso completo a esta máquina (pasta de trabalho {}): \
+                                    {request}\nEdite agora pelo shell só os arquivos deste pedido, dentro ou fora do projeto, confira o resultado e diga \
+                                    numa frase o que mudou. Ao terminar, você volta a gravar só na sua pasta.", organizer::NOTE_PREFIX, project.display());
+                                match rpc.request("turn/start", json!({"threadId": thread, "input": [{"type": "text", "text": text}]})).await {
+                                    Ok(result) => {
+                                        if let Some(turn) = result["turn"]["id"].as_str() { edit_turn = Some(turn.to_owned()); results.mark_summary(turn.to_owned()); }
+                                        // Os resultados de sessão esperam o turno da edição acabar.
+                                        results.turn_started();
+                                        log("edit turn started");
+                                    }
+                                    Err(error) => {
+                                        log(format!("edit turn start failed kind={}", rpc_error_kind(&error)));
+                                        close_edit_access(&rpc, &thread, &own, events).await;
+                                        if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
+                                    }
+                                }
+                            } else if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
                         }
                         "item/completed" if params["item"]["type"] == "agentMessage" && params["item"]["phase"] != "commentary" => {
                             if results.take_summary(params["turnId"].as_str().unwrap_or_default())
                                 && let Some(text) = params["item"]["text"].as_str() {
-                                let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": text})).await;
-                                log(format!("summary appendSpeech bytes={} ok={}", text.len(), spoke.is_ok()));
+                                speak(&rpc, &thread, &mut hold, text.to_owned(), "summary").await;
                             }
                         }
                         "thread/tokenUsage/updated" => if let Some((used, window)) = usage::context_usage(&params) {
@@ -501,37 +692,52 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                 Some(Command::SetMode(mode)) => {
                     log(format!("mode set {mode:?}"));
                     let mut note = switch_mode(&mut planner, mode, &target, &mut gate, &rpc, events).await;
-                    if let Some(warn) = apply_models(&rpc, &thread, &mut applied, &models, mode, default_model.as_deref(), events).await { note = format!("{note} {warn}"); }
-                    let _ = rpc.request("thread/realtime/appendText", json!({"threadId": thread, "role": "developer", "text": note})).await;
+                    if let Some(warn) = apply_models(&rpc, &thread, &mut applied, &models, mode, &defaults, &mut effective, events).await { note = format!("{note} {warn}"); }
+                    // Para o organizador, na próxima fala; a voz só anuncia o modo.
+                    pending_context = Some(match pending_context.take() { Some(old) => format!("{old}\n{note}"), None => note });
                     let speech = if mode == Mode::Plan { "Modo planejar." } else { "Modo direto." };
                     let _ = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": speech})).await;
                 }
                 Some(Command::Models(edited)) => {
                     models = edited;
                     // A falha já aparece no cartão; o modo não mudou, não há o que dizer ao organizador.
-                    let _ = apply_models(&rpc, &thread, &mut applied, &models, planner.mode, default_model.as_deref(), events).await;
+                    let _ = apply_models(&rpc, &thread, &mut applied, &models, planner.mode, &defaults, &mut effective, events).await;
                 }
                 Some(Command::PlanDelivered) => planner.delivered(),
+                Some(Command::Jev { turn, verdict, speech, note }) => {
+                    consent.jev(&turn, verdict, Instant::now());
+                    log(format!("jev verdict={verdict:?} note={} speech={}", note.is_some(), speech.is_some()));
+                    if let Some(text) = speech { speak(&rpc, &thread, &mut hold, text, "jev").await; }
+                    // A tela já agiu: o organizador sabe no mesmo turno e não repete a ação.
+                    if let Some(note) = note {
+                        let steer = json!({"threadId": thread, "expectedTurnId": turn,
+                            "input": [{"type": "text", "text": format!("{} {note}", organizer::NOTE_PREFIX)}]});
+                        let steered = rpc.request("turn/steer", steer).await;
+                        log(format!("jev note steered ok={}", steered.is_ok()));
+                    }
+                }
                 Some(Command::Sessions(names)) => { log(format!("sessions known count={}", names.len())); session_names = names; }
                 Some(Command::Answer(text)) => {
                     log(format!("session answer bytes={}", text.len()));
-                    if let Some(input) = results.push(String::new(), text) { start_summary(&rpc, &thread, input, &mut results, organizer_busy).await; }
+                    if let Some(input) = results.push(String::new(), text) { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
                 }
                 Some(Command::Retarget(name, context, cwd)) => {
                     log("retarget");
-                    // O envio retido sairia para a sessão que está na tela agora, não para a do pedido.
-                    if let Some((old, _)) = gate.user_spoke() {
+                    // O envio retido sem destino sairia para a sessão que está na tela agora; o nomeado segue para a dele.
+                    for ((old, ..), _) in gate.take_for("") {
                         let _ = rpc.respond(old, tool_reply("Cancelado: a sessão mudou; nada foi enviado.", false)).await;
                     }
                     target = name.clone();
                     target_cwd = cwd;
-                    // Sem anúncio falado: a pessoa vê a tela. O contexto da sessão só entra quando ela voltar a falar.
-                    pending_context = Some(format!("{}\n{context}", organizer::code_note(target_cwd.as_deref(), &own)));
+                    // Sem anúncio falado: a pessoa vê a tela. O contexto da sessão só entra quando ela voltar a falar; a troca
+                    // de sessão substitui a nota da anterior, mas não a do modo.
+                    let note = format!("{}\n{context}", organizer::code_note(target_cwd.as_deref(), &own));
+                    pending_context = Some(match pending_context.take().filter(|old| old.starts_with("Modo ")) { Some(old) => format!("{old}\n{note}"), None => note });
                     context_failures = 0;
                 }
                 Some(Command::Result(session, text)) => {
                     log(format!("session result bytes={}", text.len()));
-                    if let Some(input) = results.push(session, text) { start_summary(&rpc, &thread, input, &mut results, organizer_busy).await; }
+                    if let Some(input) = results.push(session, text) { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
                 }
                 None => break Ok(()),
             },
@@ -540,6 +746,8 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
         }
     };
     stopped.store(true, Ordering::Relaxed);
+    let (held, bytes) = hold.pending();
+    if held > 0 { log(format!("held speech dropped at call end count={held} bytes={bytes}")); }
     let _ = rpc.request("thread/realtime/stop", json!({"threadId": thread})).await;
     if !matches!(tokio::task::spawn_blocking(move || peer.join()).await, Ok(Ok(()))) { log("rtc thread join failed (panic)"); }
     outcome
@@ -552,30 +760,42 @@ async fn send_limits(events: &async_channel::Sender<VoiceEvent>, limits: Option<
 }
 
 /// Entrar no Planejar cancela o envio que esperava a janela: a chamada pendente falha em vez de ficar sem resposta.
-async fn switch_mode(planner: &mut Planner, mode: Mode, target: &str, gate: &mut SendGate<Value>, rpc: &Rpc,
+async fn switch_mode(planner: &mut Planner, mode: Mode, target: &str, gate: &mut SendGate<(Value, Option<String>, String)>, rpc: &Rpc,
     events: &async_channel::Sender<VoiceEvent>) -> String {
-    if mode == Mode::Plan && let Some((old, _)) = gate.user_spoke() {
-        let _ = rpc.respond(old, tool_reply("Cancelado: modo Planejar; nada foi enviado.", false)).await;
+    if mode == Mode::Plan {
+        for ((old, ..), _) in gate.user_spoke() {
+            let _ = rpc.respond(old, tool_reply("Cancelado: modo Planejar; nada foi enviado.", false)).await;
+        }
     }
     let note = planner.set_mode(mode, target);
     let _ = events.send(VoiceEvent::Mode(mode)).await;
     note
 }
 
+/// O que a conta usa quando o par não escolhe: o modelo do config e a velocidade com que a thread abriu.
+struct Defaults { model: Option<String>, tier: Option<String> }
+
 /// Leva a thread ao par do modo; vale a partir do próximo turno. Falha aparece na tela e o texto devolvido avisa o organizador.
-async fn apply_models(rpc: &Rpc, thread: &str, applied: &mut ModeModel, models: &ModeModels, mode: Mode, default_model: Option<&str>,
-    events: &async_channel::Sender<VoiceEvent>) -> Option<&'static str> {
+async fn apply_models(rpc: &Rpc, thread: &str, applied: &mut ModeModel, models: &ModeModels, mode: Mode, defaults: &Defaults,
+    effective: &mut Effective, events: &async_channel::Sender<VoiceEvent>) -> Option<&'static str> {
     let wanted = models.get(mode);
     // Voltar ao "modelo do config" sem saber qual é ele não troca nada: dizer, em vez de fingir que trocou.
-    if wanted.model.is_none() && default_model.is_none() && applied.model.is_some() {
+    if wanted.model.is_none() && defaults.model.is_none() && applied.model.is_some() {
         log(format!("settings update skipped mode={mode:?} reason=unknown_default_model"));
         let _ = events.send(VoiceEvent::Failed(VoiceFailure::ModelSwitch)).await;
         return Some("O modo mudou, mas o modelo que pensa não trocou; segue o anterior.");
     }
-    let Some(update) = settings_update(thread, applied, wanted, default_model) else { *applied = wanted.clone(); return None };
-    if rpc.request("thread/settings/update", update).await.is_ok() {
-        log(format!("settings update ok mode={mode:?}"));
+    let Some(update) = settings_update(thread, applied, wanted, defaults.model.as_deref(), defaults.tier.as_deref()) else {
         *applied = wanted.clone();
+        return None;
+    };
+    if rpc.request("thread/settings/update", update.clone()).await.is_ok() {
+        log(format!("settings update ok mode={mode:?} tier={}", update.get("serviceTier").map_or("same", |t| t.as_str().unwrap_or("default"))));
+        *applied = wanted.clone();
+        if let Some(model) = update["model"].as_str() { effective.model = Some(model.to_owned()); }
+        if let Some(effort) = update["effort"].as_str() { effective.effort = Some(effort.to_owned()); }
+        if let Some(tier) = update.get("serviceTier") { effective.tier = Some(tier.as_str().unwrap_or(organizer::TIER_STANDARD).to_owned()); }
+        let _ = events.send(VoiceEvent::Organizer(effective.clone())).await;
         return None;
     }
     log(format!("settings update failed mode={mode:?}"));
@@ -583,7 +803,32 @@ async fn apply_models(rpc: &Rpc, thread: &str, applied: &mut ModeModel, models: 
     Some("O modo mudou, mas o modelo que pensa não trocou; segue o anterior.")
 }
 
-async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Results, organizer_busy: bool) {
+/// Volta o organizador ao isolamento: grava só na pasta própria. Tenta duas vezes; falhando, avisa na tela, porque o acesso
+/// completo ficaria aberto nos turnos seguintes.
+async fn close_edit_access(rpc: &Rpc, thread: &str, own: &std::path::Path, events: &async_channel::Sender<VoiceEvent>) {
+    let back = json!({"threadId": thread, "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": []}, "cwd": own});
+    for _ in 0..2 {
+        if rpc.request("thread/settings/update", back.clone()).await.is_ok() { log("edit access closed"); return; }
+    }
+    log("edit access close failed");
+    let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await;
+}
+
+/// Fala que a voz puxa sozinha passa por aqui: com o usuário falando, fica guardada até ele terminar.
+async fn speak(rpc: &Rpc, thread: &str, hold: &mut SpeechHold, text: String, tag: &str) {
+    let bytes = text.len();
+    match hold.offer(text, Instant::now()) {
+        Some(text) => append_speech(rpc, thread, &text, tag).await,
+        None => log(format!("{tag} speech held bytes={bytes}")),
+    }
+}
+
+async fn append_speech(rpc: &Rpc, thread: &str, text: &str, tag: &str) {
+    let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": text})).await;
+    log(format!("{tag} appendSpeech bytes={} ok={}", text.len(), spoke.is_ok()));
+}
+
+async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Results, hold: &mut SpeechHold, organizer_busy: bool) {
     let mut next = Some(first);
     // Laço, não recursão: um resumo recusado com o organizador ocioso solta o próximo da fila na hora.
     while let Some(mut input) = next.take() {
@@ -595,7 +840,7 @@ async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Resu
                 // Ocioso e recusado: nenhum turn/completed virá; fala o começo do texto e drena a fila.
                 if let Some(text) = results.turn_start_failed(organizer_busy) {
                     let short: String = text.chars().take(400).collect();
-                    let _ = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": format!("A sessão respondeu: {short}")})).await;
+                    speak(rpc, thread, hold, format!("A sessão respondeu: {short}"), "summary fallback").await;
                     next = results.turn_completed();
                 }
             }

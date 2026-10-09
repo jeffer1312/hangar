@@ -1510,7 +1510,13 @@ def jev_config(auto: bool = False) -> dict:
     url = first(os.environ.get("ORQ_JEV_URL"), os.environ.get("JEV_ENDPOINT"), rc.get("jev_endpoint"))
     model = first(os.environ.get("JEV_MODEL"), rc.get("jev_model"))
     if auto and not url and key.startswith("sk-or-"):
-        url, model = OPENROUTER_JEV_URL, model or OPENROUTER_JEV_MODEL
+        url = OPENROUTER_JEV_URL
+    # Same rule as the server (`runtime_config.destino_jev`): OpenRouter never gets the TypeSafe name,
+    # and its `-latest` alias needs the `~` ("typesafe/jev-latest does not exist").
+    if "openrouter.ai" in url:
+        model = model or OPENROUTER_JEV_MODEL
+        if model.startswith("typesafe/") and model.endswith("-latest"):
+            model = "~" + model
     return {"key": key, "url": url or JEV_URL, "model": model or JEV_MODEL}
 
 

@@ -6,6 +6,9 @@ use std::{ffi::OsString, path::{Path, PathBuf}, time::Duration};
 /// O `objetivo` do HCC desiste sozinho em 240 s; a folga cobre a subida do Python e do agente.
 const OBJECTIVE_DEADLINE: Duration = Duration::from_secs(300);
 pub const JEV_KEY: &str = "TYPESAFE_API_KEY";
+/// Destino do Jev que o servidor grava junto da chave do Windows; ausente, a chave decide.
+const JEV_ENDPOINT: &str = "JEV_ENDPOINT";
+const JEV_MODEL: &str = "JEV_MODEL";
 /// Só o fallback com imagem usa; sem elas o laço segue pela árvore de acessibilidade.
 const OPTIONAL_KEYS: [&str; 4] = ["LLM_PROXY_KEY", "LLM_PROXY_URL", "LLM_MODEL", "LLM_EFFORT"];
 
@@ -48,7 +51,7 @@ fn stored_keys(home: &Path) -> Vec<(&'static str, String)> {
     let active = &read_json(&home.join(".claude.json"))["mcpServers"]["hangar-computer-control"]["env"];
     let entry = if active.is_object() { active.clone() } else { read_json(&home.join(".hangar").join("computer-control.json"))["env"].clone() };
     let settings = read_json(&home.join(".claude").join("settings.json"))["env"].clone();
-    std::iter::once(JEV_KEY).chain(OPTIONAL_KEYS).filter_map(|key| {
+    [JEV_KEY, JEV_ENDPOINT, JEV_MODEL].into_iter().chain(OPTIONAL_KEYS).filter_map(|key| {
         let stored = entry[key].as_str().or_else(|| (key == JEV_KEY).then(|| settings[key].as_str()).flatten()).map(str::to_owned);
         stored.filter(|v| !v.is_empty()).or_else(|| std::env::var(key).ok().filter(|v| !v.is_empty())).map(|v| (key, v))
     }).collect()
@@ -59,7 +62,12 @@ pub fn child_env(keys: Vec<(&'static str, String)>, dir: &Path, agent: &Path) ->
     if !keys.iter().any(|(k, _)| *k == JEV_KEY) {
         return Err(format!("Falta a chave {JEV_KEY} (Jev): configure em Configurações > Controle do Windows ou no ambiente do app."));
     }
-    let mut env: Vec<(&'static str, OsString)> = keys.into_iter().map(|(k, v)| (k, OsString::from(v))).collect();
+    // A chave decide o destino (mesma regra do servidor): chave do OpenRouter ia à TypeSafe e voltava 401.
+    let value = |name: &str| keys.iter().find(|(k, _)| *k == name).map(|(_, v)| v.clone());
+    let (endpoint, model) = super::jev::destination(&value(JEV_KEY).unwrap_or_default(), value(JEV_ENDPOINT).as_deref(), value(JEV_MODEL).as_deref());
+    let mut env: Vec<(&'static str, OsString)> = keys.into_iter().filter(|(k, _)| *k != JEV_ENDPOINT && *k != JEV_MODEL)
+        .map(|(k, v)| (k, OsString::from(v))).collect();
+    env.extend([(JEV_ENDPOINT, endpoint), (JEV_MODEL, model)].into_iter().filter_map(|(k, v)| v.map(|v| (k, OsString::from(v)))));
     env.extend([("PYTHONPATH", dir.as_os_str().to_owned()), ("VIRTUAL_ENV", OsString::new()), ("HCC_AGENT_CONFIG", agent.as_os_str().to_owned())]);
     Ok(env)
 }
@@ -188,6 +196,18 @@ mod tests {
         let env = child_env(vec![(JEV_KEY, "k".into())], dir, agent).unwrap();
         assert!(env.contains(&("HCC_AGENT_CONFIG", OsString::from("/p/hcc/linux-agent.json"))));
         assert!(env.contains(&("PYTHONPATH", OsString::from("/p/hcc"))) && env.contains(&("VIRTUAL_ENV", OsString::new())));
+        assert!(!env.iter().any(|(k, _)| *k == JEV_ENDPOINT || *k == JEV_MODEL), "TypeSafe: o HCC usa o padrão dele");
+    }
+
+    #[test]
+    fn openrouter_key_goes_with_its_endpoint_and_model() {
+        let (dir, agent) = (Path::new("/p/hcc"), Path::new("/p/hcc/linux-agent.json"));
+        let get = |env: &[(&str, OsString)], k: &str| env.iter().find(|(name, _)| *name == k).map(|(_, v)| v.to_string_lossy().into_owned());
+        let env = child_env(vec![(JEV_KEY, "sk-or-k".into())], dir, agent).unwrap();
+        assert_eq!(get(&env, JEV_ENDPOINT).as_deref(), Some("https://openrouter.ai/api/alpha/decisions"), "antes ia à TypeSafe e voltava 401");
+        assert_eq!(get(&env, JEV_MODEL).as_deref(), Some("typesafe/jev-1.13-20260917"));
+        let saved = child_env(vec![(JEV_KEY, "sk-or-k".into()), (JEV_MODEL, "typesafe/jev-latest".into())], dir, agent).unwrap();
+        assert_eq!(get(&saved, JEV_MODEL).as_deref(), Some("~typesafe/jev-latest"), "o gravado vale, com o til do apelido");
     }
 
     #[test]
