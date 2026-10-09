@@ -17,7 +17,7 @@ caído) e sai na parte 7, como manda o dono único.
 - Pi, omp, Kimi e orq.
 - Módulos compartilhados que saem inteiros na parte 6: `archive.py`/`archive_providers.py`,
   `bastao.py`, `config_sync.py` (menos o trecho do Codex, ver 5F), `credenciais.py` (menos as
-  rotas do Codex, ver 5E). O ramo do Codex neles muda só para chamar o Rust quando a escrita
+  rotas do Codex, ver #115). O ramo do Codex neles muda só para chamar o Rust quando a escrita
   passar a ser dele.
 - Desktop web e Electron (parados). Tela nova vai para PWA/mobile (`frontend/` e `mobile/`) e
   para o nativo (`desktop-native/`).
@@ -57,15 +57,18 @@ Medição e alternativas em [`analise.md`](analise.md#tipos-do-protocolo). Decis
 5A tipos + cliente ──┬── 5B sem terminal ──┬── 5C com terminal ──┐
                      │                     ├── 5D fork/revert/goal/terminais
                      │                     └── 5H voz            ├── 5I lançadores
-                     └── 5E contas/cota/catálogo ──┬── 5F integração nativa ┘
+                     └── 5E catálogo de modelos ──┬── 5F integração nativa ┘
                                                    └── 5G transferência (precisa de 5B)
+#115 contas/login/cotas ───────────────────────────► 5F/5G e consumidores de sessões
 ```
 
 A 5B depende também da **5-0** (caminho de escrita comum aos dois provedores: tabela de despacho
 rota × provedor × modo, rotas genéricas reivindicadas no Rust, `runtime_coordinator` perguntando
 à tabela, `format_status` e `skill_catalog` no Rust), que a metade Claude escreve e revisa no próprio fluxo; esta só usa o resultado.
 Divisão e regras dos arquivos comuns em [`../parte5-claude/contrato-par.md`](../parte5-claude/contrato-par.md).
-5B e 5E correm em paralelo depois de 5A. Cada subparte tem plano próprio, execução com revisor
+5B e 5E correm em paralelo depois de 5A. A gestão de contas Claude/Codex foi separada na
+[issue #115](https://github.com/jeffer1312/hangar/issues/115); a 5E mantém o catálogo de modelos.
+Cada subparte tem plano próprio, execução com revisor
 por Task, revisão final, PR em rascunho e uso real pelo canal de testes antes da seguinte que
 depende dela. Mudou rota `/internal`, evento do `side-events` ou variável do filho → o próximo
 número livre do contrato interno (`RUST_SERVER_PROTOCOL`/`INTERNAL_PROTOCOL`) na junção.
@@ -167,26 +170,31 @@ Depende de 5B (e de 5C para sessão com terminal). Tela no PWA/mobile e no nativ
 
 Pronta quando: cada ação usada uma vez no celular e no nativo com uma sessão real.
 
-### 5E. Contas, cota, catálogo e login
+### 5E. Catálogo de modelos; contas na #115
 
-- `hangar-codex::accounts` (catálogo `default` + `~/.codex-<nome>` com marcador, ambiente do
-  processo, dono de um rollout), `login` (via app-server `account/login/*`, travas e reservas por
-  conta, cache de autenticação), `quota` (HTTP `wham/usage` e `rate-limit-reset-credits` com o
-  token do `auth.json`, app-server de reserva, cache em disco e espera de 10 min após 429 — regras
-  vigentes), `models` (catálogo `/codex/models?client_version=` com reserva `model/list`,
-  `checar_escolha`), `oauth` (device flow; grava `auth.json` do Codex, do Pi e o SQLite do omp
-  com `rusqlite`, que já está no workspace).
-- Rotas no Rust: `/api/codex-contas/*`, `/api/credenciais/codex*`, a parte Codex de
-  `/api/cotas` e `/api/model-options?provider=codex`. A rota de criação (`POST /api/sessions`) é
-  da parte 6 (decisão do dono, 07/10); aqui vão só as checagens Codex dela
-  (escolha de conta, catálogo de modelo, reserva), chamadas pela rota Python por `/internal`.
-- **Os 22 módulos Python que importam `codex_contas`** continuam com um leitor só de leitura
-  (listar contas, ambiente, dono do rollout) até saírem nas partes 6/7. A escrita (criar, apagar,
-  marcador, login) é só do Rust; um golden do formato do marcador roda nos dois lados.
-- Escopos de conta para custos (`costs/codex.rs`, `CodexScope`) passam a vir do próprio Rust.
+- A 5E mantém `hangar-codex::models`: catálogo `/codex/models?client_version=`, reserva
+  `model/list`, validação da escolha e `/api/model-options?provider=codex`.
+- A #115 assume catálogo de contas Claude/Codex, ambiente e identidade pública, cadastro,
+  exclusão, login, logout, renovação Claude, cotas, cache e redefinição Codex. As rotas
+  `/api/codex-contas/*`, `/api/credenciais/codex*`, `/api/claude-configs*`,
+  `/api/conta-estado*`, `/api/cotas` e `/api/cotas/sugestao` entram nessa frente.
+- O serviço é `hangar-server::accounts`; o cliente efêmero é o `hangar-codex` já disponível.
+  O app-server administrativo não usa nem ocupa o cliente de uma sessão.
+- `POST /api/sessions` continua na parte 6. Seus consumidores Python e os adaptadores Rust
+  usam o mesmo lock de existência da conta; criar sessão, transferência e lançadores não
+  migram na #115. Leitores locais puros continuam até as partes 6/7.
+- O Rust grava marcadores, credencial do device flow e cache quando ativo. Os CLIs gravam
+  sua autenticação nativa. Preparação de configuração, hooks, skills e plugins fica nos
+  reconciliadores Python até a 5F, por gancho interno restrito. A propagação do device flow
+  grava apenas Pi/omp no Python; não pode voltar a gravar `auth.json` do Codex.
+- Escopos de conta para custos (`costs/codex.rs`, `CodexScope`) usam os retratos públicos de
+  contas, sem entregar credenciais ao consumidor.
 
-Pronta quando: criar e apagar conta, logar, ver cota e catálogo pelo app; cota sem rede cai no
-app-server; 429 espera.
+Contratos, consumidores e autoria de arquivos:
+[inventário e referência Python](../../../backend/tests/fixtures/accounts_contract/README.md).
+Falha de conta migrada com Rust ativo é erro identificado; a reserva Python é do processo
+inteiro. Modelos ficam prontos quando catálogo e escolha forem usados pelo app. A #115 tem
+aceite próprio de gestão de contas nas três interfaces, sem consumir redefinição real na prova.
 
 ### 5F. Integração nativa e sincronização entre contas
 
@@ -215,7 +223,7 @@ conta adicional.
 
 `transfer.py`, `claude_to_codex.py` e os trechos Codex de `conversation_transfer.py`,
 `conversation_history.py` e da rota `/conta` vão para `hangar-codex::transfer` +
-`hangar-server`. Depende de 5B (sessão) e 5E (conta, catálogo). A regra vigente de prova vale:
+`hangar-server`. Depende de 5B (sessão), #115 (conta) e 5E (catálogo). A regra vigente de prova vale:
 conferir os itens enviados após retomada, incluindo resultados completos.
 
 ### 5H. Voz (beta)
@@ -252,11 +260,11 @@ reiniciando o app-server depois de um kill, sem `python` no `ps` do pane.
 | `adapters/codex/rollout.py` (373) | já em `transcript/codex.rs`; `status_line_do_rollout` → `list/` | 5B |
 | `adapters/codex/transfer.py` (360), `claude_to_codex.py` (409) | `hangar-codex::transfer` | 5G |
 | `codex_permissions.py` (133) | `terminal_state.rs` + escritor terminal | 5C |
-| `codex_contas.py` (246) | `hangar-codex::accounts`; **leitor Python fica** até 6/7 (22 consumidores) | 5E |
-| `codex_contas_api.py` (282), `codex_contas_login.py` (656) | `routes/codex_accounts.rs` + `hangar-codex::login` | 5E |
-| `codex_appserver.py` (227) | `hangar-codex::client` (stdio efêmero) + `quota` (HTTP) | 5A/5E |
+| `codex_contas.py` (246) | `hangar-server::accounts`; leitor Python puro fica até 6/7 | #115 |
+| `codex_contas_api.py` (282), `codex_contas_login.py` (656) | `hangar-server::accounts` (rotas, login e preparação) | #115 |
+| `codex_appserver.py` (227) | `hangar-codex::client` (stdio efêmero) + `accounts::quotas` (HTTP) | 5A/#115 |
 | `codex_models.py` (296) | `hangar-codex::models` | 5E |
-| `oauth_codex.py` (376) | `hangar-codex::oauth` | 5E |
+| `oauth_codex.py` (376) | device flow no `hangar-server::accounts`; propagação Pi/omp por gancho Python | #115 |
 | `uso_codex.py` (218) | conferir se `/api/uso` já é do Rust (parte 3); se sim, é referência e sai na 7 | 5E |
 | `codex_contas_sync.py` (1318), `codex_contas_plugins.py` (645) | `hangar-codex::integration::sync` | 5F |
 | `codex_integracao.py` (1105), `codex_importador.py` (409), `codex_instrucoes.py` (220), `codex_hooks_arquivos.py` (158), `codex_hook_installer.py` (136), `codex_fragmentos.py` (134), `codex_skills.py` (393), `codex_compat.py` (291), `codex_arquivos.py` (268), `codex_opcoes.py` (66), `codex_msgs.py` (104) | `hangar-codex::integration::*` | 5F |
@@ -264,7 +272,8 @@ reiniciando o app-server depois de um kill, sem `python` no `ps` do pane.
 | `scripts/hangar-codex-tui` (662), `scripts/hangar-codex` (290), `codex-hook-allow.py` (49), `codex-hook-json.py` (52) | subcomandos do binário Rust; o script fica de reserva até a 7 | 5I |
 | `shell/codex.{fish,posix.sh,ps1}` (63) | ficam (são funções de shell), apontando para o binário | 5I |
 | Ramos Codex em `api.py`, `registry.py`, `sse.py`, `state.py`, `terminal_input.py`, `runtime_*.py` | somem do caminho com o Rust de pé; ficam só para o modo `python` | 5B/5C |
-| Ramos Codex em `cotas.py`, `credenciais.py`, `harness_saude.py`, `harness_api.py`, `config_sync.py`, `agentes_sync.py`, `costs_sources.py` | chamam o Rust; o módulo sai inteiro na parte 6 | 5E/5F |
+| Ramos Codex em `cotas.py`, `credenciais.py`, `costs_sources.py` | contas/cotas e retratos públicos no Rust; outros provedores continuam no Python | #115 |
+| Ramos Codex em `harness_saude.py`, `harness_api.py`, `config_sync.py`, `agentes_sync.py` | integração geral no Rust | 5F |
 | Ramos Codex em `archive*.py`, `bastao.py`, `orq_politica.py`, `cliproxy_accounts.py` | ficam: módulo compartilhado, sai inteiro na parte 6 | — |
 
 Todo arquivo Python acima fica no disco como reserva do modo `python` e sai na parte 7.

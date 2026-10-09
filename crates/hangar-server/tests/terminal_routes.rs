@@ -215,6 +215,6 @@ async fn removed_pure_reduce_rpc_is_rejected() {
         "plugin_question":null,"plugin_state":null,"hook_state":null,"hook_grace":8,"status_line":null}});
     let r = reqwest::Client::new().post(url).header("x-hangar-internal", "internal").body(body.to_string()).send().await.unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 42);
+    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 49);
     task.abort();
 }

@@ -160,10 +160,11 @@ Kimi Code. Setup details, Tailscale, the phone and every feature are in the
             └──── HTTPS / SSE / WebSocket ────┐
                                                ▼
                          hangar-server (Rust, :8765)
-                          lists, live state, history, costs, groups
+                          lists, live state, history, costs, groups,
+                          accounts, session attachments
                                                │
                          Python backend (loopback, behind it)
-                          sessions, accounts, adapters, MCP
+                          sessions, adapters, MCP
                                                │
         ┌──────────────┬──────────────┬────────┴─────┬──────────────┐
    Claude Code       Codex          Pi / omp       Kimi Code     your browser
@@ -176,6 +177,12 @@ Chat content comes from each agent's structured transcript, never from scraping 
 tmux pane is used only for live state and input of sessions that have a terminal; headless Claude
 and Codex run as managed processes with durable sidecars. The CLIs and providers you configure may
 still send data according to their own policies.
+
+The backend moves to Rust part by part. With the Rust server up, Claude and Codex accounts
+(catalog, preparation, login, state, logout, quotas, Claude renewal and the guarded Codex reset)
+and the session attachment vault are served by it; Python keeps guest admission, session and
+configuration facts, transcription and the fallback when the supervisor turns Rust off. Contracts
+and limits: [accounts and attachments](docs/decisoes/accounts-uploads-rust.md).
 
 Repository map: `crates/` (Rust server), `backend/` (Python, FastAPI), `desktop-native/` (Rust
 desktop app), `frontend/` (Svelte PWA), `mobile/` (Expo app, in development), `packages/core`

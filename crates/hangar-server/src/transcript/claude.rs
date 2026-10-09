@@ -499,6 +499,15 @@ fn patch_hunks(obj: &Map<String, Value>) -> Option<Vec<PatchHunk>> {
     Some(hunks)
 }
 
+/// `_bg_agent_id` (transcript.py): o id do subagente só quando o resultado é o lançamento em segundo plano.
+fn bg_agent_id(obj: &Map<String, Value>) -> Option<String> {
+    let tur = obj.get("toolUseResult")?.as_object()?;
+    if tur.get("status").and_then(Value::as_str) != Some("async_launched") {
+        return None;
+    }
+    tur.get("agentId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 fn user_blocks(obj: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<ChatEvent> {
     let is_type = |it: &&Map<String, Value>, t: &str| it.get("type").and_then(Value::as_str) == Some(t);
     let trs: Vec<_> = items.iter().filter_map(Value::as_object).filter(|it| is_type(it, "tool_result")).collect();
@@ -528,6 +537,7 @@ fn user_blocks(obj: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<Chat
                     result,
                     is_error: Some(failed),
                     patch: if single && !failed { patch_hunks(obj) } else { None },
+                    bg_agent_id: if single { bg_agent_id(obj) } else { None },
                     ts,
                     ..event(ChatKind::ToolResult, sub_id(uid, k))
                 }
@@ -735,6 +745,14 @@ mod tests {
         let line = r#"{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]},"toolUseResult":{"structuredPatch":[{"oldStart":1,"newStart":1,"lines":["+meio \ud83d emoji"]}]}}"#;
         let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(line.as_bytes(), 0)).unwrap();
         assert_eq!(ev.patch.unwrap()[0].lines, vec!["+meio \u{FFFD} emoji".to_string()]);
+    }
+
+    #[test]
+    fn background_agent_launch_carries_the_agent_id() {
+        let [ev] = <[ChatEvent; 1]>::try_from(parse(json!({"status": "async_launched", "agentId": "ag1"}), vec![], Value::Null)).unwrap();
+        let [fin] = <[ChatEvent; 1]>::try_from(parse(json!({"agentId": "ag1"}), vec![], Value::Null)).unwrap();
+        assert_eq!(ev.bg_agent_id.as_deref(), Some("ag1"));
+        assert_eq!(fin.bg_agent_id, None);
     }
 
     #[test]

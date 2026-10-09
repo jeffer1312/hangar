@@ -1,0 +1,20 @@
+//! Proteção de existência e fatos estritos de uso das contas.
+pub mod bridge;
+pub mod catalog;
+pub mod claude_auth;
+pub mod claude_login;
+pub mod codex_login;
+pub mod codex_device_login;
+pub mod environment;
+pub mod secondary_auth;
+pub mod storage;
+pub mod native;
+pub mod http;
+pub mod preparation;
+pub mod quotas;
+pub mod claude_refresh;
+pub use catalog::AccountService;
+pub mod locks;
+pub mod types;
+pub use locks::{AccountGuard, AccountLocks, LockError};
+pub use types::{AccountKey, GuardMode, Provider, UsageFacts};

@@ -290,13 +290,18 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 if let Some(task) = id.strip_prefix("task:") { finish(task.to_owned(), &background, &mut resulted, &mut finished_early); continue; }
                 let text = event.result.as_deref().unwrap_or("");
                 // Só o resultado de um Agent é lido: a conta é refeita a cada evento e as saídas de ferramenta são grandes.
-                if agent_calls.contains(id) { if let Some(agent) = word_after(text, "agentId:") { agent_ids.insert(id, agent); } }
-                if agent_calls.contains(id) && text.to_lowercase().contains("async agent launched") {
-                    if let Some(agent) = word_after(text, "agentId:") {
-                        if finished_early.remove(agent) { resulted.insert(id); }
-                        background.insert(agent.to_owned(), id);
+                if agent_calls.contains(id) {
+                    // O campo estruturado vence o texto, que muda entre versões do Claude Code.
+                    let text_launch = text.to_lowercase().contains("async agent launched");
+                    let launched = event.bg_agent_id.as_deref().or_else(|| if text_launch { word_after(text, "agentId:") } else { None });
+                    if let Some(agent) = launched.or_else(|| word_after(text, "agentId:")) { agent_ids.insert(id, agent); }
+                    if text_launch || launched.is_some() {
+                        if let Some(agent) = launched {
+                            if finished_early.remove(agent) { resulted.insert(id); }
+                            background.insert(agent.to_owned(), id);
+                        }
+                        continue;
                     }
-                    continue;
                 }
                 if shell_pending.remove(id) {
                     if let Some(shell) = word_after(text, "Command running in background with ID:") {

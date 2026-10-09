@@ -50,6 +50,10 @@ impl Ctx {
 }
 
 /// Envelope do `HTTPException(detail=erro(...))` do Python (`mensagens.py`).
+pub(crate) fn detail(status: StatusCode, code: &str, msg: &str, params: Value) -> Response {
+    json_response(status, detail_body(code, msg, params))
+}
+
 pub fn detail_body(code: &str, msg: &str, params: Value) -> Value {
     json!({"detail": {"code": code, "params": params, "msg": msg}})
 }

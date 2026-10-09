@@ -114,7 +114,7 @@ async def listar_endpoint(request: Request, forcar: bool = False) -> list[Creden
     service = getattr(request.app.state, "codex_contas_login", None)
     async def snapshot(account):
         auth = service.cached_auth(account)
-        sync = service.preparation_status(account).get("status")
+        sync = (await service.preparation_status_async(account)).get("status")
         if sync != "running":
             try:
                 async with asyncio.timeout(3):

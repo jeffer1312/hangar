@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 
 from app import codex_contas as accounts
 from app import codex_contas_sync, diag
+from app import account_lifecycle
 from app.codex_importador import CodexAusente, CodexNativo, CodexNativoErro
 
 
@@ -76,10 +77,16 @@ class _Reservation:
     kind: str
     live: bool = False
     identity: dict | None = None
+    guard: account_lifecycle.AccountGuard | None = None
+    birth_path: Path | None = None
 
     def mark_live(self, session_name: str, *, pane_id: str | None = None,
                   pid: int | None = None) -> None:
         self.service._mark_live(self, session_name, pane_id=pane_id, pid=pid)
+
+    def retire_birth(self) -> None:
+        if self.birth_path is not None and account_lifecycle.retire_terminal_birth(self.birth_path):
+            self.birth_path = None
 
     def release(self) -> None:
         self.service._release_reservation(self)
@@ -149,6 +156,13 @@ class CodexContasLogin:
                 }.get(active.kind, "codex_account_creation_in_progress")
                 raise accounts.AccountError(409, code, {"account_id": account.id})
             reservation = _Reservation(self, key, uuid.uuid4().hex, kind)
+            try:
+                reservation.guard = account_lifecycle.acquire(
+                    account_lifecycle.AccountKey.new("codex", account.home),
+                    account_lifecycle.GuardMode.EXCLUSIVE if kind == "login" else account_lifecycle.GuardMode.SHARED,
+                    deadline=time.monotonic())
+            except account_lifecycle.AccountLockError as exc:
+                raise accounts.AccountError(409, "codex_account_in_use", {"account_id": account.id}) from exc
             self._reservations.setdefault(key, []).append(reservation)
             return reservation
 
@@ -159,13 +173,34 @@ class CodexContasLogin:
     def _mark_live(self, reservation: _Reservation, session_name: str, *,
                    pane_id: str | None = None, pid: int | None = None) -> None:
         with self._lock:
-            if reservation in self._reservations.get(reservation.key, []):
+            if reservation not in self._reservations.get(reservation.key, []):
+                return
+            if reservation.guard is None:
                 reservation.live = True
                 reservation.kind = "live"
                 reservation.identity = {"name": session_name, "pane_id": pane_id, "pid": pid}
+                return
+            guard = reservation.guard.retain()
+        # O worker possui o descritor, mas consulta e disco não retêm o lock do serviço.
+        with guard:
+            birth_path = account_lifecycle.publish_terminal_birth(guard, session_name, reservation.token)
+            with self._lock:
+                reservation.birth_path = birth_path
+                if reservation not in self._reservations.get(reservation.key, []):
+                    return
+                reservation.live = True
+                reservation.kind = "live"
+                reservation.identity = {"name": session_name, "pane_id": pane_id, "pid": pid}
+                original = reservation.guard
+                reservation.guard = None
+            if original is not None:
+                original.close()
 
     def _release_reservation(self, reservation: _Reservation) -> None:
         with self._lock:
+            if reservation.guard is not None:
+                reservation.guard.close()
+                reservation.guard = None
             reservations = self._reservations.get(reservation.key, [])
             if reservation in reservations:
                 reservations.remove(reservation)
@@ -262,6 +297,10 @@ class CodexContasLogin:
         Com o cache vencido, abrir a criação de sessão esperava um app-server do Codex subir (2,7s
         medidos só pra listar as contas). Sem leitura anterior, ou com a credencial trocada desde
         ela (assinatura/geração diferentes), não há o que mostrar e a leitura é esperada."""
+        from app.account_bridge import request_codex
+        result, delegated = await asyncio.to_thread(request_codex, "auth_cached", account)
+        if delegated:
+            return result
         key = self._key(account)
         cached = self._auth_cache.get(key)
         if (cached and cached[0] == self._auth_signature(account)
@@ -274,6 +313,10 @@ class CodexContasLogin:
         return await self.read_auth(account)
 
     async def read_auth(self, account: accounts.Account, *, refresh: bool = False) -> dict:
+        from app.account_bridge import request_codex
+        result, delegated = await asyncio.to_thread(request_codex, "auth", account, refresh=refresh)
+        if delegated:
+            return result
         key = self._key(account)
         preparation = self._preparations.get(key)
         if preparation is not None and not preparation.done():
@@ -416,20 +459,27 @@ class CodexContasLogin:
             if attempt.ready is not None and not attempt.ready.done():
                 attempt.ready.set_result(None)
             attempt.native = None
-            if reservation is not None and not reservation.live:
-                self._release_reservation(reservation)
             try:
                 if attempt.queue is not None and native is not None:
                     native.unsubscribe(_LOGIN_COMPLETED, attempt.queue)
             finally:
                 if native is not None:
                     try:
-                        await native.close()
+                        await account_lifecycle.complete_on_cancel(native.close())
                     except Exception as exc:  # noqa: BLE001 - cleanup não pode prender a tentativa
                         diag.registrar("conta.login.limpeza_falhou", "aviso", etapa="fechar_app_server",
                                        **campos, **diag.erro_campos(exc))
+                    finally:
+                        if reservation is not None and not reservation.live:
+                            self._release_reservation(reservation)
+                elif reservation is not None and not reservation.live:
+                    self._release_reservation(reservation)
 
     async def start_login(self, account: accounts.Account) -> dict:
+        from app.account_bridge import request_codex
+        result, delegated = await asyncio.to_thread(request_codex, "login", account)
+        if delegated:
+            return result
         key = self._key(account)
         with self._lock:
             current = self._attempts.get(key)
@@ -461,6 +511,10 @@ class CodexContasLogin:
         return result
 
     def login_status(self, account: accounts.Account) -> dict | None:
+        from app.account_bridge import request_codex
+        result, delegated = request_codex("status", account)
+        if delegated:
+            return result
         attempt = self._attempts.get(self._key(account))
         return self._public_attempt(attempt) if attempt is not None else None
 
@@ -490,6 +544,10 @@ class CodexContasLogin:
                                **campos, **diag.erro_campos(exc))
 
     async def cancel_login(self, account: accounts.Account, attempt_id: str) -> dict:
+        from app.account_bridge import request_codex
+        result, delegated = await asyncio.to_thread(request_codex, "cancel", account, attempt_id=attempt_id)
+        if delegated:
+            return result
         attempt = self._attempts.get(self._key(account))
         if attempt is None or attempt.attempt_id != attempt_id:
             raise accounts.AccountError(409, "codex_login_attempt_mismatch", {"account_id": account.id})
@@ -502,6 +560,10 @@ class CodexContasLogin:
         return self._public_attempt(attempt)
 
     async def prepare(self, account: accounts.Account, *, forcar: bool = False) -> dict:
+        from app.account_bridge import request_preparation
+        delegated = await asyncio.to_thread(request_preparation, account, prepare=True, force=forcar)
+        if delegated is not None:
+            return delegated
         if account.is_default:
             return {"status": "ready", "trust_pending": False, "issues": []}
         key = self._key(account)
@@ -522,6 +584,7 @@ class CodexContasLogin:
     @diag.rastrear("conta.preparar", provider="codex")
     async def _prepare_one(self, account: accounts.Account, reservation: _Reservation,
                            forcar: bool) -> dict:
+        from app.account_bridge import publish_preparation_result
         key = self._key(account)
         etapa = "principal"
         diag.registrar("conta.preparar.etapa", provider="codex", etapa=etapa, conta_id=diag.conta_id(key))
@@ -538,9 +601,9 @@ class CodexContasLogin:
                 etapa = "herdar_configuracao"
                 diag.registrar("conta.preparar.etapa", provider="codex", etapa=etapa)
                 if forcar:
-                    result = await codex_contas_sync.prepare_account(account, force=True)
+                    result = await account_lifecycle.complete_on_cancel(codex_contas_sync.prepare_account(account, force=True))
                 else:
-                    result = await codex_contas_sync.prepare_account(account)
+                    result = await account_lifecycle.complete_on_cancel(codex_contas_sync.prepare_account(account))
                 if isinstance(principal, dict) and principal.get("estado") not in (None, "ok", "ocioso"):
                     result = copy.deepcopy(result)
                     if result.get("status") == "ready":
@@ -554,6 +617,7 @@ class CodexContasLogin:
                     self._preparation_force.discard(key)
                 if not repetir:
                     self._preparation_results[key] = copy.deepcopy(result)
+                    publish_preparation_result(account, result)
                     status = result.get("status", "unknown")
                     issues = result.get("issues") or []
                     diag.registrar("conta.preparar.concluiu",
@@ -573,12 +637,24 @@ class CodexContasLogin:
                       "issues": [{"code": "codex_account_prepare_failed",
                                   "params": {"error": type(exc).__name__}}]}
             self._preparation_results[key] = copy.deepcopy(result)
+            publish_preparation_result(account, result)
             return result
         finally:
             self._preparing_source.discard(key)
             reservation.release()
 
     def preparation_status(self, account: accounts.Account) -> dict:
+        from app.account_bridge import request_preparation
+        delegated = request_preparation(account)
+        return delegated if delegated is not None else self._local_preparation_status(account)
+
+    async def preparation_status_async(self, account: accounts.Account) -> dict:
+        """Só a ida HTTP à ponte vai para thread; o estado local é lido no loop."""
+        from app.account_bridge import request_preparation
+        delegated = await asyncio.to_thread(request_preparation, account)
+        return delegated if delegated is not None else self._local_preparation_status(account)
+
+    def _local_preparation_status(self, account: accounts.Account) -> dict:
         task = self._preparations.get(self._key(account))
         gravado = codex_contas_sync.preparation_status(account)
         if task is not None and not task.done():
@@ -594,7 +670,7 @@ class CodexContasLogin:
         try:
             diag.registrar("conta.apagar.etapa", provider="codex", etapa="remover_pasta",
                            conta_id=diag.conta_id(self._key(account)))
-            await asyncio.to_thread(accounts.delete_account, account)
+            await account_lifecycle.complete_on_cancel(asyncio.to_thread(accounts.delete_account, account))
             key = self._key(account)
             with self._lock:
                 self._auth_cache.pop(key, None)
@@ -655,7 +731,8 @@ class CodexContasLogin:
 
     async def account_snapshot(self, account: accounts.Account, *, read_auth: bool = True,
                                sync: dict | None = None) -> dict:
-        sync = sync if sync is not None else self.preparation_status(account)
+        if sync is None:
+            sync = await self.preparation_status_async(account)
         if read_auth:
             auth = await self.read_auth_rapido(account)
         elif sync.get("status") == "running":
@@ -665,12 +742,12 @@ class CodexContasLogin:
         home = str(account.home.expanduser().resolve(strict=False))
         return {"id": account.id, "credential_id": f"codex:{home}", "name": account.id,
                 "home": home, "is_default": account.is_default, "auth": auth,
-                "sync": self.preparation_status(account),
+                "sync": await self.preparation_status_async(account),
                 "has_settings": self._has_settings(account)}
 
     async def accounts_snapshot(self) -> list[dict]:
         async def one(account: accounts.Account) -> dict:
-            sync = self.preparation_status(account)
+            sync = await self.preparation_status_async(account)
             return await self.account_snapshot(
                 account, read_auth=sync.get("status") != "running", sync=sync)
         # Uma leitura de auth por conta, em paralelo: em série a tela esperava a soma delas.

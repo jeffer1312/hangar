@@ -62,6 +62,11 @@ jobs:
             experimental: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
+    # Target enxuto no cache: o incremental não serve entre runs e a depuração completa inchava o do
+    # Windows a ponto de o GitHub despejar o do Linux pelo limite do repositório.
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     # Escreve porque cada sistema publica no fim do próprio build; sem o token do git no checkout, o cargo
     # test e os build scripts não alcançam essa escrita.
     permissions:
@@ -80,6 +85,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Preparar CLI Codex para os contratos de contas
+        run: |
+          npm install --global @openai/codex@0.161.0
+          codex --version
       - name: Preparar terminal no macOS
         if: runner.os == 'macOS'
         run: |
@@ -99,8 +108,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             crates/target
-          key: server-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
-          restore-keys: server-${{ runner.os }}-
+          key: server-v2-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-v2-${{ runner.os }}-
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
       - run: cargo test --locked --workspace
       - if: matrix.target != ''

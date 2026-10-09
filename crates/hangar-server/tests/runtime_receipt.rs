@@ -21,6 +21,23 @@ fn one_echo_confirms_only_one_identical_prompt() {
 }
 
 #[test]
+fn batched_peer_messages_confirm_one_entry_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chat.jsonl");
+    std::fs::write(&path, "").unwrap();
+    let mut index = ReceiptIndex::new("claude", "sid");
+    let cursor = index.capture(&path).unwrap();
+    let content = "Another Claude session sent a message:\n<cross-session-message from=\"uds:a.sock\" from-name=\"a\">\n[de: a] pronto\nlinha 2\n</cross-session-message>\n<cross-session-message from=\"uds:b.sock\" from-name=\"b\">\n[de: b] feito\n</cross-session-message>\n\nThis came from another Claude session.";
+    std::fs::write(&path, format!("{}\n", json!({"type":"user","uuid":"u1","message":{"content":content}}))).unwrap();
+    index.scan(&path).unwrap();
+    let a = index.match_after(&path,&cursor,&json!({"text":"[de: a] pronto\nlinha 2"}),&BTreeMap::new()).unwrap().unwrap();
+    let used = BTreeMap::from([(a.occurrence.id.clone(),json!({"operation_id":"a"}))]);
+    let b = index.match_after(&path,&cursor,&json!({"text":"[de: b] feito"}),&used).unwrap().unwrap();
+    assert_ne!(a.occurrence.id, b.occurrence.id);
+    assert!(a.validates(&cursor,&json!({"text":"[de: a] pronto\nlinha 2"})));
+}
+
+#[test]
 fn missing_or_partial_transcript_is_no_proof() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("chat.jsonl");

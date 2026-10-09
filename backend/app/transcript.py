@@ -333,6 +333,15 @@ def _patch_hunks(obj: dict) -> Optional[list[dict]]:
     return hunks
 
 
+def _bg_agent_id(obj: dict) -> Optional[str]:
+    """Id do subagente quando o resultado é o lançamento em segundo plano, não o resultado final."""
+    tur = obj.get("toolUseResult")
+    if not isinstance(tur, dict) or tur.get("status") != "async_launched":
+        return None
+    aid = tur.get("agentId")
+    return aid if isinstance(aid, str) and aid else None
+
+
 def parse_line(line: str) -> list[ChatEvent]:
     line = line.strip()
     if not line:
@@ -592,6 +601,7 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                         is_error=failed, ts=_ts(obj),
                         # O `toolUseResult` é um por linha: com dois resultados não dá para saber de quem é.
                         patch=_patch_hunks(obj) if len(trs) == 1 and not failed else None,
+                        bg_agent_id=_bg_agent_id(obj) if len(trs) == 1 else None,
                     ))
                 return out
             # Imagens coladas no terminal: contar os blocos `image` -> o front busca cada uma lazy.

@@ -91,6 +91,8 @@ pub struct ChatEvent {
     pub is_error: Option<bool>,
     /// Só em `tool_result` de Edit/Write do Claude: os trechos do `structuredPatch`, com a linha real do arquivo.
     pub patch: Option<Vec<PatchHunk>>,
+    /// Só em `tool_result` do Agent lançado em segundo plano: o id do subagente, do campo estruturado.
+    pub bg_agent_id: Option<String>,
     pub ts: Option<f64>,
     pub cache_read: Option<u64>,
     pub cache_ttl_s: Option<u64>,

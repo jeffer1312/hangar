@@ -33,6 +33,12 @@ describe('activity — pareamento de agente background', () => {
     expect(s.runningAgents).toBe(0);
   });
 
+  it('reconhece o launch pelo bg_agent_id mesmo sem o texto "Async agent launched"', () => {
+    const semTexto: ChatEvent = { kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'tu1', result: 'Agente iniciado', bg_agent_id: 'aa0777' };
+    expect(run([launch('tu1'), semTexto]).runningAgents).toBe(1);
+    expect(run([launch('tu1'), semTexto, done('aa0777')]).runningAgents).toBe(0);
+  });
+
   it('segue rodando enquanto nao chega o evento de fim', () => {
     const s = run([launch('tu1'), launched('tu1', 'aa0777')]);
     expect(s.runningAgents).toBe(1);

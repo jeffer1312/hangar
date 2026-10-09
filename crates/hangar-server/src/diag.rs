@@ -5,6 +5,15 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+/// Código da falha que uma rota do Rust devolveu, para o diário sem reler o corpo da resposta.
+#[derive(Clone, Copy)]
+pub(crate) struct FailureCode(pub &'static str);
+
+pub(crate) fn coded(mut response: axum::response::Response, code: &'static str) -> axum::response::Response {
+    response.extensions_mut().insert(FailureCode(code));
+    response
+}
+
 #[derive(Clone)]
 pub struct DiagClient { upstream:SocketAddr,secret:String,http:crate::proxy::HttpClient }
 
@@ -13,6 +22,16 @@ impl DiagClient {
 
     /// `event` começa com `rust.`; `reason` é frase fixa do código (por isso `'static`), nunca texto
     /// de conversa nem erro formatado, que pode ecoar valores.
+    /// Falha marcada por `coded`: conflito e erro do servidor vão ao diário; entrada recusada
+    /// (400, 404, 413, 422) é do usuário e só volta na resposta.
+    pub(crate) fn report_response(&self,event:&'static str,scope:&str,response:&axum::response::Response,reason:&'static str) {
+        let status = response.status().as_u16();
+        if let Some(FailureCode(code)) = response.extensions().get::<FailureCode>().copied()
+            && (status == 409 || status >= 500) {
+            self.report(event,scope,code,reason);
+        }
+    }
+
     pub fn report(&self,event:&'static str,session:&str,code:&str,reason:&'static str) {
         if !crate::warn_limit::allow(Some(session),&format!("diag:{event}:{code}")) { return; }
         let session:String = session.chars().take(128).collect();

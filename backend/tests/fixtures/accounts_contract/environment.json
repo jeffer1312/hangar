@@ -1,0 +1,22 @@
+{
+  "base": {
+    "HOME": "<HOME>", "USERPROFILE": "<HOME>", "CODEX_HOME": "<HOME>/captured",
+    "PATH": "programs", "LANG": "pt_BR.UTF-8",
+    "OPENAI_API_KEY": "synthetic", "CODEX_AUTH_TOKEN": "synthetic",
+    "CHATGPT_ACCESS_SECRET": "synthetic", "OPENAI_ORG_ID": "synthetic",
+    "OPENAI_BASE_URL": "https://example.invalid", "CODEX_SQLITE_HOME": "<HOME>/sqlite",
+    "XDG_CACHE_HOME": "<HOME>/cache"
+  },
+  "default": {
+    "HOME": "<HOME>", "USERPROFILE": "<HOME>", "CODEX_HOME": "<HOME>/captured",
+    "PATH": "programs", "LANG": "pt_BR.UTF-8",
+    "OPENAI_API_KEY": "synthetic", "CODEX_AUTH_TOKEN": "synthetic",
+    "CHATGPT_ACCESS_SECRET": "synthetic", "OPENAI_ORG_ID": "synthetic",
+    "OPENAI_BASE_URL": "https://example.invalid", "CODEX_SQLITE_HOME": "<HOME>/sqlite",
+    "XDG_CACHE_HOME": "<HOME>/cache"
+  },
+  "additional": {
+    "HOME": "<HOME>", "USERPROFILE": "<HOME>", "CODEX_HOME": "<HOME>/.codex-extra",
+    "PATH": "programs", "LANG": "pt_BR.UTF-8"
+  }
+}

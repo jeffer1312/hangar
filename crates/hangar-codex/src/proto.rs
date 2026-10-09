@@ -38,6 +38,26 @@ macro_rules! wire {
 
 wire!(pub struct ClientInfo { pub name:String, pub title:Option<String>, pub version:String });
 wire!(pub struct InitializeCapabilities { pub experimental_api:bool });
+wire!(pub struct GetAccountParams { pub refresh_token:bool });
+#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+#[cfg_attr(test,derive(schemars::JsonSchema))]
+#[serde(tag="type")]
+pub enum LoginAccountParams {
+    #[serde(rename="chatgptDeviceCode")] ChatgptDeviceCode,
+}
+#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+#[cfg_attr(test,derive(schemars::JsonSchema))]
+#[serde(tag="type")]
+pub enum LoginAccountResponse {
+    #[serde(rename="chatgptDeviceCode")] ChatgptDeviceCode {
+        #[serde(rename="loginId")] login_id:String,
+        #[serde(rename="verificationUrl")] verification_url:String,
+        #[serde(rename="userCode")] user_code:String,
+    },
+}
+wire!(pub struct CancelLoginAccountParams { pub login_id:String });
+wire!(pub struct CancelLoginAccountResponse { pub status:String });
+wire!(pub struct AccountLoginCompletedNotification { pub login_id:Option<String>, pub success:bool });
 wire!(pub struct InitializeParams { pub client_info:ClientInfo, pub capabilities:Option<InitializeCapabilities> });
 
 wire!(pub struct ThreadStartParams {
@@ -103,12 +123,15 @@ pub enum ClientRequest {
     #[serde(rename = "model/list")] ModelList(ModelListParams),
     #[serde(rename = "skills/list")] SkillsList(SkillsListParams),
     #[serde(rename = "account/rateLimits/read")] AccountRateLimitsRead,
+    #[serde(rename = "account/read")] AccountRead(GetAccountParams),
+    #[serde(rename = "account/login/start")] AccountLoginStart(LoginAccountParams),
+    #[serde(rename = "account/login/cancel")] AccountLoginCancel(CancelLoginAccountParams),
 }
 
 impl ClientRequest {
     pub const METHODS:&[&str] = &["initialize","thread/start","thread/resume","thread/read","thread/settings/update",
         "thread/compact/start","thread/unsubscribe","thread/backgroundTerminals/terminate","turn/start","turn/steer",
-        "turn/interrupt","model/list","skills/list","account/rateLimits/read"];
+        "turn/interrupt","model/list","skills/list","account/rateLimits/read","account/read","account/login/start","account/login/cancel"];
 
     pub fn into_parts(self) -> (&'static str,Value) {
         let mut value = serde_json::to_value(&self).expect("pedido serializa");
@@ -257,6 +280,7 @@ pub enum ServerNotification {
     #[serde(rename = "model/safetyBuffering/updated")] ModelSafetyBufferingUpdated(ModelSafetyBufferingUpdatedNotification),
     #[serde(rename = "thread/tokenUsage/updated")] ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification),
     #[serde(rename = "account/rateLimits/updated")] AccountRateLimitsUpdated(AccountRateLimitsUpdatedNotification),
+    #[serde(rename = "account/login/completed")] AccountLoginCompleted(AccountLoginCompletedNotification),
     #[serde(rename = "error")] Error(ErrorNotification),
     #[serde(rename = "hook/completed")] HookCompleted(HookCompletedNotification),
     /// Método que o Hangar não usa: ignorado sem erro.
@@ -325,6 +349,7 @@ decoder!(ServerNotification,{
     "model/safetyBuffering/updated" => ModelSafetyBufferingUpdated(ModelSafetyBufferingUpdatedNotification),
     "thread/tokenUsage/updated" => ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification),
     "account/rateLimits/updated" => AccountRateLimitsUpdated(AccountRateLimitsUpdatedNotification),
+    "account/login/completed" => AccountLoginCompleted(AccountLoginCompletedNotification),
     "error" => Error(ErrorNotification),
     "hook/completed" => HookCompleted(HookCompletedNotification),
 });
@@ -429,12 +454,14 @@ mod tests {
             C::ThreadRead(Default::default()),C::ThreadSettingsUpdate(Default::default()),C::ThreadCompactStart(Default::default()),
             C::ThreadUnsubscribe(Default::default()),C::ThreadBackgroundTerminalsTerminate(Default::default()),C::TurnStart(Default::default()),
             C::TurnSteer(Default::default()),C::TurnInterrupt(Default::default()),C::ModelList(Default::default()),
-            C::SkillsList(Default::default()),C::AccountRateLimitsRead];
+            C::SkillsList(Default::default()),C::AccountRateLimitsRead,C::AccountRead(Default::default()),
+            C::AccountLoginStart(LoginAccountParams::ChatgptDeviceCode),C::AccountLoginCancel(Default::default())];
         // Sem curinga: variante nova não compila até entrar na lista acima.
         for request in &all {
             match request { C::Initialize(_)|C::ThreadStart(_)|C::ThreadResume(_)|C::ThreadRead(_)|C::ThreadSettingsUpdate(_)
                 |C::ThreadCompactStart(_)|C::ThreadUnsubscribe(_)|C::ThreadBackgroundTerminalsTerminate(_)|C::TurnStart(_)
-                |C::TurnSteer(_)|C::TurnInterrupt(_)|C::ModelList(_)|C::SkillsList(_)|C::AccountRateLimitsRead => {} }
+                |C::TurnSteer(_)|C::TurnInterrupt(_)|C::ModelList(_)|C::SkillsList(_)|C::AccountRateLimitsRead|C::AccountRead(_)
+                |C::AccountLoginStart(_)|C::AccountLoginCancel(_) => {} }
         }
         let methods:Vec<_> = all.into_iter().map(|request|request.into_parts().0).collect();
         assert_eq!(methods,ClientRequest::METHODS);

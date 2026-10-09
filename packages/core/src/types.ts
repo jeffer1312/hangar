@@ -187,6 +187,8 @@ export interface ChatEvent {
   is_error?: boolean | null;
   /** Só em tool_result de Edit/Write do Claude. Ausente nos outros providers e em arquivo novo. */
   patch?: PatchHunk[] | null;
+  /** Só em tool_result do Agent lançado em segundo plano: o id do subagente, do campo estruturado. */
+  bg_agent_id?: string | null;
   ts?: number | null;
   // Cache de prompt (só em assistant_msg): tokens lidos do cache + janela de expiração em segundos.
   // O TTL vem medido do usage do transcript (1h ou 5min), não suposto.

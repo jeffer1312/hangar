@@ -145,7 +145,7 @@ def test_limpeza_sobrevive_a_app_server_ja_morto(w, tmp_path):
     assert codex_sessions.load("proj") is None
 
 
-def test_carregar_os_modulos_nao_puxa_o_pacote_dos_adapters(w):
+def test_carregar_os_modulos_nao_puxa_o_pacote_dos_adapters(w, monkeypatch):
     """`from app.adapters.codex import sessions` executa `app/adapters/__init__.py`, que instancia
     os quatro adapters e puxa `app.config` -> pydantic. Este wrapper roda no `python3` do SISTEMA:
     numa maquina sem pydantic instalado ali, aquele import falharia e o wrapper voltaria a depender
@@ -153,8 +153,10 @@ def test_carregar_os_modulos_nao_puxa_o_pacote_dos_adapters(w):
     pydantic no sistema), entao o que se afirma e o FATO que segura a garantia: o pacote nao e
     tocado."""
     import sys as _sys
+    # Pelo monkeypatch, que devolve os pacotes no fim: reimportado sem eles, `app.adapters.codex`
+    # nasce sem o atributo `adapter` e quebra quem roda depois neste processo.
     for nome in ("app.adapters", "app.adapters.codex"):
-        _sys.modules.pop(nome, None)
+        monkeypatch.delitem(_sys.modules, nome, raising=False)
 
     sessions, lancador = w._do_backend()
 

@@ -80,6 +80,21 @@ def _shell_submeter(nome: str, texto: str) -> None:
     if not tmux.send_keys(nome, "Enter"):
         raise RuntimeError(f"nao consegui enviar Enter para a janela de login de {nome}")
 
+def _shell_code(nome: str, codigo: str) -> None:
+    """Entrega o código por stdin, sem fallback que o exponha em argv."""
+    if not codigo or len(codigo) > 4096 or any(c in codigo for c in ("\n", "\r", "\x00")):
+        raise ValueError("código inválido")
+    buffer = "hangar-login-" + uuid.uuid4().hex
+    try:
+        loaded = tmux._run(["tmux", "load-buffer", "-b", buffer, "-"], input=codigo.encode())
+        if loaded.returncode != 0:
+            raise RuntimeError("não consegui entregar o código à janela de login")
+        pasted = tmux._run(["tmux", "paste-buffer", "-t", tmux._pane_target(nome), "-b", buffer, "-d"])
+        if pasted.returncode != 0 or not tmux.send_keys(nome, "Enter"):
+            raise RuntimeError("não consegui confirmar o código na janela de login")
+    finally:
+        tmux._run(["tmux", "delete-buffer", "-b", buffer])
+
 
 def _shell_ler(nome: str) -> str:
     """I/O: lê o pane da janela escondida (tmux.capture_pane), JUNTANDO linhas quebradas.
@@ -93,8 +108,12 @@ def _shell_ler(nome: str) -> str:
 
 
 def _shell_matar(nome: str) -> None:
-    """I/O: mata a janela escondida (tmux.kill_session)."""
-    tmux.kill_session(nome)
+    """Só confirma a limpeza depois de provar que a janela saiu."""
+    if not tmux.kill_session(nome):
+        raise RuntimeError("a janela de login continua aberta")
+    probe = tmux._run(["tmux", "has-session", "-t", "=" + nome])
+    if probe.returncode != 1:
+        raise RuntimeError("não consegui confirmar o fim da janela de login")
 
 
 # A tentativa em voo por conta: identidade (id que so cresce) + alvo REAL da janela (o
@@ -278,7 +297,7 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
               "operacao": tentativa.operacao}
     diag.registrar("conta.login.confirmando", etapa="enviar_codigo", **campos)
     try:
-        _shell_submeter(tentativa.alvo, codigo)
+        _shell_code(tentativa.alvo, codigo)
     except Exception as exc:
         diag.registrar("conta.login.falhou", "erro", etapa="enviar_codigo",
                        **campos, **diag.erro_campos(exc))
@@ -304,6 +323,8 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
             if atual is not None and atual is not tentativa:
                 # Substituída: o token novo, se houver, é da tentativa que está no lugar.
                 raise RuntimeError(f"login da conta {conta} cancelado")
+            # Só cancelada: se a CLI já gravou o token novo, o login aconteceu e precisa fechar
+            # as boas-vindas e o cache; sem ele, a checagem abaixo encerra na hora.
             if estado.estado == "ok" and estado.loggedIn and _token_novo(oauth, tentativa.token_anterior):
                 diag.registrar("conta.login.concluiu", etapa="confirmar_credencial",
                                ms=int((time.monotonic() - tentativa.inicio) * 1000), **campos)

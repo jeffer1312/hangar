@@ -21,6 +21,22 @@ fn ordinary_results_do_not_rebuild_historical_activity() {
     assert!(!fold.snapshot().agents.last().unwrap().running);
 }
 
+#[test]
+fn structured_launch_id_keeps_the_agent_running_without_the_launch_text() {
+    let events = [
+        event(json!({"id":"agent","kind":"tool_use","tool_use_id":"a","tool_name":"Agent","tool_input":{"prompt":"Ler"}})),
+        event(json!({"id":"launch","kind":"tool_result","tool_use_id":"a","result":"Agente iniciado","bg_agent_id":"worker"})),
+        event(json!({"id":"end","kind":"tool_result","tool_use_id":"task:worker","result":"Concluído"})),
+    ];
+    let mut fold = super::ActivityFold::default();
+    for (i, ev) in events.iter().enumerate().take(2) { fold.push(i, ev); }
+    assert!(fold.snapshot().agents[0].running);
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events[..2]));
+    fold.push(2, &events[2]);
+    assert!(!fold.snapshot().agents[0].running);
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
+}
+
 fn views() -> Vec<View> {
     [ThinkingTools::None, ThinkingTools::Search, ThinkingTools::All].into_iter().flat_map(|thinking| {
         [false, true].into_iter().flat_map(move |tasks| {

@@ -5256,7 +5256,10 @@ impl Hangar {
     /// na própria linha e a prévia da última resposta ao parar o mouse. A linha entra no Tab (Enter abre) e o ⋯ vem depois dela.
     fn render_session_row(&self, session: SessionInfo, selected: bool, remote: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // O orquestrador não roda agente: selo de provider nele seria mentira.
-        let provider_label = (!session.orq()).then(|| agent_name(&session.provider).to_owned());
+        // Sessão de motor roda outro modelo pelo Claude Code: o selo diz o motor, como o chip ⚙ do web.
+        let engine = session.engine.clone().filter(|e| !e.is_empty() && session.provider == "claude");
+        let on_engine = engine.is_some();
+        let provider_label = (!session.orq()).then(|| engine.map_or_else(|| agent_name(&session.provider).to_owned(), |e| format!("⚙ {e}")));
         let target = sidebar::Target::new(&remote.clone().unwrap_or_else(|| self.active_key()), &session.name);
         // Ids com a máquina: a de mesmo nome em outra máquina não divide marca, menu nem selos.
         let row_key = if remote.is_some() { target.id() } else { session.name.clone() };
@@ -5371,7 +5374,8 @@ impl Hangar {
             .when(provider_label.is_some() || folder.is_some() || branch.is_some() || added.is_some() || removed.is_some() || ahead.is_some() || behind.is_some(), |el| el.child(div().flex().items_center().gap(px(8.))
                 .text_size(px(11.5)).text_color(theme::faint()).child(lane())
                 .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.))
-                    .when_some(provider_label, |el, label| el.child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(label)))
+                    .when_some(provider_label, |el, label| el.child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD)
+                        .text_color(if on_engine { theme::accent() } else { theme::muted() }).child(label)))
                     .when_some(folder, |el, f| el.child(chrome::small_icon(IconName::Folder, 12., theme::faint()))
                         .child(div().min_w_0().truncate().child(f)))
                     .when_some(branch, |el, b| el.child(chrome::small_icon(IconName::GitBranch, 12., theme::faint()))

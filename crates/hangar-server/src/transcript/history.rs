@@ -31,6 +31,16 @@ static IMG_SOURCE: LazyLock<Regex> = LazyLock::new(|| py_re(r"\[Image: source: (
 // pqueue.py `_COMMAND_NAME`/`_COMMAND_ARGS`
 static COMMAND_NAME: LazyLock<Regex> = LazyLock::new(|| py_re(r"<command-name>([^<]*)</command-name>"));
 static COMMAND_ARGS: LazyLock<Regex> = LazyLock::new(|| py_re(r"(?s)<command-args>(.*?)</command-args>"));
+// pqueue.py `_PEER_BODY`/`_PEER_STARTS`
+static PEER_BODY: LazyLock<Regex> = LazyLock::new(|| py_re(r"(?s)<cross-session-message\b[^>]*>\n?(.*?)\n?</cross-session-message>"));
+const PEER_STARTS: [&str; 2] = ["<cross-session-message", "Another Claude session sent a message:"];
+
+/// Corpo de cada recado de um registro que É recado; vazio para qualquer outro texto.
+pub(crate) fn peer_bodies(text: &str) -> Vec<&str> {
+    let t = strip(text);
+    if !PEER_STARTS.iter().any(|p| t.starts_with(p)) { return Vec::new(); }
+    PEER_BODY.captures_iter(t).filter_map(|c| c.get(1)).map(|m| strip(m.as_str())).filter(|b| !b.is_empty()).collect()
+}
 
 /// O que o Python devolve em `GET /internal/sessions/{name}/info`.
 #[derive(serde::Deserialize, Clone, Debug)]
@@ -286,6 +296,7 @@ pub(crate) fn chaves_de_commit(text: &str) -> Vec<String> {
             if !comando.is_empty() { out.push(comando); }
         }
     }
+    out.extend(peer_bodies(t).into_iter().map(str::to_string));
     out
 }
 

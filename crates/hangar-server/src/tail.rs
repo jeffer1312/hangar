@@ -608,6 +608,9 @@ mod tests {
         let watchers = Watchers::default();
         let wake = Arc::new(Notify::new());
         assert!(watchers.subscribe(&p, &wake));
+        // O FSEvents (macOS) entrega com atraso o evento da escrita acima; chegando depois da
+        // assinatura, ele deixaria uma permissão no Notify e pareceria que a leitura acordou o leitor.
+        while tokio::time::timeout(Duration::from_secs(1), wake.notified()).await.is_ok() {}
         std::fs::read(&p).unwrap();
         let quiet = tokio::time::timeout(Duration::from_millis(300), wake.notified()).await;
         assert!(quiet.is_err(), "abrir e ler o arquivo acordou o leitor");

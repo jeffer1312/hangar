@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import time
 
 import pytest
 
@@ -21,6 +22,50 @@ pytestmark = [
         reason="Exige RUN_CODEX_INTEGRATION=1; usa somente HOME temporaria",
     ),
 ]
+
+
+def _tree_event(phase: str, **fields) -> None:
+    """Linha de instrumentação com o instante da fase; capturada com `pytest -s`."""
+    print("process-tree " + json.dumps({"phase": phase, "monotonic": time.monotonic(), **fields}), flush=True)
+
+
+def _own_processes(native: CodexNativo) -> list[dict]:
+    """Processos da contenção própria (Job no Windows) ou, sem ela, só o líder."""
+    import psutil
+
+    pids = native._tree._track() if native._tree is not None else [native._proc.pid]
+    found = []
+    for pid in pids:
+        try:
+            found.append({"pid": pid, "birth": psutil.Process(pid).create_time()})
+        except psutil.NoSuchProcess:
+            continue
+    return found
+
+
+def _still_running(process: dict) -> bool:
+    import psutil
+
+    try:
+        proc = psutil.Process(process["pid"])
+        return (proc.create_time() == process["birth"] and proc.status() != psutil.STATUS_ZOMBIE
+                and proc.num_threads() > 0)
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _holding(root: Path) -> list[dict]:
+    """Processos visíveis deste usuário com cwd dentro da raiz do teste."""
+    import psutil
+
+    holders = []
+    for proc in psutil.process_iter(["pid"]):
+        try:
+            if Path(proc.cwd()).is_relative_to(root):
+                holders.append({"pid": proc.pid, "birth": proc.create_time()})
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, ValueError):
+            continue
+    return holders
 
 
 def _isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,8 +116,19 @@ async def native_accounts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             first_process = first._proc
             second_process = second._proc
             yield home, source, target, first, second
+            own = {"first": _own_processes(first), "second": _own_processes(second)}
+            work_dirs = [Path(first._work_dir), Path(second._work_dir)]
+            _tree_event("before-close", own=own, work_dirs=[str(path) for path in work_dirs])
+        survivors = [process for group in own.values() for process in group if _still_running(process)]
+        _tree_event("after-close", survivors=survivors,
+                    work_dirs_left=[str(path) for path in work_dirs if path.exists()])
+        assert survivors == []
+        assert not any(path.exists() for path in work_dirs)
         assert first_process is not None and first_process.returncode is not None
         assert second_process is not None and second_process.returncode is not None
+        holders = _holding(root)
+        _tree_event("before-rmtree", holders=holders)
+        assert holders == []
     assert not root.exists()
 
 
