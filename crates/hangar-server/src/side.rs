@@ -880,7 +880,8 @@ async fn private_loop(lease: Lease, out: tokio::sync::mpsc::Sender<Bytes>) {
                 _ = ping.tick() => if !send(tail::ping_frame()).await { return },
                 msg = rx.recv() => match msg {
                     Ok(Out::Side(f)) if state_frame(&f, events) => if !send(f).await { return },
-                    Ok(Out::Ui(version)) => if let Some(f) = hub.resolve(Queued::Ui(version)) {
+                    // O `/events` do Python repassa a vista inteira ao convidado: sem diferença aqui.
+                    Ok(Out::Ui(version)) => if let Some(f) = hub.resolve(Queued::Ui(version), &mut None, false) {
                         if !send(f).await { return }
                     },
                     Ok(Out::Side(_) | Out::Tail(..) | Out::Rebind) => {}
