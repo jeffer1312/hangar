@@ -132,6 +132,12 @@ def list_config_dirs(ordered: bool = True) -> list[ConfigDirInfo]:
     return out
 
 
+def visible_accounts(ordered: bool = True) -> list[ConfigDirInfo]:
+    """As contas Claude que a tela de contas mostra: as criadas pelo app e a base dele. Pasta de
+    backup fica fora, porque a tela não teria como apagá-la."""
+    return [c for c in list_config_dirs(ordered) if c.active or contas.e_conta(Path(c.path))]
+
+
 def _default_projects_dir() -> Path:
     # Claude Code writes transcripts under $CLAUDE_CONFIG_DIR/projects when that env
     # is set, else ~/.claude/projects. Don't hardcode — CLAUDE_CONFIG_DIR varies per

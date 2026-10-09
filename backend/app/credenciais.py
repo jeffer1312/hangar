@@ -17,17 +17,17 @@ aqui, e por isso não aparecem na lista: caixa marcada que não faz nada é ment
 """
 import asyncio
 import logging
-from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import agentes_sync, apelidos, contas, cotas, engines, opencode_cota, codex_contas
+from app import agentes_sync, apelidos, cotas, engines, opencode_cota, codex_contas
 from app.auth import require_auth
 from app import engine_probe
-from app.config import list_config_dirs
+from app.config import visible_accounts
 from app.mensagens import erro
+from app.codex_contas_login import UNAVAILABLE_AUTH
 from app.conta_estado import EstadoLogin, logins
 from app.adapters.kimi.sessions import kimi_home
 
@@ -121,7 +121,7 @@ async def listar_endpoint(request: Request, forcar: bool = False) -> list[Creden
                     auth = await service.read_auth(account, refresh=forcar)
             except TimeoutError:
                 _log.warning("leitura de autenticação Codex excedeu o prazo: %s", account.id)
-        return {"id": account.id, "auth": auth or {"method": "unknown", "status": "unavailable"},
+        return {"id": account.id, "auth": auth or dict(UNAVAILABLE_AUTH),
                 "sync": sync}
 
     snapshots = await asyncio.gather(*(snapshot(a) for a in codex_contas.list_visible_accounts())) if service else []
@@ -139,7 +139,7 @@ def listar(forcar: bool = False, *, codex_snapshots: list[dict] | tuple = ()) ->
 
     # Contas do Claude: mesmo filtro da aba antiga — conta de verdade (carimbada pelo app) ou a
     # base do app. Pasta de backup continua fora: a tela não conseguiria apagá-la.
-    cfgs = [c for c in list_config_dirs() if contas.e_conta(Path(c.path)) or c.active]
+    cfgs = visible_accounts()
     for c, login in zip(cfgs, logins(cfgs)):
         cid = f"claude:{c.path}"
         saida.append(Credencial(

@@ -60,7 +60,8 @@ def test_apelido_tem_teto_de_tamanho(casa):
 
 
 def _monta(monkeypatch, *, dirs=(), motores=None, cotas_lista=()):
-    monkeypatch.setattr(credenciais, "list_config_dirs", lambda: list(dirs))
+    from app import config
+    monkeypatch.setattr(config, "list_config_dirs", lambda ordered=True: list(dirs))
     monkeypatch.setattr(engines, "listar", lambda: dict(motores or {}))
     monkeypatch.setattr(credenciais, "logins",
                         lambda cfgs: [credenciais.EstadoLogin(estado="ok", loggedIn=True) for _ in cfgs])

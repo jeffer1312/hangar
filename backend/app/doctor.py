@@ -92,18 +92,19 @@ def _prioridade_backend(porta: int) -> str | None:
 
 
 def _claude_logado() -> bool:
-    """Alguma conta Claude logada, pela CLI: o doctor roda sem o backend (e o Rust) de pé."""
+    """Alguma conta Claude logada, pela CLI: o doctor roda sem o backend (e o Rust) de pé. A ativa
+    vem primeiro e conta sem `.credentials.json` nem é perguntada: cada pergunta custa um processo."""
     import json
     import subprocess
     from pathlib import Path
-    from app import contas
-    from app.config import list_config_dirs
+    from app.config import visible_accounts
     exe = _binario("claude")
     if exe is None:
         return False
-    for conta in list_config_dirs(ordered=False):
-        if not (conta.active or contas.e_conta(Path(conta.path))):
-            continue
+    candidatas = sorted((c for c in visible_accounts(ordered=False)
+                         if c.active or (Path(c.path) / ".credentials.json").is_file()),
+                        key=lambda c: not c.active)
+    for conta in candidatas:
         try:
             r = subprocess.run([exe, "auth", "status", "--json"], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=10,
