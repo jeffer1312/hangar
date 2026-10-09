@@ -7,7 +7,7 @@ pub mod rpc;
 pub mod rtc;
 pub mod usage;
 
-use organizer::{FinishStep, MIC_VOICE_LEVEL, Mode, ModeModel, ModeModels, Planner, Results, SendGate, SpokenTurns, ToolCall, finish_request, parse_tool, send_allowed, settings_update, tool_reply, organizer_start, ORGANIZER_PROMPT, VOICE_PROMPT};
+use organizer::{FinishStep, MIC_VOICE_LEVEL, Mode, ModeModel, ModeModels, Planner, Results, SendGate, SpeechHold, SpokenTurns, ToolCall, finish_request, parse_tool, send_allowed, settings_update, tool_reply, organizer_start, ORGANIZER_PROMPT, VOICE_PROMPT};
 use rpc::{Codex, Incoming, Rpc, RpcError, handshake};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
@@ -214,7 +214,12 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
     let mut pending_context: Option<String> = None;
     let mut context_failures = 0u32;
     let mut session_names: Vec<String> = Vec::new();
+    let mut hold = SpeechHold::default();
     let outcome = loop {
+        for text in hold.due(Instant::now()) {
+            let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": text})).await;
+            log(format!("held appendSpeech bytes={} ok={}", text.len(), spoke.is_ok()));
+        }
         // No Planejar nada sai pelo gate; ao entrar nele o envio pendente já foi cancelado.
         if planner.mode == Mode::Direct && let Some((id, request)) = gate.due(Instant::now()) {
             log(format!("gate sent words={}", request.split_whitespace().count()));
@@ -234,7 +239,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                     }
                 }
                 Ok(rtc::RtcEvent::Levels(i, o)) => {
-                    if i >= MIC_VOICE_LEVEL { gate.heard_voice(Instant::now()); }
+                    if i >= MIC_VOICE_LEVEL { gate.heard_voice(Instant::now()); hold.heard_voice(Instant::now()); }
                     let _ = events.try_send(VoiceEvent::Levels(i, o));
                 }
                 Ok(rtc::RtcEvent::Failed(error)) => { log(format!("rtc failed error={error:?}")); break Err(failed("rtc")(rtc_failure(error))); }
@@ -467,13 +472,12 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                                 log(format!("organizer failure: {:?}", VoiceFailure::Organizer));
                                 let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await;
                             }
-                            if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, organizer_busy).await; }
+                            if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
                         }
                         "item/completed" if params["item"]["type"] == "agentMessage" && params["item"]["phase"] != "commentary" => {
                             if results.take_summary(params["turnId"].as_str().unwrap_or_default())
                                 && let Some(text) = params["item"]["text"].as_str() {
-                                let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": text})).await;
-                                log(format!("summary appendSpeech bytes={} ok={}", text.len(), spoke.is_ok()));
+                                speak(&rpc, &thread, &mut hold, text.to_owned(), "summary").await;
                             }
                         }
                         "thread/tokenUsage/updated" => if let Some((used, window)) = usage::context_usage(&params) {
@@ -515,7 +519,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                 Some(Command::Sessions(names)) => { log(format!("sessions known count={}", names.len())); session_names = names; }
                 Some(Command::Answer(text)) => {
                     log(format!("session answer bytes={}", text.len()));
-                    if let Some(input) = results.push(String::new(), text) { start_summary(&rpc, &thread, input, &mut results, organizer_busy).await; }
+                    if let Some(input) = results.push(String::new(), text) { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
                 }
                 Some(Command::Retarget(name, context, cwd)) => {
                     log("retarget");
@@ -531,7 +535,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                 }
                 Some(Command::Result(session, text)) => {
                     log(format!("session result bytes={}", text.len()));
-                    if let Some(input) = results.push(session, text) { start_summary(&rpc, &thread, input, &mut results, organizer_busy).await; }
+                    if let Some(input) = results.push(session, text) { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
                 }
                 None => break Ok(()),
             },
@@ -583,7 +587,19 @@ async fn apply_models(rpc: &Rpc, thread: &str, applied: &mut ModeModel, models: 
     Some("O modo mudou, mas o modelo que pensa não trocou; segue o anterior.")
 }
 
-async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Results, organizer_busy: bool) {
+/// Fala que a voz puxa sozinha passa por aqui: com o usuário falando, fica guardada até ele terminar.
+async fn speak(rpc: &Rpc, thread: &str, hold: &mut SpeechHold, text: String, tag: &str) {
+    let bytes = text.len();
+    match hold.offer(text, Instant::now()) {
+        Some(text) => {
+            let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": text})).await;
+            log(format!("{tag} appendSpeech bytes={bytes} ok={}", spoke.is_ok()));
+        }
+        None => log(format!("{tag} speech held bytes={bytes}")),
+    }
+}
+
+async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Results, hold: &mut SpeechHold, organizer_busy: bool) {
     let mut next = Some(first);
     // Laço, não recursão: um resumo recusado com o organizador ocioso solta o próximo da fila na hora.
     while let Some(mut input) = next.take() {
@@ -595,7 +611,7 @@ async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Resu
                 // Ocioso e recusado: nenhum turn/completed virá; fala o começo do texto e drena a fila.
                 if let Some(text) = results.turn_start_failed(organizer_busy) {
                     let short: String = text.chars().take(400).collect();
-                    let _ = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": format!("A sessão respondeu: {short}")})).await;
+                    speak(rpc, thread, hold, format!("A sessão respondeu: {short}"), "summary fallback").await;
                     next = results.turn_completed();
                 }
             }

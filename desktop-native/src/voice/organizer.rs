@@ -440,6 +440,28 @@ impl<T> SendGate<T> {
     }
 }
 
+/// O que a voz fala por conta própria (resumo de resultado de sessão) espera o usuário terminar: falar por
+/// cima corta o que ele dizia. Fala pronta com voz no microfone no último `SILENCE` fica guardada e sai, na ordem, no
+/// primeiro silêncio.
+#[derive(Default)]
+pub struct SpeechHold { queue: VecDeque<String>, last_voice: Option<Instant> }
+
+impl SpeechHold {
+    pub fn heard_voice(&mut self, now: Instant) { self.last_voice = Some(now); }
+    fn quiet(&self, now: Instant) -> bool { self.last_voice.is_none_or(|at| now.saturating_duration_since(at) >= SILENCE) }
+    /// `Some` = pode falar já; `None` = ficou guardada (atrás das que já esperavam, para não trocar a ordem).
+    pub fn offer(&mut self, text: String, now: Instant) -> Option<String> {
+        if self.queue.is_empty() && self.quiet(now) { return Some(text); }
+        self.queue.push_back(text);
+        None
+    }
+    /// As guardadas, quando o usuário parou de falar.
+    pub fn due(&mut self, now: Instant) -> Vec<String> {
+        if self.queue.is_empty() || !self.quiet(now) { return Vec::new(); }
+        self.queue.drain(..).collect()
+    }
+}
+
 /// Turnos que nasceram de uma fala do usuário: só neles o organizador pode pedir envio ou segurar.
 /// O resumo de um resultado carrega texto cru da sessão e não pode gerar envio.
 /// Guarda a fala de cada turno: o `set_mode` confere nela se o usuário disse "modo".
@@ -510,6 +532,20 @@ mod tests {
     use core::prelude::v1::test;
     use serde_json::json;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn speech_waits_for_the_user_to_finish() {
+        let now = Instant::now();
+        let mut hold = SpeechHold::default();
+        assert_eq!(hold.offer("a".into(), now), Some("a".into()), "ninguém falando: sai já");
+        hold.heard_voice(now);
+        assert_eq!(hold.offer("resultado".into(), now + Duration::from_millis(300)), None, "ele está falando: guarda");
+        assert!(hold.due(now + Duration::from_millis(800)).is_empty(), "ainda dentro do silêncio exigido");
+        hold.heard_voice(now + Duration::from_millis(900));
+        assert_eq!(hold.offer("outro".into(), now + SILENCE * 2), None, "fila não fura: espera a da frente");
+        assert_eq!(hold.due(now + Duration::from_millis(900) + SILENCE), vec!["resultado".to_owned(), "outro".to_owned()], "parou: sai na ordem");
+        assert!(hold.due(now + SILENCE * 5).is_empty());
+    }
 
     #[test]
     fn parses_each_tool() {
