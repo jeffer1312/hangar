@@ -8,14 +8,20 @@
 #       scripts/verificar-local --base <ref>    o que mudou desde que saiu de <ref> (ex.: o PR inteiro)
 #       scripts/verificar-local --tudo          todos os passos, mude o que mudar
 #       scripts/verificar-local --so linux|windows
-#       scripts/verificar-local --de-novo       roda mesmo se esta árvore já passou
+#       scripts/verificar-local --passos "a b"  só esses passos do plano (ex.: repetir um que falhou)
+#       scripts/verificar-local --de-novo       repete os passos que já passaram nesta árvore
 #       scripts/verificar-local --plano         só mostra o que rodaria
 #       scripts/verificar-local --exigir <sha>  (pre-push) sai 1 se falta verificação
+#
+# Paralelismo: git config hangar.verificarProcessos <n> (ou HANGAR_VERIFICAR_PROCESSOS), padrão 4.
+# Com n > 1, os passos do Linux rodam em faixas paralelas (rust | backend | nativo | os de Node), o
+# pytest roda em n processos e o cargo do preparo usa até n jobs; com 1, tudo em fila, como antes.
 #
 # A árvore verificada é um clone fixo por máquina, não o checkout de quem chama: compila só o que
 # mudou desde a última verificação, nunca mistura binário de outro checkout e deixa o checkout
 # livre para editar enquanto roda. Uma verificação por vez na máquina (flock) e uma por vez na VM
-# (mutex), em prioridade baixa.
+# (mutex), em prioridade baixa. Cada passo que passa fica gravado para a árvore: a próxima rodada
+# só repete o que falta.
 set -uo pipefail
 
 ESTADO="${XDG_STATE_HOME:-$HOME/.local/state}/hangar-verificacao"
@@ -30,6 +36,9 @@ VM_WIN='C:/hangar-verificacao'
 RUNTIME_TESTS=(tests/test_runtime_process.py tests/test_runtime_queue_terminal_v2.py
     tests/test_runtime_terminal_fix.py tests/test_runtime_terminal_fix2.py
     tests/test_runtime_terminal_failure_policy.py tests/test_runtime_final_fixes.py)
+
+XDIST="pytest-xdist==3.8.0"
+PROCESSOS_PADRAO=4
 
 erro() { echo "verificar-local: $*" >&2; exit 2; }
 
@@ -75,7 +84,8 @@ classificar() {
         esac
         case "$f" in
             scripts/shell/*|scripts/test-wrappers.sh|scripts/hangar-engine|scripts/install-claude-wrapper.sh|\
-            scripts/verificar-local|scripts/test-verificar-local.sh|scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
+            scripts/verificar-local|scripts/test-verificar-local.sh|\
+            scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in
             scripts/*statusline*) status=1 ;;
@@ -127,7 +137,57 @@ passo_backend() {   # só Linux: no Windows fica o passo_runtime
     # Os contratos que o pytest executa, como no ci.yml.
     (cd crates && cargo build --locked -p hangar-server && \
         cargo build --locked -p hangar-workspace --example workspace_contract) || return 1
-    # O CI instala um omp de versão fixa para as provas de extensão; sem ele, 20 casos falham.
+    local omp; omp="$(omp_de_teste)" || return 1
+    local uv=(uv run) pytest=(pytest -q)
+    if (( PROCESSOS > 1 )); then
+        # Um arquivo inteiro por processo: há testes com nome fixo de sessão tmux, que colidem
+        # quando o mesmo arquivo se divide entre processos.
+        uv+=(--with "$XDIST"); pytest+=(-n "$PROCESSOS" --dist loadfile)
+    fi
+    # basetemp em disco: o omp extrai centenas de MB por caso (7 GB na suíte), e o /tmp pode ser tmpfs.
+    mkdir -p "/var/tmp/hangar-verificacao-$USER"
+    (cd backend && OMP_TEST_BIN="$omp" "${uv[@]}" "${pytest[@]}" --basetemp="/var/tmp/hangar-verificacao-$USER/pytest")
+}
+
+# Só Linux, antes dos outros: o único que compila e instala. Depois dele os passos só executam,
+# então rodar em paralelo não deixa um cargo reescrever binário que outro passo está usando, nem o
+# pytest chegar antes das sondas de contas.
+passo_preparo() {
+    local plano=" $PLANO "
+    (( PROCESSOS > CARGO_BUILD_JOBS )) && export CARGO_BUILD_JOBS="$PROCESSOS"
+    if [[ "$plano" == *" rust "* || "$plano" == *" backend "* ]]; then
+        # Os mesmos comandos dos passos, na mesma forma, para os deles não recompilarem nada.
+        (cd crates && cargo build --locked -p hangar-server -p hangar-cano && \
+            cargo build --locked -p hangar-server && \
+            cargo build --locked -p hangar-workspace --example workspace_contract) || return 1
+        (cd backend && uv run python -c '') || return 1
+    fi
+    if [[ "$plano" == *" rust "* ]]; then
+        (cd crates && cargo test --locked --workspace --no-run) || return 1
+    elif [[ "$plano" == *" backend "* ]]; then
+        # As sondas que os testes de contas executam (ci.yml).
+        (cd crates && cargo test --locked -p hangar-server --no-run \
+            --test accounts_lifecycle --test accounts_catalog --test accounts_preparation) || return 1
+    fi
+    if [[ "$plano" == *" backend "* ]]; then
+        omp_de_teste >/dev/null || return 1
+        if (( PROCESSOS > 1 )); then (cd backend && uv run --with "$XDIST" python -c 'import xdist') || return 1; fi
+    fi
+    if [[ "$plano" == *" nativo "* ]]; then
+        (cd desktop-native && env -u CARGO_TARGET_DIR cargo test --locked --no-run) || return 1
+    fi
+    if [[ "$plano" == *" front "* || "$plano" == *" mobile "* ]]; then
+        npm_ci_se_mudou package-lock.json npm ci --workspace=@hangar/core --workspace=frontend || return 1
+    fi
+    if [[ "$plano" == *" mobile "* ]]; then
+        npm_ci_se_mudou mobile/package-lock.json npm ci --prefix mobile || return 1
+    fi
+    return 0
+}
+
+# Caminho do omp de versão fixa que o CI instala para as provas de extensão; sem ele, 20 casos
+# falham. Baixa na primeira vez.
+omp_de_teste() {
     local v omp
     v="$(grep -o 'releases/download/v[0-9.]*/omp-linux-x64' .github/workflows/ci.yml | head -1 | cut -d/ -f3)"
     # O nome do executável tem que ser `omp`: a extensão do Hangar decide se roda no omp ou no pi
@@ -137,13 +197,11 @@ passo_backend() {   # só Linux: no Windows fica o passo_runtime
         local d; d="$(mktemp -d)"
         (cd "$d" && curl -fsSL --retry 3 -o omp-linux-x64 "https://github.com/can1357/oh-my-pi/releases/download/$v/omp-linux-x64" \
             && curl -fsSL --retry 3 -o SHA256SUMS.txt "https://github.com/can1357/oh-my-pi/releases/download/$v/SHA256SUMS.txt" \
-            && sha256sum --check --ignore-missing --quiet SHA256SUMS.txt) || { rm -rf "$d"; echo "omp $v: download falhou"; return 1; }
-        install -Dm755 "$d/omp-linux-x64" "$omp" || { rm -rf "$d"; echo "omp $v: não consegui gravar $omp"; return 1; }
+            && sha256sum --check --ignore-missing --quiet SHA256SUMS.txt) || { rm -rf "$d"; echo "omp $v: download falhou" >&2; return 1; }
+        install -Dm755 "$d/omp-linux-x64" "$omp" || { rm -rf "$d"; echo "omp $v: não consegui gravar $omp" >&2; return 1; }
         rm -rf "$d"
     fi
-    # basetemp em disco: o omp extrai centenas de MB por caso (7 GB na suíte), e o /tmp pode ser tmpfs.
-    mkdir -p "/var/tmp/hangar-verificacao-$USER"
-    (cd backend && OMP_TEST_BIN="$omp" uv run pytest -q --basetemp="/var/tmp/hangar-verificacao-$USER/pytest")
+    echo "$omp"
 }
 
 npm_ci_se_mudou() {   # $1 = lockfile, $2.. = comando
@@ -219,9 +277,50 @@ vigiar_disco() {   # $1 = pid do passo, $2 = log
 
 executar() {   # $1 = so, $2 = sha, $3 = bundle ("-" = sem bundle), resto = passos
     SO="$1"; local sha="$2" bundle="$3"; shift 3
-    local dir logs
-    if [[ "$SO" == windows ]]; then dir="$VM_GIT"; logs="${VM_GIT%/*}/logs"; else dir="$FIXO"; logs="$ESTADO/logs"; fi
-    mkdir -p "$logs"
+    PROCESSOS="${HANGAR_VERIFICAR_PROCESSOS:-1}"; PLANO="$*"
+    preparar_arvore "$sha" "$bundle" || return $?
+    if [[ "$SO" == windows ]]; then rodar_passos "$sha" "$@"; else rodar_em_faixas "$sha" "$@"; fi
+}
+
+# Preparo e depois os passos em faixas; com PROCESSOS=1, uma faixa só, na ordem do plano. Imprime
+# um resumo único, no formato do rodar_passos.
+rodar_em_faixas() {   # $1 = sha, resto = passos
+    local sha="$1" p f faixas=() demais=() saidas
+    shift
+    saidas="$(mktemp -d)"
+    if ! rodar_passos "$sha" preparo > "$saidas/preparo" 2>&1; then
+        sed -n '/^--- /,/^=== resumo/{/^=== resumo/!p}' "$saidas/preparo"
+        echo "=== resumo $SO ${sha:0:10}"
+        printf '  FALHOU  preparo (nenhum passo rodou)\n'
+        rm -rf "$saidas"; return 1
+    fi
+    if (( PROCESSOS > 1 )); then
+        for p in "$@"; do
+            case "$p" in rust|backend|nativo) faixas+=("$p") ;; *) demais+=("$p") ;; esac
+        done
+        (( ${#demais[@]} )) && faixas+=("${demais[*]}")
+    else
+        faixas=("$*")
+    fi
+    local i pids=() falhou=0
+    for i in "${!faixas[@]}"; do
+        # shellcheck disable=SC2086
+        rodar_passos "$sha" ${faixas[$i]} > "$saidas/faixa-$i" 2>&1 &
+        pids+=($!)
+    done
+    for p in "${pids[@]}"; do wait "$p" || falhou=1; done
+    for f in "$saidas"/faixa-*; do sed -n '/^--- /,/^=== resumo/{/^=== resumo/!p}' "$f"; done
+    echo "=== resumo $SO ${sha:0:10}"
+    for f in "$saidas"/faixa-*; do sed -n '/^=== resumo/,$p' "$f" | tail -n +2; done
+    rm -rf "$saidas"
+    return $falhou
+}
+
+# Deixa a árvore fixa no commit e entra nela (cwd).
+preparar_arvore() {   # $1 = sha, $2 = bundle ("-" = sem bundle); usa $SO
+    local sha="$1" bundle="$2" dir
+    if [[ "$SO" == windows ]]; then dir="$VM_GIT"; LOGS="${VM_GIT%/*}/logs"; else dir="$FIXO"; LOGS="$ESTADO/logs"; fi
+    mkdir -p "$LOGS"
     if [[ ! -d "$dir/.git" ]]; then git init -q "$dir" || return 2; fi
     cd "$dir" || return 2
     if [[ "$bundle" != - ]]; then
@@ -247,7 +346,10 @@ executar() {   # $1 = so, $2 = sha, $3 = bundle ("-" = sem bundle), resto = pass
         echo "  FALHOU  disco: só ${livre} GB livres em $dir (mínimo ${minimo} GB)"
         return 1
     fi
+}
 
+rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
+    local sha="$1"; shift
     SETSID=""; [[ "$SO" == linux ]] && SETSID=setsid
     local casa; casa="$(mktemp -d)"
     if [[ "$SO" == linux ]]; then
@@ -262,11 +364,11 @@ executar() {   # $1 = so, $2 = sha, $3 = bundle ("-" = sem bundle), resto = pass
 
     local p ini dur log falhou=0 resumo=()
     for p in "$@"; do
-        log="$logs/${sha:0:10}-$SO-$p.log"
+        log="$LOGS/${sha:0:10}-$SO-$p.log"
         echo ">> $SO: $p…" >&3
         ini=$SECONDS
         # setsid no Linux: o passo vira grupo próprio e o vigia mata a árvore inteira.
-        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS); passo_$p" >"$log" 2>&1 &
+        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS XDIST PROCESSOS PLANO); passo_$p" >"$log" 2>&1 &
         local spid=$! vigia rc
         vigiar_disco "$spid" "$log" &
         vigia=$!
@@ -290,10 +392,15 @@ executar() {   # $1 = so, $2 = sha, $3 = bundle ("-" = sem bundle), resto = pass
 
 registro() { echo "$ESTADO/resultados/$(git rev-parse "$1^{tree}")-$2"; }
 
+# Soma os passos aos que já passaram nesta árvore: um passo que falha não apaga os que passaram.
 gravar() {   # $1 = sha, $2 = so, $3 = base, resto = passos
-    local sha="$1" so="$2" base="$3"; shift 3
+    local sha="$1" so="$2" base="$3" arq p ja=()
+    shift 3
     mkdir -p "$ESTADO/resultados"
-    printf 'commit=%s\nbase=%s\npassos=%s\nquando=%s\n' "$sha" "$base" "$*" "$(date -Is)" > "$(registro "$sha" "$so")"
+    arq="$(registro "$sha" "$so")"
+    [[ -f "$arq" ]] && read -ra ja <<< "$(sed -n 's/^passos=//p' "$arq")"
+    for p in "$@"; do [[ " ${ja[*]} " == *" $p "* ]] || ja+=("$p"); done
+    printf 'commit=%s\nbase=%s\npassos=%s\nquando=%s\n' "$sha" "$base" "${ja[*]}" "$(date -Is)" > "$arq"
 }
 
 # Passos de $2.. que nenhum registro desta árvore cobre.
@@ -365,7 +472,8 @@ if [[ "${1:-}" == --executar ]]; then
     exit $?
 fi
 
-commit=HEAD base="" tudo=0 so="" modo=rodar de_novo=0
+args=("$@")
+commit=HEAD base="" tudo=0 so="" modo=rodar de_novo=0 so_passos=""
 while (( $# )); do
     case "$1" in
         --commit) commit="${2:?}"; shift ;;
@@ -373,9 +481,10 @@ while (( $# )); do
         --tudo) tudo=1 ;;
         --de-novo) de_novo=1 ;;
         --so) so="${2:?}"; shift ;;
+        --passos) so_passos="${2:?}"; shift ;;
         --plano) modo=plano ;;
         --exigir) modo=exigir; commit="${2:?}"; shift ;;
-        -h|--help) sed -n '2,15p' "$SCRIPT" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$SCRIPT" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) erro "opção desconhecida: $1" ;;
     esac
     shift
@@ -407,31 +516,67 @@ fi
 [[ "$so" == windows ]] && plano_lin=""
 [[ "$so" == linux ]] && plano_win=""
 
-case "$modo" in
-    plano)
-        echo "commit ${sha:0:10}, comparado com ${base:0:10}"
-        echo "linux:   ${plano_lin:-nada a rodar}"
-        if [[ -n "$VM" ]]; then echo "windows: ${plano_win:-nada a rodar} (VM $VM)"
-        else echo "windows: sem VM (git config hangar.verificarWindows <host>)"; fi
-        exit 0 ;;
-    exigir)
-        # shellcheck disable=SC2086
-        fl="$(faltando "$(registro "$sha" linux)" $plano_lin)"
-        # shellcheck disable=SC2086
-        fw="$(faltando "$(registro "$sha" windows)" $plano_win)"
-        [[ -z "$fl$fw" ]] && exit 0
-        echo "  ${sha:0:10}: falta verificação local de${fl:+ linux ($fl)}${fw:+ windows ($fw)}" >&2
-        exit 1 ;;
-esac
+filtrar() {   # $1 = lista, resto = passos aceitos; imprime a lista só com os aceitos, na ordem dela
+    local p saida=() aceitos=" ${*:2} "
+    for p in $1; do [[ "$aceitos" == *" $p "* ]] && saida+=("$p"); done
+    echo "${saida[*]}"
+}
+if [[ -n "$so_passos" ]]; then
+    for p in $so_passos; do [[ " $TODOS_LINUX " == *" $p "* ]] || erro "passo desconhecido: $p"; done
+    # shellcheck disable=SC2086
+    plano_lin="$(filtrar "$plano_lin" $so_passos)"
+    # shellcheck disable=SC2086
+    plano_win="$(filtrar "$plano_win" $so_passos)"
+fi
+
+if [[ "$modo" == exigir ]]; then
+    # shellcheck disable=SC2086
+    fl="$(faltando "$(registro "$sha" linux)" $plano_lin)"
+    # shellcheck disable=SC2086
+    fw="$(faltando "$(registro "$sha" windows)" $plano_win)"
+    [[ -z "$fl$fw" ]] && exit 0
+    echo "  ${sha:0:10}: falta verificação local de${fl:+ linux ($fl)}${fw:+ windows ($fw)}" >&2
+    exit 1
+fi
 
 if (( ! de_novo )); then
-    # shellcheck disable=SC2086
-    [[ -n "$plano_lin" && -z "$(faltando "$(registro "$sha" linux)" $plano_lin)" ]] && \
-        { echo "verificar-local: linux já passou nesta árvore ($plano_lin); --de-novo para repetir."; plano_lin=""; }
-    # shellcheck disable=SC2086
-    [[ -n "$plano_win" && -z "$(faltando "$(registro "$sha" windows)" $plano_win)" ]] && \
-        { echo "verificar-local: windows já passou nesta árvore ($plano_win); --de-novo para repetir."; plano_win=""; }
-    [[ -z "$plano_lin$plano_win" && -f "$(registro "$sha" linux)" ]] && exit 0
+    # Só o que ainda não passou nesta árvore.
+    pl="$plano_lin" pw="$plano_win"
+    # shellcheck disable=SC2046,SC2086
+    plano_lin="$(filtrar "$plano_lin" $(faltando "$(registro "$sha" linux)" $plano_lin))"
+    # shellcheck disable=SC2046,SC2086
+    plano_win="$(filtrar "$plano_win" $(faltando "$(registro "$sha" windows)" $plano_win))"
+    pula=""
+    for p in $pl; do [[ " $plano_lin " == *" $p "* ]] || pula+="$p "; done
+    for p in $pw; do [[ " $plano_win " == *" $p "* ]] || pula+="windows/$p "; done
+    [[ -n "$pula" ]] && echo "verificar-local: já passaram nesta árvore: ${pula% }; --de-novo para repetir."
+    [[ "$modo" != plano && -z "$plano_lin$plano_win" && -n "$pl$pw" ]] && exit 0
+fi
+
+# rc 1 do git config é "não configurado"; acima disso, erro de leitura.
+PROCESSOS="${HANGAR_VERIFICAR_PROCESSOS:-$(git config hangar.verificarProcessos)}"
+(( $? > 1 )) && erro "não consegui ler hangar.verificarProcessos"
+PROCESSOS="${PROCESSOS:-$PROCESSOS_PADRAO}"
+[[ "$PROCESSOS" =~ ^[1-9][0-9]*$ ]] || erro "hangar.verificarProcessos inválido: $PROCESSOS (use um inteiro a partir de 1)"
+
+if [[ "$modo" == plano ]]; then
+    echo "commit ${sha:0:10}, comparado com ${base:0:10}"
+    echo "linux:   ${plano_lin:-nada a rodar}"
+    if [[ -n "$VM" ]]; then echo "windows: ${plano_win:-nada a rodar} (VM $VM)"
+    else echo "windows: sem VM (git config hangar.verificarWindows <host>)"; fi
+    echo "processos: $PROCESSOS (git config hangar.verificarProcessos <n>)"
+    exit 0
+fi
+
+# Node do .node-version, o mesmo do CI: com outro, o jsdom do vitest fica sem localStorage e front e
+# mobile quebram (o pytest e os testes de shell também executam node). Troca pelo fnm quando existe.
+node_ci="$(tr -d '[:space:]v' < "$(dirname "$SCRIPT")/../.node-version" 2>/dev/null)"
+node_atual="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
+if [[ -n "$plano_lin" && -n "$node_ci" && "$node_atual" != "$node_ci" ]]; then
+    if [[ -z "${VERIFICAR_NODE_TROCADO:-}" ]] && command -v fnm >/dev/null; then
+        VERIFICAR_NODE_TROCADO=1 exec fnm exec --using="$node_ci" "$SCRIPT" "${args[@]}"
+    fi
+    echo "verificar-local: o CI usa Node $node_ci e aqui roda o ${node_atual:-nenhum}; front e mobile podem falhar só por isso." >&2
 fi
 
 [[ "$commit" == HEAD && -n "$(git status --porcelain --untracked-files=no)" ]] && \
@@ -440,13 +585,15 @@ fi
     gravar "$sha" linux "$base"; exit 0; }
 
 echo "verificar-local: ${sha:0:10} contra ${base:0:10}"
-echo "  linux:   ${plano_lin:-nada}"
+echo "  linux:   ${plano_lin:-nada}${plano_lin:+ ($PROCESSOS processos)}"
 [[ -n "$VM" ]] && echo "  windows: ${plano_win:-nada} (VM $VM)"
 
 mkdir -p "$ESTADO/logs"
 [[ -d "$FIXO/.git" ]] || { mkdir -p "$(dirname "$FIXO")" && git clone -q --no-checkout "$ORIGEM" "$FIXO"; } || erro "não consegui criar $FIXO"
 
 rc_lin=0 rc_win=0
+saida_lin="$(mktemp)"
+trap 'rm -f "$saida_lin"' EXIT
 exec 3>&2
 (
     exec 9>"$TRAVA" || exit 10
@@ -467,7 +614,9 @@ exec 3>&2
     rl=0
     if [[ -n "$plano_lin" ]]; then
         # shellcheck disable=SC2086
-        ORIGEM="$ORIGEM" nice -n 10 ionice -c 3 bash "$SCRIPT" --executar linux "$sha" - $plano_lin 9>&- || rl=$?
+        ORIGEM="$ORIGEM" HANGAR_VERIFICAR_PROCESSOS="$PROCESSOS" nice -n 10 ionice -c 3 \
+            bash "$SCRIPT" --executar linux "$sha" - $plano_lin 9>&- | tee "$saida_lin"
+        rl=${PIPESTATUS[0]}
     fi
     rw=0
     if [[ -n "$win_pid" ]]; then
@@ -488,7 +637,14 @@ case "$rc" in
 esac
 (( rc & 1 )) && rc_lin=1
 (( rc & 2 )) && rc_win=1
-[[ -n "$plano_lin" ]] && (( ! rc_lin )) && gravar "$sha" linux "$base" $plano_lin
+# Linux: cada passo que passou, mesmo que outro tenha falhado (o resumo diz quais).
+passaram="$(sed -n '/^=== resumo linux/,$p' "$saida_lin" | awk '$1 == "ok" {print $2}' | tr '\n' ' ')"
+# shellcheck disable=SC2046,SC2086
+[[ -n "${passaram// /}" ]] && gravar "$sha" linux "$base" $(filtrar "$plano_lin" $passaram)
+# shellcheck disable=SC2086
 [[ -n "$plano_win" ]] && (( ! rc_win )) && gravar "$sha" windows "$base" $plano_win
-(( rc_lin || rc_win )) && { echo "verificar-local: FALHOU"; exit 1; }
+if (( rc_lin || rc_win )); then
+    echo "verificar-local: FALHOU; o que passou ficou gravado, e a próxima rodada só repete o que falta."
+    exit 1
+fi
 echo "verificar-local: ok, gravado para a árvore $(git rev-parse --short "$sha^{tree}")"
