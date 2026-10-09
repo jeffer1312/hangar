@@ -1640,6 +1640,44 @@ def test_processo_nao_herda_a_ponte_de_outra_sessao(sidecar, monkeypatch, lancad
     assert "--plugin-dir" not in visto["argv"] and "tok-de-outra" not in " ".join(visto["argv"])
 
 
+@pytest.mark.parametrize("var", ["CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS",
+                                 "TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL", "JEV_TEXTO_API_KEY"])
+def test_processo_nao_herda_do_backend_variavel_da_sessao(sidecar, monkeypatch, lancador_cano, var):
+    """Sessão sem subagente, sem Jev e com o portão de hooks desligado: o valor que o backend herdou
+    de outra sessão não chega ao filho."""
+    monkeypatch.setenv(var, "de-outra-sessao")
+    monkeypatch.setattr(A.runtime_config, "get", lambda campo: None)
+    visto = {}
+
+    async def exec_falso(*argv, env, **kw):
+        visto["env"] = env
+
+        class _P:
+            pid = 1
+            returncode = None
+
+            async def wait(self):
+                return 0
+        return _P()
+
+    async def conectar_falso(cano, **kw):
+        return _ligacao_com([]), {"type": "cano_snapshot", "versao": A.cano_mod.VERSAO, "pid": 2,
+                                  "init": None, "aberto": False, "pendentes": [], "stderr_tail": []}
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", exec_falso)
+    monkeypatch.setattr(A.shutil, "which", lambda b: "/usr/bin/claude")
+    ad = ClaudeHeadlessAdapter()
+    sess = _Sessao("s1", S.load("s1"))
+
+    async def ctrl(s, sub, **kw):
+        return {}
+    ad._conectar = conectar_falso                 # type: ignore[method-assign]
+    ad._ler = lambda s: asyncio.sleep(0)          # type: ignore[method-assign]
+    ad._ctrl = ctrl                               # type: ignore[method-assign]
+    ad._agendar_cota = lambda s: None             # type: ignore[method-assign]
+    _run(ad._spawn(sess))
+    assert var not in visto["env"]
+
+
 @pytest.mark.parametrize("tier,supported", [(None, False), ("default", True), ("priority", True), ("default", False)])
 def test_sessao_com_motor_chama_o_hangar_engine_pelo_caminho_resolvido(sidecar, monkeypatch, lancador_cano, tier, supported):
     # No Windows o `hangar-engine` é `.CMD`: o CreateProcess do cano não acha o nome sem extensão.

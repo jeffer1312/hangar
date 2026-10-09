@@ -1174,6 +1174,10 @@ class ClaudeHeadlessAdapter:
             env["CP_SESSION_KEY"] = meta["key"]
         env[_MARCADOR_CANO] = meta["key"]
         env[_CANO_OWNER] = str(Path.home())
+        # Só a sessão (ou a config do servidor) as põe: herdadas do backend subido de dentro de outra
+        # sessão, dariam a esta o subagente, o Jev ou o portão de hooks daquela.
+        for var in ("CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS", *runtime_config.JEV_VARS):
+            env.pop(var, None)
         if meta.get("config_dir"):
             env["CLAUDE_CONFIG_DIR"] = meta["config_dir"]
         if meta.get("subagent_model"):
