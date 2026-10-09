@@ -2838,7 +2838,7 @@ impl Hangar {
 
     fn steer_offered(&self) -> bool {
         let (provider, headless) = self.provider();
-        self.chat.state.state == "working" && self.queued_count() > 0 && (headless || matches!(provider, "codex" | "kimi"))
+        self.chat.state.state == "working" && self.queued_count() > 0 && (headless || matches!(provider, "codex" | "kimi" | "claude"))
     }
 
     // Implementar pelo menu da TUI: só Codex com terminal, e só o plano da última resposta.

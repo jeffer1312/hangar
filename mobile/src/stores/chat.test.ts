@@ -420,8 +420,8 @@ test('(f) filaCount conta pending + queued-* e zera quando o real chega', async 
   // eco local já entrou
   expect(chat.use.getState().pending).toHaveLength(1);
   expect(filaCount(chat.use.getState(), 'kimi')).toBe(1);
-  // Claude com terminal não tem como mandar a fila agora: sem contagem, como no PWA.
-  expect(filaCount(chat.use.getState(), 'claude')).toBe(0);
+  // Claude com terminal também conta: o chip manda a fila da TUI com ctrl+x ctrl+s, como no PWA.
+  expect(filaCount(chat.use.getState(), 'claude')).toBe(1);
   // sintético queued-* chega com mesmo texto -> pending reconciliado, queued entra
   // restaura fetch falso de history pra não quebrar o SSE trigger, mas mantém send mock
   // o trigger não depende de fetch, só do store

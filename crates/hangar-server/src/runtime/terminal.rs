@@ -678,7 +678,7 @@ impl Executor {
         if self.footer_misses.as_ref().is_some_and(|(row,misses)|row==root && *misses>=FOCUS_RETURN_TRIES) {driver=driver.footer_kept();}
         let facts=if prompt {Some(services.facts(&self.target.binding).await)}else{None};
         let current=facts.as_ref().is_none_or(|result|result.as_ref().is_ok_and(|facts|facts.binding==self.target.binding));
-        if let Some(facts)=&facts {self.deliverable=facts.as_ref().is_ok_and(|facts|current && facts.ready && facts.idle && !facts.open_question);}
+        if let Some(facts)=&facts {self.deliverable=facts.as_ref().is_ok_and(|facts|current && facts.ready && !facts.open_question);}
         let mut result=if !current {reply(id,Disposition::Deferred,json!({"code":"terminal_facts","cleanup":"not_needed"}))}
             else if prompt && !slash && !facts.as_ref().is_some_and(|result|result.as_ref().is_ok_and(|f|f.ready && !f.open_question || f.native.is_some())) {reply(id,Disposition::Deferred,json!({"queued":true,"cleanup":"not_needed"}))}
             else {
@@ -795,9 +795,10 @@ impl Executor {
             && self.stall.take().is_some_and(|s|s.surfaced) {self.publish().await?;}
         let services=self.services("maintenance","maintenance","");
         let facts=services.facts(&self.target.binding).await.map_err(|_|error("terminal_facts"))?;
-        self.deliverable=facts.binding==self.target.binding && facts.ready && facts.idle && !facts.open_question;
+        // Trabalhando não segura a fila: o Claude enfileira o que chega no meio do turno, como no envio direto.
+        self.deliverable=facts.binding==self.target.binding && facts.ready && !facts.open_question;
         if !self.deliverable || facts.binding!=self.target.binding {
-            // Terminal ocupado ou com pergunta é espera normal: o motivo antigo sai da tela.
+            // Caixa ilegível ou com pergunta é espera normal: o motivo antigo sai da tela.
             if self.stall.take().is_some_and(|s|s.surfaced) {self.publish().await?;}
             return Ok(json!({"drained":0}));
         }

@@ -34,6 +34,19 @@ fn terminal_input_composer_proof() {
  assert_eq!(ComposerSnapshot::parse(&format!("a long original message\n{}",screen(""))).unwrap().proves("a long original message",&old),Proof::Absent);
  assert!(ComposerSnapshot::parse("no composer").is_none());
 }
+#[test]
+fn terminal_input_composer_below_long_agent_panel() {
+ let agents: String = (0..6).map(|i| format!("  ◯ general-purpose  task {i}\n")).collect();
+ for main in ["  ● main", "  ❯ ● main"] {
+  let s = format!("{}\n  model │ folder\n\n{main}\n{agents}\n", screen("draft").trim_end_matches('\n'));
+  assert_eq!(ComposerSnapshot::parse(&s).unwrap().content, "draft");
+ }
+ let steps: String = (0..9).map(|i| format!("● step {i}\n")).collect();
+ assert!(ComposerSnapshot::parse(&format!("{}{steps}", screen(""))).is_none());
+ // Opções `◯` de um diálogo sem a linha `main` não são o painel.
+ let options: String = (0..9).map(|i| format!("  ◯ option {i}\n")).collect();
+ assert!(ComposerSnapshot::parse(&format!("{}{options}", screen(""))).is_none());
+}
 #[tokio::test]
 async fn terminal_input_short_text_literal_cr() {
  let io=Arc::new(FakeIo::new(vec![screen(""),screen("ok"),screen("")]));
