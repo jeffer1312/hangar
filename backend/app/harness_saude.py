@@ -23,6 +23,8 @@ from pathlib import Path
 
 import sqlite3
 
+from fastapi import HTTPException
+
 from app import agentes_sync, contas, engine_probe, engines, hook_installer, kimi_hook_installer, oauth_codex, omp_dirs, skill_bridge
 from app.adapters.kimi.sessions import kimi_home
 from app.agentes_sync import _codex_dir, provedor_embutido_do_pi
@@ -534,7 +536,12 @@ def _sincronizar(cli: str) -> str:
         if alvo in tem:
             continue
         if cred is None:
-            r = oauth_codex.propagar()
+            try:
+                r = oauth_codex.propagar()
+            except HTTPException as error:
+                # Sem o Rust o login não se espalha; as chaves de API seguem gravadas.
+                feitos.append(f"{PROVEDOR}: {(error.detail or {}).get('code', error.status_code)}")
+                continue
             feitos.append(f"{PROVEDOR}: {r.get(cli, {}).get('motivo', '?')}")
             continue
         if cli == "omp":

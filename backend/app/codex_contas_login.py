@@ -7,6 +7,7 @@ autenticação fica indisponível, sem abrir o Codex aqui.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,11 +18,16 @@ from collections.abc import Awaitable, Callable
 
 from app import codex_contas as accounts
 from app import account_lifecycle
+from app.account_bridge import NEED_RUST, request_codex, request_preparation
+from app.codex_contas_sync import _issue
 
 
 _log = logging.getLogger("hangar.codex.contas")
 
-_UNAVAILABLE = {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
+# Autenticação Codex que não deu pra ler; sem o Rust, com o motivo.
+UNAVAILABLE_AUTH = {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
+_NEED_RUST_AUTH = {**UNAVAILABLE_AUTH, "reason": NEED_RUST["code"]}
+_NEED_RUST_PREPARATION = {"status": "error", "trust_pending": False, "issues": [_issue(NEED_RUST["code"])]}
 
 
 @dataclass
@@ -29,15 +35,12 @@ class _Reservation:
     service: "CodexContasLogin"
     key: str
     token: str
-    kind: str
     live: bool = False
-    identity: dict | None = None
     guard: account_lifecycle.AccountGuard | None = None
     birth_path: Path | None = None
 
-    def mark_live(self, session_name: str, *, pane_id: str | None = None,
-                  pid: int | None = None) -> None:
-        self.service._mark_live(self, session_name, pane_id=pane_id, pid=pid)
+    def mark_live(self, session_name: str) -> None:
+        self.service._mark_live(self, session_name)
 
     def retire_birth(self) -> None:
         if self.birth_path is not None and account_lifecycle.retire_terminal_birth(self.birth_path):
@@ -66,7 +69,7 @@ class CodexContasLogin:
             if any(not item.live for item in self._reservations.get(key, [])):
                 raise accounts.AccountError(409, "codex_account_creation_in_progress",
                                             {"account_id": account.id})
-            reservation = _Reservation(self, key, uuid.uuid4().hex, "creation")
+            reservation = _Reservation(self, key, uuid.uuid4().hex)
             try:
                 reservation.guard = account_lifecycle.acquire(
                     account_lifecycle.AccountKey.new("codex", account.home),
@@ -76,15 +79,9 @@ class CodexContasLogin:
             self._reservations.setdefault(key, []).append(reservation)
             return reservation
 
-    def _mark_live(self, reservation: _Reservation, session_name: str, *,
-                   pane_id: str | None = None, pid: int | None = None) -> None:
+    def _mark_live(self, reservation: _Reservation, session_name: str) -> None:
         with self._lock:
             if reservation not in self._reservations.get(reservation.key, []):
-                return
-            if reservation.guard is None:
-                reservation.live = True
-                reservation.kind = "live"
-                reservation.identity = {"name": session_name, "pane_id": pane_id, "pid": pid}
                 return
             guard = reservation.guard.retain()
         # O worker possui o descritor, mas consulta e disco não retêm o lock do serviço.
@@ -95,8 +92,6 @@ class CodexContasLogin:
                 if reservation not in self._reservations.get(reservation.key, []):
                     return
                 reservation.live = True
-                reservation.kind = "live"
-                reservation.identity = {"name": session_name, "pane_id": pane_id, "pid": pid}
                 original = reservation.guard
                 reservation.guard = None
             if original is not None:
@@ -132,25 +127,16 @@ class CodexContasLogin:
 
     async def read_auth_rapido(self, account: accounts.Account) -> dict:
         """O último login que o Rust conhece, sem esperar uma leitura nova."""
-        from app.account_bridge import request_codex
-        result, delegated = await asyncio.to_thread(request_codex, "auth_cached", account)
-        return result if delegated else dict(_UNAVAILABLE)
+        result = await asyncio.to_thread(request_codex, "auth_cached", account)
+        return dict(_NEED_RUST_AUTH) if result is None else result
 
     async def read_auth(self, account: accounts.Account, *, refresh: bool = False) -> dict:
-        from app.account_bridge import request_codex
-        result, delegated = await asyncio.to_thread(request_codex, "auth", account, refresh=refresh)
-        return result if delegated else dict(_UNAVAILABLE)
+        result = await asyncio.to_thread(request_codex, "auth", account, refresh=refresh)
+        return dict(_NEED_RUST_AUTH) if result is None else result
 
     def preparation_status(self, account: accounts.Account) -> dict:
-        from app.account_bridge import request_preparation
-        return request_preparation(account) or _preparation_unavailable()
+        return request_preparation(account) or copy.deepcopy(_NEED_RUST_PREPARATION)
 
     async def preparation_status_async(self, account: accounts.Account) -> dict:
         """Só a ida HTTP à ponte vai para thread."""
-        from app.account_bridge import request_preparation
-        return await asyncio.to_thread(request_preparation, account) or _preparation_unavailable()
-
-
-def _preparation_unavailable() -> dict:
-    from app.account_bridge import NEED_RUST
-    return {"status": "error", "trust_pending": False, "issues": [{"code": NEED_RUST["code"], "params": {}}]}
+        return await asyncio.to_thread(request_preparation, account) or copy.deepcopy(_NEED_RUST_PREPARATION)

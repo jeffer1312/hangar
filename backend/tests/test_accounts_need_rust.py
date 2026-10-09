@@ -147,3 +147,27 @@ def test_codex_auth_is_unavailable_without_rust(python_owner):
     for read in (service.read_auth(account), service.read_auth(account, refresh=True),
                  service.read_auth_rapido(account)):
         assert asyncio.run(read)["status"] == "unavailable"
+
+
+def test_codex_auth_without_rust_says_why(python_owner):
+    account = codex_contas.resolve_account("default")
+    auth = asyncio.run(CodexContasLogin().read_auth(account))
+    assert auth["reason"] == "accounts_need_rust_server"
+
+
+def test_device_login_spread_is_refused_without_rust(python_owner):
+    from fastapi import HTTPException
+    from app import oauth_codex
+    for action in (oauth_codex.propagar, oauth_codex.importar_do_codex):
+        with pytest.raises(HTTPException) as error:
+            action()
+        assert (error.value.status_code, error.value.detail["code"]) == (503, "accounts_need_rust_server")
+    assert not (Path.home() / ".codex" / "auth.json").exists()
+
+
+def test_harness_sync_reports_the_refusal_and_keeps_going(python_owner, monkeypatch):
+    from app import harness_saude
+    from app.oauth_codex import PROVEDOR
+    monkeypatch.setattr(harness_saude, "_no_harness", lambda cli: set())
+    monkeypatch.setattr(harness_saude, "_do_app", lambda cli: {PROVEDOR: None})
+    assert harness_saude._sincronizar("pi") == f"{PROVEDOR}: accounts_need_rust_server"

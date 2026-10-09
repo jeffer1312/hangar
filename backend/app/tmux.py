@@ -762,7 +762,7 @@ def new_hidden_shell(name: str, cwd: str, config_dir: str | None = None) -> str 
 
     `config_dir` opcional: quando presente, vai como `-e CLAUDE_CONFIG_DIR=<config_dir>` no
     new-session (a MESMA forma do new_session, pelo MESMO `_e_config_dir`) — quem cria a janela
-    PARA um `claude auth login` (login_conta) precisa que a credencial grave no config dir da
+    PARA um `claude auth login` (claude_window) precisa que a credencial grave no config dir da
     conta, nao no ambiente do servidor tmux (B4). O caller de hoje (api.py, a aba Shell) chama SEM
     o parametro e o comportamento nao muda: o pane nasce sem a variavel, como sempre. Passar a
     PROPRIA pasta padrao no psmux tambem nasce sem a variavel — e o que o Claude Code entende por
@@ -1229,7 +1229,7 @@ def capture_pane(name: str, lines: int = 200, cores: bool = False, juntar: bool 
 
     So a previa do Kimi liga cores, por um motivo que o texto puro nao resolve: la o raciocinio
     e a resposta sao desenhados com o MESMO marcador `●` e so a cor/italico os separa. So o
-    `_shell_ler` do login_conta liga juntar: a URL OAuth passa de 80 colunas e o CLI a quebra
+    `read` do claude_window liga juntar: a URL OAuth passa de 80 colunas e o CLI a quebra
     na margem; sem o `-J` o link tocavel da tela chega truncado (B2)."""
     alvo = ["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"]
     if cores:

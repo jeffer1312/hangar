@@ -1,8 +1,7 @@
 """Login OAuth do ChatGPT feito pelo app e espalhado pros CLIs (app/oauth_codex.py).
 
-O que trava: a propagação grava o cofre (0600) e os três stores no formato de cada um; store que
-já tem login é mantido; CLI ausente é `nao-instalado`, não erro. O fluxo de dispositivo é do Rust,
-provado aqui contra a referência isolada.
+O fluxo de dispositivo, o cofre (0600) e a escrita nos três stores são do Rust, provados aqui
+contra a referência isolada; o Python só lê e delega, e sem o dono recusa em vez de escrever.
 """
 import base64
 import json
@@ -120,44 +119,6 @@ def casa(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_propagar_grava_cofre_e_os_tres_stores(casa):
-    t = o.Tokens.de_resposta({"access_token": _jwt(), "refresh_token": "r1", "id_token": "i1",
-                              "expires_in": 10})
-    o.salvar_cofre(t)
-    _assert_private_file(o.cofre())
-    resultado = o.propagar(None, casa)
-    assert {k: v["ok"] for k, v in resultado.items()} == {"codex": True, "pi": True, "omp": True}
-    codex = json.loads((casa / ".codex" / "auth.json").read_text())
-    assert codex["auth_mode"] == "chatgpt" and codex["tokens"]["account_id"] == "acc-1"
-    pi = json.loads((casa / ".pi" / "agent" / "auth.json").read_text())["openai-codex"]
-    assert pi == {"type": "oauth", "access": _jwt(), "refresh": "r1", "expires": 4102444800000, "accountId": "acc-1"}
-    con = sqlite3.connect(casa / ".omp" / "agent" / "agent.db")
-    prov, tipo, dados, ident = con.execute("select provider, credential_type, data, identity_key from auth_credentials").fetchone()
-    assert (prov, tipo, ident) == ("openai-codex", "oauth", "acc-1")
-    assert json.loads(dados)["refresh"] == "r1" and "type" not in json.loads(dados)
-    assert o._codex_tem_login(casa) and o._pi_tem_login(casa) and o._omp_tem_login(casa)
-
-
-def test_store_com_login_e_mantido_e_cli_ausente_nao_e_erro(casa):
-    (casa / ".codex" / "auth.json").write_text(json.dumps({"tokens": {"refresh_token": "dele"}}))
-    (casa / ".pi" / "agent" / "auth.json").write_text(json.dumps({"openai-codex": {"type": "oauth", "refresh": "dele"}}))
-    (casa / ".omp" / "agent" / "agent.db").unlink()
-    t = o.Tokens(access=_jwt(), refresh="novo", id_token="", expires_ms=1, account_id="acc-1")
-    r = o.propagar(t, casa)
-    assert r["codex"] == {"ok": True, "motivo": "ja-logado"}
-    assert r["pi"] == {"ok": True, "motivo": "ja-logado"}
-    assert r["omp"] == {"ok": False, "motivo": "nao-instalado"}
-    assert json.loads((casa / ".codex" / "auth.json").read_text())["tokens"]["refresh_token"] == "dele"
-
-
-def test_importar_do_codex_alimenta_o_cofre(casa):
-    (casa / ".codex" / "auth.json").write_text(json.dumps({
-        "tokens": {"access_token": _jwt("acc-9", "pro"), "refresh_token": "r9", "account_id": "acc-9"}}))
-    t = o.importar_do_codex(casa)
-    assert t and t.account_id == "acc-9" and t.plano == "pro"
-    assert o.ler_cofre().refresh == "r9"
-
-
 @pytest.mark.parametrize("mode", ["rust", "pending"])
 def test_managed_propagation_never_falls_back_to_python_codex_writer(casa, monkeypatch, mode):
     from types import SimpleNamespace
@@ -165,16 +126,17 @@ def test_managed_propagation_never_falls_back_to_python_codex_writer(casa, monke
     from app import account_bridge, runtime_coordinator
     monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode=mode))
     monkeypatch.setattr(account_bridge, "_preparation_transport", None)
-    tokens = o.Tokens(access=_jwt(), refresh="fixture", id_token="", expires_ms=1, account_id="acc-1")
-    o.salvar_cofre(tokens)
+    o.cofre().parent.mkdir(parents=True)
+    o._gravar_json(o.cofre(), {"access": _jwt(), "refresh": "fixture", "id_token": "",
+                               "expires_ms": 1, "account_id": "acc-1"})
     with pytest.raises(HTTPException) as issue:
-        o.propagar(home=casa)
+        o.propagar()
     assert issue.value.status_code == 503
     assert not (casa / ".codex" / "auth.json").exists(), "Python reintroduziu escritor Codex no modo gerenciado"
 
 
 @pytest.fixture
-def managed_device(tmp_path, request):
+def managed_device(tmp_path):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from types import SimpleNamespace
     import threading
@@ -224,7 +186,7 @@ def managed_device(tmp_path, request):
     oauth = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=oauth.serve_forever, daemon=True)
     thread.start()
-    reference = PythonReference(tmp_path / "home", block_handlers=getattr(request, "param", True))
+    reference = PythonReference(tmp_path / "home")
     fixture.device_url = f"http://127.0.0.1:{oauth.server_port}"
     server = RustCodex(reference, device_url=fixture.device_url)
     fixture.reference, fixture.server = reference, server

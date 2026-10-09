@@ -14,6 +14,7 @@ import pytest
 from app import codex_contas as accounts
 from app.codex_contas_login import CodexContasLogin
 from app.codex_importador import CodexNativo
+import codex_contas_apoio
 
 
 @pytest.fixture
@@ -21,7 +22,7 @@ def contas(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(accounts, "_DEFAULT_HOME", tmp_path / ".codex")
     accounts.default_home().mkdir()
-    work = accounts.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     return accounts.Account("default", accounts.default_home(), True), work
 
 

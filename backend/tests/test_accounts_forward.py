@@ -1,7 +1,7 @@
 """Contas pelas portas do Python (Connect, convidado): o Rust é o único escritor.
 
 Com o Rust de pé, o pedido de conta que chega ao Python, já autenticado, vai pela ponte privada.
-O Python só atende o que o Rust disser que não é dele; sem o Rust (modo python), indisponível.
+A resposta do Rust volta como veio; sem o Rust (modo python), indisponível.
 """
 import json
 import threading
@@ -76,11 +76,10 @@ def test_owner_refusal_reaches_the_caller_unchanged(rust):
     assert response.json()["detail"]["code"] == "erro_processos_usam_conta"
 
 
-def test_route_the_rust_does_not_own_stays_in_python(rust):
+def test_rust_answer_reaches_the_caller_as_it_came(rust):
     _Rust.reply = (404, {"code": "account_route_not_owned"})
     response = TestClient(app).get("/api/claude-configs/sem-rota", headers=AUTH)
-    assert response.status_code in {404, 405}
-    assert response.json() != {"code": "account_route_not_owned"}
+    assert (response.status_code, response.json()) == (404, {"code": "account_route_not_owned"})
     assert len(_Rust.seen) == 1
 
 
