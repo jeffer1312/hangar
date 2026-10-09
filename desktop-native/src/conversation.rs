@@ -382,7 +382,6 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     Activity { agents, shells, tasks }
 }
 
-/// A palavra `[A-Za-z0-9_-]+` logo depois do marcador (espaços no meio à vontade).
 /// Id do subagente que o painel casa com o transcript dele. O do colega de equipe ("teammate:<nome>")
 /// só serve pra fechar o par; o id de verdade vem no texto do spawn.
 fn shown_agent_id<'a>(launched: Option<&'a str>, text: &'a str) -> Option<&'a str> {
@@ -392,6 +391,7 @@ fn shown_agent_id<'a>(launched: Option<&'a str>, text: &'a str) -> Option<&'a st
     }
 }
 
+/// A palavra `[A-Za-z0-9_-]+` logo depois do marcador (espaços no meio à vontade).
 fn word_after<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
     let rest = text[text.find(marker)? + marker.len()..].trim_start();
     let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).unwrap_or(rest.len());
