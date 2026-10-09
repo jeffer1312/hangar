@@ -169,6 +169,8 @@ struct Executor {
     hold:Option<tokio::time::Instant>,
     /// A identidade do pane já foi conferida nesta reserva: as operações seguintes do clique não a refazem.
     hold_checked:bool,
+    /// O plugin já não devolveu o foco nesta reserva: as voltas seguintes da limpeza vão direto ao anel.
+    focus_refused:bool,
     /// Comandos e pedidos de drenagem que chegaram com o pane reservado: saem na ordem depois do `Release`.
     parked:VecDeque<Message>,
     /// A entrada adiada porque o foco está num painel ou na faixa de um mod (`focus_guard`).
@@ -246,7 +248,7 @@ impl TerminalActor {
         let sequence=Arc::new(AtomicU64::new(queue.initial_state().next_seq.max(previous.max(queue.initial_state().operations.len() as u64).saturating_add(1))));
         let receipt=ReceiptIndex::new("claude",&target.binding.conversation);
         let (sender,receiver)=mpsc::channel(64); let closed=Arc::new(AtomicBool::new(false)); let anchor=options.anchor.clone();
-        let executor=Executor {target,queue:Arc::new(queue),policy,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,loan:None,stall:None,hold:None,hold_checked:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None};
+        let executor=Executor {target,queue:Arc::new(queue),policy,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None};
         let task=tokio::spawn(executor.run(receiver,closed.clone()));
         TerminalHandle {sender,closed,task:Arc::new(Mutex::new(Some(task))),stopped:Arc::new(Mutex::new(None)),anchor}
     }
@@ -517,14 +519,27 @@ impl Executor {
     async fn plugin_return(&self,root:&str)->bool {
         let id=format!("{}:{}:focus:{}",self.target.key,self.target.generation,self.sequence.fetch_add(1,Ordering::Relaxed));
         let request=PluginRequest {id:id.clone(),text:String::new(),mode:input::PluginMode::Focus};
-        matches!(self.services(root,&id,"").publish(&self.target.binding,request).await,Ok(PluginReply::Filled))
+        match self.services(root,&id,"").publish(&self.target.binding,request).await {
+            Ok(PluginReply::Filled)=>true,
+            reply=>{
+                tracing::debug!(key=%self.target.key,session=%self.target.name,reply=?reply,"o plugin não devolveu o foco; segue o ctrl+x tab");
+                false
+            }
+        }
     }
     /// Depois do aviso do plugin, a tela confirma que o foco saiu do mod; o desenho vem logo depois do aviso.
     async fn focus_back(&self)->bool {
         let until=tokio::time::Instant::now()+self.options.limits.settle*2;
         loop {
-            match self.mods_view().await {Ok(Some((_,true)))=>{},Ok(_)=>return true,Err(_)=>return false}
-            if tokio::time::Instant::now()>=until {return false;}
+            match self.mods_view().await {
+                Ok(Some((_,true)))=>{},
+                Ok(_)=>return true,
+                Err(code)=>{tracing::debug!(key=%self.target.key,session=%self.target.name,code,"tela ilegível depois do aviso do plugin; segue o ctrl+x tab"); return false;},
+            }
+            if tokio::time::Instant::now()>=until {
+                tracing::debug!(key=%self.target.key,session=%self.target.name,"o plugin avisou, mas a tela segue num mod; segue o ctrl+x tab");
+                return false;
+            }
             tokio::time::sleep(FOCUS_STEP_POLL).await;
         }
     }
@@ -564,9 +579,21 @@ impl Executor {
     /// emprestado ao Python (administração digitando no pane), recusa: duas mãos no mesmo pane erram o alvo.
     async fn pane_op(&mut self,op:PaneOp)->Result<PaneReply,RuntimeError> {
         // Soltar vale sempre: é a limpeza do clique.
-        if op==PaneOp::Release {self.hold=None; self.hold_checked=false; return Ok(PaneReply::Done);}
+        if op==PaneOp::Release {self.hold=None; self.hold_checked=false; self.focus_refused=false; return Ok(PaneReply::Done);}
         if self.loaned() {return Err(error("keyboard_loan"));}
+        if op==PaneOp::ReturnFocus {
+            // Uma tentativa por reserva e só com o plugin vivo: sem isso, cada volta da limpeza pagaria o
+            // diário e a espera do aviso antes do anel, dentro do prazo curto dela.
+            if self.focus_refused {return Err(error("plugin_focus"));}
+            let live=self.services("mods-click","mods-click","").facts(&self.target.binding).await.is_ok_and(|facts|facts.plugin_live);
+            if live && self.plugin_return("mods-click").await {return Ok(PaneReply::Done);}
+            if !live {tracing::debug!(key=%self.target.key,session=%self.target.name,"sem plugin vivo; a limpeza do clique segue o ctrl+x tab");}
+            self.focus_refused=self.held();
+            return Err(error("plugin_focus"));
+        }
         if let PaneOp::Hold {millis}=op {
+            // Reserva nova (a anterior venceu sem `Release`): o plugin ganha outra tentativa.
+            if !self.held() {self.focus_refused=false;}
             // Cada reserva, também a renovação da limpeza, confere o pane de novo uma vez: uma sessão do
             // multiplexador trocada por fora com o mesmo nome não vale por todas as renovações.
             self.hold_checked=false;
@@ -593,7 +620,8 @@ impl Executor {
             PaneOp::Keys(keys)=>{let keys:Vec<&str>=keys.iter().map(String::as_str).collect(); driver.mods_keys(&keys).await.map_err(failed)?; PaneReply::Done},
             PaneOp::Resize {columns,rows}=>{driver.resize(columns,rows).await.map_err(failed)?; PaneReply::Done},
             PaneOp::Hold {..}|PaneOp::Release=>PaneReply::Done,
-            PaneOp::ReturnFocus=>if self.plugin_return("mods-click").await {PaneReply::Done} else {return Err(error("plugin_focus"))},
+            // Atendido no `pane_op`, antes do multiplexador.
+            PaneOp::ReturnFocus=>PaneReply::Done,
         })
     }
     async fn execute(&mut self,id:&str,kind:&str,payload:Value,entry:Option<String>)->Result<RuntimeReply,RuntimeError> {
