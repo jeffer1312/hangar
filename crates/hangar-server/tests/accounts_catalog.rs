@@ -407,22 +407,24 @@ fn deletion_unlinks_windows_junction_without_removing_its_target() {
     );
 }
 
-/// O primeiro `codex` de um runner frio passa às vezes do prazo de 6 s da leitura: `unavailable` aqui é
-/// a demora do processo, não o resultado. A releitura descarta a entrada que ficou no cache.
+/// O `codex` de um runner Windows frio passa às vezes do prazo de 6 s da leitura, várias vezes seguidas:
+/// `unavailable` aqui é a demora do processo, não o resultado. Relê, descartando a entrada do cache,
+/// por até um minuto; o que o teste mede é o isolamento da conta.
 async fn read_codex_auth_settled(
     service: &hangar_server::accounts::AccountService,
     account: &hangar_server::accounts::catalog::Account,
 ) -> serde_json::Value {
     use hangar_server::accounts::{AccountKey, Provider};
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
-    for _ in 0..2 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         let value = service.read_codex_auth(account).await;
-        if value["status"] != "unavailable" {
+        if value["status"] != "unavailable" || std::time::Instant::now() >= deadline {
             return value;
         }
         service.codex_auth.invalidate(&key);
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-    service.read_codex_auth(account).await
 }
 
 #[tokio::test]
