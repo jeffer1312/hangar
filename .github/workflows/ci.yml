@@ -46,6 +46,10 @@ jobs:
     # o padrao do repositorio, que pode ser write.
     permissions:
       contents: read
+    # Target enxuto no cache, como no server.yml: sem incremental e com depuração só de linhas.
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
         working-directory: backend
@@ -90,8 +94,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             crates/target
-          key: backend-rust-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
-          restore-keys: backend-rust-${{ runner.os }}-
+          key: backend-rust-v2-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: backend-rust-v2-${{ runner.os }}-
       - name: Compilar contratos Rust usados pelo pytest
         working-directory: crates
         run: |
