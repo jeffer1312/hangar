@@ -233,3 +233,18 @@ def test_cookie_novo_invalida_a_cota_do_dono_rust(casa, monkeypatch):
     monkeypatch.setattr(account_bridge, "request_quotas", lambda **k: pedidos.append(k) or {"ok": True})
     credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie="c"))
     assert pedidos == [{"invalidate": "chave:opencode"}]
+
+
+def test_cookie_gravado_responde_ok_mesmo_sem_a_ponte_de_cotas(casa, monkeypatch):
+    """A invalidação é um extra: com o cookie já gravado, um 503 da ponte faria a pessoa colar de novo."""
+    from fastapi import HTTPException
+    from app import account_bridge, opencode_cota
+    monkeypatch.setattr(opencode_cota, "definir_config", lambda *a: None)
+    monkeypatch.setattr(opencode_cota, "ler_configs", lambda: {"chave:opencode": {}})
+
+    def sem_ponte(**_):
+        raise HTTPException(503, detail={"code": "quota_bridge_unavailable"})
+
+    monkeypatch.setattr(account_bridge, "request_quotas", sem_ponte)
+    resposta = credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie="c"))
+    assert resposta == {"id": "chave:opencode", "cookie_definido": True}

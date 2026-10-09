@@ -240,8 +240,12 @@ def definir_cookie(body: CookieBody) -> dict:
     opencode_cota.definir_config(body.id, body.workspace_id, body.auth_cookie)
     # Invalida a leitura em cache: sem isto o cookie novo só valeria no próximo ciclo de 5 min, e
     # a pessoa acabou de colar justamente pra ver o número aparecer. O cache é de quem lê a cota.
+    # Extra, não a operação: com o cookie já gravado, recusar faria a pessoa colar de novo.
     from app import account_bridge
-    account_bridge.request_quotas(invalidate=body.id)
+    try:
+        account_bridge.request_quotas(invalidate=body.id)
+    except HTTPException as error:
+        _log.warning("cookie gravado, mas a cota em cache não foi invalidada: %s", error.detail)
     return {"id": body.id, "cookie_definido": body.id in opencode_cota.ler_configs()}
 
 
