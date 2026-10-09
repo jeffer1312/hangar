@@ -42,6 +42,19 @@ async fn openai_upload_is_json_and_key_is_optional() {
 }
 
 #[tokio::test]
+async fn empty_model_preserves_the_previous_whisper_default() {
+    let (url, task) = endpoint(Router::new().route("/", post(|req: Request<Body>| async move {
+        let body = axum::body::to_bytes(req.into_body(), 4096).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("name=\"model\"\r\n\r\nwhisper-large-v3\r\n"));
+        "{\"text\":\"Transcrição.\"}"
+    }))).await;
+    let result = cloud::transcribe_to(&reqwest::Client::new(), &ProviderConfig::default(), &url,
+        Bytes::from_static(b"audio"), None, "", Duration::from_secs(2)).await;
+    task.abort(); assert_eq!(result.unwrap(), "Transcrição.");
+}
+
+#[tokio::test]
 async fn empty_json_is_a_failure_instead_of_a_message() {
     let (url, task) = endpoint(Router::new().route("/", post(|| async {
         ([("content-type", "application/json")], "{\"text\":\"  \"}")

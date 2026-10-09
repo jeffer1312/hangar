@@ -4,7 +4,7 @@ use reqwest::multipart::{Form, Part};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) const OPENAI_BASE: &str = "https://api.groq.com/openai/v1";
-pub(crate) const OPENAI_MODEL: &str = "whisper-large-v3-turbo";
+pub(crate) const OPENAI_MODEL: &str = "whisper-large-v3";
 const ELEVENLABS_URL: &str = "https://api.elevenlabs.io/v1/speech-to-text";
 const RESPONSE_LIMIT: usize = 1024 * 1024;
 

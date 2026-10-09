@@ -309,8 +309,15 @@ import { cachePrazo } from '../lib/cachePrazo';
   let uploading = $state(false);
   let attachError = $state('');
   let sending = $state(false);
-  type PendingSend = { serverId: string; name: string; jsonl: string | null; draft: string; files: File[]; steer: boolean; entryId: number | null };
+  type PendingSend = { serverId: string; name: string; jsonl: string | null; draft: string; files: File[]; steer: boolean; entryId: number | null; recipients: string; cancelled: boolean };
   let pendingSend = $state<PendingSend | null>(null);
+  const sendRecipients = $derived(JSON.stringify([sendToPair, [...(pairPeers ?? [])].sort()]));
+  $effect(() => {
+    if (pendingSend && !pendingSend.cancelled && pendingSend.recipients !== sendRecipients) {
+      pendingSend.cancelled = true;
+      recError = m.composer_dictation_send_changed();
+    }
+  });
   let sendError = $state('');
   let steeringQueue = $state(false);
   let steerFeedback = $state('');
@@ -1360,7 +1367,8 @@ import { cachePrazo } from '../lib/cachePrazo';
   async function aplicarTranscricao(e: DictationEntry) {
     const intent = pendingSend;
     pendingSend = null;
-    const sendMatches = intent && intent.serverId === dictationServerId && intent.name === sessionName
+    const sendMatches = intent && !intent.cancelled && intent.serverId === dictationServerId && intent.name === sessionName
+      && intent.recipients === sendRecipients
       && intent.jsonl === (sessionJsonl ?? null) && intent.draft === inputText
       && (intent.entryId === null || intent.entryId === e.id)
       && intent.files.length === attachments.length && intent.files.every((file, index) => file === attachments[index].file);
@@ -1906,7 +1914,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     if (starting) { recGeracao++; starting = false; }
     if (recording || transcribing) {
       pendingSend = { serverId: dictationServerId, name: sessionName, jsonl: sessionJsonl ?? null,
-        draft: inputText, files: attachments.map((item) => item.file), steer, entryId: dictation?.id ?? null };
+        draft: inputText, files: attachments.map((item) => item.file), steer, entryId: dictation?.id ?? null, recipients: sendRecipients, cancelled: false };
       if (recording) pararPorMotivo('botao');
       return false;
     }

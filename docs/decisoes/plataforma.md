@@ -282,6 +282,14 @@ de ditado nativo e os sete casos de envio no PWA passaram. Os testes Rust usam u
 real de fixture para conferir reutilização, concorrência e encerramento, além de HTTP real
 para conferir multipart, JSON e autenticação da ponte.
 
+Prova real da mesma data: uma frase de 120 caracteres em português gerada pela ElevenLabs
+(`eleven_multilingual_v2`) foi convertida em WAV, WebM/Opus e M4A/AAC. Os seis pedidos pela
+fachada Python e pela ponte privada Rust conservaram a frase completa: whisper.cpp oficial
+`b5454`, modelo `small-q5_1`, em 2,63–3,20 s; OpenRouter com `openai/whisper-large-v3`, em
+0,77–7,42 s. Binário e modelo tiveram SHA-256 conferido contra GitHub e Hugging Face. Esses
+tempos são uma amostra, não garantia de latência. O padrão Groq existente continua
+`whisper-large-v3`; migrar a linguagem não troca o modelo escolhido.
+
 ## Transcrição, organização do texto e leitura são capacidades separadas
 
 (`VozSettings.svelte` + `transcribe.py` + `narrar._provedor`, 17/09/2026.) A tela móvel mostrava

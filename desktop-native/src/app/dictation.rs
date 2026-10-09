@@ -277,7 +277,7 @@ pub(super) struct Dictation {
     countdown: Option<Instant>,
 }
 
-struct SendIntent { owner: Option<SessionOwner>, draft: String, attachments: Vec<String>, steer: bool }
+struct SendIntent { owner: Option<SessionOwner>, draft: String, attachments: Vec<String>, steer: bool, recipients: Option<(bool, Vec<String>)> }
 
 #[derive(Debug, PartialEq, Eq)]
 enum SendPreparation { Ready, Stop, Wait }
@@ -286,7 +286,7 @@ impl Dictation {
     fn prepare_send(&mut self, owner: Option<SessionOwner>, draft: String, attachments: Vec<String>,
         steer: bool, recording: bool, transcribing: bool) -> SendPreparation {
         if !recording && !transcribing { return SendPreparation::Ready; }
-        if self.pending_send.is_none() { self.pending_send = Some(SendIntent { owner, draft, attachments, steer }); }
+        if self.pending_send.is_none() { self.pending_send = Some(SendIntent { owner, draft, attachments, steer, recipients: None }); }
         self.auto_send = false;
         self.countdown = None;
         if recording { SendPreparation::Stop } else { SendPreparation::Wait }
@@ -298,9 +298,17 @@ impl Dictation {
     pub(super) fn recording(&self) -> bool { self.recorder.is_some() }
     pub(super) fn processing(&self) -> bool { self.request.is_some() }
     pub(super) fn send_pending(&self) -> bool { self.pending_send.is_some() }
+    pub(super) fn cancel_pending_send(&mut self) { self.pending_send = None; }
+
+    fn observe_send_recipients(&mut self, recipients: &Option<(bool, Vec<String>)>) {
+        if self.pending_send.as_ref().is_some_and(|intent| &intent.recipients != recipients) {
+            self.pending_send = None;
+        }
+    }
 
     fn observe_file_owner(&mut self, owner: Option<SessionOwner>) -> u64 {
         if self.file_owner != owner {
+            self.pending_send = None;
             // `error` é da tela que ficou para trás; o ditado em curso segue, então só a troca o limpa.
             if self.owner.is_some() { self.error = None; }
             self.file_owner = owner;
@@ -396,6 +404,12 @@ impl Dictation {
 impl Drop for Dictation { fn drop(&mut self) { self.cancel(); } }
 
 impl Hangar {
+    fn dictation_recipients(&self) -> Option<(bool, Vec<String>)> {
+        let key = self.selected_key()?;
+        let mut peers = self.live_peers(&key.name);
+        peers.sort();
+        Some((self.group_targets(&key, "").is_some(), peers))
+    }
     fn dictation_attachments(&self) -> Vec<String> {
         self.composer_key().and_then(|key| self.attachments.get(&key))
             .map(|items| items.iter().map(|item| item.id.to_string()).collect()).unwrap_or_default()
@@ -414,7 +428,13 @@ impl Hangar {
         let owner = self.dictation_owner(cx);
         let draft = self.composer.read(cx).value().to_string();
         let attachments = self.dictation_attachments();
-        match self.dictation.prepare_send(owner, draft, attachments, steer, recording, self.dictation.processing()) {
+        let first_send = !self.dictation.send_pending();
+        let preparation = self.dictation.prepare_send(owner, draft, attachments, steer, recording, self.dictation.processing());
+        if first_send {
+            let recipients = self.dictation_recipients();
+            if let Some(intent) = self.dictation.pending_send.as_mut() { intent.recipients = recipients; }
+        }
+        match preparation {
             SendPreparation::Ready => false,
             SendPreparation::Stop => { self.stop_dictation(false, false, cx); cx.notify(); true }
             SendPreparation::Wait => true,
@@ -431,6 +451,7 @@ impl Hangar {
     pub(super) fn check_dictation_owner(&mut self, cx: &mut Context<Self>) -> u64 {
         let owner = self.dictation_owner(cx);
         let generation = self.dictation.observe_file_owner(owner.clone());
+        self.dictation.observe_send_recipients(&self.dictation_recipients());
         // O player do ditado só tem controles na barra da sessão dele: fora dela, tocaria sem como parar.
         if self.dictation.owner.is_some() && self.dictation.owner != owner { self.stop_audio("dictation"); }
         match self.dictation.on_leave(&owner, self.connection) {
@@ -818,6 +839,7 @@ impl Hangar {
         let owner = self.dictation_owner(cx);
         let draft = self.composer.read(cx).value().to_string();
         let attachments = self.dictation_attachments();
+        self.dictation.observe_send_recipients(&self.dictation_recipients());
         let pending_send = self.dictation.complete_send(&owner, &draft, &attachments);
         let result_ready = result.as_ref().ok().and_then(|v| v.get("text")).and_then(Value::as_str).is_some_and(|text| !text.trim().is_empty());
         let here = matches!(&place, Place::Open);
@@ -1077,6 +1099,27 @@ fn dictation_insert(value: &str, range: std::ops::Range<usize>, text: &str) -> S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn leaving_and_returning_cannot_restore_pending_send() {
+        let mut dictation = super::Dictation::default();
+        let owner = Some((1, "servidor".into(), "sessao".into()));
+        dictation.observe_file_owner(owner.clone());
+        dictation.prepare_send(owner.clone(), "texto".into(), vec![], false, false, true);
+        dictation.observe_file_owner(Some((1, "servidor".into(), "outra".into())));
+        dictation.observe_file_owner(owner.clone());
+        assert!(dictation.complete_send(&owner, "texto", &[]).is_none());
+    }
+
+    #[test]
+    fn group_change_cancels_send_even_when_restored_before_result() {
+        let mut dictation = super::Dictation::default();
+        let owner = Some((1, "servidor".into(), "sessao".into()));
+        dictation.prepare_send(owner.clone(), "texto".into(), vec![], false, false, true);
+        dictation.pending_send.as_mut().unwrap().recipients = Some((false, vec!["par".into()]));
+        dictation.observe_send_recipients(&Some((true, vec!["par".into()])));
+        dictation.observe_send_recipients(&Some((false, vec!["par".into()])));
+        assert!(dictation.complete_send(&owner, "texto", &[]).is_none());
+    }
     #[test]
     fn every_content_stops_recording_before_send() {
         for (draft, attachments) in [("", vec![]), ("texto", vec![]), ("", vec!["imagem".to_owned()]), ("", vec!["arquivo".to_owned()])] {

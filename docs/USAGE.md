@@ -261,7 +261,7 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   e no PWA do celular. Se a transcrição falhar, o rascunho e os anexos continuam disponíveis.
   Configure em
   **Configurações → Voz → Transcrição**: a **Chave da transcrição** e, em **Usar outro serviço de
-  transcrição**, endpoint e modelo. Endpoint e modelo vazios usam Groq e `whisper-large-v3-turbo`;
+  transcrição**, endpoint e modelo. Endpoint e modelo vazios usam Groq e `whisper-large-v3`;
   a chave padrão também pode vir de `CP_GROQ_API_KEY`/`GROQ_API_KEY` no ambiente do backend. Para
   ter reserva, monte **Serviços de transcrição, em ordem** (compatível com OpenAI, ElevenLabs ou whisper.cpp local):
   o primeiro transcreve e, se falhar ou ficar sem cota, o próximo assume — o aviso do ditado diz

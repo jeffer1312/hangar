@@ -67,7 +67,7 @@ afterEach(async () => { if (app) await unmount(app); app = undefined; target.rem
 
 function render(draft = '') {
   const props = $state({ sessionName: 'recording-send', sessionState: 'idle' as const, status: null,
-    sessionJsonl: 'transcript', inputText: draft, onSend: vi.fn(), onCommand: vi.fn(),
+    sessionJsonl: 'transcript', inputText: draft, pairPeers: ['par'] as string[] | null, sendToPair: false, onSend: vi.fn(), onCommand: vi.fn(),
     onInterrupt: vi.fn(), onOpenGit: vi.fn(), onOpenPreview: vi.fn() });
   app = mount(Composer, { target, props }); return props;
 }
@@ -149,5 +149,16 @@ describe('envio encerra o microfone no PWA', () => {
     await vi.waitFor(() => expect(props.onSend).toHaveBeenCalledExactlyOnceWith('mensagem', false));
     allow(stream); await vi.waitFor(() => expect(stopTrack).toHaveBeenCalledOnce());
     expect(target.querySelector('.mic-btn--recording')).toBeNull();
+  });
+
+  it.each(['toggle', 'members'])('mudança de destinatários %s cancela o envio pendente', async (change) => {
+    const props = render('rascunho'); await start(); send(); Recorder.last.finish();
+    await vi.waitFor(() => expect(transcribeUploaded).toHaveBeenCalledOnce());
+    if (change === 'toggle') props.sendToPair = true;
+    else props.pairPeers = ['outro par'];
+    await tick();
+    resolveText({ path: '/uploads/audio.webm', text: 'fala transcrita', raw: 'fala transcrita' });
+    await vi.waitFor(() => expect(target.textContent).toContain('Confira o texto antes de enviar'));
+    expect(props.onSend).not.toHaveBeenCalled();
   });
 });
