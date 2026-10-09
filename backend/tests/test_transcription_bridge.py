@@ -1,17 +1,18 @@
 """Dono da transcrição: Rust ativo nunca recorre ao serviço Python depois da falha."""
 from types import SimpleNamespace
+import urllib.request
 import pytest
-from app import runtime_coordinator, transcribe, transcription_bridge as bridge
+from app import runtime_coordinator, runtime_config, transcribe, transcription_bridge as bridge
 
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
     bridge.configure(None, None)
     monkeypatch.setattr(bridge._ready, "wait", lambda timeout: False)
-    monkeypatch.setattr(transcribe.runtime_config, "get", {
+    monkeypatch.setattr(runtime_config, "get", {
         "transcription_providers": [{"id": "p", "kind": "openai", "api_key": "fixture", "base_url": "http://127.0.0.1:9999/v1"}],
     }.get)
-    monkeypatch.setattr(transcribe.urllib.request, "urlopen", lambda *args, **kwargs: pytest.fail("o Python executou uma segunda chamada de transcrição"))
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: pytest.fail("o Python executou uma segunda chamada de transcrição"))
 
 
 def test_rust_owner_receives_audio_and_profile(monkeypatch):
@@ -31,6 +32,13 @@ def test_rust_owner_receives_audio_and_profile(monkeypatch):
 @pytest.mark.parametrize("mode", ["rust", "pending"])
 def test_rust_failure_does_not_charge_python_provider(monkeypatch, mode):
     monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode=mode))
+    with pytest.raises(transcribe.TranscribeError, match="Rust") as error:
+        transcribe.transcribe_with_provider(b"audio", "fala.wav")
+    assert error.value.status == 503
+
+
+def test_python_mode_has_no_second_transcription_engine(monkeypatch):
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
     with pytest.raises(transcribe.TranscribeError, match="Rust") as error:
         transcribe.transcribe_with_provider(b"audio", "fala.wav")
     assert error.value.status == 503

@@ -21,6 +21,7 @@ pub struct ConfigSnapshot {
     pub providers: Vec<ProviderConfig>,
     pub legacy: Option<ProviderConfig>,
     pub vocabulary: String,
+    pub user_vocabulary: Option<String>,
     pub state_path: String,
 }
 

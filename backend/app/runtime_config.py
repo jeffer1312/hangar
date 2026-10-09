@@ -72,7 +72,7 @@ EDITAVEIS: dict[str, type] = {
     "llm_briefing_api_key": str,
     "llm_briefing_model": str,
     # Palavras que a Whisper tem que grafar direito (nome de projeto, de sessao, jargao do seu
-    # dia). Somadas a transcribe.VOCAB_BASE. Ver transcribe.vocabulario.
+    # dia). O Rust soma os termos ao vocabulário base compartilhado.
     "ditado_vocabulario": str,
     # Quanto o ditado pode mexer no que voce falou: "limpar" | "prosa" | "briefing".
     # Ver narrar.ESTILOS_DITADO — cada um e um prompt E um conjunto de travas diferente.
@@ -429,15 +429,8 @@ def _coagir(campo: str, valor: Any) -> Any:
             if entrada and not Path(os.path.realpath(os.path.expanduser(entrada))).is_dir():
                 raise ValueError(f"scan_roots: '{entrada}' nao e um diretorio nesta maquina")
     if campo == "ditado_vocabulario" and texto:
-        # Import LOCAL: transcribe importa este modulo, entao um import no topo fecharia o ciclo —
-        # mesmo motivo (e mesma solucao) de config.automations_enabled.
-        #
-        # O teto vive AQUI, e nao so no corte de transcribe.vocabulario, porque este e o unico
-        # ponto da corrente que consegue falar com a pessoa. Cortando so na leitura, ela cadastra
-        # 40 termos, a tela diz "salvo", e os ultimos simplesmente nunca chegam na Whisper: os
-        # nomes que ela configurou pra parar de sair errado continuam saindo errado, sem nada em
-        # lugar nenhum explicando por que. Recusar na gravacao transforma isso num erro visivel no
-        # segundo em que ela aperta salvar.
+        # Recusar ao salvar evita anunciar sucesso para termos que o motor cortaria depois.
+        # O limite vem do mesmo recurso estático incluído no Rust.
         from app.transcribe import VOCAB_USUARIO_MAX
         if len(texto) > VOCAB_USUARIO_MAX:
             raise ValueError(

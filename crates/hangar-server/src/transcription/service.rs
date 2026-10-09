@@ -22,7 +22,10 @@ impl Default for TranscriptionService {
 }
 
 impl TranscriptionService {
-    pub async fn configure(&self, snapshot: ConfigSnapshot) {
+    pub async fn configure(&self, mut snapshot: ConfigSnapshot) {
+        if let Some(extra) = snapshot.user_vocabulary.take() {
+            snapshot.vocabulary = super::vocabulary::assemble(&extra);
+        }
         self.local.reconcile(&snapshot.providers).await;
         self.quota.lock().await.load(&snapshot.state_path);
         *self.snapshot.write().await = snapshot;

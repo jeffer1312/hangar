@@ -160,20 +160,6 @@ def _sem_endereco_do_plugin_real():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _sem_espera_de_transcricao_real(tmp_path_factory):
-    # A espera por cota mora em ~/.hangar: um teste que esgota um serviço falso não pode pôr em
-    # espera o serviço real desta máquina.
-    from app import transcribe
-    original = transcribe._state_path
-    path = tmp_path_factory.mktemp("transcription-wait") / "transcription-wait.json"
-    transcribe._state_path = lambda: path
-    try:
-        yield
-    finally:
-        transcribe._state_path = original
-
-
-@pytest.fixture(scope="session", autouse=True)
 def _sem_compartilhamento_real(tmp_path_factory):
     # O lifespan (`with TestClient(app)`) sobe a varredura de convites. Com os sidecars apontando
     # pra pasta vazia acima, ela veria toda sessão viva da máquina como morta, revogaria os
