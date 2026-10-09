@@ -15,6 +15,20 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 RAIZ="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
 cd "$RAIZ" || exit 1
 
+# Node do .node-version, o mesmo do CI: com outro, o jsdom do vitest fica sem localStorage e o front
+# quebra. Troca pelo fnm quando existe.
+node_ci="$(tr -d '[:space:]v' < .node-version 2>/dev/null)"
+node_atual="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
+if [[ -n "$node_ci" && "$node_atual" != "$node_ci" ]]; then
+    # Só troca se o fnm tiver a versão: sem ela, o exec derrubaria o script antes do aviso.
+    if [[ -z "${CI_GATES_NODE_TROCADO:-}" ]] && command -v fnm >/dev/null && \
+        fnm exec --using="$node_ci" node -v >/dev/null 2>&1; then
+        CI_GATES_NODE_TROCADO=1 exec fnm exec --using="$node_ci" "$RAIZ/scripts/ci-gates.sh" "$@"
+    fi
+    echo "ci-gates: o CI usa Node $node_ci e aqui roda o ${node_atual:-nenhum}; o front pode falhar só por isso" \
+        "(fnm install $node_ci resolve)." >&2
+fi
+
 roda_back=1; roda_front=1; roda_skill=1
 if (( $# == 2 )); then
     # --no-renames: um arquivo movido pra fora de backend/ ou frontend/ tem que contar como mudança lá.

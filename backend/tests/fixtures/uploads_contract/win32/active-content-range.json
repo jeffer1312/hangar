@@ -1,0 +1,498 @@
+{
+  "normalized_response": [
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload",
+      "request": {
+        "headers": {
+          "x-filename": "document.html"
+        },
+        "body_base64": "PGgxPkHDp8OjbzwvaDE+PHNjcmlwdD5kb2N1bWVudC50aXRsZT0ndGVzdGUnPC9zY3JpcHQ+"
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "95",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDAxLmh0bWwiLCJmcmFtZXMiOltdLCJ0cmFuc2NyaXB0IjoiIn0=",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000001.html",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000001.html",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "text/html; charset=utf-8",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGhlYWQ+PG1ldGEgY2hhcnNldD0idXRmLTgiPjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MSI+PHRpdGxlPjE3MDAwMDAwMDAtMDAwMDAxLmh0bWw8L3RpdGxlPjxzdHlsZT5odG1sLGJvZHl7bWFyZ2luOjA7aGVpZ2h0OjEwMCU7b3ZlcmZsb3c6aGlkZGVufWlmcmFtZXtkaXNwbGF5OmJsb2NrO3dpZHRoOjEwMCU7aGVpZ2h0OjEwMCU7Ym9yZGVyOjB9PC9zdHlsZT48L2hlYWQ+PGJvZHk+PGlmcmFtZSB0aXRsZT0iMTcwMDAwMDAwMC0wMDAwMDEuaHRtbCIgc2FuZGJveD0iYWxsb3ctc2NyaXB0cyBhbGxvdy1wb3B1cHMiIHJlZmVycmVycG9saWN5PSJuby1yZWZlcnJlciIgc3JjPSJkYXRhOnRleHQvaHRtbDtjaGFyc2V0PXV0Zi04O2Jhc2U2NCxQR2d4UGtIRHA4T2piend2YURFK1BITmpjbWx3ZEQ1a2IyTjFiV1Z1ZEM1MGFYUnNaVDBuZEdWemRHVW5QQzl6WTNKcGNIUSsiPjwvaWZyYW1lPjwvYm9keT48L2h0bWw+",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000001.html?download=true",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "text/html; charset=utf-8",
+        "accept-ranges": "bytes",
+        "content-disposition": "attachment; filename=\"1700000000-000001.html\"",
+        "content-length": "54",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"dfc3a3c387dff519fb98c65e509937a5\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "PGgxPkHDp8OjbzwvaDE+PHNjcmlwdD5kb2N1bWVudC50aXRsZT0ndGVzdGUnPC9zY3JpcHQ+",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000001.html",
+      "request": {
+        "headers": {
+          "range": "bytes=2-5"
+        },
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "text/html; charset=utf-8",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGhlYWQ+PG1ldGEgY2hhcnNldD0idXRmLTgiPjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MSI+PHRpdGxlPjE3MDAwMDAwMDAtMDAwMDAxLmh0bWw8L3RpdGxlPjxzdHlsZT5odG1sLGJvZHl7bWFyZ2luOjA7aGVpZ2h0OjEwMCU7b3ZlcmZsb3c6aGlkZGVufWlmcmFtZXtkaXNwbGF5OmJsb2NrO3dpZHRoOjEwMCU7aGVpZ2h0OjEwMCU7Ym9yZGVyOjB9PC9zdHlsZT48L2hlYWQ+PGJvZHk+PGlmcmFtZSB0aXRsZT0iMTcwMDAwMDAwMC0wMDAwMDEuaHRtbCIgc2FuZGJveD0iYWxsb3ctc2NyaXB0cyBhbGxvdy1wb3B1cHMiIHJlZmVycmVycG9saWN5PSJuby1yZWZlcnJlciIgc3JjPSJkYXRhOnRleHQvaHRtbDtjaGFyc2V0PXV0Zi04O2Jhc2U2NCxQR2d4UGtIRHA4T2piend2YURFK1BITmpjbWx3ZEQ1a2IyTjFiV1Z1ZEM1MGFYUnNaVDBuZEdWemRHVW5QQzl6WTNKcGNIUSsiPjwvaWZyYW1lPjwvYm9keT48L2h0bWw+",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000001.html",
+      "request": {
+        "headers": {
+          "range": "bytes=9999-"
+        },
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "text/html; charset=utf-8",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGhlYWQ+PG1ldGEgY2hhcnNldD0idXRmLTgiPjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MSI+PHRpdGxlPjE3MDAwMDAwMDAtMDAwMDAxLmh0bWw8L3RpdGxlPjxzdHlsZT5odG1sLGJvZHl7bWFyZ2luOjA7aGVpZ2h0OjEwMCU7b3ZlcmZsb3c6aGlkZGVufWlmcmFtZXtkaXNwbGF5OmJsb2NrO3dpZHRoOjEwMCU7aGVpZ2h0OjEwMCU7Ym9yZGVyOjB9PC9zdHlsZT48L2hlYWQ+PGJvZHk+PGlmcmFtZSB0aXRsZT0iMTcwMDAwMDAwMC0wMDAwMDEuaHRtbCIgc2FuZGJveD0iYWxsb3ctc2NyaXB0cyBhbGxvdy1wb3B1cHMiIHJlZmVycmVycG9saWN5PSJuby1yZWZlcnJlciIgc3JjPSJkYXRhOnRleHQvaHRtbDtjaGFyc2V0PXV0Zi04O2Jhc2U2NCxQR2d4UGtIRHA4T2piend2YURFK1BITmpjbWx3ZEQ1a2IyTjFiV1Z1ZEM1MGFYUnNaVDBuZEdWemRHVW5QQzl6WTNKcGNIUSsiPjwvaWZyYW1lPjwvYm9keT48L2h0bWw+",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload",
+      "request": {
+        "headers": {
+          "x-filename": "document.svg"
+        },
+        "body_base64": "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnPjxzY3JpcHQvPjwvc3ZnPg=="
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDAyLnN2ZyIsImZyYW1lcyI6W10sInRyYW5zY3JpcHQiOiIifQ==",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000002.svg",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000002.svg",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "image/svg+xml",
+        "accept-ranges": "bytes",
+        "content-length": "55",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"7a49c2d3061784a46bc45a04327c54b1\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnPjxzY3JpcHQvPjwvc3ZnPg==",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000002.svg?download=true",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "image/svg+xml",
+        "accept-ranges": "bytes",
+        "content-disposition": "attachment; filename=\"1700000000-000002.svg\"",
+        "content-length": "55",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"7a49c2d3061784a46bc45a04327c54b1\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnPjxzY3JpcHQvPjwvc3ZnPg==",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000002.svg",
+      "request": {
+        "headers": {
+          "range": "bytes=2-5"
+        },
+        "body_base64": ""
+      },
+      "status": 206,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "image/svg+xml",
+        "accept-ranges": "bytes",
+        "content-length": "4",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"7a49c2d3061784a46bc45a04327c54b1\"",
+        "content-range": "bytes 2-5/55",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "dmcgeA==",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000002.svg",
+      "request": {
+        "headers": {
+          "range": "bytes=9999-"
+        },
+        "body_base64": ""
+      },
+      "status": 416,
+      "headers": {
+        "content-range": "bytes */55",
+        "content-length": "0",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body_base64": "",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload",
+      "request": {
+        "headers": {
+          "x-filename": "document.xml"
+        },
+        "body_base64": "PD94bWwgdmVyc2lvbj0nMS4wJz8+PGRvY3VtZW50by8+"
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDAzLnhtbCIsImZyYW1lcyI6W10sInRyYW5zY3JpcHQiOiIifQ==",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000003.xml",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000003.xml",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "text/xml; charset=utf-8",
+        "accept-ranges": "bytes",
+        "content-length": "33",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"7cacbf56af574dbb552abd32d6f09558\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "PD94bWwgdmVyc2lvbj0nMS4wJz8+PGRvY3VtZW50by8+",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000003.xml?download=true",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "text/xml; charset=utf-8",
+        "accept-ranges": "bytes",
+        "content-disposition": "attachment; filename=\"1700000000-000003.xml\"",
+        "content-length": "33",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"7cacbf56af574dbb552abd32d6f09558\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "PD94bWwgdmVyc2lvbj0nMS4wJz8+PGRvY3VtZW50by8+",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000003.xml",
+      "request": {
+        "headers": {
+          "range": "bytes=2-5"
+        },
+        "body_base64": ""
+      },
+      "status": 206,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "text/xml; charset=utf-8",
+        "accept-ranges": "bytes",
+        "content-length": "4",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"7cacbf56af574dbb552abd32d6f09558\"",
+        "content-range": "bytes 2-5/33",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eG1sIA==",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000003.xml",
+      "request": {
+        "headers": {
+          "range": "bytes=9999-"
+        },
+        "body_base64": ""
+      },
+      "status": 416,
+      "headers": {
+        "content-range": "bytes */33",
+        "content-length": "0",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body_base64": "",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload",
+      "request": {
+        "headers": {
+          "x-filename": "document.bin"
+        },
+        "body_base64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDA0LmJpbiIsImZyYW1lcyI6W10sInRyYW5zY3JpcHQiOiIifQ==",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000004.bin",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000004.bin",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/octet-stream",
+        "accept-ranges": "bytes",
+        "content-length": "32",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"8ae91ad32661763c5e4c18d5637dc51d\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000004.bin?download=true",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "application/octet-stream",
+        "accept-ranges": "bytes",
+        "content-disposition": "attachment; filename=\"1700000000-000004.bin\"",
+        "content-length": "32",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"8ae91ad32661763c5e4c18d5637dc51d\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000004.bin",
+      "request": {
+        "headers": {
+          "range": "bytes=2-5"
+        },
+        "body_base64": ""
+      },
+      "status": 206,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/octet-stream",
+        "accept-ranges": "bytes",
+        "content-length": "4",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"8ae91ad32661763c5e4c18d5637dc51d\"",
+        "content-range": "bytes 2-5/32",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "AgMEBQ==",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000004.bin",
+      "request": {
+        "headers": {
+          "range": "bytes=9999-"
+        },
+        "body_base64": ""
+      },
+      "status": 416,
+      "headers": {
+        "content-range": "bytes */32",
+        "content-length": "0",
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body_base64": "",
+      "json": null
+    }
+  ],
+  "normalized_tree": [
+    {
+      "path": "<root>/vault/<project>",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<project>/transcript",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000001.html",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33206,
+      "size": 54,
+      "content_base64": "PGgxPkHDp8OjbzwvaDE+PHNjcmlwdD5kb2N1bWVudC50aXRsZT0ndGVzdGUnPC9zY3JpcHQ+"
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000002.svg",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33206,
+      "size": 55,
+      "content_base64": "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnPjxzY3JpcHQvPjwvc3ZnPg=="
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000003.xml",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33206,
+      "size": 33,
+      "content_base64": "PD94bWwgdmVyc2lvbj0nMS4wJz8+PGRvY3VtZW50by8+"
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000004.bin",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33206,
+      "size": 32,
+      "content_base64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+    }
+  ]
+}

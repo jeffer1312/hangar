@@ -1,0 +1,75 @@
+{
+  "normalized_response": [
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload",
+      "request": {
+        "headers": {
+          "x-filename": "clip.mp4"
+        },
+        "body_base64": "c3ludGhldGljLXZpZGVvLW5vLWRlY29kZXI="
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDAxLm1wNCIsImZyYW1lcyI6W10sInRyYW5zY3JpcHQiOiIifQ==",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000001.mp4",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "102",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJmaWxlcyI6W3siZmlsZW5hbWUiOiIxNzAwMDAwMDAwLTAwMDAwMS5tcDQiLCJzaXplIjoyNiwibXRpbWUiOjE3MDAwMDAwMDAuMCwiZXhwaXJlc19pbl9kYXlzIjpudWxsfV19",
+      "json": {
+        "files": [
+          {
+            "filename": "1700000000-000001.mp4",
+            "size": 26,
+            "mtime": 1700000000.0,
+            "expires_in_days": null
+          }
+        ]
+      }
+    }
+  ],
+  "normalized_tree": [
+    {
+      "path": "<root>/vault/<project>",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<project>/transcript",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16895
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000001.mp4",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33206,
+      "size": 26,
+      "content_base64": "c3ludGhldGljLXZpZGVvLW5vLWRlY29kZXI="
+    }
+  ]
+}

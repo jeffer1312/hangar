@@ -1,0 +1,209 @@
+{
+  "normalized_response": [
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "12",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJmaWxlcyI6W119",
+      "json": {
+        "files": []
+      }
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload",
+      "request": {
+        "headers": {
+          "x-filename": "relatorio.bin"
+        },
+        "body_base64": "cmVmZXLDqm5jaWEtYmluw6FyaWEA/w=="
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDAxLmJpbiIsImZyYW1lcyI6W10sInRyYW5zY3JpcHQiOiIifQ==",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000001.bin",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "url": "/api/sessions/fixture/upload",
+      "request": {
+        "headers": {
+          "x-filename": "texto.txt"
+        },
+        "body_base64": "dGV4dG8gY29tIGFjZW50b3M6IGHDp8Ojbw=="
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "94",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJwYXRoIjoiPHJvb3Q+L3ZhdWx0Lzxwcm9qZWN0Pi90cmFuc2NyaXB0LzE3MDAwMDAwMDAtMDAwMDAyLnR4dCIsImZyYW1lcyI6W10sInRyYW5zY3JpcHQiOiIifQ==",
+      "json": {
+        "path": "<root>/vault/<project>/transcript/1700000000-000002.txt",
+        "frames": [],
+        "transcript": ""
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "193",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJmaWxlcyI6W3siZmlsZW5hbWUiOiIxNzAwMDAwMDAwLTAwMDAwMS5iaW4iLCJzaXplIjoyMiwibXRpbWUiOjE3MDAwMDAwMDAuMCwiZXhwaXJlc19pbl9kYXlzIjpudWxsfSx7ImZpbGVuYW1lIjoiMTcwMDAwMDAwMC0wMDAwMDIudHh0Iiwic2l6ZSI6MjUsIm10aW1lIjoxNzAwMDAwMDAwLjAsImV4cGlyZXNfaW5fZGF5cyI6bnVsbH1dfQ==",
+      "json": {
+        "files": [
+          {
+            "filename": "1700000000-000001.bin",
+            "size": 22,
+            "mtime": 1700000000.0,
+            "expires_in_days": null
+          },
+          {
+            "filename": "1700000000-000002.txt",
+            "size": 25,
+            "mtime": 1700000000.0,
+            "expires_in_days": null
+          }
+        ]
+      }
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000001.bin",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/octet-stream",
+        "accept-ranges": "bytes",
+        "content-length": "22",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"7caf19aa0e477630b321745101778760\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "cmVmZXLDqm5jaWEtYmluw6FyaWEA/w==",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/fixture/uploads/1700000000-000002.txt?download=true",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "sandbox; script-src 'none'",
+        "content-type": "text/plain; charset=utf-8",
+        "accept-ranges": "bytes",
+        "content-disposition": "attachment; filename=\"1700000000-000002.txt\"",
+        "content-length": "25",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"3f2348dd2177119a98a73b4ce6735534\"",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "dGV4dG8gY29tIGFjZW50b3M6IGHDp8Ojbw==",
+      "json": null
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "url": "/api/sessions/renamed/uploads",
+      "request": {
+        "headers": {},
+        "body_base64": ""
+      },
+      "status": 200,
+      "headers": {
+        "content-length": "193",
+        "content-type": "application/json",
+        "vary": "Accept-Encoding"
+      },
+      "body_base64": "eyJmaWxlcyI6W3siZmlsZW5hbWUiOiIxNzAwMDAwMDAwLTAwMDAwMS5iaW4iLCJzaXplIjoyMiwibXRpbWUiOjE3MDAwMDAwMDAuMCwiZXhwaXJlc19pbl9kYXlzIjpudWxsfSx7ImZpbGVuYW1lIjoiMTcwMDAwMDAwMC0wMDAwMDIudHh0Iiwic2l6ZSI6MjUsIm10aW1lIjoxNzAwMDAwMDAwLjAsImV4cGlyZXNfaW5fZGF5cyI6bnVsbH1dfQ==",
+      "json": {
+        "files": [
+          {
+            "filename": "1700000000-000001.bin",
+            "size": 22,
+            "mtime": 1700000000.0,
+            "expires_in_days": null
+          },
+          {
+            "filename": "1700000000-000002.txt",
+            "size": 25,
+            "mtime": 1700000000.0,
+            "expires_in_days": null
+          }
+        ]
+      }
+    }
+  ],
+  "normalized_tree": [
+    {
+      "path": "<root>/vault/<project>",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16877
+    },
+    {
+      "path": "<root>/vault/<project>/transcript",
+      "kind": "directory",
+      "mtime": "<directory-mtime>",
+      "mode": 16877
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000001.bin",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33188,
+      "size": 22,
+      "content_base64": "cmVmZXLDqm5jaWEtYmluw6FyaWEA/w=="
+    },
+    {
+      "path": "<root>/vault/<project>/transcript/1700000000-000002.txt",
+      "kind": "file",
+      "mtime": 1700000000.0,
+      "mode": 33188,
+      "size": 25,
+      "content_base64": "dGV4dG8gY29tIGFjZW50b3M6IGHDp8Ojbw=="
+    }
+  ]
+}

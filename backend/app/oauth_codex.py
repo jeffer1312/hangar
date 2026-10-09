@@ -136,6 +136,9 @@ def salvar_cofre(t: Tokens) -> None:
 
 def importar_do_codex(home: Path | None = None) -> Tokens | None:
     """Quem já logou pelo `codex login` não precisa logar de novo: o cofre nasce do auth.json dele."""
+    _, managed = _managed_device("import")
+    if managed:
+        return ler_cofre()
     try:
         d = json.loads((_codex_dir(home) / "auth.json").read_text(encoding="utf-8"))
         tk = d["tokens"]
@@ -191,6 +194,7 @@ def _omp_tem_login(home: Path | None) -> bool:
 
 
 def _para_codex(t: Tokens, home: Path | None) -> tuple[bool, str]:
+    _require_python_writer()
     d = _codex_dir(home)
     if not d.is_dir():
         return False, "nao-instalado"
@@ -248,6 +252,9 @@ def _para_omp(t: Tokens, home: Path | None) -> tuple[bool, str]:
 
 
 def propagar(t: Tokens | None = None, home: Path | None = None) -> dict[str, dict]:
+    response, managed = _managed_device("propagate")
+    if managed:
+        return response
     t = t or ler_cofre()
     if t is None:
         return {a: {"ok": False, "motivo": "sem-login"} for a in ("codex", "pi", "omp")}
@@ -262,6 +269,9 @@ def propagar(t: Tokens | None = None, home: Path | None = None) -> dict[str, dic
 
 
 def estado(home: Path | None = None) -> dict:
+    response, managed = _managed_device("state")
+    if managed:
+        return response
     t = ler_cofre()
     return {
         "cofre": t is not None,
@@ -302,6 +312,16 @@ def _trocar_codigo(codigo: str, verificador: str) -> Tokens:
 
 
 def _vigiar(t: Tentativa, home: Path | None) -> None:
+    # A thread não tem a quem entregar a exceção: qualquer saída inesperada vira falha visível,
+    # senão a tentativa fica "aguardando" e recusa as próximas para sempre.
+    try:
+        _vigiar_ate_concluir(t, home)
+    except Exception as e:  # noqa: BLE001
+        _log.warning("login Codex por dispositivo interrompido: %s", type(e).__name__)
+        t.etapa, t.erro = "falhou", str(e) or type(e).__name__
+
+
+def _vigiar_ate_concluir(t: Tentativa, home: Path | None) -> None:
     espera = max(t.intervalo_s, 1.0)
     while not t._parar.is_set():
         if time.monotonic() - t.inicio > _TIMEOUT_S:
@@ -336,6 +356,9 @@ def _vigiar(t: Tentativa, home: Path | None) -> None:
 
 
 def iniciar(home: Path | None = None) -> dict:
+    response, managed = _managed_device("start")
+    if managed:
+        return response
     global _tentativa
     with _lock:
         if _tentativa and _tentativa.etapa == "aguardando":
@@ -358,6 +381,9 @@ def iniciar(home: Path | None = None) -> dict:
 
 
 def passo() -> dict:
+    response, managed = _managed_device("status")
+    if managed:
+        return response
     t = _tentativa
     if t is None:
         return {"etapa": "idle"}
@@ -366,6 +392,9 @@ def passo() -> dict:
 
 
 def cancelar() -> dict:
+    response, managed = _managed_device("cancel")
+    if managed:
+        return response
     global _tentativa
     with _lock:
         t = _tentativa
@@ -374,3 +403,15 @@ def cancelar() -> dict:
             t.etapa = "cancelado"
         _tentativa = None
     return {"etapa": "idle"}
+
+
+def _managed_device(action):
+    from app.account_bridge import request_device
+    return request_device(action)
+
+
+def _require_python_writer():
+    from fastapi import HTTPException
+    from app.account_bridge import owner_mode
+    if owner_mode() != "python":
+        raise HTTPException(503, detail={"code": "account_device_python_writer_disabled"})

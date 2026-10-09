@@ -8,8 +8,9 @@ em `contrato-par.md`. Nada disto foi implementado; o plano só começa depois da
 
 Com o Rust de pé, **toda escrita numa sessão Claude entra pelo Rust e é executada por ele, sem
 volta ao Python no caminho**: a rota, a validação, a fila, o teclado do pane, o plugin e os fatos
-que a entrega consulta. O Python fica com o que é da parte 6 (contas, troca de conta, convidado,
-Connect, par, convites, peers, cotas) e responde só por fatos e ganchos dessas áreas, nunca por
+que a entrega consulta. O Python fica com o que é da parte 6 (troca de conta, convidado,
+Connect, par, convites e peers). Contas e cotas Claude/Codex foram separadas na #115;
+o Python responde só por fatos e ganchos delimitados dessas áreas, nunca por
 um passo da escrita. Falha vira erro com código; só a reserva do processo inteiro (modo `python`)
 roda o código atual.
 
@@ -17,7 +18,11 @@ roda o código atual.
 
 - **Codex** (todas as rotas e serviços só dele): metade Codex.
 - **Criar sessão (`POST /api/sessions`)**: parte 6 (decisão 1, abaixo).
-- Contas, troca de conta (`/conta`), convidado e Connect (8766/8768), par e grupo (`/pair*`,
+- Contas, login, identidade e cotas Claude/Codex: [issue #115](https://github.com/jeffer1312/hangar/issues/115),
+  com contratos e autoria no [inventário](../../../backend/tests/fixtures/accounts_contract/README.md).
+  A preparação Claude continua no reconciliador Python por gancho restrito até sua migração;
+  a #115 decide a operação e mantém a proteção de existência da conta.
+- Troca de conta (`/conta`), convidado e Connect (8766/8768), par e grupo (`/pair*`,
   `/bastao`, `/group-message`), `/then`, `/loop`, orq, MCP, push, atualização: parte 6 ou
   provedores próprios. Esses caminhos continuam chamando `coordinator.op` do Python, que segue
   existindo como cliente interno do Rust.
@@ -26,10 +31,12 @@ roda o código atual.
 ## Decisões
 
 1. **Criar sessão vai para a parte 6.** Quase tudo que a criação faz é da parte 6: resolver
-   conta e `config_dir`, a trava `contas.ciclo_conta`, o ambiente do motor (`engines.py`),
+   conta e `config_dir`, o ambiente do motor (`engines.py`),
    criar worktree (mutações de worktree estão na parte 6) e a raiz do convidado. A parte que é da
    sessão já está no Rust: o vínculo nasce lá (`_await_birth`, `ensure_open`). Portar a criação
-   agora traria metade da parte 6 junto. *Aprovado pelo dono em 07/10/2026 (o pedido original
+   agora traria metade da parte 6 junto. A #115 troca a proteção de existência por um protocolo
+   de lock compartilhado Python/Rust, sem portar o nascimento da sessão; a criação segura o
+   descritor até comprovar o processo, inclusive após cancelamento HTTP. *Aprovado pelo dono em 07/10/2026 (o pedido original
    listava a criação no escopo).*
 2. **`model_picker.py`: parte 5** (subparte C4). É o que obriga o empréstimo do teclado no
    `/model-effort`.
@@ -85,8 +92,9 @@ Cada subparte é uma junção na `main` e sobe o contrato interno uma vez.
 - **Serviços portados na 5-0** (os que os dois provedores usam): `prepare_prompt` (chamado em
   cada Input/Steer), `format_status` (texto dos dois provedores) e `skill_catalog`. As janelas de
   cota do Claude o Rust pede ao Python (`GET /internal/quota`) só quando vai formatar e o cache
-  dele, de 5 min, venceu (cotas são da parte 6); a cota do Codex passa a ser do próprio Rust na 5E
-  da metade Codex. O texto do Codex bate por golden com `format_status_line`. O Rust não pede mais
+  dele, de 5 min, venceu. Na #115, ambas as cotas passam ao próprio serviço Rust e essa leitura
+  Python sai do caminho; as cotas dos outros provedores continuam por gancho restrito.
+  O texto do Codex bate por golden com `format_status_line`. O Rust não pede mais
   o texto da linha ao Python.
 - **Golden** de cada rota: corpo de resposta e de erro idênticos ao do Python, gerados pelas
   rotas Python (`backend/tests/fixtures/contract/`).

@@ -119,3 +119,24 @@ def test_cli_preserves_omission_and_explicit_mode(tmp_path, flags, expected):
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+@pytest.mark.asyncio
+async def test_busy_account_is_a_coded_conflict(tmp_path, monkeypatch):
+    from app import account_lifecycle
+
+    monkeypatch.setattr(runtime_config, "_backend_config_base", lambda: tmp_path)
+    create = Mock(return_value=SessionInfo(name="busy-account", cwd=str(tmp_path), provider="claude"))
+    monkeypatch.setattr(api.registry, "create", create)
+    monkeypatch.setattr(api, "get_adapter", Mock())
+
+    def busy(*args, **kwargs):
+        raise account_lifecycle.AccountLockError("account_busy")
+
+    monkeypatch.setattr(account_lifecycle, "acquire", busy)
+    body = api.CreateBody(name="busy-account", cwd=str(tmp_path), provider="claude")
+    with pytest.raises(api.HTTPException) as refused:
+        await api._criar_sessao(body, {})
+    assert refused.value.status_code == 409
+    assert refused.value.detail["code"] == "account_busy"
+    create.assert_not_called()

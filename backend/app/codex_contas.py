@@ -116,7 +116,7 @@ def _marker_data(path: Path) -> dict | None:
 
 
 def _managed(path: Path, name: str) -> bool:
-    if path.is_symlink() or not path.is_dir():
+    if path.is_symlink() or not path.is_dir() or (path / ".hangar-account-pending").exists():
         return False
     data = _marker_data(path)
     return bool(

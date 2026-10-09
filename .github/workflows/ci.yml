@@ -35,11 +35,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
       - run: node --test scripts/test-configure-statusline.cjs
 
   backend:
     runs-on: ubuntu-latest
+    # Target enxuto no cache, como no server.yml: sem incremental e com depuração só de linhas.
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/crates/target
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     # So roda teste/build — nao escreve nada no repo. Declarado explicito pra nao herdar
     # o padrao do repositorio, que pode ser write.
     permissions:
@@ -52,6 +57,13 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Preparar CLI Codex para os contratos de contas
+        run: |
+          npm install --global @openai/codex@0.161.0
+          codex --version
       # alguns testes tocam o binario do tmux (mockado na maioria, mas presente por garantia).
       # ripgrep NAO e opcional: a busca entre sessoes (app/search.py) chama `rg` de verdade, e sem
       # ele os testes de busca voltavam ZERO acerto — falha que so aparecia aqui, porque a maquina
@@ -81,13 +93,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             crates/target
-          key: backend-rust-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
-          restore-keys: backend-rust-${{ runner.os }}-
+          key: backend-rust-v2-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: backend-rust-v2-${{ runner.os }}-
       - name: Compilar contratos Rust usados pelo pytest
         working-directory: crates
         run: |
           cargo build --locked -p hangar-server
           cargo build --locked -p hangar-workspace --example workspace_contract
+          cargo test --locked -p hangar-server --no-run --test accounts_lifecycle --test accounts_catalog --test accounts_preparation
       - uses: actions/cache/save@v4
         if: github.ref == 'refs/heads/main' && steps.cache-rust.outputs.cache-hit != 'true'
         with:
@@ -108,7 +121,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       # Roda na RAIZ (o lockfile é um só), mas SELETIVO: o app nativo é workspace — precisa ser,
@@ -135,7 +148,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci --workspace=@hangar/core --workspace=frontend

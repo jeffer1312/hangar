@@ -161,6 +161,10 @@ def _codex_lease_rename_finished(name: str) -> None:
 
 
 async def _watch_codex_lease(state: dict) -> None:
+    def session_alive(name):
+        state["lease"].retire_birth()
+        return tmux.has_session(name)
+
     try:
         while True:
             if state.get("renaming"):
@@ -169,7 +173,7 @@ async def _watch_codex_lease(state: dict) -> None:
             name = state["name"]
             revision = state.get("revision", 0)
             try:
-                alive = await asyncio.to_thread(tmux.has_session, name)
+                alive = await asyncio.to_thread(session_alive, name)
             except Exception:
                 alive = True
             if (state["name"] != name or state.get("revision", 0) != revision
@@ -185,8 +189,9 @@ async def _watch_codex_lease(state: dict) -> None:
         state["lease"].release()
 
 
-def _hold_codex_lease(name: str, lease) -> None:
-    lease.mark_live(name)
+async def _hold_codex_lease(name: str, lease) -> None:
+    from app.account_lifecycle import complete_on_cancel
+    await complete_on_cancel(asyncio.to_thread(lease.mark_live, name))
     state = {"name": name, "lease": lease, "renaming": False, "revision": 0}
     _codex_live_leases[name] = state
     task = asyncio.create_task(_watch_codex_lease(state), name=f"codex-lease-{name}")
@@ -2133,6 +2138,10 @@ async def logout_claude_config(nome: str):
     (se renovar o token em memória, pode regravar a credencial).
 
     `nome` é o rótulo da lista (o apelido, quando a conta foi renomeada), igual ao login."""
+    from app import account_bridge
+    native = await asyncio.to_thread(account_bridge.request_claude, "logout", label=nome)
+    if native is not None:
+        return native
     conta = next((c for c in list_config_dirs() if c.label == nome), None)
     if conta is None:
         raise HTTPException(404, detail=erro("erro_conta_inexistente", f"conta {nome} não existe", nome=nome))
@@ -2350,7 +2359,9 @@ async def create_session(body: CreateBody) -> CreatedSessionInfo:
         # Sem conta pedida, a herdada ou a padrão só vale se não estiver acabando; senão nasce na de
         # mais folga, e a resposta diz que trocou.
         from app import cotas
-        config_dir, aviso = await asyncio.to_thread(cotas.conta_com_cota, body.config_dir, cotas.cotas_claude())
+        # cotas_claude() consulta a ponte do Rust por HTTP síncrono: fica fora do event loop.
+        config_dir, aviso = await asyncio.to_thread(
+            lambda: cotas.conta_com_cota(body.config_dir, cotas.cotas_claude()))
         if aviso:
             _log.warning("create_session %s: %s", body.name, aviso)
             body = body.model_copy(update={"config_dir": config_dir})
@@ -2431,6 +2442,11 @@ def _allowed_scan_root(path: str) -> Path:
 
 
 async def _criar_sessao(body: CreateBody, worktree: dict):
+    from app.account_lifecycle import complete_on_cancel
+    return await complete_on_cancel(_create_session_owned(body, worktree))
+
+
+async def _create_session_owned(body: CreateBody, worktree: dict):
     if body.headless is None:
         body = body.model_copy(update={"headless": not body.read_only and body.provider in ("claude", "codex")
                                       and bool(runtime_config.get("headless_default"))})
@@ -2628,10 +2644,21 @@ async def _criar_sessao(body: CreateBody, worktree: dict):
             if body.engine_account is not None:
                 kwargs["engine_account"] = body.engine_account
                 kwargs["engine_models"] = account_models
+            from app.account_lifecycle import AccountKey, AccountLockError, acquire
+            from contextlib import nullcontext
+            home = (codex_account_obj.home if body.provider == "codex"
+                    else Path(tmux.config_dir_de(body.config_dir)))
             try:
-                info = registry.create(body.name, body.cwd, body.config_dir, **kwargs)
-            except claude_customizations.CustomizationsError as exc:
-                raise HTTPException(exc.status, detail=erro(exc.code, exc.detail)) from None
+                guard = (acquire(AccountKey.new("codex" if body.provider == "codex" else "claude", home))
+                         if body.provider in ("claude", "codex", "pi", "omp") else nullcontext())
+            except AccountLockError as exc:
+                # Exclusão ou login segura a conta: o app mostra "tente de novo", não um 500.
+                raise HTTPException(409, detail=erro(exc.code, "a conta está ocupada por outra operação")) from None
+            with guard:
+                try:
+                    info = registry.create(body.name, body.cwd, body.config_dir, **kwargs)
+                except claude_customizations.CustomizationsError as exc:
+                    raise HTTPException(exc.status, detail=erro(exc.code, exc.detail)) from None
             worktree["session_created"] = True
             # O mesmo nome pode estar no snapshot com o transcript da sessão encerrada.
             _invalidate_lists()
@@ -2653,14 +2680,14 @@ async def _criar_sessao(body: CreateBody, worktree: dict):
                 codex_lease.release()
                 codex_lease = None
                 raise
-            _hold_codex_lease(info.name, codex_lease)
+            await _hold_codex_lease(info.name, codex_lease)
             codex_lease = None
             raise
         except BaseException:
             codex_lease.release()
             codex_lease = None
             raise
-        _hold_codex_lease(info.name, codex_lease)
+        await _hold_codex_lease(info.name, codex_lease)
         codex_lease = None
         return info
 
@@ -2704,7 +2731,8 @@ async def _criar_sessao(body: CreateBody, worktree: dict):
                 # bloqueia, e no event loop isso congelava o app inteiro quando duas operações de
                 # conta se cruzavam. flock pertence ao descritor aberto, não à thread — tomar e
                 # soltar de threads diferentes é válido.
-                cm = contas.ciclo_conta(nome_conta)
+                from app.account_lifecycle import GuardMode
+                cm = contas.ciclo_conta(nome_conta, mode=GuardMode.SHARED)
                 ciclo = await asyncio.to_thread(cm.__enter__)
                 try:
                     try:
@@ -7446,6 +7474,10 @@ def _id_upload(info: SessionInfo) -> str:
 
 @app.post("/api/sessions/{name}/upload", dependencies=[Depends(require_auth), Depends(_transfer_check)])
 async def upload(name: str, request: Request, audio_only: bool = False):
+    from app import upload_bridge
+    forwarded = await upload_bridge.forward(name, "save", request, audio_only=audio_only)
+    if forwarded is not None:
+        return forwarded
     # Resolve o cwd da sessao (registry.list() ja traz cwd via tmux #{pane_current_path}).
     # handler async -> registry.list() (subprocess tmux) no threadpool pra nao bloquear o loop.
     sessions = await asyncio.to_thread(registry.list)
@@ -7511,10 +7543,14 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False, es
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if not info.cwd:
         raise HTTPException(409, detail=erro("erro_cwd_indisponivel", "cwd da sessao indisponivel"))
+    from app import upload_bridge
     if arquivo:
         try:
-            path = await asyncio.to_thread(resolve_session_audio, info.cwd, _id_upload(info), arquivo,
-                                           allow_absolute=not _convidado(request))
+            forwarded = await asyncio.to_thread(upload_bridge.request_json, name, "resolve",
+                                                filename=arquivo, allow_absolute=not _convidado(request))
+            path = forwarded["path"] if forwarded is not None else await asyncio.to_thread(
+                resolve_session_audio, info.cwd, _id_upload(info), arquivo,
+                allow_absolute=not _convidado(request))
         except UploadError as e:
             if e.status == 404:
                 raise HTTPException(404, detail=erro("erro_upload_inexistente",
@@ -7532,7 +7568,10 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False, es
         data = await request.body()
         filename = request.headers.get("x-filename") or request.query_params.get("name")
         try:
-            path = await asyncio.to_thread(save_upload, info.cwd, _id_upload(info), data, filename)
+            forwarded = await asyncio.to_thread(upload_bridge.request_json, name, "save",
+                                                data=data, filename=filename or "")
+            path = forwarded["path"] if forwarded is not None else await asyncio.to_thread(
+                save_upload, info.cwd, _id_upload(info), data, filename)
         except UploadError as e:
             raise HTTPException(e.status, e.detail)
     limits = DICTATION_LIMITS if limpar else FILE_LIMITS
@@ -7647,19 +7686,32 @@ async def pensamento_para_pt(body: PensamentoPtBody):
 
 
 @app.get("/api/sessions/{name}/uploads/{filename}", dependencies=[Depends(require_auth)])
-def serve_upload(name: str, filename: str, download: bool = False):
-    info = _cached_info_sync(name)
-    if info is None or not info.cwd:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    try:
-        path = resolve_upload(info.cwd, _id_upload(info), filename)
-    except UploadError as e:
-        raise HTTPException(e.status, e.detail)
-    return file_response(path, download=download)
+async def serve_upload(name: str, filename: str, request: Request, download: bool = False):
+    from app import upload_bridge
+    forwarded = await upload_bridge.forward(name, "download", request, filename=filename, download=download)
+    if forwarded is not None:
+        return forwarded
+
+    # O caminho local lê sessão e disco: fora do loop, como quando a rota era síncrona.
+    def local():
+        info = _cached_info_sync(name)
+        if info is None or not info.cwd:
+            raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+        try:
+            path = resolve_upload(info.cwd, _id_upload(info), filename)
+        except UploadError as e:
+            raise HTTPException(e.status, e.detail)
+        return file_response(path, download=download)
+
+    return await asyncio.to_thread(local)
 
 
 @app.get("/api/sessions/{name}/uploads", dependencies=[Depends(require_auth)])
 def list_session_uploads(name: str):
+    from app import upload_bridge
+    forwarded = upload_bridge.request_json(name, "list")
+    if forwarded is not None:
+        return forwarded
     # Galeria de anexos: a retencao vive no servidor, entao o prazo sai daqui pronto (o front so
     # desenha). Le do runtime_config, nao do env cru — senao a galeria mostraria um prazo e o
     # prune usaria outro.

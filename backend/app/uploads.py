@@ -136,6 +136,8 @@ def list_uploads(cwd: str, sessao: str, retention_days: int) -> list[dict]:
                 else retention_days - (agora - st.st_mtime) / 86400
             ),
         })
+    # Mesmo segundo: o nome desempata, senão a ordem dependeria do sistema de arquivos.
+    out.sort(key=lambda d: d["filename"])
     out.sort(key=lambda d: d["mtime"], reverse=True)
     return out
 

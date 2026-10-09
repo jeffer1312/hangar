@@ -639,7 +639,9 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         assert!(store.needs_snapshot("s"), "o retrato segue falhando: o pulo continua aberto");
-        let windows = (Duration::from_millis(1050).as_millis() / RETRY.as_millis()) as usize + 1;
+        // Pelo tempo que passou de fato: num runner lento as 40 esperas de 25 ms passam de 1 s, e cada
+        // janela de retentativa a mais é uma tentativa legítima, não um pedido por acordada.
+        let windows = ((now.elapsed() + Duration::from_millis(50)).as_millis() / RETRY.as_millis()) as usize + 1;
         let attempts = py.snapshots.load(std::sync::atomic::Ordering::SeqCst);
         assert!(attempts >= 2 && attempts <= windows, "{attempts} tentativas em ~1 s com retentativa de {RETRY:?}");
     }

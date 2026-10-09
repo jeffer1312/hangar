@@ -975,6 +975,10 @@ async fn serve_file(path: &Path, headers: &HeaderMap, download: bool) -> Respons
         Ok(f) => f,
         Err(_) => return response(json!({"detail":"file not found"}), 404),
     };
+    serve_open_file(file, path, headers, download, None).await
+}
+
+pub(crate) async fn serve_open_file(file: tokio::fs::File, path: &Path, headers: &HeaderMap, download: bool, media: Option<&str>) -> Response {
     let meta = match file.metadata().await {
         Ok(m) => m,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
@@ -997,9 +1001,10 @@ async fn serve_file(path: &Path, headers: &HeaderMap, download: bool) -> Respons
             .insert(header::CACHE_CONTROL, "max-age=60".parse().unwrap());
         return r;
     }
-    let media = mime_guess::from_path(path)
+    let guessed = mime_guess::from_path(path)
         .first_or_octet_stream()
         .to_string();
+    let media = media.unwrap_or(&guessed).to_owned();
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let html = !download && ["text/html", "application/xhtml+xml"].contains(&media.as_str());
     // Como o Starlette: texto declara utf-8, e o invólucro do HTML é sempre text/html.

@@ -1,6 +1,8 @@
 """Contrato do importador nativo com processos locais sem acesso à home real."""
 
 import asyncio
+import contextlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -25,6 +27,22 @@ args = args[2:]
 assert os.getcwd() != os.environ["HOME"]
 def send(value):
     print(json.dumps(value), flush=True)
+
+def spawn_grandchild(role):
+    import subprocess
+    return subprocess.Popen([sys.executable, os.environ["HANGAR_T24_GRANDCHILD"], role],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+
+if scenario == "tree_shim":
+    # Shim: o líder só repassa stdio a um app-server filho, como o executável do npm.
+    import subprocess
+    sys.exit(subprocess.call([sys.executable, __file__, "tree", *sys.argv[2:]]))
+if scenario == "tree_cli" and args != ["app-server", "--stdio"]:
+    spawn_grandchild("cli").wait()
+    sys.exit(0)
+if scenario.startswith("tree"):
+    spawn_grandchild("app-server")
 
 if args != ["app-server", "--stdio"]:
     if scenario == "cli_error":
@@ -58,8 +76,12 @@ for line in sys.stdin:
     method = msg["method"]
     if method == "initialized":
         initialized = True
+        if scenario == "tree_leader_gone":
+            sys.exit(0)
         continue
     rid = msg["id"]
+    if method == "initialize" and scenario == "tree_init_hang":
+        continue
     if method == "initialize":
         assert msg["params"]["capabilities"]["experimentalApi"] is True
         assert msg["params"]["clientInfo"]["name"] == "hangar"
@@ -112,12 +134,26 @@ for line in sys.stdin:
         send({"id": rid, "result": {"importId": str(rid)}})
         if scenario == "import_eof":
             sys.exit(0)
-        if scenario not in {"before", "import_timeout"}:
+        if scenario not in {"before", "import_timeout", "tree"}:
             send({"method": "externalAgentConfig/import/completed", "params": completed})
     elif method == "plugin/installed":
         send({"id": rid, "result": {"plugins": []}})
     else:
         raise AssertionError(method)
+'''
+
+# Descendente que segura o cwd e um arquivo dentro dele, avisa que está pronto pelo socket do
+# teste e só sai quando o teste mandar (ou quando alguém o encerrar).
+_GRANDCHILD = r'''
+import json
+import os
+import socket
+import sys
+
+held = open(os.path.join(os.getcwd(), "grandchild.lock"), "w")
+conn = socket.create_connection(("127.0.0.1", int(os.environ["HANGAR_T24_TREE_PORT"])))
+conn.sendall((json.dumps({"pid": os.getpid(), "cwd": os.getcwd(), "role": sys.argv[1]}) + "\n").encode())
+conn.recv(1)
 '''
 
 
@@ -405,3 +441,308 @@ async def test_detectar_nao_interpreta_falha_de_fonte_como_lista_vazia(cliente, 
         with pytest.raises(CodexNativoErro, match="falhas ou avisos") as error:
             await obj.detectar()
         assert "secret-token" not in str(error.value)
+
+
+_WINDOWS_TREE = pytest.mark.skipif(
+    os.name != "nt", reason="a contenção da árvore própria do Codex é contrato do Windows")
+
+
+def _alive(info: dict) -> bool:
+    import psutil
+
+    try:
+        proc = psutil.Process(info["pid"])
+        # Encerrado e ainda listado por causa de um handle alheio não segura mais nada.
+        return (proc.create_time() == info["birth"] and proc.status() != psutil.STATUS_ZOMBIE
+                and proc.num_threads() > 0)
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _assert_tree_gone(info: dict, phase: str) -> None:
+    assert not _alive(info), (
+        f"descendente próprio vivo após {phase}: pid={info['pid']} nascimento={info['birth']} "
+        f"papel={info['role']}")
+    assert not Path(info["cwd"]).exists(), f"pasta retida após {phase}: {info['cwd']}"
+
+
+@pytest.fixture
+async def process_tree(tmp_path, monkeypatch):
+    import psutil
+
+    script = tmp_path / "grandchild.py"
+    script.write_text(_GRANDCHILD, encoding="utf-8")
+    ready: asyncio.Queue = asyncio.Queue()
+    writers: list[asyncio.StreamWriter] = []
+    seen: list[dict] = []
+
+    async def accept(reader, writer):
+        info = json.loads(await reader.readline())
+        info["birth"] = psutil.Process(info["pid"]).create_time()
+        writers.append(writer)
+        seen.append(info)
+        await ready.put(info)
+
+    server = await asyncio.start_server(accept, "127.0.0.1", 0)
+    monkeypatch.setenv("HANGAR_T24_TREE_PORT", str(server.sockets[0].getsockname()[1]))
+    monkeypatch.setenv("HANGAR_T24_GRANDCHILD", str(script))
+
+    async def next_ready() -> dict:
+        async with asyncio.timeout(20):
+            return await ready.get()
+
+    async def foreign() -> asyncio.subprocess.Process:
+        alheio = tmp_path / "alheio"
+        alheio.mkdir(exist_ok=True)
+        return await asyncio.create_subprocess_exec(sys.executable, str(script), "alheio", cwd=alheio)
+
+    try:
+        yield SimpleNamespace(next_ready=next_ready, ready=ready, foreign=foreign)
+    finally:
+        # Ação explícita do teste: libera quem ainda estiver vivo (a baseline deixa o neto).
+        for writer in writers:
+            with contextlib.suppress(OSError):
+                writer.write(b"x")
+                await writer.drain()
+            writer.close()
+        server.close()
+        await server.wait_closed()
+        for info in seen:
+            with contextlib.suppress(psutil.NoSuchProcess):
+                await asyncio.to_thread(psutil.Process(info["pid"]).wait, 20)
+
+
+@_WINDOWS_TREE
+@pytest.mark.parametrize("scenario", ["tree", "tree_shim"])
+async def test_process_tree_close_ends_own_descendant_before_removing_dir(cliente, process_tree, scenario):
+    alheio = await process_tree.foreign()
+    foreign = await process_tree.next_ready()
+    obj = cliente(scenario)
+    async with obj:
+        own = await process_tree.next_ready()
+        assert own["role"] == "app-server"
+        assert _alive(own)
+    _assert_tree_gone(own, "close")
+    assert _alive(foreign), "processo alheio foi encerrado junto com a árvore do Codex"
+    await obj.close()
+    assert alheio.returncode is None
+
+
+@_WINDOWS_TREE
+async def test_process_tree_contained_when_leader_already_exited(cliente, process_tree):
+    obj = cliente("tree_leader_gone")
+    async with obj:
+        own = await process_tree.next_ready()
+        assert await obj._proc.wait() == 0
+        assert _alive(own)
+    _assert_tree_gone(own, "close com líder encerrado")
+
+
+@_WINDOWS_TREE
+async def test_process_tree_cancelled_initialize_ends_tree(cliente, process_tree):
+    obj = cliente("tree_init_hang")
+    opening = asyncio.create_task(obj.__aenter__())
+    own = await process_tree.next_ready()
+    opening.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+    _assert_tree_gone(own, "cancelamento do initialize")
+    assert obj._proc is None
+
+
+@_WINDOWS_TREE
+async def test_process_tree_cancelled_import_then_close_ends_tree(cliente, process_tree):
+    obj = cliente("tree")
+    async with obj:
+        own = await process_tree.next_ready()
+        notices = obj.subscribe("externalAgentConfig/import/completed")
+        task = asyncio.create_task(obj.importar([{"itemType": "SKILLS"}]))
+        # O servidor só avisa a conclusão alheia depois de receber a importação: ela está em curso.
+        assert (await notices.get())["params"]["importId"] == "other"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert _alive(own)
+    _assert_tree_gone(own, "cancelamento da importação")
+
+
+@_WINDOWS_TREE
+@pytest.mark.parametrize("end", ["timeout", "cancel"])
+async def test_process_tree_cli_timeout_or_cancel_ends_tree(cliente, process_tree, end):
+    obj = cliente("tree_cli", timeout=30 if end == "cancel" else 1)
+    task = asyncio.create_task(obj.cli(["plugin", "list", "--json"]))
+    own = await process_tree.next_ready()
+    assert own["role"] == "cli"
+    if end == "timeout":
+        with pytest.raises(CodexNativoErro, match="tempo limite"):
+            await task
+    else:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    _assert_tree_gone(own, f"{end} do cli")
+
+
+@_WINDOWS_TREE
+async def test_process_tree_concurrent_close_returns_only_after_tree_end(cliente, process_tree):
+    obj = cliente("tree")
+    await obj.__aenter__()
+    own = await process_tree.next_ready()
+    closes = {asyncio.create_task(obj.close()), asyncio.create_task(obj.close())}
+    done, pending = await asyncio.wait(closes, return_when=asyncio.FIRST_COMPLETED)
+    _assert_tree_gone(own, "primeiro close concorrente")
+    await asyncio.gather(*done, *pending)
+    await obj.close()
+    _assert_tree_gone(own, "close repetido")
+
+
+@_WINDOWS_TREE
+async def test_process_tree_failed_assignment_ends_suspended_process(cliente, process_tree, monkeypatch):
+    from app import runtime_process
+
+    created = []
+    original = asyncio.create_subprocess_exec
+
+    async def capture(*args, **kwargs):
+        proc = await original(*args, **kwargs)
+        created.append(proc)
+        return proc
+
+    def refuse(self, proc):
+        raise OSError(5, "acesso negado ao Job")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture)
+    monkeypatch.setattr(runtime_process.WindowsJob, "assign", refuse)
+    obj = cliente("tree")
+    with pytest.raises(CodexNativoErro, match="contenção"):
+        await obj.__aenter__()
+    assert len(created) == 1 and created[0].returncode is not None
+    assert process_tree.ready.empty(), "processo sem contenção chegou a rodar"
+    assert obj._proc is None and obj._work_dir is None
+
+
+@_WINDOWS_TREE
+async def test_process_tree_failed_membership_query_is_not_success(cliente, process_tree, monkeypatch):
+    from app import runtime_process
+
+    obj = cliente("tree")
+    await obj.__aenter__()
+    own = await process_tree.next_ready()
+    original = runtime_process.WindowsJob.members
+
+    def refuse(self):
+        raise OSError(5, "consulta do Job negada")
+
+    monkeypatch.setattr(runtime_process.WindowsJob, "members", refuse)
+    with pytest.raises(CodexNativoErro, match="contenção"):
+        await obj.close()
+    assert Path(own["cwd"]).exists()
+    monkeypatch.setattr(runtime_process.WindowsJob, "members", original)
+    await obj.close()
+    _assert_tree_gone(own, "close após consulta recusada")
+
+
+async def test_process_tree_cli_second_cancel_and_concurrent_close_wait_for_cleanup(
+        cliente, process_tree, monkeypatch):
+    import psutil
+
+    alheio = await process_tree.foreign()
+    foreign = await process_tree.next_ready()
+    obj = cliente("tree_cli", timeout=30)
+    spawned = []
+    original_spawn, original_finish = obj._spawn, obj._finish
+    cleaning, release = asyncio.Event(), asyncio.Event()
+
+    async def capture(*args, **kwargs):
+        pair = await original_spawn(*args, **kwargs)
+        spawned.append(pair)
+        return pair
+
+    async def gated(proc, tree):
+        # Barreira só de instrumentação: a limpeza real roda inteira depois da liberação.
+        if proc is not None and not cleaning.is_set():
+            cleaning.set()
+            await release.wait()
+        await original_finish(proc, tree)
+
+    monkeypatch.setattr(obj, "_spawn", capture)
+    monkeypatch.setattr(obj, "_finish", gated)
+    task = asyncio.create_task(obj.cli(["plugin", "list", "--json"]))
+    closing = None
+    try:
+        own = await process_tree.next_ready()
+        leader = {"pid": spawned[0][0].pid, "birth": psutil.Process(spawned[0][0].pid).create_time(),
+                  "role": "líder", "cwd": own["cwd"]}
+        task.cancel()
+        async with asyncio.timeout(20):
+            await cleaning.wait()
+        task.cancel()
+        closing = asyncio.create_task(obj.close())
+        done, _ = await asyncio.wait({task, closing}, timeout=1)
+        assert not done, "cli ou close voltou com a limpeza própria ainda pendente"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await closing
+        assert not _alive(leader), f"líder próprio vivo após close: pid={leader['pid']}"
+        assert not Path(own["cwd"]).exists(), f"pasta retida após close: {own['cwd']}"
+        if os.name == "nt":
+            _assert_tree_gone(own, "segundo cancelamento do cli e close concorrente")
+        assert _alive(foreign) and alheio.returncode is None
+    finally:
+        release.set()
+        for pending in (task, closing):
+            if pending is not None and not pending.done():
+                pending.cancel()
+            if pending is not None:
+                with contextlib.suppress(asyncio.CancelledError, CodexNativoErro):
+                    await pending
+
+
+@_WINDOWS_TREE
+async def test_process_tree_cli_failed_membership_query_is_retried_by_close(cliente, process_tree, monkeypatch):
+    from app import runtime_process
+
+    alheio = await process_tree.foreign()
+    foreign = await process_tree.next_ready()
+    obj = cliente("tree_cli", timeout=30)
+    task = asyncio.create_task(obj.cli(["plugin", "list", "--json"]))
+    own = await process_tree.next_ready()
+    original = runtime_process.WindowsJob.members
+
+    def refuse(self):
+        raise OSError(5, "consulta do Job negada")
+
+    monkeypatch.setattr(runtime_process.WindowsJob, "members", refuse)
+    task.cancel()
+    with pytest.raises(CodexNativoErro, match="contenção"):
+        await task
+    # Antes da nova tentativa: a árvore e a pasta continuam com o cliente, não somem nem são soltas.
+    assert _alive(own) and Path(own["cwd"]).exists()
+    monkeypatch.setattr(runtime_process.WindowsJob, "members", original)
+    await obj.close()
+    _assert_tree_gone(own, "close após consulta recusada no cli")
+    assert _alive(foreign) and alheio.returncode is None
+
+
+async def test_falha_de_limpeza_nao_esconde_o_erro_do_comando(cliente, monkeypatch):
+    from app import codex_importador
+
+    obj = cliente("cli_timeout", timeout=0.1)
+    calls = []
+    original = codex_importador.shutil.rmtree
+
+    def locked(path):
+        # No Windows a pasta ainda presa pelo filho recusa a remoção.
+        calls.append(path)
+        if len(calls) == 1:
+            raise PermissionError(13, "em uso")
+        original(path)
+
+    monkeypatch.setattr(codex_importador.shutil, "rmtree", locked)
+    with pytest.raises(CodexNativoErro, match="tempo limite"):
+        await obj.cli(["plugin", "add", "plugin@market", "--json"])
+    # A limpeza continua registrada: o encerramento tenta de novo e remove a pasta.
+    await obj.close()
+    assert len(calls) == 2
+    assert not os.path.exists(calls[0])

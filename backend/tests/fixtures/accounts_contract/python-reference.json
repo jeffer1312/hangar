@@ -1,0 +1,533 @@
+{
+  "claude_catalog": {
+    "method": "GET",
+    "path": "/api/claude-configs",
+    "status": 200,
+    "body": [
+      {
+        "path": "<HOME>/.claude",
+        "label": "default",
+        "active": true
+      },
+      {
+        "path": "<HOME>/.claude-work",
+        "label": "Trabalho de revisão",
+        "active": false
+      },
+      {
+        "path": "<HOME>/.claude-backup",
+        "label": "backup",
+        "active": false
+      }
+    ]
+  },
+  "claude_state": {
+    "method": "GET",
+    "path": "/api/conta-estado",
+    "status": 200,
+    "body": [
+      {
+        "path": "<HOME>/.claude",
+        "label": "default",
+        "active": true,
+        "login": {
+          "estado": "ok",
+          "loggedIn": false,
+          "email": null,
+          "plano": null,
+          "motivo": null,
+          "refreshExpiresAt": null
+        },
+        "limite": {
+          "estado": "sem_leitura",
+          "linha": null,
+          "ts": null,
+          "idade_s": null
+        }
+      },
+      {
+        "path": "<HOME>/.claude-work",
+        "label": "Trabalho de revisão",
+        "active": false,
+        "login": {
+          "estado": "ok",
+          "loggedIn": false,
+          "email": null,
+          "plano": null,
+          "motivo": null,
+          "refreshExpiresAt": null
+        },
+        "limite": {
+          "estado": "sem_leitura",
+          "linha": null,
+          "ts": null,
+          "idade_s": null
+        }
+      }
+    ]
+  },
+  "claude_invalid_name": {
+    "method": "POST",
+    "path": "/api/claude-configs",
+    "status": 422,
+    "body": {
+      "detail": [
+        {
+          "type": "string_pattern_mismatch",
+          "loc": [
+            "body",
+            "nome"
+          ],
+          "msg": "String should match pattern '^[a-z0-9][a-z0-9_-]{0,31}\\z'",
+          "input": "conta\n",
+          "ctx": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,31}\\z"
+          }
+        }
+      ]
+    }
+  },
+  "claude_extra_field": {
+    "method": "POST",
+    "path": "/api/claude-configs",
+    "status": 422,
+    "body": {
+      "detail": [
+        {
+          "type": "extra_forbidden",
+          "loc": [
+            "body",
+            "extra"
+          ],
+          "msg": "Extra inputs are not permitted",
+          "input": true
+        }
+      ]
+    }
+  },
+  "claude_missing_login": {
+    "method": "POST",
+    "path": "/api/conta-estado/absent/login",
+    "status": 404,
+    "body": {
+      "detail": {
+        "code": "erro_conta_inexistente",
+        "params": {
+          "nome": "absent"
+        },
+        "msg": "conta absent não existe"
+      }
+    }
+  },
+  "claude_login_idle": {
+    "method": "GET",
+    "path": "/api/conta-estado/work/login/passo",
+    "status": 200,
+    "body": {
+      "etapa": "idle",
+      "url": null,
+      "email": null,
+      "plano": null
+    }
+  },
+  "claude_login_cancel_idle": {
+    "method": "POST",
+    "path": "/api/conta-estado/work/login/cancelar",
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "claude_logout_missing": {
+    "method": "POST",
+    "path": "/api/claude-configs/absent/logout",
+    "status": 404,
+    "body": {
+      "detail": {
+        "code": "erro_conta_inexistente",
+        "params": {
+          "nome": "absent"
+        },
+        "msg": "conta absent não existe"
+      }
+    }
+  },
+  "codex_catalog": {
+    "method": "GET",
+    "path": "/api/codex-contas",
+    "status": 200,
+    "body": [
+      {
+        "id": "default",
+        "credential_id": "codex:<HOME>/.codex",
+        "name": "default",
+        "home": "<HOME>/.codex",
+        "is_default": true,
+        "auth": {
+          "method": "none",
+          "status": "disconnected",
+          "email": null,
+          "plan": null
+        },
+        "sync": {
+          "status": "ready",
+          "trust_pending": false,
+          "issues": [],
+          "etapa": null,
+          "herdado": null
+        },
+        "has_settings": false
+      },
+      {
+        "id": "alpha",
+        "credential_id": "codex:<HOME>/.codex-alpha",
+        "name": "alpha",
+        "home": "<HOME>/.codex-alpha",
+        "is_default": false,
+        "auth": {
+          "method": "none",
+          "status": "disconnected",
+          "email": null,
+          "plan": null
+        },
+        "sync": {
+          "status": "idle",
+          "trust_pending": false,
+          "issues": [],
+          "etapa": null,
+          "herdado": null
+        },
+        "has_settings": false
+      },
+      {
+        "id": "zeta",
+        "credential_id": "codex:<HOME>/.codex-zeta",
+        "name": "zeta",
+        "home": "<HOME>/.codex-zeta",
+        "is_default": false,
+        "auth": {
+          "method": "none",
+          "status": "disconnected",
+          "email": null,
+          "plan": null
+        },
+        "sync": {
+          "status": "idle",
+          "trust_pending": false,
+          "issues": [],
+          "etapa": null,
+          "herdado": null
+        },
+        "has_settings": false
+      }
+    ]
+  },
+  "codex_missing": {
+    "method": "DELETE",
+    "path": "/api/codex-contas/absent",
+    "status": 404,
+    "body": {
+      "detail": {
+        "code": "codex_account_not_found",
+        "params": {
+          "account_id": "absent"
+        },
+        "msg": "conta Codex não encontrada"
+      }
+    }
+  },
+  "codex_protected": {
+    "method": "DELETE",
+    "path": "/api/codex-contas/default",
+    "status": 409,
+    "body": {
+      "detail": {
+        "code": "codex_account_default_protected",
+        "params": {
+          "account_id": "default"
+        },
+        "msg": "a conta padrão do Codex não pode ser apagada"
+      }
+    }
+  },
+  "codex_invalid_name": {
+    "method": "POST",
+    "path": "/api/codex-contas",
+    "status": 400,
+    "body": {
+      "detail": {
+        "code": "codex_account_invalid_name",
+        "params": {},
+        "msg": "operação de conta Codex recusada"
+      }
+    }
+  },
+  "codex_extra_field": {
+    "method": "POST",
+    "path": "/api/codex-contas",
+    "status": 422,
+    "body": {
+      "detail": [
+        {
+          "type": "extra_forbidden",
+          "loc": [
+            "body",
+            "extra"
+          ],
+          "msg": "Extra inputs are not permitted",
+          "input": true
+        }
+      ]
+    }
+  },
+  "codex_create": {
+    "method": "POST",
+    "path": "/api/codex-contas",
+    "status": 201,
+    "body": {
+      "id": "fresh",
+      "credential_id": "codex:<HOME>/.codex-fresh",
+      "name": "fresh",
+      "home": "<HOME>/.codex-fresh",
+      "is_default": false,
+      "auth": {
+        "method": "none",
+        "status": "disconnected",
+        "email": null,
+        "plan": null
+      },
+      "sync": {
+        "status": "idle",
+        "trust_pending": false,
+        "issues": [],
+        "etapa": null,
+        "herdado": null
+      },
+      "has_settings": false
+    },
+    "tree": {
+      ".hangar-codex-conta": {
+        "version": 1,
+        "id": "fresh"
+      },
+      "config.toml": {
+        "cli_auth_credentials_store": "file"
+      }
+    }
+  },
+  "codex_duplicate": {
+    "method": "POST",
+    "path": "/api/codex-contas",
+    "status": 409,
+    "body": {
+      "detail": {
+        "code": "codex_account_exists",
+        "params": {
+          "account_id": "fresh"
+        },
+        "msg": "conta Codex já existe"
+      }
+    }
+  },
+  "codex_prepare_idle": {
+    "method": "GET",
+    "path": "/api/codex-contas/fresh/prepare",
+    "status": 200,
+    "body": {
+      "status": "idle",
+      "trust_pending": false,
+      "issues": [],
+      "etapa": null,
+      "herdado": null
+    }
+  },
+  "codex_login_null": {
+    "method": "GET",
+    "path": "/api/codex-contas/fresh/login",
+    "status": 200,
+    "body": null
+  },
+  "codex_cancel_requires_attempt": {
+    "method": "DELETE",
+    "path": "/api/codex-contas/fresh/login",
+    "status": 422,
+    "body": {
+      "detail": [
+        {
+          "type": "missing",
+          "loc": [
+            "query",
+            "attempt_id"
+          ],
+          "msg": "Field required",
+          "input": null
+        }
+      ]
+    }
+  },
+  "codex_cancel_old_attempt": {
+    "method": "DELETE",
+    "path": "/api/codex-contas/fresh/login?attempt_id=old",
+    "status": 409,
+    "body": {
+      "detail": {
+        "code": "codex_login_attempt_mismatch",
+        "params": {
+          "account_id": "fresh"
+        },
+        "msg": "a tentativa de login já mudou"
+      }
+    }
+  },
+  "codex_reset_invalid_uuid": {
+    "method": "POST",
+    "path": "/api/codex-contas/fresh/rate-limit-reset",
+    "status": 422,
+    "body": {
+      "detail": [
+        {
+          "type": "uuid_parsing",
+          "loc": [
+            "body",
+            "idempotency_key"
+          ],
+          "msg": "Input should be a valid UUID, invalid character: found `i` at 1",
+          "input": "invalid",
+          "ctx": {
+            "error": "invalid character: found `i` at 1"
+          }
+        }
+      ]
+    }
+  },
+  "device_state": {
+    "method": "GET",
+    "path": "/api/credenciais/codex",
+    "status": 200,
+    "body": {
+      "cofre": false,
+      "plano": "",
+      "expira_em": null,
+      "codex": false,
+      "pi": false,
+      "omp": false
+    }
+  },
+  "device_login_idle": {
+    "method": "GET",
+    "path": "/api/credenciais/codex/login",
+    "status": 200,
+    "body": {
+      "etapa": "idle"
+    }
+  },
+  "device_cancel_idle": {
+    "method": "DELETE",
+    "path": "/api/credenciais/codex/login",
+    "status": 200,
+    "body": {
+      "etapa": "idle"
+    }
+  },
+  "quotas_disconnected": {
+    "method": "GET",
+    "path": "/api/cotas",
+    "status": 200,
+    "body": [
+      {
+        "id": "claude:<HOME>/.claude",
+        "label": "default",
+        "provedor": "claude",
+        "ativa": true,
+        "estado": "sem_credencial",
+        "janelas": [],
+        "ts": null,
+        "idade_s": null,
+        "motivo": "credencial-ilegivel",
+        "reset_credits": null,
+        "refresh_expires_at": null
+      },
+      {
+        "id": "claude:<HOME>/.claude-work",
+        "label": "Trabalho de revisão",
+        "provedor": "claude",
+        "ativa": false,
+        "estado": "sem_credencial",
+        "janelas": [],
+        "ts": null,
+        "idade_s": null,
+        "motivo": "credencial-ilegivel",
+        "reset_credits": null,
+        "refresh_expires_at": null
+      },
+      {
+        "id": "codex:<HOME>/.codex",
+        "label": "Codex",
+        "provedor": "codex",
+        "ativa": false,
+        "estado": "sem_credencial",
+        "janelas": [],
+        "ts": null,
+        "idade_s": null,
+        "motivo": null,
+        "reset_credits": null,
+        "refresh_expires_at": null
+      },
+      {
+        "id": "codex:<HOME>/.codex-alpha",
+        "label": "alpha",
+        "provedor": "codex",
+        "ativa": false,
+        "estado": "sem_credencial",
+        "janelas": [],
+        "ts": null,
+        "idade_s": null,
+        "motivo": null,
+        "reset_credits": null,
+        "refresh_expires_at": null
+      },
+      {
+        "id": "codex:<HOME>/.codex-fresh",
+        "label": "fresh",
+        "provedor": "codex",
+        "ativa": false,
+        "estado": "sem_credencial",
+        "janelas": [],
+        "ts": null,
+        "idade_s": null,
+        "motivo": null,
+        "reset_credits": null,
+        "refresh_expires_at": null
+      },
+      {
+        "id": "codex:<HOME>/.codex-zeta",
+        "label": "zeta",
+        "provedor": "codex",
+        "ativa": false,
+        "estado": "sem_credencial",
+        "janelas": [],
+        "ts": null,
+        "idade_s": null,
+        "motivo": null,
+        "reset_credits": null,
+        "refresh_expires_at": null
+      }
+    ]
+  },
+  "quota_suggestion_empty": {
+    "method": "GET",
+    "path": "/api/cotas/sugestao",
+    "status": 404,
+    "body": {
+      "detail": "sem-conta-legivel"
+    }
+  },
+  "codex_delete": {
+    "method": "DELETE",
+    "path": "/api/codex-contas/fresh",
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  }
+}

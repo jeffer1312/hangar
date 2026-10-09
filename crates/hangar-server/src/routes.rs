@@ -35,6 +35,7 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub accounts: crate::accounts::AccountService,
     pub cfg: Config,
     pub auth: Auth,
     pub http: HttpClient,
@@ -108,7 +109,7 @@ impl AppState {
         side.monitors = Some(crate::state::live::spawner(state.clone()));
         let groups = crate::groups::from_env(list.env().dirs.as_ref(),
             Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())), list.clone());
-        AppState { groups, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
+        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), groups, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             workspace_read_slots: Arc::new(tokio::sync::Semaphore::new(8)),
             workspace_meta_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -238,6 +239,10 @@ pub fn terminal_router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/workspace", axum::routing::post(crate::workspace_routes::private))
         .route("/__hangar_server/claude/customizations", axum::routing::post(crate::claude_customizations::private))
         .route("/__hangar_server/list", axum::routing::post(crate::list::bridge::private))
+        .route("/__hangar_server/accounts", axum::routing::post(crate::accounts::http::private))
+        .route("/__hangar_server/uploads/{name}", axum::routing::any(crate::uploads::http::private))
+        .route("/__hangar_server/quotas", axum::routing::post(crate::accounts::quotas::private))
+        .route("/__hangar_server/accounts/claude", axum::routing::post(crate::accounts::http::private_claude))
         .route("/__hangar_server/pages", axum::routing::post(crate::pages::routes::publish_bridge))
         .route("/__hangar_server/groups", axum::routing::post(crate::groups::bridge::private))
         .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
@@ -256,6 +261,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/workspace", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/claude/customizations", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/list", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/accounts", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/uploads/{name}", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/quotas", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/accounts/claude", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/pages", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/groups", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/term", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
@@ -375,6 +384,29 @@ pub(crate) async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
+    // Anexos e contas do dono são do Rust; o convidado segue ao Python.
+    let uploads = crate::uploads::http::matches(req.method(), req.uri().path());
+    if (uploads || crate::accounts::http::matches(req.method(), req.uri().path()))
+        && gate(&st, peer, &req).1
+    {
+        let headers = req.headers().clone();
+        let path = req.uri().path().to_owned();
+        let mut response = if uploads {
+            crate::uploads::http::public(st.clone(), req).await
+        } else {
+            crate::accounts::http::public(st.clone(), req).await
+        };
+        // Sem o Python nessas rotas, a falha só chega ao diário exportável por aqui.
+        if uploads {
+            let session = crate::uploads::http::tail(&path).map_or("", |(name, _)| name);
+            st.diag.report_response("rust.uploads_failed", session, &response, "a operação de anexo falhou");
+        } else {
+            let scope = crate::accounts::http::journal_scope(&path);
+            st.diag.report_response("rust.accounts_failed", &scope, &response, "a operação de conta falhou");
+        }
+        cors(&headers, response.headers_mut());
+        return response;
+    }
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
         let (forward, owner) = gate(&st, peer, &req);
         // Convidado segue ao Python, que o recusa como antes.

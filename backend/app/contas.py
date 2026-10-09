@@ -78,11 +78,11 @@ DRIFT_TETO = 3
 # CÓPIA real deixada de eras antigas numa conta fazia _resolver_colisao "subir" o arquivo velho
 # por cima do compartilhado, apagando os apelidos (aconteceu 19/08 08:52, mesma janela do
 # incidente do settings.json).
-# Runtime POR CONTA, que o próprio CLI (`telemetry`, `feedback`, `image-cache`,
+# Runtime POR CONTA, que o próprio CLI (`sessions`, `telemetry`, `feedback`, `image-cache`,
 # `.last-update-result.json`) ou o backend (`.hangar-models.json`, cache do picker por config dir)
 # regravam com tmp+rename — o que troca o atalho por arquivo real. Ligados, cada reconciliação
 # achava a "deriva" de novo, gavetava e avisava; a gaveta desta máquina chegou a `telemetry.3`.
-_RUNTIME_DA_CONTA = {"telemetry", "feedback", "image-cache", ".last-update-result.json",
+_RUNTIME_DA_CONTA = {"sessions", "telemetry", "feedback", "image-cache", ".last-update-result.json",
                      ".hangar-models.json"}
 _NAO_LIGAR = {MARCADOR, ".drift", ".claude.json", ".credentials.json", "projects", "settings.json",
               ".hangar-apelidos.json"} | _RUNTIME_DA_CONTA
@@ -113,7 +113,7 @@ def e_conta(p: Path) -> bool:
     seria listado como conta, e a reconciliação remexeria — e o apagar destruiria — o diretório
     externo.
     """
-    if p.is_symlink() or not p.is_dir():
+    if p.is_symlink() or not p.is_dir() or (p / ".hangar-account-pending").exists():
         return False
     marcador = p / MARCADOR
     return marcador.is_file() and not marcador.is_symlink()
@@ -125,8 +125,9 @@ def listar() -> list[str]:
 
 
 @contextmanager
-def _trava(dir_conta: Path):
-    """Serializa reconciliações da MESMA conta.
+def _trava(dir_conta: Path, arquivo: str = MARCADOR):
+    """Serializa reconciliações da MESMA conta. Na semeadura a conta ainda não tem marcador: a
+    trava fica no arquivo de pendência, o único que existe até a publicação.
 
     Sem isto, duas criações de sessão simultâneas (o app roda em thread, e o terminal chama o
     `hangar-conta --prep` por fora) caem na janela entre remover e recriar o link: uma leva
@@ -136,7 +137,7 @@ def _trava(dir_conta: Path):
     if fcntl is None:
         yield
         return
-    with open(dir_conta / MARCADOR, "r+", encoding="utf-8") as fh:
+    with open(dir_conta / arquivo, "r+", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
@@ -487,8 +488,8 @@ def _conferir_plugins(dir_conta: Path) -> list[str]:
 
 @diag.rastrear("conta.reconciliar", provider="claude")
 def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
-    """Corpo da reconciliação, SEM as travas — quem chama (reconciliar público ou o ciclo da
-    conta) já as segura. Validar o projeto aqui também protege o caminho do ciclo, que recebe
+    """Corpo da reconciliação, SEM as travas — quem chama (o ciclo da conta ou o preparo pedido
+    pelo Rust) já as segura. Validar o projeto aqui também protege o caminho do ciclo, que recebe
     o projeto do backend sem passar pelo público."""
     if projeto is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", projeto):
         # projeto entra em caminhos (raiz / projeto / memory): absoluto, `..` ou barra
@@ -533,56 +534,54 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
                    provider="claude", quantidade=len(avisos), codigo="com_avisos" if avisos else "ok")
     return avisos
 
+def prepare_configuration(account_home: Path, *, seed: bool = False) -> dict:
+    """Reconcilia sob as guardas do chamador, sem publicar conta nem autenticação."""
+    if seed:
+        _semear_claude_json(account_home)
+        (account_home / "projects").mkdir(exist_ok=True)
+    warnings = _reconciliar(account_home, None)
+    return {"status": "partial" if warnings else "ready", "trust_pending": False,
+            "issues": [{"code": "account_prepare_warning", "params": {"warning": warning}}
+                       for warning in warnings]}
+
 
 def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
-    """Refaz os atalhos da conta. Idempotente — roda a cada abertura de sessão.
-
-    É isto que impede a deriva: pasta que aparecer no `~/.claude` depois entra na conta no próximo
-    uso, sem ninguém rodar nada à mão. Devolve avisos (lista vazia = nada fora do lugar).
-    """
-    dir_conta = caminho(nome)
-    if not e_conta(dir_conta):
-        raise ContaError(404, f"{dir_conta} não é uma conta criada pelo hangar")
-    # Compartilhada primeiro, a da conta depois — sempre nesta ordem, em toda operação.
-    with _trava_compartilhada(), _trava(dir_conta):
-        return _reconciliar(dir_conta, projeto)
+    """Preparo segura descritor próprio, mesmo se o servidor que pediu reiniciar."""
+    from app.account_lifecycle import GuardMode
+    with ciclo_conta(nome, mode=GuardMode.SHARED) as cycle:
+        return cycle.reconciliar(projeto)
 
 
 class _Ciclo:
-    """A conta sob a trava do ciclo: as operações internas que a API roda DENTRO da janela em
-    que a conta não pode sumir. Só o `ciclo_conta` fabrica — a API não adquire `_trava` por
-    conta própria."""
+    """A conta sob a guarda de existência: cada operação retém a guarda e só então pega as
+    travas de configuração, sempre na mesma ordem. Só o `ciclo_conta` fabrica."""
 
-    def __init__(self, dir_conta: Path):
+    def __init__(self, dir_conta: Path, guard):
         self.dir_conta = dir_conta
+        self.guard = guard
 
     def reconciliar(self, projeto: str | None = None) -> list[str]:
-        return _reconciliar(self.dir_conta, projeto)
+        with self.guard.retain(), _trava_compartilhada(), _trava(self.dir_conta):
+            return _reconciliar(self.dir_conta, projeto)
 
     def apagar(self) -> None:
-        _apagar(self.dir_conta)
+        with self.guard.retain(), _trava_compartilhada(), _trava(self.dir_conta):
+            _apagar(self.dir_conta)
 
 
 @contextmanager
-def ciclo_conta(nome: str):
-    """Trava do ciclo de vida da conta: da reconciliação até o `registry.create` (abrir sessão),
-    e ao redor da checagem + rmtree do apagar.
-
-    Por quê: a criação de sessão é assíncrona (roda em thread) e a reconciliação tem efeito no
-    disco. Sem esta janela, um DELETE da MESMA conta no meio dela via a lista de sessões ainda
-    vazia e apagava a pasta embaixo da sessão que estava subindo — o CLI passaria a escrever num
-    caminho que sumiu. Quem abre sessão e quem apaga disputam o mesmo recurso; as duas pontas
-    usam esta mesma trava, então uma espera a outra.
-
-    O `apagar` público adquire a mesma trava sozinho (o `hangar-conta` não conhece o ciclo); a API
-    usa as operações do `_Ciclo` devolvido para não se trancar duas vezes.
-    """
+def ciclo_conta(nome: str, *, mode=None):
+    """Proteção de existência antes das travas de configuração; exclusão pede exclusividade."""
+    from app.account_lifecycle import AccountKey, AccountLockError, GuardMode, acquire
     dir_conta = caminho(nome)
-    if not e_conta(dir_conta):
-        raise ContaError(404, f"{dir_conta} não é uma conta criada pelo hangar")
-    # Compartilhada primeiro, a da conta depois — sempre nesta ordem, em toda operação.
-    with _trava_compartilhada(), _trava(dir_conta):
-        yield _Ciclo(dir_conta)
+    try:
+        guard = acquire(AccountKey.new("claude", dir_conta), mode or GuardMode.EXCLUSIVE)
+    except AccountLockError as exc:
+        raise ContaError(409, "a conta está ocupada por outra operação") from exc
+    with guard:
+        if not e_conta(dir_conta):
+            raise ContaError(404, f"{dir_conta} não é uma conta criada pelo hangar")
+        yield _Ciclo(dir_conta, guard)
 
 
 def _semear_claude_json(dir_conta: Path) -> None:
@@ -648,25 +647,13 @@ def criar(nome: str) -> Path:
 
 @diag.rastrear("conta.apagar", provider="claude")
 def _apagar(dir_conta: Path) -> None:
-    """rmtree sob a trava — quem chama (apagar público ou o ciclo da conta) já validou e já
-    segura as travas."""
+    """rmtree sob a trava — quem chama (o ciclo da conta) já validou e já segura as travas."""
     diag.registrar("conta.apagar.etapa", provider="claude", etapa="remover_pasta",
                    conta_id=diag.conta_id(str(dir_conta)))
     shutil.rmtree(dir_conta)
 
 
 def apagar(nome: str) -> None:
-    """Some com a conta. Existe porque um nome digitado errado no cadastro ficaria pra sempre no
-    seletor — `criar` só recusa sobrescrever, não desfaz.
-
-    Os `.jsonl` daquela conta vão junto: são dela, e o gasto histórico dela sai do painel. Quem
-    chama (a API) é quem checa se há sessão viva usando esta conta.
-
-    Adquire a mesma trava da reconciliação e do ciclo: o `hangar-conta` (que não conhece o ciclo)
-    também não pode apagar a conta no meio de uma abertura de sessão.
-    """
-    dir_conta = caminho(nome)
-    if not e_conta(dir_conta):
-        raise ContaError(404, f"{dir_conta} não é uma conta criada pelo hangar")
-    with _trava_compartilhada(), _trava(dir_conta):
-        _apagar(dir_conta)
+    """Exclusão disputa existência com criações e preparação, inclusive de outro processo."""
+    with ciclo_conta(nome) as cycle:
+        cycle.apagar()
