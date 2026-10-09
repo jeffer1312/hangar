@@ -631,6 +631,8 @@ pub(super) struct Costs {
     areas: Remote<Vec<Area>>,
     area_parts: Vec<Option<Vec<Area>>>,
     area_pending: usize,
+    /// Máquinas que falharam nas áreas enquanto outras responderam: o painel soma sem elas e diz quais.
+    area_partial: Partial,
     areas_key: String,
     compare_dim: Option<Dim>,
     compare_metric: Metric,
@@ -939,7 +941,7 @@ impl Hangar {
         if key == self.costs.areas_key && (self.costs.areas.loading || self.costs.areas.value.is_some()) { return; }
         self.costs.areas_key = key;
         let seq = self.costs.areas.start();
-        (self.costs.area_parts, self.costs.area_pending) = (Vec::new(), machines.len());
+        (self.costs.area_parts, self.costs.area_pending, self.costs.area_partial) = (Vec::new(), machines.len(), Partial::default());
         if machines.is_empty() { self.costs.areas.finish(seq, Err(web("custos_areas_erro"))); }
         let mut query = vec![("period".to_owned(), self.costs.period.key().to_owned())];
         query.extend(projects.into_iter().map(|p| ("projeto".to_owned(), p)));
@@ -949,15 +951,21 @@ impl Hangar {
     }
 
     /// Áreas só saem quando todas as máquinas responderam; erro só se nenhuma respondeu.
-    fn areas_part(&mut self, seq: u64, _: &Machine, result: Result<Value, String>, cx: &mut Context<Self>) {
+    fn areas_part(&mut self, seq: u64, m: &Machine, result: Result<Value, String>, cx: &mut Context<Self>) {
         if seq != self.costs.areas.seq { return; }
         let period = self.costs.period.key();
-        let part = result.ok().and_then(|v| match v.pointer("/applied/period").and_then(Value::as_str) == Some(period) {
+        let in_period = result.as_ref().is_ok_and(|v| v.pointer("/applied/period").and_then(Value::as_str) == Some(period));
+        let part = result.ok().and_then(|v| match in_period {
             // Fora do período: respondeu, mas não soma.
             false => Some(Vec::new()),
             true => v.get("by_area").map_or(Some(Vec::new()), |list| serde_json::from_value::<Vec<Area>>(list.clone()).ok()),
         });
         let c = &mut self.costs;
+        match &part {
+            None => c.area_partial.failed.push(m.label.clone()),
+            Some(_) if !in_period => c.area_partial.mismatched.push(m.label.clone()),
+            Some(_) => {}
+        }
         c.area_parts.push(part);
         c.area_pending = c.area_pending.saturating_sub(1);
         if c.area_pending == 0 {
@@ -1089,7 +1097,7 @@ impl Hangar {
             .child(two_cols(self.render_dollar(&d, rate), self.render_cache(&d, rate)))
             .child(two_cols(self.render_rank(&report, &d, Dim::Provider, rate, cx), self.render_rank(&report, &d, Dim::Source, rate, cx)))
             .children(multi.then(|| self.render_costs_by_machine(&report, rate, cx)))
-            .child(self.render_areas(&d, rate))
+            .child(self.render_areas(&d, rate, cx))
             .child(self.render_projects(&report, &d, rate, cx))
             .child(self.render_sessions(&report, &d, rate, cx))
             .child(self.render_models(&report, &d, rate, cx))
@@ -1539,7 +1547,7 @@ impl Hangar {
             .child(if rows.is_empty() { empty_state(web("custos_sem_dados_no_periodo")) } else { div().flex().flex_col().gap(px(2.)).children(rows) })
     }
 
-    fn render_areas(&self, d: &Derived, rate: Option<f64>) -> Div {
+    fn render_areas(&self, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
         let filter = &self.costs.filter;
         let mut hint = web("uso_graf_areas_nota");
         if [Dim::Provider, Dim::Source, Dim::Machine].iter().any(|d| !filter.get(*d).is_empty()) { hint.push(' '); hint.push_str(&web("custos_areas_sem_recorte")); }
@@ -1549,6 +1557,13 @@ impl Hangar {
             None => body.child(empty_state(web("custos_areas_carregando"))),
             Some(Err(error)) => body.child(empty_state(error.clone())),
             Some(Ok(list)) => {
+                let body = if self.costs.area_partial.is_empty() { body } else {
+                    body.child(partial_note("costs-areas-retry", &self.costs.area_partial, cx.listener(|this, _, _, cx| {
+                        this.costs.areas_key.clear();
+                        this.refresh_areas(cx);
+                        cx.notify();
+                    })))
+                };
                 const ORDER: [&str; 7] = ["front", "back", "banco", "infra", "docs", "outros", "conversa"];
                 let pos = |k: &str| ORDER.iter().position(|o| *o == k).unwrap_or(ORDER.len());
                 let mut items: Vec<&Area> = list.iter().filter(|a| a.tokens() > 0.).collect();
