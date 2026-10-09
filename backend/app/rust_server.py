@@ -463,7 +463,8 @@ class Supervisor:
                             _log.warning("registro de contenção do hangar-server não gravou: %s", e)
                             diag.registrar("hangar_server.registro_falhou", "aviso", **diag.erro_campos(e))
                         record_failed = True
-                from app import list_bridge, pages_bridge, workspace_bridge
+                from app import account_bridge, list_bridge, pages_bridge, workspace_bridge
+                account_bridge.configure_preparation(None, None)
                 workspace_bridge.configure(None, None)
                 claude_customizations.configure(None, None)
                 list_bridge.configure(None, None)
@@ -492,7 +493,8 @@ class Supervisor:
             return "erro"
 
     async def stop(self) -> None:
-        from app import costs_sources, list_bridge, pages_bridge, workspace_bridge
+        from app import account_bridge, costs_sources, list_bridge, pages_bridge, workspace_bridge
+        account_bridge.configure_preparation(None, None)
         workspace_bridge.configure(None, None)
         claude_customizations.configure(None, None)
         list_bridge.configure(None, None)

@@ -95,9 +95,10 @@ Com o Rust de pé (07/10/2026, depois da 5-0):
   sugestão pelo canal privado do hub; transcript e fila lidos pelo Python; terminal ligado a
   `/__hangar_server/term`), a Origin do terminal (`/internal/term/origin`) e
   o 409 de painel aberto (pergunta `term.active` ao Rust).
-- **#115:** contas, login e cotas Claude/Codex; com a migração ativa, o Rust mantém autoria
-  exclusiva e os reconciliadores Python ficam limitados à preparação de configuração.
-- **Parte 6:** convidados, pareamento, MCP, push, atualização, uploads, ditado; contas/cotas
+- **#115 (o que fica no Python):** admissão do convidado, fatos de sessão e de configuração que o
+  Rust pede, transcrição do áudio e preparo de configuração das contas. Contas, login, cotas e
+  anexos de sessão são do Rust.
+- **Parte 6:** convidados, pareamento, MCP, push, atualização, ditado; contas/cotas
   dos outros provedores, stats, criação/troca de conta da sessão e mutações de worktree.
 - **Parte 7:** o Supervisor que sobe o Rust e a reserva do processo inteiro (modo `python`).
 

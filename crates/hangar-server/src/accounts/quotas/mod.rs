@@ -231,12 +231,7 @@ impl AccountService {
             }
             sources.push((row.clone(), None));
         }
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(8))
-            .build()
-            .map_err(|_| AccountError::io())?;
+        let client = external_client(Duration::from_secs(8))?;
         let signatures: std::collections::HashMap<String, Value> = sources
             .iter()
             .filter_map(|(row, account)| {
@@ -457,9 +452,67 @@ impl AccountService {
     }
 }
 
+/// Cliente para os serviços de fora (cotas, OAuth): respeita o proxy do ambiente, como o
+/// `urllib` do Python fazia; quem só sai por proxy não pode perder cota nem login.
+pub(crate) fn external_client(timeout: Duration) -> Result<reqwest::Client, AccountError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()
+        .map_err(|_| AccountError::io())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn external_reads_go_through_the_environment_proxy() {
+        if std::env::var_os("QUOTA_PROXY_PROBE").is_none() {
+            // Processo filho: o proxy vem só do ambiente dele, sem tocar no deste teste.
+            let proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = proxy.local_addr().unwrap();
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "accounts::quotas::tests::external_reads_go_through_the_environment_proxy"])
+                .env("QUOTA_PROXY_PROBE", "1")
+                .env("HTTPS_PROXY", format!("http://{address}"))
+                .env_remove("NO_PROXY")
+                .env_remove("no_proxy")
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            proxy.set_nonblocking(true).unwrap();
+            let mut child = child;
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let stream = loop {
+                match proxy.accept() {
+                    Ok((stream, _)) => break Some(stream),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if child.try_wait().unwrap().is_some() || std::time::Instant::now() > deadline {
+                            break None;
+                        }
+                        std::thread::yield_now();
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            let mut stream = stream.expect("a leitura externa não passou pelo proxy do ambiente");
+            stream.set_nonblocking(false).unwrap();
+            let mut first = [0u8; 64];
+            let read = std::io::Read::read(&mut stream, &mut first).unwrap();
+            drop(stream);
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(
+                String::from_utf8_lossy(&first[..read]).starts_with("CONNECT quota.invalid:443"),
+                "{}",
+                String::from_utf8_lossy(&first[..read])
+            );
+            return;
+        }
+        let client = external_client(Duration::from_secs(3)).unwrap();
+        let _ = client.get("https://quota.invalid/").send().await;
+    }
     #[tokio::test]
     async fn concurrent_requests_share_one_writer_and_keep_other_provider() {
         use std::sync::atomic::{AtomicUsize, Ordering};

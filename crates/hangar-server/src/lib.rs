@@ -82,7 +82,10 @@ pub async fn serve_until_with_state(
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
         let windows = accounts::claude_login::WindowClient::new(cfg.upstream, cfg.internal_secret.clone(), instance.clone())
             .map_err(|error| std::io::Error::other(error.code))?;
-        state.accounts.recover_claude_logins(windows).await.map_err(|error| std::io::Error::other(error.code))?;
+        // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
+        if let Err(error) = state.accounts.recover_claude_logins(windows).await {
+            tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
+        }
         let private = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = private.local_addr()?.port();
         let registry = std::sync::Arc::new(runtime::gateway::RuntimeRegistry::new(cfg.upstream,

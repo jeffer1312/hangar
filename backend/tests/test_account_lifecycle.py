@@ -25,7 +25,7 @@ def lock_path(root: Path, provider: str, home: Path) -> Path:
 @pytest.fixture(scope="session")
 def rust_probe():
     root = Path(__file__).resolve().parents[2]
-    target = Path(os.environ["CARGO_TARGET_DIR"])
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or root / "crates/target")
     candidates = list((target / "debug" / "deps").glob("accounts_lifecycle-*.exe" if os.name == "nt" else "accounts_lifecycle-*"))
     candidates = [path for path in candidates if path.is_file() and path.suffix not in {".d", ".pdb"}]
     assert candidates, "compile accounts_lifecycle antes desta prova"

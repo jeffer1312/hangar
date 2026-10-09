@@ -312,6 +312,16 @@ def _trocar_codigo(codigo: str, verificador: str) -> Tokens:
 
 
 def _vigiar(t: Tentativa, home: Path | None) -> None:
+    # A thread não tem a quem entregar a exceção: qualquer saída inesperada vira falha visível,
+    # senão a tentativa fica "aguardando" e recusa as próximas para sempre.
+    try:
+        _vigiar_ate_concluir(t, home)
+    except Exception as e:  # noqa: BLE001
+        _log.warning("login Codex por dispositivo interrompido: %s", type(e).__name__)
+        t.etapa, t.erro = "falhou", str(e) or type(e).__name__
+
+
+def _vigiar_ate_concluir(t: Tentativa, home: Path | None) -> None:
     espera = max(t.intervalo_s, 1.0)
     while not t._parar.is_set():
         if time.monotonic() - t.inicio > _TIMEOUT_S:

@@ -100,37 +100,52 @@ fn cancelled(label: &str) -> AccountError {
     )
 }
 impl AccountService {
+    /// Fecha as janelas de login que a instância anterior deixou. Uma conta que não se recupera
+    /// fica com o registro para a próxima subida e não impede as outras nem o servidor.
     pub async fn recover_claude_logins(&self, client: WindowClient) -> Result<(), AccountError> {
         for (_, account) in self.claude_accounts()? {
-            let key =
-                AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
-            let record = self.login_record(&key)?;
-            if !record.exists() {
-                continue;
+            if let Err(error) = self.recover_claude_login(&account, &client).await {
+                tracing::warn!(
+                    code = "claude_login_recovery_failed",
+                    reason = error.code,
+                    "login Claude da instância anterior não foi recuperado"
+                );
             }
-            let _guard = self
-                .locks
-                .try_acquire(&key, GuardMode::Exclusive)
-                .map_err(|_| AccountError::io())?;
-            self.validate_claude(&account, &key)?;
-            let raw: Value =
-                serde_json::from_slice(&fs::read(&record).map_err(|_| AccountError::io())?)
-                    .map_err(|_| AccountError::io())?;
-            if serde_json::from_value::<AccountKey>(raw["key"].clone())
-                .ok()
-                .as_ref()
-                != Some(&key)
-            {
-                return Err(AccountError::io());
-            }
-            let operation = raw["operation"]
-                .as_str()
-                .filter(|s| valid_operation(s))
-                .ok_or_else(AccountError::io)?;
-            client.call(&key, operation, "close", None).await?;
-            fs::remove_file(record).map_err(|_| AccountError::io())?;
         }
         Ok(())
+    }
+    async fn recover_claude_login(
+        &self,
+        account: &Account,
+        client: &WindowClient,
+    ) -> Result<(), AccountError> {
+        let key =
+            AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
+        let record = self.login_record(&key)?;
+        if !record.exists() {
+            return Ok(());
+        }
+        let _guard = self
+            .locks
+            .try_acquire(&key, GuardMode::Exclusive)
+            .map_err(|_| AccountError::io())?;
+        self.validate_claude(account, &key)?;
+        let raw: Value =
+            serde_json::from_slice(&fs::read(&record).map_err(|_| AccountError::io())?)
+                .map_err(|_| AccountError::io())?;
+        if serde_json::from_value::<AccountKey>(raw["key"].clone())
+            .ok()
+            .as_ref()
+            != Some(&key)
+        {
+            return Err(AccountError::io());
+        }
+        let operation = raw["operation"]
+            .as_str()
+            .filter(|s| valid_operation(s))
+            .ok_or_else(AccountError::io)?;
+        client.call(&key, operation, "close", None).await?;
+        fs::remove_file(record).map_err(|_| AccountError::io())
     }
     pub(super) fn login_record(
         &self,
@@ -806,6 +821,52 @@ mod tests {
         let config: Value =
             serde_json::from_slice(&fs::read(account.home.join(".claude.json")).unwrap()).unwrap();
         assert_eq!(config["hasCompletedOnboarding"], true);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn one_unrecoverable_login_does_not_block_the_others() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into(),
+        ));
+        let broken = service.create(Provider::Claude, "broken", |_| Ok(())).unwrap();
+        let healthy = service.create(Provider::Claude, "healthy", |_| Ok(())).unwrap();
+        let broken_record = service
+            .login_record(&AccountKey::new(Provider::Claude, &broken.home).unwrap())
+            .unwrap();
+        fs::write(&broken_record, b"{ilegivel").unwrap();
+        let healthy_key = AccountKey::new(Provider::Claude, &healthy.home).unwrap();
+        let healthy_record = service.login_record(&healthy_key).unwrap();
+        fs::write(
+            &healthy_record,
+            json!({"key":healthy_key,"operation":"a".repeat(32)}).to_string(),
+        )
+        .unwrap();
+        let (actions, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let router = Router::new().route(
+            "/internal/accounts/claude-window",
+            post(move |body: axum::body::Bytes| {
+                let value: Value = serde_json::from_slice(&body).unwrap();
+                actions
+                    .send(value["action"].as_str().unwrap().to_owned())
+                    .unwrap();
+                async { json!({"ok":true,"url":null}).to_string() }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = WindowClient::new(
+            listener.local_addr().unwrap(),
+            "synthetic".into(),
+            "test".into(),
+        )
+        .unwrap();
+        let server = tokio::spawn(async { axum::serve(listener, router).await.unwrap() });
+        assert!(service.recover_claude_logins(client).await.is_ok());
+        assert_eq!(observed.recv().await.as_deref(), Some("close"));
+        assert!(!healthy_record.exists(), "a conta saudável não foi recuperada");
+        assert!(broken_record.exists(), "o registro ilegível fica para a próxima subida");
         server.abort();
     }
 }

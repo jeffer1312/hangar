@@ -15,7 +15,7 @@ from accounts_contract import PythonReference, HttpTransport, isolated_environme
 
 class RustCatalog(HttpTransport):
     def __init__(self, reference: PythonReference, *, instance="contract-instance", native_fixture=False):
-        target = Path(os.environ["CARGO_TARGET_DIR"]) / "debug" / "deps"
+        target = Path(os.environ.get("CARGO_TARGET_DIR") or Path(__file__).resolve().parents[2] / "crates/target") / "debug" / "deps"
         candidates = [path for path in target.glob("accounts_catalog-*.exe" if os.name == "nt" else "accounts_catalog-*")
                       if path.is_file() and path.suffix not in {".d", ".pdb", ".lib", ".exp"}]
         assert candidates, "compile accounts_catalog antes desta prova"

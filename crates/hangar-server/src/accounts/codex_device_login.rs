@@ -26,18 +26,21 @@ impl DeviceOAuth {
     pub fn new(base: &str) -> Result<Self, AccountError> {
         let url = reqwest::Url::parse(base).map_err(|_| AccountError::io())?;
         // HTTP só é aceito em loopback, para um transporte local controlado.
-        if !(url.scheme() == "https"
-            || (url.scheme() == "http"
-                && url
-                    .host_str()
-                    .and_then(|host| host.parse::<std::net::IpAddr>().ok())
-                    .is_some_and(|ip| ip.is_loopback())))
-        {
+        let loopback = url.scheme() == "http"
+            && url
+                .host_str()
+                .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+                .is_some_and(|ip| ip.is_loopback());
+        if !(url.scheme() == "https" || loopback) {
             return Err(AccountError::io());
         }
+        // O servidor OAuth de verdade passa pelo proxy do ambiente; o de loopback, nunca.
+        let mut builder = reqwest::Client::builder();
+        if loopback {
+            builder = builder.no_proxy();
+        }
         Ok(Self {
-            client: reqwest::Client::builder()
-                .no_proxy()
+            client: builder
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(20))
                 .user_agent("hangar/1.0")
@@ -88,9 +91,10 @@ impl DeviceOAuth {
             }
             bytes.extend_from_slice(&chunk);
         }
+        // Corpo vazio ou não-JSON vale `{}`, como no Python: o status decide (403/404 é pendente).
         Ok((
             status,
-            serde_json::from_slice(&bytes).map_err(|_| "device_response_invalid")?,
+            serde_json::from_slice(&bytes).unwrap_or_else(|_| serde_json::json!({})),
         ))
     }
 }
@@ -653,10 +657,25 @@ impl AccountService {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn pending_reply_without_json_body_keeps_its_status() {
+        let app = axum::Router::new().fallback(|| async { axum::http::StatusCode::FORBIDDEN });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async { axum::serve(listener, app).await.unwrap() });
+        let oauth = DeviceOAuth::new(&format!("http://{address}")).unwrap();
+        let reply = oauth
+            .post("/api/accounts/deviceauth/token", serde_json::json!({}), false)
+            .await;
+        assert_eq!(reply, Ok((403, serde_json::json!({}))));
+        server.abort();
+    }
+
+    #[cfg(unix)]
     #[test]
     fn strict_destination_refuses_a_dangling_link() {
         let root = tempfile::tempdir().unwrap();

@@ -2618,12 +2618,16 @@ async def _create_session_owned(body: CreateBody, worktree: dict):
             if body.engine_account is not None:
                 kwargs["engine_account"] = body.engine_account
                 kwargs["engine_models"] = account_models
-            from app.account_lifecycle import AccountKey, acquire
+            from app.account_lifecycle import AccountKey, AccountLockError, acquire
             from contextlib import nullcontext
             home = (codex_account_obj.home if body.provider == "codex"
                     else Path(tmux.config_dir_de(body.config_dir)))
-            guard = (acquire(AccountKey.new("codex" if body.provider == "codex" else "claude", home))
-                     if body.provider in ("claude", "codex", "pi", "omp") else nullcontext())
+            try:
+                guard = (acquire(AccountKey.new("codex" if body.provider == "codex" else "claude", home))
+                         if body.provider in ("claude", "codex", "pi", "omp") else nullcontext())
+            except AccountLockError as exc:
+                # Exclusão ou login segura a conta: o app mostra "tente de novo", não um 500.
+                raise HTTPException(409, detail=erro(exc.code, "a conta está ocupada por outra operação")) from None
             with guard:
                 try:
                     info = registry.create(body.name, body.cwd, body.config_dir, **kwargs)

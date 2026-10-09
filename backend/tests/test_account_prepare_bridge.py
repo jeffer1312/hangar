@@ -360,7 +360,7 @@ async def test_real_python_fallback_publishes_complete_result_for_restarted_rust
     from tests.accounts_contract import PythonReference, isolated_environment
     from tests.test_accounts_catalog import RustCatalog
     root, source, account = isolated
-    target_dir = os.environ["CARGO_TARGET_DIR"]
+    target_dir = os.environ.get("CARGO_TARGET_DIR") or str(Path(__file__).resolve().parents[2] / "crates/target")
     isolated_env = isolated_environment(root)
     for key in list(os.environ):
         if key not in isolated_env:

@@ -760,3 +760,24 @@ def test_native_writer_reports_sanitized_sqlite_busy_expiry(managed_device, star
         lock.execute("ROLLBACK")
         lock.close()
     assert _omp_rows(database) == []
+
+
+def test_device_attempt_never_stays_waiting_after_an_unexpected_failure(monkeypatch):
+    from fastapi import HTTPException
+    from app import oauth_codex
+
+    monkeypatch.setattr(oauth_codex, "_http", lambda *a, **k: (200, {
+        "authorization_code": "synthetic-code", "code_verifier": "synthetic-verifier"}))
+    monkeypatch.setattr(oauth_codex, "_trocar_codigo", lambda *a: object())
+    monkeypatch.setattr(oauth_codex, "salvar_cofre", lambda tokens: None)
+
+    def owner_changed(*args, **kwargs):
+        # O dono mudou entre a leitura do modo e a gravação: a ponte recusa com 503.
+        raise HTTPException(503, detail="escritor indisponível")
+
+    monkeypatch.setattr(oauth_codex, "propagar", owner_changed)
+    attempt = oauth_codex.Tentativa(device_auth_id="synthetic", user_code="SYN-0000", intervalo_s=0.0)
+    attempt._parar.wait = lambda timeout=None: False
+    oauth_codex._vigiar(attempt, None)
+    assert attempt.etapa == "falhou"
+    assert attempt.erro
