@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import threading
 import time
@@ -343,7 +344,7 @@ def _env_sessao(modelo: str | None, jev: bool, provider: str = "claude",
         # saber por qual sessão ele responde, e é o nome que a fila usa. A chave é deste
         # processo: o `resolve_binding` a lê do ambiente dele e a leva ao servidor Rust.
         if nome:
-            env.update(plugin_bridge.env_da_sessao(nome, uuid.uuid4().hex))
+            env.update(plugin_bridge.env_da_sessao(nome, secrets.token_hex(16)))
     if modelo:
         env["CLAUDE_CODE_SUBAGENT_MODEL"] = modelo
     return {"env": env}
