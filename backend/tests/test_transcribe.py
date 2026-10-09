@@ -88,7 +88,7 @@ def test_transcribe_manda_idioma_e_vocabulario_no_corpo_real(monkeypatch):
     class FakeResp:
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def read(self): return b"ok"
+        def read(self): return b'{"text":"ok"}'
 
     def fake_urlopen(req, timeout=None):
         captured["body"] = req.data
@@ -118,7 +118,7 @@ def test_transcribe_usa_endpoint_e_modelo_configurados(monkeypatch):
     class FakeResp:
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def read(self): return b"texto transcrito"
+        def read(self): return b'{"text":"texto transcrito"}'
 
     def fake_urlopen(req, timeout=None):
         captured["url"] = req.full_url
@@ -173,7 +173,7 @@ def test_transcribe_ignora_filename_do_cliente(monkeypatch):
     class FakeResp:
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def read(self): return b"ok"
+        def read(self): return b'{"text":"ok"}'
 
     monkeypatch.setattr(
         "app.transcribe.urllib.request.urlopen",

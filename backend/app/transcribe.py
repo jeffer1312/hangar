@@ -152,7 +152,7 @@ def build_multipart(filename: str, content: bytes, vocab: str = "",
                     model: str = GROQ_MODEL) -> tuple[bytes, str]:
     """Monta um corpo multipart/form-data (model + response_format + language + prompt + file) e
     devolve (body, boundary). Separado da chamada de rede pra ser testavel sem tocar na Groq."""
-    campos = [("model", model), ("response_format", "text"), ("language", IDIOMA)]
+    campos = [("model", model), ("response_format", "json"), ("language", IDIOMA)]
     if vocab:
         campos.append(("prompt", vocab))
     return _multipart(campos, filename, content)
@@ -189,7 +189,8 @@ def configured_providers() -> list[dict]:
     for item in bruto:
         if (isinstance(item, dict) and item.get("kind") in runtime_config.TRANSCRIPTION_KINDS
                 and isinstance(item.get("id"), str) and item["id"]
-                and isinstance(item.get("api_key"), str) and item["api_key"].strip()):
+                and isinstance(item.get("api_key", ""), str)
+                and (item["kind"] != "elevenlabs" or item.get("api_key", "").strip())):
             ok.append(item)
         else:
             visivel = ({k: v for k, v in item.items() if k != "api_key"}
@@ -202,15 +203,15 @@ def _openai_request(item: dict, content: bytes, ext: str) -> urllib.request.Requ
     base = (item.get("base_url") or "").strip().rstrip("/") or PADRAO_BASE_URL
     model = (item.get("model") or "").strip() or GROQ_MODEL
     body, boundary = build_multipart(f"audio.{ext}", content, vocabulario(), model)
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "User-Agent": "hangar/1.0",
+    }
+    if key := item.get("api_key", "").strip():
+        headers["Authorization"] = f"Bearer {key}"
     return urllib.request.Request(
         f"{base}/audio/transcriptions", data=body, method="POST",
-        headers={
-            "Authorization": f"Bearer {item['api_key'].strip()}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            # O Cloudflare da Groq bane o UA padrao do urllib ("Python-urllib/..") com 403 code 1010.
-            # Um UA normal passa.
-            "User-Agent": "hangar/1.0",
-        },
+        headers=headers,
     )
 
 
@@ -234,14 +235,17 @@ def _plain_text(raw: bytes) -> str:
     return " ".join(raw.decode("utf-8", "replace").split())
 
 
-def _elevenlabs_text(raw: bytes) -> str:
+def _json_text(raw: bytes) -> str:
     try:
         text = json.loads(raw).get("text")
     except (ValueError, AttributeError):
         text = None
     if not isinstance(text, str):
         raise _Failure(TranscribeError(502, "resposta do servico de transcricao sem texto"), empty=True)
-    return " ".join(text.split())
+    text = " ".join(text.split())
+    if not text:
+        raise _Failure(TranscribeError(502, "resposta do serviço de transcrição sem texto"), empty=True)
+    return text
 
 
 def _send(req: urllib.request.Request, timeout: float, parse) -> str:
@@ -274,7 +278,7 @@ def _transcribe_legacy(content: bytes, filename: str | None) -> Transcription:
             "base_url": runtime_config.get("transcription_base_url") or "",
             "model": runtime_config.get("transcription_model") or ""}
     try:
-        text = _send(_openai_request(item, content, _audio_ext(filename)), 120, _plain_text)
+        text = _send(_openai_request(item, content, _audio_ext(filename)), 120, _json_text)
     except _Failure as f:
         raise f.error from None
     return Transcription(text, display_name(item))
@@ -412,10 +416,11 @@ def transcribe_with_provider(content: bytes, filename: str | None,
             break
         name = display_name(p)
         elevenlabs = p["kind"] == "elevenlabs"
-        req = (_elevenlabs_request if elevenlabs else _openai_request)(p, content, ext)
         try:
-            text = _send(req, min(per_provider, remaining),
-                         _elevenlabs_text if elevenlabs else _plain_text)
+            if p["kind"] == "whisper_cpp":
+                raise _Failure(TranscribeError(503, "whisper.cpp local requer o servidor Rust disponível"))
+            req = (_elevenlabs_request if elevenlabs else _openai_request)(p, content, ext)
+            text = _send(req, min(per_provider, remaining), _json_text)
         except _Failure as f:
             if first_error is None:
                 first_error = TranscribeError(f.error.status, f"{name}: {f.error.detail}")

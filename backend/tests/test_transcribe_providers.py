@@ -69,6 +69,29 @@ def _servidores(monkeypatch, respostas):
     return chamadas
 
 
+def test_openai_compatible_json_response_without_authorization(monkeypatch):
+    local = {**TURBO, "api_key": "", "base_url": "http://127.0.0.1:8000/v1"}
+    _config(monkeypatch, [local])
+    captured = []
+
+    def endpoint(req, timeout=None):
+        captured.append(req)
+        assert b'name="response_format"\r\n\r\njson' in req.data
+        assert not req.has_header("Authorization")
+        return _Resp('{"text":"Transcrição em português."}'.encode())
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", endpoint)
+    result = transcribe_with_provider(b"audio", "fala.wav")
+    assert result.text == "Transcrição em português."
+    assert len(captured) == 1
+
+
+def test_openai_json_is_not_returned_as_transcript(monkeypatch):
+    _config(monkeypatch, [TURBO])
+    _servidores(monkeypatch, {"groq": '{"text":"Olá, mundo."}'.encode()})
+    assert transcribe_with_provider(b"audio", "fala.webm").text == "Olá, mundo."
+
+
 def _grava_espera(waits):
     mod._state_path().write_text(json.dumps(waits), encoding="utf-8")
 
@@ -76,7 +99,7 @@ def _grava_espera(waits):
 def test_lista_vazia_e_o_servico_unico_de_sempre(monkeypatch):
     _config(monkeypatch, [], groq_api_key="k", transcription_base_url="https://fala.exemplo/v1/",
             transcription_model="whisper-x")
-    chamadas = _servidores(monkeypatch, {"fala.exemplo": b"  texto \n transcrito "})
+    chamadas = _servidores(monkeypatch, {"fala.exemplo": b'{"text":"  texto \\n transcrito "}'})
     assert transcribe_with_provider(b"audio", "a.webm") == Transcription(
         "texto transcrito", "fala.exemplo · whisper-x", None)
     assert [c["url"] for c in chamadas] == ["https://fala.exemplo/v1/audio/transcriptions"]
@@ -121,7 +144,7 @@ def test_chave_recusada_passa_ao_proximo_e_avisa_sem_por_em_espera(monkeypatch):
     _config(monkeypatch, [EL, TURBO, LARGE])
     corpo = json.dumps({"detail": {"code": "invalid_api_key", "message": "x"}}).encode()
     chamadas = _servidores(monkeypatch, {"api.elevenlabs.io": _http_error(401, corpo),
-                                         "api.groq.com": b"texto"})
+                                         "api.groq.com": b'{"text":"texto"}'})
     r = transcribe_with_provider(b"audio", "a.webm")
     assert [c["host"] for c in chamadas] == ["api.elevenlabs.io", "api.groq.com"]
     assert r.text == "texto" and r.provider == TURBO_NOME
@@ -136,7 +159,7 @@ def test_chave_recusada_passa_ao_proximo_e_avisa_sem_por_em_espera(monkeypatch):
 ])
 def test_rede_prazo_e_5xx_passam_ao_proximo_sem_espera(monkeypatch, falha):
     _config(monkeypatch, [EL, TURBO])
-    _servidores(monkeypatch, {"api.elevenlabs.io": falha, "api.groq.com": b"texto"})
+    _servidores(monkeypatch, {"api.elevenlabs.io": falha, "api.groq.com": b'{"text":"texto"}'})
     r = transcribe_with_provider(b"audio", "a.webm")
     assert r.text == "texto" and r.aviso.startswith(f"Transcrito pelo {TURBO_NOME}: ElevenLabs")
     assert mod._load_waits() == {}
@@ -146,7 +169,7 @@ def test_cota_do_elevenlabs_poe_em_espera_e_os_seguintes_vao_direto_ao_proximo(m
     _config(monkeypatch, [EL, TURBO])
     corpo = json.dumps({"detail": {"status": "quota_exceeded", "message": "sem creditos"}}).encode()
     chamadas = _servidores(monkeypatch, {"api.elevenlabs.io": _http_error(401, corpo),
-                                         "api.groq.com": b"texto"})
+                                         "api.groq.com": b'{"text":"texto"}'})
     antes = time.time()
     primeira = transcribe_with_provider(b"audio", "a.webm")
     assert "ElevenLabs sem cota (401), em espera" in primeira.aviso
@@ -164,7 +187,7 @@ def test_espera_gravada_em_disco_vale_depois_de_reiniciar(monkeypatch):
     # O módulo não guarda espera em memória: o arquivo é tudo que um backend novo vê.
     _grava_espera({"el": {"until": time.time() + 600, "reason": "sem cota (429)"}})
     _config(monkeypatch, [EL, TURBO])
-    chamadas = _servidores(monkeypatch, {"api.groq.com": b"texto"})
+    chamadas = _servidores(monkeypatch, {"api.groq.com": b'{"text":"texto"}'})
     transcribe_with_provider(b"audio", "a.webm")
     assert [c["host"] for c in chamadas] == ["api.groq.com"]
 
@@ -186,7 +209,7 @@ def test_espera_vencida_volta_a_tentar_o_primeiro(monkeypatch):
 ])
 def test_tempo_de_espera_usa_a_data_do_servico_ou_o_padrao(monkeypatch, erro, espera):
     _config(monkeypatch, [TURBO, LARGE])
-    _servidores(monkeypatch, {"api.groq.com": erro(), "large.exemplo": b"texto"})
+    _servidores(monkeypatch, {"api.groq.com": erro(), "large.exemplo": b'{"text":"texto"}'})
     antes = time.time()
     assert transcribe_with_provider(b"a", "a.webm").provider == "Groq grande"
     until = mod._load_waits()["turbo"]["until"]
@@ -196,7 +219,7 @@ def test_tempo_de_espera_usa_a_data_do_servico_ou_o_padrao(monkeypatch, erro, es
 def test_429_de_concorrencia_do_elevenlabs_nao_e_cota(monkeypatch):
     _config(monkeypatch, [EL, TURBO])
     corpo = json.dumps({"detail": {"code": "concurrent_limit_exceeded"}}).encode()
-    _servidores(monkeypatch, {"api.elevenlabs.io": _http_error(429, corpo), "api.groq.com": b"texto"})
+    _servidores(monkeypatch, {"api.elevenlabs.io": _http_error(429, corpo), "api.groq.com": b'{"text":"texto"}'})
     assert transcribe_with_provider(b"a", "a.webm").text == "texto"
     assert mod._load_waits() == {}
 
@@ -256,7 +279,7 @@ def test_teto_do_conjunto_corta_a_fila(monkeypatch):
 def test_transcribe_do_video_devolve_so_o_texto_dentro_do_prazo_do_upload(monkeypatch):
     # A fala do vídeo roda dentro do /upload: o teto cabe antes de o cliente desistir.
     _config(monkeypatch, [TURBO])
-    chamadas = _servidores(monkeypatch, {"api.groq.com": b"so texto"})
+    chamadas = _servidores(monkeypatch, {"api.groq.com": b'{"text":"so texto"}'})
     assert mod.transcribe(b"a", "a.webm") == "so texto"
     assert chamadas[0]["timeout"] == mod.VIDEO_LIMITS[0]
     assert mod.VIDEO_LIMITS[1] < 180
@@ -265,7 +288,7 @@ def test_transcribe_do_video_devolve_so_o_texto_dentro_do_prazo_do_upload(monkey
 def test_elevenlabs_sem_texto_tem_motivo_proprio(monkeypatch):
     _config(monkeypatch, [EL, TURBO])
     _servidores(monkeypatch, {"api.elevenlabs.io": json.dumps({"language_code": "pt"}).encode(),
-                              "api.groq.com": b"texto"})
+                              "api.groq.com": b'{"text":"texto"}'})
     r = transcribe_with_provider(b"a", "a.webm")
     assert r.aviso == f"Transcrito pelo {TURBO_NOME}: ElevenLabs deu resposta sem texto"
     assert mod._load_waits() == {}
