@@ -292,7 +292,9 @@ executar() {   # $1 = so, $2 = sha, $3 = bundle ("-" = sem bundle), resto = pass
 # com outro, o jsdom do vitest fica sem localStorage e front e mobile quebram.
 node_da_arvore() {
     local alvo atual
-    alvo="$(tr -d '[:space:]v' < .node-version 2>/dev/null)"
+    # Árvore de antes do .node-version: a versão que o ci.yml dela declara.
+    alvo="$({ tr -d '[:space:]v' < .node-version; } 2>/dev/null || \
+        grep -m1 -oE 'node-version: *"?[0-9]+' .github/workflows/ci.yml 2>/dev/null | grep -oE '[0-9]+$')"
     atual="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
     if [[ -n "$alvo" && "$atual" != "$alvo" ]] && command -v fnm >/dev/null && \
         fnm exec --using="$alvo" node -p 'require("path").dirname(process.execPath)' 2>/dev/null; then
