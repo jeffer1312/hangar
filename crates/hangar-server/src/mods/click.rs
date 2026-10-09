@@ -31,6 +31,8 @@ pub enum PaneOp {
     /// `Release` ou o fim do prazo (C6).
     Hold { millis: u64 },
     Release,
+    /// Pede ao plugin do Hangar que devolva o teclado ao prompt, sem andar pelo anel; falha sem plugin.
+    ReturnFocus,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -839,6 +841,11 @@ async fn back_to_prompt(ctx: &Ctx<'_>, back: &Back) -> bool {
     let (titles, anchor) = (&back.titles, back.anchor.as_deref());
     let Ok(f) = ctx.formats().await else { return false };
     let Ok((mut s, mut last)) = ctx.read_known(titles, anchor, f).await else { return false };
+    // O plugin devolve sem trocar a aba na frente; sem ele, ou com o foco ainda num mod, segue o anel.
+    if s.focus != Some("prompt") && !s.dialog && !s.survey && ctx.op(PaneOp::ReturnFocus, ctx.until).await.is_ok() {
+        let Ok(read) = ctx.read_after(titles, anchor, f, &last, None).await else { return false };
+        (s, last) = read;
+    }
     for _ in 0..=back.cap {
         if s.focus == Some("prompt") && !s.dialog && !s.survey { return true; }
         if s.dialog || s.survey { return false; }

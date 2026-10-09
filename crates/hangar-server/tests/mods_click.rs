@@ -355,6 +355,38 @@ async fn keyboard_reaches_the_pane_presses_and_comes_back() {
     assert_eq!(mods.armed_focus(S), None, "o alvo é desarmado no fim");
 }
 
+/// Com o plugin, a limpeza volta ao prompt pelo pedido a ele: nenhum `ctrl+x tab` depois do `Enter`, e a aba
+/// na frente não muda.
+#[tokio::test]
+async fn keyboard_comes_back_by_the_plugin_without_the_ring() {
+    let (mods, pane) = setup("tmux-14-ciclo-4-prompt", pm());
+    pane.mouse(false);
+    to_mr(&pane);
+    pane.on_keys("Tab", vec![Focus("pm-mock-mr", "mr-a", false)]);
+    pane.on_keys("Enter", vec![Pressed("pm-mock-mr", "mr-a")]);
+    pane.on_return(vec![Show("tmux-14-ciclo-9-prompt")]);
+    press(&mods, &pane, "pm-mock-mr", "mr-a").await.unwrap();
+    assert_eq!(keys(&pane), ["C-x Tab", "C-x Tab", "C-x Tab", "Tab", "Enter"]);
+    assert_eq!(pane.actions().last().map(String::as_str), Some("plugin focus"));
+    assert!(!pane.held());
+}
+
+/// O plugin avisou, mas a tela segue num mod: a volta continua pelo anel.
+#[tokio::test]
+async fn a_plugin_return_that_leaves_the_focus_on_a_mod_goes_on_by_the_ring() {
+    let (mods, pane) = setup("tmux-14-ciclo-4-prompt", pm());
+    pane.mouse(false);
+    to_mr(&pane);
+    pane.on_keys("Tab", vec![Focus("pm-mock-mr", "mr-a", false)]);
+    pane.on_keys("Enter", vec![Pressed("pm-mock-mr", "mr-a")]);
+    pane.on_return(vec![]);
+    back_from_mr(&pane);
+    press(&mods, &pane, "pm-mock-mr", "mr-a").await.unwrap();
+    assert_eq!(keys(&pane), ["C-x Tab", "C-x Tab", "C-x Tab", "Tab", "Enter", "C-x Tab", "C-x Tab"]);
+    assert!(pane.actions().contains(&"plugin focus".to_string()));
+    assert!(!pane.held());
+}
+
 #[tokio::test]
 async fn keyboard_without_focus_on_the_target_never_sends_enter() {
     let (mods, pane) = setup("tmux-14-ciclo-4-prompt", pm());

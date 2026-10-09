@@ -44,7 +44,9 @@ pub struct InputFacts {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PluginMode { Fill, User }
+/// `Focus` não entrega texto: o plugin devolve o teclado ao prompt, de onde estiver nos mods, sem mexer no
+/// rascunho nem na aba que a pessoa vê.
+pub enum PluginMode { Fill, User, Focus }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginRequest { pub id: String, pub text: String, pub mode: PluginMode }

@@ -92,7 +92,7 @@ _publications: dict[str, dict] = {}
 
 def publish_terminal(name, conversation, generation, publication, validate):
     """Publica uma vez; aviso perdido conserva a possibilidade de escrita."""
-    if publication.get("mode") not in {"fill", "user"} or not isinstance(publication.get("text"), str):
+    if publication.get("mode") not in {"fill", "user", "focus"} or not isinstance(publication.get("text"), str):
         raise ValueError("publicação inválida")
     validate()
     if tracked_session_id(name) != conversation:
@@ -100,7 +100,7 @@ def publish_terminal(name, conversation, generation, publication, validate):
     with _lock:
         queue, loop = _waiters.get(name), _loop
         modes = (_donos.get(name) or (None, set(), 0))[1]
-        if queue is not None and "receipt_v2" not in modes:
+        if queue is not None and ("receipt_v2" not in modes or publication["mode"] == "focus" and "focus" not in modes):
             return "not_written"
         if queue is None or loop is None:
             return "unavailable"
@@ -130,12 +130,13 @@ def publish_terminal(name, conversation, generation, publication, validate):
             loop.call_soon_threadsafe(enqueue)
         except RuntimeError:
             return "not_written"
-        pending["event"].wait(PUBLICA_S)
+        pending["event"].wait(PUBLICA_FOCO_S if publication["mode"] == "focus" else PUBLICA_S)
         return pending["result"]
     finally:
         with _lock:
             if _publications.get(name) is pending:
-                if pending["result"] != "unknown":
+                # Foco devolvido tarde não deixa entrada incerta: não segura a publicação seguinte.
+                if pending["result"] != "unknown" or pending["mode"] == "focus":
                     del _publications[name]
                 else:
                     pending["returned"] = True
@@ -147,7 +148,8 @@ def _terminal_ack(body, mode):
         if pending is None:
             return body.publication_id is not None
         if (body.publication_id == pending["id"] and body.generation == pending["generation"]
-                and body.session_id == pending["conversation"] and mode == pending["mode"]):
+                and body.session_id == pending["conversation"]
+                and mode == ("fill" if pending["mode"] == "focus" else pending["mode"])):
             pending["result"] = ("filled" if mode == "fill" else "accepted") if body.ok else "unknown"
             pending["event"].set()
             # Aviso tardio só tira a publicação de voo; a entrada segue incerta na fila até o transcript.
@@ -510,6 +512,9 @@ CONFIRMA_S = 5.0
 # hooks do UserPromptSubmit, que com a máquina ocupada passam de 5 s. Fica abaixo do teto da
 # política `terminal_publish` no Rust (`PUBLISH_POLICY_TIMEOUT`).
 PUBLICA_S = 30.0
+# A devolução do foco é um `fill` do plugin, de milissegundos; acima disso o clique e a fila seguem pelo
+# `ctrl+x tab`, e a limpeza do clique tem 2 s ao todo.
+PUBLICA_FOCO_S = 1.0
 
 _confirmacoes: dict[str, threading.Event] = {}
 _preenchido: dict[str, bool] = {}

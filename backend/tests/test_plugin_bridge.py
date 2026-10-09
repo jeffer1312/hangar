@@ -1075,6 +1075,60 @@ def test_user_publication_waits_for_ack_after_slow_prompt_hooks(monkeypatch):
         pb._publications.clear()
 
 
+def test_focus_publication_needs_the_plugin_mode_and_acks_by_filled(monkeypatch):
+    # O pedido `focus` só vai a um plugin que o declarou; o aviso dele volta pelo `/filled`.
+    monkeypatch.setattr(pb, "tracked_session_id", lambda name: UUID)
+
+    async def cena(modos):
+        pb._loop = asyncio.get_running_loop()
+        fila = pb._waiters["s1"] = asyncio.Queue()
+        pb._donos["s1"] = ("i", set(modos), time.monotonic())
+        envio = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, "s1", UUID, 1,
+            {"id": "pub-f", "mode": "focus", "text": ""}, lambda: None))
+        if "focus" in modos:
+            item = await asyncio.wait_for(fila.get(), 1)
+            assert item["modo"] == "focus"
+            assert pb._terminal_ack(pb.FilledBody(sessao="s1", token="t", ok=True,
+                publication_id="pub-f", generation=1, session_id=UUID), "fill")
+        return await envio
+
+    try:
+        assert asyncio.run(cena({"fill", "user", "receipt_v2"})) == "not_written"
+        assert asyncio.run(cena({"fill", "user", "receipt_v2", "focus"})) == "filled"
+    finally:
+        pb._publications.clear()
+        pb._waiters.pop("s1", None)
+        pb._donos.pop("s1", None)
+
+
+def test_focus_publication_without_ack_does_not_hold_the_next(monkeypatch):
+    # Foco devolvido tarde não deixa entrada incerta: o `fill` seguinte publica normalmente.
+    monkeypatch.setattr(pb, "tracked_session_id", lambda name: UUID)
+    monkeypatch.setattr(pb, "PUBLICA_FOCO_S", .05)
+
+    async def cena():
+        pb._loop = asyncio.get_running_loop()
+        fila = pb._waiters["s1"] = asyncio.Queue()
+        pb._donos["s1"] = ("i", {"fill", "receipt_v2", "focus"}, time.monotonic())
+        foco = await asyncio.to_thread(pb.publish_terminal, "s1", UUID, 1,
+            {"id": "pub-f", "mode": "focus", "text": ""}, lambda: None)
+        await fila.get()
+        assert "s1" not in pb._publications
+        envio = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, "s1", UUID, 1,
+            {"id": "pub-1", "mode": "fill", "text": "oi"}, lambda: None))
+        await asyncio.wait_for(fila.get(), 1)
+        assert pb._terminal_ack(pb.FilledBody(sessao="s1", token="t", ok=True,
+            publication_id="pub-1", generation=1, session_id=UUID), "fill")
+        return foco, await envio
+
+    try:
+        assert asyncio.run(cena()) == ("unknown", "filled")
+    finally:
+        pb._publications.clear()
+        pb._waiters.pop("s1", None)
+        pb._donos.pop("s1", None)
+
+
 def test_publication_wait_stays_below_rust_policy_timeout():
     # Se o Rust desistir antes do Python, o aviso que chega no intervalo vira entrega incerta.
     import re
