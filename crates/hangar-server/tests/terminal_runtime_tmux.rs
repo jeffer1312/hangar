@@ -25,7 +25,8 @@ while True:
 "#).unwrap();
     let label=format!("hangar-runtime-test-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()); let _mux=IsolatedMux(label.clone());
     let cli_command=format!("python3 '{}' '{}'",cli.display(),transcript.display());
-    let output=Command::new("tmux").args(["-L",&label,"new-session","-d","-s","test","-x","100","-y","40",&cli_command]).env_remove("HANGAR_INTERNAL_SECRET").env_remove("HANGAR_RUNTIME_INSTANCE").env_remove("CP_AUTH_TOKEN").output().await.unwrap(); assert!(output.status.success());
+    // -f /dev/null: o ~/.tmux.conf de quem roda (base-index 1, por exemplo) muda o alvo =test:0.0.
+    let output=Command::new("tmux").args(["-L",&label,"-f","/dev/null","new-session","-d","-s","test","-x","100","-y","40",&cli_command]).env_remove("HANGAR_INTERNAL_SECRET").env_remove("HANGAR_RUNTIME_INSTANCE").env_remove("CP_AUTH_TOKEN").output().await.unwrap(); assert!(output.status.success());
     let meta=Command::new("tmux").args(["-L",&label,"display-message","-p","-t","=test:0.0","#{pane_id}\t#{session_created}"]).output().await.unwrap(); assert!(meta.status.success());
     let meta=String::from_utf8(meta.stdout).unwrap(); let mut fields=meta.trim().split('\t'); let pane=fields.next().unwrap().to_string(); let created=fields.next().unwrap().parse::<u64>().unwrap();
     let binding=TerminalBinding {name:"test".into(),pane:pane.clone(),conversation:"fake-conversation".into(),generation:1,created,mux_argv:vec!["tmux".into(),"-L".into(),label.clone()],windows:false,clipboard_lock_path:None};

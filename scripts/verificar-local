@@ -14,8 +14,9 @@
 #       scripts/verificar-local --exigir <sha>  (pre-push) sai 1 se falta verificação
 #
 # Paralelismo: git config hangar.verificarProcessos <n> (ou HANGAR_VERIFICAR_PROCESSOS), padrão 4.
-# Com n > 1, os passos do Linux rodam em faixas paralelas (rust | backend | nativo | os de Node), o
-# pytest roda em n processos e o cargo do preparo usa até n jobs; com 1, tudo em fila, como antes.
+# Com n > 1, os passos do Linux rodam em faixas paralelas (rust | backend | nativo | front e mobile |
+# os leves), e n vale por faixa: o pytest e o vitest usam n processos e o cargo do preparo até n
+# jobs. Com 1, tudo em fila, como antes.
 #
 # A árvore verificada é um clone fixo por máquina, não o checkout de quem chama: compila só o que
 # mudou desde a última verificação, nunca mistura binário de outro checkout e deixa o checkout
@@ -115,10 +116,10 @@ TODOS_WINDOWS="rust statusline"
 
 # ── passos (cwd = árvore fixa) ────────────────────────────────────────────────────────────────
 
+# No Linux, o que os passos compilam e instalam vem do passo_preparo, que roda antes deles.
 passo_rust() {
     (cd crates && cargo test --locked --workspace --no-fail-fast) || return 1
     if [[ "$SO" == linux ]]; then
-        (cd crates && cargo build --locked -p hangar-server -p hangar-cano) || return 1
         (cd backend && uv run pytest -q "${RUNTIME_TESTS[@]}") || return 1
         # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro, como no CI.
         local cano="$PWD/crates/target/debug/hangar-cano"
@@ -134,9 +135,6 @@ passo_rust() {
 passo_runtime() { (cd backend && uv run pytest -q "${RUNTIME_TESTS[@]}"); }
 
 passo_backend() {   # só Linux: no Windows fica o passo_runtime
-    # Os contratos que o pytest executa, como no ci.yml.
-    (cd crates && cargo build --locked -p hangar-server && \
-        cargo build --locked -p hangar-workspace --example workspace_contract) || return 1
     local omp; omp="$(omp_de_teste)" || return 1
     local uv=(uv run) pytest=(pytest -q)
     if (( PROCESSOS > 1 )); then
@@ -153,36 +151,37 @@ passo_backend() {   # só Linux: no Windows fica o passo_runtime
 # então rodar em paralelo não deixa um cargo reescrever binário que outro passo está usando, nem o
 # pytest chegar antes das sondas de contas.
 passo_preparo() {
-    local plano=" $PLANO "
+    local plano=" $PLANO " pid pids=() falhou=0
     (( PROCESSOS > CARGO_BUILD_JOBS )) && export CARGO_BUILD_JOBS="$PROCESSOS"
-    if [[ "$plano" == *" rust "* || "$plano" == *" backend "* ]]; then
-        # Os mesmos comandos dos passos, na mesma forma, para os deles não recompilarem nada.
-        (cd crates && cargo build --locked -p hangar-server -p hangar-cano && \
-            cargo build --locked -p hangar-server && \
-            cargo build --locked -p hangar-workspace --example workspace_contract) || return 1
-        (cd backend && uv run python -c '') || return 1
-    fi
-    if [[ "$plano" == *" rust "* ]]; then
-        (cd crates && cargo test --locked --workspace --no-run) || return 1
-    elif [[ "$plano" == *" backend "* ]]; then
-        # As sondas que os testes de contas executam (ci.yml).
-        (cd crates && cargo test --locked -p hangar-server --no-run \
-            --test accounts_lifecycle --test accounts_catalog --test accounts_preparation) || return 1
+    # Rede e disco correm ao lado da compilação.
+    if [[ "$plano" == *" front "* || "$plano" == *" mobile "* ]]; then
+        { npm_ci_se_mudou package-lock.json npm ci --workspace=@hangar/core --workspace=frontend && \
+            { [[ "$plano" != *" mobile "* ]] || npm_ci_se_mudou mobile/package-lock.json npm ci --prefix mobile; }; } &
+        pids+=($!)
     fi
     if [[ "$plano" == *" backend "* ]]; then
-        omp_de_teste >/dev/null || return 1
-        if (( PROCESSOS > 1 )); then (cd backend && uv run --with "$XDIST" python -c 'import xdist') || return 1; fi
+        omp_de_teste >/dev/null &
+        pids+=($!)
     fi
-    if [[ "$plano" == *" nativo "* ]]; then
-        (cd desktop-native && env -u CARGO_TARGET_DIR cargo test --locked --no-run) || return 1
+    if [[ "$plano" == *" rust "* || "$plano" == *" backend "* ]]; then
+        local uv=(uv run)
+        (( PROCESSOS > 1 )) && [[ "$plano" == *" backend "* ]] && uv+=(--with "$XDIST")
+        (cd backend && "${uv[@]}" python -c '') || falhou=1
     fi
-    if [[ "$plano" == *" front "* || "$plano" == *" mobile "* ]]; then
-        npm_ci_se_mudou package-lock.json npm ci --workspace=@hangar/core --workspace=frontend || return 1
+    if [[ "$plano" == *" rust "* ]]; then
+        # O cano é o binário que o passo rust entrega ao pytest do cano.
+        (cd crates && cargo build --locked -p hangar-server -p hangar-cano && \
+            cargo test --locked --workspace --no-run) || falhou=1
     fi
-    if [[ "$plano" == *" mobile "* ]]; then
-        npm_ci_se_mudou mobile/package-lock.json npm ci --prefix mobile || return 1
+    if [[ "$plano" == *" backend "* ]]; then
+        # Os contratos e as sondas de contas que o pytest executa (ci.yml).
+        (cd crates && cargo build --locked -p hangar-server && \
+            cargo build --locked -p hangar-workspace --example workspace_contract && \
+            cargo test --locked -p hangar-server --no-run \
+                --test accounts_lifecycle --test accounts_catalog --test accounts_preparation) || falhou=1
     fi
-    return 0
+    for pid in "${pids[@]}"; do wait "$pid" || falhou=1; done
+    return $falhou
 }
 
 # Caminho do omp de versão fixa que o CI instala para as provas de extensão; sem ele, 20 casos
@@ -214,7 +213,6 @@ npm_ci_se_mudou() {   # $1 = lockfile, $2.. = comando
 }
 
 passo_front() {
-    npm_ci_se_mudou package-lock.json npm ci --workspace=@hangar/core --workspace=frontend || return 1
     # Os vitest.config limitam a 2 forks para várias sessões não encherem a RAM ao mesmo tempo; aqui
     # a verificação roda sozinha na fila e pode usar os processos configurados.
     local vitest=()
@@ -225,8 +223,6 @@ passo_front() {
 }
 
 passo_mobile() {
-    npm_ci_se_mudou package-lock.json npm ci --workspace=@hangar/core --workspace=frontend || return 1
-    npm_ci_se_mudou mobile/package-lock.json npm ci --prefix mobile || return 1
     # O check do app compila as mensagens dele, não as do core; sem isto valem as da última rodada do front.
     npm run i18n:compile -w @hangar/core && npm run check:app && npm run test:app
 }
@@ -250,7 +246,7 @@ passo_pi() { node scripts/test-pi-hangar-state.mjs; }
 # só o PATH das ferramentas. Caches de cargo/uv/npm continuam os da máquina.
 ambiente_limpo() {
     local casa="$1" node_dir uv_dir
-    node_dir="$(dirname "$(realpath "$(command -v node)")")"
+    node_dir="${NODE_DIR:-$(dirname "$(realpath "$(command -v node)")")}"
     uv_dir="$(dirname "$(command -v uv)")"
     mkdir -p "$casa/tmux" "$casa/run"
     chmod 700 "$casa/run"
@@ -284,29 +280,42 @@ executar() {   # $1 = so, $2 = sha, $3 = bundle ("-" = sem bundle), resto = pass
     SO="$1"; local sha="$2" bundle="$3"; shift 3
     PROCESSOS="${HANGAR_VERIFICAR_PROCESSOS:-1}"; PLANO="$*"
     preparar_arvore "$sha" "$bundle" || return $?
-    if [[ "$SO" == windows ]]; then rodar_passos "$sha" "$@"; else rodar_em_faixas "$sha" "$@"; fi
+    if [[ "$SO" == windows ]]; then rodar_passos "$sha" "$@"; return; fi
+    NODE_DIR="$(node_da_arvore)"
+    rodar_em_faixas "$sha" "$@"
+}
+
+# Diretório do Node do .node-version da árvore (o mesmo do CI), pelo fnm quando o do PATH é outro:
+# com outro, o jsdom do vitest fica sem localStorage e front e mobile quebram.
+node_da_arvore() {
+    local alvo atual
+    alvo="$(tr -d '[:space:]v' < .node-version 2>/dev/null)"
+    atual="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
+    if [[ -n "$alvo" && "$atual" != "$alvo" ]] && command -v fnm >/dev/null && \
+        fnm exec --using="$alvo" node -p 'require("path").dirname(process.execPath)' 2>/dev/null; then
+        return
+    fi
+    [[ -n "$alvo" && "$atual" != "$alvo" ]] && \
+        echo "verificar-local: o CI usa Node $alvo e aqui roda o ${atual:-nenhum}; front e mobile podem falhar só por isso." >&2
+    dirname "$(realpath "$(command -v node)")"
 }
 
 # Preparo e depois os passos em faixas; com PROCESSOS=1, uma faixa só, na ordem do plano. Imprime
 # um resumo único, no formato do rodar_passos.
 rodar_em_faixas() {   # $1 = sha, resto = passos
-    local sha="$1" p f faixas=() demais=() saidas
+    local sha="$1" p f faixas=() web=() leves=() saidas
     shift
     saidas="$(mktemp -d)"
-    if ! rodar_passos "$sha" preparo > "$saidas/preparo" 2>&1; then
-        sed -n '/^--- /,/^=== resumo/{/^=== resumo/!p}' "$saidas/preparo"
-        echo "=== resumo $SO ${sha:0:10}"
-        printf '  FALHOU  preparo (nenhum passo rodou)\n'
-        rm -rf "$saidas"; return 1
-    fi
-    if (( PROCESSOS > 1 )); then
-        for p in "$@"; do
-            case "$p" in rust|backend|nativo) faixas+=("$p") ;; *) demais+=("$p") ;; esac
-        done
-        (( ${#demais[@]} )) && faixas+=("${demais[*]}")
-    else
-        faixas=("$*")
-    fi
+    rodar_passos "$sha" preparo > "$saidas/preparo" 2>&1 || { cat "$saidas/preparo"; rm -rf "$saidas"; return 1; }
+    for p in "$@"; do
+        if (( PROCESSOS == 1 )); then web+=("$p")
+        else
+            # front e mobile juntos: os dois compilam as mensagens do core no mesmo lugar.
+            case "$p" in rust|backend|nativo) faixas+=("$p") ;; front|mobile) web+=("$p") ;; *) leves+=("$p") ;; esac
+        fi
+    done
+    (( ${#web[@]} )) && faixas+=("${web[*]}")
+    (( ${#leves[@]} )) && faixas+=("${leves[*]}")
     local i pids=() falhou=0
     for i in "${!faixas[@]}"; do
         # shellcheck disable=SC2086
@@ -404,16 +413,18 @@ gravar() {   # $1 = sha, $2 = so, $3 = base, resto = passos
     mkdir -p "$ESTADO/resultados"
     arq="$(registro "$sha" "$so")"
     [[ -f "$arq" ]] && read -ra ja <<< "$(sed -n 's/^passos=//p' "$arq")"
-    for p in "$@"; do [[ " ${ja[*]} " == *" $p "* ]] || ja+=("$p"); done
+    # shellcheck disable=SC2207
+    ja+=($(faltando "$arq" "$@"))
     printf 'commit=%s\nbase=%s\npassos=%s\nquando=%s\n' "$sha" "$base" "${ja[*]}" "$(date -Is)" > "$arq"
 }
 
-# Passos de $2.. que nenhum registro desta árvore cobre.
+# Passos de $2.. que o registro $1 não cobre, na ordem dada.
 faltando() {
-    local arq="$1"; shift
-    local feitos="" p
+    local arq="$1" feitos="" p saida=()
+    shift
     [[ -f "$arq" ]] && feitos=" $(sed -n 's/^passos=//p' "$arq") "
-    for p in "$@"; do [[ "$feitos" == *" $p "* ]] || printf '%s ' "$p"; done
+    for p in "$@"; do [[ "$feitos" == *" $p "* ]] || saida+=("$p"); done
+    echo "${saida[*]}"
 }
 
 # ── Windows pela VM ───────────────────────────────────────────────────────────────────────────
@@ -477,7 +488,6 @@ if [[ "${1:-}" == --executar ]]; then
     exit $?
 fi
 
-args=("$@")
 commit=HEAD base="" tudo=0 so="" modo=rodar de_novo=0 so_passos=""
 while (( $# )); do
     case "$1" in
@@ -546,16 +556,15 @@ fi
 
 if (( ! de_novo )); then
     # Só o que ainda não passou nesta árvore.
-    pl="$plano_lin" pw="$plano_win"
-    # shellcheck disable=SC2046,SC2086
-    plano_lin="$(filtrar "$plano_lin" $(faltando "$(registro "$sha" linux)" $plano_lin))"
-    # shellcheck disable=SC2046,SC2086
-    plano_win="$(filtrar "$plano_win" $(faltando "$(registro "$sha" windows)" $plano_win))"
-    pula=""
-    for p in $pl; do [[ " $plano_lin " == *" $p "* ]] || pula+="$p "; done
-    for p in $pw; do [[ " $plano_win " == *" $p "* ]] || pula+="windows/$p "; done
-    [[ -n "$pula" ]] && echo "verificar-local: já passaram nesta árvore: ${pula% }; --de-novo para repetir."
-    [[ "$modo" != plano && -z "$plano_lin$plano_win" && -n "$pl$pw" ]] && exit 0
+    # shellcheck disable=SC2086
+    falta_lin="$(faltando "$(registro "$sha" linux)" $plano_lin)"
+    # shellcheck disable=SC2086
+    falta_win="$(faltando "$(registro "$sha" windows)" $plano_win)"
+    if [[ "$falta_lin" != "$plano_lin" || "$falta_win" != "$plano_win" ]]; then
+        echo "verificar-local: parte do plano já passou nesta árvore; falta: ${falta_lin:-nada}${falta_win:+ (windows: $falta_win)}. --de-novo repete tudo."
+        plano_lin="$falta_lin" plano_win="$falta_win"
+        [[ "$modo" != plano && -z "$plano_lin$plano_win" ]] && exit 0
+    fi
 fi
 
 # rc 1 do git config é "não configurado"; acima disso, erro de leitura.
@@ -571,17 +580,6 @@ if [[ "$modo" == plano ]]; then
     else echo "windows: sem VM (git config hangar.verificarWindows <host>)"; fi
     echo "processos: $PROCESSOS (git config hangar.verificarProcessos <n>)"
     exit 0
-fi
-
-# Node do .node-version, o mesmo do CI: com outro, o jsdom do vitest fica sem localStorage e front e
-# mobile quebram (o pytest e os testes de shell também executam node). Troca pelo fnm quando existe.
-node_ci="$(tr -d '[:space:]v' < "$(dirname "$SCRIPT")/../.node-version" 2>/dev/null)"
-node_atual="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
-if [[ -n "$plano_lin" && -n "$node_ci" && "$node_atual" != "$node_ci" ]]; then
-    if [[ -z "${VERIFICAR_NODE_TROCADO:-}" ]] && command -v fnm >/dev/null; then
-        VERIFICAR_NODE_TROCADO=1 exec fnm exec --using="$node_ci" "$SCRIPT" "${args[@]}"
-    fi
-    echo "verificar-local: o CI usa Node $node_ci e aqui roda o ${node_atual:-nenhum}; front e mobile podem falhar só por isso." >&2
 fi
 
 [[ "$commit" == HEAD && -n "$(git status --porcelain --untracked-files=no)" ]] && \
@@ -643,9 +641,9 @@ esac
 (( rc & 1 )) && rc_lin=1
 (( rc & 2 )) && rc_win=1
 # Linux: cada passo que passou, mesmo que outro tenha falhado (o resumo diz quais).
-passaram="$(sed -n '/^=== resumo linux/,$p' "$saida_lin" | awk '$1 == "ok" {print $2}' | tr '\n' ' ')"
-# shellcheck disable=SC2046,SC2086
-[[ -n "${passaram// /}" ]] && gravar "$sha" linux "$base" $(filtrar "$plano_lin" $passaram)
+passaram="$(sed -n '/^=== resumo linux/,$p' "$saida_lin" | awk '$1 == "ok" {print $2}' | xargs)"
+# shellcheck disable=SC2086
+[[ -n "$passaram" ]] && gravar "$sha" linux "$base" $passaram
 # shellcheck disable=SC2086
 [[ -n "$plano_win" ]] && (( ! rc_win )) && gravar "$sha" windows "$base" $plano_win
 if (( rc_lin || rc_win )); then
