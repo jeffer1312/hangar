@@ -225,6 +225,9 @@ async fn full_write_slots_answer_busy_without_python() {
     std::fs::write(remote.join("hooks/pre-receive"), "#!/bin/sh\nsleep 3\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(remote.join("hooks/pre-receive"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Um core.hooksPath global de quem roda faria o remoto ignorar este hook, e os pushes
+    // terminariam antes de o commit chegar.
+    git(&remote, &["config", "core.hooksPath", remote.join("hooks").to_str().unwrap()]);
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c"]);
     git(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);

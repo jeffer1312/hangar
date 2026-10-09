@@ -95,6 +95,7 @@ npm --prefix frontend run build            # production build — does NOT typec
 npm --prefix frontend run check            # svelte-check + tsc — THIS is the type gate
 
 scripts/verificar-local                    # o que o CI rodaria para o commit (Linux + VM Windows); a trava pre-push exige
+scripts/verificar-local --passos rust      # repete só um passo (o que já passou nesta árvore fica gravado)
 ./scripts/test-wrappers.sh                 # claude-engine (bash/zsh/fish) against a fake `claude`, no tmux
 ./scripts/test-statusline.sh               # statusline.js contract (engine sessions suppress cost), needs node
 node scripts/test-pi-hangar-state.mjs          # hangar-state.ts: fork de subagente do Pi não rouba o pane
@@ -108,7 +109,10 @@ arquivos tocados (`cd backend && uv run pytest tests/test_x.py tests/test_y.py`,
 Pedido o completo: `npm run check` na raiz, `vitest` e `pytest` inteiros. **`scripts/verificar-local` é exigido ao
 abrir PR e ao subir para a `main` ou para branch com PR aberto**: ele roda, numa árvore fixa da
 máquina e em fila única, o que o CI rodaria para o que o commit muda, no Linux e no Windows da VM
-(`git config hangar.verificarWindows <host>`), e grava o resultado pela árvore. O hook do
+(`git config hangar.verificarWindows <host>`), e grava pela árvore cada passo que passou. No Linux os
+passos rodam em faixas paralelas e o pytest em vários processos: `git config hangar.verificarProcessos <n>`
+(padrão 4; `1` = tudo em fila). O Node é o do `.node-version`, o mesmo do CI: com o `fnm` instalado, o
+script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobile podem falhar por isso. O hook do
 `gh pr create` (`.claude/settings.json`) confere o PR inteiro desde a base; a trava `pre-push`, cada
 push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. O que ela cobre e o que só o CI cobre:
 [instalacao.md](docs/decisoes/instalacao.md#verificação-local-antes-do-push-06102026). `npm run build` só para servir o `dist` local. Ao reportar, diga o que foi conferido no uso real e que os testes automatizados não rodaram.

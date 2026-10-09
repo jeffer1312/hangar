@@ -61,5 +61,17 @@ if [[ "$(uname -s)" == Linux ]]; then
     hook "gh pr create --base main --head main --body 'cita --base base-que-nao-existe'" 0
 fi
 
+"$V" --plano --passos inexistente >/dev/null 2>&1 && { echo "FALHOU --passos desconhecido saiu 0"; falhou=1; }
+HANGAR_VERIFICAR_PROCESSOS=0 "$V" --plano >/dev/null 2>&1 && { echo "FALHOU com 0 processos saiu 0"; falhou=1; }
+# Registro por passo: o que já passou nesta árvore sai do plano, e --de-novo o devolve.
+estado="$(mktemp -d)"
+mkdir -p "$estado/hangar-verificacao/resultados"
+printf 'passos=rust\n' > "$estado/hangar-verificacao/resultados/$(git rev-parse 'HEAD^{tree}')-linux"
+plano="$(XDG_STATE_HOME="$estado" "$V" --plano --tudo --passos "rust shell" 2>&1 | sed -n 's/^linux: *//p')"
+[[ "$plano" == "shell" ]] || { echo "FALHOU não pulou o passo gravado: \"$plano\""; falhou=1; }
+plano="$(XDG_STATE_HOME="$estado" "$V" --plano --tudo --passos "shell rust" --de-novo 2>&1 | sed -n 's/^linux: *//p')"
+[[ "$plano" == "rust shell" ]] || { echo "FALHOU --de-novo ou ordem do plano: \"$plano\""; falhou=1; }
+rm -rf "$estado"
+
 (( falhou )) && exit 1
 echo "ok: classificação do verificar-local"

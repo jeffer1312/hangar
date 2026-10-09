@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
       - run: node --test scripts/test-configure-statusline.cjs
 
   backend:
@@ -118,7 +118,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       # Roda na RAIZ (o lockfile é um só), mas SELETIVO: o app nativo é workspace — precisa ser,
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci --workspace=@hangar/core --workspace=frontend
