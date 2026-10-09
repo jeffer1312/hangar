@@ -603,7 +603,7 @@ pub fn codex_rows(dirs: &Dirs, births: &HashMap<String, u64>, procs: &dyn Proces
     out
 }
 
-pub(super) fn truthy(v: &Value) -> bool {
+pub(crate) fn truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,

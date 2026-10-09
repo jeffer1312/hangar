@@ -734,3 +734,93 @@ def test_push_channels_feeds_python_sources_only_for_claude(monkeypatch, provide
     assert bool(pushed) is fed
     if fed:
         assert sorted(name for name, _ in pushed) == ["session", "session#ferramenta", "session#pensamento"]
+
+
+def test_codex_unknown_send_stays_unknown_and_cannot_be_replayed(tmp_path, monkeypatch):
+    from app.runtime_adapter import LegacyBridge
+    from app.runtime_coordinator import Binding, RuntimeCoordinator
+
+    coordinator = RuntimeCoordinator()
+    monkeypatch.setattr(runtime_coordinator, "_current", coordinator)
+    slot = coordinator.register(Binding("session", "key", "codex", True,
+        {"key": "key", "thread_id": "thread"}, str(tmp_path / "chat.jsonl"),
+        tmp_path / "projection", tmp_path / "state", tmp_path / "lease", 1))
+    calls = []
+
+    class Adapter:
+        async def send_prompt(self, name, text):
+            calls.append(text)
+            return "unknown"
+
+    bridge = LegacyBridge(coordinator, {"codex": Adapter()})
+    try:
+        command = {"kind": "submit", "text": "sem repetir"}
+        result = asyncio.run(bridge.op(slot.binding.descriptor(), command, "entry"))
+        assert result["disposition"] == "unknown"
+        assert slot.store.state["operations"]["entry"]["status"] == "unknown"
+        assert slot.store.state["rows"][0]["delivered"] is True
+        assert asyncio.run(bridge.op(slot.binding.descriptor(), command, "entry"))["disposition"] == "unknown"
+        assert asyncio.run(bridge.op(slot.binding.descriptor(), {"kind": "drain"}, "drain"))["sent"] == 0
+        assert calls == ["sem repetir"]
+    finally:
+        coordinator.close_python_leases()
+
+
+async def test_cancelled_codex_runtime_send_preserves_uncertainty(tmp_path, monkeypatch):
+    from app.runtime_adapter import LegacyBridge
+    from app.runtime_coordinator import Binding, RuntimeCoordinator
+
+    coordinator = RuntimeCoordinator()
+    monkeypatch.setattr(runtime_coordinator, "_current", coordinator)
+    slot = coordinator.register(Binding("session", "key", "codex", True,
+        {"key": "key", "thread_id": "thread"}, str(tmp_path / "chat.jsonl"),
+        tmp_path / "projection", tmp_path / "state", tmp_path / "lease", 1))
+    written = asyncio.Event()
+
+    class Adapter:
+        async def send_prompt(self, name, text):
+            assert slot.store.state["rows"][0]["delivered"] is True
+            written.set()
+            await asyncio.Event().wait()
+
+    bridge = LegacyBridge(coordinator, {"codex": Adapter()})
+    try:
+        command = {"kind": "submit", "text": "sem repetir"}
+        task = asyncio.create_task(bridge.op(slot.binding.descriptor(), command, "entry"))
+        await written.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert slot.store.state["operations"]["entry"]["status"] == "unknown"
+        assert (await bridge.op(slot.binding.descriptor(), command, "entry"))["disposition"] == "unknown"
+        assert (await bridge.op(slot.binding.descriptor(), {"kind": "drain"}, "drain"))["sent"] == 0
+    finally:
+        coordinator.close_python_leases()
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+async def test_codex_runtime_steer_preserves_only_uncertain_attempts(tmp_path, monkeypatch, unknown):
+    from app.adapters.codex.appserver import RequestNotSent, RequestOutcomeUnknown
+    from app.runtime_adapter import LegacyBridge
+    from app.runtime_coordinator import Binding, RuntimeCoordinator
+
+    coordinator = RuntimeCoordinator()
+    monkeypatch.setattr(runtime_coordinator, "_current", coordinator)
+    slot = coordinator.register(Binding("session", "key", "codex", True,
+        {"key": "key", "thread_id": "thread"}, str(tmp_path / "chat.jsonl"),
+        tmp_path / "projection", tmp_path / "state", tmp_path / "lease", 1))
+    failure = RequestOutcomeUnknown if unknown else RequestNotSent
+
+    class Adapter:
+        async def steer(self, name, text):
+            raise failure("não houve confirmação" if unknown else "nenhuma escrita")
+
+    bridge = LegacyBridge(coordinator, {"codex": Adapter()})
+    try:
+        with pytest.raises(failure):
+            await bridge.op(slot.binding.descriptor(),
+                {"kind": "submit", "text": "orientação", "steer": True}, "entry")
+        assert slot.store.state["operations"]["entry"]["status"] == ("unknown" if unknown else "rejected")
+        assert slot.store.state["rows"][0]["delivered"] is unknown
+    finally:
+        coordinator.close_python_leases()

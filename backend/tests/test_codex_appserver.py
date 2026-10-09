@@ -365,3 +365,101 @@ async def test_reserve_client_sends_the_same_id_it_waits_for():
     assert json.loads(client.request_bytes("thread/read", {}))["id"] == f"reserve:chave:3:{client.runtime_nonce}:1"
     assert await client.request("thread/read", {}, timeout=1) == {"ok": True}
     assert sent[0]["id"] == f"reserve:chave:3:{client.runtime_nonce}:1"
+
+
+@pytest.mark.parametrize("shared", [False, True])
+async def test_websocket_resume_receives_history_larger_than_sixteen_megabytes(monkeypatch, shared):
+    import websockets
+
+    text = "á" * (9 * 1024 * 1024)
+
+    async def serve(socket):
+        async for raw in socket:
+            request = json.loads(raw)
+            await socket.send(json.dumps({"id": request["id"], "result": {
+                "thread": {"id": "large-thread", "turns": [{"items": [
+                    {"type": "agentMessage", "text": text},
+                ]}]},
+            }}, ensure_ascii=False))
+
+    class Process:
+        returncode = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return self.returncode
+
+    async with websockets.serve(serve, "127.0.0.1", 0) as server:
+        endpoint = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        client = AppServerClient()
+        if shared:
+            monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=Process()))
+        try:
+            await (client.start_shared(endpoint) if shared else client.connect(endpoint))
+            result = await client.request("thread/resume", {"threadId": "large-thread"})
+            assert result["thread"]["turns"][0]["items"][0]["text"] == text
+            assert not client.closed
+            assert (await client.request("thread/read", {"threadId": "large-thread"})) == result
+        finally:
+            await client.close()
+
+
+async def test_websocket_send_failure_clears_pending_request():
+    class Socket:
+        async def send(self, data):
+            raise ConnectionError("conexão perdida depois da escrita")
+
+        async def close(self):
+            pass
+
+    client = AppServerClient()
+    client._ws = Socket()
+    try:
+        with pytest.raises(ConnectionError):
+            await client.request("turn/start", {"threadId": "thread", "input": []})
+        assert client._pending == {}
+    finally:
+        await client.close()
+
+
+async def test_rpc_refusal_is_distinct_from_missing_connection():
+    from app.adapters.codex.appserver import RequestNotSent, RequestRejected
+
+    client = AppServerClient()
+    with pytest.raises(RequestNotSent):
+        await client.request("turn/start", {})
+    reader = _fake_reader(b'{"id":1,"error":{"code":-32600,"message":"turno recusado"}}\n')
+    client._attach(reader, _FakeWriter())
+    try:
+        with pytest.raises(RequestRejected):
+            await client.request("turn/start", {})
+    finally:
+        await client.close()
+
+
+async def test_websocket_response_loss_is_unknown_and_records_close_code(monkeypatch):
+    import websockets
+    from app import diag
+    from app.adapters.codex.appserver import RequestOutcomeUnknown
+
+    events = []
+    requests = []
+    monkeypatch.setattr(diag, "registrar", lambda *args, **kwargs: events.append((args, kwargs)))
+
+    async def serve(socket):
+        requests.append(json.loads(await socket.recv()))
+        await socket.close(code=1009, reason="resposta não entregue")
+
+    async with websockets.serve(serve, "127.0.0.1", 0) as server:
+        client = AppServerClient()
+        try:
+            await client.connect(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+            with pytest.raises(RequestOutcomeUnknown):
+                await client.request("turn/start", {"threadId": "thread", "input": []})
+            assert len(requests) == 1
+            assert client.closed and client._pending == {}
+            assert events == [(("codex.connection_closed", "aviso"), {"codigo": "1009"})]
+        finally:
+            await client.close()

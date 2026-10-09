@@ -4,8 +4,10 @@ import asyncio
 import secrets
 import json
 import copy
+import logging
 import re
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
@@ -242,7 +244,7 @@ _LIST_FACTS_MAX = 8 << 20
 _list_facts_invalid_at = 0.0
 # Os do envio e os da opção levam o nome que o Python já usava, para o diário não ter dois nomes por falha.
 _DIAG_EVENT = re.compile(r"rust\.[a-z_]{1,48}|runtime\.(?:send_failed|send_uncertain|command_deferred)|opcao\.(?:nao_convergiu|envio_falhou)")
-_DIAG_WARNING = {"runtime.send_uncertain", "runtime.command_deferred"}
+_DIAG_WARNING = {"runtime.send_uncertain", "runtime.command_deferred", "rust.groups_sweep_failed", "rust.groups_sweep_recovered"}
 # `:` e maiúscula: o Rust anexa o detalhe ao código (`list_facts_status:500`, `…:sessions:Eof`).
 _DIAG_CODE = re.compile(r"[A-Za-z0-9_:]{1,64}")
 
@@ -505,6 +507,99 @@ async def session_transfer(name: str) -> dict:
     from app import api
     await api._transfer_check(name)
     return {"ok": True}
+
+
+class _ProtocolText(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["group", "orq", "external"]
+    me: str = ""
+    others: list[str] = []
+    task: str = ""
+    contract: str | None = None
+    # A linha do contrato de outra máquina entra com o grupo entre máquinas; hoje não muda o texto.
+    contract_remote: bool = False
+    harness: dict[str, str] = {}
+    peer: str = ""
+    owner: str = ""
+
+
+@router.post("/pair/text")
+async def pair_text(body: _ProtocolText) -> dict:
+    """Texto do protocolo que o Rust entrega a quem entra no grupo: a fonte continua `pair_texto`."""
+    from app import pair_texto
+    if body.kind == "orq":
+        return {"text": pair_texto.texto_grupo_orq(body.task)}
+    if body.kind == "external":
+        return {"text": pair_texto.texto_par_externo(body.me, body.peer, body.owner)}
+    if not body.others:
+        raise HTTPException(400)
+    return {"text": pair_texto.texto_grupo(body.me, body.others, body.task, body.contract, body.harness)}
+
+
+class _OrqGid(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    gid: str
+
+
+class _OrqPromote(_OrqGid):
+    name: str
+
+
+class _OrqNames(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    names: list[str]
+
+
+class _OrqAssociate(_OrqPromote):
+    mtime: float
+
+
+@router.post("/orq/group-phase")
+async def orq_group_phase(body: _OrqGid) -> dict:
+    from app.adapters.orq import runs
+    return {"phase": await asyncio.to_thread(runs.group_phase, body.gid)}
+
+
+@router.post("/orq/promote")
+async def orq_promote(body: _OrqPromote) -> dict:
+    """O que o `pair.join_group` faz quando um grupo `orq` nasce, com os mesmos erros da rota `/pair`."""
+    from app import orq_context, orq_md
+    try:
+        await asyncio.to_thread(orq_context.promote, body.name, body.gid)
+    except orq_context.IdentityUnavailable:
+        # Sem identidade não houve configuração pela API para promover.
+        logging.getLogger(__name__).warning("pair: sem identidade para promover o grupo %s", body.gid)
+    except (orq_context.PromotionConflict, orq_md.Conflito) as e:
+        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou", str(e)))
+    return {}
+
+
+@router.post("/orq/is-orchestrator")
+async def orq_is_orchestrator(body: _OrqNames) -> dict:
+    """Os nomes que são a linha do orquestrador: a recusa `_recusa_orq` das rotas de par."""
+    from app.adapters.orq import runs
+    return {"names": await asyncio.to_thread(lambda: [n for n in body.names if runs.find(n)])}
+
+
+@router.post("/orq/associate")
+async def orq_associate(body: _OrqAssociate) -> dict:
+    """`orq_context.associate` sem o `pair._LOCK`: o Rust segura o lock de grupo em volta."""
+    from app import api, orq_context
+    return await api._orq_associate(orq_context.associate_unlocked, body.name, body.gid, body.mtime)
+
+
+class _ExternalEnd(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    peer: str
+
+
+@router.post("/external-pairs/end")
+async def external_pairs_end(body: _ExternalEnd) -> dict:
+    """Saída feita no Rust de sessão com par externo: o lado de fora continua do Python, com os
+    avisos que o `_avisar_saida` devolveria."""
+    from app import api
+    return {"errors": await api._end_external_pair(body.name, body.peer) or []}
 
 
 @router.get("/costs/scopes")

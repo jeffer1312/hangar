@@ -5,15 +5,18 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::body::Bytes;
+use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Value, json};
 
-use super::{Ctx, WriteRoute, admit, detail_body, json_response, relay, session_name};
+use super::{Ctx, Write, WriteRoute, admit, busy_body, detail_body, json_response, relay, route_write, session_name};
 use crate::mods::state::random_hex;
-use crate::routes::{AppState, cors};
+use crate::proxy::Forward;
+use crate::routes::{AppState, cors, pass};
+use crate::runtime::gateway::WriteTarget;
 use crate::runtime::protocol::{Disposition, OperationKind, RuntimeCommand, RuntimeError, RuntimeReply};
 
 const MSG_UNKNOWN: &str = "resultado incerto; entrada conservada sem reenvio";
@@ -22,6 +25,8 @@ pub(super) const MSG_STEER_UNKNOWN: &str = "resultado incerto; a operação foi 
 pub(super) const MSG_STEER_REFUSED: &str = "operação recusada pelo runtime";
 pub(super) const MSG_CONTROL_DEFERRED: &str = "O controle não foi executado; confira a sessão.";
 pub(super) const MSG_CONTROL_UNCONFIRMED: &str = "Não foi possível confirmar o controle; confira a sessão antes de repetir.";
+/// Só o envelope de erro interessa na resposta do Python ao aviso.
+const RELAY_REPLY_LIMIT: usize = 1 << 20;
 
 pub struct Params<'a> {
     pub text: &'a str,
@@ -170,16 +175,17 @@ fn parse_body(bytes: &Bytes) -> Option<(String, bool)> {
 }
 
 /// O FastAPI só lê o corpo como JSON sem `Content-Type` ou com `application/json`; outro tipo é 422 dele.
-pub(super) fn json_content_type(headers: &HeaderMap) -> bool {
+pub(crate) fn json_content_type(headers: &HeaderMap) -> bool {
     let Some(value) = headers.get(header::CONTENT_TYPE) else { return true };
     let Ok(text) = value.to_str() else { return false };
     let mime = text.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
     mime == "application/json" || (mime.starts_with("application/") && mime.ends_with("+json"))
 }
 
+fn is_clear(text: &str) -> bool { text.split_whitespace().next() == Some("/clear") }
+
 fn first_token_is_clear(bytes: &Bytes) -> bool {
-    serde_json::from_slice::<Value>(bytes).ok()
-        .is_some_and(|v| v["text"].as_str().is_some_and(|t| t.split_whitespace().next() == Some("/clear")))
+    serde_json::from_slice::<Value>(bytes).ok().is_some_and(|v| v["text"].as_str().is_some_and(is_clear))
 }
 
 pub(super) fn answer(ctx: &Ctx, (status, body): (StatusCode, Value)) -> Response {
@@ -188,14 +194,33 @@ pub(super) fn answer(ctx: &Ctx, (status, body): (StatusCode, Value)) -> Response
     response
 }
 
-fn report(ctx: &Ctx, diary: Diary) {
+fn report(st: &AppState, name: &str, diary: Diary) {
     let Some((event, code)) = diary else { return };
     let reason = match event {
         "runtime.send_failed" => "o runtime não entregou o recado",
         "runtime.send_uncertain" => "entrega sem prova; o recado fica na fila até o transcript confirmar",
         _ => "o terminal não aceitou o comando de barra agora",
     };
-    ctx.st.diag.report(event, &ctx.name, &code, reason);
+    st.diag.report(event, name, &code, reason);
+}
+
+/// O miolo do `/input` depois da admissão: envia ao ator, orienta se pedido e responde como o Python.
+async fn send(st: &AppState, name: &str, target: &WriteTarget, text: &str, steer: bool) -> (StatusCode, Value) {
+    let operation_id = random_hex(16);
+    let params = Params { text, steer, terminal: target.terminal, operation_id: &operation_id };
+    let sent = target.handle.command(RuntimeCommand { operation_id: operation_id.clone(), kind: OperationKind::Input,
+        payload: json!({"text": text, "pre_transcript": false}) }).await;
+    let (sent, diary) = classify(&params, &sent);
+    report(st, name, diary);
+    let mut steered = false;
+    if wants_steer_queue(&params, &sent) {
+        let promoted = target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerQueue,
+            payload: json!({"entry_id": operation_id}) }).await;
+        // O recado já está na fila: falha de orientação nunca desfaz nem repete o envio.
+        if let Err(error) = &promoted { tracing::warn!(session = %name, code = %error.code, "orientação do recado falhou; ele segue na fila"); }
+        steered = was_steered(&operation_id, &promoted);
+    }
+    input_answer(&sent, steered)
 }
 
 pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
@@ -210,21 +235,54 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     };
     let Some((text, steer)) = parse_body(&bytes).filter(|_| json_content_type(ctx.headers())) else { return relay(ctx, bytes).await };
     if relays_codex_input(&ctx.target.provider, &text) { return relay(ctx, bytes).await; }
-    let operation_id = random_hex(16);
-    let params = Params { text: &text, steer, terminal: ctx.target.terminal, operation_id: &operation_id };
-    let sent = ctx.target.handle.command(RuntimeCommand { operation_id: operation_id.clone(), kind: OperationKind::Input,
-        payload: json!({"text": text, "pre_transcript": false}) }).await;
-    let (sent, diary) = classify(&params, &sent);
-    report(&ctx, diary);
-    let mut steered = false;
-    if wants_steer_queue(&params, &sent) {
-        let promoted = ctx.target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::SteerQueue,
-            payload: json!({"entry_id": operation_id}) }).await;
-        // O recado já está na fila: falha de orientação nunca desfaz nem repete o envio.
-        if let Err(error) = &promoted { tracing::warn!(session = %ctx.name, code = %error.code, "orientação do recado falhou; ele segue na fila"); }
-        steered = was_steered(&operation_id, &promoted);
-    }
-    answer(&ctx, input_answer(&sent, steered))
+    let result = send(&ctx.st, &ctx.name, &ctx.target, &text, steer).await;
+    answer(&ctx, result)
+}
+
+/// Recado de fora da rota (aviso de grupo): o mesmo `/input` com `steer: false` que o `_enviar` do
+/// Python faz. `Err` = o `detail` da resposta, o envelope `{code, params, msg}`.
+pub async fn deliver_text(st: &AppState, name: &str, text: &str) -> Result<(), Value> {
+    let body = json!({"text": text, "steer": false}).to_string();
+    let route = match st.state.runtime.get() {
+        // Mesma ordem do handler: o /clear com terminal segue ao Python antes da porta.
+        Some(runtime) if !(runtime.is_terminal(name).await && is_clear(text)) =>
+            route_write(runtime, name, WriteRoute::Input, st.write_gate_wait).await,
+        _ => Write::Python,
+    };
+    let (status, reply) = match route {
+        // O /compact do Codex o handler também repassa ao Python, com o passe já solto.
+        Write::Rust(held, target) if relays_codex_input(&target.provider, text) => {
+            drop(held);
+            relay_as_owner(st, name, body).await
+        }
+        Write::Rust(held, target) => {
+            let result = send(st, name, &target, text, false).await;
+            drop(held);
+            result
+        }
+        Write::Busy => (StatusCode::CONFLICT, busy_body()),
+        Write::Python => relay_as_owner(st, name, body).await,
+    };
+    if status.is_success() { return Ok(()); }
+    Err(match reply.get("detail") {
+        Some(detail) if !detail.is_null() => detail.clone(),
+        // O mesmo genérico do `_deliver` do Python para resposta sem o envelope.
+        _ => json!({"code": "erro_envio_falhou_desconhecida", "params": {}, "msg": "falha desconhecida no envio"}),
+    })
+}
+
+/// O `/input` do Python, pelo mesmo repasse do handler, como o dono local.
+async fn relay_as_owner(st: &AppState, name: &str, body: String) -> (StatusCode, Value) {
+    // Os não reservados da URL ficam crus: o caminho repassado é o mesmo que o app mandaria.
+    const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
+    let path = format!("/api/sessions/{}/input", utf8_percent_encode(name, SEGMENT));
+    let Ok(req) = Request::post(path).header(header::AUTHORIZATION, format!("Bearer {}", st.cfg.auth_token))
+        .header(header::CONTENT_TYPE, "application/json").body(Body::from(body)) else { return (StatusCode::BAD_REQUEST, Value::Null) };
+    let fwd = Forward { client_ip: "127.0.0.1".into(), https: false };
+    let response = pass(st, req, &fwd).await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), RELAY_REPLY_LIMIT).await.unwrap_or_default();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
 pub async fn steer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {

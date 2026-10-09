@@ -231,3 +231,23 @@ async fn burst_of_writes_coalesces() {
     }
 }
 
+/// Só o sidecar de grupo de `s1` muda: sem o `pair_*` na assinatura a lista ficava com o selo velho.
+#[tokio::test(flavor = "multi_thread")]
+async fn pair_change_alone_reemits_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = server(dir.path(), 2).await;
+    let mut es = open(srv.addr).await;
+    let first: Value = serde_json::from_str(&next_named(&mut es, "sessions").await.data).unwrap();
+    assert_eq!(first[1]["pair_peers"], Value::Null);
+    let pair = dir.path().join("home/.claude/.hangar-pair");
+    std::fs::create_dir_all(&pair).unwrap();
+    std::fs::write(pair.join("s1.json"), json!({"peers": ["s0"], "task": "T", "gid": "g1"}).to_string()).unwrap();
+    let again: Value = tokio::time::timeout(Duration::from_millis(3500), next_named(&mut es, "sessions")).await
+        .map(|ev| serde_json::from_str(&ev.data).unwrap()).expect("a lista não reemitiu");
+    assert_eq!((again[1]["pair_peers"].clone(), again[1]["pair_gid"].clone()), (json!(["s0"]), json!("g1")));
+    std::fs::remove_file(pair.join("s1.json")).unwrap();
+    let gone: Value = tokio::time::timeout(Duration::from_millis(3500), next_named(&mut es, "sessions")).await
+        .map(|ev| serde_json::from_str(&ev.data).unwrap()).expect("a lista não reemitiu a saída");
+    assert_eq!(gone[1]["pair_peers"], Value::Null);
+}
+

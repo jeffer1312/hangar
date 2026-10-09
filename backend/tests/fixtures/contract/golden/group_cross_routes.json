@@ -1,0 +1,529 @@
+[
+ {
+  "name": "no_server_id",
+  "at": "anon",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peer": "lab::s1"
+  },
+  "status": 400,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_server_id_ausente",
+    "params": {},
+    "msg": "CP_SERVER_ID ausente no backend/.env \u2014 obrigat\u00f3rio pra pareamento cross-server (\u00e9 o endere\u00e7o de resposta srv::sessao)"
+   }
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "cross_with_local",
+  "at": "casa",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peers": [
+    "lab::s1",
+    "s2"
+   ]
+  },
+  "status": 400,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_cross_1_1",
+    "params": {},
+    "msg": "pareamento cross-server \u00e9 1:1 por enquanto: um peer remoto, sem misturar com grupo local"
+   }
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "cross_missing_local",
+  "at": "casa",
+  "method": "POST",
+  "path": "ghost/pair",
+  "body": {
+   "peer": "lab::s1"
+  },
+  "status": 404,
+  "response": {
+   "detail": {
+    "code": "erro_sessao_nao_encontrada_detalhe",
+    "params": {
+     "detalhe": "ghost"
+    },
+    "msg": "sess\u00e3o n\u00e3o encontrada: ghost"
+   }
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "cross_unknown_server",
+  "at": "casa",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peer": "nowhere::s1"
+  },
+  "status": 502,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_rejeitado",
+    "params": {
+     "erro": "servidor 'nowhere' n\u00e3o est\u00e1 em peers.json (ou sem base_url/token)"
+    },
+    "msg": "pareamento desfeito (peer rejeitou): servidor 'nowhere' n\u00e3o est\u00e1 em peers.json (ou sem base_url/token)"
+   }
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "cross_refused",
+  "at": "casa",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peer": "lab::ghost"
+  },
+  "status": 502,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_rejeitado",
+    "params": {
+     "erro": "lab respondeu HTTP 404: {'code': 'erro_sessao_nao_encontrada_detalhe', 'params': {'detalhe': 'ghost'}, 'msg': 'sess\u00e3o n\u00e3o encontrada: ghost'}"
+    },
+    "msg": "pareamento desfeito (peer rejeitou): lab respondeu HTTP 404: {'code': 'erro_sessao_nao_encontrada_detalhe', 'params': {'detalhe': 'ghost'}, 'msg': 'sess\u00e3o n\u00e3o encontrada: ghost'}"
+   }
+  },
+  "delivered": [],
+  "calls": [
+   {
+    "to": "lab",
+    "method": "POST",
+    "path": "/api/sessions/ghost/pair-remote",
+    "body": {
+     "initiator": "casa::s0",
+     "task": ""
+    }
+   }
+  ]
+ },
+ {
+  "name": "cross_network_down",
+  "at": "casa",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peer": "off::s1",
+   "task": "t0"
+  },
+  "status": 502,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_nao_confirmado",
+    "params": {
+     "srv": "off",
+     "erro": "off inacess\u00edvel: <rede>"
+    },
+    "msg": "pareamento N\u00c3O confirmado (falha de rede com 'off'): desfeito deste lado; se o peer tiver ficado pareado, rode unpair l\u00e1. (off inacess\u00edvel: <rede>)"
+   }
+  },
+  "delivered": [],
+  "calls": [
+   {
+    "to": "off",
+    "method": "POST",
+    "path": "/api/sessions/s1/pair-remote",
+    "body": {
+     "initiator": "casa::s0",
+     "task": "t0"
+    }
+   },
+   {
+    "to": "off",
+    "method": "POST",
+    "path": "/api/sessions/s1/unpair-remote",
+    "body": {
+     "peer": "casa::s0"
+    }
+   }
+  ]
+ },
+ {
+  "name": "cross_pair",
+  "at": "casa",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peer": "lab::s1",
+   "task": "t1"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "members": [
+    "s0",
+    "lab::s1"
+   ],
+   "warning": null
+  },
+  "delivered": [
+   "casa:s0",
+   "lab:s1"
+  ],
+  "calls": [
+   {
+    "to": "lab",
+    "method": "POST",
+    "path": "/api/sessions/s1/pair-remote",
+    "body": {
+     "initiator": "casa::s0",
+     "task": "t1"
+    }
+   }
+  ]
+ },
+ {
+  "name": "cross_local_mix",
+  "at": "casa",
+  "method": "POST",
+  "path": "s2/pair",
+  "body": {
+   "peer": "s0"
+  },
+  "status": 400,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_mistura_cross",
+    "params": {},
+    "msg": "pareamento cross-server \u00e9 1:1 (uma sess\u00e3o local + um peer remoto); uma sess\u00e3o j\u00e1 pareada cross-server n\u00e3o entra em grupo local nem pareia com outro remoto"
+   }
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "group_message_remote",
+  "at": "casa",
+  "method": "POST",
+  "path": "s0/group-message",
+  "body": {
+   "text": "oi"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "peers": [
+    "lab::s1"
+   ],
+   "pulados": [],
+   "warning": {
+    "code": "erro_pareamento_grupo_falha",
+    "params": {
+     "avisos": [
+      {
+       "sessao": "lab::s1",
+       "erro": {
+        "code": "erro_sessao_inexistente",
+        "params": {},
+        "msg": "sess\u00e3o n\u00e3o encontrada"
+       }
+      }
+     ]
+    },
+    "msg": "falha em: lab::s1: sess\u00e3o n\u00e3o encontrada"
+   }
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "pair_remote_bad_initiator",
+  "at": "lab",
+  "method": "POST",
+  "path": "s2/pair-remote",
+  "body": {
+   "initiator": "s0"
+  },
+  "status": 400,
+  "response": {
+   "detail": {
+    "code": "erro_initiator_invalido",
+    "params": {},
+    "msg": "initiator precisa ser qualificado (srv::nome)"
+   }
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "pair_remote_mix",
+  "at": "lab",
+  "method": "POST",
+  "path": "s1/pair-remote",
+  "body": {
+   "initiator": "casa::s2"
+  },
+  "status": 409,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_mistura_cross",
+    "params": {},
+    "msg": "pareamento cross-server \u00e9 1:1 (uma sess\u00e3o local + um peer remoto); uma sess\u00e3o j\u00e1 pareada cross-server n\u00e3o entra em grupo local nem pareia com outro remoto"
+   }
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "pair_remote_notice_fails",
+  "at": "lab",
+  "method": "POST",
+  "path": "s2/pair-remote",
+  "body": {
+   "initiator": "casa::s3",
+   "task": "x"
+  },
+  "fail_delivery": "lab",
+  "status": 502,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_aviso_falhou",
+    "params": {
+     "nome": "s2",
+     "erro": {
+      "code": "erro_fila_nao_digitada",
+      "params": {},
+      "msg": "composer ileg\u00edvel"
+     }
+    },
+    "msg": "pareamento desfeito: falha ao avisar 's2': composer ileg\u00edvel"
+   }
+  },
+  "delivered": [
+   "lab:s2"
+  ],
+  "calls": []
+ },
+ {
+  "name": "pair_remote_extra_field",
+  "at": "lab",
+  "method": "POST",
+  "path": "s2/pair-remote",
+  "body": {
+   "initiator": "casa::s3",
+   "bogus": 1
+  },
+  "python_only": true,
+  "status": 422,
+  "response": {
+   "detail": [
+    {
+     "type": "extra_forbidden",
+     "loc": [
+      "body",
+      "bogus"
+     ],
+     "msg": "Extra inputs are not permitted",
+     "input": 1
+    }
+   ]
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "pair_remote_direct",
+  "at": "lab",
+  "method": "POST",
+  "path": "s3/pair-remote",
+  "body": {
+   "initiator": "casa::s2",
+   "task": "y"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "members": [
+    "s3",
+    "casa::s2"
+   ]
+  },
+  "delivered": [
+   "lab:s3"
+  ],
+  "calls": []
+ },
+ {
+  "name": "unpair_remote_wrong_peer",
+  "at": "lab",
+  "method": "POST",
+  "path": "s1/unpair-remote",
+  "body": {
+   "peer": "casa::s3"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "warning": null,
+   "noop": "'s1' n\u00e3o est\u00e1 pareado com 'casa::s3'"
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "unpair_remote_not_grouped",
+  "at": "lab",
+  "method": "POST",
+  "path": "s0/unpair-remote",
+  "body": {
+   "peer": "casa::s0"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "warning": null,
+   "noop": "'s0' n\u00e3o est\u00e1 pareado com 'casa::s0'"
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "leave_cross",
+  "at": "casa",
+  "method": "DELETE",
+  "path": "s0/pair",
+  "status": 200,
+  "response": {
+   "ok": true,
+   "warning": null
+  },
+  "delivered": [
+   "casa:s0",
+   "lab:s1"
+  ],
+  "calls": [
+   {
+    "to": "lab",
+    "method": "POST",
+    "path": "/api/sessions/s1/unpair-remote",
+    "body": {
+     "peer": "casa::s0"
+    }
+   }
+  ]
+ },
+ {
+  "name": "unpair_remote_after_leave",
+  "at": "lab",
+  "method": "POST",
+  "path": "s1/unpair-remote",
+  "body": {
+   "peer": "casa::s0"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "warning": null,
+   "noop": "'s1' n\u00e3o est\u00e1 pareado com 'casa::s0'"
+  },
+  "delivered": [],
+  "calls": []
+ },
+ {
+  "name": "leave_peer_down",
+  "at": "casa",
+  "method": "DELETE",
+  "path": "s3/pair",
+  "seed": {
+   "s3": {
+    "peers": [
+     "off::s1"
+    ],
+    "task": "",
+    "gid": "abababab",
+    "harness": {}
+   }
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "warning": {
+    "code": "erro_pareamento_saida_falhou",
+    "params": {
+     "avisos": [
+      {
+       "sessao": "off::s1",
+       "erro": {
+        "code": "erro_peer_nao_avisado",
+        "params": {
+         "peer": "off::s1"
+        },
+        "msg": "off inacess\u00edvel: <rede>"
+       }
+      }
+     ]
+    },
+    "msg": "aviso de sa\u00edda falhou: off::s1: off inacess\u00edvel: <rede>"
+   }
+  },
+  "delivered": [
+   "casa:s3"
+  ],
+  "calls": [
+   {
+    "to": "off",
+    "method": "POST",
+    "path": "/api/sessions/s1/unpair-remote",
+    "body": {
+     "peer": "casa::s3"
+    }
+   }
+  ]
+ },
+ {
+  "name": "leave_no_server_id",
+  "at": "anon",
+  "method": "DELETE",
+  "path": "s3/pair",
+  "seed": {
+   "s3": {
+    "peers": [
+     "lab::s1"
+    ],
+    "task": "",
+    "gid": "cdcdcdcd",
+    "harness": {}
+   }
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "warning": {
+    "code": "erro_pareamento_saida_falhou",
+    "params": {
+     "avisos": [
+      {
+       "sessao": "lab::s1",
+       "erro": {
+        "code": "erro_pareamento_server_id_ausente",
+        "params": {},
+        "msg": "CP_SERVER_ID ausente no backend/.env \u2014 obrigat\u00f3rio pra pareamento cross-server (\u00e9 o endere\u00e7o de resposta srv::sessao)"
+       }
+      }
+     ]
+    },
+    "msg": "aviso de sa\u00edda falhou: lab::s1: CP_SERVER_ID ausente no backend/.env \u2014 obrigat\u00f3rio pra pareamento cross-server (\u00e9 o endere\u00e7o de resposta srv::sessao)"
+   }
+  },
+  "delivered": [
+   "anon:s3"
+  ],
+  "calls": []
+ }
+]

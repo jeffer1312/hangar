@@ -15,6 +15,7 @@ from app import atomico, diag, share_store, shortcut_terminals, tmux
 from app import agentpane
 from app import permission_mode as modo_permissao
 from app.config import settings
+from app.mensagens import erro
 from app import claude_customizations as session_customizations
 from app import plugin_bridge
 from app import runtime_config
@@ -164,6 +165,13 @@ def _encerrar_pares_externos(morta: str) -> None:
             except OSError as e:
                 _log.warning("varredura de pares: par externo '%s' não limpo: %r", r.address, e)
         threading.Thread(target=_avisar_par_externo, args=(r,), daemon=True).start()
+
+
+def _log_leave_warnings(name: str, warnings) -> None:
+    """Saída do grupo antigo na criação: os avisos não têm a quem voltar, mas não somem calados."""
+    if isinstance(warnings, list) and warnings:
+        # Só a contagem: o aviso pode trazer texto da outra máquina.
+        _log.warning("criação de %s: a saída do grupo antigo deixou %d aviso(s)", name, len(warnings))
 
 
 def _avisar_par_externo(rec) -> None:
@@ -1005,6 +1013,23 @@ class KillFailed(Exception):
 
     def __init__(self, name: str):
         super().__init__(f"a sessao '{name}' continua de pe depois do kill-session")
+        self.name = name
+
+
+def _rename_pair_python(old: str, new: str) -> None:
+    """No modo Rust o grupo já foi renomeado pela rota antes do tmux e do sidecar (`group.rename`)."""
+    from app import groups_bridge
+    if not groups_bridge.rust_owns_groups():
+        rename_pair(old, new)
+
+
+class GroupCleanupFailed(ValueError):
+    """O nome reusado ainda tem o grupo da sessão antiga e o Rust não o desfez: criar agora faria
+    a sessão nova nascer dentro dele."""
+    code = "erro_grupo_limpeza_falhou"
+
+    def __init__(self, name: str):
+        super().__init__(f"o grupo da sessão antiga '{name}' não foi desfeito; tente de novo")
         self.name = name
 
 
@@ -2176,6 +2201,7 @@ class SessionRegistry:
             model = model if model is not None else target.get("model")
             effort = effort if effort is not None else target.get("effort")
             permission_mode = permission_mode if permission_mode is not None else target.get("permission_mode")
+        self._leave_old_group(name)
         if headless:
             if provider not in ("claude", "codex"):
                 raise ValueError("sessao sem terminal so vale para provider claude ou codex")
@@ -2447,7 +2473,7 @@ class SessionRegistry:
         # disco — e a sessao nova de mesmo nome nascia dentro de um grupo que nao existe mais.
         # Nome reusado não herda o par externo da sessão antiga.
         _encerrar_pares_externos(name)
-        self._clear_pair(name)
+        _log_leave_warnings(name, self._clear_pair(name))
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
         # Pi (jsonl=None) nao entra no cache — nao ha path a fixar, e a resolucao dele nem passa por aqui.
@@ -2513,7 +2539,7 @@ class SessionRegistry:
         ThenLink(name).clear()
         # Nome reusado não herda o par externo da sessão antiga.
         _encerrar_pares_externos(name)
-        self._clear_pair(name)
+        _log_leave_warnings(name, self._clear_pair(name))
         jsonl = get_adapter(CLAUDE_HEADLESS).transcript_path_de(meta)
         self._seed(name, jsonl)
         diag.registrar("sessao.criada", sessao=name, provider="claude", etapa="sidecar_gravado")
@@ -2565,7 +2591,7 @@ class SessionRegistry:
         ThenLink(name).clear()
         # Nome reusado não herda o par externo da sessão antiga.
         _encerrar_pares_externos(name)
-        self._clear_pair(name)
+        _log_leave_warnings(name, self._clear_pair(name))
         diag.registrar("sessao.criada", sessao=name, provider="codex", etapa="sidecar_gravado")
         return SessionInfo(name=name, cwd=cwd, jsonl=rollout or None, tracked=True, provider="codex",
                            headless=True, conta=f"codex:{codex_home}", codex_home=codex_home)
@@ -3001,7 +3027,7 @@ class SessionRegistry:
             self._rename_rust(old, new)
             PromptQueue(old).rename(new)
             ThenLink(old).rename(new)
-            rename_pair(old, new)
+            _rename_pair_python(old, new)
             shortcut_terminals.rename_owner(old, new)
             from app.conversation_transfer import rename_transfer
             rename_transfer(old, new)
@@ -3038,7 +3064,7 @@ class SessionRegistry:
         # Pareamento: move o próprio sidecar E re-aponta o do PAR (que referencia o nome velho) —
         # senão o par ficaria pareado com um fantasma e o unpair simétrico quebrava. Sob o lock do
         # módulo pair (rename_pair): sem ele, um unpair concorrente podia ser ressuscitado.
-        rename_pair(old, new)
+        _rename_pair_python(old, new)
         if apos_renomear_codex:
             apos_renomear_codex(old, new)
         # L71 da revisao final: o shell escondido e keyed por NOME (`term-<nome>`) e NAO acompanha o
@@ -3082,7 +3108,9 @@ class SessionRegistry:
         if tmux.is_hidden(alvo) and not tmux.kill_session(alvo):
             _log.debug("kill: shell escondido de %r nao saiu (pode nao existir)", name)
 
-    def kill(self, name: str) -> None:
+    def kill(self, name: str) -> list[dict]:
+        """Devolve os avisos de saída do grupo que o Rust não entregou (vazio no modo Python, onde a
+        rota avisa depois)."""
         from app.conversation_transfer import require_available
         require_available(name)
 
@@ -3107,8 +3135,7 @@ class SessionRegistry:
             self._forget(name)
             PromptQueue(name).clear()
             ThenLink(name).clear()
-            self._clear_pair(name)
-            return
+            return self._clear_pair(name)
         if codex_sessions.exists(name):
             # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
             from app.adapters import get_adapter
@@ -3125,10 +3152,10 @@ class SessionRegistry:
             self._forget(name)
             PromptQueue(name).clear()
             ThenLink(name).clear()
-            self._clear_pair(name)
+            warnings = self._clear_pair(name)
             if apos_saida_codex:
                 apos_saida_codex(name)
-            return
+            return warnings
         # Limpa o sidecar do AskUserQuestion ANTES de matar (precisa do processo vivo pra resolver o
         # jsonl), best-effort: cleanup nunca bloqueia/quebra o kill. Senao um stale reabriria o stepper
         # numa sessao futura de mesmo nome.
@@ -3147,19 +3174,50 @@ class SessionRegistry:
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).
         PromptQueue(name).clear()
         ThenLink(name).clear()  # mesmo motivo, pro vinculo 'then' (feature #12)
-        self._clear_pair(name)
+        return self._clear_pair(name)
 
     @staticmethod
-    def _clear_pair(name: str) -> None:
+    def _clear_pair(name: str) -> list[dict]:
         # Sessão morta SAI do grupo (leave: sob lock, atualiza os demais membros): sem isto os
         # companheiros apontariam pra um fantasma (badge preso). Best-effort, nunca bloqueia o
         # kill nem a criação — mas LOGA: engolir calado deixava o badge-fantasma indiagnosticável.
+        from app import groups_bridge
+        if groups_bridge.rust_owns_groups():
+            # O Rust já avisa as outras máquinas e o par externo; falha aqui a varredura dele resolve.
+            try:
+                out = groups_bridge.call("group.leave", name=name)
+            except groups_bridge.GroupsBridgeError as e:
+                _log.warning("_clear_pair(%s): o Rust não tirou a sessão do grupo: %s", name, e.code)
+                # A varredura resolver depois não é ter saído agora: o aviso vai na resposta.
+                return [{"sessao": name, "erro": erro("erro_grupo_indisponivel",
+                                                      "os grupos estão indisponíveis agora", detalhe=e.code)}]
+            warnings = out.get("warnings")
+            return warnings if isinstance(warnings, list) else []
         try:
             pair_leave(name)
         except Exception as e:
             # Sem "kill(...)" no texto: o create() também chama isto (nome reusado de sessão morta
             # fora do kill), e a falha aparecia no log como se fosse de um encerramento.
             _log.warning("_clear_pair(%s): falha ao sair do grupo de pareamento: %r", name, e)
+        return []
+
+    @staticmethod
+    def _leave_old_group(name: str) -> None:
+        """Nome reusado no modo Rust: o grupo da sessão antiga sai antes de qualquer efeito da
+        criação. Sem limpeza e com o sidecar ainda lá, a criação é recusada."""
+        from app import groups_bridge
+        if not groups_bridge.rust_owns_groups():
+            return
+        if tmux.has_session(name) or codex_sessions.exists(name) or headless_sessions.exists(name):
+            return   # nome em uso: o ramo da criação recusa, e o grupo é de quem está viva
+        try:
+            out = groups_bridge.call("group.leave", name=name)
+            _log_leave_warnings(name, out.get("warnings"))
+        except groups_bridge.GroupsBridgeError as e:
+            if PairLink(name).path.exists():
+                _log.warning("criação de %s recusada: grupo antigo não desfeito (%s)", name, e.code)
+                raise GroupCleanupFailed(name) from e
+            _log.warning("criação de %s: ponte de grupos falhou sem grupo a desfazer (%s)", name, e.code)
 
     def sweep_pairs(self, list_fn: Callable[[], list[SessionInfo]], agora: float | None = None) -> None:
         """Lista que falha levanta antes de varrer: vazia por erro dissolveria grupos vivos. Sem

@@ -423,21 +423,27 @@ def _fake_codex_adapter(deliverable=True, send_result="sent"):
     return fake
 
 
-def test_input_codex_idle_sends_via_adapter(api_client):
-    # Sessao Codex ociosa: /input entrega via adapter.send_prompt (turn/start), NAO via terminal
-    # (tmux), e registra na fila duravel marcando entregue.
+def test_input_codex_idle_sends_via_adapter(api_client, tmp_path, monkeypatch):
+    from app import pqueue
+
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    queue = pqueue.PromptQueue("cx")
     fake = _fake_codex_adapter(deliverable=True, send_result="sent")
+
+    async def send(name, text):
+        assert queue.load()[0]["delivered"] is True
+        return "sent"
+
+    fake.send_prompt.side_effect = send
     with patch("app.api._provider_of", return_value="codex"), \
          patch("app.api.get_adapter", return_value=fake), \
-         patch("app.api.terminal.send_prompt") as term_sp, \
-         patch("app.pqueue.PromptQueue.append", return_value={"id": "x1"}) as ap, \
-         patch("app.pqueue.PromptQueue.set_delivered") as sd:
+         patch("app.api.terminal.send_prompt") as term_sp:
         r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
-    assert r.status_code == 200
+    assert r.status_code == 200 and r.json()["delivered"] is True
     fake.send_prompt.assert_awaited_once_with("cx", "oi")
     term_sp.assert_not_called()
-    ap.assert_called_once()
-    sd.assert_called_once_with("x1", True)
+    rows = queue.load()
+    assert len(rows) == 1 and rows[0]["text"] == "oi" and rows[0]["delivered"] is True
 
 
 def test_input_codex_working_stays_pending(api_client):
@@ -538,17 +544,21 @@ def test_input_claude_untouched_by_codex_path(api_client):
     fake.send_prompt.assert_not_awaited()
 
 
-def test_broadcast_codex_uses_adapter(api_client):
+def test_broadcast_codex_uses_adapter(api_client, tmp_path, monkeypatch):
+    from app import pqueue
+
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
     fake = _fake_codex_adapter(deliverable=True)
     with patch("app.api._provider_of", return_value="codex"), \
          patch("app.api.get_adapter", return_value=fake), \
-         patch("app.api.terminal.send_prompt") as term_sp, \
-         patch("app.pqueue.PromptQueue.append", return_value={"id": "x1"}), \
-         patch("app.pqueue.PromptQueue.set_delivered"):
+         patch("app.api.terminal.send_prompt") as term_sp:
         r = api_client.post("/api/broadcast", json={"names": ["cx1", "cx2"], "text": "oi"}, headers=_h())
     assert r.status_code == 200
     assert fake.send_prompt.await_count == 2
     term_sp.assert_not_called()
+    for name in ("cx1", "cx2"):
+        rows = pqueue.PromptQueue(name).load()
+        assert len(rows) == 1 and rows[0]["text"] == "oi" and rows[0]["delivered"] is True
 
 
 def test_interrupt_codex_calls_adapter(api_client):

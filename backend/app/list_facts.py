@@ -24,7 +24,7 @@ SIG_FIELDS = ("name", "cwd", "branch", "git_cwd", "worktree_gone", "git_dirty", 
               "context", "model", "label", "startup_steps", "loop_status", "loop_iter", "engine", "conta",
               "codex_service_tier", "plan_name", "plan_done", "plan_total", "plan_task", "plan_task_total",
               "plan_complete", "plan_tasks", "plan_hidden", "problema", "provider", "shared", "owner",
-              "orq_arbiter")
+              "orq_arbiter", "pair_peers", "pair_gid", "pair_task", "pair_external")
 # Lista servida mais velha que isto não se compara com a produção de agora.
 _SHADOW_MAX_AGE = 3.0
 

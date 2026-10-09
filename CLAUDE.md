@@ -479,6 +479,13 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   nunca vira lista vazia nem a do Python: 503 com código no `GET`, `list_error` com código no SSE,
   `problema` na linha quando só os fatos caíram. Convidado e outros métodos seguem ao Python.
   Medidas em [plataforma.md](docs/decisoes/plataforma.md#lista-do-dono-no-hangar-server).
+- **Os grupos são do Rust: no modo `rust`/`pending` só ele grava `.hangar-pair`.** Sidecars,
+  fusão e arquivo de contrato e a varredura de membro morto (ausência por tempo, lista sem fatos
+  não varre) moram em `groups/`. Quem chama no Python (rotas das portas dele, registry, par
+  externo, MCP) pede pela ponte `groups_bridge` (`/__hangar_server/groups`); as escritas do
+  `pair.py` recusam nesses modos (`GroupsOwnedByRust`) e o modo `python` segue com o código antigo.
+  Pedido que chegou pela ponte nunca volta ao Python. Motivo em
+  [plataforma.md](docs/decisoes/plataforma.md#grupos-o-rust-grava).
 - **A porta privada de loopback do Rust mora no mesmo filho**, anunciada na saúde somente como
   endereço; o segredo vem do Supervisor em memória após conferir o protocolo. Uma captura canônica
   por rodada, sem grade auxiliar: com o Rust de pé, quem captura o pane de Claude com terminal para o

@@ -32,7 +32,7 @@ use crate::runtime::ingress::{GateClosed, IngressPass};
 pub use table::{Owner, Provider, WriteRoute, decide};
 
 /// Mesmo teto do middleware de corpo do Python (`uploads.MAX_BYTES`), que recusa antes da rota.
-const BODY_LIMIT: usize = 100 * 1024 * 1024;
+pub(crate) const BODY_LIMIT: usize = 100 * 1024 * 1024;
 const BUSY_MSG: &str = "A sessão está trocando de agente; tente novamente quando terminar.";
 
 /// O que a rota precisa para escrever: o passe mantém a porta aberta até o fim da escrita.
@@ -88,33 +88,44 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
         return Err(pass(st, req, &fwd).await);
     };
     let (parts, body) = req.into_parts();
-    let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else {
-        // Igual ao `_BodySizeLimitMiddleware`: texto puro, e o CORS por fora dele.
-        let mut response = (StatusCode::PAYLOAD_TOO_LARGE, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "request body too large").into_response();
-        cors(&parts.headers, response.headers_mut());
-        return Err(response);
-    };
+    let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(too_large(&parts.headers)) };
     if !table::body_ok(route, &bytes) || early(&bytes) {
         return Err(forward_whole(st, parts, bytes, &fwd).await);
     }
-    let found = match enter_then_find(&runtime, &name, st.write_gate_wait).await {
-        Ok(found) => found,
-        Err(GateClosed) => {
-            let mut response = detail(StatusCode::CONFLICT, "session_transfer_busy", BUSY_MSG, json!({}));
+    match route_write(&runtime, &name, route, st.write_gate_wait).await {
+        Write::Rust(pass_in, target) => Ok((Ctx { st: st.clone(), name, target, pass: pass_in, parts, fwd }, bytes)),
+        Write::Python => Err(forward_whole(st, parts, bytes, &fwd).await),
+        Write::Busy => {
+            let mut response = json_response(StatusCode::CONFLICT, busy_body());
             cors(&parts.headers, response.headers_mut());
-            return Err(response);
+            Err(response)
         }
-    };
-    let Some((pass_in, target)) = found else {
-        return Err(forward_whole(st, parts, bytes, &fwd).await);
-    };
-    let rust = Provider::from_str(&target.provider).is_some_and(|p| decide(route, p, target.terminal, target.healthy) == Owner::Rust);
-    if !rust {
-        drop(pass_in);
-        return Err(forward_whole(st, parts, bytes, &fwd).await);
     }
-    Ok((Ctx { st: st.clone(), name, target, pass: pass_in, parts, fwd }, bytes))
 }
+
+/// Igual ao `_BodySizeLimitMiddleware`: texto puro, e o CORS por fora dele.
+pub(crate) fn too_large(headers: &axum::http::HeaderMap) -> Response {
+    let mut response = (StatusCode::PAYLOAD_TOO_LARGE, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "request body too large").into_response();
+    cors(headers, response.headers_mut());
+    response
+}
+
+/// Quem atende uma escrita de corpo já aceito.
+pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Busy }
+
+/// Porta, entrada e tabela, nessa ordem. O passe só volta com `Rust`: repasse nunca o segura.
+pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: WriteRoute, wait: Duration) -> Write {
+    match enter_then_find(runtime, name, wait).await {
+        Err(GateClosed) => Write::Busy,
+        Ok(None) => Write::Python,
+        Ok(Some((pass_in, target))) => {
+            let rust = Provider::from_str(&target.provider).is_some_and(|p| decide(route, p, target.terminal, target.healthy) == Owner::Rust);
+            if rust { Write::Rust(pass_in, target) } else { Write::Python }
+        }
+    }
+}
+
+pub(crate) fn busy_body() -> Value { detail_body("session_transfer_busy", BUSY_MSG, json!({})) }
 
 /// Repassa ao Python o que o Rust admitiu mas não atende (corpo que o FastAPI recusa), soltando
 /// antes o passe.

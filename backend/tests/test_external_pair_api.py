@@ -454,6 +454,43 @@ def test_desfazer_pelo_outro_lado_limpa_este(guest_client_par, entregues):
     assert "[painel: par externo encerrado]" in entregues[-1][1]
 
 
+def test_desfazer_pelo_outro_lado_com_grupos_fora_mantem_registro_e_convite(guest_client_par, par_gravado,
+                                                                          entregues, monkeypatch):
+    from app import groups_bridge
+    calls = []
+
+    def call(op, **args):
+        calls.append(op)
+        if len(calls) == 1:
+            raise groups_bridge.GroupsBridgeError("groups_runtime_starting")
+        return {}
+    monkeypatch.setattr(groups_bridge, "rust_owns_groups", lambda: True)
+    monkeypatch.setattr(groups_bridge, "call", call)
+    r = guest_client_par.delete("/api/pair")
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "erro_grupo_indisponivel"
+    # O outro lado tenta de novo com o mesmo token: registro e convite ficaram.
+    assert external_pairs.by_address("pc-ana::Y") is not None
+    assert share_store._load()[par_gravado.id].revoked_at is None
+    assert guest_client_par.delete("/api/pair").status_code == 200
+    assert external_pairs.by_address("pc-ana::Y") is None
+    assert share_store._load()[par_gravado.id].revoked_at is not None
+    assert calls == ["group.external_unlink", "group.external_unlink"]
+
+
+@pytest.mark.parametrize("mod,fn", [(external_pairs, "remove"), (share_store, "revoke")])
+def test_saida_que_nao_limpa_o_par_externo_avisa_em_vez_de_calar(par_gravado, monkeypatch, mod, fn):
+    import asyncio
+    import app.api as api_mod
+
+    def falha(_share_id):
+        raise OSError("disco cheio")
+    monkeypatch.setattr(external_pairs, "call", lambda *a, **k: None)
+    monkeypatch.setattr(mod, fn, falha)
+    errs = asyncio.run(api_mod._avisar_saida("X", ["pc-ana::Y"]))
+    assert [(e["sessao"], e["erro"]["code"], e["erro"]["params"]) for e in errs] == [
+        ("pc-ana::Y", "erro_par_limpeza_falhou", {"peer": "pc-ana::Y"})]
+
+
 def test_lista_do_dono_traz_o_token_para_o_nativo(owner_client, par_gravado):
     [p] = owner_client.get("/api/external-pairs").json()
     assert p == {"local_session": "X", "alias": "pc-ana", "owner": "pc-ana", "session": "Y",
@@ -481,6 +518,45 @@ def test_saida_com_alias_ambiguo_nao_cai_no_peer_da_maquina(par_gravado, monkeyp
     # Só o aviso ao outro lado é pulado: a limpeza local acontece.
     assert external_pairs.by_address("pc-ana::Y") is None
     assert share_store._load()[par_gravado.id].revoked_at is not None
+
+
+def test_saida_feita_no_rust_desfaz_o_par_externo_pela_rota_interna(par_gravado, monkeypatch):
+    import app.api as api_mod
+    from app import internal_api
+    secret = "ab" * 32
+    internal_api.set_secret(secret)
+    try:
+        client = TestClient(api_mod.app, client=("127.0.0.1", 50000))
+        post = lambda body, h={"X-Hangar-Internal": secret}: client.post("/internal/external-pairs/end", json=body, headers=h)
+        assert post({"name": "X", "peer": "pc-ana::Y"}, {}).status_code == 404
+        assert post({"name": "X", "peer": "pc-ana::Y", "extra": 1}).status_code == 422
+        # Não é par externo de X: nada a desfazer, o registro fica.
+        assert post({"name": "Z", "peer": "pc-ana::Y"}).json() == {"errors": []}
+        assert external_pairs.by_address("pc-ana::Y") is not None
+        chamadas = []
+        monkeypatch.setattr(external_pairs, "call", lambda a, t, m, p, *r, **k: chamadas.append((m, p)))
+        assert post({"name": "X", "peer": "pc-ana::Y"}).json() == {"errors": []}
+        assert chamadas == [("DELETE", "/api/pair")]
+        assert external_pairs.by_address("pc-ana::Y") is None
+        assert share_store._load()[par_gravado.id].revoked_at is not None
+    finally:
+        internal_api.set_secret(None)
+
+
+def test_rota_interna_mantem_o_alias_ambiguo(par_gravado, monkeypatch):
+    import app.api as api_mod
+    from app import internal_api
+    secret = "ab" * 32
+    internal_api.set_secret(secret)
+    monkeypatch.setattr(peers, "_load", lambda: {"pc-ana": {}})
+    monkeypatch.setattr(external_pairs, "call", lambda *a, **k: pytest.fail("não pode avisar o outro lado"))
+    try:
+        r = TestClient(api_mod.app, client=("127.0.0.1", 50000)).post(
+            "/internal/external-pairs/end", json={"name": "X", "peer": "pc-ana::Y"}, headers={"X-Hangar-Internal": secret})
+        assert [e["erro"]["code"] for e in r.json()["errors"]] == ["erro_par_endereco_ambiguo"]
+        assert external_pairs.by_address("pc-ana::Y") is None
+    finally:
+        internal_api.set_secret(None)
 
 
 def test_attach_liga_as_sessoes_do_outro_token(vivo):

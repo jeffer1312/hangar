@@ -451,7 +451,7 @@ mod tests {
         // disso a diferença volta 400 e não chega ao diário.
         let ok = |c: &str| (1..=64).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
         // Os campos de `list_facts.SIG_FIELDS`, o maior nome é o que importa.
-        let fields = ["name", "cwd", "branch", "git_cwd", "worktree_gone", "git_dirty", "state", "tracked", "headless", "jsonl", "question", "stalled", "limited", "lifecycle_id", "transfer_id", "transfer_phase", "last_reply", "last_reply_at", "pending_questions", "limit_reset", "then_target", "status_line", "context", "model", "label", "startup_steps", "loop_status", "loop_iter", "engine", "conta", "codex_service_tier", "plan_name", "plan_done", "plan_total", "plan_task", "plan_task_total", "plan_complete", "plan_tasks", "plan_hidden", "problema", "provider", "shared", "owner", "orq_arbiter"];
+        let fields = ["name", "cwd", "branch", "git_cwd", "worktree_gone", "git_dirty", "state", "tracked", "headless", "jsonl", "question", "stalled", "limited", "lifecycle_id", "transfer_id", "transfer_phase", "last_reply", "last_reply_at", "pending_questions", "limit_reset", "then_target", "status_line", "context", "model", "label", "startup_steps", "loop_status", "loop_iter", "engine", "conta", "codex_service_tier", "plan_name", "plan_done", "plan_total", "plan_task", "plan_task_total", "plan_complete", "plan_tasks", "plan_hidden", "problema", "provider", "shared", "owner", "orq_arbiter", "pair_peers", "pair_gid", "pair_task", "pair_external"];
         for field in fields.into_iter().chain([ROW_MISSING, ROW_EXTRA, ROW_UNSERIALIZABLE]) {
             assert!(ok(&diff_code(field, 4_294_967_295, 4_294_967_295)), "{field}");
         }

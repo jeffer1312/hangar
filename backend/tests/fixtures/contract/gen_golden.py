@@ -9,6 +9,7 @@ Uso, de backend/:  uv run python tests/fixtures/contract/gen_golden.py
 import json
 import logging
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -1203,6 +1204,232 @@ def write_session_write(out: Path | None = None) -> None:
         (out / name).write_text(json.dumps(rows, ensure_ascii=True, indent=1) + "\n", encoding="utf-8")
 
 
+CASOS_PAIR = {
+    "a": dict(peers=["b"], task="T-1 filtro", gid="ab12cd34", harness={"a": "claude", "b": "codex", "z": "pi"}),
+    "orq-solo": dict(peers=[], task="", gid="cd34ef56", harness={}, orq=True),
+    "nome com espaço": dict(peers=["a"], task="", gid="ab12cd34", harness={}),
+}
+
+# Escritos crus: o Python de hoje não grava `fed`, e os outros dois são formatos que ele só lê.
+CRUS_PAIR = {
+    "legado": {"peer": "x"},
+    "quebrado": [1, 2],
+    "fed": {"peers": ["b", "lab::c"], "task": "t", "gid": "ab12cd34", "harness": {},
+            "fed": {"owner": "casa", "local": True, "version": 7}},
+}
+
+
+def write_pair_sidecars() -> None:
+    """Sidecars de `.hangar-pair` como o `PairLink.set` os grava, e o que o `PairLink.get` lê deles."""
+    from app import pair
+
+    out = GOLDEN / "pair_sidecars"
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob("*.json"):
+        old.unlink()
+    antes = pair.settings.projects_dir
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            # Nunca o ~/.claude/.hangar-pair de verdade.
+            pair.settings.projects_dir = Path(tmp) / "projects"
+            for name, caso in CASOS_PAIR.items():
+                pair.PairLink(name).set(**caso)
+            for name, corpo in CRUS_PAIR.items():
+                (pair._pair_dir() / f"{name}.json").write_text(json.dumps(corpo), encoding="utf-8")
+            for f in sorted(pair._pair_dir().glob("*.json")):
+                shutil.copy(f, out / f.name)
+            nomes = [*CASOS_PAIR, *CRUS_PAIR]
+            write_golden("pair_sidecars/expected.json", {n: pair.PairLink(n).get() for n in nomes})
+    finally:
+        pair.settings.projects_dir = antes
+
+
+# Rotas de grupo de uma máquina, em sequência sobre as sessões Claude s0..s3 (as mesmas que o teste
+# do Rust cria). `orchestrators`: quem o `_recusa_orq` recusa naquele passo; `contract`: texto gravado
+# em grupo-<gid>.md antes do passo; `python_only`: o FastAPI responde (o Rust repassa o pedido).
+GROUP_GID = "9a9a9a9a"
+GROUP_STEPS = [
+    dict(name="pair_two_loose", method="POST", path="s0/pair", body={"peers": ["s1"], "task": "t1"}),
+    dict(name="pair_task_conflict", method="POST", path="s2/pair", body={"peer": "s0", "task": "outra"}),
+    dict(name="pair_third_joins", method="POST", path="s2/pair", body={"peer": "s0"}),
+    dict(name="pair_self", method="POST", path="s0/pair", body={"peers": ["s0"]}),
+    dict(name="pair_no_peer", method="POST", path="s0/pair", body={}),
+    dict(name="pair_missing_session", method="POST", path="s0/pair", body={"peers": ["ghost", "s1"]}),
+    dict(name="pair_orchestrator", method="POST", path="s0/pair", body={"peers": ["g1-orq"]}, orchestrators=["g1-orq"]),
+    dict(name="pair_extra_field", method="POST", path="s0/pair", body={"peers": ["s1"], "bogus": 1}, python_only=True),
+    dict(name="group_message_ok", method="POST", path="s0/group-message", body={"text": "terminei"}),
+    dict(name="group_message_slash", method="POST", path="s0/group-message", body={"text": "  /clear"}),
+    dict(name="group_message_forward", method="POST", path="s0/group-message", body={"text": " [grupo: s1] oi"}),
+    dict(name="group_message_no_group", method="POST", path="s3/group-message", body={"text": "oi"}),
+    *[dict(name=f"group_message_{i}", method="POST", path="s1/group-message", body={"text": f"marco {i}"}) for i in range(2, 6)],
+    dict(name="group_message_storm", method="POST", path="s2/group-message", body={"text": "marco 6"}),
+    dict(name="contract_no_group", method="GET", path="s3/pair/contract"),
+    dict(name="contract_with_group", method="GET", path="s0/pair/contract", contract="decisão: usar X\n"),
+    dict(name="unpair_orchestrator", method="DELETE", path="g1-orq/pair", orchestrators=["g1-orq"]),
+    dict(name="unpair", method="DELETE", path="s0/pair"),
+    dict(name="unpair_not_grouped", method="DELETE", path="s3/pair"),
+]
+
+
+def group_route_rows() -> list:
+    """Cada passo pela rota do Python de verdade (TestClient, sem lifespan), com sessões, envio e
+    orquestrador falsos; `delivered` = quem recebeu recado no passo."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from app import api, conversation_transfer, pair
+    from app.config import settings
+    from app.models import SessionInfo
+
+    rows, sent, orchestrators = [], [], set()
+
+    async def enviar(name, text):
+        sent.append(name)
+        return {"ok": True}
+
+    names = ["s0", "s1", "s2", "s3"]
+    antes = (pair.settings.projects_dir, settings.auth_token)
+    try:
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(api.registry, "list", lambda: [SessionInfo(name=n, cwd="/p") for n in names]), \
+             patch.object(api, "_enviar", enviar), \
+             patch.object(api, "_session_exists", lambda n: n in names), \
+             patch.object(api.orq_runs, "find", lambda n: n in orchestrators), \
+             patch.object(conversation_transfer, "require_available", lambda n: None), \
+             patch.object(pair, "_arquivo_dir", lambda: Path(tmp) / "arquivo"), \
+             patch.object(pair.uuid, "uuid4", lambda: SimpleNamespace(hex=GROUP_GID + "0" * 24)):
+            # Nunca o ~/.claude/.hangar-pair de verdade.
+            pair.settings.projects_dir = Path(tmp) / "projects"
+            settings.auth_token = "secret"
+            api._group_envios.clear()
+            client = TestClient(api.app)
+            for step in GROUP_STEPS:
+                orchestrators.clear()
+                orchestrators.update(step.get("orchestrators", []))
+                if "contract" in step:
+                    (pair._pair_dir() / f"grupo-{GROUP_GID}.md").write_text(step["contract"], encoding="utf-8")
+                sent.clear()
+                r = client.request(step["method"], f"/api/sessions/{step['path']}", headers={"Authorization": "Bearer secret"},
+                                   **({"json": step["body"]} if "body" in step else {}))
+                body = json.loads(json.dumps(r.json()).replace(str(pair._pair_dir()), "<pair>"))
+                rows.append({**step, "status": r.status_code, "response": body, "delivered": sorted(sent)})
+    finally:
+        pair.settings.projects_dir, settings.auth_token = antes
+    return rows
+
+
+# Par 1:1 entre máquinas: `casa` e `lab` (e `anon`, sem CP_SERVER_ID) com as sessões s0..s3 cada.
+# `peers.json` de todas conhece `lab` e `off` (fora do ar); `at` é a máquina que recebe o pedido;
+# `seed` grava sidecars crus nela antes do passo; `fail_delivery`: a máquina cujo envio falha.
+CROSS_REFUSAL = {"code": "erro_fila_nao_digitada", "params": {}, "msg": "composer ilegível"}
+CROSS_STEPS = [
+    dict(name="no_server_id", at="anon", method="POST", path="s0/pair", body={"peer": "lab::s1"}),
+    dict(name="cross_with_local", at="casa", method="POST", path="s0/pair", body={"peers": ["lab::s1", "s2"]}),
+    dict(name="cross_missing_local", at="casa", method="POST", path="ghost/pair", body={"peer": "lab::s1"}),
+    dict(name="cross_unknown_server", at="casa", method="POST", path="s0/pair", body={"peer": "nowhere::s1"}),
+    dict(name="cross_refused", at="casa", method="POST", path="s0/pair", body={"peer": "lab::ghost"}),
+    dict(name="cross_network_down", at="casa", method="POST", path="s0/pair", body={"peer": "off::s1", "task": "t0"}),
+    dict(name="cross_pair", at="casa", method="POST", path="s0/pair", body={"peer": "lab::s1", "task": "t1"}),
+    dict(name="cross_local_mix", at="casa", method="POST", path="s2/pair", body={"peer": "s0"}),
+    dict(name="group_message_remote", at="casa", method="POST", path="s0/group-message", body={"text": "oi"}),
+    dict(name="pair_remote_bad_initiator", at="lab", method="POST", path="s2/pair-remote", body={"initiator": "s0"}),
+    dict(name="pair_remote_mix", at="lab", method="POST", path="s1/pair-remote", body={"initiator": "casa::s2"}),
+    dict(name="pair_remote_notice_fails", at="lab", method="POST", path="s2/pair-remote",
+         body={"initiator": "casa::s3", "task": "x"}, fail_delivery="lab"),
+    dict(name="pair_remote_extra_field", at="lab", method="POST", path="s2/pair-remote",
+         body={"initiator": "casa::s3", "bogus": 1}, python_only=True),
+    dict(name="pair_remote_direct", at="lab", method="POST", path="s3/pair-remote", body={"initiator": "casa::s2", "task": "y"}),
+    dict(name="unpair_remote_wrong_peer", at="lab", method="POST", path="s1/unpair-remote", body={"peer": "casa::s3"}),
+    dict(name="unpair_remote_not_grouped", at="lab", method="POST", path="s0/unpair-remote", body={"peer": "casa::s0"}),
+    dict(name="leave_cross", at="casa", method="DELETE", path="s0/pair"),
+    dict(name="unpair_remote_after_leave", at="lab", method="POST", path="s1/unpair-remote", body={"peer": "casa::s0"}),
+    dict(name="leave_peer_down", at="casa", method="DELETE", path="s3/pair",
+         seed={"s3": {"peers": ["off::s1"], "task": "", "gid": "abababab", "harness": {}}}),
+    dict(name="leave_no_server_id", at="anon", method="DELETE", path="s3/pair",
+         seed={"s3": {"peers": ["lab::s1"], "task": "", "gid": "cdcdcdcd", "harness": {}}}),
+]
+
+
+def cross_route_rows() -> list:
+    """Cada passo pela rota do Python de verdade, as três máquinas no mesmo processo: o `call_url`
+    falso troca pasta de grupo e CP_SERVER_ID para `lab` e chama a rota dela; `off` é a rede caída.
+    `calls` = o que saiu para outra máquina; `delivered` = `máquina:sessão` que recebeu recado."""
+    from contextlib import contextmanager
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from app import api, conversation_transfer, external_pairs, pair, peers
+    from app.config import settings
+    from app.models import SessionInfo
+
+    rows, sent, calls = [], [], []
+    names = ["s0", "s1", "s2", "s3"]
+    ids = {"casa": "casa", "lab": "lab", "anon": ""}
+    here = {"at": "casa", "fail": None}
+    auth = {"Authorization": "Bearer secret"}
+
+    async def enviar(name, text):
+        sent.append(f"{here['at']}:{name}")
+        return {"ok": False, "error": CROSS_REFUSAL} if here["fail"] == here["at"] else {"ok": True}
+
+    antes = (pair.settings.projects_dir, settings.auth_token, settings.server_id)
+    with tempfile.TemporaryDirectory() as tmp:
+        @contextmanager
+        def machine(m):
+            saved = (pair.settings.projects_dir, settings.server_id, here["at"])
+            # Nunca o ~/.claude/.hangar-pair de verdade.
+            pair.settings.projects_dir, settings.server_id, here["at"] = Path(tmp) / m / "projects", ids[m], m
+            external_pairs._reset()
+            try:
+                yield
+            finally:
+                pair.settings.projects_dir, settings.server_id, here["at"] = saved
+                external_pairs._reset()
+
+        def call_url(base, token, method, path, body=None, timeout=8, label="", follow_redirects=False):
+            calls.append({"to": label, "method": method, "path": path, "body": body})
+            if label == "off":
+                raise peers.PeerError(f"{label} inacessível: <rede>", transport=True)
+            with machine("lab"):
+                r = client.request(method, path, headers=auth, **({"json": body} if body is not None else {}))
+            if r.status_code >= 300:
+                try:
+                    detail = json.loads(r.text).get("detail", r.text)
+                except (ValueError, AttributeError):
+                    detail = r.text
+                raise peers.PeerError(f"{label} respondeu HTTP {r.status_code}: {detail}", status=r.status_code, detail=detail)
+            return r.status_code, (r.json() if r.text.strip() else None)
+
+        try:
+            with patch.object(api.registry, "list", lambda: [SessionInfo(name=n, cwd="/p") for n in names]), \
+                 patch.object(api, "_enviar", enviar), \
+                 patch.object(api, "_session_exists", lambda n: n in names), \
+                 patch.object(api.orq_runs, "find", lambda n: False), \
+                 patch.object(conversation_transfer, "require_available", lambda n: None), \
+                 patch.object(pair, "_arquivo_dir", lambda: Path(tmp) / here["at"] / "arquivo"), \
+                 patch.object(peers, "peer_cfg", lambda s: {"lab": ("http://lab", "secret"), "off": ("http://off", "secret")}.get(s)), \
+                 patch.object(peers, "call_url", call_url):
+                settings.auth_token = "secret"
+                api._group_envios.clear()
+                client = TestClient(api.app)
+                for step in CROSS_STEPS:
+                    sent.clear()
+                    calls.clear()
+                    here["fail"] = step.get("fail_delivery")
+                    with machine(step["at"]):
+                        for name, sidecar in step.get("seed", {}).items():
+                            pair._pair_dir().mkdir(parents=True, exist_ok=True)
+                            (pair._pair_dir() / f"{name}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+                        r = client.request(step["method"], f"/api/sessions/{step['path']}", headers=auth,
+                                           **({"json": step["body"]} if "body" in step else {}))
+                    rows.append({**step, "status": r.status_code, "response": r.json(), "delivered": sorted(sent),
+                                 "calls": list(calls)})
+        finally:
+            pair.settings.projects_dir, settings.auth_token, settings.server_id = antes
+    return rows
+
+
 def main() -> None:
     claude = TRANSCRIPTS / "claude.jsonl"
     rewrite = TRANSCRIPTS / "claude_rewrite_surrogate.jsonl"
@@ -1229,6 +1456,9 @@ def main() -> None:
     write_golden("ask_question.json", ask_rows())
     write_golden("preview.json", preview_rows())
     write_session_write()
+    write_pair_sidecars()
+    write_golden("group_routes.json", group_route_rows())
+    write_golden("group_cross_routes.json", cross_route_rows())
 
 
 if __name__ == "__main__":

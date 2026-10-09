@@ -2015,3 +2015,28 @@ async def test_native_codex_monitor_never_acquires_unused_terminal_observer(monk
         terminal_observer.configure(None, None)
     assert sess["ouvintes"] == []
     assert blocked == []
+
+
+@pytest.mark.parametrize("failure", [ConnectionError, TimeoutError])
+async def test_drain_never_replays_prompt_when_rpc_confirmation_is_lost(monkeypatch, tmp_path, failure):
+    from app import pqueue
+
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    queue = pqueue.PromptQueue("uncertain-codex")
+    entry = queue.append("mensagem recebida sem confirmação", delivered=False)
+
+    class Client(_FakeClient):
+        async def request(self, method, params, timeout=30):
+            self.requests.append((method, params))
+            raise failure("a resposta do envio não chegou")
+
+    client = Client([])
+    adapter = CodexAdapter()
+    adapter.attach("uncertain-codex", client, "thread")
+    assert await adapter.drain("uncertain-codex", "") == 0
+    assert await adapter.drain("uncertain-codex", "") == 0
+    assert len(client.requests) == 1
+    rows = queue.load()
+    assert rows[0]["id"] == entry["id"]
+    assert rows[0]["delivered"] is True
+    assert not rows[0].get("confirmed")

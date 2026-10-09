@@ -31,7 +31,9 @@ async fn health_answers_without_token_and_with_cors() {
     // O endereço da ponte de terminal é anunciado aqui, mas só pode ser de loopback.
     let terminal = v["terminal_address"].as_str().expect("terminal_address");
     assert!(terminal.starts_with("127.0.0.1:"), "{terminal}");
-    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 46);
+    // Grupos: o Python só passa a pedir ao Rust quando a saúde diz que ele os atende.
+    assert!(v["groups"].is_boolean(), "{v}");
+    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 47);
 }
 
 #[tokio::test]

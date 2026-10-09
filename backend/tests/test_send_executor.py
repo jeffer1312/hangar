@@ -8,6 +8,7 @@ import pytest
 
 from app import api, pqueue
 from app.adapters.codex.adapter import CodexAdapter
+from app.adapters.codex.appserver import RequestRejected
 from app.adapters.codex import sessions
 
 
@@ -20,7 +21,7 @@ def test_codex_delivery_with_default_executor_occupied(tmp_path, monkeypatch, op
     monkeypatch.setattr(api, "_provider_of", lambda name: "codex")
     adapter = CodexAdapter()
     rpc = SimpleNamespace(request=AsyncMock(
-        side_effect=RuntimeError("RPC recusado") if reject else None,
+        side_effect=RequestRejected("RPC recusado") if reject else None,
         return_value={"turn": {"id": "turn-1"}},
     ))
     adapter.attach("dest", rpc, "thread-1", subscribed=True)

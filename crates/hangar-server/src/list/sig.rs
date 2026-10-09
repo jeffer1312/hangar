@@ -85,6 +85,7 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
                 i.plan_name, i.plan_done, i.plan_total, i.plan_task, i.plan_task_total, i.plan_complete,
                 i.plan_tasks.as_deref().unwrap_or_default(),
                 i.plan_hidden, i.problema, i.provider, i.shared, i.owner, i.orq_arbiter,
+                i.pair_peers, i.pair_gid, i.pair_task, i.pair_external,
             ])
         })
         .collect();
@@ -113,6 +114,14 @@ mod tests {
             assert_eq!(status_sig(Some(line)), want, "{line}");
         }
         assert_eq!(status_sig(None), Value::Null);
+    }
+
+    /// Cauda da assinatura do `sse._list_sig` para uma linha com grupo, byte a byte.
+    #[test]
+    fn group_fields_match_python() {
+        let row: SessionRow = serde_json::from_value(json!({"name": "s", "pair_peers": ["a", "é"], "pair_gid": "g",
+            "pair_task": "T", "pair_external": {"alias": "x", "owner": "o", "session": "s"}})).unwrap();
+        assert!(list_sig([&row]).ends_with(r#"["a", "é"], "g", "T", {"alias": "x", "owner": "o", "session": "s"}]]"#));
     }
 
     #[test]

@@ -32,6 +32,18 @@ _READ_LIMIT = 8 * 1024 * 1024
 _MAX_FALHAS_LEITURA = 20
 
 
+class RequestNotSent(ConnectionError):
+    """A conexão estava indisponível antes de iniciar a escrita."""
+
+
+class RequestRejected(RuntimeError):
+    """O servidor respondeu ao pedido com uma recusa JSON-RPC."""
+
+
+class RequestOutcomeUnknown(ConnectionError):
+    """A escrita começou, mas a resposta do servidor não pôde ser confirmada."""
+
+
 class AppServerClient:
     def __init__(self, codex_bin: str = "codex") -> None:
         self._codex_bin = codex_bin
@@ -138,7 +150,7 @@ class AppServerClient:
                 )
             try:
                 self._ws = await websockets.connect(
-                    self._endpoint, max_size=_READ_LIMIT, open_timeout=1
+                    self._endpoint, max_size=None, open_timeout=1
                 )
                 self._reader_task = asyncio.create_task(self._read_loop())
                 return self._endpoint
@@ -160,7 +172,7 @@ class AppServerClient:
         """
         try:
             self._ws = await websockets.connect(
-                endpoint, max_size=_READ_LIMIT, open_timeout=timeout
+                endpoint, max_size=None, open_timeout=timeout
             )
         except (OSError, TimeoutError, websockets.WebSocketException) as exc:
             raise ConnectionError(f"codex app-server nao respondeu em {endpoint}: {exc}") from exc
@@ -202,7 +214,12 @@ class AppServerClient:
                         raw = await self._reader.readline()
                 except asyncio.CancelledError:
                     raise  # cancel de close() - propaga, nao engole
-                except websockets.ConnectionClosed:
+                except websockets.ConnectionClosed as exc:
+                    close = exc.sent or exc.rcvd
+                    code = close.code if close is not None else 1006
+                    logger.warning("codex app-server: WebSocket encerrado código=%s", code)
+                    from app import diag
+                    diag.registrar("codex.connection_closed", "aviso", codigo=str(code))
                     break
                 except OSError as exc:
                     # Cano fechado no Windows chega como ConnectionResetError (WinError 64), nao como
@@ -341,24 +358,30 @@ class AppServerClient:
                             "method": method, "params": params}) + "\n").encode()
 
     async def request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
-        if self._writer is None and self._ws is None:
-            raise RuntimeError("AppServerClient.start() precisa rodar antes de request()")
+        if self._closed or (self._writer is None and self._ws is None):
+            raise RequestNotSent("O app-server está sem conexão; nenhum pedido foi escrito")
         wire = self.request_bytes(method, params)
         self._next_id += 1
         req_id = self._wire_id(self._next_id)
         fut = asyncio.get_running_loop().create_future()
         self._pending[req_id] = fut
-        line = wire.decode().rstrip("\n")
-        if self._ws is not None:
-            await self._ws.send(line)
-        else:
-            await self._send_frame(json.loads(line))
         try:
+            if self._ws is not None:
+                await self._ws.send(wire.decode().rstrip("\n"))
+            else:
+                await self._send_frame(json.loads(wire))
             msg = await asyncio.wait_for(fut, timeout=timeout)
+        except (ConnectionError, OSError, TimeoutError, websockets.ConnectionClosed) as exc:
+            # A perda da resposta não prova que o servidor deixou de receber o pedido.
+            raise RequestOutcomeUnknown(f"Resultado de {method} incerto; não reenviar automaticamente") from exc
         finally:
             self._pending.pop(req_id, None)
+            if not fut.done():
+                fut.cancel()
+            elif not fut.cancelled():
+                fut.exception()
         if "error" in msg:
-            raise RuntimeError(f"codex app-server error em '{method}': {msg['error']}")
+            raise RequestRejected(f"codex app-server error em '{method}': {msg['error']}")
         return msg.get("result", {})
 
     async def _send_frame(self, frame: dict) -> None:

@@ -1763,3 +1763,42 @@ por `_send_one` e ficam protegidos só pelo `freeze`, não pela porta. Seguem as
 
 Roteiro de medição (sem números ainda, vêm do uso real):
 [medicao-5-0.md](../migracao-rust/parte5-claude/medicao-5-0.md).
+
+## Grupos: o Rust grava
+
+(08/10/2026, parte 6 entrega 1a, branch `hangar-server-parte6-grupos`; contrato interno 40.) No
+modo `rust`/`pending` o `hangar-server` é o único que grava `.hangar-pair`: sidecars, fusão e
+arquivo de contrato (`groups/service.rs`, `groups/store.rs`) e a varredura de membro morto
+(`groups/sweep.rs`). `/pair`, `DELETE /pair`, `/group-message`, `/pair/contract`, `/pair-remote`
+e `/unpair-remote` do dono são atendidas no Rust; o Python lê os arquivos e, para gravar, pede à
+ponte privada `/__hangar_server/groups` (`backend/app/groups_bridge.py`). No modo `python` tudo
+segue como antes. Desenho: [desenho.md](../migracao-rust/parte6-grupos/desenho.md).
+
+- **Um escritor só.** O `pair._LOCK` só protege o Python; com o Rust gravando também, os dois
+  locks não se enxergam. As escritas do `pair.py` (`PairLink.set/clear`, `_merge_contract`,
+  `_arquivar_contratos`) recusam nesses modos com `GroupsOwnedByRust`: um chamador esquecido vira
+  503 `erro_grupo_indisponivel`, nunca escrita calada.
+- **Janela de dois escritores na subida.** A primeira versão só passava os grupos ao Rust na
+  primeira saúde com `groups: true`; entre o `pending` e essa saúde o Rust já atendia `/pair` e
+  varria enquanto o Python ainda gravava. `groups_bridge._capable` nasce `True`: com o Rust
+  esperado, os grupos são dele desde o início, e só a saúde com `groups: false` os devolve ao
+  Python (desistir do Rust já leva o modo a `python`). No `pending` quem chama a ponte espera e
+  falha com `groups_runtime_starting`.
+- **Sem laço Python → Rust → Python.** No modo Rust o Python sempre pede à ponte; o pedido que
+  chega por ela leva a marca `Bridged`, e onde o Rust repassaria ao Python (corpo que ele não
+  aceita) responde 500 `erro_grupo_indisponivel` com `groups_bridge_relay`. Convidado é recusado
+  pelo Python antes do handler e nunca vira pedido do dono na ponte.
+- **Varredura no Rust, morte por tempo.** A cada 2 s; sem sidecar nenhum não pergunta a lista.
+  Nome ausente da lista viva por 5 s sai do grupo: `kill` e `rename` deixam o nome ausente por um
+  instante, e só o tempo separa isso de morte. Lista com erro, vazia ou sem nenhuma resposta dos
+  fatos (`list_facts_unknown`: sessão em transferência ou de `orq` só aparece por eles) não varre;
+  o diário ganha `rust.groups_sweep_failed` uma vez por sequência e `rust.groups_sweep_recovered`
+  na volta. O stem saneado do sidecar e o nome cru da lista contam como a mesma sessão.
+- **Falha não vira sucesso.** Volta atrás de um join que falha no disco responde o 500 do Python
+  (`rust.groups_restore_failed` no diário), nunca "pareamento desfeito". Promoção de grupo `orq`
+  sem resposta do Python (prazo, 5xx, rota ausente) é 503 `erro_grupo_indisponivel` com o código,
+  não 409 "o arquivo mudou"; o diário guarda `rust.groups_orq_promote_uncertain` com o gid, porque
+  o Python pode ter promovido antes de falhar.
+- **Contrato interno 40** (`RUST_SERVER_PROTOCOL` e `INTERNAL_PROTOCOL`; o 39 é o da 5B, juntada
+  antes): a saúde ganhou `groups`, e o filho recebe `HANGAR_SERVER_ID`, `HANGAR_PEERS_FILE` e
+  `HANGAR_PAIR_ARCHIVE`.

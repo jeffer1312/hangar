@@ -1,0 +1,50 @@
+{
+ "a": {
+  "peers": [
+   "b"
+  ],
+  "task": "T-1 filtro",
+  "gid": "ab12cd34",
+  "harness": {
+   "a": "claude",
+   "b": "codex"
+  },
+  "orq": false
+ },
+ "orq-solo": {
+  "peers": [],
+  "task": "",
+  "gid": "cd34ef56",
+  "harness": {},
+  "orq": true
+ },
+ "nome com espa\u00e7o": {
+  "peers": [
+   "a"
+  ],
+  "task": "",
+  "gid": "ab12cd34",
+  "harness": {},
+  "orq": false
+ },
+ "legado": {
+  "peers": [
+   "x"
+  ],
+  "task": "",
+  "gid": "78cd83da",
+  "harness": {},
+  "orq": false
+ },
+ "quebrado": null,
+ "fed": {
+  "peers": [
+   "b",
+   "lab::c"
+  ],
+  "task": "t",
+  "gid": "ab12cd34",
+  "harness": {},
+  "orq": false
+ }
+}

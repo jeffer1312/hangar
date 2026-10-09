@@ -1,0 +1,426 @@
+[
+ {
+  "name": "pair_two_loose",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peers": [
+    "s1"
+   ],
+   "task": "t1"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "members": [
+    "s0",
+    "s1"
+   ],
+   "gid": "9a9a9a9a",
+   "warning": null
+  },
+  "delivered": [
+   "s0",
+   "s1"
+  ]
+ },
+ {
+  "name": "pair_task_conflict",
+  "method": "POST",
+  "path": "s2/pair",
+  "body": {
+   "peer": "s0",
+   "task": "outra"
+  },
+  "status": 409,
+  "response": {
+   "detail": {
+    "code": "erro_pareamento_tarefa_existente",
+    "params": {
+     "existente": "t1"
+    },
+    "msg": "o grupo j\u00e1 tem tarefa: 't1' \u2014 repita com --substituir-tarefa pra trocar"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "pair_third_joins",
+  "method": "POST",
+  "path": "s2/pair",
+  "body": {
+   "peer": "s0"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "members": [
+    "s2",
+    "s0",
+    "s1"
+   ],
+   "gid": "9a9a9a9a",
+   "warning": null
+  },
+  "delivered": [
+   "s2"
+  ]
+ },
+ {
+  "name": "pair_self",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peers": [
+    "s0"
+   ]
+  },
+  "status": 400,
+  "response": {
+   "detail": {
+    "code": "erro_autopareamento",
+    "params": {},
+    "msg": "n\u00e3o d\u00e1 pra parear uma sess\u00e3o com ela mesma"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "pair_no_peer",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {},
+  "status": 400,
+  "response": {
+   "detail": {
+    "code": "erro_peer_nao_informado",
+    "params": {},
+    "msg": "informe peer ou peers"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "pair_missing_session",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peers": [
+    "ghost",
+    "s1"
+   ]
+  },
+  "status": 404,
+  "response": {
+   "detail": {
+    "code": "erro_sessao_nao_encontrada_detalhe",
+    "params": {
+     "detalhe": "ghost"
+    },
+    "msg": "sess\u00e3o n\u00e3o encontrada: ghost"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "pair_orchestrator",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peers": [
+    "g1-orq"
+   ]
+  },
+  "orchestrators": [
+   "g1-orq"
+  ],
+  "status": 409,
+  "response": {
+   "detail": {
+    "code": "erro_sessao_orq",
+    "params": {},
+    "msg": "o orquestrador n\u00e3o recebe mensagens; fale com o \u00e1rbitro"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "pair_extra_field",
+  "method": "POST",
+  "path": "s0/pair",
+  "body": {
+   "peers": [
+    "s1"
+   ],
+   "bogus": 1
+  },
+  "python_only": true,
+  "status": 422,
+  "response": {
+   "detail": [
+    {
+     "type": "extra_forbidden",
+     "loc": [
+      "body",
+      "bogus"
+     ],
+     "msg": "Extra inputs are not permitted",
+     "input": 1
+    }
+   ]
+  },
+  "delivered": []
+ },
+ {
+  "name": "group_message_ok",
+  "method": "POST",
+  "path": "s0/group-message",
+  "body": {
+   "text": "terminei"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "peers": [
+    "s2",
+    "s1"
+   ],
+   "pulados": [],
+   "warning": null
+  },
+  "delivered": [
+   "s1",
+   "s2"
+  ]
+ },
+ {
+  "name": "group_message_slash",
+  "method": "POST",
+  "path": "s0/group-message",
+  "body": {
+   "text": "  /clear"
+  },
+  "status": 400,
+  "response": {
+   "detail": {
+    "code": "erro_group_message_slash",
+    "params": {},
+    "msg": "group-message n\u00e3o suporta slash-commands"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "group_message_forward",
+  "method": "POST",
+  "path": "s0/group-message",
+  "body": {
+   "text": " [grupo: s1] oi"
+  },
+  "status": 400,
+  "response": {
+   "detail": {
+    "code": "erro_group_message_resposta",
+    "params": {},
+    "msg": "aviso de grupo n\u00e3o pode reencaminhar um [grupo:]/[de:] \u2014 responda 1:1"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "group_message_no_group",
+  "method": "POST",
+  "path": "s3/group-message",
+  "body": {
+   "text": "oi"
+  },
+  "status": 404,
+  "response": {
+   "detail": {
+    "code": "erro_sessao_sem_grupo",
+    "params": {},
+    "msg": "sess\u00e3o n\u00e3o est\u00e1 num grupo"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "group_message_2",
+  "method": "POST",
+  "path": "s1/group-message",
+  "body": {
+   "text": "marco 2"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "peers": [
+    "s2",
+    "s0"
+   ],
+   "pulados": [],
+   "warning": null
+  },
+  "delivered": [
+   "s0",
+   "s2"
+  ]
+ },
+ {
+  "name": "group_message_3",
+  "method": "POST",
+  "path": "s1/group-message",
+  "body": {
+   "text": "marco 3"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "peers": [
+    "s2",
+    "s0"
+   ],
+   "pulados": [],
+   "warning": null
+  },
+  "delivered": [
+   "s0",
+   "s2"
+  ]
+ },
+ {
+  "name": "group_message_4",
+  "method": "POST",
+  "path": "s1/group-message",
+  "body": {
+   "text": "marco 4"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "peers": [
+    "s2",
+    "s0"
+   ],
+   "pulados": [],
+   "warning": null
+  },
+  "delivered": [
+   "s0",
+   "s2"
+  ]
+ },
+ {
+  "name": "group_message_5",
+  "method": "POST",
+  "path": "s1/group-message",
+  "body": {
+   "text": "marco 5"
+  },
+  "status": 200,
+  "response": {
+   "ok": true,
+   "peers": [
+    "s2",
+    "s0"
+   ],
+   "pulados": [],
+   "warning": null
+  },
+  "delivered": [
+   "s0",
+   "s2"
+  ]
+ },
+ {
+  "name": "group_message_storm",
+  "method": "POST",
+  "path": "s2/group-message",
+  "body": {
+   "text": "marco 6"
+  },
+  "status": 429,
+  "response": {
+   "detail": {
+    "code": "erro_group_message_tempestade",
+    "params": {
+     "max": 5,
+     "janela": 60
+    },
+    "msg": "mais de 5 avisos de grupo em 60s \u2014 parece loop; espere ou responda 1:1"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "contract_no_group",
+  "method": "GET",
+  "path": "s3/pair/contract",
+  "status": 404,
+  "response": {
+   "detail": {
+    "code": "erro_sessao_nao_pareada",
+    "params": {},
+    "msg": "sess\u00e3o n\u00e3o est\u00e1 pareada"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "contract_with_group",
+  "method": "GET",
+  "path": "s0/pair/contract",
+  "contract": "decis\u00e3o: usar X\n",
+  "status": 200,
+  "response": {
+   "peers": [
+    "s2",
+    "s1"
+   ],
+   "path": "<pair>/grupo-9a9a9a9a.md",
+   "content": "decis\u00e3o: usar X\n"
+  },
+  "delivered": []
+ },
+ {
+  "name": "unpair_orchestrator",
+  "method": "DELETE",
+  "path": "g1-orq/pair",
+  "orchestrators": [
+   "g1-orq"
+  ],
+  "status": 409,
+  "response": {
+   "detail": {
+    "code": "erro_sessao_orq",
+    "params": {},
+    "msg": "o orquestrador n\u00e3o recebe mensagens; fale com o \u00e1rbitro"
+   }
+  },
+  "delivered": []
+ },
+ {
+  "name": "unpair",
+  "method": "DELETE",
+  "path": "s0/pair",
+  "status": 200,
+  "response": {
+   "ok": true,
+   "warning": null
+  },
+  "delivered": [
+   "s0"
+  ]
+ },
+ {
+  "name": "unpair_not_grouped",
+  "method": "DELETE",
+  "path": "s3/pair",
+  "status": 200,
+  "response": {
+   "ok": true,
+   "warning": null
+  },
+  "delivered": []
+ }
+]

@@ -66,6 +66,10 @@ pub struct AppState {
     pub chromium: fn() -> Option<std::path::PathBuf>,
     /// Quanto uma escrita espera a porta de entrada da sessão reabrir (os testes encurtam).
     pub write_gate_wait: std::time::Duration,
+    /// Grupos de sessões em `.hangar-pair`; `None` sem as pastas da lista (as rotas seguem ao Python).
+    pub groups: Option<Arc<crate::groups::service::GroupService>>,
+    /// Outras máquinas do dono (`peers.json`), para o par 1:1 entre máquinas.
+    pub peers: Arc<crate::groups::peers::PeerClient>,
 }
 
 impl AppState {
@@ -103,7 +107,9 @@ impl AppState {
         let state = Arc::new(crate::state::live::StateEnv::new(terminal.clone(), list.clone(),
             crate::state::facts::StateFactsClient::new(cfg.upstream, cfg.internal_secret.clone()), diag.clone()));
         side.monitors = Some(crate::state::live::spawner(state.clone()));
-        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
+        let groups = crate::groups::from_env(list.env().dirs.as_ref(),
+            Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())), list.clone());
+        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), groups, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             workspace_read_slots: Arc::new(tokio::sync::Semaphore::new(8)),
             workspace_meta_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -212,6 +218,8 @@ pub async fn serve_with_state(listener: TcpListener, mut state: AppState) -> std
     let private = TcpListener::bind("127.0.0.1:0").await?;
     state.terminal_address = Some(private.local_addr()?);
     let state = Arc::new(state);
+    // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
+    let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let plugin_state = state.clone();
     tokio::select! {
         result = axum::serve(listener.tap_io(crate::nodelay), router(state.clone()).into_make_service_with_connect_info::<SocketAddr>()) => result,
@@ -236,6 +244,7 @@ pub fn terminal_router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/quotas", axum::routing::post(crate::accounts::quotas::private))
         .route("/__hangar_server/accounts/claude", axum::routing::post(crate::accounts::http::private_claude))
         .route("/__hangar_server/pages", axum::routing::post(crate::pages::routes::publish_bridge))
+        .route("/__hangar_server/groups", axum::routing::post(crate::groups::bridge::private))
         .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
     // Painel e canal do estado ficam fora da contagem: conexões longas, não chamadas da ponte.
     router.route("/__hangar_server/term", get(crate::term::private_ws))
@@ -257,6 +266,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/quotas", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/accounts/claude", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/pages", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/groups", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/term", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/state/{name}/events", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
@@ -299,6 +309,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_any))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
+        // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
+        .merge(crate::groups::routes::router())
         .fallback(pass_any)
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .with_state(state)
@@ -336,6 +348,8 @@ async fn health(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response
         "owns": owns,
         // O painel de terminal real é do Rust em todas as plataformas.
         "terminal_panel": true,
+        // Sem as pastas da lista não há serviço de grupos: as rotas seguem ao Python, que fica dono.
+        "groups": st.groups.is_some(),
         "terminal_address": st.terminal_address.map(|a| a.to_string())}).to_string();
     let mut resp = ([(header::CONTENT_TYPE, "application/json")], body).into_response();
     cors(&headers, resp.headers_mut());
@@ -365,7 +379,7 @@ pub(crate) async fn pass(st: &AppState, req: Request, fwd: &Forward) -> Response
     resp
 }
 
-async fn pass_any(
+pub(crate) async fn pass_any(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,

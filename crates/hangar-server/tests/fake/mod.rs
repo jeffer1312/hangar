@@ -69,6 +69,14 @@ pub struct Fake {
     plugin_reply: Mutex<Option<Value>>,
     plugin_gets: AtomicUsize,
     plugin_posts: Mutex<Vec<Value>>,
+    /// Resposta do `/api/sessions/{n}/input` repassado; `None` = o "from-python" de sempre.
+    input_reply: Mutex<Option<(StatusCode, Value)>>,
+    /// Rotas `/internal/pair/*`, `/internal/orq/*` e `/internal/external-pairs/*` (caminho sem
+    /// `/internal/`): resposta e corpos recebidos.
+    internal_replies: Mutex<HashMap<String, (StatusCode, Value)>>,
+    internal_bodies: Mutex<Vec<(String, Value)>>,
+    /// Demora dessas rotas depois de anotar o corpo (Python lento segurando quem chamou).
+    pub internal_delay: Mutex<Duration>,
 }
 
 impl Fake {
@@ -151,6 +159,23 @@ impl Fake {
     pub fn plugin_ui_bodies(&self) -> Vec<Value> {
         self.plugin_ui.lock().unwrap().clone()
     }
+    pub fn set_input_reply(&self, reply: Option<(StatusCode, Value)>) {
+        *self.input_reply.lock().unwrap() = reply;
+    }
+    /// Quantos `/api/sessions/{n}/input` chegaram, de qualquer sessão.
+    pub fn input_calls(&self) -> usize {
+        self.hits.lock().unwrap().iter().filter(|(p, _)| {
+            let path = p.split('?').next().unwrap_or_default();
+            path.starts_with("/api/sessions/") && path.ends_with("/input")
+        }).count()
+    }
+    /// `path` sem `/internal/`, ex. `orq/promote`.
+    pub fn set_internal(&self, path: &str, status: StatusCode, body: Value) {
+        self.internal_replies.lock().unwrap().insert(path.to_owned(), (status, body));
+    }
+    pub fn internal_bodies(&self, path: &str) -> Vec<Value> {
+        self.internal_bodies.lock().unwrap().iter().filter(|(p, _)| p == path).map(|(_, b)| b.clone()).collect()
+    }
 }
 
 pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
@@ -183,6 +208,17 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
         plugin_reply: Mutex::default(),
         plugin_gets: AtomicUsize::new(0),
         plugin_posts: Mutex::default(),
+        input_reply: Mutex::default(),
+        internal_replies: Mutex::new(HashMap::from([
+            ("pair/text".to_owned(), (StatusCode::OK, json!({"text": "protocolo"}))),
+            ("orq/group-phase".to_owned(), (StatusCode::OK, json!({"phase": null}))),
+            ("orq/promote".to_owned(), (StatusCode::OK, json!({}))),
+            ("orq/is-orchestrator".to_owned(), (StatusCode::OK, json!({"names": []}))),
+            ("orq/associate".to_owned(), (StatusCode::OK, json!({"ok": true}))),
+            ("external-pairs/end".to_owned(), (StatusCode::OK, json!({"errors": []}))),
+        ])),
+        internal_bodies: Mutex::default(),
+        internal_delay: Mutex::default(),
     });
     let app = Router::new()
         .route("/internal/sessions/{name}/info", get(fake_info))
@@ -191,6 +227,9 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
         .route("/internal/list/facts", axum::routing::post(fake_list_facts))
         .route("/internal/sessions/{name}/transfer", get(fake_transfer))
         .route("/internal/sessions/{name}/plugin", get(fake_plugin_get).post(fake_plugin_post))
+        .route("/internal/pair/{op}", axum::routing::post(fake_internal_json))
+        .route("/internal/orq/{op}", axum::routing::post(fake_internal_json))
+        .route("/internal/external-pairs/{op}", axum::routing::post(fake_internal_json))
         .fallback(fake_python)
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -266,6 +305,19 @@ async fn fake_plugin_post(State(f): State<Arc<Fake>>, headers: HeaderMap, body: 
     Response::builder().header("content-type", "application/json").body(Body::from(r#"{"ok":true}"#)).unwrap()
 }
 
+async fn fake_internal_json(State(f): State<Arc<Fake>>, req: Request) -> Response {
+    if !internal_ok(req.headers()) {
+        return status(StatusCode::NOT_FOUND);
+    }
+    let path = req.uri().path().trim_start_matches("/internal/").to_owned();
+    let bytes = axum::body::to_bytes(req.into_body(), 1 << 20).await.unwrap_or_default();
+    f.internal_bodies.lock().unwrap().push((path.clone(), serde_json::from_slice(&bytes).unwrap_or(Value::Null)));
+    let delay = *f.internal_delay.lock().unwrap();
+    tokio::time::sleep(delay).await;
+    let Some((code, body)) = f.internal_replies.lock().unwrap().get(&path).cloned() else { return status(StatusCode::NOT_FOUND) };
+    Response::builder().status(code).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap()
+}
+
 async fn fake_transfer(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
     if !internal_ok(&headers) {
         return status(StatusCode::NOT_FOUND);
@@ -325,6 +377,9 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
     }
     if path.ends_with("/input") && f.hold_input.load(SeqCst) {
         f.release.notified().await;
+    }
+    if path.ends_with("/input") && let Some((code, body)) = f.input_reply.lock().unwrap().clone() {
+        return Response::builder().status(code).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap();
     }
     match path.as_str() {
         "/redirect" => Response::builder().status(302).header("location", "/outro").body(Body::empty()).unwrap(),

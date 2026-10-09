@@ -5,6 +5,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Retomada Codex pelo WebSocket local recebe o histórico inteiro, sem teto de 8 MB.**
+  A fila reserva a entrada antes do envio; perda de resposta ou cancelamento conserva a
+  tentativa como incerta. Só recusa explícita ou ausência de escrita permite reenviar
+  automaticamente. Estar idle não prova ausência de entrega; o transcript confirma a entrada.
+  Medição: [retomada longa e envio sem confirmação](#codex-retomada-longa-e-envio-sem-confirmação).
+
 - **Observação terminal tem uma captura canônica por rodada, sem grade auxiliar.** O controle
   tmux confere sessão/pane a cada leitura; a análise acompanha esse quadro. Em Claude com
   terminal e o Rust de pé, o estado temporal é do `Monitor` do Rust, que pega o quadro do pool em
@@ -3269,3 +3275,35 @@ entrega, é 503 `erro_opcao_nao_convergiu`.
 
 Prova real depois do conserto (`scripts/prova-parte4.py --casos 27`, backend isolado): Codex sem
 terminal com cartão → `/select` 200 e a sessão sai do cartão; Claude sem terminal segue 200.
+
+## Codex: retomada longa e envio sem confirmação
+
+Em 08/10/2026, com Codex CLI 0.160.1, um restart do backend foi seguido por 338 reconexões e
+45 falhas de confirmação de `turn/start`. O rollout continha 45 cópias da mesma mensagem de
+usuário, cada uma recebida pelo Codex. A resposta de `thread/resume` inclui o histórico inteiro:
+uma cópia isolada do rollout anterior ao restart, com 17 turnos, já devolvia mais de 16 MB.
+O teto de 8.388.608 bytes do WebSocket encerrava a conexão; a exceção genérica virava `deferred`,
+a fila liberava o claim e a mesma mensagem era enviada novamente.
+
+A prova com o CLI real usa uma conta temporária sem credenciais, plugins desligados e uma
+cópia do histórico anterior ao restart. Não inicia turno de modelo. O cliente da base encerrou
+o WebSocket com código 1009 durante a retomada. O cliente corrigido recebeu 16.763.740 bytes,
+recuperou os 17 turnos e manteve a conexão para um `thread/read` posterior. O limite do leitor
+stdio continua separado; esta mudança remove o teto do WebSocket de loopback nos dois caminhos
+de conexão, abertura e reconexão.
+
+O pedido distingue conexão indisponível antes da escrita, recusa JSON-RPC e resultado incerto
+após começar a escrita. A entrada é reservada antes do RPC e conserva o claim quando a resposta
+se perde ou o envio é cancelado. A execução gerenciada registra `unknown`, usando o contrato
+existente, e não repete a operação. A confirmação de Codex só confirma o que encontrou no
+rollout, inclusive quando idle; ausência de texto não autoriza liberar a tentativa para reenvio.
+Fechamento do WebSocket registra o código no diário, sem conteúdo da conversa.
+
+As regressões cobrem resposta maior que 16 MB em WebSocket real, limpeza de pedido pendente,
+distinção entre recusa e ausência de conexão, perda de resposta, cancelamento, confirmação
+idle e persistência de operação incerta na execução gerenciada.
+
+Conferência contra a base `e840c9e86`: seis casos novos falharam pelo motivo esperado, sem
+erro de importação. Os dois transportes fecharam com 1009; os dois drains emitiram dois
+`turn/start` em vez de um; a confirmação idle chamou o drain; a reserva declarou `accepted`
+para um resultado incerto. Os mesmos casos passaram com a correção.

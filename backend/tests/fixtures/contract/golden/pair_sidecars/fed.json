@@ -1,0 +1,1 @@
+{"peers": ["b", "lab::c"], "task": "t", "gid": "ab12cd34", "harness": {}, "fed": {"owner": "casa", "local": true, "version": 7}}

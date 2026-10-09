@@ -174,17 +174,23 @@ def promote(name: str, gid: str, mtime: float | None = None) -> None:
 
 def associate(name: str, gid: str, mtime: float) -> Context:
     with pair._LOCK:
-        if not real_group(gid, orchestration=True):
-            raise ValueError("grupo de orquestração de destino não existe")
-        context = resolve(name)
-        if context.grouped:
-            if context.gid != gid:
-                raise ValueError("o time já pertence a outro grupo")
-            if abs(orq_md.ler_arquivo(context.path)[1] - mtime) > 1e-6:
-                raise orq_md.Conflito(str(context.path))
-            return context
-        source_text, _ = orq_md.ler_arquivo(context.path)
-        if not source_text or _GROUP.search(source_text):
-            raise ValueError("configure o time deste trabalho antes de associá-lo")
-        promote(name, gid, mtime)
-        return resolve(name)
+        return associate_unlocked(name, gid, mtime)
+
+
+def associate_unlocked(name: str, gid: str, mtime: float) -> Context:
+    """Sem o `pair._LOCK`: no modo Rust quem segura o lock de grupo é o Rust, que chama por
+    `/internal/orq/associate`."""
+    if not real_group(gid, orchestration=True):
+        raise ValueError("grupo de orquestração de destino não existe")
+    context = resolve(name)
+    if context.grouped:
+        if context.gid != gid:
+            raise ValueError("o time já pertence a outro grupo")
+        if abs(orq_md.ler_arquivo(context.path)[1] - mtime) > 1e-6:
+            raise orq_md.Conflito(str(context.path))
+        return context
+    source_text, _ = orq_md.ler_arquivo(context.path)
+    if not source_text or _GROUP.search(source_text):
+        raise ValueError("configure o time deste trabalho antes de associá-lo")
+    promote(name, gid, mtime)
+    return resolve(name)

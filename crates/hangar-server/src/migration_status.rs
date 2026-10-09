@@ -131,6 +131,11 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::DELETE && tail.and_then(|t| t.strip_prefix("queue/")).is_some_and(|id| !id.is_empty() && !id.contains('/')) {
         return true;
     }
+    // Grupos (`groups::routes`): o convidado segue ao Python, que recusa.
+    if matches!((method.as_str(), tail), ("POST", Some("pair" | "group-message" | "pair-remote" | "unpair-remote"))
+        | ("DELETE", Some("pair")) | ("GET", Some("pair/contract"))) {
+        return true;
+    }
     crate::workspace_routes::matches(method, path) || crate::worktree_routes::matches(method, path)
 }
 
@@ -331,6 +336,9 @@ mod tests {
         assert!(get("/api/sessions/a/pages/p1") && get("/api/sessions/a/pages/p1/shot") && !get("/api/sessions/a/pages"));
         assert!(rust_route(&Method::POST, "/api/sessions/a/input") && rust_route(&Method::DELETE, "/api/sessions/a/queue/e1")
             && !rust_route(&Method::POST, "/api/sessions/a/queue/e1") && get("/api/cotas") && !rust_route(&Method::POST, "/api/worktrees/create"));
+        assert!(rust_route(&Method::POST, "/api/sessions/a/pair") && rust_route(&Method::DELETE, "/api/sessions/a/pair")
+            && get("/api/sessions/a/pair/contract") && rust_route(&Method::POST, "/api/sessions/a/unpair-remote")
+            && !get("/api/sessions/a/pair") && !rust_route(&Method::POST, "/api/sessions/a/pair-invite"));
         assert_eq!(AREAS[area_of("/api/sessions/a/git/commit/abc/files")], "workspace");
         assert_eq!(AREAS[area_of("/api/sessions-x")], "other", "prefixo só casa por segmento inteiro");
         assert_eq!(AREAS[area_of("/assets/index.js")], "static");

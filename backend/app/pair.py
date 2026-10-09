@@ -31,6 +31,17 @@ from app.pqueue import _sanitize
 _LOCK = threading.Lock()
 
 
+class GroupsOwnedByRust(RuntimeError):
+    """Escrita de grupo no Python com o Rust dono (`rust`/`pending`): um caminho esquecido falha
+    alto em vez de virar segundo escritor da pasta."""
+
+
+def _refuse_if_rust(what: str) -> None:
+    from app import groups_bridge
+    if groups_bridge.rust_owns_groups():
+        raise GroupsOwnedByRust(what)
+
+
 class PairMixError(ValueError):
     """Tentativa de misturar pareamento cross-server (1:1) com grupo local — proibido (ver
     join_group). O caller (api.py) traduz pra HTTP 400."""
@@ -97,6 +108,7 @@ class PairLink:
             harness: dict[str, str] | None = None, orq: bool = False) -> None:
         """`harness` = nome -> provider do grupo (o hook de SessionStart rotula a lista com ele);
         só ficam as chaves do próprio grupo."""
+        _refuse_if_rust(self.name)
         dentro = {self.name, *peers}
         corpo = {"peers": peers, "task": task, "gid": gid,
                  "harness": {n: p for n, p in (harness or {}).items() if n in dentro}}
@@ -108,6 +120,7 @@ class PairLink:
         atomico.substituir(tmp, self.path)
 
     def clear(self) -> None:
+        _refuse_if_rust(self.name)
         self.path.unlink(missing_ok=True)
         self.path.with_suffix(".json.tmp").unlink(missing_ok=True)
 
@@ -231,6 +244,7 @@ def join_with_snapshot(a: str, b: str, task: str = "") -> tuple[list[str], dict[
 def _merge_contract(loser_gid: str, survivor_gid: str) -> None:
     """Anexa o contrato do grupo absorvido ao do sobrevivente (best-effort; merge de grupos não
     pode falhar por causa de arquivo de contrato)."""
+    _refuse_if_rust(loser_gid)
     # `regras-` (o que o time lê) segue o `grupo-` (o registro do árbitro): sem isto o merge
     # deixava o regras-<loser> órfão, o mesmo furo que o leave() já fechava só pro grupo-.
     for prefixo in ("grupo", "regras"):
@@ -271,6 +285,7 @@ def _arquivo_dir() -> Path:
 def _arquivar_contratos(gid: str) -> None:
     """Último membro saiu: o contrato vai pro arquivo em vez de sumir — dois kills seguidos apagavam
     as decisões de um trabalho inteiro. Best-effort: falha aqui não desfaz um leave que já valeu."""
+    _refuse_if_rust(gid)
     ts = time.strftime("%Y%m%d-%H%M%S")
     for prefixo in ("grupo", "regras"):
         src = _pair_dir() / f"{prefixo}-{gid}.md"

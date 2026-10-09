@@ -397,7 +397,11 @@ def _list_sig(infos) -> str:
           # sem isto o rótulo e a visibilidade ficam velhos até outra coisa mudar a assinatura.
           getattr(i, "owner", None),
           # Sucessão do árbitro muda só este campo na linha do orquestrador.
-          getattr(i, "orq_arbiter", None))
+          getattr(i, "orq_arbiter", None),
+          # Entrar, sair ou renomear grupo muda só estes campos: sem eles o selo do par fica velho
+          # no companheiro que ficou até outra coisa mudar a assinatura.
+          getattr(i, "pair_peers", None), getattr(i, "pair_gid", None),
+          getattr(i, "pair_task", None), getattr(i, "pair_external", None))
          for i in infos],
         ensure_ascii=False,
     )

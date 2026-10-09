@@ -345,6 +345,15 @@ def test_list_sig_reemits_when_conversation_life_or_transfer_changes():
         assert _list_sig([original]) != _list_sig([original.model_copy(update=fields)])
 
 
+def test_list_sig_reemits_when_only_the_group_changes():
+    from app.models import SessionInfo
+    from app.sse import _list_sig
+    original = SessionInfo(name="s", pair_peers=["a"], pair_gid="g", pair_task="T")
+    for fields in ({"pair_peers": None}, {"pair_gid": "h"}, {"pair_task": "U"},
+                   {"pair_external": {"alias": "x", "owner": "o", "session": "s"}}):
+        assert _list_sig([original]) != _list_sig([original.model_copy(update=fields)])
+
+
 class _AdapterMudo(_AdapterPorProvider):
     """Sessão parada: nem transcript nem transição de estado."""
 

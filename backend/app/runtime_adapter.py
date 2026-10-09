@@ -395,6 +395,7 @@ class LegacyBridge:
         if descriptor["meta"].get("terminal"):
             from app.runtime_terminal import reserve_op
             return await reserve_op(self.coordinator, descriptor, command, operation_id)
+        from app.adapters.codex.appserver import RequestOutcomeUnknown
         name, provider = descriptor["name"], descriptor["provider"]
         adapter, io = self.adapters[provider], LegacyIO(self.coordinator)
         kind = command["kind"]
@@ -456,7 +457,15 @@ class LegacyBridge:
                 arguments.setdefault("effort", None)
             if provider == "codex" and control_kind == "set_permission_mode":
                 arguments["modo"] = payload["mode"]
+            if provider == "codex" and kind == "submit":
+                await io._exec(name, {"kind": "set_delivered", "entry_id": entry_id, "value": True})
             result = await original(adapter, name, **arguments)
+            if provider == "codex" and method == "send_prompt" and result == "unknown":
+                reply = {"operation_id": operation_id, "disposition": "unknown",
+                         "payload": {"transport_lost": True}}
+                await io._exec(name, {"kind": "finish", "id": operation_id,
+                                     "status": "unknown", "result": reply})
+                return reply
             if method == "set_service_tier":
                 result = {"service_tier": result}
             await io.finish_call(name, context, deferred=result == "deferred")
@@ -467,8 +476,18 @@ class LegacyBridge:
             if disposition == "deferred" and entry_id is not None:
                 await io._exec(name, {"kind":"set_delivered", "entry_id":entry_id, "value":False, "steered":False})
             return reply
+        except (asyncio.CancelledError, RequestOutcomeUnknown):
+            if provider == "codex" and kind == "submit":
+                await io._exec(name, {"kind": "finish", "id": operation_id, "status": "unknown",
+                    "result": {"operation_id": operation_id, "disposition": "unknown",
+                               "payload": {"transport_lost": True}}})
+            else:
+                await io.finish_call(name, context, failed=True)
+            raise
         except BaseException:
             await io.finish_call(name, context, failed=True)
+            if provider == "codex" and kind == "submit":
+                await io._exec(name, {"kind": "set_delivered", "entry_id": entry_id, "value": False})
             raise
         finally:
             self.coordinator.legacy_active.discard(operation_id)

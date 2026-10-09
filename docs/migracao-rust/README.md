@@ -51,7 +51,8 @@ trabalho da máquina de origem; nesta pasta os arquivos equivalentes são os da 
   terminal, Pi, Kimi, omp e orq seguem no Python (provedores não migrados).
 - **Contrato interno versionado à mão.** Mudou rota `/internal`, evento do `side-events` ou variável
   passada ao filho → subir `RUST_SERVER_PROTOCOL` (Python) e `INTERNAL_PROTOCOL` (Rust) juntos.
-  Atual: **46** (a 46 é a leitura rápida de login Codex das contas; a 37 era a parte 5-0; a 35
+  Atual: **47** (a 47 junta as contas do #115, que estavam na 46, com os grupos da parte 6, que
+  estavam na 40; a 46 é a leitura rápida de login Codex das contas; a 37 era a parte 5-0; a 35
   era a parte 4 com as junções da `hangar-server-parte1`).
   O `versao` do snapshot do `hangar-cano` acompanha o `VERSAO` do `cano.py`.
 - **Paridade provada por golden.** Formato que o cliente lê sai igual ao do Python, conferido por

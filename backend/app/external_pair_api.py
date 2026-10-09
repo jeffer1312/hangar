@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from app import external_pairs, pair, pair_texto, peers, share_api, share_store, share_tunnel
+from app import external_pairs, groups_bridge, pair, pair_texto, peers, share_api, share_store, share_tunnel
 from app.auth import require_auth
 from app.external_pairs import ExternalPair
 from app.mensagens import erro
@@ -26,6 +26,8 @@ _CODE_RE = re.compile(r"[A-Za-z0-9]{1,64}")
 _MSG_JA_PAREADA = "a sessão já está em grupo ou pareada — desfaça esse par antes de parear com outra máquina"
 _REMOTE_LABEL = "resposta da outra máquina: "
 _MSG_PARCIAL = "pareamento desfeito aqui, mas a outra máquina pode continuar pareada: desfaça lá"
+# Falhas da ponte depois de o pedido sair (`groups_bridge.call`): o Rust pode ter gravado.
+_BRIDGE_UNCERTAIN = frozenset({"groups_bridge_unavailable", "groups_bridge_invalid"})
 
 
 def _my_owner() -> str:
@@ -112,7 +114,7 @@ async def pair_redeem(body: PairRedeemBody):
     harness = {s.name: s.provider for s in await asyncio.to_thread(api.registry.list)}
     # Junta antes de gastar o código: grupo recusado não queima o convite.
     try:
-        _, snap = await asyncio.to_thread(pair.join_group, name, [peer], "", substituir_task=True, harness=harness)
+        snap = await _join_external(name, peer, harness)
     except (pair.PairMixError, pair.TaskConflito) as e:
         _log.warning("par externo: grupo recusou o resgate de '%s': %s", name, e)
         raise HTTPException(409, detail=erro("erro_pareamento_mistura_cross", _MSG_JA_PAREADA))
@@ -120,7 +122,7 @@ async def pair_redeem(body: PairRedeemBody):
         share, token = await asyncio.to_thread(share_store.redeem, body.code, body.owner, None, None, "pair")
     except Exception as e:  # noqa: BLE001 — o grupo já foi montado: sempre desfaz antes de responder
         if snap is not None:
-            await _guarded_async("restaurar o grupo", pair.restore, snap)
+            await _guarded_async("restaurar o grupo", _restore_external, snap)
         if isinstance(e, share_store.ShareError):
             raise _code_error(e)
         _log.warning("par externo: resgate de '%s' falhou: %r", name, e)
@@ -142,6 +144,39 @@ async def pair_redeem(body: PairRedeemBody):
             "token": token}
 
 
+async def _join_external(name: str, peer: str, harness: dict[str, str]):
+    """Grava o par externo de `name`; devolve o que `_restore_external` desfaz. No modo Rust o
+    sidecar é dele: antes do link a sessão está sempre solta, então desfazer é o `unlink`."""
+    if groups_bridge.rust_owns_groups():
+        try:
+            await asyncio.to_thread(groups_bridge.call, "group.external_link", local=name, address=peer,
+                                    harness={n: p for n, p in harness.items() if n == name})
+        except groups_bridge.GroupsBridgeError as e:
+            if e.code == "erro_pareamento_mistura_cross":
+                raise pair.PairMixError(e.detail) from None
+            if e.code in _BRIDGE_UNCERTAIN:
+                # O pedido pode ter chegado e gravado: o unlink só age se o endereço estiver lá.
+                await _guarded_async("restaurar o grupo", _restore_external, (name, peer))
+            raise
+        return (name, peer)
+    return (await asyncio.to_thread(pair.join_group, name, [peer], "", substituir_task=True, harness=harness))[1]
+
+
+def _restore_external(undo) -> None:
+    if isinstance(undo, tuple):
+        groups_bridge.call("group.external_unlink", local=undo[0], address=undo[1])
+    else:
+        pair.restore(undo)
+
+
+def _leave_external(local: str, address: str) -> None:
+    """Fim do par externo: o lado de fora já está sendo desfeito aqui, então nada de aviso de volta."""
+    if groups_bridge.rust_owns_groups():
+        groups_bridge.call("group.external_unlink", local=local, address=address)
+    else:
+        pair.leave(local)
+
+
 def _guarded(what: str, fn, *args) -> None:
     # Cada passo do desfazer roda mesmo que o anterior falhe; senão sobra token vivo no disco.
     try:
@@ -156,7 +191,7 @@ async def _guarded_async(what: str, fn, *args) -> None:
 
 async def _undo_local(snap: dict | None, share_id: str) -> None:
     if snap is not None:
-        await _guarded_async("restaurar o grupo", pair.restore, snap)
+        await _guarded_async("restaurar o grupo", _restore_external, snap)
     await _guarded_async("revogar o convite", share_store.revoke, share_id)
     await _guarded_async("remover o registro", external_pairs.remove, share_id)
 
@@ -243,13 +278,13 @@ async def pair_accept(name: str, body: PairAcceptBody):
         await asyncio.to_thread(external_pairs.add, ExternalPair(
             mine.id, name, alias, owner, session, address, token, time.time()))
         harness = {s.name: s.provider for s in await asyncio.to_thread(api.registry.list)}
-        _, snap = await asyncio.to_thread(pair.join_group, name, [peer], "", substituir_task=True, harness=harness)
+        snap = await _join_external(name, peer, harness)
         falha = await api._deliver(name, pair_texto.texto_par_externo(name, peer, owner))
         if falha:
             raise RuntimeError(api._erro_texto(falha))
     except Exception as e:  # noqa: BLE001 — qualquer falha aqui desfaz os dois lados
         if snap is not None:
-            await _guarded_async("restaurar o grupo", pair.restore, snap)
+            await _guarded_async("restaurar o grupo", _restore_external, snap)
         await _guarded_async("revogar o convite", share_store.revoke, mine.id)
         desfeito = await _undo_remote(address, token)
         await _guarded_async("remover o registro", external_pairs.remove, mine.id)
@@ -263,9 +298,11 @@ async def pair_accept(name: str, body: PairAcceptBody):
 
 async def teardown(rec: ExternalPair, notify: bool) -> None:
     from app import api
+    # A saída do grupo vem primeiro e sem engolir a falha: registro e convite ficam, e o outro lado
+    # tenta de novo com o token que ainda vale, em vez de deixar o sidecar com um par sem registro.
+    await asyncio.to_thread(_leave_external, rec.local_session, rec.address)
     await _guarded_async("remover o registro", external_pairs.remove, rec.share_id)
     await _guarded_async("revogar o convite", share_store.revoke, rec.share_id)
-    await _guarded_async("sair do grupo", pair.leave, rec.local_session)
     if notify:
         falha = await api._deliver(rec.local_session,
                                    f"[painel: par externo encerrado] '{rec.address}' saiu do pareamento. "
