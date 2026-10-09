@@ -191,6 +191,39 @@ def test_session_the_rust_does_not_serve_falls_back_to_python(env, rust):
     assert pressed == [("outra", "above-prompt", "mr-a", "pm-mock")]
 
 
+def _bridge_answers(monkeypatch, coordinator, status):
+    monkeypatch.setattr(coordinator, "mode", "rust")
+    monkeypatch.setattr(list_bridge, "_config", ("127.0.0.1:1", "segredo"))
+
+    def answer(self, req, timeout=None):
+        raise api.urllib.error.HTTPError(req.full_url, status, "x", {}, None)
+
+    monkeypatch.setattr(api.urllib.request.OpenerDirector, "open", answer)
+
+
+@pytest.mark.parametrize("status", [403, 400])
+def test_bridge_refusal_never_falls_back_to_python(env, monkeypatch, status):
+    # Segredo divergente (403) ou operação desconhecida (400) não é "sessão fora do Rust": nada de clique daqui.
+    coordinator, guest_token, pressed = env
+    _bridge_answers(monkeypatch, coordinator, status)
+    for token in (OWNER, guest_token):
+        response = _press(token)
+        assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_mod_clique_sem_resposta")
+    assert pressed == []
+
+
+def test_guest_never_drives_a_rust_terminal_from_python(env, monkeypatch, tmp_path):
+    # O Rust tem o terminal mas a ponte diz que os mods não são dele: o convidado não dirige o pane por
+    # aqui; o dono segue com o clique do Python (teclado emprestado).
+    coordinator, guest_token, pressed = env
+    _register(coordinator, tmp_path, headless=False).phase = Phase.Rust
+    _bridge_answers(monkeypatch, coordinator, 404)
+    assert _press(guest_token).status_code == 503
+    assert _press(INVITE, invite_port=True).status_code == 503
+    assert _press(OWNER).status_code == 200
+    assert pressed == [("t", "above-prompt", "mr-a", "pm-mock")]
+
+
 def test_silent_rust_is_a_code_not_a_500(env, monkeypatch):
     coordinator, guest_token, pressed = env
     monkeypatch.setattr(coordinator, "mode", "rust")

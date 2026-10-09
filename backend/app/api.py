@@ -6350,7 +6350,9 @@ def _convidado(request: Request) -> bool:
 async def _mod_no_rust(name: str, op: str, request: Request) -> Response | None:
     """Operação de mod de sessão que o Rust atende, pedida por quem entrou pelo Python (convidado, de
     convite ou com login, e o Connect): a autenticação foi a desta porta, e o Rust aciona pela ponte
-    privada com o mesmo efeito do dono. `None`: a sessão não é dele, e quem trata é o Python."""
+    privada com o mesmo efeito do dono. `None`: a sessão não é dele (só o 404), e quem trata é o Python.
+    Convidado não chega ao `plugin_click` de terminal que é do Rust: com a ponte recusando, o clique
+    daqui dirigiria o pane do executor dele calado."""
     from app import list_bridge, runtime_coordinator
     owner = runtime_coordinator.current()
     endpoint = list_bridge.endpoint()
@@ -6375,8 +6377,11 @@ async def _mod_no_rust(name: str, op: str, request: Request) -> Response | None:
     except OSError as exc:
         _log.warning("ponte dos mods em %s falhou: %s", name, exc)
         raise HTTPException(503, detail=_MOD_SEM_RESPOSTA) from None
-    if status == 404:
+    if status == 404 and not (_convidado(request) and owner.terminal_in_rust(name)):
         return None
+    if status in (400, 403, 404):
+        _log.warning("ponte dos mods em %s recusou %s com %s", name, op, status)
+        raise HTTPException(503, detail=_MOD_SEM_RESPOSTA)
     return Response(raw, status_code=status, media_type="application/json")
 
 
