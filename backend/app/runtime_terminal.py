@@ -184,6 +184,12 @@ def resolve_binding(name, previous=None):
             and previous.meta.get('session_id') in (None, facts['session_id'])
         or previous.headless and previous.meta.get('session_id') == facts['session_id'])
     key = previous.key if same else 'terminal_' + fingerprint
+    plugin_key = facts.get('plugin_token', '').partition('.')[0] if '.' in facts.get('plugin_token', '') else None
+    kept = previous.meta.get('plugin_key') if same and previous.meta.get('agent_pid') == facts.get('agent_pid') else None
+    if plugin_key is None and kept:
+        # O ambiente do mesmo processo não muda: chave que sumiu é leitura que falhou, não token sem chave.
+        _log.warning('chave da ponte não lida do ambiente; mantida a anterior sessao=%s', name)
+        plugin_key = kept
     directory = _queue_dir()
     state_path = previous.state_path if same else directory / 'runtime' / f'{key}.json'
     generation = previous.generation if same else json.loads(state_path.read_bytes())['generation'] if state_path.exists() else 1
@@ -197,7 +203,7 @@ def resolve_binding(name, previous=None):
         agent_birth=facts.get('agent_birth'),
         **({'claude_settings': facts['claude_settings']} if facts.get('claude_settings') is not None else {}),
         # A chave do token que o processo recebeu no lançamento: a ponte do Rust acha a sessão por ela.
-        **({'plugin_key': facts['plugin_token'].partition('.')[0]} if '.' in facts.get('plugin_token', '') else {})), facts['jsonl'],
+        **({'plugin_key': plugin_key} if plugin_key else {})), facts['jsonl'],
         previous.projection_dir if same else directory, state_path,
         previous.lock_path if same else directory / 'runtime' / f'{key}.lock', generation)
 
