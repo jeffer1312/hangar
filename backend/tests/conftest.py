@@ -1,5 +1,7 @@
 import os
+import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -56,6 +58,24 @@ def _instalar_home_do_windows() -> None:
 
 if os.name == "nt":
     _instalar_home_do_windows()
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item, nextitem):
+    # A confirmação de entrega do app.api é um Timer de segundos: sobrando de um teste, dispara no
+    # seguinte e fala com o tmux no meio dele (com a suíte repartida entre processos, quebrava o
+    # arquivo vizinho). Hook e não fixture autouse: fixture por teste muda a ordem das outras (ver
+    # _instalar_home_do_windows).
+    api = sys.modules.get("app.api")
+    if api is None:
+        return
+    with api._confirm_lock:
+        pending = [timer for timer, _ in api._confirm_pend.values()]
+        api._confirm_pend.clear()
+    for timer in pending:
+        if isinstance(timer, threading.Timer):   # há testes que trocam o Timer por um falso
+            timer.cancel()
+            timer.join(timeout=5)
 
 
 @pytest.fixture(scope="session", autouse=True)

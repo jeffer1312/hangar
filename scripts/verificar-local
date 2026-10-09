@@ -215,8 +215,13 @@ npm_ci_se_mudou() {   # $1 = lockfile, $2.. = comando
 
 passo_front() {
     npm_ci_se_mudou package-lock.json npm ci --workspace=@hangar/core --workspace=frontend || return 1
+    # Os vitest.config limitam a 2 forks para várias sessões não encherem a RAM ao mesmo tempo; aqui
+    # a verificação roda sozinha na fila e pode usar os processos configurados.
+    local vitest=()
+    (( PROCESSOS > 2 )) && vitest=(-- --maxWorkers="$PROCESSOS")
     npm run check -w @hangar/core && npm run check -w frontend && \
-        npm run test -w @hangar/core && npm run test -w frontend && npm run build -w frontend
+        npm run test -w @hangar/core "${vitest[@]}" && npm run test -w frontend "${vitest[@]}" && \
+        npm run build -w frontend
 }
 
 passo_mobile() {
