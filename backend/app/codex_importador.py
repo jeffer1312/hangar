@@ -229,7 +229,7 @@ class CodexNativo:
             # Login revogado do lado da OpenAI só aparece no texto: "... unauthorized (401)".
             text = error.get("message") if isinstance(error, dict) else None
             if isinstance(text, str) and "unauthorized (401)" in text.lower():
-                safe_data = {"auth_error": "unauthorized"}
+                safe_data = {**(safe_data or {}), "auth_error": "unauthorized"}
             if code == -32601:
                 raise CodexNativoErro(
                     "Esta versão do Codex não oferece a API necessária; atualize o Codex CLI.",

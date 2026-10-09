@@ -194,7 +194,7 @@ def _account_error(exc: accounts.AccountError) -> HTTPException:
         "codex_account_invalid_marker": "conta Codex inválida",
         "codex_account_delete_failed": "não foi possível apagar a conta Codex",
         "codex_account_sign_out_failed": "o Codex não conseguiu sair da conta",
-        "codex_account_sign_out_unconfirmed": "a conta não apareceu deslogada depois de sair",
+        "codex_account_sign_out_unconfirmed": "o Codex saiu, mas não consegui confirmar que a conta ficou deslogada",
     }
     return HTTPException(exc.status, detail=erro(exc.code, messages.get(exc.code, "operação de conta Codex recusada"),
                                                   **exc.params))
