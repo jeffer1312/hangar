@@ -881,16 +881,6 @@ class RuntimeCoordinator:
         for client in tuple(self.voice_clients.values()):
             client.fail(RuntimeError("runtime encerrado; chamada de voz invalidada"))
 
-    async def _push_channels(self, slot):
-        # Codex sem terminal: a prévia vai do ator ao hub do Rust em processo, nunca por aqui.
-        if slot.binding.provider == "codex":
-            return
-        from app.adapters.preview_push import PushPreviewSource, fonte_ferramenta, fonte_pensamento
-        for channel, data in (slot.view.get("channels") or {}).items():
-            source = {"preview":PushPreviewSource.get, "thinking":fonte_pensamento, "tool":fonte_ferramenta}.get(channel)
-            if source is not None:
-                await source(slot.binding.name).push(data["text"])
-
     async def refresh_snapshot(self, name):
         from app.runtime_adapter import apply_event
         slot = self.slot(name)
@@ -901,8 +891,6 @@ class RuntimeCoordinator:
             return False
         event = {"key":descriptor["key"], "generation":descriptor["generation"], "revision":data.get("revision"), "channel":"snapshot", "data":data}
         valid = apply_event(slot, event)
-        if valid:
-            await self._push_channels(slot)
         self._signal(slot)
         return valid
 
@@ -958,8 +946,6 @@ class RuntimeCoordinator:
                         slot.cache_valid = False
                         self._refresh(slot)
                     elif event.get("revision", -1) > previous or event.get("channel") == "snapshot":
-                        if event["channel"] in {"preview", "thinking", "tool", "snapshot"}:
-                            await self._push_channels(slot)
                         if event["channel"] in {"voice", "voice_target"}:
                             client = self.voice_clients.get((event["key"], event["data"].get("call_id")))
                             if client is not None:

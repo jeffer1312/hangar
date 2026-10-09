@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from app import diag, log_paths
+from app import diag
 
 _PATCH = {
     "claude": {"session_id", "cwd", "model", "effort", "permission_mode", "previous_non_plan", "context_window", "problema", "cano"},
@@ -16,7 +16,6 @@ _PATCH = {
               "permission_mode"},
 }
 _unknown_guard = threading.Lock()
-_unknown_counts = {}
 _mutation_locks = {}
 _quota_lock = threading.Lock()
 _quota_cache = {}
@@ -60,27 +59,6 @@ def quota_windows(config_dir):
     Sem cache de 300 s aqui: o do ator Rust é o único."""
     quota = _quota({"config_dir": config_dir}, fresh=True)
     return [window for window in (quota or {}).get("janelas", []) if not window.get("por_modelo")]
-
-
-def _unknown(payload, metadata):
-    from app.adapters.claude_headless.adapter import _MAX_DESCONHECIDOS_B, _TETO_DESCONHECIDOS
-    kind = payload.get("kind")
-    if not isinstance(kind, str) or len(kind) > 512 or not isinstance(payload.get("event"), dict):
-        raise ValueError("evento privado inválido")
-    with _unknown_guard:
-        key = (metadata.get("key"), metadata.get("generation"), kind)
-        if _unknown_counts.get(key, 0) >= _TETO_DESCONHECIDOS:
-            return {"recorded": False, "reason": "type_limit"}
-        directory = log_paths.base() / "privado"
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = directory / ("claude-headless-desconhecidos.jsonl" if metadata["provider"] == "claude" else "codex-headless-desconhecidos.jsonl")
-        if path.exists() and path.stat().st_size > _MAX_DESCONHECIDOS_B:
-            return {"recorded": False, "reason": "file_limit"}
-        line = json.dumps({"ts": time.time(), "sessao": metadata.get("name"), "tipo": kind, "evento": payload["event"]}, ensure_ascii=False)
-        with path.open("a", encoding="utf-8") as stream:
-            stream.write(line + "\n")
-        _unknown_counts[key] = _unknown_counts.get(key, 0) + 1
-    return {"recorded": True}
 
 
 def native_message(payload, metadata):
@@ -210,27 +188,12 @@ def run(kind: str, payload: dict, metadata: dict) -> dict:
         from app import runtime_terminal
         return {"terminal_facts":runtime_terminal.facts, "terminal_publish":runtime_terminal.publish,
             "terminal_plugin_control":runtime_terminal.plugin_control}[kind](payload, metadata)
-    if kind == "last_usage":
-        from app.adapters.claude_headless.adapter import _uso_da_ultima_chamada
-        path = Path(metadata["jsonl"])
-        try:
-            with path.open("rb"):
-                pass
-        except FileNotFoundError:
-            return {"usage":None}
-        return {"usage": _uso_da_ultima_chamada(str(path))}
-    if kind == "reload_stamp":
-        from app.adapters.claude_headless.adapter import _marca_config
-        recorded = (metadata.get("cano") or {}).get("config_marca")
-        return {"reason": "config" if recorded and _marca_config(metadata.get("config_dir")) != recorded else None}
     if kind == "native_message":
         return native_message(payload, metadata)
     if kind == "launch_env":
         return launch_env(metadata)
     if kind == "session.clear_cano":
         return clear_cano(payload, metadata)
-    if kind == "unknown_private":
-        return _unknown(payload, metadata)
     if kind == "session.patch_meta":
         if set(payload) - _PATCH[provider]:
             raise ValueError("campo fora do catálogo do sidecar")

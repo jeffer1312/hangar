@@ -98,6 +98,10 @@ impl A11yDebug {
 
     /// Serialize the last tree update to a readable JSON string. Node ids are
     /// replaced with short ephemeral ids (`a`, `b`, ..., `z`, `aa`, ...).
+    pub(crate) fn snapshot(&self, root: Option<&str>) -> Option<String> {
+        super::snapshot::snapshot_text(self.last_tree_update.as_ref()?, root)
+    }
+
     pub(crate) fn to_json(&self) -> Option<String> {
         let update = self.last_tree_update.as_ref()?;
 

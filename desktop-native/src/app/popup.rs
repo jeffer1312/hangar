@@ -120,7 +120,7 @@ impl Hangar {
                 Some(self.render_usage_card(window, cx))),
             Floating::Context => ("composer-ctx".to_owned(), Align::End, true, Some(self.render_context_card())),
             Floating::Hangar => ("hangar-chip".to_owned(), Align::Start, true, Some(self.render_hangar_popover(window, cx))),
-            Floating::Voice => ("topbar-voice".to_owned(), Align::End, true, Some(self.render_voice_panel(cx))),
+            Floating::Voice => ("topbar-voice".to_owned(), Align::End, true, Some(self.render_voice_panel(window, cx))),
             Floating::Recent(recent) => {
                 let live = self.recent.replace(recent);
                 let content = self.render_recent(cx);
@@ -147,20 +147,27 @@ impl Hangar {
             cx.stop_propagation();
             cx.notify();
         });
-        Some(layer(trigger, placement, align, surface, visible, leaving, dismiss))
+        let close = cx.listener(|this, _: &(), _, cx| {
+            this.close_popups();
+            cx.notify();
+        });
+        Some(layer(trigger, placement, align, surface, visible, leaving, dismiss, close))
     }
 }
 
 /// Cortina que fecha no clique fora sem deixar o clique chegar ao que está atrás, e a superfície presa ao gatilho,
 /// abaixo dele ou virada para cima quando não cabe. Saindo, nada ali responde ao ponteiro.
 fn layer(trigger: Bounds<Pixels>, placement: Placement, align: Align, surface_content: AnyElement, visible: f32, leaving: bool,
-    dismiss: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static) -> AnyElement {
+    dismiss: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static, close: impl Fn(&(), &mut Window, &mut App) + 'static) -> AnyElement {
     let surface = if leaving { motion::menu_out(div(), motion::MENU_OUT.ease(1. - visible)) }
         else { motion::menu_in(div(), motion::MENU_IN.ease(visible)) };
     let surface = surface.child(surface_content).when(leaving, |el| el.child(div().absolute().inset_0().occlude()));
     let placed = Positioner::side(trigger).placement(placement).align(align).offset(px(8.)).margin(px(8.));
     div().absolute().inset_0()
-        .when(!leaving, |el| el.child(div().id("popup-scrim").absolute().inset_0().occlude().on_any_mouse_down(dismiss)))
+        // Para a acessibilidade a cortina é o "Fechar" do painel: sem tecla, é o único jeito de um agente o fechar.
+        .when(!leaving, |el| el.child(div().id("popup-scrim").absolute().inset_0().occlude().on_any_mouse_down(dismiss)
+            .role(Role::Button).aria_label(tr("close"))
+            .on_a11y_action(AccessibleAction::Click, move |_, window, cx| close(&(), window, cx))))
         .child(if leaving { placed } else { placed.occlude() }.child(surface))
         .into_any_element()
 }
@@ -215,7 +222,7 @@ pub(super) fn key_hint(keys: &'static str) -> Div {
 /// Linha clicável do popover: raio concêntrico ao do cartão, realce igual em todos os menus.
 pub(super) fn row(id: impl Into<ElementId>, selected: bool) -> Button {
     Button::new(id).ghost().w_full().h_auto().px(px(8.)).py(px(6.)).rounded(px(7.)).text_size(px(13.))
-        .when(selected, |el| el.bg(theme::accent_dim()))
+        .when(selected, |el| el.bg(theme::accent_dim())).aria_selected(selected)
 }
 
 /// Topo de um diálogo curto no meio da janela, pela altura típica dele. O kit o põe a um décimo do topo; em janela baixa

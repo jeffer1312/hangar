@@ -134,15 +134,16 @@ impl StateEnv {
 }
 
 /// A fábrica do hub: um `Monitor` de produção por hub de Claude com terminal e um feed do runtime
-/// por hub de Codex sem terminal.
+/// por hub de Claude ou Codex sem terminal.
 pub fn spawner(env: Arc<StateEnv>) -> SpawnMonitor {
     Arc::new(move |hub: &Arc<Hub>| {
-        if hub.binding().is_some_and(|b| b.provider == crate::transcript::Provider::Codex && b.headless) {
+        if hub.binding().is_some_and(|b| b.runtime_feed()) {
             let live = env.runtime.get().map(|registry| registry.live(&hub.name));
-            let feed = super::runtime_feed::RuntimeFeed::new(hub, live, env.list.published.clone());
+            let facts = super::runtime_feed::FeedFacts { store: env.list.state_facts.clone(), client: env.client.clone(), diag: env.diag.clone() };
+            let feed = super::runtime_feed::RuntimeFeed::new(hub, live, env.list.published.clone(), Some(facts));
             let diag = env.diag.clone();
             return tokio::spawn(super::runtime_feed::guarded(Arc::downgrade(hub), feed.run(), move |name| {
-                diag.report("rust.state_feed_failed", name, "state_feed_panic", "o estado do Codex sem terminal caiu; volta com o próximo assinante");
+                diag.report("rust.state_feed_failed", name, "state_feed_panic", "o estado da sessão sem terminal caiu; volta com o próximo assinante");
             }));
         }
         let src = LiveSources::new(env.clone(), hub);

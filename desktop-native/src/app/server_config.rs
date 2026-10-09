@@ -1448,7 +1448,7 @@ impl Hangar {
             .track_focus(focus).role(Role::Group).aria_label(label.clone()).flex_1().min_w_0().px(px(6.)).py(px(4.)).rounded(px(6.))
             .border_1().border_color(transparent_black()).focus_visible(|el| el.border_color(theme::accent_focus()))
             .when(!off, |el| el.on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| this.tune_key(key, event, window, cx))))
-            .child(Slider::new(state).bg(theme::accent()).text_color(theme::text()).disabled(off)));
+            .child(Slider::new(state).aria_label(label.clone()).bg(theme::accent()).text_color(theme::text()).disabled(off)));
         // Pontas de largura fixa: os quatro sliders começam e terminam na mesma coluna, qualquer que seja o texto.
         let end = |side: &str| div().w(px(96.)).flex_shrink_0().text_size(px(12.)).text_color(theme::muted()).whitespace_normal()
             .when(side == "right", |el| el.text_right()).child(tr(&format!("voice_tune_{name}_{side}")));

@@ -47,6 +47,53 @@ use std::{
     sync::Arc,
 };
 
+/// Accessibility id for a node without one: the ids the app wrote, stable across frames and runs, which is what
+/// automation agents use to find a control. View ids, plain integers and the type names that components stack
+/// (the same noise on every control) are left out. An entity number changes every run: the segment keeps its name,
+/// and on the node itself the accessible name takes the number's place (`input-editor`).
+pub(crate) fn author_path(ids: &[ElementId], label: Option<&str>) -> String {
+    let last = ids.len().saturating_sub(1);
+    let slug = |text: &str| {
+        let mut out = String::new();
+        for ch in text.chars().flat_map(char::to_lowercase) {
+            if ch.is_alphanumeric() {
+                out.push(ch);
+            } else if !out.is_empty() && !out.ends_with('-') {
+                out.push('-');
+            }
+            if out.chars().count() >= 40 {
+                break;
+            }
+        }
+        out.trim_end_matches('-').to_string()
+    };
+    ids.iter()
+        .enumerate()
+        .filter_map(|(i, id)| match id {
+            // Endereço de sessão remota (`https://host::nome`) também tem `::`.
+            ElementId::Name(name) if name.contains("::") && !name.contains("://") => None,
+            ElementId::Name(name) => Some(name.to_string()),
+            ElementId::NamedInteger(name, n) if *n > u32::MAX as u64 => {
+                Some(match label.filter(|label| i == last && !slug(label).is_empty()) {
+                    Some(label) => format!("{name}-{}", slug(label)),
+                    None => name.to_string(),
+                })
+            }
+            // Item de lista pelo índice: o nome dele identifica melhor que a posição.
+            ElementId::Integer(n) if i == last => Some(match label.map(slug).filter(|s| !s.is_empty()) {
+                Some(name) => name,
+                None if *n <= u32::MAX as u64 => n.to_string(),
+                None => return None,
+            }),
+            // Local no código-fonte muda a cada versão do app.
+            ElementId::NamedChild(inner, _) if matches!(**inner, ElementId::CodeLocation(_)) => None,
+            ElementId::NamedInteger(..) | ElementId::NamedChild(..) | ElementId::Uuid(_) => Some(id.to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(&crate::window::a11y::snapshot::ID_SEPARATOR.to_string())
+}
+
 /// Implemented by types that participate in laying out and painting the contents of a window.
 /// Elements form a tree and are laid out according to web-based layout rules, as implemented by Taffy.
 /// You can create custom elements by implementing this trait, see the module-level documentation
@@ -389,6 +436,10 @@ impl<E: Element> Drawable<E> {
                                 y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
                             });
                             self.element.write_a11y_info(&mut node);
+                            if node.author_id().is_none() {
+                                let path = author_path(&global_id.0, node.label());
+                                node.set_author_id(path);
+                            }
                             window.a11y.node_bounds.insert(node_id, bounds);
                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
                             #[cfg(debug_assertions)]

@@ -201,3 +201,36 @@ fn another_process_replacing_a_live_session_takes_nothing_from_it() {
     mods.attach_process("x", "p2", 3, Arc::new(NoLink));
     assert_eq!(mods.replay("x").len(), 1);
 }
+
+/// Sem terminal, o que o plugin manda pela ponte (`caps` e o estado do painel) entra na vista da superfície: na
+/// próxima publicação dela e já na última, republicada quando o `extra` muda.
+#[test]
+fn surface_view_carries_the_plugin_extra() {
+    let mods = mods();
+    let view = json!({"above": null, "panes": [{"id": "hangar-btw", "tree": {"type": "Box"}}, {"id": "outro", "tree": null}],
+        "shown_id": "hangar-btw", "columns": 80, "source": "surface"});
+    assert!(mods.publish_ui("s", 1, view.clone()));
+    assert!(replayed(&mods, "plugin_ui").last().unwrap().get("caps").is_none(), "sem extra, a vista de sempre");
+    let data = std::collections::BTreeMap::from([("hangar-btw".to_owned(), json!({"current": 0, "entries": []}))]);
+    mods.surface_extra("s", SurfaceExtra { caps: vec!["btw".into()], data });
+    let last = replayed(&mods, "plugin_ui").last().cloned().unwrap();
+    assert_eq!(last["caps"], json!(["btw"]));
+    assert_eq!(last["panes"][0]["data"]["current"], 0);
+    assert!(last["panes"][1].get("data").is_none());
+    // A próxima vista da superfície continua com o extra.
+    let mut next = view;
+    next["shown_id"] = json!("outro");
+    assert!(mods.publish_ui("s", 1, next));
+    assert_eq!(replayed(&mods, "plugin_ui").last().unwrap()["caps"], json!(["btw"]));
+}
+
+/// O ator morreu: o que o plugin anunciou some junto, e o app para de oferecer o `/btw`.
+#[test]
+fn clear_drops_the_plugin_extra() {
+    let mods = mods();
+    mods.publish_ui("s", 1, json!({"above": null, "panes": [], "shown_id": null, "columns": 80, "source": "surface"}));
+    mods.surface_extra("s", SurfaceExtra { caps: vec!["btw".into()], data: Default::default() });
+    assert_eq!(replayed(&mods, "plugin_ui").last().unwrap()["caps"], json!(["btw"]));
+    mods.clear_ui("s", 1);
+    assert!(replayed(&mods, "plugin_ui").last().unwrap().get("caps").is_none());
+}

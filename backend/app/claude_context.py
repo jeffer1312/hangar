@@ -11,7 +11,10 @@ import json
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
+
+from app import atomico
 
 _log = logging.getLogger("hangar.claude_context")
 
@@ -39,6 +42,9 @@ def read(jsonl: str | Path | None, config_dir: str | Path | None = None,
     numa leitura só; cada um é None quando o transcript não traz."""
     if not jsonl:
         return None, None
+    measured = _measured(Path(jsonl))
+    if measured and window_tokens:
+        measured["window"] = window_tokens
     try:
         with open(jsonl, "rb") as fh:
             fh.seek(0, os.SEEK_END)
@@ -64,9 +70,46 @@ def read(jsonl: str | Path | None, config_dir: str | Path | None = None,
                    ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
         if used > 0:
             answered = message.get("model")
-            return ({"used": used, "window": window(used, config_dir, model, window_tokens)},
+            return ({"used": used, "window": measured["window"] if measured else window(used, config_dir, model, window_tokens)},
                     answered if isinstance(answered, str) and answered else None)
-    return None, None
+    return measured, None
+
+
+def _measured(transcript: Path) -> dict | None:
+    """A janela real da conversa independe do formato da statusline e do alias do modelo."""
+    try:
+        value = json.loads(transcript.with_suffix(".context.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(value, dict) and all(type(value.get(k)) is int and value[k] > 0 for k in ("used", "window")):
+        return {k: value[k] for k in ("used", "window")}
+    return None
+
+
+def publish(transcript: Path, context: dict) -> None:
+    """Publica a medida junto do transcript: troca de conversa e reinício não misturam sessões."""
+    target = transcript.with_suffix(".context.json")
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
+                                     prefix=target.name + ".", suffix=".tmp", delete=False) as file:
+        temporary = Path(file.name)
+        json.dump(context, file)
+    try:
+        atomico.substituir(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def source_version(transcript: str | Path) -> tuple:
+    """Versão das fontes antes da leitura, para detectar uma publicação concorrente."""
+    path = Path(transcript)
+    versions = []
+    for file in (path, path.with_suffix(".context.json")):
+        try:
+            stat = file.stat()
+            versions.append((stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            versions.append(None)
+    return tuple(versions)
 
 
 def session_model(answered: str | None, opened: str | None, config_dir: str | Path | None = None,

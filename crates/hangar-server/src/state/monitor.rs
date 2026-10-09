@@ -769,13 +769,14 @@ mod tests {
         assert!(first.monitor.lock().unwrap().is_none(),"o último assinante saiu: o Monitor para com o hub");
         let again = ctx.hubs.acquire("s", binding(Provider::Claude), &ctx);
         assert_eq!(count.load(Ordering::SeqCst), 2, "volta com o próximo assinante");
-        // Codex com terminal e Claude sem terminal não têm dono do estado no Rust.
+        // Codex com terminal não tem dono do estado no Rust.
         let _codex = ctx.hubs.acquire("c", binding(Provider::Codex), &ctx);
-        let _headless = ctx.hubs.acquire("h", binding(Provider::ClaudeHeadless), &ctx);
         assert_eq!(count.load(Ordering::SeqCst), 2);
-        // Codex sem terminal ganha um feed, e só um com vários assinantes.
-        let feeds: Vec<_> = (0..2).map(|_| ctx.hubs.acquire("x", Binding { headless: true, ..binding(Provider::Codex) }, &ctx)).collect();
+        // Claude e Codex sem terminal ganham um feed, e só um com vários assinantes.
+        let _headless = ctx.hubs.acquire("h", binding(Provider::ClaudeHeadless), &ctx);
         assert_eq!(count.load(Ordering::SeqCst), 3);
+        let feeds: Vec<_> = (0..2).map(|_| ctx.hubs.acquire("x", Binding { headless: true, ..binding(Provider::Codex) }, &ctx)).collect();
+        assert_eq!(count.load(Ordering::SeqCst), 4);
         drop(feeds);
         drop(again);
     }

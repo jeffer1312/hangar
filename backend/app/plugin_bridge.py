@@ -992,6 +992,12 @@ def _entregar(name: str, texto: str, modo: str, jsonl: str | None = None):
 
 def tracked_session_id(name: str) -> str | None:
     """O uuid da conversa que o Hangar acompanha nesta sessão; None quando o vínculo é só palpite."""
+    transcript = _tracked_transcript(name)
+    return transcript.stem if transcript else None
+
+
+def _tracked_transcript(name: str) -> Path | None:
+    """Caminho confirmado pelo registro, nunca fornecido pelo plugin."""
     from app import tmux
     from app.api import registry
     from app.procinfo import _proc_children_map
@@ -1001,7 +1007,7 @@ def tracked_session_id(name: str) -> str | None:
     panes = tmux.list_panes_all().get(name)
     cwd = SessionRegistry._agent_pane(panes, _proc_children_map())["cwd"] if panes else ""
     jsonl, tracked = registry.resolve_tracked(name, cwd)
-    return Path(jsonl).stem if jsonl and tracked else None
+    return Path(jsonl) if jsonl and tracked else None
 
 
 def _conversation_mismatch(name: str, session_id: str | None) -> str | None:
@@ -1033,6 +1039,11 @@ class PullBody(BaseModel):
     session_id: str | None = None
 
 
+class MeasuredContext(BaseModel):
+    used: int = Field(gt=0, strict=True)
+    window: int = Field(gt=0, strict=True)
+
+
 class StateBody(BaseModel):
     sessao: str
     token: str
@@ -1042,6 +1053,8 @@ class StateBody(BaseModel):
     motivo: str | None = None
     tool: str | None = None
     origin: str | None = None
+    session_id: str | None = None
+    context: MeasuredContext | None = None
 
 
 class WhoamiBody(BaseModel):
@@ -1577,6 +1590,20 @@ async def state(body: StateBody, request: Request):
     _acordar(body.sessao)
     state_facts.notify(body.sessao, state_facts.FORCE)
     _log.debug("plugin estado sessao=%s estado=%s motivo=%s", body.sessao, body.estado, body.motivo)
+    # A medida é auxiliar: recusá-la ou falhar ao gravá-la não pode perder a transição de estado.
+    if body.context is not None:
+        from app import claude_context
+        from app.registry import SessionRegistry
+        transcript = await asyncio.to_thread(_tracked_transcript, body.sessao)
+        if transcript is None or transcript.stem != body.session_id:
+            _log.info("medida de contexto recusada: outra conversa sessao=%s", body.sessao)
+            raise HTTPException(409, "a medida de contexto pertence a outra conversa")
+        try:
+            await asyncio.to_thread(claude_context.publish, transcript, body.context.model_dump())
+        except OSError:
+            _log.exception("falha ao publicar medida de contexto sessao=%s", body.sessao)
+        else:
+            SessionRegistry._context_cache.pop(body.sessao, None)
     return {"ok": True}
 
 

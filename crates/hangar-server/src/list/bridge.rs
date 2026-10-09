@@ -748,6 +748,7 @@ fn decorate_context(cache: &mut ContextCache, row: &mut SessionRow, pid: Option<
                     dirs: &Dirs, config_dirs: &[PathBuf], wall: f64, mono: f64) {
     let Some(jsonl) = row.jsonl.clone() else { return };
     let (ctx, model) = if cache.stale(&row.name, &jsonl, mono) {
+        let version = context::source_version(&jsonl);
         let stem = Path::new(&jsonl).file_stem().and_then(|s| s.to_str()).map(str::to_owned);
         let chosen = facts_files::published_status(stem.as_deref(), config_dirs, wall).and_then(|p| p.model);
         let (opened, declared) = if row.headless {
@@ -763,7 +764,7 @@ fn decorate_context(cache: &mut ContextCache, row: &mut SessionRow, pid: Option<
         let account_dir = context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| dirs.claude.clone());
         let reading = context::claude_reading(&ReadingInputs { jsonl: Path::new(&jsonl), account_dir: &account_dir,
             chosen: chosen.as_deref(), opened: opened.as_deref(), declared, engine: row.engine.is_some() });
-        cache.store(&row.name, &jsonl, mono, reading)
+        cache.store(&row.name, &jsonl, mono, reading, version)
     } else {
         cache.cached(&row.name, &jsonl)
     };

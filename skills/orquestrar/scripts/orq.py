@@ -2172,9 +2172,11 @@ def _model_matches(want: str, got: str | None) -> bool:
 
 def prove_born(name: str, row: dict) -> str | None:
     """What was born, never what was asked: the sidecar of a session without terminal, or the
-    pane's start command, carries the row's provider and model. None = it matches."""
+    pane's start command, carries the row's provider, model and service tier. None = it matches."""
     prov = (row.get("provider") or "claude").lower()
     want = row.get("modelo") if row.get("modelo") not in (None, "", "default") else ""
+    extra = shlex.split(row.get("abertura", ""))
+    tier = extra[extra.index("--service-tier") + 1] if "--service-tier" in extra[:-1] else ""
     for sub, dflt in (("claude-headless", "claude"), ("codex-sessions", "codex")):
         f = Path.home() / ".hangar" / sub / f"{name}.json"
         if f.exists():
@@ -2184,6 +2186,8 @@ def prove_born(name: str, row: dict) -> str | None:
                 return f"{name}: born on {got}, row says {prov}"
             if want and not _model_matches(want, sc.get("model")):
                 return f"{name}: born on model {sc.get('model')}, row says {want}"
+            if tier and (sc.get("service_tier") or "default") != tier:
+                return f"{name}: born on service tier {sc.get('service_tier') or 'default'}, row says {tier}"
             return None
     r = subprocess.run(["tmux", "display", "-p", "-t", f"={name}:", "#{pane_start_command}"],
                        capture_output=True, text=True)
@@ -2192,6 +2196,11 @@ def prove_born(name: str, row: dict) -> str | None:
     cmd = r.stdout.strip()
     if prov not in cmd or (want and not _model_matches(want, cmd)):
         return f"{name}: pane started `{cmd[:160]}`, row says {prov} {want}".rstrip()
+    # Só o prefixo do hangar-engine, antes do `--`: o resto do comando pode ter qualquer texto.
+    born = re.search(r"--service-tier (\S+)", cmd.split(" -- ", 1)[0])
+    born_tier = born.group(1).strip("'\"") if born else "default"
+    if tier and born_tier != tier:
+        return f"{name}: born on service tier {born_tier}, row says {tier}"
     return None
 
 

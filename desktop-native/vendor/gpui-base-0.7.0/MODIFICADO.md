@@ -32,3 +32,6 @@ quadro). O kit passou a resolver isso com o `RenderedMarker` guardado no estado 
 Ao subir a versão do gpui-kit, reaplicar estas mudanças na versão nova, ou remover a cópia se o kit já trouxer o conserto.
 
 Os testes que montam `KeyDownEvent` passam `physical_digit: None`, o campo novo da cópia de gpui-pre.
+
+Acessibilidade: `Slider::aria_label` dá nome ao slider; o parágrafo do markdown (`text/inline_flow.rs`) entrega o texto
+à árvore por `Window::a11y_text`.

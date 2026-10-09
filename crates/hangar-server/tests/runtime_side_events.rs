@@ -29,10 +29,11 @@ async fn two_clients_one_source() {
     next_any(&mut a).await;
     next_any(&mut b).await;
     wait_until(|| python.side_conns() == 1).await;
-    let state = json!({"session":"s", "state":"working", "headless":true});
-    python.push_side("state", &state.to_string());
-    assert_eq!(next_named(&mut a, "state").await.data, state.to_string());
-    assert_eq!(next_named(&mut b, "state").await.data, state.to_string());
+    // O estado do Claude sem terminal é do feed do Rust; `stats` segue vindo da conexão interna.
+    let stats = json!({"turns":1});
+    python.push_side("stats", &stats.to_string());
+    assert_eq!(next_named(&mut a, "stats").await.data, stats.to_string());
+    assert_eq!(next_named(&mut b, "stats").await.data, stats.to_string());
     assert_eq!(python.side_conns(), 1);
 }
 

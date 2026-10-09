@@ -41,6 +41,25 @@ def test_sem_resposta_ou_sem_arquivo_e_none(tmp_path):
     assert cc.from_transcript(None) is None
 
 
+def test_measured_context_wins_without_a_1m_model_alias(tmp_path):
+    p = _transcript(tmp_path, _resposta(entrada=4, lido=76_573, escrito=27))
+    p.with_suffix(".context.json").write_text(json.dumps({"used": 76_604, "window": 1_000_000}), encoding="utf-8")
+    assert cc.from_transcript(p, tmp_path, model="opus") == {"used": 76_604, "window": 1_000_000}
+
+
+def test_invalid_measurement_keeps_transcript_fallback(tmp_path):
+    p = _transcript(tmp_path, _resposta(lido=90_000))
+    for value in (None, {"used": -1, "window": 1_000_000}, {"used": 90_002, "window": 0}):
+        p.with_suffix(".context.json").write_text(json.dumps(value), encoding="utf-8")
+        assert cc.from_transcript(p, tmp_path, model="opus[1m]") == {"used": 90_002, "window": 1_000_000}
+
+
+def test_declared_window_wins_over_a_measurement_from_before_resume(tmp_path):
+    p = _transcript(tmp_path, _resposta(lido=90_000))
+    p.with_suffix(".context.json").write_text(json.dumps({"used": 90_002, "window": 1_000_000}), encoding="utf-8")
+    assert cc.from_transcript(p, tmp_path, window_tokens=256_000) == {"used": 90_002, "window": 256_000}
+
+
 def test_modelo_da_sessao_vence_o_da_conta(tmp_path):
     # O Hangar abre a sessão com `--model opus[1m]` e não mexe no settings.json da conta.
     (tmp_path / "settings.json").write_text(json.dumps({"model": "sonnet"}), encoding="utf-8")
@@ -158,3 +177,27 @@ async def test_clear_zera_o_contexto_ate_a_primeira_resposta(tmp_path, monkeypat
     # /clear: transcript novo, ainda sem resposta. O número da conversa anterior não vale mais.
     info.jsonl, info.context = str(depois), None
     assert (await reg.list_with_state())[0].context is None
+
+
+async def test_measurement_during_read_does_not_freeze_old_python_context(tmp_path, monkeypatch):
+    import time
+    from app import registry
+    from app.models import SessionInfo
+    from app.registry import SessionRegistry
+    transcript = _transcript(tmp_path, _resposta(lido=76_602))
+    reg = SessionRegistry(projects_dir=tmp_path)
+    monkeypatch.setattr(SessionRegistry, "_context_cache", {})
+    monkeypatch.setattr(SessionRegistry, "_status_cache", {"s": (time.monotonic(), None)})
+    monkeypatch.setattr(registry.hook_state, "get_state", lambda _sid: ("idle", 1.0))
+    monkeypatch.setattr(registry, "pergunta_aberta", lambda _sid: None)
+    info = SessionInfo(name="s", jsonl=str(transcript), tracked=True, conta=f"claude:{tmp_path}")
+    monkeypatch.setattr(reg, "list", lambda: [info])
+
+    def read_then_publish(_info, _pid):
+        result = cc.read(transcript, tmp_path, model="opus")
+        cc.publish(transcript, {"used": 76_604, "window": 1_000_000})
+        return result
+
+    monkeypatch.setattr(registry, "_claude_reading", read_then_publish)
+    await reg.list_with_state()
+    assert (await reg.list_with_state())[0].context == {"used": 76_604, "window": 1_000_000}

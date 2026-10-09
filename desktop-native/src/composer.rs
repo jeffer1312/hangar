@@ -436,10 +436,31 @@ pub fn typed_command<'a>(commands: &'a [CommandInfo], text: &str) -> Option<&'a 
     commands.iter().find(|c| c.name == name)
 }
 
-/// Comandos cuja tela existe só no terminal ou noutro painel; a janela nativa avisa em vez de simular.
-pub fn needs_other_surface(provider: &str, command: &CommandInfo) -> bool {
+/// `/btw` (ou o `/hangar-btw` que vai à sessão sem terminal), com ou sem pergunta: respondido num painel, fora
+/// da conversa.
+pub fn side_question(text: &str) -> bool {
+    let rest = text.trim_start();
+    let rest = rest.strip_prefix("/hangar-btw").or_else(|| rest.strip_prefix("/btw"));
+    rest.is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+}
+
+/// Sem terminal o Claude Code responde o `/btw` embutido como comando local antes de qualquer hook: vai como
+/// `/hangar-btw`, que nenhum comando atende e o plugin do Hangar pega e descarta antes do transcript.
+pub fn surface_side_question(text: &str) -> String {
+    let start = text.len() - text.trim_start().len();
+    match text[start..].strip_prefix("/btw") {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => format!("{}/hangar-btw{rest}", &text[..start]),
+        _ => text.to_owned(),
+    }
+}
+
+/// Comando que esta janela não atende aqui: a chave do aviso, ou `None` para enviar. `/model` e `/effort`
+/// abrem tela só do terminal; `/btw` só vai com o plugin da sessão anunciando que o responde num painel,
+/// senão abriria no terminal um overlay que o app não mostra.
+pub fn blocked_command(provider: &str, command: &CommandInfo, btw_ready: bool) -> Option<&'static str> {
     let builtin = provider != "codex" || command.source == "builtin";
-    (builtin && matches!(command.name.as_str(), "model" | "effort")) || (provider == "claude" && command.name == "btw")
+    if builtin && matches!(command.name.as_str(), "model" | "effort") { return Some("command_other_surface"); }
+    (provider == "claude" && command.name == "btw" && !btw_ready).then_some("command_btw_unavailable")
 }
 
 #[cfg(test)]
@@ -486,6 +507,21 @@ mod tests {
     }
 
     fn command(name: &str) -> CommandInfo { CommandInfo { name: name.into(), ..Default::default() } }
+
+    #[test]
+    fn btw_goes_only_with_the_plugin_answering_it() {
+        assert_eq!(blocked_command("claude", &command("btw"), false), Some("command_btw_unavailable"));
+        assert_eq!(blocked_command("claude", &command("btw"), true), None);
+        assert_eq!(blocked_command("claude", &command("model"), true), Some("command_other_surface"));
+        assert_eq!(blocked_command("codex", &command("btw"), false), None);
+        assert_eq!(blocked_command("claude", &command("clear"), false), None);
+        assert!(side_question("/btw") && side_question("  /btw o que mudou?") && side_question("/btw\nlinha"));
+        assert!(!side_question("/btwx") && !side_question("fala /btw") && !side_question("/clear"));
+        assert!(side_question("/hangar-btw o que mudou?"));
+        assert_eq!(surface_side_question("/btw o que mudou?"), "/hangar-btw o que mudou?");
+        assert_eq!(surface_side_question("  /btw"), "  /hangar-btw");
+        assert_eq!(surface_side_question("/btwx a"), "/btwx a");
+    }
 
     #[test]
     fn filename_header_matches_encode_uri_component() {

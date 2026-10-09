@@ -144,7 +144,7 @@ impl Hangar {
         let state = self.settings_ui.slider(knob);
         let control = div().w(px(230.)).flex().items_center()
             .child(self.slider_edge(knob, false, enabled, cx))
-            .child(Slider::new(state).flex_1().bg(theme::accent()).text_color(theme::text()).disabled(!enabled))
+            .child(Slider::new(state).aria_label(tr(title)).flex_1().bg(theme::accent()).text_color(theme::text()).disabled(!enabled))
             .child(self.slider_edge(knob, true, enabled, cx))
             .child(div().w(px(52.)).flex_shrink_0().text_right().text_size(px(12.5)).text_color(theme::muted()).child(format!("{}%", knob.read(a))));
         self.line(title, description, enabled, control.into_any_element(), nested)

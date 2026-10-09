@@ -1,7 +1,7 @@
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/MODIFICADO.md gpui-pre-0.3.7/MODIFICADO.md
 --- gpui-pre-0.3.7/MODIFICADO.md
 +++ gpui-pre-0.3.7/MODIFICADO.md
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,62 @@
 +# Cópia modificada do gpui-pre 0.3.7
 +
 +Origem: crate `gpui-pre` 0.3.7 do crates.io, licença Apache-2.0 (`LICENSE-APACHE`).
@@ -51,6 +51,19 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +da tecla, seja qual for o layout, preenchido pelas cópias de gpui-pre-linux, gpui-pre-windows e gpui-pre-macos. Com
 +Shift a tecla chega como símbolo, e o Hangar escolhe a sessão por Ctrl+Shift+número em qualquer layout. Os
 +construtores de `KeyDownEvent` daqui (`window.rs`, `elements/div.rs`) passam `None`.
++
++Acessibilidade estável: a view em cache (`view.rs`, `prepaint_view`) que reaproveita o quadro anterior pulava o prepaint e
++o paint dos filhos, e os nós de acessibilidade dela sumiam da árvore até a view repintar; leitores de tela e agentes
++viam a árvore oscilar. Agora a view guarda os nós que emitiu (`A11yCapture`, `window/a11y.rs`) e os reemite no
++reaproveitamento, com limites, foco e ações do quadro anterior (`prev_*` no `A11y`). Sem `author_id` explícito, o nó
++recebe o caminho dos ids nomeados do elemento separados por `›` (`author_path`, `element.rs`), que vira `AccessibleId` no
++AT-SPI e `AutomationId` no UIA.
++
++Texto e leitura: texto visível vira folha `Label` (`Window::a11y_text`), controle sem rótulo é nomeado pelo texto de
++dentro e área clicável sem papel vira botão (`window/a11y.rs`, `elements/div.rs`). Desenho adiado volta ao nó que o
++adiou e é reemitido no reaproveitamento (`DeferredDraw`, `window.rs`). `Window::a11y_snapshot` devolve o último quadro em
++texto (`window/a11y/snapshot.rs`, testado pela suíte do app) e `Window::retain_a11y_tree` mantém a árvore sem leitor
++ligado. O clique pela acessibilidade só acontece se o elemento do nó estiver sob o ponto.
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/element.rs gpui-pre-0.3.7/src/element.rs
 --- gpui-pre-0.3.7/src/element.rs
 +++ gpui-pre-0.3.7/src/element.rs
@@ -59,7 +72,61 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  //! Elements are the workhorses of GPUI. They are responsible for laying out and painting all of
  //! the contents of a window. Elements form a tree and are laid out according to the web layout
  //! standards as implemented by [taffy](https://github.com/DioxusLabs/taffy). Most of the time,
-@@ -364,6 +365,16 @@
+@@ -46,6 +47,53 @@
+     sync::Arc,
+ };
+ 
++/// Accessibility id for a node without one: the ids the app wrote, stable across frames and runs, which is what
++/// automation agents use to find a control. View ids, plain integers and the type names that components stack
++/// (the same noise on every control) are left out. An entity number changes every run: the segment keeps its name,
++/// and on the node itself the accessible name takes the number's place (`input-editor`).
++pub(crate) fn author_path(ids: &[ElementId], label: Option<&str>) -> String {
++    let last = ids.len().saturating_sub(1);
++    let slug = |text: &str| {
++        let mut out = String::new();
++        for ch in text.chars().flat_map(char::to_lowercase) {
++            if ch.is_alphanumeric() {
++                out.push(ch);
++            } else if !out.is_empty() && !out.ends_with('-') {
++                out.push('-');
++            }
++            if out.chars().count() >= 40 {
++                break;
++            }
++        }
++        out.trim_end_matches('-').to_string()
++    };
++    ids.iter()
++        .enumerate()
++        .filter_map(|(i, id)| match id {
++            // Endereço de sessão remota (`https://host::nome`) também tem `::`.
++            ElementId::Name(name) if name.contains("::") && !name.contains("://") => None,
++            ElementId::Name(name) => Some(name.to_string()),
++            ElementId::NamedInteger(name, n) if *n > u32::MAX as u64 => {
++                Some(match label.filter(|label| i == last && !slug(label).is_empty()) {
++                    Some(label) => format!("{name}-{}", slug(label)),
++                    None => name.to_string(),
++                })
++            }
++            // Item de lista pelo índice: o nome dele identifica melhor que a posição.
++            ElementId::Integer(n) if i == last => Some(match label.map(slug).filter(|s| !s.is_empty()) {
++                Some(name) => name,
++                None if *n <= u32::MAX as u64 => n.to_string(),
++                None => return None,
++            }),
++            // Local no código-fonte muda a cada versão do app.
++            ElementId::NamedChild(inner, _) if matches!(**inner, ElementId::CodeLocation(_)) => None,
++            ElementId::NamedInteger(..) | ElementId::NamedChild(..) | ElementId::Uuid(_) => Some(id.to_string()),
++            _ => None,
++        })
++        .collect::<Vec<_>>()
++        .join(&crate::window::a11y::snapshot::ID_SEPARATOR.to_string())
++}
++
+ /// Implemented by types that participate in laying out and painting the contents of a window.
+ /// Elements form a tree and are laid out according to web-based layout rules, as implemented by Taffy.
+ /// You can create custom elements by implementing this trait, see the module-level documentation
+@@ -364,6 +412,16 @@
                  }
  
                  let bounds = window.layout_bounds(layout_id);
@@ -76,10 +143,78 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  let mut pushed_a11y_node = false;
                  if window.a11y.is_active() {
                      if let Some(global_id) = global_id.as_ref() {
+@@ -378,6 +436,10 @@
+                                 y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
+                             });
+                             self.element.write_a11y_info(&mut node);
++                            if node.author_id().is_none() {
++                                let path = author_path(&global_id.0, node.label());
++                                node.set_author_id(path);
++                            }
+                             window.a11y.node_bounds.insert(node_id, bounds);
+                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
+                             #[cfg(debug_assertions)]
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/elements/div.rs gpui-pre-0.3.7/src/elements/div.rs
 --- gpui-pre-0.3.7/src/elements/div.rs
 +++ gpui-pre-0.3.7/src/elements/div.rs
-@@ -5357,6 +5357,7 @@
+@@ -1899,9 +1899,13 @@
+     fn a11y_role(&self) -> Option<accesskit::Role> {
+         // Nodes with `GenericContainer` should never be reported to accesskit.
+         // Equivalent to an HTML div with no role.
+-        self.interactivity
+-            .override_role
+-            .filter(|role| *role != accesskit::Role::GenericContainer)
++        match self.interactivity.override_role {
++            Some(accesskit::Role::GenericContainer) => None,
++            Some(role) => Some(role),
++            // Área clicável sem papel: botão, para leitor de tela e automação a acharem e acionarem. Com outros
++            // controles dentro, o construtor da árvore a rebaixa a grupo (`A11yNodeBuilder::pop`).
++            None => (!self.interactivity.click_listeners.is_empty()).then_some(accesskit::Role::Button),
++        }
+     }
+ 
+     fn write_a11y_info(&self, node: &mut accesskit::Node) {
+@@ -2587,6 +2591,11 @@
+                                                 cx,
+                                             );
+                                             self.paint_scroll_listener(hitbox, &style, window, cx);
++                                            if window.a11y.is_active()
++                                                && let Some(global_id) = global_id
++                                            {
++                                                window.a11y.node_hitboxes.insert(global_id.accesskit_node_id(), hitbox.id);
++                                            }
+                                         }
+ 
+                                         self.paint_keyboard_listeners(window, cx);
+@@ -3585,7 +3594,26 @@
+         if let Some(count) = self.aria.column_count {
+             node.set_column_count(count);
+         }
+-        if !self.click_listeners.is_empty() {
++        // Gatilho que abre no mouse-down (popover, menu) não tem ouvinte de clique, mas o clique pela acessibilidade
++        // simula pressionar e soltar sobre ele: o papel de controle basta para anunciar a ação.
++        let actionable = matches!(
++            self.override_role,
++            Some(
++                accesskit::Role::Button
++                    | accesskit::Role::Tab
++                    | accesskit::Role::MenuItem
++                    | accesskit::Role::MenuItemCheckBox
++                    | accesskit::Role::MenuItemRadio
++                    | accesskit::Role::CheckBox
++                    | accesskit::Role::Switch
++                    | accesskit::Role::RadioButton
++                    | accesskit::Role::ComboBox
++                    | accesskit::Role::ListBoxOption
++                    | accesskit::Role::TreeItem
++                    | accesskit::Role::Link
++            )
++        );
++        if !self.click_listeners.is_empty() || actionable {
+             node.add_action(accesskit::Action::Click);
+         }
+         if self.tracked_focus_handle.is_some() || self.focusable {
+@@ -5357,6 +5385,7 @@
                      keystroke,
                      is_held: false,
                      prefer_character_input: false,
@@ -285,6 +420,45 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +        assert_eq!(held_slack(160., 100., 100., 160.), 160.);
 +    }
 +}
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/elements/text.rs gpui-pre-0.3.7/src/elements/text.rs
+--- gpui-pre-0.3.7/src/elements/text.rs
++++ gpui-pre-0.3.7/src/elements/text.rs
+@@ -281,9 +281,10 @@
+         _inspector_id: Option<&InspectorElementId>,
+         bounds: Bounds<Pixels>,
+         text_layout: &mut Self::RequestLayoutState,
+-        _window: &mut Window,
++        window: &mut Window,
+         _cx: &mut App,
+     ) {
++        window.a11y_text(self, bounds);
+         text_layout.prepaint(bounds, self)
+     }
+ 
+@@ -355,9 +356,10 @@
+         _inspector_id: Option<&InspectorElementId>,
+         bounds: Bounds<Pixels>,
+         text_layout: &mut Self::RequestLayoutState,
+-        _window: &mut Window,
++        window: &mut Window,
+         _cx: &mut App,
+     ) {
++        window.a11y_text(self.as_ref(), bounds);
+         text_layout.prepaint(bounds, self.as_ref())
+     }
+ 
+@@ -581,9 +583,10 @@
+         _inspector_id: Option<&InspectorElementId>,
+         bounds: Bounds<Pixels>,
+         _: &mut Self::RequestLayoutState,
+-        _window: &mut Window,
++        window: &mut Window,
+         _cx: &mut App,
+     ) {
++        window.a11y_text(&self.text, bounds);
+         self.layout.prepaint(bounds, &self.text)
+     }
+ 
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/gpui.rs gpui-pre-0.3.7/src/gpui.rs
 --- gpui-pre-0.3.7/src/gpui.rs
 +++ gpui-pre-0.3.7/src/gpui.rs
@@ -1671,6 +1845,689 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  #[repr(C)]
  #[expect(missing_docs)]
  pub struct PathVertex<P: Clone + Debug + Default + PartialEq> {
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/view.rs gpui-pre-0.3.7/src/view.rs
+--- gpui-pre-0.3.7/src/view.rs
++++ gpui-pre-0.3.7/src/view.rs
+@@ -297,6 +297,7 @@
+     paint_range: Range<PaintIndex>,
+     cache_key: ViewElementCacheKey,
+     accessed_entities: FxHashSet<EntityId>,
++    a11y: Option<crate::window::a11y::A11yCapture>,
+ }
+ 
+ struct ViewElementCacheKey {
+@@ -487,7 +488,11 @@
+                     && element_state.cache_key.text_style == text_style
+                     && !window.dirty_views.contains(&entity_id)
+                     && !window.refreshing
++                    && (!window.a11y.is_active() || element_state.a11y.is_some())
+                 {
++                    if let Some(capture) = element_state.a11y.as_ref() {
++                        window.a11y.replay(capture, window.focus);
++                    }
+                     let prepaint_start = window.prepaint_index();
+                     window.reuse_prepaint(element_state.prepaint_range.clone());
+                     cx.entities
+@@ -500,6 +505,11 @@
+ 
+                 let refreshing = mem::replace(&mut window.refreshing, true);
+                 let prepaint_start = window.prepaint_index();
++                let a11y_start = if window.a11y.is_active() {
++                    window.a11y.capture_start()
++                } else {
++                    None
++                };
+                 let (element, accessed_entities) = cx.detect_accessed_entities(|cx| {
+                     let mut element = render(window, cx);
+                     element.layout_as_root(Size::<AvailableSpace>::from(bounds.size), window, cx);
+@@ -509,11 +519,13 @@
+ 
+                 let prepaint_end = window.prepaint_index();
+                 window.refreshing = refreshing;
++                let a11y = a11y_start.map(|start| window.a11y.capture_end(start));
+ 
+                 (
+                     Some(element),
+                     ViewElementState {
+                         accessed_entities,
++                        a11y,
+                         prepaint_range: prepaint_start..prepaint_end,
+                         paint_range: PaintIndex::default()..PaintIndex::default(),
+                         cache_key: ViewElementCacheKey {
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/window/a11y/debug.rs gpui-pre-0.3.7/src/window/a11y/debug.rs
+--- gpui-pre-0.3.7/src/window/a11y/debug.rs
++++ gpui-pre-0.3.7/src/window/a11y/debug.rs
+@@ -98,6 +98,10 @@
+ 
+     /// Serialize the last tree update to a readable JSON string. Node ids are
+     /// replaced with short ephemeral ids (`a`, `b`, ..., `z`, `aa`, ...).
++    pub(crate) fn snapshot(&self, root: Option<&str>) -> Option<String> {
++        super::snapshot::snapshot_text(self.last_tree_update.as_ref()?, root)
++    }
++
+     pub(crate) fn to_json(&self) -> Option<String> {
+         let update = self.last_tree_update.as_ref()?;
+ 
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/window/a11y/snapshot.rs gpui-pre-0.3.7/src/window/a11y/snapshot.rs
+--- gpui-pre-0.3.7/src/window/a11y/snapshot.rs
++++ gpui-pre-0.3.7/src/window/a11y/snapshot.rs
+@@ -0,0 +1,114 @@
++// Texto do último quadro de acessibilidade, para quem lê a tela sem leitor de tela (a voz do Hangar).
++// Só depende do accesskit: a suíte do app inclui este arquivo (`include!`), porque os testes da lib não compilam
++// nesta cópia. Por isso nada de `//!` e todo nome do accesskit vem dos `use` de cima.
++
++use accesskit::{Node, NodeId, Toggled, TreeUpdate};
++#[cfg(test)]
++use accesskit::{Role, Tree, TreeId};
++use std::collections::HashMap;
++
++/// Separa os ids no id de acessibilidade automático: ids do app já levam `/` (caminho de pasta) e `::` (sessão remota).
++pub(crate) const ID_SEPARATOR: char = '›';
++
++/// One line per node, indented by depth: `role "name" = "value" [states] #id`, the id cut to its last segment.
++/// `root` limits it to the subtree of the node whose id is `root` or ends with `›root`; `None` when it is absent.
++pub(crate) fn snapshot_text(update: &TreeUpdate, root: Option<&str>) -> Option<String> {
++    let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, node)| (*id, node)).collect();
++    let start = match root {
++        None => update.tree.as_ref().map_or(NodeId(0), |tree| tree.root),
++        Some(root) => update.nodes.iter().find_map(|(id, node)| {
++            let author = node.author_id()?;
++            (author == root || author.ends_with(&format!("{ID_SEPARATOR}{root}"))).then_some(*id)
++        })?,
++    };
++    let mut out = String::new();
++    let mut stack = vec![(start, 0usize)];
++    while let Some((id, depth)) = stack.pop() {
++        let Some(node) = nodes.get(&id) else { continue };
++        out.push_str(&"  ".repeat(depth));
++        out.push_str(&format!("{:?}", node.role()));
++        if let Some(label) = node.label() {
++            out.push_str(&format!(" {label:?}"));
++        }
++        if let Some(value) = node.value() {
++            out.push_str(&format!(" = {value:?}"));
++        }
++        let mut states = Vec::new();
++        if node.is_selected() == Some(true) {
++            states.push("selected");
++        }
++        match node.toggled() {
++            Some(Toggled::True) => states.push("checked"),
++            Some(Toggled::Mixed) => states.push("mixed"),
++            _ => {}
++        }
++        match node.is_expanded() {
++            Some(true) => states.push("expanded"),
++            Some(false) => states.push("collapsed"),
++            None => {}
++        }
++        if node.is_disabled() {
++            states.push("disabled");
++        }
++        if update.focus == id && id != start {
++            states.push("focused");
++        }
++        if !states.is_empty() {
++            out.push_str(&format!(" [{}]", states.join(", ")));
++        }
++        if let Some(short) = node.author_id().and_then(|author| author.rsplit(ID_SEPARATOR).next()) {
++            out.push_str(&format!(" #{short}"));
++        }
++        out.push('\n');
++        stack.extend(node.children().iter().rev().map(|child| (*child, depth + 1)));
++    }
++    Some(out)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn tree() -> TreeUpdate {
++        let mut window = Node::new(Role::Window);
++        window.set_label("Hangar");
++        window.set_children(vec![NodeId(1)]);
++        let mut dialog = Node::new(Role::Dialog);
++        dialog.set_label("Configurações");
++        dialog.set_author_id("root›hangar-root›settings-dialog");
++        dialog.set_children(vec![NodeId(2), NodeId(3), NodeId(4)]);
++        let mut tab = Node::new(Role::Tab);
++        tab.set_label("Avançado");
++        tab.set_selected(true);
++        tab.set_author_id("root›hangar-root›settings-dialog›settings-tab-advanced");
++        let mut text = Node::new(Role::Label);
++        text.set_value("Porta do servidor");
++        let mut switch = Node::new(Role::Switch);
++        switch.set_label("Mostrar raciocínio");
++        switch.set_toggled(Toggled::True);
++        switch.set_disabled();
++        TreeUpdate {
++            nodes: vec![(NodeId(0), window), (NodeId(1), dialog), (NodeId(2), tab), (NodeId(3), text), (NodeId(4), switch)],
++            tree: Some(Tree::new(NodeId(0))),
++            tree_id: TreeId::ROOT,
++            focus: NodeId(2),
++        }
++    }
++
++    #[test]
++    fn whole_window_one_line_per_node() {
++        assert_eq!(
++            snapshot_text(&tree(), None).unwrap(),
++            "Window \"Hangar\"\n  Dialog \"Configurações\" #settings-dialog\n    Tab \"Avançado\" [selected, focused] #settings-tab-advanced\n    Label = \"Porta do servidor\"\n    Switch \"Mostrar raciocínio\" [checked, disabled]\n"
++        );
++    }
++
++    #[test]
++    fn root_limits_to_the_subtree_by_short_or_full_id() {
++        let short = snapshot_text(&tree(), Some("settings-tab-advanced")).unwrap();
++        assert_eq!(short, "Tab \"Avançado\" [selected] #settings-tab-advanced\n");
++        assert_eq!(snapshot_text(&tree(), Some("root›hangar-root›settings-dialog")).unwrap().lines().count(), 4);
++        assert_eq!(snapshot_text(&tree(), Some("dialog")), None);
++        assert_eq!(snapshot_text(&tree(), Some("missing")), None);
++    }
++}
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/window/a11y.rs gpui-pre-0.3.7/src/window/a11y.rs
+--- gpui-pre-0.3.7/src/window/a11y.rs
++++ gpui-pre-0.3.7/src/window/a11y.rs
+@@ -101,6 +101,7 @@
+ use crate::*;
+ 
+ pub(crate) mod debug;
++pub(crate) mod snapshot;
+ 
+ use crate::{App, Bounds, FocusId, Pixels, SharedString, Window};
+ use accesskit::{Action, NodeId, TreeUpdate};
+@@ -145,10 +146,18 @@
+     /// At the end of the frame, we re-call [`Self::sync_active_flag`] to
+     /// determine whether we should actually send the finished [`TreeUpdate`].
+     active_this_frame: bool,
++    /// Build the tree even without assistive technology, for [`Window::a11y_snapshot`].
++    retain: bool,
+     pub(crate) nodes: A11yNodeBuilder,
+     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
+     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
++    /// Hitbox of the element behind each node: an accessibility click only lands when it is the one under the point.
++    pub(crate) node_hitboxes: FxHashMap<NodeId, HitboxId>,
++    prev_node_hitboxes: FxHashMap<NodeId, HitboxId>,
++    prev_focus_ids: FxHashMap<NodeId, FocusId>,
++    prev_node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
++    prev_action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+     /// The window's title, used to label the root node so assistive
+     /// technology can tell windows apart.
+     window_title: Option<SharedString>,
+@@ -173,10 +182,16 @@
+             force_disabled,
+             active_flag,
+             active_this_frame: false,
++            retain: false,
+             nodes: A11yNodeBuilder::new(),
+             focus_ids: FxHashMap::default(),
+             node_bounds: FxHashMap::default(),
+             action_listeners: FxHashMap::default(),
++            node_hitboxes: FxHashMap::default(),
++            prev_node_hitboxes: FxHashMap::default(),
++            prev_focus_ids: FxHashMap::default(),
++            prev_node_bounds: FxHashMap::default(),
++            prev_action_listeners: FxHashMap::default(),
+             window_title,
+             last_focus_without_node: None,
+             debug: debug::A11yDebug::default(),
+@@ -210,7 +225,8 @@
+     /// See the docs for [`Self::active_flag`] and [`Self::active_this_frame`]
+     /// for more commentary.
+     pub(crate) fn sync_active_flag(&mut self) {
+-        self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
++        self.active_this_frame =
++            self.is_enabled() && (self.retain || self.active_flag.load(Ordering::SeqCst));
+     }
+ 
+     pub(crate) fn is_enabled(&self) -> bool {
+@@ -273,12 +289,72 @@
+ 
+     /// Clear per-frame state and push the root node to start a new frame.
+     pub(crate) fn begin_frame(&mut self) {
+-        self.focus_ids.clear();
+-        self.node_bounds.clear();
+-        self.action_listeners.clear();
++        // O quadro anterior fica guardado para as views em cache, que não repintam e reaproveitam o que registraram nele.
++        self.prev_focus_ids = std::mem::take(&mut self.focus_ids);
++        self.prev_node_bounds = std::mem::take(&mut self.node_bounds);
++        self.prev_action_listeners = std::mem::take(&mut self.action_listeners);
++        self.prev_node_hitboxes = std::mem::take(&mut self.node_hitboxes);
+         self.nodes.begin_frame(self.window_title.as_ref());
+     }
+ 
++    /// Marks where a cached view starts emitting nodes, so its subtree can be replayed on later frames.
++    pub(crate) fn capture_start(&self) -> Option<(usize, usize, u32)> {
++        let parent = self.nodes.nodes_stack.last()?;
++        Some((self.nodes.all_nodes.len(), parent.children().len(), self.nodes.text_count()))
++    }
++
++    pub(crate) fn capture_end(&self, start: (usize, usize, u32)) -> A11yCapture {
++        let roots = self
++            .nodes
++            .nodes_stack
++            .last()
++            .map(|parent| parent.children()[start.1..].to_vec())
++            .unwrap_or_default();
++        A11yCapture {
++            nodes: self.nodes.all_nodes[start.0..].to_vec(),
++            roots,
++            texts: self.nodes.text_count() - start.2,
++        }
++    }
++
++    /// Re-emits the subtree of a cached view that was reused without running prepaint/paint.
++    pub(crate) fn replay(&mut self, capture: &A11yCapture, focused: Option<FocusId>) {
++        let mut inserted = FxHashSet::default();
++        for (id, node) in &capture.nodes {
++            if !self.nodes.seen_ids.insert(*id) {
++                continue;
++            }
++            inserted.insert(*id);
++            self.nodes.all_nodes.push((*id, node.clone()));
++            if let Some(bounds) = self.prev_node_bounds.remove(id) {
++                self.node_bounds.insert(*id, bounds);
++            }
++            if let Some(hitbox) = self.prev_node_hitboxes.remove(id) {
++                self.node_hitboxes.insert(*id, hitbox);
++            }
++            if let Some(listeners) = self.prev_action_listeners.remove(id) {
++                self.action_listeners.insert(*id, listeners);
++            }
++            if let Some(focus_id) = self.prev_focus_ids.remove(id) {
++                self.focus_ids.insert(*id, focus_id);
++                if focused == Some(focus_id) {
++                    self.set_focus(*id);
++                }
++            }
++        }
++        // Os textos que vierem depois da view seguem numerados como no quadro em que ela desenhou.
++        if let Some(count) = self.nodes.text_counts.last_mut() {
++            *count += capture.texts;
++        }
++        if let Some(parent) = self.nodes.nodes_stack.last_mut() {
++            for root in &capture.roots {
++                if inserted.contains(root) {
++                    parent.push_child(*root);
++                }
++            }
++        }
++    }
++
+     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
+     pub(crate) fn end_frame(&mut self, frame: debug::FrameDebugInfo) -> TreeUpdate {
+         let update = self.nodes.finalize();
+@@ -299,6 +375,81 @@
+     }
+ }
+ 
++/// Enough of a control's visible text to name it.
++const CONTENT_CAP: usize = 300;
++
++/// Roles that take their name from the text inside them when nobody gave them a label.
++fn named_by_content(role: accesskit::Role) -> bool {
++    use accesskit::Role::*;
++    matches!(
++        role,
++        Button | Tab | MenuItem | MenuItemCheckBox | MenuItemRadio | ListItem | ListBoxOption | TreeItem | Link | Cell
++            | Row | CheckBox | RadioButton | Switch | Heading | ColumnHeader | RowHeader | Term | Definition | Tooltip
++    )
++}
++
++/// The text is already the parent's name or value: a `Label`/`Text` node, or a named control that reads as its label.
++fn text_belongs_to_parent(parent: &accesskit::Node) -> bool {
++    use accesskit::Role::*;
++    match parent.role() {
++        Label | TextInput | MultilineTextInput | SearchInput | PasswordInput => true,
++        Button | Tab | MenuItem | MenuItemCheckBox | MenuItemRadio | CheckBox | Switch | RadioButton | Link
++        | ComboBox | ListBoxOption | TreeItem | ListItem => parent.label().is_some(),
++        _ => false,
++    }
++}
++
++impl Window {
++    /// Exposes visible text as a `Label` leaf of the enclosing node. GPUI's text elements call it; custom elements that
++    /// paint text themselves call it from `prepaint` with the text and its bounds.
++    pub fn a11y_text(&mut self, text: &str, bounds: Bounds<Pixels>) {
++        // Texto fora da área rolada também entra: está desenhado e o leitor chega nele rolando, como num navegador.
++        if !self.a11y.is_active() {
++            return;
++        }
++        let scale = self.scale_factor();
++        self.a11y.nodes.push_text(
++            text,
++            accesskit::Rect {
++                x0: (bounds.origin.x.0 * scale) as f64,
++                y0: (bounds.origin.y.0 * scale) as f64,
++                x1: ((bounds.origin.x.0 + bounds.size.width.0) * scale) as f64,
++                y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
++            },
++        );
++    }
++
++    /// The accessibility tree of the last frame as text, one node per line, indented by depth:
++    /// `role "name" = "value" [states] #id`. `root` limits it to the subtree of the node whose id is `root` or ends
++    /// with `›root` (e.g. `settings-dialog`). `None` while no tree was built (no assistive technology and
++    /// [`Self::retain_a11y_tree`] off) or when `root` is not on screen.
++    pub fn a11y_snapshot(&self, root: Option<&str>) -> Option<String> {
++        self.a11y.debug.snapshot(root)
++    }
++
++    /// Keeps building the accessibility tree without assistive technology attached, so [`Self::a11y_snapshot`]
++    /// always has the last frame.
++    pub fn retain_a11y_tree(&mut self, retain: bool) {
++        self.a11y.retain = retain;
++        self.refresh();
++    }
++}
++
++/// Nodes a cached view emitted on the frame it last rendered.
++pub(crate) struct A11yCapture {
++    nodes: Vec<(NodeId, accesskit::Node)>,
++    /// Top-level nodes of the view, children of whatever node encloses it.
++    roots: Vec<NodeId>,
++    /// Text leaves the view numbered under the enclosing node.
++    texts: u32,
++}
++
++impl A11yCapture {
++    pub(crate) fn roots(&self) -> Vec<NodeId> {
++        self.roots.clone()
++    }
++}
++
+ /// Builder API for synthetic children. See the docs for
+ /// [`Element::a11y_synthetic_children`].
+ pub struct A11ySubtreeBuilder<'a> {
+@@ -375,6 +526,14 @@
+     /// `HashMap<NodeId, Node>` to remove the need for `seen_ids`
+     all_nodes: Vec<(NodeId, accesskit::Node)>,
+     seen_ids: FxHashSet<NodeId>,
++    /// Text leaves already numbered under each node on the stack (parallel to `ids_stack`).
++    text_counts: SmallVec<[u32; 16]>,
++    /// Visible text gathered under each node on the stack, capped, to name controls that have no label.
++    contents: SmallVec<[String; 16]>,
++    /// Whether each node on the stack already has a child that is a control rather than text.
++    has_controls: SmallVec<[bool; 16]>,
++    /// Nodes a deferred draw emitted at the root, to hang under the node that deferred them.
++    reparents: Vec<(NodeId, Vec<NodeId>)>,
+     /// The node that GPUI considers focused. Note that this may be different to
+     /// what is reported to accesskit - see [`Self::active_descendant`]
+     focus: Option<NodeId>,
+@@ -394,6 +553,10 @@
+             nodes_stack: SmallVec::new(),
+             all_nodes: Vec::new(),
+             seen_ids: FxHashSet::default(),
++            text_counts: SmallVec::new(),
++            contents: SmallVec::new(),
++            has_controls: SmallVec::new(),
++            reparents: Vec::new(),
+             focus: None,
+             active_descendant: None,
+             #[cfg(debug_assertions)]
+@@ -436,6 +599,9 @@
+         }
+         self.ids_stack.push(id);
+         self.nodes_stack.push(node);
++        self.text_counts.push(0);
++        self.contents.push(String::new());
++        self.has_controls.push(false);
+         true
+     }
+ 
+@@ -465,9 +631,124 @@
+     pub(crate) fn pop(&mut self) {
+         debug_assert!(self.ids_stack.len() > 1, "pop would remove the root node");
+ 
+-        if let (Some(id), Some(node)) = (self.ids_stack.pop(), self.nodes_stack.pop()) {
++        if let (Some(id), Some(mut node)) = (self.ids_stack.pop(), self.nodes_stack.pop()) {
++            let content = self.contents.pop().unwrap_or_default();
++            let content = content.trim();
++            let has_controls = self.has_controls.pop().unwrap_or(false);
++            let clickable = node.supports_action(accesskit::Action::Click);
++            let unnamed = node.label().is_none();
++            // Área clicável que embrulha controles é nomeada por eles, não pela soma dos textos.
++            if unnamed && !content.is_empty() && (named_by_content(node.role()) || clickable) && !(clickable && has_controls) {
++                node.set_label(content.to_string());
++            }
++            // Botão sem nome do app que embrulha outros controles não é botão para o leitor (ele achata os filhos):
++            // vira grupo, e continua clicável pela ação.
++            if unnamed && node.role() == accesskit::Role::Button && has_controls {
++                node.set_role(accesskit::Role::Group);
++            }
++            if node.role() != accesskit::Role::Label {
++                if let Some(parent) = self.has_controls.last_mut() {
++                    *parent = true;
++                }
++            }
++            let said = node.label().or(node.value()).unwrap_or(content).to_string();
++            self.gather(&said);
+             self.all_nodes.push((id, node));
+         }
++        self.text_counts.pop();
++    }
++
++    fn gather(&mut self, text: &str) {
++        if let Some(content) = self.contents.last_mut() {
++            if !content.is_empty() && content.len() < CONTENT_CAP {
++                content.push(' ');
++            }
++            for ch in text.chars() {
++                if content.len() >= CONTENT_CAP {
++                    break;
++                }
++                content.push(ch);
++            }
++        }
++    }
++
++    /// The node elements are being nested under right now.
++    pub(crate) fn current_id(&self) -> Option<NodeId> {
++        self.ids_stack.last().copied()
++    }
++
++    /// `kids`, emitted at the root by a deferred draw, belong under `parent`.
++    pub(crate) fn reparent(&mut self, parent: NodeId, kids: Vec<NodeId>) {
++        if parent != ROOT_NODE_ID && !kids.is_empty() {
++            self.reparents.push((parent, kids));
++        }
++    }
++
++    fn apply_reparents(&mut self) {
++        if self.reparents.is_empty() {
++            return;
++        }
++        let index: FxHashMap<NodeId, usize> =
++            self.all_nodes.iter().enumerate().map(|(i, (id, _))| (*id, i)).collect();
++        let Some(&root) = index.get(&ROOT_NODE_ID) else { return };
++        for (parent, kids) in std::mem::take(&mut self.reparents) {
++            // Pai fora da árvore (não desenhado neste quadro): os filhos ficam na raiz.
++            let Some(&at) = index.get(&parent) else { continue };
++            let root_children = self.all_nodes[root].1.children().to_vec();
++            let moved: Vec<NodeId> = kids.into_iter().filter(|kid| root_children.contains(kid)).collect();
++            if moved.is_empty() {
++                continue;
++            }
++            self.all_nodes[root].1.set_children(root_children.into_iter().filter(|c| !moved.contains(c)).collect::<Vec<_>>());
++            // Diálogo sem nome: o título chega no conteúdo adiado, e é o primeiro texto dele.
++            let parent_node = &self.all_nodes[at].1;
++            if matches!(parent_node.role(), accesskit::Role::Dialog | accesskit::Role::AlertDialog) && parent_node.label().is_none() {
++                let title = moved.iter().find_map(|kid| {
++                    let node = &self.all_nodes[*index.get(kid)?].1;
++                    (node.role() == accesskit::Role::Label).then(|| node.value().map(str::to_owned)).flatten()
++                });
++                if let Some(title) = title {
++                    self.all_nodes[at].1.set_label(title);
++                }
++            }
++            for kid in moved {
++                self.all_nodes[at].1.push_child(kid);
++            }
++        }
++    }
++
++    pub(crate) fn text_count(&self) -> u32 {
++        self.text_counts.last().copied().unwrap_or(0)
++    }
++
++    /// Adds visible text as a `Label` leaf of the current node. The id comes from the parent and the text's position
++    /// among the parent's texts, so it stays the same across frames while the text changes.
++    pub(crate) fn push_text(&mut self, text: &str, bounds: accesskit::Rect) {
++        let (Some(&parent_id), Some(parent)) = (self.ids_stack.last(), self.nodes_stack.last()) else {
++            return;
++        };
++        if text.trim().is_empty() || text_belongs_to_parent(parent) {
++            return;
++        }
++        // Diálogo sem nome: o primeiro texto dele é o título.
++        if matches!(parent.role(), accesskit::Role::Dialog | accesskit::Role::AlertDialog) && parent.label().is_none() {
++            if let Some(dialog) = self.nodes_stack.last_mut() {
++                dialog.set_label(text.trim().to_string());
++            }
++        }
++        let Some(count) = self.text_counts.last_mut() else {
++            return;
++        };
++        let position = *count;
++        *count += 1;
++        let mut hasher = std::hash::DefaultHasher::default();
++        (parent_id.0, "text", position).hash(&mut hasher);
++        let mut node = accesskit::Node::new(accesskit::Role::Label);
++        node.set_value(text.to_string());
++        node.set_bounds(bounds);
++        if self.push_leaf(NodeId(hasher.finish()), node) {
++            self.gather(text);
++        }
+     }
+ 
+     /// Push the root node to start a new frame.
+@@ -485,6 +766,13 @@
+ 
+         self.ids_stack.push(ROOT_NODE_ID);
+         self.nodes_stack.push(root_node);
++        self.text_counts.clear();
++        self.text_counts.push(0);
++        self.contents.clear();
++        self.contents.push(String::new());
++        self.has_controls.clear();
++        self.has_controls.push(false);
++        self.reparents.clear();
+         self.focus = None;
+         self.active_descendant = None;
+     }
+@@ -560,6 +848,7 @@
+                 self.all_nodes.push((id, node));
+             }
+         }
++        self.apply_reparents();
+ 
+         let focus = match self.active_descendant {
+             Some(id) if self.has_node(id) => id,
+@@ -637,7 +926,7 @@
+ mod tests {
+     // Import specific items rather than glob-importing `super`, which would pull
+     // in gpui's own `test` attribute macro and shadow the standard one.
+-    use super::{A11y, A11yNodeBuilder, ROOT_NODE_ID};
++    use super::{A11y, A11yNodeBuilder, ROOT_NODE_ID, snapshot};
+     use crate::FocusId;
+     use accesskit::{NodeId, Role};
+     use std::sync::{Arc, atomic::AtomicBool};
+@@ -658,6 +947,93 @@
+         a11y
+     }
+ 
++    fn rect() -> accesskit::Rect {
++        accesskit::Rect { x0: 0., y0: 0., x1: 10., y1: 10. }
++    }
++
++    fn text_frame(a11y: &mut A11y, words: &[&str]) -> accesskit::TreeUpdate {
++        a11y.begin_frame();
++        let mut dialog = test_node();
++        dialog.set_author_id("root›settings-dialog");
++        assert!(a11y.nodes.push(NodeId(1), dialog));
++        for word in words {
++            a11y.nodes.push_text(word, rect());
++        }
++        let mut named = accesskit::Node::new(Role::Button);
++        named.set_label("Salvar");
++        assert!(a11y.nodes.push(NodeId(2), named));
++        a11y.nodes.push_text("Salvar", rect());
++        a11y.nodes.pop();
++        assert!(a11y.nodes.push(NodeId(3), accesskit::Node::new(Role::ListItem)));
++        a11y.nodes.push_text("Opus 5.5", rect());
++        a11y.nodes.pop();
++        a11y.nodes.pop();
++        a11y.end_frame(Default::default())
++    }
++
++    #[test]
++    fn visible_text_becomes_stable_label_leaves() {
++        let mut a11y = new_a11y();
++        let first = text_frame(&mut a11y, &["Avançado", "Porta 8765"]);
++        let second = text_frame(&mut a11y, &["Avançado", "Porta 9000"]);
++        let labels = |update: &accesskit::TreeUpdate| -> Vec<(NodeId, String)> {
++            update.nodes.iter().filter(|(_, n)| n.role() == Role::Label)
++                .map(|(id, n)| (*id, n.value().unwrap().to_string())).collect()
++        };
++        let (a, b) = (labels(&first), labels(&second));
++        // Texto dentro de botão com nome não vira folha; item sem nome ganha folha e o texto como nome.
++        assert_eq!(a.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["Avançado", "Porta 8765", "Opus 5.5"]);
++        assert_eq!(a.iter().map(|(id, _)| *id).collect::<Vec<_>>(), b.iter().map(|(id, _)| *id).collect::<Vec<_>>());
++        assert_eq!(b[1].1, "Porta 9000");
++        let item = first.nodes.iter().find(|(id, _)| *id == NodeId(3)).unwrap();
++        assert_eq!(item.1.label(), Some("Opus 5.5"));
++    }
++
++    #[test]
++    fn snapshot_lists_the_subtree_one_line_per_node() {
++        let mut a11y = new_a11y();
++        let update = text_frame(&mut a11y, &["Avançado"]);
++        let all = snapshot::snapshot_text(&update, None).unwrap();
++        assert!(all.starts_with("Window\n"));
++        let dialog = snapshot::snapshot_text(&update, Some("settings-dialog")).unwrap();
++        assert_eq!(
++            dialog,
++            "GenericContainer #settings-dialog\n  Label = \"Avançado\"\n  Button \"Salvar\"\n  ListItem \"Opus 5.5\"\n    Label = \"Opus 5.5\"\n"
++        );
++        assert_eq!(snapshot::snapshot_text(&update, Some("missing")), None);
++    }
++
++    #[test]
++    fn cached_subtree_replays_on_later_frames() {
++        let mut a11y = new_a11y();
++        let container = NodeId(1);
++        let button = NodeId(2);
++        let focus = FocusId::default();
++
++        assert!(a11y.nodes.push(container, test_node()));
++        let start = a11y.capture_start().unwrap();
++        assert!(a11y.nodes.push(button, test_node()));
++        a11y.set_focusable(button, focus);
++        a11y.nodes.pop();
++        let capture = a11y.capture_end(start);
++        a11y.nodes.pop();
++        a11y.end_frame(Default::default());
++
++        for _ in 0..2 {
++            a11y.begin_frame();
++            assert!(a11y.nodes.push(container, test_node()));
++            a11y.replay(&capture, Some(focus));
++            a11y.nodes.pop();
++            let update = a11y.end_frame(Default::default());
++
++            let parent = update.nodes.iter().find(|(id, _)| *id == container).unwrap();
++            assert_eq!(parent.1.children(), &[button]);
++            assert!(update.nodes.iter().any(|(id, _)| *id == button));
++            assert_eq!(update.focus, button);
++            assert_eq!(a11y.focus_ids.get(&button), Some(&focus));
++        }
++    }
++
+     #[test]
+     fn accessibility_enabled_is_independent_of_activation() {
+         for force_disabled in [false, true] {
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-pre-0.3.7/src/window.rs gpui-pre-0.3.7/src/window.rs
 --- gpui-pre-0.3.7/src/window.rs
 +++ gpui-pre-0.3.7/src/window.rs
@@ -1712,7 +2569,17 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  /// Allocates an element in the current arena. Uses the app-specific arena if one
  /// is active (during draw), otherwise falls back to the thread-local ELEMENT_ARENA.
  #[inline(always)]
-@@ -998,11 +1018,24 @@
+@@ -973,6 +993,9 @@
+     absolute_offset: Point<Pixels>,
+     prepaint_range: Range<PrepaintStateIndex>,
+     paint_range: Range<PaintIndex>,
++    /// Accessibility node that deferred this draw, and what the draw emitted (replayed when it is reused).
++    a11y_parent: Option<accesskit::NodeId>,
++    a11y: Option<Rc<a11y::A11yCapture>>,
+ }
+ 
+ pub(crate) struct Frame {
+@@ -998,11 +1021,24 @@
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
      pub(crate) tab_stops: TabStopMap,
@@ -1737,7 +2604,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      tooltips_index: usize,
      deferred_draws_index: usize,
      dispatch_tree_index: usize,
-@@ -1057,6 +1090,7 @@
+@@ -1057,6 +1093,7 @@
              #[cfg(any(feature = "inspector", debug_assertions))]
              inspector_hitboxes: FxHashMap::default(),
              tab_stops: TabStopMap::default(),
@@ -1745,7 +2612,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          }
      }
  
-@@ -1073,6 +1107,7 @@
+@@ -1073,6 +1110,7 @@
          self.window_control_hitboxes.clear();
          self.deferred_draws.clear();
          self.tab_stops.clear();
@@ -1753,7 +2620,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          self.focus = None;
  
          #[cfg(any(test, feature = "test-support"))]
-@@ -1189,6 +1224,7 @@
+@@ -1189,6 +1227,7 @@
      pub(crate) image_cache_stack: Vec<AnyImageCache>,
      pub(crate) rendered_frame: Frame,
      pub(crate) next_frame: Frame,
@@ -1761,7 +2628,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      next_hitbox_id: HitboxId,
      pub(crate) next_tooltip_id: TooltipId,
      pub(crate) tooltip_bounds: Option<TooltipBounds>,
-@@ -1219,11 +1255,17 @@
+@@ -1219,11 +1258,17 @@
      #[cfg(feature = "profiler")]
      window_profiler: profiler::WindowProfiler,
      last_input_modality: InputModality,
@@ -1779,7 +2646,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
      pub(crate) focus: Option<FocusId>,
      focus_enabled: bool,
-@@ -1790,10 +1832,11 @@
+@@ -1790,10 +1835,11 @@
  
                  // Keep presenting if input was recently arriving at a high rate (>= 60fps).
                  // Once high-rate input is detected, we sustain presentation for 1 second
@@ -1793,7 +2660,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
                  if invalidator.is_dirty() || force_render {
                      measure("frame duration", || {
-@@ -1805,7 +1848,11 @@
+@@ -1805,7 +1851,11 @@
                                      window.refresh();
                                  }
                                  let arena_clear_needed = window.draw(cx);
@@ -1806,7 +2673,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                                  arena_clear_needed.clear(cx);
                              })
                              .log_err();
-@@ -2045,6 +2092,7 @@
+@@ -2045,6 +2095,7 @@
              focused_text_input_active: false,
              rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
              next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -1814,7 +2681,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              next_frame_callbacks,
              next_hitbox_id: HitboxId(0),
              next_tooltip_id: TooltipId::default(),
-@@ -2072,6 +2120,7 @@
+@@ -2072,6 +2123,7 @@
              #[cfg(feature = "profiler")]
              window_profiler: profiler::WindowProfiler::new(handle.window_id())?,
              last_input_modality: InputModality::Mouse,
@@ -1822,7 +2689,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              touch_gestures: TouchGestureRecognizer::new(
                  cx.platform
                      .gestures()
-@@ -2081,6 +2130,8 @@
+@@ -2081,6 +2133,8 @@
              long_press_timer: None,
              long_press_capture: None,
              refreshing: false,
@@ -1831,7 +2698,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              activation_observers: SubscriberSet::new(),
              focus: None,
              focus_enabled: true,
-@@ -2598,6 +2649,13 @@
+@@ -2598,6 +2652,13 @@
          AsyncWindowContext::new_context(cx.to_async(), self.handle)
      }
  
@@ -1845,7 +2712,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Schedule the given closure to be run directly after the current frame is rendered.
      pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
          RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
-@@ -2808,6 +2866,11 @@
+@@ -2808,6 +2869,11 @@
          self.active.get()
      }
  
@@ -1857,7 +2724,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Returns whether this window is considered to be the window
      /// that currently owns the mouse cursor.
      /// On mac, this is equivalent to `is_window_active`.
-@@ -3236,6 +3299,11 @@
+@@ -3236,6 +3302,11 @@
          self.modifiers
      }
  
@@ -1869,7 +2736,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Returns true if the last input event was keyboard-based (key press, tab navigation, etc.)
      /// This is used for focus-visible styling to show focus indicators only for keyboard navigation.
      pub fn last_input_was_keyboard(&self) -> bool {
-@@ -3344,8 +3412,21 @@
+@@ -3344,8 +3415,21 @@
          self.invalidator.set_phase(DrawPhase::Focus);
          let previous_focus_path = self.rendered_frame.focus_path();
          let previous_window_active = self.rendered_frame.window_active;
@@ -1891,7 +2758,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let current_focus_path = self.rendered_frame.focus_path();
          let current_window_active = self.rendered_frame.window_active;
          let mut focus_before_listeners = self.focus;
-@@ -3395,7 +3476,14 @@
+@@ -3395,7 +3479,14 @@
          if self.focus != focus_before_listeners {
              self.refresh();
          }
@@ -1907,7 +2774,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          #[cfg(feature = "profiler")]
          {
-@@ -3438,7 +3526,15 @@
+@@ -3438,7 +3529,15 @@
          let _foreground_turn = profiler::journal::foreground_turn();
          #[cfg(feature = "profiler")]
          let present_start = Instant::now();
@@ -1924,7 +2791,55 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          #[cfg(feature = "profiler")]
          self.window_profiler.record_present(
              present_start,
-@@ -3803,6 +3899,7 @@
+@@ -3713,7 +3812,7 @@
+             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
+ 
+             for deferred_draw_ix in traversal_order {
+-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
++                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range, a11y_parent, a11y_capture) = {
+                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
+                     self.element_id_stack
+                         .clone_from(&deferred_draw.element_id_stack);
+@@ -3726,12 +3825,15 @@
+                         deferred_draw.rem_size,
+                         deferred_draw.absolute_offset,
+                         deferred_draw.prepaint_range.clone(),
++                        deferred_draw.a11y_parent,
++                        deferred_draw.a11y.clone(),
+                     )
+                 };
+                 self.next_frame.dispatch_tree.set_active_node(parent_node);
+ 
+                 let prepaint_start = self.prepaint_index();
+                 if let Some(mut element) = element {
++                    let a11y_start = if self.a11y.is_active() { self.a11y.capture_start() } else { None };
+                     self.with_rendered_view(current_view, |window| {
+                         window.with_rem_size(Some(rem_size), |window| {
+                             window.with_absolute_element_offset(absolute_offset, |window| {
+@@ -3739,8 +3841,21 @@
+                             });
+                         });
+                     });
+-                    self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
++                    let capture = a11y_start.map(|start| Rc::new(self.a11y.capture_end(start)));
++                    if let (Some(parent), Some(capture)) = (a11y_parent, &capture) {
++                        self.a11y.nodes.reparent(parent, capture.roots());
++                    }
++                    let draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
++                    draw.element = Some(element);
++                    draw.a11y = capture;
+                 } else {
++                    // Reaproveitado sem prepaint: os nós dele voltam do quadro em que desenhou.
++                    if let (true, Some(capture)) = (self.a11y.is_active(), &a11y_capture) {
++                        self.a11y.replay(capture, self.focus);
++                        if let Some(parent) = a11y_parent {
++                            self.a11y.nodes.reparent(parent, capture.roots());
++                        }
++                    }
+                     self.reuse_prepaint(prepaint_range);
+                 }
+                 let prepaint_end = self.prepaint_index();
+@@ -3803,6 +3918,7 @@
      pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
          PrepaintStateIndex {
              hitboxes_index: self.next_frame.hitboxes.len(),
@@ -1932,7 +2847,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              tooltips_index: self.next_frame.tooltip_requests.len(),
              deferred_draws_index: self.next_frame.deferred_draws.len(),
              dispatch_tree_index: self.next_frame.dispatch_tree.len(),
-@@ -3812,6 +3909,12 @@
+@@ -3812,6 +3928,12 @@
      }
  
      pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
@@ -1945,7 +2860,16 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          self.next_frame.hitboxes.extend(
              self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                  .iter()
-@@ -4057,6 +4160,9 @@
+@@ -3858,6 +3980,8 @@
+                     absolute_offset: deferred_draw.absolute_offset,
+                     prepaint_range: deferred_draw.prepaint_range.clone(),
+                     paint_range: deferred_draw.paint_range.clone(),
++                    a11y_parent: deferred_draw.a11y_parent,
++                    a11y: deferred_draw.a11y.clone(),
+                 }),
+         );
+     }
+@@ -4057,6 +4181,9 @@
          if result.is_err() {
              self.next_frame.hitboxes.truncate(index.hitboxes_index);
              self.next_frame
@@ -1955,7 +2879,16 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  .tooltip_requests
                  .truncate(index.tooltips_index);
              self.next_frame
-@@ -4368,6 +4474,41 @@
+@@ -4340,6 +4467,8 @@
+             absolute_offset,
+             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
+             paint_range: PaintIndex::default()..PaintIndex::default(),
++            a11y_parent: if self.a11y.is_active() { self.a11y.nodes.current_id() } else { None },
++            a11y: None,
+         });
+     }
+ 
+@@ -4368,6 +4497,41 @@
          result
      }
  
@@ -1997,7 +2930,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Paint the drop (non-inset) shadows from `shadows` into the scene at the current
      /// z-index. Inset shadows are skipped; paint those with [`Self::paint_inset_shadows`]
      /// after the element's background so they layer on top of the fill.
-@@ -4985,6 +5126,29 @@
+@@ -4985,6 +5149,29 @@
          });
      }
  
@@ -2027,7 +2960,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Removes an image from the sprite atlas.
      pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
          for frame_index in 0..data.frame_count() {
-@@ -5369,6 +5533,7 @@
+@@ -5369,6 +5556,7 @@
                  keystroke: keystroke.clone(),
                  is_held: false,
                  prefer_character_input: false,
@@ -2035,7 +2968,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              }),
              cx,
          );
-@@ -5408,6 +5573,8 @@
+@@ -5408,6 +5596,8 @@
          #[cfg(feature = "profiler")]
          self.window_profiler.begin_input(event.kind_name());
          let update_count_before = self.invalidator.update_count();
@@ -2044,7 +2977,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          // Track input modality for focus-visible styling and hover suppression.
          // Hover is suppressed during keyboard modality so that keyboard navigation
          // doesn't show hover highlights on the item under the mouse cursor.
-@@ -5567,6 +5734,7 @@
+@@ -5567,6 +5757,7 @@
          }
          #[cfg(feature = "profiler")]
          self.window_profiler.end_input(caused_invalidation);
@@ -2052,7 +2985,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          DispatchEventResult {
              propagate: cx.propagate_event,
-@@ -6219,6 +6387,7 @@
+@@ -6219,6 +6410,7 @@
                  keystroke: replay.keystroke.clone(),
                  is_held: false,
                  prefer_character_input: true,
@@ -2060,7 +2993,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              };
  
              cx.propagate_event = true;
-@@ -6424,6 +6593,11 @@
+@@ -6424,6 +6616,11 @@
          self.platform_window.minimize();
      }
  
@@ -2072,7 +3005,25 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Toggle full screen status on the current window at the platform level.
      pub fn toggle_fullscreen(&self) {
          self.platform_window.toggle_fullscreen();
-@@ -7724,6 +7898,42 @@
+@@ -6844,6 +7041,17 @@
+             accesskit::Action::Click => {
+                 if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
+                     let center = bounds.center();
++                    // O clique é por coordenada: coberto por popup ou diálogo, ou fora da área rolada, ele cairia em
++                    // outro controle. Só clica se o elemento do nó for o que está sob o ponto.
++                    // Nó sem hitbox mapeada (InteractiveText) segue pelo despacho antigo.
++                    let reachable = self.a11y.node_hitboxes.get(&request.target_node).map_or(true, |hitbox| {
++                        let hit = self.rendered_frame.hit_test(center);
++                        hit.ids.iter().take(hit.hover_hitbox_count).any(|id| id == hitbox)
++                    });
++                    if !reachable {
++                        log::warn!("a11y: click on {:?} refused, its element is not under the point", request.target_node);
++                        return;
++                    }
+                     let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {
+                         button: MouseButton::Left,
+                         position: center,
+@@ -7724,6 +7932,42 @@
      }
  
      #[gpui::test]
@@ -2115,7 +3066,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      fn test_fully_visible_bounds_preserve_layout_viewport(cx: &mut TestAppContext) {
          let window = cx.add_window(|_, _| EmptyView);
          let mut platform_window = cx.test_window(window.into());
-@@ -8351,6 +8561,7 @@
+@@ -8351,6 +8595,7 @@
                      keystroke: Keystroke::parse("down").expect("valid keystroke"),
                      is_held: false,
                      prefer_character_input: false,

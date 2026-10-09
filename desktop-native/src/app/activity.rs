@@ -975,13 +975,13 @@ impl Hangar {
                     // O Button não encolhe sozinho (flex_shrink_0 interno): acompanha a aba, que encolhe, e o rótulo
                     // corta com reticências. O tamanho do texto vai no rótulo porque o do Button é sobrescrito.
                     .w_full().h(px(28.)).px(px(8.)).rounded(px(6.))
-                    .accessibility_label(label).child(body)
+                    .role(Role::Tab).aria_selected(selected).accessibility_label(label).child(body)
                     .on_click(cx.listener(move |this, _, window, cx| this.choose_side_tab(which, window, cx))))
         };
         let browser = self.side_key().is_some_and(|k| self.side.browser_open.contains(&k)).then(|| Button::new("side-tab-browser-close").ghost().xsmall().icon(TAB_CROSS)
             .tooltip(tr("browser_close")).accessibility_label(tr("browser_close"))
             .on_click(cx.listener(|this, _, window, cx| { cx.stop_propagation(); this.close_browser(window, cx); })));
-        div().id("side-tabs").flex_1().h_full().min_w_0().flex().gap(px(2.)).overflow_hidden()
+        div().id("side-tabs").role(Role::TabList).aria_label(tr("side_tabs")).flex_1().h_full().min_w_0().flex().gap(px(2.)).overflow_hidden()
             .child(tab("side-tab-context", if orq { tr_shared("orq_tab_title", &[]) } else { tr("side_context") }, SideTab::Context, None, cx))
             .when(readable, |el| el.child(tab("side-tab-files", web("arq_aba"), SideTab::Files, None, cx)))
             .when(self.has_activity(), |el| el.child(tab("side-tab-activity", web("ctx_atividade"), SideTab::Activity, None, cx)))

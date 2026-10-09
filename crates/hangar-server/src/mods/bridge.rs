@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 
 use super::http::{fits, invalid, reply};
 use super::model::PLUGIN_MAX;
-use super::state::{TerminalPane, TerminalView};
+use super::state::{SurfaceExtra, TerminalPane, TerminalView};
 use crate::routes::{AppState, gate, pass};
 
 const BODY_LIMIT: usize = 16 * 1024;
@@ -37,6 +37,7 @@ const COPIED_TEXT_MAX: usize = 65536;
 const TOAST_BODY_LIMIT: usize = UI_BODY_LIMIT;
 const ID_MAX: usize = 64;
 const ELEMENT_MAX: usize = 256;
+const CAPS_MAX: usize = 16;
 /// Prazo da cópia do `/ui` ao Python: o plugin espera a resposta, e a cópia não decide nada.
 const PYTHON_COPY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -151,6 +152,8 @@ struct UiBody {
     #[serde(default, rename = "bodyColumns")] body_columns: Option<u64>,
     #[serde(default)] panes: Vec<TerminalPane>,
     #[serde(default)] shown: Option<String>,
+    /// O que o plugin desta sessão atende (`btw`): o app libera só o que funciona aqui.
+    #[serde(default)] caps: Vec<String>,
 }
 #[derive(Deserialize)]
 struct ToastBody { text: String, #[serde(rename = "timeoutMs", default)] timeout_ms: Option<f64>, #[serde(default)] plugin: Option<String> }
@@ -190,21 +193,25 @@ pub async fn ui(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     let (envelope, name) = match owned_sized::<UiBody>(&st, peer, req, UI_BODY_LIMIT).await { Ok(found) => found, Err(response) => return *response };
     let Envelope { sessao, token, body } = envelope;
     // Os limites do `BandPane` do Python vêm antes do token, como lá.
-    if !body.panes.iter().all(|pane| fits(&pane.id, ID_MAX)) || !fits_opt(&body.shown, ID_MAX) {
+    if !body.panes.iter().all(|pane| fits(&pane.id, ID_MAX)) || !fits_opt(&body.shown, ID_MAX)
+        || body.caps.len() > CAPS_MAX || !body.caps.iter().all(|cap| fits(cap, ID_MAX)) {
         return invalid(None);
     }
     if !token_ok(&st, &sessao, &token) {
         return forbidden();
     }
-    // Sessão do Rust sem terminal: a faixa dela vem da superfície, não do plugin.
+    // Sessão do Rust sem terminal: a faixa dela vem da superfície; do plugin entram só o que ele atende e o
+    // estado estruturado dos painéis, juntados à vista da superfície.
     if !st.mods.is_terminal(&name) {
+        let data = body.panes.into_iter().filter_map(|pane| pane.data.map(|data| (pane.id, data))).collect();
+        st.mods.surface_extra(&name, SurfaceExtra { caps: body.caps, data });
         return ok();
     }
     // Antes de responder e em ordem: dois `/ui` seguidos não chegam trocados ao cache do Python. Com o nome
     // atual e o token dele: numa sessão renomeada, o cache do Python é pelo nome de agora.
     let copy = json!({"sessao": name, "token": mint(&st.cfg.auth_token, &name), "above": body.above, "columns": body.columns, "panes": body.panes});
     copy_to_python(&st, &copy).await;
-    st.mods.terminal_ui(&name, TerminalView { above: body.above, columns: body.body_columns, panes: body.panes, shown: body.shown });
+    st.mods.terminal_ui(&name, TerminalView { above: body.above, columns: body.body_columns, panes: body.panes, shown: body.shown, caps: body.caps });
     st.mods.schedule_shown(&name);
     ok()
 }

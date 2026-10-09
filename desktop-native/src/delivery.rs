@@ -48,7 +48,9 @@ pub type Held = (String, bool, Option<Vec<String>>);
 impl DeliveryTracker {
     pub fn begin(&mut self, key: SessionKey, text: String, known: HashSet<String>) -> bool {
         if self.pending(&key) { return false; }
-        self.records.insert(key, SendRecord { text, known, pending: true, confirmed: false, outcome: None, typed: false });
+        // A pergunta lateral nunca vira mensagem da conversa: a resposta do backend já é a confirmação.
+        let confirmed = crate::composer::side_question(&text);
+        self.records.insert(key, SendRecord { text, known, pending: true, confirmed, outcome: None, typed: false });
         true
     }
 
@@ -184,6 +186,20 @@ mod tests {
         assert!(tracker.complete(&key("one"), "hello", SendOutcome::Delivered));
         assert!(!tracker.pending(&key("one")));
         assert!(tracker.outcome(&key("one")).is_none());
+    }
+
+    #[test]
+    fn side_question_needs_no_transcript_echo() {
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), "/btw o que mudou?".into(), HashSet::new());
+        tracker.mark_typed(&key("one"));
+        assert!(tracker.outgoing(&key("one")).is_empty(), "sem bolha apagada esperando a conversa");
+        assert!(tracker.complete(&key("one"), "/btw o que mudou?", SendOutcome::Delivered));
+        assert!(tracker.outcome(&key("one")).is_none(), "sem \"aguardando confirmação\" preso");
+        // Falha continua à vista.
+        tracker.begin(key("one"), "/btw".into(), HashSet::new());
+        tracker.complete(&key("one"), "/btw", SendOutcome::Rejected("x".into()));
+        assert!(tracker.outcome(&key("one")).is_some());
     }
 
     #[test]

@@ -4,7 +4,9 @@ import sys
 from pathlib import Path
 
 CONTRACT = Path(__file__).parent / "fixtures" / "contract"
-NAMES = {"prepare_prompt.json", "format_status_claude.json", "format_status_codex.json", "skill_catalog.json"}
+NAMES = {"prepare_prompt.json", "format_status_claude.json", "format_status_codex.json", "skill_catalog.json",
+         "last_usage.json", "reload_stamp.json", "unknown_private.json",
+         "parked_state.json"}
 
 
 def test_local_policy_golden_is_current(tmp_path):

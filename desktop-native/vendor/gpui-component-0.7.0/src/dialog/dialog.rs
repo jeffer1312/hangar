@@ -6,7 +6,8 @@ use gpui::{
     Action, Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, BoxShadow, ClickEvent,
     Edges,
     FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
+    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, WindowControlArea, anchored, div,
+    hsla, point,
     canvas, prelude::FluentBuilder, px,
 };
 use gpui_base::{ElementExt as _, TextSelectionScopeId};
@@ -626,6 +627,7 @@ impl RenderOnce for Dialog {
             .child(
                 div()
                     .id("dialog")
+                    .role(gpui::Role::Dialog)
                     .test_support()
                     .occlude()
                     .w(view_size.width)

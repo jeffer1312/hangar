@@ -17,7 +17,9 @@ static NATIVE_PREFIX: LazyLock<regex::Regex> =
 
 fn error(code: &str) -> RuntimeError { RuntimeError::new(code, "entrada de serviço inválida") }
 
-pub fn is_local(kind: &str) -> bool { matches!(kind, "prepare_prompt" | "format_status" | "skill_catalog") }
+pub fn is_local(kind: &str) -> bool {
+    matches!(kind, "prepare_prompt" | "format_status" | "skill_catalog" | "last_usage" | "reload_stamp" | "unknown_private")
+}
 
 /// `None` = o serviço não é local. `meta["provider"]` escolhe Claude ou Codex; `quota` é o
 /// `{"windows":[…]}` do `GET /internal/quota` (só Claude).
@@ -37,6 +39,9 @@ pub fn run_at(kind: &str, payload: &Value, meta: &Value, quota: Option<&Value>, 
             _ => Err(error("policy_provider")),
         },
         "skill_catalog" => skill_catalog(payload),
+        "last_usage" => last_usage(meta),
+        "reload_stamp" => reload_stamp(meta),
+        "unknown_private" => unknown_private(payload, meta, now),
         _ => return None,
     })
 }
@@ -321,4 +326,157 @@ pub fn skills(catalog: &Value) -> Vec<Value> {
     }).collect();
     skills.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     skills
+}
+
+// ---- last_usage ----
+
+/// Cauda lida do transcript: o `usage` do último turno está sempre perto do fim.
+const TAIL_TRANSCRIPT: u64 = 512 << 10;
+
+/// `str.splitlines()`: o Python também quebra em VT, FF, FS/GS/RS, NEL e U+2028/9.
+fn py_splitlines(text: &str) -> Vec<&str> {
+    let (mut lines, mut start) = (Vec::new(), 0);
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        if !matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') { continue; }
+        lines.push(&text[start..at]);
+        start = at + c.len_utf8();
+        if c == '\r' && chars.peek().is_some_and(|(_, next)| *next == '\n') { chars.next(); start += 1; }
+    }
+    if start < text.len() { lines.push(&text[start..]); }
+    lines
+}
+
+fn tail_lines(file: &mut std::fs::File) -> std::io::Result<String> {
+    use std::io::{Seek, SeekFrom};
+    let size = file.seek(SeekFrom::End(0))?;
+    file.seek(SeekFrom::Start(size.saturating_sub(TAIL_TRANSCRIPT)))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Transcript ausente é conversa sem turno (`usage` nulo); qualquer outra falha ao abrir é erro,
+/// e leitura que falha depois de aberto vira nulo, como no Python.
+fn last_usage(meta: &Value) -> Result<Value, RuntimeError> {
+    let path = meta["jsonl"].as_str().filter(|path| !path.is_empty()).ok_or_else(|| error("policy_input"))?;
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => return Ok(json!({"usage": null})),
+        Err(_) => return Err(RuntimeError::new("policy_io", "transcript ilegível")),
+    };
+    // No Linux abrir pasta funciona; o `open` do Python recusa (IsADirectoryError).
+    if file.metadata().is_ok_and(|stat| stat.is_dir()) { return Err(RuntimeError::new("policy_io", "transcript ilegível")); }
+    let Ok(text) = tail_lines(&mut file) else { return Ok(json!({"usage": null})) };
+    for line in py_splitlines(&text).into_iter().rev() {
+        if !line.contains("\"assistant\"") { continue; }
+        // Primeira linha do corte ou escrita em andamento.
+        let Some(entry) = crate::transcript::pyjson::loads_lossless(line) else { continue };
+        // O Python chamava `.get` no que veio e estourava se não fosse objeto.
+        let Value::Object(entry) = entry else { return Err(error("policy_input")) };
+        if entry.get("type").and_then(Value::as_str) != Some("assistant") || entry.get("isSidechain").is_some_and(truthy) { continue; }
+        let message = entry.get("message").filter(|message| truthy(message));
+        if message.is_some_and(|message| !message.is_object()) { return Err(error("policy_input")); }
+        let Some(usage) = message.and_then(|message| message.get("usage")).filter(|usage| usage.is_object()) else { continue };
+        if ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].iter().any(|key| usage.get(*key).is_some_and(truthy)) {
+            return Ok(json!({"usage": usage}));
+        }
+    }
+    Ok(json!({"usage": null}))
+}
+
+// ---- reload_stamp ----
+
+/// `Path.read_text`: UTF-8 estrito e quebras de linha universais; ausente é `None`.
+fn read_text(path: &Path) -> Result<Option<String>, RuntimeError> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(RuntimeError::new("policy_io", "configuração ilegível")),
+    };
+    let text = String::from_utf8(bytes).map_err(|_| RuntimeError::new("policy_io", "configuração ilegível"))?;
+    Ok(Some(text.replace("\r\n", "\n").replace('\r', "\n")))
+}
+
+/// Impressão do que o `claude -p` lê ao nascer: só o `mcpServers` do `.claude.json` e o
+/// `settings.json` inteiro. Ilegível é erro: "não li" não pode virar "mudou" nem "não mudou".
+fn config_stamp(config_dir: Option<&str>) -> Result<String, RuntimeError> {
+    let home = || std::env::home_dir().ok_or_else(|| error("policy_input"));
+    let root = match config_dir {
+        Some("~") => home()?,
+        Some(dir) if dir.starts_with("~/") => home()?.join(&dir[2..]),
+        // `~usuario` e `~\…` o Python resolve de outro jeito; ler outro caminho calado daria marca errada.
+        Some(dir) if dir.starts_with('~') => return Err(error("policy_input")),
+        Some(dir) => Path::new(dir).to_path_buf(),
+        None => home()?.join(".claude"),
+    };
+    let mcp = match read_text(&root.join(".claude.json"))? {
+        Some(text) => match crate::transcript::pyjson::loads_lossless(&text) {
+            Some(Value::Object(fields)) => fields.get("mcpServers").cloned().unwrap_or(Value::Null),
+            Some(_) => Value::Null,
+            None => return Err(RuntimeError::new("policy_io", "configuração ilegível")),
+        },
+        None => Value::Null,
+    };
+    let settings = read_text(&root.join("settings.json"))?.unwrap_or_default();
+    let joined = format!("{}\0{settings}", crate::transcript::pyjson::dumps(&mcp, true));
+    Ok(sha1_smol::Sha1::from(joined.as_bytes()).digest().to_string())
+}
+
+/// Motivo `config` só com marca gravada no cano e diferente da de agora.
+fn reload_stamp(meta: &Value) -> Result<Value, RuntimeError> {
+    let recorded = &meta["cano"]["config_marca"];
+    if !truthy(recorded) { return Ok(json!({"reason": null})); }
+    let current = config_stamp(text(&meta["config_dir"]))?;
+    Ok(json!({"reason": if recorded.as_str() == Some(current.as_str()) { Value::Null } else { json!("config") }}))
+}
+
+// ---- unknown_private ----
+
+const UNKNOWN_PER_KIND: usize = 30;
+const UNKNOWN_FILE_CAP: u64 = 10 << 20;
+type UnknownKey = (String, String, String);
+static UNKNOWN_COUNTS: LazyLock<std::sync::Mutex<std::collections::HashMap<UnknownKey, usize>>> = LazyLock::new(Default::default);
+
+/// Mesmo lugar do `log_paths.base()` do Python: o log é do Hangar da máquina, não da conta.
+fn log_base() -> Option<std::path::PathBuf> {
+    if cfg!(windows) {
+        let root = std::env::var_os("LOCALAPPDATA").filter(|dir| !dir.is_empty()).map(std::path::PathBuf::from)
+            .or_else(|| std::env::home_dir().map(|home| home.join("AppData").join("Local")))?;
+        return Some(root.join("hangar").join("logs"));
+    }
+    Some(std::env::home_dir()?.join(".hangar").join("logs"))
+}
+
+/// Só a pasta folha é `0700` (como o `mkdir(mode=…, parents=True)` do Python); as de cima seguem o umask.
+fn private_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    #[cfg(unix)]
+    let created = { use std::os::unix::fs::DirBuilderExt; std::fs::DirBuilder::new().mode(0o700).create(path) };
+    #[cfg(not(unix))]
+    let created = std::fs::create_dir(path);
+    match created {
+        Err(failure) if failure.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        other => other,
+    }
+}
+
+/// Payload bruto no log privado (pode carregar texto de conversa), nunca no diário.
+fn unknown_private(payload: &Value, meta: &Value, now: f64) -> Result<Value, RuntimeError> {
+    let kind = payload["kind"].as_str().filter(|kind| kind.chars().count() <= 512).ok_or_else(|| error("policy_input"))?;
+    if !payload["event"].is_object() { return Err(error("policy_input")); }
+    let io = |_| RuntimeError::new("policy_io", "log privado não gravado");
+    let mut counts = UNKNOWN_COUNTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let key = (meta["key"].to_string(), meta["generation"].to_string(), kind.to_owned());
+    if counts.get(&key).copied().unwrap_or(0) >= UNKNOWN_PER_KIND { return Ok(json!({"recorded": false, "reason": "type_limit"})); }
+    let directory = log_base().ok_or_else(|| error("policy_input"))?.join("privado");
+    private_dir(&directory).map_err(io)?;
+    let file = directory.join(if meta["provider"] == "claude" { "claude-headless-desconhecidos.jsonl" } else { "codex-headless-desconhecidos.jsonl" });
+    if std::fs::metadata(&file).is_ok_and(|stat| stat.len() > UNKNOWN_FILE_CAP) { return Ok(json!({"recorded": false, "reason": "file_limit"})); }
+    let mut line = crate::transcript::pyjson::dumps_unicode(&json!({"ts": now, "sessao": meta["name"], "tipo": kind, "evento": payload["event"]}), false);
+    line.push('\n');
+    let mut stream = std::fs::OpenOptions::new().create(true).append(true).open(&file).map_err(io)?;
+    std::io::Write::write_all(&mut stream, line.as_bytes()).map_err(io)?;
+    *counts.entry(key).or_default() += 1;
+    Ok(json!({"recorded": true}))
 }

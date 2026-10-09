@@ -7,6 +7,7 @@ pub mod edges;
 pub mod facts;
 pub mod live;
 pub mod monitor;
+pub mod parked;
 pub mod permission;
 pub mod preview;
 pub mod published;

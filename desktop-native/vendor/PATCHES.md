@@ -64,3 +64,17 @@ Não compilados aqui: gpui-pre-windows e gpui-pre-apple/-macos (revisados só po
 | Ajuste | Onde | Por quê |
 |---|---|---|
 | `KeyDownEvent::physical_digit` | gpui-pre `interactive.rs` (e os construtores), gpui-pre-linux `platform.rs`/`wayland/client.rs`/`x11/client.rs`, gpui-pre-windows `events.rs`, gpui-pre-macos `events.rs`/`window.rs`, testes do gpui-base e do gpui-component | com Shift a tecla de número chega como símbolo, e só a tabela de layouts conhecidos o traduzia de volta; a posição física vale em qualquer layout (Ctrl+Shift+número escolhe a sessão) |
+
+## Acessibilidade
+
+| Ajuste | Onde | Por quê |
+|---|---|---|
+| View em cache reemite os nós de acessibilidade (`A11yCapture`, `A11y::replay`, quadro anterior em `prev_*`) | gpui-pre `view.rs`/`window/a11y.rs` | o reaproveitamento pulava o prepaint dos filhos e os nós sumiam; a árvore lida pelo AT-SPI oscilava entre poucos e todos os controles |
+| `author_id` padrão = caminho dos ids nomeados do elemento, separados por `›` (sem ids de view, números, nomes de tipo e local no código; número de entidade vira o nome acessível) | gpui-pre `element.rs` (`author_path`) | id estável por controle para automação (`AccessibleId` no AT-SPI, `AutomationId` no UIA) sem marcar elemento por elemento |
+| Texto visível vira folha `Label` (`Window::a11y_text`, chamado pelos elementos de texto, pelo parágrafo do markdown e pela grade do terminal), com id pelo pai e pela posição | gpui-pre `elements/text.rs`/`window/a11y.rs`, gpui-base `text/inline_flow.rs` | texto sem id não entrava na árvore: rótulos, explicações e valores não chegavam ao leitor nem à voz |
+| Controle sem rótulo ganha o texto de dentro como nome; área clicável sem papel vira botão (grupo, se embrulha controles) | gpui-pre `window/a11y.rs` (`A11yNodeBuilder::pop`), `elements/div.rs` (`a11y_role`) | itens de lista, linhas clicáveis e disparadores saíam sem nome ou nem apareciam |
+| Desenho adiado (diálogo, popover, menu) volta para o nó que o adiou e é reemitido quando reaproveitado | gpui-pre `window.rs` (`DeferredDraw::a11y_parent`/`a11y`, `prepaint_deferred_draws`), `window/a11y.rs` (`reparent`) | o conteúdo ficava solto na raiz e sumia quando a camada era reaproveitada |
+| `Window::a11y_snapshot(root)` e `Window::retain_a11y_tree` | gpui-pre `window/a11y.rs`, `window/a11y/snapshot.rs` | o app lê a tela do último quadro em texto, sem leitor de tela ligado |
+| Clique pela acessibilidade só quando o elemento do nó está sob o ponto | gpui-pre `window.rs` (`handle_a11y_action`), `elements/div.rs` | o clique é por coordenada; coberto por popup ele acionava o controle de cima |
+| Nome do `Button` cai na dica; `Button::aria_selected`; botão escolhido (`selected`) anuncia selecionado | gpui-component `button/button.rs` | botão só de ícone saía sem nome; aba, modo e opção escolhidos precisam do estado |
+| `Slider::aria_label` | gpui-base e gpui-component `slider.rs` | slider não tem texto próprio para ser nomeado |

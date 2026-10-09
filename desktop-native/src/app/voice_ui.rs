@@ -4,12 +4,11 @@ use std::collections::VecDeque;
 use serde::Deserialize;
 use gpui_kit::component::{select::{Select, SelectEvent, SelectState}, searchable_list::SearchableListItem};
 use crate::voice::{Activity as CallActivity, CallId, Phase, Voice, VoiceEvent, VoiceFailure, VoiceOptions, rpc::Codex,
-    organizer::{ConfirmGate, DEFAULT_EFFORT, Mode, ModeModel, ModeModels, OpenRequest, OrganizerAction, session_context, tool_reply}, usage::RateWindow};
+    organizer::{ConfirmGate, DEFAULT_EFFORT, Mode, ModeModel, ModeModels, OpenRequest, OrganizerAction, SWITCH_REFUSED, session_context, squash, switch_asked, tool_reply}, usage::RateWindow};
 use super::{create::choices::{PERMISSIONS, checked_choice, creation_defaults}, grouping::{can_leave, can_pair}, sidebar::Target};
 
-/// Vozes do Realtime; vazio é o padrão do Codex.
-const VOICES: [&str; 19] = ["alloy", "arbor", "ash", "ballad", "breeze", "cedar", "coral", "cove", "echo", "ember", "juniper", "maple",
-    "marin", "sage", "shimmer", "sol", "spruce", "vale", "verse"];
+/// Só as vozes que o Realtime v3 aceita; as outras do esquema do Codex derrubam a chamada. Vazio é o padrão do Codex.
+const VOICES: [&str; 9] = ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"];
 
 #[derive(Clone)]
 pub(super) struct VoiceChoice { id: String }
@@ -164,6 +163,11 @@ pub(super) struct VoiceUi {
     /// Arquivo e texto do plano; fica na tela depois da chamada, até a próxima começar.
     pub(super) plan: Option<(std::path::PathBuf, String)>,
     pub(super) plan_scroll: ScrollHandle,
+    /// Plano aberto ou fechado pelo usuário; `None` segue o modo (aberto só no Planejar).
+    pub(super) plan_open: Option<bool>,
+    pub(super) settings_open: bool,
+    /// Rolagem do miolo do cartão, entre o estado da chamada e os botões.
+    pub(super) body_scroll: ScrollHandle,
     /// Contexto usado e janela do organizador; fica depois da chamada, até a próxima começar.
     pub(super) context: Option<(u64, Option<u64>)>,
     pub(super) five_hour: RateWindow,
@@ -171,10 +175,101 @@ pub(super) struct VoiceUi {
     /// Fechar por voz: o pedido armado à espera do sim falado e a chamada que espera a resposta do servidor.
     pub(super) close_gate: ConfirmGate<Target>,
     pub(super) close_reply: Option<(Target, CallId)>,
+    /// Últimos nomes de sessão passados à chamada; só lista diferente vai de novo.
+    pub(super) session_names: Vec<String>,
+    /// Objetivo do `computer` em curso; abortar mata o HCC (parar a chamada usa isto).
+    pub(super) computer: Option<tokio::task::JoinHandle<()>>,
+    /// Árvore de acessibilidade mantida sem leitor de tela: na chamada (para o `read_screen`) ou com `HANGAR_A11Y_DUMP`.
+    pub(super) a11y_retained: bool,
+    pub(super) a11y_dump: bool,
+}
+
+/// Teto do texto que o `read_screen` devolve ao organizador.
+const SCREEN_BUDGET: usize = 12_000;
+
+/// `(profundidade, papel, id)` de cada linha do retrato de acessibilidade que tem `#id`.
+fn snapshot_ids(snapshot: &str) -> Vec<(usize, &str, &str)> {
+    snapshot.lines().filter_map(|line| {
+        let body = line.trim_start();
+        let (_, id) = body.rsplit_once(" #").filter(|(_, id)| !id.is_empty() && !id.contains([' ', '"']))?;
+        Some(((line.len() - body.len()) / 2, body.split(' ').next().unwrap_or_default(), id))
+    }).collect()
+}
+
+/// Raiz do `read_screen`: a área pedida, senão as Configurações abertas, senão o diálogo ou sobreposição aberto, senão
+/// a janela inteira (`None`). Área que não está na tela volta com os ids de cima para o organizador escolher.
+fn screen_root(snapshot: &str, area: Option<&str>) -> Result<Option<String>, String> {
+    let ids = snapshot_ids(snapshot);
+    if let Some(area) = area.map(|a| a.trim().trim_start_matches('#')).filter(|a| !a.is_empty()) {
+        if ids.iter().any(|(_, _, id)| *id == area) { return Ok(Some(area.to_owned())); }
+        let mut depths: Vec<usize> = ids.iter().map(|(d, ..)| *d).collect();
+        depths.sort_unstable();
+        depths.dedup();
+        let top = depths.get(2).or(depths.last()).copied().unwrap_or(0);
+        let mut shown: Vec<&str> = Vec::new();
+        for (_, _, id) in ids.iter().filter(|(d, ..)| *d <= top) { if !shown.contains(id) && shown.len() < 40 { shown.push(id); } }
+        return Err(format!("A área {area} não está na tela. Áreas visíveis: {}.", shown.join(", ")));
+    }
+    if ids.iter().any(|(_, _, id)| *id == "settings-dialog") { return Ok(Some("settings-dialog".into())); }
+    Ok(ids.iter().find(|(_, role, id)| matches!(*role, "Dialog" | "AlertDialog") || id.ends_with("-dialog") || id.ends_with("-overlay"))
+        .map(|(_, _, id)| (*id).to_owned()))
+}
+
+/// Linhas inteiras até o teto; o corte é dito no fim.
+fn clip_lines(text: &str, budget: usize) -> String {
+    if text.len() <= budget { return text.to_owned(); }
+    let mut out = String::new();
+    let mut kept = 0;
+    for line in text.lines() {
+        if out.len() + line.len() + 1 > budget { break; }
+        out.push_str(line);
+        out.push('\n');
+        kept += 1;
+    }
+    out + &format!("[cortado: faltam {} linhas; peça uma área menor]\n", text.lines().count() - kept)
+}
+
+/// O que o `read_screen` lê: `(raiz, texto)`; `None` na raiz é a janela inteira.
+fn read_screen(window: &Window, area: Option<&str>) -> Result<(Option<String>, String), String> {
+    const NOT_READY: &str = "A tela ainda não tem árvore de acessibilidade; tente de novo em um instante.";
+    let all = window.a11y_snapshot(None).ok_or(NOT_READY)?;
+    let root = screen_root(&all, area)?;
+    let text = match &root { Some(root) => window.a11y_snapshot(Some(root)).ok_or(NOT_READY)?, None => all };
+    Ok((root, clip_lines(&text, SCREEN_BUDGET)))
+}
+
+/// Uma ação da tela do Hangar que a voz executa pelo mesmo caminho do botão; o id é o de acessibilidade dele.
+pub(super) struct UiAction { pub(super) id: &'static str, pub(super) label: &'static str, pub(super) description: &'static str }
+
+pub(super) const HANGAR_ACTIONS: [UiAction; 16] = [
+    UiAction { id: "topbar-settings", label: "Abrir configurações", description: "Abre a tela de configurações; arg opcional = seção (veja as seções abaixo)." },
+    UiAction { id: "settings-back", label: "Fechar configurações", description: "Fecha a tela de configurações e volta à conversa." },
+    UiAction { id: "sidebar-new-session", label: "Nova sessão", description: "Abre o diálogo de criar sessão (a pessoa escolhe e confirma)." },
+    UiAction { id: "sidebar-fold", label: "Recolher ou mostrar a barra de sessões", description: "Alterna a barra lateral de sessões entre recolhida e aberta." },
+    UiAction { id: "side-toggle", label: "Mostrar ou esconder o painel lateral", description: "Alterna o painel lateral da sessão (Contexto, Arquivos, Atividade, Git)." },
+    UiAction { id: "side-tab-context", label: "Painel: Contexto", description: "Abre o painel lateral na aba Contexto da sessão ativa." },
+    UiAction { id: "side-tab-files", label: "Painel: Arquivos", description: "Abre o painel lateral na aba Arquivos da sessão ativa." },
+    UiAction { id: "side-tab-activity", label: "Painel: Atividade", description: "Abre o painel lateral na aba Atividade, quando a sessão tem." },
+    UiAction { id: "side-tab-git", label: "Painel: Git", description: "Abre o painel lateral na aba Git, quando a pasta é um repositório." },
+    UiAction { id: "terminal-show", label: "Abrir o terminal", description: "Abre o painel de terminal da sessão ativa." },
+    UiAction { id: "terminal-close", label: "Fechar o terminal", description: "Fecha o painel de terminal." },
+    UiAction { id: "topbar-voice", label: "Abrir o cartão da voz", description: "Mostra o cartão desta conversa por voz." },
+    UiAction { id: "voice-panel-close", label: "Fechar o cartão da voz", description: "Esconde o cartão da voz; a conversa continua." },
+    UiAction { id: "topbar-cost", label: "Abrir custos", description: "Abre a página de custos." },
+    UiAction { id: "costs-usage", label: "Abrir estatísticas de uso", description: "Abre as estatísticas de uso (na página de custos)." },
+    UiAction { id: "costs-back", label: "Fechar custos", description: "Fecha a página de custos e estatísticas." },
+];
+
+pub(super) fn hangar_actions_text(sections: &[&str]) -> String {
+    let mut lines: Vec<String> = HANGAR_ACTIONS.iter().map(|a| format!("- {}: {}. {}", a.id, a.label, a.description)).collect();
+    lines.push(format!("Seções de configurações (arg de topbar-settings): {}.", sections.join(", ")));
+    lines.join("\n")
 }
 
 /// Resultado assíncrono de uma ferramenta de sessão; volta à tela com a chamada que espera a resposta.
-pub(super) enum VoiceDone { Opened(String, Result<SessionInfo, String>), Grouped(&'static str, Result<PairResult, Failure>) }
+/// `Opened`: máquina, criação e, com `request`, o pedido e a entrega dele à sessão nova.
+pub(super) enum VoiceDone { Opened(String, Result<SessionInfo, String>, Option<(String, Result<Delivery, Failure>)>), Grouped(&'static str, Result<PairResult, Failure>),
+    Computer(Result<String, String>) }
 
 /// Uma linha do `list_sessions`.
 pub(super) struct Listed { pub(super) name: String, pub(super) machine: Option<String>, pub(super) provider: String, pub(super) state: String,
@@ -262,14 +357,6 @@ async fn create_by_voice(api: &Api, request: OpenRequest) -> Result<SessionInfo,
 
 #[derive(Debug, PartialEq)]
 pub(super) enum SessionMatch { One(usize), Many(Vec<usize>), None }
-
-/// Só letras e números em minúsculas, sem acento comum do português: "minha loja" casa com `minha-loja`.
-fn squash(text: &str) -> String {
-    text.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).map(|c| match c {
-        'á' | 'à' | 'â' | 'ã' | 'ä' => 'a', 'é' | 'è' | 'ê' | 'ë' => 'e', 'í' | 'ì' | 'î' | 'ï' => 'i',
-        'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o', 'ú' | 'ù' | 'û' | 'ü' => 'u', 'ç' => 'c', other => other,
-    }).collect()
-}
 
 /// Nome falado → sessão. Igual vence parcial; o mesmo nome em duas máquinas fica com o da ativa (`on_active`).
 pub(super) fn match_session(query: &str, names: &[&str], on_active: &[bool]) -> SessionMatch {
@@ -411,6 +498,10 @@ pub(super) fn action_text(action: &OrganizerAction) -> String {
             "close_session" => tr("voice_tool_close_session"),
             "pair_sessions" => tr("voice_tool_pair_sessions"),
             "unpair_session" => tr("voice_tool_unpair_session"),
+            "hangar_actions" => tr("voice_tool_hangar_actions"),
+            "hangar_action" => tr("voice_tool_hangar_action"),
+            "computer" => tr("voice_tool_computer"),
+            "read_screen" => tr("voice_tool_read_screen"),
             other => tr("voice_tool_other").replace("{tool}", other),
         },
         OrganizerAction::Search(query) if query.trim().is_empty() => tr("voice_action_search"),
@@ -458,6 +549,28 @@ pub(super) fn send_reply(session: &str, result: &Result<Delivery, Failure>) -> V
     }
 }
 
+/// Resposta do `open_session`: `shown` = abriu na tela; `sent` = entrega do pedido ditado junto. `Err` vira falha visível.
+pub(super) fn opened_reply(name: &str, shown: bool, sent: Option<&Result<Delivery, Failure>>) -> Result<String, String> {
+    let failed = |result: &Result<Delivery, Failure>| match result {
+        Ok(d) if d.ok => None,
+        Ok(_) => Some("a sessão recusou o pedido".to_owned()),
+        Err(error) => Some(Hangar::fetch_failure(error)),
+    };
+    match (shown, sent) {
+        (true, None) => Ok(format!("Sessão {name} criada e aberta na tela; a troca já foi anunciada, não repita.")),
+        (false, None) => Err(format!("A sessão {name} foi criada, mas a máquina dela não está conectada para abri-la.")),
+        (true, Some(result)) => match (failed(result), result) {
+            (None, Ok(d)) if d.delivered => Ok(format!("Sessão {name} aberta e pedido enviado. A troca já foi anunciada, não repita; aguarde o resultado real.")),
+            (None, _) => Ok(format!("Sessão {name} aberta e pedido enviado; ele entrou na fila da sessão. A troca já foi anunciada, não repita.")),
+            (Some(why), _) => Err(format!("Sessão {name} aberta, mas o pedido não chegou a ela: {why}. Não reenvie; peça para o usuário conferir o chat.")),
+        },
+        (false, Some(result)) => Err(match failed(result) {
+            None => format!("Sessão {name} criada e pedido enviado, mas a máquina dela não está conectada para abri-la na tela."),
+            Some(why) => format!("Sessão {name} criada, mas não abriu na tela e o pedido não chegou a ela: {why}."),
+        }),
+    }
+}
+
 fn triples(events: &[ChatEvent]) -> Vec<(String, String, String)> {
     events.iter().filter(|e| matches!(e.kind.as_str(), "user_msg" | "assistant_msg"))
         .map(|e| (e.id.clone(), e.kind.as_str().to_owned(), e.text.clone().unwrap_or_default())).collect()
@@ -474,6 +587,7 @@ fn failure_text(failure: &VoiceFailure) -> String {
         VoiceFailure::Organizer => tr("voice_organizer"),
         VoiceFailure::ModelSwitch => tr("voice_model_switch_failed"),
         VoiceFailure::OwnFolder => tr("voice_own_folder_failed"),
+        VoiceFailure::AudioStopped => tr("voice_audio_stopped"),
         VoiceFailure::Closed => tr("voice_server_closed"),
     }
 }
@@ -578,10 +692,14 @@ impl Hangar {
             return;
         }
         crate::voice::log(format!("voice: account chosen {}", if codex_home.is_some() { "custom" } else { "default" }));
-        let options = VoiceOptions { codex, voice: self.voice.voice.clone(), context: self.voice_context(), cwd: self.local_session_dir(), target, codex_home,
+        // Voz salva que o v3 não aceita (escolhida antes do filtro) cai no padrão em vez de derrubar a chamada.
+        let voice = self.voice.voice.clone().filter(|v| VOICES.contains(&v.as_str()));
+        let options = VoiceOptions { codex, voice, context: self.voice_context(), cwd: self.local_session_dir(), target, codex_home,
             organizer: self.voice.organizer.clone() };
         self.voice.generation += 1;
         self.voice.call = Some(Voice::start(self.runtime.handle(), options, events_tx));
+        self.voice.session_names.clear();
+        self.voice_push_names();
         self.voice.target = self.selected.as_ref().map(|s| s.name.clone());
         self.voice.target_key = self.selected_key();
         self.voice.spoken.clear();
@@ -596,7 +714,7 @@ impl Hangar {
         self.voice.watched.clear();
         self.voice.error = None;
         self.voice.mode = Mode::Direct;
-        self.voice.plan = None;
+        (self.voice.plan, self.voice.plan_open) = (None, None);
         (self.voice.context, self.voice.five_hour, self.voice.seven_day) = (None, None, None);
         self.voice.muted = false;
         self.voice.draft = None;
@@ -612,8 +730,35 @@ impl Hangar {
         cx.notify();
     }
 
+    /// A árvore só existe com leitor de tela; na chamada ela é mantida para o `read_screen`. Fora do desenho, porque
+    /// ligar pede um quadro novo.
+    pub(super) fn sync_a11y_retain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let want = self.voice.call.is_some() || self.voice.a11y_dump;
+        if want == self.voice.a11y_retained { return; }
+        self.voice.a11y_retained = want;
+        window.defer(cx, move |window, _| window.retain_a11y_tree(want));
+    }
+
+    /// HANGAR_A11Y_DUMP=<arquivo>: grava a árvore da janela inteira nele, no máximo a cada 2 s e só quando muda (prova o
+    /// `read_screen` sem chamada de voz). Sem a variável, nada roda.
+    pub(super) fn watch_a11y_dump(window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(path) = std::env::var_os("HANGAR_A11Y_DUMP").filter(|p| !p.is_empty()) else { return false };
+        cx.spawn_in(window, async move |_, cx| {
+            let mut last = String::new();
+            loop {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+                let Ok(snapshot) = cx.update(|window, _| window.a11y_snapshot(None)) else { break };
+                let Some(snapshot) = snapshot.filter(|s| *s != last) else { continue };
+                if let Err(error) = std::fs::write(&path, &snapshot) { crate::voice::log(format!("a11y dump failed: {error}")); }
+                last = snapshot;
+            }
+        }).detach();
+        true
+    }
+
     pub(super) fn stop_voice(&mut self, cx: &mut Context<Self>) {
         if let Some(mut call) = self.voice.call.take() { call.stop(); }
+        self.stop_computer();
         self.voice.generation += 1; // eventos atrasados da chamada parada não mexem na próxima
         self.voice.phase = None;
         self.voice.mode = Mode::Direct;
@@ -680,11 +825,15 @@ impl Hangar {
     }
 
     /// `switch_session`: as sessões que a busca enxerga, pelo nome falado.
-    fn voice_switch(&mut self, call: CallId, spoken: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// `said`: a fala do turno; sem pedido de troca para essa sessão, nada muda (o pedido segue para a sessão ativa).
+    fn voice_switch(&mut self, call: CallId, spoken: &str, said: &str, window: &mut Window, cx: &mut Context<Self>) {
         let reply = match self.voice_resolve("switch_session", spoken, cx) {
             Ok((key, session)) => {
                 if self.selected.as_ref().is_some_and(|s| s.name == session.name) && self.open_server() == key {
                     tool_reply("Já estou nessa sessão.", true)
+                } else if !switch_asked(said, &session.name) {
+                    crate::voice::log("switch_session refused not asked");
+                    tool_reply(format!("{SWITCH_REFUSED}."), false)
                 } else {
                     let name = session.name.clone();
                     if self.select_on(&key, session, window, cx) { tool_reply(format!("Sessão {name} aberta; a troca já foi anunciada, não repita."), true) }
@@ -739,11 +888,19 @@ impl Hangar {
             }
         };
         let Some(api) = self.machine_api(&key) else { let reason = self.machine_error(&key); self.voice_fail(call, reason); return };
-        crate::voice::log(format!("open_session start provider={}", request.provider));
+        crate::voice::log(format!("open_session start provider={} request={}", request.provider, request.request.is_some()));
         let (generation, connection, tx) = (self.voice.generation, self.connection, self.tx.clone());
         self.runtime.spawn(async move {
+            let work = request.request.clone();
             let result = create_by_voice(&api, request).await;
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::VoiceDone(generation, call, VoiceDone::Opened(key, result)) }).await;
+            // Como a primeira mensagem da tela de criação: o pedido sai logo que a sessão nasce, sem a espera do microfone
+            // (a fala já acabou), e a resposta ao organizador espera a entrega.
+            let (result, sent) = match (result, work) {
+                (Ok(session), Some(work)) => { let delivery = api.send(&session.name, &work).await; (Ok(session), Some((work, delivery))) }
+                (Err(text), Some(_)) => (Err(format!("{text} O pedido não foi enviado.")), None),
+                (result, None) => (result, None),
+            };
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::VoiceDone(generation, call, VoiceDone::Opened(key, result, sent)) }).await;
         });
     }
 
@@ -814,6 +971,93 @@ impl Hangar {
         self.voice_group(call, "grupo_drop_sair_falhou", async move { api.unpair(&session.name).await });
     }
 
+    /// Uma ação de `HANGAR_ACTIONS` pelo mesmo método do botão. Nenhuma troca a sessão ativa; `Err` é o motivo real.
+    pub(super) fn run_hangar_action(&mut self, id: &str, arg: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> Result<String, String> {
+        use crate::appearance::SideTab;
+        if self.connection_dialog { return Err("A janela de conexão está aberta; feche-a antes.".into()); }
+        let side_tab = |tab| match tab { SideTab::Files => "Arquivos", SideTab::Activity => "Atividade", SideTab::Git => "Git", _ => "Contexto" };
+        match id {
+            "topbar-settings" => {
+                let page = match arg {
+                    None => settings::Page::Appearance,
+                    Some(spoken) => {
+                        let sections: Vec<settings::Page> = settings::Page::sections().collect();
+                        let keys: Vec<&str> = sections.iter().map(|p| p.key()).collect();
+                        match match_session(spoken, &keys, &[]) {
+                            SessionMatch::One(i) => sections[i],
+                            _ => return Err(format!("Seção desconhecida: {spoken}. Seções: {}.", keys.join(", "))),
+                        }
+                    }
+                };
+                self.open_settings(page, window, cx);
+                Ok(format!("Configurações abertas na seção {}.", page.key()))
+            }
+            "settings-back" if self.settings.is_none() => Ok("As configurações já estavam fechadas.".into()),
+            "settings-back" => { self.close_settings(window, cx); Ok("Configurações fechadas.".into()) }
+            "sidebar-new-session" if self.create_blocked(window, cx) => Err("Não dá para abrir o diálogo agora: sem servidor conectado ou outro diálogo aberto.".into()),
+            "sidebar-new-session" => { self.open_new_session(None, window, cx); Ok("Diálogo de nova sessão aberto; a pessoa escolhe e confirma.".into()) }
+            "sidebar-fold" if appearance::get().navigation.tabs() => Err("Com a navegação em abas não há barra de sessões para recolher.".into()),
+            "sidebar-fold" => { self.toggle_rail(cx); Ok(if self.rail() { "Barra de sessões recolhida." } else { "Barra de sessões aberta." }.into()) }
+            "side-toggle" | "side-tab-context" | "side-tab-files" | "side-tab-activity" | "side-tab-git" if self.selected.is_none() =>
+                Err("Nenhuma sessão aberta; o painel lateral é da sessão.".into()),
+            "side-toggle" => { self.toggle_side(cx); Ok(if self.side.open { "Painel lateral aberto." } else { "Painel lateral escondido." }.into()) }
+            "side-tab-context" | "side-tab-files" | "side-tab-activity" | "side-tab-git" => {
+                let tab = match id { "side-tab-files" => SideTab::Files, "side-tab-activity" => SideTab::Activity, "side-tab-git" => SideTab::Git, _ => SideTab::Context };
+                if !self.side.open { self.toggle_side(cx); }
+                self.choose_side_tab(tab, window, cx);
+                // A aba que a sessão não tem cai em outra: dizer, em vez de fingir.
+                if self.side_tab() == tab { Ok(format!("Painel lateral na aba {}.", side_tab(tab))) }
+                else { Err(format!("A aba {} não está disponível nesta sessão; o painel ficou em {}.", side_tab(tab), side_tab(self.side_tab()))) }
+            }
+            "terminal-show" if self.terminal.is_some() => Ok("O terminal já está aberto.".into()),
+            "terminal-show" => {
+                if !self.selected.as_ref().is_some_and(|s| super::terminal::terminal_offered(s, self.has_shortcut_terms())) {
+                    return Err("Esta sessão não tem terminal (nenhuma aberta, orquestrador ou só leitura).".into());
+                }
+                self.toggle_terminal(window, cx);
+                if self.terminal.is_some() { Ok("Terminal aberto.".into()) } else { Err("O terminal não abriu.".into()) }
+            }
+            "terminal-close" if self.terminal.is_none() => Ok("O terminal já estava fechado.".into()),
+            "terminal-close" => { self.close_terminal(true, window, cx); Ok("Terminal fechado.".into()) }
+            "topbar-voice" if self.voice.open => Ok("O cartão da voz já está aberto.".into()),
+            "topbar-voice" => { self.toggle_voice_panel(window, cx); Ok("Cartão da voz aberto.".into()) }
+            "voice-panel-close" => { self.voice.open = false; cx.notify(); Ok("Cartão da voz fechado; a conversa continua.".into()) }
+            "topbar-cost" | "costs-usage" if self.api.is_none() => Err("Sem servidor conectado.".into()),
+            "topbar-cost" => { self.open_costs(window, cx); Ok("Página de custos aberta.".into()) }
+            "costs-usage" => {
+                if self.costs.view.is_none() { self.open_costs(window, cx); }
+                self.show_costs_view(super::costs::View::Usage, window, cx);
+                Ok("Estatísticas de uso abertas.".into())
+            }
+            "costs-back" if self.costs.view.is_none() => Ok("A página de custos já estava fechada.".into()),
+            "costs-back" => { self.close_costs(window, cx); Ok("Página de custos fechada.".into()) }
+            other => Err(format!("Ação desconhecida: {other}. Veja os ids com hangar_actions.")),
+        }
+    }
+
+    /// `computer`: o HCC roda fora da tela e responde quando acaba; um objetivo por vez.
+    fn voice_computer(&mut self, call: CallId, objective: String) {
+        if self.voice.computer.as_ref().is_some_and(|task| !task.is_finished()) {
+            self.voice_reply(call, tool_reply("Já há um objetivo no computador em andamento; espere o resultado.", false));
+            return;
+        }
+        crate::voice::log("computer start");
+        let (generation, connection, tx) = (self.voice.generation, self.connection, self.tx.clone());
+        self.voice.computer = Some(self.runtime.spawn(async move {
+            let result = match tokio::task::spawn_blocking(crate::voice::computer::launch).await {
+                Ok(Ok(launch)) => crate::voice::computer::run_objective(launch, &objective).await,
+                Ok(Err(text)) => Err(text),
+                Err(_) => Err("Não consegui preparar o hangar-computer-control.".into()),
+            };
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::VoiceDone(generation, call, VoiceDone::Computer(result)) }).await;
+        }));
+    }
+
+    /// Parar a chamada para também o objetivo: o Python cai junto com a tarefa.
+    fn stop_computer(&mut self) {
+        if let Some(task) = self.voice.computer.take() && !task.is_finished() { crate::voice::log("computer aborted"); task.abort(); }
+    }
+
     /// `fallback`: a frase do web quando o servidor não diz o motivo.
     fn voice_group(&self, call: CallId, fallback: &'static str, work: impl std::future::Future<Output = Result<PairResult, Failure>> + Send + 'static) {
         let (generation, connection, tx) = (self.voice.generation, self.connection, self.tx.clone());
@@ -826,25 +1070,46 @@ impl Hangar {
     pub(super) fn voice_done(&mut self, generation: u64, call: CallId, done: VoiceDone, window: &mut Window, cx: &mut Context<Self>) {
         if generation != self.voice.generation { return; }
         match done {
-            VoiceDone::Opened(key, Ok(session)) => {
+            VoiceDone::Opened(key, Ok(session), sent) => {
                 crate::voice::log("open_session created");
                 let name = session.name.clone();
                 // Como na tela de criação: a lista guardada da outra máquina já a inclui, para a leitura seguinte não fechá-la.
                 if let Some(list) = self.remote.get_mut(&key).filter(|l| l.loaded && !l.sessions.iter().any(|s| s.name == name)) {
                     list.sessions.push(session.clone());
                 }
-                if self.select_on(&key, session, window, cx) {
-                    self.voice_reply(call, tool_reply(format!("Sessão {name} criada e aberta na tela; a troca já foi anunciada, não repita."), true));
-                } else {
-                    self.voice_fail(call, format!("A sessão {name} foi criada, mas a máquina dela não está conectada para abri-la."));
+                let shown = self.select_on(&key, session, window, cx);
+                if let Some((work, result)) = &sent {
+                    crate::voice::log(format!("open_session request {}", match result { Ok(d) if d.ok && d.delivered => "sent", Ok(d) if d.ok => "queued", _ => "failed" }));
+                    // A entrega entra no rastreio da sessão nova como a primeira mensagem da tela de criação: bolha e falha no chat.
+                    if shown && let Some(session_key) = self.selected_key().filter(|k| k.name == name) {
+                        self.voice.watched.insert(session_key.clone(), false);
+                        self.delivery.begin(session_key.clone(), work.clone(), HashSet::new());
+                        self.receive_sent(session_key, work.clone(), String::new(), result.clone(), window, cx);
+                    }
+                }
+                match opened_reply(&name, shown, sent.as_ref().map(|(_, result)| result)) {
+                    Ok(text) => self.voice_reply(call, tool_reply(text, true)),
+                    Err(text) => self.voice_fail(call, text),
                 }
             }
-            VoiceDone::Opened(_, Err(text)) => { crate::voice::log("open_session failed"); self.voice_fail(call, text); }
+            VoiceDone::Opened(_, Err(text), _) => { crate::voice::log("open_session failed"); self.voice_fail(call, text); }
             VoiceDone::Grouped(_, Ok(result)) => {
                 crate::voice::log(format!("group done warning={}", result.warning.is_some()));
                 // O vínculo mudou, mas alguém não foi avisado: o organizador precisa dizer isso.
                 let text = result.warning.map_or_else(|| "Feito.".to_owned(), |w| format!("Feito, mas com aviso: {w}"));
                 self.voice_reply(call, tool_reply(text, true));
+            }
+            VoiceDone::Computer(result) => {
+                self.voice.computer = None;
+                match result {
+                    // "parou: …" é resultado do HCC, não falha do app: volta como está, sem sucesso.
+                    Ok(text) => {
+                        let done = !text.trim_start().starts_with("parou");
+                        crate::voice::log(format!("computer done completed={done}"));
+                        self.voice_reply(call, tool_reply(text, done));
+                    }
+                    Err(text) => { crate::voice::log("computer failed"); self.voice_fail(call, text); }
+                }
             }
             VoiceDone::Grouped(fallback, Err(error)) => {
                 crate::voice::log(format!("group failed status={:?}", error.status));
@@ -859,6 +1124,7 @@ impl Hangar {
         match event {
             VoiceEvent::Phase(Phase::Closed) => {
                 self.voice.call = None;
+                self.stop_computer();
                 self.voice.phase = None;
                 self.voice.mode = Mode::Direct;
                 self.voice.draft = None;
@@ -914,7 +1180,27 @@ impl Hangar {
                 self.voice.five_hour = five_hour.or(self.voice.five_hour);
                 self.voice.seven_day = seven_day.or(self.voice.seven_day);
             }
-            VoiceEvent::SwitchSession(call, name) => self.voice_switch(call, &name, window, cx),
+            VoiceEvent::SwitchSession { call, name, spoken } => self.voice_switch(call, &name, &spoken, window, cx),
+            VoiceEvent::HangarActions(call) => {
+                let sections: Vec<&str> = settings::Page::sections().map(settings::Page::key).collect();
+                self.voice_reply(call, tool_reply(hangar_actions_text(&sections), true));
+            }
+            VoiceEvent::HangarAction { call, id, arg } => {
+                let result = self.run_hangar_action(&id, arg.as_deref(), window, cx);
+                crate::voice::log(format!("hangar_action ok={}", result.is_ok()));
+                match result { Ok(text) => self.voice_reply(call, tool_reply(text, true)), Err(text) => self.voice_fail(call, text) }
+            }
+            VoiceEvent::Computer(call, objective) => self.voice_computer(call, objective),
+            VoiceEvent::ReadScreen(call, area) => match read_screen(window, area.as_deref()) {
+                Ok((root, text)) => {
+                    crate::voice::log(format!("read_screen area={} bytes={}", root.as_deref().unwrap_or("window"), text.len()));
+                    self.voice_reply(call, tool_reply(text, true));
+                }
+                Err(text) => {
+                    crate::voice::log(format!("read_screen failed area={}", clip(area.as_deref().unwrap_or("-"), 64)));
+                    self.voice_fail(call, text);
+                }
+            },
             VoiceEvent::ListSessions(call) => self.voice_list(call, cx),
             VoiceEvent::OpenSession(call, request) => self.voice_open(call, request, cx),
             VoiceEvent::CloseSession { call, name, confirmed, turn } => self.voice_close(call, &name, confirmed, &turn, cx),
@@ -1131,7 +1417,9 @@ impl Hangar {
 
     /// Sessão que recebeu pedido e não está na tela: a lista diz quando o turno dela acabou, e a resposta vem do histórico.
     pub(super) fn voice_sessions(&mut self) {
-        if self.voice.call.is_none() || self.voice.watched.is_empty() { return; }
+        if self.voice.call.is_none() { return; }
+        self.voice_push_names();
+        if self.voice.watched.is_empty() { return; }
         let open = self.selected_key();
         let rows: Vec<(SessionKey, String)> = self.voice.watched.keys()
             .filter(|key| Some(*key) != open.as_ref()) // a aberta é tratada pelo SSE
@@ -1154,6 +1442,14 @@ impl Hangar {
                 let _ = tx.send(Envelope { connection, selection: None, payload: Payload::VoiceHistory(generation, key, result) }).await;
             });
         }
+    }
+
+    /// A chamada conhece os nomes para o `set_mode` não confundir sessão com modo.
+    fn voice_push_names(&mut self) {
+        let names: Vec<String> = self.voice_candidates().into_iter().map(|(_, s)| s.name).collect();
+        if names == self.voice.session_names { return; }
+        if let Some(call) = &self.voice.call { call.set_sessions(names.clone()); }
+        self.voice.session_names = names;
     }
 
     pub(super) fn voice_history(&mut self, generation: u64, key: SessionKey, result: Result<api::History, Failure>) {
@@ -1415,17 +1711,41 @@ impl Hangar {
     }
 
     /// Conteúdo cru do painel: o `render_popup` já põe a superfície.
-    pub(super) fn render_voice_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Uma linha com o que os Ajustes fechados escondem: voz, conta e o par de cada modo.
+    fn voice_settings_summary(&self) -> String {
+        let mut parts = vec![self.voice.voice.clone().unwrap_or_else(|| tr_shared("codex_voice_default", &[]).to_string())];
+        if self.voice.accounts.len() > 1 { parts.extend(self.voice.accounts.get(self.account_index()).map(|a| a.title().to_string())); }
+        for (mode, title) in [(Mode::Direct, "voice_mode_direct"), (Mode::Plan, "voice_mode_plan")] {
+            let pair = self.voice.organizer.get(mode);
+            let model = match (&pair.model, &self.voice.organizer_models) {
+                (None, _) => tr("voice_organizer_default"),
+                (Some(id), Some(Ok(models))) => models.iter().find(|m| &m.id == id).and_then(|m| m.name.clone()).unwrap_or_else(|| id.clone()),
+                (Some(id), _) => id.clone(),
+            };
+            parts.push(format!("{}: {model} {}", tr(title), pair.effort));
+        }
+        parts.join(" · ")
+    }
+
+    /// Conteúdo cru do painel: o `render_popup` já põe a superfície. Estado da chamada em cima e botões embaixo ficam
+    /// presos; o miolo rola quando o cartão não cabe na janela.
+    pub(super) fn render_voice_panel(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let live = self.voice.call.is_some();
-        let mut body = div().flex().flex_col().gap(px(12.)).p(px(16.))
+        let top = popup::anchor_bounds("topbar-voice").map_or(px(0.), |t| t.bottom());
+        let height = (window.viewport_size().height - top - px(32.)).max(px(240.));
+        let mut header = div().flex_none().flex().flex_col().gap(px(12.)).p(px(16.)).pb(px(12.))
             .child(div().flex().items_center().gap(px(8.))
                 .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(tr_shared("codex_voice_title", &[])))
                 .child(beta_badge()));
+        let mut body = div().flex().flex_col().gap(px(12.)).px(px(16.)).pb(px(4.));
         if live {
             // O estado em destaque, e logo abaixo o que o organizador faz e pensa neste turno.
             let action = self.voice.action.as_ref().map(action_text);
             let thought = thought_tail(&self.voice.thought, 3, 140);
-            body = body.child(div().flex().flex_col().gap(px(8.)).p(px(12.)).rounded(px(10.)).border_1().border_color(theme::border())
+            // Texto solto não vira nó de acessibilidade: o estado inteiro vai no nome do bloco.
+            let spoken = [Some(self.voice_status().to_string()), self.voice.target.clone(), action.clone()]
+                .into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            header = header.child(div().id("voice-status").role(Role::Status).aria_label(spoken).flex().flex_col().gap(px(8.)).p(px(12.)).rounded(px(10.)).border_1().border_color(theme::border())
                 .child(div().flex().items_center().gap(px(12.))
                     .child(self.render_equalizer(4., 28., 4.).gap(px(3.)))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
@@ -1439,60 +1759,59 @@ impl Hangar {
         let ready = live && matches!(self.voice.phase, Some(Phase::Live));
         body = body.child(div().flex().items_center().gap(px(6.))
             .child(Button::new("voice-mode-direct").ghost().small().rounded_full().label(tr("voice_mode_direct"))
-                .selected(self.voice.mode == Mode::Direct).disabled(!ready)
+                .selected(self.voice.mode == Mode::Direct).aria_selected(self.voice.mode == Mode::Direct).disabled(!ready)
                 .on_click(cx.listener(|this, _, _, cx| this.set_voice_mode(Mode::Direct, cx))))
             .child(Button::new("voice-mode-plan").ghost().small().rounded_full().label(tr("voice_mode_plan"))
-                .selected(self.voice.mode == Mode::Plan).disabled(!ready)
+                .selected(self.voice.mode == Mode::Plan).aria_selected(self.voice.mode == Mode::Plan).disabled(!ready)
                 .on_click(cx.listener(|this, _, _, cx| this.set_voice_mode(Mode::Plan, cx)))));
         if let Some((path, markdown)) = &self.voice.plan {
             let open = path.clone();
-            body = body.child(div().flex().flex_col().gap(px(6.))
-                .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(tr("voice_plan_title")))
-                .child(scrolled("voice-plan-scroll", &self.voice.plan_scroll, 320.,
-                    div().text_sm().child(TextView::markdown("voice-plan", markdown.clone()).selectable(true).scrollable(false))))
-                .child(div().flex().items_center().justify_between().gap(px(8.))
-                    .child(div().min_w_0().overflow_hidden().text_size(px(10.5)).text_color(theme::faint()).child(path.display().to_string()))
-                    .child(Button::new("voice-plan-open").ghost().small().label(tr("voice_plan_open"))
-                        .on_click(cx.listener(move |_, _, _, cx| cx.open_with_system(&open))))));
+            let expanded = self.voice.plan_open.unwrap_or(self.voice.mode == Mode::Plan);
+            let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+            let first = markdown.lines().map(|l| l.trim().trim_start_matches('#').trim()).find(|l| !l.is_empty()).unwrap_or_default().to_owned();
+            // Documento lido numa caixa pequena: títulos no tamanho do texto, como nos relatórios da conversa.
+            let style = gpui_kit::component::text::TextViewStyle::default().heading_font_size(|level, _| px(if level <= 1 { 13. } else { 12. }));
+            body = body.child(div().flex().flex_col().gap(px(4.))
+                .child(div().flex().items_center().gap(px(6.))
+                    .child(Button::new("voice-plan-toggle").ghost().small().flex_shrink_0().toggled(expanded)
+                        .icon(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).label(tr("voice_plan_title"))
+                        .on_click(cx.listener(move |this, _, _, cx| { this.voice.plan_open = Some(!expanded); cx.notify(); })))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(10.5)).text_color(theme::faint()).child(name))
+                    .child(Button::new("voice-plan-open").ghost().small().flex_shrink_0().label(tr("voice_plan_open"))
+                        .on_click(cx.listener(move |_, _, _, cx| cx.open_with_system(&open)))))
+                .child(if expanded {
+                    scrolled("voice-plan-scroll", &self.voice.plan_scroll, 180.,
+                        div().text_xs().text_color(theme::text()).child(TextView::markdown("voice-plan", markdown.clone()).selectable(true).scrollable(false).style(style)))
+                } else {
+                    div().px(px(8.)).text_xs().text_color(theme::muted()).truncate().child(first).into_any_element()
+                }));
         }
         body = body.children(self.render_voice_usage());
-        if let Some((picker, _)) = &self.voice.voice_select {
-            body = body.child(div().flex().items_center().justify_between().gap(px(12.))
-                .child(div().text_xs().text_color(theme::muted()).child(tr_shared("codex_voice_label", &[])))
-                .child(div().w(px(200.)).child(Select::new(picker).small().disabled(live).accessibility_label(tr_shared("codex_voice_label", &[])))));
+        let settings_open = self.voice.settings_open;
+        body = body.child(div().flex().flex_col().gap(px(2.))
+            .child(Button::new("voice-settings-toggle").ghost().small().w_full().toggled(settings_open)
+                .icon(if settings_open { IconName::ChevronDown } else { IconName::ChevronRight })
+                .child(div().flex_1().min_w_0().flex().items_center().gap(px(8.))
+                    .child(div().flex_shrink_0().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(tr("voice_settings")))
+                    .when(!settings_open, |el| el.child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme::faint())
+                        .child(self.voice_settings_summary()))))
+                .on_click(cx.listener(move |this, _, _, cx| { this.voice.settings_open = !settings_open; cx.notify(); }))));
+        if settings_open {
+            body = self.render_voice_settings(body, live);
         }
-        if let Some((picker, _)) = &self.voice.account_select {
-            body = body.child(div().flex().items_center().justify_between().gap(px(12.))
-                .child(div().text_xs().text_color(theme::muted()).child(tr("voice_account")))
-                .child(div().w(px(200.)).child(Select::new(picker).small().disabled(live).accessibility_label(tr("voice_account")))));
-        }
-        // Abertos também na chamada: o par do modo atual troca já no próximo turno.
-        for (mode, title) in [(Mode::Direct, "voice_mode_direct"), (Mode::Plan, "voice_mode_plan")] {
-            let at = slot(mode);
-            if self.voice.model_select[at].is_none() && self.voice.effort_select[at].is_none() { continue; }
-            body = body.child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(tr(title)));
-            for (select, key) in [(&self.voice.model_select[at], "voice_organizer_model"), (&self.voice.effort_select[at], "voice_organizer_effort")] {
-                let Some((picker, _)) = select else { continue };
-                let label = format!("{} · {}", tr(title), tr(key));
-                body = body.child(div().flex().items_center().justify_between().gap(px(12.))
-                    .child(div().text_xs().text_color(theme::muted()).child(tr(key)))
-                    .child(div().w(px(200.)).child(Select::new(picker).small().accessibility_label(label))));
-            }
-        }
-        match &self.voice.organizer_models {
-            Some(Ok(_)) => body = body.child(div().text_xs().text_color(theme::faint()).whitespace_normal().child(tr("voice_organizer_hint"))),
-            Some(Err(error)) => body = body.child(div().text_xs().text_color(theme::danger()).whitespace_normal()
-                .child(format!("{} {error}", tr("voice_models_failed")).trim_end().to_owned())),
-            None if self.voice.models_seq > 0 => body = body.child(div().text_xs().text_color(theme::muted()).child(tr("voice_models_loading"))),
-            None => {}
+        // Falha do catálogo aparece com os Ajustes fechados também.
+        if let Some(Err(error)) = &self.voice.organizer_models {
+            body = body.child(div().text_xs().text_color(theme::danger()).whitespace_normal()
+                .child(format!("{} {error}", tr("voice_models_failed")).trim_end().to_owned()));
         }
         if let Some(draft) = &self.voice.draft {
             body = body.child(div().flex().flex_col().gap(px(4.)).p(px(10.)).rounded(px(8.)).border_1().border_color(theme::warning())
                 .child(div().text_xs().text_color(theme::warning()).child(tr("voice_draft_held")))
                 .child(div().text_sm().text_color(theme::text()).whitespace_normal().child(draft.clone())));
         }
+        let mut footer = div().flex_none().flex().flex_col().gap(px(8.)).p(px(16.)).pt(px(12.)).border_t_1().border_color(theme::border());
         if let Some(error) = &self.voice.error {
-            body = body.child(div().text_xs().text_color(theme::danger()).whitespace_normal().child(error.clone()));
+            footer = footer.child(div().id("voice-error").role(Role::Alert).aria_label(error.clone()).text_xs().text_color(theme::danger()).whitespace_normal().child(error.clone()));
         }
         let actions = if live {
             let mute = if self.voice.muted { "codex_voice_unmute_short" } else { "codex_voice_mute_short" };
@@ -1510,7 +1829,45 @@ impl Hangar {
             div().flex().justify_end().child(Button::new("voice-connect").primary().small().label(tr_shared("codex_voice_connect_short", &[]))
                 .on_click(cx.listener(|this, _, _, cx| this.start_voice(cx))))
         };
-        body.child(actions).into_any_element()
+        let middle = div().relative().flex_shrink(1.).min_h_0().flex().flex_col()
+            .child(div().id("voice-card-body").flex_shrink(1.).min_h_0().overflow_y_scroll().track_scroll(&self.voice.body_scroll).child(body))
+            .child(div().absolute().inset_0().child(Scrollbar::vertical(&self.voice.body_scroll).mode(ScrollbarMode::Always)));
+        div().id("voice-panel").role(Role::Group).aria_label(tr_shared("codex_voice_title", &[]))
+            .max_h(height).flex().flex_col().child(header).child(middle).child(footer.child(actions)).into_any_element()
+    }
+
+    /// Voz, conta e o par do organizador de cada modo, dentro dos Ajustes abertos.
+    fn render_voice_settings(&self, mut body: Div, live: bool) -> Div {
+        if let Some((picker, _)) = &self.voice.voice_select {
+            body = body.child(div().flex().items_center().justify_between().gap(px(12.))
+                .child(div().text_xs().text_color(theme::muted()).child(tr_shared("codex_voice_label", &[])))
+                .child(div().w(px(200.)).child(Select::new(picker).id("voice-select-voice").small().disabled(live).accessibility_label(tr_shared("codex_voice_label", &[])))));
+        }
+        if let Some((picker, _)) = &self.voice.account_select {
+            body = body.child(div().flex().items_center().justify_between().gap(px(12.))
+                .child(div().text_xs().text_color(theme::muted()).child(tr("voice_account")))
+                .child(div().w(px(200.)).child(Select::new(picker).id("voice-select-account").small().disabled(live).accessibility_label(tr("voice_account")))));
+        }
+        // Abertos também na chamada: o par do modo atual troca já no próximo turno.
+        for (mode, title) in [(Mode::Direct, "voice_mode_direct"), (Mode::Plan, "voice_mode_plan")] {
+            let at = slot(mode);
+            if self.voice.model_select[at].is_none() && self.voice.effort_select[at].is_none() { continue; }
+            body = body.child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(tr(title)));
+            for (select, key) in [(&self.voice.model_select[at], "voice_organizer_model"), (&self.voice.effort_select[at], "voice_organizer_effort")] {
+                let Some((picker, _)) = select else { continue };
+                let label = format!("{} · {}", tr(title), tr(key));
+                body = body.child(div().flex().items_center().justify_between().gap(px(12.))
+                    .child(div().text_xs().text_color(theme::muted()).child(tr(key)))
+                    .child(div().w(px(200.)).child(Select::new(picker).id(SharedString::from(format!("voice-select-{title}-{key}")))
+                        .small().accessibility_label(label))));
+            }
+        }
+        match &self.voice.organizer_models {
+            Some(Ok(_)) => body = body.child(div().text_xs().text_color(theme::faint()).whitespace_normal().child(tr("voice_organizer_hint"))),
+            None if self.voice.models_seq > 0 => body = body.child(div().text_xs().text_color(theme::muted()).child(tr("voice_models_loading"))),
+            _ => {}
+        }
+        body
     }
 }
 
@@ -1525,6 +1882,56 @@ mod tests {
     use core::prelude::v1::test;
 
     fn ev(id: &str, kind: &str, text: &str) -> (String, String, String) { (id.into(), kind.into(), text.into()) }
+
+    #[test]
+    fn open_with_request_answers_only_after_delivery() {
+        let delivered = Ok(Delivery { ok: true, delivered: true });
+        let queued = Ok(Delivery { ok: true, delivered: false });
+        let failed: Result<Delivery, Failure> = Err(Failure::local("x"));
+        assert!(opened_reply("s", true, None).unwrap().contains("criada e aberta"), "sem request, como antes");
+        assert!(opened_reply("s", false, None).is_err());
+        assert!(opened_reply("s", true, Some(&delivered)).unwrap().starts_with("Sessão s aberta e pedido enviado"));
+        assert!(opened_reply("s", true, Some(&queued)).unwrap().contains("fila"));
+        let both = opened_reply("s", true, Some(&failed)).unwrap_err();
+        assert!(both.contains("aberta") && both.contains("não chegou"), "diz as duas coisas");
+        assert!(opened_reply("s", true, Some(&Ok(Delivery { ok: false, delivered: false }))).is_err());
+        assert!(opened_reply("s", false, Some(&delivered)).unwrap_err().contains("pedido enviado"));
+    }
+
+    const SCREEN: &str = "Window \"Hangar\"\n  GenericContainer #hangar-root\n    Group \"Barra\" #topbar\n      Button \"Voz\" #topbar-voice\n    Group \"Voz\" #voice-panel\n      Status \"Ouvindo · hangar-5\" #voice-status\n";
+
+    #[test]
+    fn read_screen_picks_the_area_then_settings_then_dialog_then_window() {
+        assert_eq!(screen_root(SCREEN, None), Ok(None), "sem diálogo: a janela inteira");
+        assert_eq!(screen_root(SCREEN, Some(" #voice-panel ")), Ok(Some("voice-panel".into())));
+        let dialog = format!("{SCREEN}    Dialog \"Buscar\" #search-overlay\n");
+        assert_eq!(screen_root(&dialog, None), Ok(Some("search-overlay".into())));
+        let settings = format!("{dialog}    Dialog \"Configurações\" #settings-dialog\n      Group #settings-page-advanced\n");
+        assert_eq!(screen_root(&settings, None), Ok(Some("settings-dialog".into())), "Configurações vencem outro diálogo");
+        assert_eq!(screen_root(&settings, Some("settings-page-advanced")), Ok(Some("settings-page-advanced".into())));
+        let missing = screen_root(SCREEN, Some("costs-page")).unwrap_err();
+        assert!(missing.starts_with("A área costs-page não está na tela. Áreas visíveis: hangar-root, topbar, topbar-voice, voice-panel, voice-status."), "{missing}");
+        assert!(!missing.contains("Ouvindo"), "só ids, nunca o texto da tela");
+    }
+
+    #[test]
+    fn read_screen_cuts_whole_lines_and_says_so() {
+        assert_eq!(clip_lines(SCREEN, 10_000), SCREEN);
+        let cut = clip_lines(SCREEN, 60);
+        assert_eq!(cut, "Window \"Hangar\"\n  GenericContainer #hangar-root\n[cortado: faltam 4 linhas; peça uma área menor]\n");
+    }
+
+    #[test]
+    fn hangar_action_ids_are_unique_and_stable() {
+        let ids: Vec<&str> = HANGAR_ACTIONS.iter().map(|a| a.id).collect();
+        assert_eq!(ids, ["topbar-settings", "settings-back", "sidebar-new-session", "sidebar-fold", "side-toggle", "side-tab-context", "side-tab-files",
+            "side-tab-activity", "side-tab-git", "terminal-show", "terminal-close", "topbar-voice", "voice-panel-close", "topbar-cost", "costs-usage", "costs-back"],
+            "o organizador guarda estes ids: mudar um quebra o que ele já aprendeu na chamada");
+        assert_eq!(ids.iter().collect::<HashSet<_>>().len(), ids.len());
+        assert!(HANGAR_ACTIONS.iter().all(|a| !a.label.is_empty() && !a.description.is_empty()));
+        let text = hangar_actions_text(&["general", "voice"]);
+        assert!(text.contains("- topbar-settings: Abrir configurações.") && text.ends_with("general, voice."));
+    }
 
     #[test]
     fn thought_keeps_a_short_tail_and_shows_last_lines() {

@@ -512,8 +512,7 @@ async fn status_turn(bad_rate:bool) -> Vec<Value> {
             }
         }
     });
-    let (policy,calls) = policy_server().await;
-    let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
+    let (policy,calls) = policy_server().await;    let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
         metadata:json!({"name":"session","headless":true,"session_id":"sid-1","initialized":true}),
         binding:CanoBinding { pid:42,escuta:format!("tcp:{address}"),token:"secret-test".into(),versao:2 },
         lease_path:dir.path().join("key.lock"),state_path:dir.path().join("key.queue-state.json"),projection_dir:dir.path().join("projection"),
@@ -538,11 +537,12 @@ async fn status_turn(bad_rate:bool) -> Vec<Value> {
                 if event.channel == "problem" { problems.push(event.data.clone()); }
                 if event.channel == "state" && event.data["state"] == "idle" { idle_seen = true; }
             }
-            // Os serviços do Python que sobraram (uso, carimbo, sidecar) já foram pedidos; o preparo e o status são locais.
-            if idle_seen && calls.load(std::sync::atomic::Ordering::SeqCst) > 0 && (!bad_rate || !problems.is_empty()) { break; }
+            // Preparo, status, uso, carimbo e evento desconhecido são locais: o Python não é chamado neste turno.
+            if idle_seen && (!bad_rate || !problems.is_empty()) { break; }
         }
     }).await.expect("o turno precisa terminar");
     handle.stop().await.unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst),0,"nenhum serviço deste turno precisa mais do Python");
     server.await.unwrap();
     let state:State = serde_json::from_slice(&std::fs::read(dir.path().join("key.queue-state.json")).unwrap()).unwrap();
     assert!(!state.operations.keys().any(|id|id.starts_with("policy:")),"serviço sem efeito não entra no diário");
@@ -884,7 +884,7 @@ async fn codex_view_and_actor_error_reach_live() {
 }
 
 #[tokio::test]
-async fn claude_headless_preview_still_on_events() {
+async fn claude_headless_view_and_preview_go_to_live_not_to_events() {
     let dir = tempfile::tempdir().unwrap();
     let (cano,server) = claude_cano(vec![json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"oi"}}})]).await;
     let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
@@ -895,16 +895,18 @@ async fn claude_headless_preview_still_on_events() {
     let lease = acquire_lease(&target.lease_path).unwrap();
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let (events,mut rx) = tokio::sync::broadcast::channel(64);
-    let (live,live_rx) = tokio::sync::watch::channel(None);
+    let (live,mut live_rx) = tokio::sync::watch::channel(None);
     let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
         .with_publisher(events).with_live(live);
     let connection = cano::connect(&target.binding).await.unwrap();
     let handle = RuntimeActor::spawn(target,QueueActor::start(store,lease),connection,engine);
-    let preview = tokio::time::timeout(std::time::Duration::from_secs(5),async {
-        loop { let event = rx.recv().await.unwrap(); if event.channel == "preview" { return event; } }
-    }).await.expect("prévia do Claude sem terminal segue no events");
-    assert_eq!(preview.data["text"],"oi");
-    assert!(live_rx.borrow().is_none(),"o canal em processo é só do Codex");
+    // Turno que a CLI já tocava (reabertura): a vista sai `working` junto com a prévia.
+    live_until(&mut live_rx,"prévia do Claude sem terminal no canal em processo",
+        |s|s.preview == "oi" && s.public_state["state"] == "working").await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    while let Ok(event) = rx.try_recv() {
+        assert!(!["preview","thinking","tool"].contains(&event.channel.as_str()),"prévia foi ao events: {}",event.channel);
+    }
     handle.stop().await.unwrap();
     server.await.unwrap();
 }

@@ -32,7 +32,14 @@ impl Drop for Rpc {
         if let Some(pid) = self.pid {
             let _ = crate::app::setup::system::hidden(std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()])).output();
         }
-        #[cfg(not(windows))]
+        // SIGTERM ao grupo e, após uma folga, SIGKILL em quem ficou; a espera não pode travar quem largou o Rpc.
+        // ponytail: o grupo pode, em tese, ser reaproveitado na folga; conferir com `group_alive` se isso aparecer.
+        #[cfg(target_os = "linux")]
+        if let Some(pgid) = self.pid.filter(|&p| p > 1 && p <= i32::MAX as u32) {
+            unsafe { libc::kill(-(pgid as i32), libc::SIGTERM); }
+            std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(500)); unsafe { libc::kill(-(pgid as i32), libc::SIGKILL); } });
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         let _ = self.pid;
     }
 }
@@ -64,16 +71,21 @@ pub fn find_codex() -> Option<Codex> {
 
 impl Rpc {
     pub async fn spawn(codex: &Codex, home: Option<&std::path::Path>) -> Result<(Rpc, async_channel::Receiver<Incoming>), RpcError> {
-        Self::spawn_program(&codex.bin, &["app-server"], Some(&codex.path), home).await
+        let mut env = vec![("PATH", std::ffi::OsString::from(&codex.path))];
+        if let Some(home) = home { env.push(("CODEX_HOME", home.as_os_str().to_owned())); }
+        Self::spawn_program(&codex.bin, &["app-server".as_ref()], &env).await
     }
 
-    async fn spawn_program(program: impl AsRef<std::ffi::OsStr>, args: &[&str], path: Option<&str>, home: Option<&std::path::Path>) -> Result<(Rpc, async_channel::Receiver<Incoming>), RpcError> {
+    /// Qualquer servidor JSON-RPC de um objeto por linha (o MCP do HCC também); `env` soma ao herdado.
+    pub async fn spawn_program(program: impl AsRef<std::ffi::OsStr>, args: &[&std::ffi::OsStr], env: &[(&str, std::ffi::OsString)]) -> Result<(Rpc, async_channel::Receiver<Incoming>), RpcError> {
         let mut command = Command::new(program);
         command.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
-        if let Some(path) = path { command.env("PATH", path); }
-        if let Some(home) = home { command.env("CODEX_HOME", home); }
+        for (key, value) in env { command.env(key, value); }
         #[cfg(windows)]
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: sem console piscando ao ligar a voz
+        // Grupo próprio: o Drop derruba os netos (o agente do HCC) junto, não só o filho direto.
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command.spawn().map_err(|_| RpcError::Spawn)?;
         let pid = child.id();
         let stdin = child.stdin.take().ok_or(RpcError::Spawn)?;
@@ -113,7 +125,9 @@ impl Rpc {
         tokio::time::timeout(DEADLINE, send).await.unwrap_or(Err(RpcError::Timeout))
     }
 
-    pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> {
+    pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> { self.request_within(method, params, DEADLINE).await }
+
+    pub async fn request_within(&self, method: &str, params: Value, deadline: Duration) -> Result<Value, RpcError> {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, tx);
@@ -125,7 +139,7 @@ impl Rpc {
             self.pending.lock().unwrap().remove(&id);
             return Err(error);
         }
-        match tokio::time::timeout(DEADLINE, rx).await {
+        match tokio::time::timeout(deadline, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(RpcError::Closed),
             Err(_) => { self.pending.lock().unwrap().remove(&id); Err(RpcError::Timeout) }
@@ -174,8 +188,8 @@ mod tests {
     #[tokio::test]
     async fn exited_child_fails_pending_requests() {
         // Um "codex" que sai na hora: a request pendente falha com Closed em vez de esperar o prazo.
-        let (program, args): (&str, &[&str]) = if cfg!(windows) { ("cmd", &["/c", "exit"]) } else { ("true", &[]) };
-        let (rpc, incoming) = Rpc::spawn_program(program, args, None, None).await.unwrap();
+        let (program, args): (&str, Vec<&std::ffi::OsStr>) = if cfg!(windows) { ("cmd", vec!["/c".as_ref(), "exit".as_ref()]) } else { ("true", vec![]) };
+        let (rpc, incoming) = Rpc::spawn_program(program, &args, &[]).await.unwrap();
         let result = rpc.request("initialize", serde_json::json!({})).await;
         assert!(matches!(result, Err(RpcError::Closed)));
         assert!(matches!(incoming.recv().await, Ok(Incoming::Exited)));

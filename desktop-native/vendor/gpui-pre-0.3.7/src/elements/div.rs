@@ -1899,9 +1899,13 @@ impl Element for Div {
     fn a11y_role(&self) -> Option<accesskit::Role> {
         // Nodes with `GenericContainer` should never be reported to accesskit.
         // Equivalent to an HTML div with no role.
-        self.interactivity
-            .override_role
-            .filter(|role| *role != accesskit::Role::GenericContainer)
+        match self.interactivity.override_role {
+            Some(accesskit::Role::GenericContainer) => None,
+            Some(role) => Some(role),
+            // Área clicável sem papel: botão, para leitor de tela e automação a acharem e acionarem. Com outros
+            // controles dentro, o construtor da árvore a rebaixa a grupo (`A11yNodeBuilder::pop`).
+            None => (!self.interactivity.click_listeners.is_empty()).then_some(accesskit::Role::Button),
+        }
     }
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
@@ -2587,6 +2591,11 @@ impl Interactivity {
                                                 cx,
                                             );
                                             self.paint_scroll_listener(hitbox, &style, window, cx);
+                                            if window.a11y.is_active()
+                                                && let Some(global_id) = global_id
+                                            {
+                                                window.a11y.node_hitboxes.insert(global_id.accesskit_node_id(), hitbox.id);
+                                            }
                                         }
 
                                         self.paint_keyboard_listeners(window, cx);
@@ -3585,7 +3594,26 @@ impl Interactivity {
         if let Some(count) = self.aria.column_count {
             node.set_column_count(count);
         }
-        if !self.click_listeners.is_empty() {
+        // Gatilho que abre no mouse-down (popover, menu) não tem ouvinte de clique, mas o clique pela acessibilidade
+        // simula pressionar e soltar sobre ele: o papel de controle basta para anunciar a ação.
+        let actionable = matches!(
+            self.override_role,
+            Some(
+                accesskit::Role::Button
+                    | accesskit::Role::Tab
+                    | accesskit::Role::MenuItem
+                    | accesskit::Role::MenuItemCheckBox
+                    | accesskit::Role::MenuItemRadio
+                    | accesskit::Role::CheckBox
+                    | accesskit::Role::Switch
+                    | accesskit::Role::RadioButton
+                    | accesskit::Role::ComboBox
+                    | accesskit::Role::ListBoxOption
+                    | accesskit::Role::TreeItem
+                    | accesskit::Role::Link
+            )
+        );
+        if !self.click_listeners.is_empty() || actionable {
             node.add_action(accesskit::Action::Click);
         }
         if self.tracked_focus_handle.is_some() || self.focusable {

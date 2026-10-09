@@ -33,6 +33,11 @@ mod voice;
 #[cfg(test)]
 #[path = "../vendor/gpui-pre-0.3.7/src/elements/list_tail.rs"]
 mod list_tail_tests;
+#[cfg(test)]
+mod a11y_snapshot_tests {
+    use gpui_kit::accesskit;
+    include!("../vendor/gpui-pre-0.3.7/src/window/a11y/snapshot.rs");
+}
 use gpui_kit::{component::{Root, Theme, ThemeMode}, *};
 use std::{borrow::Cow, sync::Arc};
 
@@ -41,7 +46,7 @@ gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, 
     SquarePen, FilePlus, Wrench, Circle, CircleDashed, ChartColumn, Table, ListChecks, Download, Clock, Languages, Banknote,
     Zap, Rocket, MessageCircle, Key, Pencil, GripVertical, AudioLines, Volume2, Hash, LogOut, Smartphone, FolderTree, ChevronsDownUp, FileCode,
     RotateCcw, CornerDownRight, MessageSquare, Sparkles, CircleAlert, CircleCheck, TriangleAlert, Link, Wifi,
-    CircleStop, Upload, Workflow, CloudDownload, ArrowDownToLine, ArrowUpFromLine]);
+    CircleStop, Upload, Workflow, CloudDownload, ArrowDownToLine, ArrowUpFromLine, GitFork, Trash, MessageCircleQuestionMark]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
 pub const GROUP_GLYPH: &str = "brand/group-glyph.svg";

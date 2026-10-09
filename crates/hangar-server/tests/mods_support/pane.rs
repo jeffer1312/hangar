@@ -40,8 +40,9 @@ pub fn view(panes: &[(&str, &str, &str, &str)]) -> TerminalView {
         columns: Some(85),
         panes: panes.iter().map(|(id, title, key, label)| TerminalPane { id: (*id).into(), title: (*title).into(),
             placement: "dock".into(), columns: Some(58),
-            tree: json!({"type": "Box", "children": [button(key, label, if id.starts_with("pm-mock") { "pm-mock" } else { "vitrine" })]}) }).collect(),
+            tree: json!({"type": "Box", "children": [button(key, label, if id.starts_with("pm-mock") { "pm-mock" } else { "vitrine" })]}), data: None }).collect(),
         shown: None,
+        caps: Vec::new(),
     }
 }
 

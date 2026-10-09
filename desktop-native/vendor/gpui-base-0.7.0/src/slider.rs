@@ -418,6 +418,7 @@ pub struct Slider {
     state: Entity<SliderState>,
     axis: Axis,
     disabled: bool,
+    label: Option<gpui::SharedString>,
     base: Div,
     children: Vec<AnyElement>,
 }
@@ -428,6 +429,7 @@ impl Slider {
             state: state.clone(),
             axis: Axis::Horizontal,
             disabled: false,
+            label: None,
             base: div(),
             children: Vec::new(),
         }
@@ -450,6 +452,12 @@ impl Slider {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// The accessible name: a slider has no visible text of its own to be named by.
+    pub fn aria_label(mut self, label: impl Into<gpui::SharedString>) -> Self {
+        self.label = Some(label.into());
         self
     }
 }
@@ -477,6 +485,7 @@ impl RenderOnce for Slider {
             .id(("slider", entity_id))
             .test_support()
             .role(Role::Slider)
+            .when_some(self.label, |this, label| this.aria_label(label))
             .aria_numeric_value(state.value().end() as f64)
             .aria_min_numeric_value(state.min_value() as f64)
             .aria_max_numeric_value(state.max_value() as f64)

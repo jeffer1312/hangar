@@ -391,7 +391,10 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   `@cp_shortcut_key` no multiplexador: `close_all`/lista da sessão não o alcançam; clicar de novo
   reaproveita. A aba dele fica no painel de terminal de toda sessão. O estado chega pelo stream da
   lista (`shortcut_terminals`), nunca por SSE próprio; convidado não vê.
-- **Revisão de código:** neste repositório, revisão local e as verificações do projeto.
+- **Revisão de código:** revisão local e as verificações do projeto antes do PR; no PR, o app
+  CodeRabbit do GitHub revisa sozinho (`.coderabbit.yaml`); PR aberto antes da instalação só com
+  o comentário `@coderabbitai review`. Os comentários dele são achados a tratar, não ruído. A CLI
+  local do CodeRabbit continua fora deste repositório.
 - **MCP `hangar` (`/mcp`): identidade do chamador vai no cabeçalho e o backend resolve.** Chave
   vence pane, pane vence nome, pane ambíguo não resolve, nada resolvido é erro (nunca `cli`). O
   bearer é conferido ANTES do sub-app (mount passa por fora do `Depends`) e nunca entra no
@@ -507,11 +510,14 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   `problema=state_facts_unavailable`, nunca estado inventado. O `Sources` não tem método com corpo
   padrão: fonte que esquece um não compila. A lista lê o último `state` do `Monitor` vivo
   (`state/published.rs`) e não captura o pane dessa sessão. No modo `python` tudo roda como antes.
-  Codex sem terminal no Rust (`info.headless`) tem no lugar do `Monitor` o feed do runtime
+  Codex (`info.headless`) e Claude (provider `ClaudeHeadless`) sem terminal no Rust têm no lugar do `Monitor` o feed do runtime
   (`state/runtime_feed.rs`): o ator escreve vista, erro e prévia num canal em processo
   (`RuntimeRegistry::live`), fora do `/runtime/events`, e o feed publica os seis eventos (os quatro
-  mais `pensamento`/`ferramenta`) coalescidos em 150 ms; o Python não os produz nem os repassa. Evidência em
-  [plataforma.md](docs/decisoes/plataforma.md#estado-ao-vivo-de-claude-com-terminal-no-monitor-do-rust).
+  mais `pensamento`/`ferramenta`) coalescidos em 150 ms; o Python não os produz nem os repassa. No
+  Claude a sugestão sai dos fatos do plugin empurrados pelo Python, e a sessão parada mostra o estado
+  estacionado (linha de status, modo de permissão, `dead` sem sidecar nem troca), tudo no Rust. Só
+  o modo `python` volta a produzi-los. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#estado-do-claude-sem-terminal-no-feed-do-runtime).
 
 ## tmux + Claude Code truecolor
 

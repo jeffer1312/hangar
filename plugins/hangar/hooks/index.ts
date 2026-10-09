@@ -1,5 +1,6 @@
 import type { Register } from "claude-code";
 import { registerAsk } from "./ask";
+import { registerBtw } from "./btw";
 import { registerInput } from "./input";
 import { registerPerm } from "./perm";
 import { registerRate } from "./rate";
@@ -19,4 +20,6 @@ export const register: Register = (on) => {
   registerPerm(on);
   registerRate(on);
   registerUi(on);
+  // Depois do `ui.ts`: o painel do `/btw` fica por dentro da cadeia que ele espelha no app.
+  registerBtw(on);
 };

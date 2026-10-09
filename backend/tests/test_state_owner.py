@@ -318,3 +318,64 @@ async def test_nav_marker_only_reaches_owner_connections(rust, count_app):
     assert ("nav" in _nomes(vistos)) is count_app
     if not count_app:
         assert not any("segredo" in str(e.get("data", "")) for e in vistos)
+
+
+# --- Claude sem terminal: o feed do hub é dono dos seis, sugestão incluída ---
+
+_SEIS = {"state", "preview", "ask_question", "pensamento", "ferramenta", "suggest"}
+_HEADLESS_EVENTS = [
+    ("ask_question", "null"),
+    ("state", json.dumps({"session": "h", "state": "working", "headless": True})),
+    ("preview", json.dumps({"session": "h", "text": "em voo", "md": True, "full": True, "vivo": True})),
+    ("pensamento", json.dumps({"text": "pensando"})),
+    ("ferramenta", json.dumps({"text": ""})),
+    ("suggest", json.dumps({"text": "do rust"})),
+]
+
+
+@pytest.fixture
+def headless(tmp_path, monkeypatch):
+    from app import adapters
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    monkeypatch.setattr(sse, "_nav_arquivo", lambda: tmp_path / "nav.json")
+    monkeypatch.setattr(adapters.headless_sessions, "exists", lambda name: True)
+    adapter = _Adapter()
+    monkeypatch.setattr(sse, "get_adapter", lambda provider: adapter)
+    monkeypatch.setattr(sse.PreviewBroker, "get", _sem_broker)
+    monkeypatch.setattr(runtime_coordinator, "_current", _Dono("rust"))
+    monkeypatch.setitem(plugin_bridge._sugestoes, "h", "roda os testes")
+    jsonl = tmp_path / "sid.jsonl"
+    jsonl.write_text("")
+    return adapter, jsonl
+
+
+@pytest.mark.parametrize("modo,owns,rust", [
+    ("rust", True, True), ("pending", True, True), ("python", True, False), ("rust", False, False)])
+def test_claude_headless_state_is_rust_when_owned(monkeypatch, modo, owns, rust):
+    dono = (("claude", False), ("codex", True)) + ((("claude", True),) if owns else ())
+    monkeypatch.setattr(runtime_coordinator, "_current", _Dono(modo, dono))
+    assert sse._estado_do_rust(sse.CLAUDE_HEADLESS, "h") is rust
+
+
+async def test_claude_headless_internal_connection_sends_none_of_the_six(headless):
+    adapter, jsonl = headless
+    vistos = await _por(sse.merged_events("h", str(jsonl), provider="claude", side=True), 1.5)
+    assert vistos[0]["event"] == "info" and json.loads(vistos[0]["data"])["provider"] == "claude-headless"
+    assert not _SEIS & set(_nomes(vistos)), _nomes(vistos)
+    assert adapter.drains == [], "a fila do Claude sem terminal o ator drena sozinho"
+    assert adapter.tails == [], "a prévia gravada é suprimida no hub"
+
+
+async def test_claude_headless_python_mode_runs_python_state(headless, monkeypatch):
+    _adapter, jsonl = headless
+    monkeypatch.setattr(runtime_coordinator, "_current", _Dono("python"))
+    with pytest.raises(AssertionError, match="StateMonitor"):
+        await _coleta(sse.merged_events("h", str(jsonl), provider="claude", side=True), lambda v: False, limite=2.0)
+
+
+async def test_claude_headless_guest_reads_six_from_rust_channel(headless):
+    _adapter, jsonl = headless
+    async with _CanalRust(_HEADLESS_EVENTS):
+        gen = sse.merged_events("h", str(jsonl), provider="claude", count_app=False)
+        vistos = await _por(gen, 1.5)
+    assert [(e["event"], e["data"]) for e in vistos if e["event"] in _SEIS] == _HEADLESS_EVENTS

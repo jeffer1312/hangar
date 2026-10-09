@@ -431,6 +431,17 @@ impl Element for InlineFlow {
         let Some(layout) = request_layout.current.borrow().clone() else {
             return Vec::new();
         };
+        if window.is_a11y_active() {
+            let text: String = self
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    InlineFlowItem::Text { text, .. } | InlineFlowItem::Object { text, .. } => Some(text.as_ref()),
+                    _ => None,
+                })
+                .collect();
+            window.a11y_text(&text, bounds);
+        }
         let typography = request_layout.typography.clone();
         let text_style = &typography.text_style;
         let mut elements = Vec::with_capacity(layout.fragments.len());

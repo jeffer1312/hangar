@@ -1,7 +1,7 @@
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.7.0/MODIFICADO.md gpui-component-0.7.0/MODIFICADO.md
 --- gpui-component-0.7.0/MODIFICADO.md
 +++ gpui-component-0.7.0/MODIFICADO.md
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,45 @@
 +# Cópia modificada do gpui-component 0.7.0
 +
 +Origem: crate `gpui-component` 0.7.0 do crates.io (repositório `longbridge/gpui-kit`), licença Apache-2.0 (`LICENSE-APACHE`). Entra pelo `[patch.crates-io]` de `desktop-native/Cargo.toml`.
@@ -42,6 +42,11 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +quando a API equivalente existir no kit.
 +
 +Os testes que montam `KeyDownEvent` passam `physical_digit: None`, o campo novo da cópia de gpui-pre.
++
++Acessibilidade do `Button`: sem rótulo nem `accessibility_label`, o nome acessível é o texto da dica (botão só de
++ícone); `Button::aria_selected` marca a escolha (abas, modo) sem o visual de `selected`. Botão com `selected` anuncia selecionado. `Slider::aria_label`
++repassa o nome ao slider de gpui-base. O item de menu com a marca de escolhido (`checked`) anuncia marcado, e o
++invólucro do diálogo (`dialog/dialog.rs`) tem o papel de diálogo.
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.7.0/src/attachment.rs gpui-component-0.7.0/src/attachment.rs
 --- gpui-component-0.7.0/src/attachment.rs
 +++ gpui-component-0.7.0/src/attachment.rs
@@ -67,7 +72,50 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.7.0/src/button/button.rs gpui-component-0.7.0/src/button/button.rs
 --- gpui-component-0.7.0/src/button/button.rs
 +++ gpui-component-0.7.0/src/button/button.rs
-@@ -1472,6 +1472,7 @@
+@@ -591,6 +591,14 @@
+     }
+ }
+ 
++impl Button {
++    /// Accessibility-only selected state (tabs, list rows); unlike [`Selectable::selected`] it leaves the look alone.
++    pub fn aria_selected(mut self, selected: bool) -> Self {
++        self.base = self.base.aria_selected(selected);
++        self
++    }
++}
++
+ impl RenderOnce for Button {
+     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+         let style: ButtonVariant = self.variant;
+@@ -598,6 +606,8 @@
+         let hoverable = self.hoverable();
+         let disabled = self.disabled;
+         let selected = self.shows_selected_style();
++        // Escolhido de verdade (não o gatilho com menu aberto): o leitor precisa saber qual opção está marcada.
++        let chosen = self.selected;
+         let loading = self.loading;
+         let tooltip_placement = self.tooltip_placement;
+         let hover_group = self.hover_group;
+@@ -725,7 +735,9 @@
+         let accessibility_label = self
+             .accessibility_label
+             .clone()
+-            .or_else(|| self.label.clone());
++            .or_else(|| self.label.clone())
++            // Botão só de ícone: a dica é o único nome que ele tem.
++            .or_else(|| self.tooltip.as_ref().filter(|_| children.is_empty()).map(|(text, _)| text.clone()));
+         let content = h_flex()
+             .id("label")
+             .size_full()
+@@ -770,6 +782,7 @@
+             }
+         }))
+         .selected(selected)
++        .when(chosen, |this| this.aria_selected(true))
+         .disabled(disabled)
+         // Base layers semantic states over the builder chain, so the caller's
+         // own style is replayed inside each state to keep it the closest layer.
+@@ -1472,6 +1485,7 @@
                  keystroke: keystroke.clone(),
                  is_held: false,
                  prefer_character_input: false,
@@ -111,7 +159,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.7.0/src/dialog/dialog.rs gpui-component-0.7.0/src/dialog/dialog.rs
 --- gpui-component-0.7.0/src/dialog/dialog.rs
 +++ gpui-component-0.7.0/src/dialog/dialog.rs
-@@ -3,10 +3,11 @@
+@@ -3,10 +3,12 @@
  use std::{rc::Rc, sync::LazyLock, time::Duration};
  
  use gpui::{
@@ -119,13 +167,15 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +    Action, Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, BoxShadow, ClickEvent,
 +    Edges,
      FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-     SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
+-    SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
 -    prelude::FluentBuilder, px,
++    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, WindowControlArea, anchored, div,
++    hsla, point,
 +    canvas, prelude::FluentBuilder, px,
  };
  use gpui_base::{ElementExt as _, TextSelectionScopeId};
  use rust_i18n::t;
-@@ -20,7 +21,8 @@
+@@ -20,7 +22,8 @@
      v_flex,
  };
  
@@ -135,7 +185,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  pub use gpui_base::actions::{Cancel, Confirm};
  
  type OkHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static>;
-@@ -198,6 +200,7 @@
+@@ -198,6 +201,7 @@
  }
  
  type ContentBuilderFn = Rc<dyn Fn(DialogContent, &mut Window, &mut App) -> DialogContent + 'static>;
@@ -143,7 +193,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
  #[derive(Clone)]
  pub(crate) struct DialogProps {
-@@ -306,6 +309,7 @@
+@@ -306,6 +310,7 @@
      pub(crate) header: Option<AnyElement>,
      pub(crate) footer: Option<AnyElement>,
      pub(crate) content_builder: Option<ContentBuilderFn>,
@@ -151,7 +201,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      pub(crate) props: DialogProps,
  
      pub(super) button_props: DialogButtonProps,
-@@ -336,6 +340,7 @@
+@@ -336,6 +341,7 @@
              header: None,
              footer: None,
              content_builder: None,
@@ -159,7 +209,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              props: DialogProps::default(),
              children: Vec::new(),
              layer_ix: 0,
-@@ -361,6 +366,15 @@
+@@ -361,6 +367,15 @@
          self
      }
  
@@ -175,7 +225,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Sets the title of the dialog.
      pub fn title(mut self, title: impl IntoElement) -> Self {
          self.title = Some(title.into_any_element());
-@@ -522,6 +536,7 @@
+@@ -522,6 +537,7 @@
          let style = self.style.clone();
          let props = self.props.clone();
          let button_props = self.button_props.clone();
@@ -183,7 +233,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          gpui_base::DialogTrigger::new(trigger)
              .on_open(move |window, cx| {
-@@ -529,8 +544,9 @@
+@@ -529,8 +545,9 @@
                  let style = style.clone();
                  let props = props.clone();
                  let button_props = button_props.clone();
@@ -194,7 +244,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                          .refine_style(&style)
                          .button_props(button_props.clone())
                          .with_props(props.clone())
-@@ -543,7 +559,9 @@
+@@ -543,7 +560,9 @@
                                      content
                                  }
                              }
@@ -205,7 +255,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  });
              })
              .into_any_element()
-@@ -600,16 +618,7 @@
+@@ -600,16 +619,7 @@
              paddings.bottom = pb.to_pixels(base_size, rem_size);
          }
  
@@ -223,7 +273,15 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          anchored()
              .position(point(window_paddings.left, window_paddings.top))
-@@ -680,6 +689,19 @@
+@@ -617,6 +627,7 @@
+             .child(
+                 div()
+                     .id("dialog")
++                    .role(gpui::Role::Dialog)
+                     .test_support()
+                     .occlude()
+                     .w(view_size.width)
+@@ -680,6 +691,19 @@
                                          .w(width)
                                          .when_some(self.props.max_width, |this, w| this.max_w(w))
                                          .max_h(max_height)
@@ -243,7 +301,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                                          .child(
                                              v_flex()
                                                  .flex_1()
-@@ -781,7 +803,8 @@
+@@ -781,7 +805,8 @@
                                      move |this, delta| {
                                          this.position(point(
                                              window_paddings.left + x,
@@ -311,6 +369,46 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
                                  // Set up the subscription for dismiss handling.
                                  // Hold a Weak here, not a strong clone: the closure
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.7.0/src/menu/menu_item.rs gpui-component-0.7.0/src/menu/menu_item.rs
+--- gpui-component-0.7.0/src/menu/menu_item.rs
++++ gpui-component-0.7.0/src/menu/menu_item.rs
+@@ -15,6 +15,7 @@
+     style: StyleRefinement,
+     disabled: bool,
+     selected: bool,
++    checked: bool,
+     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
+     children: SmallVec<[AnyElement; 2]>,
+@@ -31,6 +32,7 @@
+             style: StyleRefinement::default(),
+             disabled: false,
+             selected: false,
++            checked: false,
+             on_click: None,
+             on_hover: None,
+             children: SmallVec::new(),
+@@ -43,6 +45,12 @@
+         self
+     }
+ 
++    /// The item is the current choice (the check mark), announced as checked.
++    pub(crate) fn checked(mut self, checked: bool) -> Self {
++        self.checked = checked;
++        self
++    }
++
+     /// Set the accessible label for the menu item.
+     pub(crate) fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+         self.aria_label = Some(label.into());
+@@ -99,6 +107,7 @@
+             .role(Role::MenuItem)
+             .when_some(self.aria_label, |this, label| this.aria_label(label))
+             .aria_selected(self.selected)
++            .when(self.checked, |this| this.aria_toggled(gpui::Toggled::True))
+             .group(&self.group_name)
+             .gap_x_1()
+             .py_1()
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.7.0/src/menu/mod.rs gpui-component-0.7.0/src/menu/mod.rs
 --- gpui-component-0.7.0/src/menu/mod.rs
 +++ gpui-component-0.7.0/src/menu/mod.rs
@@ -486,15 +584,18 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          })
      }
  
-@@ -1222,6 +1288,7 @@
+@@ -1222,8 +1288,10 @@
              Size::Small => (px(20.), options.radius.half()),
              _ => (px(26.), options.radius),
          };
 +        let item_height = self.appearance.as_ref().and_then(|appearance| appearance.item_height).unwrap_or(item_height);
  
          let this = MenuItemElement::new(ix, &group_name)
++            .checked(item.is_checked())
              .relative()
-@@ -1243,7 +1310,7 @@
+             .text_sm()
+             .py_0()
+@@ -1243,7 +1311,7 @@
              }))
              .when_some(item.a11y_label(), |this, label| this.aria_label(label));
  
@@ -503,7 +604,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              PopupMenuItem::Separator => this
                  .h_auto()
                  .p_0()
-@@ -1252,14 +1319,21 @@
+@@ -1252,14 +1320,21 @@
                  .border_b(px(2.))
                  .border_color(cx.theme().border)
                  .disabled(true),
@@ -533,7 +634,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              PopupMenuItem::ElementItem {
                  render,
                  icon,
-@@ -1399,6 +1473,12 @@
+@@ -1399,6 +1474,12 @@
                          .with_priority(self.priority + 1)
                      })
                  }),
@@ -546,7 +647,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          }
      }
  }
-@@ -1460,7 +1540,9 @@
+@@ -1460,7 +1541,9 @@
              radius: cx.theme().radius.min(px(8.)),
          };
  
@@ -557,7 +658,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              .id("popup-menu")
              .test_support()
              .role(Role::Menu)
-@@ -1475,6 +1557,8 @@
+@@ -1475,6 +1558,8 @@
              .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
              .popover_style(cx)
              .text_color(cx.theme().popover_foreground)
@@ -566,7 +667,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              .relative()
              .occlude()
              .child(
-@@ -1482,6 +1566,7 @@
+@@ -1482,6 +1567,7 @@
                      .id("items")
                      .p_1()
                      .gap_y_0p5()
@@ -574,7 +675,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      .min_w(rems(8.))
                      .when_some(self.min_width, |this, min_width| this.min_w(min_width))
                      .max_w(max_width)
-@@ -1502,7 +1587,7 @@
+@@ -1502,7 +1588,7 @@
              )
              .when(self.scrollable, |this| {
                  this.vertical_scrollbar(&self.scroll_handle)
@@ -766,6 +867,46 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          });
      }
  
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.7.0/src/slider.rs gpui-component-0.7.0/src/slider.rs
+--- gpui-component-0.7.0/src/slider.rs
++++ gpui-component-0.7.0/src/slider.rs
+@@ -89,6 +89,7 @@
+     style: StyleRefinement,
+     disabled: bool,
+     reverse: bool,
++    label: Option<gpui::SharedString>,
+ }
+ 
+ impl Slider {
+@@ -100,6 +101,7 @@
+             style: StyleRefinement::default(),
+             disabled: false,
+             reverse: false,
++            label: None,
+         }
+     }
+ 
+@@ -121,6 +123,12 @@
+         self
+     }
+ 
++    /// The accessible name of the slider.
++    pub fn aria_label(mut self, label: impl Into<gpui::SharedString>) -> Self {
++        self.label = Some(label.into());
++        self
++    }
++
+     /// Reverse the filled (highlighted) side of the track, default: false.
+     ///
+     /// By default the track is filled from the min end to the thumb. With
+@@ -261,6 +269,7 @@
+         BaseSlider::new(&self.state)
+             .axis(axis)
+             .disabled(self.disabled)
++            .when_some(self.label, |this, label| this.aria_label(label))
+             .flex()
+             .flex_1()
+             .items_center()
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.7.0/src/switch.rs gpui-component-0.7.0/src/switch.rs
 --- gpui-component-0.7.0/src/switch.rs
 +++ gpui-component-0.7.0/src/switch.rs

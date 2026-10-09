@@ -89,6 +89,7 @@ pub struct Slider {
     style: StyleRefinement,
     disabled: bool,
     reverse: bool,
+    label: Option<gpui::SharedString>,
 }
 
 impl Slider {
@@ -100,6 +101,7 @@ impl Slider {
             style: StyleRefinement::default(),
             disabled: false,
             reverse: false,
+            label: None,
         }
     }
 
@@ -118,6 +120,12 @@ impl Slider {
     /// Set the disabled state of the slider, default: false
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// The accessible name of the slider.
+    pub fn aria_label(mut self, label: impl Into<gpui::SharedString>) -> Self {
+        self.label = Some(label.into());
         self
     }
 
@@ -261,6 +269,7 @@ impl RenderOnce for Slider {
         BaseSlider::new(&self.state)
             .axis(axis)
             .disabled(self.disabled)
+            .when_some(self.label, |this, label| this.aria_label(label))
             .flex()
             .flex_1()
             .items_center()

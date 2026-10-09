@@ -5,8 +5,14 @@ a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
 ## Revisão de código
 
-neste repositório GitHub, usar revisão local e as verificações
-  do projeto. A instalação local do CodeRabbit pertence a outros repositórios.
+Antes do PR, revisão local e as verificações do projeto. No PR, o app CodeRabbit do GitHub
+(instalado em 08/10/2026 na conta `jeffer1312`, só nos repos `hangar` e
+`hangar-computer-control`) revisa cada PR aberto e cada commit novo nele; configuração em
+`.coderabbit.yaml` (pt-BR, perfil `chill`, lockfiles e as cópias da GPUI em `desktop-native/vendor/gpui-*` fora; `patches/` e
+`PATCHES.md` continuam revisados). `auto_pause_after_reviewed_commits: 0` porque o padrão do app
+(5) para de revisar sozinho depois de cinco commits revisados no mesmo PR. PR já
+aberto antes da instalação só é revisado com o comentário `@coderabbitai review`. A CLI local do
+CodeRabbit, usada nos repositórios da PMédico, continua fora deste.
 
 ## Diário de uso: causa e contexto no arquivo exportado
 
@@ -1519,7 +1525,40 @@ para 91–92 ms/s ([medicao-5b.md](../migracao-rust/parte5-codex/medicao-5b.md))
   não alimenta as fontes de prévia do Codex (`_push_channels`). Trocar de modo é troca de provider
   no `sse.py` e religa o hub. O canal privado serve os seis ao convidado e ao Connect.
 - A lista lê o `state` do feed em `Published` pela chave do rollout; sem chat aberto vale o fato do
-  Python. Claude sem terminal segue pelo caminho antigo (pendência da metade Claude).
+  Python. Claude sem terminal entrou no mesmo feed na C1 (seção abaixo).
+
+### Estado do Claude sem terminal no feed do runtime
+
+(08/10/2026, parte 5, C1; decisão do dono; contrato 41.) O mesmo feed do Codex passou a servir o
+Claude sem terminal (`Provider::ClaudeHeadless`): `state`, `preview`, `ask_question`, `suggest`,
+`pensamento` e `ferramenta` saem do ator Rust direto no hub, sem passar pelo Python, e o hub
+descarta as cópias que o Python ainda mandar (`state_python_leak`). `last_usage`, `reload_stamp` e
+`unknown_private` também rodam no Rust.
+
+- Motivo: com uma sessão Claude sem terminal gerando resposta (medida de 08/10), o Python gastava
+  +33 ms/s e o Rust +14 ms/s, e o `state` saía a 1,3/s contra 0,7/s da `preview`. Cada evento
+  fazia a volta ator → Python → hub. Roteiro para repetir:
+  [medicao-c1.md](../migracao-rust/parte5-claude/medicao-c1.md).
+- `suggest` vem dos fatos do plugin que o Python empurra (o plugin ainda é dele até a C2). O feed
+  reage ao empurrão e relê o retrato dos fatos a cada 25 s (o que renova o interesse no Python),
+  na hora quando falta sequência e, depois de falha, a cada 5 s.
+- Sessão parada (fora do registro do Rust) mostra o estado estacionado: linha de status
+  (modelo, esforço, contexto), modo de permissão, último modo diferente de `plan` e o problema da
+  última vida. Sem sidecar e sem troca de modo ou transferência de agente em curso
+  (`transfer_active`/`in_transfer_ms` empurrados) o estado é `dead`.
+- O dono do estado no hub é escolhido pelos eventos e pelo provider: Claude e Codex sem terminal
+  publicam os mesmos seis, e a transferência de conversa entre eles (mesmo nome) troca o feed.
+- `native_message` foi para a C3 e `session.patch_meta` fica no Python (a 5B decidiu que o Rust
+  não grava o sidecar).
+
+Limites conhecidos:
+
+- O estado estacionado é recalculado quando o feed acorda, até 25 s depois da mudança; o Python
+  reagia em cerca de 1 s.
+- Sem fatos empurrados ainda, o estado é `idle`, nunca `dead`.
+- O problema da última vida vem só do sidecar durável; erro que não chegou ao sidecar não aparece.
+- O retrato dos fatos é lido dentro do laço do feed, antes de publicar: um Python travado atrasa
+  o estado ao vivo em até 1 s (o prazo do pedido) a cada 25 s, ou a cada 5 s depois de uma falha.
 
 ## Observação terminal Rust: erro visível, sem captura Python
 

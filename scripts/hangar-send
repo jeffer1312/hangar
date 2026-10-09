@@ -55,6 +55,8 @@
 #                                  openai-codex = a padrão).
 #                                  --subagente <modelo> (claude sem motor) define o modelo dos
 #                                  subagentes da sessão.
+#                                  --service-tier <default|priority> liga (priority) ou desliga o
+#                                  Fast: Codex, ou Claude com motor GPT no CLIProxyAPI local.
 #                                  --profile <nome> (só --provider omp) nasce num perfil do omp:
 #                                  login, sessões e config em ~/.omp/profiles/<nome>/agent.
 #                                  --conta auto deixa a cota escolher: a conta Claude com mais
@@ -401,7 +403,7 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--profile <nome>] [--headless] [--jev|--sem-jev]}"
+    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless] [--jev|--sem-jev]}"
     shift
     # servidor::nome cria a sessão NOUTRA máquina, pela API dela (peers.json), igual ao recado.
     remoto=""
@@ -417,7 +419,7 @@ if [[ "$1" == "--new" ]]; then
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--profile <nome>] [--headless] [--jev|--sem-jev]" >&2
+        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>] [--subagente <modelo>] [--service-tier <default|priority>] [--profile <nome>] [--headless] [--jev|--sem-jev]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
@@ -439,10 +441,13 @@ if [[ "$1" == "--new" ]]; then
     # Só com --provider omp; o backend recusa o resto e valida o nome.
     # --subagente: modelo dos subagentes (CLAUDE_CODE_SUBAGENT_MODEL); só Claude sem motor.
     # --conta com --provider codex: conta Codex (~/.codex-<nome>); `openai-codex` é a padrão.
-    cwd=""; engine=""; provider=""; conta=""; config_dir=""; model=""; effort=""; permissao=""; perfil=""; read_only=""; headless=""; jev=""; subagente=""; codex_conta=""
+    cwd=""; engine=""; provider=""; conta=""; config_dir=""; model=""; effort=""; permissao=""; perfil=""; read_only=""; headless=""; jev=""; subagente=""; codex_conta=""; service_tier=""
     remember_provider="false"
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --service-tier)
+                [[ -n "$service_tier" ]] && { echo "erro: --service-tier informado duas vezes" >&2; exit 2; }
+                service_tier="${2:?uso: --service-tier <default|priority>}"; shift 2 ;;
             --remember-provider)
                 [[ "$remember_provider" == "true" ]] && { echo "erro: --remember-provider informado duas vezes" >&2; exit 2; }
                 remember_provider="true"; shift ;;
@@ -619,8 +624,10 @@ if sys.argv[15] == "true":
     d["remember_provider"] = True
 if sys.argv[16]:
     d["creator"] = sys.argv[16]
+if sys.argv[17]:
+    d["service_tier"] = sys.argv[17]
 print(json.dumps(d))' \
-           "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao" "$perfil" "$read_only" "$headless" "$jev" "$subagente" "$codex_conta" "$remember_provider" "$criadora")
+           "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao" "$perfil" "$read_only" "$headless" "$jev" "$subagente" "$codex_conta" "$remember_provider" "$criadora" "$service_tier")
     creation_result=$(api POST /api/sessions "$body") || exit 1
     if ! herdado=$(python3 -c 'import json,sys
 result = json.load(sys.stdin)
@@ -638,7 +645,7 @@ print("".join(" [%s]" % p for p in partes))' "$headless" <<<"$creation_result");
     fi
     [[ -n "$remoto" ]] && name="$remoto::$name"
     [[ "$headless" == "false" ]] && headless=""
-    echo "sessão criada: $name ($cwd)${headless:+ [sem terminal]}$herdado${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${codex_conta:+ [conta codex: $codex_conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]}${subagente:+ [subagentes: $subagente]}${perfil:+ [perfil: $perfil]}${jev:+ [jev: $jev]} — fala com ela via: hangar-send $name \"msg\""
+    echo "sessão criada: $name ($cwd)${headless:+ [sem terminal]}$herdado${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${codex_conta:+ [conta codex: $codex_conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]}${subagente:+ [subagentes: $subagente]}${service_tier:+ [service tier: $service_tier]}${perfil:+ [perfil: $perfil]}${jev:+ [jev: $jev]} — fala com ela via: hangar-send $name \"msg\""
     exit 0
 fi
 

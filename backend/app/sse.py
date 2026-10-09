@@ -711,8 +711,8 @@ def _confirm_codex_queue(name: str, jsonl: str) -> None:
         queue.reconcile_delivered(committed, start, time.time(), grace=0, confirm_only=True)
 
 
-# Com o Rust de pé, estes saem do hub: os quatro primeiros do `Monitor` (Claude com terminal) e os
-# seis do feed do Codex sem terminal.
+# Com o Rust de pé, estes saem do hub: os quatro primeiros do `Monitor` (Claude com terminal), os
+# seis do feed do Claude e do Codex sem terminal.
 _RUST_STATE_EVENTS = ("state", "preview", "ask_question", "suggest", "pensamento", "ferramenta")
 # O hub pinga o canal a cada 10 s: três calados = conexão morta.
 _RUST_CHANNEL_IDLE_S = 30.0
@@ -729,9 +729,9 @@ class RustStateChannelError(Exception):
 
 def _estado_do_rust(provider: str, name: str) -> bool:
     """Com o Rust esperado ou de pé (`pending`/`rust`), o hub é dono do estado ao vivo em qualquer
-    porta e nada disso sobe aqui: Claude com terminal (o `Monitor`) e Codex sem terminal que o Rust
-    atende (o feed do runtime)."""
-    if provider not in ("claude", "codex"):
+    porta e nada disso sobe aqui: Claude com terminal (o `Monitor`) e Claude e Codex sem terminal
+    que o Rust atende (o feed do runtime)."""
+    if provider not in ("claude", CLAUDE_HEADLESS, "codex"):
         return False
     from app import runtime_coordinator
     owner = runtime_coordinator.current()
@@ -739,6 +739,8 @@ def _estado_do_rust(provider: str, name: str) -> bool:
         return False
     if provider == "claude":
         return True
+    if provider == CLAUDE_HEADLESS:
+        return owner.rust_owns("claude", True)
     return _codex_headless(name) and owner.rust_owns("codex", True)
 
 
@@ -1094,13 +1096,13 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         """Tarefas do estado ao vivo por chave: as do Python, o canal do hub, ou nada (conexão interna
         de sessão do Rust, que é o próprio hub). `rust` vem de quem montou o `broker`: reler o modo
         aqui deixaria os dois discordarem se ele mudasse no meio. Pensamento e ferramenta em voo do
-        Codex sem terminal também são do hub; nos outros, o Python os produz."""
+        Claude e do Codex sem terminal também são do hub; nos outros, o Python os produz."""
         if rust:
             fontes = {} if side else {"rust": asyncio.create_task(rust_state_pump())}
         else:
             fontes = {"state": asyncio.create_task(pump("state", _monitor_de(prov))),
                       "preview": asyncio.create_task(preview_pump(broker))}
-        if not (rust and prov == "codex"):
+        if not (rust and prov in ("codex", CLAUDE_HEADLESS)):
             fontes["pensamento"] = asyncio.create_task(em_voo_pump("pensamento", fonte_pensamento(name)))
             fontes["ferramenta"] = asyncio.create_task(em_voo_pump("ferramenta", fonte_ferramenta(name)))
         return fontes
@@ -1233,7 +1235,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 motivo_diag = "falha_pump"
                 raise data
             if event == "__rust__":
-                # Do `Monitor` do hub: já saiu com sugestão, pergunta, problema e entrega resolvidos.
+                # Do hub (`Monitor` ou feed do runtime): já saiu com sugestão, pergunta, problema e entrega resolvidos.
                 rust_event, rust_data = data
                 _sent[rust_event if rust_event in _sent else "other"] += 1
                 yield {"event": rust_event, "data": rust_data}

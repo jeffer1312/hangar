@@ -777,7 +777,7 @@ impl Hangar {
         } else { match &slot.status { Status::Connecting => Some(tr("term_connecting")),
             Status::Connected => None, Status::Failed(message) => Some(message.clone()) } };
         let failed = slot.kind == Kind::Shell && panel.shell_error.is_some() || matches!(slot.status, Status::Failed(_));
-        div().id("terminal-grid").role(Role::Term).aria_label(tr("term_toggle"))
+        div().id("terminal-grid").role(Role::Terminal).aria_label(tr("term_toggle"))
             .track_focus(&panel.focus).key_context("Terminal").relative().flex_1().min_h_0().overflow_hidden()
             .bg(theme::background()).child(slot.view.element())
             .child(canvas(move |area, window, cx| {

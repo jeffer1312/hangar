@@ -151,7 +151,7 @@ pub struct RuntimeEngine {
     mods:Option<crate::mods::state::Mods>,
     /// A vida deste ator no `Mods` (`Mods::new_life`), com que ele publica e é esquecido.
     mods_life:u64,
-    /// Canal em processo do hub (Codex sem terminal): estado, erro e prévia saem por ele.
+    /// Canal em processo do hub: estado, erro e prévia saem por ele.
     live:Option<LiveSender>,
 }
 
@@ -177,9 +177,8 @@ impl RuntimeEngine {
     pub fn with_policy(mut self,policy:PolicyClient) -> Self { self.policy = Some(policy); self }
     pub fn with_publisher(mut self,publisher:broadcast::Sender<RuntimeEvent>) -> Self { self.publisher = Some(publisher); self }
     pub fn with_revision(mut self,revision:Arc<AtomicU64>) -> Self { self.revision = revision; self }
-    /// Canal em processo do hub: estado, erro e prévia do Codex sem terminal saem por ele.
-    /// Só o Codex: o Claude sem terminal segue publicando no `events` (fora desta parte).
-    pub fn with_live(mut self,live:LiveSender) -> Self { if matches!(self.core,Core::Codex(_)) { self.live = Some(live); } self }
+    /// Canal em processo do hub: estado, erro e prévia da sessão sem terminal saem por ele, fora do `events`.
+    pub fn with_live(mut self,live:LiveSender) -> Self { self.live = Some(live); self }
     /// Processo subido agora pelo Rust: a abertura do Codex repete a política (ver `codex::Engine`).
     pub fn set_fresh_process(&mut self,fresh:bool) { if let Core::Codex(core) = &mut self.core { core.set_fresh_process(fresh); } }
     /// Liga a interface dos mods: o Claude sem terminal vira superfície `desktop` e publica no `Mods`.
@@ -649,7 +648,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:CanoConnection
                 Effect::Publish { channel,data } => {
                     if ["preview","thinking","tool"].contains(&channel.as_str()) {
                         channels.insert(channel.clone(),data.clone());
-                        // Prévia do Codex sem terminal só pelo canal do hub: no `events` ela subiria a
+                        // Prévia só pelo canal do hub: no `events` ela subiria a
                         // revisão e o Python a decodificaria a cada delta.
                         if !live.channel(&channel,&data) { publish(&events,&target,&mut revision,&channel,data); }
                     } else if ["voice","voice_target","rate"].contains(&channel.as_str()) {
@@ -1468,7 +1467,9 @@ const COSMETIC_POLICIES:[&str;4] = ["format_status","reload_stamp","last_usage",
 /// Serviço puro do ator: roda fora do laço, já que `prepare_prompt` lê imagem e `format_status` lê o `settings.json`.
 async fn run_local(kind:String,payload:Value,target:&RuntimeTarget,quota:Option<Value>) -> Result<Value,RuntimeError> {
     let mut meta = target.metadata.clone();
-    meta["provider"] = json!(target.provider);
+    // Os mesmos campos que o Python juntava ao sidecar antes de rodar o serviço.
+    meta["provider"] = json!(target.provider); meta["name"] = json!(target.name); meta["key"] = json!(target.key);
+    meta["generation"] = json!(target.generation); meta["jsonl"] = json!(target.transcript.to_string_lossy());
     tokio::task::spawn_blocking(move||local_policy::run(&kind,&payload,&meta,quota.as_ref()).unwrap_or_else(||Err(failure("policy_unavailable"))))
         .await.map_err(|_|failure("policy_job"))?
 }

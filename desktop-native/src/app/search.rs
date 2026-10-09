@@ -648,9 +648,14 @@ impl Hangar {
             .child(footer);
         let card = if appearance::get().surface_material == appearance::SurfaceMaterial::Glass { chrome::Glass::new(card, px(16.)).into_any_element() }
             else { card.into_any_element() };
-        Some(deferred(div().absolute().inset_0().bg(cx.theme().overlay).occlude()
+        // Sem tecla, o agente fecha pela acessibilidade: um "Fechar" sem tamanho, fora do desenho.
+        let close_search = cx.listener(|this, _: &(), window, cx| this.close_search(window, cx));
+        let close = div().id("search-close").absolute().size_0().role(Role::Button).aria_label(tr("close"))
+            .on_a11y_action(AccessibleAction::Click, move |_, window, cx| close_search(&(), window, cx));
+        Some(deferred(div().id("search-overlay").role(Role::Dialog).aria_label(web_with("lista_buscar", &[]))
+            .absolute().inset_0().bg(cx.theme().overlay).occlude()
             .on_any_mouse_down(cx.listener(|this, _, window, cx| { this.close_search(window, cx); cx.stop_propagation(); }))
-            .flex().items_start().justify_center().pt(viewport.height / 10.).child(card))
+            .flex().items_start().justify_center().pt(viewport.height / 10.).child(close).child(card))
             .with_priority(gpui_kit::base::POPUP_PRIORITY + 1).into_any_element())
     }
 

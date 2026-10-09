@@ -838,7 +838,6 @@ class RuntimeAdapter:
     async def state_stream(self, name, sid_get):
         slot = native_slot(name)
         key, generation, instance = slot.binding.key, slot.binding.generation, runtime_coordinator.current().instance
-        await runtime_coordinator.current()._push_channels(slot)
         last = -1
         while True:
             coordinator = runtime_coordinator.current()

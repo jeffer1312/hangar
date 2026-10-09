@@ -1,0 +1,440 @@
+{
+ "tz": "BRT3",
+ "cases": [
+  {
+   "name": "plan_mode_with_previous",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "plan_mode_with_previous",
+    "model": "claude-opus-5[1m]",
+    "effort": "high",
+    "context_window": 1000000,
+    "permission_mode": "plan",
+    "previous_non_plan": "acceptEdits"
+   },
+   "files": {
+    "home/.claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl": {
+     "text": "{\"type\": \"assistant\", \"message\": {\"usage\": {\"input_tokens\": 1500, \"cache_creation_input_tokens\": 1000, \"cache_read_input_tokens\": 0, \"output_tokens\": 500}}}\n"
+    }
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": "plan",
+    "claude_previous_non_plan": "acceptEdits",
+    "status_line": "🤖 Opus5·1M (high) │ 💬 2k/500 2k/1M",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "default_mode_no_previous",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "default_mode_no_previous",
+    "model": "claude-sonnet-4-5-20250929",
+    "effort": "low",
+    "permission_mode": "default",
+    "previous_non_plan": null
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": "default",
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Sonnet 4.5 (low)",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "plan_without_previous",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "plan_without_previous",
+    "model": "claude-haiku-5",
+    "permission_mode": "plan"
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": "plan",
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Haiku 5",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "problem_with_detail",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "problem_with_detail",
+    "model": "claude-opus-5",
+    "problema": [
+     "limite_de_uso",
+     "volta às 14:00"
+    ]
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5",
+    "problema": "limite_de_uso",
+    "problema_detalhe": "volta às 14:00"
+   }
+  },
+  {
+   "name": "problem_without_detail",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "problem_without_detail",
+    "model": "claude-opus-5",
+    "problema": [
+     "credencial",
+     null
+    ]
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5",
+    "problema": "credencial",
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "engine_with_account_prefix",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "engine_with_account_prefix",
+    "model": "deepseek/deepseek-v4",
+    "effort": "low",
+    "engine": "ds",
+    "engine_account": "ds",
+    "context_window": 128000
+   },
+   "files": {
+    "home/.claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl": {
+     "text": "{\"type\": \"assistant\", \"message\": {\"usage\": {\"input_tokens\": 1500, \"cache_creation_input_tokens\": 1000, \"cache_read_input_tokens\": 0, \"output_tokens\": 500}}}\n"
+    }
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 deepseek-v4 (low) │ 💬 2k/500 2k/128k",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "engine_without_account_keeps_prefix",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "engine_without_account_keeps_prefix",
+    "model": "deepseek/deepseek-v4",
+    "effort": "low"
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 deepseek/deepseek-v4 (low)",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "effort_from_account_settings",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "effort_from_account_settings",
+    "model": "claude-opus-5",
+    "config_dir": "{ROOT}/cfg",
+    "context_window": 200000
+   },
+   "files": {
+    "cfg/settings.json": {
+     "text": "{\"effortLevel\": \"medium\"}"
+    },
+    "cfg/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl": {
+     "text": "{\"type\": \"assistant\", \"message\": {\"usage\": {\"input_tokens\": 1500, \"cache_creation_input_tokens\": 1000, \"cache_read_input_tokens\": 0, \"output_tokens\": 500}}}\n"
+    }
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5 (medium) │ 💬 2k/500 2k/200k",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "effort_from_env",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "effort_from_env",
+    "model": "claude-opus-5"
+   },
+   "env": {
+    "CLAUDE_CODE_EFFORT_LEVEL": "xhigh"
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5 (xhigh)",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "effort_from_home_settings",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "effort_from_home_settings",
+    "model": "claude-opus-5"
+   },
+   "files": {
+    "home/.claude/settings.json": {
+     "text": "{\"effortLevel\": \"max\"}"
+    }
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5 (max)",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "no_model_no_status",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "no_model_no_status",
+    "permission_mode": "default"
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": "default",
+    "claude_previous_non_plan": null,
+    "status_line": null,
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "context_window_transcript_missing",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "context_window_transcript_missing",
+    "model": "claude-opus-5",
+    "context_window": 200000
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "context_window_transcript_without_usage",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "context_window_transcript_without_usage",
+    "model": "claude-opus-5",
+    "context_window": 200000
+   },
+   "files": {
+    "home/.claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl": {
+     "text": "{\"type\": \"user\", \"message\": {\"content\": \"oi\"}}\n"
+    }
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "transcript_without_context_window",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "transcript_without_context_window",
+    "model": "claude-opus-5"
+   },
+   "files": {
+    "home/.claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl": {
+     "text": "{\"type\": \"assistant\", \"message\": {\"usage\": {\"input_tokens\": 1500, \"cache_creation_input_tokens\": 1000, \"cache_read_input_tokens\": 0, \"output_tokens\": 500}}}\n"
+    }
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "transcript_moved_to_worktree_folder",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "transcript_moved_to_worktree_folder",
+    "model": "claude-opus-5",
+    "context_window": 1000000
+   },
+   "files": {
+    "home/.claude/projects/-work-proj--worktrees-x/11111111-2222-3333-4444-555555555555.jsonl": {
+     "text": "{\"type\": \"assistant\", \"message\": {\"usage\": {\"input_tokens\": 1500, \"cache_creation_input_tokens\": 1000, \"cache_read_input_tokens\": 0, \"output_tokens\": 500}}}\n"
+    }
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5 │ 💬 2k/500 2k/1M",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "cwd_with_trailing_slash",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": {
+    "cwd": "/work/proj/",
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "provider": "claude",
+    "headless": true,
+    "name": "cwd_with_trailing_slash",
+    "model": "claude-opus-5",
+    "context_window": 1000000
+   },
+   "files": {
+    "home/.claude/projects/-work-proj/11111111-2222-3333-4444-555555555555.jsonl": {
+     "text": "{\"type\": \"assistant\", \"message\": {\"usage\": {\"input_tokens\": 1500, \"cache_creation_input_tokens\": 1000, \"cache_read_input_tokens\": 0, \"output_tokens\": 500}}}\n"
+    }
+   },
+   "expected": {
+    "state": "idle",
+    "claude_permission_mode": null,
+    "claude_previous_non_plan": null,
+    "status_line": "🤖 Opus5 │ 💬 2k/500 2k/1M",
+    "problema": null,
+    "problema_detalhe": null
+   }
+  },
+  {
+   "name": "missing_sidecar_is_dead",
+   "kind": "parked_state",
+   "payload": {},
+   "meta": {},
+   "sidecar": null,
+   "expected": {
+    "state": "dead"
+   }
+  }
+ ]
+}

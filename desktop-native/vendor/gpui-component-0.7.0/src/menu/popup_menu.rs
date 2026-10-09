@@ -1291,6 +1291,7 @@ impl PopupMenu {
         let item_height = self.appearance.as_ref().and_then(|appearance| appearance.item_height).unwrap_or(item_height);
 
         let this = MenuItemElement::new(ix, &group_name)
+            .checked(item.is_checked())
             .relative()
             .text_sm()
             .py_0()

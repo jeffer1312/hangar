@@ -400,8 +400,16 @@ impl Element for TerminalGrid {
         (window.request_layout(style, [], cx), ())
     }
 
-    fn prepaint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (),
+    fn prepaint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (),
         window: &mut Window, _: &mut App) -> Self::PrepaintState {
+        // A grade é pintada célula a célula, sem elemento de texto: o leitor recebe a tela visível como texto.
+        if window.is_a11y_active() {
+            let screen = self.snapshot.cells.chunks(self.snapshot.cols.max(1))
+                .map(|cells| cells.iter().filter(|c| !c.flags.contains(Flags::WIDE_CHAR_SPACER))
+                    .map(|c| if c.flags.contains(Flags::HIDDEN) { ' ' } else { c.c }).collect::<String>().trim_end().to_owned())
+                .collect::<Vec<_>>().join("\n");
+            window.a11y_text(screen.trim_end(), bounds);
+        }
         let font = terminal_font(window);
         let font_size = terminal_size();
         let cell_width = window.text_system().shape_line("M".into(), px(font_size),

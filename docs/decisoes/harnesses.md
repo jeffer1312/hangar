@@ -344,6 +344,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   barra própria tem o contexto e o modelo lidos do transcript (`claude_context.py`, campos
   `context` e `model` da lista) e a cota da API de uso; a barra do Hangar, quando traz o número
   ou o nome, continua valendo.
+- **Janela de contexto do Claude com terminal vem da medida do plugin.** Ao terminar o turno,
+  `$.session.usage()` publica a janela junto do transcript, após conferir o UUID da conversa.
+  A janela declarada na retomada vence a medida anterior. A primeira resposta e uma medida nova
+  invalidam o cache sem esperar o TTL; a versão dos arquivos é capturada antes da leitura.
+  Ver [contexto na abertura com statusline personalizada](#contexto-na-abertura-com-statusline-personalizada).
 - **Hook nosso nunca bloqueia prompt, e a falha dele não some calada.** Em `SessionStart` e
   `UserPromptSubmit` o sufixo é `|| echo "<aviso>"` (texto puro, ASCII): sai com 0 e o aviso
   entra no contexto do modelo. Nos demais eventos o stdout não chega a ninguém e fica
@@ -471,6 +476,19 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Voz: o organizador só grava na própria pasta:** `workspace-write` com cwd em `~/.hangar/voz/arquivos`
   (fixa, nunca apagada) e sem raízes extras; o código da sessão é lido pelo caminho completo que a nota de
   contexto leva. Modelo e esforço vêm do card da voz (padrão: modelo do config do Codex, esforço `low`).
+- **`/btw` no nativo é o plugin do Hangar, não o overlay do Claude Code.** O `command.run` de
+  `btw` (`plugins/hangar/hooks/btw.tsx`) responde por `$.model.fork` num painel de mod, devolve
+  `{}` (nada no transcript) e o `ui.ts` espelha o painel. O app só envia `/btw` com `caps` contendo
+  `btw` no `plugin_ui`; sem isso avisa, porque o overlay embutido abriria no pane sem aparecer no
+  app. O `caps` existe só no Rust: na reserva em Python o `/btw` fica bloqueado. Sem terminal o app
+  manda `/hangar-btw` (o `/btw` embutido vira comando local antes dos hooks), o `prompt.submit` de
+  origem `sdk` o descarta antes do transcript, e `caps` e `data` vão pela ponte da superfície ao
+  `/ui`, que o Rust junta à vista dela (`SurfaceExtra`); sem extra, a vista sai como sempre.
+  O painel vai com `data` (estado estruturado, `btwView()`) além da árvore: o nativo o desenha com o
+  tema do app (`plugin_ui/btw.rs`) e cada ação é a `key` de mesmo nome da árvore, pela rota de clique.
+  "Bifurcar" repete o "f" do Claude Code: `$.agent.spawn({ subagentType: "fork" })` e, no fim do
+  agente, `$.prompt.submit` leva a resposta à conversa principal. Medição em
+  [Pergunta lateral pelo plugin](#pergunta-lateral-btw-pelo-plugin-08102026).
 
 ## O /clear e o rodapé do Claude Code
 
@@ -3191,6 +3209,25 @@ Medição (03/10/2026, sessão Claude com barra própria, Opus em `[1m]`): o tra
 tokens contra 489k a 510k da barra minutos antes (a conversa crescendo entre uma e outra); no
 nativo os anéis passaram de "sem dado" para Contexto 54% e a conta 100% (semanal).
 
+## Contexto na abertura com statusline personalizada
+
+08/10/2026, Claude Code 2.1.295. Sessão nova com Opus 5.5, sem alias `[1m]` e com
+statusline personalizada: o terminal mostrava `77k/1000k`, mas o contexto da lista era
+`76604/200000`. O transcript traz o uso, mas não a janela; o modelo da conta era `opus`
+e não havia limite no ambiente. A inferência acabava na reserva de 200k. O cache ainda guardava
+uma leitura sem resposta por 20 s, ocultando as mensagens iniciais.
+
+O `turn.complete` passou a publicar `{used, window}` de `$.session.usage()` pelo `/api/plugin/state`.
+O backend valida token e UUID contra o transcript rastreado e grava `<uuid>.context.json`
+com tmp exclusivo e troca atômica. Python e Rust leem essa janela, preservando a prioridade de
+um limite declarado na retomada e o uso mais recente do transcript. A versão do arquivo medida
+antes da leitura impede uma escrita concorrente de carimbar uma leitura velha como atual.
+
+Na prova com uma sessão Claude real com terminal e o plugin alterado, a primeira resposta
+publicou `72004/1000000`, igual a `72k/1000k` da statusline personalizada. Os testes reproduziram
+200k em vez de 1M, a primeira resposta presa no cache e a escrita entre leitura e armazenamento;
+depois da correção, passaram. `/clear` troca o transcript e não herda a medida da conversa anterior.
+
 ## Entrada terminal parada sem aviso
 
 (05/10/2026, DELPHI-02, `hangar-server-parte1`.) A sugestão esmaecida lida como rascunho
@@ -3307,3 +3344,54 @@ Conferência contra a base `e840c9e86`: seis casos novos falharam pelo motivo es
 erro de importação. Os dois transportes fecharam com 1009; os dois drains emitiram dois
 `turn/start` em vez de um; a confirmação idle chamou o drain; a reserva declarou `accepted`
 para um resultado incerto. Os mesmos casos passaram com a correção.
+
+## Pergunta lateral (/btw) pelo plugin (08/10/2026)
+
+Prova descartável no Claude Code 2.1.294, sessão `cx-btw-probe` com um mod de teste por
+`--plugin-dir`:
+
+- `command.run` recebe o `/btw` embutido (`source: builtin` em `$.command.list()`), com
+  `origin.kind = composer`, também no meio de um turno em streaming: o hook roda na hora.
+- Responder `{}` sem `next` não abre o overlay e não grava linha nenhuma no transcript; a pergunta
+  e a resposta ficaram fora do `.jsonl` nas quatro rodadas.
+- `$.model.fork({prompt})`: `nothing-to-fork` em 13 ms antes da primeira resposta; com conversa,
+  2 a 11 s, com o contexto (respondeu a palavra-código guardada turnos antes). Toda ferramenta é
+  negada ("A model fork cannot use tools"): a moldura do prompt pede só texto.
+- Esc no turno principal com o fork em curso não abortou o fork. O fork não aceita sinal nem
+  prazo: o painel desiste em 2 min e descarta a resposta atrasada.
+- O "f" do `/btw` embutido não continua a conversa lateral: cria um subagente `fork` (herda a
+  conversa e as ferramentas) em segundo plano, e a resposta dele entra na conversa principal, que
+  responde. `$.agent.spawn({ subagentType: "fork" })` cria o mesmo agente (`meta.json`:
+  `agentType: fork`, `isFork: true`), mas agente de plugin responde ao plugin no `turn.complete`
+  (o do `state.ts`, repassado por `agentDone`). `$.session.send` para a própria sessão é recusado
+  ("no live session on this machine has id…"); `$.prompt.submit` com moldura entra quando a sessão
+  fica livre e o modelo principal respondeu ("14 entradas, segundo o resultado da pergunta
+  lateral"). O kit de testes apaga o `agentId` de spawn respondido pelo mock: esse caminho só tem
+  prova real.
+- O validador recusa `$.model` como valor (`typeof $.model.fork`); o suporte sai da versão
+  (`$.session.version().base` ≥ 2.1.289, o build mais antigo conferido com `model.fork` e o mesmo
+  contrato).
+- O painel é registrado depois do `ui.ts` no `index.ts`: assim o `ui.ts` fica por fora na cadeia
+  e espelha a árvore (teste "o painel do /btw vai ao app pelo /ui").
+- Árvore do próprio plugin espelhada sai com `press.plugin` vazio (o engine só carimba quando ela
+  sai do plugin): o clique do app respondia `erro_mod_botao_inexistente`. O `ui.ts` preenche
+  `hangar` na cópia (`stampOwn`).
+- `$.ui.open`/`$.ui.close` chamados pelo próprio plugin não passam pelos hooks `ui.open`/`ui.close`
+  dele: o painel fechado pelo botão ficava no app e o clique nele dava "terminal estreito". O
+  `btw.tsx` avisa o `ui.ts` por `ownPane` (`bridge.ts`).
+- Reiniciar só o filho Rust perde o espelho: o plugin só reenvia o `/ui` quando a árvore muda, e
+  até lá o app não vê `caps` e bloqueia o `/btw`. Vale para todo mod; não mexido aqui.
+- Validação: pela rota do compositor nativo (`POST /input`), `/btw` em repouso e no meio de um
+  turno de ~1.250 palavras, que terminou inteiro; transcript sem a pergunta nem a resposta; Repetir,
+  Anterior, Recentes, Copiar, Limpar e Fechar pela rota do clique (`/plugin/press`).
+- Sem terminal (`claude -p` em stream-json, como o Hangar abre): o `/btw` embutido responde "/btw
+  isn't available in this environment" como comando local, gravado no transcript, antes de qualquer
+  hook. Comando registrado pelo plugin roda, mas a chamada fica no transcript como
+  `<command-name>`/`<command-args>` (a pergunta entra no contexto). Um nome que nenhum comando atende
+  (`/hangar-btw`) passa pelo `prompt.submit` com origem `sdk`; descartado ali, o transcript guarda só
+  o `queue-operation` da fila e um `system/informational` com o motivo do descarte (o modelo não os
+  lê), e o stream fecha com `result` de `num_turns: 0`. Prova com o plugin desta branch e uma ponte
+  descartável: `caps` na largada, `data` de "pending" a "done" e o fork com o contexto.
+- A sessão sem terminal do Hangar nasce com o plugin do checkout do backend em uso
+  (`plugin_bridge.PLUGINS_ROOT`): a prova dentro do Hangar só vale com o backend rodando desta
+  branch.

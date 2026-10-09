@@ -993,6 +993,9 @@ pub(crate) struct DeferredDraw {
     absolute_offset: Point<Pixels>,
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
+    /// Accessibility node that deferred this draw, and what the draw emitted (replayed when it is reused).
+    a11y_parent: Option<accesskit::NodeId>,
+    a11y: Option<Rc<a11y::A11yCapture>>,
 }
 
 pub(crate) struct Frame {
@@ -3809,7 +3812,7 @@ impl Window {
             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
+                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range, a11y_parent, a11y_capture) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
                         .clone_from(&deferred_draw.element_id_stack);
@@ -3822,12 +3825,15 @@ impl Window {
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
+                        deferred_draw.a11y_parent,
+                        deferred_draw.a11y.clone(),
                     )
                 };
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
 
                 let prepaint_start = self.prepaint_index();
                 if let Some(mut element) = element {
+                    let a11y_start = if self.a11y.is_active() { self.a11y.capture_start() } else { None };
                     self.with_rendered_view(current_view, |window| {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
@@ -3835,8 +3841,21 @@ impl Window {
                             });
                         });
                     });
-                    self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
+                    let capture = a11y_start.map(|start| Rc::new(self.a11y.capture_end(start)));
+                    if let (Some(parent), Some(capture)) = (a11y_parent, &capture) {
+                        self.a11y.nodes.reparent(parent, capture.roots());
+                    }
+                    let draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
+                    draw.element = Some(element);
+                    draw.a11y = capture;
                 } else {
+                    // Reaproveitado sem prepaint: os nós dele voltam do quadro em que desenhou.
+                    if let (true, Some(capture)) = (self.a11y.is_active(), &a11y_capture) {
+                        self.a11y.replay(capture, self.focus);
+                        if let Some(parent) = a11y_parent {
+                            self.a11y.nodes.reparent(parent, capture.roots());
+                        }
+                    }
                     self.reuse_prepaint(prepaint_range);
                 }
                 let prepaint_end = self.prepaint_index();
@@ -3961,6 +3980,8 @@ impl Window {
                     absolute_offset: deferred_draw.absolute_offset,
                     prepaint_range: deferred_draw.prepaint_range.clone(),
                     paint_range: deferred_draw.paint_range.clone(),
+                    a11y_parent: deferred_draw.a11y_parent,
+                    a11y: deferred_draw.a11y.clone(),
                 }),
         );
     }
@@ -4446,6 +4467,8 @@ impl Window {
             absolute_offset,
             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
             paint_range: PaintIndex::default()..PaintIndex::default(),
+            a11y_parent: if self.a11y.is_active() { self.a11y.nodes.current_id() } else { None },
+            a11y: None,
         });
     }
 
@@ -7018,6 +7041,17 @@ impl Window {
             accesskit::Action::Click => {
                 if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
                     let center = bounds.center();
+                    // O clique é por coordenada: coberto por popup ou diálogo, ou fora da área rolada, ele cairia em
+                    // outro controle. Só clica se o elemento do nó for o que está sob o ponto.
+                    // Nó sem hitbox mapeada (InteractiveText) segue pelo despacho antigo.
+                    let reachable = self.a11y.node_hitboxes.get(&request.target_node).map_or(true, |hitbox| {
+                        let hit = self.rendered_frame.hit_test(center);
+                        hit.ids.iter().take(hit.hover_hitbox_count).any(|id| id == hitbox)
+                    });
+                    if !reachable {
+                        log::warn!("a11y: click on {:?} refused, its element is not under the point", request.target_node);
+                        return;
+                    }
                     let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {
                         button: MouseButton::Left,
                         position: center,

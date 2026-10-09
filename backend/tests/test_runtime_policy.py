@@ -26,7 +26,7 @@ def test_metadata_patch_has_a_strict_catalog(monkeypatch):
 
 
 @pytest.mark.parametrize("kind", ["prepare_prompt", "format_status", "skill_catalog", "answer_body", "quota",
-                                  "session.marker", "diag.error"])
+                                  "session.marker", "diag.error", "last_usage", "reload_stamp", "unknown_private"])
 def test_services_that_moved_to_rust_are_gone(kind):
     # O ator Rust roda estes por conta própria; o Python não responde mais.
     for provider in ("claude", "codex"):

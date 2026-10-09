@@ -83,6 +83,10 @@ pub fn declared_window_value(v: &Value) -> Option<u64> {
 
 /// Contexto da última resposta do agente principal e o id do modelo que a deu.
 pub fn read(jsonl: &Path, account_dir: &Path, model: Option<&str>, window_tokens: Option<u64>) -> Reading {
+    let measured = measured(jsonl).map(|mut c| {
+        if let Some(declared) = window_tokens.filter(|n| *n > 0) { c.window = declared; }
+        c
+    });
     let tail = match read_tail(jsonl) {
         Ok(tail) => tail,
         // Sessão que acabou de fechar; o cache guarda o último valor do mesmo transcript.
@@ -116,11 +120,20 @@ pub fn read(jsonl: &Path, account_dir: &Path, model: Option<&str>, window_tokens
         if used > 0 {
             let used = u64::try_from(used).unwrap_or(u64::MAX);
             let answered = message.get("model").and_then(Value::as_str).filter(|m| !m.is_empty());
-            let ctx = ContextUse { used, window: window(used, account_dir, model, window_tokens) };
+            let ctx = ContextUse { used, window: measured.map_or_else(|| window(used, account_dir, model, window_tokens), |c| c.window) };
             return (Some(ctx), answered.map(str::to_owned));
         }
     }
-    (None, None)
+    (measured, None)
+}
+
+/// O plugin publica a janela medida pelo Claude, inclusive com a statusline personalizada.
+fn measured(jsonl: &Path) -> Option<ContextUse> {
+    let raw = std::fs::read(jsonl.with_extension("context.json")).ok()?;
+    let value: Value = serde_json::from_slice(&raw).ok()?;
+    let used = value.get("used")?.as_u64().filter(|n| *n > 0)?;
+    let window = value.get("window")?.as_u64().filter(|n| *n > 0)?;
+    Some(ContextUse { used, window })
 }
 
 /// Id do modelo em uso: o da última resposta, senão o da abertura e por fim o `model` da conta.
@@ -168,6 +181,20 @@ struct Entry {
     jsonl: String,
     ctx: Option<ContextUse>,
     model: Option<String>,
+    files: SourceVersion,
+}
+
+#[derive(PartialEq)]
+pub struct SourceVersion {
+    transcript: Option<super::facts_files::FileKey>,
+    measurement: Option<super::facts_files::FileKey>,
+}
+
+/// Capture antes de ler: uma escrita durante a leitura precisa invalidar o resultado guardado.
+pub fn source_version(jsonl: &str) -> SourceVersion {
+    let path = Path::new(jsonl);
+    let key = |p: &Path| std::fs::metadata(p).ok().and_then(|m| super::facts_files::file_key(&m));
+    SourceVersion { transcript: key(path), measurement: key(&path.with_extension("context.json")) }
 }
 
 /// Em duas pontas para o chamador ler os transcripts vencidos em paralelo, fora do lock, como o
@@ -175,11 +202,17 @@ struct Entry {
 impl ContextCache {
     /// `now` é relógio monotônico em segundos.
     pub fn stale(&self, name: &str, jsonl: &str, now: f64) -> bool {
-        !self.entries.peek(name).is_some_and(|e| e.jsonl == jsonl && now - e.at <= TTL_SECS)
+        !self.entries.peek(name).is_some_and(|e| {
+            if e.jsonl != jsonl || now - e.at > TTL_SECS { return false; }
+            let files = source_version(jsonl);
+            // A primeira resposta e a janela medida chegam sem esperar; uso já conhecido mantém
+            // a cadência de leitura do transcript.
+            e.files.measurement == files.measurement && (e.ctx.is_some() || e.files.transcript == files.transcript)
+        })
     }
 
     /// Grava a leitura nova e devolve o valor que a linha mostra.
-    pub fn store(&mut self, name: &str, jsonl: &str, now: f64, reading: Reading) -> Reading {
+    pub fn store(&mut self, name: &str, jsonl: &str, now: f64, reading: Reading, files: SourceVersion) -> Reading {
         let (ctx, mut model) = reading;
         // Sem resposta lida, o valor anterior só vale para o MESMO transcript; o modelo também,
         // senão a pílula cai no da conta quando a resposta sai do trecho lido.
@@ -191,7 +224,7 @@ impl ContextCache {
             }
         }
         let ctx = ctx.or(kept);
-        self.entries.insert(name.to_owned(), Entry { at: now, jsonl: jsonl.to_owned(), ctx, model: model.clone() });
+        self.entries.insert(name.to_owned(), Entry { at: now, jsonl: jsonl.to_owned(), ctx, model: model.clone(), files });
         (ctx, model)
     }
 

@@ -2035,13 +2035,15 @@ class SessionRegistry:
         claudes = [i for i in infos
                    if getattr(i, "provider", "claude") == "claude" and i.jsonl
                    and (i.name not in self._context_cache
+                        or self._context_cache[i.name][2] is None
                         or now_m - self._context_cache[i.name][0] > _STATUS_TTL
                         or self._context_cache[i.name][1] != i.jsonl)]
         if claudes:
+            versions = [claude_context.source_version(i.jsonl) for i in claudes]
             lidos = await asyncio.gather(*[
                 asyncio.to_thread(_claude_reading, i, self._agent_pid.get(i.name))
                 for i in claudes])
-            for info, (ctx, model) in zip(claudes, lidos):
+            for info, (ctx, model), version in zip(claudes, lidos, versions):
                 _, jsonl_antes, anterior, modelo_antes = self._context_cache.get(info.name, (0.0, None, None, None))
                 # Sem resposta lida, o valor anterior só vale para o MESMO transcript; o modelo também,
                 # senão a pílula cai no da conta quando a resposta sai do trecho lido.
@@ -2049,7 +2051,11 @@ class SessionRegistry:
                 manter = anterior if mesmo else None
                 if ctx is None and mesmo and modelo_antes:
                     model = modelo_antes
-                self._context_cache[info.name] = (time.monotonic(), info.jsonl, ctx or manter, model)
+                # Uma publicação durante o threadpool não pode carimbar a leitura antiga como atual.
+                at = time.monotonic()
+                if version != claude_context.source_version(info.jsonl):
+                    at -= _STATUS_TTL + 1
+                self._context_cache[info.name] = (at, info.jsonl, ctx or manter, model)
         for info in infos:
             if getattr(info, "provider", "claude") == "claude":
                 _, jsonl_lido, ctx, model = self._context_cache.get(info.name, (0.0, None, None, None))

@@ -1,7 +1,7 @@
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.7.0/MODIFICADO.md gpui-base-0.7.0/MODIFICADO.md
 --- gpui-base-0.7.0/MODIFICADO.md
 +++ gpui-base-0.7.0/MODIFICADO.md
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,37 @@
 +# Cópia modificada do gpui-base 0.7.0
 +
 +Origem: crate `gpui-base` 0.7.0 do crates.io (repositório `longbridge/gpui-kit`), licença Apache-2.0 (`LICENSE-APACHE`).
@@ -36,6 +36,9 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +Ao subir a versão do gpui-kit, reaplicar estas mudanças na versão nova, ou remover a cópia se o kit já trouxer o conserto.
 +
 +Os testes que montam `KeyDownEvent` passam `physical_digit: None`, o campo novo da cópia de gpui-pre.
++
++Acessibilidade: `Slider::aria_label` dá nome ao slider; o parágrafo do markdown (`text/inline_flow.rs`) entrega o texto
++à árvore por `Window::a11y_text`.
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.7.0/src/button.rs gpui-base-0.7.0/src/button.rs
 --- gpui-base-0.7.0/src/button.rs
 +++ gpui-base-0.7.0/src/button.rs
@@ -91,6 +94,46 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              });
              cx.simulate_event(KeyUpEvent { keystroke });
          }
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.7.0/src/slider.rs gpui-base-0.7.0/src/slider.rs
+--- gpui-base-0.7.0/src/slider.rs
++++ gpui-base-0.7.0/src/slider.rs
+@@ -418,6 +418,7 @@
+     state: Entity<SliderState>,
+     axis: Axis,
+     disabled: bool,
++    label: Option<gpui::SharedString>,
+     base: Div,
+     children: Vec<AnyElement>,
+ }
+@@ -428,6 +429,7 @@
+             state: state.clone(),
+             axis: Axis::Horizontal,
+             disabled: false,
++            label: None,
+             base: div(),
+             children: Vec::new(),
+         }
+@@ -452,6 +454,12 @@
+         self.disabled = disabled;
+         self
+     }
++
++    /// The accessible name: a slider has no visible text of its own to be named by.
++    pub fn aria_label(mut self, label: impl Into<gpui::SharedString>) -> Self {
++        self.label = Some(label.into());
++        self
++    }
+ }
+ 
+ impl ParentElement for Slider {
+@@ -477,6 +485,7 @@
+             .id(("slider", entity_id))
+             .test_support()
+             .role(Role::Slider)
++            .when_some(self.label, |this, label| this.aria_label(label))
+             .aria_numeric_value(state.value().end() as f64)
+             .aria_min_numeric_value(state.min_value() as f64)
+             .aria_max_numeric_value(state.max_value() as f64)
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.7.0/src/switch.rs gpui-base-0.7.0/src/switch.rs
 --- gpui-base-0.7.0/src/switch.rs
 +++ gpui-base-0.7.0/src/switch.rs
@@ -102,6 +145,27 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          });
          cx.simulate_event(KeyUpEvent { keystroke });
      }
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.7.0/src/text/inline_flow.rs gpui-base-0.7.0/src/text/inline_flow.rs
+--- gpui-base-0.7.0/src/text/inline_flow.rs
++++ gpui-base-0.7.0/src/text/inline_flow.rs
+@@ -431,6 +431,17 @@
+         let Some(layout) = request_layout.current.borrow().clone() else {
+             return Vec::new();
+         };
++        if window.is_a11y_active() {
++            let text: String = self
++                .items
++                .iter()
++                .filter_map(|item| match item {
++                    InlineFlowItem::Text { text, .. } | InlineFlowItem::Object { text, .. } => Some(text.as_ref()),
++                    _ => None,
++                })
++                .collect();
++            window.a11y_text(&text, bounds);
++        }
+         let typography = request_layout.typography.clone();
+         let text_style = &typography.text_style;
+         let mut elements = Vec::with_capacity(layout.fragments.len());
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.7.0/src/text/node.rs gpui-base-0.7.0/src/text/node.rs
 --- gpui-base-0.7.0/src/text/node.rs
 +++ gpui-base-0.7.0/src/text/node.rs

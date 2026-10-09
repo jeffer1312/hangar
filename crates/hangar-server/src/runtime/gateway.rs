@@ -59,7 +59,7 @@ pub struct RuntimeRegistry {
     ingress:super::ingress::IngressGates,
     /// Primeira espera da religação do processo que cai (dobra a cada subida seguida).
     respawn_base:Duration,
-    /// Último valor do Codex sem terminal por nome, para o feed do hub (`live`).
+    /// Último valor da sessão sem terminal por nome, para o feed do hub (`live`).
     live:std::sync::Mutex<BTreeMap<String,LiveSender>>,
 }
 
@@ -229,13 +229,13 @@ impl RuntimeRegistry {
     pub async fn open_managed(&self,target:RuntimeTarget,sidecar_dir:std::path::PathBuf) -> Result<Value,RuntimeError> {
         self.open_inner(target,Some(sidecar_dir),false).await
     }
-    /// Abertura de Codex que falha fica no canal do hub até a próxima abertura (a mesma regra do
-    /// `close` com erro): sem isso o chat mostraria a sessão parada. Geração ou provedor errado é
-    /// pedido torto, não a sessão falhando.
+    /// Abertura que falha fica no canal do hub até a próxima abertura (a mesma regra do `close` com
+    /// erro): sem isso o chat mostraria a sessão parada. Geração ou provedor errado é pedido torto,
+    /// não a sessão falhando.
     async fn open_inner(&self,target:RuntimeTarget,managed:Option<std::path::PathBuf>,spawn:bool) -> Result<Value,RuntimeError> {
-        let (codex,name) = (target.provider == "codex",target.name.clone());
+        let name = target.name.clone();
         let result = self.open_attempt(target,managed,spawn).await;
-        if let Err(error) = &result && codex && !["runtime_generation","runtime_provider"].contains(&error.code.as_str()) {
+        if let Err(error) = &result && !["runtime_generation","runtime_provider"].contains(&error.code.as_str()) {
             super::actor::mark_live_error(&self.live_sender(&name),&error.code,&error.message);
         }
         result
@@ -288,7 +288,7 @@ impl RuntimeRegistry {
         engine.set_fresh_process(fresh);
         if let Some(sidecar_dir) = &managed { engine = engine.with_launch(LaunchConfig { sidecar_dir:sidecar_dir.clone(),backoff:self.respawn_base }); }
         if let Some(mods) = &self.mods { engine = engine.with_mods(mods.clone()); }
-        if target.provider == "codex" { engine = engine.with_live(self.live_sender(&target.name)); }
+        engine = engine.with_live(self.live_sender(&target.name));
         // Dono único dos pedidos dos apps até o `close` (S9). Só o Claude tem superfície. Registrado antes
         // de a tarefa do ator existir: a primeira faixa publicada já encontra a sessão no `Mods`.
         // A vida no `Mods` é única no servidor; o processo é a chave durável mais o cano, que o renomear mantém.

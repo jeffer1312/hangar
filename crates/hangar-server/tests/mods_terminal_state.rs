@@ -9,13 +9,13 @@ use mods_support::Probe;
 use serde_json::{Value, json};
 
 fn pane(id: &str, placement: &str) -> TerminalPane {
-    TerminalPane { id: id.into(), title: id.into(), placement: placement.into(), columns: Some(58), tree: json!({"type": "Box"}) }
+    TerminalPane { id: id.into(), title: id.into(), placement: placement.into(), columns: Some(58), tree: json!({"type": "Box"}), data: None }
 }
 
 fn view(ids: &[&str], shown: Option<&str>) -> TerminalView {
     TerminalView { above: json!({"type": "Box", "children": [{"type": "Button", "props": {"key": "abrir", "label": "▸ Abrir painéis"},
         "press": {"plugin": "m", "handle": 1}}]}), columns: Some(82), panes: ids.iter().map(|id| pane(id, "dock")).collect(),
-        shown: shown.map(str::to_owned) }
+        shown: shown.map(str::to_owned), caps: Vec::new() }
 }
 
 fn setup() -> (Mods, Arc<Probe>) {
@@ -40,6 +40,28 @@ fn terminal_view_is_published_with_source_and_shown() {
     assert_eq!((ui["shown_id"].as_str(), ui["columns"].as_u64(), ui["source"].as_str()), (Some("b"), Some(82), Some("terminal")));
     assert_eq!(ui["panes"].as_array().unwrap().len(), 2);
     assert!(!mods.terminal_ui("t", view(&["a", "b"], Some("b"))), "igual ao último não sai de novo");
+}
+
+/// O que o plugin atende vai ao app no `plugin_ui`; sem nada anunciado, a lista vem vazia.
+#[test]
+fn plugin_caps_reach_the_app() {
+    let (mods, _) = setup();
+    mods.terminal_ui("t", view(&[], None));
+    assert_eq!(last_ui(&mods)["caps"], json!([]));
+    assert!(mods.terminal_ui("t", TerminalView { caps: vec!["btw".into()], ..view(&[], None) }), "anúncio novo publica de novo");
+    assert_eq!(last_ui(&mods)["caps"], json!(["btw"]));
+}
+
+/// O estado estruturado de um painel vai ao app como veio; painel sem ele não ganha o campo.
+#[test]
+fn pane_data_reaches_the_app_untouched() {
+    let (mods, _) = setup();
+    let mut with_data = pane("hangar-btw", "dock");
+    with_data.data = Some(json!({"current": 0, "entries": [{"id": 1, "question": "q"}]}));
+    mods.terminal_ui("t", TerminalView { panes: vec![with_data, pane("outro", "dock")], ..view(&[], None) });
+    let ui = last_ui(&mods);
+    assert_eq!(ui["panes"][0]["data"]["entries"][0]["question"], "q");
+    assert!(ui["panes"][1].get("data").is_none());
 }
 
 #[test]

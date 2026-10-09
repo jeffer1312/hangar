@@ -1,5 +1,6 @@
 //! Conversa por voz: o Codex local fala, a sessão aberta na tela trabalha.
 pub mod audio;
+pub mod computer;
 pub mod organizer;
 pub mod plan;
 pub mod rpc;
@@ -15,13 +16,18 @@ use tokio::{runtime::Handle, sync::{Notify, mpsc}};
 pub struct CallId(Value);
 pub enum Phase { Connecting, Live, Closed }
 #[derive(Debug, Clone)]
-pub enum VoiceFailure { Microphone, Speaker, AppServer, Realtime(String), Network, Timeout, Organizer, ModelSwitch, OwnFolder, Closed }
+pub enum VoiceFailure { Microphone, Speaker, AppServer, Realtime(String), Network, Timeout, Organizer, ModelSwitch, OwnFolder, AudioStopped, Closed }
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Activity { #[default] Idle, Thinking, Searching, Working }
 pub enum VoiceEvent {
     Phase(Phase), Levels(f32, f32), Draft(Option<String>), Activity(Activity), ReadSession(CallId), Send(CallId, String), Failed(VoiceFailure),
     Mode(Mode), Plan { path: PathBuf, markdown: String }, AskSession(String), SendPlan { session: String, text: String },
-    SwitchSession(CallId, String),
+    /// Nome pedido e a fala do turno: a tela só troca quando a fala pede essa sessão.
+    SwitchSession { call: CallId, name: String, spoken: String },
+    /// Ações da tela do Hangar (catálogo e execução) e o `computer` para os outros programas.
+    HangarActions(CallId), HangarAction { call: CallId, id: String, arg: Option<String> }, Computer(CallId, String),
+    /// Leitura da tela do Hangar pela árvore de acessibilidade; `None` = a tela escolhe a área.
+    ReadScreen(CallId, Option<String>),
     /// Ferramentas de sessão: a tela resolve os nomes falados e responde por `Voice::reply`. `turn` separa o pedido do sim.
     ListSessions(CallId), OpenSession(CallId, organizer::OpenRequest),
     CloseSession { call: CallId, name: String, confirmed: bool, turn: String },
@@ -37,7 +43,8 @@ pub enum VoiceEvent {
 pub struct VoiceOptions { pub codex: Codex, pub voice: Option<String>, pub context: String, pub cwd: Option<PathBuf>, pub target: String,
     pub codex_home: Option<PathBuf>, pub organizer: ModeModels }
 
-enum Command { Retarget(String, String, Option<PathBuf>), Result(String, String), Reply(Value, Value), SetMode(Mode), Models(ModeModels), Answer(String), PlanDelivered }
+enum Command { Retarget(String, String, Option<PathBuf>), Result(String, String), Reply(Value, Value), SetMode(Mode), Models(ModeModels), Answer(String), PlanDelivered,
+    Sessions(Vec<String>) }
 
 pub struct Voice { commands: mpsc::UnboundedSender<Command>, muted: Arc<AtomicBool>, stopped: Arc<AtomicBool>, stop: Arc<Notify> }
 
@@ -60,6 +67,8 @@ impl Voice {
     pub fn session_answer(&self, text: String) { let _ = self.commands.send(Command::Answer(text)); }
     /// A sessão aceitou o plano enviado: o organizador o esquece.
     pub fn plan_delivered(&self) { let _ = self.commands.send(Command::PlanDelivered); }
+    /// Nomes das sessões que a busca enxerga: o `set_mode` recusa quando a fala cita uma delas.
+    pub fn set_sessions(&self, names: Vec<String>) { let _ = self.commands.send(Command::Sessions(names)); }
     pub fn stop(&mut self) {
         self.stopped.store(true, Ordering::Relaxed);
         // notify_one guarda a licença mesmo sem ninguém esperando ainda.
@@ -118,8 +127,15 @@ fn rpc_failure(error: RpcError) -> VoiceFailure {
     match error { RpcError::Timeout => VoiceFailure::Timeout, RpcError::Server(m) => VoiceFailure::Realtime(m), _ => VoiceFailure::AppServer }
 }
 
+/// Só o tipo: a mensagem do servidor pode repetir o texto enviado.
+fn rpc_error_kind(error: &RpcError) -> &'static str {
+    match error { RpcError::Spawn => "spawn", RpcError::Closed => "closed", RpcError::Timeout => "timeout", RpcError::Server(_) => "server" }
+}
+
 fn rtc_failure(error: rtc::RtcError) -> VoiceFailure {
-    match error { rtc::RtcError::Microphone => VoiceFailure::Microphone, rtc::RtcError::Speaker => VoiceFailure::Speaker, _ => VoiceFailure::Network }
+    // Mídia parada é microfone trocado/desconectado ou codec, não rede: o texto de rede mandava olhar o firewall.
+    match error { rtc::RtcError::Microphone => VoiceFailure::Microphone, rtc::RtcError::Speaker => VoiceFailure::Speaker,
+        rtc::RtcError::Media => VoiceFailure::AudioStopped, _ => VoiceFailure::Network }
 }
 
 async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEvent>, inbox: &mut mpsc::UnboundedReceiver<Command>,
@@ -195,6 +211,9 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
     let mut planner = Planner::default();
     let mut target = options.target.clone();
     let mut target_cwd = options.cwd.clone();
+    let mut pending_context: Option<String> = None;
+    let mut context_failures = 0u32;
+    let mut session_names: Vec<String> = Vec::new();
     let outcome = loop {
         // No Planejar nada sai pelo gate; ao entrar nele o envio pendente já foi cancelado.
         if planner.mode == Mode::Direct && let Some((id, request)) = gate.due(Instant::now()) {
@@ -234,7 +253,8 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                             "refused-not-spoken"
                         }
                         ToolCall::FinishPlan { .. } | ToolCall::AskSession(_) | ToolCall::SetMode(_) | ToolCall::SwitchSession(_)
-                            | ToolCall::OpenSession(_) | ToolCall::CloseSession { .. } | ToolCall::PairSessions(..) | ToolCall::UnpairSession(_) if !spoken.allows(&params) => {
+                            | ToolCall::OpenSession(_) | ToolCall::CloseSession { .. } | ToolCall::PairSessions(..) | ToolCall::UnpairSession(_)
+                            | ToolCall::HangarAction { .. } | ToolCall::Computer(_) if !spoken.allows(&params) => {
                             let _ = rpc.respond(id, tool_reply("Só a pedido falado do usuário.", false)).await;
                             "refused-not-spoken"
                         }
@@ -324,7 +344,15 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                             }
                         }
                         // A resposta vem da tela (`Voice::reply`), depois de resolver o nome.
-                        ToolCall::SwitchSession(name) => { let _ = events.send(VoiceEvent::SwitchSession(CallId(id), name)).await; "switch" }
+                        ToolCall::SwitchSession(name) => {
+                            let spoken = spoken.text(&params).unwrap_or_default().to_owned();
+                            let _ = events.send(VoiceEvent::SwitchSession { call: CallId(id), name, spoken }).await;
+                            "switch"
+                        }
+                        ToolCall::HangarActions => { let _ = events.send(VoiceEvent::HangarActions(CallId(id))).await; "hangar-actions" }
+                        ToolCall::HangarAction { id: action, arg } => { let _ = events.send(VoiceEvent::HangarAction { call: CallId(id), id: action, arg }).await; "hangar-action" }
+                        ToolCall::ReadScreen(area) => { let _ = events.send(VoiceEvent::ReadScreen(CallId(id), area)).await; "read-screen" }
+                        ToolCall::Computer(objective) => { let _ = events.send(VoiceEvent::Computer(CallId(id), objective)).await; "computer" }
                         ToolCall::ListSessions => { let _ = events.send(VoiceEvent::ListSessions(CallId(id))).await; "list" }
                         ToolCall::OpenSession(request) => { let _ = events.send(VoiceEvent::OpenSession(CallId(id), request)).await; "open" }
                         ToolCall::CloseSession { name, confirmed } => {
@@ -334,6 +362,11 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                         }
                         ToolCall::PairSessions(a, b) => { let _ = events.send(VoiceEvent::PairSessions(CallId(id), a, b)).await; "pair" }
                         ToolCall::UnpairSession(name) => { let _ = events.send(VoiceEvent::UnpairSession(CallId(id), name)).await; "unpair" }
+                        ToolCall::SetMode(_) if let Some(name) = organizer::mode_word_session(spoken.text(&params).unwrap_or_default(), &session_names) => {
+                            let reply = format!("'{name}' é o nome de uma sessão, não o modo; use switch_session para ir até ela.");
+                            let _ = rpc.respond(id, tool_reply(reply, false)).await;
+                            "refused-session-name"
+                        }
                         ToolCall::SetMode(mode) => {
                             let mut note = switch_mode(&mut planner, mode, &target, &mut gate, &rpc, events).await;
                             if let Some(warn) = apply_models(&rpc, &thread, &mut applied, &models, mode, default_model.as_deref(), events).await { note = format!("{note} {warn}"); }
@@ -380,6 +413,19 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                     // Limite da conta não leva threadId: tem de passar antes do filtro.
                     if method == "account/rateLimits/updated" { send_limits(events, usage::account_limits(&params["rateLimits"])).await; continue; }
                     if !ours { continue; }
+                    if method == "thread/realtime/transcript/delta" && params["role"] == "user" && let Some(text) = pending_context.take() {
+                        match rpc.request("thread/realtime/appendText", json!({"threadId": thread, "role": "developer", "text": text.clone()})).await {
+                            Ok(_) => { log("context delivered on user speech"); context_failures = 0; }
+                            // Sem o contexto o organizador fala da sessão errada: volta para a próxima fala tentar de novo.
+                            Err(error) => {
+                                context_failures += 1;
+                                log(format!("context delivery failed kind={} attempt={context_failures}", rpc_error_kind(&error)));
+                                // Cada tentativa prende o laço da chamada: na segunda falha avisa e desiste.
+                                if context_failures < 2 { pending_context.get_or_insert(text); }
+                                else { let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await; }
+                            }
+                        }
+                    }
                     // A transcrição da fala chega atrasada e cancelava o próprio pedido: só uma fala nova
                     // encaminhada (outro userMessage) prova que o usuário continuou.
                     let user_spoke = method == "item/started" && params["item"]["type"] == "userMessage";
@@ -466,6 +512,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                     let _ = apply_models(&rpc, &thread, &mut applied, &models, planner.mode, default_model.as_deref(), events).await;
                 }
                 Some(Command::PlanDelivered) => planner.delivered(),
+                Some(Command::Sessions(names)) => { log(format!("sessions known count={}", names.len())); session_names = names; }
                 Some(Command::Answer(text)) => {
                     log(format!("session answer bytes={}", text.len()));
                     if let Some(input) = results.push(String::new(), text) { start_summary(&rpc, &thread, input, &mut results, organizer_busy).await; }
@@ -478,10 +525,9 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                     }
                     target = name.clone();
                     target_cwd = cwd;
-                    let note = organizer::code_note(target_cwd.as_deref(), &own);
-                    let _ = rpc.request("thread/realtime/appendText", json!({"threadId": thread, "role": "developer", "text": note})).await;
-                    let _ = rpc.request("thread/realtime/appendText", json!({"threadId": thread, "role": "developer", "text": context})).await;
-                    let _ = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": format!("Agora estou na sessão {name}.")})).await;
+                    // Sem anúncio falado: a pessoa vê a tela. O contexto da sessão só entra quando ela voltar a falar.
+                    pending_context = Some(format!("{}\n{context}", organizer::code_note(target_cwd.as_deref(), &own)));
+                    context_failures = 0;
                 }
                 Some(Command::Result(session, text)) => {
                     log(format!("session result bytes={}", text.len()));

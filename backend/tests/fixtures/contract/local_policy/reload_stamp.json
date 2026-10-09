@@ -1,0 +1,488 @@
+{
+ "tz": "BRT3",
+ "cases": [
+  {
+   "name": "no_recorded_stamp",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {}
+   },
+   "files": {
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "empty_recorded_stamp",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": ""
+    }
+   },
+   "files": {
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "matches",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "ab01fc84c31b56d4405f2be5abdee282c7d22e8a"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"mcpServers\": {\"b\": {\"cmd\": \"x\"}, \"a\": {\"cmd\": \"y\", \"args\": [\"\\u00e9\"]}}, \"other\": 1}"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "settings_changed",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "b13c2f1be2f788d7b2b15ee3fb3ca7e1a9066d92"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"mcpServers\": {\"b\": {\"cmd\": \"x\"}, \"a\": {\"cmd\": \"y\", \"args\": [\"\\u00e9\"]}}, \"other\": 1}"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": "config"
+   }
+  },
+  {
+   "name": "mcp_changed",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "3b440d3d95e935da42a46912929bfda29a00dc19"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"mcpServers\": {\"b\": {\"cmd\": \"x\"}, \"a\": {\"cmd\": \"y\", \"args\": [\"\\u00e9\"]}}, \"other\": 1}"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": "config"
+   }
+  },
+  {
+   "name": "key_order_and_other_keys_do_not_matter",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "ab01fc84c31b56d4405f2be5abdee282c7d22e8a"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"other\": 2, \"mcpServers\": {\"a\": {\"args\": [\"\\u00e9\"], \"cmd\": \"y\"}, \"b\": {\"cmd\": \"x\"}}}"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "stale_literal",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "0000000000000000000000000000000000000000"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"mcpServers\": {\"b\": {\"cmd\": \"x\"}, \"a\": {\"cmd\": \"y\", \"args\": [\"\\u00e9\"]}}, \"other\": 1}"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": "config"
+   }
+  },
+  {
+   "name": "without_mcp_servers",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "f5c54f13880aa16f277da0d50a53687f2d3c1c30"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"other\": 1}"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "without_mcp_vs_with",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "f5c54f13880aa16f277da0d50a53687f2d3c1c30"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"mcpServers\": {\"b\": {\"cmd\": \"x\"}, \"a\": {\"cmd\": \"y\", \"args\": [\"\\u00e9\"]}}, \"other\": 1}"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": "config"
+   }
+  },
+  {
+   "name": "claude_json_not_an_object",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "f5c54f13880aa16f277da0d50a53687f2d3c1c30"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "[1, 2]"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "missing_both_files",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "17a2082ffc57c39afd2b99a2c960f6a3013c5505"
+    }
+   },
+   "files": {},
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "missing_both_files_vs_stale",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "1111111111111111111111111111111111111111"
+    }
+   },
+   "files": {},
+   "expected": {
+    "reason": "config"
+   }
+  },
+  {
+   "name": "missing_settings",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "3e5418f8a6008993137bda46e5651639145a0f6a"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"mcpServers\": {\"b\": {\"cmd\": \"x\"}, \"a\": {\"cmd\": \"y\", \"args\": [\"\\u00e9\"]}}, \"other\": 1}"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "missing_claude_json",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "f5c54f13880aa16f277da0d50a53687f2d3c1c30"
+    }
+   },
+   "files": {
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "settings_crlf_is_read_as_lf",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "f5c54f13880aa16f277da0d50a53687f2d3c1c30"
+    }
+   },
+   "files": {
+    "cfg/settings.json": {
+     "text": "{\r\n  \"effortLevel\": \"high\"\r\n}\r\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "settings_lone_cr_is_read_as_lf",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "a84d1301014d170cff656258153aa46c0e004cb6"
+    }
+   },
+   "files": {
+    "cfg/settings.json": {
+     "text": "a\rb"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "settings_invalid_json_is_not_parsed",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "6a34cca285feb689b069ce9eabd3c4526f0e1534"
+    }
+   },
+   "files": {
+    "cfg/settings.json": {
+     "text": "not json {"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "unicode_mcp_is_escaped",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "a042e2473671c6870bcdebab18b7cfba5a80ed40"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{\"mcpServers\": {\"ç\": \"ã\", \"😀\": [1.0, 2.5, null, true]}}"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "claude_json_broken",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "2222222222222222222222222222222222222222"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "{broken"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "error": true
+   }
+  },
+  {
+   "name": "claude_json_empty",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "2222222222222222222222222222222222222222"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": ""
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "error": true
+   }
+  },
+  {
+   "name": "claude_json_with_bom",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "2222222222222222222222222222222222222222"
+    }
+   },
+   "files": {
+    "cfg/.claude.json": {
+     "text": "﻿{\"mcpServers\": {\"b\": {\"cmd\": \"x\"}, \"a\": {\"cmd\": \"y\", \"args\": [\"\\u00e9\"]}}, \"other\": 1}"
+    },
+    "cfg/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "error": true
+   }
+  },
+  {
+   "name": "settings_with_bom_is_kept",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "{ROOT}/cfg",
+    "cano": {
+     "config_marca": "daf74b68792f155e0c31b2b0a039a9f7ef26c30b"
+    }
+   },
+   "files": {
+    "cfg/settings.json": {
+     "text": "﻿{\n  \"effortLevel\": \"high\"\n}\n"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  },
+  {
+   "name": "config_dir_empty_falls_back_to_home",
+   "kind": "reload_stamp",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "config_dir": "",
+    "cano": {
+     "config_marca": "45abec7d06ab49b20152071c8fec56c7f77fbba7"
+    }
+   },
+   "files": {
+    "home/.claude/settings.json": {
+     "text": "{\n  \"effortLevel\": \"high\"\n}\nx"
+    }
+   },
+   "expected": {
+    "reason": null
+   }
+  }
+ ]
+}

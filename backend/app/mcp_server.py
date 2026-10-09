@@ -14,7 +14,7 @@ import re
 import secrets
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from mcp.server import MCPServer
@@ -197,11 +197,14 @@ async def unpair(ctx: Context) -> dict[str, Any]:
                       "Pra conta que ainda precisa ser preparada, use o CLI "
                       "(`hangar-send --new --conta <nome>`). `jev`: a sessão nasce com a chave do "
                       "Jev no ambiente, e só aí o `hangar-preview objetivo` (o laço que navega e "
-                      "preenche tela sozinho) funciona nela. Omitido, vale o padrão do servidor.")
+                      "preenche tela sozinho) funciona nela. Omitido, vale o padrão do servidor. "
+                      "`service_tier`: `priority` liga o Fast, `default` desliga; só Codex ou "
+                      "Claude com motor GPT no CLIProxyAPI local.")
 async def new_session(ctx: Context, nome: str, cwd: str, provider: str | None = None, engine: str | None = None,
                       model: str | None = None, effort: str | None = None, permissao: str | None = None,
                       headless: bool | None = None, read_only: bool = False,
-                      conta: str | None = None, jev: bool | None = None) -> dict[str, Any]:
+                      conta: str | None = None, jev: bool | None = None,
+                      service_tier: Literal["default", "priority"] | None = None) -> dict[str, Any]:
     from app import api
     eu = await _eu(ctx)
     if provider is None:
@@ -214,7 +217,7 @@ async def new_session(ctx: Context, nome: str, cwd: str, provider: str | None = 
         info = await api.create_session(api.CreateBody(
             name=nome, cwd=cwd, provider=provider, engine=engine, model=model, effort=effort,
             permission_mode=permissao, headless=headless, read_only=read_only,
-            config_dir=conta, jev=jev, creator=eu))
+            config_dir=conta, jev=jev, service_tier=service_tier, creator=eu))
     except HTTPException as e:
         raise ToolError(_detalhe(e)) from e
     return {"name": info.name, "cwd": info.cwd, "provider": info.provider, "headless": info.headless,

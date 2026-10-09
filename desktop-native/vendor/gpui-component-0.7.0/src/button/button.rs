@@ -591,6 +591,14 @@ impl InteractiveElement for Button {
     }
 }
 
+impl Button {
+    /// Accessibility-only selected state (tabs, list rows); unlike [`Selectable::selected`] it leaves the look alone.
+    pub fn aria_selected(mut self, selected: bool) -> Self {
+        self.base = self.base.aria_selected(selected);
+        self
+    }
+}
+
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let style: ButtonVariant = self.variant;
@@ -598,6 +606,8 @@ impl RenderOnce for Button {
         let hoverable = self.hoverable();
         let disabled = self.disabled;
         let selected = self.shows_selected_style();
+        // Escolhido de verdade (não o gatilho com menu aberto): o leitor precisa saber qual opção está marcada.
+        let chosen = self.selected;
         let loading = self.loading;
         let tooltip_placement = self.tooltip_placement;
         let hover_group = self.hover_group;
@@ -725,7 +735,9 @@ impl RenderOnce for Button {
         let accessibility_label = self
             .accessibility_label
             .clone()
-            .or_else(|| self.label.clone());
+            .or_else(|| self.label.clone())
+            // Botão só de ícone: a dica é o único nome que ele tem.
+            .or_else(|| self.tooltip.as_ref().filter(|_| children.is_empty()).map(|(text, _)| text.clone()));
         let content = h_flex()
             .id("label")
             .size_full()
@@ -770,6 +782,7 @@ impl RenderOnce for Button {
             }
         }))
         .selected(selected)
+        .when(chosen, |this| this.aria_selected(true))
         .disabled(disabled)
         // Base layers semantic states over the builder chain, so the caller's
         // own style is replayed inside each state to keep it the closest layer.

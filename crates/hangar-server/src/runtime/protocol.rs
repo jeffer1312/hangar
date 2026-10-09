@@ -117,7 +117,7 @@ pub struct RuntimeReply {
     pub payload: Value,
 }
 
-/// Último valor do Codex sem terminal para o hub da sessão (`RuntimeRegistry::live`): a prévia sai
+/// Último valor da sessão sem terminal para o hub dela (`RuntimeRegistry::live`): a prévia sai
 /// só por aqui, fora do `events`, e o feed do hub a publica coalescida.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LiveState {

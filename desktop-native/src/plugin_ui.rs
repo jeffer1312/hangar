@@ -10,6 +10,8 @@ use gpui_kit::prelude::FluentBuilder;
 use serde_json::{json, Value};
 use crate::theme;
 
+mod btw;
+
 /// Medidas dos mods são em células de terminal; estas são as da fonte mono de 12 px.
 pub const CELL_W: f32 = 7.2;
 const CELL_H: f32 = 17.;
@@ -410,7 +412,7 @@ pub enum UiSource { Surface, Terminal }
 /// O evento `plugin_ui` lido. `shown_id`: `None` quando o servidor não manda (antigo), `Some(None)` sem painel.
 /// `columns` e `source` ausentes ou estranhos valem como "o servidor não mandou".
 #[derive(Debug, Default, PartialEq)]
-pub struct Surfaces { pub above: Value, pub panes: Vec<Value>, pub shown_id: Option<Option<String>>, pub columns: Option<f64>, pub source: Option<UiSource> }
+pub struct Surfaces { pub above: Value, pub panes: Vec<Value>, pub shown_id: Option<Option<String>>, pub columns: Option<f64>, pub source: Option<UiSource>, pub caps: Vec<String> }
 
 /// O dado do SSE `plugin_ui`, por valor: a árvore é movida, não copiada. Painel sem id fica de fora, como no web.
 pub fn surfaces(mut data: Value) -> Surfaces {
@@ -430,6 +432,7 @@ pub fn surfaces(mut data: Value) -> Surfaces {
         shown_id,
         columns: data["columns"].as_f64().filter(|c| c.is_finite() && *c > 0.),
         source: match data["source"].as_str() { Some("surface") => Some(UiSource::Surface), Some("terminal") => Some(UiSource::Terminal), _ => None },
+        caps: data["caps"].as_array().map(|caps| caps.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),
     }
 }
 
@@ -528,6 +531,10 @@ fn tabs(panes: &[Value], active: &str, view: &View) -> AnyElement {
 pub fn panes(panes: &[Value], active: Option<&str>, view: &View, max_h: f32) -> Option<AnyElement> {
     let pane = panes.iter().find(|p| p["id"].as_str() == active)?;
     let id = pane["id"].as_str().unwrap_or("").to_owned();
+    // O `/btw` manda o próprio estado: o app o desenha com o tema dele, e a árvore fica para o terminal.
+    if id == btw::SITE && pane["data"].is_object() {
+        return btw::panel(pane, view, max_h, (panes.len() > 1).then(|| tabs(panes, &id, view)));
+    }
     let header = if panes.len() > 1 { tabs(panes, &id, view) } else {
         let title = pane["title"].as_str().filter(|t| !t.is_empty()).unwrap_or(&id).to_owned();
         div().flex().items_center().justify_between().gap_2()
@@ -571,8 +578,15 @@ fn element(v: &Value, c: &Ctx, at: &Spot) -> AnyElement {
         "Text" => text(p, children(v), c, at),
         "Raster" => raster(p),
         "Svg" => svg(p),
-        "Markdown" => div().whitespace_normal().when(p["dimColor"] == true, |el| el.opacity(0.6))
-            .child(unmark(&text_of(&p["text"]))).into_any_element(),
+        "Markdown" => {
+            let source = text_of(&p["text"]);
+            // Painel é leitura (a resposta do `/btw`): markdown de verdade. A faixa segue sem as marcações.
+            let body = if c.site == BAND_SITE { div().whitespace_normal().child(unmark(&source)).into_any_element() } else {
+                gpui_kit::component::text::TextView::markdown(SharedString::from(format!("plg-md-{}", c.spot(at))), source)
+                    .selectable(true).scrollable(false).into_any_element()
+            };
+            div().w_full().min_w_0().when(p["dimColor"] == true, |el| el.opacity(0.6)).child(body).into_any_element()
+        }
         "Code" => div().whitespace_normal().text_color(theme::muted()).child(text_of(&p["source"])).into_any_element(),
         "Link" => {
             let label = Some(text_of(&p["label"])).filter(|s| !s.is_empty()).unwrap_or_else(|| plain(v));
@@ -960,7 +974,7 @@ fn color(v: &Value) -> Option<Hsla> {
     Some(rgb(value).into())
 }
 
-/// Markdown de mod sem as marcações: o nativo não abre um leitor de markdown para uma faixa.
+/// Markdown de mod na faixa, sem as marcações: o nativo não abre um leitor de markdown para uma faixa.
 fn unmark(text: &str) -> String {
     text.lines().map(|l| l.trim_start_matches('#').trim_start().replace("**", "").replace("__", "").replace('`', ""))
         .collect::<Vec<_>>().join("\n")
@@ -1091,6 +1105,8 @@ mod tests {
         let odd = surfaces(json!({"shown_id": 7, "columns": -1, "source": "mobile"}));
         assert_eq!((odd.shown_id, odd.columns, odd.source), (None, None, None));
         assert_eq!(surfaces(json!("texto")), Surfaces::default());
+        assert!(old.caps.is_empty(), "servidor antigo não anuncia nada");
+        assert_eq!(surfaces(json!({"caps": ["btw", 3, "x"], "source": "terminal"})).caps, ["btw", "x"]);
     }
 
     #[test]

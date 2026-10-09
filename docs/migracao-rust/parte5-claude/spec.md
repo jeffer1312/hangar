@@ -62,7 +62,7 @@ roda o código atual.
 ## Subpartes e ordem
 
 ```
-5-0 caminho de escrita (comum) ──► C1 serviços restantes ─┐
+5-0 caminho de escrita (comum) ──► C1 estado sem terminal ─┐
                               ├──► C2 plugin no Rust ──────┼─► C3 fatos do terminal ─► C4 administração ─► C5 ciclo de vida
                               └──► (metade Codex: 5B, 5C…) ┘
 ```
@@ -99,13 +99,23 @@ Cada subparte é uma junção na `main` e sobe o contrato interno uma vez.
 - **Golden** de cada rota: corpo de resposta e de erro idênticos ao do Python, gerados pelas
   rotas Python (`backend/tests/fixtures/contract/`).
 
-### C1 Serviços restantes do ator
+### C1 Estado do Claude sem terminal no feed do runtime
 
-`last_usage`, `reload_stamp` (hash idêntico ao `_marca_config`: `json.dumps(sort_keys=True)` e
-junção com `\0`), `unknown_private` (mesmos tetos e arquivos), `session.patch_meta` (o Rust grava
-o sidecar; o Python passa a só ler) e `native_message` com caixa de entrada própria do Rust (o
-`from=uds:` hoje aponta para o socket do Python; o plano confere quem lê as respostas). Depois da
-C1, `/internal/runtime/policy` só atende o que a metade Codex ainda não tirou.
+Escopo mudado pelo dono em 08/10/2026: a medição mostrou o custo no estado e na prévia da sessão
+sem terminal (Python +33 ms/s contra Rust +14 ms/s com uma sessão gerando), então a C1 tira o
+Python desse caminho em vez de portar os quatro serviços soltos.
+
+- O feed do runtime da 5B (`state/runtime_feed.rs`) passa a servir `Provider::ClaudeHeadless`:
+  `state`, `preview`, `ask_question`, `suggest`, `pensamento` e `ferramenta` saem do ator direto
+  no hub; o Python não os produz nem os repassa fora do modo `python`.
+- `suggest` sai dos fatos do plugin empurrados pelo Python (o plugin só vai ao Rust na C2).
+- Sessão parada: estado estacionado no Rust (linha de status, modo de permissão, último modo
+  diferente de `plan`, problema da última vida, `dead` sem sidecar nem troca de conta).
+- `last_usage`, `reload_stamp` (hash idêntico ao `_marca_config`: `json.dumps(sort_keys=True)` e
+  junção com `\0`) e `unknown_private` (mesmos tetos e arquivos) rodam no Rust.
+- **Fora da C1:** `native_message` com caixa de entrada própria do Rust vai para a **C3**;
+  `session.patch_meta` fica no Python, porque a 5B decidiu que o Rust não grava o sidecar. Por
+  isso `/internal/runtime/policy` ainda atende `patch_meta` depois da C1.
 
 ### C2 Plugin do Claude no Rust
 
@@ -156,7 +166,7 @@ antes e depois em release, backend isolado:
 
 - Cada `/input` deixa de fazer Rust → Python → Rust (rota) e Rust → Python (`prepare_prompt`).
 - Cada entrega com terminal deixa de pedir `terminal_facts` ao Python.
-- Cada sessão sem terminal deixa de pedir `reload_stamp` a cada 10 s.
+- Cada sessão sem terminal deixa de pedir `reload_stamp` a cada 10 s e de passar estado e prévia pelo Python (C1).
 - Medida: chamadas a `/internal/*` por minuto com 5 sessões Claude ativas (com e sem terminal),
   latência do `/input` do pedido ao `delivered`, CPU do Python parado e pico de RSS do Rust.
 
@@ -181,8 +191,8 @@ quando mudam.
   mas a memória (pergunta segurada, publicação em curso) se perde na troca de dono. Pergunta
   segurada no momento do update cai para o diálogo do terminal, como num restart de hoje.
 - **Leitores Python do sidecar** (`registry`, `_classe_modo`) depois que o Rust passa a gravá-lo
-  (C1): gravação atômica e o mesmo formato; o plano lista cada leitor.
-- **Caixa de entrada do `native_message`** (C1): quem consome hoje as respostas no Python precisa
+  (só se o Rust vier a gravá-lo; a 5B decidiu que não): gravação atômica e o mesmo formato; o plano lista cada leitor.
+- **Caixa de entrada do `native_message`** (C3): quem consome hoje as respostas no Python precisa
   de um equivalente antes de trocar a origem.
 - **Conflito com a metade Codex** nos mesmos arquivos (`runtime_policy.py`, `internal_api.py`,
   `routes.rs`, `migration_status.rs`, número do contrato): regras em `contrato-par.md`.

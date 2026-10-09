@@ -22,7 +22,10 @@ impl Page {
     const SERVER: [Page; 14] = [Page::Servers, Page::Sync, Page::Connect, Page::SharedConfig, Page::Accounts, Page::Orchestration, Page::Harnesses, Page::Voice,
         Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Advanced];
 
-    fn key(self) -> &'static str {
+    /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
+    pub(super) fn sections() -> impl Iterator<Item = Page> { Self::DEVICE.into_iter().chain(Self::SERVER) }
+
+    pub(super) fn key(self) -> &'static str {
         match self {
             Page::General => "general", Page::Appearance => "appearance", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
             Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Orchestration => "orchestration",
@@ -775,6 +778,7 @@ impl Hangar {
         let nav_item = |page_item: Page, current: Page, cx: &mut Context<Self>| {
             let on = page_item == current;
             Button::new(SharedString::from(format!("settings-nav-{}", page_item.key())))
+                .role(Role::Tab).aria_selected(on).accessibility_id(format!("settings-tab-{}", page_item.key()))
                 .custom(ButtonCustomVariant::new(cx).color(if on { selected } else { transparent_black() })
                     .foreground(if on { theme::text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
                 .w_full().h(px(32.)).px(px(10.)).rounded(px(6.))
@@ -803,7 +807,7 @@ impl Hangar {
                     .prefix(chrome::small_icon(IconName::Search, 14., theme::faint()))
                     .suffix(chrome::kbd("Ctrl F"))))
             .child(if searching { self.render_found(cx) } else {
-                div().id("settings-nav").flex_1().min_h_0().overflow_y_scroll().flex().flex_col().gap(px(2.))
+                div().id("settings-nav").role(Role::TabList).aria_label(tr("settings")).flex_1().min_h_0().overflow_y_scroll().flex().flex_col().gap(px(2.))
                     .child(group(tr("settings_group_device")))
                     .children(Page::DEVICE.map(|p| nav_item(p, page, cx)))
                     .child(group(tr("settings_group_server")).child(server))
@@ -839,7 +843,8 @@ impl Hangar {
             Page::SharedConfig => self.render_shared_config(cx),
             Page::Windows => self.render_computer(cx),
         };
-        let scroll = div().id("settings-content").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
+        let scroll = div().id("settings-content").role(Role::TabPanel).aria_label(page.title())
+            .accessibility_id(format!("settings-page-{}", page.key())).flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_ui.scroll)
             .child(div().w_full().flex().justify_center().child(motion::fade_quick(div().w(px(if accounts_wide || servers_wide { 1040. } else { 720. })).max_w_full().px_4().pt(px(44.)).pb(px(40.)), body_in).child(body)));
         let tabs = (page == Page::Appearance).then(|| div().w_full().flex_shrink_0().flex().justify_center().px_4().pt(px(14.)).pb(px(6.))
             .child(div().w(px(720.)).max_w_full().child(self.section_tabs(cx))));
@@ -850,7 +855,7 @@ impl Hangar {
                 .child(div().id("appearance-aside").w(px(360.)).flex_shrink_0().h_full().overflow_y_scroll().pt(px(44.)).pr(px(24.)).pb(px(40.))
                     .child(self.render_appearance_aside(cx)))
         } else { content };
-        div().size_full().flex().opacity(shown).when(floating, |el| el.p(px(10.)).gap(px(10.))).child(nav).child(content).into_any_element()
+        div().id("settings-dialog").role(Role::Dialog).aria_label(tr("settings")).size_full().flex().opacity(shown).when(floating, |el| el.p(px(10.)).gap(px(10.))).child(nav).child(content).into_any_element()
     }
 
     /// Resultados da busca no lugar da navegação: "Página › Linha", o marcado pelas setas em destaque.

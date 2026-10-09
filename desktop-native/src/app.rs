@@ -516,6 +516,8 @@ pub struct Hangar {
     plugin_columns: Option<f64>,
     /// De onde vem a interface dos mods; `None` vale como terminal (sem digitação).
     plugin_source: Option<crate::plugin_ui::UiSource>,
+    /// O que o plugin da sessão anuncia que atende (`btw`); vazio sem plugin ou num servidor antigo.
+    plugin_caps: Vec<String>,
     /// Escolha local da aba: começa no último painel aberto e sobrevive aos redesenhos.
     plugin_local_tab: Option<String>,
     /// Rolagem da fileira de abas dos mods e a aba ativa para a qual ela já rolou.
@@ -870,7 +872,7 @@ impl Hangar {
             attachments: HashMap::new(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(),
             suggest_pick: 0, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
             mention: Default::default(),
-            terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_local_tab: None, plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
+            terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
             side: side::Side::default(), controls: controls::Controls::default(),
             settings: None, settings_ui, tab_focus: HashMap::new(), tabs_scroll: ScrollHandle::new(),
             appearance_note: appearance_error.map(|error| tr("settings_not_loaded").replace("{error}", &error)),
@@ -889,7 +891,7 @@ impl Hangar {
             servers: known_servers, remote: HashMap::new(), remote_tasks: Vec::new(), remote_gen: 0, servers_rev: 0, invite_ended: HashSet::new(), pending_open: None, pending_remote: None,
             external_pairs: Vec::new(), external_seen: None, attached: HashSet::new(), external_seq: 0,
             dictation: Default::default(),
-            voice: Default::default(),
+            voice: voice_ui::VoiceUi { a11y_dump: Self::watch_a11y_dump(window, cx), ..Default::default() },
             player: Default::default(),
             connection_origin: None,
             electron_offer: saved.is_none() && crate::electron::exists(),
@@ -1315,6 +1317,7 @@ impl Hangar {
         self.plugin_shown = None;
         self.plugin_columns = None;
         self.plugin_source = None;
+        self.plugin_caps.clear();
         self.plugin_local_tab = None;
         self.plugin_tabs_seen = None;
         self.plugin_hovered.clear();
@@ -1960,6 +1963,7 @@ impl Hangar {
                 self.plugin_shown = s.shown_id;
                 self.plugin_columns = s.columns;
                 self.plugin_source = s.source;
+                self.plugin_caps = s.caps;
                 self.plugin_draws += 1;
                 self.keep_plugin_hovered();
                 return (true, Changed::Screen);
@@ -2098,6 +2102,7 @@ impl Hangar {
                 self.plugin_shown = None;
                 self.plugin_columns = None;
                 self.plugin_source = None;
+                self.plugin_caps.clear();
                 self.plugin_local_tab = None;
                 self.plugin_tabs_seen = None;
                 self.plugin_hovered.clear();
@@ -2290,6 +2295,11 @@ impl Hangar {
         !self.connection_dialog && self.chat_online && self.history_installed && !self.selected.as_ref().is_some_and(SessionInfo::orq)
     }
 
+    /// O plugin desta sessão, com ou sem terminal, responde o `/btw` num painel (`caps` do `plugin_ui`).
+    fn btw_ready(&self) -> bool {
+        self.plugin_caps.iter().any(|cap| cap == "btw")
+    }
+
     // `confirmed` = a pessoa já aceitou o aviso de comando destrutivo para este mesmo texto.
     fn submit(&mut self, steer: bool, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected.is_none() && self.reopen.is_some() { self.send_reopen(window, cx); return; }
@@ -2319,8 +2329,8 @@ impl Hangar {
         // Com anexo a legenda vai na frente do prompt: o comando do campo continua sendo o da mensagem.
         let provider = self.provider().0.to_owned();
         if let Some(command) = composer::typed_command(self.command_list(), &text).cloned() {
-            if composer::needs_other_surface(&provider, &command) {
-                self.action_feedback.insert(key, (tr("command_other_surface").replace("{cmd}", &format!("/{}", command.name)), true));
+            if let Some(warning) = composer::blocked_command(&provider, &command, self.btw_ready()) {
+                self.action_feedback.insert(key, (tr(warning).replace("{cmd}", &format!("/{}", command.name)), true));
                 cx.notify();
                 return;
             }
@@ -2335,6 +2345,15 @@ impl Hangar {
         self.action_feedback.remove(&key);
         // O grupo é o da hora do Enter: o texto pode sair depois, com outra conversa aberta ou o grupo mudado.
         let group = if steer { None } else { self.group_targets(&key, &text) };
+        // Sem terminal, o `/btw` só sai traduzido e com o plugin anunciando que o atende; mesmo com a lista de
+        // comandos ainda vazia (sem `blocked_command`), nunca vai cru ao Claude Code.
+        let surface_btw = group.is_none() && self.plugin_source == Some(crate::plugin_ui::UiSource::Surface) && composer::side_question(&text);
+        if surface_btw && !self.btw_ready() {
+            self.action_feedback.insert(key, (tr("command_btw_unavailable").replace("{cmd}", "/btw"), true));
+            cx.notify();
+            return;
+        }
+        let text = if surface_btw { composer::surface_side_question(&text) } else { text };
         // Enter com um envio em voo não se perde: o texto sai do campo e vai na vez dele.
         if flying {
             self.delivery.hold(key.clone(), text, steer, group);
@@ -2738,9 +2757,9 @@ impl Hangar {
             let whole = self.composer_cursor(cx).and_then(|(text, cursor)| composer::slash_token(&text, cursor).map(|t| t.whole));
             if whole == Some(false) { self.complete_slash(&command.name, window, cx); return; }
         }
-        if composer::needs_other_surface(&provider, &command) {
+        if let Some(warning) = composer::blocked_command(&provider, &command, self.btw_ready()) {
             if let Some(key) = self.selected_key() {
-                self.action_feedback.insert(key, (tr("command_other_surface").replace("{cmd}", &format!("/{}", command.name)), true));
+                self.action_feedback.insert(key, (tr(warning).replace("{cmd}", &format!("/{}", command.name)), true));
             }
             cx.notify();
             return;
@@ -4168,7 +4187,7 @@ impl Hangar {
         let can_stop = self.can_interrupt();
         let focused = self.composer.read(cx).focus_handle(cx).is_focused(window);
         let paste_target = cx.entity().downgrade();
-        let textarea = Textarea::new(&self.composer).appearance(false).disabled((!readable && !new_chat && !reopen) || creating || resuming).on_paste(move |item, _, cx| {
+        let textarea = Textarea::new(&self.composer).accessibility_id("composer-input").appearance(false).disabled((!readable && !new_chat && !reopen) || creating || resuming).on_paste(move |item, _, cx| {
             paste_target.update(cx, |this, cx| this.paste(item, cx)).unwrap_or(false)
         });
         let field = div().id("composer-field").text_base()
@@ -4958,7 +4977,7 @@ impl Hangar {
             .map(|el| self.drop_background(el, cx));
         let filter = layout.show_filter().then(|| div().flex_shrink_0().px(px(8.)).pb(px(4.))
             .child(Input::new(&self.sidebar.filter).small().cleanable(true).prefix(chrome::small_icon(IconName::Search, 14., theme::faint()))
-                .aria_label(tr("sidebar_filter"))));
+                .aria_label(tr("sidebar_filter")).accessibility_id("sidebar-filter")));
         div().w_full().min_h_0().flex().flex_col().when(!fit_content, |el| el.h_full())
             .child(div().h(px(44.)).flex_shrink_0().px(px(14.)).flex().items_center().gap_2()
                 .child(chrome::hangar_mark(20., theme::accent()))
@@ -6174,6 +6193,7 @@ impl Hangar {
 
 impl Render for Hangar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_a11y_retain(window, cx);
         // O assistente ocupa a janela: nada da conversa por baixo recebe tecla nem clique.
         if let Some(setup) = self.setup.clone() {
             return div().id("hangar-root").size_full().bg(theme::window_fill()).text_color(theme::text()).text_base()

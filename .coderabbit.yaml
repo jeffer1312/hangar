@@ -1,0 +1,9 @@
+language: pt-BR
+reviews:
+  profile: chill
+  auto_review:
+    auto_pause_after_reviewed_commits: 0
+  path_filters:
+    - "!**/package-lock.json"
+    - "!**/Cargo.lock"
+    - "!desktop-native/vendor/gpui-*/**"

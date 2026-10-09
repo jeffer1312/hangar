@@ -153,6 +153,7 @@ fn run_context_cases(file: &str) -> usize {
                 let engine = !field(row, defaults, "engine").is_null();
                 let now = wall - mono_off;
                 let (ctx, model) = if cache.stale(row_name, &jsonl, now) {
+                    let version = context::source_version(&jsonl);
                     let reading = context::claude_reading(&ReadingInputs {
                         jsonl: Path::new(&jsonl),
                         account_dir: &account_dir,
@@ -161,7 +162,7 @@ fn run_context_cases(file: &str) -> usize {
                         declared,
                         engine,
                     });
-                    cache.store(row_name, &jsonl, now, reading)
+                    cache.store(row_name, &jsonl, now, reading, version)
                 } else {
                     cache.cached(row_name, &jsonl)
                 };
@@ -238,22 +239,74 @@ fn context_reading_skips_sidechain_synthetic_and_zero() {
 }
 
 #[test]
+fn context_uses_the_measured_window_without_a_1m_model_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    let jsonl = dir.path().join("measured.jsonl");
+    std::fs::write(&jsonl, r#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":76604}}}"#).unwrap();
+    std::fs::write(jsonl.with_extension("context.json"), r#"{"used":76604,"window":1000000}"#).unwrap();
+    let (ctx, model) = context::read(&jsonl, dir.path(), Some("opus"), None);
+    assert_eq!(ctx.map(|c| (c.used, c.window)), Some((76_604, 1_000_000)));
+    assert_eq!(model.as_deref(), Some("claude-opus-5-5"));
+}
+
+#[test]
+fn declared_window_wins_over_a_measurement_from_before_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let jsonl = dir.path().join("resumed.jsonl");
+    std::fs::write(&jsonl, r#"{"type":"assistant","message":{"usage":{"input_tokens":90002}}}"#).unwrap();
+    std::fs::write(jsonl.with_extension("context.json"), r#"{"used":90002,"window":1000000}"#).unwrap();
+    assert_eq!(context::read(&jsonl, dir.path(), None, Some(256_000)).0.map(|c| c.window), Some(256_000));
+}
+
+#[test]
+fn context_cache_sees_the_first_answer_and_measurement_before_its_ttl() {
+    let dir = tempfile::tempdir().unwrap();
+    let jsonl = dir.path().join("new.jsonl");
+    std::fs::write(&jsonl, "").unwrap();
+    let path = jsonl.to_str().unwrap();
+    let mut cache = ContextCache::default();
+    cache.store("new", path, 0.0, (None, Some("opus".into())), context::source_version(path));
+    assert!(!cache.stale("new", path, 1.0));
+    std::fs::write(&jsonl, r#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":76604}}}"#).unwrap();
+    assert!(cache.stale("new", path, 2.0), "a primeira resposta não espera 20 segundos");
+    let version = context::source_version(path);
+    cache.store("new", path, 2.0, context::read(&jsonl, dir.path(), Some("opus"), None), version);
+    assert!(!cache.stale("new", path, 3.0));
+    std::fs::write(jsonl.with_extension("context.json"), r#"{"used":76604,"window":1000000}"#).unwrap();
+    assert!(cache.stale("new", path, 4.0), "a medida do Claude não espera o cache vencer");
+}
+
+#[test]
+fn context_cache_does_not_stamp_new_files_on_an_old_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    let jsonl = dir.path().join("racing.jsonl");
+    std::fs::write(&jsonl, "").unwrap();
+    let path = jsonl.to_str().unwrap();
+    let mut cache = ContextCache::default();
+    let version = context::source_version(path);
+    let reading = context::read(&jsonl, dir.path(), None, None);
+    std::fs::write(jsonl.with_extension("context.json"), r#"{"used":76604,"window":1000000}"#).unwrap();
+    cache.store("new", path, 0.0, reading, version);
+    assert!(cache.stale("new", path, 1.0), "a medida que chegou durante a leitura não pode ficar presa no cache");
+}
+
+#[test]
 fn context_cache_keeps_previous_only_for_same_transcript() {
     let mut cache = ContextCache::default();
     let ctx = hangar_api::session::ContextUse { used: 5, window: 200_000 };
     assert!(cache.stale("s", "/a.jsonl", 0.0));
-    let first = cache.store("s", "/a.jsonl", 0.0, (Some(ctx), Some("m".into())));
+    let first = cache.store("s", "/a.jsonl", 0.0, (Some(ctx), Some("m".into())), context::source_version("/a.jsonl"));
     assert_eq!(first, (Some(ctx), Some("m".into())));
     // Dentro dos 20 s não relê.
     assert!(!cache.stale("s", "/a.jsonl", 20.0));
     assert_eq!(cache.cached("s", "/a.jsonl"), first);
     // Venceu e a leitura veio vazia: mesmo transcript mantém contexto e modelo.
     assert!(cache.stale("s", "/a.jsonl", 20.5));
-    assert_eq!(cache.store("s", "/a.jsonl", 20.5, (None, Some("conta".into()))), first);
+    assert_eq!(cache.store("s", "/a.jsonl", 20.5, (None, Some("conta".into())), context::source_version("/a.jsonl")), first);
     // Transcript novo: relê na hora e não herda nada.
     assert!(cache.stale("s", "/b.jsonl", 21.0));
     assert_eq!(cache.cached("s", "/b.jsonl"), (None, None));
-    assert_eq!(cache.store("s", "/b.jsonl", 21.0, (None, Some("conta".into()))), (None, Some("conta".into())));
+    assert_eq!(cache.store("s", "/b.jsonl", 21.0, (None, Some("conta".into())), context::source_version("/b.jsonl")), (None, Some("conta".into())));
     cache.forget("s");
     assert!(cache.stale("s", "/b.jsonl", 21.0));
     assert_eq!(cache.cached("s", "/b.jsonl"), (None, None));

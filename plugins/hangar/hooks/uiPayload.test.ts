@@ -13,6 +13,12 @@ test("faixa, bodyColumns, painéis e o painel na frente vão juntos", async () =
   expect(body.bodyColumns).toBe(82);
   expect(body.panes.map((p: PaneEntry) => p.id)).toEqual(["review-mr"]);
   expect(body.shown).toBe("review-mr");
+  expect(body.caps).toEqual([]);
+});
+
+test("o que o plugin atende vai junto, mesmo quando os painéis saem pelo teto", async () => {
+  expect(JSON.parse(`{${bandBody(null, 82, [], null, 1000, ["btw"])}}`).caps).toEqual(["btw"]);
+  expect(JSON.parse(`{${bandBody({ type: "Box" }, 82, [pane("grande", 5000)], "grande", 300, ["btw"])}}`).caps).toEqual(["btw"]);
 });
 
 test("shown de painel que não está na lista vai como null", async () => {

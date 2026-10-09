@@ -1,0 +1,955 @@
+{
+ "tz": "BRT3",
+ "cases": [
+  {
+   "name": "claude_first_line",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "claude_first_line",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "type": "x",
+      "n": 1
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"type\": \"x\", \"n\": 1}}\n"
+    }
+   }
+  },
+  {
+   "name": "codex_goes_to_its_own_file",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "codex",
+    "key": "codex_goes_to_its_own_file",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "decode:thread/read",
+     "event": {
+      "a": 1
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/codex-headless-desconhecidos.jsonl",
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/codex-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"decode:thread/read\", \"evento\": {\"a\": 1}}\n",
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": null
+    }
+   }
+  },
+  {
+   "name": "unicode_not_escaped",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "unicode_not_escaped",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "ação/é",
+     "event": {
+      "texto": "olá ✓ 😀",
+      "lista": [
+       1,
+       2.5,
+       null,
+       true,
+       "x"
+      ]
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"ação/é\", \"evento\": {\"texto\": \"olá ✓ 😀\", \"lista\": [1, 2.5, null, true, \"x\"]}}\n"
+    }
+   }
+  },
+  {
+   "name": "key_order_kept",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "key_order_kept",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "z": 1,
+      "a": {
+       "y": 2,
+       "b": 3
+      },
+      "m": []
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"z\": 1, \"a\": {\"y\": 2, \"b\": 3}, \"m\": []}}\n"
+    }
+   }
+  },
+  {
+   "name": "floats_and_ints",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "floats_and_ints",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "a": 1.0,
+      "b": 1e+22,
+      "c": 0.1,
+      "d": -0.0,
+      "e": 12345678901234567890
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"a\": 1.0, \"b\": 1e+22, \"c\": 0.1, \"d\": -0.0, \"e\": 12345678901234567890}}\n"
+    }
+   }
+  },
+  {
+   "name": "session_name_null",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "session_name_null",
+    "generation": 3,
+    "name": null
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "type": "x"
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": null, \"tipo\": \"k\", \"evento\": {\"type\": \"x\"}}\n"
+    }
+   }
+  },
+  {
+   "name": "appends_in_order",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "appends_in_order",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k1",
+     "event": {
+      "i": 1
+     }
+    },
+    {
+     "kind": "k2",
+     "event": {
+      "i": 2
+     }
+    },
+    {
+     "kind": "k1",
+     "event": {
+      "i": 3
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k1\", \"evento\": {\"i\": 1}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k2\", \"evento\": {\"i\": 2}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k1\", \"evento\": {\"i\": 3}}\n"
+    }
+   }
+  },
+  {
+   "name": "type_cap_30_per_kind",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "type_cap_30_per_kind",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "i": 0
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 1
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 2
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 3
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 4
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 5
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 6
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 7
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 8
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 9
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 10
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 11
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 12
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 13
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 14
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 15
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 16
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 17
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 18
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 19
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 20
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 21
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 22
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 23
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 24
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 25
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 26
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 27
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 28
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 29
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 30
+     }
+    },
+    {
+     "kind": "k",
+     "event": {
+      "i": 31
+     }
+    },
+    {
+     "kind": "other",
+     "event": {
+      "i": 99
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": true
+     },
+     {
+      "recorded": false,
+      "reason": "type_limit"
+     },
+     {
+      "recorded": false,
+      "reason": "type_limit"
+     },
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 0}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 1}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 2}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 3}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 4}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 5}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 6}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 7}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 8}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 9}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 10}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 11}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 12}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 13}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 14}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 15}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 16}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 17}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 18}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 19}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 20}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 21}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 22}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 23}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 24}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 25}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 26}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 27}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 28}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"i\": 29}}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"other\", \"evento\": {\"i\": 99}}\n"
+    }
+   }
+  },
+  {
+   "name": "existing_file_is_appended",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "existing_file_is_appended",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "type": "x"
+     }
+    }
+   ],
+   "files": {
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": {
+     "text": "{\"old\": true}\n"
+    }
+   },
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"old\": true}\n{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"type\": \"x\"}}\n"
+    }
+   }
+  },
+  {
+   "name": "file_at_the_cap_still_records",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "file_at_the_cap_still_records",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "type": "x"
+     }
+    }
+   ],
+   "files": {
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": {
+     "size": 10485760
+    }
+   },
+   "read": [],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {}
+   }
+  },
+  {
+   "name": "file_over_the_cap_blocks",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "file_over_the_cap_blocks",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "type": "x"
+     }
+    }
+   ],
+   "files": {
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": {
+     "size": 10485761
+    }
+   },
+   "read": [],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": false,
+      "reason": "file_limit"
+     }
+    ],
+    "files": {}
+   }
+  },
+  {
+   "name": "other_provider_file_does_not_block",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "codex",
+    "key": "other_provider_file_does_not_block",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": {
+      "type": "x"
+     }
+    }
+   ],
+   "files": {
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": {
+     "size": 10485761
+    }
+   },
+   "read": [
+    "home/.hangar/logs/privado/codex-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/codex-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"type\": \"x\"}}\n"
+    }
+   }
+  },
+  {
+   "name": "kind_512_chars_ok",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "kind_512_chars_ok",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+     "event": {}
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\", \"evento\": {}}\n"
+    }
+   }
+  },
+  {
+   "name": "kind_513_chars_invalid",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "kind_513_chars_invalid",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+     "event": {}
+    }
+   ],
+   "files": null,
+   "read": [],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "error": true
+     }
+    ],
+    "files": {}
+   }
+  },
+  {
+   "name": "kind_not_a_string",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "kind_not_a_string",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": 3,
+     "event": {}
+    }
+   ],
+   "files": null,
+   "read": [],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "error": true
+     }
+    ],
+    "files": {}
+   }
+  },
+  {
+   "name": "kind_missing",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "kind_missing",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "event": {}
+    }
+   ],
+   "files": null,
+   "read": [],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "error": true
+     }
+    ],
+    "files": {}
+   }
+  },
+  {
+   "name": "event_not_an_object",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "event_not_an_object",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": [
+      1
+     ]
+    },
+    {
+     "kind": "k",
+     "event": "x"
+    },
+    {
+     "kind": "k",
+     "event": null
+    },
+    {
+     "kind": "k"
+    }
+   ],
+   "files": null,
+   "read": [],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "error": true
+     },
+     {
+      "error": true
+     },
+     {
+      "error": true
+     },
+     {
+      "error": true
+     }
+    ],
+    "files": {}
+   }
+  },
+  {
+   "name": "invalid_step_does_not_count",
+   "kind": "unknown_private",
+   "payload": {},
+   "meta": {
+    "provider": "claude",
+    "key": "invalid_step_does_not_count",
+    "generation": 3,
+    "name": "sessao-x"
+   },
+   "steps": [
+    {
+     "kind": "k",
+     "event": 1
+    },
+    {
+     "kind": "k",
+     "event": {
+      "type": "ok"
+     }
+    }
+   ],
+   "files": null,
+   "read": [
+    "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl"
+   ],
+   "now": 1800000000.0,
+   "expected": {
+    "results": [
+     {
+      "error": true
+     },
+     {
+      "recorded": true
+     }
+    ],
+    "files": {
+     "home/.hangar/logs/privado/claude-headless-desconhecidos.jsonl": "{\"ts\": 1800000000.0, \"sessao\": \"sessao-x\", \"tipo\": \"k\", \"evento\": {\"type\": \"ok\"}}\n"
+    }
+   }
+  }
+ ]
+}

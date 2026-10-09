@@ -101,6 +101,7 @@
 use crate::*;
 
 pub(crate) mod debug;
+pub(crate) mod snapshot;
 
 use crate::{App, Bounds, FocusId, Pixels, SharedString, Window};
 use accesskit::{Action, NodeId, TreeUpdate};
@@ -145,10 +146,18 @@ pub(crate) struct A11y {
     /// At the end of the frame, we re-call [`Self::sync_active_flag`] to
     /// determine whether we should actually send the finished [`TreeUpdate`].
     active_this_frame: bool,
+    /// Build the tree even without assistive technology, for [`Window::a11y_snapshot`].
+    retain: bool,
     pub(crate) nodes: A11yNodeBuilder,
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+    /// Hitbox of the element behind each node: an accessibility click only lands when it is the one under the point.
+    pub(crate) node_hitboxes: FxHashMap<NodeId, HitboxId>,
+    prev_node_hitboxes: FxHashMap<NodeId, HitboxId>,
+    prev_focus_ids: FxHashMap<NodeId, FocusId>,
+    prev_node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+    prev_action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
     window_title: Option<SharedString>,
@@ -173,10 +182,16 @@ impl A11y {
             force_disabled,
             active_flag,
             active_this_frame: false,
+            retain: false,
             nodes: A11yNodeBuilder::new(),
             focus_ids: FxHashMap::default(),
             node_bounds: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
+            node_hitboxes: FxHashMap::default(),
+            prev_node_hitboxes: FxHashMap::default(),
+            prev_focus_ids: FxHashMap::default(),
+            prev_node_bounds: FxHashMap::default(),
+            prev_action_listeners: FxHashMap::default(),
             window_title,
             last_focus_without_node: None,
             debug: debug::A11yDebug::default(),
@@ -210,7 +225,8 @@ impl A11y {
     /// See the docs for [`Self::active_flag`] and [`Self::active_this_frame`]
     /// for more commentary.
     pub(crate) fn sync_active_flag(&mut self) {
-        self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
+        self.active_this_frame =
+            self.is_enabled() && (self.retain || self.active_flag.load(Ordering::SeqCst));
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
@@ -273,10 +289,70 @@ impl A11y {
 
     /// Clear per-frame state and push the root node to start a new frame.
     pub(crate) fn begin_frame(&mut self) {
-        self.focus_ids.clear();
-        self.node_bounds.clear();
-        self.action_listeners.clear();
+        // O quadro anterior fica guardado para as views em cache, que não repintam e reaproveitam o que registraram nele.
+        self.prev_focus_ids = std::mem::take(&mut self.focus_ids);
+        self.prev_node_bounds = std::mem::take(&mut self.node_bounds);
+        self.prev_action_listeners = std::mem::take(&mut self.action_listeners);
+        self.prev_node_hitboxes = std::mem::take(&mut self.node_hitboxes);
         self.nodes.begin_frame(self.window_title.as_ref());
+    }
+
+    /// Marks where a cached view starts emitting nodes, so its subtree can be replayed on later frames.
+    pub(crate) fn capture_start(&self) -> Option<(usize, usize, u32)> {
+        let parent = self.nodes.nodes_stack.last()?;
+        Some((self.nodes.all_nodes.len(), parent.children().len(), self.nodes.text_count()))
+    }
+
+    pub(crate) fn capture_end(&self, start: (usize, usize, u32)) -> A11yCapture {
+        let roots = self
+            .nodes
+            .nodes_stack
+            .last()
+            .map(|parent| parent.children()[start.1..].to_vec())
+            .unwrap_or_default();
+        A11yCapture {
+            nodes: self.nodes.all_nodes[start.0..].to_vec(),
+            roots,
+            texts: self.nodes.text_count() - start.2,
+        }
+    }
+
+    /// Re-emits the subtree of a cached view that was reused without running prepaint/paint.
+    pub(crate) fn replay(&mut self, capture: &A11yCapture, focused: Option<FocusId>) {
+        let mut inserted = FxHashSet::default();
+        for (id, node) in &capture.nodes {
+            if !self.nodes.seen_ids.insert(*id) {
+                continue;
+            }
+            inserted.insert(*id);
+            self.nodes.all_nodes.push((*id, node.clone()));
+            if let Some(bounds) = self.prev_node_bounds.remove(id) {
+                self.node_bounds.insert(*id, bounds);
+            }
+            if let Some(hitbox) = self.prev_node_hitboxes.remove(id) {
+                self.node_hitboxes.insert(*id, hitbox);
+            }
+            if let Some(listeners) = self.prev_action_listeners.remove(id) {
+                self.action_listeners.insert(*id, listeners);
+            }
+            if let Some(focus_id) = self.prev_focus_ids.remove(id) {
+                self.focus_ids.insert(*id, focus_id);
+                if focused == Some(focus_id) {
+                    self.set_focus(*id);
+                }
+            }
+        }
+        // Os textos que vierem depois da view seguem numerados como no quadro em que ela desenhou.
+        if let Some(count) = self.nodes.text_counts.last_mut() {
+            *count += capture.texts;
+        }
+        if let Some(parent) = self.nodes.nodes_stack.last_mut() {
+            for root in &capture.roots {
+                if inserted.contains(root) {
+                    parent.push_child(*root);
+                }
+            }
+        }
     }
 
     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
@@ -296,6 +372,81 @@ impl A11y {
 
     pub(crate) fn debug_tree_json(&self) -> Option<String> {
         self.debug.to_json()
+    }
+}
+
+/// Enough of a control's visible text to name it.
+const CONTENT_CAP: usize = 300;
+
+/// Roles that take their name from the text inside them when nobody gave them a label.
+fn named_by_content(role: accesskit::Role) -> bool {
+    use accesskit::Role::*;
+    matches!(
+        role,
+        Button | Tab | MenuItem | MenuItemCheckBox | MenuItemRadio | ListItem | ListBoxOption | TreeItem | Link | Cell
+            | Row | CheckBox | RadioButton | Switch | Heading | ColumnHeader | RowHeader | Term | Definition | Tooltip
+    )
+}
+
+/// The text is already the parent's name or value: a `Label`/`Text` node, or a named control that reads as its label.
+fn text_belongs_to_parent(parent: &accesskit::Node) -> bool {
+    use accesskit::Role::*;
+    match parent.role() {
+        Label | TextInput | MultilineTextInput | SearchInput | PasswordInput => true,
+        Button | Tab | MenuItem | MenuItemCheckBox | MenuItemRadio | CheckBox | Switch | RadioButton | Link
+        | ComboBox | ListBoxOption | TreeItem | ListItem => parent.label().is_some(),
+        _ => false,
+    }
+}
+
+impl Window {
+    /// Exposes visible text as a `Label` leaf of the enclosing node. GPUI's text elements call it; custom elements that
+    /// paint text themselves call it from `prepaint` with the text and its bounds.
+    pub fn a11y_text(&mut self, text: &str, bounds: Bounds<Pixels>) {
+        // Texto fora da área rolada também entra: está desenhado e o leitor chega nele rolando, como num navegador.
+        if !self.a11y.is_active() {
+            return;
+        }
+        let scale = self.scale_factor();
+        self.a11y.nodes.push_text(
+            text,
+            accesskit::Rect {
+                x0: (bounds.origin.x.0 * scale) as f64,
+                y0: (bounds.origin.y.0 * scale) as f64,
+                x1: ((bounds.origin.x.0 + bounds.size.width.0) * scale) as f64,
+                y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
+            },
+        );
+    }
+
+    /// The accessibility tree of the last frame as text, one node per line, indented by depth:
+    /// `role "name" = "value" [states] #id`. `root` limits it to the subtree of the node whose id is `root` or ends
+    /// with `›root` (e.g. `settings-dialog`). `None` while no tree was built (no assistive technology and
+    /// [`Self::retain_a11y_tree`] off) or when `root` is not on screen.
+    pub fn a11y_snapshot(&self, root: Option<&str>) -> Option<String> {
+        self.a11y.debug.snapshot(root)
+    }
+
+    /// Keeps building the accessibility tree without assistive technology attached, so [`Self::a11y_snapshot`]
+    /// always has the last frame.
+    pub fn retain_a11y_tree(&mut self, retain: bool) {
+        self.a11y.retain = retain;
+        self.refresh();
+    }
+}
+
+/// Nodes a cached view emitted on the frame it last rendered.
+pub(crate) struct A11yCapture {
+    nodes: Vec<(NodeId, accesskit::Node)>,
+    /// Top-level nodes of the view, children of whatever node encloses it.
+    roots: Vec<NodeId>,
+    /// Text leaves the view numbered under the enclosing node.
+    texts: u32,
+}
+
+impl A11yCapture {
+    pub(crate) fn roots(&self) -> Vec<NodeId> {
+        self.roots.clone()
     }
 }
 
@@ -375,6 +526,14 @@ pub(crate) struct A11yNodeBuilder {
     /// `HashMap<NodeId, Node>` to remove the need for `seen_ids`
     all_nodes: Vec<(NodeId, accesskit::Node)>,
     seen_ids: FxHashSet<NodeId>,
+    /// Text leaves already numbered under each node on the stack (parallel to `ids_stack`).
+    text_counts: SmallVec<[u32; 16]>,
+    /// Visible text gathered under each node on the stack, capped, to name controls that have no label.
+    contents: SmallVec<[String; 16]>,
+    /// Whether each node on the stack already has a child that is a control rather than text.
+    has_controls: SmallVec<[bool; 16]>,
+    /// Nodes a deferred draw emitted at the root, to hang under the node that deferred them.
+    reparents: Vec<(NodeId, Vec<NodeId>)>,
     /// The node that GPUI considers focused. Note that this may be different to
     /// what is reported to accesskit - see [`Self::active_descendant`]
     focus: Option<NodeId>,
@@ -394,6 +553,10 @@ impl A11yNodeBuilder {
             nodes_stack: SmallVec::new(),
             all_nodes: Vec::new(),
             seen_ids: FxHashSet::default(),
+            text_counts: SmallVec::new(),
+            contents: SmallVec::new(),
+            has_controls: SmallVec::new(),
+            reparents: Vec::new(),
             focus: None,
             active_descendant: None,
             #[cfg(debug_assertions)]
@@ -436,6 +599,9 @@ impl A11yNodeBuilder {
         }
         self.ids_stack.push(id);
         self.nodes_stack.push(node);
+        self.text_counts.push(0);
+        self.contents.push(String::new());
+        self.has_controls.push(false);
         true
     }
 
@@ -465,8 +631,123 @@ impl A11yNodeBuilder {
     pub(crate) fn pop(&mut self) {
         debug_assert!(self.ids_stack.len() > 1, "pop would remove the root node");
 
-        if let (Some(id), Some(node)) = (self.ids_stack.pop(), self.nodes_stack.pop()) {
+        if let (Some(id), Some(mut node)) = (self.ids_stack.pop(), self.nodes_stack.pop()) {
+            let content = self.contents.pop().unwrap_or_default();
+            let content = content.trim();
+            let has_controls = self.has_controls.pop().unwrap_or(false);
+            let clickable = node.supports_action(accesskit::Action::Click);
+            let unnamed = node.label().is_none();
+            // Área clicável que embrulha controles é nomeada por eles, não pela soma dos textos.
+            if unnamed && !content.is_empty() && (named_by_content(node.role()) || clickable) && !(clickable && has_controls) {
+                node.set_label(content.to_string());
+            }
+            // Botão sem nome do app que embrulha outros controles não é botão para o leitor (ele achata os filhos):
+            // vira grupo, e continua clicável pela ação.
+            if unnamed && node.role() == accesskit::Role::Button && has_controls {
+                node.set_role(accesskit::Role::Group);
+            }
+            if node.role() != accesskit::Role::Label {
+                if let Some(parent) = self.has_controls.last_mut() {
+                    *parent = true;
+                }
+            }
+            let said = node.label().or(node.value()).unwrap_or(content).to_string();
+            self.gather(&said);
             self.all_nodes.push((id, node));
+        }
+        self.text_counts.pop();
+    }
+
+    fn gather(&mut self, text: &str) {
+        if let Some(content) = self.contents.last_mut() {
+            if !content.is_empty() && content.len() < CONTENT_CAP {
+                content.push(' ');
+            }
+            for ch in text.chars() {
+                if content.len() >= CONTENT_CAP {
+                    break;
+                }
+                content.push(ch);
+            }
+        }
+    }
+
+    /// The node elements are being nested under right now.
+    pub(crate) fn current_id(&self) -> Option<NodeId> {
+        self.ids_stack.last().copied()
+    }
+
+    /// `kids`, emitted at the root by a deferred draw, belong under `parent`.
+    pub(crate) fn reparent(&mut self, parent: NodeId, kids: Vec<NodeId>) {
+        if parent != ROOT_NODE_ID && !kids.is_empty() {
+            self.reparents.push((parent, kids));
+        }
+    }
+
+    fn apply_reparents(&mut self) {
+        if self.reparents.is_empty() {
+            return;
+        }
+        let index: FxHashMap<NodeId, usize> =
+            self.all_nodes.iter().enumerate().map(|(i, (id, _))| (*id, i)).collect();
+        let Some(&root) = index.get(&ROOT_NODE_ID) else { return };
+        for (parent, kids) in std::mem::take(&mut self.reparents) {
+            // Pai fora da árvore (não desenhado neste quadro): os filhos ficam na raiz.
+            let Some(&at) = index.get(&parent) else { continue };
+            let root_children = self.all_nodes[root].1.children().to_vec();
+            let moved: Vec<NodeId> = kids.into_iter().filter(|kid| root_children.contains(kid)).collect();
+            if moved.is_empty() {
+                continue;
+            }
+            self.all_nodes[root].1.set_children(root_children.into_iter().filter(|c| !moved.contains(c)).collect::<Vec<_>>());
+            // Diálogo sem nome: o título chega no conteúdo adiado, e é o primeiro texto dele.
+            let parent_node = &self.all_nodes[at].1;
+            if matches!(parent_node.role(), accesskit::Role::Dialog | accesskit::Role::AlertDialog) && parent_node.label().is_none() {
+                let title = moved.iter().find_map(|kid| {
+                    let node = &self.all_nodes[*index.get(kid)?].1;
+                    (node.role() == accesskit::Role::Label).then(|| node.value().map(str::to_owned)).flatten()
+                });
+                if let Some(title) = title {
+                    self.all_nodes[at].1.set_label(title);
+                }
+            }
+            for kid in moved {
+                self.all_nodes[at].1.push_child(kid);
+            }
+        }
+    }
+
+    pub(crate) fn text_count(&self) -> u32 {
+        self.text_counts.last().copied().unwrap_or(0)
+    }
+
+    /// Adds visible text as a `Label` leaf of the current node. The id comes from the parent and the text's position
+    /// among the parent's texts, so it stays the same across frames while the text changes.
+    pub(crate) fn push_text(&mut self, text: &str, bounds: accesskit::Rect) {
+        let (Some(&parent_id), Some(parent)) = (self.ids_stack.last(), self.nodes_stack.last()) else {
+            return;
+        };
+        if text.trim().is_empty() || text_belongs_to_parent(parent) {
+            return;
+        }
+        // Diálogo sem nome: o primeiro texto dele é o título.
+        if matches!(parent.role(), accesskit::Role::Dialog | accesskit::Role::AlertDialog) && parent.label().is_none() {
+            if let Some(dialog) = self.nodes_stack.last_mut() {
+                dialog.set_label(text.trim().to_string());
+            }
+        }
+        let Some(count) = self.text_counts.last_mut() else {
+            return;
+        };
+        let position = *count;
+        *count += 1;
+        let mut hasher = std::hash::DefaultHasher::default();
+        (parent_id.0, "text", position).hash(&mut hasher);
+        let mut node = accesskit::Node::new(accesskit::Role::Label);
+        node.set_value(text.to_string());
+        node.set_bounds(bounds);
+        if self.push_leaf(NodeId(hasher.finish()), node) {
+            self.gather(text);
         }
     }
 
@@ -485,6 +766,13 @@ impl A11yNodeBuilder {
 
         self.ids_stack.push(ROOT_NODE_ID);
         self.nodes_stack.push(root_node);
+        self.text_counts.clear();
+        self.text_counts.push(0);
+        self.contents.clear();
+        self.contents.push(String::new());
+        self.has_controls.clear();
+        self.has_controls.push(false);
+        self.reparents.clear();
         self.focus = None;
         self.active_descendant = None;
     }
@@ -560,6 +848,7 @@ impl A11yNodeBuilder {
                 self.all_nodes.push((id, node));
             }
         }
+        self.apply_reparents();
 
         let focus = match self.active_descendant {
             Some(id) if self.has_node(id) => id,
@@ -637,7 +926,7 @@ impl A11yNodeBuilder {
 mod tests {
     // Import specific items rather than glob-importing `super`, which would pull
     // in gpui's own `test` attribute macro and shadow the standard one.
-    use super::{A11y, A11yNodeBuilder, ROOT_NODE_ID};
+    use super::{A11y, A11yNodeBuilder, ROOT_NODE_ID, snapshot};
     use crate::FocusId;
     use accesskit::{NodeId, Role};
     use std::sync::{Arc, atomic::AtomicBool};
@@ -656,6 +945,93 @@ mod tests {
         let mut a11y = A11y::new(Arc::new(AtomicBool::new(true)), false, None);
         a11y.begin_frame();
         a11y
+    }
+
+    fn rect() -> accesskit::Rect {
+        accesskit::Rect { x0: 0., y0: 0., x1: 10., y1: 10. }
+    }
+
+    fn text_frame(a11y: &mut A11y, words: &[&str]) -> accesskit::TreeUpdate {
+        a11y.begin_frame();
+        let mut dialog = test_node();
+        dialog.set_author_id("root›settings-dialog");
+        assert!(a11y.nodes.push(NodeId(1), dialog));
+        for word in words {
+            a11y.nodes.push_text(word, rect());
+        }
+        let mut named = accesskit::Node::new(Role::Button);
+        named.set_label("Salvar");
+        assert!(a11y.nodes.push(NodeId(2), named));
+        a11y.nodes.push_text("Salvar", rect());
+        a11y.nodes.pop();
+        assert!(a11y.nodes.push(NodeId(3), accesskit::Node::new(Role::ListItem)));
+        a11y.nodes.push_text("Opus 5.5", rect());
+        a11y.nodes.pop();
+        a11y.nodes.pop();
+        a11y.end_frame(Default::default())
+    }
+
+    #[test]
+    fn visible_text_becomes_stable_label_leaves() {
+        let mut a11y = new_a11y();
+        let first = text_frame(&mut a11y, &["Avançado", "Porta 8765"]);
+        let second = text_frame(&mut a11y, &["Avançado", "Porta 9000"]);
+        let labels = |update: &accesskit::TreeUpdate| -> Vec<(NodeId, String)> {
+            update.nodes.iter().filter(|(_, n)| n.role() == Role::Label)
+                .map(|(id, n)| (*id, n.value().unwrap().to_string())).collect()
+        };
+        let (a, b) = (labels(&first), labels(&second));
+        // Texto dentro de botão com nome não vira folha; item sem nome ganha folha e o texto como nome.
+        assert_eq!(a.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["Avançado", "Porta 8765", "Opus 5.5"]);
+        assert_eq!(a.iter().map(|(id, _)| *id).collect::<Vec<_>>(), b.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+        assert_eq!(b[1].1, "Porta 9000");
+        let item = first.nodes.iter().find(|(id, _)| *id == NodeId(3)).unwrap();
+        assert_eq!(item.1.label(), Some("Opus 5.5"));
+    }
+
+    #[test]
+    fn snapshot_lists_the_subtree_one_line_per_node() {
+        let mut a11y = new_a11y();
+        let update = text_frame(&mut a11y, &["Avançado"]);
+        let all = snapshot::snapshot_text(&update, None).unwrap();
+        assert!(all.starts_with("Window\n"));
+        let dialog = snapshot::snapshot_text(&update, Some("settings-dialog")).unwrap();
+        assert_eq!(
+            dialog,
+            "GenericContainer #settings-dialog\n  Label = \"Avançado\"\n  Button \"Salvar\"\n  ListItem \"Opus 5.5\"\n    Label = \"Opus 5.5\"\n"
+        );
+        assert_eq!(snapshot::snapshot_text(&update, Some("missing")), None);
+    }
+
+    #[test]
+    fn cached_subtree_replays_on_later_frames() {
+        let mut a11y = new_a11y();
+        let container = NodeId(1);
+        let button = NodeId(2);
+        let focus = FocusId::default();
+
+        assert!(a11y.nodes.push(container, test_node()));
+        let start = a11y.capture_start().unwrap();
+        assert!(a11y.nodes.push(button, test_node()));
+        a11y.set_focusable(button, focus);
+        a11y.nodes.pop();
+        let capture = a11y.capture_end(start);
+        a11y.nodes.pop();
+        a11y.end_frame(Default::default());
+
+        for _ in 0..2 {
+            a11y.begin_frame();
+            assert!(a11y.nodes.push(container, test_node()));
+            a11y.replay(&capture, Some(focus));
+            a11y.nodes.pop();
+            let update = a11y.end_frame(Default::default());
+
+            let parent = update.nodes.iter().find(|(id, _)| *id == container).unwrap();
+            assert_eq!(parent.1.children(), &[button]);
+            assert!(update.nodes.iter().any(|(id, _)| *id == button));
+            assert_eq!(update.focus, button);
+            assert_eq!(a11y.focus_ids.get(&button), Some(&focus));
+        }
     }
 
     #[test]
