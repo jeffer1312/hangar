@@ -304,6 +304,9 @@ SSE devolvia 404 para uma sessão declarada viva, e o teste de atualização do 
 de turnos do agendador. A fixture agora mantém o canal aberto e sinaliza o início da leitura
 com um evento. O contrato com o Codex instalado prepara a inicialização fria antes da leitura,
 sem repetir a asserção nem ampliar seu prazo de produção.
+Na captura, o executável temporário podia falhar ao nascer durante outros spawns. A fixture
+Unix usa um link para um script imutável, com os parâmetros em arquivos separados, como o
+observador de terminal já fazia. A espera bloqueada usa um pipe, sem atraso artificial.
 
 ## Transcrição, organização do texto e leitura são capacidades separadas
 
