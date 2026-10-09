@@ -98,7 +98,7 @@ normalização muda somente a raiz temporária declarada e seus separadores: nã
 remove horários, UUIDs, mensagens, campos desconhecidos ou listas fora de ordem.
 Dados temporais novos deverão declarar sua normalização na Task consumidora.
 
-`PythonReference(..., block_handlers=True)` recusa operações de conta com 503 e
+`PythonReference` recusa operações de conta com 503 e
 `contract_python_handler_blocked`, guardando um diário separado. Uma resposta
 200 entregue por proxy Python falha em `assert_rust_ownership`. Só
 `bridge.prepare`, `bridge.claude_window` e `bridge.other_quotas` são

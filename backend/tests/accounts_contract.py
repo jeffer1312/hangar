@@ -108,13 +108,11 @@ class PythonReference(HttpTransport):
     """Filho com as rotas internas que o Rust consome e a criação de sessão, sem lifespan do
     servidor nem CLI/rede real."""
 
-    def __init__(self, root: Path, *, block_handlers: bool = False):
+    def __init__(self, root: Path):
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
         self.log = (root / "worker.log").open("w", encoding="utf-8")
         arguments = [sys.executable, str(Path(__file__).resolve()), "--worker"]
-        if block_handlers:
-            arguments.append("--block-handlers")
         self.process = subprocess.Popen(arguments, cwd=root, env=isolated_environment(root),
                                         stdout=subprocess.PIPE, stderr=self.log, text=True,
                                         encoding="utf-8", errors="strict")
@@ -360,7 +358,7 @@ else send({id:m.id,error:{code:-32601,message:'método inesperado'}});
             self.process.stdout.close()
             self.process.stderr.close()
 
-def _worker(block_handlers: bool) -> None:
+def _worker() -> None:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from unittest.mock import patch
     from fastapi import FastAPI
@@ -473,11 +471,8 @@ def _worker(block_handlers: bool) -> None:
     internal_api.set_secret("contract-internal")
     app.include_router(internal_api.router)
     app.state.codex_contas_login = service
-    prefixes = {"/api/claude-configs": "claude", "/api/conta-estado": "claude",
-                "/api/codex-contas": "codex", "/api/cotas": "quotas",
-                "/api/credenciais/codex": "device"}
     calls = []
-    from app import login_conta
+    from app import claude_window
     windows = {}
     window_calls = []
     code_entered = threading.Event()
@@ -674,18 +669,12 @@ def _worker(block_handlers: bool) -> None:
             response = await call_next(request)
             calls.append({"operation": "bridge.claude_window", "status": response.status_code})
             return response
-        prefix = next((prefix for prefix in prefixes if request.url.path.startswith(prefix)), None)
-        if prefix:
-            suffix = "catalog" if request.url.path == prefix else "operation"
-            operation = f"{prefixes[prefix]}.{suffix}"
-            entry = {"operation": operation, "method": request.method, "path": request.url.path}
-            calls.append(entry)
-            if block_handlers:
-                entry["status"] = 503
-                return JSONResponse({"detail": {"code": "contract_python_handler_blocked", "operation": operation}}, status_code=503)
-            response = await call_next(request)
-            entry["status"] = response.status_code
-            return response
+        if request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES):
+            # Conta e cota são do Rust: o pedido que chega aqui fica no diário e é recusado.
+            operation = f"account:{request.method} {request.url.path}"
+            calls.append({"operation": operation, "status": 503})
+            return JSONResponse({"detail": {"code": "contract_python_handler_blocked", "operation": operation}},
+                                status_code=503)
         return await call_next(request)
 
     @app.post("/__contract__/runtime-instance")
@@ -754,9 +743,9 @@ def _worker(block_handlers: bool) -> None:
                 return original_connection(address, *args, **kwargs)
         return deny_external()
 
-    with patch.multiple(login_conta, _shell_criar=window_create, _shell_submeter=window_send,
-                        _shell_ler=lambda name: "https://claude.ai/oauth/authorize?fixture=1\nPaste code here if prompted",
-                        _shell_matar=window_close, _shell_code=window_code, create=True), \
+    with patch.multiple(claude_window, spawn=window_create, submit=window_send,
+                        read=lambda name: "https://claude.ai/oauth/authorize?fixture=1\nPaste code here if prompted",
+                        kill=window_close, send_code=window_code), \
             patch.object(runtime_coordinator, "current", return_value=instance), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api.registry, "create", side_effect=create_at_barrier), \
@@ -813,7 +802,6 @@ def _worker(block_handlers: bool) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Referência Python isolada de contas")
     parser.add_argument("--worker", action="store_true")
-    parser.add_argument("--block-handlers", action="store_true")
     arguments = parser.parse_args()
     if arguments.worker:
-        _worker(arguments.block_handlers)
+        _worker()

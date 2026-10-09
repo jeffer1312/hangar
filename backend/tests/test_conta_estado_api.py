@@ -9,7 +9,7 @@ import pytest
 def test_rust_login_requires_changed_token_and_authenticated_identity(tmp_path):
     from accounts_contract import PythonReference, RustClaude, assert_rust_ownership
     import json
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustClaude(reference)
     account = reference.root / ".claude-work"
     try:
@@ -37,7 +37,7 @@ def test_rust_login_requires_changed_token_and_authenticated_identity(tmp_path):
 
 def test_rust_restart_closes_only_the_abandoned_login_window(tmp_path):
     from accounts_contract import PythonReference, RustClaude
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustClaude(reference)
     try:
         path = "/api/conta-estado/Trabalho%20de%20revis%C3%A3o/login"
@@ -62,7 +62,7 @@ def test_rust_old_confirmation_cannot_clean_or_complete_a_new_attempt(tmp_path):
     from accounts_contract import PythonReference, RustClaude, assert_rust_ownership
     from concurrent.futures import ThreadPoolExecutor
     import json
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustClaude(reference)
     pool = ThreadPoolExecutor()
     try:
@@ -96,7 +96,7 @@ def test_rust_old_confirmation_cannot_clean_or_complete_a_new_attempt(tmp_path):
 def test_rust_unreadable_identity_cleans_attempt_without_onboarding(tmp_path, reply):
     from accounts_contract import PythonReference, RustClaude
     import json
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustClaude(reference)
     account = reference.root / ".claude-work"
     try:
@@ -115,7 +115,7 @@ def test_rust_unreadable_identity_cleans_attempt_without_onboarding(tmp_path, re
 def test_python_consumer_uses_private_rust_auth_for_equivalent_account_paths(tmp_path):
     from accounts_contract import PythonReference, RustClaude, assert_rust_ownership
     from urllib.parse import quote
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustClaude(reference)
     try:
         account = reference.root / ".claude-work"
@@ -140,7 +140,7 @@ def test_step_does_not_conclude_when_credential_changes_during_identity_probe(tm
     from accounts_contract import PythonReference, RustClaude
     import json
     import os
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustClaude(reference)
     account = reference.root / ".claude-work"
     credential = account / ".credentials.json"
@@ -179,7 +179,7 @@ def test_confirmation_does_not_accept_identity_read_before_token_replacement(tmp
     import json
     import os
     import time
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustClaude(reference)
     account = reference.root / ".claude-work"
     credential = account / ".credentials.json"

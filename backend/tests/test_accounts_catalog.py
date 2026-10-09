@@ -57,7 +57,7 @@ class RustCatalog(HttpTransport):
 
 
 def test_claimed_http_routes_match_goldens_without_python_handlers(tmp_path):
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCatalog(reference)
     golden = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
     try:
@@ -83,7 +83,7 @@ def test_claimed_http_routes_match_goldens_without_python_handlers(tmp_path):
 
 @pytest.mark.parametrize("cancelled", [False, True])
 def test_http_delete_is_blocked_after_creator_returns_and_across_rust_restart(tmp_path, cancelled):
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCatalog(reference)
     try:
         launcher = reference.block("launcher_before_publication")
@@ -117,7 +117,7 @@ def test_http_delete_is_blocked_after_creator_returns_and_across_rust_restart(tm
 
 @pytest.mark.parametrize("identity", ["known", "unknown", "reused_name"])
 def test_http_delete_keeps_renamed_boot_protected(tmp_path, identity):
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCatalog(reference)
     try:
         assert reference.request("POST", "/__contract__/launcher-options", {
@@ -165,7 +165,7 @@ def test_python_readers_do_not_select_pending_accounts(tmp_path, monkeypatch):
 
 def test_claimed_validation_matches_real_python_envelopes(tmp_path):
     golden = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
-    reference = PythonReference(tmp_path / "native", block_handlers=True)
+    reference = PythonReference(tmp_path / "native")
     server = RustCatalog(reference)
     try:
         differences = []
