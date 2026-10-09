@@ -165,6 +165,24 @@ export function parsePluginUi(data: unknown): PluginSurfaces {
   };
 }
 
+/** A vista inteira a partir da anterior (`prev`, o dado cru do último `plugin_ui`) e do `plugin_ui_delta`: a faixa
+ *  ausente fica a de antes, e o painel `{id, same: true}` volta ao de mesmo id na anterior. O servidor só manda a
+ *  diferença a quem já tem a vista de que ela parte. */
+export function applyPluginUiDelta(prev: unknown, delta: unknown): Record<string, unknown> {
+  const p = (prev && typeof prev === 'object' ? prev : {}) as Record<string, unknown>;
+  const d = (delta && typeof delta === 'object' ? delta : {}) as Record<string, unknown>;
+  const before = new Map<string, unknown>();
+  for (const pane of Array.isArray(p.panes) ? p.panes : []) {
+    const id = (pane as { id?: unknown } | null)?.id;
+    if (typeof id === 'string') before.set(id, pane);
+  }
+  const panes = (Array.isArray(d.panes) ? d.panes : []).map((pane) => {
+    const o = pane as { id?: unknown; same?: unknown } | null;
+    return o?.same === true && typeof o.id === 'string' && before.has(o.id) ? before.get(o.id) : pane;
+  });
+  return { ...d, above: 'above' in d ? d.above : p.above ?? null, panes };
+}
+
 /** O servidor diz qual painel está na frente, e ele está na lista: a aba segue o servidor. */
 export function tabFollowsServer(ids: readonly string[], shownId: string | null | undefined): boolean {
   return typeof shownId === 'string' && ids.includes(shownId);

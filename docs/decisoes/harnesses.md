@@ -1930,6 +1930,16 @@ marcador de versão, e cada conexão lê a vista do retrato só quando pode escr
 até 1024 quadros por hub e 64 por conexão); os outros eventos seguem todos, na ordem, e a faixa
 sai no lugar do último marcador dela. O evento e o formato que os apps recebem não mudaram.
 
+Desde a issue #71 o aparelho que já tem a vista anterior recebe só o que mudou: o app anuncia
+`ui_delta=1` no `/events`, o hub guarda, junto com a vista atual, a diferença dela para a anterior
+(`plugin_ui_delta`: o mesmo objeto, sem `above` quando a faixa não mudou e com o painel igual
+reduzido a `{id, same: true}`), e cada conexão sabe a versão que entregou. Diferença só sai a quem
+tem exatamente a versão anterior; quem pulou uma vista, acabou de entrar (o retrato leva a vista
+inteira), voltou de um `reset` ou não anunciou recebe a vista inteira. A faixa de 1 Hz com um painel
+de ~400 KB aberto passa a custar só a faixa por segundo. A versão por aparelho, e não um `rev` por
+parte, porque o hub já numera as vistas e é ele quem sabe o que cada conexão recebeu. O `/events`
+do Python (processo sem Rust, convidado) segue mandando a vista inteira, e os apps aceitam as duas.
+
 O `claude -p` sobe com o plugin do Hangar (`--plugin-dir`) e as variáveis da ponte
 (`HANGAR_PLUGIN_URL`, `HANGAR_PLUGIN_TOKEN`), exceção explícita à regra de não acrescentar nada ao
 Python (S7, no lançador do `adapter.py`): a URL que um mod abre num clique do app (`xdg-open`) vai
@@ -2034,7 +2044,7 @@ Limites conhecidos:
 - a sessão sem terminal renomeada continua com o mesmo `claude -p`, que manda à ponte o nome com que nasceu (`CP_SESSION_NAME`) e o token desse nome. O renomear fecha e reabre a sessão no Rust no mesmo processo (chave durável e cano), e a reabertura herda o nome de nascimento; com isso `press-start` e `opened` acham a sessão. Se o `hangar-server` reiniciar depois do renomear, ele não conhece o nome antigo, e a URL de um clique do app abre na máquina do servidor até o processo ser relançado;
 - o token da ponte é o HMAC só do nome, como no Python: dois processos que nasceram com o mesmo nome (uma sessão renomeada e outra criada depois com o nome antigo) têm o mesmo token, e o servidor não os distingue. Com as duas vivas no Rust, a ponte não atende nenhuma (a URL de um clique do app abre no servidor), para um processo não tomar o clique nem mandar URL ao aparelho da outra. Quando o nome antigo é hoje o de uma sessão fora do Rust (com terminal, ou atendida pelo Python), o Rust pergunta ao Python, sem cache, se a sessão existe; existindo, ou sem resposta, `press-start` e `opened` vão ao Python, que atende essa sessão, e a renomeada perde o efeito do clique do app (a URL abre no servidor) enquanto as duas viverem. Na interface, cada vida de ator tem identificador próprio, e uma sessão nova com o nome antigo não herda faixa, avisos nem clique. Fechar o limite pede um token por processo (o nome de nascimento e a chave no sidecar e no HMAC, no Python e no plugin), fora da exceção S7;
 - a sessão com terminal que o Rust atende, inclusive no Windows (onde o terminal já nasce no Rust), não é superfície remota: a fonte da interface dos mods dela é o plugin do Hangar no terminal, e desde a fase 3 a ponte dela e o clique do app são do Rust (parágrafos seguintes).
-- o aparelho que acompanha recebe a vista inteira a cada mudança da faixa, sem gzip (SSE): a barra de progresso de um mod, que redesenha a 1 Hz com um painel grande aberto, custa ~400 KB/s por aparelho. Cortar isso pede mudança de contrato com os apps (um evento só da faixa, ou revisão por painel com a árvore omitida quando não mudou, com anúncio de capacidade no `/events` para os apps atrasados), fora deste trabalho.
+- pelo `/events` do Python (processo sem Rust, convidado) e para app que não anuncia `ui_delta`, o aparelho que acompanha recebe a vista inteira a cada mudança da faixa, sem gzip (SSE): a barra de progresso de um mod, que redesenha a 1 Hz com um painel grande aberto, custa ~400 KB/s por aparelho. Pelo hub do Rust, o app que anuncia recebe só a diferença (issue #71, seção da faixa dos mods).
 
 Feito na fase 3 dos mods, com terminal, no `hangar-server` (`mods/screen.rs`, `mods/click.rs`, `mods/terminal.rs`, `mods/bridge.rs`, `runtime/terminal.rs`), em Linux, macOS e Windows (psmux). O plugin do Hangar continua sendo a fonte da interface: manda a faixa e os painéis com o `bodyColumns` ao lado do `columns` (que soma as 5 colunas do `[-]` e é o que o Python usa para cortar a prévia), registra o painel já no `ui.open` colocado, informa o último painel desenhado (`shown`) e repassa `ui.scroll` e `ui.focus`. O Rust não lê a árvore do terminal: lê a tela.
 
