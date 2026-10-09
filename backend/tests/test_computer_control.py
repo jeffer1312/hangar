@@ -357,6 +357,19 @@ def test_install_migrates_existing_linux_targets_only_for_binary(home, rust_rele
     assert json.loads((targets / "custom-agent.json").read_text()) == custom
 
 
+def test_install_migrates_sh_wrapped_linux_target(home, rust_release):
+    targets = home / ".hangar" / "computer-control" / "targets"
+    targets.mkdir(parents=True)
+    prefix = "HYPRLAND_INSTANCE_SIGNATURE=${HYPRLAND_INSTANCE_SIGNATURE:-$(ls -t /run/user/1000/hypr | head -1)} "
+    legacy = {"transport": "local", "command": [
+        "/bin/sh", "-c", prefix + 'exec /usr/bin/python3 /old/hangar-computer-control/linux_agent.py "$@"', "sh"]}
+    (targets / "linux-agent.json").write_text(json.dumps(legacy))
+    cc.install()
+    command = json.loads((targets / "linux-agent.json").read_text())["command"]
+    binary = targets.parent / "hangar-computer-control"
+    assert command == ["/bin/sh", "-c", prefix + f'exec {binary} agent "$@"', "sh"]
+
+
 def test_install_exposes_invalid_target_without_overwriting_it(home, rust_release):
     targets = home / ".hangar" / "computer-control" / "targets"
     targets.mkdir(parents=True)

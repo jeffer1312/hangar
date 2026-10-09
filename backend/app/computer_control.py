@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -537,6 +538,12 @@ def _migrated(cfg: dict, exe: Path, binary: Path | None = None) -> dict:
             script = command[1] if len(command) > 1 and re.fullmatch(r"python(?:\d+(?:\.\d+)?)?(?:\.exe)?", program) else command[0]
             if Path(str(script)).name == "linux_agent.py":
                 return {**cfg, "command": [str(binary), "agent"]}
+            # O wrapper sh fica: ele preenche HYPRLAND_INSTANCE_SIGNATURE, sem a qual o agente Rust não sobe.
+            if len(command) >= 3 and program in {"sh", "bash"} and command[1] == "-c":
+                wrapped = re.sub(r"exec\s+\S*python[\d.]*\s+\S*linux_agent\.py",
+                                 lambda _: f"exec {shlex.quote(str(binary))} agent", str(command[2]), count=1)
+                if wrapped != command[2]:
+                    return {**cfg, "command": [*command[:2], wrapped, *command[3:]]}
         if command and str(command[0]).endswith("windows-agent.exe"):
             return {**cfg, "command": [str(exe), *command[1:]]}
     return cfg
