@@ -242,6 +242,11 @@ describe('applyPluginUiDelta', () => {
     expect(parsePluginUi(full).panes.map((p) => p.id)).toEqual(['b', 'a']);
   });
 
+  it('sem a vista anterior, ou com painel igual que ela não tem, lança', () => {
+    expect(() => applyPluginUiDelta(null, { panes: [] })).toThrow();
+    expect(() => applyPluginUiDelta(prev, { panes: [{ id: 'z', same: true }] })).toThrow();
+  });
+
   it('troca a faixa que veio, inclusive nula, e some com o painel que não veio', () => {
     expect(applyPluginUiDelta(prev, { above: null, panes: [] })).toEqual({ above: null, panes: [] });
   });

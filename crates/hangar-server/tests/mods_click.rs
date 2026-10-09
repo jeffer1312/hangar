@@ -567,6 +567,29 @@ fn renewal_after_enter(pane: &FakePane) -> u64 {
     log[enter + 1].strip_prefix("hold ").expect("a limpeza renova a reserva antes de qualquer volta").parse().unwrap()
 }
 
+/// Com a volta ao prompt no teto dela (9 s), a folga não some no corte do executor (10 s): o prazo da volta
+/// encolhe para a reserva caber inteira.
+#[tokio::test]
+async fn the_cleanup_hold_fits_the_executor_ceiling() {
+    let (mods, pane) = setup("tmux-14-ciclo-4-prompt", pm());
+    let pane = Arc::new(pane);
+    pane.mouse(false);
+    to_mr(&pane);
+    pane.on_keys("Tab", vec![Focus("pm-mock-mr", "mr-a", false)]);
+    pane.on_keys("Enter", vec![Pressed("pm-mock-mr", "mr-a")]);
+    // Custo que, somado aos 9 s da volta e à folga, passa dos 10 s do executor.
+    pane.cost(Duration::from_millis(550));
+    let parts = Parts { limits: Limits { ring_step: Duration::from_secs(2), ..Limits::quick() }, ..parts(&mods, &pane) };
+    let (task, answer) = click::spawn(parts, press_call("pm-mock-mr", "mr-a"), far());
+    assert_eq!(answer.await.unwrap().unwrap(), json!({}));
+    task.await.unwrap();
+    let log = pane.log();
+    let enter = log.iter().position(|a| a == "keys Enter").unwrap();
+    let holds: Vec<u64> = log[enter..].iter().filter_map(|a| a.strip_prefix("hold ")?.parse().ok()).collect();
+    assert!(holds.iter().all(|ms| *ms <= 10_000), "{holds:?}");
+    assert!(renewal_after_enter(&pane) >= 9_000, "{holds:?}");
+}
+
 #[tokio::test]
 async fn a_failed_return_keeps_the_pane_held() {
     // A tela não sai do painel: a limpeza renova a reserva, tenta até o teto e não solta o pane.

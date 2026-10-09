@@ -115,6 +115,8 @@ fn ui_delta(prev: &serde_json::Value, now: &serde_json::Value) -> Option<serde_j
         }
     }
     let mut delta = serde_json::Map::new();
+    // Id repetido em `now` com o mesmo conteúdo: só a primeira ocorrência vira `same`, a outra vai inteira.
+    let mut used = std::collections::HashSet::new();
     let above = |view: &serde_json::Map<String, Value>| view.get("above").cloned().unwrap_or(Value::Null);
     if above(prev) != above(now) { delta.insert("above".into(), above(now)); }
     for (key, value) in now {
@@ -124,7 +126,7 @@ fn ui_delta(prev: &serde_json::Value, now: &serde_json::Value) -> Option<serde_j
                 let panes = value.as_array()?.iter().map(|pane| {
                     let id = pane.get("id").and_then(Value::as_str);
                     match id.and_then(|id| before.get(id).copied().flatten()) {
-                        Some(old) if old == pane => serde_json::json!({"id": id, "same": true}),
+                        Some(old) if old == pane && used.insert(id) => serde_json::json!({"id": id, "same": true}),
                         _ => pane.clone(),
                     }
                 });
@@ -1431,6 +1433,15 @@ mod tests {
         lease.hub.seed(stale);
         let kept = lease.hub.cache.lock().unwrap().latest[PLUGIN_UI].clone().unwrap();
         assert!(String::from_utf8_lossy(&kept).contains("nova"), "a faixa nova fica");
+    }
+
+    #[test]
+    fn a_repeated_pane_id_is_same_only_once() {
+        use serde_json::json;
+        let pane = json!({"id": "a", "tree": {"type": "Text"}});
+        let prev = json!({"above": null, "panes": [pane.clone()]});
+        let now = json!({"above": null, "panes": [pane.clone(), pane.clone()]});
+        assert_eq!(ui_delta(&prev, &now), Some(json!({"panes": [{"id": "a", "same": true}, pane]})));
     }
 
     #[tokio::test]

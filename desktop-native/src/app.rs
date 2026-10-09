@@ -1958,7 +1958,10 @@ impl Hangar {
                 // (`plugin_ui_delta`) junta-se à vista anterior, também movida.
                 let old_ids = crate::plugin_ui::pane_ids(&self.plugin_panes);
                 let data = if event == "plugin_ui_delta" {
-                    crate::plugin_ui::apply_delta(std::mem::take(&mut self.plugin_band), std::mem::take(&mut self.plugin_panes), data)
+                    match crate::plugin_ui::apply_delta(&mut self.plugin_band, &mut self.plugin_panes, data) {
+                        Ok(data) => data,
+                        Err(_) => { self.error = Some(tr("invalid_response")); return (false, Changed::Screen); }
+                    }
                 } else { data };
                 let s = crate::plugin_ui::surfaces(data);
                 self.plugin_local_tab = crate::plugin_ui::follow_local(&old_ids, &crate::plugin_ui::pane_ids(&s.panes),

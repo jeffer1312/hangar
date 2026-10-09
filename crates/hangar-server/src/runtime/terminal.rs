@@ -235,7 +235,7 @@ fn clear_on_disk(transcript:&std::path::Path,since:f64)->Result<bool,std::io::Er
 /// Teto de cada reserva do pane a um clique de mod: os 7,5 s do pedido mais os 2 s da limpeza, com folga; a
 /// limpeza renova a sua a cada volta ao prompt, também abaixo disto. Vence sozinha: uma tarefa de clique que
 /// sumiu sem o `Release` não segura a fila.
-const MAX_MODS_HOLD:Duration=Duration::from_secs(10);
+pub(crate) const MAX_MODS_HOLD:Duration=Duration::from_secs(10);
 pub struct TerminalActor;
 impl TerminalActor {
     pub fn spawn(target:TerminalTarget,queue:QueueActor,policy:PolicyClient,options:TerminalOptions,events:broadcast::Sender<RuntimeEvent>,revision:Arc<AtomicU64>)->TerminalHandle {
