@@ -233,3 +233,27 @@ def test_conta_sem_cota_lida_continua_na_lista(casa, monkeypatch):
            cotas_lista=[_cota("claude:/home/u/.claude", estado="indisponivel")])
     linha = credenciais.listar()[0]
     assert linha.cota.estado == "indisponivel" and linha.cota.janelas == []
+
+
+# ------------------------------------------------------------------------------------ cookie
+def test_cookie_novo_invalida_a_cota_do_dono_rust(casa, monkeypatch):
+    """Com o Rust de pé a cota em cache é a dele: limpar só o cache Python deixava o número
+    antigo por até 5 min, logo depois de a pessoa colar o cookie para ver o número aparecer."""
+    from app import account_bridge, opencode_cota
+    pedidos = []
+    monkeypatch.setattr(opencode_cota, "definir_config", lambda *a: None)
+    monkeypatch.setattr(opencode_cota, "ler_configs", lambda: {"chave:opencode": {}})
+    monkeypatch.setattr(account_bridge, "request_quotas", lambda **k: pedidos.append(k) or {"ok": True})
+    credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie="c"))
+    assert pedidos == [{"invalidate": "chave:opencode"}]
+
+
+def test_cookie_novo_no_modo_python_limpa_o_cache_dele(casa, monkeypatch):
+    from app import account_bridge, opencode_cota
+    monkeypatch.setattr(opencode_cota, "definir_config", lambda *a: None)
+    monkeypatch.setattr(opencode_cota, "ler_configs", lambda: {})
+    monkeypatch.setattr(account_bridge, "request_quotas", lambda **k: None)
+    with cotas._lock:
+        cotas._cache["chave:opencode"] = (0.0, None)
+    credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie=""))
+    assert "chave:opencode" not in cotas._cache
