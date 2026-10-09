@@ -28,6 +28,11 @@ def _make_client(tmp_path, monkeypatch, bind_ip="127.0.0.1", **extra_env):
     # o `api.settings.auth_token` dos testes seguintes deixa de ser o que o `auth` confere (401).
     for mod in (sync, api):
         monkeypatch.setattr(mod, "settings", config.settings)
+    # O reload troca os globais dos módulos, inclusive o `app`; quem roda depois no mesmo processo
+    # passaria a ver um `app` novo, sem o estado que montou. O monkeypatch devolve os originais.
+    for mod in (sync, api):
+        for nome, valor in list(vars(mod).items()):
+            monkeypatch.setitem(vars(mod), nome, valor)
     importlib.reload(sync)
     importlib.reload(api)
     return TestClient(api.app)

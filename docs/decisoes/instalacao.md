@@ -641,13 +641,14 @@ e mobile 139 s na mesma faixa; shell, statusline e pi 8 s. Caminho crítico ≈ 
   processos, 95–117 s com 8 a 16. Arquivo inteiro por processo porque há testes com nome fixo de
   sessão tmux (`cp-test-termsock`), que colidiam quando o mesmo arquivo se dividia.
 - **A suíte dependia da ordem dos arquivos.** Em fila, na ordem alfabética do CI, passava; repartida,
-  cada rodada quebrava um arquivo diferente, e cada um passava sozinho. Duas origens: o Timer de
+  cada rodada quebrava um arquivo diferente, e cada um passava sozinho. Três origens: o Timer de
   confirmação de entrega do `app.api` (~8,5 s) sobrava de um teste e falava com o tmux no meio do
   arquivo seguinte (`test_api.py` → `test_terminal_observer.py`, e por tempo o
   `test_create_modelo_api.py`); e `test_codex_wrapper.py` tirava `app.adapters` do `sys.modules`
-  sem devolver, e o pacote reimportado nascia sem o atributo `adapter`. Detector usado: um plugin de
-  pytest que lista as threads vivas ao fim de cada arquivo. Depois dos dois consertos, 5 de 6
-  rodadas passaram; a que falhou era do segundo, consertado em seguida.
+  sem devolver, e o pacote reimportado nascia sem o atributo `adapter`; e `test_sync.py` recarregava
+  o `app.api` (`importlib.reload`), trocando o `app` global, e o `test_create_modelo_api.py` seguinte
+  perdia o serviço de contas Codex que tinha montado. Detector usado: um plugin de
+  pytest que lista as threads vivas ao fim de cada arquivo; o terceiro, por bissecção da ordem.
 - **Preparo único.** Com os passos em paralelo, um `cargo build` de uma faixa reescrevia binário que
   outra executava, e o pytest chegava antes das sondas de contas (~30 falhas falsas). Os passos não
   compilam mais nada no Linux.
