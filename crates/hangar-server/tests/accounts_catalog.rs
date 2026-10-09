@@ -407,6 +407,24 @@ fn deletion_unlinks_windows_junction_without_removing_its_target() {
     );
 }
 
+/// O primeiro `codex` de um runner frio passa às vezes do prazo de 6 s da leitura: `unavailable` aqui é
+/// a demora do processo, não o resultado. A releitura descarta a entrada que ficou no cache.
+async fn read_codex_auth_settled(
+    service: &hangar_server::accounts::AccountService,
+    account: &hangar_server::accounts::catalog::Account,
+) -> serde_json::Value {
+    use hangar_server::accounts::{AccountKey, Provider};
+    let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
+    for _ in 0..2 {
+        let value = service.read_codex_auth(account).await;
+        if value["status"] != "unavailable" {
+            return value;
+        }
+        service.codex_auth.invalidate(&key);
+    }
+    service.read_codex_auth(account).await
+}
+
 #[tokio::test]
 async fn installed_codex_reads_disconnected_account_in_isolated_home() {
     use hangar_server::accounts::Provider;
@@ -428,7 +446,7 @@ async fn installed_codex_reads_disconnected_account_in_isolated_home() {
         .base
         .insert("OPENAI_API_KEY".into(), "synthetic-parent-key".into());
     assert_eq!(
-        service.read_codex_auth(&account).await,
+        read_codex_auth_settled(&service, &account).await,
         serde_json::json!({"method":"none","status":"disconnected","email":null,"plan":null})
     );
     std::fs::write(
@@ -437,7 +455,7 @@ async fn installed_codex_reads_disconnected_account_in_isolated_home() {
     )
     .unwrap();
     assert_eq!(
-        service.read_codex_auth(&account).await,
+        read_codex_auth_settled(&service, &account).await,
         serde_json::json!({"method":"api_key","status":"connected","email":null,"plan":null})
     );
 }
