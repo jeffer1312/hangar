@@ -5,9 +5,10 @@ fluxo de código de dispositivo. Cada um guarda o resultado no formato dele — 
 `~/.pi/agent/auth.json` e a tabela `auth_credentials` do `~/.omp/agent/agent.db`. Sem isto a
 pessoa loga três vezes na mesma conta.
 
-O app roda o fluxo de dispositivo sozinho (stdlib, sem depender de nenhum dos três CLIs estar
-instalado), guarda o resultado no cofre (`~/.hangar/auth/openai-codex.json`, 0600) e escreve nos
-três stores. Depois disso cada CLI renova o token por conta própria: medido, o refresh rotaciona
+O fluxo de dispositivo é do Rust, que guarda o resultado no cofre
+(`~/.hangar/auth/openai-codex.json`, 0600) e escreve nos três stores; sem ele não há fluxo
+Python. Daqui sai a leitura do cofre e dos stores que a saúde dos harnesses usa, e a
+importação/propagação que ela pede (delegada ao Rust quando ele está de pé). Depois disso cada CLI renova o token por conta própria: medido, o refresh rotaciona
 mas o refresh anterior continua válido, então cópias independentes coexistem — o mesmo que já
 acontece hoje com Codex e Pi logados em separado.
 
@@ -18,32 +19,18 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import os
 import sqlite3
-import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app import atomico
 from app.agentes_sync import _codex_dir, _pi_dir
 
-_log = logging.getLogger("hangar.oauth_codex")
 
-CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
-_AUTH = "https://auth.openai.com"
-_TOKEN_URL = f"{_AUTH}/oauth/token"
-_DEVICE_USERCODE_URL = f"{_AUTH}/api/accounts/deviceauth/usercode"
-_DEVICE_TOKEN_URL = f"{_AUTH}/api/accounts/deviceauth/token"
-_DEVICE_REDIRECT_URI = f"{_AUTH}/deviceauth/callback"
-VERIFICATION_URL = f"{_AUTH}/codex/device"
 _JWT_CLAIM = "https://api.openai.com/auth"
-_TIMEOUT_S = 15 * 60
 PROVEDOR = "openai-codex"
 
 
@@ -56,32 +43,6 @@ def _omp_db(home: Path | None) -> Path:
     # `home` explícito é semente de teste: raiz fixa, sem perfil nem variável de ambiente.
     # Estrito: aqui se GRAVA credencial; perfil inválido tem que falhar, não cair na raiz errada.
     return omp_dirs.agent_dir(home=home, env={} if home else None, estrito=True) / "agent.db"
-
-
-# ---------------------------------------------------------------- HTTP (seam de teste)
-
-def _http(url: str, corpo: dict, *, form: bool) -> tuple[int, dict]:
-    if form:
-        dados = urllib.parse.urlencode(corpo).encode()
-        tipo = "application/x-www-form-urlencoded"
-    else:
-        dados = json.dumps(corpo).encode()
-        tipo = "application/json"
-    # A Cloudflare na frente do auth.openai.com devolve 530 pro User-Agent padrão do urllib
-    # (medido); qualquer outro passa.
-    req = urllib.request.Request(url, data=dados, headers={"Content-Type": tipo, "User-Agent": "hangar/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            corpo = r.read()
-        try:
-            return r.status, json.loads(corpo or b"{}")
-        except ValueError:
-            return r.status, {}
-    except urllib.error.HTTPError as e:
-        try:
-            return e.code, json.loads(e.read() or b"{}")
-        except ValueError:
-            return e.code, {}
 
 
 # ---------------------------------------------------------------- tokens
@@ -266,143 +227,6 @@ def propagar(t: Tokens | None = None, home: Path | None = None) -> dict[str, dic
             ok, motivo = False, str(e)
         saida[nome] = {"ok": ok, "motivo": motivo}
     return saida
-
-
-def estado(home: Path | None = None) -> dict:
-    response, managed = _managed_device("state")
-    if managed:
-        return response
-    t = ler_cofre()
-    return {
-        "cofre": t is not None,
-        "plano": t.plano if t else "",
-        "expira_em": t.expires_ms if t else None,
-        "codex": _codex_tem_login(home),
-        "pi": _pi_tem_login(home),
-        "omp": _omp_tem_login(home),
-    }
-
-
-# ---------------------------------------------------------------- fluxo de dispositivo
-
-@dataclass
-class Tentativa:
-    device_auth_id: str
-    user_code: str
-    intervalo_s: float
-    inicio: float = field(default_factory=time.monotonic)
-    etapa: str = "aguardando"      # aguardando | concluido | falhou | cancelado
-    erro: str = ""
-    resultado: dict | None = None
-    _parar: threading.Event = field(default_factory=threading.Event)
-
-
-_lock = threading.Lock()
-_tentativa: Tentativa | None = None
-
-
-def _trocar_codigo(codigo: str, verificador: str) -> Tokens:
-    st, r = _http(_TOKEN_URL, {
-        "grant_type": "authorization_code", "client_id": CLIENT_ID, "code": codigo,
-        "code_verifier": verificador, "redirect_uri": _DEVICE_REDIRECT_URI,
-    }, form=True)
-    if st != 200 or not r.get("access_token") or not r.get("refresh_token"):
-        raise RuntimeError(f"troca do código falhou ({st}): {json.dumps(r)[:200]}")
-    return Tokens.de_resposta(r)
-
-
-def _vigiar(t: Tentativa, home: Path | None) -> None:
-    # A thread não tem a quem entregar a exceção: qualquer saída inesperada vira falha visível,
-    # senão a tentativa fica "aguardando" e recusa as próximas para sempre.
-    try:
-        _vigiar_ate_concluir(t, home)
-    except Exception as e:  # noqa: BLE001
-        _log.warning("login Codex por dispositivo interrompido: %s", type(e).__name__)
-        t.etapa, t.erro = "falhou", str(e) or type(e).__name__
-
-
-def _vigiar_ate_concluir(t: Tentativa, home: Path | None) -> None:
-    espera = max(t.intervalo_s, 1.0)
-    while not t._parar.is_set():
-        if time.monotonic() - t.inicio > _TIMEOUT_S:
-            t.etapa, t.erro = "falhou", "tempo esgotado"
-            return
-        if t._parar.wait(espera):
-            return
-        try:
-            st, r = _http(_DEVICE_TOKEN_URL, {"device_auth_id": t.device_auth_id, "user_code": t.user_code},
-                          form=False)
-        except OSError as e:
-            _log.debug("device poll: %r", e)
-            continue
-        if st == 200 and r.get("authorization_code") and r.get("code_verifier"):
-            try:
-                tokens = _trocar_codigo(r["authorization_code"], r["code_verifier"])
-                salvar_cofre(tokens)
-                t.resultado = propagar(tokens, home)
-                t.etapa = "concluido"
-            except (RuntimeError, OSError) as e:
-                t.etapa, t.erro = "falhou", str(e)
-            return
-        codigo = (r.get("error") or {})
-        codigo = codigo.get("code") if isinstance(codigo, dict) else codigo
-        if st in (403, 404) or codigo == "deviceauth_authorization_pending":
-            continue
-        if codigo == "slow_down":
-            espera += 5
-            continue
-        t.etapa, t.erro = "falhou", f"{st}: {json.dumps(r)[:200]}"
-        return
-
-
-def iniciar(home: Path | None = None) -> dict:
-    response, managed = _managed_device("start")
-    if managed:
-        return response
-    global _tentativa
-    with _lock:
-        if _tentativa and _tentativa.etapa == "aguardando":
-            raise RuntimeError("login já em andamento")
-        try:
-            st, r = _http(_DEVICE_USERCODE_URL, {"client_id": CLIENT_ID}, form=False)
-        except OSError as e:
-            raise RuntimeError(f"sem acesso a auth.openai.com: {e}") from e
-        if st != 200 or not r.get("device_auth_id") or not r.get("user_code"):
-            raise RuntimeError(f"pedido de código falhou ({st}): {json.dumps(r)[:200]}")
-        intervalo = r.get("interval", 5)
-        try:
-            intervalo = float(str(intervalo).strip())
-        except ValueError:
-            intervalo = 5.0
-        t = Tentativa(device_auth_id=r["device_auth_id"], user_code=r["user_code"], intervalo_s=intervalo)
-        _tentativa = t
-        threading.Thread(target=_vigiar, args=(t, home), daemon=True, name="oauth-codex").start()
-        return passo()
-
-
-def passo() -> dict:
-    response, managed = _managed_device("status")
-    if managed:
-        return response
-    t = _tentativa
-    if t is None:
-        return {"etapa": "idle"}
-    return {"etapa": t.etapa, "user_code": t.user_code, "url": VERIFICATION_URL,
-            "erro": t.erro, "resultado": t.resultado}
-
-
-def cancelar() -> dict:
-    response, managed = _managed_device("cancel")
-    if managed:
-        return response
-    global _tentativa
-    with _lock:
-        t = _tentativa
-        if t and t.etapa == "aguardando":
-            t._parar.set()
-            t.etapa = "cancelado"
-        _tentativa = None
-    return {"etapa": "idle"}
 
 
 def _managed_device(action):

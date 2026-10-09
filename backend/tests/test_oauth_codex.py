@@ -1,7 +1,8 @@
 """Login OAuth do ChatGPT feito pelo app e espalhado pros CLIs (app/oauth_codex.py).
 
-O que trava: o fluxo de dispositivo termina com o cofre gravado (0600) e os três stores escritos
-no formato de cada um; store que já tem login é mantido; CLI ausente é `nao-instalado`, não erro.
+O que trava: a propagação grava o cofre (0600) e os três stores no formato de cada um; store que
+já tem login é mantido; CLI ausente é `nao-instalado`, não erro. O fluxo de dispositivo é do Rust,
+provado aqui contra a referência isolada.
 """
 import base64
 import json
@@ -116,29 +117,16 @@ def casa(tmp_path, monkeypatch):
     con.execute("create table auth_credentials (id integer primary key autoincrement, provider text not null, "
                 "credential_type text not null, data text not null, identity_key text)")
     con.commit(); con.close()
-    o._tentativa = None
     return tmp_path
 
 
-def test_fluxo_de_dispositivo_grava_cofre_e_os_tres_stores(casa, monkeypatch):
-    respostas = iter([
-        (200, {"device_auth_id": "d1", "user_code": "ABCD-1234", "interval": "0"}),
-        (403, {}),
-        (200, {"authorization_code": "c", "code_verifier": "v"}),
-        (200, {"access_token": _jwt(), "refresh_token": "r1", "id_token": "i1", "expires_in": 10}),
-    ])
-    monkeypatch.setattr(o, "_http", lambda url, corpo, form: next(respostas))
-    passo = o.iniciar(casa)
-    assert passo["etapa"] == "aguardando" and passo["user_code"] == "ABCD-1234"
-    assert passo["url"] == o.VERIFICATION_URL
-    for _ in range(100):
-        if o.passo()["etapa"] != "aguardando":
-            break
-        time.sleep(0.05)
-    p = o.passo()
-    assert p["etapa"] == "concluido", p
+def test_propagar_grava_cofre_e_os_tres_stores(casa):
+    t = o.Tokens.de_resposta({"access_token": _jwt(), "refresh_token": "r1", "id_token": "i1",
+                              "expires_in": 10})
+    o.salvar_cofre(t)
     _assert_private_file(o.cofre())
-    assert {k: v["ok"] for k, v in p["resultado"].items()} == {"codex": True, "pi": True, "omp": True}
+    resultado = o.propagar(None, casa)
+    assert {k: v["ok"] for k, v in resultado.items()} == {"codex": True, "pi": True, "omp": True}
     codex = json.loads((casa / ".codex" / "auth.json").read_text())
     assert codex["auth_mode"] == "chatgpt" and codex["tokens"]["account_id"] == "acc-1"
     pi = json.loads((casa / ".pi" / "agent" / "auth.json").read_text())["openai-codex"]
@@ -147,8 +135,7 @@ def test_fluxo_de_dispositivo_grava_cofre_e_os_tres_stores(casa, monkeypatch):
     prov, tipo, dados, ident = con.execute("select provider, credential_type, data, identity_key from auth_credentials").fetchone()
     assert (prov, tipo, ident) == ("openai-codex", "oauth", "acc-1")
     assert json.loads(dados)["refresh"] == "r1" and "type" not in json.loads(dados)
-    assert o.estado(casa) == {"cofre": True, "plano": "plus", "expira_em": 4102444800000,
-                              "codex": True, "pi": True, "omp": True}
+    assert o._codex_tem_login(casa) and o._pi_tem_login(casa) and o._omp_tem_login(casa)
 
 
 def test_store_com_login_e_mantido_e_cli_ausente_nao_e_erro(casa):
@@ -377,27 +364,6 @@ def test_retired_secondary_routes_are_unavailable(managed_device):
     assert not (fixture.reference.root / ".pi/agent/auth.json").exists()
     with closing(sqlite3.connect(fixture.reference.root / ".omp/agent/agent.db")) as connection:
         assert connection.execute("select count(*) from auth_credentials").fetchone()[0] == 0
-
-
-@pytest.mark.parametrize("managed_device", [False], indirect=True)
-def test_legacy_python_consumers_delegate_and_pending_never_falls_back(managed_device):
-    fixture = managed_device
-    reference = fixture.reference
-    reference.request("POST", "/__contract__/claude-owner", {
-        "address": fixture.server.request("GET", "/__hangar_server/health").json()["terminal_address"], "mode": "rust"})
-    attempt = reference.request("POST", "/api/credenciais/codex/login")
-    assert attempt.status_code == 200, attempt.json()
-    assert attempt.json()["etapa"] == "aguardando"
-    assert fixture.server.request("GET", "/api/credenciais/codex/login").json() == attempt.json()
-    assert reference.request("DELETE", "/api/credenciais/codex/login").json() == {"etapa": "idle"}
-    reference.request("POST", "/__contract__/claude-owner", {"address": "127.0.0.1:1", "mode": "pending"})
-    for method, path in [("POST", "/api/credenciais/codex/login"), ("GET", "/api/credenciais/codex/login"),
-                         ("DELETE", "/api/credenciais/codex/login"), ("GET", "/api/credenciais/codex")]:
-        response = reference.request(method, path)
-        assert response.status_code == 503
-        assert response.json()["detail"]["code"] == "account_device_bridge_unavailable"
-    assert not (reference.root / ".codex/auth.json").exists()
-    assert not (reference.root / ".hangar/auth/openai-codex.json").exists()
 
 
 def test_legacy_restart_discards_attempt_and_releases_default_account_guard(managed_device):
@@ -760,24 +726,3 @@ def test_native_writer_reports_sanitized_sqlite_busy_expiry(managed_device, star
         lock.execute("ROLLBACK")
         lock.close()
     assert _omp_rows(database) == []
-
-
-def test_device_attempt_never_stays_waiting_after_an_unexpected_failure(monkeypatch):
-    from fastapi import HTTPException
-    from app import oauth_codex
-
-    monkeypatch.setattr(oauth_codex, "_http", lambda *a, **k: (200, {
-        "authorization_code": "synthetic-code", "code_verifier": "synthetic-verifier"}))
-    monkeypatch.setattr(oauth_codex, "_trocar_codigo", lambda *a: object())
-    monkeypatch.setattr(oauth_codex, "salvar_cofre", lambda tokens: None)
-
-    def owner_changed(*args, **kwargs):
-        # O dono mudou entre a leitura do modo e a gravação: a ponte recusa com 503.
-        raise HTTPException(503, detail="escritor indisponível")
-
-    monkeypatch.setattr(oauth_codex, "propagar", owner_changed)
-    attempt = oauth_codex.Tentativa(device_auth_id="synthetic", user_code="SYN-0000", intervalo_s=0.0)
-    attempt._parar.wait = lambda timeout=None: False
-    oauth_codex._vigiar(attempt, None)
-    assert attempt.etapa == "falhou"
-    assert attempt.erro
