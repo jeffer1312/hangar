@@ -1050,10 +1050,24 @@ export interface AccountDeleteResult {
   skipped?: number;
   renamed?: number;
 }
-/** Arquivos de conversa que a conta padrão ganhou; null quando o servidor não juntou nada. */
+/** Arquivos de conversa que a conta padrão ganhou; null quando o servidor não confirmou a junção. */
 export function mergedTranscripts(r: AccountDeleteResult | null | undefined): number | null {
   if (r?.merged === undefined) return null;
   return r.merged + (r.renamed ?? 0);
+}
+/** Aviso depois de apagar uma conta, dizendo só o que o servidor confirmou sobre as conversas. */
+export function accountDeletedNotice(nome: string, keepRequested: boolean,
+                                     r: AccountDeleteResult | null | undefined): string {
+  if (!keepRequested) return m.criar_conta_apagada({ nome });
+  const merged = mergedTranscripts(r);
+  // Servidor antigo ignora o pedido e apaga tudo: não dá para dizer que as conversas ficaram.
+  if (merged === null) return m.contas_conversas_nao_confirmadas({ nome });
+  const skipped = r?.skipped ?? 0;
+  if (skipped > 0) {
+    return m.contas_conversas_juntadas_puladas({ nome, n: String(merged), pulados: String(skipped) });
+  }
+  if (merged === 0) return m.criar_conta_apagada({ nome });
+  return m.contas_conversas_juntadas({ nome, n: String(merged) });
 }
 function keepQuery(keepTranscripts: boolean): string {
   return `?keep_transcripts=${keepTranscripts ? 1 : 0}`;

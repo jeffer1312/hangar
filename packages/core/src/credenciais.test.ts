@@ -12,7 +12,8 @@ import { getCredentialsForServer, listarCredenciais, getCodexAccountsForServer, 
   consumeCodexRateLimitResetForServer,
   createSessionForServer, createSession,
   modelOptionsForServer, modelOptions, getArchiveHistory, getArchivePorCwd, resumeArchivedConversation,
-  passarBastao, errorDetail } from './api';
+  passarBastao, errorDetail, mergedTranscripts, accountDeletedNotice } from './api';
+import * as m from './paraglide/messages';
 
 const server = { id: 'b', label: 'B', baseUrl: 'https://b.test', token: 'token-b' };
 const unauthorized = vi.fn();
@@ -133,6 +134,24 @@ describe('contas e servidor explícito', () => {
     expect(fetcher.mock.calls[0][1]?.method).toBe('DELETE');
     expect(timeout).toHaveBeenCalledWith(120_000);
     expect(timeout).not.toHaveBeenCalledWith(8000);
+  });
+
+  it('conta de conversas juntadas só existe quando o servidor confirmou', () => {
+    expect(mergedTranscripts(undefined)).toBeNull();
+    expect(mergedTranscripts({ ok: true })).toBeNull();
+    expect(mergedTranscripts({ ok: true, merged: 0, skipped: 0, renamed: 0 })).toBe(0);
+    expect(mergedTranscripts({ ok: true, merged: 2, skipped: 5, renamed: 1 })).toBe(3);
+  });
+
+  it('aviso de conta apagada não afirma o que o servidor não confirmou', () => {
+    expect(accountDeletedNotice('w', false, null)).toBe(m.criar_conta_apagada({ nome: 'w' }));
+    expect(accountDeletedNotice('w', true, { ok: true })).toBe(m.contas_conversas_nao_confirmadas({ nome: 'w' }));
+    expect(accountDeletedNotice('w', true, { ok: true, merged: 0, skipped: 0, renamed: 0 }))
+      .toBe(m.criar_conta_apagada({ nome: 'w' }));
+    expect(accountDeletedNotice('w', true, { ok: true, merged: 2, skipped: 0, renamed: 1 }))
+      .toBe(m.contas_conversas_juntadas({ nome: 'w', n: '3' }));
+    expect(accountDeletedNotice('w', true, { ok: true, merged: 0, skipped: 4, renamed: 0 }))
+      .toBe(m.contas_conversas_juntadas_puladas({ nome: 'w', n: '0', pulados: '4' }));
   });
 
   it('consome uma redefinição Codex com id e chave idempotente', async () => {

@@ -7,6 +7,7 @@ export interface PageAction {
   label: string;
   icon?: IconName;
   onPress: () => void;
+  disabled?: boolean;
 }
 
 /** Topo das páginas (page_top do Rust): título, a linha que explica e as pílulas de ação embaixo. */
@@ -27,15 +28,18 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-export function Pill({ label, icon, onPress }: PageAction) {
+export function Pill({ label, icon, onPress, disabled }: PageAction) {
   const c = useSettingsColors();
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
       hitSlop={6}
-      style={({ pressed }) => [styles.pill, { borderColor: c.borderStrong }, pressed && { backgroundColor: c.hover }]}
+      style={({ pressed }) => [styles.pill, { borderColor: c.borderStrong }, pressed && { backgroundColor: c.hover },
+        disabled && { opacity: 0.45 }]}
     >
       {icon ? <Icon name={icon} size={14} color={c.text} /> : null}
       <Text style={[styles.pillText, { color: c.text }]} numberOfLines={1}>{label}</Text>

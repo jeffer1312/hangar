@@ -8,7 +8,7 @@
   import { getCodexAccountsForServer, createSessionForServer, codexAccountMessage, defaultCodexAccount, patchConfig,
     getConfigForServer, patchConfigForServer, type CodexAccount } from '@hangar/core';
   import IconFolder from './icons/IconFolder.svelte';
-  import { getSessions, listClaudeConfigs, getClaudeAccountSuggestion, getEngines, getProviders, criarConta, apagarConta, mergedTranscripts,
+  import { getSessions, listClaudeConfigs, getClaudeAccountSuggestion, getEngines, getProviders, criarConta, apagarConta, accountDeletedNotice,
            getArchivePorCwd, resumeArchivedConversation, getArchiveHistory, getBastao, passarBastao,
            getCreationProgress, type CreationProgress,
            type ModelOption, type Motor, type CliProxyAccount, type SessionOpeningExtras, type ArchiveEntry,
@@ -498,6 +498,12 @@
   let confirmandoApagar = $state(false);
   // Marcado por padrão: apagar a conta leva as conversas para a conta padrão.
   let manterConversas = $state(true);
+  // Abrir, fechar ou trocar a conta da confirmação volta a guardar: a escolha vale só ali.
+  $effect.pre(() => {
+    void nomeDaSelecionada;
+    void confirmandoApagar;
+    manterConversas = true;
+  });
 
   async function apagar() {
     const nome = nomeDaSelecionada;
@@ -514,11 +520,11 @@
     try {
       // null de propósito: o sheet já fez selectServer(id) no pickTarget — o alvo É o ativo,
       // então o caminho global (com self-heal de 401) é o certo aqui.
-      const resultado = await apagarConta(null, nome, manterConversas);
+      const manter = manterConversas;
+      const resultado = await apagarConta(null, nome, manter);
       if (seq !== cfgSeq || targetServer !== serverId) return;
       confirmandoApagar = false;
-      const juntados = mergedTranscripts(resultado);
-      const apagada = juntados ? m.contas_conversas_juntadas({ nome, n: String(juntados) }) : null;
+      const apagada = accountDeletedNotice(nome, manter, resultado);
       let cs: ConfigDirInfo[];
       try {
         cs = await listClaudeConfigs();
@@ -539,7 +545,7 @@
       configs = cs;
       // A seleção apontava pra pasta que sumiu: mandar esse caminho no create daria 400.
       selectedConfig = cs.find((c) => c.active)?.path ?? cs[0]?.path ?? null;
-      avisoConta = apagada ?? m.criar_conta_apagada({ nome });
+      avisoConta = apagada;
       // B4 da revisão final: mesma regra do catch acima — seleção mudou por caminho
       // programático, o catálogo da conta que ficou tem que recarregar.
       carregarModelos();
@@ -1338,7 +1344,7 @@
               {contaOcupada ? '…' : m.criar_mais_conta()}
             </button>
             {#if nomeDaSelecionada && !pedindoNome && !confirmandoApagar}
-              <button type="button" class="ghost-btn conta-add" onclick={() => { confirmandoApagar = true; manterConversas = true; }}
+              <button type="button" class="ghost-btn conta-add" onclick={() => (confirmandoApagar = true)}
                 disabled={contaOcupada}
                 aria-label={m.criar_apagar_conta_aria({ nome: nomeDaSelecionada })}>{m.criar_apagar()}</button>
             {/if}
@@ -1365,10 +1371,13 @@
               <p class="conta-hint conta-confirma">
                 {m.contas_apagar_pergunta({ nome: nomeDaSelecionada })}
                 <label class="conta-manter">
-                  <input type="checkbox" bind:checked={manterConversas} disabled={contaOcupada} />
+                  <input type="checkbox" bind:checked={manterConversas} disabled={contaOcupada}
+                    aria-describedby={manterConversas ? undefined : 'conta-perde-conversas'} />
                   {m.contas_juntar_conversas()}
                 </label>
-                {#if !manterConversas}{m.contas_apagar_conversas_aviso()}{/if}
+                {#if !manterConversas}
+                  <span class="conta-confirma-aviso" id="conta-perde-conversas" role="status">{m.contas_apagar_conversas_aviso()}</span>
+                {/if}
               </p>
               <button type="button" class="ghost-btn conta-add conta-perigo" onclick={apagar}
                 disabled={contaOcupada}>{contaOcupada ? '…' : m.criar_apagar()}</button>
@@ -2074,6 +2083,7 @@
   .conta-nova { margin-top: var(--space-2); }
   .conta-confirma { flex: 1; min-width: 0; margin: 0; }
   .conta-manter { display: flex; align-items: center; gap: var(--space-2); }
+  .conta-confirma-aviso { display: block; font-size: var(--text-2xs); color: var(--text-muted); }
   .conta-row .conta-perigo { color: var(--error); border-color: var(--error); }
   .conta-row .conta-perigo:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
   .conta-nova :global(.field-input) { height: 40px; }

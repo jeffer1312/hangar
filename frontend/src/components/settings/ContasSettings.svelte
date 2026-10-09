@@ -12,7 +12,7 @@
   // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
   // existe assim que a pessoa renomear a primeira.
   import { onDestroy, tick, untrack } from 'svelte';
-import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, mergedTranscripts, type AccountDeleteResult, type Motor, type EnginesResponse } from '@hangar/core';
+import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, accountDeletedNotice, type AccountDeleteResult, type Motor, type EnginesResponse } from '@hangar/core';
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, consumirRedefinicaoCodex,
     novaChaveIdempotente, type Credencial } from '../../lib/credenciais';
@@ -145,6 +145,11 @@ import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineF
   let apagando = $state(false);
   // Guardar as conversas vem marcado; só a conta em que a pessoa desmarcou apaga tudo.
   let apagarConversasDe = $state<string | null>(null);
+  // Abrir, trocar ou fechar a confirmação volta a guardar: a escolha vale só para aquela abertura.
+  $effect.pre(() => {
+    void confirmando;
+    apagarConversasDe = null;
+  });
   let saindoDe = $state<string | null>(null);  // id da conta Claude com a confirmação de Sair aberta
   let saindo = $state(false);
   let sairErro = $state('');
@@ -418,6 +423,8 @@ import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineF
     apagando = true;
     aviso = '';
     avisoErro = false;
+    // Kimi e chave não têm conversas no servidor: o aviso é só o de conta apagada.
+    const guarda = conta.tipo !== 'chave' && !conta.id.startsWith('kimi:');
     try {
       let resultado: AccountDeleteResult | null = null;
       if (conta.id.startsWith('kimi:')) {
@@ -433,10 +440,7 @@ import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineF
       }
       if (g !== geracao) return;
       confirmando = null;
-      apagarConversasDe = null;
-      const juntados = mergedTranscripts(resultado);
-      aviso = juntados ? m.contas_conversas_juntadas({ nome: conta.nome, n: String(juntados) })
-        : m.criar_conta_apagada({ nome: conta.nome });
+      aviso = accountDeletedNotice(conta.nome, guarda && manter, resultado);
       // A conta pode ter sumido da lista entre o clique e o fim do DELETE (outro painel, outra
       // sessão) — recarregar é a fonte única, não remover item por item.
       await carregar(geracao);
@@ -1284,10 +1288,13 @@ import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineF
                 <span class="ct-confirma-txt">{m.contas_apagar_pergunta({ nome: conta.nome })}</span>
                 <label class="ct-confirma-manter">
                   <input type="checkbox" checked={apagarConversasDe !== conta.id} disabled={apagando}
+                    aria-describedby={apagarConversasDe === conta.id ? `ct-perde-conversas-${conta.id}` : undefined}
                     onchange={(e) => (apagarConversasDe = e.currentTarget.checked ? null : conta.id)} />
                   {m.contas_juntar_conversas()}
                 </label>
-                {#if apagarConversasDe === conta.id}<span class="ct-confirma-aviso">{m.contas_apagar_conversas_aviso()}</span>{/if}
+                {#if apagarConversasDe === conta.id}
+                  <span class="ct-confirma-aviso" id={`ct-perde-conversas-${conta.id}`} role="status">{m.contas_apagar_conversas_aviso()}</span>
+                {/if}
               {:else}
                 <span class="ct-confirma-txt">
                   {m.comum_apagar()} <strong>{conta.nome}</strong> {m.criar_apagar_fim()}
@@ -1297,7 +1304,7 @@ import { apagarConta, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineF
               <button type="button" class="ct-confirma-btn perigo" onclick={apagar}
                 disabled={apagando}>{apagando ? '…' : m.comum_apagar()}</button>
               <button type="button" class="ct-confirma-btn"
-                onclick={() => { confirmando = null; apagarConversasDe = null; }} disabled={apagando}>{m.comum_cancelar()}</button>
+                onclick={() => (confirmando = null)} disabled={apagando}>{m.comum_cancelar()}</button>
             </div>
           {/if}
 
