@@ -17,6 +17,24 @@ from app import terminal_input as ti
 # adapters.claude -> registry -> adapters (registry importa get_adapter em create()).
 
 
+def with_session_plugins(argv: list[str]) -> list[str]:
+    """O plugin do Hangar envolve os do marketplace em qualquer modo de execução."""
+    args = list(argv)
+    for root in plugin_bridge.raizes_dos_plugins():
+        args += ["--plugin-dir", root]
+    return args
+
+
+def terminal_command(cwd: str | None, session_id: str,
+                     model: str | None = None, effort: str | None = None,
+                     permission_mode: str | None = None,
+                     claude_settings: dict | None = None, *, resume: bool = False) -> list[str]:
+    """Criação e retomada carregam os mesmos plugins e configurações da sessão."""
+    argv = with_session_plugins(["claude", "--resume" if resume else "--session-id", session_id])
+    return claude_customizations.apply_settings(
+        argv + model_args.args_de("claude", model, effort, permission_mode), claude_settings, cwd=cwd)
+
+
 class ClaudeAdapter:
     provider = "claude"
 
@@ -55,12 +73,7 @@ class ClaudeAdapter:
                       model: str | None = None, effort: str | None = None,
                       permission_mode: str | None = None,
                       claude_settings: dict | None = None) -> list[str]:
-        argv = ["claude", "--session-id", session_id]
-        # `--plugin-dir` põe o plugin por fora dos plugins do marketplace na cadeia de hooks.
-        for raiz in plugin_bridge.raizes_dos_plugins():
-            argv += ["--plugin-dir", raiz]
-        return claude_customizations.apply_settings(
-            argv + model_args.args_de("claude", model, effort, permission_mode), claude_settings, cwd=cwd)
+        return terminal_command(cwd, session_id, model, effort, permission_mode, claude_settings)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:
         from app.registry import sanitize_cwd   # local: registry importa os adapters

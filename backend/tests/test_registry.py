@@ -615,6 +615,26 @@ def test_create_with_resume_session_id_builds_resume_command(tmp_path):
     assert SessionRegistry._jsonl_cache["cc"] == info.jsonl
 
 
+@pytest.mark.parametrize("resumed", [False, True])
+def test_create_keeps_plugins_when_starting_or_resuming(tmp_path, monkeypatch, resumed):
+    from app import plugin_bridge
+    roots = ["/plugins/hangar", "/plugins/outro mod"]
+    monkeypatch.setattr(plugin_bridge, "raizes_dos_plugins", lambda: roots)
+    monkeypatch.setattr(plugin_bridge, "env_da_sessao", lambda name: {"HANGAR_PLUGIN_URL": "http://127.0.0.1:1/api/plugin"})
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_session:
+        reg.create("cc", "/projeto", resume_session_id=_UUID if resumed else None,
+                   model="haiku", effort="low")
+    import shlex
+    argv = shlex.split(new_session.call_args[0][2])
+    assert argv[:2] == ["claude", "--resume" if resumed else "--session-id"]
+    assert [argv[i + 1] for i, value in enumerate(argv[:-1]) if value == "--plugin-dir"] == roots
+    assert argv[argv.index("--model") + 1] == "haiku"
+    assert argv[argv.index("--effort") + 1] == "low"
+    assert new_session.call_args.kwargs["env"]["HANGAR_PLUGIN_URL"] == "http://127.0.0.1:1/api/plugin"
+
+
 def test_create_with_resume_session_id_rejects_bad_uuid(tmp_path):
     # uuid vai DIRETO pro comando do shell -> invalido (injecao) e recusado antes de tocar tmux.
     reg = SessionRegistry(projects_dir=tmp_path)
@@ -873,6 +893,28 @@ def test_resume_respawns_with_resume_flag(tmp_path):
     kill.assert_called_once_with("cc")
     assert f"--resume {_UUID}" in ns.call_args[0][2]        # comando relançado carrega --resume
     assert SessionRegistry._jsonl_cache["cc"].endswith(f"{_UUID}.jsonl")
+
+
+def test_resume_keeps_plugins_and_session_bridge(tmp_path, monkeypatch):
+    import shlex
+    from app import plugin_bridge
+    cwd = "/projeto"
+    project = tmp_path / sanitize_cwd(cwd)
+    project.mkdir()
+    (project / f"{_UUID}.jsonl").write_text("{}\n", encoding="utf-8")
+    roots = ["/plugins/hangar", "/plugins/outro mod"]
+    monkeypatch.setattr(plugin_bridge, "raizes_dos_plugins", lambda: roots)
+    monkeypatch.setattr(plugin_bridge, "env_da_sessao", lambda name: {"HANGAR_PLUGIN_URL": f"http://127.0.0.1:1/{name}"})
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "list_panes_active", return_value=[{"name": "cc", "pid": 111, "cwd": cwd}]), \
+         patch.object(registry, "_config_dir_of", return_value=None), \
+         patch.object(registry.tmux, "kill_session"), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_session:
+        reg.resume("cc", _UUID)
+    argv = shlex.split(new_session.call_args[0][2])
+    assert argv[:3] == ["claude", "--resume", _UUID]
+    assert [argv[i + 1] for i, value in enumerate(argv[:-1]) if value == "--plugin-dir"] == roots
+    assert new_session.call_args.kwargs["env"]["HANGAR_PLUGIN_URL"] == "http://127.0.0.1:1/cc"
 
 
 def test_resume_rejects_bad_uuid(tmp_path):

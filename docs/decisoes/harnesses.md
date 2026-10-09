@@ -46,6 +46,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   link antigo em `~/.claude/skills/hangar` sai no instalador: o mesmo nome nos dois lugares carrega
   um só, mas deixa erro em todo `/plugin` (medido em B, abaixo). Ver
   [faixa dos mods](#faixa-dos-mods-ordem-na-cadeia-medida-03102026).
+  Criação e retomada com terminal usam `adapters/claude.py:terminal_command`; com e sem terminal,
+  os plugins entram por `with_session_plugins`. Retomar pelo Arquivo nunca monta um `claude --resume`
+  separado. Ver [retomada sem o plugin](#retomada-sem-o-plugin-do-hangar).
 
 - **Faixa e painéis dos mods saem no SSE por fonte própria, nunca na carona do `state`.** O
   `state` só sai quando a chave muda; o mod que relê com a sessão parada ficava velho no app. O
@@ -3227,6 +3230,31 @@ Na prova com uma sessão Claude real com terminal e o plugin alterado, a primeir
 publicou `72004/1000000`, igual a `72k/1000k` da statusline personalizada. Os testes reproduziram
 200k em vez de 1M, a primeira resposta presa no cache e a escrita entre leitura e armazenamento;
 depois da correção, passaram. `/clear` troca o transcript e não herda a medida da conversa anterior.
+
+## Retomada sem o plugin do Hangar
+
+09/10/2026, Claude Code 2.1.295. Uma conversa retomada pela tela de criação subiu com
+`claude --resume`, sem `--plugin-dir`. A barra personalizada informava `173k/1000k`, mas o
+painel mostrava `173k de 200k`. Antes da compactação, o transcript registrava 818.692 tokens;
+depois, 173.351. Sem o plugin, não havia janela medida junto do transcript, e a inferência
+voltou a 200k quando o uso caiu abaixo desse valor.
+
+A montagem do comando com terminal passou a ter uma fonte para criação, retomada do Arquivo,
+retomada de sessão aberta e retorno do modo sem terminal. A inclusão dos plugins também é
+compartilhada com o modo sem terminal. Os relançamentos passam o nome da sessão para recompor
+a ponte do plugin.
+
+Na prova real, uma cópia de conversa de teste foi retomada com os dois plugins em `--plugin-dir`,
+na ordem esperada, e a ponte configurada no processo. A primeira resposta publicou
+`72946/1000000`, igual a `73k/1000k` do terminal. O `/compact` manual registrou 72.956 tokens
+antes e 5.724 depois; após uma nova resposta, o plugin publicou `50735/1000000`, igual a
+`51k/1000k` do terminal. A janela permaneceu em 1M com o uso abaixo de 200k.
+
+- RED, numa cópia com o código anterior: `python -m pytest -q tests/test_registry.py::test_create_keeps_plugins_when_starting_or_resuming tests/test_registry.py::test_resume_keeps_plugins_and_session_bridge tests/test_modo_execucao.py::test_terminal_command_keeps_plugins_and_choices` → quatro falhas em `assert [] == ['/plugins/hangar', '/plugins/outro mod']`; a criação sem retomada já passava.
+- GREEN: `uv run pytest -q tests/test_registry.py tests/test_modo_execucao.py tests/test_plugin_bridge.py tests/test_claude_headless.py tests/test_claude_customizations.py tests/test_engines_create.py tests/test_trocar_conta.py` → 415 passaram.
+
+A prova usou uma ponte local temporária, sem reiniciar o servidor nem a sessão de trabalho.
+A sessão de prova e a ponte foram encerradas, e a cópia do transcript foi removida.
 
 ## Entrada terminal parada sem aviso
 

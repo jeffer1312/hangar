@@ -58,6 +58,22 @@ def test_sem_terminal_vira_pane_com_resume_e_as_escolhas(reg, tmp_path, monkeypa
     assert any(e.get("text") == "nota que fica" for e in PromptQueue("hl").load())
 
 
+@pytest.mark.parametrize("resume", [False, True])
+def test_terminal_command_keeps_plugins_and_choices(monkeypatch, resume):
+    import shlex
+    from app import plugin_bridge, registry as R
+    roots = ["/plugins/hangar", "/plugins/outro mod"]
+    monkeypatch.setattr(plugin_bridge, "raizes_dos_plugins", lambda: roots)
+    meta = {"session_id": SID, "cwd": "/projeto", "model": "haiku", "effort": "low",
+            "permission_mode": "acceptEdits"}
+    argv = shlex.split(R.SessionRegistry._comando_terminal(meta, resume=resume))
+    assert argv[:3] == ["claude", "--resume" if resume else "--session-id", SID]
+    assert [argv[i + 1] for i, value in enumerate(argv[:-1]) if value == "--plugin-dir"] == roots
+    assert argv[argv.index("--model") + 1] == "haiku"
+    assert argv[argv.index("--effort") + 1] == "low"
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+
+
 def test_pane_que_nao_nasce_devolve_o_sidecar(reg, tmp_path, monkeypatch):
     from app import registry as R
     S.save("hl", str(tmp_path), SID, model="haiku")

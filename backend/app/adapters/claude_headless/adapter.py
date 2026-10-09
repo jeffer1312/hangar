@@ -982,12 +982,8 @@ class ClaudeHeadlessAdapter:
                 "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio",
                 "--setting-sources", "user,project,local"]
         base += ["--resume", sid] if resume else ["--session-id", sid]
-        # S7: sem terminal o Hangar é a superfície `desktop` dos mods, e o plugin dele entra para levar ao
-        # aparelho de quem clicou a URL que um mod abriria na máquina do servidor. Mesma regra da sessão
-        # com terminal (`claude.py`, `spawn_command`): volta vazia com os mods desligados ou num CLI que
-        # não aceita a flag, e aí o argv fica como era.
-        for raiz in plugin_bridge.raizes_dos_plugins():
-            base += ["--plugin-dir", raiz]
+        from app.adapters.claude import with_session_plugins
+        base = with_session_plugins(base)
         if pensamento.ler():
             # Com `-p` a CLI ignora `showThinkingSummaries` e o bloco vem cifrado; só a flag
             # explícita traz o texto, no stream e no .jsonl.
