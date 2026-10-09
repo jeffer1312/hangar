@@ -741,7 +741,10 @@ impl Executor {
             None=>(Stall {row:row.into(),code:code.into(),since:now,wait:self.options.tick,next:now,surfaced:false},false),
         };
         let (stall,repeated)=stall;
-        let stall=self.stall.insert(Stall {next:now+stall.wait,..stall});
+        // A devolução do foco tem hora marcada (`focus_guard`): a espera crescente não pode passar dela.
+        let due=self.away.as_ref().filter(|away|away.row==row && away.tries<FOCUS_RETURN_TRIES).map(|away|away.next);
+        let next=due.map_or(now+stall.wait,|due|(now+stall.wait).min(due));
+        let stall=self.stall.insert(Stall {next,..stall});
         if !stall.surfaced && now.duration_since(stall.since)>=self.options.stall_notice {
             stall.surfaced=true;
             tracing::warn!(key=%self.target.key,session=%self.target.name,code=%stall.code,
