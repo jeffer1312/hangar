@@ -516,11 +516,13 @@ async fn events(
         .filter(|v| !v.is_empty())
         .or_else(|| req.headers().get("last-event-id").and_then(|v| v.to_str().ok()).map(str::to_owned));
     tracing::debug!(session = %name, req = %diag_req(&req), retomada = resume.is_some(), "events: abriu");
+    // O app que sabe juntar a diferença da vista dos mods anuncia; app antigo segue com a vista inteira.
+    let deltas = auth::query_param(req.uri().query(), "ui_delta").as_deref() == Some("1");
     let lease = st.side.hubs.acquire(&name, binding, &st.side);
     let hub = lease.hub.clone();
     let (tx, rx) = mpsc::channel::<Queued>(64);
     tokio::spawn(client_loop(lease, resume, tx));
-    let mut resp = Response::new(Body::from_stream(device_stream(rx, hub).map(Ok::<Bytes, Infallible>)));
+    let mut resp = Response::new(Body::from_stream(device_stream(rx, hub, deltas).map(Ok::<Bytes, Infallible>)));
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream; charset=utf-8"));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -533,12 +535,12 @@ async fn events(
 /// O que a conexão de um aparelho escreve, na ordem da fila. O marcador do `plugin_ui` só vira quadro
 /// aqui, quando o corpo da resposta pede o próximo: o aparelho lento recebe a vista mais nova, e a fila
 /// guarda marcadores, não cópias de até ~400 KB.
-fn device_stream(rx: mpsc::Receiver<Queued>, hub: Arc<Hub>) -> impl futures_util::Stream<Item = Bytes> {
-    futures_util::stream::unfold((rx, hub), |(mut rx, hub)| async move {
+fn device_stream(rx: mpsc::Receiver<Queued>, hub: Arc<Hub>, deltas: bool) -> impl futures_util::Stream<Item = Bytes> {
+    futures_util::stream::unfold((rx, hub, None), move |(mut rx, hub, mut ui)| async move {
         loop {
             let item = rx.recv().await?;
-            if let Some(frame) = hub.resolve(item) {
-                return Some((frame, (rx, hub)));
+            if let Some(frame) = hub.resolve(item, &mut ui, deltas) {
+                return Some((frame, (rx, hub, ui)));
             }
         }
     })
@@ -563,6 +565,9 @@ async fn client_loop(lease: Lease, resume: Option<String>, out: mpsc::Sender<Que
             if !push(&out, f).await {
                 return;
             }
+        }
+        if !push(&out, Queued::Has(att.has_ui.then_some(att.ui))).await {
+            return;
         }
         let (generation, mut rx, mut ui) = (att.generation, att.rx, att.ui);
         let rebind = loop {
@@ -705,6 +710,10 @@ mod tests {
 
     /// Aparelho ligado a um hub sem conexão interna (porta sem ninguém): só o que o teste entrega chega.
     async fn device(dir: &std::path::Path) -> (SideCtx, std::pin::Pin<Box<dyn futures_util::Stream<Item = Bytes> + Send>>) {
+        device_with(dir, false).await
+    }
+
+    async fn device_with(dir: &std::path::Path, deltas: bool) -> (SideCtx, std::pin::Pin<Box<dyn futures_util::Stream<Item = Bytes> + Send>>) {
         let ctx = SideCtx {
             upstream: "127.0.0.1:9".parse().unwrap(),
             secret: "s".into(),
@@ -725,7 +734,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), async {
             while hub.tx.receiver_count() == 0 { tokio::time::sleep(Duration::from_millis(5)).await; }
         }).await.unwrap();
-        (ctx, Box::pin(device_stream(rx, hub)))
+        (ctx, Box::pin(device_stream(rx, hub, deltas)))
     }
 
     /// Os próximos quadros sem `ping`, como (evento, dado), até o evento `until` inclusive.
@@ -788,6 +797,79 @@ mod tests {
         ctx.hubs.deliver("s", "plugin_ui", "u3");
         ctx.hubs.deliver("s", "state", "2");
         assert_eq!(read_until(&mut stream, ("state", "2")).await, pairs(&[("state", "2")]));
+    }
+
+    fn mods_view(band: &str, second: &str) -> String {
+        serde_json::json!({"above": {"type": "Text", "children": [band]}, "panes": [
+            {"id": "a", "tree": {"type": "Text", "children": ["painel grande"]}},
+            {"id": "b", "tree": {"type": "Text", "children": [second]}}], "source": "terminal"}).to_string()
+    }
+
+    #[tokio::test]
+    async fn device_that_announced_gets_only_what_changed_in_the_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut stream) = device_with(dir.path(), true).await;
+        let first = mods_view("1", "x");
+        ctx.hubs.deliver("s", "plugin_ui", &first);
+        assert_eq!(read_until(&mut stream, ("plugin_ui", &first)).await.len(), 1, "a primeira vista sai inteira");
+        ctx.hubs.deliver("s", "plugin_ui", &mods_view("2", "x"));
+        ctx.hubs.deliver("s", "state", "1");
+        let got = read_until(&mut stream, ("state", "1")).await;
+        assert_eq!(got[0].0, "plugin_ui_delta");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&got[0].1).unwrap(), serde_json::json!({
+            "above": {"type": "Text", "children": ["2"]}, "panes": [{"id": "a", "same": true}, {"id": "b", "same": true}], "source": "terminal"}));
+        // Só o segundo painel muda: a faixa igual não vai.
+        ctx.hubs.deliver("s", "plugin_ui", &mods_view("2", "y"));
+        ctx.hubs.deliver("s", "state", "2");
+        let got = read_until(&mut stream, ("state", "2")).await;
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&got[0].1).unwrap(), serde_json::json!({
+            "panes": [{"id": "a", "same": true}, {"id": "b", "tree": {"type": "Text", "children": ["y"]}}], "source": "terminal"}));
+    }
+
+    #[tokio::test]
+    async fn device_that_skipped_a_view_or_did_not_announce_gets_it_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut slow) = device_with(dir.path(), true).await;
+        let (first, last) = (mods_view("1", "x"), mods_view("3", "x"));
+        ctx.hubs.deliver("s", "plugin_ui", &first);
+        read_until(&mut slow, ("plugin_ui", &first)).await;
+        // Duas vistas enquanto ele não lê: a diferença da última é sobre a do meio, que ele não tem.
+        ctx.hubs.deliver("s", "plugin_ui", &mods_view("2", "x"));
+        ctx.hubs.deliver("s", "plugin_ui", &last);
+        ctx.hubs.deliver("s", "state", "1");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(read_until(&mut slow, ("state", "1")).await, pairs(&[("plugin_ui", &last), ("state", "1")]));
+
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut old) = device_with(dir.path(), false).await;
+        for view in [&first, &last] {
+            ctx.hubs.deliver("s", "plugin_ui", view);
+            assert_eq!(read_until(&mut old, ("plugin_ui", view)).await, pairs(&[("plugin_ui", view)]));
+        }
+    }
+
+    #[tokio::test]
+    async fn device_that_arrives_gets_the_whole_view_then_differences() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut early) = device_with(dir.path(), true).await;
+        let first = mods_view("1", "x");
+        ctx.hubs.deliver("s", "plugin_ui", &first);
+        read_until(&mut early, ("plugin_ui", &first)).await;
+        // Quem entra agora recebe a vista inteira no retrato, e a próxima já como diferença sobre ela.
+        let (tx, rx) = mpsc::channel::<Queued>(64);
+        let lease = ctx.hubs.acquire("s", Binding { provider: crate::transcript::Provider::Claude, jsonl: dir.path().join("t.jsonl"),
+            key: "k".into(), headless: false }, &ctx);
+        let hub = lease.hub.clone();
+        let receivers = hub.tx.receiver_count();
+        tokio::spawn(client_loop(lease, None, tx));
+        let mut late = Box::pin(device_stream(rx, hub.clone(), true));
+        assert_eq!(read_until(&mut late, ("plugin_ui", &first)).await.last().unwrap().1, first);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while hub.tx.receiver_count() == receivers { tokio::time::sleep(Duration::from_millis(5)).await; }
+        }).await.unwrap();
+        ctx.hubs.deliver("s", "plugin_ui", &mods_view("2", "x"));
+        ctx.hubs.deliver("s", "state", "1");
+        assert_eq!(read_until(&mut late, ("state", "1")).await[0].0, "plugin_ui_delta");
     }
 
     #[test]

@@ -253,6 +253,9 @@ pub struct Mods {
     inner: Arc<Mutex<Inner>>,
     hubs: Arc<OnceLock<WeakHubs>>,
     lives: Arc<std::sync::atomic::AtomicU64>,
+    /// Segura a gravação da vista e a entrega aos aparelhos juntas: entre duas publicações que se cruzam, a
+    /// que grava por último também entrega por último. Ordem das travas: esta antes de `inner` e dos hubs.
+    publishing: Arc<Mutex<()>>,
     /// Acorda quem espera press, fechar, foco e rolagem da sessão com terminal.
     notify: Arc<Notify>,
 }
@@ -314,6 +317,7 @@ impl Mods {
 
     fn attach_with(&self, name: &str, process: &str, plugin_key: Option<&str>, life: u64, link: Arc<dyn SurfaceLink>, terminal: Option<Terminal>) {
         let source = if terminal.is_some() { "terminal" } else { "surface" };
+        let publishing = self.publishing.lock().unwrap();
         let (replaced, old_probe) = {
             let mut inner = self.inner.lock().unwrap();
             let old = inner.sessions.remove(name);
@@ -332,12 +336,14 @@ impl Mods {
         if replaced {
             self.deliver(name, "plugin_ui", &empty_ui(source).to_string());
         }
+        drop(publishing);
         self.notify.notify_waiters();
     }
 
     /// A sessão saiu do Rust (S9): esquece o estado, para o elo da sessão com terminal e limpa a faixa dos
     /// aparelhos. Só a vida `life`: outra sessão com o mesmo nome fica.
     pub fn forget(&self, name: &str, life: u64) {
+        let publishing = self.publishing.lock().unwrap();
         let removed = {
             let mut inner = self.inner.lock().unwrap();
             inner.sessions.get(name).is_some_and(|session| session.life == life).then(|| inner.sessions.remove(name)).flatten()
@@ -351,6 +357,7 @@ impl Mods {
                 None => "surface",
             };
             self.deliver(name, "plugin_ui", &empty_ui(source).to_string());
+            drop(publishing);
             self.notify.notify_waiters();
         }
     }
@@ -415,9 +422,11 @@ impl Mods {
     }
 
     /// `current`: conferido sob a trava, diz se a publicação ainda é a da vez (a da sessão com terminal é
-    /// montada fora da trava e não pode passar na frente de uma mais nova).
+    /// montada fora da trava e não pode passar na frente de uma mais nova). Gravar e entregar ficam sob a
+    /// trava de publicação: a que passou na conferência por último é também a última a chegar aos aparelhos.
     fn publish_if(&self, name: &str, life: u64, data: Value, current: impl Fn(&Session) -> bool) -> bool {
         let raw: Arc<str> = data.to_string().into();
+        let _publishing = self.publishing.lock().unwrap();
         {
             let mut inner = self.inner.lock().unwrap();
             let Some(session) = inner.sessions.get_mut(name).filter(|session| session.life == life && current(session)) else { return false };
@@ -830,5 +839,33 @@ impl Mods {
         if let Some(hubs) = self.hubs.get().and_then(WeakHubs::upgrade) {
             hubs.deliver(name, event, data);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Quiet;
+    impl SurfaceLink for Quiet {
+        fn call(&self, _: ModsCall, _: Instant) -> CallFuture { Box::pin(async { Ok(Value::Null) }) }
+    }
+
+    /// Com uma publicação entregando, outra nem grava: a que grava por último é também a última a chegar aos
+    /// aparelhos, e a vista mais velha não fica por último no retrato do hub.
+    #[test]
+    fn a_publication_waits_for_the_one_being_delivered() {
+        let mods = Mods::default();
+        mods.attach("s", 1, Arc::new(Quiet));
+        let delivering = mods.publishing.lock().unwrap();
+        let other = std::thread::spawn({
+            let mods = mods.clone();
+            move || mods.publish_ui("s", 1, json!({"above": null, "panes": [], "source": "surface"}))
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(mods.replay("s").is_empty(), "gravou com a entrega da outra em curso");
+        drop(delivering);
+        assert!(other.join().unwrap());
+        assert_eq!(mods.replay("s").len(), 1);
     }
 }

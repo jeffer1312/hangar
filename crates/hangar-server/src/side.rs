@@ -102,6 +102,39 @@ pub(crate) const TOAST_MAX_MS: f64 = 5.0 * 60.0 * 1000.0;
 pub(crate) fn remaining_ms(until: Instant, now: Instant) -> u64 {
     (until.saturating_duration_since(now).as_millis() as u64).max(1)
 }
+/// O `plugin_ui` `now` só com o que mudou desde `prev`: a faixa sai só quando muda (ausente vale nula, como
+/// na vista inteira), e o painel igual ao de mesmo id em `prev` vira `{id, same: true}`. O app junta com a
+/// vista que já tem. Painel sem id, ou com id repetido em `prev`, vai inteiro.
+fn ui_delta(prev: &serde_json::Value, now: &serde_json::Value) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    let (prev, now) = (prev.as_object()?, now.as_object()?);
+    let mut before: HashMap<&str, Option<&Value>> = HashMap::new();
+    for pane in prev.get("panes").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(id) = pane.get("id").and_then(Value::as_str) {
+            before.entry(id).and_modify(|seen| *seen = None).or_insert(Some(pane));
+        }
+    }
+    let mut delta = serde_json::Map::new();
+    let above = |view: &serde_json::Map<String, Value>| view.get("above").cloned().unwrap_or(Value::Null);
+    if above(prev) != above(now) { delta.insert("above".into(), above(now)); }
+    for (key, value) in now {
+        match key.as_str() {
+            "above" => {}
+            "panes" => {
+                let panes = value.as_array()?.iter().map(|pane| {
+                    let id = pane.get("id").and_then(Value::as_str);
+                    match id.and_then(|id| before.get(id).copied().flatten()) {
+                        Some(old) if old == pane => serde_json::json!({"id": id, "same": true}),
+                        _ => pane.clone(),
+                    }
+                });
+                delta.insert(key.clone(), Value::Array(panes.collect()));
+            }
+            _ => { delta.insert(key.clone(), value.clone()); }
+        }
+    }
+    Some(Value::Object(delta))
+}
 const CHANNEL: usize = 1024;
 const SIDE_CONNECT: Duration = Duration::from_secs(10);
 /// O Python manda `ping` a cada 10 s; três calados = conexão morta.
@@ -134,6 +167,11 @@ struct SideCache {
     latest: [Option<Bytes>; 8],
     /// Sobe a cada `plugin_ui` gravado; é o que o marcador `Out::Ui` leva.
     ui_version: u64,
+    /// A vista da versão atual, lida, para calcular a diferença da próxima.
+    ui_prev: Option<serde_json::Value>,
+    /// `plugin_ui_delta` da versão anterior para a atual: o aparelho que anunciou e já tem a anterior
+    /// recebe só o que mudou (`ui_delta`).
+    ui_delta: Option<Bytes>,
     queue: Vec<(String, Bytes)>,
     /// Avisos de mod (`plugin_toast`) ainda vivos: (id, quando vence, dado). A conexão interna é
     /// uma só por sessão, então quem abre o chat depois não os receberia do Python; o retrato os
@@ -155,6 +193,10 @@ impl SideCache {
             self.latest[i] = Some(frame.clone());
             if i == PLUGIN_UI {
                 self.ui_version += 1;
+                let now = serde_json::from_str::<serde_json::Value>(data).ok();
+                self.ui_delta = self.ui_prev.as_ref().zip(now.as_ref()).and_then(|(prev, now)| ui_delta(prev, now))
+                    .map(|delta| sse_frame("plugin_ui_delta", &delta.to_string(), None));
+                self.ui_prev = now;
             }
             if event == "state" && pane_question {
                 let awaiting = serde_json::from_str::<serde_json::Value>(data)
@@ -241,6 +283,8 @@ pub struct Attach {
     pub rx: broadcast::Receiver<Out>,
     pub frames: Vec<Bytes>,
     pub ui: u64,
+    /// O retrato levou o `plugin_ui` da versão `ui`.
+    pub has_ui: bool,
 }
 
 /// Item da fila de envio de um aparelho: quadro pronto, ou o marcador do `plugin_ui`, resolvido pelo
@@ -248,6 +292,8 @@ pub struct Attach {
 pub enum Queued {
     Frame(Bytes),
     Ui(u64),
+    /// A versão do `plugin_ui` que o retrato da entrada levou ao aparelho (`None`: nenhuma); não escreve nada.
+    Has(Option<u64>),
 }
 
 impl From<Bytes> for Queued {
@@ -443,6 +489,9 @@ impl Hub {
         {
             let mut cache = self.cache.lock().unwrap();
             cache.latest = Default::default();
+            // Sem a vista anterior no retrato, a próxima sai inteira.
+            cache.ui_prev = None;
+            cache.ui_delta = None;
             if let Some((event, data)) = ui {
                 let frame = sse_frame(event, &data, None);
                 cache.record(event, &data, &frame, false);
@@ -485,13 +534,24 @@ impl Hub {
 
     /// O quadro de um item da fila de um aparelho. O marcador do `plugin_ui` vira o quadro só se a versão
     /// dele ainda for a do retrato; vencido, some, porque o marcador da versão nova vem atrás dele na
-    /// mesma fila (ou o retrato dela, depois de um `reset`).
-    pub fn resolve(&self, item: Queued) -> Option<Bytes> {
+    /// mesma fila (ou o retrato dela, depois de um `reset`). `ui` é a versão que o aparelho já tem: com
+    /// `deltas` e a anterior à do retrato, sai só a diferença.
+    pub fn resolve(&self, item: Queued, ui: &mut Option<u64>, deltas: bool) -> Option<Bytes> {
         match item {
             Queued::Frame(frame) => Some(frame),
+            Queued::Has(version) => {
+                *ui = version;
+                None
+            }
             Queued::Ui(version) => {
                 let cache = self.cache.lock().unwrap();
-                if cache.ui_version == version { cache.latest[PLUGIN_UI].clone() } else { None }
+                if cache.ui_version != version { return None; }
+                let frame = match &cache.ui_delta {
+                    Some(delta) if deltas && *ui == version.checked_sub(1) => delta.clone(),
+                    _ => cache.latest[PLUGIN_UI].clone()?,
+                };
+                *ui = Some(version);
+                Some(frame)
             }
         }
     }
@@ -532,9 +592,9 @@ impl Hub {
             if self.bound.lock().unwrap().as_ref().map(|x| x.generation) != Some(b.generation) {
                 continue;
             }
-            let (cached, ui) = {
+            let (cached, ui, has_ui) = {
                 let cache = self.cache.lock().unwrap();
-                (cache.replay(), cache.ui_version)
+                (cache.replay(), cache.ui_version, cache.latest[PLUGIN_UI].is_some())
             };
             let binding = b.binding.clone();
             let resume = resume.clone();
@@ -555,7 +615,7 @@ impl Hub {
                 }
             };
             frames.extend(cached);
-            return Some(Attach { generation: b.generation, rx, frames, ui });
+            return Some(Attach { generation: b.generation, rx, frames, ui, has_ui });
         }
     }
 }

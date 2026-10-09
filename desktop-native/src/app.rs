@@ -1953,11 +1953,16 @@ impl Hangar {
                 self.terminal_suggestion = data.get("text").and_then(Value::as_str).unwrap_or("").to_owned();
                 return (true, Changed::Screen);
             }
-            "plugin_ui" => {
-                // A árvore chega por valor: `surfaces` move em vez de copiar centenas de KB por evento.
+            "plugin_ui" | "plugin_ui_delta" => {
+                // A árvore chega por valor: `surfaces` move em vez de copiar centenas de KB por evento. A diferença
+                // (`plugin_ui_delta`) junta-se à vista anterior, também movida.
+                let old_ids = crate::plugin_ui::pane_ids(&self.plugin_panes);
+                let data = if event == "plugin_ui_delta" {
+                    crate::plugin_ui::apply_delta(std::mem::take(&mut self.plugin_band), std::mem::take(&mut self.plugin_panes), data)
+                } else { data };
                 let s = crate::plugin_ui::surfaces(data);
-                self.plugin_local_tab = crate::plugin_ui::follow_local(&crate::plugin_ui::pane_ids(&self.plugin_panes),
-                    &crate::plugin_ui::pane_ids(&s.panes), self.plugin_local_tab.as_deref());
+                self.plugin_local_tab = crate::plugin_ui::follow_local(&old_ids, &crate::plugin_ui::pane_ids(&s.panes),
+                    self.plugin_local_tab.as_deref());
                 self.plugin_band = s.above;
                 self.plugin_panes = s.panes;
                 self.plugin_shown = s.shown_id;

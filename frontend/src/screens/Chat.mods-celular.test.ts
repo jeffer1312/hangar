@@ -408,3 +408,21 @@ it('troca de agente em curso: clique, troca de aba e digitação recusados mostr
     await unmount(t.comp);
   }
 });
+
+it('a diferença da vista troca só a faixa e mantém o painel que veio igual', async () => {
+  const t = montar();
+  try {
+    await tick();
+    emitirPluginUi();
+    modsCelular.ligado = true;
+    await tick();
+    const faixa = { type: 'Box', children: [botao('b1', 'Faixa nova')] };
+    sseCtl.handlers.get('plugin_ui_delta')?.({ data: JSON.stringify({ above: faixa, panes: [{ id: 'p1', same: true }], source: 'surface' }) } as MessageEvent);
+    await tick();
+    expect(t.el.textContent).toContain('Faixa nova');
+    expect(t.el.textContent).not.toContain('Abrir mod');
+    expect(t.el.textContent).toContain('No painel');
+  } finally {
+    await unmount(t.comp);
+  }
+});

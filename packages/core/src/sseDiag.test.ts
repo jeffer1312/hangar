@@ -20,6 +20,7 @@ it.each([true, false])('SSE preserva autenticação e retomada com o mesmo ID (m
   const urls = create.mock.calls.map(([url]) => new URL(url));
   expect(urls.map(url => url.searchParams.get('diag_req'))).toEqual(['chat-1', 'lista-1', 'comparacao-1']);
   expect(urls[0].searchParams.get('last_event_id')).toBe('thread:42');
+  expect(urls.map(url => url.searchParams.get('ui_delta'))).toEqual(['1', null, '1']);
   expect(urls.map(url => url.pathname)).toEqual([
     '/api/sessions/sess/events', '/api/sessions/events', '/api/sessions/outra/events',
   ]);
