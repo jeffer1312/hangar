@@ -6342,6 +6342,11 @@ class PluginCloseBody(_StrictBody):
 _MOD_SEM_RESPOSTA = erro("erro_mod_clique_sem_resposta", "O mod não respondeu a tempo.")
 
 
+def _convidado(request: Request) -> bool:
+    from app import guest_users
+    return guest_of(request) is not None or guest_users.current.get() is not None
+
+
 async def _mod_no_rust(name: str, op: str, request: Request) -> Response | None:
     """Operação de mod de sessão que o Rust atende, pedida por quem entrou pelo Python (convidado, de
     convite ou com login, e o Connect): a autenticação foi a desta porta, e o Rust aciona pela ponte
