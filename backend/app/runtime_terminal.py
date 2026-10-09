@@ -19,9 +19,6 @@ from app.runtime_coordinator import Binding, Phase, WriterLease, _clock
 _log = logging.getLogger("hangar.runtime_terminal")
 
 _writer = contextvars.ContextVar('runtime_terminal_writer', default=None)
-# Pedido de convidado (clique de mod pelo app): não recebe o teclado de uma sessão do Rust. A marca
-# viaja com o contexto até a thread do driver, que a passa adiante ao `run_admin`.
-guest_admin = contextvars.ContextVar('runtime_terminal_guest_admin', default=False)
 
 
 # Teto do teclado emprestado pelo Rust a uma administração (troca de modelo/motor, /btw, modo).
@@ -45,11 +42,6 @@ class TerminalControlError(RuntimeError):
         self.control, self.disposition, self.code = control, disposition, code
         super().__init__('O controle não foi executado; confira a sessão.' if disposition == 'deferred'
             else 'Não foi possível confirmar o controle; confira a sessão antes de repetir.')
-
-
-class GuestRefused(Exception):
-    """Convidado pediu o teclado de uma sessão cujo terminal é do Rust. Não é `RuntimeError` de
-    propósito: quem trata falha de escrita como "sem resposta" não pode engolir a recusa."""
 
 
 def outside_scope(name):
@@ -437,18 +429,15 @@ async def _return_lost_loan(coordinator, name, descriptor, request, request_id):
         diag.registrar('runtime.keyboard_return_failed', 'erro', sessao=name, **failure_reason(exc))
 
 
-async def _borrow_keyboard(coordinator, name, action, *, guest=False):
+async def _borrow_keyboard(coordinator, name, action):
     """Administração que digita no pane de uma sessão do Rust: ele pausa as próprias escritas e
-    empresta o teclado por uma operação, com prazo; fila, trava e estado continuam com ele.
-    `guest`: pedido de convidado, recusado aqui, sob a barreira, com a posse já conferida."""
+    empresta o teclado por uma operação, com prazo; fila, trava e estado continuam com ele."""
     from app import diag
     from app.runtime_coordinator import failure_reason
     slot = coordinator.slot(name)
     async with coordinator._barrier(slot):      # fechar/renomear espera; envios seguem para a fila
         if coordinator.slots.get(coordinator.names.get(name, '')) is not slot or slot.phase != Phase.Rust:
             raise RuntimeError('a sessão mudou de dono antes da administração; tente de novo')
-        if guest:
-            raise GuestRefused('convidado não recebe o teclado de uma sessão do Rust')
         descriptor = slot.binding.descriptor()
         await asyncio.to_thread(validate_binding, descriptor)
         asked = time.monotonic()        # o prazo do Rust começa antes de a resposta chegar aqui
@@ -486,11 +475,11 @@ async def _borrow_keyboard(coordinator, name, action, *, guest=False):
         return result
 
 
-async def run_admin(coordinator, name, operation, payload, action, *, guest=False):
+async def run_admin(coordinator, name, operation, payload, action):
     if not await coordinator.prepare_session(name, 'claude') or not coordinator.slot(name).binding.meta.get('terminal'):
         return await asyncio.to_thread(action)
     if coordinator.slot(name).phase == Phase.Rust:
-        task = asyncio.create_task(_borrow_keyboard(coordinator, name, action, guest=guest))
+        task = asyncio.create_task(_borrow_keyboard(coordinator, name, action))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -999,10 +988,8 @@ def wrap_driver(original, *, control=None, admin=False):
             return original(*args, **kwargs)
         payload = {key:value for key,value in arguments.arguments.items() if key not in {'self','name','provider','pane_id','msg_id','jsonl'}}
         if admin:
-            # Lida aqui, na thread de quem pede: a tarefa no loop do coordenador nasce com outro contexto.
-            guest = guest_admin.get()
             return run_sync(lambda:run_admin(owner, name, original.__name__, payload,
-                lambda:original(*args, **kwargs), guest=guest), owner.loop)
+                lambda:original(*args, **kwargs)), owner.loop)
         if control == 'submit':
             command = {'kind':'submit','text':payload['text']}
         elif control == 'drain':

@@ -376,7 +376,7 @@ impl Hub {
         self.bound.lock().unwrap().as_ref()?;
         let events = self.state_events();
         let rx = self.tx.subscribe();
-        let cached = self.cache.lock().unwrap().replay().into_iter().filter(|f| state_frame(f, events)).collect();
+        let cached = self.cache.lock().unwrap().replay().into_iter().filter(|f| private_frame(f, events)).collect();
         Some((rx, cached, events))
     }
 
@@ -702,6 +702,11 @@ fn on_side_event(hub: &Arc<Hub>, event: &str, data: &str) -> bool {
     true
 }
 
+/// Quadro que o canal privado leva ao Python: o estado e a faixa dos mods, que o convidado também vê.
+fn private_frame(frame: &[u8], events: &[&str]) -> bool {
+    state_frame(frame, events) || state_frame(frame, &[LATEST[PLUGIN_UI]])
+}
+
 /// Quadro de um dos eventos do estado dados.
 fn state_frame(frame: &[u8], events: &[&str]) -> bool {
     let Some(rest) = frame.strip_prefix(b"event: ") else { return false };
@@ -754,7 +759,8 @@ async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
 }
 
 /// `GET /__hangar_server/state/{name}/events` na porta privada: o Python lê daqui `state`,
-/// `preview`, `ask_question` e `suggest` (sem terminal, Claude ou Codex, também `pensamento` e `ferramenta`) de
+/// `preview`, `ask_question` e `suggest` (sem terminal, Claude ou Codex, também `pensamento` e `ferramenta`),
+/// mais o `plugin_ui`, de
 /// quem entrou pelas portas dele (convite, Connect). Conta
 /// como assinante do hub, então liga o `Monitor` igual a um aparelho do dono.
 pub async fn private_events(
@@ -814,7 +820,10 @@ async fn private_loop(lease: Lease, out: tokio::sync::mpsc::Sender<Bytes>) {
                 _ = ping.tick() => if !send(tail::ping_frame()).await { return },
                 msg = rx.recv() => match msg {
                     Ok(Out::Side(f)) if state_frame(&f, events) => if !send(f).await { return },
-                    Ok(Out::Side(_) | Out::Tail(..) | Out::Rebind | Out::Ui(_)) => {}
+                    Ok(Out::Ui(version)) => if let Some(f) = hub.resolve(Queued::Ui(version)) {
+                        if !send(f).await { return }
+                    },
+                    Ok(Out::Side(_) | Out::Tail(..) | Out::Rebind) => {}
                     Ok(Out::Close) | Err(broadcast::error::RecvError::Closed) => return,
                     // Atrasado: o retrato de agora repõe o que se perdeu.
                     Err(broadcast::error::RecvError::Lagged(_)) => break,
@@ -1295,6 +1304,18 @@ mod tests {
             assert!(hub.monitor.lock().unwrap().is_some(), "e liga o Monitor");
         }
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // A faixa dos mods sai pelo marcador da versão e chega ao Python como quadro: o convidado a vê.
+        st.side.hubs.deliver("s1", "plugin_ui", "{\"band\":1}");
+        got.clear();
+        let _ = tokio::time::timeout(Duration::from_millis(500), async {
+            loop {
+                let n = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await.unwrap();
+                if n == 0 { return }
+                got.extend_from_slice(&buf[..n]);
+                if String::from_utf8_lossy(&got).contains("event: plugin_ui") { return }
+            }
+        }).await;
+        assert!(String::from_utf8_lossy(&got).contains("event: plugin_ui\r\ndata: {\"band\":1}"), "{}", String::from_utf8_lossy(&got));
         // Só os quatro eventos do estado passam: o Python segue dono do resto para quem entra por ele.
         on_side_event(&st.side.hubs.0.lock().unwrap().get("s1").unwrap().0.clone(), "stats", "{}");
         drop(s);
@@ -1342,10 +1363,10 @@ mod tests {
     }
 
     #[test]
-    fn private_channel_forwards_only_state_events() {
-        for (event, pass) in [("state", true), ("preview", true), ("ask_question", true), ("suggest", true),
+    fn private_channel_forwards_only_state_events_and_the_band() {
+        for (event, pass) in [("state", true), ("preview", true), ("ask_question", true), ("suggest", true), ("plugin_ui", true),
                               ("stats", false), ("message", false), ("plugin_toast", false), ("nav", false)] {
-            assert_eq!(state_frame(&sse_frame(event, "{}", None), &STATE_EVENTS), pass, "{event}");
+            assert_eq!(private_frame(&sse_frame(event, "{}", None), &STATE_EVENTS), pass, "{event}");
         }
     }
 
