@@ -913,6 +913,7 @@ impl Hangar {
             cx.notify();
         }).detach();
         chrome::set_window_active(window.is_window_active());
+        chrome::set_software_gpu(window.gpu_specs().is_some_and(|gpu| gpu.is_software_emulated));
         cx.observe_window_activation(window, |this, window, cx| {
             chrome::set_window_active(window.is_window_active());
             if !window.is_window_active() {
