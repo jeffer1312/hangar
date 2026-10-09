@@ -661,7 +661,9 @@ def _apagar(dir_conta: Path, keep_into: Path | None = None) -> dict[str, int] | 
     return kept
 
 
-def apagar(nome: str) -> None:
-    """Exclusão disputa existência com criações e preparação, inclusive de outro processo."""
+def apagar(nome: str) -> dict[str, int] | None:
+    """Exclusão disputa existência com criações e preparação, inclusive de outro processo.
+    As conversas vão antes para a conta padrão, como no DELETE sem `keep_transcripts=0`."""
+    from app.config import _backend_config_base  # config importa contas
     with ciclo_conta(nome) as cycle:
-        cycle.apagar()
+        return cycle.apagar(_backend_config_base().expanduser())

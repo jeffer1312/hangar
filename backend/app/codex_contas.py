@@ -230,7 +230,7 @@ def delete_account(account: Account, keep_transcripts: bool = True) -> dict[str,
                                             account_transcripts.CODEX_FOLDERS, account.id)
         except account_transcripts.MergeError as error:
             raise AccountError(500, account_transcripts.MERGE_FAILED,
-                               {"account_id": account.id, "error": str(error)}) from error
+                               {"account_id": account.id, **error.params()}) from error
     try:
         shutil.rmtree(account.home, onexc=_retirar_somente_leitura)
     except OSError as error:

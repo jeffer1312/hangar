@@ -174,6 +174,10 @@ def _tail_info(jsonl: Path, provider: str = "claude") -> str:
 def _folder_files(proj: Path) -> list[tuple[float, Path]]:
     files: list[tuple[float, Path]] = []
     for f in proj.glob("*.jsonl"):
+        # Só `<uuid>.jsonl` é conversa retomável; a cópia `<uuid>.from-<conta>.jsonl` de uma conta
+        # apagada viraria um item que o `archive_jsonl` recusa ao abrir.
+        if not _SID_RE.match(f.stem):
+            continue
         try:
             files.append((f.stat().st_mtime, f))
         except OSError:

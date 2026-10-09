@@ -475,12 +475,18 @@ impl AccountService {
             Provider::Claude => (&self.env.claude_base, &["projects"]),
             Provider::Codex => (&self.env.codex_default, &["sessions", "archived_sessions"]),
         };
-        let failed = |error: std::io::Error| {
+        let failed = |error: super::transcripts::MergeError| {
+            // O diário recebe só o código (via `rust.accounts_failed`); os caminhos ficam no log.
+            tracing::warn!(%error, kind = ?error.error.kind(), "conversas não foram juntadas na conta padrão");
             AccountError::new(
                 500,
                 "account_transcripts_merge_failed",
                 "não foi possível juntar as conversas na conta padrão; a conta não foi apagada",
-                json!({"error":error.to_string()}),
+                json!({
+                    "error": error.to_string(),
+                    "source": error.source.as_ref().map(|p| p.display().to_string()),
+                    "target": error.target.display().to_string(),
+                }),
             )
         };
         let mut merge = super::transcripts::Merge::new(&account.id);
@@ -742,6 +748,8 @@ mod tests {
         fs::write(root.path().join(".claude/projects"), "").unwrap();
         let error = delete_with(&service, Provider::Claude, &account, true).unwrap_err();
         assert_eq!(error.code, "account_transcripts_merge_failed");
+        assert!(error.params["source"].as_str().unwrap().ends_with("abc.jsonl"));
+        assert!(error.params["target"].as_str().unwrap().contains(".claude"));
         assert!(account.home.join("projects/-repo/abc.jsonl").is_file());
     }
 

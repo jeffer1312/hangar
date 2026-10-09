@@ -44,6 +44,8 @@ def test_list_folders_aggregates(tmp_path):
     _write_transcript(tmp_path / "-home-u-proj")
     _write_transcript(tmp_path / "-home-u-proj", sid="33333333-3333-3333-3333-333333333333",
                       text="segunda conversa")
+    # Cópia renomeada ao apagar uma conta não é conversa retomável: não entra na contagem.
+    _write_transcript(tmp_path / "-home-u-proj", sid=f"{SID}.from-work", text="copia")
     folders = archive.list_folders()
     assert [(f.project, f.cwd, f.count) for f in folders] == [
         ("-home-u-proj", "/home/u/proj", 2),

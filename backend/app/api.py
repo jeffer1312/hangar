@@ -2122,14 +2122,15 @@ async def delete_claude_config(nome: str, keep_transcripts: bool = Query(True)):
             if pids:
                 raise HTTPException(409, detail=erro("erro_processos_usam_conta",
                                          f"processo(s) {pids} estão usando esta conta", pids=pids))
-            return ciclo.apagar(_backend_config_base() if keep_transcripts else None)
+            # `~` expandido como o `expand` do Rust: senão o destino viraria uma pasta chamada "~".
+            return ciclo.apagar(_backend_config_base().expanduser() if keep_transcripts else None)
 
     try:
         kept = await asyncio.to_thread(_checar_e_apagar)
     except account_transcripts.MergeError as e:
         raise HTTPException(500, detail=erro(account_transcripts.MERGE_FAILED,
                                  "não foi possível juntar as conversas na conta padrão; a conta "
-                                 "não foi apagada", error=str(e))) from None
+                                 "não foi apagada", **e.params())) from None
     except contas.ContaError as e:
         # Pasta não carimbada (ou conta que sumiu): mesmo 404 do apagar() antigo, agora como
         # envelope — a mesma chave do login (erro_conta_inexistente) traduz nos dois fluxos.

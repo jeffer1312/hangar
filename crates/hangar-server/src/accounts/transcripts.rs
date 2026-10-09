@@ -14,6 +14,32 @@ pub struct MergeCount {
     pub renamed: u64,
 }
 
+/// Falha com os caminhos envolvidos: sem eles o erro não diz qual arquivo travou a exclusão.
+#[derive(Debug)]
+pub struct MergeError {
+    pub source: Option<PathBuf>,
+    pub target: PathBuf,
+    pub error: io::Error,
+}
+
+impl std::fmt::Display for MergeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(source) = &self.source {
+            write!(f, "{} → ", source.display())?;
+        }
+        write!(f, "{}: {}", self.target.display(), self.error)
+    }
+}
+
+fn at(source: Option<&Path>, target: &Path) -> impl FnOnce(io::Error) -> MergeError {
+    let (source, target) = (source.map(Path::to_owned), target.to_owned());
+    move |error| MergeError {
+        source,
+        target,
+        error,
+    }
+}
+
 /// Junta várias árvores sob o mesmo rótulo; `finish` só volta depois de as pastas tocadas
 /// estarem no disco, porque logo em seguida a origem é apagada.
 pub struct Merge<'a> {
@@ -32,31 +58,38 @@ impl<'a> Merge<'a> {
     }
 
     /// Copia `from` para `to` no mesmo caminho relativo, sem sobrescrever nada.
-    pub fn tree(&mut self, from: &Path, to: &Path) -> io::Result<()> {
-        for entry in fs::read_dir(from)? {
-            let entry = entry?;
-            let kind = entry.file_type()?;
+    pub fn tree(&mut self, from: &Path, to: &Path) -> Result<(), MergeError> {
+        for entry in fs::read_dir(from).map_err(at(Some(from), to))? {
+            let entry = entry.map_err(at(Some(from), to))?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(at(Some(&path), to))?;
             let target = to.join(entry.file_name());
             if kind.is_dir() {
-                self.tree(&entry.path(), &target)?;
+                self.tree(&path, &target)?;
             } else if kind.is_file() {
-                self.file(&entry.path(), &target)?;
+                self.file(&path, &target)?;
             }
             // Link não é seguido: levaria para a conta padrão o que mora fora da conta.
         }
         Ok(())
     }
 
-    pub fn finish(self) -> io::Result<MergeCount> {
+    pub fn finish(self) -> Result<MergeCount, MergeError> {
         #[cfg(unix)]
         for dir in &self.touched {
-            fs::File::open(dir)?.sync_all()?;
+            fs::File::open(dir)
+                .and_then(|d| d.sync_all())
+                .map_err(at(None, dir))?;
         }
         Ok(self.count)
     }
 
-    fn file(&mut self, source: &Path, target: &Path) -> io::Result<()> {
-        for attempt in 0u32.. {
+    fn file(&mut self, source: &Path, target: &Path) -> Result<(), MergeError> {
+        if let Some(parent) = target.parent() {
+            self.make_dirs(parent).map_err(at(Some(source), parent))?;
+        }
+        let mut attempt = 0u32;
+        loop {
             let candidate = if attempt == 0 {
                 target.to_owned()
             } else {
@@ -64,7 +97,12 @@ impl<'a> Merge<'a> {
             };
             match fs::symlink_metadata(&candidate) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    copy_new(source, &candidate)?;
+                    match copy_new(source, &candidate) {
+                        Ok(()) => {}
+                        // Uma sessão da conta padrão criou o mesmo nome agora: reavalia o candidato.
+                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                        Err(error) => return Err(at(Some(source), &candidate)(error)),
+                    }
                     if let Some(parent) = candidate.parent() {
                         self.touched.insert(parent.to_owned());
                     }
@@ -75,15 +113,41 @@ impl<'a> Merge<'a> {
                     }
                     return Ok(());
                 }
-                Err(error) => return Err(error),
-                Ok(meta) if meta.is_file() && same_bytes(source, &candidate)? => {
-                    self.count.skipped += 1;
-                    return Ok(());
+                Err(error) => return Err(at(Some(source), &candidate)(error)),
+                Ok(meta) if meta.is_file() => {
+                    if same_bytes(source, &candidate).map_err(at(Some(source), &candidate))? {
+                        self.count.skipped += 1;
+                        return Ok(());
+                    }
                 }
                 Ok(_) => {}
             }
+            attempt += 1;
         }
-        unreachable!("a sequência de nomes alternativos não termina")
+    }
+
+    /// Cria só para o dono as pastas que faltam (as do Claude são 0700) e marca o pai de cada
+    /// uma para o `finish`: a entrada da pasta nova também precisa chegar ao disco.
+    fn make_dirs(&mut self, dir: &Path) -> io::Result<()> {
+        if dir.is_dir() {
+            return Ok(());
+        }
+        if let Some(parent) = dir.parent() {
+            self.make_dirs(parent)?;
+        }
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        match builder.create(dir) {
+            Ok(()) => {
+                if let Some(parent) = dir.parent() {
+                    self.touched.insert(parent.to_owned());
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -102,20 +166,21 @@ fn renamed(target: &Path, label: &str, attempt: u32) -> PathBuf {
 }
 
 fn copy_new(source: &Path, target: &Path) -> io::Result<()> {
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let mut input = fs::File::open(source)?;
     let meta = input.metadata()?;
-    let mut output = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(target)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut output = options.open(target)?;
     let result = (|| {
         if io::copy(&mut input, &mut output)? != meta.len() {
             return Err(io::Error::other("cópia incompleta"));
         }
         output.set_modified(meta.modified()?)?;
+        // Transcript do Claude é 0600: a cópia não pode ficar legível por outros usuários.
+        #[cfg(unix)]
+        output.set_permissions(meta.permissions())?;
         output.sync_all()
     })();
     // O arquivo é nosso (create_new): cópia pela metade não fica para a próxima tentativa.
@@ -223,5 +288,33 @@ mod tests {
             fs::read_to_string(to.join("a.from-work-2.jsonl")).unwrap(),
             "three"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copies_keep_the_file_mode_and_new_dirs_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let (from, to) = (root.path().join("from"), root.path().join("to"));
+        write(&from.join("-p/s/a.jsonl"), "x");
+        fs::set_permissions(from.join("-p/s/a.jsonl"), fs::Permissions::from_mode(0o600)).unwrap();
+        let mut merge = Merge::new("work");
+        merge.tree(&from, &to).unwrap();
+        merge.finish().unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&to.join("-p/s/a.jsonl")), 0o600);
+        assert_eq!(mode(&to), 0o700);
+        assert_eq!(mode(&to.join("-p/s")), 0o700);
+    }
+
+    #[test]
+    fn failure_names_source_and_target() {
+        let root = tempfile::tempdir().unwrap();
+        let (from, to) = (root.path().join("from"), root.path().join("to"));
+        write(&from.join("-p/a.jsonl"), "x");
+        write(&to.join("-p"), "um arquivo no lugar da pasta");
+        let error = Merge::new("work").tree(&from, &to).unwrap_err();
+        assert_eq!(error.source.as_deref(), Some(from.join("-p/a.jsonl").as_path()));
+        assert_eq!(error.target, to.join("-p"));
     }
 }
