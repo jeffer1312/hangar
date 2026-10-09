@@ -109,6 +109,7 @@ def test_restart_after_fake_backend_and_rust_death_cleans_old_writer(tmp_path):
     child_file=tmp_path/'child.pid'
     ready=tmp_path/'ready.json'
     fake_backend=tmp_path/'backend.py'
+    # O sinal de pronto é atômico: o teste só espera o arquivo existir e lê em seguida.
     fake_backend.write_text('''import json,os,sys,time
 from pathlib import Path
 from app.runtime_process import spawn_contained, refresh_members
@@ -116,7 +117,9 @@ script="import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','imp
 p=spawn_contained([sys.executable,'-c',script,sys.argv[2]],env=dict(os.environ),record_path=Path(sys.argv[1]))
 while not Path(sys.argv[2]).exists() or not Path(sys.argv[2]).read_text():time.sleep(.01)
 refresh_members(p)
-Path(sys.argv[3]).write_text(json.dumps({'rust':p.pid,'child':int(Path(sys.argv[2]).read_text())}))
+ready=Path(sys.argv[3])
+ready.with_suffix('.tmp').write_text(json.dumps({'rust':p.pid,'child':int(Path(sys.argv[2]).read_text())}))
+os.replace(ready.with_suffix('.tmp'),ready)
 time.sleep(60)
 ''')
     backend=subprocess.Popen([sys.executable,str(fake_backend),str(record),str(child_file),str(ready)],
