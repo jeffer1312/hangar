@@ -606,8 +606,8 @@ class CodexContasLogin:
 
     @diag.rastrear("conta.sair", provider="codex")
     async def sign_out(self, account: accounts.Account) -> dict:
-        # Mesma trava do login: tirar o login de baixo de uma sessão viva a quebraria.
-        self._prepared(account)
+        # Mesma trava do login: tirar o login de baixo de uma sessão viva a quebraria. Sem o
+        # `_prepared` do login: sair vale para qualquer armazenamento da credencial.
         reservation = self._reserve(account, "login")
         key = self._key(account)
         auth = None

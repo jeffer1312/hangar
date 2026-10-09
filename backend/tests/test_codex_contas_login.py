@@ -316,6 +316,13 @@ async def test_sair_desloga_e_esquece_a_identidade(contas, service):
     assert (await service.read_auth(work))["status"] == "disconnected"
 
 
+async def test_sair_aceita_conta_sem_armazenamento_em_arquivo(contas, service):
+    _, work = contas
+    (work.home / "config.toml").write_text('cli_auth_credentials_store = "keyring"\n', encoding="utf-8")
+
+    assert (await service.sign_out(work))["method"] == "none"
+
+
 async def test_sair_recusa_conta_viva_e_logout_nao_confirmado(contas, service, monkeypatch):
     _, work = contas
     monkeypatch.setattr("app.codex_contas_login.CodexNativo", FakeNative)
