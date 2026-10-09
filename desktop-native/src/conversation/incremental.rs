@@ -192,12 +192,15 @@ impl ActivityFold {
                 let text = event.result.as_deref().unwrap_or("");
                 let mut changed = false;
                 if self.agent_calls.contains(id) {
-                    if let Some(agent) = word_after(text, "agentId:") {
+                    // O campo estruturado vence o texto, que muda entre versões do Claude Code.
+                    let text_launch = text.to_lowercase().contains("async agent launched");
+                    let launched = event.bg_agent_id.as_deref().or_else(|| if text_launch { word_after(text, "agentId:") } else { None });
+                    if let Some(agent) = launched.or_else(|| word_after(text, "agentId:")) {
                         changed = self.agent_ids.get(id).map(String::as_str) != Some(agent);
                         if changed { self.agent_ids.insert(id.to_owned(), agent.to_owned()); }
                     }
-                    if text.to_lowercase().contains("async agent launched") {
-                        if let Some(agent) = word_after(text, "agentId:") {
+                    if text_launch || launched.is_some() {
+                        if let Some(agent) = launched {
                             if self.finished_early.remove(agent) { changed |= self.resulted.insert(id.to_owned()); }
                             self.background.insert(agent.to_owned(), id.to_owned());
                         }

@@ -147,12 +147,14 @@ export function createActivityFolder(): ActivityFolder {
         return;
       }
       const r = e.result ?? '';
-      if (/Async agent launched/i.test(r)) {
-        const match = r.match(/agentId:\s*([A-Za-z0-9_-]+)/);
-        if (match) {
-          bgAgent.set(match[1], e.tool_use_id);
+      // O campo estruturado vence o texto, que muda entre versoes do Claude Code.
+      const textLaunch = /Async agent launched/i.test(r);
+      const launchedId = e.bg_agent_id ?? (textLaunch ? r.match(/agentId:\s*([A-Za-z0-9_-]+)/)?.[1] : undefined);
+      if (textLaunch || launchedId) {
+        if (launchedId) {
+          bgAgent.set(launchedId, e.tool_use_id);
           // o fim ja tinha chegado antes do launch (reorder do reseed) -> fecha o par agora.
-          if (completedIds.delete(match[1])) resulted.add(e.tool_use_id);
+          if (completedIds.delete(launchedId)) resulted.add(e.tool_use_id);
         }
         return; // launch imediato: so marca resulted se o fim ja veio; senao segue rodando
       }

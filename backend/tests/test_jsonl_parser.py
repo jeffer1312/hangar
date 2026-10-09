@@ -698,6 +698,13 @@ def test_patch_accepts_a_zero_start():
     assert (ev.patch[0]["old_start"], ev.patch[0]["new_start"]) == (0, 0)
 
 
+def test_background_agent_launch_carries_the_agent_id():
+    [ev] = parse_line(_tool_result_line({"status": "async_launched", "agentId": "ag1", "isAsync": True}))
+    [final] = parse_line(_tool_result_line({"agentId": "ag1"}))
+    assert ev.bg_agent_id == "ag1"
+    assert final.bg_agent_id is None
+
+
 def test_patch_keeps_exactly_the_line_ceiling():
     full = {**_HUNK, "lines": ["+x"] * 2000}
     [ev] = parse_line(_tool_result_line({"structuredPatch": [full]}))
