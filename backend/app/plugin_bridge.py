@@ -259,34 +259,36 @@ def raizes_dos_plugins() -> list[str]:
     return [str(PLUGIN_SRC), *map(str, outros)]
 
 
-def env_da_sessao(name: str) -> dict[str, str]:
-    """O que o pane precisa para achar a ponte: endereço e o token DESTA sessão.
+def env_da_sessao(name: str, key: str) -> dict[str, str]:
+    """O que o processo precisa para achar a ponte: endereço e o token DESTE processo.
 
-    O bearer do app não entra aqui — quem roda dentro do pane não é o app."""
+    `key` distingue o processo dos outros que nasceram com o mesmo nome; o servidor Rust acha a
+    sessão por ela, também depois de um renomear. O bearer do app não entra aqui — quem roda
+    dentro do pane não é o app."""
     if not ligado():
         return {}
     from app.config import settings
     return {
         "HANGAR_PLUGIN_URL": f"http://127.0.0.1:{settings.port}/api/plugin",
-        "HANGAR_PLUGIN_TOKEN": mint(name),
+        "HANGAR_PLUGIN_TOKEN": mint(name, key),
     }
 
 
-def mint(name: str) -> str:
-    """Token desta sessão, para o `-e` do pane.
+def mint(name: str, key: str | None = None) -> str:
+    """Token da ponte: `<key>.<HMAC(nome, key)>`, ou só o HMAC do nome sem `key`.
 
     DERIVADO, não sorteado: sorteado ele viveria só na memória do backend, e todo restart deixava
-    a sessão viva batendo 403 para sempre — o envio caía no tmux (certo), mas o caminho nativo só
-    voltava recriando a sessão (medido em 18/09/2026). O segredo do servidor é estável, então o
-    valor se refaz igual depois do restart.
+    a sessão viva batendo 403 para sempre. Com a chave dentro do token, a conferência se refaz
+    igual depois do restart sem guardar nada. Não é o bearer do app: é um HMAC dele, de mão única.
 
-    Não é o bearer do app: é um HMAC dele, de mão única, e é ele que vai para o ambiente do pane.
-    Sessão recriada com o MESMO nome recebe o mesmo token, o que é aceitável — quem responde por
-    aquele nome é uma sessão só, e a anterior já morreu.
+    O formato só com o nome é o dos processos lançados antes da chave, e o da cópia do `/ui` que o
+    Rust manda com o nome atual; dois processos com o mesmo nome têm o mesmo token nele.
     """
     from app.config import settings
     segredo = (settings.auth_token or "hangar").encode()
-    return hmac.new(segredo, f"plugin:{name}".encode(), hashlib.sha256).hexdigest()[:32]
+    if key is None:
+        return hmac.new(segredo, f"plugin:{name}".encode(), hashlib.sha256).hexdigest()[:32]
+    return key + "." + hmac.new(segredo, f"plugin:{name}:{key}".encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def machine_key() -> str:
@@ -422,7 +424,8 @@ def esquecer(name: str) -> None:
 
 
 def _confere(name: str, token: str) -> None:
-    if not secrets.compare_digest(mint(name), token):
+    key, dot, _ = token.partition(".")
+    if not secrets.compare_digest(mint(name, key if dot else None), token):
         raise HTTPException(403, detail="token do plugin invalido")
 
 
@@ -1079,7 +1082,21 @@ async def whoami(body: WhoamiBody):
                       body.pane, nome, body.session_id, recusa)
             return {"sessao": None}
     _log.info("plugin whoami pane=%s sessao=%s origem=%s", body.pane, nome, origem)
-    return {"sessao": nome, "token": mint(nome), "origem": origem} if nome else {"sessao": None}
+    if not nome:
+        return {"sessao": None}
+    return {"sessao": nome, "token": mint(nome, await asyncio.to_thread(_terminal_key, nome)), "origem": origem}
+
+
+def _terminal_key(name: str) -> str | None:
+    """A chave com que o servidor Rust abre a sessão com terminal (`resolve_binding`): ela vai no
+    token, e a ponte do Rust acha a sessão por ela. Sem vínculo provado, o token só do nome."""
+    from app import runtime_terminal
+    try:
+        binding = runtime_terminal.resolve_binding(name)
+    except Exception as e:
+        _log.info("plugin whoami sem chave sessao=%s: %r", name, e)
+        return None
+    return binding.key if binding else None
 
 
 async def _whoami(body: WhoamiBody) -> tuple[str | None, str]:

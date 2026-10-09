@@ -2,7 +2,7 @@
 //! (fase 3): quem leva os pedidos dos apps (o ator ou o elo do terminal), o último `plugin_ui`, os avisos
 //! vivos e o clique do app em aberto. Liga o ator do runtime, as rotas dos apps e o hub de eventos dos
 //! aparelhos, que vivem em lugares diferentes.
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -197,11 +197,11 @@ struct Session {
     /// A vida do ator que atende a sessão, única no servidor (`Mods::new_life`): a publicação de um ator
     /// velho, de outra sessão que teve o mesmo nome, não casa com ela.
     life: u64,
-    /// O processo do `claude -p` (chave durável e cano): o renomear fecha e reabre a sessão no mesmo.
+    /// O processo do `claude -p` (chave durável e cano): o renomear fecha e reabre a sessão no mesmo. Começa
+    /// pela chave durável (`key:...`), que vai no token da ponte do processo.
     process: String,
-    /// O nome com que o processo nasceu (`CP_SESSION_NAME`), que é o que ele manda à ponte junto com o
-    /// token desse nome. Muda só com processo novo, não com o renomear.
-    born: String,
+    /// Com terminal: a chave do token que o processo recebeu no lançamento, quando não é a chave durável.
+    plugin_key: Option<String>,
     link: Arc<dyn SurfaceLink>,
     lock: Arc<tokio::sync::Mutex<()>>,
     /// O último `plugin_ui`, no texto que sai aos aparelhos e que se compara. Por `Arc`: quem lê copia o
@@ -243,16 +243,10 @@ fn with_extra(view: &Value, extra: &SurfaceExtra) -> Value {
 #[derive(Default)]
 struct Inner {
     sessions: HashMap<String, Session>,
-    /// O nome de nascimento dos processos cujas sessões saíram do Rust: o renomear fecha e reabre a
-    /// sessão com o mesmo processo, e a reabertura o herda daqui.
-    departed: VecDeque<(String, String)>,
     toast_seq: u64,
     /// Ordem dos avisos de foco e rolagem da sessão com terminal.
     seq: u64,
 }
-
-/// Quantos processos que saíram do Rust guardam o nome de nascimento para uma reabertura.
-const DEPARTED_KEPT: usize = 64;
 
 #[derive(Clone, Default)]
 pub struct Mods {
@@ -299,22 +293,26 @@ impl Mods {
         self.attach_process(name, name, life, link);
     }
 
-    /// `attach` com o processo do `claude -p`. Reaberta no mesmo processo (renomear), a sessão herda o nome
-    /// de nascimento dele e os avisos vivos. Outro processo com o mesmo nome não herda nada: nem avisos, nem
-    /// faixa, nem clique em aberto, nem o nome de nascimento de quem saiu.
+    /// `attach` com o processo do `claude -p`. Reaberta no mesmo processo (renomear), a sessão herda os avisos
+    /// vivos. Outro processo com o mesmo nome não herda nada: nem avisos, nem faixa, nem clique em aberto.
     pub fn attach_process(&self, name: &str, process: &str, life: u64, link: Arc<dyn SurfaceLink>) {
-        self.attach_with(name, process, life, link, None);
+        self.attach_with(name, process, None, life, link, None);
     }
 
     /// A sessão com terminal abriu no Rust (fase 3): os pedidos dos apps vão ao elo dela (dono único). O
     /// processo é a chave durável mais o pane e a criação dele (`key:pane:created`, Task 16): o renomear
     /// reabre no mesmo e herda como a sessão sem terminal.
     pub fn attach_terminal(&self, name: &str, process: &str, life: u64, probe: Arc<dyn TerminalProbe>) {
-        let link: Arc<dyn SurfaceLink> = probe.clone();
-        self.attach_with(name, process, life, link, Some(Terminal::new(probe)));
+        self.attach_terminal_keyed(name, process, None, life, probe);
     }
 
-    fn attach_with(&self, name: &str, process: &str, life: u64, link: Arc<dyn SurfaceLink>, terminal: Option<Terminal>) {
+    /// `attach_terminal` com a chave do token que o processo recebeu no lançamento (`plugin_key` do vínculo).
+    pub fn attach_terminal_keyed(&self, name: &str, process: &str, plugin_key: Option<&str>, life: u64, probe: Arc<dyn TerminalProbe>) {
+        let link: Arc<dyn SurfaceLink> = probe.clone();
+        self.attach_with(name, process, plugin_key, life, link, Some(Terminal::new(probe)));
+    }
+
+    fn attach_with(&self, name: &str, process: &str, plugin_key: Option<&str>, life: u64, link: Arc<dyn SurfaceLink>, terminal: Option<Terminal>) {
         let source = if terminal.is_some() { "terminal" } else { "surface" };
         let (replaced, old_probe) = {
             let mut inner = self.inner.lock().unwrap();
@@ -322,11 +320,7 @@ impl Mods {
             let replaced = old.as_ref().is_some_and(|old| old.process != process);
             let old_probe = old.as_ref().and_then(|old| old.terminal.as_ref().map(|terminal| terminal.probe.clone()));
             let (toasts, extra) = old.filter(|old| old.process == process).map(|old| (old.toasts, old.extra)).unwrap_or_default();
-            let born = match inner.departed.iter().position(|(departed, _)| departed == process) {
-                Some(at) => inner.departed.remove(at).map(|(_, born)| born).unwrap_or_else(|| name.to_owned()),
-                None => name.to_owned(),
-            };
-            inner.sessions.insert(name.to_owned(), Session { life, process: process.to_owned(), born, link,
+            inner.sessions.insert(name.to_owned(), Session { life, process: process.to_owned(), plugin_key: plugin_key.map(str::to_owned), link,
                 lock: Arc::default(), ui: None, toasts, click: None, terminal, extra, surface_view: None });
             (replaced, old_probe)
         };
@@ -346,17 +340,7 @@ impl Mods {
     pub fn forget(&self, name: &str, life: u64) {
         let removed = {
             let mut inner = self.inner.lock().unwrap();
-            match inner.sessions.get(name).is_some_and(|session| session.life == life).then(|| inner.sessions.remove(name)).flatten() {
-                Some(session) => {
-                    inner.departed.retain(|(process, _)| *process != session.process);
-                    inner.departed.push_back((session.process.clone(), session.born.clone()));
-                    if inner.departed.len() > DEPARTED_KEPT {
-                        inner.departed.pop_front();
-                    }
-                    Some(session)
-                }
-                None => None,
-            }
+            inner.sessions.get(name).is_some_and(|session| session.life == life).then(|| inner.sessions.remove(name)).flatten()
         };
         if let Some(session) = removed {
             let source = match &session.terminal {
@@ -375,17 +359,16 @@ impl Mods {
         self.inner.lock().unwrap().sessions.contains_key(name)
     }
 
-    /// A sessão que a ponte do plugin quer dizer com `sessao`, o nome com que o processo dela nasceu (que
-    /// difere do nome atual depois de um renomear sem relançar o `claude -p`). Devolve o nome atual.
-    ///
-    /// O token da ponte é derivado só do nome: dois processos que nasceram com o mesmo nome têm o mesmo
-    /// token, e o servidor não os distingue. Com duas sessões vivas nessa situação (uma renomeada, outra
-    /// criada depois com o nome antigo), a ponte não atende nenhuma das duas, para um processo não agir no
-    /// clique da outra: o pedido segue ao Python, que não tem o clique, e o mod abre a URL no servidor. Uma
-    /// sessão de fora do Rust com esse nome não aparece aqui: quem confere é a ponte (`bridge::owned`).
-    pub fn bridge_session(&self, sessao: &str) -> Option<String> {
+    /// A sessão do processo que chama a ponte do plugin, pelo nome atual. O token com chave
+    /// (`chave.hmac`) diz o processo, também depois de um renomear e de o servidor reiniciar; a conferência
+    /// do HMAC com o `sessao` fica na rota. O token só do nome, de processo lançado antes da chave, vale
+    /// para a sessão que tem esse nome agora. Sem sessão, o pedido segue ao Python.
+    pub fn bridge_session(&self, sessao: &str, token: &str) -> Option<String> {
         let inner = self.inner.lock().unwrap();
-        let mut found = inner.sessions.iter().filter(|(_, session)| session.born == sessao).map(|(name, _)| name.clone());
+        let Some((key, _)) = token.split_once('.') else { return inner.sessions.contains_key(sessao).then(|| sessao.to_owned()) };
+        let mut found = inner.sessions.iter().filter(|(_, session)| {
+            session.process.split(':').next() == Some(key) || session.plugin_key.as_deref() == Some(key)
+        }).map(|(name, _)| name.clone());
         match (found.next(), found.next()) {
             (Some(name), None) => Some(name),
             _ => None,
@@ -715,7 +698,7 @@ impl Mods {
     }
 
     /// Muda o terminal da sessão; com `only`, só na vida dada (o que o clique escreve). Os avisos da ponte
-    /// valem para quem tem o nome agora: a ponte acha a sessão pelo nome de nascimento (`bridge_session`).
+    /// valem para quem tem o nome agora: a ponte acha a sessão pelo token do processo (`bridge_session`).
     fn with_terminal(&self, name: &str, only: Option<u64>, change: impl FnOnce(&mut Terminal, u64)) {
         {
             let mut inner = self.inner.lock().unwrap();

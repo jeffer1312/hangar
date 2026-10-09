@@ -1167,9 +1167,10 @@ class ClaudeHeadlessAdapter:
         # backend herdou (subido de dentro de outra sessão) sai antes: o filho nunca leva a de outra sessão.
         env.pop("HANGAR_PLUGIN_URL", None)
         env.pop("HANGAR_PLUGIN_TOKEN", None)
-        env.update(plugin_bridge.env_da_sessao(sess.name))
         if not meta.get("key"):
             meta = sess.meta = hl_sessions.update(sess.name, key=uuid.uuid4().hex) or meta
+        # A chave do sidecar vai no token: é por ela que o servidor Rust acha a sessão (`target.key`).
+        env.update(plugin_bridge.env_da_sessao(sess.name, meta["key"]))
         if meta.get("key"):
             env["CP_SESSION_KEY"] = meta["key"]
         env[_MARCADOR_CANO] = meta["key"]

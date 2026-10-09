@@ -285,7 +285,7 @@ async fn open_terminal_on(registry: &RuntimeRegistry, config: &Path, name: &str,
     std::fs::write(&transcript, "").unwrap();
     registry.open_terminal(TerminalTarget { key: format!("k-{name}"), generation: 1, name: name.into(), binding,
         lease_path: dir.join(format!("{name}.lease")), state_path: dir.join(format!("{name}.state")), projection_dir: dir.join(format!("{name}.projection")),
-        transcript: transcript.clone(), created: 0.0 }).await.unwrap();
+        transcript: transcript.clone(), created: 0.0, plugin_key: None }).await.unwrap();
     assert!(registry.writable(name).await.unwrap().healthy);
     (log, transcript)
 }

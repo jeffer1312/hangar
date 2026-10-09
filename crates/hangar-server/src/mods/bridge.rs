@@ -13,7 +13,6 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use subtle::ConstantTimeEq;
 
 use super::http::{fits, invalid, reply};
@@ -23,9 +22,6 @@ use crate::routes::{AppState, gate, pass};
 
 const BODY_LIMIT: usize = 16 * 1024;
 const URL_MAX: usize = 8192;
-/// Prazo da pergunta ao Python sobre o nome antigo: o plugin desiste do `press-start` em 3 s, e a resposta,
-/// com o repasse ao Python incluído, tem de chegar antes; senão o clique roda depois de ele desistir.
-const NAME_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
 /// O `/ui` leva a faixa e os painéis inteiros: o mesmo teto do Python (`MAX_BAND_BYTES`).
 const UI_BODY_LIMIT: usize = 300 * 1024;
 /// A cópia aceita o que o Python aceita (`CopiedBody.text`, até 65536 caracteres); no JSON um caractere
@@ -53,35 +49,44 @@ struct PressBody { #[serde(rename = "requestId")] request_id: String, element: S
 #[derive(Deserialize)]
 struct Opened { attempt: String, url: String }
 
-/// O token da ponte de uma sessão, igual ao `plugin_bridge.mint` do Python: HMAC-SHA256 do token do
-/// dono (ou "hangar", sem token) sobre `plugin:<nome>`, em 32 dígitos hexadecimais.
+/// O token da ponte só do nome, igual ao `plugin_bridge.mint(nome)` do Python: HMAC-SHA256 do token do
+/// dono (ou "hangar", sem token) sobre `plugin:<nome>`, em 32 dígitos hexadecimais. É o dos processos
+/// lançados antes da chave e o da cópia do `/ui` ao Python.
 pub fn mint(secret: &str, name: &str) -> String {
+    hmac_hex(secret, &format!("plugin:{name}"))
+}
+
+/// O token da ponte de um processo, igual ao `plugin_bridge.mint(nome, chave)` do Python:
+/// `<chave>.<HMAC de plugin:<nome>:<chave>>`. A chave é a da sessão no Rust (`target.key`, ou a do
+/// ambiente do processo com terminal): a ponte acha a sessão por ela, e o nome entra só na conferência.
+pub fn mint_keyed(secret: &str, name: &str, key: &str) -> String {
+    format!("{key}.{}", hmac_hex(secret, &format!("plugin:{name}:{key}")))
+}
+
+fn hmac_hex(secret: &str, message: &str) -> String {
     let secret = if secret.is_empty() { "hangar" } else { secret };
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
-    ring::hmac::sign(&key, format!("plugin:{name}").as_bytes()).as_ref()[..16].iter().map(|byte| format!("{byte:02x}")).collect()
+    ring::hmac::sign(&key, message.as_bytes()).as_ref()[..16].iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Corpo lido uma vez: sessão que não é do Rust volta ao Python com o mesmo corpo. Devolve o corpo e o
 /// nome atual da sessão, que pode não ser o `sessao` do plugin (sessão renomeada sem relançar o processo:
-/// o plugin manda o nome com que nasceu, e o token é o desse nome). Corpo que não serve ao tipo, de sessão
-/// do Rust, é 422, como o Pydantic do Python.
+/// o plugin manda o nome com que nasceu). Corpo que não serve ao tipo, de sessão do Rust, é 422, como o
+/// Pydantic do Python.
 async fn owned_sized<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, req: Request, limit: usize) -> Result<(Envelope<T>, String), Box<Response>> {
     let (fwd, _) = gate(st, peer, &req);
     let (parts, raw) = req.into_parts();
     let Ok(bytes) = to_bytes(raw, limit).await else { return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response())) };
     let parsed = serde_json::from_slice::<Envelope<T>>(&bytes);
-    let sessao = match &parsed {
-        Ok(envelope) => Some(envelope.sessao.clone()),
-        Err(_) => serde_json::from_slice::<Value>(&bytes).ok().and_then(|body| body["sessao"].as_str().map(str::to_owned)),
+    let found = match &parsed {
+        Ok(envelope) => st.mods.bridge_session(&envelope.sessao, &envelope.token),
+        // Sem token, a sessão é a do nome: o corpo dela é recusado aqui (422), como antes.
+        Err(_) => serde_json::from_slice::<Value>(&bytes).ok().and_then(|body| body["sessao"].as_str()
+            .and_then(|sessao| st.mods.bridge_session(sessao, body["token"].as_str().unwrap_or_default()))),
     };
-    let name = sessao.as_deref().and_then(|sessao| st.mods.bridge_session(sessao));
-    let elsewhere = match (&name, &sessao) {
-        (Some(name), Some(sessao)) if name != sessao => named_elsewhere(st, sessao).await,
-        _ => false,
-    };
-    match (parsed, name) {
-        (Ok(envelope), Some(name)) if !elsewhere => Ok((envelope, name)),
-        (Err(_), Some(_)) if !elsewhere => Err(Box::new(invalid(None))),
+    match (parsed, found) {
+        (Ok(envelope), Some(name)) => Ok((envelope, name)),
+        (Err(_), Some(_)) => Err(Box::new(invalid(None))),
         _ => Err(Box::new(pass(st, Request::from_parts(parts, Body::from(bytes)), &fwd).await)),
     }
 }
@@ -90,21 +95,14 @@ async fn owned<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, req: R
     owned_sized(st, peer, req, BODY_LIMIT).await
 }
 
-/// O nome antigo de uma sessão renomeada pode ser o nome atual de outra, fora do Rust (com terminal, ou
-/// criada depois no Python), cujo plugin manda o mesmo `sessao` com um token que vale. Pergunta ao Python
-/// pelo status do `info`, sem o cache do `/events` (a resposta de um segundo atrás pode ser de antes do
-/// renomear) e sem ler o corpo: 404 é sessão inexistente. Existindo a sessão, ou sem resposta em
-/// `NAME_CHECK`, o pedido é dela e vai ao Python.
-async fn named_elsewhere(st: &AppState, sessao: &str) -> bool {
-    let url = format!("http://{}/internal/sessions/{}/info", st.cfg.upstream, utf8_percent_encode(sessao, NON_ALPHANUMERIC));
-    let Ok(request) = axum::http::Request::get(url).header("x-hangar-internal", &st.cfg.internal_secret).body(Body::empty()) else { return true };
-    !matches!(tokio::time::timeout(NAME_CHECK, st.http.request(request)).await,
-        Ok(Ok(response)) if response.status() == StatusCode::NOT_FOUND)
-}
-
-/// Comparação em tempo constante, como o `secrets.compare_digest` do Python.
+/// Comparação em tempo constante, como o `secrets.compare_digest` do Python. `name` é o `sessao` do
+/// plugin: o nome com que o token foi cunhado.
 fn token_ok(st: &AppState, name: &str, token: &str) -> bool {
-    mint(&st.cfg.auth_token, name).as_bytes().ct_eq(token.as_bytes()).into()
+    let expected = match token.split_once('.') {
+        Some((key, _)) => mint_keyed(&st.cfg.auth_token, name, key),
+        None => mint(&st.cfg.auth_token, name),
+    };
+    expected.as_bytes().ct_eq(token.as_bytes()).into()
 }
 
 pub async fn press_start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
