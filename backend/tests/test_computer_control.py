@@ -1,7 +1,10 @@
 """Tela do hangar-computer-control: grava em todos os .claude.json, desligar tira de todos e religar
 volta com a configuração de antes."""
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -19,6 +22,8 @@ def home(tmp_path, monkeypatch):
     (projeto / ".venv" / "bin").mkdir(parents=True)
     (projeto / ".venv" / "bin" / "python").write_text("")
     (projeto / "servidor_mcp.py").write_text("")
+    (projeto / "target" / "release").mkdir(parents=True)
+    (projeto / "target" / "release" / cc.NAME).write_bytes(b"local-binary")
     (projeto / "alvo-agent.json").write_text("{}")
     (tmp_path / ".claude.json").write_text("{}", encoding="utf-8")
     return tmp_path
@@ -73,7 +78,7 @@ def test_cria_alvo_ssh_e_recusa_repetido_e_local_fora_do_windows(home, monkeypat
     assert e.value.code == "erro_computer_control_local_only_windows"
 
 
-def test_instalar_versao_publicada_leva_alvos_e_troca_pra_uvx(home, monkeypatch):
+def test_install_falls_back_to_uvx_when_release_has_no_binary(home, monkeypatch):
     projeto = home / "Projetos" / cc.NAME
     (projeto / "alvo-agent.json").write_text(json.dumps(
         {"transport": "ssh", "host": "h", "agent_path": str(projeto / "dist" / "windows-agent.exe")}))
@@ -96,6 +101,8 @@ def test_instalar_versao_publicada_leva_alvos_e_troca_pra_uvx(home, monkeypatch)
         home / ".hangar" / "computer-control" / "windows-agent.exe")
     assert (projeto / "alvo-agent.json").is_file()   # a pasta local não é apagada
     assert estado["mode"] == "package" and estado["installed_tag"] == "v0.1.0"
+    assert estado["legacy_package"] is True
+    assert "pacote Python" in estado["detail"]
 
 
 def test_preserva_variavel_que_a_tela_nao_controla(home):
@@ -220,3 +227,261 @@ def test_invalid_windows_key_type_does_not_write_other_changes(home, monkeypatch
     with pytest.raises(ValueError, match="jev_windows_api_key: esperado texto"):
         rc.aplicar({"jev_windows_api_key": True, "upload_retention_days": 7})
     assert not cc._parked_file().exists() and not rc._caminho().exists()
+
+
+@pytest.fixture
+def rust_release(monkeypatch):
+    assets = {"hangar-computer-control-linux-x86_64": b"linux-binary", "windows-agent.exe": b"MZ-agent"}
+
+    def get(url, timeout):
+        if url == f"https://api.github.com/repos/{cc.REPO}/releases/latest":
+            return json.dumps({"tag_name": "v2.0.0", "assets": [{"name": name} for name in assets]}).encode()
+        prefix = f"https://github.com/{cc.REPO}/releases/download/v2.0.0/"
+        assert url.startswith(prefix)
+        return assets[url.removeprefix(prefix)]
+
+    monkeypatch.setattr(cc, "_get", get)
+    return assets
+
+
+def test_install_downloads_both_assets(home, rust_release):
+    result = cc.install()
+    directory = home / ".hangar" / "computer-control"
+    binary = directory / "hangar-computer-control"
+    assert binary.read_bytes() == b"linux-binary"
+    assert binary.stat().st_mode & 0o777 == 0o755
+    assert (directory / "windows-agent.exe").read_bytes() == b"MZ-agent"
+    assert json.loads((directory / "install.json").read_text()) == {"tag": "v2.0.0"}
+    assert result["installed_tag"] == "v2.0.0" and result["package_exists"]
+
+
+def test_package_entry_is_binary_without_args(home, rust_release):
+    cc.save(_pedido(home))
+    data = json.loads(cc._main_file().read_text())
+    data["mcpServers"][cc.NAME]["env"].update(PYTHONPATH="old-pythonpath", VIRTUAL_ENV="")
+    cc._main_file().write_text(json.dumps(data))
+    cc.install()
+    entry = _entrada(home / ".claude-x" / ".claude.json")
+    assert entry == _entrada(cc._main_file())
+    assert entry["command"] == str(home / ".hangar" / "computer-control" / "hangar-computer-control")
+    assert entry["args"] == []
+    assert "PYTHONPATH" not in entry["env"] and entry["env"]["VIRTUAL_ENV"] == ""
+    assert entry["env"]["LLM_MODEL"] == "m1"
+
+
+def test_mode_detects_installed_binary_as_package(home):
+    command = home / ".hangar" / "computer-control" / "hangar-computer-control"
+    cc._main_file().write_text(json.dumps({"mcpServers": {cc.NAME: {"command": str(command), "args": []}}}))
+    assert cc.state()["mode"] == "package"
+
+
+def test_mode_detects_target_release_as_local(home):
+    project = home / "another-checkout"
+    (project / "target" / "release").mkdir(parents=True)
+    binary = project / "target" / "release" / "hangar-computer-control"
+    binary.write_bytes(b"local-binary")
+    (project / "custom-agent.json").write_text("{}")
+    cc._main_file().write_text(json.dumps({"mcpServers": {cc.NAME: {"command": str(binary), "args": []}}}))
+    result = cc.state()
+    assert result["mode"] == "local" and result["project_dir"] == str(project)
+    assert result["agent_configs"] == [str(project / "custom-agent.json")]
+
+
+def test_local_mode_requires_built_binary(home):
+    binary = home / "Projetos" / cc.NAME / "target" / "release" / cc.NAME
+    binary.unlink()
+    with pytest.raises(cc.ComputerControlError) as error:
+        cc.save(_pedido(home, mode="local"))
+    project = home / "Projetos" / cc.NAME
+    assert error.value.code == "erro_computer_control_dir"
+    assert error.value.msg == f"{project} não tem target/release/hangar-computer-control (rode cargo build --release)"
+    assert _entrada(cc._main_file()) is None
+
+
+def test_local_mode_uses_only_binary_and_installed_windows_agent(home):
+    project = home / "Projetos" / cc.NAME
+    (project / "servidor_mcp.py").unlink()
+    (project / ".venv" / "bin" / "python").unlink()
+    cc.save(_pedido(home, mode="local"))
+    entry = _entrada(cc._main_file())
+    assert entry["command"] == str(project / "target" / "release" / "hangar-computer-control")
+    assert entry["args"] == [] and "PYTHONPATH" not in entry["env"]
+    result = cc.create_target({"name": "vm-new", "transport": "ssh", "host": "vm-new"})
+    target = json.loads((project / "vm-new-agent.json").read_text())
+    assert target["agent_path"] == str(home / ".hangar" / "computer-control" / "windows-agent.exe")
+    assert result["agent_exe"]["path"] == target["agent_path"]
+
+
+def test_legacy_uvx_entry_still_package_and_rewritten_on_save(home):
+    directory = home / ".hangar" / "computer-control"
+    directory.mkdir(parents=True)
+    (directory / "windows-agent.exe").write_bytes(b"MZ-agent")
+    (directory / "hangar-computer-control").write_bytes(b"binary")
+    (directory / "install.json").write_text('{"tag":"v2.0.0"}')
+    cc._main_file().write_text(json.dumps({"mcpServers": {cc.NAME: {
+        "command": "/bin/uvx", "args": ["--from", "legacy-package", cc.NAME], "env": {"PYTHONPATH": "old"}}}}))
+    assert cc.state()["mode"] == "package"
+    cc.save(_pedido(home, mode="package"))
+    entry = _entrada(cc._main_file())
+    assert entry["command"] == str(directory / "hangar-computer-control") and entry["args"] == []
+    assert "PYTHONPATH" not in entry["env"]
+
+
+def test_save_keeps_uvx_entry_when_binary_missing(home):
+    entry = {"command": "/custom/uvx", "args": ["--from", "working-package", cc.NAME],
+             "env": {"LLM_MODEL": "old"}}
+    cc._main_file().write_text(json.dumps({"mcpServers": {cc.NAME: entry}}))
+    cc.save(_pedido(home, mode="package"))
+    saved = _entrada(cc._main_file())
+    assert saved["command"] == entry["command"] and saved["args"] == entry["args"]
+    assert saved["env"]["LLM_MODEL"] == "m1"
+
+
+def test_no_uvx_requirement(home, monkeypatch, rust_release):
+    monkeypatch.setattr(cc.shutil, "which", lambda name: None)
+    result = cc.install()
+    assert result["package_exists"] and not result["legacy_package"]
+
+
+def test_install_migrates_existing_linux_targets_only_for_binary(home, rust_release):
+    targets = home / ".hangar" / "computer-control" / "targets"
+    targets.mkdir(parents=True)
+    legacy = {"transport": "local", "command": ["python", "/old/linux_agent.py"], "request_timeout": 41}
+    (targets / "linux-agent.json").write_text(json.dumps(legacy))
+    custom = {"transport": "local", "command": ["/custom/agent", "arg"]}
+    (targets / "custom-agent.json").write_text(json.dumps(custom))
+    cc.install()
+    assert json.loads((targets / "linux-agent.json").read_text()) == {
+        "transport": "local", "command": [str(targets.parent / "hangar-computer-control"), "agent"],
+        "request_timeout": 41}
+    assert json.loads((targets / "custom-agent.json").read_text()) == custom
+
+
+def test_install_exposes_invalid_target_without_overwriting_it(home, rust_release):
+    targets = home / ".hangar" / "computer-control" / "targets"
+    targets.mkdir(parents=True)
+    invalid = targets / "broken-agent.json"
+    invalid.write_text("not-json")
+    result = cc.install()
+    assert "broken-agent.json" in result["migration_skipped"]
+    assert invalid.read_text() == "not-json"
+
+
+def test_binary_install_download_failure_keeps_previous_install(home, monkeypatch):
+    directory = home / ".hangar" / "computer-control"
+    directory.mkdir(parents=True)
+    (directory / "hangar-computer-control").write_bytes(b"old-linux")
+    (directory / "windows-agent.exe").write_bytes(b"old-windows")
+    (directory / "install.json").write_text('{"tag":"v1.0.0"}')
+
+    def get(url, timeout):
+        if "api.github.com" in url:
+            return b'{"tag_name":"v2.0.0","assets":[{"name":"hangar-computer-control-linux-x86_64"}]}'
+        if url.endswith("windows-agent.exe"):
+            raise cc.ComputerControlError(502, "erro_computer_control_release", "download recusado")
+        return b"new-linux"
+
+    monkeypatch.setattr(cc, "_get", get)
+    with pytest.raises(cc.ComputerControlError, match="download recusado"):
+        cc.install()
+    assert (directory / "hangar-computer-control").read_bytes() == b"old-linux"
+    assert (directory / "windows-agent.exe").read_bytes() == b"old-windows"
+    assert json.loads((directory / "install.json").read_text()) == {"tag": "v1.0.0"}
+
+
+def test_package_entry_on_windows_uses_windows_binary(home, monkeypatch, rust_release):
+    monkeypatch.setattr(cc, "os", SimpleNamespace(**{**vars(cc.os), "name": "nt"}))
+    cc.install()
+    cc.save(_pedido(home, mode="package"))
+    entry = _entrada(cc._main_file())
+    assert entry["command"] == str(home / ".hangar" / "computer-control" / "windows-agent.exe")
+    assert entry["args"] == [] and cc.state()["mode"] == "package"
+
+
+@pytest.mark.parametrize("platform,stale_binary", [("posix", False), ("posix", True), ("nt", False)])
+def test_legacy_install_updates_uvx_tag_even_with_old_binary(home, monkeypatch, platform, stale_binary):
+    monkeypatch.setattr(cc, "os", SimpleNamespace(**{**vars(cc.os), "name": platform}))
+    directory = home / ".hangar" / "computer-control"
+    directory.mkdir(parents=True)
+    if stale_binary:
+        (directory / "hangar-computer-control").write_bytes(b"old-rust")
+    targets = directory / "targets"
+    targets.mkdir()
+    target = targets / "existing-agent.json"
+    target.write_text(json.dumps({"transport": "ssh", "host": "vm-old", "agent_path": str(directory / "windows-agent.exe")}))
+    entry = {"command": "/bin/uvx", "args": ["--from", f"git+https://github.com/{cc.REPO}@v1.0.0", cc.NAME],
+             "env": {"HCC_AGENT_CONFIG": str(target)}}
+    cc._main_file().write_text(json.dumps({"mcpServers": {cc.NAME: entry}}))
+    monkeypatch.setattr(cc.shutil, "which", lambda name: "/bin/uvx" if name == "uvx" else None)
+    monkeypatch.setattr(cc, "_get", lambda url, timeout: (
+        b'{"tag_name":"v2.0.0","assets":[{"name":"windows-agent.exe"}]}' if "api.github.com" in url else b"MZ-legacy"))
+    result = cc.install()
+    saved = _entrada(cc._main_file())
+    assert saved["command"] == "/bin/uvx"
+    assert saved["args"] == ["--from", f"git+https://github.com/{cc.REPO}@v2.0.0", cc.NAME]
+    assert result["legacy_package"] and result["installed_tag"] == "v2.0.0"
+    cc.save(_pedido(home, mode="package"))
+    assert _entrada(cc._main_file())["command"] == "/bin/uvx"
+
+
+def test_install_preserves_custom_linux_script_argument(home, rust_release):
+    targets = home / ".hangar" / "computer-control" / "targets"
+    targets.mkdir(parents=True)
+    custom = {"transport": "local", "command": ["/custom/agent", "linux_agent.py"]}
+    (targets / "custom-agent.json").write_text(json.dumps(custom))
+    cc.install()
+    assert json.loads((targets / "custom-agent.json").read_text()) == custom
+
+
+def test_local_save_resolves_relative_project_directory(home, monkeypatch):
+    monkeypatch.chdir(home)
+    cc.save(_pedido(home, mode="local", project_dir=f"Projetos/{cc.NAME}"))
+    entry = _entrada(cc._main_file())
+    assert entry["command"] == str(home / "Projetos" / cc.NAME / "target" / "release" / cc.NAME)
+    assert entry["env"]["HCC_AGENTS_DIR"] == str(home / "Projetos" / cc.NAME)
+
+
+@pytest.mark.parametrize("binary_release", [False, True])
+def test_install_flow_with_real_http_and_config_files(home, monkeypatch, binary_release):
+    assets = {"windows-agent.exe": b"MZ-agent"}
+    if binary_release:
+        assets["hangar-computer-control-linux-x86_64"] = b"linux-binary"
+    payloads = {f"/repos/{cc.REPO}/releases/latest": json.dumps({
+        "tag_name": "v3.0.0", "assets": [{"name": name} for name in assets]}).encode()}
+    payloads.update({f"/{cc.REPO}/releases/download/v3.0.0/{name}": content for name, content in assets.items()})
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = payloads.get(self.path)
+            self.send_response(200 if body is not None else 404)
+            self.end_headers()
+            self.wfile.write(body or b"missing asset")
+
+        def log_message(self, format, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        get = cc._get
+        base = f"http://127.0.0.1:{server.server_port}"
+        monkeypatch.setattr(cc, "_get", lambda url, timeout: get(base + urlsplit(url).path, timeout))
+        monkeypatch.setattr(cc.shutil, "which", lambda name: "/bin/uvx" if name == "uvx" else None)
+        try:
+            result = cc.install()
+            directory = home / ".hangar" / "computer-control"
+            cc.create_target({"name": "vm-http", "transport": "ssh", "host": "vm-http"})
+            target = directory / "targets" / "vm-http-agent.json"
+            cc.save(_pedido(home, mode="package", agent_config=str(target)))
+            assert json.loads(target.read_text())["agent_path"] == str(directory / "windows-agent.exe")
+            entry = _entrada(cc._main_file())
+            assert entry == _entrada(home / ".claude-x" / ".claude.json")
+            assert entry["command"] == (str(directory / "hangar-computer-control") if binary_release else "/bin/uvx")
+            assert entry["args"] == ([] if binary_release else [
+                "--from", f"git+https://github.com/{cc.REPO}@v3.0.0", cc.NAME])
+            assert json.loads((directory / "install.json").read_text()) == {
+                "tag": "v3.0.0", **({} if binary_release else {"uvx": "/bin/uvx"})}
+            assert "PYTHONPATH" not in entry["env"] and result["legacy_package"] is not binary_release
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)

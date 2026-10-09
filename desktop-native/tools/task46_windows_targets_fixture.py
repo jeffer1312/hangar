@@ -104,7 +104,7 @@ class Handler(T44["Handler"]):
         print("POST /api/computer-control/targets synthetic", flush=True)
         if CONTROL["create"] == "error":
             directory = "/fixture/computer-control/targets" if T44["STATE"]["mode"] == "package" else str(body.get("project_dir") or "/fixture/project").strip()
-            return self.send_json(ERROR("erro_computer_control_dir", f"{directory} não tem servidor_mcp.py e .venv/bin/python",
+            return self.send_json(ERROR("erro_computer_control_dir", f"{directory} não tem target/release/hangar-computer-control (rode cargo build --release)",
                 dir=directory), 400)
         name = str(body.get("name") or "").strip()
         if not name and body.get("transport") == "ssh":

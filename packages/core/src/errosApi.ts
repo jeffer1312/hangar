@@ -219,7 +219,6 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_computer_control_local_only_windows: () => m.erro_computer_control_local_only_windows(),
   erro_computer_control_target_host: () => m.erro_computer_control_target_host(),
   erro_computer_control_not_installed: () => m.erro_computer_control_not_installed(),
-  erro_computer_control_no_uvx: () => m.erro_computer_control_no_uvx(),
   erro_computer_control_no_ssh_key: () => m.erro_computer_control_no_ssh_key(),
   erro_computer_control_release: (p) => m.erro_computer_control_release({ error: String(p.error) }),
   erro_nao_encontrado: () => m.erro_nao_encontrado(),
