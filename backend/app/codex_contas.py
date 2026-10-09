@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import stat
 
 
 _NOME = r"[a-z0-9][a-z0-9_-]{0,31}"
@@ -166,64 +165,6 @@ def resolve_account(account_id: str = "default") -> Account:
     if not _managed(target, account_id):
         raise AccountError(409, "codex_account_invalid_marker", {"account_id": account_id})
     return _account(account_id, target)
-
-
-def _cleanup_new_directory(target: Path) -> None:
-    marker = target / MARKER
-    try:
-        if marker.is_file() and not marker.is_symlink():
-            marker.unlink()
-        target.rmdir()
-    except OSError:
-        pass
-
-
-def create_account(name: str) -> Account:
-    name = _validate_name(name)
-    target = _account_home(name)
-    if _canonical(target) == _canonical(default_home()):
-        raise AccountError(409, "codex_account_conflict", {"account_id": name})
-    try:
-        target.mkdir(mode=0o700, exist_ok=False)
-    except FileExistsError:
-        raise AccountError(409, "codex_account_exists", {"account_id": name}) from None
-    except OSError as error:
-        raise AccountError(500, "codex_account_create_failed", {"account_id": name}) from error
-
-    try:
-        (target / MARKER).write_text(
-            json.dumps({"version": _MARKER_VERSION, "id": name}) + "\n",
-            encoding="utf-8",
-        )
-        # Sem isto o login gravaria a credencial no keyring do sistema, fora da pasta da conta.
-        (target / "config.toml").write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
-    except Exception as error:
-        _cleanup_new_directory(target)
-        raise AccountError(500, "codex_account_marker_failed", {"account_id": name}) from error
-    return _account(name, target)
-
-
-def _retirar_somente_leitura(func, path, exc: BaseException) -> None:
-    # No Windows, arquivo somente-leitura (pack do git em .tmp/marketplaces) recusa unlink.
-    if not isinstance(exc, PermissionError):
-        raise exc
-    try:
-        os.chmod(path, stat.S_IWRITE)
-    except OSError:
-        raise exc from None
-    func(path)
-
-
-def delete_account(account: Account) -> None:
-    """Apaga a pasta de uma conta ADICIONAL gerenciada. A padrao (~/.codex) nunca e apagada."""
-    if account.is_default or _canonical(account.home) == _canonical(default_home()):
-        raise AccountError(409, "codex_account_default_protected", {"account_id": account.id})
-    if not _managed(account.home, account.id):
-        raise AccountError(409, "codex_account_invalid_marker", {"account_id": account.id})
-    try:
-        shutil.rmtree(account.home, onexc=_retirar_somente_leitura)
-    except OSError as error:
-        raise AccountError(500, "codex_account_delete_failed", {"account_id": account.id}) from error
 
 
 def _under(path: Path, root: Path) -> bool:

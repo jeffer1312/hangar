@@ -10,6 +10,7 @@ import pytest
 
 from app import archive_providers as ap
 from app import codex_contas
+import codex_contas_apoio
 
 
 PI_SID = "602c251a-5233-42be-9b55-585c88e072f2"
@@ -165,7 +166,7 @@ def duas_contas_codex(tmp_path, monkeypatch):
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
     default = codex_contas.Account("default", tmp_path / ".codex", True)
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     paths = {}
     for account, text in ((default, "default"), (work, "work")):

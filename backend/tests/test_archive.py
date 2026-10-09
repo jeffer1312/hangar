@@ -8,6 +8,7 @@ from app import archive
 from app import archive_providers
 from app import codex_contas
 from app import worktrees
+import codex_contas_apoio
 
 
 SID = "11111111-1111-1111-1111-111111111111"
@@ -210,7 +211,7 @@ def test_archive_codex_filtra_a_conta_antes_do_limite(tmp_path, monkeypatch):
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
     default = codex_contas.Account("default", tmp_path / ".codex", True)
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     sid_default = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     sid_work = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
@@ -236,7 +237,7 @@ def test_archive_por_cwd_filtra_provider_antes_do_limite(tmp_path, monkeypatch):
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     sid = "cccccccc-cccc-cccc-cccc-cccccccccccc"
     path = work.home / "sessions" / "2026" / "09" / "09"
     path.mkdir(parents=True)

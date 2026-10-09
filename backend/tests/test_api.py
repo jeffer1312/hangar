@@ -76,6 +76,7 @@ def test_rejects_wrong_cookie(client):
 # ---------------------------------------------------------------------------
 from unittest.mock import ANY, patch
 from app.models import SessionInfo
+import codex_contas_apoio
 
 
 @pytest.fixture
@@ -2011,7 +2012,7 @@ def test_resume_archived_codex_encaminha_a_conta_da_origem(api_client, monkeypat
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     sid = "cccccccc-cccc-cccc-cccc-cccccccccccc"
     path = work.home / "sessions" / "2026" / "09" / "09"
     path.mkdir(parents=True)
@@ -2033,8 +2034,8 @@ def test_resume_archived_codex_recusa_conta_diferente_da_origem(api_client, monk
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
-    other = codex_contas.create_account("other")
+    work = codex_contas_apoio.create_account("work")
+    other = codex_contas_apoio.create_account("other")
     sid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
     path = work.home / "sessions" / "2026" / "09" / "09"
     path.mkdir(parents=True)

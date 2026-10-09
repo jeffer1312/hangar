@@ -12,6 +12,7 @@ from app import account_lifecycle, internal_api, runtime_coordinator
 from test_codex_contas_sync import isolated, fake_writer
 
 import pytest
+import codex_contas_apoio
 
 def test_prepare_callback_requires_current_operation_and_seeds_pending_account(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -56,7 +57,7 @@ def test_http_python_worker_blocks_delete_after_rust_restart(tmp_path, force_pen
     import urllib.request
     from tests.accounts_contract import PythonReference
     from tests.test_accounts_catalog import RustCatalog
-    reference = PythonReference(tmp_path, block_handlers=True)
+    reference = PythonReference(tmp_path)
     rust = RustCatalog(reference)
     try:
         barrier = reference.block("account_prepare")
@@ -112,7 +113,7 @@ def test_http_python_worker_blocks_delete_after_rust_restart(tmp_path, force_pen
 def test_http_claude_seed_preserves_configuration_and_does_not_publish_oauth(tmp_path):
     from tests.accounts_contract import PythonReference
     from tests.test_accounts_catalog import RustCatalog
-    reference = PythonReference(tmp_path, block_handlers=True)
+    reference = PythonReference(tmp_path)
     rust = RustCatalog(reference)
     try:
         source = tmp_path / ".claude"
@@ -144,7 +145,7 @@ def test_http_claude_seed_preserves_configuration_and_does_not_publish_oauth(tmp
 def test_http_invalid_main_configuration_does_not_publish_claude_account(tmp_path):
     from tests.accounts_contract import PythonReference
     from tests.test_accounts_catalog import RustCatalog
-    reference = PythonReference(tmp_path, block_handlers=True)
+    reference = PythonReference(tmp_path)
     rust = RustCatalog(reference)
     try:
         (tmp_path / ".claude.json").write_text("{invalid", encoding="utf-8")
@@ -248,7 +249,7 @@ def test_http_claude_validation_preserves_real_python_envelopes(tmp_path):
     from tests.accounts_contract import FIXTURES, PythonReference, normalize
     from tests.test_accounts_catalog import RustCatalog
     golden = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
-    reference = PythonReference(tmp_path / "native", block_handlers=True)
+    reference = PythonReference(tmp_path / "native")
     rust = RustCatalog(reference)
     try:
         for expected in golden["claude_validation_envelopes"]:
@@ -264,7 +265,7 @@ def test_http_pretrust_only_on_explicit_valid_cwd(tmp_path):
     from tests.accounts_contract import PythonReference
     from tests.test_accounts_catalog import RustCatalog
     import urllib.parse
-    reference = PythonReference(tmp_path, block_handlers=True)
+    reference = PythonReference(tmp_path)
     rust = RustCatalog(reference)
     try:
         project = tmp_path / "project"
@@ -290,7 +291,6 @@ def test_http_pretrust_only_on_explicit_valid_cwd(tmp_path):
 
 async def test_valid_windows_toml_resource_is_prepared_without_changing_auth(isolated, fake_writer):
     import tomllib
-    from app import codex_contas_sync as sync
     _, source, account = isolated
     hook = source / "hooks/probe.py"
     hook.parent.mkdir()
@@ -301,7 +301,7 @@ async def test_valid_windows_toml_resource_is_prepared_without_changing_auth(iso
     (source / "config.toml").write_text('model = "high"\n', encoding="utf-8")
     (source / "auth.json").write_text('{"token":"synthetic-source"}', encoding="utf-8")
     (account.home / "auth.json").write_text('{"token":"synthetic-own"}', encoding="utf-8")
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
     assert result["status"] == "ready", result
     data = tomllib.loads((account.home / "agents/probe.toml").read_text(encoding="utf-8"))
     assert data["config_file"] == str(account.home / "hooks/probe.py")
@@ -316,7 +316,7 @@ def test_http_codex_catalog_reads_native_identity_with_real_preparation_status(t
     system = root / ".codex/skills/.system"
     system.mkdir(parents=True)
     (system / "fixture.md").write_text("Configuração compartilhada de referência", encoding="utf-8")
-    upstream = PythonReference(root, block_handlers=True)
+    upstream = PythonReference(root)
     rust = RustCatalog(upstream)
     try:
         response = rust.request("GET", "/api/codex-contas")
@@ -332,7 +332,7 @@ def test_http_codex_catalog_reads_native_identity_with_real_preparation_status(t
 def test_http_codex_catalog_matches_empty_settings_with_equivalent_native_transport(tmp_path):
     from tests.accounts_contract import PythonReference, FIXTURES, normalize
     from tests.test_accounts_catalog import RustCatalog
-    reference = PythonReference(tmp_path, block_handlers=True)
+    reference = PythonReference(tmp_path)
     rust = RustCatalog(reference, native_fixture=True)
     try:
         expected = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))["codex_catalog"]
