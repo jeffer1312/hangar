@@ -60,6 +60,9 @@ libc.workspace = true
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
+
 [dev-dependencies]
 # Relógio pausado: as rodadas do `state::Monitor` contadas sem esperar o tempo real.
 tokio = { workspace = true, features = ["test-util"] }

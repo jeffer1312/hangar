@@ -1,5 +1,6 @@
 use super::model::{ConfigSnapshot, Profile, Transcription, TranscriptionError};
 use super::{cloud::{self, AttemptFailure}, quota::{self, Quota, Verdict}};
+use super::local::LocalWhisper;
 use bytes::Bytes;
 use tokio::sync::{RwLock, Mutex};
 use std::time::Duration;
@@ -8,11 +9,12 @@ pub struct TranscriptionService {
     snapshot: RwLock<ConfigSnapshot>,
     client: reqwest::Client,
     quota: Mutex<Quota>,
+    local: LocalWhisper,
 }
 
 impl Default for TranscriptionService {
     fn default() -> Self {
-        Self { snapshot: RwLock::new(ConfigSnapshot::default()), quota: Mutex::new(Quota::default()),
+        Self { snapshot: RwLock::new(ConfigSnapshot::default()), quota: Mutex::new(Quota::default()), local: LocalWhisper::default(),
             client: reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
                 .user_agent("hangar/1.0").connect_timeout(Duration::from_secs(10))
                 .build().expect("Cliente HTTP de transcrição com parâmetros válidos") }
@@ -21,6 +23,7 @@ impl Default for TranscriptionService {
 
 impl TranscriptionService {
     pub async fn configure(&self, snapshot: ConfigSnapshot) {
+        self.local.reconcile(&snapshot.providers).await;
         self.quota.lock().await.load(&snapshot.state_path);
         *self.snapshot.write().await = snapshot;
     }
@@ -71,6 +74,8 @@ impl TranscriptionService {
             let name = cloud::display_name(&provider);
             let result = if matches!(provider.kind.as_str(), "openai" | "elevenlabs") {
                 cloud::transcribe(&self.client, &provider, content.clone(), filename.as_deref(), &snapshot.vocabulary, timeout).await
+            } else if provider.kind == "whisper_cpp" {
+                self.local.transcribe(&provider, content.clone(), filename.as_deref(), &snapshot.vocabulary, &snapshot.state_path, timeout).await
             } else {
                 Err(AttemptFailure::unavailable("transcription_local_unavailable", "O serviço local de transcrição não está disponível."))
             };
@@ -106,12 +111,14 @@ impl TranscriptionService {
         let quota = self.quota.lock().await;
         snapshot.providers.iter().map(|p| {
             let wait = quota.wait(&p.id);
+            let (state, error) = self.local.status(&p.id);
             serde_json::json!({"id":p.id,"kind":p.kind,"name":cloud::display_name(p),
-                "waiting_until":wait.as_ref().map(|w| w.until), "reason":wait.and_then(|w| w.reason)})
+                "waiting_until":wait.as_ref().map(|w| w.until), "reason":wait.and_then(|w| w.reason),
+                "state":if p.kind == "whisper_cpp" {Some(state)} else {None}, "error":error})
         }).collect()
     }
 
     pub async fn shutdown(&self) {
-        // O processo local passa a ser encerrado aqui quando configurado.
+        self.local.shutdown().await;
     }
 }

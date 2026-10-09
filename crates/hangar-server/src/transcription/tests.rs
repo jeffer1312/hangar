@@ -100,3 +100,69 @@ async fn failure_does_not_create_an_unconfigured_external_fallback() {
     assert!(failure.detail.contains("Configurado"));
     assert!(failure.detail.contains("401"));
 }
+
+const WAV: &[u8] = b"RIFF\x26\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00data\x02\x00\x00\x00\x00\x00";
+
+async fn installed_whisper() -> (tempfile::TempDir, ProviderConfig) {
+    tokio::task::spawn_blocking(|| {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("Whisper instalado");
+        std::fs::create_dir(&directory).unwrap();
+        let program = directory.join(if cfg!(windows) { "whisper-server.exe" } else { "whisper-server" });
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/whisper_server.rs");
+        assert!(std::process::Command::new("rustc").args(["--edition=2024", "-o"])
+            .arg(&program).arg(source).status().unwrap().success());
+        let model = directory.join("ggml-model.bin");
+        std::fs::write(&model, b"fixture").unwrap();
+        let provider = ProviderConfig { id: "whisper".into(), kind: "whisper_cpp".into(), language: "pt".into(),
+            executable_path: program.to_string_lossy().into_owned(), model_path: model.to_string_lossy().into_owned(),
+            ..Default::default() };
+        (temp, provider)
+    }).await.unwrap()
+}
+
+#[tokio::test]
+async fn local_process_is_reused_and_stopped_by_its_owner() {
+    let (temp, provider) = installed_whisper().await;
+    let service = TranscriptionService::default();
+    service.configure(ConfigSnapshot { providers: vec![provider.clone()],
+        state_path: temp.path().join("wait.json").to_string_lossy().into_owned(), ..Default::default() }).await;
+    let (first, second) = tokio::join!(
+        service.transcribe(Bytes::from_static(WAV), Some("fala.wav".into()), Profile::Dictation),
+        service.transcribe(Bytes::from_static(WAV), Some("fala.wav".into()), Profile::Dictation),
+    );
+    assert_eq!(first.unwrap().text, "Transcrição local em português.");
+    assert_eq!(second.unwrap().text, "Transcrição local em português.");
+    let starts = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("starts")).unwrap();
+    assert_eq!(starts.lines().count(), 1);
+    service.shutdown().await;
+    assert!(!temp.path().join("transcription-local.json").exists());
+}
+
+#[tokio::test]
+async fn missing_local_model_is_a_visible_failure() {
+    let (temp, mut provider) = installed_whisper().await;
+    provider.model_path = temp.path().join("modelo-ausente.bin").to_string_lossy().into_owned();
+    let service = TranscriptionService::default();
+    service.configure(ConfigSnapshot { providers: vec![provider], ..Default::default() }).await;
+    let error = service.transcribe(Bytes::from_static(WAV), None, Profile::Dictation).await.unwrap_err();
+    assert_eq!(error.code, "whisper_model_missing");
+}
+
+#[tokio::test]
+async fn missing_converter_does_not_forward_local_audio_to_cloud() {
+    let (_temp, mut provider) = installed_whisper().await;
+    provider.converter_path = "conversor-que-nao-existe".into();
+    let service = TranscriptionService::default();
+    service.configure(ConfigSnapshot { providers: vec![provider], ..Default::default() }).await;
+    let error = service.transcribe(Bytes::from_static(b"audio-webm"), Some("fala.webm".into()), Profile::Dictation).await.unwrap_err();
+    assert_eq!(error.code, "audio_converter_missing");
+}
+
+#[tokio::test]
+async fn health_port_must_belong_to_the_started_process() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    assert!(super::process::owns_port(std::process::id(), port).await.unwrap());
+    assert!(!super::process::owns_port(0, port).await.unwrap());
+}
