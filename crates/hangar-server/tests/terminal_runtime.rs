@@ -1233,13 +1233,14 @@ async fn the_stall_backoff_does_not_delay_the_focus_return() {
     *f.io.ghost.lock().unwrap()="rascunho".into();
     f.unknown.store(true,std::sync::atomic::Ordering::Release);
     f.focus_plugin.store(true,std::sync::atomic::Ordering::Release);
-    let h=f.start_returning(broadcast::channel(128).0,Duration::from_secs(30),Duration::from_millis(600));
+    let h=f.start_returning(broadcast::channel(128).0,Duration::from_secs(30),Duration::from_millis(1100));
     let started=std::time::Instant::now();
     assert_eq!(h.command(f.command("preso","Com @foco no mod")).await.unwrap().payload["code"],"mods_focus");
     f.wait_for("a devolução pelo plugin",||published(&f).contains(&"focus".to_string())).await;
     let waited=started.elapsed();
-    // Sem a correção, a tentativa depois dos 600 ms só saía perto de 1,1 s (15, 30, 60… ms de espera).
-    assert!(waited>=Duration::from_millis(600) && waited<Duration::from_millis(900),"devolução em {waited:?}");
+    // Sem a correção, as tentativas da espera crescente caem perto de 1,07 s e de 2 s, e a devolução dos 1,1 s
+    // esperava a de 2 s. O teto de 1,8 s deixa folga para o CI do Windows, que atrasa o primeiro envio.
+    assert!(waited>=Duration::from_millis(1100) && waited<Duration::from_millis(1800),"devolução em {waited:?}");
     h.stop().await.unwrap();
 }
 
