@@ -147,7 +147,8 @@ struct Row {
     cookie: Option<bool>,
     /// Entrar ou Renovar login, quando a conta Claude precisa.
     sign_in: Option<String>,
-    can_sign_out: bool,
+    /// Rota do POST de sair, conforme o tipo.
+    sign_out: Option<Vec<String>>,
     /// Rota do DELETE conforme o tipo, o prazo dele e o texto da confirmação.
     remove: Option<(Vec<String>, u64, &'static str)>,
 }
@@ -405,7 +406,12 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
     Row {
         id: c.id.clone(), name: c.name.clone(), label: c.natural.clone(), natural: c.natural.clone(), alias: c.alias.clone().unwrap_or_default(),
         active: c.active, glyph, subtitle, chips, plan, login_days: if c.kind == "claude" { c.login_days(now) } else { None }, resets, quota, codex, reset: codex::reset_offer(c, now), edit, cookie: c.accepts_cookie.then_some(c.cookie_set), sign_in,
-        can_sign_out: c.kind == "claude" && c.managed != Some(false) && logged == Some(true) && !c.expired(),
+        sign_out: match c.kind.as_str() {
+            "claude" if c.managed != Some(false) && logged == Some(true) && !c.expired() =>
+                Some(vec!["claude-configs".into(), c.natural.clone(), "logout".into()]),
+            "codex" if logged == Some(true) => c.codex_account.clone().map(|id| vec!["codex-contas".into(), id, "logout".into()]),
+            _ => None,
+        },
         remove,
     }
 }
@@ -963,7 +969,7 @@ impl Hangar {
                 QuotaView::Nothing => el,
             });
         let this = cx.entity().downgrade();
-        let (id, sign_out, remove, cookie_set) = (row.id.clone(), row.can_sign_out, row.remove.is_some(), row.cookie == Some(true));
+        let (id, sign_out, remove, cookie_set) = (row.id.clone(), row.sign_out.is_some(), row.remove.is_some(), row.cookie == Some(true));
         // Uma escrita em voo (nome, saída, remoção, login) segura as outras em toda linha.
         let busy = self.accounts_busy();
         let menu_title = row.name.clone();
@@ -1247,7 +1253,21 @@ mod tests {
         let row = build_row(&expired, &HashMap::new(), false, now);
         assert_eq!(row.sign_in, Some(tr("accounts_sign_in")));
         assert!(matches!(row.quota, QuotaView::Note(ref t) if *t == tr("accounts_quota_live_session")));
-        assert!(!row.can_sign_out);
+        assert!(row.sign_out.is_none());
+    }
+
+    #[test]
+    fn codex_signs_out_through_its_own_route_only_when_logged_in() {
+        let now = 1_000_000.;
+        let logged = credential(json!({"id": "codex:/c", "tipo": "codex", "nome": "c", "codex_account": "c", "auth_method": "oauth",
+            "login": {"estado": "ok", "loggedIn": true}}));
+        let row = build_row(&logged, &HashMap::new(), false, now);
+        assert_eq!(row.sign_out, Some(vec!["codex-contas".to_owned(), "c".to_owned(), "logout".to_owned()]));
+        let revoked = credential(json!({"id": "codex:/c", "tipo": "codex", "nome": "c", "codex_account": "c", "auth_method": "none",
+            "login": {"estado": "ok", "loggedIn": false}}));
+        let row = build_row(&revoked, &HashMap::new(), false, now);
+        assert!(row.sign_out.is_none());
+        assert!(row.codex.is_some());
     }
 
     #[test]

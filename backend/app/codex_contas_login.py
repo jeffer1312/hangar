@@ -299,9 +299,16 @@ class CodexContasLogin:
             result = {"method": "unknown", "status": "unavailable", "email": None, "plan": None,
                       "reason": "cli_missing"}
         except (CodexNativoErro, OSError, RuntimeError, ValueError) as exc:
-            diag.registrar("conta.auth.falhou", "erro", provider="codex", etapa="consultar_auth",
-                           conta_id=diag.conta_id(key), **diag.erro_campos(exc))
-            result = {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
+            # Login revogado é resposta, não falha de leitura: a tela oferece entrar de novo.
+            if isinstance(exc, CodexNativoErro) and (exc.data or {}).get("auth_error") == "unauthorized":
+                diag.registrar("conta.auth.revogada", "aviso", provider="codex", etapa="consultar_auth",
+                               conta_id=diag.conta_id(key))
+                result = {"method": "none", "status": "disconnected", "email": None, "plan": None,
+                          "reason": "login_revoked"}
+            else:
+                diag.registrar("conta.auth.falhou", "erro", provider="codex", etapa="consultar_auth",
+                               conta_id=diag.conta_id(key), **diag.erro_campos(exc))
+                result = {"method": "unknown", "status": "unavailable", "email": None, "plan": None}
         current_signature = self._auth_signature(account)
         if result["status"] == "unavailable":
             diag.registrar("conta.auth.indisponivel", "aviso", provider="codex", etapa="consultar_auth",
@@ -596,6 +603,33 @@ class CodexContasLogin:
                 self._preparation_results.pop(key, None)
         finally:
             reservation.release()
+
+    @diag.rastrear("conta.sair", provider="codex")
+    async def sign_out(self, account: accounts.Account) -> dict:
+        # Mesma trava do login: tirar o login de baixo de uma sessão viva a quebraria. Sem o
+        # `_prepared` do login: sair vale para qualquer armazenamento da credencial.
+        reservation = self._reserve(account, "login")
+        key = self._key(account)
+        auth = None
+        try:
+            async with self.native(Path.home(), account.home, account=account) as native:
+                await native.request("account/logout", None, timeout=_REQUEST_TIMEOUT)
+                # Saiu, mas a releitura falhou: é "não confirmado", não "falhou".
+                try:
+                    auth = await self._read_auth_native(native)
+                except (CodexNativoErro, OSError, RuntimeError, ValueError):
+                    pass
+        except (CodexNativoErro, OSError, RuntimeError, ValueError) as exc:
+            diag.registrar("conta.sair.falhou", "erro", provider="codex", conta_id=diag.conta_id(key),
+                           **diag.erro_campos(exc))
+            raise accounts.AccountError(502, "codex_account_sign_out_failed", {"account_id": account.id}) from exc
+        finally:
+            reservation.release()
+            self._invalidate_auth(key)
+            self._indisponivel.pop(key, None)
+        if auth is None or auth.get("method") != "none":
+            raise accounts.AccountError(502, "codex_account_sign_out_unconfirmed", {"account_id": account.id})
+        return auth
 
     @diag.rastrear("conta.criar", provider="codex")
     async def create_account(self, name: str) -> dict:
