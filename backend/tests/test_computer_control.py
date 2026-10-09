@@ -13,7 +13,10 @@ from app import computer_control as cc
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
+    from app import runtime_config as rc
+
     monkeypatch.setattr(cc.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(rc, "_backend_config_base", lambda: tmp_path)
     conta = tmp_path / ".claude-x"
     conta.mkdir()
     (conta / ".claude.json").write_text(json.dumps({"oauthAccount": {"a": 1}}), encoding="utf-8")
@@ -33,7 +36,7 @@ def _pedido(home, **extra):
     projeto = home / "Projetos" / cc.NAME
     return {"enabled": True, "project_dir": str(projeto), "agent_config": str(projeto / "alvo-agent.json"),
             "llm_url": "http://x/v1/chat/completions", "llm_model": "m1", "llm_effort": "high",
-            "llm_key": "chave-do-llm-123", "jev_key": "chave-do-jev-456", **extra}
+            "llm_key": "chave-do-llm-123", **extra}
 
 
 def _entrada(p):
@@ -41,6 +44,9 @@ def _entrada(p):
 
 
 def test_liga_desliga_e_religa_sem_perder_a_configuracao(home):
+    from app import runtime_config as rc
+
+    rc.aplicar({"jev_api_key": "chave-do-jev-456"})
     principal, conta = home / ".claude.json", home / ".claude-x" / ".claude.json"
     cc.save(_pedido(home))
     assert _entrada(principal) == _entrada(conta)
@@ -51,18 +57,22 @@ def test_liga_desliga_e_religa_sem_perder_a_configuracao(home):
     assert _entrada(principal) is None and _entrada(conta) is None
     assert estado["enabled"] is False and estado["llm_model"] == "m1"   # a tela não perde os campos
 
-    cc.save(_pedido(home, llm_key=None, jev_key=None))   # chave vazia = mantém a guardada
+    cc.save(_pedido(home, llm_key=None))   # chave vazia = mantém a guardada
     env = _entrada(conta)["env"]
     assert env["LLM_PROXY_KEY"] == "chave-do-llm-123" and env["TYPESAFE_API_KEY"] == "chave-do-jev-456"
+    assert env["JEV_ENDPOINT"] == rc.JEV_TYPESAFE_URL and env["JEV_MODEL"] == "jev-latest"
 
 
 def test_estado_nunca_devolve_a_chave_inteira(home):
+    from app import runtime_config as rc
+
+    rc.aplicar({"jev_api_key": "chave-do-jev-456"})
     cc.save(_pedido(home))
     texto = json.dumps(cc.state())
     assert "chave-do-llm-123" not in texto and "chave-do-jev-456" not in texto
 
 
-def test_cria_alvo_ssh_e_recusa_repetido_e_local_fora_do_windows(home, monkeypatch):
+def test_cria_alvo_ssh_e_recusa_repetido_e_local_sem_programa(home, monkeypatch):
     projeto = str(home / "Projetos" / cc.NAME)
     estado = cc.create_target({"project_dir": projeto, "name": "delphi-03", "transport": "ssh",
                                "host": "delphi-03", "proxy_command": "", "request_timeout": 40})
@@ -73,6 +83,7 @@ def test_cria_alvo_ssh_e_recusa_repetido_e_local_fora_do_windows(home, monkeypat
         cc.create_target({"project_dir": projeto, "name": "delphi-03", "transport": "ssh", "host": "x"})
     assert e.value.code == "erro_computer_control_target_exists"
     monkeypatch.setattr(cc.os, "name", "posix")
+    (home / "Projetos" / cc.NAME / "target" / "release" / cc.NAME).unlink()
     with pytest.raises(cc.ComputerControlError) as e:
         cc.create_target({"project_dir": projeto, "name": "eu", "transport": "local"})
     assert e.value.code == "erro_computer_control_local_only_windows"
@@ -128,7 +139,7 @@ def test_first_install_without_checkout_creates_package_target(tmp_path, monkeyp
         b'{"tag_name":"v1.0.0"}' if "api.github.com" in url else b"MZ-agent"))
     assert cc.state()["mode"] == "package" and not cc.state()["package_exists"]
     if configure_key:
-        rc.aplicar({"jev_windows_api_key": "windows-secret-1234"})
+        rc.aplicar({"jev_api_key": "windows-secret-1234"})
         assert not cc.state()["enabled"]
         assert not cc._main_file().exists()
 
@@ -159,74 +170,72 @@ def test_installed_package_does_not_override_existing_local_entry(home):
     assert (home / "Projetos" / cc.NAME / "still-local-agent.json").is_file()
 
 
-def test_windows_key_updates_only_key_in_active_and_parked_entries(home, monkeypatch):
+def test_jev_config_reaches_active_and_parked_entries_only_in_jev_vars(home):
     from app import runtime_config as rc
 
-    monkeypatch.setattr(rc, "_backend_config_base", lambda: home)
     cc.save(_pedido(home))
     cc.save({"enabled": False})
     cc.save(_pedido(home))
     before = {path: json.loads(path.read_text()) for path in [*cc._config_files(), cc._parked_file()]}
-    rc.aplicar({"jev_windows_api_key": "new-windows-key-7890", "jev_api_key": "openrouter-secret"})
+    rc.aplicar({"jev_api_key": "sk-or-segredo"})
     for path, original in before.items():
         entry = original if path == cc._parked_file() else original["mcpServers"][cc.NAME]
-        entry["env"]["TYPESAFE_API_KEY"] = "new-windows-key-7890"
+        entry["env"].update({"TYPESAFE_API_KEY": "sk-or-segredo", "JEV_ENDPOINT": rc.JEV_OPENROUTER_URL,
+                             "JEV_MODEL": "~typesafe/jev-latest"})
         assert json.loads(path.read_text()) == original
-    assert "jev_windows_api_key" not in json.loads(rc._caminho().read_text())
-    state = rc.estado()["jev_windows_api_key"]
-    assert state["definido"] and state["valor"] != "new-windows-key-7890"
-    for value in ("", "  ", state["valor"]):
-        rc.aplicar({"jev_windows_api_key": value})
-        assert cc.jev_key() == "new-windows-key-7890"
-    cc.save({"enabled": False})
-    rc.aplicar({"jev_windows_api_key": "parked-windows-key"})
-    assert not cc.state()["enabled"] and cc.jev_key() == "parked-windows-key"
-    assert "parked-windows-key" not in json.dumps(rc.estado())
+    state = cc.state()
+    assert state["jev_key_set"] and state["jev_model"] == "~typesafe/jev-latest"
+    assert "sk-or-segredo" not in json.dumps(state) and "jev_windows_api_key" not in rc.estado()
+    rc.aplicar({"jev_model": "typesafe/jev-1.13-20260917"})
+    assert _entrada(cc._main_file())["env"]["JEV_MODEL"] == "typesafe/jev-1.13-20260917"
+    rc.aplicar({}, remover={"jev_api_key"})
+    assert not {"TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL"} & _entrada(cc._main_file())["env"].keys()
 
 
-def test_windows_key_reads_legacy_settings_without_copying_global_key(home, monkeypatch):
+def test_migrate_turns_the_computer_use_key_into_the_jev_key_once(home):
     from app import runtime_config as rc
 
-    monkeypatch.setattr(rc, "_backend_config_base", lambda: home)
-    rc.aplicar({"jev_api_key": "openrouter-secret"})
-    assert not rc.estado()["jev_windows_api_key"]["definido"]
+    cc.save(_pedido(home))
+    for path in cc._config_files():
+        data = json.loads(path.read_text())
+        data["mcpServers"][cc.NAME]["env"]["TYPESAFE_API_KEY"] = "old-windows-key"
+        path.write_text(json.dumps(data))
+    cc.migrate_jev()
+    assert rc.get("jev_api_key") == "old-windows-key"
+    assert _entrada(cc._main_file())["env"]["JEV_MODEL"] == "jev-latest"
+    rc.aplicar({"jev_api_key": "page-key"})
+    cc.migrate_jev()
+    assert rc.get("jev_api_key") == "page-key"
+    assert _entrada(cc._main_file())["env"]["TYPESAFE_API_KEY"] == "page-key"
+
+
+def test_migrate_reads_legacy_settings_key(home):
+    from app import runtime_config as rc
+
     settings = home / ".claude" / "settings.json"
     settings.parent.mkdir()
     settings.write_text(json.dumps({"env": {"TYPESAFE_API_KEY": "legacy-typesafe-key"}}))
-    assert cc.jev_key() == "legacy-typesafe-key"
-    rc.aplicar({"jev_windows_api_key": rc.estado()["jev_windows_api_key"]["valor"]})
-    assert not cc._parked_file().exists()
+    cc.migrate_jev()
+    assert rc.get("jev_api_key") == "legacy-typesafe-key"
+    assert not cc._parked_file().exists()   # sem MCP configurado, nada é criado
 
 
 @pytest.mark.parametrize("relative,content", [
     (".claude.json", "{invalid-secret"),
     (".claude.json", '{"mcpServers": "invalid-secret"}'),
     (".hangar/computer-control.json", "[\"invalid-secret\"]"),
-    (".claude/settings.json", "{invalid-secret"),
 ])
-def test_invalid_windows_config_keeps_other_settings_available(home, monkeypatch, relative, content):
+def test_invalid_computer_use_config_keeps_jev_settings_saved(home, relative, content):
     from app import runtime_config as rc
 
-    monkeypatch.setattr(rc, "_backend_config_base", lambda: home)
     path = home / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
-    state = rc.estado()
-    assert "upload_retention_days" in state
-    assert state["jev_windows_api_key"]["erro"]
-    assert "invalid-secret" not in json.dumps(state)
-    with pytest.raises(ValueError, match="jev_windows_api_key"):
-        rc.aplicar({"jev_windows_api_key": "replacement-secret"})
+    assert "upload_retention_days" in rc.estado()
+    with pytest.raises(ValueError, match="Computer Use"):
+        rc.aplicar({"jev_api_key": "replacement-secret"})
+    assert rc.get("jev_api_key") == "replacement-secret"
     assert path.read_text() == content
-
-
-def test_invalid_windows_key_type_does_not_write_other_changes(home, monkeypatch):
-    from app import runtime_config as rc
-
-    monkeypatch.setattr(rc, "_backend_config_base", lambda: home)
-    with pytest.raises(ValueError, match="jev_windows_api_key: esperado texto"):
-        rc.aplicar({"jev_windows_api_key": True, "upload_retention_days": 7})
-    assert not cc._parked_file().exists() and not rc._caminho().exists()
 
 
 @pytest.fixture
@@ -498,3 +507,13 @@ def test_install_flow_with_real_http_and_config_files(home, monkeypatch, binary_
         finally:
             server.shutdown()
             worker.join(timeout=5)
+
+
+def test_linux_local_target_runs_the_binary_as_agent(home, monkeypatch):
+    projeto = home / "Projetos" / cc.NAME
+    monkeypatch.setattr(cc.os, "name", "posix")
+    binary = projeto / "target" / "release" / cc.NAME
+    cc.create_target({"project_dir": str(projeto), "name": "este", "transport": "local"})
+    cfg = json.loads((projeto / "este-agent.json").read_text())
+    assert cfg["command"] == [str(binary), "agent"]
+    assert next(t for t in cc.state()["targets"] if t["name"] == "este")["os"] == "linux"

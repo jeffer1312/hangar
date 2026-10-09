@@ -188,6 +188,12 @@ def main():
     # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
     migracao_sidecars.migrar(_state_dirs)
     orq_politica.migrar()
+    # Uma configuração do Jev: a chave antiga do Computer Use vira a dela e o MCP recebe endereço e modelo.
+    try:
+        from app import computer_control
+        computer_control.migrate_jev()
+    except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
+        print(f"[hangar] AVISO: configuração do Jev não chegou ao Computer Use ({e})")
     # Ponte de skills (pi/kimi/codex) — rebuilda as fazendas de symlinks a partir das fontes do
     # Claude. Aqui e no installer: bump de versão de plugin muda o caminho do cache e link velho
     # fica pendurado; fail-soft como os hooks, um erro aqui não pode impedir o backend de subir.

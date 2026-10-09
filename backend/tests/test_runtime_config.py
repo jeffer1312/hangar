@@ -245,6 +245,16 @@ def test_env_jev_ligado_leva_endpoint_e_modelo_do_jev():
     assert env["JEV_MODEL"] == "typesafe/jev-1.13-20260917"
 
 
+def test_env_jev_resolve_o_provedor_pela_chave():
+    rc.aplicar({"jev_api_key": "sk-or-x", "jev_endpoint": "", "jev_model": "typesafe/jev-latest"})
+    env = rc.env_jev(True)
+    assert env["JEV_ENDPOINT"] == rc.JEV_OPENROUTER_URL
+    assert env["JEV_MODEL"] == "~typesafe/jev-latest", "sem o til o OpenRouter recusa"
+    rc.aplicar({"jev_api_key": "apik-x", "jev_model": ""})
+    env = rc.env_jev(True)
+    assert (env["JEV_ENDPOINT"], env["JEV_MODEL"]) == (rc.JEV_TYPESAFE_URL, "jev-latest")
+
+
 def test_env_jev_desligado_nao_leva_endpoint_nem_modelo():
     rc.aplicar({"jev_endpoint": "https://openrouter.ai/api/alpha/decisions", "jev_model": "m"})
     assert rc.env_jev(False) == {"HANGAR_JEV": "off"}

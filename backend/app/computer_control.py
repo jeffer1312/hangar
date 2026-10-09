@@ -254,40 +254,65 @@ def _cliproxy_running() -> bool:
         return False
 
 
-def _jev_from_settings() -> str:
-    env = _read(Path.home() / ".claude" / "settings.json").get("env") or {}
-    v = env.get("TYPESAFE_API_KEY") if isinstance(env, dict) else None
-    return v if isinstance(v, str) else ""
+JEV_VARS = ("TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL")
 
 
-def jev_key() -> str:
-    env = (_known_entry() or {}).get("env") or {}
+def _jev_env() -> dict[str, str]:
+    from app import runtime_config
+    return runtime_config.jev_destino_env()
+
+
+def _with_jev(env: dict, jev: dict[str, str]) -> dict:
+    return {**{k: v for k, v in env.items() if k not in JEV_VARS}, **jev}
+
+
+def _env_of(entry: dict, where: str) -> dict:
+    env = entry.get("env") or {}
     if not isinstance(env, dict):
-        raise ComputerControlError(500, "erro_computer_control_read", "env do MCP Windows não é um objeto JSON")
-    key = env.get("TYPESAFE_API_KEY")
-    return key if isinstance(key, str) and key else _jev_from_settings()
+        raise ComputerControlError(500, "erro_computer_control_read", f"env em {where} não é um objeto JSON")
+    return env
 
 
-def save_jev_key(key: str) -> None:
-    """Atualiza só a chave, sem ligar o MCP nem substituir ajustes de cada conta."""
+def sync_jev() -> None:
+    """Leva a configuração do Jev ao MCP, ativo ou guardado, sem ligar nem mexer no resto do env."""
+    jev = _jev_env()
     pending = []
     for path in _config_files():
         entry = _entry(path)
         if entry is not None:
-            data = _read(path)
-            env = entry.get("env") or {}
-            if not isinstance(env, dict):
-                raise ComputerControlError(500, "erro_computer_control_read", f"env em {path} não é um objeto JSON")
-            data["mcpServers"][NAME] = {**entry, "env": {**env, "TYPESAFE_API_KEY": key}}
-            pending.append((path, data))
+            env = _env_of(entry, str(path))
+            if _with_jev(env, jev) != env:
+                data = _read(path)
+                data["mcpServers"][NAME] = {**entry, "env": _with_jev(env, jev)}
+                pending.append((path, data))
     parked = _read(_parked_file())
-    env = parked.get("env") or {}
-    if not isinstance(env, dict):
-        raise ComputerControlError(500, "erro_computer_control_read", "env do MCP Windows guardado não é um objeto JSON")
-    if parked or not pending:
-        _park({**parked, "env": {**env, "TYPESAFE_API_KEY": key}})
+    if parked:
+        env = _env_of(parked, str(_parked_file()))
+        if _with_jev(env, jev) != env:
+            _park({**parked, "env": _with_jev(env, jev)})
     for path, data in pending:
         _write(path, data)
+
+
+def migrate_jev() -> None:
+    """Chave que só existia no MCP (ou no `env` do settings.json) passa a ser a do Jev, uma vez;
+    depois disso o MCP só recebe a configuração única."""
+    from app import runtime_config
+    if not str(runtime_config.get("jev_api_key") or "").strip():
+        old = ((_known_entry() or {}).get("env") or {}).get("TYPESAFE_API_KEY")
+        if not (isinstance(old, str) and old.strip()):
+            settings_env = _read(Path.home() / ".claude" / "settings.json").get("env")
+            old = settings_env.get("TYPESAFE_API_KEY") if isinstance(settings_env, dict) else ""
+        if isinstance(old, str) and old.strip():
+            runtime_config.aplicar({"jev_api_key": old.strip()})
+            _log.info("computer-control: chave do Jev do Computer Use virou a configuração única do Jev")
+            return
+    old = ((_known_entry() or {}).get("env") or {}).get("TYPESAFE_API_KEY") or ""
+    new = _jev_env().get("TYPESAFE_API_KEY", "")
+    if old and new and old != new:
+        _log.warning("computer-control: a chave do Jev do Computer Use (…%s) foi trocada pela da página Jev (…%s)",
+                     _tail(old), _tail(new))
+    sync_jev()
 
 
 def _tail(key: str) -> str:
@@ -307,8 +332,11 @@ def _targets(project: Path) -> list[dict]:
         except (OSError, ValueError):
             cfg = {}
         cfg = cfg if isinstance(cfg, dict) else {}
+        transport = cfg.get("transport", "local")
+        # Por SSH só há agente de Windows; o local é o sistema desta máquina.
+        system = "windows" if transport == "ssh" or os.name == "nt" else "linux"
         out.append({"name": p.name.removesuffix("-agent.json"), "path": str(p),
-                    "transport": cfg.get("transport", "local"), "host": cfg.get("host", "")})
+                    "transport": transport, "host": cfg.get("host", ""), "os": system})
     return out
 
 
@@ -338,6 +366,14 @@ def _local_project(entry: dict | None) -> Path:
     return Path.home() / "Projetos" / NAME
 
 
+def _linux_binary(entry: dict | None, project: Path) -> Path | None:
+    """No Linux o agente desta máquina é o próprio binário (`<binário> agent`), instalado ou compilado."""
+    if os.name == "nt":
+        return None
+    binary = _package_binary() if _mode(entry) == "package" else _local_binary(project)
+    return binary if binary.is_file() else None
+
+
 def _where_targets(entry: dict | None, project_dir: str = "") -> tuple[Path, Path]:
     """(pasta dos *-agent.json, windows-agent.exe) conforme o modo."""
     if _mode(entry) == "package":
@@ -349,7 +385,8 @@ def _where_targets(entry: dict | None, project_dir: str = "") -> tuple[Path, Pat
 def create_target(body: dict) -> dict:
     """Cria `<nome>-agent.json` na pasta dos alvos. SSH aponta pra um Windows na rede; local é o
     próprio Windows onde este Hangar roda."""
-    project, agent_exe = _where_targets(_known_entry(), str(body.get("project_dir") or "").strip())
+    known = _known_entry()
+    project, agent_exe = _where_targets(known, str(body.get("project_dir") or "").strip())
     if not project.is_dir():
         raise ComputerControlError(400, "erro_computer_control_dir",
                                    f"{project} não tem target/release/hangar-computer-control (rode cargo build --release)", dir=str(project))
@@ -366,10 +403,14 @@ def create_target(body: dict) -> dict:
                                    name=name)
     cfg: dict
     if body.get("transport") == "local":
-        if os.name != "nt":
-            raise ComputerControlError(400, "erro_computer_control_local_only_windows",
-                                       "este computador só pode ser alvo quando o Hangar roda no Windows")
-        cfg = {"transport": "local", "command": [str(agent_exe)]}
+        if os.name == "nt":
+            cfg = {"transport": "local", "command": [str(agent_exe)]}
+        else:
+            binary = _linux_binary(known, project)
+            if binary is None:
+                raise ComputerControlError(400, "erro_computer_control_local_only_windows",
+                                           "instale o programa antes de cadastrar este computador")
+            cfg = {"transport": "local", "command": [str(binary), "agent"], "request_timeout": 15}
     else:
         cfg = {"transport": "ssh", "host": _check_host(str(body.get("host") or "")), "agent_path": str(agent_exe)}
         proxy = str(body.get("proxy_command") or "").strip()
@@ -391,8 +432,8 @@ def state() -> dict:
     env = (entry or {}).get("env") or {}
     project = str(_local_project(entry))
     llm_key = env.get("LLM_PROXY_KEY", "")
-    jev = env.get("TYPESAFE_API_KEY", "")
-    jev_settings = _jev_from_settings()
+    jev = _jev_env()
+    jev_key = jev.get("TYPESAFE_API_KEY", "")
     cliproxy = _cliproxy_keys()
     targets = _targets(_where_targets(entry)[0])
     agents = [t["path"] for t in targets]
@@ -408,7 +449,8 @@ def state() -> dict:
                           and (_package_binary().is_file() or bool(install.get("uvx"))),
         "targets": targets,
         "ssh_hosts": _ssh_hosts(),
-        "local_available": os.name == "nt",
+        "local_available": os.name == "nt" or _linux_binary(entry, Path(project)) is not None,
+        "platform": "windows" if os.name == "nt" else "linux",
         "enabled": enabled,
         "project_dir": project,
         "agent_config": env.get("HCC_AGENT_CONFIG", agents[0] if agents else ""),
@@ -418,9 +460,11 @@ def state() -> dict:
         "llm_effort": env.get("LLM_EFFORT", ""),
         "llm_key_set": bool(llm_key),
         "llm_key_tail": _tail(llm_key),
-        "jev_key_set": bool(jev or jev_settings),
-        "jev_key_tail": _tail(jev or jev_settings),
-        "jev_key_from_settings": not jev and bool(jev_settings),
+        # Só leitura: o Jev se configura na página dele, e o MCP recebe a mesma configuração.
+        "jev_key_set": bool(jev_key),
+        "jev_key_tail": _tail(jev_key),
+        "jev_endpoint": jev.get("JEV_ENDPOINT", ""),
+        "jev_model": jev.get("JEV_MODEL", ""),
         "cliproxy": {"preset_url": PRESET_URL, "has_keys": bool(cliproxy),
                      "installed": shutil.which("cli-proxy-api") is not None, "running": _cliproxy_running(),
                      "key_is_cliproxy": bool(llm_key) and llm_key in cliproxy},
@@ -490,13 +534,12 @@ def save(body: dict, *, installing: bool = False) -> dict:
                                        "o ~/.cli-proxy-api/config.yaml não tem nenhuma api-key")
         llm_key = previous.get("LLM_PROXY_KEY") if previous.get("LLM_PROXY_KEY") in keys else keys[0]
     llm_key = llm_key or previous.get("LLM_PROXY_KEY", "")
-    jev = str(body.get("jev_key") or "") or previous.get("TYPESAFE_API_KEY", "") or _jev_from_settings()
 
     # HCC_AGENT_CONFIG é o alvo padrão; HCC_AGENTS_DIR, a pasta de onde o MCP tira os outros.
     managed = {"HCC_AGENT_CONFIG": agent, "HCC_AGENTS_DIR": str(agents_dir),
                "LLM_PROXY_URL": url,
                "LLM_MODEL": str(body.get("llm_model") or "").strip(), "LLM_EFFORT": effort,
-               "LLM_PROXY_KEY": llm_key, "TYPESAFE_API_KEY": jev}
+               "LLM_PROXY_KEY": llm_key, **{k: "" for k in JEV_VARS}, **_jev_env()}
     # O resto do env é de quem montou o MCP e fica como está (o VIRTUAL_ENV vazio de propósito
     # impede herdar o venv do processo que abre a sessão). Das variáveis desta tela, vazia = ausente.
     env = {k: v for k, v in previous.items() if k not in managed and k != "PYTHONPATH"}
@@ -626,7 +669,7 @@ def install() -> dict:
     if agent is None:
         return s   # sem alvo ainda: a tela pede pra criar um antes de ligar
     ligado = save({"enabled": True, "mode": "package", "agent_config": str(agent), "llm_url": s["llm_url"],
-                   "llm_model": s["llm_model"], "llm_effort": s["llm_effort"], "llm_key": None, "jev_key": None,
+                   "llm_model": s["llm_model"], "llm_effort": s["llm_effort"], "llm_key": None,
                    "use_cliproxy_key": s["cliproxy"]["key_is_cliproxy"]}, installing=True)
     ligado.update({key: s[key] for key in ("migration_skipped", "legacy_package", "detail")})
     return ligado

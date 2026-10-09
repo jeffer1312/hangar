@@ -6,6 +6,8 @@ use std::{ffi::OsString, path::{Path, PathBuf}, time::Duration};
 /// O `objetivo` do HCC desiste sozinho em 240 s; a folga cobre a subida do servidor e do agente.
 const OBJECTIVE_DEADLINE: Duration = Duration::from_secs(300);
 pub const JEV_KEY: &str = "TYPESAFE_API_KEY";
+const JEV_ENDPOINT: &str = "JEV_ENDPOINT";
+const JEV_MODEL: &str = "JEV_MODEL";
 /// Só o fallback com imagem usa; sem elas o laço segue pela árvore de acessibilidade.
 const OPTIONAL_KEYS: [&str; 4] = ["LLM_PROXY_KEY", "LLM_PROXY_URL", "LLM_MODEL", "LLM_EFFORT"];
 const ENTRY: &str = "hangar-computer-control";
@@ -50,7 +52,7 @@ fn local_agent(env: &mut Vec<(String, OsString)>, windows: bool) -> Result<(), S
     if !windows { env.push(("HCC_AGENT_CONFIG".to_owned(), OsString::new())); return Ok(()); }
     let dir = env.iter().find(|(k, v)| k == "HCC_AGENTS_DIR" && !v.is_empty()).map(|(_, v)| PathBuf::from(v))
         .or_else(|| configured.as_deref().and_then(Path::parent).filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf))
-        .ok_or("Sem pasta de alvos do controle do computador (HCC_AGENTS_DIR). Ative em Configurações > Controle do Windows.")?;
+        .ok_or("Sem pasta de alvos do controle do computador (HCC_AGENTS_DIR). Ative em Configurações > Computer Use.")?;
     let mut configs: Vec<(String, Value)> = std::fs::read_dir(&dir).map_err(|e| format!("Não consegui ler {}: {e}", dir.display()))?
         .filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with("-agent.json"))
         .map(|name| { let config = read_json(&dir.join(&name)); (name, config) }).collect();
@@ -63,21 +65,22 @@ fn local_agent(env: &mut Vec<(String, OsString)>, windows: bool) -> Result<(), S
 
 /// Roda o comando da entrada como está (binário ou uvx/python antigo); só a chave do Jev ganha os fallbacks do backend.
 pub fn launch_from(home: &Path, windows: bool, process_env: impl Fn(&str) -> Option<String>) -> Result<Launch, String> {
-    let entry = registered_entry(home).ok_or("O controle do computador não está registrado. Ative em Configurações > Controle do Windows.")?;
+    let entry = registered_entry(home).ok_or("O controle do computador não está registrado. Ative em Configurações > Computer Use.")?;
     let program = PathBuf::from(entry["command"].as_str().unwrap_or_default());
     let args = entry["args"].as_array().map(|a| a.iter().map(|v| v.as_str().map(OsString::from)).collect::<Option<Vec<_>>>()).unwrap_or(Some(vec![]))
-        .ok_or("A entrada do hangar-computer-control tem argumento que não é texto. Ative de novo em Configurações > Controle do Windows.")?;
+        .ok_or("A entrada do hangar-computer-control tem argumento que não é texto. Ative de novo em Configurações > Computer Use.")?;
     // O env da entrada vai como está: vazio é de propósito (VIRTUAL_ENV); só a chave do Jev trata vazio como ausente.
     let mut env: Vec<(String, OsString)> = entry["env"].as_object().map(|vars| vars.iter()
         .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), OsString::from(v)))).collect()).unwrap_or_default();
     let has = |env: &[(String, OsString)], key: &str| env.iter().any(|(k, v)| k == key && !v.is_empty());
-    if !has(&env, JEV_KEY) {
-        let settings = read_json(&home.join(".claude").join("settings.json"))["env"][JEV_KEY].as_str().map(str::to_owned);
-        let key = settings.filter(|v| !v.is_empty()).or_else(|| process_env(JEV_KEY).filter(|v| !v.is_empty()))
-            .ok_or_else(|| format!("Falta a chave {JEV_KEY} (Jev): configure em Configurações > Controle do Windows ou no ambiente do app."))?;
-        env.retain(|(k, _)| k != JEV_KEY);
-        env.push((JEV_KEY.to_owned(), key.into()));
-    }
+    // O Jev é a configuração única do servidor (a mesma do navegador e da orquestração); a da entrada só vale sem ela.
+    let base = process_env("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()).map_or_else(|| home.join(".claude"), PathBuf::from);
+    let entry_key = entry["env"][JEV_KEY].as_str().map(str::to_owned).filter(|v| !v.is_empty());
+    let jev = super::jev::config_from(&read_json(&base.join("runtime-config.json")), &read_json(&home.join(".claude").join("settings.json"))["env"],
+        entry_key.or_else(|| process_env(JEV_KEY).filter(|v| !v.is_empty())))
+        .ok_or_else(|| format!("Falta a chave {JEV_KEY} (Jev): configure em Configurações > Jev."))?;
+    env.retain(|(k, _)| ![JEV_KEY, JEV_ENDPOINT, JEV_MODEL].contains(&k.as_str()));
+    env.extend([(JEV_KEY, jev.key), (JEV_ENDPOINT, jev.url), (JEV_MODEL, jev.model)].map(|(k, v)| (k.to_owned(), OsString::from(v))));
     local_agent(&mut env, windows)?;
     let missing: Vec<&str> = OPTIONAL_KEYS.into_iter().filter(|k| !has(&env, k) && process_env(k).is_none_or(|v| v.is_empty())).collect();
     if !missing.is_empty() { super::log(format!("computer optional keys missing: {}", missing.join(","))); }
@@ -229,7 +232,18 @@ mod tests {
     #[test]
     fn missing_entry_error_points_to_settings() {
         let error = launch_from(&home_with("noentry", &[]), false, no_env).err().unwrap();
-        assert!(error.contains("Ative em Configurações > Controle do Windows"), "{error}");
+        assert!(error.contains("Ative em Configurações > Computer Use"), "{error}");
+    }
+
+    #[test]
+    fn the_single_jev_config_wins_and_carries_endpoint_and_model() {
+        let entry = active(json!({"command": "/opt/hcc/hangar-computer-control", "args": [], "env": {JEV_KEY: "old-entry-key"}}));
+        let home = home_with("jevsingle", &[entry, (".claude/runtime-config.json", json!({"jev_api_key": "sk-or-page", "jev_model": "typesafe/jev-latest"}))]);
+        let launch = launch_from(&home, false, no_env).unwrap();
+        assert_eq!(get(&launch, JEV_KEY), Some(&OsString::from("sk-or-page")));
+        assert_eq!(get(&launch, JEV_ENDPOINT), Some(&OsString::from(super::super::jev::OPENROUTER_URL)));
+        assert_eq!(get(&launch, JEV_MODEL), Some(&OsString::from("~typesafe/jev-latest")));
+        assert_eq!(launch.env.iter().filter(|(k, _)| k == JEV_KEY).count(), 1);
     }
 
     #[test]

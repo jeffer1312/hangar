@@ -88,7 +88,7 @@ const TUNES: [Tune; 4] = [
 struct Field { key: &'static str, label: &'static str, help: &'static str, icon: IconName, kind: Kind, page: Page }
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
-const FIELDS: [Field; 33] = [
+const FIELDS: [Field; 32] = [
     Field { key: "upload_retention_days", label: "server_keep_attachments", help: "server_keep_attachments_help", icon: IconName::Paperclip,
         kind: Kind::Number("server_days"), page: Page::Attachments },
     Field { key: "notify_finished", label: "server_notify_finished", help: "server_notify_finished_help", icon: IconName::CircleCheck,
@@ -118,8 +118,6 @@ const FIELDS: [Field; 33] = [
         page: Page::Jev },
     Field { key: "jev_texto_cmd", label: "server_jev_cmd", help: "server_jev_cmd_help", icon: IconName::SquareTerminal, kind: Kind::Text,
         page: Page::Jev },
-    Field { key: "jev_windows_api_key", label: "server_jev_windows_key", help: "server_jev_windows_key_help", icon: IconName::Key,
-        kind: Kind::Secret, page: Page::Jev },
     // Voz, na ordem do `VozSettings.svelte`; a página as distribui pelas seções dela.
     Field { key: "groq_api_key", label: "voice_groq", help: "voice_groq_help", icon: IconName::Key, kind: Kind::Secret, page: Page::Voice },
     Field { key: "transcription_base_url", label: "voice_transcription_endpoint", help: "voice_transcription_endpoint_help", icon: IconName::Globe,
@@ -315,6 +313,24 @@ impl ServerConfig {
         (field.get("definido") == Some(&Value::Bool(true))).then(|| text_of(field.get("valor").unwrap_or(&Value::Null)))
     }
 
+    /// Começo da chave do Jev: a digitada agora, senão a máscara guardada (`sk-o••••` já diz o provedor).
+    fn jev_key_head(&self) -> Option<String> {
+        if self.removing("jev_api_key") { return None; }
+        let typed = self.draft.get("jev_api_key").map(text_of).filter(|t| !t.trim().is_empty());
+        let head = typed.or_else(|| self.secret_mask("jev_api_key"))?;
+        Some(if head.starts_with("sk-o") { "sk-or-".to_owned() } else { head })
+    }
+
+    /// Provedor, endereço e modelo efetivos do Jev pela regra do servidor; `None` sem chave.
+    fn jev_route(&self) -> Option<(bool, String, String)> {
+        let key = self.jev_key_head()?;
+        let setting = |name: &str| Some(text_of(&self.current(name))).filter(|v| !v.trim().is_empty());
+        let endpoint = setting("jev_endpoint");
+        let openrouter = crate::voice::jev::is_openrouter(&key, endpoint.as_deref());
+        let (url, model) = crate::voice::jev::destination(&key, endpoint.as_deref(), setting("jev_model").as_deref());
+        Some((openrouter, url.unwrap_or_default(), model.unwrap_or_default()))
+    }
+
     /// `scan_roots` é a string "a,b" do `CP_SCAN_ROOTS`; a tela edita como lista.
     fn roots(&self) -> Vec<String> {
         text_of(&self.current("scan_roots")).split(',').map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned).collect()
@@ -492,7 +508,7 @@ impl ServerConfig {
             .or_else(|| TUNES.iter().find(|t| label == format!("voice_tune_{}", t.name)).map(|t| t.key))
             .or((label == "voice_voice").then_some("elevenlabs_voice_id"));
         let Some(key) = key else { return };
-        if key.starts_with("jev_") && !["jev_api_key", "jev_padrao", "jev_windows_api_key"].contains(&key) {
+        if key.starts_with("jev_texto_") {
             self.jev_advanced = true;
         }
         if let Some(n) = SECTIONS.iter().position(|keys| keys.contains(&key)) {
@@ -519,6 +535,27 @@ fn icon_box(icon: IconName) -> Div {
 
 fn text_of(value: &Value) -> String {
     match value { Value::String(s) => s.clone(), Value::Null => String::new(), other => other.to_string() }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum JevModel { Latest, Fixed }
+
+/// Versões fixas sugeridas; o vazio é o mais novo do provedor.
+const JEV_FIXED: [&str; 2] = ["jev-1.13.0", "typesafe/jev-1.13-20260917"];
+
+fn jev_model_value(which: JevModel, openrouter: bool) -> &'static str {
+    match which { JevModel::Latest => "", JevModel::Fixed => JEV_FIXED[usize::from(openrouter)] }
+}
+
+/// Qual sugestão o modelo atual é; `None` para um modelo próprio. O apelido do mais novo também conta como ele.
+fn jev_model_preset(current: &str, openrouter: bool) -> Option<JevModel> {
+    let latest = if openrouter { crate::voice::jev::OPENROUTER_MODEL } else { crate::voice::jev::TYPESAFE_MODEL };
+    match current.trim() {
+        "" => Some(JevModel::Latest),
+        v if v == latest || (openrouter && v == "typesafe/jev-latest") => Some(JevModel::Latest),
+        v if v == JEV_FIXED[usize::from(openrouter)] => Some(JevModel::Fixed),
+        _ => None,
+    }
 }
 
 /// Valor de uma linha só leitura: sim/não, "—" quando vazio.
@@ -835,9 +872,13 @@ impl Hangar {
                     Kind::Secret => InputState::new(window, cx).masked(true),
                     _ => InputState::new(window, cx),
                 });
-                let sub = cx.subscribe_in(&input, window, move |this: &mut Hangar, input, event: &InputEvent, _, cx| {
+                let sub = cx.subscribe_in(&input, window, move |this: &mut Hangar, input, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::Change) {
                         this.server_config.stage(key, Value::String(input.read(cx).value().to_string()));
+                        // Colar a chave escolhe o provedor: o endereço padrão do outro sai do caminho.
+                        if key == "jev_api_key" {
+                            if let Some((openrouter, ..)) = this.server_config.jev_route() { this.follow_jev_provider(openrouter, false, window, cx); }
+                        }
                         cx.notify();
                     }
                 });
@@ -1047,26 +1088,119 @@ impl Hangar {
     }
 
     fn render_jev(&self, cx: &mut Context<Self>) -> Div {
-        let open = self.server_config.jev_advanced;
+        let s = &self.server_config;
+        let route = s.jev_route();
+        let openrouter = route.as_ref().map(|(openrouter, ..)| *openrouter);
+        let provider = |openrouter: bool| if openrouter { "OpenRouter" } else { "TypeSafe" };
+        let card_title = |text: String, aside: Option<Div>| div().px_4().pt(px(14.)).pb(px(4.)).flex().items_center().justify_between().gap(px(8.))
+            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(text)).children(aside);
+        let line = || div().mt(px(-1.)).border_t_1().border_color(theme::border()).px_4().py(px(14.)).flex().flex_col().gap(px(8.));
+        let label = |key: &str, chip_text: Option<String>| div().flex().flex_wrap().items_center().gap(px(8.))
+            .child(div().font_weight(FontWeight::MEDIUM).child(tr(key)))
+            .children(chip_text.map(|t| chip(t, theme::accent_text(), theme::accent_dim())));
+        let help = |text: String| div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(text);
+        // Provedor não é campo gravado: sai da chave e do endereço, como no servidor.
+        let names = [provider(false).to_owned(), provider(true).to_owned()];
+        let provider_row = line()
+            .child(label("server_jev_provider", route.as_ref().filter(|_| !s.filled("jev_endpoint")).map(|_| tr("server_jev_provider_from_key"))))
+            .child(div().flex().child(segments_with_hints("jev-provider", &names, &[], openrouter.map_or(usize::MAX, usize::from), 2, false,
+                String::new(), |this, n, window, cx| { this.follow_jev_provider(n == 1, true, window, cx); cx.notify(); }, cx)))
+            .child(help(tr("server_jev_provider_help")));
+        let default_chip = |value_is_default: bool| openrouter.filter(|_| value_is_default)
+            .map(|o| tr(if o { "server_jev_default_of_openrouter" } else { "server_jev_default_of_typesafe" }));
+        let in_use = |value: &str| route.as_ref().map(|_| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal()
+            .child(tr("server_jev_in_use").replace("{value}", value)));
+        let input = |key: &str| s.inputs.iter().find(|(k, _)| *k == key).map(|(_, i)| i.clone());
+        let url = route.as_ref().map(|(_, url, _)| url.clone()).unwrap_or_default();
+        let url_row = line()
+            .child(label("server_jev_endpoint", default_chip(!s.filled("jev_endpoint"))))
+            .child(help(tr("server_jev_endpoint_help")))
+            .children(input("jev_endpoint").map(|i| Input::new(&i).small().aria_label(tr("server_jev_endpoint"))))
+            .child(div().flex().items_center().gap(px(10.)).children(in_use(&url))
+                .when(s.filled("jev_endpoint"), |el| el.child(Button::new("jev-endpoint-default").ghost().xsmall().label(tr("server_jev_back_to_default"))
+                    .on_click(cx.listener(|this, _, window, cx| { this.set_jev_text("jev_endpoint", "", window, cx); cx.notify(); })))));
+        let model = route.as_ref().map(|(_, _, model)| model.clone()).unwrap_or_default();
+        let current_model = text_of(&s.current("jev_model"));
+        let preset = jev_model_preset(&current_model, openrouter.unwrap_or(false));
+        let presets = [("jev-model-latest", "server_jev_model_latest", JevModel::Latest), ("jev-model-fixed", "server_jev_model_fixed", JevModel::Fixed)];
+        let model_row = line()
+            .child(label("server_jev_model", default_chip(current_model.trim().is_empty())))
+            .child(help(tr("server_jev_model_help")))
+            .child(div().flex().gap(px(6.)).children(presets.into_iter().map(|(id, text, which)| {
+                let selected = preset == Some(which);
+                Button::new(id).ghost().small().rounded_full().selected(selected).aria_selected(selected).label(tr(text))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let openrouter = this.server_config.jev_route().is_some_and(|(openrouter, ..)| openrouter);
+                        this.set_jev_text("jev_model", jev_model_value(which, openrouter), window, cx);
+                        cx.notify();
+                    }))
+            })))
+            .children(input("jev_model").map(|i| Input::new(&i).small().aria_label(tr("server_jev_model"))))
+            .children(in_use(&model));
+        let config_card = settings_box()
+            .child(card_title(tr("server_jev_config_title"), None))
+            .child(self.config_row(field("jev_api_key"), cx))
+            .child(self.mark(provider_row, "server_jev_provider"))
+            .child(self.mark(url_row, "server_jev_endpoint"))
+            .child(self.mark(model_row, "server_jev_model"));
+        let summary = route.as_ref().map(|(openrouter, _, model)| chip(format!("{} · {model}", provider(*openrouter)), theme::muted(), theme::raised()));
+        let uses = [("server_jev_use_browser", "server_jev_use_browser_help"), ("server_jev_use_orchestration", "server_jev_use_orchestration_help"),
+            ("server_jev_use_voice", "server_jev_use_voice_help"), ("server_jev_use_computer", "server_jev_use_computer_help")];
+        let has_key = route.is_some();
+        let status = move || if has_key { chip(tr("server_jev_uses"), theme::accent_text(), theme::accent_dim()) }
+            else { chip(tr("server_jev_no_key"), theme::warning(), theme::raised()) };
+        let cell = |(name, about): (&str, &str)| div().flex_1().min_w(px(220.)).p_3().rounded(px(8.)).border_1().border_color(theme::border())
+            .flex().flex_col().gap(px(4.))
+            .child(div().flex().items_center().justify_between().gap(px(8.))
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr(name))).child(status()))
+            .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr(about)));
+        let computer = cell(uses[3]).child(div().flex().child(Button::new("jev-open-computer").ghost().xsmall().label(tr("server_jev_open_computer"))
+            .icon(IconName::ArrowRight).on_click(cx.listener(|this, _, window, cx| this.open_settings(Page::Windows, window, cx)))));
+        let users_card = settings_box()
+            .child(card_title(tr("server_jev_users_title"), summary))
+            .child(div().px_4().pb(px(14.)).pt(px(6.)).flex().flex_wrap().gap(px(10.))
+                .children(uses[..3].iter().copied().map(cell)).child(computer))
+            .child(self.config_row(field("jev_padrao"), cx));
+        let open = s.jev_advanced;
         let owner = cx.entity().downgrade();
-        let heading = |title, help| div().flex().flex_col().gap_1()
-            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(tr_shared(title, &[])))
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr_shared(help, &[])));
         div().mt_4().flex().flex_col().gap_4()
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr_shared("jev_intro", &[])))
-            .child(heading("jev_browser_title", "jev_browser_help"))
-            .child(settings_box().child(self.config_row(field("jev_api_key"), cx)).child(self.config_row(field("jev_padrao"), cx)))
-            .child(heading("jev_windows_title", "jev_windows_help"))
-            .child(settings_box().child(self.config_row(field("jev_windows_api_key"), cx)))
-            .child(Disclosure::new("jev-advanced", open, tr_shared("jev_advanced", &[]), false)
+            .child(help(tr("server_jev_intro")))
+            .child(config_card)
+            .child(users_card)
+            .child(Disclosure::new("jev-advanced", open, tr("server_jev_text_advanced"), false)
                 .on_change(move |open, cx| { let _ = owner.update(cx, |this, cx| {
                     this.server_config.jev_advanced = open; cx.notify();
                 }); }))
             .when(open, |el| el
-                .child(settings_box().child(self.config_row(field("jev_endpoint"), cx)).child(self.config_row(field("jev_model"), cx)))
-                .child(heading("jev_text_title", "jev_text_help"))
+                .child(help(tr_shared("jev_text_help", &[])))
                 .child(settings_box().children(["jev_texto_base_url", "jev_texto_api_key", "jev_texto_modelo", "jev_texto_cmd"]
                     .into_iter().map(|key| self.config_row(field(key), cx)))))
+    }
+
+    /// Grava um texto do Jev no rascunho e mostra no campo.
+    fn set_jev_text(&mut self, key: &'static str, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.server_config.stage(key, Value::String(value.to_owned())) { return; }
+        if let Some((_, input)) = self.server_config.inputs.iter().find(|(k, _)| *k == key) {
+            input.update(cx, |state, cx| if state.value() != value { state.set_value(value.to_owned(), window, cx) });
+        }
+    }
+
+    /// Escolher o provedor (`force`) troca o endereço; colar a chave só tira do caminho o endereço padrão do outro. Modelo
+    /// sugerido pelo outro provedor volta ao padrão; modelo próprio fica.
+    fn follow_jev_provider(&mut self, openrouter: bool, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let s = &self.server_config;
+        let key = s.jev_key_head().unwrap_or_default();
+        let endpoint = text_of(&s.current("jev_endpoint")).trim().to_owned();
+        let defaults = [crate::voice::jev::TYPESAFE_URL, crate::voice::jev::OPENROUTER_URL];
+        if force || defaults.contains(&endpoint.as_str()) {
+            let by_key = crate::voice::jev::is_openrouter(&key, None);
+            let wanted = if openrouter == by_key { "" } else { defaults[usize::from(openrouter)] };
+            if endpoint != wanted { self.set_jev_text("jev_endpoint", wanted, window, cx); }
+        }
+        let model = text_of(&self.server_config.current("jev_model"));
+        if !model.trim().is_empty() && jev_model_preset(&model, !openrouter).is_some() {
+            self.set_jev_text("jev_model", "", window, cx);
+        }
     }
 
     /// Chip de onde a linha grava, e "editado" quando o valor veio do app e não do `.env`.
@@ -1638,10 +1772,11 @@ mod tests {
         let jev: Vec<(&str, &str)> = super::FIELDS.iter().filter(|f| f.key.starts_with("jev_")).map(|f| (f.key, f.label)).collect();
         assert_eq!(jev, [("jev_api_key", "server_jev_key"), ("jev_padrao", "server_jev_default"), ("jev_endpoint", "server_jev_endpoint"),
             ("jev_model", "server_jev_model"), ("jev_texto_base_url", "server_jev_text_endpoint"), ("jev_texto_api_key", "server_jev_text_key"),
-            ("jev_texto_modelo", "server_jev_text_model"), ("jev_texto_cmd", "server_jev_cmd"), ("jev_windows_api_key", "server_jev_windows_key")]);
+            ("jev_texto_modelo", "server_jev_text_model"), ("jev_texto_cmd", "server_jev_cmd")]);
         assert!(super::FIELDS.iter().filter(|f| f.key.starts_with("jev_")).all(|f| f.page == super::Page::Jev));
-        assert!(super::field("jev_windows_api_key").kind == Kind::Secret);
         let mut s = ServerConfig::default();
+        s.reveal("server_jev_model");
+        assert!(!s.jev_advanced, "endereço e modelo ficam no cartão principal");
         s.reveal("server_jev_text_model");
         assert!(s.jev_advanced, "a busca abre os ajustes avançados do Jev");
         // `reveal` acha o campo pelo rótulo: rótulo repetido abriria a seção errada.
@@ -1652,6 +1787,30 @@ mod tests {
         assert_eq!(tr("server_jev_model"), tr_shared("config_server_jev_modelo", &[]));
         assert_eq!(tr("server_jev_text_endpoint"), tr_shared("config_server_jev_texto_endpoint", &[]));
         assert_eq!(tr("server_jev_text_model"), tr_shared("config_server_jev_texto_modelo", &[]));
+    }
+
+    #[test]
+    fn jev_model_suggestions_follow_the_provider() {
+        use super::{jev_model_preset, jev_model_value, JevModel};
+        assert_eq!(jev_model_preset("", true), Some(JevModel::Latest), "vazio = o mais novo");
+        assert_eq!(jev_model_preset("~typesafe/jev-latest", true), Some(JevModel::Latest));
+        assert_eq!(jev_model_preset("typesafe/jev-latest", true), Some(JevModel::Latest), "sem til conta como o mais novo");
+        assert_eq!(jev_model_preset("jev-latest", false), Some(JevModel::Latest));
+        assert_eq!(jev_model_preset(jev_model_value(JevModel::Fixed, true), true), Some(JevModel::Fixed));
+        assert_eq!(jev_model_preset(jev_model_value(JevModel::Fixed, false), true), None, "versão da TypeSafe não é a do OpenRouter");
+        assert_eq!(jev_model_preset("meu-modelo", false), None);
+    }
+
+    #[test]
+    fn jev_route_reads_the_provider_from_the_key_or_its_mask() {
+        let mut s = ServerConfig::default();
+        assert_eq!(s.jev_route(), None, "sem chave");
+        s.fields.insert("jev_api_key".into(), json!({"valor": "sk-o••••••••25ba", "definido": true}));
+        s.fields.insert("jev_endpoint".into(), json!({"valor": ""}));
+        s.fields.insert("jev_model".into(), json!({"valor": ""}));
+        assert_eq!(s.jev_route(), Some((true, crate::voice::jev::OPENROUTER_URL.into(), "~typesafe/jev-latest".into())));
+        assert!(s.stage("jev_api_key", json!("apik-123")));
+        assert_eq!(s.jev_route(), Some((false, crate::voice::jev::TYPESAFE_URL.into(), "jev-latest".into())));
     }
 
     #[test]

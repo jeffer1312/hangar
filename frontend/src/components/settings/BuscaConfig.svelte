@@ -152,7 +152,6 @@
     { tela: 'jev', rotulo: m.config_server_jev_padrao, descricao: m.config_server_jev_padrao_ajuda },
     { tela: 'jev', rotulo: m.config_server_jev_endpoint, descricao: m.config_server_jev_endpoint_ajuda },
     { tela: 'jev', rotulo: m.config_server_jev_modelo, descricao: m.config_server_jev_modelo_ajuda },
-    { tela: 'jev', rotulo: m.jev_windows_key, descricao: m.jev_windows_key_help },
     { tela: 'jev', rotulo: m.jev_text_title, descricao: m.jev_text_help },
 
     { tela: 'computer', rotulo: m.computer_control_enable, descricao: m.computer_control_enable_hint },
