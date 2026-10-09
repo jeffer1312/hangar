@@ -451,6 +451,26 @@ def _pane_claude(composer_lines):
     return "\n".join(["banner", ""] + [_REGUA_R] + composer_lines + [_REGUA_R, "status"])
 
 
+def _painel_de_agentes(n, cursor=""):
+    return ["", f"  {cursor}● main"] + [f"  ◯ general-purpose  tarefa {i}" for i in range(n)]
+
+
+def test_composer_legivel_com_painel_de_agentes_longo():
+    # Com 4+ subagentes em segundo plano o painel empurrava a régua de baixo para fora das últimas
+    # _COMPOSER_FUNDO linhas: a caixa virava ilegível e a mensagem do app ficava na fila para sempre.
+    rodape = [_REGUA_R, "  🤖 modelo │ 📁 pasta", "  ⏵⏵ bypass permissions on · ← 3 agents"]
+    for painel in (_painel_de_agentes(6), _painel_de_agentes(6, cursor="❯ ")):
+        pane = "\n".join(["conversa", _REGUA_R, "❯ "] + rodape + painel + ["", ""])
+        assert terminal_input._composer_regiao(pane) == "\n".join([_REGUA_R, "❯ ", _REGUA_R])
+
+
+def test_composer_rodape_sem_subagente_continua_contando():
+    # Só o painel (que sempre tem um ◯) sai da conta: linhas com ● da conversa abaixo da última
+    # régua continuam afastando a régua do fim, como antes.
+    pane = "\n".join(["banner", _REGUA_R, "❯ ", _REGUA_R] + [f"● passo {i}" for i in range(9)])
+    assert terminal_input._composer_regiao(pane) is None
+
+
 def test_paste_alheio_nao_conta_como_entrega():
     # Placeholder que JA existia (rascunho do usuario) nao pode virar prova da nossa mensagem —
     # o Enter submeteria texto de terceiro.

@@ -390,14 +390,28 @@ def _paste_ids(regiao: str) -> set[str]:
     return set(_PASTE_ID_RE.findall(regiao)) | {f"img{n}" for n in _IMAGE_ID_RE.findall(regiao)}
 
 
+_LINHA_DO_PAINEL_RE = re.compile(r"^\s*(?:❯\s+)?[●◯]\s")
+
+
 def _linhas_uteis(pane: str) -> list[str]:
     """Linhas do pane SEM as em branco do fim — terceira porta do mesmo defeito que `state._rodape` e
     `_pane_tail` ja tratam. O `capture-pane` devolve a altura inteira, entao numa sessao recem-aberta
     o composer fica no ALTO e o resto vem vazio: a distancia dele ate o fim estoura _COMPOSER_FUNDO e
-    a regiao e dada como ilegivel."""
+    a regiao e dada como ilegivel.
+
+    Pelo mesmo motivo sai o painel de agentes do fim ("● main" / "◯ subagente"): ele ganha uma linha
+    por subagente em segundo plano e, com 4 ou mais, a caixa virava ilegível e a fila não andava."""
     linhas = pane.split("\n")
     while linhas and not linhas[-1].strip():
         linhas.pop()
+    fim = len(linhas)
+    while fim and _LINHA_DO_PAINEL_RE.match(linhas[fim - 1]):
+        fim -= 1
+    # Só o painel tem `◯`; um bloco só de `●` é conversa e continua contando.
+    if any("◯" in ln for ln in linhas[fim:]):
+        del linhas[fim:]
+        while linhas and not linhas[-1].strip():
+            linhas.pop()
     return linhas
 
 

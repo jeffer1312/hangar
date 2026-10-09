@@ -1265,7 +1265,7 @@
   "stats_cache": "cache {n}%",
   "stats_io": "↓ {i} · ↑ {o} tok",
   "stats_faixa_aria": "Session statistics",
-  "composer_fila_titulo": "These messages are waiting for the current turn to finish. Tap to send now (Kimi's ctrl-s).",
+  "composer_fila_titulo": "These messages are waiting for the current turn to finish. Tap to send now.",
   "composer_fila_erro": "Could not send now",
   "composer_ditado_pill": "Dictation",
   "ditado_estilo_titulo": "Dictation style",

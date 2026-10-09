@@ -177,9 +177,9 @@ import { cachePrazo } from '../lib/cachePrazo';
   // OMP é o fork do Pi (mesma TUI, mesmo popover de modelo/esforço) — trata igual aqui.
   const isPi = $derived(provider === 'pi' || provider === 'omp');
   const isKimi = $derived(provider === 'kimi');
-  // Quem tem fila promovível: Kimi (ctrl-s), Codex (turn/steer) e Claude sem terminal (mensagem
-  // no meio do turno pelo stdin).
-  const temFilaPromovivel = $derived(isKimi || isCodex || headless);
+  // Quem tem fila promovível: Kimi (ctrl-s), Codex (turn/steer), Claude sem terminal (mensagem
+  // no meio do turno pelo stdin) e Claude com terminal (ctrl+x ctrl+s da fila do Claude Code).
+  const temFilaPromovivel = $derived(isKimi || isCodex || headless || provider === 'claude');
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -2547,7 +2547,7 @@ import { cachePrazo } from '../lib/cachePrazo';
             class:send-btn--disabled={!canSend}
             onclick={() => submit()}
             disabled={!canSend}
-            aria-label={temFilaPromovivel && isWorking ? m.composer_enviar_fila_kimi() : m.composer_enviar_mensagem()}
+            aria-label={(isKimi || isCodex || headless) && isWorking ? m.composer_enviar_fila_kimi() : m.composer_enviar_mensagem()}
           >
             <IconSend size={18} />
           </button>

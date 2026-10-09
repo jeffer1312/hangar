@@ -352,6 +352,16 @@ async fn terminal_runtime_idle_timer_drains_without_sse_and_claims_one() {
     let state=f.state(); assert_eq!(state["rows"].as_array().unwrap().len(),2); h.stop().await.unwrap();
 }
 #[tokio::test]
+async fn terminal_runtime_queued_row_drains_while_claude_is_working() {
+    // A fila só espera a caixa de digitar voltar; o turno em andamento é do Claude Code enfileirar.
+    let f=Fixture::new().await; f.idle.store(false,std::sync::atomic::Ordering::Release); f.ready.store(false,std::sync::atomic::Ordering::Release); let h=f.start();
+    h.command(f.command("queued","Um")).await.unwrap();
+    assert!(f.io.calls.lock().unwrap().is_empty());
+    f.ready.store(true,std::sync::atomic::Ordering::Release);
+    f.wait_for("sai com a sessão trabalhando",||f.state()["rows"][0]["delivered"]==true).await;
+    h.stop().await.unwrap();
+}
+#[tokio::test]
 async fn terminal_runtime_identical_text_uses_distinct_occurrences_and_enqueue_stays_visible() {
     let f=Fixture::new().await; let h=f.start(); h.command(f.command("one","Olá — 📎 imagem: /tmp/x.png")).await.unwrap(); h.command(f.command("two","Olá — 📎 imagem: /tmp/x.png")).await.unwrap();
     std::fs::write(&f.target.transcript,"{\"type\":\"queue-operation\",\"operation\":\"enqueue\",\"content\":\"Olá\"}\n").unwrap(); h.confirm().await.unwrap();

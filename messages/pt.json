@@ -1265,7 +1265,7 @@
   "stats_cache": "cache {n}%",
   "stats_io": "↓ {i} · ↑ {o} tok",
   "stats_faixa_aria": "Estatísticas da sessão",
-  "composer_fila_titulo": "Estas mensagens estão esperando o turno atual terminar. Tocar manda agora (ctrl-s do Kimi).",
+  "composer_fila_titulo": "Estas mensagens estão esperando o turno atual terminar. Tocar manda agora.",
   "composer_fila_erro": "Falha ao mandar agora",
   "composer_ditado_pill": "Ditado",
   "ditado_estilo_titulo": "Estilo do ditado",

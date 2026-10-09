@@ -191,6 +191,7 @@ pub enum Proof { Present, Absent, Unreadable }
 pub struct ComposerSnapshot { pub content: String, pub placeholders: BTreeSet<String>, pub stashed: bool }
 static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[(Pasted text|Image) #(\d+)").unwrap());
 static CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*[❯›]\s*(\d+)\.\s").unwrap());
+static AGENT_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)?[●◯]\s").unwrap());
 static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
 fn compact(text: &str) -> String { text.chars().filter(|c| !c.is_whitespace() && !"│┃║".contains(*c)).collect() }
 /// O Claude marca `› stashed` na linha de dicas acima do composer enquanto guarda um rascunho.
@@ -203,6 +204,13 @@ impl ComposerSnapshot {
     pub fn parse(screen: &str) -> Option<Self> {
         let mut lines: Vec<_> = screen.split('\n').collect();
         while lines.last().is_some_and(|s| s.trim().is_empty()) { lines.pop(); }
+        // O painel de agentes ganha uma linha por subagente abaixo do rodapé: fora da conta da distância.
+        // Só ele tem `◯`; um bloco só de `●` é conversa e continua contando.
+        let panel = lines.iter().rev().take_while(|s| AGENT_ROW.is_match(s)).count();
+        if lines[lines.len() - panel..].iter().any(|s| s.contains('◯')) {
+            lines.truncate(lines.len() - panel);
+            while lines.last().is_some_and(|s| s.trim().is_empty()) { lines.pop(); }
+        }
         let rules: Vec<_> = lines.iter().enumerate().filter(|(_, s)| s.matches('─').count() >= 20).map(|(n, _)| n).collect();
         let bottom = *rules.last()?;
         let top = *rules.get(rules.len().checked_sub(2)?)?;
