@@ -25,23 +25,46 @@ impl Drop for Server {
 }
 
 impl Server {
-    async fn start(listener: TcpListener, state: AppState) -> Self {
+    /// Sobe e devolve None quando a ponte (a mesma porta em 127.0.0.1) já é de outro processo.
+    async fn try_start(listener: TcpListener, state: AppState) -> Option<Self> {
         let public = listener.local_addr().unwrap();
         let bridge = SocketAddr::from((Ipv4Addr::LOCALHOST, public.port()));
         let (stop, stopping) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(hangar_server::serve_until_with_state(listener, state, async { let _ = stopping.await; }));
-        let server = Self { public, bridge, stop: Some(stop), task };
+        let mut task = tokio::spawn(hangar_server::serve_until_with_state(listener, state, async { let _ = stopping.await; }));
         let http = http();
-        tokio::time::timeout(Duration::from_secs(5), async {
+        let up = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
+                if task.is_finished() {
+                    return false;
+                }
                 if let Ok(response) = http.get(format!("http://{public}/__hangar_server/health")).send().await {
                     assert_eq!(response.status().as_u16(), 200);
-                    break;
+                    return true;
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }).await.expect("a saúde pública respondeu depois dos binds");
-        server
+        if !up {
+            let error = (&mut task).await.unwrap().expect_err("o servidor saiu sem erro antes da saúde");
+            assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{error}");
+            return None;
+        }
+        Some(Self { public, bridge, stop: Some(stop), task })
+    }
+
+    async fn start(listener: TcpListener, state: AppState) -> Self {
+        Self::try_start(listener, state).await.expect("a ponte da porta pública já é de outro processo")
+    }
+
+    /// Porta pública nova a cada tentativa: em paralelo, outro processo pode estar na porta da ponte.
+    async fn launch(mut state: impl FnMut() -> AppState) -> Self {
+        for _ in 0..5 {
+            let listener = TcpListener::bind("127.0.0.2:0").await.unwrap();
+            if let Some(server) = Self::try_start(listener, state()).await {
+                return server;
+            }
+        }
+        panic!("nenhuma porta livre para a ponte");
     }
 
     async fn stop(&mut self) {
@@ -56,12 +79,14 @@ fn http() -> reqwest::Client { reqwest::Client::builder().no_proxy().build().unw
 
 async fn setup() -> (Arc<Fake>, Server, Mods) {
     let (python, upstream) = spawn_fake().await;
-    let state = AppState::new(config(upstream, "127.0.0.1"));
-    let mods = state.mods.clone();
-    mods.attach_terminal("t", "proc-t", 1, Arc::new(Probe::default()));
-    let listener = TcpListener::bind("127.0.0.2:0").await.unwrap();
-    let server = Server::start(listener, state).await;
-    (python, server, mods)
+    let mut mods = None;
+    let server = Server::launch(|| {
+        let state = AppState::new(config(upstream, "127.0.0.1"));
+        state.mods.attach_terminal("t", "proc-t", 1, Arc::new(Probe::default()));
+        mods = Some(state.mods.clone());
+        state
+    }).await;
+    (python, server, mods.unwrap())
 }
 
 async fn post(server: SocketAddr, route: &str, body: Value) -> reqwest::Response {
@@ -134,8 +159,7 @@ async fn legacy_bridge_methods_keep_the_path_body_and_loopback_origin() {
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = upstream.local_addr().unwrap();
     let upstream_task = tokio::spawn(async { axum::serve(upstream, axum::Router::new().fallback(echo)).await });
-    let listener = TcpListener::bind("127.0.0.2:0").await.unwrap();
-    let mut server = Server::start(listener, AppState::new(config(address, "127.0.0.1"))).await;
+    let mut server = Server::launch(|| AppState::new(config(address, "127.0.0.1"))).await;
     for endpoint in ["whoami", "pull", "suggest", "ask", "ask-fim", "filled", "submitted", "state", "rate"] {
         let body = json!({"probe":endpoint}).to_string();
         let response = http().post(format!("http://{}/api/plugin/{endpoint}?check=1", server.bridge))
@@ -192,4 +216,14 @@ async fn stopping_allows_a_restart_on_the_same_public_and_bridge_port() {
         assert_eq!(response.status().as_u16(), 200);
         server.stop().await;
     }
+}
+
+#[tokio::test]
+async fn start_reports_a_bridge_port_taken_by_someone_else() {
+    let (_python, upstream) = spawn_fake().await;
+    let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::new(127, 0, 0, 2), occupied.local_addr().unwrap().port())).await.unwrap();
+    let started = tokio::time::Instant::now();
+    assert!(Server::try_start(listener, AppState::new(config(upstream, "127.0.0.1"))).await.is_none());
+    assert!(started.elapsed() < Duration::from_secs(2), "esperou a saúde de um servidor que não subiu");
 }
