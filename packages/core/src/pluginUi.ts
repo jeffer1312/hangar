@@ -170,7 +170,7 @@ export function parsePluginUi(data: unknown): PluginSurfaces {
  *  diferença a quem já tem a vista de que ela parte; sem a anterior, ou com painel igual que ela não tem, lança
  *  em vez de desenhar um painel em branco. */
 export function applyPluginUiDelta(prev: unknown, delta: unknown): Record<string, unknown> {
-  if (!prev || typeof prev !== 'object') throw new Error('plugin_ui_delta sem a vista anterior');
+  if (!prev || typeof prev !== 'object') throw new Error('plugin_ui_delta_without_base');
   const p = prev as Record<string, unknown>;
   const d = (delta && typeof delta === 'object' ? delta : {}) as Record<string, unknown>;
   const before = new Map<string, unknown>();
@@ -181,7 +181,7 @@ export function applyPluginUiDelta(prev: unknown, delta: unknown): Record<string
   const panes = (Array.isArray(d.panes) ? d.panes : []).map((pane) => {
     const o = pane as { id?: unknown; same?: unknown } | null;
     if (o?.same !== true) return pane;
-    if (typeof o.id !== 'string' || !before.has(o.id)) throw new Error('plugin_ui_delta com painel igual fora da vista anterior');
+    if (typeof o.id !== 'string' || !before.has(o.id)) throw new Error('plugin_ui_delta_same_without_base');
     return before.get(o.id);
   });
   return { ...d, above: 'above' in d ? d.above : p.above ?? null, panes };
