@@ -1243,6 +1243,29 @@ async fn the_stall_backoff_does_not_delay_the_focus_return() {
     h.stop().await.unwrap();
 }
 
+/// A volta do clique pede ao plugin uma vez por reserva, e só com ele vivo: sem isso cada volta da limpeza
+/// pagaria o diário e a espera do aviso antes do anel.
+#[tokio::test]
+async fn the_click_asks_the_plugin_once_per_hold_and_only_when_it_is_live() {
+    let f=Fixture::new().await; let h=f.start();
+    let hold=||h.pane(PaneOp::Hold{millis:5000},far());
+    assert_eq!(hold().await.unwrap(),PaneReply::Done);
+    assert!(h.pane(PaneOp::ReturnFocus,far()).await.is_err(),"sem plugin vivo");
+    assert!(published(&f).is_empty(),"nada publicado sem plugin");
+    assert_eq!(h.pane(PaneOp::Release,far()).await.unwrap(),PaneReply::Done);
+    f.unknown.store(true,std::sync::atomic::Ordering::Release);
+    assert_eq!(hold().await.unwrap(),PaneReply::Done);
+    assert!(h.pane(PaneOp::ReturnFocus,far()).await.is_err(),"o plugin não conhece o pedido");
+    assert!(h.pane(PaneOp::ReturnFocus,far()).await.is_err());
+    assert_eq!(published(&f),["focus"],"a segunda volta na mesma reserva não pede de novo");
+    assert_eq!(h.pane(PaneOp::Release,far()).await.unwrap(),PaneReply::Done);
+    f.focus_plugin.store(true,std::sync::atomic::Ordering::Release);
+    assert_eq!(hold().await.unwrap(),PaneReply::Done);
+    assert_eq!(h.pane(PaneOp::ReturnFocus,far()).await.unwrap(),PaneReply::Done,"reserva nova, nova tentativa");
+    assert_eq!(published(&f),["focus","focus"]);
+    h.stop().await.unwrap();
+}
+
 /// O plugin que não conhece o pedido (`not_written`) deixa a volta ao `ctrl+x tab`.
 #[tokio::test]
 async fn without_the_plugin_focus_the_ring_returns_it() {

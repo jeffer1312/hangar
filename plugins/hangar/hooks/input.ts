@@ -75,12 +75,21 @@ async function discover($: EngineInterface, attempt = 0) {
 }
 
 /** Devolve o teclado ao prompt, de onde estiver nos mods: um `prompt.fill` com texto tira o foco da faixa
- *  ou do painel sem trocar a aba na frente, e o vazio não mexe nele (medido). O segundo devolve o rascunho
- *  como estava; o cursor vai ao fim dele. */
-async function returnFocus($: EngineInterface): Promise<boolean> {
-  const { text } = await $.prompt.read();
-  if (!(await $.prompt.fill({ text: `${text} `, mode: "replace" })).isFilled) return false;
-  return (await $.prompt.fill({ text, mode: "replace" })).isFilled;
+ *  ou do painel sem trocar a aba na frente, e o vazio não mexe nele (medido). O espaço entra no fim, sem
+ *  apagar o que a pessoa digite no meio, e só sai se o rascunho ainda for o nosso; o cursor vai ao fim. */
+export async function returnFocus(read: () => Promise<{ text: string }>,
+  fill: (a: { text: string; mode: "append" | "replace" }) => Promise<{ isFilled: boolean }>): Promise<{ moved: boolean; restored: boolean }> {
+  const { text } = await read();
+  let moved = false;
+  let restored = true;
+  try {
+    moved = (await fill({ text: " ", mode: "append" })).isFilled;
+  } finally {
+    if ((await read()).text === `${text} `) {
+      restored = (await fill({ text, mode: "replace" }).catch(() => ({ isFilled: false }))).isFilled;
+    }
+  }
+  return { moved, restored };
 }
 
 async function pull($: EngineInterface, ponte: Bridge) {
@@ -109,7 +118,11 @@ async function pull($: EngineInterface, ponte: Bridge) {
       if (modo === "focus") {
         let ok = false;
         try {
-          if (!session_id || await $.session.id() === session_id) ok = await returnFocus($);
+          if (!session_id || await $.session.id() === session_id) {
+            const r = await returnFocus(() => $.prompt.read(), (a) => $.prompt.fill(a));
+            ok = r.moved;
+            if (!r.restored) $.ui.log("hangar: o rascunho ficou com um espaço a mais ao devolver o foco", { to: "debug" });
+          }
         } catch (err) {
           $.ui.log(`hangar: devolver o foco falhou: ${String(err)}`, { to: "debug" });
         }
