@@ -46,6 +46,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
     if device_matches(method, path) { return true; }
     if matches!(*method,Method::GET|Method::POST|Method::DELETE) && path.strip_prefix("/api/codex-contas/")
         .and_then(|tail|tail.strip_suffix("/login")).is_some_and(|id|!id.is_empty() && !id.contains('/')) {return true;}
+    if *method == Method::POST && codex_sign_out(path).is_some() {return true;}
     if claude_matches(method, path) {
         return true;
     }
@@ -105,6 +106,15 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     }
     if claude_matches(&method, &path) {
         return claude_public(state, request).await;
+    }
+    if !deletion && let Some(id) = codex_sign_out(&path) {
+        let Ok(id) = percent_encoding::percent_decode_str(id).decode_utf8() else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        return match codex_sign_out_operation(&state, &id).await {
+            Ok(auth) => Json(auth).into_response(),
+            Err(err) => error(err),
+        };
     }
     if !deletion && path.ends_with("/login") {
         let id=path.trim_start_matches("/api/codex-contas/").trim_end_matches("/login");
@@ -503,6 +513,29 @@ async fn codex_operation(state:&crate::routes::AppState,action:&str,id:&str,atte
         _=>Err(AccountError::io()),
     };
     match result {Ok(value)=>Json(value).into_response(),Err(err)=>error(err)}
+}
+
+fn codex_sign_out(path: &str) -> Option<&str> {
+    path.strip_prefix("/api/codex-contas/")
+        .and_then(|tail| tail.strip_suffix("/logout"))
+        .filter(|id| !id.is_empty() && !id.contains('/'))
+}
+
+async fn codex_sign_out_operation(
+    state: &crate::routes::AppState,
+    id: &str,
+) -> Result<Value, AccountError> {
+    let account = state.accounts.resolve(Provider::Codex, id)?;
+    let bridge = bridge(state)?;
+    let invalidator = super::codex_login::CodexInvalidator::new(
+        state.cfg.upstream,
+        state.cfg.internal_secret.clone(),
+        bridge.instance().into(),
+    )?;
+    state
+        .accounts
+        .sign_out_codex(&account, bridge, state.state.runtime.get().cloned(), invalidator)
+        .await
 }
 
 fn device_matches(method: &Method, path: &str) -> bool {
