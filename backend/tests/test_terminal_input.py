@@ -464,11 +464,12 @@ def test_composer_legivel_com_painel_de_agentes_longo():
         assert terminal_input._composer_regiao(pane) == "\n".join([_REGUA_R, "❯ ", _REGUA_R])
 
 
-def test_composer_rodape_sem_subagente_continua_contando():
-    # Só o painel (que sempre tem um ◯) sai da conta: linhas com ● da conversa abaixo da última
-    # régua continuam afastando a régua do fim, como antes.
-    pane = "\n".join(["banner", _REGUA_R, "❯ ", _REGUA_R] + [f"● passo {i}" for i in range(9)])
-    assert terminal_input._composer_regiao(pane) is None
+def test_composer_rodape_sem_painel_continua_contando():
+    # Só o painel (linha `main` + ◯) sai da conta: linhas com ● da conversa e opções ◯ de um
+    # diálogo abaixo da última régua continuam afastando a régua do fim, como antes.
+    for cauda in ([f"● passo {i}" for i in range(9)], [f"  ◯ opção {i}" for i in range(9)]):
+        pane = "\n".join(["banner", _REGUA_R, "❯ ", _REGUA_R] + cauda)
+        assert terminal_input._composer_regiao(pane) is None
 
 
 def test_paste_alheio_nao_conta_como_entrega():

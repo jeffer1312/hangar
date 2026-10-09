@@ -2049,9 +2049,9 @@ import { cachePrazo } from '../lib/cachePrazo';
         {/if}
       {/if}
       {#if temFilaPromovivel && isWorking && (filaCount > 0 || steeringQueue) && onSteer}
-        <!-- FILA da TUI do Kimi: msg já mandada, esperando o turno atual acabar. O chip existe pra
+        <!-- FILA da TUI (Kimi, Claude): msg já mandada, esperando o turno atual acabar. O chip existe pra
              DIZER que há fila (antes disso a bolha translúcida era a única pista) e dar a saída:
-             tocar manda o `ctrl-s`, que promove a msg pro turno em curso. Não tocar = espera, que
+             tocar manda a tecla da TUI (Kimi `ctrl-s`, Claude `ctrl+x ctrl+s`), que promove a msg. Não tocar = espera, que
              é o comportamento de sempre. -->
         <button class="repo-chip fila-chip" onclick={steerFila}
                 disabled={steeringQueue} aria-busy={steeringQueue}

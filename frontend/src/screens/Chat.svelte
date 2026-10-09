@@ -2656,14 +2656,14 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Medido em 14/08/2026: um envio pelo app vira "queued-" em ~1s e o dedup ali embaixo REMOVE o
   // pending correspondente — contar só o `pending` dava 0 com a bolha na tela e o chip nunca
   // aparecia. `desistiu` fora: aquela não está na fila, está perdida (a TUI engoliu as teclas).
-  // Duas travas de propósito: (1) só Kimi, Codex e Claude sem terminal oferecem o chip; sem isto TODA sessão
+  // Duas travas de propósito: (1) só Kimi, Codex e Claude oferecem o chip; sem isto TODA sessão
   // pagava um scan O(n) sobre `events` a cada evento novo do SSE (o arquivo já trocou o
   // `deriveActivity` por fold incremental pelo mesmo motivo); (2) `kind === 'user_msg'` — o prefixo
   // "queued-" tem DOIS produtores no backend: a fila durável (`pqueue.py`, user_msg) e o aviso de
   // subagente que terminou (`transcript.py`, `queued-task:<id>`, tool_result). Sem o kind, um
   // agente de fundo terminando contaria como mensagem na fila.
   const filaCount = $derived(
-    sessionProvider !== 'kimi' && sessionProvider !== 'codex' && !sessionHeadless
+    sessionProvider !== 'kimi' && sessionProvider !== 'codex' && sessionProvider !== 'claude' && !sessionHeadless
       ? 0
       : pending.length
         + queuedMessages(events, sessionProvider, sessionHeadless).length,
@@ -3542,7 +3542,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
         {lastCache}
         stats={statsEvent}
         onSend={handleSend}
-        onSteer={sessionProvider === 'kimi' || sessionProvider === 'codex' || sessionHeadless ? steerAgora : undefined}
+        onSteer={sessionProvider === 'kimi' || sessionProvider === 'codex' || sessionProvider === 'claude' || sessionHeadless ? steerAgora : undefined}
         headless={sessionHeadless}
         codexMode={stateEvent?.codex_mode}
         claudePermissionMode={stateEvent?.claude_permission_mode}

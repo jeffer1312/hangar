@@ -390,7 +390,7 @@ def _paste_ids(regiao: str) -> set[str]:
     return set(_PASTE_ID_RE.findall(regiao)) | {f"img{n}" for n in _IMAGE_ID_RE.findall(regiao)}
 
 
-_LINHA_DO_PAINEL_RE = re.compile(r"^\s*(?:❯\s+)?[●◯]\s")
+_LINHA_DO_PAINEL_RE = re.compile(r"^\s*(?:❯\s+)?[●◯]\s+(\S+)")
 
 
 def _linhas_uteis(pane: str) -> list[str]:
@@ -407,8 +407,9 @@ def _linhas_uteis(pane: str) -> list[str]:
     fim = len(linhas)
     while fim and _LINHA_DO_PAINEL_RE.match(linhas[fim - 1]):
         fim -= 1
-    # Só o painel tem `◯`; um bloco só de `●` é conversa e continua contando.
-    if any("◯" in ln for ln in linhas[fim:]):
+    # Só corta com a linha `main` e um `◯`: bloco só de `●` é conversa, e opção `◯` sem `main` é diálogo.
+    painel = linhas[fim:]
+    if any("◯" in ln for ln in painel) and any((m := _LINHA_DO_PAINEL_RE.match(ln)) and m.group(1) == "main" for ln in painel):
         del linhas[fim:]
         while linhas and not linhas[-1].strip():
             linhas.pop()
