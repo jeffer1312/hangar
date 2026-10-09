@@ -68,9 +68,6 @@ pub const HOLD_MARGIN: Duration = Duration::from_millis(500);
 const NEAR_CELLS: usize = 2;
 /// Teto de uma volta ao prompt na limpeza: abaixo dos 10 s de cada reserva no executor, com a folga.
 pub const BACK_MAX: Duration = Duration::from_secs(9);
-/// O mais longo que a limpeza segura o pane: a primeira volta ao prompt, as novas tentativas até
-/// `keep_held` (a última pode começar no fim dele) e as devoluções da altura e do pane.
-pub const CLEANUP_MAX: Duration = Duration::from_secs(9 + 10 + 9 + 2 * 2);
 
 /// Tempos medidos (`medicoes-terminal.md`, `medicoes-psmux.md`), cortados para caber nos 7,5 s do pedido
 /// (fase 2); `quick` para os testes.
@@ -140,7 +137,7 @@ impl Limits {
 struct Back { titles: Vec<String>, anchor: Option<String>, cap: usize }
 
 #[derive(Default)]
-struct Pending { hold: bool, height: Option<(u16, u16)>, focus: Option<String>, keyboard: Option<Back> }
+struct Pending { hold: bool, height: Option<(u16, u16)>, focus: Option<String>, keyboard: Option<Back>, slowest: Duration }
 
 /// O que o pedido deixou para desfazer. Cada item entra antes da ação que o pede, para valer também com o
 /// pedido cortado no meio; `finish` desfaz.
@@ -248,7 +245,10 @@ impl<'a> Ctx<'a> {
     }
     /// Uma operação no pane, cortada no prazo: a resposta que não vier a tempo é a do mod sem resposta.
     async fn op(&self, op: PaneOp, start_by: Instant) -> Result<PaneReply, ModsError> {
-        tokio::time::timeout_at(self.until.into(), self.pane.op(op, start_by)).await.unwrap_or_else(|_| Err(no_answer()))
+        let started = Instant::now();
+        let reply = tokio::time::timeout_at(self.until.into(), self.pane.op(op, start_by)).await.unwrap_or_else(|_| Err(no_answer()));
+        self.undo.with(|p| p.slowest = p.slowest.max(started.elapsed()));
+        reply
     }
     /// Ação no mod que espera `after` antes do clique final. Conferida a vida logo antes: a sessão que
     /// reabriu no meio do clique não recebe a ação, e o pedido segue para a limpeza.
@@ -858,9 +858,10 @@ fn back_budget(limits: &Limits, back: &Back) -> Duration {
     limits.ring_step.saturating_mul(steps).clamp(UNDO_MAX, BACK_MAX)
 }
 
-/// Renova a reserva do pane por `cover` mais a folga. O executor troca a reserva anterior por esta.
+/// Renova a reserva do pane por `cover` mais a folga e a operação mais lenta do pedido: a última que começa
+/// no fim de `cover` ainda roda no executor depois dele, e o `Release` só chega atrás dela.
 async fn renew(ctx: &Ctx<'_>, cover: Duration) {
-    let millis = u64::try_from((cover + HOLD_MARGIN).as_millis()).unwrap_or(u64::MAX);
+    let millis = u64::try_from((cover + HOLD_MARGIN + ctx.undo.with(|p| p.slowest)).as_millis()).unwrap_or(u64::MAX);
     let _ = ctx.op(PaneOp::Hold { millis }, ctx.until).await;
 }
 

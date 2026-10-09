@@ -252,6 +252,26 @@ async fn the_task_answers_then_cleans_up_and_releases_the_pane() {
     assert!(!pane.held(), "a reserva do pane é solta no fim");
 }
 
+/// Com o pane lento, a reserva renovada para devolver a altura cobre também a operação mais lenta medida: a
+/// última que começa no fim do prazo ainda roda no executor, e o `Release` chega atrás dela.
+#[tokio::test]
+async fn the_cleanup_hold_covers_the_measured_cost_of_an_operation() {
+    let (mods, pane) = setup("tmux-230-longo-topo-150", longo());
+    let pane = Arc::new(pane);
+    pane.clients(0);
+    pane.cost(Duration::from_millis(150));
+    pane.on_resize(click::TALL_ROWS, vec![Show("tmux-232-longo-meio-150")]);
+    pane.on_click((38, 92), vec![Pressed("vitrine-longo", "V37-meio")]);
+    let (task, answer) = click::spawn(parts(&mods, &pane), press_call("vitrine-longo", "V37-meio"), far());
+    assert_eq!(answer.await.unwrap().unwrap(), json!({}));
+    task.await.unwrap();
+    let log = pane.log();
+    let give_back = log.iter().position(|a| a == "resize 150 45").unwrap();
+    let renewal: u64 = log[..give_back].iter().rev().find_map(|a| a.strip_prefix("hold ")).unwrap().parse().unwrap();
+    assert!(renewal >= (click::UNDO_MAX + click::HOLD_MARGIN + Duration::from_millis(150)).as_millis() as u64, "{log:?}");
+    assert!(!log.contains(&"hold vencida".to_string()) && !pane.held(), "{log:?}");
+}
+
 #[tokio::test]
 async fn a_cut_in_the_middle_of_the_stretch_gives_the_height_back() {
     let (mods, pane) = setup("tmux-230-longo-topo-150", longo());
