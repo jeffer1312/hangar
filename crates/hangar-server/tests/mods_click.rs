@@ -198,6 +198,17 @@ async fn show_clicks_the_title_and_publishes_the_shown_pane() {
 }
 
 #[tokio::test]
+async fn a_band_click_before_the_band_arrives_is_a_missing_button() {
+    // Sem o primeiro `/ui` não há espelho: a faixa responde como a sessão sem terminal, e o painel como painel.
+    let mods = Mods::default();
+    mods.attach_terminal(S, "proc-t", 1, Arc::new(Probe::default()));
+    let pane = FakePane::new(&mods, S, "tmux-01-tres-paineis-150");
+    assert_eq!(code(press(&mods, &pane, BAND_SITE, "pm-a").await), "erro_mod_botao_inexistente");
+    assert_eq!(code(press(&mods, &pane, "pm-mock-mr", "mr-a").await), "erro_mod_painel_inexistente");
+    assert!(pane.actions().is_empty());
+}
+
+#[tokio::test]
 async fn a_click_of_a_replaced_life_does_nothing_in_the_new_one() {
     // A sessão reabriu com outro processo e o mesmo nome: o pedido da vida 1 não lê o espelho nem clica na nova.
     let (mods, pane) = setup("tmux-01-tres-paineis-150", pm());
@@ -250,6 +261,26 @@ async fn the_task_answers_then_cleans_up_and_releases_the_pane() {
     task.await.unwrap();
     assert_eq!(pane.actions(), ["resize 150 250", "click 38 92", "resize 150 45"]);
     assert!(!pane.held(), "a reserva do pane é solta no fim");
+}
+
+/// Com o pane lento, a reserva renovada para devolver a altura cobre também a operação mais lenta medida: a
+/// última que começa no fim do prazo ainda roda no executor, e o `Release` chega atrás dela.
+#[tokio::test]
+async fn the_cleanup_hold_covers_the_measured_cost_of_an_operation() {
+    let (mods, pane) = setup("tmux-230-longo-topo-150", longo());
+    let pane = Arc::new(pane);
+    pane.clients(0);
+    pane.cost(Duration::from_millis(150));
+    pane.on_resize(click::TALL_ROWS, vec![Show("tmux-232-longo-meio-150")]);
+    pane.on_click((38, 92), vec![Pressed("vitrine-longo", "V37-meio")]);
+    let (task, answer) = click::spawn(parts(&mods, &pane), press_call("vitrine-longo", "V37-meio"), far());
+    assert_eq!(answer.await.unwrap().unwrap(), json!({}));
+    task.await.unwrap();
+    let log = pane.log();
+    let give_back = log.iter().position(|a| a == "resize 150 45").unwrap();
+    let renewal: u64 = log[..give_back].iter().rev().find_map(|a| a.strip_prefix("hold ")).unwrap().parse().unwrap();
+    assert!(renewal >= (click::UNDO_MAX + click::HOLD_MARGIN + Duration::from_millis(150)).as_millis() as u64, "{log:?}");
+    assert!(!log.contains(&"hold vencida".to_string()) && !pane.held(), "{log:?}");
 }
 
 #[tokio::test]
@@ -333,6 +364,38 @@ async fn keyboard_reaches_the_pane_presses_and_comes_back() {
     press(&mods, &pane, "pm-mock-mr", "mr-a").await.unwrap();
     assert_eq!(keys(&pane), ["C-x Tab", "C-x Tab", "C-x Tab", "Tab", "Enter", "C-x Tab", "C-x Tab"]);
     assert_eq!(mods.armed_focus(S), None, "o alvo é desarmado no fim");
+}
+
+/// Com o plugin, a limpeza volta ao prompt pelo pedido a ele: nenhum `ctrl+x tab` depois do `Enter`, e a aba
+/// na frente não muda.
+#[tokio::test]
+async fn keyboard_comes_back_by_the_plugin_without_the_ring() {
+    let (mods, pane) = setup("tmux-14-ciclo-4-prompt", pm());
+    pane.mouse(false);
+    to_mr(&pane);
+    pane.on_keys("Tab", vec![Focus("pm-mock-mr", "mr-a", false)]);
+    pane.on_keys("Enter", vec![Pressed("pm-mock-mr", "mr-a")]);
+    pane.on_return(vec![Show("tmux-14-ciclo-9-prompt")]);
+    press(&mods, &pane, "pm-mock-mr", "mr-a").await.unwrap();
+    assert_eq!(keys(&pane), ["C-x Tab", "C-x Tab", "C-x Tab", "Tab", "Enter"]);
+    assert_eq!(pane.actions().last().map(String::as_str), Some("plugin focus"));
+    assert!(!pane.held());
+}
+
+/// O plugin avisou, mas a tela segue num mod: a volta continua pelo anel.
+#[tokio::test]
+async fn a_plugin_return_that_leaves_the_focus_on_a_mod_goes_on_by_the_ring() {
+    let (mods, pane) = setup("tmux-14-ciclo-4-prompt", pm());
+    pane.mouse(false);
+    to_mr(&pane);
+    pane.on_keys("Tab", vec![Focus("pm-mock-mr", "mr-a", false)]);
+    pane.on_keys("Enter", vec![Pressed("pm-mock-mr", "mr-a")]);
+    pane.on_return(vec![]);
+    back_from_mr(&pane);
+    press(&mods, &pane, "pm-mock-mr", "mr-a").await.unwrap();
+    assert_eq!(keys(&pane), ["C-x Tab", "C-x Tab", "C-x Tab", "Tab", "Enter", "C-x Tab", "C-x Tab"]);
+    assert!(pane.actions().contains(&"plugin focus".to_string()));
+    assert!(!pane.held());
 }
 
 #[tokio::test]
@@ -545,6 +608,29 @@ fn renewal_after_enter(pane: &FakePane) -> u64 {
     let log = pane.log();
     let enter = log.iter().position(|a| a == "keys Enter").unwrap();
     log[enter + 1].strip_prefix("hold ").expect("a limpeza renova a reserva antes de qualquer volta").parse().unwrap()
+}
+
+/// Com a volta ao prompt no teto dela (9 s), a folga não some no corte do executor (10 s): o prazo da volta
+/// encolhe para a reserva caber inteira.
+#[tokio::test]
+async fn the_cleanup_hold_fits_the_executor_ceiling() {
+    let (mods, pane) = setup("tmux-14-ciclo-4-prompt", pm());
+    let pane = Arc::new(pane);
+    pane.mouse(false);
+    to_mr(&pane);
+    pane.on_keys("Tab", vec![Focus("pm-mock-mr", "mr-a", false)]);
+    pane.on_keys("Enter", vec![Pressed("pm-mock-mr", "mr-a")]);
+    // Custo que, somado aos 9 s da volta e à folga, passa dos 10 s do executor.
+    pane.cost(Duration::from_millis(550));
+    let parts = Parts { limits: Limits { ring_step: Duration::from_secs(2), ..Limits::quick() }, ..parts(&mods, &pane) };
+    let (task, answer) = click::spawn(parts, press_call("pm-mock-mr", "mr-a"), far());
+    assert_eq!(answer.await.unwrap().unwrap(), json!({}));
+    task.await.unwrap();
+    let log = pane.log();
+    let enter = log.iter().position(|a| a == "keys Enter").unwrap();
+    let holds: Vec<u64> = log[enter..].iter().filter_map(|a| a.strip_prefix("hold ")?.parse().ok()).collect();
+    assert!(holds.iter().all(|ms| *ms <= 10_000), "{holds:?}");
+    assert!(renewal_after_enter(&pane) >= 9_000, "{holds:?}");
 }
 
 #[tokio::test]

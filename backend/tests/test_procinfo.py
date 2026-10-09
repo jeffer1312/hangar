@@ -420,3 +420,13 @@ def test_saida_de_comando_acha_o_bash_pelo_eval(tmp_path, monkeypatch, ramo):
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_taskkill_path_prefers_system32_and_falls_back_to_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setattr(procinfo.shutil, "which", lambda n: r"C:\no-path\taskkill.exe")
+    assert procinfo.taskkill_path() == r"C:\no-path\taskkill.exe"
+    exe = tmp_path / "System32" / "taskkill.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+    assert procinfo.taskkill_path() == str(exe)

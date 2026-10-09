@@ -74,6 +74,24 @@ async function discover($: EngineInterface, attempt = 0) {
   }
 }
 
+/** Devolve o teclado ao prompt, de onde estiver nos mods: um `prompt.fill` com texto tira o foco da faixa
+ *  ou do painel sem trocar a aba na frente, e o vazio não mexe nele (medido). O espaço entra no fim, sem
+ *  apagar o que a pessoa digite no meio, e só sai se o rascunho ainda for o nosso; o cursor vai ao fim. */
+export async function returnFocus(read: () => Promise<{ text: string }>,
+  fill: (a: { text: string; mode: "append" | "replace" }) => Promise<{ isFilled: boolean }>): Promise<{ moved: boolean; restored: boolean }> {
+  const { text } = await read();
+  let moved = false;
+  let restored = true;
+  try {
+    moved = (await fill({ text: " ", mode: "append" })).isFilled;
+  } finally {
+    if ((await read()).text === `${text} `) {
+      restored = (await fill({ text, mode: "replace" }).catch(() => ({ isFilled: false }))).isFilled;
+    }
+  }
+  return { moved, restored };
+}
+
 async function pull($: EngineInterface, ponte: Bridge) {
   let espera = REARM_MS;
   try {
@@ -83,7 +101,7 @@ async function pull($: EngineInterface, ponte: Bridge) {
       // A conversa vai a cada poll: o `/clear` troca o id sem `session.start`, e o backend só
       // entrega à conversa que ele acompanha (um segundo `claude` no mesmo pane recebe 409).
       body: JSON.stringify({
-        sessao: ponte.sessao, token: ponte.token, instance: instance(), modos: ["fill", "user", "receipt_v2"], estado: lastState(),
+        sessao: ponte.sessao, token: ponte.token, instance: instance(), modos: ["fill", "user", "receipt_v2", "focus"], estado: lastState(),
         session_id: await $.session.id(),
       }),
     });
@@ -97,7 +115,24 @@ async function pull($: EngineInterface, ponte: Bridge) {
       };
       if (faixa === false) askResend();
       const receipt = { publication_id, generation };
-      if (text && modo === "fill") {
+      if (modo === "focus") {
+        let ok = false;
+        try {
+          if (!session_id || await $.session.id() === session_id) {
+            const r = await returnFocus(() => $.prompt.read(), (a) => $.prompt.fill(a));
+            ok = r.moved;
+            if (!r.restored) $.ui.log("hangar: o rascunho ficou com um espaço a mais ao devolver o foco", { to: "debug" });
+          }
+        } catch (err) {
+          $.ui.log(`hangar: devolver o foco falhou: ${String(err)}`, { to: "debug" });
+        }
+        await $.http.fetch(`${ponte.url}/filled`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessao: ponte.sessao, token: ponte.token, ok,
+            ...receipt, session_id: await $.session.id() }),
+        });
+      } else if (text && modo === "fill") {
         let isFilled = false;
         try {
           if (!session_id || await $.session.id() === session_id) {

@@ -436,6 +436,29 @@ pub fn surfaces(mut data: Value) -> Surfaces {
     }
 }
 
+/// A vista inteira a partir da anterior e do `plugin_ui_delta`: a faixa ausente fica a de antes, e o painel
+/// `{id, same: true}` volta ao de mesmo id na anterior, movido. O servidor só manda a diferença a quem já tem a
+/// vista de que ela parte; painel igual que a anterior não tem (ou repetido) é erro, conferido antes de mexer
+/// na vista, que fica como estava.
+pub fn apply_delta(above: &mut Value, panes: &mut Vec<Value>, mut delta: Value) -> Result<Value, &'static str> {
+    if !delta.is_object() { return Err("delta_shape"); }
+    let known: std::collections::HashSet<&str> = panes.iter().filter_map(|pane| pane["id"].as_str()).collect();
+    let mut same = std::collections::HashSet::new();
+    for pane in delta["panes"].as_array().into_iter().flatten().filter(|pane| pane["same"] == true) {
+        match pane["id"].as_str() {
+            Some(id) if known.contains(id) && same.insert(id.to_owned()) => {}
+            _ => return Err("delta_unknown_pane"),
+        }
+    }
+    let mut before: std::collections::HashMap<String, Value> =
+        std::mem::take(panes).into_iter().filter_map(|pane| Some((pane["id"].as_str()?.to_owned(), pane))).collect();
+    if delta.get("above").is_none() { delta["above"] = std::mem::take(above); }
+    for pane in delta["panes"].as_array_mut().into_iter().flatten() {
+        if pane["same"] == true && let Some(old) = pane["id"].as_str().and_then(|id| before.remove(id)) { *pane = old; }
+    }
+    Ok(delta)
+}
+
 pub fn pane_ids(panes: &[Value]) -> Vec<String> { panes.iter().filter_map(|p| p["id"].as_str().map(str::to_owned)).collect() }
 
 /// O servidor diz qual painel está na frente, e ele está na lista: a aba segue o servidor.
@@ -983,7 +1006,7 @@ fn unmark(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     // Importação explícita: `super::*` traz o `test` do gpui_kit, e o `#[test]` passaria a ser o dele.
-    use super::{accepts_typing, active_pane, box_background, button_control, cell_color, color, field_id, fields, FieldSync, fills_place, follow_local, follows_server,
+    use super::{accepts_typing, active_pane, apply_delta, box_background, button_control, cell_color, color, field_id, fields, FieldSync, fills_place, follow_local, follows_server,
         hover_props, input_kind, input_request, is_empty, older_server_retry, keep_hovered, keyless_text, Outbox, pane_ids, tab_scroll_target, TabScroll, plain_deep, raster_row, raster_runs, safe_href,
         scope_active, surfaces, text_row, toast, wants_hover, Control, FieldSpec, Surfaces, Toast, UiSource};
     use gpui_kit::component::input::InputEvent;
@@ -1089,6 +1112,22 @@ mod tests {
         assert!(color(&json!("#5aa6ff")).is_some());
         assert!(color(&json!("redBright")).is_some());
         assert_eq!(color(&json!("nope")), None);
+    }
+
+    #[test]
+    fn delta_keeps_the_band_and_brings_back_unchanged_panes() {
+        let a = json!({"id": "a", "tree": {"type": "Text", "children": ["grande"]}});
+        let full = apply_delta(&mut json!({"type": "Text"}), &mut vec![a.clone(), json!({"id": "b"})],
+            json!({"panes": [{"id": "c", "tree": null}, {"id": "a", "same": true}], "shown_id": "c"}));
+        assert_eq!(full, Ok(json!({"above": {"type": "Text"}, "panes": [{"id": "c", "tree": null}, a.clone()], "shown_id": "c"})));
+        assert_eq!(apply_delta(&mut json!({"type": "Text"}), &mut vec![a.clone()], json!({"above": null, "panes": []})),
+            Ok(json!({"above": null, "panes": []})));
+        // Painel igual que a vista não tem, ou repetido: erro, e a vista fica como estava.
+        let (mut above, mut panes) = (json!({"type": "Text"}), vec![a.clone()]);
+        for delta in [json!({"panes": [{"id": "z", "same": true}]}), json!({"panes": [{"id": "a", "same": true}, {"id": "a", "same": true}]})] {
+            assert!(apply_delta(&mut above, &mut panes, delta).is_err());
+            assert_eq!((&above, &panes), (&json!({"type": "Text"}), &vec![a.clone()]));
+        }
     }
 
     fn amostras() -> Value { serde_json::from_str(include_str!("../../packages/core/src/__fixtures__/plugin-ui-arvores.json")).unwrap() }

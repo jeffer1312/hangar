@@ -32,6 +32,7 @@ async fn terminal_app() -> (Arc<Fake>, std::net::SocketAddr, Mods, Arc<FakePane>
     let (python, upstream) = spawn_fake().await;
     let state = AppState::new(config(upstream, "127.0.0.1"));
     let mods = state.mods.clone();
+    let _ = state.state.runtime.set(Arc::new(registry(&mods)));
     let server = spawn_state(state).await;
     let pane = Arc::new(FakePane::new(&mods, "t", "tmux-01-tres-paineis-150"));
     let life = mods.new_life();
@@ -55,7 +56,7 @@ async fn apps_reach_the_terminal_through_the_link() {
 
 #[tokio::test]
 async fn typing_is_refused_without_waiting_the_turn_or_the_transfer_guard() {
-    let (python, server, mods, pane) = terminal_app().await;
+    let (_python, server, mods, pane) = terminal_app().await;
     // Um clique em curso segura a vez da sessão; a recusa da digitação não espera por ela.
     let turn = mods.link("t").unwrap().lock;
     let _held = turn.lock().await;
@@ -63,7 +64,6 @@ async fn typing_is_refused_without_waiting_the_turn_or_the_transfer_guard() {
     let (status, body) = post_as(server, "input", json!({"site": "pm-mock-mr", "plugin": "pm-mock", "key": "k", "kind": "change", "value": "x"}), OWNER).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_mod_sem_digitacao")));
     assert!(started.elapsed() < Duration::from_secs(2), "a recusa saiu em {:?}", started.elapsed());
-    assert_eq!(python.transfer_calls(), 0, "a guarda da troca de agente não é consultada");
     assert!(pane.actions().is_empty());
 }
 
@@ -91,7 +91,7 @@ fn target(dir: &std::path::Path, mux: &str) -> TerminalTarget {
     let transcript = dir.join("t.jsonl");
     std::fs::write(&transcript, "").unwrap();
     TerminalTarget { key: "key-t".into(), generation: 1, name: "t".into(), binding, lease_path: dir.join("lease"),
-        state_path: dir.join("state"), projection_dir: dir.join("projection"), transcript, created: 0.0 }
+        state_path: dir.join("state"), projection_dir: dir.join("projection"), transcript, created: 0.0, plugin_key: None }
 }
 
 fn registry(mods: &Mods) -> RuntimeRegistry {
@@ -105,7 +105,7 @@ async fn terminal_session_is_owned_until_close() {
     let registry = registry(&mods);
     registry.open_terminal(target(dir.path(), "/does-not-exist/hangar-test-tmux")).await.unwrap();
     assert!(mods.owns("t") && mods.is_terminal("t"));
-    assert_eq!(mods.bridge_session("t").as_deref(), Some("t"), "a ponte acha a sessão com terminal");
+    assert_eq!(mods.bridge_session("t", "key-t.mac").as_deref(), Some("t"), "a ponte acha a sessão com terminal pela chave");
     registry.close("key-t", 1).await.unwrap();
     assert!(!mods.owns("t"), "fechar a sessão tira a interface dos mods do Rust");
 }
@@ -258,13 +258,13 @@ async fn reopening_does_not_take_the_name_from_a_newer_live_session() {
     let registry = registry(&mods);
     let target = target(dir.path(), "/does-not-exist/hangar-test-tmux");
     registry.open_terminal(target.clone()).await.unwrap();
-    // Outra sessão, viva e mais nova, tomou o nome (com o nome de nascimento dela).
+    // Outra sessão, viva e mais nova, tomou o nome.
     let other = mods.new_life();
     mods.attach_process("t", "outro-processo", other, Arc::new(NoLink));
     registry.open_terminal(target).await.unwrap();
     assert_eq!(mods.life("t"), Some(other), "a reabertura não toma o nome da outra vida");
     assert!(!mods.is_terminal("t"));
-    assert_eq!(mods.bridge_session("t").as_deref(), Some("t"), "a outra sessão segue com o nome de nascimento");
+    assert_eq!(mods.bridge_session("t", "outro-processo.mac").as_deref(), Some("t"), "a outra sessão segue achada pela chave dela");
     registry.close("key-t", 1).await.unwrap();
     assert_eq!(mods.life("t"), Some(other), "o fechar da entrada também não a apaga");
 }

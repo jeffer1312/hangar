@@ -46,7 +46,7 @@ from app.adapters.preview_push import PushPreviewSource, fonte_ferramenta, fonte
 from app.adapters.stream_buffer import StreamBuffer, error_frames
 from app.config import settings
 from app.pqueue import PromptQueue
-from app.procinfo import _argv, pid_vivo
+from app.procinfo import _argv, pid_vivo, taskkill_path
 from app.state import StateEvent
 from app.live_rate import live_rate
 from app.transcript import ChatEvent, TranscriptTailer
@@ -1171,13 +1171,18 @@ class ClaudeHeadlessAdapter:
         # backend herdou (subido de dentro de outra sessão) sai antes: o filho nunca leva a de outra sessão.
         env.pop("HANGAR_PLUGIN_URL", None)
         env.pop("HANGAR_PLUGIN_TOKEN", None)
-        env.update(plugin_bridge.env_da_sessao(sess.name))
         if not meta.get("key"):
             meta = sess.meta = hl_sessions.update(sess.name, key=uuid.uuid4().hex) or meta
+        # A chave do sidecar vai no token: é por ela que o servidor Rust acha a sessão (`target.key`).
+        env.update(plugin_bridge.env_da_sessao(sess.name, meta["key"]))
         if meta.get("key"):
             env["CP_SESSION_KEY"] = meta["key"]
         env[_MARCADOR_CANO] = meta["key"]
         env[_CANO_OWNER] = str(Path.home())
+        # Só a sessão (ou a config do servidor) as põe: herdadas do backend subido de dentro de outra
+        # sessão, dariam a esta o subagente, o Jev ou o portão de hooks daquela.
+        for var in ("CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS", *runtime_config.JEV_VARS):
+            env.pop(var, None)
         if meta.get("config_dir"):
             env["CLAUDE_CONFIG_DIR"] = meta["config_dir"]
         if meta.get("subagent_model"):
@@ -2488,7 +2493,7 @@ def _matar_grupo(pid: int, name: str) -> None:
         import subprocess
         if not pid_vivo(pid):
             return
-        exe = shutil.which("taskkill")
+        exe = taskkill_path()
         if exe is None:
             raise RuntimeError("taskkill não encontrado; o processo da sessão segue vivo")
         try:

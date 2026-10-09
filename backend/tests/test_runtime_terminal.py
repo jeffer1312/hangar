@@ -77,6 +77,23 @@ def test_terminal_resolver_same_life_rename_and_new_mux_no_inherited_debt(monkey
     assert replacement.jsonl == first.jsonl
 
 
+def test_terminal_binding_carries_the_key_of_the_launch_token(monkeypatch, tmp_path):
+    # O Rust acha pela chave do token a sessão que o Hangar lançou; token só do nome não leva chave.
+    from app import runtime_terminal as terminal, pqueue
+    facts = dict(name='session', pane='%1', created=123, namespace='socket:pid1:born1',
+        jsonl=str(tmp_path / 'sid.jsonl'), session_id='sid', config_dir=str(tmp_path),
+        cwd=str(tmp_path), mux_argv=['tmux'], windows=False, plugin_token='k1.' + '0' * 32)
+    monkeypatch.setattr(terminal, '_collect', lambda name: dict(facts))
+    monkeypatch.setattr(pqueue, '_queue_dir', lambda: tmp_path)
+    first = terminal.resolve_binding('session')
+    assert first.meta['plugin_key'] == 'k1'
+    # Leitura do ambiente que falha na mesma vida não tira a chave do vínculo.
+    facts['plugin_token'] = ''
+    assert terminal.resolve_binding('session', first).meta['plugin_key'] == 'k1'
+    facts['plugin_token'] = '0' * 32
+    assert 'plugin_key' not in terminal.resolve_binding('session').meta
+
+
 def test_terminal_native_slot_never_replaces_2c_observation(tmp_path):
     owner = RuntimeCoordinator()
     slot = owner.register(terminal_binding(tmp_path))
@@ -1145,10 +1162,9 @@ def test_terminal_session_registers_in_rust_without_python_phase(monkeypatch, tm
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('guest', [True, False])
-def test_guest_click_is_refused_when_the_click_itself_opens_the_terminal_in_rust(monkeypatch, tmp_path, guest):
-    # Primeira operação depois de reiniciar o backend: ainda não há slot, e a fotografia da rota diria
-    # "terminal fora do Rust". O próprio clique abre a sessão no Rust, e a recusa vem sob a barreira.
+def test_click_that_opens_the_terminal_in_rust_borrows_the_keyboard(monkeypatch, tmp_path):
+    # Primeira operação depois de reiniciar o backend: ainda não há slot. O próprio clique abre a sessão
+    # no Rust e recebe o teclado emprestado, também quando quem clica é convidado.
     from app import plugin_click, tmux, runtime_terminal as terminal
     gateway = LoanGateway()
     owner = _born_terminal(monkeypatch, tmp_path, gateway)
@@ -1161,20 +1177,9 @@ def test_guest_click_is_refused_when_the_click_itself_opens_the_terminal_in_rust
     async def flow():
         owner.loop = asyncio.get_running_loop()
         assert 'session' not in owner.names and not owner.terminal_in_rust('session')
-        marca = terminal.guest_admin.set(guest)
-        try:
-            if guest:
-                with pytest.raises(terminal.GuestRefused):
-                    await plugin_click._click('session', 2, 5)
-            else:
-                await plugin_click._click('session', 2, 5)
-        finally:
-            terminal.guest_admin.reset(marca)
+        await plugin_click._click('session', 2, 5)
         assert owner.slot('session').phase == Phase.Rust and gateway.calls.count('open') == 1
-        if guest:
-            assert sent == [] and gateway.controls == [], 'o convidado não recebe o teclado'
-        else:
-            assert sent == ['session'] and [kind for kind, _ in gateway.controls] == ['keyboard_loan', 'keyboard_return']
+        assert sent == ['session'] and [kind for kind, _ in gateway.controls] == ['keyboard_loan', 'keyboard_return']
         await owner.change('session', lambda: asyncio.sleep(0), remove=True)
     asyncio.run(flow())
 

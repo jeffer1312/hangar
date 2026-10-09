@@ -181,7 +181,7 @@ async fn attach_terminal_mods(mods:&crate::mods::state::Mods,target:&super::term
     let link = crate::mods::terminal::TerminalLink::anchored(target.name.clone(),life,Arc::new(handle.clone()),mods.clone(),
         crate::mods::click::Limits::default(),handle.anchor());
     let process = format!("{}:{}:{}",target.key,target.binding.pane,target.binding.created);
-    mods.attach_terminal(&target.name,&process,life,link.clone());
+    mods.attach_terminal_keyed(&target.name,&process,target.plugin_key.as_deref(),life,link.clone());
     // O vigia sobe depois de ligar: o `attach_terminal` para o vigia do elo que estava no nome, e se fosse
     // este mesmo elo o derrubaria. No psmux não há vigia (o `watch_notices` recusa no Windows): lá o mínimo
     // volta na operação seguinte, no `prepare` do clique. O mínimo vale já na abertura: a janela pode ter
@@ -677,6 +677,7 @@ fn descriptor(value:&Value,launch:bool) -> Result<Target,RuntimeError> {
             || (binding.windows && !binding.pane.starts_with(&format!("={}:",binding.name))) {return Err(failure("terminal_binding"));}
         return Ok(Target::Terminal(super::terminal::TerminalTarget {key:descriptor.key,generation:descriptor.generation,name:descriptor.name,
             created:descriptor.meta["created"].as_f64().unwrap_or(binding.created as f64),binding,
+            plugin_key:descriptor.meta["plugin_key"].as_str().filter(|key|!key.is_empty()).map(str::to_owned),
             lease_path:descriptor.lock_path,state_path:descriptor.state_path,projection_dir:descriptor.projection_dir,transcript:descriptor.jsonl.into()}));
     }
     if descriptor.meta.get("terminal").is_some(){return Err(failure("descriptor_provider"));}

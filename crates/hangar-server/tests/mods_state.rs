@@ -146,21 +146,20 @@ fn attach_keeps_the_live_toasts() {
 }
 
 #[test]
-fn renamed_session_keeps_the_birth_name_of_its_process() {
+fn bridge_finds_the_session_by_the_key_of_the_process() {
+    // O token com chave diz o processo: renomeada sem relançar, a sessão segue achada; relançada (processo
+    // novo), a chave antiga não acha mais nada. A conferência do HMAC é da rota.
     let mods = Mods::default();
-    mods.attach_process("a", "p1", 1, Arc::new(NoLink));
-    assert_eq!(mods.bridge_session("a").as_deref(), Some("a"));
-    // Renomeada duas vezes sem relançar o processo: ele segue mandando o nome com que nasceu.
+    mods.attach_process("a", "p1:10:x", 1, Arc::new(NoLink));
+    assert_eq!(mods.bridge_session("a", "p1.mac").as_deref(), Some("a"));
     mods.forget("a", 1);
-    mods.attach_process("b", "p1", 2, Arc::new(NoLink));
-    mods.forget("b", 2);
-    mods.attach_process("c", "p1", 3, Arc::new(NoLink));
-    assert_eq!(mods.bridge_session("a").as_deref(), Some("c"));
-    assert_eq!(mods.bridge_session("b"), None, "nenhum processo nasceu com o nome do meio");
-    // Relançada (processo novo), nasce com o nome atual e não herda o de antes.
-    mods.forget("c", 3);
-    mods.attach_process("c", "p2", 4, Arc::new(NoLink));
-    assert_eq!((mods.bridge_session("c").as_deref(), mods.bridge_session("a")), (Some("c"), None));
+    mods.attach_process("c", "p1:10:x", 2, Arc::new(NoLink));
+    assert_eq!(mods.bridge_session("a", "p1.mac").as_deref(), Some("c"));
+    mods.forget("c", 2);
+    mods.attach_process("c", "p2:11:x", 3, Arc::new(NoLink));
+    assert_eq!((mods.bridge_session("c", "p2.mac").as_deref(), mods.bridge_session("a", "p1.mac")), (Some("c"), None));
+    // Token só do nome (processo lançado antes da chave): a sessão com esse nome agora.
+    assert_eq!((mods.bridge_session("c", "hex").as_deref(), mods.bridge_session("a", "hex")), (Some("c"), None));
 }
 
 #[test]
@@ -181,10 +180,8 @@ fn a_new_session_with_an_old_name_inherits_nothing_and_shares_no_bridge() {
     assert!(!mods.publish_ui("a", 1, json!({"above": {"type": "Text"}})));
     mods.toast("a", 1, "vitrine", "atrasado", 4000);
     assert!(mods.replay("a").is_empty());
-    // Os dois processos vivos nasceram como `a` e têm o mesmo token: a ponte não atende nenhum.
-    assert_eq!(mods.bridge_session("a"), None);
-    mods.forget("b", 2);
-    assert_eq!(mods.bridge_session("a").as_deref(), Some("a"));
+    // Os dois processos vivos nasceram como `a`, cada um com a própria chave no token.
+    assert_eq!((mods.bridge_session("a", "p1.mac").as_deref(), mods.bridge_session("a", "p2.mac").as_deref()), (Some("b"), Some("a")));
 }
 
 #[test]

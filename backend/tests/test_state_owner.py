@@ -160,6 +160,20 @@ async def test_guest_chat_reads_rust_channel(rust):
     assert "message" in _nomes(vistos), "o transcript do convidado continua vindo do Python"
 
 
+async def test_guest_sees_the_mods_band_from_the_hub(rust):
+    # A faixa dos mods que o Rust atende só existe no hub; a do Python não a tem e não sai ao convidado.
+    _adapter, jsonl = rust
+    plugin_bridge._guardar_faixa("s", {"type": "Text", "children": ["do python"]}, 80, [])
+    faixa = json.dumps({"above": {"type": "Text", "children": ["do rust"]}, "panes": [], "source": "surface"})
+    try:
+        async with _CanalRust(_RUST_EVENTS + [("plugin_ui", faixa)]):
+            gen = sse.merged_events("s", str(jsonl), count_app=False)
+            vistos = await _coleta(gen, lambda v: "plugin_ui" in _nomes(v) and "suggest" in _nomes(v), limite=2.0)
+    finally:
+        plugin_bridge.esquecer("s")
+    assert [e["data"] for e in vistos if e["event"] == "plugin_ui"] == [faixa]
+
+
 async def test_guest_channel_failure_closes_the_stream(rust):
     _adapter, jsonl = rust
     list_bridge.configure(None, None)

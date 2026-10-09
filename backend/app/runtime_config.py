@@ -191,6 +191,9 @@ _JEV_DESTINO = (
     ("jev_endpoint", "JEV_ENDPOINT"),
     ("jev_model", "JEV_MODEL"),
 )
+# Tudo que o `env_jev` pode pôr além do marcador: quem monta o ambiente tira antes, senão a chave
+# herdada do backend vale numa sessão com o recurso desligado.
+JEV_VARS = ("TYPESAFE_API_KEY", *(var for _, var in _JEV_DESTINO + _JEV_TEXTO))
 # Marcador do estado do recurso NA SESSÃO. Vai sempre, ligado ou desligado: sem ele o
 # `hangar-preview objetivo` não separa "desligado nesta sessão" de "nunca configurado", e as duas
 # pedem frases diferentes.

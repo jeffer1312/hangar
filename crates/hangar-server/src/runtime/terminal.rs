@@ -10,6 +10,8 @@ use tokio::sync::{Mutex,mpsc,oneshot,broadcast};
 pub struct TerminalTarget {
     pub key:String,pub generation:u64,pub name:String,pub binding:TerminalBinding,
     pub lease_path:PathBuf,pub state_path:PathBuf,pub projection_dir:PathBuf,pub transcript:PathBuf,pub created:f64,
+    /// A chave do token da ponte que o processo recebeu no lançamento (`plugin_key` do vínculo).
+    pub plugin_key:Option<String>,
 }
 /// A âncora da faixa dos mods (`mods::tree::anchor`, o começo do primeiro texto dela): o elo do `Mods` a
 /// escreve a cada `/ui` do plugin, e o executor a lê para reconhecer na tela a faixa inteira focada.
@@ -167,6 +169,8 @@ struct Executor {
     hold:Option<tokio::time::Instant>,
     /// A identidade do pane já foi conferida nesta reserva: as operações seguintes do clique não a refazem.
     hold_checked:bool,
+    /// O plugin já não devolveu o foco nesta reserva: as voltas seguintes da limpeza vão direto ao anel.
+    focus_refused:bool,
     /// Comandos e pedidos de drenagem que chegaram com o pane reservado: saem na ordem depois do `Release`.
     parked:VecDeque<Message>,
     /// A entrada adiada porque o foco está num painel ou na faixa de um mod (`focus_guard`).
@@ -235,7 +239,7 @@ fn clear_on_disk(transcript:&std::path::Path,since:f64)->Result<bool,std::io::Er
 /// Teto de cada reserva do pane a um clique de mod: os 7,5 s do pedido mais os 2 s da limpeza, com folga; a
 /// limpeza renova a sua a cada volta ao prompt, também abaixo disto. Vence sozinha: uma tarefa de clique que
 /// sumiu sem o `Release` não segura a fila.
-const MAX_MODS_HOLD:Duration=Duration::from_secs(10);
+pub(crate) const MAX_MODS_HOLD:Duration=Duration::from_secs(10);
 pub struct TerminalActor;
 impl TerminalActor {
     pub fn spawn(target:TerminalTarget,queue:QueueActor,policy:PolicyClient,options:TerminalOptions,events:broadcast::Sender<RuntimeEvent>,revision:Arc<AtomicU64>)->TerminalHandle {
@@ -244,7 +248,7 @@ impl TerminalActor {
         let sequence=Arc::new(AtomicU64::new(queue.initial_state().next_seq.max(previous.max(queue.initial_state().operations.len() as u64).saturating_add(1))));
         let receipt=ReceiptIndex::new("claude",&target.binding.conversation);
         let (sender,receiver)=mpsc::channel(64); let closed=Arc::new(AtomicBool::new(false)); let anchor=options.anchor.clone();
-        let executor=Executor {target,queue:Arc::new(queue),policy,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,loan:None,stall:None,hold:None,hold_checked:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None};
+        let executor=Executor {target,queue:Arc::new(queue),policy,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None};
         let task=tokio::spawn(executor.run(receiver,closed.clone()));
         TerminalHandle {sender,closed,task:Arc::new(Mutex::new(Some(task))),stopped:Arc::new(Mutex::new(None)),anchor}
     }
@@ -465,9 +469,10 @@ impl Executor {
     ///
     /// A saída da fila: o foco num mod por mais que `focus_return` desde a primeira vez que a linha o viu (a
     /// limpeza de um clique que desistiu, ou quem levou o foco lá e saiu) é devolvido ao prompt, e a entrada
-    /// escreve. A linha tenta `FOCUS_RETURN_TRIES` devoluções; depois, e com só a faixa na tela, só registra e
-    /// espera a pessoa. A contagem é da linha: a seguinte começa do zero.
-    async fn focus_guard(&mut self,row:&str)->Option<&'static str> {
+    /// escreve. Com `plugin` vivo, quem devolve é ele, sem andar pelo anel; sem ele, ou se o foco não voltou,
+    /// o `ctrl+x tab`. A linha tenta `FOCUS_RETURN_TRIES` devoluções; depois, e com só a faixa na tela sem o
+    /// plugin, só registra e espera a pessoa. A contagem é da linha: a seguinte começa do zero.
+    async fn focus_guard(&mut self,row:&str,plugin:bool)->Option<&'static str> {
         let band_only=match self.mods_view().await {
             Err(code)=>return Some(code),
             Ok(Some((screen,true)))=>screen.placement.is_none(),
@@ -482,10 +487,16 @@ impl Executor {
         if now<state.next || state.tries>=FOCUS_RETURN_TRIES {return away;}
         state.tries+=1;
         let (since,tries)=(state.since,state.tries);
+        if plugin && self.plugin_return(row).await && self.focus_back().await {
+            tracing::info!(key=%self.target.key,session=%self.target.name,code="mods_focus_returned",by="plugin",waited_s=now.duration_since(since).as_secs(),
+                "o foco seguia num mod com uma entrada esperando; o plugin o devolveu ao prompt");
+            self.away=None;
+            return None;
+        }
         // Só com a faixa na tela o anel do `ctrl+x tab` gira dentro dela e nunca chega ao prompt (medição (i)):
         // nenhuma tecla, só o registro.
         if band_only {
-            state.tries=FOCUS_RETURN_TRIES;
+            if let Some(state)=self.away.as_mut() {state.tries=FOCUS_RETURN_TRIES;}
             tracing::warn!(key=%self.target.key,session=%self.target.name,code="mods_focus_band_only",
                 "o foco segue na faixa de um mod sem painel aberto; o ctrl+x tab não o devolve, e a entrada espera a pessoa");
             return away;
@@ -501,6 +512,36 @@ impl Executor {
         tracing::warn!(key=%self.target.key,session=%self.target.name,code="mods_focus_return_failed",tries,
             "o foco não voltou ao prompt; a entrada espera");
         away
+    }
+    /// Pede ao plugin que devolva o teclado ao prompt (`PluginMode::Focus`): ele o faz pelo `prompt.fill`, que
+    /// tira o foco da faixa ou do painel sem trocar a aba na frente. `true` só com o aviso dele; o plugin que
+    /// não conhece o pedido responde `not_written`, e quem chamou segue pelo `ctrl+x tab`.
+    async fn plugin_return(&self,root:&str)->bool {
+        let id=format!("{}:{}:focus:{}",self.target.key,self.target.generation,self.sequence.fetch_add(1,Ordering::Relaxed));
+        let request=PluginRequest {id:id.clone(),text:String::new(),mode:input::PluginMode::Focus};
+        match self.services(root,&id,"").publish(&self.target.binding,request).await {
+            Ok(PluginReply::Filled)=>true,
+            reply=>{
+                tracing::debug!(key=%self.target.key,session=%self.target.name,reply=?reply,"o plugin não devolveu o foco; segue o ctrl+x tab");
+                false
+            }
+        }
+    }
+    /// Depois do aviso do plugin, a tela confirma que o foco saiu do mod; o desenho vem logo depois do aviso.
+    async fn focus_back(&self)->bool {
+        let until=tokio::time::Instant::now()+self.options.limits.settle*2;
+        loop {
+            match self.mods_view().await {
+                Ok(Some((_,true)))=>{},
+                Ok(_)=>return true,
+                Err(code)=>{tracing::debug!(key=%self.target.key,session=%self.target.name,code,"tela ilegível depois do aviso do plugin; segue o ctrl+x tab"); return false;},
+            }
+            if tokio::time::Instant::now()>=until {
+                tracing::debug!(key=%self.target.key,session=%self.target.name,"o plugin avisou, mas a tela segue num mod; segue o ctrl+x tab");
+                return false;
+            }
+            tokio::time::sleep(FOCUS_STEP_POLL).await;
+        }
     }
     /// Volta o teclado ao prompt pelo `ctrl+x tab`, a tecla medida para isso (o `Escape` age no Claude, e no
     /// psmux nem devolve o foco), lendo a tela antes de cada tecla. Para com um diálogo ou a pesquisa na tela,
@@ -538,9 +579,21 @@ impl Executor {
     /// emprestado ao Python (administração digitando no pane), recusa: duas mãos no mesmo pane erram o alvo.
     async fn pane_op(&mut self,op:PaneOp)->Result<PaneReply,RuntimeError> {
         // Soltar vale sempre: é a limpeza do clique.
-        if op==PaneOp::Release {self.hold=None; self.hold_checked=false; return Ok(PaneReply::Done);}
+        if op==PaneOp::Release {self.hold=None; self.hold_checked=false; self.focus_refused=false; return Ok(PaneReply::Done);}
         if self.loaned() {return Err(error("keyboard_loan"));}
+        if op==PaneOp::ReturnFocus {
+            // Uma tentativa por reserva e só com o plugin vivo: sem isso, cada volta da limpeza pagaria o
+            // diário e a espera do aviso antes do anel, dentro do prazo curto dela.
+            if self.focus_refused {return Err(error("plugin_focus"));}
+            let live=self.services("mods-click","mods-click","").facts(&self.target.binding).await.is_ok_and(|facts|facts.plugin_live);
+            if live && self.plugin_return("mods-click").await {return Ok(PaneReply::Done);}
+            if !live {tracing::debug!(key=%self.target.key,session=%self.target.name,"sem plugin vivo; a limpeza do clique segue o ctrl+x tab");}
+            self.focus_refused=self.held();
+            return Err(error("plugin_focus"));
+        }
         if let PaneOp::Hold {millis}=op {
+            // Reserva nova (a anterior venceu sem `Release`): o plugin ganha outra tentativa.
+            if !self.held() {self.focus_refused=false;}
             // Cada reserva, também a renovação da limpeza, confere o pane de novo uma vez: uma sessão do
             // multiplexador trocada por fora com o mesmo nome não vale por todas as renovações.
             self.hold_checked=false;
@@ -567,6 +620,8 @@ impl Executor {
             PaneOp::Keys(keys)=>{let keys:Vec<&str>=keys.iter().map(String::as_str).collect(); driver.mods_keys(&keys).await.map_err(failed)?; PaneReply::Done},
             PaneOp::Resize {columns,rows}=>{driver.resize(columns,rows).await.map_err(failed)?; PaneReply::Done},
             PaneOp::Hold {..}|PaneOp::Release=>PaneReply::Done,
+            // Atendido no `pane_op`, antes do multiplexador.
+            PaneOp::ReturnFocus=>PaneReply::Done,
         })
     }
     async fn execute(&mut self,id:&str,kind:&str,payload:Value,entry:Option<String>)->Result<RuntimeReply,RuntimeError> {
@@ -650,7 +705,7 @@ impl Executor {
                         // o próximo tique tenta de novo.
                         // Só quando a entrega vai apertar tecla: o modo `User` e a nativa não passam pelo teclado,
                         // e a guarda só custaria leituras e atraso.
-                        "input"=>match if facts.as_ref().is_some_and(|f|f.as_ref().is_ok_and(|f|!input::presses_keys(f,text))) {None} else {self.focus_guard(root).await} {
+                        "input"=>match if facts.as_ref().is_some_and(|f|f.as_ref().is_ok_and(|f|!input::presses_keys(f,text))) {None} else {self.focus_guard(root,facts.as_ref().is_some_and(|f|f.as_ref().is_ok_and(|f|f.plugin_live))).await} {
                             Some(code)=>DeliveryResult {disposition:input::Disposition::Deferred,stage:input::DeliveryStage::Composer,cleanup:input::Cleanup::NotNeeded,
                                 native:false,message_id:None,code:code.into(),draft:None},
                             None=>driver.prompt(text,&publication).await,
@@ -714,7 +769,10 @@ impl Executor {
             None=>(Stall {row:row.into(),code:code.into(),since:now,wait:self.options.tick,next:now,surfaced:false},false),
         };
         let (stall,repeated)=stall;
-        let stall=self.stall.insert(Stall {next:now+stall.wait,..stall});
+        // A devolução do foco tem hora marcada (`focus_guard`): a espera crescente não pode passar dela.
+        let due=self.away.as_ref().filter(|away|away.row==row && away.tries<FOCUS_RETURN_TRIES).map(|away|away.next);
+        let next=due.map_or(now+stall.wait,|due|(now+stall.wait).min(due));
+        let stall=self.stall.insert(Stall {next,..stall});
         if !stall.surfaced && now.duration_since(stall.since)>=self.options.stall_notice {
             stall.surfaced=true;
             tracing::warn!(key=%self.target.key,session=%self.target.name,code=%stall.code,
