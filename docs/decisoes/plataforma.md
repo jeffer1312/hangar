@@ -299,11 +299,10 @@ comprovaram encerramento
 em menos de 2 s e nenhuma chamada à reserva. O teste de áudio usa prazo de 300 s também na
 mensagem de erro; o seletor do Expo tem trava síncrona até concluir ou cancelar a seleção.
 
-O CI também expôs duas esperas frágeis nas fixtures de contas e estado: o canal interno de
-SSE devolvia 404 para uma sessão declarada viva, e o teste de atualização do login dependia
-de turnos do agendador. A fixture agora mantém o canal aberto e sinaliza o início da leitura
-com um evento. O contrato com o Codex instalado prepara a inicialização fria antes da leitura,
-sem repetir a asserção nem ampliar seu prazo de produção.
+O CI também expôs uma espera frágil na fixture de estado: o canal interno de SSE devolvia 404
+para uma sessão declarada viva. A fixture agora mantém o canal aberto. O contrato com o Codex
+instalado prepara a inicialização fria antes da leitura e ainda relê `unavailable` por até um
+minuto, sem ampliar o prazo de produção.
 Na captura, o executável temporário podia falhar ao nascer durante outros spawns. A fixture
 Unix usa um link para um script imutável, com os parâmetros em arquivos separados, como o
 observador de terminal já fazia. A espera bloqueada usa um pipe, sem atraso artificial.
