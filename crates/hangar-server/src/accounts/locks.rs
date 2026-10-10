@@ -26,7 +26,6 @@ impl KeyedGates {
 pub enum LockError {
     Busy,
     Io(io::Error),
-    Worker,
 }
 impl From<io::Error> for LockError {
     fn from(error: io::Error) -> Self {
@@ -107,6 +106,8 @@ impl AccountLocks {
     }
 
     /// Cancelar a future abandona a espera; uma guarda entregue nunca vence por prazo.
+    /// Cada tentativa roda aqui mesmo: `try_lock` não bloqueia, e uma tentativa no pool de bloqueio
+    /// sobreviveria ao cancelamento e seguraria a trava depois dele.
     pub async fn acquire(
         &self,
         key: &AccountKey,
@@ -114,11 +115,7 @@ impl AccountLocks {
         deadline: Instant,
     ) -> Result<AccountGuard, LockError> {
         loop {
-            let (locks, key) = (self.clone(), key.clone());
-            match tokio::task::spawn_blocking(move || locks.try_acquire(&key, mode))
-                .await
-                .map_err(|_| LockError::Worker)?
-            {
+            match self.try_acquire(key, mode) {
                 Err(LockError::Busy) if Instant::now() < deadline => {
                     tokio::time::sleep(
                         Duration::from_millis(25)

@@ -92,6 +92,35 @@ fn first_call_waits_and_refresh_changes_generation_only_when_map_changes() {
     while Instant::now() < deadline { assert_eq!(cache.recent().0, changed); std::thread::yield_now(); }
 }
 
+/// Muda a data de uma pasta; o Windows só abre pasta com acesso de atributos e semântica de backup.
+fn set_mtime(dir: &Path, time: std::time::SystemTime) {
+    let mut options = std::fs::OpenOptions::new();
+    #[cfg(unix)] options.read(true);
+    #[cfg(windows)] { use std::os::windows::fs::OpenOptionsExt; options.access_mode(0x100).custom_flags(0x0200_0000); }
+    options.open(dir).unwrap().set_modified(time).unwrap();
+}
+
+/// Skill nova no mesmo degrau de relógio do sistema de arquivos em que a pasta foi varrida (no Windows o
+/// degrau é de 1 a 16 ms): a data da pasta não muda, e a verificação seguinte ainda tem de achá-la.
+#[test]
+fn change_in_the_same_timestamp_tick_as_the_scan_is_seen() {
+    let d = tempfile::tempdir().unwrap(); let home = d.path().join("home"); let root = home.join(".claude/skills");
+    skill(&root.join("one"));
+    let clock = Arc::new(AtomicU64::new(1)); let c = clock.clone();
+    let cache = origins::Origins::with_clock(home.clone(), d.path().join("repo"), Arc::new(move || c.load(Ordering::SeqCst)));
+    let (generation, _) = cache.recent();
+    let tick = std::fs::metadata(&root).unwrap().modified().unwrap();
+    skill(&root.join("two"));
+    set_mtime(&root, tick);
+    clock.store(31_000_000_001, Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let changed = loop {
+        let r = cache.recent(); if r.1.contains_key("two") { break r.0; }
+        assert!(Instant::now() < deadline, "a skill nova no mesmo degrau não apareceu"); std::thread::yield_now();
+    };
+    assert!(changed > generation);
+}
+
 #[test]
 fn missing_roots_initialize_an_empty_snapshot_shared_by_concurrent_calls() {
     let d = tempfile::tempdir().unwrap();

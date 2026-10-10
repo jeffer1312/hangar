@@ -111,7 +111,18 @@ impl Fixture {
         TerminalActor::spawn(self.target.clone(),QueueActor::start(store,lease),self.policy.clone(),options,events,Arc::new(AtomicU64::new(0)))
     }
     fn command(&self,id:&str,text:&str)->RuntimeCommand { RuntimeCommand {operation_id:id.into(),kind:OperationKind::Input,payload:json!({"text":text,"pre_transcript":false})} }
-    fn state(&self)->Value {serde_json::from_slice(&std::fs::read(&self.target.state_path).unwrap()).unwrap()}
+    /// Lê o estado que o ator grava por troca atômica. No Windows quem abre o arquivo no instante da troca
+    /// recebe NotFound ou acesso negado; a leitura seguinte já vê o arquivo novo.
+    fn state(&self)->Value {
+        let deadline=std::time::Instant::now()+Duration::from_secs(1);
+        loop {
+            match std::fs::read(&self.target.state_path) {
+                Ok(bytes) => return serde_json::from_slice(&bytes).unwrap(),
+                Err(error) if cfg!(windows) && matches!(error.kind(),std::io::ErrorKind::NotFound|std::io::ErrorKind::PermissionDenied) && std::time::Instant::now()<deadline => std::thread::yield_now(),
+                Err(error) => panic!("estado ilegível: {error}"),
+            }
+        }
+    }
     /// Espera com prazo; no estouro mostra onde a operação parou (política, multiplexador e diário).
     /// O teto cobre o runner Windows, onde cada leitura de fatos grava o diário durável em ~0,1–0,3 s.
     async fn wait_for(&self,what:&str,mut done:impl FnMut()->bool) {

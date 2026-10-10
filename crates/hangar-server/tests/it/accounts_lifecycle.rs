@@ -75,6 +75,24 @@ fn shared_birth_allows_preparation_but_excludes_identity_changes() {
     drop(identity);
 }
 
+/// A tentativa roda na própria espera, não no pool de bloqueio: com o pool ocupado a trava livre sai na
+/// hora, e uma espera cancelada não deixa tentativa solta que pegue a trava depois.
+#[test]
+fn acquire_does_not_queue_behind_the_blocking_pool() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().max_blocking_threads(1).enable_all().build().unwrap();
+    let (release, hold) = std::sync::mpsc::channel::<()>();
+    let busy = runtime.spawn_blocking(move || { let _ = hold.recv(); });
+    let root = tempfile::tempdir().unwrap();
+    let key = AccountKey::new(Provider::Codex, root.path()).unwrap();
+    let locks = AccountLocks::new(root.path().join("locks"));
+    let acquired = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(2), locks.acquire(&key, GuardMode::Exclusive, Instant::now())).await
+    });
+    release.send(()).unwrap();
+    runtime.block_on(busy).unwrap();
+    assert!(matches!(acquired, Ok(Ok(_))), "a trava livre esperou o pool de bloqueio");
+}
+
 #[tokio::test]
 async fn deadline_is_for_waiting_not_for_guard_lifetime() {
     let root = tempfile::tempdir().unwrap();
