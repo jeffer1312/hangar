@@ -1394,6 +1394,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn side_events_404_closes_the_hub_with_a_subscriber() {
+        // 404 na conexão interna é "sessão sumiu": o hub fecha mesmo com assinante.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new()).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let binding = Binding { provider: Provider::Claude, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false };
+        let ctx = SideCtx { upstream, ..test_ctx() };
+        let lease = ctx.hubs.acquire("s", binding, &ctx);
+        let gone = tokio::time::timeout(Duration::from_secs(2), async {
+            while ctx.hubs.0.lock().unwrap().contains_key("s") { tokio::time::sleep(Duration::from_millis(20)).await }
+        }).await;
+        assert!(gone.is_ok(), "o 404 tira o hub do mapa com o assinante ainda preso");
+        drop(lease);
+    }
+
+    #[tokio::test]
     async fn own_pane_question_not_replayed_after_answer() {
         // A pergunta do `Monitor` sai uma vez por pergunta: quem chega depois da resposta não a recebe.
         let dir = tempfile::tempdir().unwrap();
