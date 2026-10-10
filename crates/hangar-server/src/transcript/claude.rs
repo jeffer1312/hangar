@@ -361,7 +361,10 @@ fn queue_operation(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatE
     if obj.get("operation").and_then(Value::as_str) != Some("remove") {
         return Vec::new();
     }
-    let id = delivery_id(obj.get("deliveryId"))
+    let delivery = delivery_id(obj.get("deliveryId"));
+    // Com entrega, este evento pode substituir o do anexo no SSE: leva o próprio horário.
+    let delivery_ts = if delivery.is_some() { ts(obj) } else { None };
+    let id = delivery
         .unwrap_or_else(|| format!("queued:{}:{h}", obj.get("timestamp").map_or_else(String::new, py::py_str)));
     if let Some(peer) = wrapped_peer_msg(q, resolve) {
         return vec![text_event(ChatKind::UserMsg, id, peer)];
@@ -377,7 +380,7 @@ fn queue_operation(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatE
     if cleaned.is_empty() {
         return Vec::new();
     }
-    vec![text_event(ChatKind::UserMsg, id, cleaned)]
+    vec![ChatEvent { ts: delivery_ts, ..text_event(ChatKind::UserMsg, id, cleaned) }]
 }
 
 /// Sem terminal, a mesma entrega grava o anexo `queued_command` e o `remove`: o id comum vira uma bolha só.

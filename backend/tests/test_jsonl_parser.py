@@ -520,6 +520,21 @@ def test_entrega_sem_terminal_anexo_e_remove_viram_uma_bolha():
     assert [e.id for e in att] == [e.id for e in rem] == ["delivery:d-1"]
 
 
+def test_historico_leva_uma_bolha_por_entrega_sem_terminal(tmp_path, monkeypatch):
+    from app import pqueue
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    jsonl = tmp_path / "s.jsonl"
+    jsonl.write_text("\n".join(json.dumps(o) for o in [
+        {"type": "attachment", "uuid": "u-att", "timestamp": "2026-10-09T23:06:03.448Z",
+         "attachment": {"type": "queued_command", "delivery_id": "d-1",
+                        "prompt": [{"type": "text", "text": "A DESCULPA ERA B"}]}},
+        {"type": "queue-operation", "operation": "remove", "deliveryId": "d-1", "reason": "absorbed_mid_turn",
+         "timestamp": "2026-10-09T23:06:10.249Z", "content": "A DESCULPA ERA B"},
+    ]) + "\n")
+    msgs = [e for e in pqueue.merged_history("s", str(jsonl)) if e.kind == "user_msg"]
+    assert [(e.id, e.text) for e in msgs] == [("delivery:d-1", "A DESCULPA ERA B")]
+
+
 def test_queued_dequeue_nao_renderiza_para_nao_duplicar_turno_real():
     # dequeue = virou turno de verdade (tem seu type='user'); renderizar aqui duplicaria a bubble.
     ev = json.dumps({"type": "queue-operation", "operation": "dequeue", "sessionId": "s1",

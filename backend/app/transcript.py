@@ -533,8 +533,10 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             # front, que deduplica por id, esconderia uma. Hash estavel (nao o hash() randomizado do
             # processo) pra o mesmo remove reparseado manter o id e nao duplicar na reconexao do SSE.
             digest = hashlib.md5(queued.encode("utf-8", "replace")).hexdigest()[:8]
-            return [ChatEvent(kind="user_msg", text=cleaned,
-                              id=_delivery_id(obj.get("deliveryId")) or f"queued:{obj.get('timestamp', '')}:{digest}")]
+            entrega = _delivery_id(obj.get("deliveryId"))
+            # Com entrega, este evento pode substituir o do anexo no SSE: leva o próprio horário.
+            return [ChatEvent(kind="user_msg", text=cleaned, ts=_ts(obj) if entrega else None,
+                              id=entrega or f"queued:{obj.get('timestamp', '')}:{digest}")]
         return []
 
     # Claude sem terminal: a msg orientada no meio do turno (stdin com turno em voo) entra como
