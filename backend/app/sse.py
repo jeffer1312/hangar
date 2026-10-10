@@ -362,6 +362,8 @@ def _list_sig(infos) -> str:
     return json.dumps(
         [(i.name, i.cwd, getattr(i, "branch", None), getattr(i, "git_cwd", None),
           getattr(i, "worktree_gone", False), getattr(i, "git_dirty", None),
+          getattr(i, "git_ahead", None), getattr(i, "git_behind", None),
+          getattr(i, "git_added", None), getattr(i, "git_removed", None),
           i.state, i.tracked, getattr(i, "headless", False), i.jsonl, i.question, i.stalled, i.limited,
           getattr(i, "lifecycle_id", None), getattr(i, "transfer_id", None),
           getattr(i, "transfer_phase", None),

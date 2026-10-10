@@ -199,6 +199,14 @@ def _repo_fingerprint(cwd: str) -> tuple | None:
                  os.path.join(common, "FETCH_HEAD")]
         if head.startswith("ref: "):
             paths.append(os.path.join(common, head[len("ref: "):]))
+            # O push só regrava a ref remota da branch: sem ela o "à frente" ficava velho até o prazo.
+            branch = head[len("ref: refs/heads/"):] if head.startswith("ref: refs/heads/") else ""
+            if branch:
+                remotes = os.path.join(common, "refs", "remotes")
+                try:
+                    paths += [os.path.join(remotes, r, branch) for r in sorted(os.listdir(remotes))]
+                except FileNotFoundError:
+                    pass
         fp = []
         for p in paths:
             try:

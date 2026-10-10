@@ -156,6 +156,14 @@ fn fingerprint(cwd: &Path) -> Option<Vec<u128>> {
     ];
     if let Some(target) = head.trim().strip_prefix("ref: ") {
         paths.push(common.join(target));
+        // O push só regrava a ref remota da branch: sem ela o "à frente" ficava velho até o prazo.
+        if let Some(branch) = target.strip_prefix("refs/heads/")
+            && let Ok(remotes) = std::fs::read_dir(common.join("refs").join("remotes"))
+        {
+            let mut found: Vec<PathBuf> = remotes.flatten().map(|r| r.path().join(branch)).collect();
+            found.sort();
+            paths.extend(found);
+        }
     }
     paths
         .iter()

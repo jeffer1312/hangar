@@ -76,6 +76,7 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
             };
             json!([
                 i.name, i.cwd, i.branch, i.git_cwd, i.worktree_gone, i.git_dirty,
+                i.git_ahead, i.git_behind, i.git_added, i.git_removed,
                 i.state, i.tracked, i.headless, i.jsonl, i.question, i.stalled, i.limited,
                 i.lifecycle_id, i.transfer_id, i.transfer_phase,
                 i.last_reply, i.last_reply_at, i.pending_questions,
