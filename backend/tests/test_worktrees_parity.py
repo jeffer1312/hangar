@@ -84,12 +84,12 @@ def scene(tmp_path, monkeypatch):
     git(detached, "checkout", "--detach")
 
     projects = tmp_path / "projects"
-    live = projects / sanitize_cwd(str(dirty)) / "viva.jsonl"
+    live = projects / sanitize_cwd(str(dirty)) / "d0000003-0000-4000-8000-000000000000.jsonl"
     live.parent.mkdir(parents=True)
     live.write_text("{}\n", encoding="utf-8")
-    (live.parent / "fechada.jsonl").write_text("{}\n", encoding="utf-8")
+    (live.parent / "d0000001-0000-4000-8000-000000000000.jsonl").write_text("{}\n", encoding="utf-8")
     (projects / sanitize_cwd(str(merged))).mkdir()
-    (projects / sanitize_cwd(str(merged)) / "outra.jsonl").write_text("{}\n", encoding="utf-8")
+    (projects / sanitize_cwd(str(merged)) / "d0000002-0000-4000-8000-000000000000.jsonl").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(archive, "_contas", lambda config_dir=None: [(None, "", projects)])
     sessions = [
         {"name": "dentro", "cwd": str(dirty / "build"), "worktree_path": None, "jsonl": str(live)},

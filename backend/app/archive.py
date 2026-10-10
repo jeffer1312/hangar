@@ -171,13 +171,16 @@ def _tail_info(jsonl: Path, provider: str = "claude") -> str:
     return ""
 
 
+def conversation_files(proj: Path) -> list[Path]:
+    """Transcripts `<uuid>.jsonl` da pasta do projeto. A cópia `<uuid>.from-<conta>.jsonl` que a
+    exclusão de uma conta deixa não é conversa: retomá-la é recusado e adotá-la pelo mtime troca o
+    transcript de uma sessão viva."""
+    return [f for f in proj.glob("*.jsonl") if _SID_RE.match(f.stem)]
+
+
 def _folder_files(proj: Path) -> list[tuple[float, Path]]:
     files: list[tuple[float, Path]] = []
-    for f in proj.glob("*.jsonl"):
-        # Só `<uuid>.jsonl` é conversa retomável; a cópia `<uuid>.from-<conta>.jsonl` de uma conta
-        # apagada viraria um item que o `archive_jsonl` recusa ao abrir.
-        if not _SID_RE.match(f.stem):
-            continue
+    for f in conversation_files(proj):
         try:
             files.append((f.stat().st_mtime, f))
         except OSError:

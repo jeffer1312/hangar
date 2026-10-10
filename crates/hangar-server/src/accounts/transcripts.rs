@@ -68,8 +68,11 @@ impl<'a> Merge<'a> {
                 self.tree(&path, &target)?;
             } else if kind.is_file() {
                 self.file(&path, &target)?;
+            } else {
+                // Link, socket ou fifo: seguir levaria à conta padrão o que mora fora da conta, e
+                // pular deixaria a exclusão apagá-lo sem aviso. Recusa e a conta fica.
+                return Err(at(Some(&path), &target)(io::Error::other("não é arquivo nem pasta")));
             }
-            // Link não é seguido: levaria para a conta padrão o que mora fora da conta.
         }
         Ok(())
     }

@@ -26,7 +26,7 @@ from app.git_ops import git_summary, git_diffstat
 from app import worktrees
 from app.models import SessionInfo, session_key
 from app.pqueue import PromptQueue, _sanitize, merged_history
-from app.archive import _texto_simples
+from app.archive import _texto_simples, conversation_files
 from app.chain import ThenLink
 from app import guest_users, pair
 from app.pair import PairLink, rename_pair, leave as pair_leave
@@ -417,7 +417,7 @@ def _newest_after_clear(projdir: Path, sid_jsonl: str, exclude: set[str]) -> str
         return sid_jsonl
     best = sid_jsonl
     try:
-        for f in projdir.glob("*.jsonl"):
+        for f in conversation_files(projdir):
             if os.path.realpath(str(f)) in exclude:
                 continue
             try:
@@ -1107,7 +1107,7 @@ class SessionRegistry:
             except OSError:
                 return 0.0
 
-        files = sorted(proj.glob("*.jsonl"), key=_mtime, reverse=True)
+        files = sorted(conversation_files(proj), key=_mtime, reverse=True)
         return str(files[0]) if files else None
 
     def _aux_open_jsonls(self, pids: list[int]) -> set[str]:
@@ -3368,7 +3368,7 @@ class SessionRegistry:
         ag = _pid_do_agente(pane.get("pid"))
         cdir = _config_dir_of(ag) if ag else None
         proj = ((cdir / "projects") if cdir else self.projects_dir) / sanitize_cwd(cwd)
-        files = sorted(proj.glob("*.jsonl"),
+        files = sorted(conversation_files(proj),
                        key=lambda f: (f.stat().st_mtime if f.exists() else 0.0), reverse=True)[:6] \
             if proj.is_dir() else []
         taken = {os.path.realpath(s.jsonl) for s in self.list() if s.jsonl and s.name != name}

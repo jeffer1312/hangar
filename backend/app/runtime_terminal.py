@@ -600,7 +600,8 @@ def _clear_on_disk(jsonl, since):
     conversa, que começa pelo registro do comando. Leitura que falha conta como prova."""
     atual = Path(jsonl)
     try:
-        for p in atual.parent.glob('*.jsonl'):
+        from app.archive import conversation_files
+        for p in conversation_files(atual.parent):
             try:
                 info = p.stat()
                 # Sem data de nascimento (Linux), vale a de escrita: o teto de 60 s limita o engano.

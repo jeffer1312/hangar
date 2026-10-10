@@ -37,14 +37,14 @@ def test_roots_and_worktree_list(tmp_path):
 
 
 def test_claude_cwd_reads_last_line_with_cwd(tmp_path):
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text("\n".join([json.dumps({"cwd": "/a"}), json.dumps({"cwd": "/b"}),
                             json.dumps({"type": "summary"})]) + "\n")
     assert worktrees.claude_cwd(str(f)) == "/b"
 
 
 def test_claude_cwd_without_cwd_is_none(tmp_path):
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text(json.dumps({"type": "summary"}) + "\n")
     assert worktrees.claude_cwd(str(f)) is None
 
@@ -53,7 +53,7 @@ def test_locate_claude_moved_into_worktree(tmp_path):
     main = _repo(tmp_path / "repo")
     wt = _wt(main, tmp_path / "repo-x", "x")
     (tmp_path / "repo-x" / "sub").mkdir()
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text(json.dumps({"cwd": main}) + "\n" + json.dumps({"cwd": wt + "/sub"}) + "\n")
     loc = worktrees.locate("claude", main, str(f))
     assert (loc.branch, loc.worktree, loc.worktree_path, loc.worktree_gone) == ("x", True, wt, False)
@@ -61,7 +61,7 @@ def test_locate_claude_moved_into_worktree(tmp_path):
 
 def test_locate_claude_worktree_gone(tmp_path):
     main = _repo(tmp_path / "repo")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text(json.dumps({"cwd": str(tmp_path / "repo-sumiu")}) + "\n")
     loc = worktrees.locate("claude", main, str(f))
     assert loc.worktree_gone and loc.worktree_path == str(tmp_path / "repo-sumiu")
@@ -77,7 +77,7 @@ def test_locate_claude_sibling_worktree_by_cd_without_cwd_change(tmp_path):
     # O Claude Code devolve o shell à pasta de abertura: o `cwd` do transcript nunca sai da principal.
     main = _repo(tmp_path / "repo")
     wt = _wt(main, tmp_path / "repo-x", "x")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text(_claude_line(main, ("Bash", {"command": f"cd {wt} && git status"})) + "\n")
     loc = worktrees.locate("claude", main, str(f))
     assert (loc.branch, loc.worktree_path, loc.git_cwd) == ("x", wt, wt)
@@ -88,7 +88,7 @@ def test_locate_claude_edit_in_worktree_and_main_note_keeps_worktree(tmp_path):
     wt = _wt(main, tmp_path / "repo-x", "x")
     (tmp_path / "repo-x" / "a.py").write_text("")
     (tmp_path / "repo" / "nota.md").write_text("")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text("\n".join([
         _claude_line(main, ("Edit", {"file_path": wt + "/a.py"})),
         _claude_line(main, ("Write", {"file_path": main + "/nota.md"})),
@@ -101,7 +101,7 @@ def test_locate_claude_cd_to_main_to_look_keeps_the_worktree(tmp_path):
     # Consultar a principal é rotina: se o `cd` para ela contasse, o rótulo alternaria a cada comando.
     main = _repo(tmp_path / "repo")
     wt = _wt(main, tmp_path / "repo-x", "x")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text("\n".join([
         _claude_line(main, ("Bash", {"command": f"git -C {wt} log -1"})),
         _claude_line(main, ("Bash", {"command": f"cd {wt}; ls; cd {main} && git status"})),
@@ -116,7 +116,7 @@ def test_locate_session_born_in_worktree_stays_there(tmp_path, provider):
     main = _repo(tmp_path / "repo")
     wt = _wt(main, tmp_path / "repo-x", "x")
     wy = _wt(main, tmp_path / "repo-y", "y")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     if provider == "claude":
         f.write_text(_claude_line(wt, ("Bash", {"command": f"cd {wy} && ls"})) + "\n")
     else:
@@ -131,7 +131,7 @@ def test_locate_claude_cd_into_another_worktree_moves(tmp_path):
     main = _repo(tmp_path / "repo")
     _wt(main, tmp_path / "repo-x", "x")
     wy = _wt(main, tmp_path / "repo-y", "y")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text("\n".join([
         _claude_line(main, ("Bash", {"command": f"cd {tmp_path / 'repo-x'} && ls"})),
         _claude_line(main, ("Bash", {"command": f"git -C {wy} status"})),
@@ -143,7 +143,7 @@ def test_locate_claude_calls_before_the_last_cwd_change_do_not_count(tmp_path):
     # ExitWorktree: o `cwd` voltou à principal; o `cd` de antes era da worktree.
     main = _repo(tmp_path / "repo")
     wt = _wt(main, tmp_path / "repo-x", "x")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text("\n".join([
         _claude_line(wt, ("Bash", {"command": f"cd {wt} && ls"})),
         json.dumps({"type": "user", "cwd": main}),
@@ -154,7 +154,7 @@ def test_locate_claude_calls_before_the_last_cwd_change_do_not_count(tmp_path):
 
 def test_locate_claude_relative_missing_cd_is_not_a_removed_worktree(tmp_path):
     main = _repo(tmp_path / "repo")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text(_claude_line(main, ("Bash", {"command": "W=/x; cd $W && cd - && cd build"})) + "\n")
     loc = worktrees.locate("claude", main, str(f))
     assert (loc.branch, loc.worktree_gone, loc.git_cwd) == ("main", False, None)
@@ -164,7 +164,7 @@ def test_locate_claude_removed_sibling_worktree_is_gone(tmp_path):
     main = _repo(tmp_path / "repo")
     wt = _wt(main, tmp_path / "repo-x", "x")
     assert git_ops._run(main, "worktree", "remove", wt).returncode == 0
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text(_claude_line(main, ("Bash", {"command": f"cd {wt} && ls"})) + "\n")
     loc = worktrees.locate("claude", main, str(f))
     assert loc.worktree_gone and loc.worktree_path == wt and loc.git_cwd is None
@@ -254,7 +254,7 @@ def test_worktree_paths_with_relative_pointers(tmp_path):
 ])
 def test_locate_survives_malformed_lines(tmp_path, lines):
     main = _repo(tmp_path / "repo")
-    f = tmp_path / "t.jsonl"
+    f = tmp_path / "d0000009-0000-4000-8000-000000000000.jsonl"
     f.write_text("\n".join(lines))
     for provider in ("codex", "claude"):
         loc = worktrees.locate(provider, main, str(f))
@@ -264,13 +264,13 @@ def test_locate_survives_malformed_lines(tmp_path, lines):
 def test_locate_missing_transcript_uses_opening_folder(tmp_path):
     main = _repo(tmp_path / "repo")
     for provider in ("codex", "claude"):
-        loc = worktrees.locate(provider, main, str(tmp_path / "nao-existe.jsonl"))
+        loc = worktrees.locate(provider, main, str(tmp_path / "d0000007-0000-4000-8000-000000000000.jsonl"))
         assert (loc.branch, loc.worktree_path, loc.worktree_gone) == ("main", None, False)
 
 
 def test_locate_never_raises_on_reader_failure(tmp_path, monkeypatch):
     main = _repo(tmp_path / "repo")
-    f = tmp_path / "s.jsonl"
+    f = tmp_path / "d0000008-0000-4000-8000-000000000000.jsonl"
     f.write_text("{}\n")
 
     def boom(*_):
@@ -427,10 +427,10 @@ def test_closed_skips_live_session_transcripts(tmp_path, monkeypatch):
     wt = _wt(main, tmp_path / "repo-x", "x")
     proj = tmp_path / "projects"
     (proj / sanitize_cwd(wt)).mkdir(parents=True)
-    (proj / sanitize_cwd(wt) / "a.jsonl").write_text("{}\n")
-    (proj / sanitize_cwd(wt) / "b.jsonl").write_text("{}\n")
+    (proj / sanitize_cwd(wt) / "d0000001-0000-4000-8000-000000000000.jsonl").write_text("{}\n")
+    (proj / sanitize_cwd(wt) / "d0000003-0000-4000-8000-000000000000.jsonl").write_text("{}\n")
     monkeypatch.setattr(archive, "_contas", lambda *_a: [(None, "", proj)])
-    live = SessionInfo(name="s1", cwd=wt, jsonl=str(proj / sanitize_cwd(wt) / "b.jsonl"))
+    live = SessionInfo(name="s1", cwd=wt, jsonl=str(proj / sanitize_cwd(wt) / "d0000003-0000-4000-8000-000000000000.jsonl"))
     st = worktrees.status(wt, [live])
     assert st["sessions"] == ["s1"] and st["closed"] == 1
 
@@ -570,7 +570,7 @@ def test_guest_gets_403_on_every_route(tmp_path, monkeypatch):
         guest_users._reset()
 
 
-def _claude_project(tmp_path, monkeypatch, wt, sid="abc"):
+def _claude_project(tmp_path, monkeypatch, wt, sid="d0000002-0000-4000-8000-000000000000"):
     from app import archive
     from app.registry import sanitize_cwd
     base = tmp_path / "cfg" / "projects"
@@ -597,8 +597,8 @@ def test_delete_clean_merged_moves_conversations_and_branch(tmp_path, monkeypatc
     out = worktrees.delete(main, wt, [])
     assert out == {"removed": wt, "branch_deleted": True, "moved": 2}
     assert not (tmp_path / "repo-x").exists()
-    assert (base / sanitize_cwd(main) / "abc.jsonl").exists()
-    assert (base / sanitize_cwd(main) / "abc").is_dir()
+    assert (base / sanitize_cwd(main) / "d0000002-0000-4000-8000-000000000000.jsonl").exists()
+    assert (base / sanitize_cwd(main) / "d0000002-0000-4000-8000-000000000000").is_dir()
     assert worktrees.removed()[wt] == main
     assert worktrees.redirect(wt) == main
     assert "x" not in git_ops.list_branches(main)["branches"]
@@ -663,11 +663,11 @@ def test_delete_does_not_overwrite_same_uuid(tmp_path, monkeypatch):
     base = _claude_project(tmp_path, monkeypatch, wt)
     from app.registry import sanitize_cwd
     (base / sanitize_cwd(main)).mkdir()
-    (base / sanitize_cwd(main) / "abc.jsonl").write_text("principal\n")
+    (base / sanitize_cwd(main) / "d0000002-0000-4000-8000-000000000000.jsonl").write_text("principal\n")
     out = worktrees.delete(main, wt, [])
     assert out["moved"] == 0
-    assert (base / sanitize_cwd(main) / "abc.jsonl").read_text() == "principal\n"
-    assert (base / sanitize_cwd(wt) / "abc.jsonl").exists()
+    assert (base / sanitize_cwd(main) / "d0000002-0000-4000-8000-000000000000.jsonl").read_text() == "principal\n"
+    assert (base / sanitize_cwd(wt) / "d0000002-0000-4000-8000-000000000000.jsonl").exists()
 
 
 def test_delete_merged_only_takes_clean(tmp_path, monkeypatch):
@@ -720,13 +720,13 @@ def test_delete_leaves_colliding_subfolder_conversations(tmp_path, monkeypatch):
     sub.mkdir()
     wt = _merged_wt(main, tmp_path / "repo-sub", "feat")
     assert sanitize_cwd(str(sub)) == sanitize_cwd(wt)   # `repo/sub` e `repo-sub`: mesma pasta de projeto
-    base = _claude_project(tmp_path, monkeypatch, str(sub), sid="dasub")
-    live = base / sanitize_cwd(wt) / "viva.jsonl"
+    base = _claude_project(tmp_path, monkeypatch, str(sub), sid="d0000004-0000-4000-8000-000000000000")
+    live = base / sanitize_cwd(wt) / "d000000a-0000-4000-8000-000000000000.jsonl"
     live.write_text(json.dumps({"cwd": wt}) + "\n")
     s2 = SessionInfo(name="s2", cwd=str(sub), jsonl=str(live))
     out = worktrees.delete(main, wt, [s2])
     assert out["moved"] == 0
-    assert (base / sanitize_cwd(wt) / "dasub.jsonl").exists()
+    assert (base / sanitize_cwd(wt) / "d0000004-0000-4000-8000-000000000000.jsonl").exists()
     assert live.exists()
 
 
@@ -736,11 +736,11 @@ def test_delete_moves_conversation_that_entered_the_worktree(tmp_path, monkeypat
     wt = _merged_wt(main, tmp_path / "repo-x", "x")
     base = _claude_project(tmp_path, monkeypatch, wt)
     # EnterWorktree: começou na principal, terminou na worktree, e o Claude guarda no projeto dela.
-    (base / sanitize_cwd(wt) / "entrou.jsonl").write_text(
+    (base / sanitize_cwd(wt) / "d0000005-0000-4000-8000-000000000000.jsonl").write_text(
         json.dumps({"cwd": main}) + "\n" + json.dumps({"cwd": wt}) + "\n")
     out = worktrees.delete(main, wt, [])
     assert out["moved"] == 3
-    assert (base / sanitize_cwd(main) / "entrou.jsonl").exists()
+    assert (base / sanitize_cwd(main) / "d0000005-0000-4000-8000-000000000000.jsonl").exists()
 
 
 def test_delete_moves_conversations_of_worktree_subfolders(tmp_path, monkeypatch):
@@ -749,11 +749,11 @@ def test_delete_moves_conversations_of_worktree_subfolders(tmp_path, monkeypatch
     wt = _merged_wt(main, tmp_path / "repo-x", "x")
     (tmp_path / "repo-x" / "sub").mkdir()
     sub = str(tmp_path / "repo-x" / "sub")
-    base = _claude_project(tmp_path, monkeypatch, sub, sid="dasub")
+    base = _claude_project(tmp_path, monkeypatch, sub, sid="d0000004-0000-4000-8000-000000000000")
     out = worktrees.delete(main, wt, [])
     assert out["moved"] == 2
-    assert (base / sanitize_cwd(main) / "dasub.jsonl").exists()
-    assert (base / sanitize_cwd(main) / "dasub").is_dir()
+    assert (base / sanitize_cwd(main) / "d0000004-0000-4000-8000-000000000000.jsonl").exists()
+    assert (base / sanitize_cwd(main) / "d0000004-0000-4000-8000-000000000000").is_dir()
 
 
 def test_delete_leaves_colliding_deeper_subfolder_conversations(tmp_path, monkeypatch):
@@ -764,10 +764,10 @@ def test_delete_leaves_colliding_deeper_subfolder_conversations(tmp_path, monkey
     wt = _merged_wt(main, tmp_path / "repo-sub", "feat")
     # `repo/sub/deep` cai no prefixo das subpastas de `repo-sub`, mas nunca esteve nela.
     assert sanitize_cwd(str(deep)).startswith(sanitize_cwd(wt) + "-")
-    base = _claude_project(tmp_path, monkeypatch, str(deep), sid="funda")
+    base = _claude_project(tmp_path, monkeypatch, str(deep), sid="d0000006-0000-4000-8000-000000000000")
     out = worktrees.delete(main, wt, [])
     assert out["moved"] == 0
-    assert (base / sanitize_cwd(str(deep)) / "funda.jsonl").exists()
+    assert (base / sanitize_cwd(str(deep)) / "d0000006-0000-4000-8000-000000000000.jsonl").exists()
 
 
 def test_delete_missing_folder_keeps_other_orphan(tmp_path, monkeypatch):

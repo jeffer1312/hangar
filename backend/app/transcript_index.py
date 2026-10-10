@@ -178,7 +178,7 @@ class Index:
         if providers:
             from app import archive_providers
             self.providers = archive_providers.conversas()
-        from app.archive import _contas
+        from app.archive import _contas, conversation_files
         atuais: dict[str, tuple[str, str, os.stat_result]] = {}
         for _cfg, _rot, base in _contas():
             try:
@@ -186,7 +186,7 @@ class Index:
             except OSError:
                 continue
             for proj in projetos:
-                for f in proj.glob("*.jsonl"):
+                for f in conversation_files(proj):
                     try:
                         atuais[str(f)] = (proj.name, f.stem, f.stat())
                     except OSError:

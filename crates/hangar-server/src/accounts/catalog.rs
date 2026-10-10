@@ -757,6 +757,24 @@ mod tests {
         assert!(account.home.join("projects/-repo/abc.jsonl").is_file());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn link_among_the_transcripts_refuses_the_delete() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        fs::create_dir_all(account.home.join("projects/-repo")).unwrap();
+        fs::write(account.home.join("projects/-repo/abc.jsonl"), "x").unwrap();
+        let outside = root.path().join("outside.jsonl");
+        fs::write(&outside, "fora").unwrap();
+        std::os::unix::fs::symlink(&outside, account.home.join("projects/-repo/link.jsonl")).unwrap();
+        let error = delete_with(&service, Provider::Claude, &account, true).unwrap_err();
+        assert_eq!(error.code, "account_transcripts_merge_failed");
+        assert!(error.params["source"].as_str().unwrap().ends_with("link.jsonl"));
+        assert!(account.home.join("projects/-repo/link.jsonl").is_symlink());
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "fora");
+    }
+
     #[test]
     fn codex_delete_keeps_rollouts_in_the_default_home() {
         let root = tempfile::tempdir().unwrap();

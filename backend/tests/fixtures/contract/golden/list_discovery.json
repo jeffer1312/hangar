@@ -89,7 +89,7 @@
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/aaaa.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000001-0000-4000-8000-000000000000.jsonl",
        "text": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"um\"}, \"cwd\": \"⟦ROOT⟧/work/a\", \"timestamp\": \"2027-01-15T08:00:00.000Z\", \"uuid\": \"u-um\"}\n",
        "mtime": 1799999995.0
       },
@@ -124,7 +124,7 @@
        "env": {},
        "start": 1799999400.0,
        "fds": [
-        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/aaaa.jsonl"
+        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000001-0000-4000-8000-000000000000.jsonl"
        ]
       }
      ],
@@ -146,12 +146,12 @@
         "name": "s",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/a",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/aaaa.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000001-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "s": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/aaaa.jsonl"
+       "s": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000001-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [
        "s"
@@ -173,7 +173,7 @@
      "fs": [
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/bbbb.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000003-0000-4000-8000-000000000000.jsonl",
        "text": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"outra\"}, \"cwd\": \"⟦ROOT⟧/work/a\", \"timestamp\": \"2027-01-15T08:00:00.000Z\", \"uuid\": \"u-outra\"}\n",
        "mtime": 1800000002.0
       }
@@ -222,12 +222,12 @@
         "name": "s",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/a",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/aaaa.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000001-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "s": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/aaaa.jsonl"
+       "s": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000001-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [
        "s"
@@ -249,7 +249,7 @@
       {
        "op": "write",
        "path": "⟦ROOT⟧/home/.claude/.hangar-active/11111111-1111-4111-8111-111111111111.json",
-       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/bbbb.jsonl\"}",
+       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000003-0000-4000-8000-000000000000.jsonl\"}",
        "mtime": null
       }
      ],
@@ -297,12 +297,12 @@
         "name": "s",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/a",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/bbbb.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000003-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "s": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/bbbb.jsonl"
+       "s": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c0000003-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [],
       "tmux": [
@@ -337,7 +337,7 @@
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/sub.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c000000b-0000-4000-8000-000000000000.jsonl",
        "text": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"sub\"}, \"cwd\": \"⟦ROOT⟧/work/a\", \"timestamp\": \"2027-01-15T08:00:00.000Z\", \"uuid\": \"u-sub\"}\n",
        "mtime": 1799999999.0
       }
@@ -381,7 +381,7 @@
        "env": {},
        "start": 1799999400.0,
        "fds": [
-        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/sub.jsonl"
+        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c000000b-0000-4000-8000-000000000000.jsonl"
        ]
       },
       {
@@ -395,7 +395,7 @@
        "env": {},
        "start": 1799999400.0,
        "fds": [
-        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/sub.jsonl"
+        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-a/c000000b-0000-4000-8000-000000000000.jsonl"
        ]
       }
      ],
@@ -456,7 +456,7 @@
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/velho.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/c000000d-0000-4000-8000-000000000000.jsonl",
        "text": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"velho\"}, \"cwd\": \"⟦ROOT⟧/work/b\", \"timestamp\": \"2027-01-15T08:00:00.000Z\", \"uuid\": \"u-velho\"}\n",
        "mtime": 1799999100.0
       }
@@ -581,7 +581,7 @@
      "fs": [
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/posclear.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/c0000009-0000-4000-8000-000000000000.jsonl",
        "text": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"depois\"}, \"cwd\": \"⟦ROOT⟧/work/b\", \"timestamp\": \"2027-01-15T08:00:00.000Z\", \"uuid\": \"u-depois\"}\n",
        "mtime": 1800000003.0
       }
@@ -619,12 +619,12 @@
         "name": "b",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/b",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/posclear.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/c0000009-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "b": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/posclear.jsonl"
+       "b": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/c0000009-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [],
       "tmux": [
@@ -665,7 +665,7 @@
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/novo.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-b/c0000007-0000-4000-8000-000000000000.jsonl",
        "text": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"z\"}, \"cwd\": \"⟦ROOT⟧/work/b\", \"timestamp\": \"2027-01-15T08:00:00.000Z\", \"uuid\": \"u-z\"}\n",
        "mtime": 1799999999.0
       }
@@ -782,32 +782,32 @@
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m1.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000005-0000-4000-8000-000000000000.jsonl",
        "text": "{}\n",
        "mtime": 1799999970.0
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m2.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000006-0000-4000-8000-000000000000.jsonl",
        "text": "{}\n",
        "mtime": 1799999980.0
       },
       {
        "op": "write",
        "path": "⟦ROOT⟧/home/.claude/.hangar-active/boot1.json",
-       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m1.jsonl\", \"pid\": 401, \"ts\": 1799999970.0}",
+       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000005-0000-4000-8000-000000000000.jsonl\", \"pid\": 401, \"ts\": 1799999970.0}",
        "mtime": null
       },
       {
        "op": "write",
        "path": "⟦ROOT⟧/home/.claude/.hangar-active/boot2.json",
-       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m2.jsonl\", \"pid\": 401, \"ts\": 1799999990.0}",
+       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000006-0000-4000-8000-000000000000.jsonl\", \"pid\": 401, \"ts\": 1799999990.0}",
        "mtime": null
       },
       {
        "op": "write",
        "path": "⟦ROOT⟧/home/.claude/.hangar-active/boot3.json",
-       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m1.jsonl\", \"pid\": 999, \"ts\": 1800000000.0}",
+       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000005-0000-4000-8000-000000000000.jsonl\", \"pid\": 999, \"ts\": 1800000000.0}",
        "mtime": null
       }
      ],
@@ -853,12 +853,12 @@
         "name": "c",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/c",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m2.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000006-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "c": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m2.jsonl"
+       "c": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000006-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [],
       "tmux": [
@@ -917,12 +917,12 @@
         "name": "c",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/c",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m2.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000006-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "c": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m2.jsonl"
+       "c": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000006-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [],
       "tmux": [
@@ -974,7 +974,7 @@
         "name": "c",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/c",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m2.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000006-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude",
         "tracked": false
        }
@@ -1012,7 +1012,7 @@
         "name": "c",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/c",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/m2.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-c/c0000006-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude",
         "tracked": false
        }
@@ -1039,20 +1039,20 @@
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/retomada.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/c000000a-0000-4000-8000-000000000000.jsonl",
        "text": "{}\n",
        "mtime": 1799999960.0
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/outra.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/c0000008-0000-4000-8000-000000000000.jsonl",
        "text": "{}\n",
        "mtime": 1799999999.0
       },
       {
        "op": "write",
        "path": "⟦ROOT⟧/home/.claude/.hangar-active/66666666-6666-4666-8666-666666666666.json",
-       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/retomada.jsonl\"}",
+       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/c000000a-0000-4000-8000-000000000000.jsonl\"}",
        "mtime": null
       }
      ],
@@ -1089,12 +1089,12 @@
         "name": "d",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/d",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/retomada.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/c000000a-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "d": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/retomada.jsonl"
+       "d": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/c000000a-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [],
       "tmux": [
@@ -1114,7 +1114,7 @@
       {
        "op": "write",
        "path": "⟦ROOT⟧/home/.claude/.hangar-active/66666666-6666-4666-8666-666666666666.json",
-       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/sumiu.jsonl\"}",
+       "text": "{\"jsonl\": \"⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-d/c000000c-0000-4000-8000-000000000000.jsonl\"}",
        "mtime": null
       }
      ],
@@ -1184,7 +1184,7 @@
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/antigo.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/c0000002-0000-4000-8000-000000000000.jsonl",
        "text": "{}\n",
        "mtime": 1799999900.0
       }
@@ -1193,7 +1193,7 @@
       {
        "op": "seed",
        "name": "nova",
-       "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/fixo.jsonl"
+       "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/c000000e-0000-4000-8000-000000000000.jsonl"
       }
      ],
      "procs": [
@@ -1227,12 +1227,12 @@
         "name": "nova",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/e",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/fixo.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/c000000e-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "nova": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/fixo.jsonl"
+       "nova": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/c000000e-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [],
       "tmux": [
@@ -1285,12 +1285,12 @@
         "name": "renomeada",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/e",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/fixo.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/c000000e-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        }
       ],
       "jsonl_cache": {
-       "renomeada": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/fixo.jsonl"
+       "renomeada": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/c000000e-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [],
       "tmux": [
@@ -1341,7 +1341,7 @@
         "name": "renomeada",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/e",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/antigo.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-e/c0000002-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude",
         "tracked": false
        }
@@ -1372,7 +1372,7 @@
       },
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-f/velho.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-f/c000000d-0000-4000-8000-000000000000.jsonl",
        "text": "{}\n",
        "mtime": 1799999900.0
       }
@@ -1437,7 +1437,7 @@
         "name": "f",
         "lifecycle_id": "t:1800000001",
         "cwd": "⟦ROOT⟧/work/f",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-f/velho.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-f/c000000d-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude",
         "tracked": false
        }
@@ -2954,7 +2954,7 @@
      "fs": [
       {
        "op": "write",
-       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/compartilhado.jsonl",
+       "path": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/c0000004-0000-4000-8000-000000000000.jsonl",
        "text": "{}\n",
        "mtime": 1800000002.0
       }
@@ -2976,7 +2976,7 @@
        "env": {},
        "start": 1799999400.0,
        "fds": [
-        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/compartilhado.jsonl"
+        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/c0000004-0000-4000-8000-000000000000.jsonl"
        ]
       },
       {
@@ -3019,7 +3019,7 @@
         "name": "dona",
         "lifecycle_id": "t:1799999400",
         "cwd": "⟦ROOT⟧/work/n",
-        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/compartilhado.jsonl",
+        "jsonl": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/c0000004-0000-4000-8000-000000000000.jsonl",
         "conta": "claude:⟦ROOT⟧/home/.claude"
        },
        {
@@ -3031,7 +3031,7 @@
        }
       ],
       "jsonl_cache": {
-       "dona": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/compartilhado.jsonl"
+       "dona": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/c0000004-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [
        "dona"
@@ -3062,7 +3062,7 @@
        "env": {},
        "start": 1799999400.0,
        "fds": [
-        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/compartilhado.jsonl"
+        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/c0000004-0000-4000-8000-000000000000.jsonl"
        ]
       },
       {
@@ -3075,7 +3075,7 @@
        "env": {},
        "start": 1799999400.0,
        "fds": [
-        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/compartilhado.jsonl"
+        "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/c0000004-0000-4000-8000-000000000000.jsonl"
        ]
       }
      ],
@@ -3119,8 +3119,8 @@
        }
       ],
       "jsonl_cache": {
-       "bare": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/compartilhado.jsonl",
-       "dona": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/compartilhado.jsonl"
+       "bare": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/c0000004-0000-4000-8000-000000000000.jsonl",
+       "dona": "⟦ROOT⟧/home/.claude/projects/⟦ROOT_SAN⟧-work-n/c0000004-0000-4000-8000-000000000000.jsonl"
       },
       "fd_locked": [
        "bare",
