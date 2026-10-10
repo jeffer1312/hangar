@@ -1321,7 +1321,12 @@ mod tests {
         let python = axum::Router::new().route("/internal/sessions/{name}/info", get(move || {
             let info = info.clone();
             async move { ([(axum::http::header::CONTENT_TYPE, "application/json")], info) }
-        }));
+        }))
+            // Sem esta rota a conexão interna leva 404, que é "sessão sumiu": o hub fecharia com o canal
+            // ainda aberto, e o teste dependia de chegar antes disso.
+            .route("/internal/sessions/{name}/side-events", get(|| async {
+                axum::body::Body::from_stream(futures_util::stream::pending::<Result<axum::body::Bytes, std::convert::Infallible>>())
+            }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, python).await.unwrap() });
