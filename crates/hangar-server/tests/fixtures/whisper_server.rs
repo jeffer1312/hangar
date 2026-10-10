@@ -44,8 +44,13 @@ fn main() {
     let model = PathBuf::from(argument("--model"));
     assert!(model.is_file());
     let starts = model.with_extension("starts");
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(starts).unwrap();
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&starts).unwrap();
     writeln!(file, "{}", std::process::id()).unwrap();
+    // `exit-first`: a primeira partida sai antes de escutar, como quando a porta reservada foi tomada.
+    if std::fs::read_to_string(&model).is_ok_and(|text| text == "exit-first")
+        && std::fs::read_to_string(&starts).unwrap().lines().count() == 1 {
+        std::process::exit(1);
+    }
     let listener = TcpListener::bind(format!("127.0.0.1:{}", argument("--port"))).unwrap();
     let gate = std::fs::read_to_string(&model).ok().and_then(|text| text.strip_prefix("hold:")?.parse().ok());
     for stream in listener.incoming() { reply(stream.unwrap(), gate); }

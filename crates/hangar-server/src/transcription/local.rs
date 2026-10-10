@@ -135,53 +135,72 @@ impl LocalWhisper {
         if (dead || current.as_ref().is_some_and(|r| r.key != Key::of(provider)))
             && let Some(mut old) = current.take() { old.stop().await;
         }
-        if current.is_none() {
-            self.publish(provider, "starting", None);
-            let record = if state_path.is_empty() { None } else { Path::new(state_path).parent().map(|p| p.join("transcription-local.json")) };
-            if let Some(path) = &record { recover(path).await?; }
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await
-                .map_err(|_| AttemptFailure::unavailable("whisper_port_failed", "Não foi possível reservar uma porta local para o Whisper."))?;
-            let port = listener.local_addr().map_err(|_| AttemptFailure::unavailable("whisper_port_failed", "Porta local indisponível."))?.port();
-            let owner = crate::accounts::claude_login::nonce()
-                .map_err(|_| AttemptFailure::unavailable("whisper_identity_failed", "Não foi possível identificar o processo local."))?;
-            let key = Key::of(provider);
-            let mut command = process::command(&program);
-            command.args(["--host", "127.0.0.1", "--port"]).arg(port.to_string())
-                .arg("--model").arg(&model).arg("--language").arg(&key.language).arg("--no-gpu")
-                .env("HANGAR_TRANSCRIPTION_OWNER", &owner);
-            drop(listener);
-            let process = ManagedChild::spawn(command, "whisper_start_failed", "Não foi possível iniciar o whisper-server. Confira o executável e o modelo.").await?;
-            let mut running = Running { process, key, address: format!("http://127.0.0.1:{port}"), record: None };
-            if let Some(path) = record {
-                if let Err(error) = record_process(&path, running.process.child.id().unwrap_or_default(), owner).await {
-                    running.stop().await;
-                    return Err(error);
+        // A porta é reservada e solta antes de o Whisper subir: outro processo pode tomá-la nesse meio, e o
+        // Whisper sai antes de escutar. Partida feita aqui que morre assim tenta de novo, numa porta nova.
+        let mut starts = 0;
+        loop {
+            let fresh = current.is_none();
+            if fresh {
+                self.publish(provider, "starting", None);
+                let record = if state_path.is_empty() { None } else { Path::new(state_path).parent().map(|p| p.join("transcription-local.json")) };
+                if let Some(path) = &record { recover(path).await?; }
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await
+                    .map_err(|_| AttemptFailure::unavailable("whisper_port_failed", "Não foi possível reservar uma porta local para o Whisper."))?;
+                let port = listener.local_addr().map_err(|_| AttemptFailure::unavailable("whisper_port_failed", "Porta local indisponível."))?.port();
+                let owner = crate::accounts::claude_login::nonce()
+                    .map_err(|_| AttemptFailure::unavailable("whisper_identity_failed", "Não foi possível identificar o processo local."))?;
+                let key = Key::of(provider);
+                let mut command = process::command(&program);
+                command.args(["--host", "127.0.0.1", "--port"]).arg(port.to_string())
+                    .arg("--model").arg(&model).arg("--language").arg(&key.language).arg("--no-gpu")
+                    .env("HANGAR_TRANSCRIPTION_OWNER", &owner);
+                drop(listener);
+                let process = ManagedChild::spawn(command, "whisper_start_failed", "Não foi possível iniciar o whisper-server. Confira o executável e o modelo.").await?;
+                let mut running = Running { process, key, address: format!("http://127.0.0.1:{port}"), record: None };
+                if let Some(path) = record {
+                    if let Err(error) = record_process(&path, running.process.child.id().unwrap_or_default(), owner).await {
+                        running.stop().await;
+                        return Err(error);
+                    }
+                    running.record = Some(path);
                 }
-                running.record = Some(path);
+                *current = Some(running);
             }
-            *current = Some(running);
+            let running = current.as_mut().unwrap();
+            match wait_ready(running, deadline, &self.client).await {
+                Ok(()) => break,
+                Err(error) if fresh && matches!(error.error.code.as_str(), "whisper_start_failed" | "whisper_port_not_owned") && starts < 2 => {
+                    starts += 1;
+                    if let Some(mut dead) = current.take() { dead.stop().await; }
+                }
+                Err(error) => return Err(error),
+            }
         }
         let running = current.as_mut().unwrap();
-        loop {
-            if !matches!(running.process.child.try_wait(), Ok(None)) {
-                return Err(AttemptFailure::unavailable("whisper_start_failed", "O processo Whisper encerrou antes de ficar disponível."));
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() { return Err(AttemptFailure::unavailable("whisper_timeout", "O modelo Whisper não carregou a tempo.")); }
-            let health = self.client.get(format!("{}/health", running.address)).timeout(remaining.min(Duration::from_millis(500))).send().await;
-            if health.is_ok_and(|r| r.status().is_success()) {
-                let port = reqwest::Url::parse(&running.address).ok().and_then(|u| u.port()).unwrap_or(0);
-                if !process::owns_port(running.process.child.id().unwrap_or_default(), port).await.unwrap_or(false) {
-                    return Err(AttemptFailure::unavailable("whisper_port_not_owned", "A porta de transcrição não pertence ao processo Whisper iniciado pelo Hangar."));
-                }
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
         self.publish(provider, "ready", None);
         let request = ProviderConfig { kind: "openai".into(), model: "local".into(), language: running.key.language.clone(), ..Default::default() };
         cloud::transcribe_to(&self.client, &request, &format!("{}/inference", running.address), content,
             Some("audio.wav"), vocabulary, deadline.saturating_duration_since(tokio::time::Instant::now())).await
+    }
+}
+
+/// Espera o Whisper recém-lançado responder na porta dele, e confere que a porta é mesmo dele.
+async fn wait_ready(running: &mut Running, deadline: tokio::time::Instant, client: &reqwest::Client) -> Result<(), AttemptFailure> {
+    loop {
+        if !matches!(running.process.child.try_wait(), Ok(None)) {
+            return Err(AttemptFailure::unavailable("whisper_start_failed", "O processo Whisper encerrou antes de ficar disponível."));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() { return Err(AttemptFailure::unavailable("whisper_timeout", "O modelo Whisper não carregou a tempo.")); }
+        let health = client.get(format!("{}/health", running.address)).timeout(remaining.min(Duration::from_millis(500))).send().await;
+        if health.is_ok_and(|r| r.status().is_success()) {
+            let port = reqwest::Url::parse(&running.address).ok().and_then(|u| u.port()).unwrap_or(0);
+            if !process::owns_port(running.process.child.id().unwrap_or_default(), port).await.unwrap_or(false) {
+                return Err(AttemptFailure::unavailable("whisper_port_not_owned", "A porta de transcrição não pertence ao processo Whisper iniciado pelo Hangar."));
+            }
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 

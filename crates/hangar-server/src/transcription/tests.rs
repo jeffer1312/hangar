@@ -184,6 +184,22 @@ async fn local_process_is_reused_and_stopped_by_its_owner() {
     assert!(!temp.path().join("transcription-local.json").exists());
 }
 
+/// A porta do Whisper é reservada e solta antes de ele subir: outro processo pode tomá-la nesse meio, e o
+/// Whisper sai antes de escutar. Uma partida que morre assim tenta de novo numa porta nova.
+#[tokio::test]
+async fn local_process_that_dies_on_start_is_retried_on_a_new_port() {
+    let (temp, provider) = installed_whisper().await;
+    std::fs::write(&provider.model_path, "exit-first").unwrap();
+    let service = TranscriptionService::default();
+    service.configure(ConfigSnapshot { providers: vec![provider.clone()],
+        state_path: temp.path().join("wait.json").to_string_lossy().into_owned(), ..Default::default() }).await;
+    let text = service.transcribe(Bytes::from_static(WAV), Some("fala.wav".into()), Profile::Dictation).await.unwrap().text;
+    assert_eq!(text, "Transcrição local em português.");
+    let starts = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("starts")).unwrap();
+    assert_eq!(starts.lines().count(), 2, "uma partida que morreu e outra que subiu");
+    service.shutdown().await;
+}
+
 #[tokio::test]
 async fn shutdown_stops_a_local_inference_without_waiting_for_its_response() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
