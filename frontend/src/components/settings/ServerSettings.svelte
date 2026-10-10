@@ -6,6 +6,7 @@
   import type { Server } from '../../lib/auth';
   import type { VariavelEnv } from '@hangar/core';
   import PushQuiet from '../PushQuiet.svelte';
+  import PushPresence from '../PushPresence.svelte';
   import { pushSupported } from '../../lib/push';
   import type { PushTarget } from '../../lib/quietHours';
   import * as m from '../../paraglide/messages';
@@ -309,6 +310,7 @@
 
 {#if secao === 'notificacoes'}
   <div class="cfg push" class:com-rodape={rodapeVisivel}>
+    <PushPresence preferred={apiTarget} />
     {#if pushSupported()}
       <p class="ajuda">{m.notif_push_legenda()}</p>
       <PushQuiet target={pushTarget} open={true} />

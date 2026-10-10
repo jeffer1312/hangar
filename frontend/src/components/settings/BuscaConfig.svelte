@@ -133,6 +133,7 @@
     { tela: 'notificacoes', rotulo: m.config_server_marcar_travada, descricao: m.config_server_marcar_travada_ajuda },
     { tela: 'notificacoes', rotulo: m.push_horas_silenciosas, descricao: m.push_horas_silenciosas_porque },
     { tela: 'notificacoes', rotulo: m.push_ativar_todos, descricao: m.notif_push_legenda },
+    { tela: 'notificacoes', rotulo: m.push_presence_title, descricao: m.push_presence_pc_help },
 
     { tela: 'anexos', rotulo: m.config_server_guardar_anexos, descricao: m.config_server_guardar_ajuda },
 

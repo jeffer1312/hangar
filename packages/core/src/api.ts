@@ -1386,6 +1386,23 @@ export function getPushSettingsForServer(s: Server): Promise<{ muted: string[]; 
   return apiFetchForServer(s, '/api/push/settings');
 }
 
+// Presença "No PC / Fora": com o dono no PC (modo pc + app do computador vivo), o servidor segura o
+// push do celular. Servidor antigo responde 404/405.
+export type PresenceMode = 'pc' | 'away';
+export interface Presence {
+  mode: PresenceMode;
+  desktop_alive: boolean;
+  present: boolean;
+}
+
+export function getPresenceForServer(s: Server): Promise<Presence> {
+  return apiFetchForServer(s, '/api/presence');
+}
+
+export function setPresenceForServer(s: Server, mode: PresenceMode): Promise<Presence> {
+  return apiFetchForServer(s, '/api/presence', { method: 'POST', body: JSON.stringify({ mode }) });
+}
+
 export function setSessionMute(session: string, muted: boolean): Promise<{ ok: boolean }> {
   return apiFetch('/api/push/mute', { method: 'POST', body: JSON.stringify({ session, muted }) });
 }
