@@ -2314,6 +2314,7 @@ impl Hangar {
 
     // `confirmed` = a pessoa já aceitou o aviso de comando destrutivo para este mesmo texto.
     fn submit(&mut self, steer: bool, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.defer_dictation_send(steer, cx) { return; }
         if self.selected.is_none() && self.reopen.is_some() { self.send_reopen(window, cx); return; }
         if self.selected.is_none() {
             let text = self.composer.read(cx).value().to_string();
@@ -4171,7 +4172,8 @@ impl Hangar {
             (done, batch.len())
         });
         let attached = key.as_ref().is_some_and(|key| self.attachments.get(key).is_some_and(|list| !list.is_empty()));
-        let has_input = !text.trim().is_empty() || attached;
+        let dictated = self.dictation_here(cx) && (self.dictation.recording() || self.dictation.processing());
+        let has_input = !text.trim().is_empty() || attached || dictated;
         let suggestions = if readable { self.visible_suggestions(cx) } else { Vec::new() };
         if self.suggest_pick >= suggestions.len() { self.suggest_pick = 0; }
         let tray = key.as_ref().and_then(|key| self.render_attachments(key, cx));
@@ -4196,7 +4198,7 @@ impl Hangar {
         let steer_text = readable && has_input && (provider == "codex" || headless) && self.chat.state.state == "working"
             && self.selected_key().is_none_or(|key| self.group_targets(&key, "").is_none());
         // Só o anexo espera o envio em voo; texto sai do campo e vai na vez dele.
-        let blocked = if reopen { resuming || self.reopen_blocked(cx) } else if new_chat { !can_create } else { sending && attached || uploading.is_some() || !self.chat_online || !self.history_installed };
+        let blocked = self.dictation.send_pending() || if reopen { resuming || self.reopen_blocked(cx) } else if new_chat { !can_create } else { sending && attached || uploading.is_some() || !self.chat_online || !self.history_installed };
         let can_stop = self.can_interrupt();
         let focused = self.composer.read(cx).focus_handle(cx).is_focused(window);
         let paste_target = cx.entity().downgrade();

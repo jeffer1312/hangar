@@ -1330,6 +1330,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, python).await.unwrap() });
+        let side_response = reqwest::Client::new()
+            .get(format!("http://{upstream}/internal/sessions/s1/side-events?app=1"))
+            .send().await.unwrap();
+        assert_eq!(side_response.status(), StatusCode::OK, "A fixture precisa manter a sessão viva também no canal interno");
         let cfg = crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream, internal_secret: "s".into(),
             auth_token: "dono".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") };
         let mut st = crate::routes::AppState::new(cfg);

@@ -254,16 +254,32 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
 ### Enviar
 - **Texto:** digite e envie. **Multi-linha** funciona (Shift+Enter / colar — vai por bracketed paste).
 - **Imagem / arquivo:** 📎 no composer (upload) — ou cole no terminal do Claude que o app mostra o thumbnail.
-- **Áudio (transcrição):** 🎤 no composer grava pelo microfone (toque grava, toque ⏹ para); ou anexe
-  um arquivo de áudio pelo 📎. Nos dois casos o áudio é gravado e enviado a uma API compatível com
-  a OpenAI; o texto reaparece de uma vez ao final e o áudio não vira anexo. Configure em
+- **Áudio (transcrição):** o botão de microfone grava (toque grava, outro toque para); ou anexe
+  um arquivo de áudio. O texto aparece ao final, sem transcrição em tempo real. **Enviar encerra
+  a gravação**, espera a transcrição e a organização do texto e envia uma mensagem com o texto
+  digitado e os anexos. Isso vale para texto, imagem, arquivo ou apenas ditado, no desktop nativo
+  e no PWA do celular. Se a transcrição falhar, o rascunho e os anexos continuam disponíveis.
+  Configure em
   **Configurações → Voz → Transcrição**: a **Chave da transcrição** e, em **Usar outro serviço de
-  transcrição**, endpoint e modelo. Endpoint e modelo vazios usam Groq e `whisper-large-v3-turbo`;
+  transcrição**, endpoint e modelo. Endpoint e modelo vazios usam Groq e `whisper-large-v3`;
   a chave padrão também pode vir de `CP_GROQ_API_KEY`/`GROQ_API_KEY` no ambiente do backend. Para
-  ter reserva, monte **Serviços de transcrição, em ordem** (compatível com OpenAI ou ElevenLabs):
+  ter reserva, monte **Serviços de transcrição, em ordem** (compatível com OpenAI, ElevenLabs ou whisper.cpp local):
   o primeiro transcreve e, se falhar ou ficar sem cota, o próximo assume — o aviso do ditado diz
   qual transcreveu. Com a lista em uso, a transcrição usa só ela. Sem chave nem lista, a gravação
-  funciona, mas a transcrição responde 503.
+  funciona, mas a transcrição responde 503. Em **Compatível com OpenAI**, informe URL base e
+  modelo; a chave é opcional para serviços que dispensam autenticação. Para OpenRouter, use
+  `https://openrouter.ai/api/v1`, sua chave e um modelo de transcrição do catálogo dele.
+  **Testar com áudio** usa a configuração salva e mostra o texto ou o erro; o serviço pode cobrar
+  essa chamada.
+- **Whisper local:** instale o [whisper.cpp](https://github.com/ggml-org/whisper.cpp) e obtenha um
+  modelo pelos canais oficiais. No serviço local do Hangar, informe os caminhos do executável
+  `whisper-server` e do modelo, o idioma e, se necessário, o caminho do FFmpeg. Esses arquivos
+  ficam na máquina do **servidor selecionado**, inclusive ao configurar pelo celular. O Hangar
+  inicia o processo em loopback, reutiliza-o e o encerra junto com o servidor; não baixa nem
+  instala programas ou modelos. WAV PCM mono de 16 kHz passa diretamente; WebM/Opus, M4A/AAC e
+  outros formatos usam o FFmpeg configurado ou encontrado no PATH. Falta de arquivo ou conversor
+  aparece como erro. Só há reserva externa se você a acrescentar à lista. A transcrição requer
+  o `hangar-server` Rust; o modo Python não contém um segundo motor.
 - **Conversa por voz com Codex (Beta):** nasce desligada. Ative em **Configurações → Harnesses →
   Codex → Opções → Conversa por voz**. O botão **Voz · Beta** aparece nas sessões Codex daquele
   servidor. A escolha vale só para esse servidor; desligar durante uma chamada encerra o microfone

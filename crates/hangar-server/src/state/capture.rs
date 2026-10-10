@@ -124,16 +124,18 @@ mod tests {
     impl Fake {
         fn new(frame: &[u8], capture_rc: i32, has_rc: i32) -> Self {
             let dir = tempfile::tempdir().unwrap();
-            let (out, calls) = (dir.path().join("frame"), dir.path().join("calls"));
+            let out = dir.path().join("frame");
+            #[cfg(windows)]
+            let calls = dir.path().join("calls");
             std::fs::write(&out, frame).unwrap();
             #[cfg(unix)]
             let program = {
-                let has_exit = if has_rc == HANG { "sleep 5; exit 0".to_owned() } else { format!("exit {has_rc}") };
-                use std::os::unix::fs::PermissionsExt;
                 let path = dir.path().join("fake-tmux");
-                std::fs::write(&path, format!("#!/bin/sh\ncase \"$1\" in\n  has-session) echo has >> '{}'; {has_exit};;\n  capture-pane) cat '{}'; exit {capture_rc};;\nesac\nexit 99\n",
-                    calls.display(), out.display())).unwrap();
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+                std::fs::write(dir.path().join("capture-rc"), capture_rc.to_string()).unwrap();
+                std::fs::write(dir.path().join("has-rc"), has_rc.to_string()).unwrap();
+                // Spawns paralelos não podem herdar um descritor escritor do executável.
+                std::os::unix::fs::symlink(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/mux_capture.sh"), &path).unwrap();
                 path
             };
             #[cfg(windows)]

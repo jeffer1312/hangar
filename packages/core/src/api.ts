@@ -1808,23 +1808,29 @@ export interface CampoConfig {
 // Lista ordenada de serviços de transcrição (`transcription_providers`). Chega em
 // `campos.transcription_providers.valor` como lista; `CampoConfig.valor` não é alargado porque os
 // leitores de campo escalar continuam lendo string — quem quer a lista usa este parser.
-export type TranscriptionProviderKind = 'openai' | 'elevenlabs';
+export type TranscriptionProviderKind = 'openai' | 'elevenlabs' | 'whisper_cpp';
 export interface TranscriptionProviderConfig {
   id: string; kind: TranscriptionProviderKind; name: string; base_url: string; api_key: string; model: string;
+  executable_path?: string; model_path?: string; language?: string; converter_path?: string;
 }
 export interface TranscriptionProviderStatus {
   id: string; name: string; kind: string; waiting_until: number | null; reason: string | null;
+  state?: 'not_started' | 'starting' | 'ready' | 'failed' | null; error?: string | null;
 }
 
 export function parseTranscriptionProviders(v: unknown): TranscriptionProviderConfig[] {
   if (!Array.isArray(v)) return [];
   return v
     .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object'
-      && typeof p.id === 'string' && (p.kind === 'openai' || p.kind === 'elevenlabs'))
+      && typeof p.id === 'string' && (p.kind === 'openai' || p.kind === 'elevenlabs' || p.kind === 'whisper_cpp'))
     .map((p) => ({
       id: p.id as string, kind: p.kind as TranscriptionProviderKind,
       name: String(p.name ?? ''), base_url: String(p.base_url ?? ''),
       api_key: String(p.api_key ?? ''), model: String(p.model ?? ''),
+      ...(p.kind === 'whisper_cpp' ? {
+        executable_path: String(p.executable_path ?? ''), model_path: String(p.model_path ?? ''),
+        language: String(p.language || 'pt'), converter_path: String(p.converter_path ?? ''),
+      } : {}),
     }));
 }
 
@@ -1835,6 +1841,7 @@ export function transcriptionProviderLabel(
 ): string {
   if (p.name.trim()) return p.name.trim();
   if (p.kind === 'elevenlabs') return 'ElevenLabs';
+  if (p.kind === 'whisper_cpp') return 'whisper.cpp';
   // Como o `urlparse(...).hostname or base` do backend: sem porta, e o texto cru se não for URL.
   const base = p.base_url.trim() || 'https://api.groq.com/openai/v1';
   let host = base;
@@ -1884,9 +1891,9 @@ export function editTranscriptionProviderTarget(
   return next;
 }
 
-// Item sem chave faz o servidor recusar o Salvar inteiro (o rascunho é um só): o Salvar espera.
-export function transcriptionProvidersMissingKey(list: readonly Pick<TranscriptionProviderConfig, 'api_key'>[]): boolean {
-  return list.some((p) => !p.api_key);
+// Só o ElevenLabs exige chave; servidores compatíveis podem autenticar de outra forma.
+export function transcriptionProvidersMissingKey(list: readonly Pick<TranscriptionProviderConfig, 'api_key' | 'kind'>[]): boolean {
+  return list.some((p) => p.kind === 'elevenlabs' && !p.api_key);
 }
 
 export function getTranscriptionProvidersStatus(
@@ -1895,6 +1902,13 @@ export function getTranscriptionProvidersStatus(
   return server
     ? apiFetchForServer(server, '/api/transcription/providers/status')
     : apiFetch('/api/transcription/providers/status', { signal: AbortSignal.timeout(8000) });
+}
+
+export function testTranscriptionProvider(id: string, audio: Blob, filename: string, server?: Server | null): Promise<{ text: string; provider: string; aviso?: string }> {
+  const path = `/api/transcription/providers/${encodeURIComponent(id)}/test`;
+  const options = { method: 'POST', body: audio, headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(filename) } };
+  return server ? apiFetchForServer(server, path, options, 300_000)
+    : apiFetch(path, { ...options, signal: AbortSignal.timeout(300_000) });
 }
 
 /**

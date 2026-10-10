@@ -199,7 +199,8 @@ async function run(key: string, entry: DictationEntry, jsonlAgora: string | null
     if (recriada(identity)) { descartar(); return; }
     const status = (err as { status?: number } | null)?.status;
     // 503 = nenhum serviço de transcrição configurado: diz onde resolver, não só "falhou".
-    falhar({ error: status === 503 ? m.composer_groq_chave()
+    const code = (err as { code?: string } | null)?.code;
+    falhar({ error: status === 503 && code === 'transcription_not_configured' ? m.composer_transcription_not_configured()
       : err instanceof Error ? err.message : m.composer_falha_transcricao() });
   } finally {
     sessionsStore.release();

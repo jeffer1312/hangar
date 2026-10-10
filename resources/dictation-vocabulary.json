@@ -1,0 +1,4 @@
+{
+  "base": "hangar-send, cp-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, frontend, commit, merge request, deploy, endpoint, worktree, prompt, token",
+  "max_characters": 700
+}

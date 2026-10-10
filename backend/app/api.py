@@ -7447,7 +7447,7 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False, es
     try:
         t = await asyncio.to_thread(transcribe_with_provider, data, filename, limits)
     except TranscribeError as e:
-        raise HTTPException(e.status, e.detail)
+        raise HTTPException(e.status, e.payload())
     if not limpar:
         return _with_provider({"path": path, "text": t.text}, t)
     return {"path": path, **_with_provider(await _cleaned_dictation(t.text, estilo), t)}
@@ -7464,7 +7464,7 @@ async def transcribe_dictation(request: Request, estilo: str | None = None, limp
     try:
         t = await asyncio.to_thread(transcribe_with_provider, data, filename, DICTATION_LIMITS)
     except TranscribeError as e:
-        raise HTTPException(e.status, e.detail)
+        raise HTTPException(e.status, e.payload())
     if not limpar:
         return _with_provider({"text": t.text}, t)
     return _with_provider(await _cleaned_dictation(t.text, estilo), t)
@@ -7523,10 +7523,34 @@ async def relimpar_ditado(body: RelimparBody):
 
 
 @app.get("/api/transcription/providers/status", dependencies=[Depends(require_auth)])
-def transcription_providers_status():
+def transcription_providers_status(request: Request):
     """Espera por cota de cada serviço de transcrição, para a tela de configuração. `def` e não
     `async`: lê um arquivo, e o FastAPI já roda isso na threadpool."""
-    return {"providers": providers_status()}
+    if _convidado(request):
+        raise HTTPException(403, "A configuração de transcrição é exclusiva do dono.")
+    try:
+        return {"providers": providers_status()}
+    except TranscribeError as e:
+        raise HTTPException(e.status, e.payload())
+
+
+@app.post("/api/transcription/providers/{provider_id}/test", dependencies=[Depends(require_auth)])
+async def test_transcription_provider(provider_id: str, request: Request):
+    from app import transcription_bridge
+    if _convidado(request):
+        raise HTTPException(403, "O teste de transcrição é exclusivo do dono.")
+    if not transcription_bridge.owned_by_rust():
+        raise HTTPException(503, detail={"code": "transcription_rust_unavailable", "msg": "O teste requer o servidor Rust disponível."})
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 100 * 1024 * 1024:
+            raise HTTPException(413, "O áudio excede o limite de 100 MiB.")
+        data.extend(chunk)
+    filename = request.headers.get("x-filename") or "audio.wav"
+    try:
+        return await asyncio.to_thread(transcription_bridge.transcribe, bytes(data), filename, "dictation", provider_id)
+    except transcription_bridge.BridgeError as e:
+        raise HTTPException(e.status, detail={"code": e.code, "params": {}, "msg": e.detail})
 
 
 class PensamentoPtBody(_StrictBody):

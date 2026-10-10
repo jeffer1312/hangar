@@ -72,7 +72,7 @@ EDITAVEIS: dict[str, type] = {
     "llm_briefing_api_key": str,
     "llm_briefing_model": str,
     # Palavras que a Whisper tem que grafar direito (nome de projeto, de sessao, jargao do seu
-    # dia). Somadas a transcribe.VOCAB_BASE. Ver transcribe.vocabulario.
+    # dia). O Rust soma os termos ao vocabulário base compartilhado.
     "ditado_vocabulario": str,
     # Quanto o ditado pode mexer no que voce falou: "limpar" | "prosa" | "briefing".
     # Ver narrar.ESTILOS_DITADO — cada um e um prompt E um conjunto de travas diferente.
@@ -265,14 +265,15 @@ def mascarar(valor: str) -> str:
     return f"{valor[:4]}{'•' * 8}{valor[-4:]}"
 
 
-TRANSCRIPTION_KINDS = ("openai", "elevenlabs")
+TRANSCRIPTION_KINDS = ("openai", "elevenlabs", "whisper_cpp")
 _TRANSCRIPTION_FIELDS = ("id", "kind", "name", "base_url", "api_key", "model")
+_LOCAL_TRANSCRIPTION_FIELDS = ("executable_path", "model_path", "language", "converter_path")
 _TRANSCRIPTION_MAX = 10
 
 
 def _validate_transcription_providers(valor: Any) -> list[dict]:
     """Normaliza a lista de serviços de transcrição. Recusa na gravação o que a transcrição teria
-    de pular calada depois: item sem chave, tipo inexistente, endpoint que não é URL."""
+    de pular calada depois: tipo inexistente ou configuração incompleta para o serviço."""
     if not isinstance(valor, list):
         raise ValueError("transcription_providers: esperado uma lista")
     if len(valor) > _TRANSCRIPTION_MAX:
@@ -299,7 +300,7 @@ def _validate_transcription_providers(valor: Any) -> list[dict]:
             raise ValueError(
                 f"{onde}: tipo '{campos['kind']}' nao existe. Use um de: {', '.join(TRANSCRIPTION_KINDS)}."
             )
-        if not campos["api_key"]:
+        if campos["kind"] == "elevenlabs" and not campos["api_key"]:
             raise ValueError(f"{onde} sem chave")
         # Máscara que não casou com a chave guardada do MESMO id (item novo, id trocado) viraria a
         # chave de verdade: o serviço recusaria toda requisição sem a tela dizer por quê.
@@ -307,6 +308,17 @@ def _validate_transcription_providers(valor: Any) -> list[dict]:
             raise ValueError(f"{onde}: a chave esta mascarada; digite a chave de novo")
         if campos["kind"] == "elevenlabs":
             campos["base_url"] = ""
+        elif campos["kind"] == "whisper_cpp":
+            for field in _LOCAL_TRANSCRIPTION_FIELDS:
+                value = item.get(field) or ""
+                if not isinstance(value, str):
+                    raise ValueError(f"{onde}: {field} deve ser texto")
+                campos[field] = value.strip()
+            for field in ("executable_path", "model_path"):
+                if not campos[field]:
+                    raise ValueError(f"{onde}: informe {field}")
+            campos["language"] = campos["language"] or "pt"
+            campos["api_key"] = campos["base_url"] = campos["model"] = ""
         elif campos["base_url"] and not campos["base_url"].startswith(("http://", "https://")):
             raise ValueError(f"{onde}: use endpoint vazio ou uma URL http(s)://")
         out.append(campos)
@@ -438,15 +450,8 @@ def _coagir(campo: str, valor: Any) -> Any:
             if entrada and not Path(os.path.realpath(os.path.expanduser(entrada))).is_dir():
                 raise ValueError(f"scan_roots: '{entrada}' nao e um diretorio nesta maquina")
     if campo == "ditado_vocabulario" and texto:
-        # Import LOCAL: transcribe importa este modulo, entao um import no topo fecharia o ciclo —
-        # mesmo motivo (e mesma solucao) de config.automations_enabled.
-        #
-        # O teto vive AQUI, e nao so no corte de transcribe.vocabulario, porque este e o unico
-        # ponto da corrente que consegue falar com a pessoa. Cortando so na leitura, ela cadastra
-        # 40 termos, a tela diz "salvo", e os ultimos simplesmente nunca chegam na Whisper: os
-        # nomes que ela configurou pra parar de sair errado continuam saindo errado, sem nada em
-        # lugar nenhum explicando por que. Recusar na gravacao transforma isso num erro visivel no
-        # segundo em que ela aperta salvar.
+        # Recusar ao salvar evita anunciar sucesso para termos que o motor cortaria depois.
+        # O limite vem do mesmo recurso estático incluído no Rust.
         from app.transcribe import VOCAB_USUARIO_MAX
         if len(texto) > VOCAB_USUARIO_MAX:
             raise ValueError(

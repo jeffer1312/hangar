@@ -447,6 +447,22 @@ async fn installed_codex_reads_disconnected_account_in_isolated_home() {
         .env
         .base
         .insert("OPENAI_API_KEY".into(), "synthetic-parent-key".into());
+    // Prepara a instalação fria sem consumir o prazo da leitura que o teste verifica.
+    #[cfg(windows)]
+    let mut installed = {
+        let mut command = tokio::process::Command::new("cmd.exe");
+        command.args(["/d", "/c", "codex", "--version"]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut installed = {
+        let mut command = tokio::process::Command::new("codex");
+        command.arg("--version");
+        command
+    };
+    let prepared = installed.env_clear().envs(service.env.codex(&account))
+        .current_dir(root.path()).kill_on_drop(true).output().await.unwrap();
+    assert!(prepared.status.success(), "O Codex instalado precisa estar pronto para a fixture");
     assert_eq!(
         read_codex_auth_settled(&service, &account).await,
         serde_json::json!({"method":"none","status":"disconnected","email":null,"plan":null})

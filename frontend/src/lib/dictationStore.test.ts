@@ -305,10 +305,17 @@ describe('ditado por sessão', () => {
     expect(transcribeUploaded).toHaveBeenLastCalledWith('x', 'gravacao-1.webm', { limpar: true, estilo: 'prosa' }, undefined);
   });
 
-  it('503 diz onde configurar a chave', async () => {
-    vi.mocked(transcribeUploaded).mockRejectedValue(Object.assign(new Error('x'), { status: 503 }));
+  it('503 de configuração ausente diz onde configurar o serviço', async () => {
+    vi.mocked(transcribeUploaded).mockRejectedValue(Object.assign(new Error('x'), { status: 503, code: 'transcription_not_configured' }));
     iniciar();
     await flush();
-    expect(dictations.get('a', 'x')?.error).toBe(m.composer_groq_chave());
+    expect(dictations.get('a', 'x')?.error).toBe(m.composer_transcription_not_configured());
+  });
+  it('503 do servidor Rust mostra a falha e preserva o áudio para repetir', async () => {
+    vi.mocked(transcribeUploaded).mockRejectedValue(Object.assign(new Error('Servidor Rust indisponível'), { status: 503, code: 'transcription_rust_unavailable' }));
+    iniciar();
+    await flush();
+    expect(dictations.get('a', 'x')?.error).toBe('Servidor Rust indisponível');
+    expect(dictations.get('a', 'x')?.file).toBeDefined();
   });
 });

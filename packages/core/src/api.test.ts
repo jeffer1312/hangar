@@ -21,10 +21,16 @@ import { discardFile, fileAuthHeader, fileUrlNative, getPairContract, getPlans, 
 import type { Server } from './servers';
 import { exportShortcuts } from './api';
 import { fileUrl, uploadUrl, uploadUrlNative } from './api';
-import { editTranscriptionProviderKey, editTranscriptionProviderTarget, moveTranscriptionProvider, parseTranscriptionProviders, transcriptionProviderKeepsKey, transcriptionProviderLabel, transcriptionProvidersMissingKey } from './api';
+import { editTranscriptionProviderKey, editTranscriptionProviderTarget, moveTranscriptionProvider, parseTranscriptionProviders, transcriptionProviderKeepsKey, transcriptionProviderLabel, transcriptionProvidersMissingKey, testTranscriptionProvider } from './api';
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 /** O campo `V18-campo` da vitrine, como o `inputControl` o tira da árvore. */
 const CAMPO = { plugin: 'vitrine', key: 'V18-campo' };
+
+it('teste de transcrição informa o prazo real do servidor selecionado', async () => {
+  vi.spyOn(globalThis, 'fetch').mockRejectedValue(new DOMException('prazo excedido', 'TimeoutError'));
+  await expect(testTranscriptionProvider('p', new Blob(['audio']), 'fala.wav', server))
+    .rejects.toThrow('Servidor A não respondeu em 300s');
+});
 
 it('exportação leva IDs selecionados ao servidor escolhido e distingue seleção vazia', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
@@ -1169,6 +1175,19 @@ it('plugin/input sem resposta e sem servidor explícito é cortado em 8 s, e a f
 
 describe('lista de serviços de transcrição', () => {
   const ELEVEN = { id: 'a', kind: 'elevenlabs' as const, name: '', base_url: '', api_key: 'xi_••••', model: '' };
+
+  it('preserva caminhos e idioma do Whisper local sem exigir chave', () => {
+    const local = { id: 'local', kind: 'whisper_cpp', name: '', base_url: '', api_key: '', model: '',
+      executable_path: '/opt/Whisper local/whisper-server', model_path: '/opt/Whisper local/ggml-small.bin',
+      language: 'pt', converter_path: '' };
+    expect(parseTranscriptionProviders([local])).toEqual([local]);
+  });
+
+  it('aceita serviço compatível sem chave e mantém a exigência do ElevenLabs', () => {
+    const openai = { ...ELEVEN, kind: 'openai' as const, api_key: '', base_url: 'http://localhost:8000/v1' };
+    expect(transcriptionProvidersMissingKey([openai])).toBe(false);
+    expect(transcriptionProvidersMissingKey([{ ...ELEVEN, api_key: '' }])).toBe(true);
+  });
 
   it('lê só itens válidos e completa campos ausentes', () => {
     expect(parseTranscriptionProviders('x')).toEqual([]);
