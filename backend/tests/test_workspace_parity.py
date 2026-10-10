@@ -20,14 +20,15 @@ def rust(operation, **arguments):
 
 # Trava do git some no meio da cópia (manutenção em segundo plano) e derruba o copytree; não é estado
 # comparado pelos testes.
-_SEM_TRAVAS = shutil.ignore_patterns("*.lock")
+_SEM_TRAVAS = shutil.ignore_patterns("*.lock", "tmp_*")
 
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_AUTHOR_DATE", "2020-01-01T00:00:00+00:00")
     monkeypatch.setenv("GIT_COMMITTER_DATE", "2020-01-01T00:00:00+00:00")
-    for args in (("init", "-b", "main"), ("config", "user.name", "Teste"), ("config", "user.email", "teste@example.invalid")):
+    for args in (("init", "-b", "main"), ("config", "user.name", "Teste"), ("config", "user.email", "teste@example.invalid"),
+                 ("config", "maintenance.auto", "false"), ("config", "gc.auto", "0")):
         git_ops._run(str(tmp_path), *args)
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub/ação.txt").write_text("primeira\nlinha\n", encoding="utf-8")
