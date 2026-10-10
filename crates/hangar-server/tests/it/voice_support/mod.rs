@@ -51,12 +51,14 @@ async fn fake_api() -> SocketAddr {
 /// Um app-server falso por chamada, todos anotando no mesmo `seen`. Cada `thread/realtime/start` devolve `v=0 answer <n>`.
 fn fake_app_servers(seen: Seen, push: Push) -> SpawnFactory {
     Arc::new(move || -> Spawn {
-        let (ours, theirs) = tokio::io::duplex(1 << 20);
+        // Um duplex por sentido: quando o `Rpc` cai, o lado que ele escreve some inteiro e o falso lê o fim (`<eof>`).
+        // Com um duplex só, o leitor do cliente seguraria a outra metade para sempre.
+        let (client_out, read) = tokio::io::duplex(1 << 20);
+        let (write, client_in) = tokio::io::duplex(1 << 20);
         let (push_tx, mut pushed) = tokio::sync::mpsc::unbounded_channel::<Value>();
         *push.lock().unwrap() = Some(push_tx);
         let seen = seen.clone();
         tokio::spawn(async move {
-            let (read, write) = tokio::io::split(theirs);
             let write = Arc::new(tokio::sync::Mutex::new(write));
             let w = write.clone();
             tokio::spawn(async move { while let Some(v) = pushed.recv().await { let _ = w.lock().await.write_all(format!("{v}\n").as_bytes()).await; } });
@@ -89,8 +91,7 @@ fn fake_app_servers(seen: Seen, push: Push) -> SpawnFactory {
             // A chamada largou o `Rpc`: em produção é o app-server derrubado.
             seen.lock().unwrap().push(json!({"method": "<eof>"}));
         });
-        let (r, w) = tokio::io::split(ours);
-        Box::new(move || Box::pin(async move { Ok(Rpc::over_lines(r, w)) }))
+        Box::new(move || Box::pin(async move { Ok(Rpc::over_lines(client_in, client_out)) }))
     })
 }
 
