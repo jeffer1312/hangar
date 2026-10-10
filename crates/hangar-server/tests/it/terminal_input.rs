@@ -33,6 +33,9 @@ fn terminal_input_composer_proof() {
  for s in ["[Pasted text #2 +2 lines]","[Image #2]","a long ori\nginal mes sage"] {assert_eq!(ComposerSnapshot::parse(&screen(s)).unwrap().proves("a long original message",&old),Proof::Present);}
  assert_eq!(ComposerSnapshot::parse(&format!("a long original message\n{}",screen(""))).unwrap().proves("a long original message",&old),Proof::Absent);
  assert!(ComposerSnapshot::parse("no composer").is_none());
+ let empty=ComposerSnapshot::parse(&screen("")).unwrap();
+ assert_eq!(ComposerSnapshot::parse(&screen("/clear │ [name]")).unwrap().proves("/clear",&empty),Proof::Present);
+ assert_eq!(ComposerSnapshot::parse(&screen("/clear [x] [name]")).unwrap().proves("/clear",&empty),Proof::Unreadable);
 }
 #[test]
 fn terminal_input_composer_below_long_agent_panel() {
