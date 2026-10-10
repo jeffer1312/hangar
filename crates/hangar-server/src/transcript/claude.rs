@@ -696,7 +696,7 @@ mod tests {
         let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(rem.to_string().as_bytes(), 0))
             .expect("um evento");
         assert_eq!((ev.id.as_str(), ev.text.as_deref()), ("delivery:d-1", Some("[de: x] oi")));
-        assert!(ev.ts.is_some());
+        assert!((ev.ts.expect("ts") - 1_791_587_170.249).abs() < 1e-3);
     }
 
     #[test]

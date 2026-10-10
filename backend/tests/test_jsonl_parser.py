@@ -526,7 +526,7 @@ def test_recado_nativo_entregue_sem_terminal_leva_o_horario_do_remove():
              '[de: x] oi\n</cross-session-message>')
     [ev] = parse_line(json.dumps({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
                                   "timestamp": "2026-10-09T23:06:10.249Z", "content": bruto}))
-    assert ev.id == "delivery:d-1" and ev.text == "[de: x] oi" and ev.ts is not None
+    assert ev.id == "delivery:d-1" and ev.text == "[de: x] oi" and ev.ts == pytest.approx(1791587170.249)
 
 def test_historico_leva_uma_bolha_por_entrega_sem_terminal(tmp_path, monkeypatch):
     from app import pqueue
