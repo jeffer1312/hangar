@@ -219,6 +219,12 @@ export function basename(path: string): string {
   return parts.length ? parts[parts.length - 1] : path;
 }
 
+// Nome da conta Claude no disco (`~/.claude-<nome>`), o que o DELETE /api/claude-configs/<nome>
+// resolve. O rótulo da lista já vem com o apelido e não serve para isso; a pasta padrão não tem nome.
+export function claudeAccountFolder(path: string | null | undefined): string | null {
+  return basename(path ?? '').match(/^\.claude-(.+)$/)?.[1] ?? null;
+}
+
 // cwd -> prefixo truncável + basename que nunca encolhe: o que identifica a sessão na lista é a
 // ÚLTIMA pasta, e a ellipsis padrão corta justamente o fim. Mora aqui, e não copiado no card e na
 // sidebar, porque a regra da contrabarra é a mesma do basename() — num cwd do Windows as duas

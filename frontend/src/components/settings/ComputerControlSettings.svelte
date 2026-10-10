@@ -191,7 +191,6 @@
         llm_model: model.trim(),
         llm_effort: effort,
         llm_key: preset === 'custom' ? (newLlmKey || null) : null,
-        jev_key: null,
         use_cliproxy_key: preset === 'cliproxy',
       });
       fill(s);
@@ -341,9 +340,9 @@
       {/if}
 
       <div class="jev-status">
-        <p class="status">{m.jev_windows_title()}</p>
+        <p class="status">{m.computer_control_jev_title()}</p>
         <p class="hint">{current.jev_key_set
-          ? m.computer_control_key_saved({ tail: current.jev_key_tail })
+          ? m.computer_control_jev_shared({ tail: current.jev_key_tail })
           : m.computer_control_key_missing()}</p>
         <button type="button" onclick={onConfigureJev}>{m.jev_open_settings()}</button>
       </div>

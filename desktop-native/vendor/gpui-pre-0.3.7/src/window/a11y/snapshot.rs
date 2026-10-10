@@ -10,6 +10,12 @@ use std::collections::HashMap;
 /// Separa os ids no id de acessibilidade automático: ids do app já levam `/` (caminho de pasta) e `::` (sessão remota).
 pub(crate) const ID_SEPARATOR: char = '›';
 
+/// Nodes whose id is `id` or ends with `›id`, the same match as the `root` of [`snapshot_text`].
+pub(crate) fn find_by_id<'a>(update: &'a TreeUpdate, id: &str) -> Vec<(NodeId, &'a Node)> {
+    update.nodes.iter().filter(|(_, node)| node.author_id().is_some_and(|author| author == id || author.ends_with(&format!("{ID_SEPARATOR}{id}"))))
+        .map(|(nid, node)| (*nid, node)).collect()
+}
+
 /// One line per node, indented by depth: `role "name" = "value" [states] #id`, the id cut to its last segment.
 /// `root` limits it to the subtree of the node whose id is `root` or ends with `›root`; `None` when it is absent.
 pub(crate) fn snapshot_text(update: &TreeUpdate, root: Option<&str>) -> Option<String> {
@@ -93,6 +99,15 @@ mod tests {
             tree_id: TreeId::ROOT,
             focus: NodeId(2),
         }
+    }
+
+    #[test]
+    fn find_by_id_matches_the_last_segment_only() {
+        let tree = tree();
+        let ids = |id: &str| find_by_id(&tree, id).into_iter().map(|(nid, _)| nid).collect::<Vec<_>>();
+        assert_eq!(ids("settings-tab-advanced"), vec![NodeId(2)]);
+        assert_eq!(ids("settings-dialog"), vec![NodeId(1)], "o pai não casa pelo segmento do meio");
+        assert!(ids("advanced").is_empty(), "pedaço de segmento não casa");
     }
 
     #[test]

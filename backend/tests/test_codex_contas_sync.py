@@ -19,6 +19,7 @@ from app import codex_contas as accounts
 from app import codex_contas_sync as sync
 from app.codex_arquivos import ler
 from app.codex_importador import CodexNativo
+import codex_contas_apoio
 
 
 def _toml_value(value):
@@ -116,9 +117,9 @@ async def test_plugin_preparation_cache_is_short_and_invalidated(isolated, fake_
         return {"manifest": {"plugins": {}}, "issues": [], "trust_pending": False}
 
     monkeypatch.setattr(plugins, "sync_plugins", synchronize)
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     now[0] += 1
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     assert len(calls) == 1
 
     if invalidate == "expiry":
@@ -131,7 +132,7 @@ async def test_plugin_preparation_cache_is_short_and_invalidated(isolated, fake_
             config.write("\n# alteração externa\n")
     elif invalidate == "cli":
         monkeypatch.setattr(sync, "_cli_version", lambda: "updated")
-    await sync.prepare_account(account, force=invalidate == "force")
+    await codex_contas_apoio.prepare_account(account, force=invalidate == "force")
     assert len(calls) == 2
 
 
@@ -155,8 +156,8 @@ async def test_plugin_failures_are_cached_but_hook_trust_is_rechecked(isolated, 
         trust_checks.append(account)
         return trust
     monkeypatch.setattr(plugins, 'check_trust', check_trust)
-    first = await sync.prepare_account(account)
-    second = await sync.prepare_account(account)
+    first = await codex_contas_apoio.prepare_account(account)
+    second = await codex_contas_apoio.prepare_account(account)
     assert first == second
     assert len(calls) == 1
     assert len(trust_checks) == int(trust)
@@ -169,7 +170,7 @@ async def test_unchanged_preparation_checks_inventory_before_reading_resources(i
     (source / 'skills/sample').mkdir(parents=True)
     (source / 'skills/sample/SKILL.md').write_text('sample')
     monkeypatch.setattr(sync, '_cli_version', lambda: 'test')
-    first = await sync.prepare_account(account)
+    first = await codex_contas_apoio.prepare_account(account)
     original = sync._source_resources
     scans = []
     def scan(root, *, read_contents=True):
@@ -179,7 +180,7 @@ async def test_unchanged_preparation_checks_inventory_before_reading_resources(i
         raise AssertionError('recursos inalterados não devem ser transformados')
     monkeypatch.setattr(sync, '_source_resources', scan)
     monkeypatch.setattr(sync, '_transform_resources', transform)
-    assert await sync.prepare_account(account) == first
+    assert await codex_contas_apoio.prepare_account(account) == first
     assert scans == [False]
 
 
@@ -196,8 +197,8 @@ async def test_cached_preparation_observes_hook_approval(isolated, fake_writer, 
         return False
     monkeypatch.setattr(plugins, 'sync_plugins', synchronize)
     monkeypatch.setattr(plugins, 'check_trust', check_trust)
-    assert (await sync.prepare_account(account))['trust_pending'] is True
-    assert (await sync.prepare_account(account))['trust_pending'] is False
+    assert (await codex_contas_apoio.prepare_account(account))['trust_pending'] is True
+    assert (await codex_contas_apoio.prepare_account(account))['trust_pending'] is False
     assert len(calls) == 1
 
 
@@ -238,12 +239,12 @@ async def test_plugin_cache_preserves_informational_mcp_exclusions(isolated, fak
         return {"manifest": {"plugins": {}}, "issues": [], "trust_pending": False}
 
     monkeypatch.setattr(plugins, "sync_plugins", synchronize)
-    first = await sync.prepare_account(account)
+    first = await codex_contas_apoio.prepare_account(account)
     assert first["status"] == "ready"
     assert {issue["code"] for issue in first["issues"]} == {
         "codex_account_mcp_runtime_excluded", "codex_account_mcp_auth_excluded",
     }
-    assert await sync.prepare_account(account) == first
+    assert await codex_contas_apoio.prepare_account(account) == first
     assert len(calls) == 1
 
 
@@ -256,13 +257,13 @@ async def test_resource_execution_survives_copy_and_mode_only_changes(isolated, 
     hook.chmod(0o755)
     target = account.home / "hooks/probe.sh"
 
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     assert subprocess.check_output([str(target)], text=True) == "ok"
     target.chmod(0o600)
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     assert subprocess.check_output([str(target)], text=True) == "ok"
     hook.chmod(0o644)
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     assert not target.stat().st_mode & 0o100
 
 
@@ -290,25 +291,25 @@ async def test_external_hook_keeps_helper_and_repairs_legacy_copy(isolated, fake
         "hooks/probe.sh": {"hash": sync.hash_bytes(script.encode())},
     }})
 
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     assert target.is_symlink()
     assert subprocess.check_output([str(target)], text=True) == "first"
     hook.unlink()
     hook.symlink_to(originals[1])
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     assert subprocess.check_output([str(target)], text=True) == "second"
     hook.unlink()
     hook.write_text(script)
     hook.chmod(0o755)
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     assert not target.is_symlink()
     assert target.read_text() == script
     assert originals[1].stat().st_mode & 0o777 == 0o755
     hook.unlink()
     hook.symlink_to(originals[1])
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     hook.unlink()
-    assert (await sync.prepare_account(account))["status"] == "ready"
+    assert (await codex_contas_apoio.prepare_account(account))["status"] == "ready"
     assert not target.is_symlink()
     assert all(path.read_text() == script for path in originals)
 
@@ -325,7 +326,7 @@ async def test_external_hook_link_failure_is_not_ready(isolated, fake_writer, mo
         raise PermissionError("symlinks indisponíveis")
 
     monkeypatch.setattr(Path, "symlink_to", denied)
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
     assert result["status"] == "partial"
     assert not (account.home / "hooks/probe.sh").exists()
     assert result["issues"]
@@ -344,7 +345,7 @@ async def test_hook_repair_preserves_personal_destination_link(isolated, fake_wr
     target.parent.mkdir()
     target.symlink_to(personal)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
     assert result["status"] == "partial"
     assert target.resolve() == personal
     assert personal.read_text() == "print('personal')\n"
@@ -408,7 +409,7 @@ async def test_prepare_without_default_config_toml_is_ready(isolated, fake_write
     _, source, account = isolated
     assert not (source / "config.toml").exists()
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
 
@@ -427,7 +428,7 @@ async def test_prepare_inherits_preferences_and_keeps_account_state(isolated, fa
     sessions.parent.mkdir()
     sessions.write_bytes(b"sessao")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     config = tomllib.loads((account.home / "config.toml").read_text())
@@ -446,11 +447,11 @@ async def test_destination_change_is_repaired_even_when_source_is_unchanged(isol
     (source / "skills/probe").mkdir(parents=True)
     (source / "skills/probe/SKILL.md").write_text("fonte", encoding="utf-8")
 
-    await sync.prepare_account(account)
+    await codex_contas_apoio.prepare_account(account)
     _config(account.home / "config.toml", model="local")
     (account.home / "skills/probe/SKILL.md").unlink()
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     assert tomllib.loads((account.home / "config.toml").read_text())["model"] == "high"
@@ -461,11 +462,11 @@ async def test_destination_change_is_repaired_even_when_source_is_unchanged(isol
 async def test_invalid_source_keeps_managed_destination_untouched(isolated, fake_writer):
     _, source, account = isolated
     _config(source / "config.toml", model="high")
-    await sync.prepare_account(account)
+    await codex_contas_apoio.prepare_account(account)
     _config(account.home / "config.toml", model="local")
     (source / "config.toml").write_bytes(b"model = [")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "error"
     assert any(issue["code"] == "codex_account_source_invalid" for issue in result["issues"])
@@ -478,18 +479,18 @@ async def test_restriction_conflict_is_blocking_and_source_removal_keeps_local(i
     _config(source / "config.toml", forced_login_method="chatgpt", forced_chatgpt_workspace_id="ws-1")
     _config(account.home / "config.toml")
 
-    first = await sync.prepare_account(account)
+    first = await codex_contas_apoio.prepare_account(account)
     assert first["status"] == "ready"
     assert tomllib.loads((account.home / "config.toml").read_text())["forced_login_method"] == "chatgpt"
 
     _config(source / "config.toml")
-    second = await sync.prepare_account(account)
+    second = await codex_contas_apoio.prepare_account(account)
     assert second["status"] == "ready"
     assert "forced_login_method" in tomllib.loads((account.home / "config.toml").read_text())
 
     _config(source / "config.toml", forced_login_method="chatgpt")
     _config(account.home / "config.toml", forced_login_method="api")
-    third = await sync.prepare_account(account)
+    third = await codex_contas_apoio.prepare_account(account)
     assert third["status"] == "partial", third
     assert any(issue["code"] == "codex_account_restriction_conflict" for issue in third["issues"])
     assert tomllib.loads((account.home / "config.toml").read_text())["forced_login_method"] == "api"
@@ -503,9 +504,9 @@ async def test_removed_hook_definition_preserves_destination_state(isolated, fak
         "state": {"private": {"approved": True}},
     })
 
-    await sync.prepare_account(account)
+    await codex_contas_apoio.prepare_account(account)
     _config(source / "config.toml")
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     hooks = tomllib.loads((account.home / "config.toml").read_text())["hooks"]
@@ -516,11 +517,11 @@ async def test_removed_preference_preserves_local_change(isolated, fake_writer):
     _, source, account = isolated
     _config(source / "config.toml", model="high", personality="source")
     _config(account.home / "config.toml", model="low")
-    await sync.prepare_account(account)
+    await codex_contas_apoio.prepare_account(account)
 
     _config(source / "config.toml", model="high")
     _config(account.home / "config.toml", model="high", personality="local")
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert "personality" in tomllib.loads((account.home / "config.toml").read_text())
@@ -532,7 +533,7 @@ async def test_internal_reference_outside_allowed_resources_is_pending(isolated,
     _config(source / "config.toml", model_instructions_file=str(source / "private.md"))
     _config(account.home / "config.toml")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert any(issue["code"] == "codex_account_unmapped_reference" for issue in result["issues"])
@@ -544,7 +545,7 @@ async def test_concurrent_preparation_reuses_completed_state(isolated, fake_writ
     _config(source / "config.toml", model="high")
     _config(account.home / "config.toml", model="low")
 
-    results = await asyncio.gather(sync.prepare_account(account), sync.prepare_account(account))
+    results = await asyncio.gather(codex_contas_apoio.prepare_account(account), codex_contas_apoio.prepare_account(account))
 
     assert [result["status"] for result in results] == ["ready", "ready"]
     assert len(fake_writer) == 1
@@ -556,7 +557,7 @@ async def test_status_is_read_only_and_private_state_is_restricted(isolated, fak
     _config(account.home / "config.toml", model="low")
     assert sync.preparation_status(account)["status"] == "idle"
     assert not (account.home.parent / ".hangar").exists()
-    await sync.prepare_account(account)
+    await codex_contas_apoio.prepare_account(account)
     before = len(fake_writer)
 
     status = sync.preparation_status(account)
@@ -579,7 +580,7 @@ async def test_profiles_use_the_same_native_writer(isolated, fake_writer):
     _config(account.home / "config.toml", model="low")
     _config(account.home / "fast.config.toml", model="low")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     assert tomllib.loads((account.home / "fast.config.toml").read_text())["model"] == "high"
@@ -592,10 +593,10 @@ async def test_removed_profile_keeps_local_content_and_removes_managed_file(isol
     _config(source / "fast.config.toml", model="high")
     _config(account.home / "config.toml", model="low")
     _config(account.home / "fast.config.toml", model="low")
-    await sync.prepare_account(account)
+    await codex_contas_apoio.prepare_account(account)
 
     (source / "fast.config.toml").unlink()
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     assert not (account.home / "fast.config.toml").exists()
@@ -610,7 +611,7 @@ async def test_destination_symlink_ancestor_is_reported_without_writing_outside(
     outside.mkdir()
     (account.home / "agents").symlink_to(outside, target_is_directory=True)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial"
     assert any(issue["code"] == "codex_account_path_conflict" for issue in result["issues"])
@@ -624,7 +625,7 @@ async def test_config_symlink_is_not_replaced(isolated, fake_writer):
     outside.write_bytes(b'model = "outside"\n')
     (account.home / "config.toml").symlink_to(outside)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert outside.read_bytes() == b'model = "outside"\n'
@@ -636,7 +637,7 @@ async def test_broad_source_symlink_is_rejected_before_enumeration(isolated, fak
     _config(source / "config.toml", model="high")
     (source / "agents").symlink_to(source, target_is_directory=True)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert any(issue["code"] == "codex_account_source_root_link" for issue in result["issues"])
@@ -651,7 +652,7 @@ async def test_source_file_symlink_to_auth_is_rejected(isolated, fake_writer):
     secret.write_text("secret", encoding="utf-8")
     (source / "AGENTS.md").symlink_to(secret)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert any(issue["code"] == "codex_account_source_forbidden" for issue in result["issues"])
@@ -668,7 +669,7 @@ async def test_pasta_antiga_de_upload_em_skill_e_ignorada_sem_bloquear(isolated,
     uploads.mkdir()
     (uploads / "anexo.txt").write_text("não copiar", encoding="utf-8")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     assert (account.home / "skills/orquestrar/SKILL.md").is_file()
@@ -681,7 +682,7 @@ async def test_source_file_symlink_to_default_config_is_rejected(isolated, fake_
     _config(source / "config.toml", model="high")
     (source / "AGENTS.md").symlink_to(source / "config.toml")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert any(issue["code"] == "codex_account_source_forbidden" for issue in result["issues"])
@@ -697,7 +698,7 @@ async def test_agent_link_to_broad_directory_is_rejected(isolated, fake_writer):
     (source / "agents").mkdir()
     (source / "agents/broad").symlink_to(broad, target_is_directory=True)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert any(issue["code"] == "codex_account_source_broad_link" for issue in result["issues"])
@@ -714,7 +715,7 @@ async def test_agent_link_with_readme_and_random_files_is_rejected(isolated, fak
     (source / "agents").mkdir()
     (source / "agents/broad").symlink_to(broad, target_is_directory=True)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert any(issue["code"] == "codex_account_source_broad_link" for issue in result["issues"])
@@ -730,7 +731,7 @@ async def test_external_skill_symlink_is_allowed_when_it_points_to_one_resource(
     (source / "skills").mkdir()
     (source / "skills/pessoal").symlink_to(external, target_is_directory=True)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     assert (account.home / "skills/pessoal/SKILL.md").read_text() == "pessoal"
@@ -747,7 +748,7 @@ async def test_mcp_environment_does_not_inherit_identity_or_runtime(isolated, fa
     }}})
     _config(account.home / "config.toml")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     config = tomllib.loads((account.home / "config.toml").read_text())
@@ -769,7 +770,7 @@ async def test_hooks_internal_command_is_remapped_to_destination(isolated, fake_
         "SessionStart": [{"hooks": [{"type": "command", "command": f"python {hook}"}]}],
     }}), encoding="utf-8")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     data = json.loads((account.home / "hooks.json").read_text())
@@ -785,7 +786,7 @@ async def test_agent_config_file_reference_is_remapped(isolated, fake_writer):
     agent.write_text('name = "probe"\n', encoding="utf-8")
     _config(source / "config.toml", agents={"probe": {"config_file": str(agent)}})
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     config = tomllib.loads((account.home / "config.toml").read_text())
@@ -802,7 +803,7 @@ async def test_agent_toml_reference_is_transformed_by_native_writer(isolated, fa
     agent.write_text(f'config_file = "{hook}"\n', encoding="utf-8")
     _config(source / "config.toml")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     data = tomllib.loads((account.home / "agents/probe.toml").read_text())
@@ -822,7 +823,7 @@ async def test_agent_toml_override_does_not_edit_personal_collision(isolated, fa
     personal.parent.mkdir()
     personal.write_text('config_file = "local.py"\n', encoding="utf-8")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert any(issue["code"] == "codex_account_resource_conflict" for issue in result["issues"])
@@ -838,7 +839,7 @@ async def test_unmapped_hook_reference_preserves_previous_resource(isolated, fak
     }]}]}}), encoding="utf-8")
     (account.home / "hooks.json").write_text('{"hooks": {"local": []}}', encoding="utf-8")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     assert any(issue["code"] == "codex_account_unmapped_reference" for issue in result["issues"])
@@ -851,10 +852,10 @@ async def test_unmapped_config_reference_preserves_previous_managed_value(isolat
     instruction.write_text("global", encoding="utf-8")
     _config(source / "config.toml", model_instructions_file=str(instruction))
     _config(account.home / "config.toml")
-    await sync.prepare_account(account)
+    await codex_contas_apoio.prepare_account(account)
     _config(source / "config.toml", model_instructions_file=str(source / "private.md"))
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "partial", result
     config = tomllib.loads((account.home / "config.toml").read_text())
@@ -865,11 +866,11 @@ async def test_invalid_manifest_blocks_preparation_and_preserves_destination(iso
     _, source, account = isolated
     _config(source / "config.toml", model="high")
     _config(account.home / "config.toml", model="low")
-    await sync.prepare_account(account)
+    await codex_contas_apoio.prepare_account(account)
     sync._state_path(account).write_bytes(b"not-json")
     _config(account.home / "config.toml", model="local")
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "error"
     assert any(issue["code"] == "codex_account_state_invalid" for issue in result["issues"])
@@ -889,7 +890,7 @@ async def test_preparation_uses_native_writer_in_temporary_codex_home(isolated, 
     agent.write_text(f'config_file = "{hook}"\n', encoding="utf-8")
     monkeypatch.setattr(sync, "_NATIVO", CodexNativo)
 
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "ready", result
     assert tomllib.loads((account.home / "config.toml").read_text())["model"] == "high"
@@ -917,7 +918,7 @@ async def test_source_change_during_write_does_not_advance_signature(isolated, m
         confirm()
 
     monkeypatch.setattr(sync, "editar_config", writer)
-    result = await sync.prepare_account(account)
+    result = await codex_contas_apoio.prepare_account(account)
 
     assert result["status"] == "error"
     assert any(issue["code"] == "codex_account_changed_during_prepare" for issue in result["issues"])
@@ -941,9 +942,9 @@ async def test_trust_pending_anterior_sobrevive_falha_e_atualiza_apos_leitura_va
         return {"manifest": {}, "issues": [], "trust_pending": False}
 
     monkeypatch.setattr(plugins, "sync_plugins", falha)
-    primeira = await sync.prepare_account(account, force=True)
+    primeira = await codex_contas_apoio.prepare_account(account, force=True)
     assert primeira["trust_pending"] is True
 
     monkeypatch.setattr(plugins, "sync_plugins", aprovada)
-    segunda = await sync.prepare_account(account, force=True)
+    segunda = await codex_contas_apoio.prepare_account(account, force=True)
     assert segunda["trust_pending"] is False

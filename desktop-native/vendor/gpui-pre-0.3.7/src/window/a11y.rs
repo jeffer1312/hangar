@@ -427,6 +427,44 @@ impl Window {
         self.a11y.debug.snapshot(root)
     }
 
+    /// Role and name of the node `id` (or `…›id`) in the last frame. Errors: `no-tree`, `not-found`, `ambiguous`.
+    pub fn a11y_target(&self, id: &str) -> Result<(String, Option<String>), &'static str> {
+        let (_, node) = self.a11y.debug.node(id)?;
+        Ok((format!("{:?}", node.role()), node.label().map(str::to_owned)))
+    }
+
+    /// Clicks the node `id` of the last frame by the same path as a screen reader. Besides the [`Self::a11y_target`]
+    /// errors: `disabled`, and `covered` when the click would land on another element (popup, dialog, scrolled out).
+    #[cfg(not(target_family = "wasm"))]
+    pub fn a11y_click(&mut self, id: &str, cx: &mut App) -> Result<(), &'static str> {
+        let (node_id, node) = self.a11y.debug.node(id)?;
+        if node.is_disabled() {
+            return Err("disabled");
+        }
+        let listens = self.a11y.action_listeners.get(&node_id).is_some_and(|l| l.iter().any(|(a, _)| *a == Action::Click));
+        // A button under an open dialog must not be pressed, whichever path handles the click. The built-in click drops
+        // itself with only a log line when it would miss: say it here instead.
+        let bounds = self.a11y.node_bounds.get(&node_id).copied();
+        if bounds.is_none() && !listens {
+            return Err("not-found");
+        }
+        if let Some(bounds) = bounds {
+            let center = bounds.center();
+            let reachable = self.a11y.node_hitboxes.get(&node_id).map_or(true, |hitbox| {
+                let hit = self.rendered_frame.hit_test(center);
+                hit.ids.iter().take(hit.hover_hitbox_count).any(|id| id == hitbox)
+            });
+            if !reachable {
+                return Err("covered");
+            }
+        }
+        self.handle_a11y_action(
+            accesskit::ActionRequest { action: Action::Click, target_tree: accesskit::TreeId::ROOT, target_node: node_id, data: None },
+            cx,
+        );
+        Ok(())
+    }
+
     /// Keeps building the accessibility tree without assistive technology attached, so [`Self::a11y_snapshot`]
     /// always has the last frame.
     pub fn retain_a11y_tree(&mut self, retain: bool) {

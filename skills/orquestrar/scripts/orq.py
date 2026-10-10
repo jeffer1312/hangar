@@ -54,10 +54,10 @@ EVENT_FIELDS_INT = ("task", "rodada")
 EVENT_FIELDS_STR = ("commit", "resultado", "sessao", "motivo", "titulo", "executor", "par",
                     "de", "para", "plano", "branch", "gid", "fase", "patch", "ate")
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
-JEV_MODEL = "jev-1.13.0"
+JEV_MODEL = "jev-latest"
 # The same Jev served by OpenRouter, for a `sk-or-` key with no endpoint configured.
 OPENROUTER_JEV_URL = "https://openrouter.ai/api/alpha/decisions"
-OPENROUTER_JEV_MODEL = "typesafe/jev-1.13-20260917"
+OPENROUTER_JEV_MODEL = "~typesafe/jev-latest"
 JEV_TIMEOUT_S = 5
 # A hung backend cannot hang the session that called orq.
 SEND_TIMEOUT_S = 30
@@ -1510,7 +1510,13 @@ def jev_config(auto: bool = False) -> dict:
     url = first(os.environ.get("ORQ_JEV_URL"), os.environ.get("JEV_ENDPOINT"), rc.get("jev_endpoint"))
     model = first(os.environ.get("JEV_MODEL"), rc.get("jev_model"))
     if auto and not url and key.startswith("sk-or-"):
-        url, model = OPENROUTER_JEV_URL, model or OPENROUTER_JEV_MODEL
+        url = OPENROUTER_JEV_URL
+    # Same rule as the server (`runtime_config.destino_jev`): OpenRouter never gets the TypeSafe name,
+    # and its `-latest` alias needs the `~` ("typesafe/jev-latest does not exist").
+    if "openrouter.ai" in url:
+        model = model or OPENROUTER_JEV_MODEL
+        if model.startswith("typesafe/") and model.endswith("-latest"):
+            model = "~" + model
     return {"key": key, "url": url or JEV_URL, "model": model or JEV_MODEL}
 
 

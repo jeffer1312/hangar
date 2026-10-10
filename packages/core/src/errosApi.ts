@@ -146,6 +146,8 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_codex_controle: () => m.erro_codex_controle(),
   erro_plano_removido: () => m.chat_plan_ausente(),
   erro_plano_ilegivel: () => m.chat_plan_erro(),
+  // Contas e cotas sem o servidor Rust de pé: não há reserva Python.
+  accounts_need_rust_server: () => m.accounts_need_rust_server(),
   // /api/claude-configs — apagar conta recusado por alguma condicao da maquina
   erro_config_dirs_fixo: () => m.erro_config_dirs_fixo(),
   erro_conta_ativa_backend: () => m.erro_conta_ativa_backend(),
@@ -217,9 +219,9 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_computer_control_target_name: () => m.erro_computer_control_target_name(),
   erro_computer_control_target_exists: (p) => m.erro_computer_control_target_exists({ name: String(p.name) }),
   erro_computer_control_local_only_windows: () => m.erro_computer_control_local_only_windows(),
+  erro_computer_control_jev_key_moved: () => m.erro_computer_control_jev_key_moved(),
   erro_computer_control_target_host: () => m.erro_computer_control_target_host(),
   erro_computer_control_not_installed: () => m.erro_computer_control_not_installed(),
-  erro_computer_control_no_uvx: () => m.erro_computer_control_no_uvx(),
   erro_computer_control_no_ssh_key: () => m.erro_computer_control_no_ssh_key(),
   erro_computer_control_release: (p) => m.erro_computer_control_release({ error: String(p.error) }),
   erro_nao_encontrado: () => m.erro_nao_encontrado(),
@@ -465,6 +467,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_conta_cheia: (p) => m.erro_conta_cheia({ conta: String(p.conta ?? ''), pct: String(Math.round(Number(p.pct ?? 0))) }),
   erro_conversa_ja_na_conta: () => m.erro_conversa_ja_na_conta(),
   erro_troca_conta: (p) => m.erro_troca_conta({ erro: String(p.erro ?? '') }),
+  erro_troca_conta_parada: (p) => m.erro_troca_conta_parada({ erro: String(p.erro ?? '') }),
   erro_mover_conversa: (p) => m.erro_mover_conversa({ erro: String(p.erro ?? '') }),
 
   // Capacidade ausente: extensao do Pi, catalogo, resposta que nao veio

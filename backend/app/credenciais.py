@@ -17,17 +17,17 @@ aqui, e por isso não aparecem na lista: caixa marcada que não faz nada é ment
 """
 import asyncio
 import logging
-from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import agentes_sync, apelidos, contas, cotas, engines, oauth_codex, opencode_cota, codex_contas
+from app import agentes_sync, apelidos, cotas, engines, opencode_cota, codex_contas
 from app.auth import require_auth
 from app import engine_probe
-from app.config import list_config_dirs
+from app.config import visible_accounts
 from app.mensagens import erro
+from app.codex_contas_login import UNAVAILABLE_AUTH
 from app.conta_estado import EstadoLogin, logins
 from app.adapters.kimi.sessions import kimi_home
 
@@ -113,7 +113,7 @@ def _cota_por_id(forcar: bool = False) -> dict[str, CotaResumo]:
 async def listar_endpoint(request: Request, forcar: bool = False) -> list[Credencial]:
     service = getattr(request.app.state, "codex_contas_login", None)
     async def snapshot(account):
-        auth = service.cached_auth(account)
+        auth = None
         sync = (await service.preparation_status_async(account)).get("status")
         if sync != "running":
             try:
@@ -121,7 +121,7 @@ async def listar_endpoint(request: Request, forcar: bool = False) -> list[Creden
                     auth = await service.read_auth(account, refresh=forcar)
             except TimeoutError:
                 _log.warning("leitura de autenticação Codex excedeu o prazo: %s", account.id)
-        return {"id": account.id, "auth": auth or {"method": "unknown", "status": "unavailable"},
+        return {"id": account.id, "auth": auth or dict(UNAVAILABLE_AUTH),
                 "sync": sync}
 
     snapshots = await asyncio.gather(*(snapshot(a) for a in codex_contas.list_visible_accounts())) if service else []
@@ -139,7 +139,7 @@ def listar(forcar: bool = False, *, codex_snapshots: list[dict] | tuple = ()) ->
 
     # Contas do Claude: mesmo filtro da aba antiga — conta de verdade (carimbada pelo app) ou a
     # base do app. Pasta de backup continua fora: a tela não conseguiria apagá-la.
-    cfgs = [c for c in list_config_dirs() if contas.e_conta(Path(c.path)) or c.active]
+    cfgs = visible_accounts()
     for c, login in zip(cfgs, logins(cfgs)):
         cid = f"claude:{c.path}"
         saida.append(Credencial(
@@ -239,9 +239,13 @@ def definir_cookie(body: CookieBody) -> dict:
     """
     opencode_cota.definir_config(body.id, body.workspace_id, body.auth_cookie)
     # Invalida a leitura em cache: sem isto o cookie novo só valeria no próximo ciclo de 5 min, e
-    # a pessoa acabou de colar justamente pra ver o número aparecer.
-    with cotas._lock:
-        cotas._cache.pop(body.id, None)
+    # a pessoa acabou de colar justamente pra ver o número aparecer. O cache é de quem lê a cota.
+    # Extra, não a operação: com o cookie já gravado, recusar faria a pessoa colar de novo.
+    from app import account_bridge
+    try:
+        account_bridge.request_quotas(invalidate=body.id)
+    except HTTPException as error:
+        _log.warning("cookie gravado, mas a cota em cache não foi invalidada: %s", error.detail)
     return {"id": body.id, "cookie_definido": body.id in opencode_cota.ler_configs()}
 
 
@@ -286,33 +290,6 @@ def sincronizar_nos_agentes(body: SyncBody) -> dict:
     alvos = tuple(a for a in body.alvos if a in agentes_sync.ALVOS) or agentes_sync.ALVOS
     return {"id": body.id, "modelos": len(modelos),
             "resultado": agentes_sync.sincronizar(nome, base_url, api_key, modelos, alvos)}
-
-
-# ---------------------------------------------------------------- login OAuth do ChatGPT (Codex)
-# O app faz o fluxo de código de dispositivo e espalha o resultado pro Codex, Pi e omp
-# (app/oauth_codex.py). O poll é do front: `GET /codex/login` a cada 2s até `concluido`.
-
-@credenciais_router.get("/codex", dependencies=[Depends(require_auth)])
-def codex_estado() -> dict:
-    return oauth_codex.estado()
-
-
-@credenciais_router.post("/codex/login", dependencies=[Depends(require_auth)])
-def codex_login_iniciar() -> dict:
-    try:
-        return oauth_codex.iniciar()
-    except RuntimeError as e:
-        raise HTTPException(409, detail=erro("erro_codex_login", str(e), motivo=str(e)))
-
-
-@credenciais_router.get("/codex/login", dependencies=[Depends(require_auth)])
-def codex_login_passo() -> dict:
-    return oauth_codex.passo()
-
-
-@credenciais_router.delete("/codex/login", dependencies=[Depends(require_auth)])
-def codex_login_cancelar() -> dict:
-    return oauth_codex.cancelar()
 
 
 @credenciais_router.delete("/kimi/{nome}", dependencies=[Depends(require_auth)])

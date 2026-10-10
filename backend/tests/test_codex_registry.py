@@ -18,6 +18,7 @@ from app.registry import SessionRegistry
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.adapter import CodexAdapter
+import codex_contas_apoio
 
 
 @pytest.fixture(autouse=True)
@@ -158,7 +159,7 @@ def test_registry_rejects_invalid_tier_before_effects(tmp_path, provider, tier):
 def test_create_codex_transporta_a_conta_secundaria_ao_lancador(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_accounts, "_DEFAULT_HOME", tmp_path / ".codex")
-    account = codex_accounts.create_account("work")
+    account = codex_contas_apoio.create_account("work")
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "has_session", return_value=False), \
          patch.object(registry.shutil, "which", return_value="/usr/bin/hangar-codex-tui"), \

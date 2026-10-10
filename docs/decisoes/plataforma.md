@@ -263,7 +263,7 @@ encerra sua árvore na saída. WAV PCM mono de 16 kHz não exige conversão; out
 o conversor configurado ou o FFmpeg no PATH. Erro local não cria reserva externa: a lista
 salva é a única ordem de serviços.
 
-O `hangar-server` atende STT pela ponte privada autenticada. Protocolo interno 50 nos dois
+O `hangar-server` atende STT pela ponte privada autenticada. Protocolo interno 51 nos dois
 lados. Multipart HTTP, parser JSON, vocabulário, cotas e processo local estão no Rust; o motor
 antigo de `transcribe.py` foi removido. O Python mantém autorização e upload das rotas públicas,
 DTOs e organização LLM, que são capacidades compartilhadas. Sem Rust, transcrição responde 503
@@ -702,6 +702,34 @@ Jev e comparar, o que acontece entre sessões. Virar ao vivo exigiria endpoint n
 sessão e a chave atravessando mais uma fronteira. Ficaram de fora, pelo mesmo motivo, o registro de
 consumidores da chave e o override por sessão. A tela é só do front desktop neste primeiro momento,
 por decisão explícita — o app Expo fica para depois.
+
+## Uma configuração do Jev para os quatro usos
+
+09/10/2026, decisão do Jefferson. Navegador (`objetivo`/`confere`), orquestração, voz e Computer Use
+(Windows e Linux) leem a MESMA chave, URL e modelo: `jev_api_key`, `jev_endpoint` e `jev_model` no
+`runtime_config`, no ambiente `TYPESAFE_API_KEY`, `JEV_ENDPOINT` e `JEV_MODEL`. A chave separada do
+Computer Use (`jev_windows_api_key`, gravada só no `env` do MCP) saiu: duas chaves com nomes
+diferentes eram a confusão da tela, e com chave do OpenRouter o Computer Use respondia 401 porque
+tinha a TypeSafe fixa.
+
+- **Uma regra de destino, em três cópias que precisam casar:** `runtime_config.destino_jev`
+  (Python), `voice::jev::destination` (nativo) e `jev_config` do `orq.py`. OpenRouter quando o
+  endereço é dele ou, sem endereço, quando a chave começa com `sk-or-`. Padrões: TypeSafe
+  `https://api.typesafe.ai/v1/systemone` + `jev-latest`; OpenRouter
+  `https://openrouter.ai/api/alpha/decisions` + `~typesafe/jev-latest`. No OpenRouter,
+  `typesafe/jev-latest` sem o `~` responde "does not exist".
+- **A sessão recebe os três já resolvidos** (`env_jev`), e o MCP do Computer Use também
+  (`computer_control.sync_jev`, chamado ao gravar qualquer um dos três e na subida do backend). A
+  subida migra uma vez: chave que só existia no MCP ou no `env` do `settings.json` vira `jev_api_key`.
+  Chave diferente nos dois: vale a da página Jev, e o diário registra o final das duas.
+- **O OpenRouter serve o mesmo contrato da TypeSafe.** Medido com a chave `sk-or-` configurada: corpo
+  `{model, state, questions}` com um `choice` de 251 opções em `criteria` e um `noul`; resposta 200 em
+  ~0,5 s com `answers.<q>.{type, choice, confidence, probabilities}` (as 251 chaves) e
+  `answers.<q>.noul`. Com `~typesafe/jev-latest` e com `jev-latest` ele serviu
+  `typesafe/jev-1.13-20260917`. Acima de 251 opções não foi medido.
+- **A lista de modelos do OpenRouter não traz o Jev de decisão.** `GET /api/v1/models` (458 modelos)
+  só tinha `typesafe/jev-router`. Por isso a tela oferece duas sugestões fixas ("Sempre o mais
+  novo" e "Versão fixa") e um campo livre, nunca uma busca de modelos.
 
 ## Triagem de recados da orquestrar-auto: Jev ligado, regex só anotando
 

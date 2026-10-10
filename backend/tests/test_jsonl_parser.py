@@ -509,6 +509,40 @@ def test_queued_removed_ids_diferem_no_mesmo_timestamp():
     assert a.id != b.id and a.text != b.text
 
 
+def test_entrega_sem_terminal_anexo_e_remove_viram_uma_bolha():
+    # Sem terminal, a mesma entrega grava `attachment/queued_command` e `queue-operation remove`.
+    att = parse_line(json.dumps({"type": "attachment", "uuid": "u-att", "timestamp": "2026-10-09T23:06:03.448Z",
+                                 "attachment": {"type": "queued_command", "delivery_id": "d-1",
+                                                "prompt": [{"type": "text", "text": "A DESCULPA ERA B"}]}}))
+    rem = parse_line(json.dumps({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
+                                 "reason": "absorbed_mid_turn", "timestamp": "2026-10-09T23:06:10.249Z",
+                                 "content": "A DESCULPA ERA B"}))
+    assert [e.id for e in att] == [e.id for e in rem] == ["delivery:d-1"]
+
+
+
+def test_recado_nativo_entregue_sem_terminal_leva_o_horario_do_remove():
+    bruto = ('<cross-session-message from="uds:/run/user/1000/cc-socks/4242.sock" from-name="x">\n'
+             '[de: x] oi\n</cross-session-message>')
+    [ev] = parse_line(json.dumps({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
+                                  "timestamp": "2026-10-09T23:06:10.249Z", "content": bruto}))
+    assert ev.id == "delivery:d-1" and ev.text == "[de: x] oi" and ev.ts == pytest.approx(1791587170.249)
+
+def test_historico_leva_uma_bolha_por_entrega_sem_terminal(tmp_path, monkeypatch):
+    from app import pqueue
+    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
+    jsonl = tmp_path / "s.jsonl"
+    jsonl.write_text("\n".join(json.dumps(o) for o in [
+        {"type": "attachment", "uuid": "u-att", "timestamp": "2026-10-09T23:06:03.448Z",
+         "attachment": {"type": "queued_command", "delivery_id": "d-1",
+                        "prompt": [{"type": "text", "text": "A DESCULPA ERA B"}]}},
+        {"type": "queue-operation", "operation": "remove", "deliveryId": "d-1", "reason": "absorbed_mid_turn",
+         "timestamp": "2026-10-09T23:06:10.249Z", "content": "A DESCULPA ERA B"},
+    ]) + "\n")
+    msgs = [e for e in pqueue.merged_history("s", str(jsonl)) if e.kind == "user_msg"]
+    assert [(e.id, e.text) for e in msgs] == [("delivery:d-1", "A DESCULPA ERA B")]
+
+
 def test_queued_dequeue_nao_renderiza_para_nao_duplicar_turno_real():
     # dequeue = virou turno de verdade (tem seu type='user'); renderizar aqui duplicaria a bubble.
     ev = json.dumps({"type": "queue-operation", "operation": "dequeue", "sessionId": "s1",
@@ -703,6 +737,21 @@ def test_background_agent_launch_carries_the_agent_id():
     [final] = parse_line(_tool_result_line({"agentId": "ag1"}))
     assert ev.bg_agent_id == "ag1"
     assert final.bg_agent_id is None
+
+
+def _colega(bloco: str) -> str:
+    return _user('Another Claude session sent a message:\n<teammate-message teammate_id="frente-c"'
+                 + bloco + '</teammate-message>\n\nThis came from another Claude session.')
+
+
+def test_colega_de_equipe_roda_do_spawn_ate_ficar_ocioso():
+    [ev] = parse_line(_tool_result_line({"status": "teammate_spawned", "agentId": "areconf-c-b72",
+                                         "name": "reconf-c"}))
+    assert ev.bg_agent_id == "teammate:reconf-c"
+    ocioso = parse_line(_colega(' color="blue">\n{"type":"idle_notification","from":"frente-c"}\n'))
+    assert [(e.kind, e.tool_use_id) for e in ocioso] == [("tool_result", "task:teammate:frente-c")]
+    recado = parse_line(_colega(' summary="x">\nfecho a frente agora.\n'))
+    assert [e.kind for e in recado] == ["user_msg"]
 
 
 def test_patch_keeps_exactly_the_line_ceiling():

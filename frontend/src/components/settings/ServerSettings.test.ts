@@ -494,17 +494,16 @@ describe('ServerSettings — variáveis do .env', () => {
 
 
 describe('ServerSettings — Jev em uma tela própria', () => {
-  it('separa as chaves por uso e mantém opções técnicas recolhidas', async () => {
+  it('mostra uma configuração só e mantém opções técnicas recolhidas', async () => {
     const base = criarStore('').store;
-    const store = { ...base, campos: { jev_windows_api_key: { valor: '••••1234', definido: true, origem: 'app' } } } as ConfigServidorStore;
+    const store = { ...base, campos: { jev_api_key: { valor: 'sk-o••••1234', definido: true, origem: 'app' } } } as ConfigServidorStore;
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(ServerSettings, { target: el, props: { store, secao: 'jev' } });
     await tick();
     expect(el.textContent).toContain(m.jev_browser_title());
-    expect(el.textContent).toContain(m.jev_windows_title());
     expect(el.querySelector('#cfg-jev_api_key')).not.toBeNull();
-    expect(el.querySelector('#cfg-jev_windows_api_key')).not.toBeNull();
+    expect(el.querySelector('[id^="cfg-jev_windows"]')).toBeNull();
     expect(el.querySelector<HTMLDetailsElement>('.jev-details')?.open).toBe(false);
     unmount(comp);
     const advanced = mount(ServerSettings, { target: el, props: { store, secao: 'avancado' } });

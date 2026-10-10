@@ -177,9 +177,9 @@ import { cachePrazo } from '../lib/cachePrazo';
   // OMP é o fork do Pi (mesma TUI, mesmo popover de modelo/esforço) — trata igual aqui.
   const isPi = $derived(provider === 'pi' || provider === 'omp');
   const isKimi = $derived(provider === 'kimi');
-  // Quem tem fila promovível: Kimi (ctrl-s), Codex (turn/steer) e Claude sem terminal (mensagem
-  // no meio do turno pelo stdin).
-  const temFilaPromovivel = $derived(isKimi || isCodex || headless);
+  // Quem tem fila promovível: Kimi (ctrl-s), Codex (turn/steer), Claude sem terminal (mensagem
+  // no meio do turno pelo stdin) e Claude com terminal (ctrl+x ctrl+s da fila do Claude Code).
+  const temFilaPromovivel = $derived(isKimi || isCodex || headless || provider === 'claude');
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
   // Comeca vazio; o $effect popula na hora a partir do cache (sincrono) ou da rede.
@@ -2084,9 +2084,9 @@ import { cachePrazo } from '../lib/cachePrazo';
         {/if}
       {/if}
       {#if temFilaPromovivel && isWorking && (filaCount > 0 || steeringQueue) && onSteer}
-        <!-- FILA da TUI do Kimi: msg já mandada, esperando o turno atual acabar. O chip existe pra
+        <!-- FILA da TUI (Kimi, Claude): msg já mandada, esperando o turno atual acabar. O chip existe pra
              DIZER que há fila (antes disso a bolha translúcida era a única pista) e dar a saída:
-             tocar manda o `ctrl-s`, que promove a msg pro turno em curso. Não tocar = espera, que
+             tocar manda a tecla da TUI (Kimi `ctrl-s`, Claude `ctrl+x ctrl+s`), que promove a msg. Não tocar = espera, que
              é o comportamento de sempre. -->
         <button class="repo-chip fila-chip" onclick={steerFila}
                 disabled={steeringQueue} aria-busy={steeringQueue}

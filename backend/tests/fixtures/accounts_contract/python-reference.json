@@ -529,5 +529,349 @@
     "body": {
       "ok": true
     }
+  },
+  "claude_validation_envelopes": [
+    {
+      "method": "POST",
+      "path": "/api/claude-configs",
+      "body": {
+        "nome": "conta\n"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_pattern_mismatch",
+            "loc": [
+              "body",
+              "nome"
+            ],
+            "msg": "String should match pattern '^[a-z0-9][a-z0-9_-]{0,31}\\z'",
+            "input": "conta\n",
+            "ctx": {
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}\\z"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/claude-configs",
+      "body": {
+        "nome": ""
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_short",
+            "loc": [
+              "body",
+              "nome"
+            ],
+            "msg": "String should have at least 1 character",
+            "input": "",
+            "ctx": {
+              "min_length": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/claude-configs",
+      "body": {
+        "nome": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_too_long",
+            "loc": [
+              "body",
+              "nome"
+            ],
+            "msg": "String should have at most 32 characters",
+            "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "ctx": {
+              "max_length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/claude-configs",
+      "body": {
+        "nome": "fresh",
+        "extra": true
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "extra"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/claude-configs",
+      "body": {
+        "nome": "work"
+      },
+      "status": 409,
+      "response": {
+        "detail": "já existe <HOME>/.claude-work"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/claude-configs",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "nome"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/claude-configs",
+      "body": {
+        "nome": 17
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "nome"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 17
+          }
+        ]
+      }
+    }
+  ],
+  "catalog_validation_envelopes": [
+    {
+      "method": "DELETE",
+      "path": "/api/claude-configs/absent",
+      "body": null,
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "erro_conta_inexistente",
+          "params": {
+            "nome": "absent"
+          },
+          "msg": "<HOME>/.claude-absent não é uma conta criada pelo hangar"
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/claude-configs/bad%0A",
+      "body": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "erro_conta_nome_invalido",
+          "params": {},
+          "msg": "nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/codex-contas",
+      "body": null,
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/codex-contas",
+      "body": [],
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": []
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/codex-contas",
+      "body": {},
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Field required",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/codex-contas",
+      "body": {
+        "name": null
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Input should be a valid string",
+            "input": null
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/codex-contas",
+      "body": {
+        "name": 17
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "string_type",
+            "loc": [
+              "body",
+              "name"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 17
+          }
+        ]
+      }
+    }
+  ],
+  "codex_catalog_with_shared_settings": {
+    "method": "GET",
+    "path": "/api/codex-contas",
+    "status": 200,
+    "body": [
+      {
+        "id": "default",
+        "credential_id": "codex:<HOME>/.codex",
+        "name": "default",
+        "home": "<HOME>/.codex",
+        "is_default": true,
+        "auth": {
+          "method": "none",
+          "status": "disconnected",
+          "email": null,
+          "plan": null
+        },
+        "sync": {
+          "status": "ready",
+          "trust_pending": false,
+          "issues": [],
+          "etapa": null,
+          "herdado": null
+        },
+        "has_settings": true
+      },
+      {
+        "id": "alpha",
+        "credential_id": "codex:<HOME>/.codex-alpha",
+        "name": "alpha",
+        "home": "<HOME>/.codex-alpha",
+        "is_default": false,
+        "auth": {
+          "method": "none",
+          "status": "disconnected",
+          "email": null,
+          "plan": null
+        },
+        "sync": {
+          "status": "idle",
+          "trust_pending": false,
+          "issues": [],
+          "etapa": null,
+          "herdado": null
+        },
+        "has_settings": false
+      },
+      {
+        "id": "zeta",
+        "credential_id": "codex:<HOME>/.codex-zeta",
+        "name": "zeta",
+        "home": "<HOME>/.codex-zeta",
+        "is_default": false,
+        "auth": {
+          "method": "none",
+          "status": "disconnected",
+          "email": null,
+          "plan": null
+        },
+        "sync": {
+          "status": "idle",
+          "trust_pending": false,
+          "issues": [],
+          "etapa": null,
+          "herdado": null
+        },
+        "has_settings": false
+      }
+    ]
   }
 }
