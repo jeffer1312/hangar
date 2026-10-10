@@ -1257,6 +1257,13 @@ impl NewSession {
                 let roots = result.map_err(|e| Hangar::fetch_failure(&e))
                     .and_then(|v| serde_json::from_value::<Vec<Root>>(v).map_err(|_| tr("invalid_response")));
                 if !self.roots.finish(seq, roots) { return None; }
+                // A tela sem sessão fica aberta por horas: uma falha passageira (backend subindo) não pode ficar presa nela.
+                if self.roots.ok().is_none() {
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_secs(5)).await;
+                        let _ = this.update(cx, |this, cx| if this.roots.seq == seq { this.load_roots(cx) });
+                    }).detach();
+                }
                 let list = self.roots.ok().cloned().unwrap_or_default();
                 self.root_scans = list.iter().cloned().map(|root| RootScan { root, scan: Remote::default() }).collect();
                 if let Some(root) = list.iter().find(|r| Some(&r.path) == last.as_ref()).or(list.first()).cloned() { self.select_root(root, window, cx); }
