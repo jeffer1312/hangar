@@ -159,8 +159,9 @@ pub struct Controller {
     next_tool: u64,
     /// Sobe a cada aparelho que assume.
     owner_epoch: u64,
-    /// Dono de cada oferta ainda sem resposta, na ordem: o realtime responde na mesma ordem.
-    offers: VecDeque<u64>,
+    next_offer: u64,
+    /// `(seq, dono)` da última oferta repassada: só a resposta dela vai ao aparelho.
+    latest_offer: Option<(u64, u64)>,
     snap: Snapshot,
     sent_state: Option<Value>,
     sent_at: Option<Instant>,
@@ -175,7 +176,7 @@ impl Controller {
             actions: Vec::new(), rows: Vec::new(), followed: HashSet::new(), watched: HashSet::new(), talked: HashMap::new(), jev_switched: None,
             close_gate: ConfirmGate::default(), closing: false, switch_offer: SwitchOffer::default(), sent_turn: None, pending_question: None,
             spoken: HashSet::new(), heard_recent: String::new(), session_names: Vec::new(), target, plan_key: None, computer: None, detached: false, last_failure: None, forwarded: HashMap::new(),
-            next_tool: 0, owner_epoch: 0, offers: VecDeque::new(), snap: Snapshot { phase: "connecting", ..Snapshot::default() }, sent_state: None, sent_at: None, dirty: true }
+            next_tool: 0, owner_epoch: 0, next_offer: 0, latest_offer: None, snap: Snapshot { phase: "connecting", ..Snapshot::default() }, sent_state: None, sent_at: None, dirty: true }
     }
 
     fn ctx(&self) -> Ctx { Ctx { voice: self.voice.clone(), machines: self.machines.clone(), done: self.done.clone(), backoff: self.backoff.clone() } }
@@ -241,8 +242,9 @@ impl Controller {
                         Some(screen) => format!("A sessão na tela agora é {}.", screen.name),
                         None => "Nenhuma sessão aberta na tela.".to_owned(),
                     };
-                    self.offers.push_back(self.owner_epoch);
-                    self.voice.offer(sdp, note);
+                    self.next_offer += 1;
+                    self.latest_offer = Some((self.next_offer, self.owner_epoch));
+                    self.voice.offer(self.next_offer, sdp, note);
                 }
                 ClientMsg::Live => self.voice.live(),
                 ClientMsg::Level { input } => self.voice.level(input),
@@ -298,7 +300,7 @@ impl Controller {
                 if self.snap.backstage.len() >= BACKSTAGE_KEEP { self.snap.backstage.pop_front(); }
                 self.snap.backstage.push_back(line);
             }
-            VoiceEvent::Answer(sdp) => self.answer(sdp),
+            VoiceEvent::Answer(seq, sdp) => self.answer(seq, sdp),
             VoiceEvent::ReadSession(call) => self.read_session(call),
             VoiceEvent::Send { call, request, session, turn } => self.send(call, request, session, turn),
             VoiceEvent::AskSession(question) => self.ask(question),
@@ -373,13 +375,12 @@ impl Controller {
     }
 
     /// Só a resposta da última oferta do dono atual vai a ele; a de uma oferta anterior quebraria a conexão dele.
-    // ponytail: casa por ordem; oferta que o realtime não responder desalinha a fila. Id por oferta se isso aparecer.
-    fn answer(&mut self, sdp: String) {
-        let Some(epoch) = self.offers.pop_front() else { log("sdp answer dropped: no offer"); return };
-        if epoch != self.owner_epoch || self.offers.contains(&epoch) {
+    fn answer(&mut self, seq: u64, sdp: String) {
+        if self.latest_offer != Some((seq, self.owner_epoch)) {
             log("sdp answer dropped: stale offer");
             return;
         }
+        self.latest_offer = None;
         self.device.send(ServerMsg::Answer { sdp });
     }
 

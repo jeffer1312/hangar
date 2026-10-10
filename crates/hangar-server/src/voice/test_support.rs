@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// Responde o necessário, devolve o que recebeu e aceita notificações empurradas pelo teste. Cada `thread/realtime/start`
-/// devolve a resposta SDP `v=0 answer <n>`.
+/// devolve a resposta SDP `v=0 answer <n>`, menos a oferta com `no-answer`, que fica sem resposta.
 pub fn fake_app_server() -> (Spawn, tokio::sync::mpsc::UnboundedReceiver<Value>, tokio::sync::mpsc::UnboundedSender<Value>) {
     let (ours, theirs) = tokio::io::duplex(1 << 20);
     let (seen_tx, seen) = tokio::sync::mpsc::unbounded_channel();
@@ -26,6 +26,10 @@ pub fn fake_app_server() -> (Spawn, tokio::sync::mpsc::UnboundedReceiver<Value>,
                 Some("thread/start") => json!({"thread": {"id": "t1"}, "model": "gpt-test"}),
                 Some("thread/realtime/start") => {
                     starts += 1;
+                    if msg["params"]["transport"]["sdp"].as_str().is_some_and(|s| s.contains("no-answer")) {
+                        let _ = write.lock().await.write_all(format!("{}\n", json!({"id": msg["id"], "result": {}})).as_bytes()).await;
+                        continue;
+                    }
                     let sdp = format!("v=0 answer {starts}");
                     let w = write.clone();
                     tokio::spawn(async move { let _ = w.lock().await.write_all(format!("{}\n", json!({"method": "thread/realtime/sdp", "params": {"threadId": "t1", "sdp": sdp}})).as_bytes()).await; });

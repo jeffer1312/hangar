@@ -17,8 +17,8 @@ pub enum VoiceFailure { Microphone, Speaker, AppServer, Realtime(String), Networ
 pub enum Activity { #[default] Idle, Thinking, Searching, Working }
 pub enum VoiceEvent {
     Phase(Phase), Draft(Option<String>), Activity(Activity), ReadSession(CallId), Failed(VoiceFailure),
-    /// Resposta SDP para o aparelho dono da chamada (a primeira e a de cada passagem).
-    Answer(String),
+    /// Resposta SDP à oferta `seq` (a primeira e a de cada passagem).
+    Answer(u64, String),
     /// `turn`: a fala que pediu. A tela não manda duas vezes à mesma sessão no mesmo turno.
     Send { call: CallId, request: String, session: Option<String>, turn: String },
     Mode(Mode), Plan { path: PathBuf, markdown: String }, AskSession(String), SendPlan { session: String, text: String },
@@ -76,8 +76,8 @@ pub type Spawn = Box<dyn FnOnce() -> futures_util::future::BoxFuture<'static, Re
 
 enum Command { Retarget(String, String, Option<PathBuf>), Result(String, String), Reply(Value, Value), SetMode(Mode), Models(ModeModels), Answer(String), PlanDelivered,
     Sessions(Vec<String>), Jev { turn: String, verdict: SendVerdict, speech: Option<String>, note: Option<String> },
-    /// SDP e a nota da sessão na tela do aparelho que ofereceu.
-    Offer(String, String), Live, Level(f32), Detached }
+    /// Número da oferta, SDP e a nota da sessão na tela do aparelho que ofereceu.
+    Offer(u64, String, String), Live, Level(f32), Detached }
 
 #[derive(Clone)]
 pub struct Voice { commands: mpsc::UnboundedSender<Command>, stopped: Arc<AtomicBool>, stop: Arc<Notify> }
@@ -90,7 +90,8 @@ impl Voice {
         Voice { commands, stopped, stop }
     }
     /// Oferta WebRTC de um aparelho: a primeira abre a conversa falada; as seguintes são a passagem para ele.
-    pub fn offer(&self, sdp: String, context: String) { let _ = self.commands.send(Command::Offer(sdp, context)); }
+    /// A resposta volta com o mesmo `seq`.
+    pub fn offer(&self, seq: u64, sdp: String, context: String) { let _ = self.commands.send(Command::Offer(seq, sdp, context)); }
     /// O aparelho conectou o áudio.
     pub fn live(&self) { let _ = self.commands.send(Command::Live); }
     /// Nível do microfone do aparelho: segura o envio e a fala puxada enquanto o usuário fala.
@@ -125,6 +126,15 @@ impl Voice {
 /// Só o tipo: a mensagem de `Realtime` vem do servidor e pode repetir o texto enviado.
 fn failure_kind(failure: &VoiceFailure) -> String {
     match failure { VoiceFailure::Realtime(_) => "Realtime".to_owned(), other => format!("{other:?}") }
+}
+
+/// Quanto uma oferta espera a resposta SDP.
+const ANSWER_WAIT: Duration = Duration::from_secs(20);
+
+/// A passagem em curso acabou (respondida, falhou ou estourou): a oferta que esperava vai ao laço.
+fn next_offer(answering: &mut Option<Instant>, waiting: &mut Option<(u64, String, String)>, early: &mut VecDeque<Command>) {
+    *answering = None;
+    if let Some((seq, sdp, context)) = waiting.take() { early.push_front(Command::Offer(seq, sdp, context)); }
 }
 
 fn failed(step: &'static str) -> impl FnOnce(VoiceFailure) -> VoiceFailure {
@@ -221,13 +231,13 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     let mut early: VecDeque<Command> = VecDeque::new();
     // Aparelho que caiu antes de oferecer (celular travado) tira o prazo: quem limita a espera passa a ser o do hub.
     let mut offer_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(45));
-    let offer_sdp = loop {
+    let (offer_seq, offer_sdp) = loop {
         let command = match offer_deadline {
             Some(at) => tokio::time::timeout_at(at, inbox.recv()).await.map_err(|_| failed("device offer")(VoiceFailure::Timeout))?,
             None => inbox.recv().await,
         };
         match command {
-            Some(Command::Offer(sdp, _)) => break sdp,
+            Some(Command::Offer(seq, sdp, _)) => break (seq, sdp),
             Some(Command::Detached) => offer_deadline = None,
             Some(Command::Live | Command::Level(_)) => {}
             Some(other) => early.push_back(other),
@@ -246,7 +256,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
 
     // A resposta SDP chega como notificação; até lá, só ela interessa.
     let mut last_delta = None;
-    let answer = tokio::time::timeout(Duration::from_secs(20), async {
+    let answer = tokio::time::timeout(ANSWER_WAIT, async {
         while let Ok(item) = incoming.recv().await {
             match item {
                 Incoming::Notification { method, params } if method == "thread/realtime/sdp" => return Ok(params["sdp"].as_str().unwrap_or_default().to_owned()),
@@ -263,9 +273,14 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
         Err(VoiceFailure::AppServer)
     }).await.map_err(|_| VoiceFailure::Timeout).and_then(|answer| answer).map_err(failed("sdp answer"))?;
     log(format!("sdp answer received bytes={}", answer.len()));
-    let _ = events.send(VoiceEvent::Answer(answer)).await;
+    let _ = events.send(VoiceEvent::Answer(offer_seq, answer)).await;
 
     let mut greeted = false;
+    // Uma passagem por vez: a resposta SDP não diz de qual oferta é, então a próxima espera a anterior responder,
+    // falhar ou estourar o prazo.
+    let mut last_offer = offer_seq;
+    let mut answering: Option<Instant> = None;
+    let mut waiting_offer: Option<(u64, String, String)> = None;
     // `restarting`: passagem para outro aparelho em curso; `detached`: o dono caiu. Nos dois, o fim da conversa falada não
     // encerra a chamada: a thread do organizador espera a próxima oferta.
     let mut restarting = false;
@@ -297,6 +312,10 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     // Envio recusado por falta de pedido: se a fala seguinte o completar, o organizador é avisado para tentar de novo.
     let mut refused_send: Option<Instant> = None;
     let outcome = loop {
+        if answering.is_some_and(|at| Instant::now() >= at) {
+            log("handoff sdp answer timed out");
+            next_offer(&mut answering, &mut waiting_offer, &mut early);
+        }
         for text in out.hold.due(Instant::now()) {
             if out.away { out.park(text, "held"); } else { append_speech(&rpc, &thread, &text, "held").await; }
         }
@@ -329,9 +348,15 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 }
                 Some(Command::Level(input)) => if input >= MIC_VOICE_LEVEL { gate.heard_voice(Instant::now()); out.hold.heard_voice(Instant::now()); },
                 Some(Command::Detached) => { log("device detached"); detached = true; out.away = true; }
-                Some(Command::Offer(sdp, context)) => {
+                Some(Command::Offer(seq, sdp, context)) if answering.is_some() => {
+                    // A mais nova substitui a que esperava: a resposta desta é a única que o dono atual aplica.
+                    log("handoff offer waits for the previous answer");
+                    waiting_offer = Some((seq, sdp, context));
+                }
+                Some(Command::Offer(seq, sdp, context)) => {
                     // Outro aparelho assumiu (ou o mesmo voltou): a conversa falada recomeça na mesma thread, com o histórico dela.
                     log(format!("handoff offer bytes={}", sdp.len()));
+                    (last_offer, answering) = (seq, Some(Instant::now() + ANSWER_WAIT));
                     restarting = true;
                     detached = false;
                     out.away = true;
@@ -651,8 +676,14 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     if method == "account/rateLimits/updated" { send_limits(events, usage::account_limits(&params["rateLimits"])).await; continue; }
                     if !ours { continue; }
                     if method == "thread/realtime/sdp" {
-                        let _ = events.send(VoiceEvent::Answer(params["sdp"].as_str().unwrap_or_default().to_owned())).await;
+                        let _ = events.send(VoiceEvent::Answer(last_offer, params["sdp"].as_str().unwrap_or_default().to_owned())).await;
+                        next_offer(&mut answering, &mut waiting_offer, &mut early);
                         continue;
+                    }
+                    // A passagem em curso falhou sem resposta: a oferta seguinte não fica presa atrás dela.
+                    if method == "thread/realtime/error" && answering.is_some() {
+                        log("handoff offer failed without answer");
+                        next_offer(&mut answering, &mut waiting_offer, &mut early);
                     }
                     if method == "item/started" || method == "item/completed" { spoken.item_started(&params); }
                     // Cada fala uma vez: o started pode vir sem texto e o completed repete o item.
@@ -933,8 +964,8 @@ mod tests {
         CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(), tools, handoff_same_thread: true, voice_dir }
     }
 
-    async fn next_answer(events: &async_channel::Receiver<VoiceEvent>) -> String {
-        loop { if let VoiceEvent::Answer(sdp) = events.recv().await.unwrap() { return sdp; } }
+    async fn next_answer(events: &async_channel::Receiver<VoiceEvent>) -> (u64, String) {
+        loop { if let VoiceEvent::Answer(seq, sdp) = events.recv().await.unwrap() { return (seq, sdp); } }
     }
 
     #[test]
@@ -955,8 +986,8 @@ mod tests {
         let (spawn, mut seen, _push) = fake_app_server();
         let (tx, events) = async_channel::unbounded();
         let voice = Voice::start(options(json!([])), spawn, tx);
-        voice.offer("v=0 offer A".into(), "ctx".into());
-        assert_eq!(next_answer(&events).await, "v=0 answer 1");
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
+        assert_eq!(next_answer(&events).await, (1, "v=0 answer 1".into()));
         let mut start = None;
         while let Some(m) = seen.recv().await { if m["method"] == "thread/realtime/start" { start = Some(m); break; } }
         let start = start.unwrap();
@@ -969,13 +1000,13 @@ mod tests {
         let (spawn, mut seen, push) = fake_app_server();
         let (tx, events) = async_channel::unbounded();
         let voice = Voice::start(options(json!([])), spawn, tx);
-        voice.offer("v=0 offer A".into(), "ctx".into());
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
         next_answer(&events).await;
         voice.live();
-        voice.offer("v=0 offer B".into(), "A sessão na tela agora é web.".into());
+        voice.offer(2, "v=0 offer B".into(), "A sessão na tela agora é web.".into());
         // O fechamento da conversa anterior não encerra a chamada.
         push.send(json!({"method": "thread/realtime/closed", "params": {"threadId": "t1", "reason": "replaced"}})).unwrap();
-        assert_eq!(next_answer(&events).await, "v=0 answer 2");
+        assert_eq!(next_answer(&events).await, (2, "v=0 answer 2".into()));
         let all: Vec<Value> = std::iter::from_fn(|| seen.try_recv().ok()).collect();
         let starts: Vec<&Value> = all.iter().filter(|m| m["method"] == "thread/realtime/start").collect();
         assert_eq!(starts.last().unwrap()["params"]["threadId"], "t1");
@@ -989,7 +1020,7 @@ mod tests {
         let (spawn, mut seen, push) = fake_app_server();
         let (tx, events) = async_channel::unbounded();
         let voice = Voice::start(options(json!([])), spawn, tx);
-        voice.offer("v=0 offer A".into(), "ctx".into());
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
         next_answer(&events).await;
         voice.live();
         voice.detached();
@@ -997,11 +1028,27 @@ mod tests {
         push.send(json!({"method": "thread/realtime/closed", "params": {"threadId": "t1", "reason": "peer_gone"}})).unwrap();
         push.send(json!({"method": "thread/realtime/error", "params": {"threadId": "t1", "message": "ice failed"}})).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        voice.offer("v=0 offer C".into(), "ctx".into());
-        assert_eq!(next_answer(&events).await, "v=0 answer 2");
+        voice.offer(2, "v=0 offer C".into(), "ctx".into());
+        assert_eq!(next_answer(&events).await, (2, "v=0 answer 2".into()));
         while let Ok(e) = events.try_recv() { assert!(!matches!(e, VoiceEvent::Phase(Phase::Closed)), "não encerrou"); }
         let all: Vec<Value> = std::iter::from_fn(|| seen.try_recv().ok()).collect();
         assert!(!all.iter().any(|m| m["method"] == "thread/realtime/stop"));
+    }
+
+    #[tokio::test]
+    async fn offer_that_failed_without_answer_does_not_hold_the_next_one() {
+        let (spawn, mut seen, push) = fake_app_server();
+        let (tx, events) = async_channel::unbounded();
+        let voice = Voice::start(options(json!([])), spawn, tx);
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
+        next_answer(&events).await;
+        voice.live();
+        voice.offer(2, "v=0 no-answer".into(), "ctx".into());
+        loop { let m = seen.recv().await.unwrap(); if m["method"] == "thread/realtime/start" && m["params"]["transport"]["sdp"] == "v=0 no-answer" { break; } }
+        push.send(json!({"method": "thread/realtime/error", "params": {"threadId": "t1", "message": "ice failed"}})).unwrap();
+        // O aparelho reconecta e oferece de novo: recebe a resposta da oferta dele.
+        voice.offer(3, "v=0 offer C".into(), "ctx".into());
+        assert_eq!(next_answer(&events).await, (3, "v=0 answer 3".into()));
     }
 
     #[tokio::test]
@@ -1010,7 +1057,7 @@ mod tests {
         let (tx, _events) = async_channel::unbounded();
         let tools = crate::voice::organizer::tools_for(&["switch_session".into()]);
         let voice = Voice::start(options(tools.clone()), spawn, tx);
-        voice.offer("v=0".into(), "ctx".into());
+        voice.offer(1, "v=0".into(), "ctx".into());
         loop { let m = seen.recv().await.unwrap(); if m["method"] == "thread/start" { assert_eq!(m["params"]["dynamicTools"], tools); break; } }
     }
 
@@ -1019,7 +1066,7 @@ mod tests {
         let (spawn, mut seen, _push) = fake_app_server();
         let (tx, events) = async_channel::unbounded();
         let voice = Voice::start(options(json!([])), spawn, tx);
-        voice.offer("v=0 offer A".into(), "ctx".into());
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
         next_answer(&events).await;
         voice.live();
         voice.detached();
@@ -1027,7 +1074,7 @@ mod tests {
         let spoke = |m: &Value| m["method"] == "thread/realtime/appendSpeech" && m["params"]["text"] == "resposta guardada";
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(!std::iter::from_fn(|| seen.try_recv().ok()).any(|m| spoke(&m)), "sem aparelho, nada vai à voz");
-        voice.offer("v=0 offer B".into(), "ctx".into());
+        voice.offer(2, "v=0 offer B".into(), "ctx".into());
         next_answer(&events).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         let before_live: Vec<Value> = std::iter::from_fn(|| seen.try_recv().ok()).collect();
@@ -1043,7 +1090,7 @@ mod tests {
         let (tx, events) = async_channel::unbounded();
         let voice = Voice::start(options(json!([])), spawn, tx);
         voice.detached();
-        voice.offer("v=0 offer A".into(), "ctx".into());
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
         next_answer(&events).await;
         voice.live();
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1058,7 +1105,7 @@ mod tests {
         let (tx, events) = async_channel::unbounded();
         let voice = Voice::start(options(json!([])), spawn, tx);
         voice.set_mode(Mode::Plan);
-        voice.offer("v=0".into(), "ctx".into());
+        voice.offer(1, "v=0".into(), "ctx".into());
         next_answer(&events).await;
         loop { if let VoiceEvent::Mode(Mode::Plan) = events.recv().await.unwrap() { break; } }
         loop { let m = seen.recv().await.unwrap(); if m["method"] == "thread/realtime/appendSpeech" { assert_eq!(m["params"]["text"], "Modo planejar."); break; } }

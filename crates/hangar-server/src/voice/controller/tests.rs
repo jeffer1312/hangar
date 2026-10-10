@@ -306,3 +306,28 @@ async fn answer_of_a_former_owner_never_reaches_the_new_one() {
     while let Ok(msg) = b.try_recv() { assert!(!matches!(msg, ServerMsg::Answer { .. }), "resposta a mais"); }
     while let Ok(msg) = rig.device.try_recv() { assert!(!matches!(msg, ServerMsg::Answer { .. }), "A já não é o dono"); }
 }
+
+#[tokio::test]
+async fn device_reconnecting_after_an_unanswered_offer_gets_its_answer() {
+    let mut rig = rig(&[], None).await;
+    let take_over = |rig: &Rig, sdp: &str| {
+        let (tx, rx) = mpsc::unbounded_channel();
+        rig.link.replace_owner(tx, vec![], None);
+        rig.to_ctl.send(ToController::OwnerChanged).unwrap();
+        rig.to_ctl.send(ToController::Device(ClientMsg::Hello { client: "pwa".into(), screen: None, caps: vec![], actions: vec![] })).unwrap();
+        rig.to_ctl.send(ToController::Device(ClientMsg::Offer { sdp: sdp.into() })).unwrap();
+        rx
+    };
+    let _b = take_over(&rig, "v=0 no-answer");
+    rig.wait("oferta sem resposta", |m| m["method"] == "thread/realtime/start" && m["params"]["transport"]["sdp"] == "v=0 no-answer").await;
+    rig.push.send(json!({"method": "thread/realtime/error", "params": {"threadId": "t1", "message": "ice failed"}})).unwrap();
+    let mut c = take_over(&rig, "v=0 c");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match tokio::time::timeout_at(deadline, c.recv()).await {
+            Ok(Some(ServerMsg::Answer { sdp })) => { assert_eq!(sdp, "v=0 answer 3"); break; }
+            Ok(Some(_)) => {}
+            _ => panic!("o aparelho que voltou ficou sem resposta"),
+        }
+    }
+}
