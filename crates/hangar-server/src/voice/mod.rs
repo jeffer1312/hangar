@@ -1,4 +1,5 @@
 //! Voz ao vivo: o organizador roda aqui; o aparelho dono da chamada só fala, ouve e atende a tela.
+pub mod call;
 pub mod computer;
 pub mod hub;
 pub mod jev;
@@ -10,6 +11,8 @@ pub mod routes;
 pub mod rpc;
 pub mod rules;
 pub mod settings;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod usage;
 
 /// Diário da voz. Nunca recebe fala, transcrição, texto de pedido nem argumentos de ferramenta.
