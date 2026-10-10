@@ -204,8 +204,9 @@ def _repo_fingerprint(cwd: str) -> tuple | None:
             if branch:
                 remotes = os.path.join(common, "refs", "remotes")
                 try:
-                    paths += [os.path.join(remotes, r, branch) for r in sorted(os.listdir(remotes))]
-                except FileNotFoundError:
+                    paths += [os.path.join(remotes, r, branch) for r in sorted(os.listdir(remotes))
+                              if os.path.isdir(os.path.join(remotes, r))]
+                except OSError:
                     pass
         fp = []
         for p in paths:

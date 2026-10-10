@@ -160,7 +160,8 @@ fn fingerprint(cwd: &Path) -> Option<Vec<u128>> {
         if let Some(branch) = target.strip_prefix("refs/heads/")
             && let Ok(remotes) = std::fs::read_dir(common.join("refs").join("remotes"))
         {
-            let mut found: Vec<PathBuf> = remotes.flatten().map(|r| r.path().join(branch)).collect();
+            let mut found: Vec<PathBuf> = remotes.flatten().map(|r| r.path()).filter(|p| p.is_dir())
+                .map(|p| p.join(branch)).collect();
             found.sort();
             paths.extend(found);
         }
