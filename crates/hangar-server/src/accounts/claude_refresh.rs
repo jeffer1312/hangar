@@ -122,11 +122,8 @@ impl AccountService {
             .is_err()
         {
             if client.call(&key, &operation, "close", None).await.is_err() {
-                self.refresh_cleanup
-                    .0
-                    .lock()
-                    .await
-                    .insert(key, (operation, _guard));
+                self.park_cleanup(client, key, operation, _guard, record)
+                    .await;
             } else {
                 let _ = fs::remove_file(record);
             }
@@ -144,16 +141,55 @@ impl AccountService {
             timer.tick().await;
         };
         if client.call(&key, &operation, "close", None).await.is_err() {
-            self.refresh_cleanup
-                .0
-                .lock()
-                .await
-                .insert(key, (operation, _guard));
+            self.park_cleanup(client, key, operation, _guard, record)
+                .await;
             return Err("renovacao-falhou");
         }
         let _ = fs::remove_file(record);
         self.claude_auth.invalidate(&key);
         if success { Ok(()) } else { Err("timeout") }
+    }
+
+    /// A guarda segue presa até o ACK do fechamento, mas o fechamento é retentado em segundos:
+    /// esperar a próxima rodada deixava a conta recusando sessão nova por horas.
+    async fn park_cleanup(
+        &self,
+        client: WindowClient,
+        key: AccountKey,
+        operation: String,
+        guard: super::AccountGuard,
+        record: std::path::PathBuf,
+    ) {
+        tracing::warn!(
+            code = "refresh_cleanup_pending",
+            "janela da renovação não fechou; conta segue travada até o fechamento"
+        );
+        let pending = self.refresh_cleanup.0.clone();
+        pending
+            .lock()
+            .await
+            .insert(key.clone(), (operation.clone(), guard));
+        tokio::spawn(async move {
+            for wait in [5, 15, 30, 60].into_iter().chain(std::iter::repeat(300)) {
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+                let still_parked = |map: &std::collections::HashMap<AccountKey, (String, super::AccountGuard)>| {
+                    map.get(&key).is_some_and(|(op, _)| *op == operation)
+                };
+                if !still_parked(&*pending.lock().await) {
+                    return;
+                }
+                if client.call(&key, &operation, "close", None).await.is_err() {
+                    continue;
+                }
+                let mut map = pending.lock().await;
+                if still_parked(&map) {
+                    map.remove(&key);
+                    let _ = fs::remove_file(&record);
+                    tracing::info!(code = "refresh_cleanup_done", "janela da renovação fechada; conta liberada");
+                }
+                return;
+            }
+        });
     }
 }
 
@@ -167,7 +203,12 @@ pub fn start(
 ) {
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(6 * 3600));
+        // ponytail: espera fixa; na subida o Python fica ~30 s sem atender e a renovação falhava.
+        // Trocar por um sinal de prontidão do Python se a subida passar disso.
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(120),
+            Duration::from_secs(6 * 3600),
+        );
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! { biased;
