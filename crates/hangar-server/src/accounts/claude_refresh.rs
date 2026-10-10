@@ -169,8 +169,9 @@ impl AccountService {
             .lock()
             .await
             .insert(key.clone(), (operation.clone(), guard));
+        let service = self.clone();
         tokio::spawn(async move {
-            for wait in [5, 15, 30, 60].into_iter().chain(std::iter::repeat(300)) {
+            for (attempt, wait) in [5, 15, 30, 60].into_iter().chain(std::iter::repeat(300)).enumerate() {
                 tokio::time::sleep(Duration::from_secs(wait)).await;
                 let still_parked = |map: &std::collections::HashMap<AccountKey, (String, super::AccountGuard)>| {
                     map.get(&key).is_some_and(|(op, _)| *op == operation)
@@ -178,13 +179,20 @@ impl AccountService {
                 if !still_parked(&*pending.lock().await) {
                     return;
                 }
-                if client.call(&key, &operation, "close", None).await.is_err() {
+                if let Err(error) = client.call(&key, &operation, "close", None).await {
+                    tracing::warn!(
+                        code = "refresh_cleanup_retry_failed",
+                        reason = error.code,
+                        attempt = attempt + 1,
+                        "janela da renovação ainda não fechou; conta segue travada"
+                    );
                     continue;
                 }
                 let mut map = pending.lock().await;
                 if still_parked(&map) {
                     map.remove(&key);
                     let _ = fs::remove_file(&record);
+                    service.claude_auth.invalidate(&key);
                     tracing::info!(code = "refresh_cleanup_done", "janela da renovação fechada; conta liberada");
                 }
                 return;
