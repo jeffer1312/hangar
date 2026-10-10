@@ -602,6 +602,8 @@ impl Engine {
             return;
         };
         if self.rpc.contains_key(&request_id) { return; }
+        // Thread efêmera da voz antiga, pendente desde antes da atualização: a resposta trocaria a conversa da sessão.
+        if method == "thread/start" && frame["params"]["ephemeral"] == true { return; }
         let continuation = (method == "thread/settings/update" && frame["params"].get("serviceTier").is_some())
             .then(||json!({"kind":"service_tier_recovered"}));
         self.rpc.insert(request_id.clone(),Rpc { operation_id:operation_id.clone(),method:method.into(),params:frame["params"].clone(),

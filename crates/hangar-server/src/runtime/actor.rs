@@ -845,6 +845,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:CanoConnection
                     let mut commands = Vec::new();
                     for row in claimed.as_array().ok_or_else(||failure("queue_shape"))? {
                         let id = row["id"].as_str().ok_or_else(||failure("queue_entry"))?;
+                        // Controle da voz antiga que sobrou da versão anterior: não tem mais dono e não vira mensagem.
+                        if state.operations.get(id).is_some_and(|op|op.payload["kind"].as_str().is_some_and(|kind|kind.starts_with("voice_"))) { continue; }
                         let command = state.operations.get(id).and_then(|op|serde_json::from_value::<RuntimeCommand>(op.payload.clone()).ok())
                             .unwrap_or_else(||RuntimeCommand { operation_id:id.into(),kind:OperationKind::Input,
                                 payload:json!({"text":row["text"],"pre_transcript":row["pre_transcript"].as_bool().unwrap_or(false)}) });
