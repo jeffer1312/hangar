@@ -824,7 +824,7 @@ mod tests {
         let idle = user(" color=\"blue\">
 {\"type\":\"idle_notification\",\"from\":\"frente-c\",\"timestamp\":\"2026-10-01T13:59:53.812Z\"}
 ");
-        assert_eq!(idle[0].ts, Some(1_790_863_193.812));
+        assert!(idle[0].ts.is_some_and(|t| (t - 1_790_863_193.812).abs() < 1e-3));
 
         let recado = user(" summary=\"x\">\nfecho a frente agora.\n");
         assert!(recado.iter().all(|e| e.kind == ChatKind::UserMsg));

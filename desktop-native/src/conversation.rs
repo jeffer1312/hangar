@@ -263,6 +263,15 @@ fn whole_list(input: Option<&Map<String, Value>>, list: &str, title: &str) -> Op
     }).collect())
 }
 
+/// Se o SendMessage acorda o colega `key` ("teammate:<nome>"): pelo nome ou por `*`. Pedido de
+/// encerramento não abre rodada, porque nenhum aviso de ocioso viria fechá-la.
+fn wakes(input: Option<&Value>, key: &str) -> bool {
+    let shutdown = input.and_then(|v| v.get("message")).and_then(|m| m.get("type")).and_then(Value::as_str)
+        .is_some_and(|t| t.starts_with("shutdown"));
+    let to = input.and_then(|v| v.get("to").or_else(|| v.get("recipient"))).and_then(Value::as_str).unwrap_or("");
+    !shutdown && key.strip_prefix("teammate:").is_some_and(|name| to == "*" || name == to)
+}
+
 /// Agentes e shells de fundo, dobrados dos eventos como o `createActivityFolder` do web. Refeito a cada troca do
 /// conjunto de eventos, então `/clear` e histórico novo não carregam nada do anterior.
 pub fn fold_activity(events: &[ChatEvent]) -> Activity {
@@ -334,10 +343,10 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                     Some("update_plan") => { if let Some(list) = whole_list(input, "plan", "step") { whole = Some(list); } continue; }
                     // Colega de equipe trabalha em rodadas: a mensagem reabre o que o aviso de ocioso fechou.
                     Some("SendMessage") => {
-                        let key = format!("teammate:{}", text("to").or_else(|| text("recipient")).unwrap_or_default());
-                        if let Some(&call) = background.get(&key) {
+                        for (key, &call) in &background {
+                            if !wakes(input, key) { continue; }
                             resulted.remove(call);
-                            if let Some(at) = event.ts { woken.insert(key, at); }
+                            if let Some(at) = event.ts { woken.insert(key.clone(), at); }
                         }
                         continue;
                     }

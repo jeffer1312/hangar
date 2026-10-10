@@ -53,6 +53,10 @@ describe('activity — pareamento de agente background', () => {
     expect(run([launch('tu1'), spawn, ocioso(5), envia]).runningAgents).toBe(1);
     expect(run([launch('tu1'), spawn, envia, ocioso(5)]).runningAgents).toBe(1);
     expect(run([launch('tu1'), spawn, envia, ocioso(5), ocioso(20)]).runningAgents).toBe(0);
+    const todos: ChatEvent = { ...envia, id: `e${seq++}`, tool_input: { to: '*', message: 'mais' } };
+    expect(run([launch('tu1'), spawn, ocioso(5), todos]).runningAgents).toBe(1);
+    const encerra: ChatEvent = { ...envia, id: `e${seq++}`, tool_input: { to: 'ana', message: { type: 'shutdown_request' } } };
+    expect(run([launch('tu1'), spawn, ocioso(5), encerra]).runningAgents).toBe(0);
   });
 
   it('segue rodando enquanto nao chega o evento de fim', () => {

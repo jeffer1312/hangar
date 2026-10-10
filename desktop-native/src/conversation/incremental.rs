@@ -237,10 +237,13 @@ impl ActivityFold {
                     Some("update_plan") => { if let Some(list) = whole_list(input, "plan", "step") { self.whole = Some(list); } return true; }
                     // Colega de equipe trabalha em rodadas: a mensagem reabre o que o aviso de ocioso fechou.
                     Some("SendMessage") => {
-                        let key = format!("teammate:{}", text("to").or_else(|| text("recipient")).unwrap_or_default());
-                        let Some(call) = self.background.get(&key).cloned() else { return false };
-                        if let Some(at) = event.ts { self.woken.insert(key, at); }
-                        return self.resulted.remove(&call);
+                        let mut changed = false;
+                        for (key, call) in &self.background {
+                            if !super::wakes(input, key) { continue; }
+                            changed |= self.resulted.remove(call);
+                            if let Some(at) = event.ts { self.woken.insert(key.clone(), at); }
+                        }
+                        return changed;
                     }
                     Some("TaskCreate") => {
                         let title = text("subject").or_else(|| text("content"))

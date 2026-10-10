@@ -189,11 +189,15 @@ export function createActivityFolder(): ActivityFolder {
     // como fallback: se houver, a última vence (é canônica).
     switch (e.tool_name) {
       case 'SendMessage': {
-        const alvo = `teammate:${String(input.to ?? input.recipient ?? '')}`;
-        const tuid = bgAgent.get(alvo);
-        if (!tuid) break;
-        resulted.delete(tuid);
-        if (typeof e.ts === 'number') acordado.set(alvo, e.ts);
+        // Pedido de encerramento não abre rodada: nenhum aviso de ocioso viria fechá-la.
+        const msg = input.message as Record<string, unknown> | undefined;
+        if (msg && typeof msg === 'object' && String(msg.type ?? '').startsWith('shutdown')) break;
+        const para = String(input.to ?? input.recipient ?? '');
+        for (const [alvo, tuid] of bgAgent) {
+          if (alvo !== `teammate:${para}` && !(para === '*' && alvo.startsWith('teammate:'))) continue;
+          resulted.delete(tuid);
+          if (typeof e.ts === 'number') acordado.set(alvo, e.ts);
+        }
         break;
       }
       case 'TodoWrite': {
