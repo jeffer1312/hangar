@@ -118,10 +118,9 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     std::fs::write(&script, source).unwrap();
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        
         let executable = fixture.join("codex");
-        std::fs::write(&executable, format!("#!/usr/bin/env node\n{source}")).unwrap();
-        std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::write_executable(&executable, format!("#!/usr/bin/env node\n{source}"));
     }
     let mut environment: std::collections::BTreeMap<String, String> = std::env::vars().collect();
     let path = environment
@@ -369,7 +368,7 @@ async fn sign_out_disconnects_confirms_and_invalidates() {
         codex_login::CodexInvalidator, environment::AccountEnvironment,
     };
     use serde_json::{Value, json};
-    use std::os::unix::fs::PermissionsExt;
+    
     use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
     let root = tempfile::tempdir().unwrap();
     let fixture = root.path().join("cli");
@@ -380,8 +379,7 @@ if(m.method==='account/logout'&&!home.endsWith('stuck'))fs.writeFileSync(out,'')
 const result=m.method==='account/read'?{account:fs.existsSync(out)?null:{type:'chatgpt',email:'pessoa@exemplo.com',planType:'plus'}}:{};
 process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     let executable = fixture.join("codex");
-    std::fs::write(&executable, format!("#!/usr/bin/env node\n{source}")).unwrap();
-    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    crate::write_executable(&executable, format!("#!/usr/bin/env node\n{source}"));
     let mut environment: std::collections::BTreeMap<String, String> = std::env::vars().collect();
     let path = environment.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).unwrap().1.clone();
     let dirs = std::iter::once(fixture.clone()).chain(std::env::split_paths(&path));

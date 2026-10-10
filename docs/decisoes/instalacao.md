@@ -98,7 +98,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `exact_name(module_path!(), …)` e confere `assert_ran_one`; filho de `fork` sem `exec` chama
   `close_inherited_fds`; porta que deve recusar vem de `refused_address`; porta que deve ter fechado
   passa por `assert_closed`; lease ou porta reaberta logo depois de solta, por `lease_when_free` ou
-  espera com prazo. A depuração reduzida vem do perfil
+  espera com prazo; executável de teste, por `write_executable`. A depuração reduzida vem do perfil
   `dev` do `crates/Cargo.toml`, nunca de variável, e o `hangar-server` pede as mesmas features que o
   resto do workspace: `-p` e `--workspace` têm de dar o mesmo hash. O binário publicado pela `main`
   sai do perfil `dist` (`--profile dist`, em `target/dist/`); a branch, do `release`. O cache tem o
@@ -741,6 +741,9 @@ testes novos das correções abaixo vieram depois da medição).
     é a porta 1 (`refused_address`), que o kernel nunca sorteia; o auxiliar confere uma vez que ela
     recusa e para com o motivo se algo escutar ali. Reservar com
     `bind` sem `listen` não serve: no macOS a conexão fica pendurada em vez de recusar.
+  - **Executável gravado e rodado em seguida** podia dar "Text file busy" (ETXTBSY): um filho de outro
+    teste, nascido enquanto o arquivo estava aberto para escrita, herdava o descritor. Quem grava agora
+    é um `install` à parte (`write_executable` no `it`, `write_test_executable` nos testes de `src/`).
   - **"A porta fechou" logo depois do `stop`** espera a recusa com prazo (`assert_closed`), pela mesma
     janela entre o `fork` e o `exec`.
   - **Lease e portas reabertos logo depois de soltos**: um filho de outro teste, entre o `fork` e o

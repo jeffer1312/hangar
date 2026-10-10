@@ -252,11 +252,10 @@ async fn open_headless(registry: &RuntimeRegistry, dir: &Path, name: &str) {
 /// tmux falso: aceita tudo e anota cada chamada com o texto que ela leva.
 #[cfg(unix)]
 fn fake_tmux(dir: &Path, name: &str, pane: &str) -> (String, std::path::PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
+    
     let (script, log) = (dir.join("tmux"), dir.join("tmux.log"));
-    std::fs::write(&script, format!(
-        "#!/bin/sh\nif [ \"$1\" = display-message ]; then printf '{name}\\t{}\\t1\\n'; exit 0; fi\necho \"$@\" >> '{}'\n", pane.replace('%', "%%"), log.display())).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::write_executable(&script, format!(
+        "#!/bin/sh\nif [ \"$1\" = display-message ]; then printf '{name}\\t{}\\t1\\n'; exit 0; fi\necho \"$@\" >> '{}'\n", pane.replace('%', "%%"), log.display()));
     (script.to_str().unwrap().to_owned(), log)
 }
 

@@ -141,13 +141,8 @@ async fn native_identity_cache_changes_with_credential_and_explicit_invalidation
     fs::write(&script, source).unwrap();
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::write(
-            fixture.join("claude"),
-            format!("#!/usr/bin/env node\n{source}"),
-        )
-        .unwrap();
-        fs::set_permissions(fixture.join("claude"), fs::Permissions::from_mode(0o700)).unwrap();
+        
+        crate::write_executable(&fixture.join("claude"), format!("#!/usr/bin/env node\n{source}"));
     }
     let separator = if cfg!(windows) { ";" } else { ":" };
     let path = format!(

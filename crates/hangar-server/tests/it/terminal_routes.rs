@@ -75,10 +75,10 @@ async fn semantic_capture_errors_are_bad_requests() {
 #[cfg(unix)]
 #[tokio::test]
 async fn route_producers_share_fake_actor_acquire_renews_and_final_release_reaps() {
-    use std::os::unix::fs::PermissionsExt;
+    
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join("observer.py");
-    std::fs::write(&program, r#"#!/usr/bin/env python3
+    crate::write_executable(&program, r#"#!/usr/bin/env python3
 import os, pathlib, sys
 root = pathlib.Path(__file__).parent
 with root.joinpath('pids').open('a') as log: log.write(str(os.getpid()) + '\n')
@@ -97,8 +97,7 @@ for n, line in enumerate(sys.stdin, 2):
     assert command.startswith(('display-message -p -t ', 'capture-pane -p '))
     frame(n * 100 + 17, '%3\tfixture\t20\t4\t0\t0\t0\n' if command.startswith('display-message') else 'ready\n\n\n\n')
     frame(n * 100 + 39, parts[2].removeprefix('display-message -p ') + '\n')
-"#).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+"#);
     let (url, task) = server_with_pool(TerminalPool::with_program(program, None, Limits::default())).await;
     let client = reqwest::Client::new();
     let mut body = serde_json::json!({"op":"acquire", "consumer":"state", "name":"fixture", "provider":"claude", "binding":"b",

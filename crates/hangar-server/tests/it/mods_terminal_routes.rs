@@ -144,13 +144,12 @@ async fn wait_until(what: &str, check: impl Fn() -> bool) {
 #[cfg(unix)]
 #[tokio::test]
 async fn the_size_watch_is_alive_after_opening_and_stops_on_close() {
-    use std::os::unix::fs::PermissionsExt;
+    
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("watch.pid");
     let mux = dir.path().join("mux");
-    std::fs::write(&mux, format!("#!/bin/sh\ncase \" $* \" in *\" -C \"*) echo $$ > '{}'; exec cat;; esac\nexit 1\n",
-        marker.display())).unwrap();
-    std::fs::set_permissions(&mux, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::write_executable(&mux, format!("#!/bin/sh\ncase \" $* \" in *\" -C \"*) echo $$ > '{}'; exec cat;; esac\nexit 1\n",
+        marker.display()));
     let mods = Mods::default();
     let registry = registry(&mods);
     registry.open_terminal(target(dir.path(), mux.to_str().unwrap())).await.unwrap();
@@ -195,7 +194,7 @@ async fn opening_gives_back_a_window_left_stretched() {
 /// `resize-window` e `set-window-option`. O resto (o vigia incluído) falha.
 #[cfg(unix)]
 fn stretched_mux(dir: &std::path::Path) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
+    
     let script = r##"#!/bin/sh
 dir='DIR'
 case "$*" in
@@ -208,8 +207,7 @@ case "$*" in
 esac
 "##.replace("DIR", &dir.display().to_string());
     let mux = dir.join("mux");
-    std::fs::write(&mux, script).unwrap();
-    std::fs::set_permissions(&mux, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::write_executable(&mux, script);
     mux
 }
 

@@ -78,6 +78,18 @@ pub fn lease_when_free(path: &std::path::Path) -> std::sync::Arc<std::fs::File> 
     }
 }
 
+/// Grava um executável sem abrir o arquivo para escrita neste processo: quem grava é um `install` à
+/// parte. Gravado aqui, um filho de outro teste nascido nesse instante herdaria o descritor de escrita, e
+/// rodar o arquivo daria "Text file busy" (ETXTBSY).
+#[cfg(unix)]
+pub fn write_executable(path: &std::path::Path, content: impl AsRef<[u8]>) {
+    let source = path.with_extension("conteudo");
+    std::fs::write(&source, content).unwrap();
+    let status = std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(path).status().unwrap();
+    assert!(status.success(), "install não gravou {}", path.display());
+    std::fs::remove_file(&source).unwrap();
+}
+
 /// Nome de um teste deste executável para o `--exact`: o caminho do módulo de `module_path!()` sem o
 /// do crate, que o libtest não mostra.
 pub fn exact_name(module: &str, test: &str) -> String {

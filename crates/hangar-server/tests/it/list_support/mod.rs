@@ -8,7 +8,6 @@ use hangar_server::list::mux::Mux;
 use hangar_server::routes::{AppState, router};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,10 +30,9 @@ pub fn sessions(root: &Path, n: usize) -> std::path::PathBuf {
         panes.push_str(&format!("s{i}\\t1\\t\\t{}\\t%%{i}\\t\\t\\t\\t0\\t0\\n", cwd.display()));
     }
     let script = root.join("tmux");
-    std::fs::write(&script, format!(
+    crate::write_executable(&script, format!(
         "#!/bin/sh\necho \"$1\" >> '{log}'\n[ -e '{fail}' ] && exit 2\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\nprintf '{panes}'\n",
-        log = root.join("calls.log").display(), fail = root.join("fail").display())).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        log = root.join("calls.log").display(), fail = root.join("fail").display()));
     script
 }
 

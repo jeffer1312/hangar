@@ -341,12 +341,12 @@ mod tests {
     #[tokio::test]
     async fn lost_response_reuses_persisted_uuid_and_completed_retry_does_not_consume() {
         use crate::accounts::environment::AccountEnvironment;
-        use std::os::unix::fs::PermissionsExt;
+        
         let temp = tempfile::tempdir().unwrap();
         let bin = temp.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let cli = bin.join("codex");
-        std::fs::write(&cli, r#"#!/usr/bin/env node
+        crate::write_test_executable(&cli, r#"#!/usr/bin/env node
 const fs=require('fs'),path=require('path');
 const home=process.env.CODEX_HOME, ledger=path.join(process.env.HOME,'.hangar','codex-reset-attempts.json');
 const rows=path.join(home,'consumes.jsonl');
@@ -365,8 +365,7 @@ rl.on('line',line=>{
  }
  process.stdout.write(JSON.stringify({id:m.id,result})+'\n');
 });
-"#).unwrap();
-        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+"#);
         let path = std::env::join_paths(
             std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )
@@ -429,12 +428,12 @@ rl.on('line',line=>{
     #[tokio::test]
     async fn unreadable_line_and_expired_attempts_do_not_block_a_new_reset() {
         use crate::accounts::environment::AccountEnvironment;
-        use std::os::unix::fs::PermissionsExt;
+        
         let temp = tempfile::tempdir().unwrap();
         let bin = temp.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let cli = bin.join("codex");
-        std::fs::write(&cli, r#"#!/usr/bin/env node
+        crate::write_test_executable(&cli, r#"#!/usr/bin/env node
 const rl=require('readline').createInterface({input:process.stdin});
 rl.on('line',line=>{
  const m=JSON.parse(line); if(!m.id)return;
@@ -443,8 +442,7 @@ rl.on('line',line=>{
  if(m.method==='account/rateLimitResetCredit/consume')result={outcome:'reset'};
  process.stdout.write(JSON.stringify({id:m.id,result})+'\n');
 });
-"#).unwrap();
-        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+"#);
         let path = std::env::join_paths(
             std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )

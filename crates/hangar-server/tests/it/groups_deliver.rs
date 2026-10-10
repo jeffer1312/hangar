@@ -130,11 +130,10 @@ async fn open_codex_headless(registry: &RuntimeRegistry, dir: &Path, name: &str,
 /// Entrada com terminal sobre um tmux falso que aceita tudo e anota cada chamada.
 #[cfg(unix)]
 async fn open_terminal(registry: &RuntimeRegistry, dir: &Path, name: &str) {
-    use std::os::unix::fs::PermissionsExt;
+    
     let (script, log) = (dir.join("tmux"), dir.join("tmux.log"));
-    std::fs::write(&script, format!(
-        "#!/bin/sh\nif [ \"$1\" = display-message ]; then printf '{name}\\t%%1\\t1\\n'; exit 0; fi\necho \"$@\" >> '{}'\n", log.display())).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::write_executable(&script, format!(
+        "#!/bin/sh\nif [ \"$1\" = display-message ]; then printf '{name}\\t%%1\\t1\\n'; exit 0; fi\necho \"$@\" >> '{}'\n", log.display()));
     let (state_path, projection_dir) = (dir.join(format!("{name}.state")), dir.join(format!("{name}.projection")));
     let binding = TerminalBinding { name: name.into(), pane: "%1".into(), conversation: "sid".into(), generation: 1, created: 1,
         mux_argv: vec![script.to_str().unwrap().to_owned()], windows: false, clipboard_lock_path: None };

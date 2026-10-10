@@ -957,9 +957,9 @@ mod launch {
 
     /// `codex app-server --stdio` falso: responde `initialize` e a abertura da conversa.
     fn fake_codex(dir:&std::path::Path) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
+        
         let path = dir.join("codex");
-        std::fs::write(&path,format!(r#"#!/usr/bin/env python3
+        crate::write_executable(&path, format!(r#"#!/usr/bin/env python3
 import json, sys
 for line in sys.stdin:
     msg = json.loads(line)
@@ -973,8 +973,7 @@ for line in sys.stdin:
     else:
         result = {{}}
     print(json.dumps({{"id": msg["id"], "result": result}}), flush=True)
-"#,hangar_codex::version::CHECKED)).unwrap();
-        std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o755)).unwrap();
+"#,hangar_codex::version::CHECKED));
         path
     }
 
@@ -1134,9 +1133,9 @@ for line in sys.stdin:
     /// primeiro pedido (antes de ficar pronto); sem ele, cai quando `die` aparece na pasta. `turn/start` abre um
     /// turno que só `turn/interrupt` fecha.
     fn lifecycle_codex(dir:&std::path::Path) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
+        
         let path = dir.join("codex");
-        std::fs::write(&path,format!(r#"#!/usr/bin/env python3
+        crate::write_executable(&path, format!(r#"#!/usr/bin/env python3
 import json, os, sys, threading, time
 d = os.path.dirname(os.path.abspath(__file__))
 def note(entry):
@@ -1177,8 +1176,7 @@ for line in sys.stdin:
     else:
         result = {{}}
     send({{"id": msg["id"], "result": result}})
-"#,hangar_codex::version::CHECKED)).unwrap();
-        std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o755)).unwrap();
+"#,hangar_codex::version::CHECKED));
         path
     }
 

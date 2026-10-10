@@ -10,7 +10,6 @@ use hangar_server::list::mux::Mux;
 use hangar_server::routes::{AppState, terminal_router};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,10 +19,9 @@ use std::time::Duration;
 fn fake_mux(dir: &Path, exit: i32) -> std::path::PathBuf {
     let log = dir.join("calls.log");
     let script = dir.join("tmux");
-    std::fs::write(&script, format!(
+    crate::write_executable(&script, format!(
         "#!/bin/sh\necho \"$1\" >> '{}'\nsleep 0.3\n[ \"$1\" = list-panes ] || exit 0\n[ {exit} = 0 ] || exit {exit}\nprintf 'alpha\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\n'\n",
-        log.display(), dir.display())).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        log.display(), dir.display()));
     script
 }
 
@@ -200,8 +198,7 @@ async fn bridge_with_sessions(root: &Path, n: usize, marker: (&str, f64)) -> (Li
         panes.push_str(&format!("s{i}\\t1\\t\\t{}\\t%%{i}\\t\\t\\t\\t0\\t0\\n", cwd.display()));
     }
     let script = root.join("tmux");
-    std::fs::write(&script, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\nprintf '{panes}'\n")).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::write_executable(&script, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\nprintf '{panes}'\n"));
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());

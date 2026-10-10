@@ -226,7 +226,7 @@ mod tests {
     #[tokio::test]
     async fn native_cli_renews_only_when_account_is_unused() {
         use super::super::http::Json;
-        use std::os::unix::fs::PermissionsExt;
+        
         let temp = tempfile::tempdir().unwrap();
         let account_home = temp.path().join(".claude-test");
         let bin = temp.path().join("bin");
@@ -235,8 +235,7 @@ mod tests {
         let old = json!({"claudeAiOauth":{"accessToken":"before","refreshToken":"refresh","expiresAt":1000}});
         fs::write(account_home.join(".credentials.json"), old.to_string()).unwrap();
         let cli = bin.join("claude");
-        fs::write(&cli,b"#!/bin/sh\nprintf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"after\",\"refreshToken\":\"refresh\",\"expiresAt\":20000000000000}}' > \"$CLAUDE_CONFIG_DIR/.credentials.json\"\n").unwrap();
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::write_test_executable(&cli, b"#!/bin/sh\nprintf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"after\",\"refreshToken\":\"refresh\",\"expiresAt\":20000000000000}}' > \"$CLAUDE_CONFIG_DIR/.credentials.json\"\n");
         let busy = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let flag = busy.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

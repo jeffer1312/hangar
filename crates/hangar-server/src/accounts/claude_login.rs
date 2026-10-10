@@ -572,13 +572,8 @@ mod tests {
         fs::write(script, source).unwrap();
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            fs::write(
-                fixture.join("claude"),
-                format!("#!/usr/bin/env node\n{source}"),
-            )
-            .unwrap();
-            fs::set_permissions(fixture.join("claude"), fs::Permissions::from_mode(0o700)).unwrap();
+            
+            crate::write_test_executable(&fixture.join("claude"), format!("#!/usr/bin/env node\n{source}"));
         }
         let separator = if cfg!(windows) { ";" } else { ":" };
         let path = format!(
@@ -714,13 +709,8 @@ mod tests {
         fs::write(script, source).unwrap();
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            fs::write(
-                fixture.join("claude"),
-                format!("#!/usr/bin/env node\n{source}"),
-            )
-            .unwrap();
-            fs::set_permissions(fixture.join("claude"), fs::Permissions::from_mode(0o700)).unwrap();
+            
+            crate::write_test_executable(&fixture.join("claude"), format!("#!/usr/bin/env node\n{source}"));
         }
         let separator = if cfg!(windows) { ";" } else { ":" };
         let path = format!(

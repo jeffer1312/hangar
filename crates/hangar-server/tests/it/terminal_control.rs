@@ -156,12 +156,11 @@ async fn idle_expiry_is_not_postponed_by_continuous_output() {
 #[cfg(unix)]
 #[tokio::test]
 async fn child_startup_timeout_and_eof_are_errors_and_reaped() {
-    use std::os::unix::fs::PermissionsExt;
+    
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("fake");
     for body in ["#!/bin/sh\nexec sleep 30\n", "#!/bin/sh\nexit 0\n"] {
-        std::fs::write(&script, body).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::write_executable(&script, body);
         let limits = Limits { startup: Duration::from_millis(100), command: Duration::from_millis(100), ..Limits::default() };
         let pool = TerminalPool::with_program(script.clone(), None, limits);
         assert!(tokio::time::timeout(Duration::from_secs(2), pool.capture(request("state"))).await.unwrap().is_err());
