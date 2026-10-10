@@ -95,7 +95,7 @@ async fn answers_and_refusals_like_python() {
 
 #[tokio::test]
 async fn network_failure_is_transport() {
-    let (_reserved, addr) = crate::refused_address();
+    let addr = crate::refused_address();
     let dir = tempfile::tempdir().unwrap();
     let err = client_for(dir.path(), addr).call("lab", reqwest::Method::POST, "/x", None).await.unwrap_err();
     assert!(err.is_transport() && err.text("lab").starts_with("lab inacessível: "), "{err:?}");

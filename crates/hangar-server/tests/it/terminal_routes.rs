@@ -164,9 +164,9 @@ async fn specific_public_bind_advertises_private_loopback_and_stop_closes_both()
     assert_eq!(client.get(format!("http://{plugin}/api/sessions")).send().await.unwrap().status(), StatusCode::NOT_FOUND);
     stop.send(()).unwrap();
     task.await.unwrap();
-    assert!(tokio::net::TcpStream::connect(public_addr).await.is_err());
-    assert!(tokio::net::TcpStream::connect(private).await.is_err());
-    assert!(tokio::net::TcpStream::connect(plugin).await.is_err());
+    crate::assert_closed(public_addr, "a porta pública").await;
+    crate::assert_closed(private, "a porta privada").await;
+    crate::assert_closed(plugin, "a ponte do plugin").await;
 }
 
 #[tokio::test]

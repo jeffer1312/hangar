@@ -41,13 +41,21 @@ pub unsafe fn close_inherited_fds<const N: usize>(mut keep: [libc::c_int; N]) {
     close(first, u32::MAX);
 }
 
-/// Endereço TCP que recusa conexão enquanto a reserva viver: um socket com `bind` e sem `listen` segura a
-/// porta. Soltar um listener e usar a porta dele deixava outro teste deste processo ocupá-la e responder.
-pub fn refused_address() -> (socket2::Socket, std::net::SocketAddr) {
-    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
-    socket.bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into()).unwrap();
-    let address = socket.local_addr().unwrap().as_socket().unwrap();
-    (socket, address)
+/// Endereço TCP que recusa conexão: a porta 1, que o kernel nunca sorteia num bind em `:0` e em que nada
+/// escuta. Soltar um listener e usar a porta dele deixava outro teste deste processo ocupá-la e
+/// responder; um socket com `bind` e sem `listen` não recusa no macOS, a conexão fica pendurada.
+pub fn refused_address() -> std::net::SocketAddr {
+    std::net::SocketAddr::from(([127, 0, 0, 1], 1))
+}
+
+/// A porta fechou: conexão recusada dentro do prazo. Um filho de outro teste, entre o fork e o exec, pode
+/// carregar por instantes a cópia do socket que o servidor acabou de fechar.
+pub async fn assert_closed(address: std::net::SocketAddr, what: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while tokio::net::TcpStream::connect(address).await.is_ok() {
+        assert!(std::time::Instant::now() < deadline, "{what} continua aceitando conexão em {address}");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
 }
 
 /// O lease, esperando a cópia que um filho de outro teste carrega entre o fork e o exec: a trava do

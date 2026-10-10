@@ -77,8 +77,8 @@ impl Server {
     async fn stop(&mut self) {
         self.stop.take().unwrap().send(()).unwrap();
         assert!(tokio::time::timeout(Duration::from_secs(5), &mut self.task).await.unwrap().unwrap().is_ok());
-        assert!(tokio::net::TcpStream::connect(self.public).await.is_err());
-        assert!(tokio::net::TcpStream::connect(self.bridge).await.is_err());
+        crate::assert_closed(self.public, "a porta pública").await;
+        crate::assert_closed(self.bridge, "a ponte").await;
     }
 }
 
@@ -207,7 +207,7 @@ async fn occupied_bridge_fails_before_public_health_and_releases_our_sockets() {
     let listener = TcpListener::bind(public).await.unwrap();
     let result = hangar_server::routes::serve(listener, config(upstream, "127.0.0.1")).await;
     assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
-    assert!(tokio::net::TcpStream::connect(public).await.is_err());
+    crate::assert_closed(public, "a porta pública").await;
     assert!(tokio::net::TcpStream::connect(address).await.is_ok());
 }
 

@@ -96,8 +96,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   mexe em estado do processo inteiro (PATH, HOME, TZ, logger global, gancho de pânico) vai para um
   `[[test]]` à parte no `Cargo.toml`. Quem reexecuta o próprio executável monta o nome com
   `exact_name(module_path!(), …)` e confere `assert_ran_one`; filho de `fork` sem `exec` chama
-  `close_inherited_fds`; porta que deve recusar vem de `refused_address`; lease ou porta reaberta
-  logo depois de solta passa por `lease_when_free` ou espera com prazo. A depuração reduzida vem do perfil
+  `close_inherited_fds`; porta que deve recusar vem de `refused_address`; porta que deve ter fechado
+  passa por `assert_closed`; lease ou porta reaberta logo depois de solta, por `lease_when_free` ou
+  espera com prazo. A depuração reduzida vem do perfil
   `dev` do `crates/Cargo.toml`, nunca de variável, e o `hangar-server` pede as mesmas features que o
   resto do workspace: `-p` e `--workspace` têm de dar o mesmo hash. O binário publicado pela `main`
   sai do perfil `dist` (`--profile dist`, em `target/dist/`); a branch, do `release`. O cache tem o
@@ -736,8 +737,11 @@ testes novos das correções abaixo vieram depois da medição).
   - **Filho de `fork` sem `exec`** (a sonda de `ptrace` do `uploads_store` e o filho parado do
     `accounts_catalog`) carregava cópias de todos os descritores do processo: o socket que outro teste
     fechou continuava aceitando conexão. O filho agora fecha o que herdou (`close_inherited_fds`).
-  - **Porta "fechada" tirada de um listener solto** voltava a outro teste, que respondia no lugar. A
-    porta agora fica reservada por um socket com `bind` e sem `listen` (`refused_address`).
+  - **Porta "fechada" tirada de um listener solto** voltava a outro teste, que respondia no lugar. Agora
+    é a porta 1 (`refused_address`), que o kernel nunca sorteia e em que nada escuta. Reservar com
+    `bind` sem `listen` não serve: no macOS a conexão fica pendurada em vez de recusar.
+  - **"A porta fechou" logo depois do `stop`** espera a recusa com prazo (`assert_closed`), pela mesma
+    janela entre o `fork` e o `exec`.
   - **Lease e portas reabertos logo depois de soltos**: um filho de outro teste, entre o `fork` e o
     `exec`, carrega por instantes a cópia do descritor (a trava do `flock` é da descrição aberta). O
     teste espera até 2 s (`lease_when_free` e o reinício do `plugin_loopback`). A produção tem a

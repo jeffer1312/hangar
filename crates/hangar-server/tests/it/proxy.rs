@@ -55,8 +55,8 @@ async fn closed_stdin_stops_the_server() {
     drop(parent);
     let ended = tokio::time::timeout(Duration::from_secs(5), server).await.expect("parou em 5 s");
     assert!(ended.unwrap().is_ok(), "fim pelo cano é saída limpa");
-    assert!(tokio::net::TcpStream::connect(addr).await.is_err(), "a porta pública fechou");
-    assert!(tokio::net::TcpStream::connect(plugin).await.is_err(), "a ponte do plugin fechou");
+    crate::assert_closed(addr, "a porta pública").await;
+    crate::assert_closed(plugin, "a ponte do plugin").await;
 }
 
 #[tokio::test]

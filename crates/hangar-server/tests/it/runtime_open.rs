@@ -204,7 +204,7 @@ async fn reopen_of_initialized_cano_becomes_deliverable() {
 #[tokio::test]
 async fn failed_open_leaves_no_entry_and_frees_the_lease() {
     let dir = tempfile::tempdir().unwrap();
-    let (_reserved, closed) = crate::refused_address();
+    let closed = crate::refused_address();
     let escuta = format!("tcp:{closed}");
     let target = target(dir.path(),escuta,true);
     let registry = registry().await;
