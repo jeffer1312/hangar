@@ -10,6 +10,7 @@ import threading
 
 import pytest
 
+from accounts_contract import rust_integration_binary
 from app import codex_contas as accounts
 from app.codex_contas_login import CodexContasLogin
 
@@ -24,18 +25,13 @@ def lock_path(root: Path, provider: str, home: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def rust_probe():
-    root = Path(__file__).resolve().parents[2]
-    target = Path(os.environ.get("CARGO_TARGET_DIR") or root / "crates/target")
-    candidates = list((target / "debug" / "deps").glob("accounts_lifecycle-*.exe" if os.name == "nt" else "accounts_lifecycle-*"))
-    candidates = [path for path in candidates if path.is_file() and path.suffix not in {".d", ".pdb"}]
-    assert candidates, "compile accounts_lifecycle antes desta prova"
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+    return rust_integration_binary()
 
 
 class RustProbe:
     def __init__(self, executable: Path, path: Path, mode="exclusive"):
         env = dict(os.environ, ACCOUNT_PROBE_PATH=str(path), ACCOUNT_PROBE_MODE=mode)
-        self.process = subprocess.Popen([str(executable), "--exact", "probe_process", "--nocapture"],
+        self.process = subprocess.Popen([str(executable), "--exact", "accounts_lifecycle::probe_process", "--nocapture"],
                                         env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="strict")
         result = queue.Queue()

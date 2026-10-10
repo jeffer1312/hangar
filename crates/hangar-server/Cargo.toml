@@ -3,10 +3,15 @@ name = "hangar-server"
 version.workspace = true
 edition.workspace = true
 publish = false
+# Os testes de integração são um executável só (tests/it/) mais os que precisam de processo próprio.
+autotests = false
 
 [dependencies]
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+# alloc (aqui, no serde e o signal do tokio): as features que o resto do workspace pede. Sem elas,
+# `cargo test -p hangar-server` e `cargo test --workspace` compilam o servidor com features diferentes
+# e cada um guarda a sua cópia de tudo no target.
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc"] }
 indexmap.workspace = true
 hangar-api.workspace = true
 hangar-codex.workspace = true
@@ -21,7 +26,7 @@ md-5.workspace = true
 sha1_smol.workspace = true
 # sha256 do workdir_key do Kimi; já vem pelo rustls, sem crate novo.
 ring = "=0.17.14"
-serde.workspace = true
+serde = { workspace = true, features = ["alloc"] }
 serde-saphyr = "=1.3.0"
 axum = { workspace = true }
 bytes = { workspace = true }
@@ -32,7 +37,7 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 subtle = { workspace = true }
 # io-std: o stdin é o cano que avisa a morte do Python.
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
@@ -70,3 +75,28 @@ tokio = { workspace = true, features = ["test-util"] }
 # O leitor `sysinfo` (`list/procs.rs`) também é testado no Linux.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+# Processo próprio: cada um mexe em estado do processo inteiro, que vazaria para os outros testes.
+[[test]]
+name = "workspace_unavailable"   # esvazia o PATH
+path = "tests/workspace_unavailable.rs"
+
+[[test]]
+name = "runtime_diagnostics"   # logger global do tracing e contagem exata de avisos
+path = "tests/runtime_diagnostics.rs"
+
+[[test]]
+name = "terminal_diagnostics"   # idem
+path = "tests/terminal_diagnostics.rs"
+
+[[test]]
+name = "contract_local_policy"   # troca HOME, USERPROFILE e TZ
+path = "tests/contract_local_policy.rs"
+
+[[test]]
+name = "costs_hook"   # gancho de pânico global (install_panic_hook)
+path = "tests/costs_hook/main.rs"

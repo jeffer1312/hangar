@@ -1,5 +1,5 @@
 //! Falha que o Rust atende sozinho vai ao diário do Python (`POST /internal/diag`): o
-//! `hangar-server.log` não entra no arquivo que o dono exporta. Uma vez por minuto por (sessão, código).
+//! `hangar-server.log` não entra no arquivo que o dono exporta. Uma vez por minuto por (diário, sessão, código).
 use axum::body::Body;
 use serde_json::json;
 use std::net::SocketAddr;
@@ -33,7 +33,8 @@ impl DiagClient {
     }
 
     pub fn report(&self,event:&'static str,session:&str,code:&str,reason:&'static str) {
-        if !crate::warn_limit::allow(Some(session),&format!("diag:{event}:{code}")) { return; }
+        // Por diário (o Python de destino): em produção há um só, e cada servidor de teste tem o seu.
+        if !crate::warn_limit::allow(Some(session),&format!("diag:{}:{event}:{code}",self.upstream)) { return; }
         let session:String = session.chars().take(128).collect();
         let body = json!({"evento":event,"sessao":session,"codigo":code,"motivo":reason}).to_string();
         let (client,code) = (self.clone(),code.to_owned());
@@ -61,11 +62,13 @@ mod tests {
     use std::sync::{Arc,Mutex};
     use tokio::io::{AsyncBufReadExt,AsyncReadExt,AsyncWriteExt,BufReader};
 
-    #[tokio::test]
-    async fn report_reaches_python_once_per_minute_with_the_secret() {
+    type Hits = Arc<Mutex<Vec<(String,serde_json::Value)>>>;
+
+    /// Python falso do `/internal/diag`: guarda segredo e corpo de cada registro.
+    async fn fake_python() -> (SocketAddr,Hits) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let hits:Arc<Mutex<Vec<(String,serde_json::Value)>>> = Arc::default();
+        let hits:Hits = Arc::default();
         let seen = hits.clone();
         tokio::spawn(async move {
             loop {
@@ -90,11 +93,21 @@ mod tests {
                 });
             }
         });
+        (address,hits)
+    }
+
+    async fn wait_hits(hits:&Hits,count:usize) {
+        tokio::time::timeout(Duration::from_secs(5),async {
+            while hits.lock().unwrap().len() < count { tokio::time::sleep(Duration::from_millis(10)).await; }
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn report_reaches_python_once_per_minute_with_the_secret() {
+        let (address,hits) = fake_python().await;
         let client = DiagClient::new(address,"secret-test".into());
         client.report("rust.history_failed","diag-session","history_io","leitura do transcript falhou");
-        tokio::time::timeout(Duration::from_secs(5),async {
-            while hits.lock().unwrap().is_empty() { tokio::time::sleep(Duration::from_millis(10)).await; }
-        }).await.unwrap();
+        wait_hits(&hits,1).await;
         client.report("rust.history_failed","diag-session","history_io","leitura do transcript falhou");
         tokio::time::sleep(Duration::from_millis(200)).await;
         let hits = hits.lock().unwrap();
@@ -102,5 +115,16 @@ mod tests {
         assert_eq!(hits[0].0,"secret-test");
         assert_eq!(hits[0].1,json!({"evento":"rust.history_failed","sessao":"diag-session","codigo":"history_io",
             "motivo":"leitura do transcript falhou"}));
+    }
+
+    /// O limite é por diário: outro Python (outro servidor no mesmo processo) recebe o seu registro.
+    #[tokio::test]
+    async fn the_limit_is_per_diary_not_per_process() {
+        let (first,first_hits) = fake_python().await;
+        let (second,second_hits) = fake_python().await;
+        DiagClient::new(first,"secret-test".into()).report("rust.history_failed","per-diary","history_io","leitura do transcript falhou");
+        wait_hits(&first_hits,1).await;
+        DiagClient::new(second,"secret-test".into()).report("rust.history_failed","per-diary","history_io","leitura do transcript falhou");
+        wait_hits(&second_hits,1).await;
     }
 }

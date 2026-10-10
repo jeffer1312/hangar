@@ -10,16 +10,12 @@ import threading
 
 import pytest
 
-from accounts_contract import PythonReference, HttpTransport, isolated_environment, normalize, assert_rust_ownership, FIXTURES
+from accounts_contract import PythonReference, HttpTransport, isolated_environment, normalize, assert_rust_ownership, FIXTURES, rust_integration_binary
 
 
 class RustCatalog(HttpTransport):
     def __init__(self, reference: PythonReference, *, instance="contract-instance", native_fixture=False):
-        target = Path(os.environ.get("CARGO_TARGET_DIR") or Path(__file__).resolve().parents[2] / "crates/target") / "debug" / "deps"
-        candidates = [path for path in target.glob("accounts_catalog-*.exe" if os.name == "nt" else "accounts_catalog-*")
-                      if path.is_file() and path.suffix not in {".d", ".pdb", ".lib", ".exp"}]
-        assert candidates, "compile accounts_catalog antes desta prova"
-        binary = max(candidates, key=lambda path: path.stat().st_mtime)
+        binary = rust_integration_binary()
         environment = isolated_environment(reference.root)
         if native_fixture:
             fixture_root = reference.root / "native-fixture"
@@ -34,7 +30,7 @@ class RustCatalog(HttpTransport):
             environment["PATH"] = str(fixture_root) + os.pathsep + environment["PATH"]
         environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
                            HANGAR_RUNTIME_INSTANCE=instance)
-        self.process = subprocess.Popen([str(binary), "--exact", "http_probe_process", "--nocapture"],
+        self.process = subprocess.Popen([str(binary), "--exact", "accounts_catalog::http_probe_process", "--nocapture"],
                                         env=environment, cwd=reference.root, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, encoding="utf-8")
         ready = queue.Queue()
