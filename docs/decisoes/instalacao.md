@@ -91,6 +91,16 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   da árvore verificada. Teste do backend não pode deixar timer, thread que age, `sys.modules`,
   módulo recarregado ou tratador de sinal alterado para o arquivo seguinte: com a suíte repartida, quem paga é o vizinho. Evidência em
   [Verificação local em paralelo](#verificação-local-em-paralelo-09102026).
+- **Build Rust: testes de integração do `hangar-server` num executável só, e o CI publica com LTO
+  fat só na `main`.** Teste novo entra como módulo de `crates/hangar-server/tests/it/`; teste que
+  mexe em estado do processo inteiro (PATH, HOME, TZ, logger global, gancho de pânico) vai para um
+  `[[test]]` à parte no `Cargo.toml`. Quem reexecuta o próprio executável monta o nome com
+  `exact_name(module_path!(), …)` e confere `assert_ran_one`. A depuração reduzida vem do perfil
+  `dev` do `crates/Cargo.toml`, nunca de variável, e o `hangar-server` pede as mesmas features que o
+  resto do workspace: `-p` e `--workspace` têm de dar o mesmo hash. O binário publicado pela `main`
+  sai do perfil `dist` (`--profile dist`, em `target/dist/`); a branch, do `release`. O cache tem o
+  perfil na chave e só guarda dependências de terceiros (`scripts/podar-target --cache`). Evidência em
+  [Build Rust e CI menores](#build-rust-e-ci-menores-09102026).
 - **O bloco do MCP `hangar` no `config.toml` do Codex é reconhecido pela TABELA, não só pelos
   marcadores.** O app desktop reescreve o arquivo sem comentários; quem só procura `# >>> hangar`
   anexa de novo, e o TOML com chave duplicada derruba o ChatGPT e o Codex juntos.
@@ -614,7 +624,7 @@ os passos do que mudou, e árvore que já passou não roda nada.
   processo o ergue), e o padrão do Windows é 15,625 ms: teste de prazo que passa aqui pode falhar
   no runner; 4 núcleos dedicados contra 4 vCPU compartilhadas, Windows 11 26100
   contra Server 2022, e o cache frio de cada rodada do CI.
-- **O que só o CI faz**: build release com LTO fat (`zigbuild` com glibc 2.28 no Linux), macOS, a
+- **O que só o CI faz**: build release (LTO fat na `main`; `zigbuild` com glibc 2.28 no Linux), macOS, a
   publicação dos binários e do `dist-latest`, e o `passos` (o pre-commit faz o mesmo por commit).
 - **Cache do Rust no Actions: só a `main` grava, toda branch lê o dela.** Em 07/10 o repositório
   estava em 7,3 GB de 10 GB, com cópias de 2 a 3,6 GB gravadas por branches `fix/*`; a parte1
@@ -674,3 +684,55 @@ e mobile 139 s na mesma faixa; shell, statusline e pi 8 s. Caminho crítico ≈ 
   release, 1119 s no job). Os jobs que guardam `crates/target` compilam sem incremental e com
   depuração só de linhas, e as chaves ganharam `-v2-`: o `save` só grava quando a chave exata não
   existe, e sem chave nova o cache enxuto nunca seria gravado.
+
+## Build Rust e CI menores (09/10/2026)
+
+Issue #142. Um executável por arquivo de `crates/hangar-server/tests/` (94), cada um com o servidor
+inteiro; perfil `dev` com depuração completa para quem não passava a variável do CI; e o CI ligando
+LTO fat com uma unidade de código em todo push.
+
+Medido nesta máquina (24 núcleos, `CARGO_BUILD_JOBS=12`), `cargo test --workspace --no-run` do
+zero em `crates/`, depois tocando `src/lib.rs` e um arquivo de teste e rodando
+`cargo test -p hangar-server --no-run`:
+
+| | Antes (perfil padrão) | Antes (`line-tables-only`) | Depois |
+|---|---|---|---|
+| Compilação do zero | 79 s | 58 s | 55 s |
+| `target` | 42,7 GB | 15,6 GB | 4,3 GB |
+| `debug/deps` | 35,9 GB | 11,9 GB | 2,0 GB |
+| Executáveis acima de 100 MB | 95 | 41 | 4 |
+| Tocar `src/lib.rs` | 68 s | 47 s | 7 s |
+| Tocar um arquivo de teste | 1 s | 0 s | 3 s |
+| `target` depois dos dois | 84 GB | 30 GB | 5,5 GB |
+
+Testes listados: 1651 no `hangar-server`, 1739 no workspace, antes e depois.
+
+- **Seis executáveis à parte.** `workspace_unavailable` esvazia o `PATH`; `runtime_diagnostics` e
+  `terminal_diagnostics` instalam o logger global e contam avisos exatos; `contract_local_policy`
+  troca `HOME`, `USERPROFILE` e `TZ`; `costs_hook` (os três de custos) instala o gancho de pânico do
+  servidor, que tirava a mensagem de falha de todo o `it` (duas falhas apareceram sem motivo antes
+  da separação).
+- **O limite do diário atravessava os arquivos.** `groups_routes` e `groups_legacy` esperavam o
+  mesmo `rust.groups_restore_failed` para `s0`; no mesmo processo o segundo nunca chegava
+  ("condição não chegou em 5 s"), porque o `warn_limit` é do processo. A chave do diário ganhou o
+  destino (o Python do servidor): em produção há um só, e cada servidor de teste tem o seu. Um
+  `DiagClient` próprio por limitador mudaria a produção, porque o cliente é criado em vários pontos.
+- **Reexecução com nome curto passava sem testar nada.** No `it` o nome ganha o módulo; o filho com
+  `--exact <nome>` rodava 0 testes e saía 0. Prova: com `assert_ran_one` e o nome antigo, os cinco
+  falharam com `running 0 tests`.
+- **Features iguais entre `-p` e `--workspace`.** `alloc` no `serde`/`serde_json` (vindo do
+  `schemars` de teste do `hangar-codex`) e `signal` no `tokio` (do `hangar-cano`) faziam
+  `cargo test -p hangar-server` e `--workspace` compilarem o servidor duas vezes, com uma cópia de
+  cada. O `resolver.feature-unification` resolveria, mas no cargo 1.98 ainda pede `-Z`.
+- **O Native não era lento por cache despejado.** Na `main` (run 37998405378) o cache foi achado nos
+  três sistemas e o release levou 869 s (Linux), 1130 s (Windows) e 1392 s (macOS): o LTO fat com
+  uma unidade de código, mais o GPUI vendorizado recompilando a cada checkout, porque o cargo julga
+  crate de caminho pela data dos arquivos. Os 74 crates do job Linux do Server eram o
+  `cargo install cargo-zigbuild`, não o release.
+- **Com LTO as dependências saem em bitcode**, e o cache da `main` (`dist`) não serve ao `release`
+  da branch. Por isso a chave leva o perfil, e o job `cache-release` da `main` grava o cache do
+  `release` só quando as dependências mudam. O perfil nomeado no `Cargo.toml`, e não variável de
+  ambiente, deixa os dois perfis em pastas próprias e sem valor a espelhar entre os jobs.
+- **Cache do Actions em 10,98 GB** (limite 10 GB) antes: `server-v2` 2,5/2,2/1,6 GB, `native-*`
+  0,8–0,9 GB, `backend-rust` 0,6 GB e 0,8 GB de uma chave sem `v2` que nenhum workflow usava.
+

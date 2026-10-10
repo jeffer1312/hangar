@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Poda um target do cargo sem obrigar a compilar as dependências de novo.
+#
+# Uso:  scripts/podar-target <target>...           máquina de quem programa
+#       scripts/podar-target --cache <target>...   CI, logo antes do actions/cache/save
+#
+# Na máquina, cada build deixa para trás a cópia anterior de cada executável de teste (centenas de
+# MB) e do cache incremental, que nenhum build seguinte usa. Por nome, fica a cópia mais nova e as
+# que saíram do mesmo build (até 24 h antes dela); as outras saem.
+#
+# No CI, o que é do próprio workspace recompila a cada push de qualquer jeito: guardá-lo no cache só
+# ocupa o limite do repositório. Sai tudo dos membros (bibliotecas, executáveis, testes, exemplos,
+# fingerprints) e o incremental; ficam as dependências de terceiros, que são o que o cache poupa.
+set -euo pipefail
+
+cache=0
+if [[ "${1:-}" == --cache ]]; then cache=1; shift; fi
+(( $# )) || { sed -n '4,5p' "$0" >&2; exit 2; }
+
+tamanho() { du -sk "$1" 2>/dev/null | awk '{print $1}'; }
+# "<mtime> <nome>" das entradas diretas de $1 que casam com os predicados do find em seguida: um find por
+# pasta (GNU), ou um stat por lote (BSD, sem -printf).
+if find . -maxdepth 0 -printf '' 2>/dev/null; then
+    listar() { local d="$1"; shift; find "$d" -mindepth 1 -maxdepth 1 "$@" -printf '%Ts %f\n'; }
+else
+    listar() {
+        local d="$1"; shift
+        find "$d" -mindepth 1 -maxdepth 1 "$@" -exec stat -f '%m %N' {} + | sed 's|^\([0-9]*\) .*/|\1 |'
+    }
+fi
+
+# Pastas de perfil (debug/, release/, dist/) e as de alvo cruzado (<triplo>/<perfil>/): as que têm deps/.
+perfis() {
+    local t="$1" p
+    for p in "$t"/* "$t"/*/*; do
+        [[ -d "$p/deps" ]] && echo "$p"
+    done
+    return 0
+}
+
+# Nomes dos alvos e dos pacotes do workspace dono do target, como aparecem nos arquivos (- vira _).
+membros() {
+    local manifesto="$1/../Cargo.toml"
+    [[ -f "$manifesto" ]] || { echo "podar-target: sem Cargo.toml ao lado de $1" >&2; return 1; }
+    cargo metadata --no-deps --format-version 1 --manifest-path "$manifesto" |
+        jq -r '.packages[] | .name, .targets[].name' | sort -u
+}
+
+podar_cache() {
+    local t="$1" p n nomes
+    nomes="$(membros "$t")" || return 1
+    rm -rf "$t"/flycheck*
+    while IFS= read -r p; do
+        rm -rf "$p/incremental" "$p/examples"
+        # Na raiz do perfil só ficam as cópias dos executáveis e bibliotecas do workspace.
+        find "$p" -maxdepth 1 -type f -delete
+        while IFS= read -r n; do
+            rm -rf "$p/.fingerprint/$n"-* "$p/build/$n"-*
+            n="${n//-/_}"
+            rm -f "$p/deps/$n"-* "$p/deps/lib$n"-*
+        done <<< "$nomes"
+    done < <(perfis "$t")
+}
+
+# Imprime, das entradas "<mtime> <nome>-<hash><ext>" recebidas, as que saem: por nome, as que têm
+# mais de 24 h a menos que a mais nova.
+velhas() {
+    awk '{ nome = $2; sub(/[.]exe$/, "", nome); sub(/-[^-]+$/, "", nome); print nome, $1, $2 }' |
+        LC_ALL=C sort -k1,1 -k2,2nr |
+        awk '$1 != atual { atual = $1; topo = $2; next } topo - $2 > 86400 { print $3 }'
+}
+
+podar_maquina() {
+    local t="$1" p f
+    while IFS= read -r p; do
+        # Executáveis: sem extensão (ou .exe), nunca lib*; os .d e .pdb do mesmo hash vão junto.
+        while IFS= read -r f; do
+            rm -f "$p/deps/${f%.exe}" "$p/deps/${f%.exe}".*
+        done < <(listar "$p/deps" -type f -perm -u+x ! -name 'lib*' | awk '$2 ~ /-[0-9a-f]+(\.exe)?$/' | velhas)
+        [[ -d "$p/incremental" ]] || continue
+        while IFS= read -r f; do
+            rm -rf "${p:?}/incremental/$f"
+        done < <(listar "$p/incremental" -type d | velhas)
+    done < <(perfis "$t")
+}
+
+for t in "$@"; do
+    [[ -d "$t" ]] || { echo "podar-target: $t não existe; nada a podar."; continue; }
+    antes="$(tamanho "$t")"
+    if (( cache )); then podar_cache "$t"; else podar_maquina "$t"; fi
+    depois="$(tamanho "$t")"
+    echo "podar-target: $t de $(( antes / 1024 )) MB para $(( depois / 1024 )) MB."
+done

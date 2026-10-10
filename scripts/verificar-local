@@ -39,7 +39,6 @@ RUNTIME_TESTS=(tests/test_runtime_process.py tests/test_runtime_queue_terminal_v
     tests/test_runtime_terminal_fix.py tests/test_runtime_terminal_fix2.py
     tests/test_runtime_terminal_failure_policy.py tests/test_runtime_final_fixes.py)
 
-XDIST="pytest-xdist==3.8.0"
 PROCESSOS_PADRAO=4
 
 erro() { echo "verificar-local: $*" >&2; exit 2; }
@@ -86,7 +85,7 @@ classificar() {
         esac
         case "$f" in
             scripts/shell/*|scripts/test-wrappers.sh|scripts/hangar-engine|scripts/install-claude-wrapper.sh|\
-            scripts/verificar-local|scripts/test-verificar-local.sh|\
+            scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
             scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in
@@ -137,15 +136,13 @@ passo_runtime() { (cd backend && uv run pytest -q "${RUNTIME_TESTS[@]}"); }
 
 passo_backend() {   # só Linux: no Windows fica o passo_runtime
     local omp; omp="$(omp_de_teste)" || return 1
-    local uv=(uv run) pytest=(pytest -q)
-    if (( PROCESSOS > 1 )); then
-        # Um arquivo inteiro por processo: há testes com nome fixo de sessão tmux, que colidem
-        # quando o mesmo arquivo se divide entre processos.
-        uv+=(--with "$XDIST"); pytest+=(-n "$PROCESSOS" --dist loadfile)
-    fi
+    local pytest=(pytest -q)
+    # Um arquivo inteiro por processo: há testes com nome fixo de sessão tmux, que colidem
+    # quando o mesmo arquivo se divide entre processos.
+    (( PROCESSOS > 1 )) && pytest+=(-n "$PROCESSOS" --dist loadfile)
     # basetemp em disco: o omp extrai centenas de MB por caso (7 GB na suíte), e o /tmp pode ser tmpfs.
     mkdir -p "/var/tmp/hangar-verificacao-$USER"
-    (cd backend && OMP_TEST_BIN="$omp" "${uv[@]}" "${pytest[@]}" --basetemp="/var/tmp/hangar-verificacao-$USER/pytest")
+    (cd backend && OMP_TEST_BIN="$omp" uv run "${pytest[@]}" --basetemp="/var/tmp/hangar-verificacao-$USER/pytest")
 }
 
 # Só Linux, antes dos outros: o único que compila e instala. Depois dele os passos só executam,
@@ -165,9 +162,7 @@ passo_preparo() {
         pids+=($!)
     fi
     if [[ "$plano" == *" rust "* || "$plano" == *" backend "* ]]; then
-        local uv=(uv run)
-        (( PROCESSOS > 1 )) && [[ "$plano" == *" backend "* ]] && uv+=(--with "$XDIST")
-        (cd backend && "${uv[@]}" python -c '') || falhou=1
+        (cd backend && uv sync) || falhou=1
     fi
     if [[ "$plano" == *" rust "* ]]; then
         # O cano é o binário que o passo rust entrega ao pytest do cano.
@@ -175,14 +170,11 @@ passo_preparo() {
             cargo test --locked --workspace --no-run) || falhou=1
     fi
     if [[ "$plano" == *" backend "* ]]; then
-        # Os contratos e as sondas de contas que o pytest executa (ci.yml), só as que a árvore tem.
-        local sonda sondas=()
-        for sonda in accounts_lifecycle accounts_catalog accounts_preparation; do
-            [[ -f "crates/hangar-server/tests/$sonda.rs" ]] && sondas+=(--test "$sonda")
-        done
+        # Os contratos e as sondas de contas que o pytest executa (ci.yml): as sondas são módulos do
+        # executável de testes `it` do hangar-server.
         (cd crates && cargo build --locked -p hangar-server && \
             cargo build --locked -p hangar-workspace --example workspace_contract && \
-            { (( ! ${#sondas[@]} )) || cargo test --locked -p hangar-server --no-run "${sondas[@]}"; }) || falhou=1
+            cargo test --locked -p hangar-server --no-run --test it) || falhou=1
     fi
     for pid in "${pids[@]}"; do wait "$pid" || falhou=1; done
     return $falhou
@@ -235,7 +227,8 @@ passo_mobile() {
 passo_nativo() { (cd desktop-native && env -u CARGO_TARGET_DIR cargo test --locked); }
 passo_shell() {
     bash scripts/test-wrappers.sh || return 1
-    [[ ! -f scripts/test-verificar-local.sh ]] || bash scripts/test-verificar-local.sh
+    [[ ! -f scripts/test-verificar-local.sh ]] || bash scripts/test-verificar-local.sh || return 1
+    [[ ! -f scripts/test-podar-target.sh ]] || bash scripts/test-podar-target.sh
 }
 passo_statusline() {
     node --test scripts/test-configure-statusline.cjs || return 1
@@ -352,16 +345,18 @@ preparar_arvore() {   # $1 = sha, $2 = bundle ("-" = sem bundle); usa $SO
     # Sem -x: node_modules, target e .venv ficam e são o que deixa a próxima rodada incremental.
     git checkout -q --force --detach "$sha" && git clean -ffdq || return 2
     unset CARGO_TARGET_DIR
-    # Cada arquivo de teste vira um binário; com depuração completa o target passa de 27 GB no Linux
-    # e enche o disco da VM. Só as linhas basta para o backtrace, e o teste roda igual.
-    CARGO_ENV=(CARGO_BUILD_JOBS=4 CARGO_PROFILE_DEV_DEBUG=line-tables-only)
+    # A depuração reduzida vem do perfil dev do crates/Cargo.toml: as mesmas flags de quem programa,
+    # sem uma segunda cópia de cada artefato.
+    CARGO_ENV=(CARGO_BUILD_JOBS=4)
     # Os testes procuram os binários em crates/target; um `target-dir` no ~/.cargo/config.toml da
     # máquina mandaria o build para outro lugar. A variável vence a configuração, e só chega aos
     # passos pela lista do `env -i`.
     if [[ "$SO" != windows ]]; then CARGO_ENV+=(CARGO_TARGET_DIR="$PWD/crates/target"); fi
     # Cada commit deixa artefatos com hash novo que nenhum build seguinte usa, e o target só cresce
-    # (52 GB em três dias). Passou do teto, poda (ver podar_target) e o disco não enche.
+    # (52 GB em três dias). As cópias velhas saem a cada rodada (podar-target); passou do teto mesmo
+    # assim, poda (ver podar_target) e o disco não enche.
     if [[ "$SO" == linux ]]; then
+        [[ ! -d crates/target ]] || "$(dirname "$SCRIPT")/podar-target" crates/target >&3
         podar_target crates/target $(( ${HANGAR_VERIFICAR_TARGET_GB:-40} * 1048576 )) >&3
     fi
     local livre minimo=4
@@ -393,7 +388,7 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
         echo ">> $SO: $p…" >&3
         ini=$SECONDS
         # setsid no Linux: o passo vira grupo próprio e o vigia mata a árvore inteira.
-        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS XDIST PROCESSOS PLANO); passo_$p" >"$log" 2>&1 &
+        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS PROCESSOS PLANO); passo_$p" >"$log" 2>&1 &
         local spid=$! vigia rc
         vigiar_disco "$spid" "$log" &
         vigia=$!

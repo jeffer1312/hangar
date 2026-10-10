@@ -40,11 +40,10 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
-    # Target enxuto no cache, como no server.yml: sem incremental e com depuração só de linhas.
+    # Sem incremental, como no server.yml; a depuração reduzida vem do perfil dev do crates/Cargo.toml.
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/crates/target
       CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     # So roda teste/build — nao escreve nada no repo. Declarado explicito pra nao herdar
     # o padrao do repositorio, que pode ser write.
     permissions:
@@ -89,27 +88,29 @@ jobs:
       - uses: actions/cache/restore@v4
         id: cache-rust
         with:
-          path: |
+          path: &cache-backend |
             ~/.cargo/registry
             ~/.cargo/git
             crates/target
-          key: backend-rust-v2-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
-          restore-keys: backend-rust-v2-${{ runner.os }}-
+          key: backend-rust-v3-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: backend-rust-v3-${{ runner.os }}-
       - name: Compilar contratos Rust usados pelo pytest
         working-directory: crates
         run: |
           cargo build --locked -p hangar-server
           cargo build --locked -p hangar-workspace --example workspace_contract
-          cargo test --locked -p hangar-server --no-run --test accounts_lifecycle --test accounts_catalog --test accounts_preparation
+          cargo test --locked -p hangar-server --no-run --test it
+      # Um arquivo inteiro por processo (há testes com nome fixo de sessão tmux), como no scripts/verificar-local.
+      # O runner tem 4 vCPUs. basetemp no RUNNER_TEMP: o omp extrai centenas de MB por caso.
+      - run: uv run pytest -q -n 4 --dist loadfile --basetemp="$RUNNER_TEMP/pytest"
+      # Depois do pytest, que usa os binários do workspace: a poda os tira e fica só o que o cache poupa.
+      - if: &grava-backend always() && github.ref == 'refs/heads/main' && steps.cache-rust.outputs.cache-hit != 'true'
+        run: ../scripts/podar-target --cache ../crates/target
       - uses: actions/cache/save@v4
-        if: github.ref == 'refs/heads/main' && steps.cache-rust.outputs.cache-hit != 'true'
+        if: *grava-backend
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            crates/target
+          path: *cache-backend
           key: ${{ steps.cache-rust.outputs.cache-primary-key }}
-      - run: uv run pytest -q
 
   frontend:
     runs-on: ubuntu-latest
@@ -135,8 +136,10 @@ jobs:
       - run: npm ci --workspace=@hangar/core --workspace=frontend
       - run: npm run check -w @hangar/core
       - run: npm run check -w frontend
-      - run: npm run test -w @hangar/core
-      - run: npm run test -w frontend
+      # Os vitest.config limitam a 2 forks para várias suítes locais não encherem a RAM; o runner roda só
+      # esta e tem 4 vCPUs, como o scripts/verificar-local.
+      - run: npm run test -w @hangar/core -- --maxWorkers=4
+      - run: npm run test -w frontend -- --maxWorkers=4
 
   # Build em job proprio: teste vermelho no `frontend` nao pode segurar a tela publicada, senao
   # quem atualiza recebe o codigo novo com a tela do ultimo commit verde.

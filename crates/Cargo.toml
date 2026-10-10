@@ -41,5 +41,20 @@ rayon = "=1.12.0"
 hangar-codex = { path = "hangar-codex" }
 tokio-tungstenite = "=0.29.0"
 
+# Depuração só de linhas: o backtrace sai com arquivo e linha, e cada executável de teste cai a menos
+# da metade. Nas dependências, nenhuma. Variáveis no depurador: CARGO_PROFILE_DEV_DEBUG=full.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 strip = true
+
+# O binário publicado pela main: LTO completo e uma unidade de código. Fica em target/dist/, à parte do
+# release comum (o da pré-release de branch), que continua rápido de compilar.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
