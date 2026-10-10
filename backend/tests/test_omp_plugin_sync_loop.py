@@ -147,7 +147,7 @@ def _serve_test_backend():
     from app import api
     async def idle(*args, **kwargs):
         await asyncio.Event().wait()
-    for name in ("_fetch_loop", "_auto_update_loop", "_prune_loop", "_renova_token_loop"):
+    for name in ("_fetch_loop", "_auto_update_loop", "_prune_loop"):
         setattr(api, name, idle)
     api.hook_state.watch = idle
     api.stall_watch.watch = idle

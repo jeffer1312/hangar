@@ -73,9 +73,9 @@ export interface ChatState {
 }
 
 // Quantas bolhas estão "na fila" (translúcidas): ecos locais + sintéticos queued-* da fila durável.
-// Só conta onde a fila pode ser mandada agora (Kimi, Codex, Claude sem terminal), como no PWA.
+// Só conta onde a fila pode ser mandada agora (Kimi, Codex, Claude), como no PWA.
 export function filaCount(state: Pick<ChatState, 'events' | 'pending'>, provider?: string | null, headless = false): number {
-  if (provider !== 'kimi' && provider !== 'codex' && !headless) return 0;
+  if (provider !== 'kimi' && provider !== 'codex' && provider !== 'claude' && !headless) return 0;
   return state.pending.length + queuedMessages(state.events, provider, headless).length;
 }
 

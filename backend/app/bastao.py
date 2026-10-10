@@ -158,8 +158,8 @@ def _conta_do_transcript(jsonl: str, provider: str = "claude",
                          codex_account: str | None = None) -> str:
     """Rótulo da conta dona do transcript, deduzido do caminho (`<config>/projects/<proj>/<id>.jsonl`).
 
-    Sem chamar `conta_estado.listar_contas()` de propósito: aquilo forka o CLI do `claude` por conta,
-    com timeout de 10s, pra devolver estado de LOGIN — que não é o que o sucessor precisa saber.
+    Sem perguntar o estado de LOGIN das contas de propósito: ele custa o CLI do `claude` por conta,
+    e não é o que o sucessor precisa saber.
     Fora do Claude o transcript nem mora na conta (Pi/Kimi/Codex), e aí a linha simplesmente não sai.
     """
     if provider == "codex":

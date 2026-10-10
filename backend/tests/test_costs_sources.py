@@ -8,6 +8,7 @@ from app import costs_claude_transcript as ct
 from app import codex_contas
 from app import costs_sources as cs
 from app import pricing
+import codex_contas_apoio
 
 
 @pytest.fixture(autouse=True)
@@ -586,7 +587,7 @@ def test_coletar_codex_separa_contas_e_deduplica_rollout_canonico(tmp_path, monk
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
     default = codex_contas.Account("default", tmp_path / ".codex", True)
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     sid_a = "a"
     sid_b = "b"
     original = default.home / "sessions" / "2026" / "09" / "09" / "rollout-a.jsonl"
@@ -617,7 +618,7 @@ def test_coletar_codex_separa_contas_e_deduplica_rollout_canonico(tmp_path, monk
 
 def test_coletar_link_da_padrao_para_secundaria_preserva_dono_e_cache(tmp_path, monkeypatch):
     default = codex_contas.Account("default", tmp_path / ".codex", True)
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     rollout = work.home / "sessions" / "2026" / "09" / "09" / "rollout-only.jsonl"
     _escrever(rollout, _rollout_codex("/work", "only",
                                       {"input_tokens": 10, "output_tokens": 1}))

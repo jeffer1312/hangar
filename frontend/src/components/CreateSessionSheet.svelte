@@ -14,7 +14,7 @@
            type ModelOption, type Motor, type CliProxyAccount, type SessionOpeningExtras, type ArchiveEntry,
            sanitizeSessionName, uniqueSessionName } from '@hangar/core';
   import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
-  import { basename, providerName, relativeTime, cotaDaConta, resumoCota, janelaEsgotada, effortLevels, SESSION_PROVIDERS } from '@hangar/core';
+  import { basename, claudeAccountFolder, providerName, relativeTime, cotaDaConta, resumoCota, janelaEsgotada, effortLevels, SESSION_PROVIDERS } from '@hangar/core';
   import SessionOpeningFields from './SessionOpeningFields.svelte';
   import BranchChoice from './BranchChoice.svelte';
   import { renderMarkdown } from '../lib/markdown';
@@ -467,7 +467,7 @@
   const contaSelecionada = $derived(configs.find((c) => c.path === selectedConfig) ?? null);
   const nomeDaSelecionada = $derived(
     contaSelecionada && !contaSelecionada.active
-      ? (contaSelecionada.path.split('/').pop() ?? '').match(/^\.claude-(.+)$/)?.[1] ?? null
+      ? claudeAccountFolder(contaSelecionada.path)
       : null,
   );
 

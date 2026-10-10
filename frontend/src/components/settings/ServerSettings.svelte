@@ -84,8 +84,6 @@
       ajuda: m.config_server_jev_texto_modelo_ajuda() },
     { chave: 'jev_texto_cmd', rotulo: m.config_server_jev_texto_cmd(), tipo: 'texto', secao: 'jev',
       ajuda: m.config_server_jev_texto_cmd_ajuda() },
-    { chave: 'jev_windows_api_key', rotulo: m.jev_windows_key(), tipo: 'segredo', secao: 'jev',
-      ajuda: m.jev_windows_key_help() },
   ];
 
   const visiveis = $derived(CAMPOS.filter((c) => c.secao === secao));
@@ -212,20 +210,6 @@
             <LinhaConfig campo={c} {store} />
           {/each}
         </details>
-      </section>
-      <section class="jev-section" aria-labelledby="jev-windows">
-        <h3 id="jev-windows">{m.jev_windows_title()}</h3>
-        <p class="ajuda">{m.jev_windows_help()}</p>
-        {#if store.campos.jev_windows_api_key?.erro}
-          <p class="aviso erro" role="alert">{store.campos.jev_windows_api_key.erro}</p>
-        {/if}
-        {#if store.campos.jev_windows_api_key}
-          {#each visiveis.filter((c) => c.chave === 'jev_windows_api_key') as c (c.chave)}
-            <LinhaConfig campo={c} {store} />
-          {/each}
-        {:else}
-          <p class="aviso">{m.jev_windows_update_required()}</p>
-        {/if}
       </section>
     {:else}
       <div class="lista">

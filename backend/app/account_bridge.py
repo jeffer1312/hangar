@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import contextlib
 import json
 import os
 import re
@@ -15,6 +16,7 @@ except ImportError:
     psutil = None
 
 from app.account_lifecycle import AccountKey, Provider
+from app.mensagens import erro
 
 
 @dataclass
@@ -432,35 +434,6 @@ def configure_preparation(address, secret):
     _preparation_transport = (address, secret)
 
 
-def publish_preparation_result(account, result):
-    """Publica a operação completa no registro compartilhado com o coordenador Rust."""
-    import os
-    import tempfile
-    from app import account_lifecycle, atomico
-    if result.get("status") not in {"ready", "partial", "error"}:
-        raise ValueError("resultado de preparo ainda não concluído")
-    key = account_lifecycle.AccountKey.new("codex", account.home)
-    directory = account_lifecycle.default_lock_root()
-    target = directory / (key.digest + ".prepare-result.json")
-    if directory.is_symlink() or target.is_symlink():
-        raise ValueError("registro de preparo é um link")
-    # O chamador conserva a reserva da conta até a publicação atômica do resultado.
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
-                                     suffix=".tmp", delete=False) as temporary:
-        try:
-            os.chmod(temporary.name, 0o600)
-            json.dump(result, temporary, ensure_ascii=False, allow_nan=False)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        except BaseException:
-            temporary.close()
-            Path(temporary.name).unlink(missing_ok=True)
-            raise
-    try:
-        atomico.substituir(temporary.name, target)
-    finally:
-        Path(temporary.name).unlink(missing_ok=True)
-
 def request_preparation(account, *, prepare=False, force=False, cwd=None):
     from app import codex_contas
     if owner_mode() == "python":
@@ -485,7 +458,7 @@ def request_preparation(account, *, prepare=False, force=False, cwd=None):
         raise codex_contas.AccountError(503, "account_prepare_bridge_unavailable", {}) from None
 
 class ClaudeWindows:
-    """Transporte auxiliar: só janela nativa e invalidação, sem decidir autenticação."""
+    """Transporte auxiliar: só a janela nativa, sem decidir autenticação."""
     def __init__(self):
         import threading
         self.lock = threading.RLock()
@@ -493,7 +466,7 @@ class ClaudeWindows:
         self.closed = set()
 
     def run(self, body):
-        from app import login_conta, conta_estado, runtime_coordinator
+        from app import claude_window, runtime_coordinator
         if not isinstance(body, dict) or set(body) != {"instance", "key", "operation", "action", "code"}:
             raise ValueError("pedido inválido")
         coordinator = runtime_coordinator.current()
@@ -502,7 +475,7 @@ class ClaudeWindows:
         operation, action, code = body["operation"], body["action"], body["code"]
         if not isinstance(operation, str) or not re.fullmatch("[a-f0-9]{32}", operation):
             raise ValueError("operação inválida")
-        if action not in {"open", "read", "code", "close", "invalidate", "refresh"}:
+        if action not in {"open", "read", "code", "close", "refresh"}:
             raise ValueError("ação inválida")
         if action == "code":
             if not isinstance(code, str) or not code or len(code) > 4096 or any(c in code for c in ("\n", "\r", "\x00")):
@@ -524,8 +497,7 @@ class ClaudeWindows:
             current = runtime_coordinator.current()
             if current is None or current.instance != body["instance"]:
                 raise ValueError("instância inválida")
-            # Invalidar só esquece caches e vem depois do fechamento da janela no login concluído.
-            if action not in {"close", "invalidate"} and operation in self.closed:
+            if action != "close" and operation in self.closed:
                 raise ValueError("operação encerrada")
             previous = self.active.get(operation)
             if previous is not None and (previous[0] != key or (action != "close" and previous[1] != body["instance"])):
@@ -533,60 +505,59 @@ class ClaudeWindows:
             # A identidade é da operação: limpar uma tentativa antiga não toca na nova.
             if action == "close":
                 self.closed.add(operation)
-                login_conta._shell_matar(target)
+                claude_window.kill(target)
                 self.active.pop(operation, None)
             elif action == "open":
                 previous = self.active.get(operation)
                 if previous is not None and previous != (key, body["instance"]):
                     raise ValueError("operação divergente")
                 if previous is None:
-                    created = login_conta._shell_criar(name, str(key.canonical_home), config_dir=str(key.canonical_home))
+                    created = claude_window.spawn(name, str(key.canonical_home), str(key.canonical_home))
                     if created != target:
-                        login_conta._shell_matar(target)
+                        claude_window.kill(target)
                         raise RuntimeError("não consegui abrir a janela escondida")
                     self.active[operation] = (key, body["instance"])
                     try:
-                        login_conta._shell_submeter(target, "claude auth login --claudeai")
+                        claude_window.submit(target, "claude auth login --claudeai")
                     except Exception:
-                        login_conta._shell_matar(target)
+                        claude_window.kill(target)
                         self.active.pop(operation, None)
                         raise
             elif action == "refresh":
-                from app import renova_token
-                cwd = renova_token.pasta_confiada(key.canonical_home)
+                cwd = claude_window.trusted_folder(key.canonical_home)
                 if cwd is None:
                     return {"ok": False, "motivo": "sem-pasta-confiada"}
                 if previous is None:
-                    created = renova_token._criar_janela(name, str(cwd), str(key.canonical_home))
+                    created = claude_window.spawn(name, str(cwd), str(key.canonical_home))
                     if created != target:
                         if created is not None:
-                            renova_token._matar(created)
+                            # A recusa já é a resposta; a limpeza da janela estranha é tentativa.
+                            with contextlib.suppress(RuntimeError):
+                                claude_window.kill(created)
                         return {"ok": False, "motivo": "tmux-recusou"}
                     self.active[operation] = (key, body["instance"])
                     try:
-                        renova_token._submeter(target, "claude")
+                        claude_window.submit(target, "claude")
                     except Exception:
-                        renova_token._matar(target)
+                        claude_window.kill(target)
                         self.active.pop(operation, None)
                         raise
-            elif action == "invalidate":
-                conta_estado.esquecer_conta(str(key.canonical_home))
             else:
                 if self.active.get(operation) != (key, body["instance"]):
                     raise ValueError("operação ausente")
                 if action == "read":
-                    match = login_conta._URL_RE.search(login_conta._shell_ler(target))
+                    match = claude_window.URL_RE.search(claude_window.read(target))
                     return {"ok": True, "url": match.group(1) if match else None}
-                if not login_conta._PROMPT_RE.search(login_conta._shell_ler(target)):
+                if not claude_window.PROMPT_RE.search(claude_window.read(target)):
                     raise RuntimeError("a CLI não está aguardando o código de autorização")
-                login_conta._shell_code(target, code)
+                claude_window.send_code(target, code)
         return {"ok": True}
 
 
 claude_windows = ClaudeWindows()
 
 
-def request_claude(action, *, label=None, path=None, code=None):
+def request_claude(action, *, path):
     """Encaminha consumidores Python ao dono Rust; pending nunca usa reserva Python."""
     from fastapi import HTTPException
     if owner_mode() == "python":
@@ -597,27 +568,27 @@ def request_claude(action, *, label=None, path=None, code=None):
         raise HTTPException(503, detail=unavailable)
     try:
         return _post(config, "/__hangar_server/accounts/claude",
-                     {"action": action, "label": label, "path": path, "code": code},
-                     timeout=320 if action == "code" else 30, limit=256 * 1024)
+                     {"action": action, "label": None, "path": path, "code": None},
+                     timeout=30, limit=256 * 1024)
     except urllib.error.HTTPError as error:
         raise HTTPException(error.code, detail=_error_detail(error, unavailable)) from None
     except (OSError, ValueError):
         raise HTTPException(503, detail=unavailable) from None
 
 
-def request_codex(action, account, *, attempt_id=None, refresh=False):
+def request_codex(action, account, *, refresh=False):
     """Ponte de consumidores internos; pending recusa sem abrir um escritor Python."""
     from fastapi import HTTPException
     if owner_mode() == "python":
-        return None, False
+        return None
     unavailable = {"code": "account_auth_bridge_unavailable"}
     config = _preparation_transport
     if config is None:
         raise HTTPException(503, detail=unavailable)
     try:
         return _post(config, "/__hangar_server/accounts",
-                     {"action": action, "account_id": account.id, "attempt_id": attempt_id, "refresh": refresh},
-                     timeout=45, limit=256 * 1024), True
+                     {"action": action, "account_id": account.id, "attempt_id": None, "refresh": refresh},
+                     timeout=45, limit=256 * 1024)
     except urllib.error.HTTPError as error:
         detail = _error_detail(error, unavailable)
         if isinstance(detail, dict) and "code" in detail:
@@ -645,43 +616,60 @@ def request_quotas(*, force=False, cached_only=False, invalidate=None):
         raise HTTPException(503, detail=unavailable) from None
 
 
-def request_reset(account, credit_id, idempotency_key):
-    """O consumo no Rust conserva a tentativa antes de enviar qualquer pedido ao provedor."""
-    from fastapi import HTTPException
-    if owner_mode() == "python":
-        return None
-    unavailable = {"code": "codex_reset_failed"}
-    config = _preparation_transport
-    if config is None:
-        raise HTTPException(503, detail=unavailable)
-    try:
-        return _post(config, "/__hangar_server/accounts",
-                     {"reset_account_id": account.id, "credit_id": credit_id,
-                      "idempotency_key": str(idempotency_key)},
-                     timeout=70, limit=65536)
-    except urllib.error.HTTPError as error:
-        raise HTTPException(error.code, detail=_error_detail(error, unavailable)) from None
-    except (OSError, ValueError):
-        raise HTTPException(503, detail=unavailable) from None
-
-
 def request_device(action):
     """Encaminha somente a operação; credenciais permanecem no cofre local."""
     from fastapi import HTTPException
     mode = owner_mode()
     if mode == "python":
-        return None, False
+        raise HTTPException(503, detail=NEED_RUST)
     unavailable = {"code": "account_device_bridge_unavailable"}
     config = _preparation_transport
     if mode != "rust" or config is None:
         raise HTTPException(503, detail=unavailable)
     try:
         return _post(config, "/__hangar_server/accounts", {"device_action": action},
-                     timeout=45, limit=256 * 1024), True
+                     timeout=45, limit=256 * 1024)
     except urllib.error.HTTPError as error:
         raise HTTPException(error.code, detail=_error_detail(error, unavailable)) from None
     except (OSError, ValueError):
         raise HTTPException(503, detail=unavailable) from None
+
+
+# Rotas de conta e cota que só o Rust atende; sem ele, respondem NEED_RUST.
+ACCOUNT_PREFIXES = ("/api/claude-configs", "/api/codex-contas", "/api/cotas", "/api/conta-estado",
+                    "/api/credenciais/codex")
+NEED_RUST = erro("accounts_need_rust_server", "contas e cotas precisam do servidor Rust")
+
+
+async def forward_public(request):
+    """Leva ao Rust o pedido de conta que entrou pelas portas do Python, já autenticado, e devolve
+    a resposta dele como veio. Em pending, sem transporte, recusa: nunca abre um segundo
+    escritor. Quem chama já respondeu NEED_RUST no modo python."""
+    import asyncio
+    from starlette.responses import JSONResponse, Response
+    config = _preparation_transport
+    if config is None:
+        return JSONResponse({"detail": {"code": "account_bridge_unavailable"}}, status_code=503)
+    body = await request.body()
+    query = request.url.query
+    forwarded = urllib.request.Request(
+        f"http://{config[0]}/__hangar_server/accounts/public" + (f"?{query}" if query else ""),
+        data=body or None, method=request.method,
+        headers={"content-type": request.headers.get("content-type", "application/json"),
+                 "x-hangar-internal": config[1], "x-hangar-path": request.url.path})
+
+    def send():
+        try:
+            with _opener.open(forwarded, timeout=330) as response:
+                return response.status, response.headers.get("content-type"), response.read(8 * 1024 * 1024)
+        except urllib.error.HTTPError as error:
+            return error.code, error.headers.get("content-type"), error.read(8 * 1024 * 1024)
+
+    try:
+        status, kind, content = await asyncio.to_thread(send)
+    except OSError:
+        return JSONResponse({"detail": {"code": "account_bridge_unavailable"}}, status_code=503)
+    return Response(content, status_code=status, media_type=kind or "application/json")
 
 
 preparation_jobs = PreparationJobs()

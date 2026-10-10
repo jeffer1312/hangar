@@ -332,9 +332,6 @@ impl AccountService {
             .await?;
         self.complete_claude_onboarding(&attempt.account);
         self.claude_auth.invalidate(&attempt.key);
-        client
-            .call(&attempt.key, &attempt.operation, "invalidate", None)
-            .await?;
         self.close_attempt(attempt, client).await?;
         Ok(Some(
             json!({"ok":true,"email":state["email"],"plano":state["plano"]}),
@@ -482,16 +479,7 @@ impl AccountService {
                 .try_acquire(&key, GuardMode::Exclusive)
                 .map_err(|_| bridge_error())?;
             service.validate_claude(&account, &key)?;
-            let result = service.claude_logout_guarded(&account).await;
-            client
-                .call(
-                    &key,
-                    &nonce().map_err(|_| AccountError::io())?,
-                    "invalidate",
-                    None,
-                )
-                .await?;
-            result?;
+            service.claude_logout_guarded(&account).await?;
             Ok(json!({"ok":true}))
         })
         .await

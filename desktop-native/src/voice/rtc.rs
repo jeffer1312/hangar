@@ -60,7 +60,30 @@ struct Window { written: u32, write_errors: u32, encode_errors: u32, no_writer: 
     // Maior intervalo entre pacotes (ms) no socket e na entrega do str0m: rajada da rede ou do laço.
     gap_raw_ms: u32, gap_media_ms: u32,
     // Volta mais longa do laço (ms): se bate com o intervalo no socket, quem segura é o app.
-    loop_max_ms: u32 }
+    loop_max_ms: u32,
+    // Pela numeração e pelo relógio do RTP, o que o intervalo bruto mistura: pacotes que faltaram (perda na rede),
+    // atraso da chegada além do tempo de áudio (oscilação da rede) e áudio que o servidor nem mandou (silêncio).
+    lost: u32, late_max_ms: u32, skipped_max_ms: u32 }
+
+/// Chegada de cada pacote comparada ao anterior: numeração, relógio do áudio e relógio da parede.
+#[derive(Default)]
+struct Arrival { last: Option<(u64, u64, Instant)> }
+
+impl Arrival {
+    /// `seq`: primeiro e último número do pacote; `media_us`: relógio do áudio dele.
+    fn observe(&mut self, seq: (u64, u64), media_us: u64, now: Instant, window: &mut Window) {
+        if let Some((prev_seq, prev_us, prev_at)) = self.last {
+            window.lost += seq.0.saturating_sub(prev_seq + 1) as u32;
+            let audio_ms = media_us.saturating_sub(prev_us) / 1000;
+            let wall_ms = now.duration_since(prev_at).as_millis() as u64;
+            window.late_max_ms = window.late_max_ms.max(wall_ms.saturating_sub(audio_ms) as u32);
+            // Pacote seguido na numeração com salto no relógio: o servidor pulou áudio (silêncio), não a rede.
+            if seq.0 == prev_seq + 1 { window.skipped_max_ms = window.skipped_max_ms.max(audio_ms.saturating_sub(20) as u32); }
+        }
+        // Pacote atrasado que chega depois de um mais novo não volta o relógio.
+        if self.last.is_none_or(|(prev, ..)| seq.1 > prev) { self.last = Some((seq.1, media_us, now)); }
+    }
+}
 
 /// RTP (não RTCP) pelo cabeçalho, que o SRTP deixa em claro.
 fn is_rtp(datagram: &[u8]) -> bool {
@@ -121,6 +144,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
     let (mut connected, mut timestamp, mut buffer) = (false, 0u64, vec![0u8; 2000]);
     let mut rtp_start = RtpStart::default();
     let (mut last_raw, mut last_media): (Option<Instant>, Option<Instant>) = (None, None);
+    let mut arrival = Arrival::default();
     let (mut write_errors, mut last_written) = (0u32, Instant::now());
     let (mut decoded, mut packet) = (vec![0f32; FRAME * 2], vec![0u8; 1500]);
     let (started, mut last_levels) = (Instant::now(), Instant::now());
@@ -141,9 +165,10 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
         if last_summary.elapsed() >= SUMMARY_EVERY {
             let w = std::mem::take(&mut window);
             let flow = audio.take_flow();
-            log(format!("rtc summary connected={connected} written={} write_errors={} encode_errors={} no_writer={} no_opus={} received={} rtp_raw={} decode_errors={} max_in={:.4} raw_in_peak={:.4} max_out={:.4} capture_queue={} playback_queue={} underruns={} flow_in={} flow_played={} flow_dropped={} out_frames={} gap_raw_ms={} gap_media_ms={} loop_max_ms={}",
+            log(format!("rtc summary connected={connected} written={} write_errors={} encode_errors={} no_writer={} no_opus={} received={} rtp_raw={} decode_errors={} max_in={:.4} raw_in_peak={:.4} max_out={:.4} capture_queue={} playback_queue={} underruns={} speech_underruns={} flow_in={} flow_played={} flow_dropped={} out_frames={} gap_raw_ms={} gap_media_ms={} loop_max_ms={} lost={} late_max_ms={} skipped_max_ms={}",
                 w.written, w.write_errors, w.encode_errors, w.no_writer, w.no_opus, w.received, w.rtp_raw, w.decode_errors,
-                w.max_in, audio.take_raw_peak(), w.max_out, audio.capture_len(), audio.playback_len(), audio.take_underruns(), flow[0], flow[1], flow[2], flow[3], w.gap_raw_ms, w.gap_media_ms, w.loop_max_ms));
+                w.max_in, audio.take_raw_peak(), w.max_out, audio.capture_len(), audio.playback_len(), audio.take_underruns(), audio.take_speech_underruns(),
+                flow[0], flow[1], flow[2], flow[3], w.gap_raw_ms, w.gap_media_ms, w.loop_max_ms, w.lost, w.late_max_ms, w.skipped_max_ms));
             last_summary = Instant::now();
         }
         let timeout = match rtc.poll_output() {
@@ -203,6 +228,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
                         let now = Instant::now();
                         if let Some(prev) = last_media { window.gap_media_ms = window.gap_media_ms.max(now.duration_since(prev).as_millis() as u32); }
                         last_media = Some(now);
+                        arrival.observe((**media.seq_range.start(), **media.seq_range.end()), media.time.as_micros(), media.network_time, &mut window);
                         match decoder.decode(&media.data, FRAME, &mut decoded) {
                             Ok(n) => audio.play(&decoded[..n]),
                             Err(_) => window.decode_errors += 1,
@@ -277,6 +303,24 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn arrival_separates_loss_lateness_and_skipped_silence() {
+        let (mut arrival, mut window, t0) = (Arrival::default(), Window::default(), Instant::now());
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        arrival.observe((1, 1), 0, ms(0), &mut window);
+        arrival.observe((2, 2), 20_000, ms(20), &mut window);
+        assert_eq!((window.lost, window.late_max_ms, window.skipped_max_ms), (0, 0, 0), "no ritmo");
+        arrival.observe((3, 3), 40_000, ms(200), &mut window);
+        assert_eq!(window.late_max_ms, 160, "20 ms de áudio levaram 180 ms: atraso da rede");
+        arrival.observe((6, 6), 100_000, ms(260), &mut window);
+        assert_eq!(window.lost, 2, "4 e 5 faltaram");
+        arrival.observe((7, 7), 500_000, ms(660), &mut window);
+        assert_eq!(window.skipped_max_ms, 380, "numeração seguida, relógio pulou: silêncio que o servidor não mandou");
+        assert_eq!(window.late_max_ms, 160, "o salto chegou no tempo dele");
+        arrival.observe((5, 5), 80_000, ms(670), &mut window);
+        assert_eq!(window.lost, 2, "atrasado fora de ordem não volta o relógio nem conta perda de novo");
+    }
 
     #[test]
     fn stray_first_packet_is_dropped_and_stream_opens_on_consecutive_pair() {

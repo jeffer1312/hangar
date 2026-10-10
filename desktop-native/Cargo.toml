@@ -44,6 +44,7 @@ tree-sitter-swift = "=0.7.3"
 tree-sitter-pascal = "=0.10.2"
 tree-sitter-dart = "=0.2.0"
 tree-sitter-kotlin-sg = "=0.4.1"
+sysinfo = { version = "=0.31.4", default-features = false, features = ["system"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 wry = "=0.55.1"

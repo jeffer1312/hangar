@@ -471,6 +471,19 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     unmount(t.comp);
   });
 
+  it('Remover conta com apelido apaga a PASTA, não o apelido que veio em nome_natural', async () => {
+    // O catálogo já aplica o apelido no rótulo: `nome_natural` chega "claude-5" para a pasta
+    // `.claude-claude-200-5`, e o DELETE com o apelido voltava 404 sem apagar nada.
+    const t = montar([claude({ path: '/home/u/.claude-claude-200-5', nome: 'claude-5', nome_natural: 'claude-5' })]);
+    await tick(); await tick();
+    botaoNomeado(t.el, m.lista_remover())!.click();
+    await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
+    await tick(); await tick();
+    expect(apiMock.apagarConta).toHaveBeenCalledWith(ALVO, 'claude-200-5', true);
+    unmount(t.comp);
+  });
+
   it('desmarcar "juntar as conversas" apaga sem guardar; marcado mostra quantos arquivos foram', async () => {
     apiMock.apagarConta.mockResolvedValueOnce({ ok: true, merged: 3, skipped: 0, renamed: 1 } as never);
     const t = montar([LOGADA]);

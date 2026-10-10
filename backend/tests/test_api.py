@@ -76,6 +76,7 @@ def test_rejects_wrong_cookie(client):
 # ---------------------------------------------------------------------------
 from unittest.mock import ANY, patch
 from app.models import SessionInfo
+import codex_contas_apoio
 
 
 @pytest.fixture
@@ -829,18 +830,6 @@ def test_routes_require_auth(api_client):
 # Testes de config dirs (Task 4)
 # ---------------------------------------------------------------------------
 
-def test_claude_configs_endpoint(api_client, monkeypatch):
-    monkeypatch.setattr(api_mod, "list_config_dirs",
-                        lambda: [api_mod.ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
-    r = api_client.get("/api/claude-configs", headers=_h())
-    assert r.status_code == 200
-    assert r.json() == [{"path": "/h/.claude-work", "label": "work", "active": True}]
-
-
-# ---------------------------------------------------------------------------
-# Testes de _on_hook_transition: pushes de "terminou" (debounce) e "caiu" (Feature #2)
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(autouse=False)
 def _transition_fixture(monkeypatch):
     """Isola _on_hook_transition: sem tmux real (registry.list vazio) e captura os pushes
@@ -995,8 +984,9 @@ def test_clear_then_link_route(api_client, _tmp_chain_dir):
 
 
 def test_create_rejects_unknown_config_dir(api_client, monkeypatch):
+    from app.config import ConfigDirInfo
     monkeypatch.setattr(api_mod, "list_config_dirs",
-                        lambda: [api_mod.ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
+                        lambda: [ConfigDirInfo(path="/h/.claude-work", label="work", active=True)])
     r = api_client.post("/api/sessions", headers=_h(),
                         json={"name": "x", "cwd": "/tmp", "config_dir": "/h/.evil"})
     assert r.status_code == 400
@@ -2022,7 +2012,7 @@ def test_resume_archived_codex_encaminha_a_conta_da_origem(api_client, monkeypat
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
+    work = codex_contas_apoio.create_account("work")
     sid = "cccccccc-cccc-cccc-cccc-cccccccccccc"
     path = work.home / "sessions" / "2026" / "09" / "09"
     path.mkdir(parents=True)
@@ -2044,8 +2034,8 @@ def test_resume_archived_codex_recusa_conta_diferente_da_origem(api_client, monk
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas.create_account("work")
-    other = codex_contas.create_account("other")
+    work = codex_contas_apoio.create_account("work")
+    other = codex_contas_apoio.create_account("other")
     sid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
     path = work.home / "sessions" / "2026" / "09" / "09"
     path.mkdir(parents=True)

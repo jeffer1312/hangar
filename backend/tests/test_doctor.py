@@ -67,16 +67,41 @@ def test_lan_responde_le_o_shape_real_do_alcance(monkeypatch):
     assert doctor._lan_responde(_settings()) is False
 
 
-def test_claude_logado_usa_loggedIn(monkeypatch):
-    import app.conta_estado as ce
-    monkeypatch.setattr(ce, "listar_contas", lambda: [
-        SimpleNamespace(login=SimpleNamespace(estado="ok", loggedIn=False)),
-    ])
+def test_claude_logado_pergunta_a_cli_da_ativa_e_das_contas_com_credencial(monkeypatch, tmp_path):
+    """O doctor roda sem o backend de pé: o login vem da CLI. A conta ativa vem primeiro, conta
+    sem `.credentials.json` não é perguntada, e a primeira logada encerra a busca."""
+    import json
+    import subprocess
+    from app import contas
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CP_CLAUDE_CONFIG_DIRS", raising=False)
+    ativa = (tmp_path / ".claude")
+    ativa.mkdir()
+    contas_criadas = {}
+    for nome, credencial in (("trabalho", True), ("vazia", False)):
+        conta = tmp_path / f".claude-{nome}"
+        conta.mkdir()
+        (conta / contas.MARCADOR).write_text("", encoding="utf-8")
+        if credencial:
+            (conta / ".credentials.json").write_text("{}", encoding="utf-8")
+        contas_criadas[nome] = str(conta.resolve())
+    monkeypatch.setattr(doctor, "_binario", lambda nome: "/fake/" + nome)
+    logadas, perguntas = set(), []
+
+    def cli(argv, **kwargs):
+        assert argv == ["/fake/claude", "auth", "status", "--json"]
+        perguntas.append(kwargs["env"]["CLAUDE_CONFIG_DIR"])
+        saida = json.dumps({"loggedIn": kwargs["env"]["CLAUDE_CONFIG_DIR"] in logadas})
+        return subprocess.CompletedProcess(argv, 1, saida, "")
+
+    monkeypatch.setattr(subprocess, "run", cli)
     assert doctor._claude_logado() is False
-    monkeypatch.setattr(ce, "listar_contas", lambda: [
-        SimpleNamespace(login=SimpleNamespace(estado="ok", loggedIn=True)),
-    ])
+    assert perguntas == [str(ativa.resolve()), contas_criadas["trabalho"]]
+    perguntas.clear()
+    logadas.add(str(ativa.resolve()))
     assert doctor._claude_logado() is True
+    assert perguntas == [str(ativa.resolve())]
 
 
 def test_erro_sai_um_e_aviso_nao(monkeypatch, capsys):

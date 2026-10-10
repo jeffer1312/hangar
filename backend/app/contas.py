@@ -36,7 +36,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from app import account_transcripts, atomico, diag
+from app import atomico, diag
 
 try:
     import fcntl
@@ -547,8 +547,7 @@ def prepare_configuration(account_home: Path, *, seed: bool = False) -> dict:
 
 def reconciliar(nome: str, projeto: str | None = None) -> list[str]:
     """Preparo segura descritor próprio, mesmo se o servidor que pediu reiniciar."""
-    from app.account_lifecycle import GuardMode
-    with ciclo_conta(nome, mode=GuardMode.SHARED) as cycle:
+    with ciclo_conta(nome) as cycle:
         return cycle.reconciliar(projeto)
 
 
@@ -564,18 +563,15 @@ class _Ciclo:
         with self.guard.retain(), _trava_compartilhada(), _trava(self.dir_conta):
             return _reconciliar(self.dir_conta, projeto)
 
-    def apagar(self, keep_into: Path | None = None) -> dict[str, int] | None:
-        with self.guard.retain(), _trava_compartilhada(), _trava(self.dir_conta):
-            return _apagar(self.dir_conta, keep_into)
-
 
 @contextmanager
-def ciclo_conta(nome: str, *, mode=None):
-    """Proteção de existência antes das travas de configuração; exclusão pede exclusividade."""
+def ciclo_conta(nome: str):
+    """Proteção de existência compartilhada antes das travas de configuração: só a exclusão, que
+    é do Rust, pede exclusividade."""
     from app.account_lifecycle import AccountKey, AccountLockError, GuardMode, acquire
     dir_conta = caminho(nome)
     try:
-        guard = acquire(AccountKey.new("claude", dir_conta), mode or GuardMode.EXCLUSIVE)
+        guard = acquire(AccountKey.new("claude", dir_conta), GuardMode.SHARED)
     except AccountLockError as exc:
         raise ContaError(409, "a conta está ocupada por outra operação") from exc
     with guard:
@@ -644,26 +640,3 @@ def criar(nome: str) -> Path:
                 raise
             diag.registrar("conta.criar.rollback_concluiu", provider="claude", etapa="remover_pasta_parcial")
 
-
-@diag.rastrear("conta.apagar", provider="claude")
-def _apagar(dir_conta: Path, keep_into: Path | None = None) -> dict[str, int] | None:
-    """rmtree sob a trava — quem chama (o ciclo da conta) já validou e já segura as travas.
-    Com `keep_into`, as conversas vão antes para lá; falha na cópia mantém a conta."""
-    kept = None
-    if keep_into is not None:
-        diag.registrar("conta.apagar.etapa", provider="claude", etapa="guardar_conversas",
-                       conta_id=diag.conta_id(str(dir_conta)))
-        kept = account_transcripts.keep(dir_conta, keep_into, account_transcripts.CLAUDE_FOLDERS,
-                                        dir_conta.name.removeprefix(".claude-"))
-    diag.registrar("conta.apagar.etapa", provider="claude", etapa="remover_pasta",
-                   conta_id=diag.conta_id(str(dir_conta)))
-    shutil.rmtree(dir_conta)
-    return kept
-
-
-def apagar(nome: str) -> dict[str, int] | None:
-    """Exclusão disputa existência com criações e preparação, inclusive de outro processo.
-    As conversas vão antes para a conta padrão, como no DELETE sem `keep_transcripts=0`."""
-    from app.config import _backend_config_base  # config importa contas
-    with ciclo_conta(nome) as cycle:
-        return cycle.apagar(_backend_config_base().expanduser())

@@ -60,7 +60,8 @@ def test_apelido_tem_teto_de_tamanho(casa):
 
 
 def _monta(monkeypatch, *, dirs=(), motores=None, cotas_lista=()):
-    monkeypatch.setattr(credenciais, "list_config_dirs", lambda: list(dirs))
+    from app import config
+    monkeypatch.setattr(config, "list_config_dirs", lambda ordered=True: list(dirs))
     monkeypatch.setattr(engines, "listar", lambda: dict(motores or {}))
     monkeypatch.setattr(credenciais, "logins",
                         lambda cfgs: [credenciais.EstadoLogin(estado="ok", loggedIn=True) for _ in cfgs])
@@ -196,20 +197,6 @@ def test_codex_sem_snapshot_nao_inventa_autenticacao(casa, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_endpoint_reusa_auth_publica_sem_esperar_preparo(casa, monkeypatch):
-    _monta(monkeypatch)
-    account = codex_contas.Account("default", casa / ".codex", True)
-    monkeypatch.setattr(codex_contas, "list_accounts", lambda: [account])
-    service = SimpleNamespace(
-        preparation_status_async=AsyncMock(return_value={"status": "running"}),
-        cached_auth=lambda a: {"method": "oauth", "status": "connected", "email": "x@example.test", "plan": "pro"},
-    )
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(codex_contas_login=service)))
-    rows = await credenciais.listar_endpoint(request)
-    assert rows[0].auth_method == "oauth"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("method,status", [("oauth", "connected"), ("none", "disconnected"),
                                            ("unknown", "unavailable")])
 async def test_endpoint_le_identidade_nativa_sem_cota(casa, monkeypatch, method, status):
@@ -219,7 +206,7 @@ async def test_endpoint_le_identidade_nativa_sem_cota(casa, monkeypatch, method,
     monkeypatch.setattr(codex_contas, "list_accounts", lambda: [account])
     read = AsyncMock(return_value={"method": method, "status": status, "email": None, "plan": None})
     service = SimpleNamespace(preparation_status_async=AsyncMock(return_value={"status": "ready"}),
-                              cached_auth=lambda a: None, read_auth=read)
+                              read_auth=read)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(codex_contas_login=service)))
     rows = await credenciais.listar_endpoint(request, forcar=True)
     read.assert_awaited_once_with(account, refresh=True)
@@ -233,3 +220,31 @@ def test_conta_sem_cota_lida_continua_na_lista(casa, monkeypatch):
            cotas_lista=[_cota("claude:/home/u/.claude", estado="indisponivel")])
     linha = credenciais.listar()[0]
     assert linha.cota.estado == "indisponivel" and linha.cota.janelas == []
+
+
+# ------------------------------------------------------------------------------------ cookie
+def test_cookie_novo_invalida_a_cota_do_dono_rust(casa, monkeypatch):
+    """Com o Rust de pé a cota em cache é a dele: limpar só o cache Python deixava o número
+    antigo por até 5 min, logo depois de a pessoa colar o cookie para ver o número aparecer."""
+    from app import account_bridge, opencode_cota
+    pedidos = []
+    monkeypatch.setattr(opencode_cota, "definir_config", lambda *a: None)
+    monkeypatch.setattr(opencode_cota, "ler_configs", lambda: {"chave:opencode": {}})
+    monkeypatch.setattr(account_bridge, "request_quotas", lambda **k: pedidos.append(k) or {"ok": True})
+    credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie="c"))
+    assert pedidos == [{"invalidate": "chave:opencode"}]
+
+
+def test_cookie_gravado_responde_ok_mesmo_sem_a_ponte_de_cotas(casa, monkeypatch):
+    """A invalidação é um extra: com o cookie já gravado, um 503 da ponte faria a pessoa colar de novo."""
+    from fastapi import HTTPException
+    from app import account_bridge, opencode_cota
+    monkeypatch.setattr(opencode_cota, "definir_config", lambda *a: None)
+    monkeypatch.setattr(opencode_cota, "ler_configs", lambda: {"chave:opencode": {}})
+
+    def sem_ponte(**_):
+        raise HTTPException(503, detail={"code": "quota_bridge_unavailable"})
+
+    monkeypatch.setattr(account_bridge, "request_quotas", sem_ponte)
+    resposta = credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie="c"))
+    assert resposta == {"id": "chave:opencode", "cookie_definido": True}

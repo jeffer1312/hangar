@@ -111,7 +111,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("server_notify_dead", Some("server_notify_dead_help")), ("server_stall", Some("server_stall_help")), ("server_quiet", Some("server_quiet_why"))]),
     (Page::Attachments, &[("server_keep_attachments", Some("server_keep_attachments_help"))]),
     (Page::Windows, &[("computer_control_enable", Some("computer_control_enable_hint")),
-        ("computer_control_install", None), ("computer_control_dir", None), ("computer_control_target", Some("computer_control_target_hint"))]),
+        ("computer_control_install", None), ("computer_control_dir", None), ("computer_control_target", Some("computer_control_target_hint")),
+        ("computer_control_step_jev", Some("computer_control_jev_status")), ("computer_control_llm", Some("computer_control_llm_hint"))]),
     (Page::Advanced, &[("server_automations", Some("server_automations_help")), ("server_thinking", Some("server_thinking_help")),
         ("server_translate_thinking", Some("server_translate_thinking_help")), ("server_editor", Some("server_editor_help")),
         ("server_roots", Some("server_roots_help")), ("server_machine_only", Some("server_machine_only_help")), ("server_env", Some("server_env_help"))]),
@@ -119,7 +120,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("server_jev_endpoint", Some("server_jev_endpoint_help")), ("server_jev_model", Some("server_jev_model_help")),
         ("server_jev_text_endpoint", Some("server_jev_text_endpoint_help")), ("server_jev_text_key", Some("server_jev_text_key_help")),
         ("server_jev_text_model", Some("server_jev_text_model_help")), ("server_jev_cmd", Some("server_jev_cmd_help")),
-        ("server_jev_windows_key", Some("server_jev_windows_key_help"))]),
+        ("server_jev_provider", Some("server_jev_provider_help"))]),
 ];
 
 /// Um resultado da busca: a linha de uma página, ou a própria página (`row: None`) quando ela ainda não tem linhas.
@@ -1100,7 +1101,7 @@ mod tests {
     #[test]
     fn jev_search_finds_every_jev_field() {
         let (_, rows) = super::PAGE_ROWS.iter().find(|(page, _)| *page == super::Page::Jev).expect("Jev na busca");
-        for label in ["server_jev_key", "server_jev_default", "server_jev_endpoint", "server_jev_model", "server_jev_text_endpoint", "server_jev_text_key", "server_jev_text_model", "server_jev_cmd", "server_jev_windows_key"] {
+        for label in ["server_jev_key", "server_jev_default", "server_jev_endpoint", "server_jev_model", "server_jev_text_endpoint", "server_jev_text_key", "server_jev_text_model", "server_jev_cmd", "server_jev_provider"] {
             assert!(rows.iter().any(|(row, _)| *row == label), "{label} fora da busca");
         }
     }

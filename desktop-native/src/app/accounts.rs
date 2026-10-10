@@ -251,9 +251,16 @@ fn host(url: &str) -> &str {
     rest.split('/').next().unwrap_or("")
 }
 
+/// Nome da conta Claude no disco, `~/.claude-<nome>`: é ele que o `DELETE /api/claude-configs/<nome>` resolve.
+pub(super) fn claude_folder_name(path: &str) -> Option<&str> {
+    crate::composer::basename(path).strip_prefix(".claude-").filter(|name| !name.is_empty())
+}
+
 impl Credential {
     fn auth(&self) -> &str { self.auth_method.as_deref().unwrap_or(if self.kind == "claude" { "oauth" } else { "unknown" }) }
     fn engine_name(&self) -> Option<&str> { self.id.strip_prefix("chave:") }
+    /// A exclusão recebe o nome da pasta: o `nome_natural` de uma conta Claude já vem com o apelido.
+    fn claude_folder(&self) -> Option<&str> { claude_folder_name(self.id.strip_prefix("claude:")?) }
     fn logged_in(&self) -> Option<bool> { self.login.as_ref().filter(|l| l.state == "ok").and_then(|l| l.logged_in) }
     fn expired(&self) -> bool { self.quota.as_ref().is_some_and(|q| q.state == "expirada") }
     /// Dias até o login vencer (arredonda para cima, como o CLI). Sem prazo no arquivo, nada.
@@ -394,7 +401,7 @@ fn build_row(c: &Credential, engines: &HashMap<String, Engine>, has_kimi_copy: b
         (_, "chave") => (vec!["engines".into(), c.engine_name().unwrap_or(&c.natural).into()], 30,
             if engine.is_some() { "accounts_remove_desc_model" } else { "accounts_remove_desc_key" }),
         (_, "codex") => (vec!["codex-contas".into(), c.codex_account.clone().unwrap_or_default()], 120, "accounts_remove_desc_codex"),
-        _ => (vec!["claude-configs".into(), c.natural.clone()], 60, "accounts_remove_desc_claude"),
+        _ => (vec!["claude-configs".into(), c.claude_folder().unwrap_or(&c.natural).into()], 60, "accounts_remove_desc_claude"),
     });
     let plan = c.login.as_ref().filter(|_| logged == Some(true)).and_then(|l| l.plan.as_deref()).filter(|p| !p.is_empty())
         .map(|p| { let mut chars = p.chars(); chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default() });
@@ -1182,6 +1189,15 @@ mod tests {
         assert_eq!(targets[0].label, "Second");
         let invalid = Engine { cliproxy_error: Some("invalid discovery".into()), ..engine };
         assert!(super::proxy_account_targets(&session, &list, &invalid).is_empty());
+    }
+
+    #[test]
+    fn claude_removal_names_the_folder_even_with_an_alias() {
+        // O servidor apaga `~/.claude-<nome>`: o apelido no lugar do nome dava 404 e a conta ficava.
+        for (id, folder) in [("claude:/home/u/.claude-claude-200-5", "claude-200-5"), (r"claude:C:\Users\u\.claude-work", "work")] {
+            let row = build_row(&credential(json!({"id": id, "tipo": "claude", "nome": "apelido", "nome_natural": "apelido"})), &HashMap::new(), false, 0.);
+            assert_eq!(row.remove.map(|(path, ..)| path), Some(vec!["claude-configs".to_owned(), folder.to_owned()]));
+        }
     }
 
     #[test]

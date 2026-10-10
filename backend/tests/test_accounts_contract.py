@@ -3,17 +3,7 @@
 import json
 import pytest
 
-from accounts_contract import (FIXTURES, PythonReference, assert_rust_ownership,
-                               capture_reference, isolated_environment, normalize)
-
-
-@pytest.fixture
-def account_contract(tmp_path):
-    reference = PythonReference(tmp_path / "home")
-    try:
-        yield reference
-    finally:
-        reference.close()
+from accounts_contract import PythonReference, assert_rust_ownership, isolated_environment, normalize
 
 
 def test_ownership_rejects_successful_python_proxy():
@@ -25,31 +15,13 @@ def test_ownership_allows_delimited_preparation_bridge():
     assert_rust_ownership([{"operation": "bridge.prepare", "status": 200}])
 
 
-def test_catalogue_keeps_disconnected_base(account_contract):
-    response = account_contract.request("GET", "/api/claude-configs")
-    assert response.status_code == 200
-    assert any(row["active"] for row in response.json())
-    assert any(row["label"] == "Trabalho de revisão" for row in response.json())
-
-
-def test_python_routes_match_explicit_reference(account_contract):
-    expected = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))
-    actual = capture_reference(account_contract)
-    assert actual["claude_state"]["status"] == actual["codex_catalog"]["status"] == 200
-    assert [row["id"] for row in actual["codex_catalog"]["body"]] == ["default", "alpha", "zeta"]
-    assert actual["codex_create"]["status"] == 201
-    assert actual["codex_login_null"]["body"] is None
-    assert actual["codex_delete"]["body"] == {"ok": True, "merged": 0, "skipped": 0, "renamed": 0}
-    assert actual == expected
-
-
 def test_blocked_python_handler_cannot_fake_rust_ownership(tmp_path):
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     try:
         response = reference.request("GET", "/api/claude-configs")
         assert response.status_code == 503
         assert response.json()["detail"]["code"] == "contract_python_handler_blocked"
-        with pytest.raises(AssertionError, match="claude.catalog"):
+        with pytest.raises(AssertionError, match="account:GET /api/claude-configs"):
             assert_rust_ownership(reference.calls())
     finally:
         reference.close()
@@ -83,7 +55,7 @@ def test_worker_cleanup_collects_owned_process(tmp_path):
 
 def test_codex_success_waits_for_identity_and_owns_http(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCodex(reference)
     try:
         response = server.request("POST", "/api/codex-contas/alpha/login")
@@ -117,7 +89,7 @@ def test_codex_success_waits_for_identity_and_owns_http(tmp_path):
 
 def test_codex_cancel_old_attempt_does_not_stop_new_helper(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     account = reference.root / ".codex-alpha"
     (account / "emit-success.json").write_text("false", encoding="utf-8")
     (account / "spawn-descendant.json").write_text("true", encoding="utf-8")
@@ -149,7 +121,7 @@ def test_codex_cancel_old_attempt_does_not_stop_new_helper(tmp_path):
 
 def test_codex_early_completion_survives_obsolete_event_burst(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     account = reference.root / ".codex-alpha"
     (account / "obsolete-events.json").write_text("512", encoding="utf-8")
     (account / "identity.json").write_text(json.dumps({
@@ -166,7 +138,7 @@ def test_codex_early_completion_survives_obsolete_event_burst(tmp_path):
 
 def test_codex_missing_cli_reports_failure_without_fallback(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCodex(reference, missing_cli=True)
     try:
         response = server.request("POST", "/api/codex-contas/alpha/login")
@@ -181,7 +153,7 @@ def test_codex_missing_cli_reports_failure_without_fallback(tmp_path):
 
 def test_codex_empty_identity_reopens_helper_and_fails(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCodex(reference)
     try:
         assert server.request("POST", "/api/codex-contas/alpha/login").json()["status"] == "waiting"
@@ -198,7 +170,7 @@ def test_codex_empty_identity_reopens_helper_and_fails(tmp_path):
 
 def test_codex_identity_changed_during_read_never_completes(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     account = reference.root / ".codex-alpha"
     (account / "mutate-auth-on-read.json").write_text("true", encoding="utf-8")
     (account / "identity.json").write_text(json.dumps({
@@ -219,7 +191,7 @@ def test_codex_identity_changed_during_read_never_completes(tmp_path):
 def test_codex_restart_cleans_attempt_and_does_not_restore_old_id(tmp_path):
     from accounts_contract import RustCodex
     import psutil
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     account = reference.root / ".codex-alpha"
     (account / "emit-success.json").write_text("false", encoding="utf-8")
     server = RustCodex(reference)
@@ -248,7 +220,7 @@ def test_codex_shutdown_does_not_abandon_owned_auth_reader(tmp_path, drain):
     import psutil
     import time
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     account = reference.root / ".codex"
     for name in ("spawn-reader-descendant.json", "hold-read.json"):
         (account / name).write_text("true", encoding="utf-8")
@@ -300,7 +272,7 @@ def test_codex_lost_http_response_keeps_owned_auth_reader_until_cleanup(tmp_path
     import time
     from urllib.request import Request
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     account = reference.root / ".codex"
     for name in ("spawn-reader-descendant.json", "hold-read.json"):
         (account / name).write_text("true", encoding="utf-8")
@@ -360,7 +332,7 @@ def test_codex_lost_http_response_keeps_owned_auth_reader_until_cleanup(tmp_path
 
 def test_codex_birth_blocks_login_before_and_after_restart(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     barrier = reference.block("session_before_registration")
     birth = reference.start_session_async(provider="codex", account_id="alpha")
     server = RustCodex(reference)
@@ -383,7 +355,7 @@ def test_codex_birth_blocks_login_before_and_after_restart(tmp_path):
 
 def test_codex_uncertain_usage_refuses_login_without_cli(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCodex(reference)
     try:
         reference.request("POST", "/__contract__/runtime-instance", {"instance": "obsolete"})
@@ -427,39 +399,9 @@ def test_codex_cache_callback_requires_secret_instance_and_valid_key(tmp_path):
     finally:
         reference.close()
 
-def test_codex_python_consumers_delegate_and_pending_does_not_fallback(tmp_path):
-    from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home")
-    account = reference.root / ".codex-alpha"
-    (account / "emit-success.json").write_text("false", encoding="utf-8")
-    server = RustCodex(reference)
-    try:
-        reference.request("POST", "/__contract__/claude-owner", {
-            "address": server.request("GET", "/__hangar_server/health").json()["terminal_address"], "mode": "rust",
-        })
-        assert reference.request("GET", "/api/codex-contas/alpha/login").json() is None
-        attempt = reference.request("POST", "/api/codex-contas/alpha/login").json()
-        assert attempt["status"] == "waiting"
-        assert server.request("GET", "/api/codex-contas/alpha/login").json() == attempt
-        cancelled = reference.request("DELETE", "/api/codex-contas/alpha/login?attempt_id=" + attempt["attempt_id"])
-        assert cancelled.json()["status"] == "cancelled"
-        assert sum(call["method"] == "account/login/start" for call in server.native_calls("alpha")) == 1
-        reference.request("POST", "/__contract__/claude-owner", {
-            "address": "127.0.0.1:1", "mode": "pending",
-        })
-        for method in ("POST", "GET", "DELETE"):
-            response = reference.request(method, "/api/codex-contas/alpha/login?attempt_id=" + attempt["attempt_id"])
-            assert response.status_code == 503
-            assert response.json()["detail"]["code"] == "account_auth_bridge_unavailable"
-        assert sum(call["method"] == "account/login/start" for call in server.native_calls("alpha")) == 1
-    finally:
-        server.close()
-        reference.close()
-
-
 def test_codex_native_identity_cache_is_bound_to_auth_files(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCodex(reference)
     account = reference.root / ".codex-alpha"
     def identity(email):
@@ -486,7 +428,7 @@ def test_codex_native_identity_cache_is_bound_to_auth_files(tmp_path):
 
 def test_codex_login_preserves_storage_and_query_errors(tmp_path):
     from accounts_contract import RustCodex
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustCodex(reference)
     account = reference.root / ".codex-alpha"
     try:
@@ -512,7 +454,7 @@ def test_codex_login_preserves_storage_and_query_errors(tmp_path):
 
 def test_rust_claude_logout_remains_allowed_with_live_session(tmp_path):
     from accounts_contract import RustClaude
-    reference = PythonReference(tmp_path / "home", block_handlers=True)
+    reference = PythonReference(tmp_path / "home")
     server = RustClaude(reference)
     import json
     account = reference.root / ".claude-work"

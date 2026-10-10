@@ -43,6 +43,10 @@ impl AccountError {
             "codex_account_auth_storage_invalid" => "a conta Codex precisa usar armazenamento em arquivo",
             "codex_login_attempt_mismatch" => "a tentativa de login já mudou",
             "codex_account_delete_failed" => "não foi possível apagar a conta Codex",
+            "codex_account_sign_out_failed" => "o Codex não conseguiu sair da conta",
+            "codex_account_sign_out_unconfirmed" => {
+                "o Codex saiu, mas não consegui confirmar que a conta ficou deslogada"
+            }
             _ => "operação de conta Codex recusada",
         };
         Self::new(

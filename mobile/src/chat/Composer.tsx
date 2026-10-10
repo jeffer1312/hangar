@@ -989,8 +989,9 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, f
   }, [name, isCodex, headless, chat]);
 
   const isKimi = provider === 'kimi';
-  // Fila que dá para mandar agora: Kimi (ctrl-s), Codex (turn/steer) e Claude sem terminal (stdin).
-  const queuePromotable = isKimi || isCodex || headless;
+  // Fila que dá para mandar agora: Kimi (ctrl-s), Codex (turn/steer), Claude sem terminal (stdin)
+  // e Claude com terminal (ctrl+x ctrl+s da fila do Claude Code).
+  const queuePromotable = isKimi || isCodex || headless || isClaude;
   const showSteer = queuePromotable && state === 'working' && (filaCount > 0 || steering);
   useEffect(() => {
     if (state !== 'working') setSteerFeedback('');

@@ -409,22 +409,24 @@ fn deletion_unlinks_windows_junction_without_removing_its_target() {
     );
 }
 
-/// O primeiro `codex` de um runner frio passa às vezes do prazo de 6 s da leitura: `unavailable` aqui é
-/// a demora do processo, não o resultado. A releitura descarta a entrada que ficou no cache.
+/// O `codex` de um runner Windows frio passa às vezes do prazo de 6 s da leitura, várias vezes seguidas:
+/// `unavailable` aqui é a demora do processo, não o resultado. Relê, descartando a entrada do cache,
+/// por até um minuto; o que o teste mede é o isolamento da conta.
 async fn read_codex_auth_settled(
     service: &hangar_server::accounts::AccountService,
     account: &hangar_server::accounts::catalog::Account,
 ) -> serde_json::Value {
     use hangar_server::accounts::{AccountKey, Provider};
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
-    for _ in 0..2 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         let value = service.read_codex_auth(account).await;
-        if value["status"] != "unavailable" {
+        if value["status"] != "unavailable" || std::time::Instant::now() >= deadline {
             return value;
         }
         service.codex_auth.invalidate(&key);
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-    service.read_codex_auth(account).await
 }
 
 #[tokio::test]
@@ -786,6 +788,63 @@ async fn account_failure_reaches_the_exportable_journal() {
     assert_eq!(entry["evento"], "rust.accounts_failed");
     assert_eq!(entry["sessao"], "codex:journal");
     assert_eq!(entry["codigo"], "account_usage_unknown");
+    server.abort();
+    python.abort();
+}
+
+/// Connect e convidado chegam ao Python; contas ainda têm um escritor só, o Rust, pela ponte.
+#[tokio::test]
+async fn python_ports_reach_the_account_owner_through_the_private_bridge() {
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let python = tokio::spawn(async move {
+        axum::serve(upstream, Router::new().fallback(|| async { StatusCode::SERVICE_UNAVAILABLE }))
+            .await
+            .unwrap();
+    });
+    let root = tempfile::tempdir().unwrap();
+    let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = private.local_addr().unwrap();
+    let mut state = AppState::new(Config {
+        listen: addr,
+        upstream: upstream_addr,
+        internal_secret: "contract-internal".into(),
+        auth_token: "contract-only".into(),
+        log_path: None,
+        trusted: TrustedHosts::parse("127.0.0.1"),
+    });
+    state.accounts = isolated_service(root.path());
+    let app = hangar_server::routes::terminal_router(Arc::new(state));
+    let server = tokio::spawn(async move {
+        axum::serve(private, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+            .await
+            .unwrap()
+    });
+    let send = |path: &'static str, secret: Option<&'static str>| {
+        let mut request = reqwest::Client::new()
+            .post(format!("http://{addr}/__hangar_server/accounts/public"))
+            .header("x-hangar-path", path)
+            .header("content-type", "application/json")
+            .body(r#"{"name":"via-connect"}"#);
+        if let Some(secret) = secret {
+            request = request.header("x-hangar-internal", secret);
+        }
+        async move {
+            let response = request.send().await.unwrap();
+            let status = response.status().as_u16();
+            let body: serde_json::Value =
+                serde_json::from_slice(&response.bytes().await.unwrap()).unwrap_or_default();
+            (status, body)
+        }
+    };
+    let (status, body) = send("/api/codex-contas", Some("contract-internal")).await;
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(body["id"], "via-connect");
+    assert!(root.path().join(".codex-via-connect").is_dir());
+    let (status, body) = send("/api/credenciais", Some("contract-internal")).await;
+    assert_eq!((status, body["code"].as_str()), (404, Some("account_route_not_owned")));
+    let (status, _) = send("/api/codex-contas", None).await;
+    assert_eq!(status, 404);
     server.abort();
     python.abort();
 }
