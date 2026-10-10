@@ -1166,6 +1166,14 @@ impl Hangar {
         cx.notify();
     }
 
+    /// A lista do servidor voltou: o que foi lido uma vez só e falhou na queda (atalhos, nova conversa) é lido de novo.
+    fn server_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.active_invite() && self.side.shortcuts_failed() { self.load_notification_preferences(); }
+        for view in [self.new_chat.clone(), self.new_session.clone()].into_iter().flatten() {
+            view.update(cx, |view, cx| view.server_back(window, cx));
+        }
+    }
+
     /// Silenciar, horas quietas e atalhos globais da máquina da conversa aberta: são deles que o aviso e o painel falam.
     /// Convite não alcança essas rotas do servidor do dono: nada é lido, e nenhum aviso usa as preferências de outra máquina.
     fn load_notification_preferences(&mut self) {
@@ -1568,7 +1576,11 @@ impl Hangar {
                     self.chat_online = true;
                     self.error = None;
                     if !self.history_started { self.load_history(cx); }
-                } else { self.list_online = true; }
+                } else {
+                    let back = !self.list_online;
+                    self.list_online = true;
+                    if back { self.server_back(window, cx); }
+                }
             }
             Payload::Stream(Update::Offline(error)) => {
                 if if is_chat { self.chat_auth_lost(&error) } else { self.auth_lost(&error) } {

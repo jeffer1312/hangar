@@ -744,6 +744,17 @@ impl NewSession {
         self.link.runtime.spawn(work(self.link.api.clone(), send));
     }
 
+    /// O servidor voltou: relê só o que falhou enquanto ele estava fora (a tela aberta no meio de um reinício).
+    pub(super) fn server_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.creating { return; }
+        let failed = |value: Option<bool>| value == Some(true);
+        if failed(self.roots.value.as_ref().map(Result::is_err)) { self.load_roots(cx); }
+        if failed(self.providers.value.as_ref().map(Result::is_err)) { self.load_providers(cx); }
+        if failed(self.configs.value.as_ref().map(Result::is_err)) { self.load_configs(cx); }
+        else if failed(self.models.value.as_ref().map(Result::is_err)) { self.load_models(window, cx); }
+        cx.notify();
+    }
+
     fn load_roots(&mut self, cx: &mut Context<Self>) {
         let seq = self.roots.start();
         self.request(cx, move |api, send| Box::pin(async move {

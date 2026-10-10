@@ -205,6 +205,8 @@ impl Side {
         self.shortcuts = Some(Ok(items.iter().filter_map(|item| Shortcut::from_item(item, None)).collect()));
     }
 
+    pub fn shortcuts_failed(&self) -> bool { matches!(self.shortcuts, Some(Err(_))) }
+
     pub fn receive_config(&mut self, result: Result<Value, String>) {
         self.shortcuts = Some(result.map(|config| parse_shortcuts(
             config.pointer("/campos/shortcuts/valor").and_then(Value::as_str).unwrap_or(""))));
