@@ -39,6 +39,14 @@ pub async fn ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     ws.on_upgrade(move |socket| serve_socket(st, socket))
 }
 
+/// Ponte do Connect: o Python já conferiu o dono e a Origin; aqui só o segredo interno.
+pub async fn private_ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
+    let (mut parts, _) = req.into_parts();
+    let Ok(ws) = WebSocketUpgrade::from_request_parts(&mut parts, &()).await else { return StatusCode::BAD_REQUEST.into_response() };
+    ws.on_upgrade(move |socket| serve_socket(st, socket))
+}
+
 /// Aparelho que dormiu deixa o socket meio aberto: sem nada dele por este tempo (o cliente pinga a cada 10 s), a conexão
 /// cai e o prazo sem dono começa.
 const SILENT_FOR: Duration = Duration::from_secs(30);
@@ -115,6 +123,13 @@ pub async fn settings_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): 
     // Mesmo CORS das outras rotas do dono: PWA servido por outro servidor lê a resposta.
     crate::routes::cors(&headers, resp.headers_mut());
     resp
+}
+
+/// Ponte do Connect para as configurações: mesma resposta do dono, sem CORS (quem lê é o Python).
+pub async fn private_settings(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
+    let (home, claude_dir) = (st.voice.home().to_path_buf(), st.voice.claude_dir().to_path_buf());
+    settings_reply(&st, req, home, claude_dir).await
 }
 
 fn refuse(status: StatusCode, code: &str) -> Response { json_response(status, json!({"error_code": code})) }
