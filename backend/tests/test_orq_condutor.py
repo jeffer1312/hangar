@@ -757,6 +757,15 @@ def test_endereco_do_openrouter_nunca_leva_o_nome_da_typesafe(jev_cfg):
     assert m.jev_config(auto=True)["model"] == "~typesafe/jev-latest", "sem o til o OpenRouter recusa"
 
 
+def test_endereco_do_openrouter_nunca_leva_o_nome_da_typesafe(jev_cfg):
+    m, conta = jev_cfg
+    url = "https://openrouter.ai/api/alpha/decisions"
+    _runtime(conta, jev_api_key="sk-or-v1-x", jev_endpoint=url, jev_model="")
+    assert m.jev_config(auto=True)["model"] == "~typesafe/jev-latest"
+    _runtime(conta, jev_api_key="sk-or-v1-x", jev_endpoint=url, jev_model="typesafe/jev-latest")
+    assert m.jev_config(auto=True)["model"] == "~typesafe/jev-latest", "sem o til o OpenRouter recusa"
+
+
 def test_ambiente_vence_o_runtime_config(jev_cfg, monkeypatch):
     m, conta = jev_cfg
     _runtime(conta, jev_api_key="sk-or-v1-x", jev_endpoint="https://rc/v1", jev_model="rc-model")

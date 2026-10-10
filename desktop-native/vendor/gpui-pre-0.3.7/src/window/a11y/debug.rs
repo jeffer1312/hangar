@@ -102,6 +102,16 @@ impl A11yDebug {
         super::snapshot::snapshot_text(self.last_tree_update.as_ref()?, root)
     }
 
+    /// The one node of the last frame with id `id`; absent or repeated is an error, never a guess.
+    pub(crate) fn node(&self, id: &str) -> Result<(NodeId, accesskit::Node), &'static str> {
+        let update = self.last_tree_update.as_ref().ok_or("no-tree")?;
+        match super::snapshot::find_by_id(update, id).as_slice() {
+            [] => Err("not-found"),
+            [(nid, node)] => Ok((*nid, (*node).clone())),
+            _ => Err("ambiguous"),
+        }
+    }
+
     pub(crate) fn to_json(&self) -> Option<String> {
         let update = self.last_tree_update.as_ref()?;
 

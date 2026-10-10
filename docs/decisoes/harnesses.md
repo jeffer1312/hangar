@@ -483,9 +483,25 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Voz: modo Planejar:** nada vai à sessão até o fim; `finish_plan`, `ask_session` e `set_mode` só
   saem de fala do usuário, `finish_plan` em dois passos, e o envio só sai após silêncio do
   microfone. A leitura fora do projeto fica liberada (mesmo acesso da sessão). Medição em "Voz: modo Planejar".
-- **Voz: o organizador só grava na própria pasta:** `workspace-write` com cwd em `~/.hangar/voz/arquivos`
-  (fixa, nunca apagada) e sem raízes extras; o código da sessão é lido pelo caminho completo que a nota de
-  contexto leva. Modelo e esforço vêm do card da voz (padrão: modelo do config do Codex, esforço `low`).
+- **Voz: o organizador só grava na própria pasta, salvo edição pedida:**
+  - **Normal:** `workspace-write`, com cwd em `~/.hangar/voz/arquivos` (fixa, nunca apagada) e sem raízes
+    extras. O código da sessão é lido pelo caminho completo que a nota de contexto leva.
+  - **Edição:** o `edit_files` só passa com pedido falado de edição ("edita…", "altera…", "corrige você…")
+    ou com o sim a uma confirmação noutro turno (`Consent::edit`). Vale para qualquer arquivo desta máquina,
+    do projeto ou de fora dele (ex.: `~/.local/bin/delphi-vm`).
+  - **Como abre:** com o pedido, `thread/settings/update` põe `dangerFullAccess` (o acesso de uma sessão
+    normal; `workspaceWrite` com `writableRoots` exigiria adivinhar os caminhos pela fala) e cwd no projeto
+    da sessão na tela, ou na pasta pessoal. Isso vale do turno seguinte em diante, então o app abre um turno
+    só para a edição.
+  - **Como fecha:** no fim desse turno, volta a `workspace-write` na pasta própria; se a volta falhar, a
+    tela avisa.
+  - **Limite:** sem shell no Windows a edição é recusada.
+  - Modelo e esforço vêm do card da voz (padrão: modelo do config do Codex, esforço `low`).
+- **Voz: o organizador conversa; envio à sessão só com intenção:** `send_to_session` só sai com pedido
+  falado de mandar (linhas `user:` da transcrição, por 45 s) ou com o sim a uma confirmação armada noutro
+  turno. A fala que a voz repassa de novo não cancela o envio e recebe uma nota no turno. O GPT-Live (v3)
+  não aceita ajuste de fim de fala: interromper e esperar só se controlam pelo prompt. Medição em
+  "Voz: assistente que conversa".
 - **`/btw` no nativo é o plugin do Hangar, não o overlay do Claude Code.** O `command.run` de
   `btw` (`plugins/hangar/hooks/btw.tsx`) responde por `$.model.fork` num painel de mod, devolve
   `{}` (nada no transcript) e o `ui.ts` espelha o painel. O app só envia `/btw` com `caps` contendo
@@ -2951,6 +2967,149 @@ do microfone, com teto de 8 s.
 prompt ("leia só dentro da pasta do projeto; nunca abra credenciais"). Motivo: a sessão roda na
 mesma máquina, com o mesmo acesso e com internet; restringir só o organizador não muda o risco.
 Descartados: ferramentas de leitura restritas à pasta e desligar a pesquisa com o shell ligado.
+
+## Voz: assistente que conversa
+
+(`desktop-native/src/voice/`, 09/10/2026, Codex 0.160.1.) Numa chamada do Jefferson (diário de 09/10,
+13:42–13:46) a voz falhou três vezes:
+- 13:43:02, `realtime answered without delegation`: a voz respondeu "não consigo ler a tela" sozinha.
+  O prompt dela só dizia "não invente acesso à tela" e não dizia o que o organizador lê.
+- 13:44:27, `send_to_session` com um pedido de "analisar e planejar a migração comigo": o prompt
+  definia o organizador como despachante, o Planejar só entrava com a palavra "modo" e o envio não
+  tinha trava no código.
+- Toda fala chegou duas vezes ao organizador (13:43:09 e 13:43:11; 13:44:23 e 13:44:30). Por isso a
+  confirmação de envio foi repetida.
+
+**Medido na fonte do Codex 0.160.1.**
+- O v3 é o GPT-Live (`gpt-live-1-codex`), e não há v4. O `session.update` só aceita os ajustes de
+  delegação: o `turn_detection` que derrubava a chamada é recusado por construção.
+- Cada `delegation.created` vira uma entrada do organizador, sem descartar repetida. O
+  `handoff_request` sai em `thread/realtime/itemAdded` depois da entrada.
+- Com `clientManagedHandoffs: false` e o modo `thinking`, toda mensagem do organizador é falada,
+  inclusive as do meio do turno. O `bemTags` exige cabeçalho entre colchetes; sem ele, tudo vira fala.
+- `serviceTier` (`priority` = Fast) vale em `thread/start` e `thread/settings/update`, e os turnos
+  delegados usam o da thread. `null` volta ao normal.
+- `ephemeral: false` põe a thread no `codex resume`.
+
+**O que ficou.**
+- O prompt da voz segue o guia de prompting do GPT-Live (escuta, interrupção, quando delegar) e lista
+  o que o organizador faz.
+- O organizador conversa por padrão e entra no Planejar quando a pessoa quer planejar junto.
+- `SendConsent` faz a trava do envio. A fala repetida (mesmas palavras, ou trecho seguido de 3 ou
+  mais palavras da anterior, em 30 s) não cancela envio pendente, não reabre pedido de envio e recebe
+  `turn/steer` com `[NOTA DO HANGAR]`. Fala curta só repete se for igual: comparar por caractere
+  engolia um "sim" depois de "corrige a simulação".
+- `delegationAckFiller` e `backendReasoningStatus` ficaram ligados.
+- Velocidade por modo no card, e o card mostra o modelo, o esforço e a velocidade que a thread usa
+  de fato.
+- `follow_session` põe a sessão na vigia a cada leitura da lista.
+- O `read_screen` tenta de novo após 400 ms, porque o retrato é do quadro anterior: o cartão aberto
+  no mesmo instante não estava nele. A falha volta só ao organizador.
+- A thread continua efêmera: os bastidores ficam no card, sem poluir o `codex resume`.
+
+**Segunda chamada (09/10, 14:54–15:01).**
+- **O que a voz falou sem dever.** O aviso de troca de sessão (caminho da pasta, "nunca grave no
+  projeto") e o de modo iam por `thread/realtime/appendText`, e na v3 texto sem canal é falado. Agora
+  vão ao organizador por `turn/steer` com `[NOTA DO HANGAR]`, no turno da próxima fala.
+- **Processos.** O shell do Codex roda no bubblewrap com `--unshare-pid` (0.160.1). Só vê os
+  processos dele, e o `read-only` faz o mesmo. A única saída é o `danger-full-access`, que também
+  tira o limite de escrita. Por isso a ferramenta `observe_system` roda no app (`sysinfo`, só o
+  recurso `system`): ela dá CPU, memória e processos, não lê o ambiente dos processos e mascara
+  segredos na linha de comando.
+- **Ação de tela.** O `hangar_action` tem lista fixa. O `click_screen` clica por id da árvore de
+  acessibilidade (`Window::a11y_click` no GPUI vendorizado), recusa desabilitado e coberto, e pede o
+  sim (`ConfirmGate`) em botão de apagar, enviar, parar, fechar sessão e afins.
+- **Subagente.** O `spawn_agent` falhava sempre: o catálogo dos modelos GPT-6 liga o multi-agent v2
+  mesmo com `features.multi_agent=false`, e o filho copia o histórico gravado, que a thread efêmera
+  não tem. Agora vai `agents.enabled=false`.
+- **Áudio.** Houve falta de áudio em 46 de 85 janelas, sem perda de pacote no decodificador e com o
+  laço abaixo de 30 ms quase sempre. Os intervalos de 120–350 ms são os mesmos no socket e na
+  entrega. O diário não separava perda, atraso da rede e silêncio que o servidor não manda, então o
+  resumo ganhou `lost`, `late_max_ms`, `skipped_max_ms` e `speech_underruns`. A correção espera a
+  próxima medição.
+- **Troca entre máquinas.** Sessão com o mesmo nome em duas máquinas aceita a máquina na fala
+  ("hangar lá no PC X", `X::hangar`, "hangar (máquina X)"). "Seção" conta como "sessão" na trava de
+  troca. O "isso" depois da pergunta "qual?" vale só para uma das sessões oferecidas, por 1 min.
+
+**Jev na voz (opcional).**
+- **Medição.** Pelo OpenRouter, o Jev acertou 10 de 10 falas (troca, ação de tela, mandar, conversa,
+  segurar, fala solta). Média de 567 ms, máximo de 787 ms. O organizador levou 16 s para a mesma troca.
+- **Configuração.** A chave, o endpoint e o modelo são os da tela do Jev (`runtime-config.json`). O
+  modelo `typesafe/jev-latest` não existe no OpenRouter: na recusa ("does not exist") a voz tenta uma
+  vez `typesafe/jev-1.13-20260917` e fica com ele.
+- **Fluxo.** Cada fala nova vai ao Jev em paralelo ao organizador. Só certeza ≥ 0,9 age:
+  - troca de sessão, que ainda passa pelo `switch_asked`;
+  - ação de tela da lista fixa;
+  - "mandar", que abre a trava de envio;
+  - conversa, "segura" ou fala solta, que trancam o envio daquele turno.
+  - Quando a tela já agiu, o organizador recebe uma `[NOTA DO HANGAR]` no mesmo turno.
+- **Sem o Jev.** Sem chave, com erro ou com dúvida, nada muda: as palavras, a confirmação e o
+  organizador decidem como antes.
+- **Calibragem da certeza (teste de 09/10, 17:58–18:01).**
+  - **O que falhou:** com 0,9 no destino, o Jev deixava passar trocas que acertava. "vai pro voz" veio
+    com destino 0,89, 0,63 e 0,59.
+  - **A régua agora:** troca exige destino 0,65 e intenção 0,7; ação de tela, 0,7 nas duas. A trava
+    `switch_asked` continua por cima, então nenhuma troca acontece sem o pedido falado.
+  - **Mandar e trancar envio ficam em 0,9:** erro ali manda trabalho para a sessão.
+  - **O que o Jev recebe:** as últimas falas da conversa (a transcrição da delegação) e instruções de
+    nome parcial. Com isso "vai pro Voz" foi a 1,00.
+  - **A trava de troca** passou a ler as palavras do usuário na transcrição, e não a paráfrase da voz.
+  - **Sim à oferta da voz (teste de 09/10, 19:16 e 19:17).** "Quer que eu volte para voz-entendimento?"
+    seguido de "sim, volta pra lá e avisa ela" era recusado duas vezes com `not asked`: a fala não tinha
+    o nome. O Jev via a troca com certeza 1,00, mas o destino com 0,00 ("lá" não tem nome); na segunda
+    vez tinha 0,66 e a trava o barrou também. Agora a trava (`switch_requested`) aceita também um sim
+    ou um verbo de ir dito logo depois da última fala da voz, quando essa fala oferece ir para aquela
+    sessão. Negativa ("não", "espera", "deixa"), oferta com alternativa ("X ou Y?"), fala da voz que só
+    cita a sessão e oferta já seguida de outra fala da voz não valem. O Jev sem destino usa a sessão
+    oferecida, se for uma só.
+  - **Envio para várias sessões e pedido dirigido (chamada de 09/10, 19:33 e 19:34).** "Pergunta pra ela…" era
+    recusado (`pergunta` não era verbo de envio, e a voz repassou a fala antes do "pede pra ele"); e "manda pra
+    HCC-Rust plano… e manda pra voz entendimento" entregava o primeiro e recusava o segundo, porque o primeiro
+    envio gastava o pedido. Agora:
+    - verbo de comunicação (pergunta, avisa, informa, conta, passa, fala, diz, explica) vale como pedido quando
+      vem com o destinatário ("pra ela", "a sessão", o começo do nome de uma sessão); "pergunta pra você", "me
+      conta" e negativa continuam conversa;
+    - o pedido vale para o turno: um envio por sessão citada na fala (`mentions_session`), quantas forem;
+      sessão não citada e a mesma sessão duas vezes são recusadas (a tela confere também pela sessão resolvida);
+    - a espera de 1,5 s é por destino (`SendGate`): pedido novo só substitui o que ia para o mesmo lugar, e a
+      troca de tela só derruba o pedido sem destino;
+    - envio recusado por falta de pedido seguido de uma fala que o completa leva uma `[NOTA DO HANGAR]` ao
+      organizador para tentar de novo, sem perguntar;
+    - na recusa, o diário registra só contagens (palavras, verbos de envio, verbos dirigidos, sessões citadas).
+  - **Nome parcial ou aproximado.** "HCC" casava com cinco sessões (hcc-rust-plano e os executores e revisores
+    dela) e a troca parava. A resolução do Hangar agora aceita palavra aproximada ("setting ux", uma letra a
+    mais ou a menos) e, quando várias casam, desempata nesta ordem: a única no contexto (citada na conversa,
+    acompanhada, falada há pouco, a da tela quando não é troca); a raiz da família (o nome do qual as outras são
+    continuação). Sem isso, continua ambíguo e a voz pergunta. A trava de troca segue exigindo o pedido falado.
+  - **Eco do organizador:** se ele pede a troca que o Jev acabou de fazer (até 20 s depois), recebe
+    "já trocou, termine calado", em vez de "já estou nela", que ele falava como se trocasse agora.
+- **Troca por voz pergunta antes de resumir.** Depois de trocar por voz (Jev ou organizador), a voz
+  pergunta "quer um resumo do que ela fez por último?" e só lê a sessão com o sim. Não pergunta se
+  falou dela nos últimos 15 min: resumo, leitura ou resposta falada, e a própria pergunta também
+  conta. Troca por clique continua calada. Pedido do Jefferson: trocar pode ser só para ir até lá.
+
+**Destino do Jev: uma regra para todos os usos.**
+- A regra está em `runtime_config.destino_jev` (servidor), `voice::jev::destination` (app) e
+  `jev_config` (orq).
+- Vai ao OpenRouter quando o endereço é dele ou, sem endereço, quando a chave é dele (`sk-or-`).
+  - Modelo vazio vira `typesafe/jev-1.13-20260917`, porque o OpenRouter recusa o nome da TypeSafe.
+  - `typesafe/jev-latest` ganha o `~`: só `~typesafe/jev-latest` existe lá, e sem o til ele responde
+    400 "does not exist".
+- Na TypeSafe, vazio fica vazio: cada cliente usa o seu padrão.
+- **Controle do Windows.** O `computer` mandava a chave do OpenRouter ao endereço fixo da TypeSafe e
+  recebia 401. Agora a entrada do MCP e o ambiente do `computer` da voz levam `JEV_ENDPOINT` e
+  `JEV_MODEL` da chave. O hangar-computer-control ainda não lê esses valores: tanto o
+  `laco_uia.py` quanto `crates/hcc-laco/src/jev.rs` têm a TypeSafe fixa no código. A tela avisa
+  isso quando a chave do Windows é do OpenRouter.
+- **Tela do Jev no nativo (uma chave).**
+  - A caixa "Chave do Jev" mostra o provedor que sai da chave e o modelo em três botões: o
+    recomendado (vazio = padrão do provedor), "Sempre o mais novo" e "Outro", que abre o Avançado.
+  - O Windows ganhou "Usar a mesma chave" (`jev_windows_mesma_chave`). Sem escolha gravada, ela vale
+    ligada só quando o Windows já tem a mesma chave da geral: copiar sem pedido levaria uma chave do
+    OpenRouter a quem só fala com a TypeSafe, como já dizia o
+    `test_windows_key_reads_legacy_settings_without_copying_global_key`.
+  - A cópia só acontece quando a pessoa mexe na chave geral ou na opção.
+  - Os rótulos que a tela web também usa não mudaram.
 
 - `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
   same tmux-native shape as Pi: TUI in the pane, chat from
