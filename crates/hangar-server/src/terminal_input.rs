@@ -195,7 +195,8 @@ static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[(Pasted te
 static CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*[❯›]\s*(\d+)\.\s").unwrap());
 static AGENT_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)?[●◯]\s+(\S+)").unwrap());
 // Dica de argumento que o Claude desenha depois de um comando com barra completo (`/clear │ [name]`).
-static ARG_HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[[^\[\]]*\]$").unwrap());
+// Sem `#`: anexo (`[Image #1]`) nunca passa por dica.
+static ARG_HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[[^\[\]#]*\]$").unwrap());
 static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
 fn compact(text: &str) -> String { text.chars().filter(|c| !c.is_whitespace() && !"│┃║".contains(*c)).collect() }
 /// O Claude marca `› stashed` na linha de dicas acima do composer enquanto guarda um rascunho.
@@ -225,15 +226,17 @@ impl ComposerSnapshot {
         Some(Self { content, placeholders, stashed: stash_held(screen) })
     }
     pub fn is_empty(&self) -> bool { self.content.trim().is_empty() }
-    /// O composer compactado, sem a dica de argumento que segue o comando com barra digitado.
-    fn typed(&self, text: &str) -> String {
+    /// O composer compactado, sem a dica de argumento que segue o comando com barra digitado. Só
+    /// com o composer vazio antes: um rascunho `/clear [nota]` do dono não vira dica.
+    fn typed(&self, text: &str, before: &Self) -> String {
         let (visible, expected) = (compact(&self.content), compact(text));
-        let hinted = expected.starts_with('/') && visible.strip_prefix(expected.as_str()).is_some_and(|rest| ARG_HINT.is_match(rest));
+        let hinted = before.is_empty() && expected.starts_with('/')
+            && visible.strip_prefix(expected.as_str()).is_some_and(|rest| ARG_HINT.is_match(rest));
         if hinted { expected } else { visible }
     }
     pub fn proves(&self, text: &str, before: &Self) -> Proof {
         if self.placeholders.difference(&before.placeholders).next().is_some() { return Proof::Present; }
-        let visible = self.typed(text);
+        let visible = self.typed(text, before);
         let expected = compact(text);
         if expected.is_empty() { return Proof::Unreadable; }
         if expected.chars().count() < 12 {
@@ -244,7 +247,7 @@ impl ComposerSnapshot {
         if [head, tail].iter().map(|s| compact(s)).any(|s| s.chars().count() >= 12 && visible.contains(&s)) { Proof::Present } else { Proof::Absent }
     }
     fn owned(&self, text: &str, before: &Self) -> bool {
-        if self.typed(text) == compact(text) { return true; }
+        if self.typed(text, before) == compact(text) { return true; }
         let mut residual = self.content.clone();
         for hit in PLACEHOLDER.find_iter(&self.content) {
             let end = self.content[hit.start()..].find(']').map(|n| hit.start()+n+1);

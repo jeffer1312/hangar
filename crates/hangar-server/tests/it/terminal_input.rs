@@ -36,6 +36,9 @@ fn terminal_input_composer_proof() {
  let empty=ComposerSnapshot::parse(&screen("")).unwrap();
  assert_eq!(ComposerSnapshot::parse(&screen("/clear │ [name]")).unwrap().proves("/clear",&empty),Proof::Present);
  assert_eq!(ComposerSnapshot::parse(&screen("/clear [x] [name]")).unwrap().proves("/clear",&empty),Proof::Unreadable);
+ assert_eq!(ComposerSnapshot::parse(&screen("/clear [a #1]")).unwrap().proves("/clear",&empty),Proof::Unreadable);
+ let draft=ComposerSnapshot::parse(&screen("/clear [nota]")).unwrap();
+ assert_eq!(draft.proves("/clear",&draft),Proof::Unreadable);
 }
 #[test]
 fn terminal_input_composer_below_long_agent_panel() {
