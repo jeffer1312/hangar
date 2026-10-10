@@ -6,10 +6,16 @@ set -uo pipefail
 P="$(cd "$(dirname "$0")" && pwd)/podar-target"
 falhou=0
 
-arquivo() {   # $1 = caminho, $2 = idade ("" = agora), $3 = x para executável
+# Data de "$1 horas atrás" no formato do `touch -t`, com o `date` do GNU ou do BSD.
+horas_atras() {
+    local t=$(( $(date +%s) - $1 * 3600 ))
+    date -d "@$t" +%Y%m%d%H%M.%S 2>/dev/null || date -r "$t" +%Y%m%d%H%M.%S
+}
+
+arquivo() {   # $1 = caminho, $2 = idade em horas ("" = agora), $3 = x para executável
     mkdir -p "$(dirname "$1")"
     head -c 4096 /dev/urandom > "$1"
-    [[ -z "${2:-}" ]] || touch -d "$2" "$1"
+    [[ -z "${2:-}" ]] || touch -t "$(horas_atras "$2")" "$1"
     [[ "${3:-}" != x ]] || chmod +x "$1"
 }
 
@@ -26,21 +32,21 @@ d="$(mktemp -d)"
 t="$d/target/debug"
 arquivo "$t/deps/it-aaaaaaaaaaaaaaaa" "" x                       # executável de teste atual
 arquivo "$t/deps/it-aaaaaaaaaaaaaaaa.d"
-arquivo "$t/deps/it-bbbbbbbbbbbbbbbb" "3 days ago" x             # cópia velha do mesmo teste
-arquivo "$t/deps/it-bbbbbbbbbbbbbbbb.d" "3 days ago"
+arquivo "$t/deps/it-bbbbbbbbbbbbbbbb" 72 x             # cópia velha do mesmo teste
+arquivo "$t/deps/it-bbbbbbbbbbbbbbbb.d" 72
 arquivo "$t/deps/hangar_server-cccccccccccccccc" "" x            # bin e teste unitário do mesmo build
-arquivo "$t/deps/hangar_server-dddddddddddddddd" "2 hours ago" x
-arquivo "$t/deps/hangar_server-eeeeeeeeeeeeeeee" "5 days ago" x
-arquivo "$t/deps/proxy-ffffffffffffffff" "9 days ago" x          # sozinho: fica, mesmo velho
-arquivo "$t/deps/libserde-1111111111111111.rlib" "9 days ago"    # biblioteca nunca sai
+arquivo "$t/deps/hangar_server-dddddddddddddddd" 2 x
+arquivo "$t/deps/hangar_server-eeeeeeeeeeeeeeee" 120 x
+arquivo "$t/deps/proxy-ffffffffffffffff" 216 x          # sozinho: fica, mesmo velho
+arquivo "$t/deps/libserde-1111111111111111.rlib" 216    # biblioteca nunca sai
 arquivo "$t/deps/libserde-2222222222222222.rlib"
-arquivo "$t/deps/libserde_derive-3333333333333333.so" "9 days ago" x
+arquivo "$t/deps/libserde_derive-3333333333333333.so" 216 x
 arquivo "$t/deps/libserde_derive-4444444444444444.so" "" x
 arquivo "$t/incremental/hangar_server-1abc/s-novo/a"
-arquivo "$t/incremental/hangar_server-2def/s-velho/a" "4 days ago"
-touch -d "4 days ago" "$t/incremental/hangar_server-2def"
-arquivo "$t/incremental/it-3ghi/s/a" "4 days ago"
-touch -d "4 days ago" "$t/incremental/it-3ghi"
+arquivo "$t/incremental/hangar_server-2def/s-velho/a" 96
+touch -t "$(horas_atras 96)" "$t/incremental/hangar_server-2def"
+arquivo "$t/incremental/it-3ghi/s/a" 96
+touch -t "$(horas_atras 96)" "$t/incremental/it-3ghi"
 "$P" "$d/target" >/dev/null || { echo "FALHOU podar-target saiu com erro (máquina)"; falhou=1; }
 confere "máquina" "$(sobrou "$t")" "deps/hangar_server-cccccccccccccccc deps/hangar_server-dddddddddddddddd deps/it-aaaaaaaaaaaaaaaa deps/it-aaaaaaaaaaaaaaaa.d deps/libserde-1111111111111111.rlib deps/libserde-2222222222222222.rlib deps/libserde_derive-3333333333333333.so deps/libserde_derive-4444444444444444.so deps/proxy-ffffffffffffffff incremental/hangar_server-1abc/s-novo/a incremental/it-3ghi/s/a "
 rm -rf "$d"

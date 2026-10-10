@@ -738,7 +738,8 @@ testes novos das correções abaixo vieram depois da medição).
     `accounts_catalog`) carregava cópias de todos os descritores do processo: o socket que outro teste
     fechou continuava aceitando conexão. O filho agora fecha o que herdou (`close_inherited_fds`).
   - **Porta "fechada" tirada de um listener solto** voltava a outro teste, que respondia no lugar. Agora
-    é a porta 1 (`refused_address`), que o kernel nunca sorteia e em que nada escuta. Reservar com
+    é a porta 1 (`refused_address`), que o kernel nunca sorteia; o auxiliar confere uma vez que ela
+    recusa e para com o motivo se algo escutar ali. Reservar com
     `bind` sem `listen` não serve: no macOS a conexão fica pendurada em vez de recusar.
   - **"A porta fechou" logo depois do `stop`** espera a recusa com prazo (`assert_closed`), pela mesma
     janela entre o `fork` e o `exec`.

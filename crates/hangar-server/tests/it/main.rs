@@ -41,11 +41,19 @@ pub unsafe fn close_inherited_fds<const N: usize>(mut keep: [libc::c_int; N]) {
     close(first, u32::MAX);
 }
 
-/// Endereço TCP que recusa conexão: a porta 1, que o kernel nunca sorteia num bind em `:0` e em que nada
-/// escuta. Soltar um listener e usar a porta dele deixava outro teste deste processo ocupá-la e
-/// responder; um socket com `bind` e sem `listen` não recusa no macOS, a conexão fica pendurada.
+/// Endereço TCP que recusa conexão: a porta 1, que o kernel nunca sorteia num bind em `:0`. Conferida uma vez
+/// por processo; se algo escutar nela, os testes que dependem da recusa param aqui, com o motivo. Soltar um
+/// listener e usar a porta dele deixava outro teste ocupá-la, e um socket com `bind` e sem `listen` não
+/// recusa no macOS (a conexão fica pendurada).
 pub fn refused_address() -> std::net::SocketAddr {
-    std::net::SocketAddr::from(([127, 0, 0, 1], 1))
+    static CHECKED: std::sync::Once = std::sync::Once::new();
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], 1));
+    CHECKED.call_once(|| {
+        let refused = std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_secs(5))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused);
+        assert!(refused, "{address} não recusou conexão; estes testes precisam dela fechada");
+    });
+    address
 }
 
 /// A porta fechou: conexão recusada dentro do prazo. Um filho de outro teste, entre o fork e o exec, pode

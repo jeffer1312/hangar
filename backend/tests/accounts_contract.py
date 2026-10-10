@@ -42,7 +42,8 @@ def rust_integration_binary(build_log: Path | None = None) -> Path:
     rodam por `--exact <módulo>::<teste>`. Com `build_log`, compila antes (uma vez por processo)."""
     if build_log is not None:
         _build_integration_tests(build_log)
-    deps = Path(os.environ.get("CARGO_TARGET_DIR") or CRATES / "target") / "debug" / "deps"
+    # O cargo roda em crates/: um CARGO_TARGET_DIR relativo vale a partir de lá.
+    deps = CRATES / (os.environ.get("CARGO_TARGET_DIR") or "target") / "debug" / "deps"
     candidates = [p for p in deps.glob("it-*") if p.is_file() and p.suffix in {"", ".exe"}]
     assert candidates, "compile os testes do hangar-server antes desta prova (cargo test -p hangar-server --test it --no-run)"
     return max(candidates, key=lambda p: p.stat().st_mtime)
