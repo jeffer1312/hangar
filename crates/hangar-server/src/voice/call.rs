@@ -219,16 +219,21 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     // Comando que chega antes da oferta não se perde: fica na fila e o laço o trata primeiro, na ordem. O estado do aparelho
     // (queda, áudio, nível) é de quem ainda não ofereceu: aplicado depois, marcaria como caído o aparelho que assumiu.
     let mut early: VecDeque<Command> = VecDeque::new();
-    let offer_sdp = tokio::time::timeout(Duration::from_secs(45), async {
-        loop {
-            match inbox.recv().await {
-                Some(Command::Offer(sdp, _)) => return Ok(sdp),
-                Some(Command::Detached | Command::Live | Command::Level(_)) => {}
-                Some(other) => early.push_back(other),
-                None => return Err(VoiceFailure::Closed),
-            }
+    // Aparelho que caiu antes de oferecer (celular travado) tira o prazo: quem limita a espera passa a ser o do hub.
+    let mut offer_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(45));
+    let offer_sdp = loop {
+        let command = match offer_deadline {
+            Some(at) => tokio::time::timeout_at(at, inbox.recv()).await.map_err(|_| failed("device offer")(VoiceFailure::Timeout))?,
+            None => inbox.recv().await,
+        };
+        match command {
+            Some(Command::Offer(sdp, _)) => break sdp,
+            Some(Command::Detached) => offer_deadline = None,
+            Some(Command::Live | Command::Level(_)) => {}
+            Some(other) => early.push_back(other),
+            None => return Err(failed("device offer")(VoiceFailure::Closed)),
         }
-    }).await.map_err(|_| VoiceFailure::Timeout).and_then(|r| r).map_err(failed("device offer"))?;
+    };
     let mut realtime = json!({"threadId": thread, "version": "v3", "outputModality": "audio", "prompt": VOICE_PROMPT,
         // O aviso curto de que ouviu sai da própria voz; o resumo do raciocínio deixa a voz saber o que o organizador faz.
         "includeStartupContext": false, "delegationAckFiller": true, "backendReasoningStatus": true, "clientManagedHandoffs": false,
