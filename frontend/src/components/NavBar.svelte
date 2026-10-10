@@ -48,6 +48,8 @@
     // Conta Anthropic da sessão, ao lado do título tappável (celular): o desktop tem a pílula de
     // cota da barra de abas; no celular não havia como saber qual conta paga a sessão aberta.
     conta?: { label: string; nome: string; cor: string } | null;
+    // Tocar a conta abre as contas e a troca, sem abrir o seletor de sessão do título.
+    onContaTap?: () => void;
     // Desktop: breadcrumb (servidor › sessao › branch) no lugar do titulo centralizado + pilula de estado.
     crumbs?: { server: string; session: string; branch?: string; dirty?: boolean } | null;
     // Estado da sessao aberta, ao lado do breadcrumb (so no desktop; sem estado, sem pilula).
@@ -66,7 +68,7 @@
     loopColor?: string;
     onLoopTap?: () => void;
   }
-  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenNavegador, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, conta = null, crumbs = null, state, stateLabel, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
+  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenNavegador, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, conta = null, onContaTap, crumbs = null, state, stateLabel, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
 
   // Sinal do "⋯": no celular Rodar/Atividade moram dentro do menu, entao o estado deles precisa
   // aparecer no botao — senao voce so descobre que algo esta rodando abrindo o menu.
@@ -150,9 +152,23 @@
         {#if conta}
           <!-- Conta da sessão aberta: no celular é o único lugar que diz qual conta paga a conversa.
                Linha própria pra nunca cortar o nome; a cor da conta fica só na bolinha. -->
-          <span class="navbar-conta" title={m.sessao_conta({ n: conta.nome })}>
-            <span class="conta-dot" style="background: {conta.cor};" aria-hidden="true"></span>{conta.label}
-          </span>
+          {#if onContaTap}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span
+              class="navbar-conta navbar-conta--tap"
+              role="button"
+              tabindex="0"
+              aria-label={m.accounts_open_aria({ n: conta.nome })}
+              onclick={(e) => { e.stopPropagation(); onContaTap(); }}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onContaTap(); } }}
+            >
+              <span class="conta-dot" style="background: {conta.cor};" aria-hidden="true"></span>{conta.label}<span class="conta-chev" aria-hidden="true">›</span>
+            </span>
+          {:else}
+            <span class="navbar-conta" title={m.sessao_conta({ n: conta.nome })}>
+              <span class="conta-dot" style="background: {conta.cor};" aria-hidden="true"></span>{conta.label}
+            </span>
+          {/if}
         {/if}
       </button>
     {:else if subtitle}
@@ -390,6 +406,10 @@
     line-height: 1.2;
     color: var(--text-muted);
   }
+  /* Área de toque maior que a linha de texto, sem empurrar o layout. */
+  .navbar-conta--tap { padding: 8px 10px; margin: -8px -10px; cursor: pointer; }
+  .navbar-conta--tap:active { color: var(--text-secondary); }
+  .conta-chev { margin-left: 3px; }
   .conta-dot {
     display: inline-block;
     width: 6px;

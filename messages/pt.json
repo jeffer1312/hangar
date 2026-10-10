@@ -7815,5 +7815,9 @@
   "native_presence_failed": "No PC/Fora não mudou em {server}: {erro}",
   "save_file_tap_again": "Toque de novo para salvar",
   "save_file_failed": "Não deu para salvar o arquivo",
-  "save_file_downloading": "Baixando…"
+  "save_file_downloading": "Baixando…",
+  "accounts_sheet_title": "Contas",
+  "accounts_switch_title": "Trocar a conta desta conversa",
+  "accounts_none": "Nenhuma conta neste servidor",
+  "accounts_open_aria": "Conta {n}: ver contas e trocar"
 }

@@ -7815,5 +7815,9 @@
   "native_presence_failed": "At PC/Away did not change on {server}: {erro}",
   "save_file_tap_again": "Tap again to save",
   "save_file_failed": "Could not save the file",
-  "save_file_downloading": "Downloading…"
+  "save_file_downloading": "Downloading…",
+  "accounts_sheet_title": "Accounts",
+  "accounts_switch_title": "Switch this conversation's account",
+  "accounts_none": "No accounts on this server",
+  "accounts_open_aria": "Account {n}: see accounts and switch"
 }

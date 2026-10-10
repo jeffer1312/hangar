@@ -17,6 +17,7 @@
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import UsageSheet from '../components/UsageSheet.svelte';
+  import AccountsSheet from '../components/AccountsSheet.svelte';
   import Git from '../components/Git.svelte';
   import PreviewSheet from '../components/PreviewSheet.svelte';
   import ActivitySheet from '../components/ActivitySheet.svelte';
@@ -684,6 +685,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   let activityOpen = $state(false);
   // Menu "⋯" do celular: Rodar/Atividade saíram da NavBar pra sobrar largura pro nome da sessão.
   let moreOpen = $state(false);
+  let accountsOpen = $state(false);
   let shareOpen = $state(false);
   // Galeria de anexos: "⋯" no celular, botao inline no desktop.
   let anexosOpen = $state(false);
@@ -944,9 +946,9 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   }
 
   const anyOverlayOpen = () =>
-    switcherOpen || createOpen || usageOpen || btwOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || xtermOpen || askOpen || moreOpen || anexosOpen;
+    switcherOpen || createOpen || usageOpen || btwOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || xtermOpen || askOpen || moreOpen || anexosOpen || accountsOpen;
   function closeOverlays() {
-    switcherOpen = createOpen = usageOpen = btwOpen = gitOpen = runOpen = previewOpen = activityOpen = limitsOpen = moreOpen = anexosOpen = false;
+    switcherOpen = createOpen = usageOpen = btwOpen = gitOpen = runOpen = previewOpen = activityOpen = limitsOpen = moreOpen = anexosOpen = accountsOpen = false;
     if (mirrorOpen) closeMirror();
     xtermOpen = false;
     askOpen = false;
@@ -3148,7 +3150,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   {/if}
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} stateLabel={codexWaitKey ? m.chat_codex_opening() : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (ctxPanel.aba = 'atividade') : undefined} {activityBadge} {activityRunning} onOpenTerminal={botaoTerminal ? abrirTerminalReal : undefined} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop && !orqSession ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} onContaTap={desktop ? undefined : () => (accountsOpen = true)} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} stateLabel={codexWaitKey ? m.chat_codex_opening() : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (ctxPanel.aba = 'atividade') : undefined} {activityBadge} {activityRunning} onOpenTerminal={botaoTerminal ? abrirTerminalReal : undefined} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop && !orqSession ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {/if}
   </div>
 
@@ -3632,6 +3634,13 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
        {events} {histGap} cwd={planSession?.cwd ?? null} />
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
+  {#if !desktop}
+    <AccountsSheet open={accountsOpen} onClose={() => (accountsOpen = false)} {sessionName}
+                   serverKey={chatServerId ?? ''}
+                   activeAccount={allSessions.find((s) => s.name === sessionName)?.conta ?? null}
+                   onSwitch={contaTrocavel ? pedirTrocaConta : undefined}
+                   blocked={!modoLivre || trocandoConta} />
+  {/if}
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
              shortcuts={customShortcuts} onShortcut={triggerShortcut}
              projectName={projectShortcuts?.name} projectError={projectShortcutsErr}
