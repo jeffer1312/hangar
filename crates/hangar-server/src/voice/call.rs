@@ -1,6 +1,6 @@
 //! A chamada de voz: o organizador e a conversa falada rodam aqui; o WebRTC é do aparelho, que manda a oferta e o nível do
 //! microfone e recebe a resposta SDP.
-use super::{SendVerdict, log, observe, organizer, plan, usage};
+use super::{SendVerdict, log, observe, organizer, usage};
 use super::organizer::{Effective, FinishStep, MIC_VOICE_LEVEL, Mode, ModeModel, ModeModels, Planner, REPEAT_NOTE, REPEAT_WINDOW, Results, SEND_UNCONFIRMED, SpeechHold,
     Consent, SendConsent, SendGate, SpokenTurns, ToolCall, finish_request, parse_tool, repeated_handoff, send_allowed, settings_update, spoken_input, tool_reply,
     organizer_start, user_speech, ORGANIZER_PROMPT, VOICE_PROMPT};
@@ -67,8 +67,9 @@ fn backstage_input(text: &str) -> Backstage {
 /// `cwd`: pasta da sessão na tela quando é desta máquina (o organizador lê o código dela); `target`: nome dessa sessão.
 /// `organizer`: modelo e esforço do organizador por modo; a chamada nasce no Direto. `tools`: o catálogo do dono, fixo desde o
 /// `thread/start` (a thread não aceita catálogo novo). `handoff_same_thread`: a passagem recomeça a conversa falada na mesma thread.
+/// `voice_dir`: raiz da voz (`~/.hangar/voz` em produção), com a pasta própria do organizador e os planos.
 pub struct CallOptions { pub voice: Option<String>, pub context: String, pub cwd: Option<PathBuf>, pub target: String, pub organizer: ModeModels,
-    pub tools: Value, pub handoff_same_thread: bool }
+    pub tools: Value, pub handoff_same_thread: bool, pub voice_dir: PathBuf }
 
 /// Sobe o app-server: o filho de verdade em produção, um falso nos testes.
 pub type Spawn = Box<dyn FnOnce() -> futures_util::future::BoxFuture<'static, Result<(Rpc, async_channel::Receiver<Incoming>), RpcError>> + Send>;
@@ -184,7 +185,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     let config = handshake(&rpc).await.map_err(rpc_failure).map_err(failed("handshake"))?;
     log("handshake ok");
     // Pasta própria e fixa: o que o organizador grava fica entre chamadas, nada aqui a apaga.
-    let own = plan::files_dir();
+    let own = options.voice_dir.join("arquivos");
     if let Err(error) = std::fs::create_dir_all(&own) {
         log(format!("own folder create failed kind={:?}", error.kind()));
         let _ = events.send(VoiceEvent::Failed(VoiceFailure::OwnFolder)).await;
@@ -270,7 +271,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     let mut organizer_busy = false;
     let mut spoken = SpokenTurns::default();
     let mut activity = Activity::Idle;
-    let mut planner = Planner::default();
+    let mut planner = Planner::new(options.voice_dir.join("planos"));
     let mut target = options.target.clone();
     let mut target_cwd = options.cwd.clone();
     let mut pending_context: Option<String> = None;
@@ -922,7 +923,9 @@ mod tests {
     use serde_json::json;
 
     fn options(tools: Value) -> CallOptions {
-        CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(), tools, handoff_same_thread: true }
+        // Nunca o HOME real: a chamada cria a pasta própria e os planos aqui.
+        let voice_dir = std::env::temp_dir().join(format!("hangar-voice-call-{}", std::process::id()));
+        CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(), tools, handoff_same_thread: true, voice_dir }
     }
 
     async fn next_answer(events: &async_channel::Receiver<VoiceEvent>) -> String {

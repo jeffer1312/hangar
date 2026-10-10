@@ -60,15 +60,20 @@ fn read_json(path: &Path) -> Value {
     }
 }
 
+/// O `TYPESAFE_API_KEY` do ambiente, lido uma vez por quem monta o hub; o teste passa `None`.
+pub fn env_jev_key() -> Option<String> { std::env::var("TYPESAFE_API_KEY").ok().filter(|v| !v.is_empty()) }
+
 /// Bloqueia (lê arquivos).
-pub fn read_gate(home: &Path, claude_dir: &Path) -> Gate {
+pub fn read_gate(home: &Path, claude_dir: &Path, env_key: Option<String>) -> Gate {
     let runtime = read_json(&claude_dir.join("runtime-config.json"));
     let settings = read_json(&home.join(".claude").join("settings.json"));
-    Gate { enabled: runtime["codex_voice_beta"] == Value::Bool(true),
-        jev: jev::config_from(&runtime, &settings["env"], std::env::var("TYPESAFE_API_KEY").ok().filter(|v| !v.is_empty())) }
+    Gate { enabled: runtime["codex_voice_beta"] == Value::Bool(true), jev: jev::config_from(&runtime, &settings["env"], env_key) }
 }
 
-pub fn settings_path(home: &Path) -> PathBuf { home.join(".hangar").join("voz").join("config.json") }
+/// Raiz da voz: configuração, pasta própria do organizador e planos.
+pub fn voice_dir(home: &Path) -> PathBuf { home.join(".hangar").join("voz") }
+
+pub fn settings_path(home: &Path) -> PathBuf { voice_dir(home).join("config.json") }
 
 pub fn read_settings(home: &Path) -> VoiceSettings {
     serde_json::from_value::<SettingsDto>(read_json(&settings_path(home))).map(Into::into).unwrap_or_default()

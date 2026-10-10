@@ -39,15 +39,20 @@ pub async fn ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     ws.on_upgrade(move |socket| serve_socket(st, socket))
 }
 
+/// Aparelho que dormiu deixa o socket meio aberto: sem nada dele por este tempo (o cliente pinga a cada 10 s), a conexão
+/// cai e o prazo sem dono começa.
+const SILENT_FOR: Duration = Duration::from_secs(30);
+const SEND_WITHIN: Duration = Duration::from_secs(10);
+
 async fn send(socket: &mut WebSocket, msg: &ServerMsg) -> bool {
     let Ok(text) = serde_json::to_string(msg) else { return false };
-    socket.send(Message::Text(text.into())).await.is_ok()
+    matches!(tokio::time::timeout(SEND_WITHIN, socket.send(Message::Text(text.into()))).await, Ok(Ok(())))
 }
 
 async fn refuse_socket(mut socket: WebSocket, code: &str) {
     super::log(format!("voice refused code={code}"));
     let _ = send(&mut socket, &ServerMsg::Error { code: code.to_owned(), detail: None }).await;
-    let _ = socket.send(Message::Close(None)).await;
+    close(&mut socket).await;
 }
 
 /// A primeira mensagem de texto; controle do WebSocket não conta.
@@ -70,9 +75,11 @@ async fn serve_socket(st: Arc<AppState>, mut socket: WebSocket) {
         Ok(attached) => attached,
         Err(code) => return refuse_socket(socket, code).await,
     };
+    let mut heard = tokio::time::Instant::now();
     loop {
         tokio::select! {
-            incoming = socket.recv() => match incoming {
+            _ = tokio::time::sleep_until(heard + SILENT_FOR) => { super::log("voice device silent: closing"); break; }
+            incoming = socket.recv() => match { heard = tokio::time::Instant::now(); incoming } {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMsg>(text.as_str()) {
                     Ok(ClientMsg::Ping) => if !send(&mut socket, &ServerMsg::Pong).await { break },
                     // Capacidades e tela do dono só mudam por nova conexão.
@@ -92,9 +99,12 @@ async fn serve_socket(st: Arc<AppState>, mut socket: WebSocket) {
             },
         }
     }
-    let _ = socket.send(Message::Close(None)).await;
+    // Antes do Close: num socket meio aberto o envio pode demorar, e o prazo sem dono já tem de estar correndo.
     st.voice.detach(epoch);
+    close(&mut socket).await;
 }
+
+async fn close(socket: &mut WebSocket) { let _ = tokio::time::timeout(SEND_WITHIN, socket.send(Message::Close(None))).await; }
 
 pub async fn settings_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = crate::routes::gate(&st, peer, &req);
@@ -112,7 +122,8 @@ fn refuse(status: StatusCode, code: &str) -> Response { json_response(status, js
 async fn settings_reply(st: &AppState, req: Request, home: PathBuf, claude_dir: PathBuf) -> Response {
     match *req.method() {
         Method::GET => {
-            let read = tokio::task::spawn_blocking(move || (settings::read_gate(&home, &claude_dir), settings::read_settings(&home))).await;
+            let env_key = st.voice.env_jev_key();
+            let read = tokio::task::spawn_blocking(move || (settings::read_gate(&home, &claude_dir, env_key), settings::read_settings(&home))).await;
             let Ok((gate, current)) = read else { return refuse(StatusCode::INTERNAL_SERVER_ERROR, "settings_read_failed") };
             let (active, client) = st.voice.call_status();
             json_response(StatusCode::OK, json!({"enabled": gate.enabled, "codex": st.accounts.codex_command().is_some(), "jev": gate.jev.is_some(),

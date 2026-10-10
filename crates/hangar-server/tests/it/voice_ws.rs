@@ -100,7 +100,8 @@ async fn device_drop_keeps_call_for_grace_and_resumes() {
     assert_eq!(t.count("thread/start"), 1, "voltou na mesma chamada");
     drop(b);
     tokio::time::sleep(std::time::Duration::from_millis(700)).await;
-    assert!(t.app_server_sees("thread/realtime/stop").await, "sem aparelho além do prazo, encerra");
+    // Parar derruba o `Rpc` no meio (sem `realtime/stop`): o app-server falso vê o fim da conexão.
+    assert!(t.app_server_sees("<eof>").await, "sem aparelho além do prazo, encerra");
 }
 
 #[tokio::test]
@@ -111,7 +112,18 @@ async fn beta_turned_off_mid_call_ends_with_disabled() {
     until(&mut a, "answer").await;
     t.set_beta(false);
     assert_eq!(until(&mut a, "error").await["code"], "disabled");
-    assert!(t.app_server_sees("thread/realtime/stop").await);
+    assert!(t.app_server_sees("<eof>").await, "o app-server cai junto");
+}
+
+#[tokio::test]
+async fn call_that_dies_tells_the_device_why() {
+    let t = voice_support::voice_server_failing_spawn().await;
+    let mut a = open(t.addr, fake::OWNER).await.unwrap();
+    hello(&mut a, "pwa", json!(["switch_session"])).await;
+    let error = until(&mut a, "error").await;
+    assert_eq!(error["code"], "app_server");
+    assert!(error["detail"].is_string());
+    until(&mut a, "closed").await;
 }
 
 #[tokio::test]

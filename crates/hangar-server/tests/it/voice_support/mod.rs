@@ -86,6 +86,8 @@ fn fake_app_servers(seen: Seen, push: Push) -> SpawnFactory {
                     let _ = write.lock().await.write_all(format!("{}\n", json!({"id": msg["id"], "result": result})).as_bytes()).await;
                 }
             }
+            // A chamada largou o `Rpc`: em produção é o app-server derrubado.
+            seen.lock().unwrap().push(json!({"method": "<eof>"}));
         });
         let (r, w) = tokio::io::split(ours);
         Box::new(move || Box::pin(async move { Ok(Rpc::over_lines(r, w)) }))
@@ -96,8 +98,15 @@ fn write_gate(claude_dir: &Path, beta: bool) {
     std::fs::write(claude_dir.join("runtime-config.json"), json!({"codex_voice_beta": beta}).to_string()).unwrap();
 }
 
+/// App-server que nem sobe, como um `codex` que falha ao iniciar.
+fn failing_app_server() -> SpawnFactory {
+    Arc::new(|| -> Spawn { Box::new(|| Box::pin(async { Err(hangar_server::voice::rpc::RpcError::Spawn) })) })
+}
+
 /// `own_api`: `false` = API falsa; `true` = o próprio servidor de teste (o caminho real até o Python falso).
-async fn build(beta: bool, account: Option<&str>, own_api: bool) -> TestVoice {
+async fn build(beta: bool, account: Option<&str>, own_api: bool) -> TestVoice { build_with(beta, account, own_api, false).await }
+
+async fn build_with(beta: bool, account: Option<&str>, own_api: bool, failing: bool) -> TestVoice {
     let home = tempfile::tempdir().unwrap();
     let claude_dir = home.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -111,7 +120,8 @@ async fn build(beta: bool, account: Option<&str>, own_api: bool) -> TestVoice {
     let (seen, push): (Seen, Push) = (Arc::default(), Arc::default());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
-    state.voice = hub(home.path(), claude_dir.clone(), Some(fake_app_servers(seen.clone(), push.clone())));
+    let spawn = if failing { failing_app_server() } else { fake_app_servers(seen.clone(), push.clone()) };
+    state.voice = hub(home.path(), claude_dir.clone(), Some(spawn));
     // Nunca os peers reais da máquina.
     state.peers = Arc::new(PeerClient::new(PeerBook::new(None)));
     // O `set_self` do servidor não sobrescreve este (é gravado uma vez só).
@@ -125,6 +135,8 @@ pub async fn voice_server(beta: bool) -> TestVoice { build(beta, None, false).aw
 pub async fn voice_server_with_account(beta: bool, account: &str) -> TestVoice { build(beta, Some(account), false).await }
 
 pub async fn voice_server_self_api(beta: bool) -> TestVoice { build(beta, None, true).await }
+
+pub async fn voice_server_failing_spawn() -> TestVoice { build_with(true, None, false, true).await }
 
 impl TestVoice {
     pub fn app_server_saw(&self, method: &str) -> bool { self.count(method) > 0 }

@@ -1,7 +1,7 @@
 //! O organizador: uma thread efêmera do Codex que decide o que da fala vira pedido para a sessão.
 use super::plan::{PlanFile, new_plan};
 use serde_json::{Value, json};
-use std::{collections::{HashMap, HashSet, VecDeque}, path::Path, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet, VecDeque}, path::{Path, PathBuf}, time::{Duration, Instant}};
 
 pub const SETTLE: Duration = Duration::from_millis(1500);
 /// Silêncio do microfone exigido antes de soltar o envio.
@@ -770,12 +770,15 @@ pub fn clean_question(question: &str) -> Result<String, &'static str> {
 
 /// Estado do modo Planejar no laço da chamada.
 #[derive(Default)]
-pub struct Planner { pub mode: Mode, plan: Option<(PlanFile, String)>, armed: Option<(FinishAction, String)>, asked: Option<String> }
+pub struct Planner { pub mode: Mode, plans: PathBuf, plan: Option<(PlanFile, String)>, armed: Option<(FinishAction, String)>, asked: Option<String> }
 
 impl Planner {
+    /// `plans`: a pasta onde os planos nascem.
+    pub fn new(plans: PathBuf) -> Self { Self { plans, ..Self::default() } }
     /// O plano nasce para uma sessão e fica com ela, mesmo que a tela mude depois.
     pub fn plan(&mut self, target: &str) -> &PlanFile {
-        &self.plan.get_or_insert_with(|| (new_plan(target, chrono::Local::now()), target.to_owned())).0
+        let plans = &self.plans;
+        &self.plan.get_or_insert_with(|| (new_plan(plans, target, chrono::Local::now()), target.to_owned())).0
     }
     pub fn session(&self) -> Option<&str> { self.plan.as_ref().map(|(_, s)| s.as_str()) }
     /// Plano alterado: a confirmação dada sobre o resumo anterior não vale mais.

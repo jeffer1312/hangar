@@ -152,6 +152,8 @@ pub struct Controller {
     computer: Option<tokio::task::JoinHandle<()>>,
     /// O dono caiu e nenhum outro assumiu: ferramentas de tela recusam até o próximo `hello`/oferta.
     detached: bool,
+    /// Falha do evento anterior: a que vem logo antes do `Closed` foi a que encerrou a chamada.
+    last_failure: Option<(&'static str, String)>,
     forwarded: HashMap<u64, Forwarded>,
     next_tool: u64,
     snap: Snapshot,
@@ -167,7 +169,7 @@ impl Controller {
         Self { voice, machines, jev, device, gate, diag, done, done_rx: Some(done_rx), backoff: Arc::default(), client: String::new(),
             actions: Vec::new(), rows: Vec::new(), followed: HashSet::new(), watched: HashSet::new(), talked: HashMap::new(), jev_switched: None,
             close_gate: ConfirmGate::default(), closing: false, switch_offer: SwitchOffer::default(), sent_turn: None, pending_question: None,
-            spoken: HashSet::new(), heard_recent: String::new(), session_names: Vec::new(), target, plan_key: None, computer: None, detached: false, forwarded: HashMap::new(),
+            spoken: HashSet::new(), heard_recent: String::new(), session_names: Vec::new(), target, plan_key: None, computer: None, detached: false, last_failure: None, forwarded: HashMap::new(),
             next_tool: 0, snap: Snapshot { phase: "connecting", ..Snapshot::default() }, sent_state: None, sent_at: None, dirty: true }
     }
 
@@ -196,6 +198,8 @@ impl Controller {
             };
             if !go { break; }
         }
+        // Fechado já: o hub não entrega um aparelho novo a esta chamada que está acabando.
+        drop(from_device);
         self.flush_state();
         watcher.abort();
         self.stop_computer();
@@ -243,8 +247,13 @@ impl Controller {
 
     fn on_event(&mut self, event: VoiceEvent) -> bool {
         self.dirty = true;
+        let last_failure = self.last_failure.take();
         match event {
             VoiceEvent::Phase(Phase::Closed) => {
+                // A chamada morreu por falha: o aparelho recebe o código, não só o retrato.
+                if let Some((code, text)) = last_failure {
+                    self.device.send(ServerMsg::Error { code: code.to_owned(), detail: Some(text) });
+                }
                 self.stop_computer();
                 self.pending_question = None;
                 let s = &mut self.snap;
@@ -441,6 +450,10 @@ impl Controller {
         let (code, text) = failure_text(failure);
         log(format!("call failure code={code}"));
         self.diag.report("rust.voice_failed", "voice", code, "a chamada de voz falhou");
+        // Estas não encerram a chamada: ficam só no retrato.
+        if !matches!(failure, VoiceFailure::Organizer | VoiceFailure::ModelSwitch | VoiceFailure::OwnFolder) {
+            self.last_failure = Some((code, text.clone()));
+        }
         self.snap.error = Some((code.to_owned(), text));
     }
 
@@ -461,7 +474,7 @@ impl Controller {
         let (home, claude_dir, done) = (self.gate.home.clone(), self.gate.claude_dir.clone(), self.done.clone());
         tokio::spawn(async move {
             // Leitura que não terminou não derruba a chamada.
-            let enabled = tokio::task::spawn_blocking(move || super::settings::read_gate(&home, &claude_dir).enabled).await.unwrap_or(true);
+            let enabled = tokio::task::spawn_blocking(move || super::settings::read_gate(&home, &claude_dir, None).enabled).await.unwrap_or(true);
             let _ = done.send(Done::Gate(enabled));
         });
     }

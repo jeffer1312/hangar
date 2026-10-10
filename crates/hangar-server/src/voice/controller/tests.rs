@@ -59,7 +59,7 @@ async fn rig(caps: &[&str], peers: Option<Value>) -> Rig {
     let (spawn, seen, push) = fake_app_server();
     let (tx, events) = async_channel::unbounded();
     let options = CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(),
-        tools: tools_for(&caps), handoff_same_thread: true };
+        tools: tools_for(&caps), handoff_same_thread: true, voice_dir: dir.path().join("voz") };
     let voice = Voice::start(options, spawn, tx);
     let (link, mut device) = DeviceLink::channel(caps, Some(Screen { server: String::new(), name: "hangar".into() }));
     let gate = GateSource { home: dir.path().to_path_buf(), claude_dir: dir.path().to_path_buf(), every: Duration::from_secs(5) };

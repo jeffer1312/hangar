@@ -40,6 +40,7 @@ struct LiveCall {
 pub struct VoiceHub {
     home: PathBuf,
     claude_dir: PathBuf,
+    env_jev_key: Option<String>,
     grace: Duration,
     gate_every: Duration,
     /// Contas do teste; `None` pergunta ao catálogo.
@@ -67,17 +68,21 @@ impl VoiceHub {
     pub fn new() -> Self {
         let home = std::env::home_dir().unwrap_or_default();
         let claude_dir = settings::claude_dir(&home);
-        Self::with_parts(TestParts { home, claude_dir, grace: GRACE, gate_every: GATE_EVERY, spawn: None, accounts: None })
+        let hub = Self::with_parts(TestParts { home, claude_dir, grace: GRACE, gate_every: GATE_EVERY, spawn: None, accounts: None });
+        Self { env_jev_key: settings::env_jev_key(), ..hub }
     }
 
+    /// Sem a chave do Jev do ambiente: o teste nunca fala com o Jev de verdade.
     pub fn with_parts(p: TestParts) -> Self {
-        Self { home: p.home, claude_dir: p.claude_dir, grace: p.grace, gate_every: p.gate_every, accounts: p.accounts, spawn: p.spawn,
+        Self { home: p.home, claude_dir: p.claude_dir, env_jev_key: None, grace: p.grace, gate_every: p.gate_every, accounts: p.accounts, spawn: p.spawn,
             own: OnceLock::new(), live: Mutex::new(None), opening: tokio::sync::Mutex::new(()), next: AtomicU64::new(0) }
     }
 
     pub fn home(&self) -> &Path { &self.home }
 
     pub fn claude_dir(&self) -> &Path { &self.claude_dir }
+
+    pub fn env_jev_key(&self) -> Option<String> { self.env_jev_key.clone() }
 
     /// `Account.id` é o nome que as sessões gravam em `codex_account`.
     pub async fn account_ids(&self, accounts: &AccountService) -> Vec<String> {
@@ -126,8 +131,8 @@ impl VoiceHub {
             }
             *live = None;
         }
-        let (home, claude_dir) = (self.home.clone(), self.claude_dir.clone());
-        let (gate, chosen) = tokio::task::spawn_blocking(move || (settings::read_gate(&home, &claude_dir), settings::read_settings(&home))).await
+        let (home, claude_dir, env_key) = (self.home.clone(), self.claude_dir.clone(), self.env_jev_key.clone());
+        let (gate, chosen) = tokio::task::spawn_blocking(move || (settings::read_gate(&home, &claude_dir, env_key), settings::read_settings(&home))).await
             .map_err(|_| "failed")?;
         if !gate.enabled { return Err("disabled"); }
         let spawn = self.spawn_for(st, &chosen.codex_account).await?;
@@ -135,7 +140,7 @@ impl VoiceHub {
         let name = screen.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let context = if name.is_empty() { "Nenhuma sessão aberta na tela.".to_owned() } else { format!("A sessão na tela agora é {name}.") };
         let options = CallOptions { voice: chosen.voice.filter(|v| VOICES.contains(&v.as_str())), context, cwd: None, target: name,
-            organizer: chosen.organizer, tools: tools_for(&caps), handoff_same_thread: true };
+            organizer: chosen.organizer, tools: tools_for(&caps), handoff_same_thread: true, voice_dir: settings::voice_dir(&self.home) };
         let (events_tx, events) = async_channel::unbounded();
         let voice = Voice::start(options, spawn, events_tx);
         let own_label = st.groups.as_ref().map(|g| g.server_id().to_owned()).filter(|id| !id.is_empty()).unwrap_or_else(|| "este servidor".to_owned());
