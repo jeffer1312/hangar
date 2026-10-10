@@ -20,7 +20,9 @@ struct Cached {
 #[derive(Default)]
 pub struct Models {
     cache: Mutex<BTreeMap<(String, PathBuf), Cached>>,
-    gate: tokio::sync::Mutex<()>,
+    gates: Mutex<BTreeMap<(String, PathBuf), Arc<tokio::sync::Mutex<()>>>>,
+    #[cfg(test)]
+    codex_endpoint: Option<String>,
 }
 
 fn signature(home: &Path) -> Vec<Option<Vec<u8>>> {
@@ -164,7 +166,12 @@ impl Models {
                     .to_vec(),
             ));
         }
-        let _gate = self.gate.lock().await;
+        let gate = {
+            let mut gates = self.gates.lock().unwrap();
+            gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+            gates.entry(key.clone()).or_default().clone()
+        };
+        let _gate = gate.lock().await;
         let cached = self
             .cache
             .lock()
@@ -192,8 +199,22 @@ impl Models {
                 String::new(),
             )
         } else {
+            #[cfg(not(test))]
             let version = version(service, context, account_guard.clone()).await?;
-            match codex_http(&context.home, &version).await {
+            #[cfg(test)]
+            let version = if self.codex_endpoint.is_some() {
+                "0.162.1".into()
+            } else {
+                version(service, context, account_guard.clone()).await?
+            };
+            match codex_http(
+                &context.home,
+                &version,
+                #[cfg(test)]
+                self.codex_endpoint.as_deref(),
+            )
+            .await
+            {
                 Ok(Some(raw)) => {
                     let data = codex_http_models(&raw)?;
                     (
@@ -204,9 +225,12 @@ impl Models {
                     )
                 }
                 Err("dictation_catalog_rate_limited") => {
-                    if let Some(row) = cached {
-                        self.cache.lock().unwrap().get_mut(&key).unwrap().at = Instant::now();
-                        return Ok((row.models, row.raw));
+                    if cached.is_some() {
+                        let mut cache = self.cache.lock().unwrap();
+                        if let Some(row) = cache.get_mut(&key).filter(|row| row.signature == sig) {
+                            row.at = Instant::now();
+                            return Ok((row.models.clone(), row.raw.clone()));
+                        }
                     }
                     return Err("dictation_catalog_rate_limited");
                 }
@@ -307,9 +331,14 @@ impl Models {
             if let Some(row) = cached {
                 row.raw
             } else {
-                codex_http(&home, version)
-                    .await?
-                    .ok_or("session_transfer_model_capacity_unknown")?
+                codex_http(
+                    &home,
+                    version,
+                    #[cfg(test)]
+                    self.codex_endpoint.as_deref(),
+                )
+                .await?
+                .ok_or("session_transfer_model_capacity_unknown")?
             }
         };
         let mut selected = raw.into_iter().filter(|m| m["slug"].as_str() == Some(slug));
@@ -514,7 +543,11 @@ fn fast_enabled(home: &Path) -> bool {
     enabled
 }
 
-async fn codex_http(home: &Path, version: &str) -> Result<Option<Vec<Value>>, &'static str> {
+async fn codex_http(
+    home: &Path,
+    version: &str,
+    #[cfg(test)] endpoint_override: Option<&str>,
+) -> Result<Option<Vec<Value>>, &'static str> {
     use base64::Engine;
     let config = codex_configuration(home)?;
     if config
@@ -568,11 +601,14 @@ async fn codex_http(home: &Path, version: &str) -> Result<Option<Vec<Value>>, &'
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|_| "dictation_catalog_unavailable")?;
+    let endpoint = format!(
+        "https://chatgpt.com/backend-api/codex/models?client_version={}",
+        form_urlencoded::byte_serialize(version.as_bytes()).collect::<String>()
+    );
+    #[cfg(test)]
+    let endpoint = endpoint_override.unwrap_or(&endpoint);
     let response = match client
-        .get(format!(
-            "https://chatgpt.com/backend-api/codex/models?client_version={}",
-            form_urlencoded::byte_serialize(version.as_bytes()).collect::<String>()
-        ))
+        .get(endpoint)
         .bearer_auth(token)
         .header("chatgpt-account-id", account)
         .header("user-agent", "codex-cli")
@@ -713,4 +749,170 @@ pub fn validate(
         return Err(format!("service_tier priority indisponível para {model}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    async fn endpoint(
+        status: u16,
+        body: Value,
+    ) -> (
+        String,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (seen, received) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            seen.send(()).unwrap();
+            let _ = wait.await;
+            let body = body.to_string();
+            stream.get_mut().write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        (format!("http://{address}/models"), received, release)
+    }
+
+    fn account(
+        service: &AccountService,
+        root: &Path,
+        name: &str,
+        provider: &str,
+    ) -> context::Context {
+        let home = root.join(name);
+        std::fs::create_dir_all(&home).unwrap();
+        context::account(provider, &home, &service.env).unwrap()
+    }
+
+    fn service(root: &Path) -> AccountService {
+        AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(), root.to_string_lossy().into_owned())].into(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn cached_account_remains_available_while_another_account_catalog_is_pending() {
+        let root = tempfile::tempdir().unwrap();
+        let service = Arc::new(service(root.path()));
+        let models = Arc::new(Models::default());
+        let mut first = account(&service, root.path(), "first", "claude");
+        let mut second = account(&service, root.path(), "second", "claude");
+        let (second_url, second_seen, second_release) =
+            endpoint(200, json!({"data":[{"id":"model-second"}]})).await;
+        second.env.insert("ANTHROPIC_BASE_URL".into(), second_url);
+        second
+            .env
+            .insert("ANTHROPIC_API_KEY".into(), "fixture-key".into());
+        second.engine = Some(json!({"name":"fixture"}));
+        second_release.send(()).unwrap();
+        assert_eq!(
+            models
+                .get_context(&service, &second, false)
+                .await
+                .unwrap()
+                .0[0]["id"],
+            "model-second"
+        );
+        second_seen.await.unwrap();
+        let (first_url, first_seen, first_release) =
+            endpoint(200, json!({"data":[{"id":"model-first"}]})).await;
+        first.env.insert("ANTHROPIC_BASE_URL".into(), first_url);
+        first
+            .env
+            .insert("ANTHROPIC_API_KEY".into(), "fixture-key".into());
+        first.engine = Some(json!({"name":"fixture"}));
+        let pending = tokio::spawn({
+            let models = models.clone();
+            let service = service.clone();
+            async move { models.get_context(&service, &first, false).await }
+        });
+        first_seen.await.unwrap();
+        let cached = tokio::time::timeout(
+            Duration::from_secs(1),
+            models.get_context(&service, &second, false),
+        )
+        .await;
+        first_release.send(()).unwrap();
+        pending.await.unwrap().unwrap();
+        assert_eq!(
+            cached
+                .expect("uma conta pendente não pode bloquear o catálogo em cache de outra conta")
+                .unwrap()
+                .0[0]["id"],
+            "model-second"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalidation_during_rate_limited_request_does_not_poison_the_catalog() {
+        use base64::Engine;
+        let root = tempfile::tempdir().unwrap();
+        let service = Arc::new(service(root.path()));
+        let context = account(&service, root.path(), "codex", "codex");
+        let payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"exp":4102444800}"#);
+        std::fs::write(context.home.join("auth.json"), json!({"tokens":{"access_token":format!("fixture.{payload}.signature"),"account_id":"fixture-account"}}).to_string()).unwrap();
+        let (url, seen, release) = endpoint(429, json!({})).await;
+        let models = Arc::new(Models {
+            codex_endpoint: Some(url),
+            ..Models::default()
+        });
+        let key = ("codex".into(), context.home.clone());
+        models.cache.lock().unwrap().insert(
+            key.clone(),
+            Cached {
+                signature: signature(&context.home),
+                at: Instant::now() - Duration::from_secs(601),
+                models: vec![json!({"id":"old-model"})],
+                raw: vec![],
+                version: "0.162.1".into(),
+            },
+        );
+        let pending = tokio::spawn({
+            let models = models.clone();
+            let service = service.clone();
+            let context = context.clone();
+            async move { models.get_context(&service, &context, false).await }
+        });
+        seen.await.unwrap();
+        models.invalidate(Some(&context.home));
+        release.send(()).unwrap();
+        assert_eq!(
+            pending
+                .await
+                .expect("uma invalidação concorrente não pode causar pânico"),
+            Err("dictation_catalog_rate_limited")
+        );
+        models.cache.lock().unwrap().insert(
+            key,
+            Cached {
+                signature: signature(&context.home),
+                at: Instant::now(),
+                models: vec![json!({"id":"new-model"})],
+                raw: vec![],
+                version: "0.162.1".into(),
+            },
+        );
+        assert_eq!(
+            models
+                .get_context(&service, &context, false)
+                .await
+                .unwrap()
+                .0[0]["id"],
+            "new-model"
+        );
+    }
 }

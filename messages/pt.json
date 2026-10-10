@@ -6163,7 +6163,7 @@
   "native_voice_harness_model_help": "Escolha um modelo do catálogo da conta da conversa. Para mudar o outro harness, abra uma conversa dele.",
   "native_voice_model_choose": "Escolher modelo",
   "native_voice_models_refresh": "Atualizar catálogo",
-  "native_voice_models_loading": "Carregando catálogo da conta…",
+  "native_voice_harness_models_loading": "Carregando catálogo da conta…",
   "native_voice_models_empty": "O catálogo não ofereceu modelos disponíveis.",
   "native_voice_models_destination": "Abra uma conversa deste servidor para consultar o catálogo da conta de destino.",
   "native_dictation_config_failed": "Não foi possível ler as preferências de ditado. Abra Configurações → Voz para tentar novamente.",

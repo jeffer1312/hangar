@@ -12,6 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,6 +33,30 @@ from app.config import settings
 
 TOKEN = "t-model-options"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+@pytest.mark.parametrize("session", [False, True])
+def test_claude_parser_failure_is_an_explicit_error_without_alias_fallback(cli, monkeypatch, session):
+    async def info(name):
+        return SessionInfo(name=name, cwd="/tmp", provider="claude")
+
+    async def list_models(name):
+        return [{"value": "modelo-real"}]
+
+    def unavailable(*args):
+        raise api.claude_models.ClaudeIndisponivel("Rust indisponível")
+
+    monkeypatch.setattr(api, "_cached_info", info)
+    monkeypatch.setattr(api, "_headless", lambda name: True)
+    monkeypatch.setattr(api, "get_adapter", lambda provider: SimpleNamespace(list_models=list_models, escolhas=lambda name: (None, None)))
+    monkeypatch.setattr(api.headless_sessions, "load", lambda name: {})
+    monkeypatch.setattr(api.claude_models, "listar", lambda *args: [{"value": "modelo-real"}])
+    monkeypatch.setattr(api.claude_models, "para_tela", unavailable)
+    route = "/api/sessions/claude/model/options" if session else "/api/model-options?provider=claude"
+    response = cli.get(route, headers=AUTH)
+    assert response.status_code == 503
+    assert "Rust indisponível" in str(response.json())
+    assert "models" not in response.json()
 
 
 @pytest.fixture(autouse=True)

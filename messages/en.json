@@ -6163,7 +6163,7 @@
   "native_voice_harness_model_help": "Choose a model from the destination account's catalog. Open a conversation in the other harness to change its choice.",
   "native_voice_model_choose": "Choose a model",
   "native_voice_models_refresh": "Refresh catalog",
-  "native_voice_models_loading": "Loading the account's catalog…",
+  "native_voice_harness_models_loading": "Loading the account's catalog…",
   "native_voice_models_empty": "The catalog did not offer any available models.",
   "native_voice_models_destination": "Open a conversation on this server to load the destination account's catalog.",
   "native_dictation_config_failed": "Unable to read dictation preferences. Open Settings → Voice to try again.",

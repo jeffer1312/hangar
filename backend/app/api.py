@@ -10223,12 +10223,13 @@ async def model_options(name: str):
         hl = get_adapter(CLAUDE_HEADLESS)
         try:
             modelos = await hl.list_models(name)
+            meta = headless_sessions.load(name) or {}
+            atual = hl.escolhas(name)[0] or meta.get("model")
+            models = await asyncio.to_thread(claude_models.para_tela, modelos, atual)
         except Exception as e:
             raise HTTPException(503, detail=erro("erro_modelos_indisponiveis", f"não consegui listar os modelos: {e}"))
-        meta = headless_sessions.load(name) or {}
-        atual = hl.escolhas(name)[0] or meta.get("model")
         return {"kind": "claude", "engine": None, "effort": meta.get("effort"),
-                "models": claude_models.para_tela(modelos, atual)}
+                "models": models}
     # Conta Anthropic: le o picker de verdade. Abre e fecha um overlay — nao vai pro scrollback,
     # nao entra no transcript e nao gasta token.
     await asyncio.to_thread(_recusa_se_painel_aberto, name)
@@ -10334,7 +10335,11 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
         # Sem `effort`: quem sabe o nivel atual e a SESSAO, e aqui nao ha uma. A chave e a mesma do
         # picker de proposito (a lista vem da conta, nao da sessao); nenhum leitor do cache usa o
         # campo, e inventar um nivel aqui seria pior que a ausencia dele.
-        resp = {"kind": "claude", "engine": None, "models": claude_models.para_tela(crus)}
+        try:
+            models = await asyncio.to_thread(claude_models.para_tela, crus)
+        except claude_models.ClaudeIndisponivel as error:
+            raise HTTPException(503, detail=erro("erro_modelos_indisponiveis", str(error))) from None
+        resp = {"kind": "claude", "engine": None, "models": models}
         _models_cache_put(chave, resp)
         return {**resp, "reduced": False}
     return {"kind": "claude", "reduced": True,

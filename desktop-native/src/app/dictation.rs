@@ -574,8 +574,8 @@ impl Hangar {
         self.stop_audio("dictation");
     }
 
-    fn dictation_ready(&self) -> bool {
-        let Some(api)=self.session_api().or_else(||self.api.clone()) else{return false};
+    fn dictation_ready(&self, cx: &App) -> bool {
+        let Some((api,_))=self.dictation_target(cx) else{return false};
         if !self.dictation.organization.as_ref().is_some_and(|(identity,_)|*identity==api.identity()){return false;}
         if self.selected.is_none() { return self.new_chat_screen() && self.opening.is_none(); }
         self.selected_key().is_some() && self.chat_online && self.history_installed
@@ -645,7 +645,8 @@ impl Hangar {
 
     fn set_dictation_style(&mut self, style: &'static str, cx: &mut Context<Self>) {
         if self.dictation.recorder.is_some() || self.dictation.request.is_some() { return; }
-        let Some(api) = self.api.clone() else { return; };
+        let Some((api,_)) = self.dictation_target(cx) else { return; };
+        let identity = api.identity();
         let (connection, before) = (self.connection, self.dictation.style);
         self.dictation.style = Some((connection, style));
         self.dictation.style_writes += 1;
@@ -658,6 +659,7 @@ impl Hangar {
             let result = job.await.unwrap_or_else(|_| Err(Failure::local("invalid_response")));
             let _ = this.update(cx, |this, cx| {
                 if this.connection != connection || this.dictation.style_writes != mine { return; }
+                if this.dictation_target(cx).is_none_or(|(api,_)|api.identity()!=identity) { return; }
                 if let Err(error) = result {
                     this.dictation.style = before;
                     this.dictation.error = Some(Self::failure(&error));
@@ -668,8 +670,8 @@ impl Hangar {
         cx.notify();
     }
 
-    fn dictation_options(&self)->api::DictationOptions {
-        let identity=self.session_api().or_else(||self.api.clone()).map(|api|api.identity());
+    fn dictation_options(&self, cx: &App)->api::DictationOptions {
+        let identity=self.dictation_target(cx).map(|(api,_)|api.identity());
         self.dictation.organization.as_ref().filter(|(owner,_)|Some(owner)==identity.as_ref())
             .map(|(_,selection)|selection.options(self.selected.as_ref())).unwrap_or_default()
     }
@@ -685,9 +687,9 @@ impl Hangar {
             return;
         }
         if self.connection_dialog || self.settings.is_some() || window.has_active_dialog(cx) { return; }
-        if !self.dictation_ready() { return; }
+        if !self.dictation_ready(cx) { return; }
         self.cancel_dictation();
-        self.dictation.snapshot=Some(self.dictation_options());
+        self.dictation.snapshot=Some(self.dictation_options(cx));
         self.dictation.snapshot_style=self.dictation.style(self.connection);
         match Recorder::start() {
             Ok(recorder) => {
@@ -742,7 +744,7 @@ impl Hangar {
 
     pub(super) fn transcribe_file(&mut self, key: &SessionKey, filename: String, bytes: Vec<u8>, cx: &mut Context<Self>) -> Result<(), String> {
         if bytes.len() as u64 > api::MAX_BYTES { return Err(tr("attach_too_big_named").replace("{name}", &filename)); }
-        if !self.dictation_ready() { return Err(tr("attach_audio_not_ready").replace("{name}", &filename)); }
+        if !self.dictation_ready(cx) { return Err(tr("attach_audio_not_ready").replace("{name}", &filename)); }
         if self.composer_key().as_ref() != Some(key) { return Err(tr("attach_audio_session_changed")); }
         let Some(owner) = self.dictation_owner(cx) else { return Err(tr("attach_audio_session_changed")); };
         if self.dictation.recorder.is_some() || self.dictation.request.is_some() {
@@ -766,9 +768,9 @@ impl Hangar {
     /// Áudio dos anexos da sessão aberta de volta ao ditado: o servidor transcreve o arquivo que já tem (`?arquivo=`),
     /// nada desce nem sobe de novo.
     pub(super) fn dictate_upload(&mut self, filename: String, cx: &mut Context<Self>) -> Result<(), String> {
-        let target = self.dictation.saved_audio_target(self.dictation_ready(), self.open_dictation_target(), &filename)?;
+        let target = self.dictation.saved_audio_target(self.dictation_ready(cx), self.open_dictation_target(), &filename)?;
         self.cancel_dictation();
-        self.dictation.snapshot=Some(self.dictation_options());
+        self.dictation.snapshot=Some(self.dictation_options(cx));
         self.dictation.snapshot_style=self.dictation.style(self.connection);
         self.dictation.owner = self.dictation_owner(cx);
         self.dictation.file_name = Some(filename.clone());
@@ -1042,13 +1044,13 @@ impl Hangar {
         } else { chrome::icon_button("dictation-toggle", IconName::Mic, label.clone(), cx) };
         let voice = self.voice.call.is_some();
         let mic = mic.accessibility_label(label.clone())
-            .disabled(voice || in_flight || (!recording && (!readable || !self.dictation_ready())))
+            .disabled(voice || in_flight || (!recording && (!readable || !self.dictation_ready(cx))))
             .loading(transcribing)
             .tooltip(if voice { tr("voice_dictation_blocked") } else { format!("{label} · {}", tr("dictation_shortcut")) })
             .on_click(cx.listener(|this, _, window, cx| this.toggle_dictation(window, cx)));
         let owner = here && self.dictation.owner.is_some();
         let style = self.dictation.style(self.connection).unwrap_or("prosa");
-        let options=if recording||in_flight {self.dictation.snapshot.clone().unwrap_or_else(||self.dictation_options())}else{self.dictation_options()};
+        let options=if recording||in_flight {self.dictation.snapshot.clone().unwrap_or_else(||self.dictation_options(cx))}else{self.dictation_options(cx)};
         let organized=options.mode!="none";
         let entity = cx.entity().downgrade();
         // Gravando, some: trocar no meio não muda nada (o backend lê o estilo no fim) e o espaço é do botão de parar.

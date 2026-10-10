@@ -302,6 +302,8 @@ impl ServerConfig {
         (self.quiet.load, self.quiet.saving, self.quiet.note) = (Remote::default(), false, None);
         (self.voices, self.usage, self.voice_picker) = (Remote::default(), Remote::default(), None);
         self.provider_status = Remote::default();
+        self.dictation_catalog.reset();
+        self.dictation_catalog_target = None;
         self.provider_tests.clear();
     }
 
@@ -775,12 +777,12 @@ impl Hangar {
 
     fn load_dictation_models(&mut self,cx:&mut Context<Self>) {
         if self.server_config.organization_mode()!="harness"||self.server_config.dictation_catalog.loading{return;}
-        let Some(api)=self.api.clone() else{return;};
-        let Some(session)=self.selected.as_ref().filter(|_|self.session_api().is_some_and(|target|target.identity()==api.identity())) else {
+        let Some(api)=self.session_api() else{return;};
+        let Some(session)=self.selected.as_ref() else {
             let seq=self.server_config.dictation_catalog.start();
             self.server_config.dictation_catalog.finish(seq,Err(tr("voice_models_destination")));cx.notify();return;
         };
-        let target=format!("{}|{:?}|{:?}",session.name,session.lifecycle_id,session.conta);
+        let target=format!("{}|{}|{:?}|{:?}",api.identity(),session.name,session.lifecycle_id,session.conta);
         let name=session.name.clone();
         let seq=self.server_config.dictation_catalog.start();
         self.server_config.dictation_catalog_target=Some(target.clone());
@@ -931,7 +933,7 @@ impl Hangar {
                 self.show_voice(window, cx);
             }
             ServerConfigReply::DictationModels(seq,target,result)=>{
-                let current=self.selected.as_ref().map(|session|format!("{}|{:?}|{:?}",session.name,session.lifecycle_id,session.conta));
+                let current=self.selected.as_ref().zip(self.session_api()).map(|(session,api)|format!("{}|{}|{:?}|{:?}",api.identity(),session.name,session.lifecycle_id,session.conta));
                 if current.as_deref()!=Some(target.as_str()){
                     self.server_config.dictation_catalog.finish(seq,Err(tr("voice_models_destination")));return;
                 }
@@ -1532,7 +1534,7 @@ impl Hangar {
                     }))));
         }
         body
-            .when(state.dictation_catalog.loading,|el|el.child(div().id("voice-models-loading").role(Role::Status).child(tr("voice_models_loading"))))
+            .when(state.dictation_catalog.loading,|el|el.child(div().id("voice-models-loading").role(Role::Status).child(tr("voice_harness_models_loading"))))
             .when_some(state.dictation_catalog.value.as_ref().and_then(|value|value.as_ref().err()).cloned(),|el,error|el.child(div().id("voice-models-error").role(Role::Alert).text_sm().text_color(theme::warning()).whitespace_normal().child(error)))
             .when(catalog.is_some_and(|catalog|catalog["models"].as_array().is_some_and(Vec::is_empty)),|el|el.child(tr("voice_models_empty")))
             .child(Button::new("voice-models-refresh").ghost().small().label(tr("voice_models_refresh")).disabled(state.dictation_catalog.loading)
@@ -2024,6 +2026,20 @@ mod tests {
         assert_eq!(env_value(&json!({"valor": "", "definida": false, "segredo": false})), "—");
         assert_eq!(env_value(&json!({"valor": 8765, "definida": true, "segredo": false})), "8765");
         assert_eq!(shown(&json!(false)), crate::i18n::tr("server_no"));
+    }
+
+    #[test]
+    fn reconnecting_allows_a_new_dictation_catalog_after_the_old_request_is_discarded() {
+        let mut state = ServerConfig::default();
+        state.reconnected("servidor".into());
+        let old = state.dictation_catalog.start();
+        state.dictation_catalog_target = Some("conversa-antiga".into());
+        state.reconnected("servidor".into());
+        assert!(!state.dictation_catalog.loading, "a resposta descartada não pode bloquear uma nova consulta");
+        assert!(state.dictation_catalog_target.is_none());
+        let next = state.dictation_catalog.start();
+        assert!(state.dictation_catalog.finish(next, Ok(json!({"models":[]}))));
+        assert!(!state.dictation_catalog.finish(old, Ok(json!({"models":["antigo"]}))));
     }
 
     #[test]
