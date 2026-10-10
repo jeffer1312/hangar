@@ -214,7 +214,7 @@ fn attrs(raw: &str) -> HashMap<&str, &str> {
 }
 
 /// `_teammate_textos` (transcript.py:106): (recados a mostrar, colegas que ficaram ociosos).
-fn teammate_texts(text: Option<&Value>) -> Option<(Vec<String>, Vec<String>)> {
+fn teammate_texts(text: Option<&Value>) -> Option<(Vec<String>, Vec<(String, Option<f64>)>)> {
     let t = lstrip(text?.as_str()?);
     if !TEAMMATE_START.is_match(t) {
         return None;
@@ -230,7 +230,7 @@ fn teammate_texts(text: Option<&Value>) -> Option<(Vec<String>, Vec<String>)> {
         if body.starts_with('{') {
             if let Some(Value::Object(aviso)) = pyjson::loads_lossless(body) {
                 if aviso.get("type").and_then(Value::as_str) == Some("idle_notification") {
-                    idle.push(name.to_string());
+                    idle.push((name.to_string(), ts(&aviso)));
                 }
                 continue;
             }
@@ -247,10 +247,13 @@ fn teammate_events(text: Option<&Value>, id: &str) -> Option<Vec<ChatEvent>> {
     let (texts, idle) = teammate_texts(text)?;
     let mut events: Vec<_> =
         texts.into_iter().enumerate().map(|(k, t)| text_event(ChatKind::UserMsg, sub_id(id, k), t)).collect();
-    // ponytail: fecha no 1o ocioso; colega reacordado por SendMessage nao volta a aparecer rodando.
-    // Pra isso, reabrir no tool_use SendMessage com `to` == nome.
+    // O ts e o do aviso, nao o da entrega: ele chega ao lider depois do SendMessage que ja reacordou
+    // o colega, e o fold so fecha com aviso posterior a esse SendMessage.
     let n = events.len();
-    events.extend(idle.iter().enumerate().map(|(j, name)| task_result(sub_id(id, n + j), &format!("teammate:{name}"))));
+    events.extend(idle.into_iter().enumerate().map(|(j, (name, at))| ChatEvent {
+        ts: at,
+        ..task_result(sub_id(id, n + j), &format!("teammate:{name}"))
+    }));
     Some(events)
 }
 
@@ -818,6 +821,10 @@ mod tests {
         let idle = user(" color=\"blue\">\n{\"type\":\"idle_notification\",\"from\":\"frente-c\"}\n");
         let [fim] = <[ChatEvent; 1]>::try_from(idle).unwrap();
         assert_eq!((fim.kind, fim.tool_use_id.as_deref()), (ChatKind::ToolResult, Some("task:teammate:frente-c")));
+        let idle = user(" color=\"blue\">
+{\"type\":\"idle_notification\",\"from\":\"frente-c\",\"timestamp\":\"2026-10-01T13:59:53.812Z\"}
+");
+        assert_eq!(idle[0].ts, Some(1_790_863_193.812));
 
         let recado = user(" summary=\"x\">\nfecho a frente agora.\n");
         assert!(recado.iter().all(|e| e.kind == ChatKind::UserMsg));

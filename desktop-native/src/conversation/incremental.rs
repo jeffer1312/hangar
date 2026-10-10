@@ -168,6 +168,8 @@ struct ActivityFold {
     resulted: HashSet<String>,
     background: HashMap<String, String>,
     finished_early: HashSet<String>,
+    // Colega de equipe -> hora do último SendMessage para ele; aviso de ocioso anterior chegou atrasado.
+    woken: HashMap<String, f64>,
     shell_pending: HashSet<String>,
     shell_calls: HashSet<String>,
     agent_calls: HashSet<String>,
@@ -188,7 +190,10 @@ impl ActivityFold {
         match event.kind.as_str() {
             "tool_result" => {
                 let Some(id) = tool_key(event) else { return false };
-                if let Some(task) = id.strip_prefix("task:") { return self.finish(task); }
+                if let Some(task) = id.strip_prefix("task:") {
+                    if matches!((self.woken.get(task), event.ts), (Some(&since), Some(at)) if at < since) { return false; }
+                    return self.finish(task);
+                }
                 let text = event.result.as_deref().unwrap_or("");
                 let mut changed = false;
                 if self.agent_calls.contains(id) {
@@ -230,6 +235,13 @@ impl ActivityFold {
                 match event.tool_name.as_deref() {
                     Some("TodoWrite") => { if let Some(list) = whole_list(input, "todos", "content") { self.whole = Some(list); } return true; }
                     Some("update_plan") => { if let Some(list) = whole_list(input, "plan", "step") { self.whole = Some(list); } return true; }
+                    // Colega de equipe trabalha em rodadas: a mensagem reabre o que o aviso de ocioso fechou.
+                    Some("SendMessage") => {
+                        let key = format!("teammate:{}", text("to").or_else(|| text("recipient")).unwrap_or_default());
+                        let Some(call) = self.background.get(&key).cloned() else { return false };
+                        if let Some(at) = event.ts { self.woken.insert(key, at); }
+                        return self.resulted.remove(&call);
+                    }
                     Some("TaskCreate") => {
                         let title = text("subject").or_else(|| text("content"))
                             .unwrap_or_else(|| crate::i18n::tr_web("atividade_tarefa_fallback", &HashMap::new()).unwrap_or_else(|| "Tarefa".into()));

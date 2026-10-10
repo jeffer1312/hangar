@@ -125,7 +125,7 @@ def _teammate_textos(texto) -> Optional[tuple[list[str], list[str]]]:
                 aviso = None
             if isinstance(aviso, dict):
                 if aviso.get("type") == "idle_notification":
-                    ociosos.append(nome)
+                    ociosos.append((nome, _ts(aviso)))
                 continue  # aviso estruturado (colega ocioso etc.), não recado
         if corpo:
             out.append(f"[de: {nome}] {corpo}")
@@ -139,11 +139,11 @@ def _teammate_eventos(texto, id_: str) -> Optional[list[ChatEvent]]:
     textos, ociosos = lido
     eventos = [ChatEvent(kind="user_msg", id=_sub_id(id_, k), text=t) for k, t in enumerate(textos)]
     # Colega ocioso fecha o "teammate:<nome>" do spawn (bg_agent_id), como a <task-notification>.
-    # ponytail: fecha no 1o ocioso; colega reacordado por SendMessage nao volta a aparecer rodando.
-    # Pra isso, reabrir no tool_use SendMessage com `to` == nome.
+    # O ts e o do aviso, nao o da entrega: ele chega ao lider atrasado, depois do SendMessage que ja
+    # reacordou o colega, e o fold so fecha com aviso posterior a esse SendMessage.
     eventos += [ChatEvent(kind="tool_result", id=_sub_id(id_, len(eventos) + j),
-                          tool_use_id=f"task:teammate:{nome}", result="task-notification")
-                for j, nome in enumerate(ociosos)]
+                          tool_use_id=f"task:teammate:{nome}", result="task-notification", ts=ts)
+                for j, (nome, ts) in enumerate(ociosos)]
     return eventos
 
 

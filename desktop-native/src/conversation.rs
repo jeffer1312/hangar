@@ -273,6 +273,8 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     let mut finished_early: HashSet<String> = HashSet::new();
     // Bash de fundo esperando a resposta de lançamento; outro resultado com a mesma frase não conta.
     let mut shell_pending: HashSet<&str> = HashSet::new();
+    // Colega de equipe -> hora do último SendMessage para ele; aviso de ocioso anterior chegou atrasado.
+    let mut woken: HashMap<String, f64> = HashMap::new();
     let mut agent_calls: HashSet<&str> = HashSet::new();
     let mut agent_ids: HashMap<&str, &str> = HashMap::new();
     let mut agents = Vec::new();
@@ -287,7 +289,11 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
         match event.kind.as_str() {
             "tool_result" => {
                 let Some(id) = tool_key(event) else { continue };
-                if let Some(task) = id.strip_prefix("task:") { finish(task.to_owned(), &background, &mut resulted, &mut finished_early); continue; }
+                if let Some(task) = id.strip_prefix("task:") {
+                    if matches!((woken.get(task), event.ts), (Some(&since), Some(at)) if at < since) { continue; }
+                    finish(task.to_owned(), &background, &mut resulted, &mut finished_early);
+                    continue;
+                }
                 let text = event.result.as_deref().unwrap_or("");
                 // Só o resultado de um Agent é lido: a conta é refeita a cada evento e as saídas de ferramenta são grandes.
                 if agent_calls.contains(id) {
@@ -326,6 +332,15 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 match event.tool_name.as_deref() {
                     Some("TodoWrite") => { if let Some(list) = whole_list(input, "todos", "content") { whole = Some(list); } continue; }
                     Some("update_plan") => { if let Some(list) = whole_list(input, "plan", "step") { whole = Some(list); } continue; }
+                    // Colega de equipe trabalha em rodadas: a mensagem reabre o que o aviso de ocioso fechou.
+                    Some("SendMessage") => {
+                        let key = format!("teammate:{}", text("to").or_else(|| text("recipient")).unwrap_or_default());
+                        if let Some(&call) = background.get(&key) {
+                            resulted.remove(call);
+                            if let Some(at) = event.ts { woken.insert(key, at); }
+                        }
+                        continue;
+                    }
                     Some("TaskCreate") => {
                         let title = text("subject").or_else(|| text("content"))
                             .unwrap_or_else(|| crate::i18n::tr_web("atividade_tarefa_fallback", &HashMap::new()).unwrap_or_else(|| "Tarefa".into()));

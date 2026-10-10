@@ -46,6 +46,15 @@ describe('activity — pareamento de agente background', () => {
     expect(run([launch('tu1'), spawn, ocioso]).runningAgents).toBe(0);
   });
 
+  it('colega reacordado por SendMessage volta a rodar; aviso atrasado da rodada anterior não fecha', () => {
+    const spawn: ChatEvent = { kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'tu1', result: 'Spawned successfully.', bg_agent_id: 'teammate:ana' };
+    const ocioso = (ts: number): ChatEvent => ({ kind: 'tool_result', id: `e${seq++}`, tool_use_id: 'task:teammate:ana', result: 'task-notification', ts });
+    const envia: ChatEvent = { kind: 'tool_use', id: `e${seq++}`, tool_use_id: 'tu2', tool_name: 'SendMessage', tool_input: { to: 'ana', message: 'mais' }, ts: 10 };
+    expect(run([launch('tu1'), spawn, ocioso(5), envia]).runningAgents).toBe(1);
+    expect(run([launch('tu1'), spawn, envia, ocioso(5)]).runningAgents).toBe(1);
+    expect(run([launch('tu1'), spawn, envia, ocioso(5), ocioso(20)]).runningAgents).toBe(0);
+  });
+
   it('segue rodando enquanto nao chega o evento de fim', () => {
     const s = run([launch('tu1'), launched('tu1', 'aa0777')]);
     expect(s.runningAgents).toBe(1);

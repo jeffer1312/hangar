@@ -124,6 +124,9 @@ export function createActivityFolder(): ActivityFolder {
   // voltou a falar, ele acabou, mesmo sem tool_result gravado. tool_use/tool_result não contam
   // (chamadas paralelas terminam em qualquer ordem), nem a msg da fila (queued-).
   let semResultado = new Set<string>();
+  // Colega de equipe trabalha em rodadas: SendMessage reabre, aviso de ocioso fecha. O aviso chega
+  // ao lider atrasado (depois do SendMessage seguinte), entao so fecha o aviso com ts posterior.
+  let acordado = new Map<string, number>();
   // Marca um agente background como terminado pelo agentId, com o launch vindo ANTES ou DEPOIS do fim.
   function completeAgent(agentId: string): void {
     const tuid = bgAgent.get(agentId);
@@ -143,6 +146,8 @@ export function createActivityFolder(): ActivityFolder {
       // tool_result sintetico do backend (transcript.py): <task-notification> virou "task:<id>".
       // Resolve o launch background correspondente e marca como terminado.
       if (e.tool_use_id.startsWith('task:')) {
+        const desde = acordado.get(e.tool_use_id.slice(5));
+        if (desde !== undefined && typeof e.ts === 'number' && e.ts < desde) return;
         completeAgent(e.tool_use_id.slice(5));
         return;
       }
@@ -183,6 +188,14 @@ export function createActivityFolder(): ActivityFolder {
     // o stream, não "pegar o último". Suporta também TodoWrite stock (lista inteira por chamada)
     // como fallback: se houver, a última vence (é canônica).
     switch (e.tool_name) {
+      case 'SendMessage': {
+        const alvo = `teammate:${String(input.to ?? input.recipient ?? '')}`;
+        const tuid = bgAgent.get(alvo);
+        if (!tuid) break;
+        resulted.delete(tuid);
+        if (typeof e.ts === 'number') acordado.set(alvo, e.ts);
+        break;
+      }
       case 'TodoWrite': {
         let todos: unknown = input.todos;
         if (typeof todos === 'string') {
@@ -303,6 +316,7 @@ export function createActivityFolder(): ActivityFolder {
     bgAgent = new Map();
     completedIds = new Set();
     semResultado = new Set();
+    acordado = new Map();
     shells = [];
     bgPendente = new Set();
     for (const e of events) push(e);

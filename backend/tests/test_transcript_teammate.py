@@ -41,6 +41,12 @@ def test_aviso_de_colega_ocioso_so_fecha_o_colega_no_painel():
     assert _fins(_user([{"type": "text", "text": _OCIOSO}])) == _FIM_ANA
 
 
+def test_aviso_de_ocioso_leva_a_hora_dele_nao_a_da_entrega():
+    aviso = _OCIOSO.replace('"from":"ana"', '"from":"ana","timestamp":"2026-10-01T13:59:53.812Z"')
+    [fim] = parse_obj(_user(aviso, timestamp="2026-10-01T14:00:01.000Z"))
+    assert fim.ts == 1790863193.812
+
+
 def test_varios_blocos_mostram_so_os_recados():
     assert _textos(_user(_DOIS)) == [("user_msg", "[de: beto] Versões: git 2.55.0, Python 3.14.7."),
                                      ("tool_result", None)]

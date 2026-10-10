@@ -54,6 +54,24 @@ fn teammate_runs_until_idle_and_keeps_its_real_agent_id() {
     assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
 }
 
+#[test]
+fn teammate_woken_by_send_message_runs_again_and_ignores_the_late_idle() {
+    let events = [
+        event(json!({"id":"agent","kind":"tool_use","tool_use_id":"a","tool_name":"Agent","tool_input":{"prompt":"Ler","name":"ana"}})),
+        event(json!({"id":"spawn","kind":"tool_result","tool_use_id":"a","result":"Spawned successfully.","bg_agent_id":"teammate:ana"})),
+        event(json!({"id":"send","kind":"tool_use","tool_use_id":"s","tool_name":"SendMessage","tool_input":{"to":"ana"},"ts":10.0})),
+        event(json!({"id":"idle1","kind":"tool_result","tool_use_id":"task:teammate:ana","result":"task-notification","ts":5.0})),
+        event(json!({"id":"idle2","kind":"tool_result","tool_use_id":"task:teammate:ana","result":"task-notification","ts":20.0})),
+    ];
+    let mut fold = super::ActivityFold::default();
+    for (i, ev) in events.iter().enumerate().take(4) { fold.push(i, ev); }
+    assert!(fold.snapshot().agents[0].running);
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events[..4]));
+    fold.push(4, &events[4]);
+    assert!(!fold.snapshot().agents[0].running);
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
+}
+
 fn views() -> Vec<View> {
     [ThinkingTools::None, ThinkingTools::Search, ThinkingTools::All].into_iter().flat_map(|thinking| {
         [false, true].into_iter().flat_map(move |tasks| {
