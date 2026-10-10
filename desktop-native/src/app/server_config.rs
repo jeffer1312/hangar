@@ -911,7 +911,10 @@ impl Hangar {
                         result.map_err(|error| Self::failure(&error)).and_then(|value|
                             value.get("text").and_then(Value::as_str).filter(|s| !s.trim().is_empty())
                                 .map(str::to_owned).ok_or_else(|| tr("invalid_response"))));
-                } else { self.server_config.provider_tests.remove(&id); }
+                } else if let Some(test) = self.server_config.provider_tests.get_mut(&id).filter(|t| t.seq == seq) {
+                    // Seletor cancelado: volta ao vazio sem reusar o número, que um pedido anterior ainda pode trazer.
+                    test.reset();
+                }
                 self.load_provider_status(cx);
             }
         }
