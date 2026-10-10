@@ -113,11 +113,17 @@ fn rpc_text(step: &str, error: RpcError) -> String {
     }
 }
 
-/// O receptor volta junto: largado, o leitor do Rpc para na primeira notificação e as respostas nunca chegam.
-async fn session(launch: &Launch) -> Result<(Rpc, async_channel::Receiver<super::rpc::Incoming>), String> {
+/// O agente roda programas de fora: nunca leva o token do dono nem o segredo interno do servidor.
+fn command(launch: &Launch) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(&launch.program);
     command.args(&launch.args).envs(launch.env.iter().map(|(k, v)| (k.as_str(), v.as_os_str())));
-    let (rpc, incoming) = Rpc::spawn(command).await.map_err(|e| rpc_text("a subida", e))?;
+    for key in crate::terminal_process::PRIVATE_ENV_KEYS { command.env_remove(key); }
+    command
+}
+
+/// O receptor volta junto: largado, o leitor do Rpc para na primeira notificação e as respostas nunca chegam.
+async fn session(launch: &Launch) -> Result<(Rpc, async_channel::Receiver<super::rpc::Incoming>), String> {
+    let (rpc, incoming) = Rpc::spawn(command(launch)).await.map_err(|e| rpc_text("a subida", e))?;
     rpc.request("initialize", initialize_params()).await.map_err(|e| rpc_text("initialize", e))?;
     rpc.notify("notifications/initialized", json!({})).await.map_err(|e| rpc_text("initialize", e))?;
     Ok((rpc, incoming))
@@ -168,6 +174,19 @@ mod tests {
         assert_eq!(get(&launch, JEV_KEY), Some(&OsString::from("k")));
         assert_eq!(get(&launch, "LLM_MODEL"), Some(&OsString::from("m")));
         assert_eq!(get(&launch, "HCC_AGENTS_DIR"), Some(&OsString::from("/t")));
+    }
+
+    #[test]
+    fn child_never_gets_owner_or_internal_secrets() {
+        let launch = Launch { program: "/opt/hcc".into(), args: vec![],
+            env: vec![("LLM_MODEL".into(), "m".into()), ("CP_AUTH_TOKEN".into(), "da-entrada".into())] };
+        let command = command(&launch);
+        let envs: Vec<(String, Option<OsString>)> = command.as_std().get_envs()
+            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(OsString::from))).collect();
+        for key in ["CP_AUTH_TOKEN", "HANGAR_INTERNAL_SECRET", "HANGAR_SERVER_UPSTREAM", "HANGAR_SERVER_LISTEN", "HANGAR_RUNTIME_INSTANCE"] {
+            assert!(envs.contains(&(key.to_owned(), None)), "{key} chega ao filho");
+        }
+        assert!(envs.contains(&("LLM_MODEL".to_owned(), Some("m".into()))));
     }
 
     #[test]

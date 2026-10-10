@@ -62,14 +62,8 @@ impl AccountEnvironment {
         });
         let mut env = self.base.clone();
         env.retain(|key, _| {
-            !matches!(
-                key.to_ascii_uppercase().as_str(),
-                "CP_AUTH_TOKEN"
-                    | "HANGAR_INTERNAL_SECRET"
-                    | "HANGAR_RUNTIME_INSTANCE"
-                    | "HANGAR_SERVER_LISTEN"
-                    | "HANGAR_SERVER_UPSTREAM"
-            )
+            let key = key.to_ascii_uppercase();
+            !crate::terminal_process::PRIVATE_ENV_KEYS.contains(&key.as_str())
         });
         if !account.is_default {
             env.retain(|key, _| {
