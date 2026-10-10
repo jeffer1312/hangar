@@ -12,7 +12,9 @@ use tokio::sync::{Notify, mpsc};
 pub struct CallId(pub Value);
 pub enum Phase { Connecting, Live, Closed }
 #[derive(Debug, Clone)]
-pub enum VoiceFailure { Microphone, Speaker, AppServer, Realtime(String), Network, Timeout, Organizer, ModelSwitch, OwnFolder, AudioStopped, Closed }
+pub enum VoiceFailure { Microphone, Speaker, AppServer, Realtime(String), Network, Timeout, Organizer, ModelSwitch, OwnFolder, AudioStopped, Closed,
+    /// A conversa falada caiu sem a chamada acabar: espera uma oferta nova.
+    AudioLost }
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Activity { #[default] Idle, Thinking, Searching, Working }
 pub enum VoiceEvent {
@@ -819,12 +821,17 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             let _ = events.send(VoiceEvent::OrganizerContext { used, window }).await;
                         },
                         "thread/realtime/error" | "thread/realtime/closed" if restarting || detached => log("realtime ended while switching device"),
-                        "thread/realtime/error" => break Err(failed("realtime")(VoiceFailure::Realtime(params["message"].as_str().unwrap_or_default().to_owned()))),
-                        "thread/realtime/closed" => {
+                        // Fim que não pedimos: caiu só a perna de áudio (o celular dorme antes de o WebSocket perceber). A thread
+                        // do organizador espera a próxima oferta; quem encerra a chamada é o stop explícito ou o prazo do hub.
+                        "thread/realtime/error" | "thread/realtime/closed" => {
+                            if stopped.load(Ordering::Relaxed) { break Ok(()); }
                             // Só um código curto vai ao diário; o texto livre pode trazer conteúdo.
                             let reason = params["reason"].as_str().filter(|r| r.len() <= 40 && r.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))).unwrap_or("?");
-                            log(format!("realtime closed by server reason={reason} stopped={}", stopped.load(Ordering::Relaxed)));
-                            break if stopped.load(Ordering::Relaxed) { Ok(()) } else { Err(VoiceFailure::Closed) };
+                            log(format!("realtime audio lost method={method} reason={reason}: waiting for a device"));
+                            detached = true;
+                            out.away = true;
+                            let _ = events.send(VoiceEvent::Phase(Phase::Connecting)).await;
+                            let _ = events.send(VoiceEvent::Failed(VoiceFailure::AudioLost)).await;
                         }
                         _ => {}
                     }
@@ -1086,17 +1093,52 @@ mod tests {
 
     #[tokio::test]
     async fn detached_before_the_first_offer_does_not_stick() {
-        let (spawn, _seen, push) = fake_app_server();
+        let (spawn, mut seen, _push) = fake_app_server();
         let (tx, events) = async_channel::unbounded();
         let voice = Voice::start(options(json!([])), spawn, tx);
         voice.detached();
         voice.offer(1, "v=0 offer A".into(), "ctx".into());
         next_answer(&events).await;
         voice.live();
+        // Com o aparelho presente, a fala sai na hora em vez de ficar guardada para o próximo.
+        voice.jev_verdict("turn-1".into(), SendVerdict::Unsure, Some("falada já".into()), None);
+        loop { let m = seen.recv().await.unwrap(); if m["method"] == "thread/realtime/appendSpeech" && m["params"]["text"] == "falada já" { break; } }
+    }
+
+    /// O app-server fecha a conversa falada antes de o hub perceber a queda do aparelho: a chamada espera, não acaba.
+    #[tokio::test]
+    async fn audio_lost_before_detached_keeps_the_call_for_the_next_offer() {
+        let (spawn, mut seen, push) = fake_app_server();
+        let (tx, events) = async_channel::unbounded();
+        let voice = Voice::start(options(json!([])), spawn, tx);
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
+        next_answer(&events).await;
+        voice.live();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        // Com o aparelho presente, o fim da conversa falada encerra a chamada.
-        push.send(json!({"method": "thread/realtime/closed", "params": {"threadId": "t1", "reason": "x"}})).unwrap();
-        loop { if let VoiceEvent::Phase(Phase::Closed) = events.recv().await.unwrap() { break; } }
+        push.send(json!({"method": "thread/realtime/closed", "params": {"threadId": "t1", "reason": "peer_gone"}})).unwrap();
+        let mut lost = false;
+        while !lost {
+            match events.recv().await.unwrap() {
+                VoiceEvent::Failed(VoiceFailure::AudioLost) => lost = true,
+                VoiceEvent::Phase(Phase::Closed) => panic!("a chamada acabou"),
+                _ => {}
+            }
+        }
+        // Sem aparelho, a fala espera o próximo.
+        voice.jev_verdict("turn-1".into(), SendVerdict::Unsure, Some("guardada".into()), None);
+        voice.detached();
+        voice.offer(2, "v=0 offer B".into(), "ctx".into());
+        assert_eq!(next_answer(&events).await, (2, "v=0 answer 2".into()));
+        voice.live();
+        let spoke = |m: &Value| m["method"] == "thread/realtime/appendSpeech" && m["params"]["text"] == "guardada";
+        let mut threads = 0;
+        loop {
+            let m = seen.recv().await.unwrap();
+            if m["method"] == "thread/start" { threads += 1; }
+            if spoke(&m) { break; }
+        }
+        assert_eq!(threads, 1, "mesma thread do organizador");
+        while let Ok(e) = events.try_recv() { assert!(!matches!(e, VoiceEvent::Phase(Phase::Closed)), "não encerrou"); }
     }
 
     #[tokio::test]

@@ -476,7 +476,7 @@ impl Controller {
         log(format!("call failure code={code}"));
         self.diag.report("rust.voice_failed", "voice", code, "a chamada de voz falhou");
         // Estas não encerram a chamada: ficam só no retrato.
-        if !matches!(failure, VoiceFailure::Organizer | VoiceFailure::ModelSwitch | VoiceFailure::OwnFolder) {
+        if !matches!(failure, VoiceFailure::Organizer | VoiceFailure::ModelSwitch | VoiceFailure::OwnFolder | VoiceFailure::AudioLost) {
             self.last_failure = Some((code, text.clone()));
         }
         self.snap.error = Some((code.to_owned(), text));
@@ -574,5 +574,6 @@ fn failure_text(failure: &VoiceFailure) -> (&'static str, String) {
         VoiceFailure::OwnFolder => ("own_folder", "Não consegui criar a pasta do organizador (~/.hangar/voz/arquivos); ele conversa, mas não consegue gravar arquivos.".into()),
         VoiceFailure::AudioStopped => ("audio_stopped", "O áudio da chamada parou: o microfone pode ter sido trocado ou desconectado. Conecte de novo.".into()),
         VoiceFailure::Closed => ("closed", "A OpenAI encerrou a chamada.".into()),
+        VoiceFailure::AudioLost => ("audio_lost", "O áudio da chamada caiu; conecte de novo para continuar a mesma conversa.".into()),
     }
 }
