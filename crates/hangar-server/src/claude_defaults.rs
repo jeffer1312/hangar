@@ -57,6 +57,7 @@ pub async fn save(
 fn failure(status: StatusCode, code: &str) -> Response {
     let msg = match code {
         "claude_defaults_invalid" => "valor de modelo, esforço ou permissão inválido",
+        "claude_defaults_empty" => "nada para gravar no settings.json: o modelo Padrão não muda o arquivo",
         "claude_settings_unreadable" => "o settings.json principal não é um JSON legível; nada foi mexido",
         _ => "não consegui gravar o settings.json principal",
     };
@@ -112,7 +113,7 @@ fn apply(path: &Path, body: &Value) -> Result<Vec<&'static str>, Failure> {
         written.push("permissions.defaultMode");
     }
     if written.is_empty() {
-        return Ok(written);
+        return Err((StatusCode::BAD_REQUEST, "claude_defaults_empty"));
     }
     let mut bytes = serde_json::to_vec_pretty(&Value::Object(settings))
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "claude_settings_write_failed"))?;
@@ -155,9 +156,12 @@ mod tests {
     fn default_and_engine_models_never_reach_the_file() {
         for model in ["default", "", "claude-200-2/gpt-6.1-sol", "kimi-for-coding"] {
             let (result, after) = run(Some(r#"{"model":"opus"}"#), json!({"model":model,"effort":"","permission":""}));
-            assert!(result.unwrap().is_empty());
+            assert_eq!(result.unwrap_err().1, "claude_defaults_empty");
             assert_eq!(after.unwrap()["model"], "opus");
         }
+        let (result, after) = run(Some(r#"{"model":"opus"}"#), json!({"model":"default","effort":"low","permission":""}));
+        assert_eq!(result.unwrap(), vec!["effortLevel"]);
+        assert_eq!(after.unwrap()["model"], "opus");
     }
 
     #[test]
