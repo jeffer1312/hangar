@@ -217,6 +217,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_computer_control_target_name: () => m.erro_computer_control_target_name(),
   erro_computer_control_target_exists: (p) => m.erro_computer_control_target_exists({ name: String(p.name) }),
   erro_computer_control_local_only_windows: () => m.erro_computer_control_local_only_windows(),
+  erro_computer_control_jev_key_moved: () => m.erro_computer_control_jev_key_moved(),
   erro_computer_control_target_host: () => m.erro_computer_control_target_host(),
   erro_computer_control_not_installed: () => m.erro_computer_control_not_installed(),
   erro_computer_control_no_ssh_key: () => m.erro_computer_control_no_ssh_key(),

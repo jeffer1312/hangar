@@ -220,6 +220,47 @@ def test_migrate_reads_legacy_settings_key(home):
     assert not cc._parked_file().exists()   # sem MCP configurado, nada é criado
 
 
+def test_replaced_computer_use_key_is_kept_for_the_owner(home):
+    from app import runtime_config as rc
+
+    cc.save(_pedido(home))
+    for path in cc._config_files():
+        data = json.loads(path.read_text())
+        data["mcpServers"][cc.NAME]["env"]["TYPESAFE_API_KEY"] = "old-windows-key"
+        path.write_text(json.dumps(data))
+    rc.aplicar({"jev_api_key": "page-key"})
+    for path in cc._config_files():   # a página grava sem repassar, como antes da subida nova
+        data = json.loads(path.read_text())
+        data["mcpServers"][cc.NAME]["env"]["TYPESAFE_API_KEY"] = "old-windows-key"
+        path.write_text(json.dumps(data))
+    cc.migrate_jev()
+    kept = cc._jev_old_keys_file()
+    assert json.loads(kept.read_text()) == {"TYPESAFE_API_KEY": "old-windows-key"}
+    assert kept.stat().st_mode & 0o777 == 0o600
+    assert _entrada(cc._main_file())["env"]["TYPESAFE_API_KEY"] == "page-key"
+
+
+def test_old_clients_sending_a_computer_use_key_get_an_error(home):
+    from app import runtime_config as rc
+
+    with pytest.raises(cc.ComputerControlError) as e:
+        cc.save(_pedido(home, jev_key="typed-key"))
+    assert e.value.code == "erro_computer_control_jev_key_moved"
+    cc.save(_pedido(home, jev_key=None))
+    with pytest.raises(ValueError, match="página Jev"):
+        rc.aplicar({"jev_windows_api_key": "typed-key"})
+    rc.aplicar({"jev_windows_api_key": "••••1234", "upload_retention_days": 7})   # rascunho inteiro de cliente antigo
+    assert rc.get("upload_retention_days") == 7
+
+
+def test_unrecognized_linux_agent_command_is_reported_on_install(home, rust_release):
+    targets = cc._package_targets()
+    targets.mkdir(parents=True, exist_ok=True)
+    (targets / "odd-agent.json").write_text(json.dumps({"transport": "local", "command": ["/opt/run", "linux_agent.py"]}))
+    result = cc.install()
+    assert "odd-agent.json" in result["migration_skipped"]
+
+
 def test_key_removed_on_the_jev_page_does_not_come_back_on_restart(home):
     from app import runtime_config as rc
 

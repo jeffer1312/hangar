@@ -2848,6 +2848,7 @@
   "erro_computer_control_target_name": "target name: lowercase letters, digits, dot, hyphen or underscore",
   "erro_computer_control_target_exists": "the target {name} already exists",
   "erro_computer_control_local_only_windows": "install the program before adding this computer",
+  "erro_computer_control_jev_key_moved": "the Computer Use Jev key now comes from the Jev page",
   "erro_computer_control_target_host": "enter the SSH host (no spaces)",
   "erro_computer_control_not_installed": "install the published version before using this mode",
   "erro_computer_control_no_ssh_key": "this machine has no SSH key: create one with ssh-keygen -t ed25519",

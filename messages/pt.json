@@ -2848,6 +2848,7 @@
   "erro_computer_control_target_name": "nome do alvo: letras minúsculas, números, ponto, hífen ou sublinhado",
   "erro_computer_control_target_exists": "o alvo {name} já existe",
   "erro_computer_control_local_only_windows": "instale o programa antes de cadastrar este computador",
+  "erro_computer_control_jev_key_moved": "a chave do Jev do Computer Use agora é a da página Jev",
   "erro_computer_control_target_host": "informe o host SSH (sem espaços)",
   "erro_computer_control_not_installed": "instale a versão publicada antes de usar esse modo",
   "erro_computer_control_no_ssh_key": "esta máquina não tem chave SSH: crie uma com ssh-keygen -t ed25519",

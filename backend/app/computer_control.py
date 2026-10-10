@@ -298,6 +298,10 @@ def _jev_migrated_marker() -> Path:
     return Path.home() / ".hangar" / "jev-migrated"
 
 
+def _jev_old_keys_file() -> Path:
+    return Path.home() / ".hangar" / "jev-chave-antiga-computer-use.json"
+
+
 def migrate_jev() -> None:
     """Chave que só existia no MCP (ou no `env` do settings.json) passa a ser a do Jev, uma vez;
     depois disso o MCP só recebe a configuração única."""
@@ -318,8 +322,16 @@ def migrate_jev() -> None:
     old = ((_known_entry() or {}).get("env") or {}).get("TYPESAFE_API_KEY") or ""
     new = _jev_env().get("TYPESAFE_API_KEY", "")
     if old and new and old != new:
-        _log.warning("computer-control: a chave do Jev do Computer Use (…%s) foi trocada pela da página Jev (…%s)",
-                     _tail(old), _tail(new))
+        # A chave do Computer Use vai ser trocada pela da página Jev: a antiga fica guardada, só para o dono.
+        kept = _jev_old_keys_file()
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        previous = _read(kept) if kept.exists() else {}
+        tmp = kept.with_name(f"{kept.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({**previous, "TYPESAFE_API_KEY": old}, fh, indent=2)
+        atomico.substituir(tmp, kept)
+        _log.warning("computer-control: a chave do Jev do Computer Use foi trocada pela da página Jev; a antiga está em %s", kept)
     sync_jev()
 
 
@@ -481,6 +493,9 @@ def state() -> dict:
 
 
 def save(body: dict, *, installing: bool = False) -> dict:
+    if str(body.get("jev_key") or "").strip():
+        raise ComputerControlError(400, "erro_computer_control_jev_key_moved",
+                                   "a chave do Jev do Computer Use agora é a da página Jev")
     """Grava (ligado) ou remove (desligado) a entrada em todos os `.claude.json`. Chave vazia no
     pedido mantém a que já está gravada: a tela nunca recebeu a chave inteira pra devolver."""
     files = _config_files()
@@ -665,6 +680,9 @@ def install() -> dict:
             migrated = _migrated(cfg, exe, _package_binary())
             if migrated != cfg:
                 _write(path, migrated)
+            elif "linux_agent.py" in json.dumps(cfg.get("command")):
+                # Comando que a troca não reconheceu: continua no agente Python, e a tela precisa dizer.
+                puladas.append(path.name)
     _write(_install_dir() / "install.json", {"tag": tag, **({"uvx": uvx} if uvx else {})})
 
     s = state()

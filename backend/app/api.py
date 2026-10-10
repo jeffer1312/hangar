@@ -9153,7 +9153,7 @@ class ComputerControlBody(_StrictBody):
     llm_model: str = ""
     llm_effort: str = ""
     llm_key: str | None = None     # None/vazio = mantém a gravada
-    jev_key: str | None = None     # ignorado: cliente antigo ainda manda; o Jev vem da página dele
+    jev_key: str | None = None     # cliente antigo: vazio passa, chave digitada volta erro (o Jev vem da página dele)
     use_cliproxy_key: bool = False
 
 

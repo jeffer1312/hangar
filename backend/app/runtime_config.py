@@ -496,6 +496,10 @@ def _aplicar_travado(mudancas: dict[str, Any], remover: set[str]) -> dict[str, A
     # front manda o rascunho INTEIRO num POST só, e um campo inválido no meio levantava ValueError
     # DEPOIS de a chave já ter sido escrita lá. A tela mostrava o erro e mantinha o rascunho — ou
     # seja, a pessoa achava que não tinha ligado o resumo, e tinha.
+    legado = mudancas.get("jev_windows_api_key")
+    # Cliente antigo ainda tem o campo; chave nova nele sumiria calada. A máscara devolvida é só o rascunho inteiro.
+    if isinstance(legado, str) and legado.strip() and "•" not in legado:
+        raise ValueError("jev_windows_api_key: a chave do Computer Use agora é a da página Jev")
     externos = {}
     for campo, valor in mudancas.items():
         if campo in EXTERNOS:
