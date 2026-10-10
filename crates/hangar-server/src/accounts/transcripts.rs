@@ -44,8 +44,7 @@ fn at(source: Option<&Path>, target: &Path) -> impl FnOnce(io::Error) -> MergeEr
 /// estarem no disco, porque logo em seguida a origem é apagada.
 pub struct Merge<'a> {
     label: &'a str,
-    /// Raízes onde um link não guarda nada da conta (a conta padrão de destino), como vieram e
-    /// resolvidas.
+    /// Raízes onde um link não guarda nada da conta (a conta padrão de destino), resolvidas.
     homes: Vec<PathBuf>,
     count: MergeCount,
     touched: BTreeSet<PathBuf>,
@@ -53,10 +52,9 @@ pub struct Merge<'a> {
 
 impl<'a> Merge<'a> {
     pub fn new(label: &'a str, homes: &[&Path]) -> Self {
-        let resolved = homes.iter().filter_map(|home| fs::canonicalize(home).ok());
         Self {
             label,
-            homes: homes.iter().map(|home| lexical(home)).chain(resolved).collect(),
+            homes: homes.iter().map(|home| resolve_loose(home)).collect(),
             count: MergeCount::default(),
             touched: BTreeSet::new(),
         }
@@ -92,7 +90,7 @@ impl<'a> Merge<'a> {
         let target = match fs::canonicalize(path) {
             Ok(real) => real,
             Err(error) if error.kind() == io::ErrorKind::NotFound => match fs::read_link(path) {
-                Ok(written) => lexical(&path.parent().unwrap_or(Path::new("")).join(written)),
+                Ok(written) => resolve_loose(&path.parent().unwrap_or(Path::new("")).join(written)),
                 Err(_) => return false,
             },
             Err(_) => return false,
@@ -173,6 +171,24 @@ impl<'a> Merge<'a> {
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
             Err(error) => Err(error),
+        }
+    }
+}
+
+/// `canonicalize` de um caminho que pode não existir (alvo de link quebrado, padrão ainda sem
+/// pasta): resolve o maior prefixo que existe e anexa o resto. Raiz e alvo ficam na mesma forma
+/// mesmo com um link no caminho (no macOS o `/var` é `/private/var`).
+fn resolve_loose(path: &Path) -> PathBuf {
+    let path = lexical(path);
+    let mut rest = Vec::new();
+    let mut prefix = path.as_path();
+    loop {
+        if let Ok(real) = fs::canonicalize(prefix) {
+            return rest.iter().rev().fold(real, |acc, part| acc.join(part));
+        }
+        match (prefix.parent(), prefix.file_name()) {
+            (Some(parent), Some(name)) => { rest.push(name.to_owned()); prefix = parent; }
+            _ => return path,
         }
     }
 }
