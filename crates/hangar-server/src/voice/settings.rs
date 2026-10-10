@@ -77,7 +77,6 @@ pub fn read_settings(home: &Path) -> VoiceSettings {
 pub fn write_settings(home: &Path, s: &VoiceSettings) -> std::io::Result<()> {
     let path = settings_path(home);
     std::fs::create_dir_all(path.parent().unwrap_or(home))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(&SettingsDto::from(s)).map_err(std::io::Error::other)?)?;
-    std::fs::rename(&tmp, &path)
+    let bytes = serde_json::to_vec(&SettingsDto::from(s)).map_err(std::io::Error::other)?;
+    crate::runtime::queue::atomic_write(&path, &bytes)
 }
