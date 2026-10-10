@@ -95,7 +95,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   fat só na `main`.** Teste novo entra como módulo de `crates/hangar-server/tests/it/`; teste que
   mexe em estado do processo inteiro (PATH, HOME, TZ, logger global, gancho de pânico) vai para um
   `[[test]]` à parte no `Cargo.toml`. Quem reexecuta o próprio executável monta o nome com
-  `exact_name(module_path!(), …)` e confere `assert_ran_one`. A depuração reduzida vem do perfil
+  `exact_name(module_path!(), …)` e confere `assert_ran_one`; filho de `fork` sem `exec` chama
+  `close_inherited_fds`; porta que deve recusar vem de `refused_address`; lease ou porta reaberta
+  logo depois de solta passa por `lease_when_free` ou espera com prazo. A depuração reduzida vem do perfil
   `dev` do `crates/Cargo.toml`, nunca de variável, e o `hangar-server` pede as mesmas features que o
   resto do workspace: `-p` e `--workspace` têm de dar o mesmo hash. O binário publicado pela `main`
   sai do perfil `dist` (`--profile dist`, em `target/dist/`); a branch, do `release`. O cache tem o
@@ -706,7 +708,8 @@ em `crates/`, depois tocando `src/lib.rs` e um arquivo de teste e rodando
 | Tocar um arquivo de teste | 1 s | 0 s | 3 s |
 | `target` depois dos dois | 84 GB | 30 GB | 5,5 GB |
 
-Testes listados: 1651 no `hangar-server`, 1739 no workspace, antes e depois.
+Testes listados: 1651 no `hangar-server` e 1739 no workspace antes; depois da junção os mesmos (os
+testes novos das correções abaixo vieram depois da medição).
 
 - **Seis executáveis à parte.** `workspace_unavailable` esvazia o `PATH`; `runtime_diagnostics` e
   `terminal_diagnostics` instalam o logger global e contam avisos exatos; `contract_local_policy`
@@ -728,6 +731,20 @@ Testes listados: 1651 no `hangar-server`, 1739 no workspace, antes e depois.
   - O `terminal_runtime` lia o arquivo de estado no meio da troca atômica do ator. No Windows 11, 286 de
     392 mil leituras feitas durante as trocas deram acesso negado. O leitor Python de
     `runtime_policy.py` (`session.patch_meta`) está exposto ao mesmo e ficou fora deste trabalho.
+- **Um processo só para todos os testes exige higiene de processo.** No Linux, em 12 rodadas do `it`
+  inteiro, três falharam por recursos de um teste que outro segurava:
+  - **Filho de `fork` sem `exec`** (a sonda de `ptrace` do `uploads_store` e o filho parado do
+    `accounts_catalog`) carregava cópias de todos os descritores do processo: o socket que outro teste
+    fechou continuava aceitando conexão. O filho agora fecha o que herdou (`close_inherited_fds`).
+  - **Porta "fechada" tirada de um listener solto** voltava a outro teste, que respondia no lugar. A
+    porta agora fica reservada por um socket com `bind` e sem `listen` (`refused_address`).
+  - **Lease e portas reabertos logo depois de soltos**: um filho de outro teste, entre o `fork` e o
+    `exec`, carrega por instantes a cópia do descritor (a trava do `flock` é da descrição aberta). O
+    teste espera até 2 s (`lease_when_free` e o reinício do `plugin_loopback`). A produção tem a
+    mesma janela, já que o servidor lança processos o tempo todo; trocar o `flock` pela trava do
+    `fcntl`, que não passa ao filho, muda o contrato com o `WriterLease` do Python.
+  - Os intermitentes de porta do `cano_v2` e do `plugin_loopback` vieram do #140, com o mesmo
+    conteúdo.
 - **Reexecução com nome curto passava sem testar nada.** No `it` o nome ganha o módulo; o filho com
   `--exact <nome>` rodava 0 testes e saía 0. Prova: com `assert_ran_one` e o nome antigo, os cinco
   falharam com `running 0 tests`.
