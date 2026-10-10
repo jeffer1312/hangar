@@ -291,6 +291,10 @@ class Settings(BaseSettings):
     codex_sync: bool = True
     # Voz realtime do Codex é experimental e nasce desligada; habilitada nas Opções do harness.
     codex_voice_beta: bool = False
+    # Organização é opt-in, independentemente de credenciais antigas de LLM.
+    dictation_organization_mode: str = "none"
+    dictation_claude_model: str = ""
+    dictation_codex_model: str = ""
     # A preferência salva também é lida pelos instaladores, sem depender do backend em execução.
     claude_statusline_update: bool = True
     # Caminho do plugin do Hangar nas sessões Claude (mods do Claude Code). Nasce ligado; desligado,

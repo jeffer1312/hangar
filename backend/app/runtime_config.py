@@ -77,6 +77,9 @@ EDITAVEIS: dict[str, type] = {
     # Quanto o ditado pode mexer no que voce falou: "limpar" | "prosa" | "briefing".
     # Ver narrar.ESTILOS_DITADO — cada um e um prompt E um conjunto de travas diferente.
     "ditado_estilo": str,
+    "dictation_organization_mode": str,
+    "dictation_claude_model": str,
+    "dictation_codex_model": str,
     # Origens EXTRAS que podem abrir o terminal, no mesmo formato "a,b" do CP_TERM_ORIGINS.
     # SOMA com o env, ao contrario do scan_roots logo abaixo, que sobrescreve: aqui a lista e o
     # perimetro de quem PODE abrir o terminal, e um override por inteiro feito do celular tiraria
@@ -425,6 +428,8 @@ def _coagir(campo: str, valor: Any) -> Any:
     if not isinstance(valor, str):
         raise ValueError(f"{campo}: esperado texto")
     texto = valor.strip()
+    if campo == "dictation_organization_mode" and texto not in ("", "none", "harness", "external_api"):
+        raise ValueError("dictation_organization_mode: use none, harness ou external_api")
     if campo == "editor" and texto:
         # O editor vira argv[0] de um subprocess. Enquanto vinha so do .env, quem escolhia era o dono
         # da maquina; agora o celular escreve. Nome NU (sem barra, sem ..) mantem a escolha livre

@@ -32,6 +32,7 @@ mod terminal_process;
 pub mod terminal_routes;
 pub mod transcript;
 pub mod transcription;
+pub mod dictation;
 pub mod workspace_routes;
 pub mod uploads;
 pub mod worktree_routes;
