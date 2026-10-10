@@ -149,12 +149,37 @@ def _in_quiet_hours(now: dtime | None = None) -> bool:
     return now >= start or now < end  # janela cruza meia-noite (ex: 22:00-07:00)
 
 
+_presence: tuple[str, str] | None = None
+
+
+def configure_presence(address: str | None, secret: str | None) -> None:
+    global _presence
+    _presence = (address, secret) if address and secret else None
+
+
+def _owner_at_pc() -> bool:
+    """Dono "No PC" com o app de desktop à vista (status do Rust): o PC já mostra o aviso.
+    Sem o Rust ou sem resposta, o push sai, porque reter calado seria perder o aviso."""
+    import urllib.request
+    config = _presence
+    if config is None:
+        return False
+    req = urllib.request.Request(f"http://{config[0]}/__hangar_server/presence",
+                                 headers={"x-hangar-internal": config[1]})
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=2) as r:
+            return json.loads(r.read(4096)).get("present") is True
+    except (OSError, ValueError) as e:
+        _log.warning("presença indisponível; push sai mesmo assim: %s", type(e).__name__)
+        return False
+
+
 def _suppressed(session_name: str) -> bool:
     """True se este push deve ser silenciado: sessao mutada (mute por sessao) OU dentro da janela de
     quiet hours (global). Consultado no topo de TODO notify_* (awaiting/finished/dead/stalled/limited)
     -> quiet hours silencia TODOS os pushes; mutar uma sessao silencia TODOS os tipos de push dela.
     Sessao de convidado que escondeu as dele do dono tambem nao notifica."""
-    return is_muted(session_name) or _in_quiet_hours() or _hidden_guest(session_name)
+    return is_muted(session_name) or _in_quiet_hours() or _hidden_guest(session_name) or _owner_at_pc()
 
 
 def _hidden_guest(session_name: str) -> bool:

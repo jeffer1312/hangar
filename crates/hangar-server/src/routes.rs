@@ -251,6 +251,7 @@ pub fn terminal_router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/accounts/public", axum::routing::any(crate::accounts::http::private_public))
         .route("/__hangar_server/pages", axum::routing::post(crate::pages::routes::publish_bridge))
         .route("/__hangar_server/groups", axum::routing::post(crate::groups::bridge::private))
+        .route("/__hangar_server/presence", axum::routing::get(crate::presence::private))
         .route("/__hangar_server/mods/{name}/{op}", axum::routing::post(crate::mods::routes::bridge))
         .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
     // Painel e canal do estado ficam fora da contagem: conexões longas, não chamadas da ponte.
@@ -276,6 +277,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/__hangar_server/accounts/public", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/pages", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/groups", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+        .route("/__hangar_server/presence", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/mods/{name}/{op}", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/term", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
         .route("/__hangar_server/state/{name}/events", axum::routing::any(|| async { StatusCode::NOT_FOUND }))
@@ -320,6 +322,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
+        .route("/api/presence", axum::routing::get(crate::presence::route).post(crate::presence::route).fallback(pass_any))
+        .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_any))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
         .fallback(pass_any)

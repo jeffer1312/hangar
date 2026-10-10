@@ -353,7 +353,7 @@ class Supervisor:
         `address` (endereço privado ausente ou inválido na saúde)."""
         global terminal_panel
         terminal_panel = None
-        from app import account_bridge, groups_bridge, list_bridge, pages_bridge, workspace_bridge, transcription_bridge
+        from app import account_bridge, groups_bridge, list_bridge, pages_bridge, push, workspace_bridge, transcription_bridge
         account_bridge.configure_preparation(None, None)
         workspace_bridge.configure(None, None)
         claude_customizations.configure(None, None)
@@ -361,6 +361,7 @@ class Supervisor:
         pages_bridge.configure(None, None)
         groups_bridge.configure(None, None)
         transcription_bridge.configure(None, None)
+        push.configure_presence(None, None)
         terminal_observer.configure(None, None)
         if self.proc is not None:
             from app.runtime_process import cleanup
@@ -411,6 +412,7 @@ class Supervisor:
                     pages_bridge.configure(address, env["HANGAR_INTERNAL_SECRET"])
                     groups_bridge.configure(address, env["HANGAR_INTERNAL_SECRET"])
                     transcription_bridge.configure(address, env["HANGAR_INTERNAL_SECRET"])
+                    push.configure_presence(address, env["HANGAR_INTERNAL_SECRET"])
                 except ValueError:
                     # Sem o endereço privado o Rust não tem as pontes: é falha de partida, e o Python
                     # assume a porta inteira em vez de atender metade por trás dele.
@@ -422,6 +424,7 @@ class Supervisor:
                     pages_bridge.configure(None, None)
                     groups_bridge.configure(None, None)
                     transcription_bridge.configure(None, None)
+                    push.configure_presence(None, None)
                     _log.error("hangar-server sem endereço privado válido na saúde")
                     diag.registrar("hangar_server.partida", "erro", codigo="endereco_invalido")
                     return "address"
@@ -477,7 +480,7 @@ class Supervisor:
                             _log.warning("registro de contenção do hangar-server não gravou: %s", e)
                             diag.registrar("hangar_server.registro_falhou", "aviso", **diag.erro_campos(e))
                         record_failed = True
-                from app import account_bridge, groups_bridge, list_bridge, pages_bridge, workspace_bridge, transcription_bridge
+                from app import account_bridge, groups_bridge, list_bridge, pages_bridge, push, workspace_bridge, transcription_bridge
                 account_bridge.configure_preparation(None, None)
                 groups_bridge.configure(None, None)
                 transcription_bridge.configure(None, None)
@@ -485,6 +488,7 @@ class Supervisor:
                 claude_customizations.configure(None, None)
                 list_bridge.configure(None, None)
                 pages_bridge.configure(None, None)
+                push.configure_presence(None, None)
                 costs_sources.set_served_by_rust(False)
                 terminal_observer.configure(None, None)
                 # Parada normal (systemctl, Ctrl+C) leva o filho junto, no mesmo instante em que o uvicorn
