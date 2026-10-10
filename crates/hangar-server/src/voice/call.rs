@@ -121,8 +121,13 @@ impl Voice {
     }
 }
 
+/// Só o tipo: a mensagem de `Realtime` vem do servidor e pode repetir o texto enviado.
+fn failure_kind(failure: &VoiceFailure) -> String {
+    match failure { VoiceFailure::Realtime(_) => "Realtime".to_owned(), other => format!("{other:?}") }
+}
+
 fn failed(step: &'static str) -> impl FnOnce(VoiceFailure) -> VoiceFailure {
-    move |failure| { log(format!("{step} failed: {failure:?}")); failure }
+    move |failure| { log(format!("{step} failed: {}", failure_kind(&failure))); failure }
 }
 
 /// Deltas vêm aos montes: só o primeiro de cada (método, papel) até virar o turno ou mudar o falante.
@@ -157,7 +162,7 @@ async fn call(options: CallOptions, spawn: Spawn, events: async_channel::Sender<
         _ = stop.notified() => { log("stop requested"); Ok(()) },
     };
     stopped.store(true, Ordering::Relaxed);
-    match &outcome { Ok(()) => log("call end ok"), Err(failure) => log(format!("call end failure={failure:?}")) }
+    match &outcome { Ok(()) => log("call end ok"), Err(failure) => log(format!("call end failure={}", failure_kind(failure))) }
     if let Err(failure) = outcome { let _ = events.send(VoiceEvent::Failed(failure)).await; }
     log("phase Closed");
     let _ = events.send(VoiceEvent::Phase(Phase::Closed)).await;
@@ -193,7 +198,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     let limits = async {
         match tokio::time::timeout(Duration::from_secs(3), rpc.request("account/rateLimits/read", json!({}))).await {
             Ok(Ok(result)) => send_limits(events, usage::read_limits(&result)).await,
-            Ok(Err(error)) => log(format!("rateLimits/read failed: {error:?}")),
+            Ok(Err(error)) => log(format!("rateLimits/read failed kind={}", rpc_error_kind(&error))),
             Err(_) => log("rateLimits/read timed out"),
         }
     };
@@ -210,10 +215,18 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     log(format!("thread started id={thread} tier={}", effective.tier.as_deref().unwrap_or("none")));
     let _ = events.send(VoiceEvent::Organizer(effective.clone())).await;
 
-    // Comando que chega antes da oferta não se perde: fica na fila e o laço o trata primeiro, na ordem.
+    // Comando que chega antes da oferta não se perde: fica na fila e o laço o trata primeiro, na ordem. O estado do aparelho
+    // (queda, áudio, nível) é de quem ainda não ofereceu: aplicado depois, marcaria como caído o aparelho que assumiu.
     let mut early: VecDeque<Command> = VecDeque::new();
     let offer_sdp = tokio::time::timeout(Duration::from_secs(45), async {
-        loop { match inbox.recv().await { Some(Command::Offer(sdp, _)) => return Ok(sdp), Some(other) => early.push_back(other), None => return Err(VoiceFailure::Closed) } }
+        loop {
+            match inbox.recv().await {
+                Some(Command::Offer(sdp, _)) => return Ok(sdp),
+                Some(Command::Detached | Command::Live | Command::Level(_)) => {}
+                Some(other) => early.push_back(other),
+                None => return Err(VoiceFailure::Closed),
+            }
+        }
     }).await.map_err(|_| VoiceFailure::Timeout).and_then(|r| r).map_err(failed("device offer"))?;
     let mut realtime = json!({"threadId": thread, "version": "v3", "outputModality": "audio", "prompt": VOICE_PROMPT,
         // O aviso curto de que ouviu sai da própria voz; o resumo do raciocínio deixa a voz saber o que o organizador faz.
@@ -274,11 +287,13 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     // Última fala repassada (para reconhecer a repetida) e os itens de fala já tratados.
     let mut last_input: Option<(String, Instant)> = None;
     let mut seen_items: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut hold = SpeechHold::default();
+    let mut out = Speech::default();
     // Envio recusado por falta de pedido: se a fala seguinte o completar, o organizador é avisado para tentar de novo.
     let mut refused_send: Option<Instant> = None;
     let outcome = loop {
-        for text in hold.due(Instant::now()) { append_speech(&rpc, &thread, &text, "held").await; }
+        for text in out.hold.due(Instant::now()) {
+            if out.away { out.park(text, "held"); } else { append_speech(&rpc, &thread, &text, "held").await; }
+        }
         // No Planejar nada sai pelo gate; ao entrar nele o envio pendente já foi cancelado.
         if planner.mode == Mode::Direct && let Some(((id, session, turn), request)) = gate.due(Instant::now()) {
             consent.used();
@@ -294,20 +309,26 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     log("phase Live");
                     let _ = events.send(VoiceEvent::Phase(Phase::Live)).await;
                     restarting = false;
+                    out.away = detached;
                     // A voz V3 nunca fala primeiro: sem isto a pessoa não tem prova de que o alto-falante funciona.
                     if !greeted {
                         greeted = true;
                         let spoke = rpc.request("thread/realtime/appendSpeech", json!({"threadId": thread, "text": "Conectado. Pode falar."})).await;
                         log(format!("greeting appendSpeech ok={}", spoke.is_ok()));
                     }
+                    // O que a voz ia falar durante a troca sai agora, na ordem; ela nunca fala primeiro, então se perderia.
+                    if !out.away {
+                        for text in std::mem::take(&mut out.parked) { speak(&rpc, &thread, &mut out, text, "parked").await; }
+                    }
                 }
-                Some(Command::Level(input)) => if input >= MIC_VOICE_LEVEL { gate.heard_voice(Instant::now()); hold.heard_voice(Instant::now()); },
-                Some(Command::Detached) => { log("device detached"); detached = true; }
+                Some(Command::Level(input)) => if input >= MIC_VOICE_LEVEL { gate.heard_voice(Instant::now()); out.hold.heard_voice(Instant::now()); },
+                Some(Command::Detached) => { log("device detached"); detached = true; out.away = true; }
                 Some(Command::Offer(sdp, context)) => {
                     // Outro aparelho assumiu (ou o mesmo voltou): a conversa falada recomeça na mesma thread, com o histórico dela.
                     log(format!("handoff offer bytes={}", sdp.len()));
                     restarting = true;
                     detached = false;
+                    out.away = true;
                     let mut again = realtime_start.clone();
                     again["transport"] = json!({"type": "webrtc", "sdp": sdp});
                     again["includeStartupContext"] = json!(true);
@@ -347,7 +368,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                         }
                     }
                     log(format!("jev verdict={verdict:?} note={} speech={}", note.is_some(), speech.is_some()));
-                    if let Some(text) = speech { speak(&rpc, &thread, &mut hold, text, "jev").await; }
+                    if let Some(text) = speech { speak(&rpc, &thread, &mut out, text, "jev").await; }
                     // A tela já agiu: o organizador sabe no mesmo turno e não repete a ação.
                     if let Some(note) = note {
                         let steer = json!({"threadId": thread, "expectedTurnId": turn,
@@ -359,7 +380,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 Some(Command::Sessions(names)) => { log(format!("sessions known count={}", names.len())); session_names = names; }
                 Some(Command::Answer(text)) => {
                     log(format!("session answer bytes={}", text.len()));
-                    if let Some(input) = results.push(String::new(), text) { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
+                    if let Some(input) = results.push(String::new(), text) { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
                 }
                 Some(Command::Retarget(name, context, cwd)) => {
                     log("retarget");
@@ -377,7 +398,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 }
                 Some(Command::Result(session, text)) => {
                     log(format!("session result bytes={}", text.len()));
-                    if let Some(input) = results.push(session, text) { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
+                    if let Some(input) = results.push(session, text) { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
                 }
                 None => break Ok(()),
             },
@@ -745,15 +766,15 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                                     Err(error) => {
                                         log(format!("edit turn start failed kind={}", rpc_error_kind(&error)));
                                         edit_stuck = !close_edit_access(&rpc, &thread, &own, events).await;
-                                        if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
+                                        if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
                                     }
                                 }
-                            } else if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
+                            } else if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
                         }
                         "item/completed" if params["item"]["type"] == "agentMessage" && params["item"]["phase"] != "commentary" => {
                             if results.take_summary(params["turnId"].as_str().unwrap_or_default())
                                 && let Some(text) = params["item"]["text"].as_str() {
-                                speak(&rpc, &thread, &mut hold, text.to_owned(), "summary").await;
+                                speak(&rpc, &thread, &mut out, text.to_owned(), "summary").await;
                             }
                         }
                         "thread/tokenUsage/updated" => if let Some((used, window)) = usage::context_usage(&params) {
@@ -778,8 +799,9 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
         }
     };
     stopped.store(true, Ordering::Relaxed);
-    let (held, bytes) = hold.pending();
+    let (held, bytes) = out.hold.pending();
     if held > 0 { log(format!("held speech dropped at call end count={held} bytes={bytes}")); }
+    if !out.parked.is_empty() { log(format!("parked speech dropped at call end count={}", out.parked.len())); }
     let _ = rpc.request("thread/realtime/stop", json!({"threadId": thread})).await;
     outcome
 }
@@ -846,10 +868,23 @@ async fn close_edit_access(rpc: &Rpc, thread: &str, own: &std::path::Path, event
     false
 }
 
+/// Fala que a voz puxa sozinha: `hold` a segura enquanto o usuário fala; `parked` a guarda enquanto nenhum aparelho ouve
+/// (dono caído ou passagem em curso), até o próximo `Live`.
+#[derive(Default)]
+struct Speech { hold: SpeechHold, away: bool, parked: VecDeque<String> }
+
+impl Speech {
+    fn park(&mut self, text: String, tag: &str) {
+        log(format!("{tag} speech parked bytes={}", text.len()));
+        self.parked.push_back(text);
+    }
+}
+
 /// Fala que a voz puxa sozinha passa por aqui: com o usuário falando, fica guardada até ele terminar.
-async fn speak(rpc: &Rpc, thread: &str, hold: &mut SpeechHold, text: String, tag: &str) {
+async fn speak(rpc: &Rpc, thread: &str, out: &mut Speech, text: String, tag: &str) {
+    if out.away { out.park(text, tag); return; }
     let bytes = text.len();
-    match hold.offer(text, Instant::now()) {
+    match out.hold.offer(text, Instant::now()) {
         Some(text) => append_speech(rpc, thread, &text, tag).await,
         None => log(format!("{tag} speech held bytes={bytes}")),
     }
@@ -860,7 +895,7 @@ async fn append_speech(rpc: &Rpc, thread: &str, text: &str, tag: &str) {
     log(format!("{tag} appendSpeech bytes={} ok={}", text.len(), spoke.is_ok()));
 }
 
-async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Results, hold: &mut SpeechHold, organizer_busy: bool) {
+async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Results, out: &mut Speech, organizer_busy: bool) {
     let mut next = Some(first);
     // Laço, não recursão: um resumo recusado com o organizador ocioso solta o próximo da fila na hora.
     while let Some(mut input) = next.take() {
@@ -868,11 +903,11 @@ async fn start_summary(rpc: &Rpc, thread: &str, first: Value, results: &mut Resu
         match rpc.request("turn/start", input).await {
             Ok(result) => { if let Some(turn) = result["turn"]["id"].as_str() { results.mark_summary(turn.to_owned()); } }
             Err(error) => {
-                log(format!("summary turn/start failed: {error:?} organizer_busy={organizer_busy}"));
+                log(format!("summary turn/start failed kind={} organizer_busy={organizer_busy}", rpc_error_kind(&error)));
                 // Ocioso e recusado: nenhum turn/completed virá; fala o começo do texto e drena a fila.
                 if let Some(text) = results.turn_start_failed(organizer_busy) {
                     let short: String = text.chars().take(400).collect();
-                    speak(rpc, thread, hold, format!("A sessão respondeu: {short}"), "summary fallback").await;
+                    speak(rpc, thread, out, format!("A sessão respondeu: {short}"), "summary fallback").await;
                     next = results.turn_completed();
                 }
             }
@@ -969,6 +1004,44 @@ mod tests {
         let voice = Voice::start(options(tools.clone()), spawn, tx);
         voice.offer("v=0".into(), "ctx".into());
         loop { let m = seen.recv().await.unwrap(); if m["method"] == "thread/start" { assert_eq!(m["params"]["dynamicTools"], tools); break; } }
+    }
+
+    #[tokio::test]
+    async fn speech_while_detached_waits_for_the_next_device() {
+        let (spawn, mut seen, _push) = fake_app_server();
+        let (tx, events) = async_channel::unbounded();
+        let voice = Voice::start(options(json!([])), spawn, tx);
+        voice.offer("v=0 offer A".into(), "ctx".into());
+        next_answer(&events).await;
+        voice.live();
+        voice.detached();
+        voice.jev_verdict("turn-1".into(), SendVerdict::Unsure, Some("resposta guardada".into()), None);
+        let spoke = |m: &Value| m["method"] == "thread/realtime/appendSpeech" && m["params"]["text"] == "resposta guardada";
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!std::iter::from_fn(|| seen.try_recv().ok()).any(|m| spoke(&m)), "sem aparelho, nada vai à voz");
+        voice.offer("v=0 offer B".into(), "ctx".into());
+        next_answer(&events).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let before_live: Vec<Value> = std::iter::from_fn(|| seen.try_recv().ok()).collect();
+        assert!(before_live.iter().any(|m| m["method"] == "thread/realtime/start" && m["params"]["transport"]["sdp"] == "v=0 offer B"));
+        assert!(!before_live.iter().any(|m| spoke(m)), "a passagem ainda não conectou o áudio");
+        voice.live();
+        loop { if spoke(&seen.recv().await.unwrap()) { break; } }
+    }
+
+    #[tokio::test]
+    async fn detached_before_the_first_offer_does_not_stick() {
+        let (spawn, _seen, push) = fake_app_server();
+        let (tx, events) = async_channel::unbounded();
+        let voice = Voice::start(options(json!([])), spawn, tx);
+        voice.detached();
+        voice.offer("v=0 offer A".into(), "ctx".into());
+        next_answer(&events).await;
+        voice.live();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Com o aparelho presente, o fim da conversa falada encerra a chamada.
+        push.send(json!({"method": "thread/realtime/closed", "params": {"threadId": "t1", "reason": "x"}})).unwrap();
+        loop { if let VoiceEvent::Phase(Phase::Closed) = events.recv().await.unwrap() { break; } }
     }
 
     #[tokio::test]
