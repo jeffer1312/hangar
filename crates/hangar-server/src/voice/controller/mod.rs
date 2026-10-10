@@ -575,5 +575,6 @@ fn failure_text(failure: &VoiceFailure) -> (&'static str, String) {
         VoiceFailure::AudioStopped => ("audio_stopped", "O áudio da chamada parou: o microfone pode ter sido trocado ou desconectado. Conecte de novo.".into()),
         VoiceFailure::Closed => ("closed", "A OpenAI encerrou a chamada.".into()),
         VoiceFailure::AudioLost => ("audio_lost", "O áudio da chamada caiu; conecte de novo para continuar a mesma conversa.".into()),
+        VoiceFailure::AudioLostEnded => ("audio_lost", "O áudio da chamada caiu e nenhum aparelho reconectou a tempo; a chamada foi encerrada.".into()),
     }
 }

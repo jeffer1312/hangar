@@ -54,7 +54,9 @@ async fn rig(caps: &[&str], peers: Option<Value>) -> Rig {
 }
 
 /// O controlador de pé, antes da primeira oferta.
-async fn launch(caps: &[&str], peers: Option<Value>) -> Rig {
+async fn launch(caps: &[&str], peers: Option<Value>) -> Rig { launch_with(caps, peers, Duration::from_secs(600)).await }
+
+async fn launch_with(caps: &[&str], peers: Option<Value>, audio_grace: Duration) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("runtime-config.json"), r#"{"codex_voice_beta": true}"#).unwrap();
     let peers_path = peers.map(|p| { let path = dir.path().join("peers.json"); std::fs::write(&path, p.to_string()).unwrap(); path });
@@ -68,7 +70,7 @@ async fn launch(caps: &[&str], peers: Option<Value>) -> Rig {
     let (spawn, seen, push) = fake_app_server();
     let (tx, events) = async_channel::unbounded();
     let options = CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(),
-        tools: tools_for(&caps), handoff_same_thread: true, voice_dir: dir.path().join("voz") };
+        tools: tools_for(&caps), handoff_same_thread: true, voice_dir: dir.path().join("voz"), audio_grace };
     let voice = Voice::start(options, spawn, tx);
     let (link, device) = DeviceLink::channel(caps, Some(Screen { server: String::new(), name: "hangar".into() }));
     let gate = GateSource { home: dir.path().to_path_buf(), claude_dir: dir.path().to_path_buf(), every: Duration::from_secs(5) };
@@ -330,4 +332,24 @@ async fn device_reconnecting_after_an_unanswered_offer_gets_its_answer() {
             _ => panic!("o aparelho que voltou ficou sem resposta"),
         }
     }
+}
+
+#[tokio::test]
+async fn audio_lost_past_the_grace_tells_the_device_and_closes() {
+    let mut rig = launch_with(&[], None, Duration::from_millis(300)).await;
+    rig.to_ctl.send(ToController::Device(ClientMsg::Offer { sdp: "v=0 offer".into() })).unwrap();
+    loop { if let ServerMsg::Answer { .. } = rig.device.recv().await.unwrap() { break; } }
+    rig.to_ctl.send(ToController::Device(ClientMsg::Live)).unwrap();
+    rig.push.send(json!({"method": "thread/realtime/error", "params": {"threadId": "t1", "message": "ice failed"}})).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut error = None;
+    loop {
+        match tokio::time::timeout_at(deadline, rig.device.recv()).await {
+            Ok(Some(ServerMsg::Error { code, .. })) => error = Some(code),
+            Ok(Some(ServerMsg::Closed)) => break,
+            Ok(Some(_)) => {}
+            _ => panic!("a chamada não acabou"),
+        }
+    }
+    assert_eq!(error.as_deref(), Some("audio_lost"));
 }

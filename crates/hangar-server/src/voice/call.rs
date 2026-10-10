@@ -14,7 +14,9 @@ pub enum Phase { Connecting, Live, Closed }
 #[derive(Debug, Clone)]
 pub enum VoiceFailure { Microphone, Speaker, AppServer, Realtime(String), Network, Timeout, Organizer, ModelSwitch, OwnFolder, AudioStopped, Closed,
     /// A conversa falada caiu sem a chamada acabar: espera uma oferta nova.
-    AudioLost }
+    AudioLost,
+    /// Nenhuma oferta nova veio no prazo depois da queda do áudio: a chamada acabou.
+    AudioLostEnded }
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Activity { #[default] Idle, Thinking, Searching, Working }
 pub enum VoiceEvent {
@@ -71,7 +73,9 @@ fn backstage_input(text: &str) -> Backstage {
 /// `thread/start` (a thread não aceita catálogo novo). `handoff_same_thread`: a passagem recomeça a conversa falada na mesma thread.
 /// `voice_dir`: raiz da voz (`~/.hangar/voz` em produção), com a pasta própria do organizador e os planos.
 pub struct CallOptions { pub voice: Option<String>, pub context: String, pub cwd: Option<PathBuf>, pub target: String, pub organizer: ModeModels,
-    pub tools: Value, pub handoff_same_thread: bool, pub voice_dir: PathBuf }
+    pub tools: Value, pub handoff_same_thread: bool, pub voice_dir: PathBuf,
+    /// Quanto a chamada espera uma oferta nova depois que o áudio cai: o mesmo prazo do hub para o aparelho que sai.
+    pub audio_grace: Duration }
 
 /// Sobe o app-server: o filho de verdade em produção, um falso nos testes.
 pub type Spawn = Box<dyn FnOnce() -> futures_util::future::BoxFuture<'static, Result<(Rpc, async_channel::Receiver<Incoming>), RpcError>> + Send>;
@@ -280,6 +284,9 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     let mut greeted = false;
     // Uma passagem por vez: a resposta SDP não diz de qual oferta é, então a próxima espera a anterior responder,
     // falhar ou estourar o prazo.
+    // Áudio caído sem aparelho que ofereça de novo: o erro pode não ter derrubado o WebRTC, e aí nada mais acabaria a chamada.
+    let mut audio_lost: Option<Instant> = None;
+    let audio_grace = options.audio_grace;
     let mut last_offer = offer_seq;
     let mut answering: Option<Instant> = None;
     let mut waiting_offer: Option<(u64, String, String)> = None;
@@ -314,6 +321,9 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
     // Envio recusado por falta de pedido: se a fala seguinte o completar, o organizador é avisado para tentar de novo.
     let mut refused_send: Option<Instant> = None;
     let outcome = loop {
+        if audio_lost.is_some_and(|at| Instant::now() >= at) {
+            break Err(failed("audio lost: no new offer")(VoiceFailure::AudioLostEnded));
+        }
         if answering.is_some_and(|at| Instant::now() >= at) {
             log("handoff sdp answer timed out");
             next_offer(&mut answering, &mut waiting_offer, &mut early);
@@ -353,12 +363,13 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 Some(Command::Offer(seq, sdp, context)) if answering.is_some() => {
                     // A mais nova substitui a que esperava: a resposta desta é a única que o dono atual aplica.
                     log("handoff offer waits for the previous answer");
+                    audio_lost = None;
                     waiting_offer = Some((seq, sdp, context));
                 }
                 Some(Command::Offer(seq, sdp, context)) => {
                     // Outro aparelho assumiu (ou o mesmo voltou): a conversa falada recomeça na mesma thread, com o histórico dela.
                     log(format!("handoff offer bytes={}", sdp.len()));
-                    (last_offer, answering) = (seq, Some(Instant::now() + ANSWER_WAIT));
+                    (last_offer, answering, audio_lost) = (seq, Some(Instant::now() + ANSWER_WAIT), None);
                     restarting = true;
                     detached = false;
                     out.away = true;
@@ -830,6 +841,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             log(format!("realtime audio lost method={method} reason={reason}: waiting for a device"));
                             detached = true;
                             out.away = true;
+                            audio_lost = Some(Instant::now() + audio_grace);
                             let _ = events.send(VoiceEvent::Phase(Phase::Connecting)).await;
                             let _ = events.send(VoiceEvent::Failed(VoiceFailure::AudioLost)).await;
                         }
@@ -968,7 +980,8 @@ mod tests {
     fn options(tools: Value) -> CallOptions {
         // Nunca o HOME real: a chamada cria a pasta própria e os planos aqui.
         let voice_dir = std::env::temp_dir().join(format!("hangar-voice-call-{}", std::process::id()));
-        CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(), tools, handoff_same_thread: true, voice_dir }
+        CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(), tools, handoff_same_thread: true, voice_dir,
+            audio_grace: Duration::from_secs(600) }
     }
 
     async fn next_answer(events: &async_channel::Receiver<VoiceEvent>) -> (u64, String) {
@@ -1110,20 +1123,13 @@ mod tests {
     async fn audio_lost_before_detached_keeps_the_call_for_the_next_offer() {
         let (spawn, mut seen, push) = fake_app_server();
         let (tx, events) = async_channel::unbounded();
-        let voice = Voice::start(options(json!([])), spawn, tx);
+        let voice = Voice::start(CallOptions { audio_grace: Duration::from_millis(800), ..options(json!([])) }, spawn, tx);
         voice.offer(1, "v=0 offer A".into(), "ctx".into());
         next_answer(&events).await;
         voice.live();
         tokio::time::sleep(Duration::from_millis(100)).await;
         push.send(json!({"method": "thread/realtime/closed", "params": {"threadId": "t1", "reason": "peer_gone"}})).unwrap();
-        let mut lost = false;
-        while !lost {
-            match events.recv().await.unwrap() {
-                VoiceEvent::Failed(VoiceFailure::AudioLost) => lost = true,
-                VoiceEvent::Phase(Phase::Closed) => panic!("a chamada acabou"),
-                _ => {}
-            }
-        }
+        audio_lost(&events).await;
         // Sem aparelho, a fala espera o próximo.
         voice.jev_verdict("turn-1".into(), SendVerdict::Unsure, Some("guardada".into()), None);
         voice.detached();
@@ -1138,7 +1144,64 @@ mod tests {
             if spoke(&m) { break; }
         }
         assert_eq!(threads, 1, "mesma thread do organizador");
+        // A oferta nova desarmou o prazo da queda: passado ele, a chamada segue.
+        tokio::time::sleep(Duration::from_millis(1000)).await;
         while let Ok(e) = events.try_recv() { assert!(!matches!(e, VoiceEvent::Phase(Phase::Closed)), "não encerrou"); }
+    }
+
+    async fn audio_lost(events: &async_channel::Receiver<VoiceEvent>) {
+        loop {
+            match events.recv().await.unwrap() {
+                VoiceEvent::Failed(VoiceFailure::AudioLost) => return,
+                VoiceEvent::Phase(Phase::Closed) => panic!("a chamada acabou"),
+                _ => {}
+            }
+        }
+    }
+
+    /// Erro do realtime com o aparelho ainda ligado e nenhuma oferta nova: a chamada acaba no prazo, com o código.
+    #[tokio::test]
+    async fn audio_lost_without_a_new_offer_ends_after_the_grace() {
+        let (spawn, _seen, push) = fake_app_server();
+        let (tx, events) = async_channel::unbounded();
+        let voice = Voice::start(CallOptions { audio_grace: Duration::from_millis(300), ..options(json!([])) }, spawn, tx);
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
+        next_answer(&events).await;
+        voice.live();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        push.send(json!({"method": "thread/realtime/error", "params": {"threadId": "t1", "message": "ice failed"}})).unwrap();
+        audio_lost(&events).await;
+        let started = Instant::now();
+        let mut ended = false;
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), events.recv()).await.expect("prazo").unwrap() {
+                VoiceEvent::Failed(VoiceFailure::AudioLostEnded) => ended = true,
+                VoiceEvent::Phase(Phase::Closed) => break,
+                _ => {}
+            }
+        }
+        assert!(ended, "acabou com o código da queda");
+        assert!(started.elapsed() >= Duration::from_millis(250), "esperou o prazo");
+    }
+
+    /// Parada nossa: o fechamento que vem depois não vira falha.
+    #[tokio::test]
+    async fn own_stop_then_late_closed_ends_cleanly() {
+        let (spawn, _seen, push) = fake_app_server();
+        let (tx, events) = async_channel::unbounded();
+        let voice = Voice::start(options(json!([])), spawn, tx);
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
+        next_answer(&events).await;
+        voice.live();
+        voice.stop();
+        push.send(json!({"method": "thread/realtime/closed", "params": {"threadId": "t1", "reason": "stopped"}})).unwrap();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), events.recv()).await.expect("prazo").unwrap() {
+                VoiceEvent::Failed(failure) => panic!("falha numa parada pedida: {}", failure_kind(&failure)),
+                VoiceEvent::Phase(Phase::Closed) => break,
+                _ => {}
+            }
+        }
     }
 
     #[tokio::test]
