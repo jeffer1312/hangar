@@ -220,6 +220,20 @@ def test_migrate_reads_legacy_settings_key(home):
     assert not cc._parked_file().exists()   # sem MCP configurado, nada é criado
 
 
+def test_key_removed_on_the_jev_page_does_not_come_back_on_restart(home):
+    from app import runtime_config as rc
+
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"env": {"TYPESAFE_API_KEY": "legacy-typesafe-key"}}))
+    cc.save(_pedido(home))
+    cc.migrate_jev()
+    rc.aplicar({}, remover={"jev_api_key"})
+    cc.migrate_jev()
+    assert not rc.get("jev_api_key")
+    assert "TYPESAFE_API_KEY" not in _entrada(cc._main_file())["env"]
+
+
 @pytest.mark.parametrize("relative,content", [
     (".claude.json", "{invalid-secret"),
     (".claude.json", '{"mcpServers": "invalid-secret"}'),

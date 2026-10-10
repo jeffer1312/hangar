@@ -294,19 +294,27 @@ def sync_jev() -> None:
         _write(path, data)
 
 
+def _jev_migrated_marker() -> Path:
+    return Path.home() / ".hangar" / "jev-migrated"
+
+
 def migrate_jev() -> None:
     """Chave que só existia no MCP (ou no `env` do settings.json) passa a ser a do Jev, uma vez;
     depois disso o MCP só recebe a configuração única."""
     from app import runtime_config
-    if not str(runtime_config.get("jev_api_key") or "").strip():
-        old = ((_known_entry() or {}).get("env") or {}).get("TYPESAFE_API_KEY")
-        if not (isinstance(old, str) and old.strip()):
-            settings_env = _read(Path.home() / ".claude" / "settings.json").get("env")
-            old = settings_env.get("TYPESAFE_API_KEY") if isinstance(settings_env, dict) else ""
-        if isinstance(old, str) and old.strip():
-            runtime_config.aplicar({"jev_api_key": old.strip()})
-            _log.info("computer-control: chave do Jev do Computer Use virou a configuração única do Jev")
-            return
+    marker = _jev_migrated_marker()
+    # Sem a marca, chave apagada na página Jev voltaria do MCP ou do settings.json a cada subida.
+    if not marker.exists():
+        if not str(runtime_config.get("jev_api_key") or "").strip():
+            old = ((_known_entry() or {}).get("env") or {}).get("TYPESAFE_API_KEY")
+            if not (isinstance(old, str) and old.strip()):
+                settings_env = _read(Path.home() / ".claude" / "settings.json").get("env")
+                old = settings_env.get("TYPESAFE_API_KEY") if isinstance(settings_env, dict) else ""
+            if isinstance(old, str) and old.strip():
+                runtime_config.aplicar({"jev_api_key": old.strip()})
+                _log.info("computer-control: chave do Jev do Computer Use virou a configuração única do Jev")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
     old = ((_known_entry() or {}).get("env") or {}).get("TYPESAFE_API_KEY") or ""
     new = _jev_env().get("TYPESAFE_API_KEY", "")
     if old and new and old != new:
