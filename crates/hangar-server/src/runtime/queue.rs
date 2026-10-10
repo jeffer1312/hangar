@@ -452,14 +452,23 @@ fn confirm_row(state:&mut State,id:&str) {
 }
 
 /// Pergunta lateral (`/hangar-btw`, `/btw`): o plugin responde no painel e nada entra no transcript,
-/// então a entrega aceita já é a confirmação.
-fn confirm_side_questions(state:&mut State)->bool {
-    let side:Vec<String> = state.rows.iter().filter(|row| {
-        row["delivered"] == true && row["confirmed"] != true && row["papel"] != "assistant"
+/// então só a operação ACEITA dela confirma a entrada; despacho em curso ou incerto não confirma nada.
+fn confirm_side_question(state:&mut State,op_id:&str)->bool {
+    let Some(entry) = state.operations.get(op_id).filter(|op|op.status == Status::Accepted).and_then(|op|op.entry_id.clone())
+        else { return false };
+    let side = state.rows.iter().find(|row|row_id(row) == entry).is_some_and(|row| {
+        row["confirmed"] != true && row["papel"] != "assistant"
             && row["text"].as_str().and_then(|text|text.split_whitespace().next()).is_some_and(|c|c == "/hangar-btw" || c == "/btw")
-    }).map(|row|row_id(row).to_owned()).collect();
-    for id in &side { confirm_row(state,id); }
-    !side.is_empty()
+    });
+    if side { confirm_row(state,&entry); }
+    side
+}
+
+/// Na leitura: perguntas laterais já aceitas que ficaram presas antes desta regra.
+fn confirm_side_questions(state:&mut State)->bool {
+    let accepted:Vec<String> = state.operations.iter().filter(|(key,op)|!key.starts_with(CALL_PREFIX) && op.status == Status::Accepted)
+        .map(|(key,_)|key.clone()).collect();
+    accepted.iter().fold(false,|changed,id|confirm_side_question(state,id) || changed)
 }
 
 /// Fila gravada antes de a resposta local confirmar o comando: a entrada `/x` entregue seguida
@@ -689,7 +698,7 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             record_terminal_write_barrier(state,&id);
             release_terminal_write_barrier(state);
             if terminal {finalize_terminal(state,&id,clock)?;}
-            if status == Status::Accepted {confirm_side_questions(state);}
+            confirm_side_question(state,&id);
             serde_json::to_value(&state.operations[&id])?
         }
         Action::LateRpcResolution { id, wire_id, request_id, generation, result } => {
@@ -702,7 +711,7 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             if op.wire_attempts.values().all(|a|a["status"] == "accepted") && op.status != Status::Confirmed {
                 op.status = Status::Accepted; op.result = result;
                 release_terminal_write_barrier(state);
-                confirm_side_questions(state);
+                confirm_side_question(state,&id);
             }
             serde_json::to_value(&state.operations[&id])?
         }
