@@ -142,7 +142,8 @@ async fn list_sessions_names_machines_and_screen() {
 async fn send_to_named_session_posts_input_once_per_turn() {
     let mut rig = rig(&[], None).await;
     let args = json!({"request": "revisar o login da tela", "session": "web"});
-    push_speech(&rig.push, "turn-1", "manda pra web revisar o login da tela");
+    // A fala cita "web" e "casa web": a trava da chamada aceita os dois destinos, e só a do controlador vê que são a mesma sessão.
+    push_speech(&rig.push, "turn-1", "manda pra web e pra casa web revisar o login da tela");
     push_tool(&rig.push, "s1", "send_to_session", args.clone(), "turn-1");
     let first = rig.reply("s1").await;
     assert_eq!(first["success"], true, "{first}");
@@ -150,6 +151,10 @@ async fn send_to_named_session_posts_input_once_per_turn() {
     let second = rig.reply("s2").await;
     assert_eq!(second["success"], false);
     assert_eq!(text(&second), SEND_DUPLICATE);
+    push_tool(&rig.push, "s3", "send_to_session", json!({"request": "revisar o login da tela", "session": "casa::web"}), "turn-1");
+    let third = rig.reply("s3").await;
+    assert_eq!(third["success"], false, "{third}");
+    assert_eq!(text(&third), SEND_DUPLICATE);
     tokio::time::sleep(Duration::from_secs(2)).await;
     let inputs = rig.api.lock().unwrap().inputs.clone();
     assert_eq!(inputs, vec![("web".to_owned(), "revisar o login da tela".to_owned())]);

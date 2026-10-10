@@ -21,22 +21,27 @@ impl SelfApi {
         Self { base: format!("http://{addr}"), token: token.to_owned(), http }
     }
 
-    async fn call(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, String> {
+    async fn call(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, CallError> {
         let mut req = self.http.request(method, format!("{}{path}", self.base)).bearer_auth(&self.token);
         if let Some(body) = body {
             req = req.header(reqwest::header::CONTENT_TYPE, "application/json").body(body.to_string());
         }
-        let resp = req.send().await.map_err(|_| "O servidor não respondeu.".to_owned())?;
+        let resp = req.send().await.map_err(|_| CallError { certain: false, text: "O servidor não respondeu.".to_owned() })?;
         let status = resp.status();
         let value: Value = resp.bytes().await.ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
         if status.is_success() { return Ok(value); }
-        Err(value["detail"]["message"].as_str()
+        let text = value["detail"]["message"].as_str()
             .or_else(|| value["detail"].as_str())
             .or_else(|| value["message"].as_str())
             .map(str::to_owned)
-            .unwrap_or_else(|| format!("O servidor recusou ({status}).")))
+            .unwrap_or_else(|| format!("O servidor recusou ({status})."));
+        Err(CallError { certain: true, text })
     }
 }
+
+/// `certain`: o outro lado respondeu e recusou, nada foi gravado; senão (rede, prazo, resposta ilegível) pode ter chegado.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallError { pub certain: bool, pub text: String }
 
 pub struct Machines { pub own: SelfApi, pub peers: Arc<PeerClient>, pub own_label: String }
 
@@ -44,8 +49,13 @@ fn enc(name: &str) -> String { utf8_percent_encode(name, NON_ALPHANUMERIC).to_st
 
 impl Machines {
     pub async fn call(&self, machine: &str, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, String> {
+        self.call_checked(machine, method, path, body).await.map_err(|e| e.text)
+    }
+
+    async fn call_checked(&self, machine: &str, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, CallError> {
         if machine == HERE { return self.own.call(method, path, body).await; }
-        self.peers.call(machine, method, path, body.as_ref()).await.map(|v| v.unwrap_or(Value::Null)).map_err(|e| e.text(machine))
+        self.peers.call(machine, method, path, body.as_ref()).await.map(|v| v.unwrap_or(Value::Null))
+            .map_err(|e| CallError { certain: !e.is_transport(), text: e.text(machine) })
     }
 
     pub fn label(&self, machine: &str) -> String {
@@ -83,11 +93,11 @@ impl Machines {
         serde_json::from_value(value).map_err(|_| "Resposta inválida do histórico.".to_owned())
     }
 
-    pub async fn send(&self, machine: &str, name: &str, text: &str) -> Result<Delivery, String> {
+    pub async fn send(&self, machine: &str, name: &str, text: &str) -> Result<Delivery, CallError> {
         let path = format!("/api/sessions/{}/input", enc(name));
-        let value = self.call(machine, reqwest::Method::POST, &path, Some(json!({"text": text, "steer": false}))).await?;
-        let delivery: Delivery = serde_json::from_value(value).map_err(|_| "Resposta inválida do envio.".to_owned())?;
-        if delivery.ok { Ok(delivery) } else { Err("A sessão recusou o pedido.".to_owned()) }
+        let value = self.call_checked(machine, reqwest::Method::POST, &path, Some(json!({"text": text, "steer": false}))).await?;
+        let delivery: Delivery = serde_json::from_value(value).map_err(|_| CallError { certain: false, text: "Resposta inválida do envio.".to_owned() })?;
+        if delivery.ok { Ok(delivery) } else { Err(CallError { certain: true, text: "A sessão recusou o pedido.".to_owned() }) }
     }
 
     pub async fn pair(&self, machine: &str, target: &str, origin: &str) -> Result<PairResult, String> {

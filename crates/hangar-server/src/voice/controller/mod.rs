@@ -7,7 +7,7 @@ mod watch;
 mod tests;
 
 use super::call::{Activity, Backstage, CallId, Phase, Voice, VoiceEvent, VoiceFailure};
-use super::machines::{HERE, Machines};
+use super::machines::{CallError, HERE, Machines};
 use super::organizer::{ConfirmGate, Effective, Mode, OrganizerAction, tool_reply};
 use super::protocol::{ClientMsg, Screen, ServerMsg, ToController};
 use super::rules::{Delivery, SwitchOffer};
@@ -28,6 +28,7 @@ const GATE_EVERY: Duration = Duration::from_secs(5);
 const BACKSTAGE_KEEP: usize = 60;
 const THOUGHT_KEEP: usize = 2000;
 const MOVED: &str = "A chamada passou para outro aparelho; tente de novo.";
+const NO_DEVICE: &str = "Nenhum aparelho conectado agora; tente de novo quando a voz voltar.";
 
 /// De onde reler a trava do beta.
 pub struct GateSource { pub home: PathBuf, pub claude_dir: PathBuf }
@@ -78,8 +79,10 @@ enum Done {
     Rows { rows: Vec<(String, SessionRow)>, unreachable: Vec<String>, want: Want },
     Watch { rows: Vec<(String, SessionRow)>, fired: Vec<(Key, SessionRow)> },
     History { key: Key, row: SessionRow, result: Result<Vec<ChatEvent>, String> },
-    Sent { key: Key, ok: bool },
-    Closed { call: CallId, name: String, result: Result<(), String> },
+    Sent { key: Key, turn: String, error: Option<CallError> },
+    Closed { call: CallId, key: Key, result: Result<(), String> },
+    /// A sessão aceitou o plano: o próximo nasce para a sessão da tela de então.
+    PlanDelivered,
     Opened { call: CallId, machine: String, name: String, sent: Option<Result<Delivery, String>> },
     AskFailed(Key),
     Jev(tools::JevAsked, Result<jev::Decision, String>),
@@ -130,7 +133,11 @@ pub struct Controller {
     session_names: Vec<String>,
     /// A sessão da tela já passada à chamada (`retarget`).
     target: Option<Screen>,
+    /// Sessão `(máquina, nome)` do plano em curso: o `SendPlan` só traz o nome.
+    plan_key: Option<Key>,
     computer: Option<tokio::task::JoinHandle<()>>,
+    /// O dono caiu e nenhum outro assumiu: ferramentas de tela recusam até o próximo `hello`/oferta.
+    detached: bool,
     forwarded: HashMap<u64, Forwarded>,
     next_tool: u64,
     snap: Snapshot,
@@ -146,7 +153,7 @@ impl Controller {
         Self { voice, machines, jev, device, gate, diag, done, done_rx: Some(done_rx), backoff: Arc::default(), client: String::new(),
             actions: Vec::new(), rows: Vec::new(), followed: HashSet::new(), watched: HashSet::new(), talked: HashMap::new(), jev_switched: None,
             close_gate: ConfirmGate::default(), closing: false, switch_offer: SwitchOffer::default(), sent_turn: None, pending_question: None,
-            spoken: HashSet::new(), heard_recent: String::new(), session_names: Vec::new(), target, computer: None, forwarded: HashMap::new(),
+            spoken: HashSet::new(), heard_recent: String::new(), session_names: Vec::new(), target, plan_key: None, computer: None, detached: false, forwarded: HashMap::new(),
             next_tool: 0, snap: Snapshot { phase: "connecting", ..Snapshot::default() }, sent_state: None, sent_at: None, dirty: true }
     }
 
@@ -183,12 +190,17 @@ impl Controller {
 
     fn on_device(&mut self, msg: ToController) -> bool {
         match msg {
-            ToController::Detached => self.voice.detached(),
-            ToController::OwnerChanged => self.owner_changed(),
+            ToController::Detached => {
+                self.voice.detached();
+                self.detached = true;
+                self.drop_forwarded("device detached");
+            }
+            ToController::OwnerChanged => self.drop_forwarded("owner changed"),
             ToController::Models(models) => self.voice.set_models(models),
             ToController::Device(msg) => match msg {
                 ClientMsg::Hello { client, screen, caps, actions } => {
                     log(format!("device hello client={client} caps={} actions={}", caps.len(), actions.len()));
+                    self.detached = false;
                     self.client = client;
                     self.actions = actions;
                     self.device.set_caps(caps);
@@ -196,6 +208,7 @@ impl Controller {
                     self.dirty = true;
                 }
                 ClientMsg::Offer { sdp } => {
+                    self.detached = false;
                     let note = match self.device.screen() {
                         Some(screen) => format!("A sessão na tela agora é {}.", screen.name),
                         None => "Nenhuma sessão aberta na tela.".to_owned(),
@@ -235,8 +248,11 @@ impl Controller {
             VoiceEvent::Action(action) => self.snap.action = action,
             VoiceEvent::TurnDone => (self.snap.thought, self.snap.action) = (String::new(), None),
             VoiceEvent::Failed(failure) => self.call_failed(&failure),
-            VoiceEvent::Mode(mode) => self.snap.mode = mode,
-            VoiceEvent::Plan { path, markdown } => self.snap.plan = Some((path, markdown)),
+            VoiceEvent::Mode(mode) => {
+                if mode == Mode::Plan { self.mark_plan(); }
+                self.snap.mode = mode;
+            }
+            VoiceEvent::Plan { path, markdown } => { self.mark_plan(); self.snap.plan = Some((path, markdown)); }
             VoiceEvent::OrganizerContext { used, window } => self.snap.context = Some((used, window)),
             // Atualização com uma janela só não apaga a outra.
             VoiceEvent::AccountLimits { five_hour, seven_day } => {
@@ -280,14 +296,24 @@ impl Controller {
             Done::Rows { rows, unreachable, want } => self.on_rows(rows, unreachable, want),
             Done::Watch { rows, fired } => self.on_watch(rows, fired),
             Done::History { key, row, result } => self.on_history(key, row, result),
-            Done::Sent { key, ok } => if !ok { self.watched.remove(&key); },
-            Done::Closed { call, name, result } => {
+            Done::Sent { key, turn, error: Some(error) } => {
+                // Recusa certa não entregou nada: a sessão volta a poder receber o reenvio do mesmo turno e deixa de ser
+                // vigiada. Incerto fica marcado e vigiado, porque pode ter chegado.
+                if error.certain {
+                    if let Some((sent, keys)) = &mut self.sent_turn && *sent == turn { keys.remove(&key); }
+                    self.watched.remove(&key);
+                }
+                self.action_failed("send_to_session", error.text);
+            }
+            Done::Sent { error: None, .. } => {}
+            Done::PlanDelivered => self.plan_key = None,
+            Done::Closed { call, key, result } => {
                 self.closing = false;
                 match result {
                     Ok(()) => {
                         log("close_session closed");
-                        self.followed.retain(|(_, n)| *n != name);
-                        self.voice.reply(call, tool_reply(format!("Sessão {name} fechada."), true));
+                        self.voice.reply(call, tool_reply(format!("Sessão {} fechada.", key.1), true));
+                        self.followed.remove(&key);
                     }
                     Err(text) => self.fail(call, "close_session", text),
                 }
@@ -329,11 +355,19 @@ impl Controller {
         self.voice.retarget(name.clone(), format!("A sessão na tela agora é {name}."), cwd);
     }
 
+    /// O plano nasce para a sessão que a chamada tem como alvo (`target`) e fica com ela até ser entregue.
+    fn mark_plan(&mut self) {
+        if self.plan_key.is_none() { self.plan_key = self.target.as_ref().map(|s| (s.server.clone(), s.name.clone())); }
+    }
+
     fn screen_key(&self) -> Option<Key> { self.device.screen().map(|s| (s.server, s.name)) }
+
+    /// Sem dono vale "sim": as capacidades são do aparelho que caiu, e o `send_tool` recusa com o motivo certo.
+    fn can(&self, tool: &str) -> bool { self.detached || self.device.can(tool) }
 
     /// Ferramenta de tela: pede ao aparelho dono; quem não a atende recusa já.
     fn forward(&mut self, call: CallId, tool: &'static str, args: Value) {
-        if !self.device.can(tool) {
+        if !self.can(tool) {
             log(format!("{tool} refused: device lacks it"));
             self.voice.reply(call, tool_reply(format!("Este aparelho não atende {tool}; peça no PC."), false));
             return;
@@ -342,6 +376,12 @@ impl Controller {
     }
 
     fn send_tool(&mut self, name: &str, args: Value, pending: Forwarded) {
+        // Sem dono, a ferramenta iria às capacidades do aparelho que caiu e ninguém responderia.
+        if self.detached {
+            log(format!("{name} refused: no device"));
+            self.abandon(pending, NO_DEVICE);
+            return;
+        }
         self.next_tool += 1;
         let call = self.next_tool;
         self.forwarded.insert(call, pending);
@@ -364,17 +404,22 @@ impl Controller {
         }
     }
 
-    /// O aparelho anterior não responde mais: cada ferramenta pendente volta ao organizador agora.
-    fn owner_changed(&mut self) {
-        log(format!("owner changed pending_tools={}", self.forwarded.len()));
-        for (_, pending) in self.forwarded.drain() {
-            match pending {
-                Forwarded::Reply(call) | Forwarded::Switch(call, _) => self.voice.reply(call, tool_reply(MOVED, false)),
-                // A sessão já existe: tentar de novo criaria outra.
-                Forwarded::Opened { call, name, .. } => self.voice.reply(call, tool_reply(
-                    format!("A sessão {name} foi criada, mas a chamada passou para outro aparelho antes de abri-la; peça para trocar para ela."), false)),
-                Forwarded::JevSwitch { turn, verdict, .. } | Forwarded::JevAction { turn, verdict, .. } => self.voice.jev_verdict(turn, verdict, None, None),
-            }
+    /// O aparelho que recebeu as ferramentas não vai responder (caiu ou outro assumiu): cada uma volta ao organizador agora,
+    /// senão o turno dele fica preso esperando.
+    fn drop_forwarded(&mut self, why: &str) {
+        log(format!("{why} pending_tools={}", self.forwarded.len()));
+        let pending: Vec<Forwarded> = self.forwarded.drain().map(|(_, p)| p).collect();
+        for p in pending { self.abandon(p, MOVED); }
+    }
+
+    /// Ferramenta que o aparelho não atendeu: a recusa vai ao organizador; o Jev só manda o veredito, sem fala.
+    fn abandon(&mut self, pending: Forwarded, text: &str) {
+        match pending {
+            Forwarded::Reply(call) | Forwarded::Switch(call, _) => self.voice.reply(call, tool_reply(text, false)),
+            // A sessão já existe: tentar de novo criaria outra.
+            Forwarded::Opened { call, name, .. } => self.voice.reply(call, tool_reply(
+                format!("A sessão {name} foi criada, mas não abriu na tela: {text} Não crie outra; peça para trocar para ela."), false)),
+            Forwarded::JevSwitch { turn, verdict, .. } | Forwarded::JevAction { turn, verdict, .. } => self.voice.jev_verdict(turn, verdict, None, None),
         }
     }
 

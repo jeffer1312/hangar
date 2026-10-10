@@ -147,7 +147,7 @@ impl Controller {
         } else if !switch_requested(said, recent, &key.1) && !self.switch_offer.take(&key.0, &key.1, now) {
             log("switch_session refused not asked");
             self.voice.reply(call, tool_reply(format!("{SWITCH_REFUSED}."), false));
-        } else if !self.device.can("switch_session") {
+        } else if !self.can("switch_session") {
             log("switch_session refused: device lacks it");
             self.voice.reply(call, tool_reply("Este aparelho não troca de sessão pela voz.", false));
         } else {
@@ -202,7 +202,7 @@ impl Controller {
         let ctx = self.ctx();
         tokio::spawn(async move {
             let result = ctx.machines.close(&key.0, &key.1).await;
-            let _ = ctx.done.send(Done::Closed { call, name: key.1, result });
+            let _ = ctx.done.send(Done::Closed { call, key, result });
         });
     }
 
@@ -274,7 +274,7 @@ impl Controller {
         // Nomes diferentes podem chegar à mesma sessão ("hcc" e "hcc-rust-plano"): a trava final é pela sessão.
         let fresh = match &mut self.sent_turn {
             Some((sent, keys)) if *sent == turn => keys.insert(key.clone()),
-            slot => { *slot = Some((turn, HashSet::from([key.clone()]))); true }
+            slot => { *slot = Some((turn.clone(), HashSet::from([key.clone()]))); true }
         };
         if !fresh {
             log("send refused duplicate session");
@@ -286,10 +286,10 @@ impl Controller {
         let ctx = self.ctx();
         tokio::spawn(async move {
             let result = ctx.machines.send(&key.0, &key.1, &request).await;
-            log(format!("send result {}", match &result { Ok(d) if d.delivered => "sent", Ok(_) => "queued", Err(_) => "failed" }));
-            ctx.voice.reply(call, send_reply(&key.1, &result));
-            // ponytail: falha de envio fica marcada no turno (pode ter chegado); separar recusa certa pede o status no `Machines`.
-            let _ = ctx.done.send(Done::Sent { key, ok: result.is_ok() });
+            log(format!("send result {}", match &result {
+                Ok(d) if d.delivered => "sent", Ok(_) => "queued", Err(e) if e.certain => "refused", Err(_) => "uncertain" }));
+            ctx.voice.reply(call, send_reply(&key.1, &result.clone().map_err(|e| e.text)));
+            let _ = ctx.done.send(Done::Sent { key, turn, error: result.err() });
         });
     }
 
@@ -309,23 +309,26 @@ impl Controller {
         });
     }
 
-    /// O plano foi escrito para uma sessão: vai para ela, esteja ou não na tela.
+    /// O plano foi escrito para uma sessão: vai para ela, esteja ou não na tela. A máquina é a de quando o plano nasceu;
+    /// o nome sozinho pode estar em outra máquina.
     pub(super) fn send_plan(&mut self, session: String, text: String) {
-        let key = self.screen_key().filter(|(_, n)| *n == session)
-            .or_else(|| self.rows.iter().find(|(_, r)| r.name == session).map(|(m, r)| (m.clone(), r.name.clone())));
-        let Some(key) = key else {
-            log("plan target not found");
-            self.voice.session_answer(format!("O plano não foi enviado: não achei a sessão {session}."));
+        let Some(key) = self.plan_key.clone().filter(|(_, n)| *n == session) else {
+            log("plan target unknown");
+            self.voice.session_answer(format!("O plano não foi enviado: não sei em que máquina está a sessão {session}."));
             return;
         };
         self.watched.insert(key.clone());
         let ctx = self.ctx();
         tokio::spawn(async move {
             match ctx.machines.send(&key.0, &key.1, &text).await {
-                Ok(_) => { log("plan delivered"); ctx.voice.plan_delivered(); }
+                Ok(_) => {
+                    log("plan delivered");
+                    ctx.voice.plan_delivered();
+                    let _ = ctx.done.send(Done::PlanDelivered);
+                }
                 Err(error) => {
                     ctx.voice.session_answer("O plano não chegou à sessão.".into());
-                    let _ = ctx.done.send(Done::Failed { code: "send_plan", text: error });
+                    let _ = ctx.done.send(Done::Failed { code: "send_plan", text: error.text });
                 }
             }
         });
@@ -339,11 +342,10 @@ impl Controller {
         self.talked.insert(key.clone(), Instant::now());
         let ctx = self.ctx();
         tokio::spawn(async move {
-            let reply = match ctx.machines.history(&key.0, &key.1, 60).await {
-                Ok(events) => tool_reply(session_context(&key.1, &conversation_pairs(&events)), true),
-                Err(error) => tool_reply(format!("Não consegui ler a sessão {}: {error}", key.1), false),
-            };
-            ctx.voice.reply(call, reply);
+            match ctx.machines.history(&key.0, &key.1, 60).await {
+                Ok(events) => ctx.voice.reply(call, tool_reply(session_context(&key.1, &conversation_pairs(&events)), true)),
+                Err(error) => ctx.fail(call, "read_session", format!("Não consegui ler a sessão {}: {error}", key.1)),
+            }
         });
     }
 
@@ -399,7 +401,10 @@ impl Controller {
             let work = request.request.clone();
             let created = create(&ctx.machines, &machine, &request).await;
             let (created, sent) = match (created, work) {
-                (Ok(name), Some(work)) => { let delivery = ctx.machines.send(&machine, &name, &work).await; (Ok(name), Some(delivery)) }
+                (Ok(name), Some(work)) => {
+                    let delivery = ctx.machines.send(&machine, &name, &work).await.map_err(|e| e.text);
+                    (Ok(name), Some(delivery))
+                }
                 (Err(text), Some(_)) => (Err(format!("{text} O pedido não foi enviado.")), None),
                 (created, None) => (created, None),
             };
@@ -414,7 +419,7 @@ impl Controller {
         log(format!("open_session created request={}", sent.is_some()));
         let key = (machine, name.clone());
         if sent.is_some() { self.watched.insert(key.clone()); }
-        if self.device.can("switch_session") {
+        if self.can("switch_session") {
             let args = self.switch_args(&key);
             self.send_tool("switch_session", args, Forwarded::Opened { call, name, sent });
             return;
@@ -437,7 +442,7 @@ impl Controller {
             .map(|(m, s)| jev::session_label(&s.name, &self.machines.label(m), open.as_ref().is_some_and(|(om, on)| om == m && *on == s.name)))
             .collect();
         let sessions: Vec<Key> = self.rows.iter().map(|(m, s)| (m.clone(), s.name.clone())).collect();
-        let catalog: Vec<(String, String, String)> = if self.device.can("hangar_action") {
+        let catalog: Vec<(String, String, String)> = if self.can("hangar_action") {
             self.actions.iter().filter_map(|a| {
                 let text = |k: &str| a[k].as_str().unwrap_or_default().to_owned();
                 Some((a["id"].as_str().filter(|id| !id.is_empty())?.to_owned(), text("label"), text("description")))
@@ -485,7 +490,7 @@ impl Controller {
                     let reason = if self.screen_key().as_ref() == Some(&key) { Some("on-screen") }
                         else if !switch_requested(&asked.speech, &asked.recent, &key.1) { Some("not-asked") }
                         else if !self.rows.iter().any(|(m, s)| *m == key.0 && s.name == key.1) { Some("gone") }
-                        else if !self.device.can("switch_session") { Some("no-device") }
+                        else if !self.can("switch_session") { Some("no-device") }
                         else { None };
                     match reason {
                         Some(reason) => log(format!("jev skip reason={reason}")),
