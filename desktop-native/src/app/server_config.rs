@@ -840,6 +840,7 @@ impl Hangar {
                     s.open_filled();
                     s.follow_readers();
                     self.fill_config_inputs(window, cx);
+                    self.load_dictation_style(cx);
                     self.load_dictation_models(cx);
                 }
             }
@@ -1530,7 +1531,7 @@ impl Hangar {
                         menu.item(PopupMenuItem::new(label).checked(checked).on_click(move|_,_,cx|{let _=owner.update(cx,|this,cx|{this.server_config.stage(key,json!(id));cx.notify();});}))
                     }))));
         }
-        body.child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("voice_claude_oauth_limit")))
+        body
             .when(state.dictation_catalog.loading,|el|el.child(div().id("voice-models-loading").role(Role::Status).child(tr("voice_models_loading"))))
             .when_some(state.dictation_catalog.value.as_ref().and_then(|value|value.as_ref().err()).cloned(),|el,error|el.child(div().id("voice-models-error").role(Role::Alert).text_sm().text_color(theme::warning()).whitespace_normal().child(error)))
             .when(catalog.is_some_and(|catalog|catalog["models"].as_array().is_some_and(Vec::is_empty)),|el|el.child(tr("voice_models_empty")))

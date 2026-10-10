@@ -22,7 +22,16 @@ async fn main() {
     let codex = home.join(".codex");
     std::fs::create_dir_all(&base).unwrap();
     std::fs::create_dir_all(&codex).unwrap();
-    std::fs::write(base.join("settings.json"),json!({"env":{"ANTHROPIC_API_KEY":"fixture-api-key","ANTHROPIC_BASE_URL":endpoint},"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo HOOK_ISCA"}]}]},"enabledPlugins":{"plugin-isca":true}}).to_string()).unwrap();
+    let oauth = std::env::args().any(|argument| argument == "--oauth");
+    let mut settings = json!({"env":{"ANTHROPIC_BASE_URL":endpoint},"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo HOOK_ISCA"}]}]},"enabledPlugins":{"plugin-isca":true}});
+    if oauth {
+        std::fs::write(base.join(".credentials.json"), json!({"claudeAiOauth":{"accessToken":"fixture-oauth-token","refreshToken":"fixture-refresh-token","expiresAt":4102444800000u64,"scopes":["user:inference","user:profile"],"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}).to_string()).unwrap();
+        std::fs::write(base.join(".claude.json"), json!({"oauthAccount":{"accountUuid":"fixture-account","emailAddress":"fixture@example.invalid","organizationUuid":"fixture-organization"}}).to_string()).unwrap();
+    } else {
+        settings["env"]["ANTHROPIC_API_KEY"] = json!("fixture-api-key");
+    }
+    std::fs::write(base.join("settings.json"), settings.to_string()).unwrap();
+    std::fs::write(base.join("CLAUDE.md"), "INSTRUÇÃO_ISCA_GLOBAL").unwrap();
     std::fs::write(home.join("CLAUDE.md"), "INSTRUÇÃO_ISCA_DO_PROJETO").unwrap();
     std::fs::write(home.join("AGENTS.md"), "INSTRUÇÃO_ISCA_DO_PROJETO").unwrap();
     for directory in [

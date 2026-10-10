@@ -12,9 +12,6 @@ use serde_json::{Value, json};
 
 pub fn detail(code: &str) -> &'static str {
     match code {
-        "dictation_claude_oauth_unsupported" => {
-            "O organizador mínimo do Claude não aceita login OAuth nesta versão. Use uma conta API ou outro modo; a transcrição foi preservada."
-        }
         "dictation_target_missing" => {
             "A conversa de destino não está disponível; a transcrição foi preservada."
         }
@@ -55,17 +52,33 @@ pub async fn organize(
     config: &OrganizationConfig,
     style: DictationStyle,
     original: OrganizationResult,
+    deadline: tokio::time::Instant,
+) -> OrganizationResult {
+    tokio::time::timeout_at(
+        deadline,
+        organize_before_deadline(state, request, config, style, original.clone(), deadline),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        original.failed(
+            "dictation_organization_timeout",
+            detail("dictation_organization_timeout"),
+        )
+    })
+}
+
+async fn organize_before_deadline(
+    state: &AppState,
+    request: &OrganizationRequest,
+    config: &OrganizationConfig,
+    style: DictationStyle,
+    original: OrganizationResult,
+    deadline: tokio::time::Instant,
 ) -> OrganizationResult {
     let context = match context::resolve(state, request).await {
         Ok(context) => context,
         Err(code) => return original.failed(code, detail(code)),
     };
-    if context.provider == "claude" && !context.compatible {
-        return original.failed(
-            "dictation_claude_oauth_unsupported",
-            detail("dictation_claude_oauth_unsupported"),
-        );
-    }
     let model = request
         .model
         .as_deref()
@@ -95,13 +108,14 @@ pub async fn organize(
         );
     }
     let raw = original.raw.trim();
-    let output = match run(
+    let output = match run_with_budget(
         state,
         &context,
         model,
         style,
         raw,
         original.recent_messages.as_deref(),
+        deadline,
     )
     .await
     {
@@ -144,10 +158,37 @@ pub async fn run(
     raw: &str,
     references: Option<&[ReferenceMessage]>,
 ) -> Result<String, &'static str> {
+    run_with_budget(
+        state,
+        context,
+        model,
+        style,
+        raw,
+        references,
+        tokio::time::Instant::now() + style.timeout(),
+    )
+    .await
+}
+
+async fn run_with_budget(
+    state: &AppState,
+    context: &Context,
+    model: &str,
+    style: DictationStyle,
+    raw: &str,
+    references: Option<&[ReferenceMessage]>,
+    deadline: tokio::time::Instant,
+) -> Result<String, &'static str> {
+    if tokio::time::Instant::now() >= deadline {
+        return Err("dictation_organization_timeout");
+    }
     let guard = std::sync::Arc::new(account_guard(state, context)?);
     let (command, directory) = build_command(state, context, model, style, references)?;
-    let bytes =
-        limited_output_guarded(command, directory, raw, style.timeout(), Some(guard)).await?;
+    let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if budget.is_zero() {
+        return Err("dictation_organization_timeout");
+    }
+    let bytes = limited_output_guarded(command, directory, raw, budget, Some(guard)).await?;
     parse_output(&bytes, context.provider == "claude")
 }
 
@@ -197,7 +238,7 @@ pub fn build_command(
         command
             .args([
                 "-p",
-                "--bare",
+                "--safe-mode",
                 "--no-session-persistence",
                 "--tools",
                 "",

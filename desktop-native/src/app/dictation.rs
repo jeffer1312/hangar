@@ -382,8 +382,21 @@ impl Dictation {
         let raw = value.get("raw").and_then(Value::as_str).unwrap_or(text);
         let applied = value.get("estilo_aplicado").and_then(Value::as_str).unwrap_or("cru");
         if self.result.as_ref().and_then(|v| v.get("raw")) != value.get("raw") { self.versions.clear(); }
-        self.versions.insert("cru".into(), json!({"text": raw, "raw": raw, "estilo_aplicado": "cru"}));
-        self.versions.insert(applied.to_owned(), value.clone());
+        let mut raw_version = value.clone();
+        raw_version["text"] = json!(raw);
+        raw_version["raw"] = json!(raw);
+        raw_version["estilo_aplicado"] = json!("cru");
+        if let Some(fields) = raw_version.as_object_mut() {
+            fields.remove("aviso");
+            fields.remove("organization_code");
+            if let Some(warning) = fields.get("aviso_transcricao").cloned() {
+                fields.insert("aviso".into(), warning);
+            }
+        }
+        self.versions.insert("cru".into(), raw_version);
+        if applied != "cru" {
+            self.versions.insert(applied.to_owned(), value.clone());
+        }
     }
 
     /// Arquivo de áudio vazio tem a frase do web; gravação vazia, a de gravar de novo.
@@ -615,6 +628,9 @@ impl Hangar {
                 if this.dictation_target(cx).is_none_or(|(api,_)|api.identity()!=identity){return;}
                 if let Ok(Ok(value)) = result {
                     this.dictation.organization=Some((identity,OrganizationSelection::read(&value)));
+                    if this.dictation.error.as_deref() == Some(tr("dictation_config_failed").as_str()) {
+                        this.dictation.error = None;
+                    }
                     if let Some(style) = STYLES.into_iter().find(|style| value.pointer("/campos/ditado_estilo/valor").and_then(Value::as_str) == Some(*style)) {
                         this.dictation.style = Some((connection, style));
                         cx.notify();
@@ -1474,6 +1490,18 @@ mod tests {
         assert!(snapshot.include_recent_messages);assert_eq!(snapshot.mode,"harness");
         assert_eq!(later.options(Some(&destination)).mode,"none");
         dictation.cancel();assert!(dictation.snapshot.is_none());
+    }
+
+    #[test]
+    fn raw_version_preserves_the_spelling_references_for_the_next_revision() {
+        let references=serde_json::json!([{"role":"user","text":"O projeto usa PostgreSQL"}]);
+        let value=serde_json::json!({"text":"Texto organizado.","raw":"texto original","estilo_aplicado":"prosa",
+            "organization_mode":"harness","recent_messages":references});
+        let mut dictation=Dictation::default();dictation.remember_versions(&value);
+        let raw=dictation.versions["cru"].clone();dictation.result=Some(raw.clone());
+        assert_eq!(raw["text"],"texto original");
+        assert_eq!(raw["recent_messages"],references,"Cru não pode obrigar a revisão seguinte a reler a conversa");
+        assert_eq!(dictation.result.as_ref().unwrap()["recent_messages"],references);
     }
 
     #[test]

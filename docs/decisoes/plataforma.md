@@ -1958,4 +1958,6 @@ e rejeição foram conferidos pelo corpus portado e pelos testes do motor Rust.
 
 O isolamento dos CLIs foi conferido no pedido HTTP emitido pelos executáveis reais, usando o
 construtor Rust e um provedor local, conforme [a prova dos harnesses](harnesses.md#organização-mínima-do-ditado).
-OAuth do Claude é limitação explícita desta versão; não abre login nem usa outra conta.
+Claude preserva a autenticação original da conta, inclusive assinatura OAuth; não abre login nem usa outra conta.
+O SDK acrescenta contexto interno de ambiente e identificação da conta, descrito na prova dos
+harnesses; não confundir esse overhead com histórico ou instruções do projeto.

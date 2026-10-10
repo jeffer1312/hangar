@@ -25,6 +25,21 @@ async fn attempt_with_context(
     snapshot: Option<Value>,
     locked: bool,
 ) -> Value {
+    attempt_with_budget(
+        provider, oauth, model, generation, include, snapshot, locked, None,
+    )
+    .await
+}
+async fn attempt_with_budget(
+    provider: &str,
+    oauth: bool,
+    model: Option<&str>,
+    generation: &str,
+    include: bool,
+    snapshot: Option<Value>,
+    locked: bool,
+    budget: Option<Duration>,
+) -> Value {
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -48,11 +63,7 @@ async fn attempt_with_context(
     if provider == "claude" {
         std::fs::write(
             account.join("settings.json"),
-            if oauth {
-                "{}"
-            } else {
-                r#"{"env":{"ANTHROPIC_API_KEY":"fixture-api-key"}}"#
-            },
+            if oauth {"{}".to_owned()} else {json!({"env":{"ANTHROPIC_API_KEY":"fixture-api-key"},"fixture_catalog_stall":budget.is_some()}).to_string()},
         )
         .unwrap();
         if oauth {
@@ -162,7 +173,47 @@ async fn attempt_with_context(
         },
         FactsClient::new(upstream, "harness-secret".into()),
     ));
-    let app = hangar_server::routes::terminal_router(Arc::new(state));
+    let state = Arc::new(state);
+    if let Some(budget) = budget {
+        use hangar_server::dictation::{
+            harness,
+            model::{
+                DictationStyle, OrganizationConfig, OrganizationMode, OrganizationRequest,
+                OrganizationResult,
+            },
+        };
+        let request = OrganizationRequest {
+            raw: "  Hoje vamos conferir o ditado completo.\n".into(),
+            session: Some("destination".into()),
+            generation: Some(generation.into()),
+            ..Default::default()
+        };
+        let cfg = OrganizationConfig {
+            dictation_claude_model: "model-claude-a".into(),
+            ..Default::default()
+        };
+        let original = OrganizationResult::original(request.raw.clone(), OrganizationMode::Harness);
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            harness::organize(
+                &state,
+                &request,
+                &cfg,
+                DictationStyle::Clean,
+                original,
+                tokio::time::Instant::now() + budget,
+            ),
+        )
+        .await
+        .expect("a espera pelo catálogo ignorou o prazo único da tentativa");
+        assert!(
+            !account.join("fixture-executed").exists(),
+            "a organização não pode começar depois do prazo"
+        );
+        python.abort();
+        return serde_json::to_value(result).unwrap();
+    }
+    let app = hangar_server::routes::terminal_router(state);
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
@@ -195,13 +246,10 @@ async fn dictation_harness_uses_destination_account_and_its_separate_model() {
     }
 }
 #[tokio::test]
-async fn dictation_harness_oauth_claude_is_explicitly_unsupported_and_preserves_raw() {
+async fn dictation_harness_oauth_claude_uses_safe_mode_and_destination_subscription() {
     let result = attempt("claude", true, None, "k:original").await;
-    assert_eq!(result["text"], "  Hoje vamos conferir o ditado completo.\n");
-    assert_eq!(
-        result["organization_code"],
-        "dictation_claude_oauth_unsupported"
-    );
+    assert_eq!(result["text"], "Hoje vamos conferir o ditado completo.");
+    assert!(result["organization_code"].is_null(), "{result}");
 }
 #[tokio::test]
 async fn dictation_harness_refuses_recreated_destination_and_unavailable_model() {
@@ -267,6 +315,26 @@ async fn dictation_harness_empty_model_snapshot_does_not_use_a_later_saved_model
     assert_eq!(
         result["organization_code"], "dictation_model_unavailable",
         "modelo não escolhido no snapshot: {result}"
+    );
+    assert_eq!(result["text"], "  Hoje vamos conferir o ditado completo.\n");
+}
+
+#[tokio::test]
+async fn dictation_deadline_includes_waiting_for_the_catalog_and_preserves_raw() {
+    let result = attempt_with_budget(
+        "claude",
+        false,
+        None,
+        "k:original",
+        false,
+        None,
+        false,
+        Some(Duration::from_millis(500)),
+    )
+    .await;
+    assert_eq!(
+        result["organization_code"],
+        "dictation_organization_timeout"
     );
     assert_eq!(result["text"], "  Hoje vamos conferir o ditado completo.\n");
 }

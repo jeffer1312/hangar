@@ -15,7 +15,6 @@ pub struct Context {
     pub session: Option<String>,
     pub env: BTreeMap<String, String>,
     pub settings: Value,
-    pub compatible: bool,
     pub engine: Option<Value>,
     pub jsonl: Option<PathBuf>,
 }
@@ -75,7 +74,6 @@ pub fn account(
         home.to_string_lossy().into(),
     );
     let mut settings = json!({});
-    let mut compatible = provider == "codex";
     if provider == "claude" {
         let stored = read_json(&home.join("settings.json"));
         for key in [
@@ -107,10 +105,6 @@ pub fn account(
         if let Some(helper) = stored["apiKeyHelper"].as_str().filter(|h| !h.is_empty()) {
             settings["apiKeyHelper"] = json!(helper);
         }
-        compatible = env
-            .get("ANTHROPIC_API_KEY")
-            .is_some_and(|key| !key.is_empty())
-            || settings["apiKeyHelper"].is_string();
     }
     Ok(Context {
         provider: provider.into(),
@@ -119,7 +113,6 @@ pub fn account(
         session: None,
         env,
         settings,
-        compatible,
         engine: None,
         jsonl: None,
     })
@@ -238,7 +231,6 @@ pub async fn resolve(
                 .ok_or("dictation_organization_failed")?;
             data["dictation_prefix"] = json!(prefix);
         }
-        context.compatible = true;
         context.engine = Some(data);
     }
     Ok(context)

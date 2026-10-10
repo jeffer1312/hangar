@@ -6,6 +6,35 @@ pub async fn organize(
     request: OrganizationRequest,
     config: &OrganizationConfig,
 ) -> OrganizationResult {
+    organize_started(state, request, config, tokio::time::Instant::now()).await
+}
+
+pub async fn organize_started(
+    state: &crate::routes::AppState,
+    request: OrganizationRequest,
+    config: &OrganizationConfig,
+    started: tokio::time::Instant,
+) -> OrganizationResult {
+    let saved = match config.ditado_estilo.as_str() {
+        "limpar" => DictationStyle::Clean,
+        "briefing" => DictationStyle::Briefing,
+        _ => DictationStyle::Prose,
+    };
+    let deadline = started
+        + request
+            .style
+            .unwrap_or(saved)
+            .effective(request.raw.trim())
+            .timeout();
+    organize_before_deadline(state, request, config, deadline).await
+}
+
+async fn organize_before_deadline(
+    state: &crate::routes::AppState,
+    request: OrganizationRequest,
+    config: &OrganizationConfig,
+    deadline: tokio::time::Instant,
+) -> OrganizationResult {
     let mode = request
         .mode
         .unwrap_or_else(|| OrganizationMode::saved(&config.dictation_organization_mode));
@@ -34,9 +63,10 @@ pub async fn organize(
                 "O contexto da conversa não está autorizado; a transcrição foi preservada.",
             );
         }
-        match super::references::read(state,&request).await {
-            Ok(references)=>original.recent_messages=Some(references),
-            Err(code)=>return original.failed(code,"Não foi possível ler a referência de grafia da conversa; a transcrição foi preservada."),
+        match tokio::time::timeout_at(deadline, super::references::read(state,&request)).await {
+            Ok(Ok(references))=>original.recent_messages=Some(references),
+            Ok(Err(code))=>return original.failed(code,"Não foi possível ler a referência de grafia da conversa; a transcrição foi preservada."),
+            Err(_)=>return original.failed("dictation_organization_timeout", super::harness::detail("dictation_organization_timeout")),
         }
     }
     let raw = original.raw.trim();
@@ -44,7 +74,7 @@ pub async fn organize(
         if !request.harness_allowed {
             return original.failed("dictation_harness_unauthorized","A organização pela conta do harness é exclusiva do dono; foi mantida a transcrição original.");
         }
-        return super::harness::organize(state, &request, config, style, original).await;
+        return super::harness::organize(state, &request, config, style, original, deadline).await;
     }
     let briefing =
         style == DictationStyle::Briefing && !config.llm_briefing_base_url.trim().is_empty();
@@ -95,21 +125,31 @@ pub async fn organize(
         .header("content-type", "application/json")
         .header("user-agent", "hangar/1.0")
         .body(body.to_string())
-        .timeout(style.timeout())
+        .timeout(deadline.saturating_duration_since(tokio::time::Instant::now()))
         .send()
         .await;
     let output = match response {
-        Ok(response) if response.status().is_success() => match response.bytes().await {
-            Ok(bytes) if bytes.len() <= 1024 * 1024 => serde_json::from_slice::<Value>(&bytes)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/choices/0/message/content")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                }),
-            _ => None,
-        },
+        Ok(response) if response.status().is_success() => {
+            match tokio::time::timeout_at(deadline, response.bytes()).await {
+                Ok(Ok(bytes)) if bytes.len() <= 1024 * 1024 => {
+                    serde_json::from_slice::<Value>(&bytes)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .pointer("/choices/0/message/content")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        })
+                }
+                Err(_) => {
+                    return original.failed(
+                        "dictation_organization_timeout",
+                        super::harness::detail("dictation_organization_timeout"),
+                    );
+                }
+                _ => None,
+            }
+        }
         Err(error) if error.is_timeout() => {
             return original.failed(
                 "dictation_organization_timeout",

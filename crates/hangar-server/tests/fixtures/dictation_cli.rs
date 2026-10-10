@@ -60,6 +60,11 @@ fn main() {
     if args.iter().any(|a| a == "exec")
         || args.iter().any(|a| a == "--output-format") && args.iter().any(|a| a == "json")
     {
+        std::fs::write(
+            std::path::Path::new(&root).join("fixture-executed"),
+            "executou",
+        )
+        .unwrap();
         let selected = args
             .iter()
             .position(|a| a == "--model")
@@ -88,7 +93,7 @@ fn main() {
             );
         } else {
             for flag in [
-                "--bare",
+                "--safe-mode",
                 "--no-session-persistence",
                 "--tools",
                 "--disable-slash-commands",
@@ -120,6 +125,16 @@ fn main() {
             let response = if value.pointer("/request/subtype").and_then(Value::as_str)
                 == Some("list_models")
             {
+                let settings: Value =
+                    std::fs::read(std::path::Path::new(&root).join("settings.json"))
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                        .unwrap_or(Value::Null);
+                if settings["fixture_catalog_stall"] == true {
+                    loop {
+                        std::thread::park();
+                    }
+                }
                 json!({"models":[{"value":model,"displayName":account}]})
             } else {
                 json!({})

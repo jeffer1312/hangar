@@ -288,9 +288,10 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   escolha **Sem organização** (padrão), **Harness da conversa** ou **API externa**. Sem organização
   entrega o texto da transcrição e dispensa um serviço de organização. No harness, escolha o modelo
   disponível na conta da conversa aberta; Claude e Codex têm preferências separadas. A chamada é
-  independente da conversa principal e leva somente transcrição e prompt de estilo. Claude com
-  login OAuth mostra uma limitação específica e conserva o cru; nesta versão, use uma conta API,
-  API externa ou Sem organização.
+  independente da conversa principal; o Hangar fornece transcrição e prompt de estilo. Claude usa
+  a autenticação original da conta de destino, inclusive a assinatura por login OAuth, e seu SDK
+  acrescenta metadados de ambiente e identificação da conta. O histórico e as instruções globais
+  ou do projeto ficam fora da chamada.
   Com organização ligada, **Só limpar**, **Reorganizar** e **Briefing** mantêm as travas contra
   invenção e perda de conteúdo. Frase com menos de cinco palavras ou começando com `/` é preservada.
   Falha de serviço, modelo indisponível ou saída recusada conserva o cru com aviso, sem recorrer a

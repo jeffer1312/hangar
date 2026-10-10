@@ -58,6 +58,7 @@ pub async fn private(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response {
+    let organization_started = tokio::time::Instant::now();
     if !crate::workspace_routes::private_ok(&state, peer, request.headers()) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -109,13 +110,6 @@ pub async fn private(
                 Ok(context) => context,
                 Err(code) => return failure(409, code, super::harness::detail(code)),
             };
-            if context.provider == "claude" && !context.compatible {
-                return failure(
-                    409,
-                    "dictation_claude_oauth_unsupported",
-                    super::harness::detail("dictation_claude_oauth_unsupported"),
-                );
-            }
             return match state
                 .dictation_models
                 .get_context(&state.accounts, &context, false)
@@ -225,9 +219,20 @@ pub async fn private(
             200,
         );
     }
-    let config = match configuration(&state).await {
-        Ok(config) => config,
+    let config = match tokio::time::timeout_at(
+        organization_started + std::time::Duration::from_secs(120),
+        configuration(&state),
+    )
+    .await
+    {
+        Ok(Ok(config)) => config,
         Err(_) => {
+            return response(
+                json!({"ok":true,"result":OrganizationResult::original(request.raw, request.mode.unwrap_or_default()).failed("dictation_organization_timeout",super::harness::detail("dictation_organization_timeout"))}),
+                200,
+            );
+        }
+        Ok(Err(_)) => {
             return response(
                 json!({"ok":true,"result":OrganizationResult::original(request.raw, request.mode.unwrap_or_default())
             .failed("dictation_rust_unavailable","A configuração de organização está indisponível; foi mantida a transcrição original.")}),
@@ -236,7 +241,7 @@ pub async fn private(
         }
     };
     response(
-        json!({"ok":true,"result":service::organize(&state,request,&config).await}),
+        json!({"ok":true,"result":service::organize_started(&state,request,&config,organization_started).await}),
         200,
     )
 }

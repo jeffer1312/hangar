@@ -370,7 +370,9 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
   conta e modelo de organização próprios da conversa de destino; API externa usa sua chave própria.
   Falha conserva o cru e mostra a causa, sem reserva Python ou troca de conta/modelo. Referência das
   três últimas mensagens é opt-in e congelada por tentativa. O executor mínimo não leva ferramentas,
-  plugins, skills, hooks, MCP nem instruções do projeto; Claude OAuth fica sem suporte nesta versão.
+  plugins, skills, hooks, MCP nem instruções globais ou do projeto; Claude usa `--safe-mode` com
+  a autenticação original da conta de destino, inclusive a assinatura OAuth. O SDK Claude acrescenta
+  metadados de ambiente e identificação da conta; a captura não contém literalmente só o texto do Hangar.
   Contrato e prova em [plataforma.md](docs/decisoes/plataforma.md#organização-opcional-do-ditado-no-rust).
 - **Transcrição é do Rust; Enviar encerra o ditado.** Configuração local aponta para executável e
   modelo instalados pelo usuário na máquina do servidor selecionado. O Hangar inicia e encerra
