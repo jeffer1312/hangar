@@ -314,11 +314,11 @@ def _flush_coalesce() -> None:
                    tag=_COALESCE_TAG, title_suffix_fn=lambda l: _msg(l, "sessoes", n=n), url="/")
 
 
-def notify_finished(session_name: str) -> None:
-    """Push: sessao terminou um turno longo (working -> idle apos > CP_FINISH_MIN_SECONDS)."""
+def notify_finished(session_name: str, reply: str | None = None) -> None:
+    """Push: sessão terminou um trabalho longo; `reply` = o começo da última resposta, quando houver."""
     if _suppressed(session_name):
         return
-    _broadcast(session_name, lambda l: _msg(l, "terminou"))
+    _broadcast(session_name, lambda l: f"{_msg(l, 'terminou')}: {reply}" if reply else _msg(l, "terminou"))
 
 
 def notify_dead(session_name: str) -> None:

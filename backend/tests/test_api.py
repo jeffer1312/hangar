@@ -843,6 +843,7 @@ def _transition_fixture(monkeypatch):
     # aqui executa em linha pra o teste continuar deterministico.
     monkeypatch.setattr(api_mod.threading, "Thread",
                         lambda target, daemon=None: SimpleNamespace(start=target))
+    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
     api_mod._working_started.clear()
     api_mod._recheca_armada.clear()
     return calls
@@ -868,6 +869,49 @@ def test_finish_ping_fires_on_long_turn(_transition_fixture, monkeypatch):
     monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1050.0))  # 50s: dispara
     api_mod._on_hook_transition("s2", "idle")
     assert calls == [("s2", api_mod.push.notify_finished)]
+
+
+def test_finish_ping_waits_for_the_session_to_really_stop(_transition_fixture, monkeypatch):
+    calls = _transition_fixture
+    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
+    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
+    api_mod._on_hook_transition("s7", "working")
+    # Fim de turno, mas quando a espera acaba a sessão já voltou a trabalhar (recado na fila): nada sai.
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1200.0))
+    api_mod._terminou_se_parou("s7", 1000.0)
+    assert calls == [] and api_mod._working_started["s7"] == 1000.0
+    # O turno seguinte continua a mesma série: o início fica o do primeiro.
+    api_mod._on_hook_transition("s7", "working")
+    assert api_mod._working_started["s7"] == 1000.0
+    # Ele dura 10 s, mas a série inteira passou de 45: avisa no fim de verdade.
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1210.0))
+    api_mod._on_hook_transition("s7", "idle")
+    assert calls == [("s7", api_mod.push.notify_finished)] and "s7" not in api_mod._working_started
+
+
+def test_finish_ping_holds_while_background_work_is_open(_transition_fixture, monkeypatch):
+    from types import SimpleNamespace
+    from app import background_open
+    calls = _transition_fixture
+    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
+    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
+    info = SimpleNamespace(name="s8", jsonl="/tmp/s8.jsonl", provider="claude", last_reply="**Pronto**: build verde")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "session_key", lambda p: "s8")
+    monkeypatch.setattr(api_mod, "drain", lambda *a, **k: 0)
+    monkeypatch.setattr(api_mod, "_maybe_chain", lambda n: None)
+    monkeypatch.setattr(api_mod, "_agendar_confirmacao", lambda *a: None)
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
+    api_mod._on_hook_transition("s8", "working")
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1100.0))
+    monkeypatch.setattr(background_open, "count", lambda jsonl: 1)
+    api_mod._on_hook_transition("s8", "idle")
+    assert calls == [] and "s8" in api_mod._working_started    # agente rodando: espera ele
+    monkeypatch.setattr(background_open, "count", lambda jsonl: 0)
+    api_mod._on_hook_transition("s8", "idle")
+    assert [sid for sid, _ in calls] == ["s8"] and "s8" not in api_mod._working_started
+    assert api_mod._resumo_resposta(info.last_reply) == "Pronto: build verde"
 
 
 def test_finish_ping_respects_flag(_transition_fixture, monkeypatch):
@@ -3156,6 +3200,7 @@ def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts, lim
     # _work roda numa thread; aqui executa o alvo direto pra o teste ser deterministico.
     monkeypatch.setattr(api_mod.threading, "Thread",
                         lambda target, daemon=None: SimpleNamespace(start=target))
+    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
     if limpar:
         api_mod._recheca_armada.clear()
     api_mod._on_hook_transition("sid-k", "idle")
@@ -3218,9 +3263,14 @@ def test_push_terminou_nao_consome_o_inicio_de_outro_turno(monkeypatch):
     # avisaria.
     monkeypatch.setattr(api_mod.runtime_config, "get",
                         lambda k: True if k == "notify_finished" else 1)
+    from types import SimpleNamespace
     avisos = []
     monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: avisos.append(sid))
     monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", _AGORA))
+    # A espera de a sessão sossegar roda numa thread: aqui em linha e sem espera.
+    monkeypatch.setattr(api_mod.threading, "Thread", lambda target, daemon=None: SimpleNamespace(start=target))
+    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
 
     api_mod._working_started["s9"] = _AGORA - 300          # turno NOVO ja registrado
     api_mod._push_terminou("s9", _AGORA - 999)             # push do turno VELHO chega atrasado

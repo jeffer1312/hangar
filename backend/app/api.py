@@ -1548,16 +1548,46 @@ def _push_terminou(session_id: str, started: Optional[float]) -> None:
     `started is None` e nunca avisaria."""
     if started is None:
         return
+    threading.Thread(target=lambda: _terminou_se_parou(session_id, started), daemon=True).start()
+
+
+# Fim de turno não é fim de trabalho: recado na fila e agente ou shell em segundo plano acordam a
+# sessão de novo. O "terminou" espera ela sossegar e só sai com ela parada de verdade.
+_FINISH_SETTLE = 20.0
+
+
+def _resumo_resposta(texto: str | None, limite: int = 160) -> str | None:
+    """Uma linha do começo da última resposta, sem a marcação do markdown."""
+    if not texto:
+        return None
+    linha = re.sub(r"[`*_#>|]+", "", " ".join(texto.split())).strip()
+    return (linha[:limite - 1].rstrip() + "…") if len(linha) > limite else (linha or None)
+
+
+def _terminou_se_parou(session_id: str, started: float) -> None:
+    time.sleep(_FINISH_SETTLE)
+    m = hook_state.get_state(session_id)
+    if not m or m[0] != "idle":
+        return       # voltou a trabalhar: o início da série fica para o fim de verdade
     with _turno_lock:
         if _working_started.get(session_id) != started:
-            return                       # outro turno ja tomou o lugar: nao e nosso pra consumir
+            return
+    info = next((s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id), None)
+    if info is not None and info.jsonl and getattr(info, "provider", "claude") == "claude":
+        from app import background_open
+        try:
+            if background_open.count(info.jsonl):
+                return   # ainda há trabalho em segundo plano: o aviso sai quando ele acordar e parar
+        except OSError as e:
+            _log.warning("terminou: não li o transcript de %s (%s); aviso sai mesmo assim", info.name, type(e).__name__)
+    with _turno_lock:
+        if _working_started.get(session_id) != started:
+            return
         del _working_started[session_id]
-    if not runtime_config.get("notify_finished"):
+    if not runtime_config.get("notify_finished") or m[1] - started < runtime_config.get("finish_min_seconds"):
         return
-    m = hook_state.get_state(session_id)
-    elapsed = (m[1] if m else time.time()) - started
-    if elapsed >= runtime_config.get("finish_min_seconds"):
-        _notify_async(session_id, push.notify_finished)
+    resumo = _resumo_resposta(getattr(info, "last_reply", None))
+    _notify_async(session_id, (lambda name: push.notify_finished(name, resumo)) if resumo else push.notify_finished)
 
 
 def _on_hook_transition(session_id: str, state: str) -> None:
@@ -1574,7 +1604,9 @@ def _on_hook_transition(session_id: str, state: str) -> None:
         m = hook_state.get_state(session_id)
         if m:
             with _turno_lock:
-                _working_started[session_id] = m[1]
+                # Só o primeiro turno da série grava: os que vêm por recado ou trabalho de fundo
+                # continuam o mesmo trabalho, e o "terminou" mede ele inteiro. Quem apaga é o fim real.
+                _working_started.setdefault(session_id, m[1])
     elif state == "idle":
         # O push de "terminou" NAO sai daqui: ele espera o `_work` decidir se este idle e de verdade
         # (no Kimi ele pode ser o marcador congelado do turno anterior — ver corrige_ocioso_kimi).
