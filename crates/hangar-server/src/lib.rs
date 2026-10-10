@@ -34,6 +34,7 @@ pub mod transcript;
 pub mod transcription;
 pub mod workspace_routes;
 pub mod uploads;
+pub mod voice;
 pub mod worktree_routes;
 mod warn_limit;
 
