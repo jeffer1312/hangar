@@ -80,7 +80,7 @@ pub fn area_of(path: &str) -> usize {
         (&["/api/hangar-terminals"], "terminal"),
         (&["/api/codex-contas"], "codex"),
         (&["/api/orq", "/api/orquestracao", "/api/omp", "/api/pi"], "providers"),
-        (&["/api/claude-configs", "/api/conta-estado", "/api/credenciais", "/api/engines", "/api/harness"], "accounts"),
+        (&["/api/claude-configs", "/api/claude", "/api/conta-estado", "/api/credenciais", "/api/engines", "/api/harness"], "accounts"),
         (&["/api/guests", "/api/guest", "/api/share", "/api/me", "/par"], "guests"),
         (&["/api/peers", "/api/alcance", "/api/external-pairs", "/api/pair"], "pairing"),
         (&["/api/push"], "push"),
@@ -113,6 +113,9 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     }
     // Interface dos mods: o Rust atende as sessões dele e repassa as outras (os contadores mostram).
     if *method == Method::POST {
+        if path == "/api/claude/defaults" {
+            return true;
+        }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
         if matches!(tail, Some("plugin/press" | "plugin/close" | "plugin/show" | "plugin/input")) || matches!(path.strip_prefix("/api/plugin/"),
             Some("press-start" | "opened" | "ui" | "toast" | "pressed" | "copied" | "focus-target" | "focused" | "scroll")) {

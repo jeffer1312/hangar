@@ -319,6 +319,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_any))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
+        .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
         .fallback(pass_any)

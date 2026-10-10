@@ -3,6 +3,7 @@ pub mod accounts;
 pub mod auth;
 pub mod config;
 pub mod claude_customizations;
+pub mod claude_defaults;
 pub mod costs;
 pub mod costs_routes;
 pub mod costs_failure;

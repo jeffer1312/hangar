@@ -262,6 +262,7 @@ pub(super) enum CreateReply {
     /// A configuração do servidor: modo de sessão e Jev.
     Config(u64, (bool, Result<Option<Value>, Failure>)),
     HeadlessSaved(u64, Result<Value, Failure>),
+    ClaudeDefaultSaved(Result<Value, Failure>),
     Quotas(u64, Result<Value, Failure>),
     Context(u64, Result<Value, Failure>),
     Account(u64, AccountDone),
@@ -1252,6 +1253,9 @@ impl NewSession {
                 if seq != self.jev.seq { return None; }
                 self.headless_saving = false;
                 if let Err(error) = result { self.error = Some(format!("{} {}", tr("session_mode_save_failed"), Hangar::fetch_failure(&error))); }
+            }
+            CreateReply::ClaudeDefaultSaved(result) => {
+                if let Err(error) = result { self.error = Some(tr("create_default_failed").replace("{erro}", &Hangar::fetch_failure(&error))); }
             }
             CreateReply::Roots(seq, result, last) => {
                 let roots = result.map_err(|e| Hangar::fetch_failure(&e))

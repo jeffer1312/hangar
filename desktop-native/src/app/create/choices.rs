@@ -385,8 +385,15 @@ impl NewSession {
                 let value = on.then(|| this.current_choice());
                 // Na hora, num arquivo pequeno: o check só fica marcado se gravou, e duas gravações seguidas não se cruzam.
                 match crate::appearance::set_harness_default(&this.default_key(), value.clone()) {
-                    Ok(()) => this.saved_default = value,
+                    Ok(()) => this.saved_default = value.clone(),
                     Err(error) => this.error = Some(tr("create_default_failed").replace("{erro}", &error)),
+                }
+                // Claude da conta (sem motor): o padrão também é o do settings.json da máquina, para o `claude` fora do Hangar.
+                if let Some((model, effort, permission)) = value.filter(|_| this.provider == "claude" && this.engine.is_empty() && this.proxy_accounts().is_none()) {
+                    this.request(cx, move |api, send| Box::pin(async move {
+                        send(CreateReply::ClaudeDefaultSaved(api.server_send(reqwest::Method::POST, &["claude", "defaults"],
+                            Some(serde_json::json!({"model": model, "effort": effort, "permission": permission})), 10).await)).await;
+                    }));
                 }
                 cx.notify();
             }))))
