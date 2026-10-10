@@ -106,10 +106,15 @@
     void save(s => ({ ...s, organizer: { ...s.organizer, [mode]: { ...s.organizer[mode], [field]: field === 'effort' ? value : orNull(value) } } }));
   }
 
-  const pct = (w: { used_percent: number } | null) => (w ? `${Math.round(w.used_percent)}%` : '—');
+  function close() {
+    liveVoiceStore.open = false;
+    if (!inCall) liveVoiceStore.dismissError();
+  }
+
+  const pct = (w:{ used_percent: number } | null) => (w ? `${Math.round(w.used_percent)}%` : '—');
 </script>
 
-<BottomSheet open={liveVoiceStore.open} onClose={() => (liveVoiceStore.open = false)} ariaLabel={m.live_voice_open()}>
+<BottomSheet open={liveVoiceStore.open} onClose={close} ariaLabel={m.live_voice_open()}>
   <div class="lv">
     <header class="lv-head">
       <h2 class="lv-title">{m.live_voice_open()}</h2>

@@ -7,14 +7,17 @@
   const reply = $derived(liveVoiceStore.settingsOf(server)?.reply ?? null);
   const phase = $derived(liveVoiceStore.phase);
   const inCall = $derived(phase === 'connecting' || phase === 'live');
+  // `taken` não é falha: a conversa seguiu noutro aparelho.
+  const failed = $derived(!!liveVoiceStore.error && liveVoiceStore.error.code !== 'taken');
   // Chamada aberta noutra máquina continua alcançável daqui, mesmo onde a voz está desligada.
-  const visible = $derived(inCall || !!liveVoiceStore.error || !!(reply?.enabled && reply.codex));
+  const visible = $derived(inCall || failed || !!(reply?.enabled && reply.codex));
   const level = (v: number) => `scaleY(${0.15 + v * 0.85})`;
 
   $effect(() => { if (server && !server.invite) void liveVoiceStore.loadSettings(server); });
 
   function tap() {
-    if (!inCall && server) void liveVoiceStore.start(server);
+    // Com erro pendente o painel mostra a causa (e o botão de começar); depois de `taken` recomeçar puxaria a conversa de volta.
+    if (!inCall && !liveVoiceStore.error && server) void liveVoiceStore.start(server);
     else liveVoiceStore.open = true;
   }
 </script>
@@ -35,7 +38,7 @@
         <rect x="9" y="3" width="6" height="11" rx="3"/>
         <path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
       </svg>
-      {#if liveVoiceStore.error}<span class="alert-dot" aria-hidden="true"></span>{/if}
+      {#if failed}<span class="alert-dot" aria-hidden="true"></span>{/if}
     {/if}
   </button>
 {/if}
@@ -43,8 +46,8 @@
 <style>
   .live-voice-btn {
     position: relative;
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     flex-shrink: 0;
     display: grid;
     place-items: center;

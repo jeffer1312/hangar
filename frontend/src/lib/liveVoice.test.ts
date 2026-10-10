@@ -102,7 +102,7 @@ describe('LiveVoiceCall', () => {
   it('refuses a screen tool it does not support', async () => {
     const { ws } = await started();
     ws.receive({ type: 'tool', call: 4, name: 'read_screen', args: {} });
-    expect(ws.sent.at(-1)).toMatchObject({ type: 'tool_result', call: 4, ok: false });
+    expect(ws.sent.at(-1)).toEqual({ type: 'tool_result', call: 4, ok: false, text: '' });
   });
 
   it('taken_does_not_reconnect', async () => {

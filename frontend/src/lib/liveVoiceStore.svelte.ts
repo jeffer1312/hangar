@@ -189,6 +189,8 @@ export const liveVoiceStore = {
   saveSettings,
   start,
   stop,
+  /** A pessoa já viu o erro no painel: o botão volta ao normal. */
+  dismissError() { error = null; },
   toggleMute() {
     muted = !muted;
     call?.setMuted(muted);

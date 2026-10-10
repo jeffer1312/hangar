@@ -33,8 +33,6 @@ export interface LiveVoiceHandlers {
   levels(v: { input: number; output: number }): void;
 }
 
-const UNSUPPORTED_TOOL = 'Este aparelho não atende essa ferramenta.';
-
 export class LiveVoiceCall {
   private pc: RTCPeerConnection | null = null;
   private ws: WebSocket | null = null;
@@ -139,7 +137,7 @@ export class LiveVoiceCall {
 
   private async receive(raw: string, pc: RTCPeerConnection) {
     let msg;
-    try { msg = JSON.parse(raw); } catch { console.warn('voz: mensagem do servidor ilegível'); return; }
+    try { msg = JSON.parse(raw); } catch { console.warn('live voice: unreadable server message'); return; }
     switch (msg.type) {
       case 'answer':
         try { await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }); }
@@ -156,7 +154,8 @@ export class LiveVoiceCall {
 
   private tool(call: number, name: string, args: Record<string, unknown>) {
     if (name !== 'switch_session') {
-      this.send({ type: 'tool_result', call, ok: false, text: UNSUPPORTED_TOOL });
+      // Recusa sem texto: o servidor fala a recusa no idioma da voz.
+      this.send({ type: 'tool_result', call, ok: false, text: '' });
       return;
     }
     let ok = false;
@@ -166,7 +165,7 @@ export class LiveVoiceCall {
         baseUrl: typeof args.base_url === 'string' ? args.base_url : null,
         name: String(args.name ?? ''),
       });
-    } catch (e) { console.warn('voz: troca de sessão falhou', e); }
+    } catch (e) { console.warn('live voice: session switch failed', e); }
     this.send({ type: 'tool_result', call, ok, text: '' });
   }
 

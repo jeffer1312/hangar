@@ -27,6 +27,7 @@ const BACKSTAGE_KEEP: usize = 60;
 const THOUGHT_KEEP: usize = 2000;
 const MOVED: &str = "A chamada passou para outro aparelho; tente de novo.";
 const NO_DEVICE: &str = "Nenhum aparelho conectado agora; tente de novo quando a voz voltar.";
+const UNSUPPORTED_TOOL: &str = "Este aparelho não atende essa ferramenta; peça no PC.";
 
 /// De onde e em que ritmo reler a trava do beta: desligar no meio encerra a chamada.
 pub struct GateSource { pub home: PathBuf, pub claude_dir: PathBuf, pub every: Duration }
@@ -416,6 +417,8 @@ impl Controller {
         let Some(pending) = self.forwarded.remove(&call) else { log(format!("tool result unknown call={call}")); return };
         log(format!("tool result call={call} ok={ok}"));
         match pending {
+            // A recusa sem texto é do aparelho; o idioma da fala é decidido aqui, não no cliente.
+            Forwarded::Reply(id) if !ok && text.trim().is_empty() => self.voice.reply(id, tool_reply(UNSUPPORTED_TOOL, false)),
             Forwarded::Reply(id) => self.voice.reply(id, tool_reply(text, ok)),
             Forwarded::Switch(id, key) => self.switched(id, key, ok, text),
             Forwarded::Opened { call, name, sent } => match super::rules::opened_reply(&name, ok, sent.as_ref()) {
