@@ -493,17 +493,18 @@ impl AccountService {
                 }),
             )
         };
-        let mut merge = super::transcripts::Merge::new(&account.id);
+        let mut merge = super::transcripts::Merge::new(&account.id, default);
         for folder in folders {
             let (source, target) = (account.home.join(folder), default.join(folder));
-            // Raiz que é link (ou não é pasta) recusa como dentro da árvore: pular deixaria a
-            // exclusão seguir sem que as conversas fossem para a conta padrão.
+            // Raiz que é link para fora (ou não é pasta) recusa como dentro da árvore: pular
+            // deixaria a exclusão seguir sem que as conversas fossem para a conta padrão.
             let refuse = |error: std::io::Error| failed(super::transcripts::MergeError {
                 source: Some(source.clone()), target: target.clone(), error });
             match fs::symlink_metadata(&source) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(refuse(error)),
                 Ok(_) if storage::real_dir(&source) => merge.tree(&source, &target).map_err(failed)?,
+                Ok(_) if merge.links_into_home(&source) => {}
                 Ok(_) => return Err(refuse(std::io::Error::other("não é pasta"))),
             }
         }
@@ -779,6 +780,27 @@ mod tests {
         assert!(error.params["source"].as_str().unwrap().ends_with("link.jsonl"));
         assert!(account.home.join("projects/-repo/link.jsonl").is_symlink());
         assert_eq!(fs::read_to_string(&outside).unwrap(), "fora");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn memory_link_into_the_default_account_is_skipped() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let memory = root.path().join(".claude/projects/-repo/memory");
+        fs::create_dir_all(&memory).unwrap();
+        fs::write(memory.join("MEMORY.md"), "m").unwrap();
+        fs::create_dir_all(account.home.join("projects/-repo")).unwrap();
+        fs::write(account.home.join("projects/-repo/x.jsonl"), "x").unwrap();
+        std::os::unix::fs::symlink(&memory, account.home.join("projects/-repo/memory")).unwrap();
+        let count = delete_with(&service, Provider::Claude, &account, true).unwrap().unwrap();
+        assert_eq!((count.merged, count.skipped, count.renamed), (1, 0, 0));
+        assert!(!account.home.exists());
+        assert_eq!(fs::read_to_string(root.path().join(".claude/projects/-repo/x.jsonl")).unwrap(), "x");
+        let entries: Vec<_> = fs::read_dir(&memory).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(entries, ["MEMORY.md"], "a memória compartilhada fica como estava");
+        assert_eq!(fs::read_to_string(memory.join("MEMORY.md")).unwrap(), "m");
     }
 
     #[cfg(unix)]

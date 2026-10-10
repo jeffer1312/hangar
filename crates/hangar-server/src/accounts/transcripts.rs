@@ -44,14 +44,17 @@ fn at(source: Option<&Path>, target: &Path) -> impl FnOnce(io::Error) -> MergeEr
 /// estarem no disco, porque logo em seguida a origem é apagada.
 pub struct Merge<'a> {
     label: &'a str,
+    /// A conta padrão de destino, resolvida: link para dentro dela não guarda nada da conta.
+    home: Option<PathBuf>,
     count: MergeCount,
     touched: BTreeSet<PathBuf>,
 }
 
 impl<'a> Merge<'a> {
-    pub fn new(label: &'a str) -> Self {
+    pub fn new(label: &'a str, home: &Path) -> Self {
         Self {
             label,
+            home: fs::canonicalize(home).ok(),
             count: MergeCount::default(),
             touched: BTreeSet::new(),
         }
@@ -68,13 +71,24 @@ impl<'a> Merge<'a> {
                 self.tree(&path, &target)?;
             } else if kind.is_file() {
                 self.file(&path, &target)?;
-            } else {
-                // Link, socket ou fifo: seguir levaria à conta padrão o que mora fora da conta, e
-                // pular deixaria a exclusão apagá-lo sem aviso. Recusa e a conta fica.
+            } else if !self.links_into_home(&path) {
+                // Link para fora, socket ou fifo: seguir levaria à conta padrão o que mora fora
+                // da conta, e pular deixaria a exclusão apagá-lo sem aviso. Recusa e a conta fica.
                 return Err(at(Some(&path), &target)(io::Error::other("não é arquivo nem pasta")));
             }
         }
         Ok(())
+    }
+
+    /// Link cujo alvo fica na conta padrão (o `memory/` de cada projeto do Claude aponta para o
+    /// compartilhado) não tem nada da conta: é pulado e sai com ela. Link quebrado também não
+    /// guarda nada.
+    pub fn links_into_home(&self, path: &Path) -> bool {
+        let is_link = fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+        is_link && match fs::canonicalize(path) {
+            Ok(real) => self.home.as_ref().is_some_and(|home| real.starts_with(home)),
+            Err(error) => error.kind() == io::ErrorKind::NotFound,
+        }
     }
 
     pub fn finish(self) -> Result<MergeCount, MergeError> {
@@ -239,7 +253,7 @@ mod tests {
             .unwrap()
             .set_modified(old)
             .unwrap();
-        let mut merge = Merge::new("work");
+        let mut merge = Merge::new("work", Path::new("/nonexistent-home"));
         merge.tree(&from, &to).unwrap();
         let count = merge.finish().unwrap();
         assert_eq!(
@@ -265,7 +279,7 @@ mod tests {
             "sub"
         );
         // Repetir depois de uma falha não duplica nada.
-        let mut again = Merge::new("work");
+        let mut again = Merge::new("work", Path::new("/nonexistent-home"));
         again.tree(&from, &to).unwrap();
         assert_eq!(
             again.finish().unwrap(),
@@ -284,7 +298,7 @@ mod tests {
         write(&from.join("a.jsonl"), "three");
         write(&to.join("a.jsonl"), "one");
         write(&to.join("a.from-work.jsonl"), "two");
-        let mut merge = Merge::new("work");
+        let mut merge = Merge::new("work", Path::new("/nonexistent-home"));
         merge.tree(&from, &to).unwrap();
         assert_eq!(merge.finish().unwrap().renamed, 1);
         assert_eq!(
@@ -301,7 +315,7 @@ mod tests {
         let (from, to) = (root.path().join("from"), root.path().join("to"));
         write(&from.join("-p/s/a.jsonl"), "x");
         fs::set_permissions(from.join("-p/s/a.jsonl"), fs::Permissions::from_mode(0o600)).unwrap();
-        let mut merge = Merge::new("work");
+        let mut merge = Merge::new("work", Path::new("/nonexistent-home"));
         merge.tree(&from, &to).unwrap();
         merge.finish().unwrap();
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
@@ -316,7 +330,7 @@ mod tests {
         let (from, to) = (root.path().join("from"), root.path().join("to"));
         write(&from.join("-p/a.jsonl"), "x");
         write(&to.join("-p"), "um arquivo no lugar da pasta");
-        let error = Merge::new("work").tree(&from, &to).unwrap_err();
+        let error = Merge::new("work", Path::new("/nonexistent-home")).tree(&from, &to).unwrap_err();
         assert_eq!(error.source.as_deref(), Some(from.join("-p/a.jsonl").as_path()));
         assert_eq!(error.target, to.join("-p"));
     }
