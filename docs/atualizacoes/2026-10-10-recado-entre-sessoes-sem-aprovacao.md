@@ -8,5 +8,6 @@ destrutivo: false
 ---
 
 Sessões do Claude que pedem aprovação para rodar comandos pediam também a cada recado para outra
-sessão. Agora o `hangar-send` e as ferramentas do MCP `hangar` ficam liberados no
-`~/.claude/settings.json`, e o resto continua pedindo como antes.
+sessão. Agora as ferramentas de recado do MCP `hangar` (mandar, avisar o grupo, listar sessões)
+ficam liberadas no `~/.claude/settings.json`. Criar ou fechar sessão e o `hangar-send` pelo
+terminal continuam pedindo aprovação.

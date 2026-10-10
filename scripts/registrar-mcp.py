@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Registra o MCP `hangar` nos clientes desta máquina (chamado pelo install-hangar-send.sh).
 
-Também libera `hangar-send` e as ferramentas `mcp__hangar__*` no `permissions.allow` do
+Também libera as ferramentas de recado do MCP `hangar` no `permissions.allow` do
 ~/.claude/settings.json principal, para recado entre sessões não pedir aprovação.
 
 Claude Code: `mcpServers.hangar` no ~/.claude.json e em cada ~/.claude-<conta>/.claude.json, com
@@ -51,8 +51,9 @@ def claude(url: str, helper: str) -> None:
         print(f"ok: MCP hangar em {arq}")
 
 
-# Recado entre sessões não pede aprovação em nenhum modo; o resto do Claude continua pedindo.
-PERMISSOES = ("Bash(hangar-send:*)", "mcp__hangar__*")
+# Só as ferramentas de recado: `Bash(hangar-send:*)` ou `mcp__hangar__*` liberariam também criar
+# sessão em bypass, e uma sessão que pede aprovação escaparia por ela.
+PERMISSOES = ("mcp__hangar__send", "mcp__hangar__group", "mcp__hangar__sessions", "mcp__hangar__who_am_i")
 
 
 def com_permissoes(dados: object) -> bool | None:
@@ -75,7 +76,7 @@ def claude_permissoes(arq: Path) -> None:
     try:
         dados = json.loads(arq.read_text(encoding="utf-8")) if arq.exists() else {}
     except (OSError, ValueError):
-        print(f"aviso: {arq} ilegível — liberação do hangar-send não gravada", file=sys.stderr)
+        print(f"aviso: {arq} ilegível — liberação do recado não gravada", file=sys.stderr)
         return
     mudou = com_permissoes(dados)
     if mudou is None:
@@ -86,7 +87,7 @@ def claude_permissoes(arq: Path) -> None:
     tmp = arq.with_name(arq.name + ".hangar-novo")
     tmp.write_text(json.dumps(dados, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, arq)
-    print(f"ok: hangar-send e MCP hangar liberados em {arq}")
+    print(f"ok: recado pelo MCP hangar liberado em {arq}")
 
 
 MARKED_BLOCK = re.compile(re.escape(INICIO) + r".*?" + re.escape(FIM) + r"\n?", re.S)
