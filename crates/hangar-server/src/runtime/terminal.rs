@@ -222,7 +222,7 @@ fn clear_on_disk(transcript:&std::path::Path,since:f64)->Result<bool,std::io::Er
     let gone=|failure:&std::io::Error|failure.kind()==std::io::ErrorKind::NotFound;
     for entry in std::fs::read_dir(dir)? {
         let path=entry?.path();
-        if path==transcript || path.extension().is_none_or(|e|e!="jsonl") {continue;}
+        if path==transcript || !path.file_name().is_some_and(|n|hangar_workspace::worktrees::is_conversation_file(&n.to_string_lossy())) {continue;}
         // Apagado no meio da varredura não é prova nem dúvida.
         let meta=match std::fs::metadata(&path) {Ok(meta)=>meta,Err(failure) if gone(&failure)=>continue,Err(failure)=>return Err(failure)};
         let born=meta.created().or_else(|_|meta.modified())?.duration_since(UNIX_EPOCH).map_or(0.0,|t|t.as_secs_f64());

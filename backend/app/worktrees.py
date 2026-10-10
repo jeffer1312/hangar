@@ -456,11 +456,11 @@ def _ignored_lost(path: str, main: str, failed: list) -> list[str]:
 
 def _closed_count(path: str, live: set[str]) -> int:
     """Conversas guardadas na pasta, menos as das sessões vivas dentro dela."""
-    from app.archive import _contas
+    from app.archive import _contas, conversation_files
     from app.registry import sanitize_cwd
     n = 0
     for _cfg, _rot, base in _contas():
-        n += sum(1 for f in (base / sanitize_cwd(path)).glob("*.jsonl") if os.path.realpath(f) not in live)
+        n += sum(1 for f in conversation_files(base / sanitize_cwd(path)) if os.path.realpath(f) not in live)
     return n
 
 
@@ -753,7 +753,7 @@ def redirect(cwd: str | None) -> str | None:
 def relocate_transcripts(path: str, main: str, sessions=()) -> list[tuple[Path, Path]]:
     """Leva `<uuid>.jsonl` e a pasta irmã `<uuid>/` do projeto da worktree pro da principal, em
     todas as contas. Mover, não copiar: a mesma conversa listada duas vezes confunde o Arquivo."""
-    from app.archive import _contas, _head_info
+    from app.archive import _contas, _head_info, conversation_files
     from app.registry import sanitize_cwd
     # O nome da pasta de projeto colide (`repo-x` e `repo/x` viram o mesmo): só sai a conversa
     # que esteve dentro da worktree, e nunca a de uma sessão viva. Primeira OU última pasta: quem
@@ -772,7 +772,7 @@ def relocate_transcripts(path: str, main: str, sessions=()) -> list[tuple[Path, 
             srcs = sorted(d for d in base.iterdir()
                           if d.name != target and (d.name in names or d.name.startswith(subs)) and d.is_dir())
             for src in srcs:
-                for f in sorted(src.glob("*.jsonl")):
+                for f in sorted(conversation_files(src)):
                     if os.path.realpath(f) in live or not (
                             _under(_head_info(f)[1], path) or _under(claude_cwd(str(f)), path)):
                         continue

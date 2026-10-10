@@ -480,7 +480,14 @@ pub fn popover(content: AnyElement, narrow: bool) -> AnyElement {
 /// que fecha com a animação e devolve o foco como antes. `act` devolve se o alerta fecha.
 pub fn confirm_alert(window: &mut Window, cx: &mut App, title: String, description: String, ok: String, variant: ButtonVariant,
     act: impl Fn(&mut Window, &mut App) -> bool + 'static) {
-    use gpui_kit::{base::actions::{Cancel, Confirm}, component::{WindowExt, dialog::DialogFooter}};
+    confirm_alert_with(window, cx, title, description, None, ok, variant, act)
+}
+
+/// O mesmo alerta com uma caixa de marcar abaixo do texto; quem chama lê a escolha na célula ao confirmar.
+#[allow(clippy::too_many_arguments)]
+pub fn confirm_alert_with(window: &mut Window, cx: &mut App, title: String, description: String, check: Option<(String, Rc<Cell<bool>>)>,
+    ok: String, variant: ButtonVariant, act: impl Fn(&mut Window, &mut App) -> bool + 'static) {
+    use gpui_kit::{base::actions::{Cancel, Confirm}, component::{WindowExt, checkbox::Checkbox, dialog::DialogFooter}};
     let act = Rc::new(act);
     let pressed = Rc::new(Cell::new(false));
     // Cada botão despacha a partir de um nó dentro dele, como o rodapé do kit: pelo foco, uma superfície que o
@@ -496,6 +503,9 @@ pub fn confirm_alert(window: &mut Window, cx: &mut App, title: String, descripti
         super::popup::dialog(dialog).w(px(360.)).close_button(false).margin_top(top)
             .title(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title.clone()))
             .child(div().text_size(px(13.)).line_height(px(19.)).text_color(theme::muted()).whitespace_normal().child(description.clone()))
+            .when_some(check.clone(), |el, (label, value)| el.child(div().pt(px(10.)).child(
+                Checkbox::new("confirm-check").small().label(label).checked(value.get())
+                    .on_click(move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }))))
             .footer(DialogFooter::new()
                 .child(OwnFocus { id: "cancel".into(), focus: Some(cancel_focus.clone()),
                     button: Button::new("cancel").label(crate::i18n::tr("cancel")).child(anchor(&cancel_from))

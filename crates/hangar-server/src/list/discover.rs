@@ -195,7 +195,8 @@ fn mtime(path: &Path) -> Option<SystemTime> { std::fs::metadata(path).and_then(|
 
 fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    entries.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".jsonl")).map(|e| e.path()).collect()
+    entries.flatten().filter(|e| hangar_workspace::worktrees::is_conversation_file(&e.file_name().to_string_lossy()))
+        .map(|e| e.path()).collect()
 }
 
 /// Os processos do pane com argv e cmdline de cada um, lidos uma vez por rodada.
@@ -663,9 +664,12 @@ mod tests {
     fn seed_then_forget() {
         let dir = tempfile::tempdir().unwrap();
         let projects = dir.path().join("projects");
-        let old = projects.join(sanitize_cwd("/w")).join("old.jsonl");
+        let old = projects.join(sanitize_cwd("/w")).join("00000000-0000-4000-8000-000000000001.jsonl");
         std::fs::create_dir_all(old.parent().unwrap()).unwrap();
         std::fs::write(&old, "{}\n").unwrap();
+        age(&old, 30);
+        // A cópia de uma conta apagada é mais nova, mas não é conversa: o mais novo do cwd é o `old`.
+        std::fs::write(old.with_file_name("00000000-0000-4000-8000-000000000001.from-work.jsonl"), "{}\n").unwrap();
         let mut r = Resolver::default();
         let run = |r: &mut Resolver, name: &str| {
             discover_panes(&[pane(name, "/w")], &NoProcs, &ChildrenMap::new(), &projects, r, &|_| false)[0]
@@ -778,8 +782,8 @@ mod tests {
     #[test]
     fn after_clear_is_remembered_until_the_project_changes() {
         let dir = tempfile::tempdir().unwrap();
-        let sid = dir.path().join("sid.jsonl");
-        let other = dir.path().join("other.jsonl");
+        let sid = dir.path().join("00000000-0000-4000-8000-00000000000a.jsonl");
+        let other = dir.path().join("00000000-0000-4000-8000-00000000000b.jsonl");
         std::fs::write(&other, "").unwrap();
         age(&other, 40);
         std::fs::write(&sid, "").unwrap();
@@ -794,7 +798,7 @@ mod tests {
         age(&other, 20);
         assert_eq!(r.newest_after_clear(dir.path(), sid_s.clone(), &none), sid_s);
         // O `/clear` cria o arquivo novo: a pasta muda e ele vence.
-        let cleared = dir.path().join("cleared.jsonl");
+        let cleared = dir.path().join("00000000-0000-4000-8000-00000000000c.jsonl");
         std::fs::write(&cleared, "").unwrap();
         assert_eq!(r.newest_after_clear(dir.path(), sid_s, &none), cleared.to_string_lossy());
     }

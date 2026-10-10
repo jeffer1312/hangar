@@ -26,6 +26,19 @@ em 100%. O UUID é gravado antes do consumo. Retentativas usam a mesma chave; um
 resultado definitivo fica persistido e não dispara outro consumo. Depois do
 resultado, o cache é invalidado e os limites são relidos.
 
+Apagar uma conta Claude ou Codex copia antes as conversas dela para a conta padrão
+do mesmo provedor (`projects/` do Claude; `sessions/` e `archived_sessions/` do
+Codex), no mesmo caminho relativo e sem sobrescrever: arquivo igual é pulado e
+arquivo diferente vira `<nome>.from-<conta><ext>`. Essa cópia não é conversa: só
+`<uuid>.jsonl` conta como transcript (`archive.conversation_files` no Python,
+`is_conversation_file` no Rust), em Arquivo, retomada, índice, contagem de worktree e
+escolha do transcript da sessão pelo mtime. Link, socket ou fifo entre as conversas,
+inclusive a própria raiz (`projects/`, `sessions/`), recusa a exclusão: seguir levaria o que mora fora da conta, pular o apagaria calado. A exceção é o link que aponta para dentro da conta padrão ou, no Claude, do `~/.claude` real (o `memory/` de cada projeto aponta para lá mesmo com `CLAUDE_CONFIG_DIR`): não guarda nada da conta, é pulado e sai com ela. Link quebrado vale pelo alvo escrito nele. A cópia mantém o modo do arquivo (0600 no Claude) e pasta
+nova nasce 0700. Só depois da cópia e de cada pasta criada gravadas no disco a pasta
+é removida; falha na cópia recusa a exclusão com
+`account_transcripts_merge_failed` e mantém a conta. `keep_transcripts=0` volta a
+apagar tudo; ausente vale guardar, para cliente antigo não perder conversa.
+
 ### Sem reserva Python (09/10/2026)
 
 Contas e cotas não têm mais reserva Python. No modo `python` (sem binário,

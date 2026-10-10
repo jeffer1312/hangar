@@ -428,7 +428,7 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     await tick();
     t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
     await tick(); await tick();
-    expect(apiMock.deleteCodexAccountForServer).toHaveBeenCalledWith(ALVO, 'work');
+    expect(apiMock.deleteCodexAccountForServer).toHaveBeenCalledWith(ALVO, 'work', true);
     expect(apiMock.apagarConta).not.toHaveBeenCalled();
     unmount(t.comp);
   });
@@ -463,10 +463,10 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     await tick(); await tick();
     botaoNomeado(t.el, m.lista_remover())!.click();
     await tick();
-    expect(t.el.querySelector('.ct-confirma')!.textContent).toContain(m.criar_apagar_fim());
+    expect(t.el.querySelector('.ct-confirma')!.textContent).toContain(m.contas_apagar_pergunta({ nome: 'jefferson' }));
     t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
     await tick(); await tick();
-    expect(apiMock.apagarConta).toHaveBeenCalledWith(ALVO, 'jefferson');
+    expect(apiMock.apagarConta).toHaveBeenCalledWith(ALVO, 'jefferson', true);
     expect(credMock.listarCredenciais).toHaveBeenCalledTimes(2);
     unmount(t.comp);
   });
@@ -480,7 +480,28 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     await tick();
     t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
     await tick(); await tick();
-    expect(apiMock.apagarConta).toHaveBeenCalledWith(ALVO, 'claude-200-5');
+    expect(apiMock.apagarConta).toHaveBeenCalledWith(ALVO, 'claude-200-5', true);
+    unmount(t.comp);
+  });
+
+  it('desmarcar "juntar as conversas" apaga sem guardar; marcado mostra quantos arquivos foram', async () => {
+    apiMock.apagarConta.mockResolvedValueOnce({ ok: true, merged: 3, skipped: 0, renamed: 1 } as never);
+    const t = montar([LOGADA]);
+    await tick(); await tick();
+    botaoNomeado(t.el, m.lista_remover())!.click();
+    await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
+    await vi.waitFor(() => expect(t.el.querySelector('.ct-aviso')!.textContent)
+      .toContain(m.contas_conversas_juntadas({ nome: 'jefferson', n: '4' })));
+    botaoNomeado(t.el, m.lista_remover())!.click();
+    await tick();
+    const caixa = t.el.querySelector<HTMLInputElement>('.ct-confirma-manter input')!;
+    expect(caixa.checked).toBe(true);
+    caixa.click();
+    await tick();
+    expect(t.el.querySelector('.ct-confirma')!.textContent).toContain(m.contas_apagar_conversas_aviso());
+    t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
+    await vi.waitFor(() => expect(apiMock.apagarConta).toHaveBeenLastCalledWith(ALVO, 'jefferson', false));
     unmount(t.comp);
   });
 
@@ -561,7 +582,7 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
       credMock.listarCredenciais.mockResolvedValue([original]);
       card.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
       for (let i = 0; i < 12; i++) await tick();
-      expect(apiMock.apagarConta).toHaveBeenCalledExactlyOnceWith(ALVO, 'duplicada');
+      expect(apiMock.apagarConta).toHaveBeenCalledExactlyOnceWith(ALVO, 'duplicada', true);
       expect(t.el.querySelectorAll('.ct-card')).toHaveLength(1);
       expect(t.el.querySelector('.ct-nome')!.textContent).toBe('Minha conta');
     } finally { await unmount(t.comp); }

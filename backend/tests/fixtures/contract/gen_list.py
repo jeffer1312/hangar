@@ -171,25 +171,25 @@ def discovery_cases():
 
     # fd aberto vence; some no meio de uma escrita e o _fd_locked segura; marcador do sid destrava.
     sid = "11111111-1111-4111-8111-111111111111"
-    procs = [P(100, 1, SHELL, A), P(101, 100, ["claude", "--session-id", sid], A, fds=[f"{pa}/aaaa.jsonl"])]
+    procs = [P(100, 1, SHELL, A), P(101, 100, ["claude", "--session-id", sid], A, fds=[f"{pa}/c0000001-0000-4000-8000-000000000000.jsonl"])]
     cases["claude_fd_open_then_locked"] = [
-        tick(0, fs=[MK(A), W(f"{pa}/aaaa.jsonl", user_line("um", A) + "\n", T0 - 5),
+        tick(0, fs=[MK(A), W(f"{pa}/c0000001-0000-4000-8000-000000000000.jsonl", user_line("um", A) + "\n", T0 - 5),
                     W(f"{pa}/{sid}.jsonl", user_line("boot", A) + "\n", T0 - 50)],
              procs=procs, panes=[PANE("s", 100, A)]),
-        tick(2, fs=[W(f"{pa}/bbbb.jsonl", user_line("outra", A) + "\n", T0 + 2)],
+        tick(2, fs=[W(f"{pa}/c0000003-0000-4000-8000-000000000000.jsonl", user_line("outra", A) + "\n", T0 + 2)],
              procs=[procs[0], {**procs[1], "fds": []}], panes=[PANE("s", 100, A)]),
-        tick(4, fs=[J(f"{CFG}/.hangar-active/{sid}.json", {"jsonl": f"{pa}/bbbb.jsonl"})],
+        tick(4, fs=[J(f"{CFG}/.hangar-active/{sid}.json", {"jsonl": f"{pa}/c0000003-0000-4000-8000-000000000000.jsonl"})],
              procs=[procs[0], {**procs[1], "fds": []}], panes=[PANE("s", 100, A)]),
     ]
 
     # fd de subagente (--agent) e de daemon não contam; fd de processo que não é agente não é lido.
     cases["claude_fd_aux_ignored"] = [
         tick(0, fs=[MK(A), W(f"{pa}/{sid}.jsonl", user_line("um", A) + "\n", T0 - 50),
-                    W(f"{pa}/sub.jsonl", user_line("sub", A) + "\n", T0 - 1)],
+                    W(f"{pa}/c000000b-0000-4000-8000-000000000000.jsonl", user_line("sub", A) + "\n", T0 - 1)],
              procs=[P(100, 1, SHELL, A), P(101, 100, ["claude", "--session-id", sid], A),
                     P(102, 101, ["claude", "--agent", "x", "--session-id", "22222222-2222-4222-8222-222222222222"], A,
-                      fds=[f"{pa}/sub.jsonl"]),
-                    P(103, 101, ["node", "mcp.js"], A, fds=[f"{pa}/sub.jsonl"])],
+                      fds=[f"{pa}/c000000b-0000-4000-8000-000000000000.jsonl"]),
+                    P(103, 101, ["node", "mcp.js"], A, fds=[f"{pa}/c000000b-0000-4000-8000-000000000000.jsonl"])],
              panes=[PANE("s", 100, A)]),
     ]
 
@@ -198,11 +198,11 @@ def discovery_cases():
     base = [P(200, 1, ["claude", "--session-id", sid2], B)]
     pb = proj(B)
     cases["claude_session_id_then_clear"] = [
-        tick(0, fs=[MK(B), W(f"{pb}/velho.jsonl", user_line("velho", B) + "\n", T0 - 900)],
+        tick(0, fs=[MK(B), W(f"{pb}/c000000d-0000-4000-8000-000000000000.jsonl", user_line("velho", B) + "\n", T0 - 900)],
              procs=base, panes=[PANE("b", 200, B)]),
         tick(2, fs=[W(f"{pb}/{sid2}.jsonl", user_line("boot", B) + "\n", T0 + 1)],
              procs=base, panes=[PANE("b", 200, B)]),
-        tick(4, fs=[W(f"{pb}/posclear.jsonl", user_line("depois", B) + "\n", T0 + 3)],
+        tick(4, fs=[W(f"{pb}/c0000009-0000-4000-8000-000000000000.jsonl", user_line("depois", B) + "\n", T0 + 3)],
              procs=base, panes=[PANE("b", 200, B)]),
     ]
 
@@ -211,7 +211,7 @@ def discovery_cases():
     cases["claude_session_id_with_sibling"] = [
         tick(0, fs=[MK(B), W(f"{pb}/{s1}.jsonl", user_line("x", B) + "\n", T0 - 10),
                     W(f"{pb}/{s2}.jsonl", user_line("y", B) + "\n", T0 - 20),
-                    W(f"{pb}/novo.jsonl", user_line("z", B) + "\n", T0 - 1)],
+                    W(f"{pb}/c0000007-0000-4000-8000-000000000000.jsonl", user_line("z", B) + "\n", T0 - 1)],
              procs=[P(300, 1, ["claude", "--session-id", s1], B), P(310, 1, ["claude", "--session-id", s2], B)],
              panes=[PANE("x", 300, B, "%3"), PANE("y", 310, B, "%4"),
                     PANE("escondida", 320, B, "%5", hidden=True)]),
@@ -223,10 +223,10 @@ def discovery_cases():
     pc = proj(C)
     bare = [P(400, 1, SHELL, C), P(401, 400, ["claude"], C)]
     cases["claude_marker_by_pid_cache_newest"] = [
-        tick(0, fs=[MK(C), W(f"{pc}/m1.jsonl", "{}\n", T0 - 30), W(f"{pc}/m2.jsonl", "{}\n", T0 - 20),
-                    J(f"{CFG}/.hangar-active/boot1.json", {"jsonl": f"{pc}/m1.jsonl", "pid": 401, "ts": T0 - 30}),
-                    J(f"{CFG}/.hangar-active/boot2.json", {"jsonl": f"{pc}/m2.jsonl", "pid": 401, "ts": T0 - 10}),
-                    J(f"{CFG}/.hangar-active/boot3.json", {"jsonl": f"{pc}/m1.jsonl", "pid": 999, "ts": T0})],
+        tick(0, fs=[MK(C), W(f"{pc}/c0000005-0000-4000-8000-000000000000.jsonl", "{}\n", T0 - 30), W(f"{pc}/c0000006-0000-4000-8000-000000000000.jsonl", "{}\n", T0 - 20),
+                    J(f"{CFG}/.hangar-active/boot1.json", {"jsonl": f"{pc}/c0000005-0000-4000-8000-000000000000.jsonl", "pid": 401, "ts": T0 - 30}),
+                    J(f"{CFG}/.hangar-active/boot2.json", {"jsonl": f"{pc}/c0000006-0000-4000-8000-000000000000.jsonl", "pid": 401, "ts": T0 - 10}),
+                    J(f"{CFG}/.hangar-active/boot3.json", {"jsonl": f"{pc}/c0000005-0000-4000-8000-000000000000.jsonl", "pid": 999, "ts": T0})],
              procs=bare, panes=[PANE("c", 400, C)]),
         tick(2, fs=[RM(f"{CFG}/.hangar-active/boot1.json"), RM(f"{CFG}/.hangar-active/boot2.json")],
              procs=bare[:1], panes=[PANE("c", 400, C)]),
@@ -239,11 +239,11 @@ def discovery_cases():
     D = work("d")
     pd = proj(D)
     cases["claude_marker_by_session_id"] = [
-        tick(0, fs=[MK(D), W(f"{pd}/retomada.jsonl", "{}\n", T0 - 40),
-                    W(f"{pd}/outra.jsonl", "{}\n", T0 - 1),
-                    J(f"{CFG}/.hangar-active/{sid3}.json", {"jsonl": f"{pd}/retomada.jsonl"})],
+        tick(0, fs=[MK(D), W(f"{pd}/c000000a-0000-4000-8000-000000000000.jsonl", "{}\n", T0 - 40),
+                    W(f"{pd}/c0000008-0000-4000-8000-000000000000.jsonl", "{}\n", T0 - 1),
+                    J(f"{CFG}/.hangar-active/{sid3}.json", {"jsonl": f"{pd}/c000000a-0000-4000-8000-000000000000.jsonl"})],
              procs=[P(500, 1, ["claude", "--session-id", sid3], D)], panes=[PANE("d", 500, D)]),
-        tick(2, fs=[J(f"{CFG}/.hangar-active/{sid3}.json", {"jsonl": f"{pd}/sumiu.jsonl"})],
+        tick(2, fs=[J(f"{CFG}/.hangar-active/{sid3}.json", {"jsonl": f"{pd}/c000000c-0000-4000-8000-000000000000.jsonl"})],
              procs=[P(500, 1, ["claude", "--session-id", sid3], D)], panes=[PANE("d", 500, D)]),
     ]
 
@@ -251,8 +251,8 @@ def discovery_cases():
     E = work("e")
     pe = proj(E)
     cases["seed_rename_forget"] = [
-        tick(0, fs=[MK(E), W(f"{pe}/antigo.jsonl", "{}\n", T0 - 100)],
-             ops=[dict(op="seed", name="nova", jsonl=f"{pe}/fixo.jsonl")],
+        tick(0, fs=[MK(E), W(f"{pe}/c0000002-0000-4000-8000-000000000000.jsonl", "{}\n", T0 - 100)],
+             ops=[dict(op="seed", name="nova", jsonl=f"{pe}/c000000e-0000-4000-8000-000000000000.jsonl")],
              procs=[P(600, 1, SHELL, E)], panes=[PANE("nova", 600, E)]),
         tick(2, ops=[dict(op="rename", old="nova", new="renomeada")],
              procs=[P(600, 1, SHELL, E)], panes=[PANE("renomeada", 600, E)]),
@@ -268,7 +268,7 @@ def discovery_cases():
     born = [P(700, 1, SHELL, F, start=T0 + 1), P(701, 700, ["claude", "--session-id", sid4], F, start=T0 + 1)]
     novo = [PANE("f", 700, F, provider="claude", created=int(T0 + 1))]
     cases["created_under_one_second"] = [
-        tick(0, fs=[MK(F), W(f"{pf}/velho.jsonl", "{}\n", T0 - 100)], procs=[], panes=[]),
+        tick(0, fs=[MK(F), W(f"{pf}/c000000d-0000-4000-8000-000000000000.jsonl", "{}\n", T0 - 100)], procs=[], panes=[]),
         tick(1.5, procs=born, panes=novo),
         tick(1.75, ops=[dict(op="fresh")], procs=born, panes=novo),
     ]
@@ -394,12 +394,12 @@ def discovery_cases():
         tick(0, fs=[MK(N), W(f"{pn}/{own}.jsonl", "{}\n", T0 - 1)],
              procs=[P(1300, 1, ["claude", "--session-id", own], N), P(1310, 1, ["claude"], N)],
              panes=[PANE("dona", 1300, N, "%30"), PANE("bare", 1310, N, "%31")]),
-        tick(2, fs=[W(f"{pn}/compartilhado.jsonl", "{}\n", T0 + 2)],
+        tick(2, fs=[W(f"{pn}/c0000004-0000-4000-8000-000000000000.jsonl", "{}\n", T0 + 2)],
              ops=[dict(op="forget", name="dona")],
-             procs=[P(1300, 1, ["claude"], N, fds=[f"{pn}/compartilhado.jsonl"]), P(1310, 1, ["claude"], N)],
+             procs=[P(1300, 1, ["claude"], N, fds=[f"{pn}/c0000004-0000-4000-8000-000000000000.jsonl"]), P(1310, 1, ["claude"], N)],
              panes=[PANE("dona", 1300, N, "%30"), PANE("bare", 1310, N, "%31")]),
-        tick(4, procs=[P(1300, 1, ["claude"], N, fds=[f"{pn}/compartilhado.jsonl"]),
-                       P(1310, 1, ["claude"], N, fds=[f"{pn}/compartilhado.jsonl"])],
+        tick(4, procs=[P(1300, 1, ["claude"], N, fds=[f"{pn}/c0000004-0000-4000-8000-000000000000.jsonl"]),
+                       P(1310, 1, ["claude"], N, fds=[f"{pn}/c0000004-0000-4000-8000-000000000000.jsonl"])],
              panes=[PANE("dona", 1300, N, "%30"), PANE("bare", 1310, N, "%31")]),
     ]
     return cases

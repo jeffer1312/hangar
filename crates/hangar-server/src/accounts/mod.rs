@@ -8,6 +8,7 @@ pub mod codex_device_login;
 pub mod environment;
 pub mod secondary_auth;
 pub mod storage;
+pub mod transcripts;
 pub mod native;
 pub mod http;
 pub mod preparation;

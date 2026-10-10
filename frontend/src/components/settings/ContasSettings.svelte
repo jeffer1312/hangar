@@ -12,7 +12,7 @@
   // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
   // existe assim que a pessoa renomear a primeira.
   import { onDestroy, tick, untrack } from 'svelte';
-import { apagarConta, claudeAccountFolder, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, type Motor, type EnginesResponse } from '@hangar/core';
+import { apagarConta, claudeAccountFolder, sairConta, apagarProvedorKimi, deleteEngine, deleteEngineForServer, deleteCodexAccountForServer, isAbortError, isTimeoutError, accountDeletedNotice, type AccountDeleteResult, type Motor, type EnginesResponse } from '@hangar/core';
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, consumirRedefinicaoCodex,
     novaChaveIdempotente, type Credencial } from '../../lib/credenciais';
@@ -143,6 +143,13 @@ import { apagarConta, claudeAccountFolder, sairConta, apagarProvedorKimi, delete
   // Apagar: "Remover" nomeado no card abre a confirmação inline; confirmar apaga e recarrega.
   let confirmando = $state<string | null>(null);  // id da credencial com a confirmação aberta
   let apagando = $state(false);
+  // Guardar as conversas vem marcado; só a conta em que a pessoa desmarcou apaga tudo.
+  let apagarConversasDe = $state<string | null>(null);
+  // Abrir, trocar ou fechar a confirmação volta a guardar: a escolha vale só para aquela abertura.
+  $effect.pre(() => {
+    void confirmando;
+    apagarConversasDe = null;
+  });
   let saindoDe = $state<string | null>(null);  // id da conta Claude com a confirmação de Sair aberta
   let saindo = $state(false);
   let sairErro = $state('');
@@ -413,10 +420,14 @@ import { apagarConta, claudeAccountFolder, sairConta, apagarProvedorKimi, delete
     // Geração desta operação: "conta X apagada" pertence à máquina que recebeu o DELETE — troca
     // de ?srv= no meio do voo não deixa o relato da máquina antiga na tela da nova (rodada 2).
     const g = geracao;
+    const manter = apagarConversasDe !== conta.id;
     apagando = true;
     aviso = '';
     avisoErro = false;
+    // Kimi e chave não têm conversas no servidor: o aviso é só o de conta apagada.
+    const guarda = conta.tipo !== 'chave' && !conta.id.startsWith('kimi:');
     try {
+      let resultado: AccountDeleteResult | null = null;
       if (conta.id.startsWith('kimi:')) {
         await apagarProvedorKimi(apiTarget, conta.id.slice('kimi:'.length));
       } else if (conta.tipo === 'chave') {
@@ -424,13 +435,13 @@ import { apagarConta, claudeAccountFolder, sairConta, apagarProvedorKimi, delete
         else await deleteEngine(idDisco);
       } else if (conta.tipo === 'codex') {
         if (!codexServer || !conta.codex_account) throw new Error(m.falha_conexao());
-        await deleteCodexAccountForServer(codexServer, conta.codex_account);
+        resultado = await deleteCodexAccountForServer(codexServer, conta.codex_account, manter);
       } else {
-        await apagarConta(apiTarget, idDisco);
+        resultado = await apagarConta(apiTarget, idDisco, manter);
       }
       if (g !== geracao) return;
       confirmando = null;
-      aviso = m.criar_conta_apagada({ nome: conta.nome });
+      aviso = accountDeletedNotice(conta.nome, guarda && manter, resultado);
       // A conta pode ter sumido da lista entre o clique e o fim do DELETE (outro painel, outra
       // sessão) — recarregar é a fonte única, não remover item por item.
       await carregar(geracao);
@@ -1272,10 +1283,24 @@ import { apagarConta, claudeAccountFolder, sairConta, apagarProvedorKimi, delete
           {/if}
 
           {#if confirmando === conta.id}
+            {@const guardaConversas = conta.tipo !== 'chave' && !conta.id.startsWith('kimi:')}
             <div class="ct-confirma">
-              <span class="ct-confirma-txt">
-                {m.comum_apagar()} <strong>{conta.nome}</strong> {m.criar_apagar_fim()}
-              </span>
+              {#if guardaConversas}
+                <span class="ct-confirma-txt">{m.contas_apagar_pergunta({ nome: conta.nome })}</span>
+                <label class="ct-confirma-manter">
+                  <input type="checkbox" checked={apagarConversasDe !== conta.id} disabled={apagando}
+                    aria-describedby={apagarConversasDe === conta.id ? `ct-perde-conversas-${conta.id}` : undefined}
+                    onchange={(e) => (apagarConversasDe = e.currentTarget.checked ? null : conta.id)} />
+                  {m.contas_juntar_conversas()}
+                </label>
+                {#if apagarConversasDe === conta.id}
+                  <span class="ct-confirma-aviso" id={`ct-perde-conversas-${conta.id}`} role="status">{m.contas_apagar_conversas_aviso()}</span>
+                {/if}
+              {:else}
+                <span class="ct-confirma-txt">
+                  {m.comum_apagar()} <strong>{conta.nome}</strong> {m.criar_apagar_fim()}
+                </span>
+              {/if}
               {#if conta.tipo === 'chave'}<span class="ct-confirma-aviso">{m.config_motores_sessoes_abertas()}</span>{/if}
               <button type="button" class="ct-confirma-btn perigo" onclick={apagar}
                 disabled={apagando}>{apagando ? '…' : m.comum_apagar()}</button>
@@ -1566,6 +1591,8 @@ import { apagarConta, claudeAccountFolder, sairConta, apagarProvedorKimi, delete
                              border-color: var(--accent); }
   /* Linha inteira própria (o `.ct-confirma` embrulha): o aviso é ressalva, não parte da pergunta. */
   .ct-confirma-aviso { flex-basis: 100%; font-size: var(--text-2xs); color: var(--text-muted); }
+  .ct-confirma-manter { flex-basis: 100%; display: flex; align-items: center; gap: var(--space-2);
+                        font-size: var(--text-xs); color: var(--text-secondary); }
   .ct-confirma-aviso.erro { font-size: var(--text-xs); color: var(--error); }
 
   .ct-rodape { display: flex; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap;

@@ -1427,13 +1427,13 @@ def test_rust_bypass_reopen_of_terminal_closes_and_reopens_in_rust(monkeypatch, 
 def test_clear_on_disk_counts_only_a_transcript_after_the_dispatch(tmp_path):
     import os
     from app import runtime_terminal as rt
-    atual = tmp_path / 'atual.jsonl'
+    atual = tmp_path / '00000000-0000-4000-8000-000000000001.jsonl'
     atual.write_text('<command-name>/clear</command-name>\n')
-    antigo = tmp_path / 'antigo.jsonl'
+    antigo = tmp_path / '00000000-0000-4000-8000-000000000002.jsonl'
     antigo.write_text('{"message":{"content":"<command-name>/clear</command-name>"}}\n')
     os.utime(antigo, (1000, 1000))
     assert rt._clear_on_disk(str(atual), 2000) is False
-    (tmp_path / 'novo.jsonl').write_text('{"message":{"content":"<command-name>/clear</command-name>"}}\n')
+    (tmp_path / '00000000-0000-4000-8000-000000000003.jsonl').write_text('{"message":{"content":"<command-name>/clear</command-name>"}}\n')
     assert rt._clear_on_disk(str(atual), 2000) is True
 
 

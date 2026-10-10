@@ -572,7 +572,7 @@ async fn terminal_runtime_clear_without_new_conversation_releases_barrier_withou
     // O Enter saiu e o composer esvaziou, mas a conversa nunca mudou: o /clear caiu em outro lugar.
     let f=Fixture::new().await; let h=f.start_clear(Duration::from_millis(200));
     // Transcript de antes do despacho (outra sessão, ou conversa antiga nascida de /clear): não prova nada.
-    std::fs::write(f.target.transcript.with_file_name("older.jsonl"),"{\"message\":{\"content\":\"<command-name>/clear</command-name>\"}}\n").unwrap();
+    std::fs::write(f.target.transcript.with_file_name("00000000-0000-4000-8000-000000000001.jsonl"),"{\"message\":{\"content\":\"<command-name>/clear</command-name>\"}}\n").unwrap();
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert_eq!(h.command(f.command("clear-stuck","/clear")).await.unwrap().disposition,hangar_server::runtime::protocol::Disposition::Accepted);
     assert!(f.state()["runtime_state"]["clear_barrier"].is_object());
@@ -600,7 +600,7 @@ async fn terminal_runtime_clear_with_new_transcript_on_disk_keeps_barrier() {
     // O transcript novo do /clear existe: falta só o Python trocar o vínculo, a trava fica.
     let f=Fixture::new().await; let h=f.start_clear(Duration::from_millis(100));
     assert_eq!(h.command(f.command("clear-ok","/clear")).await.unwrap().disposition,hangar_server::runtime::protocol::Disposition::Accepted);
-    std::fs::write(f.target.transcript.with_file_name("new-sid.jsonl"),
+    std::fs::write(f.target.transcript.with_file_name("00000000-0000-4000-8000-000000000002.jsonl"),
         "{\"type\":\"user\",\"message\":{\"content\":\"<command-name>/clear</command-name>\"}}\n").unwrap();
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(f.state()["runtime_state"]["clear_barrier"].is_object()); assert_ne!(f.state()["operations"]["clear-ok"]["status"],"rejected");

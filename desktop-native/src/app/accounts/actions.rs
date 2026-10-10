@@ -4,6 +4,8 @@
 use super::*;
 use gpui_kit::component::WindowExt;
 use tokio::sync::oneshot;
+use std::{cell::Cell, rc::Rc};
+use crate::i18n::tr_shared;
 
 /// Tentativa de login numa conta; enquanto existe, a página mostra os passos no lugar da lista, como no web.
 pub(super) struct SignIn {
@@ -50,7 +52,8 @@ pub(in crate::app) enum ActionReply {
     Step(u64, Result<Value, Failure>),
     Code(u64, Result<Value, Failure>, oneshot::Sender<bool>),
     Stopped(u64, bool, Result<Value, Failure>),
-    Changed(String, String, ChangeKind, Result<Value, Failure>),
+    /// O `bool` diz se a exclusão pediu para guardar as conversas.
+    Changed(String, String, ChangeKind, bool, Result<Value, Failure>),
     Created(String, Result<Value, Failure>),
 }
 
@@ -368,12 +371,20 @@ impl Hangar {
             ChangeKind::Remove => (tr("accounts_remove_title"), tr(row.remove.as_ref().map_or("accounts_remove_desc_key", |r| r.2)), tr("accounts_remove_ok")),
         };
         let title = title.replace("{name}", &row.name);
+        // Conta Claude ou Codex: as conversas vão para a conta padrão, a menos que a pessoa desmarque.
+        let keep = (kind == ChangeKind::Remove && row.remove.as_ref()
+            .is_some_and(|r| matches!(r.0.first().map(String::as_str), Some("claude-configs" | "codex-contas"))))
+            .then(|| Rc::new(Cell::new(true)));
+        let check = keep.clone().map(|keep| (tr_shared("contas_juntar_conversas", &[]), keep));
         let this = cx.entity().downgrade();
-        chrome::confirm_alert(window, cx, title, description, ok, ButtonVariant::Danger,
-            move |_, cx| { let _ = this.update(cx, |this, cx| this.start_change(id.clone(), kind, cx)); true });
+        chrome::confirm_alert_with(window, cx, title, description, check, ok, ButtonVariant::Danger, move |_, cx| {
+            let keep = keep.as_ref().map(|keep| keep.get());
+            let _ = this.update(cx, |this, cx| this.start_change(id.clone(), kind, keep, cx));
+            true
+        });
     }
 
-    fn start_change(&mut self, id: String, kind: ChangeKind, cx: &mut Context<Self>) {
+    fn start_change(&mut self, id: String, kind: ChangeKind, keep: Option<bool>, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         if self.accounts_busy() { return; }
         // A linha pode ter sumido entre a pergunta e o sim: nada a fazer.
@@ -390,9 +401,13 @@ impl Hangar {
             let path: Vec<&str> = path.iter().map(String::as_str).collect();
             let result = match kind {
                 ChangeKind::SignOut => api.server_post(&path, seconds).await,
-                ChangeKind::Remove => api.server_send(reqwest::Method::DELETE, &path, None, seconds).await,
+                ChangeKind::Remove => {
+                    let query: &[(&str, &str)] = match keep { Some(true) => &[("keep_transcripts", "1")],
+                        Some(false) => &[("keep_transcripts", "0")], None => &[] };
+                    api.server_send_query(reqwest::Method::DELETE, &path, query, None, seconds).await
+                }
             };
-            done(AccountsReply::Action(ActionReply::Changed(id, name, kind, result))).await
+            done(AccountsReply::Action(ActionReply::Changed(id, name, kind, keep == Some(true), result))).await
         });
         cx.notify();
     }
@@ -505,10 +520,13 @@ impl Hangar {
                     Err(error) => s.error = Some(if error.uncertain { tr("accounts_login_stop_uncertain") } else { Self::failure(&error) }),
                 }
             }
-            ActionReply::Changed(id, name, kind, result) => {
+            ActionReply::Changed(id, name, kind, keep, result) => {
                 self.accounts.change = None;
                 let ok = result.is_ok();
+                let kept = result.as_ref().ok().filter(|_| kind == ChangeKind::Remove)
+                    .and_then(|body| super::kept_transcripts_notice(&name, keep, body));
                 self.accounts.outcome = Some(match result {
+                    Ok(_) if kept.is_some() => (kept.unwrap_or_default(), false),
                     Ok(_) => (tr(if kind == ChangeKind::SignOut { "accounts_signed_out" } else { "accounts_removed" }).replace("{name}", &name), false),
                     Err(error) if error.uncertain => (tr("accounts_change_uncertain").replace("{name}", &name), true),
                     Err(error) => (tr(if kind == ChangeKind::SignOut { "accounts_sign_out_failed" } else { "accounts_remove_failed" })

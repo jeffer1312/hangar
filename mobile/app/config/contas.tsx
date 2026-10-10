@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { codexCliAusente, credentialAuth, credentialGroup, deleteCodexAccountForServer, getCodexAccountsForServer,
-  getCredentialsForServer, type CodexAccount, type Credencial } from '@hangar/core';
+  getCredentialsForServer, accountDeletedNotice, type CodexAccount, type Credencial } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader, Pill, type PageAction } from '../../src/features/config/PageHeader';
 import { SectionCard } from '../../src/features/config/SectionCard';
@@ -24,6 +24,9 @@ export default function Contas() {
   const [error, setError] = useState('');
   const [loginAccount, setLoginAccount] = useState<string | null>(null);
   const [newLogin, setNewLogin] = useState(false);
+  const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set());
+  // Trava síncrona: dois alertas abertos antes do primeiro sim ainda veem o `deleting` antigo.
+  const deletingNow = useRef(new Set<string>());
   const generation = useRef(0);
   const controller = useRef<AbortController | null>(null);
 
@@ -101,13 +104,32 @@ export default function Contas() {
   const removeAccount = (account: CodexAccount) => {
     if (!server) return;
     const s = server;
-    Alert.alert(m.comum_apagar(), account.name, [
+    if (deleting.has(account.id)) return;
+    const remove = (keepTranscripts: boolean) => {
+      // Segundo toque enquanto a pasta é apagada mandaria outro DELETE da mesma conta.
+      if (deletingNow.current.has(account.id)) return;
+      deletingNow.current.add(account.id);
+      setDeleting((prev) => new Set(prev).add(account.id));
+      deleteCodexAccountForServer(s, account.id, keepTranscripts)
+        .then((result) => {
+          Alert.alert(accountDeletedNotice(account.name, keepTranscripts, result));
+          load(s);
+        })
+        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : m.codex_account_delete_failed()))
+        .finally(() => {
+          deletingNow.current.delete(account.id);
+          setDeleting((prev) => {
+            const next = new Set(prev);
+            next.delete(account.id);
+            return next;
+          });
+        });
+    };
+    // Alerta nativo não tem caixa de marcar: guardar as conversas é o botão preferido.
+    Alert.alert(m.contas_apagar_pergunta({ nome: account.name }), m.contas_apagar_opcoes_desc(), [
       { text: m.comum_cancelar(), style: 'cancel' },
-      { text: m.lista_remover(), style: 'destructive', onPress: () => {
-        deleteCodexAccountForServer(s, account.id)
-          .then(() => load(s))
-          .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : m.codex_account_delete_failed()));
-      } },
+      { text: m.contas_apagar_com_conversas(), style: 'destructive', onPress: () => remove(false) },
+      { text: m.contas_apagar_juntando(), isPreferred: true, onPress: () => remove(true) },
     ]);
   };
   const startLogin = (accountId?: string) => {
@@ -148,10 +170,12 @@ export default function Contas() {
       {identity.account && (canSignIn(identity.account) || !identity.account.is_default) ? (
         <View style={styles.actions}>
           {canSignIn(identity.account) ? (
-            <Pill icon="LogIn" label={m.contas_entrar()} onPress={() => startLogin(identity.account!.id)} />
+            <Pill icon="LogIn" label={m.contas_entrar()} onPress={() => startLogin(identity.account!.id)}
+              disabled={deleting.has(identity.account.id)} />
           ) : null}
           {!identity.account.is_default ? (
-            <Pill icon="Trash2" label={m.lista_remover()} onPress={() => removeAccount(identity.account!)} />
+            <Pill icon="Trash2" label={m.lista_remover()} onPress={() => removeAccount(identity.account!)}
+              disabled={deleting.has(identity.account.id)} />
           ) : null}
         </View>
       ) : null}

@@ -256,6 +256,23 @@ pub(super) fn claude_folder_name(path: &str) -> Option<&str> {
     crate::composer::basename(path).strip_prefix(".claude-").filter(|name| !name.is_empty())
 }
 
+/// O que o servidor confirmou sobre as conversas de uma conta apagada, como o `accountDeletedNotice`
+/// do core; `None` deixa a frase de conta apagada de quem chama. Sem `merged` com a junção pedida,
+/// o servidor (antigo) pode ter apagado as conversas: não dá para dizer que ficaram.
+pub(super) fn kept_transcripts_notice(name: &str, keep: bool, body: &serde_json::Value) -> Option<String> {
+    use crate::i18n::tr_shared;
+    if !keep { return None; }
+    let Some(merged) = body.get("merged").and_then(serde_json::Value::as_u64) else {
+        return Some(tr_shared("contas_conversas_nao_confirmadas", &[("nome", name)]));
+    };
+    let n = (merged + body["renamed"].as_u64().unwrap_or(0)).to_string();
+    match body["skipped"].as_u64().unwrap_or(0) {
+        0 if n == "0" => None,
+        0 => Some(tr_shared("contas_conversas_juntadas", &[("nome", name), ("n", &n)])),
+        skipped => Some(tr_shared("contas_conversas_juntadas_puladas", &[("nome", name), ("n", &n), ("pulados", &skipped.to_string())])),
+    }
+}
+
 impl Credential {
     fn auth(&self) -> &str { self.auth_method.as_deref().unwrap_or(if self.kind == "claude" { "oauth" } else { "unknown" }) }
     fn engine_name(&self) -> Option<&str> { self.id.strip_prefix("chave:") }
@@ -1198,6 +1215,20 @@ mod tests {
             let row = build_row(&credential(json!({"id": id, "tipo": "claude", "nome": "apelido", "nome_natural": "apelido"})), &HashMap::new(), false, 0.);
             assert_eq!(row.remove.map(|(path, ..)| path), Some(vec!["claude-configs".to_owned(), folder.to_owned()]));
         }
+    }
+
+    #[test]
+    fn deleted_notice_only_claims_what_the_server_confirmed() {
+        use crate::i18n::tr_shared;
+        let notice = |keep, body| super::kept_transcripts_notice("w", keep, &body);
+        // Servidor antigo ignora `keep_transcripts` e responde só `ok`: não dá para dizer que as conversas ficaram.
+        assert_eq!(notice(true, json!({"ok": true})), Some(tr_shared("contas_conversas_nao_confirmadas", &[("nome", "w")])));
+        assert_eq!(notice(false, json!({"ok": true})), None);
+        assert_eq!(notice(true, json!({"ok": true, "merged": 0, "skipped": 0, "renamed": 0})), None);
+        assert_eq!(notice(true, json!({"ok": true, "merged": 2, "skipped": 0, "renamed": 1})),
+            Some(tr_shared("contas_conversas_juntadas", &[("nome", "w"), ("n", "3")])));
+        assert_eq!(notice(true, json!({"ok": true, "merged": 2, "skipped": 4, "renamed": 0})),
+            Some(tr_shared("contas_conversas_juntadas_puladas", &[("nome", "w"), ("n", "2"), ("pulados", "4")])));
     }
 
     #[test]

@@ -504,7 +504,12 @@ impl Api {
 
     /// Mutação (PUT, POST, DELETE), com ou sem corpo JSON, sem retry: queda depois de enviar é incerteza.
     pub async fn server_send(&self, method: reqwest::Method, path: &[&str], body: Option<Value>, seconds: u64) -> Result<Value, Failure> {
-        let mut req = self.client.request(method, self.server_url(path, &[]));
+        self.server_send_query(method, path, &[], body, seconds).await
+    }
+
+    pub async fn server_send_query(&self, method: reqwest::Method, path: &[&str], query: &[(&str, &str)], body: Option<Value>,
+        seconds: u64) -> Result<Value, Failure> {
+        let mut req = self.client.request(method, self.server_url(path, query));
         if let Some(body) = body { req = req.json(&body); }
         let r = req.timeout(Duration::from_secs(seconds)).send().await.map_err(|_| Failure::transport(true))?;
         Self::checked(r, true).await?.json().await.map_err(|_| Failure::transport(true))

@@ -532,6 +532,15 @@ pub fn sanitize_cwd(cwd: &str) -> String {
         .collect()
 }
 
+/// `<uuid>.jsonl` é conversa do Claude. A cópia `<uuid>.from-<conta>.jsonl` que a exclusão de uma
+/// conta deixa não é: retomá-la é recusado e adotá-la pelo mtime troca o transcript de uma sessão.
+pub fn is_conversation_file(name: &str) -> bool {
+    name.strip_suffix(".jsonl").is_some_and(|stem| {
+        stem.len() == 36
+            && stem.char_indices().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() })
+    })
+}
+
 /// Conversas guardadas na pasta, menos as das sessões vivas dentro dela.
 fn closed_count(path: &str, live: &HashSet<PathBuf>, bases: &[String]) -> usize {
     let project = sanitize_cwd(path);
@@ -539,7 +548,7 @@ fn closed_count(path: &str, live: &HashSet<PathBuf>, bases: &[String]) -> usize 
         .iter()
         .filter_map(|b| std::fs::read_dir(Path::new(b).join(&project)).ok())
         .flat_map(|d| d.flatten())
-        .filter(|e| e.file_name().to_string_lossy().ends_with(".jsonl"))
+        .filter(|e| is_conversation_file(&e.file_name().to_string_lossy()))
         .filter(|e| !live.contains(&real(&e.path())))
         .count()
 }

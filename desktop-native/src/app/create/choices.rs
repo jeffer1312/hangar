@@ -2,7 +2,7 @@
 //! conta, criar e apagar conta Claude e o contexto estendido do Codex (`CreateSessionSheet.svelte`, `CodexContextControl.svelte`).
 //! Toda escolha gravada saiu de uma leitura do servidor; leitura que falhou deixa o campo no padrão, nunca num valor inventado.
 use super::*;
-use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{checkbox::Checkbox, switch::Switch};
 
 /// Os níveis de esforço fechados de cada provider, os do backend (`model_args.py`). O Kimi não tem nível; o Codex vem por modelo.
 pub(in crate::app) const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
@@ -825,8 +825,9 @@ impl NewSession {
         self.account_seq += 1;
         let seq = self.account_seq;
         (self.account_busy, self.notice, self.created_path) = (true, None, None);
+        let keep = if self.keep_transcripts { "1" } else { "0" };
         self.request(cx, move |api, send| Box::pin(async move {
-            let deleted = api.server_send(reqwest::Method::DELETE, &["claude-configs", &name], None, 120).await;
+            let deleted = api.server_send_query(reqwest::Method::DELETE, &["claude-configs", &name], &[("keep_transcripts", keep)], None, 120).await;
             let list = if deleted.is_ok() { Some(api.server_read(&["claude-configs"], &[], 15).await) } else { None };
             send(CreateReply::Account(seq, AccountDone::Deleted(name, path, deleted, list))).await
         }));
@@ -868,8 +869,10 @@ impl NewSession {
                 }
                 _ => self.notice = Some((tr("create_account_list_failed"), false)),
             },
-            AccountDone::Deleted(name, path, Ok(_), list) => {
+            AccountDone::Deleted(name, path, Ok(deleted), list) => {
                 self.confirming = false;
+                // A caixa fica travada enquanto o DELETE corre: o valor dela ainda é o que foi pedido.
+                let kept = crate::app::accounts::kept_transcripts_notice(&name, self.keep_transcripts, &deleted);
                 let key = match list.map(configs_of) {
                     Some(Ok(list)) => { self.replace_configs(list); "create_account_deleted" }
                     // O DELETE deu certo: a pasta não existe mais, então ela sai da lista local mesmo sem a releitura.
@@ -880,7 +883,12 @@ impl NewSession {
                     }
                 };
                 self.config = self.fallback_config();
-                self.notice = Some((tr(key).replace("{nome}", &name), false));
+                // O que o DELETE confirmou sobre as conversas fica; a falha da releitura vem junto.
+                self.notice = Some((match kept {
+                    Some(kept) if key == "create_account_deleted" => kept,
+                    Some(kept) => format!("{kept} {}", crate::i18n::tr_shared("criar_conta_lista_falhou", &[])),
+                    None => tr(key).replace("{nome}", &name),
+                }, false));
                 self.build_config_pick(window, cx);
                 self.load_models(window, cx);
             }
@@ -977,17 +985,22 @@ impl NewSession {
                     .on_click(cx.listener(|this, _, window, cx| this.open_account_line(window, cx))))
                 .when_some(deletable, |el, name| el.child(small("create-account-delete", tr("create_delete")).disabled(busy)
                     .accessibility_label(tr("create_delete_account_aria").replace("{nome}", &name))
-                    .on_click(cx.listener(|this, _, _, cx| { (this.confirming, this.notice) = (true, None); cx.notify(); })))))
+                    .on_click(cx.listener(|this, _, _, cx| { (this.confirming, this.keep_transcripts, this.notice) = (true, true, None); cx.notify(); })))))
             .when_some(selected_quota, |el, q| el.child(self.render_quota("create-claude-quota".into(), q)))
             .when_some(self.deletable().filter(|_| self.confirming), |el, name| el.child(div().flex().items_center().gap(px(8.))
                 .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal()
                     .child(format!("{} ", tr("create_delete_start"))).child(div().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(name))
-                    .child(format!(" {}", tr("create_delete_end"))).flex().flex_wrap().gap_x(px(0.)))
+                    .child(if self.keep_transcripts { "?".to_owned() } else { format!(" {}", tr("create_delete_end")) })
+                    .flex().flex_wrap().gap_x(px(0.)))
                 .child(Button::new("create-account-delete-yes").outline().text_color(theme::danger()).border_color(theme::danger())
                     .label(if self.account_busy { "…".into() } else { tr("create_delete") }).disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| this.delete_account(cx))))
                 .child(small("create-account-delete-no", tr("create_cancel")).disabled(busy)
                     .on_click(cx.listener(|this, _, _, cx| { this.confirming = false; cx.notify(); })))))
+            .when(self.confirming && self.deletable().is_some(), |el| el.child(
+                Checkbox::new("create-account-keep").small().label(crate::i18n::tr_shared("contas_juntar_conversas", &[]))
+                    .checked(self.keep_transcripts).disabled(busy)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| { this.keep_transcripts = *checked; cx.notify(); }))))
             .when(self.asking, |el| {
                 let ready = !self.account_name.read(cx).value().trim().is_empty();
                 el.child(div().id("create-account-line").flex().items_center().gap(px(8.)).on_action(esc)

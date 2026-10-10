@@ -468,14 +468,65 @@ impl AccountService {
             is_default: false,
         })
     }
+    /// Conversas da conta copiadas para a conta padrão do mesmo provedor; credenciais e
+    /// configuração ficam de fora.
+    fn keep_transcripts(
+        &self,
+        provider: Provider,
+        account: &Account,
+    ) -> Result<super::transcripts::MergeCount, AccountError> {
+        let (default, folders): (&Path, &[&str]) = match provider {
+            Provider::Claude => (&self.env.claude_base, &["projects"]),
+            Provider::Codex => (&self.env.codex_default, &["sessions", "archived_sessions"]),
+        };
+        let failed = |error: super::transcripts::MergeError| {
+            // O diário recebe só o código (via `rust.accounts_failed`); os caminhos ficam no log.
+            tracing::warn!(%error, kind = ?error.error.kind(), "conversas não foram juntadas na conta padrão");
+            AccountError::new(
+                500,
+                "account_transcripts_merge_failed",
+                "não foi possível juntar as conversas na conta padrão; a conta não foi apagada",
+                json!({
+                    "error": error.to_string(),
+                    "source": error.source.as_ref().map(|p| p.display().to_string()),
+                    "target": error.target.display().to_string(),
+                }),
+            )
+        };
+        // O `memory/` das contas Claude aponta sempre para o `~/.claude` real (o compartilhado),
+        // mesmo quando a padrão vem de `CLAUDE_CONFIG_DIR`.
+        let shared = self.env.home.join(".claude");
+        let roots: Vec<&Path> = match provider {
+            Provider::Claude => vec![default, &shared],
+            Provider::Codex => vec![default],
+        };
+        let mut merge = super::transcripts::Merge::new(&account.id, &roots);
+        for folder in folders {
+            let (source, target) = (account.home.join(folder), default.join(folder));
+            // Raiz que é link para fora (ou não é pasta) recusa como dentro da árvore: pular
+            // deixaria a exclusão seguir sem que as conversas fossem para a conta padrão.
+            let refuse = |error: std::io::Error| failed(super::transcripts::MergeError {
+                source: Some(source.clone()), target: target.clone(), error });
+            match fs::symlink_metadata(&source) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(refuse(error)),
+                Ok(_) if storage::real_dir(&source) => merge.tree(&source, &target).map_err(failed)?,
+                Ok(_) if merge.links_into_home(&source) => {}
+                Ok(_) => return Err(refuse(std::io::Error::other("não é pasta"))),
+            }
+        }
+        merge.finish().map_err(failed)
+    }
     /// O chamador conserva a guarda exclusiva e relê os fatos antes deste ponto.
+    /// `keep` copia as conversas para a conta padrão antes de apagar; falha na cópia mantém a conta.
     pub fn delete(
         &self,
         provider: Provider,
         account: &Account,
         guard: &super::AccountGuard,
         facts: &super::UsageFacts,
-    ) -> Result<(), AccountError> {
+        keep: bool,
+    ) -> Result<Option<super::transcripts::MergeCount>, AccountError> {
         let current = self.resolve(provider, &account.id)?;
         let key = AccountKey::new(provider, &current.home).map_err(|_| AccountError::io())?;
         if guard.mode != GuardMode::Exclusive || guard.key != key {
@@ -518,6 +569,11 @@ impl AccountService {
                 json!({"pids":facts.holders}),
             ));
         }
+        let kept = if keep {
+            Some(self.keep_transcripts(provider, &current)?)
+        } else {
+            None
+        };
         storage::remove_tree(&current.home).map_err(|_| {
             AccountError::codex(500, "codex_account_delete_failed", Some(&account.id))
         })?;
@@ -534,7 +590,7 @@ impl AccountService {
                 _ => {}
             }
         }
-        Ok(())
+        Ok(kept)
     }
 }
 
@@ -637,10 +693,208 @@ mod tests {
         )
         .unwrap();
         let error = service
-            .delete(Provider::Claude, &account, &guard, &facts)
+            .delete(Provider::Claude, &account, &guard, &facts, true)
             .unwrap_err();
         assert_eq!(error.code, "erro_processos_usam_conta");
         assert_eq!(error.params, json!({"pids":[83]}));
         assert!(account.home.exists());
+    }
+
+    fn service_in(root: &Path) -> AccountService {
+        let home = root.to_string_lossy().into_owned();
+        AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into(),
+        ))
+    }
+
+    fn delete_with(
+        service: &AccountService,
+        provider: Provider,
+        account: &Account,
+        keep: bool,
+    ) -> Result<Option<super::super::transcripts::MergeCount>, AccountError> {
+        let key = AccountKey::new(provider, &account.home).unwrap();
+        let guard = service.locks.try_acquire(&key, GuardMode::Exclusive).unwrap();
+        let facts: super::super::UsageFacts =
+            serde_json::from_value(json!({"complete":true,"sessions":[],"pids":[],"holders":[]}))
+                .unwrap();
+        service.delete(provider, account, &guard, &facts, keep)
+    }
+
+    #[test]
+    fn claude_delete_keeps_transcripts_in_the_default_account() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let project = account.home.join("projects/-repo");
+        fs::create_dir_all(project.join("abc/subagents")).unwrap();
+        fs::write(project.join("abc.jsonl"), "conversa").unwrap();
+        fs::write(project.join("abc/subagents/x.jsonl"), "sub").unwrap();
+        fs::write(account.home.join(".credentials.json"), "segredo").unwrap();
+        let count = delete_with(&service, Provider::Claude, &account, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(count.merged, 2);
+        assert!(!account.home.exists());
+        let kept = root.path().join(".claude/projects/-repo");
+        assert_eq!(fs::read_to_string(kept.join("abc.jsonl")).unwrap(), "conversa");
+        assert!(kept.join("abc/subagents/x.jsonl").is_file());
+        assert!(!root.path().join(".claude/.credentials.json").exists());
+    }
+
+    #[test]
+    fn claude_delete_without_keep_copies_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        fs::create_dir_all(account.home.join("projects/-repo")).unwrap();
+        fs::write(account.home.join("projects/-repo/abc.jsonl"), "x").unwrap();
+        assert!(delete_with(&service, Provider::Claude, &account, false).unwrap().is_none());
+        assert!(!account.home.exists());
+        assert!(!root.path().join(".claude/projects/-repo").exists());
+    }
+
+    #[test]
+    fn failed_copy_leaves_the_account_intact() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        fs::create_dir_all(account.home.join("projects/-repo")).unwrap();
+        fs::write(account.home.join("projects/-repo/abc.jsonl"), "x").unwrap();
+        // Um arquivo no lugar da pasta de destino impede a cópia.
+        fs::create_dir_all(root.path().join(".claude")).unwrap();
+        fs::write(root.path().join(".claude/projects"), "").unwrap();
+        let error = delete_with(&service, Provider::Claude, &account, true).unwrap_err();
+        assert_eq!(error.code, "account_transcripts_merge_failed");
+        assert!(error.params["source"].as_str().unwrap().ends_with("abc.jsonl"));
+        assert!(error.params["target"].as_str().unwrap().contains(".claude"));
+        assert!(account.home.join("projects/-repo/abc.jsonl").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn link_among_the_transcripts_refuses_the_delete() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        fs::create_dir_all(account.home.join("projects/-repo")).unwrap();
+        fs::write(account.home.join("projects/-repo/abc.jsonl"), "x").unwrap();
+        let outside = root.path().join("outside.jsonl");
+        fs::write(&outside, "fora").unwrap();
+        std::os::unix::fs::symlink(&outside, account.home.join("projects/-repo/link.jsonl")).unwrap();
+        let error = delete_with(&service, Provider::Claude, &account, true).unwrap_err();
+        assert_eq!(error.code, "account_transcripts_merge_failed");
+        assert!(error.params["source"].as_str().unwrap().ends_with("link.jsonl"));
+        assert!(account.home.join("projects/-repo/link.jsonl").is_symlink());
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "fora");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn memory_link_into_the_default_account_is_skipped() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let memory = root.path().join(".claude/projects/-repo/memory");
+        fs::create_dir_all(&memory).unwrap();
+        fs::write(memory.join("MEMORY.md"), "m").unwrap();
+        fs::create_dir_all(account.home.join("projects/-repo")).unwrap();
+        fs::write(account.home.join("projects/-repo/x.jsonl"), "x").unwrap();
+        std::os::unix::fs::symlink(&memory, account.home.join("projects/-repo/memory")).unwrap();
+        let count = delete_with(&service, Provider::Claude, &account, true).unwrap().unwrap();
+        assert_eq!((count.merged, count.skipped, count.renamed), (1, 0, 0));
+        assert!(!account.home.exists());
+        assert_eq!(fs::read_to_string(root.path().join(".claude/projects/-repo/x.jsonl")).unwrap(), "x");
+        let entries: Vec<_> = fs::read_dir(&memory).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(entries, ["MEMORY.md"], "a memória compartilhada fica como estava");
+        assert_eq!(fs::read_to_string(memory.join("MEMORY.md")).unwrap(), "m");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn memory_link_into_the_shared_claude_is_skipped_under_claude_config_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let config = root.path().join("cfg").to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home), ("CLAUDE_CONFIG_DIR".into(), config)].into(),
+        ));
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let memory = root.path().join(".claude/projects/-repo/memory");
+        fs::create_dir_all(&memory).unwrap();
+        fs::create_dir_all(account.home.join("projects/-repo")).unwrap();
+        fs::write(account.home.join("projects/-repo/x.jsonl"), "x").unwrap();
+        std::os::unix::fs::symlink(&memory, account.home.join("projects/-repo/memory")).unwrap();
+        let count = delete_with(&service, Provider::Claude, &account, true).unwrap().unwrap();
+        assert_eq!(count.merged, 1);
+        assert!(root.path().join("cfg/projects/-repo/x.jsonl").is_file());
+        assert!(memory.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_link_counts_by_its_written_target() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let repo = account.home.join("projects/-repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("x.jsonl"), "x").unwrap();
+        // Quebrado para fora: o alvo escrito não fica em raiz nenhuma, então recusa.
+        std::os::unix::fs::symlink(root.path().join("gone/x.jsonl"), repo.join("fora.jsonl")).unwrap();
+        let error = delete_with(&service, Provider::Claude, &account, true).unwrap_err();
+        assert_eq!(error.code, "account_transcripts_merge_failed");
+        assert!(error.params["source"].as_str().unwrap().ends_with("fora.jsonl"));
+        // Quebrado para dentro da padrão, escrito relativo: não guarda nada, é pulado.
+        fs::remove_file(repo.join("fora.jsonl")).unwrap();
+        let relative = Path::new("../../../.claude/projects/-repo/memory");
+        assert!(!repo.join(relative).exists());
+        std::os::unix::fs::symlink(relative, repo.join("memory")).unwrap();
+        let count = delete_with(&service, Provider::Claude, &account, true).unwrap().unwrap();
+        // A tentativa recusada pode já ter copiado o `x.jsonl`: aí ele volta como igual.
+        assert_eq!(count.merged + count.skipped, 1);
+        assert!(!account.home.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_transcript_root_refuses_the_delete() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let outside = root.path().join("outside-projects");
+        fs::create_dir_all(outside.join("-repo")).unwrap();
+        fs::write(outside.join("-repo/abc.jsonl"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, account.home.join("projects")).unwrap();
+        let error = delete_with(&service, Provider::Claude, &account, true).unwrap_err();
+        assert_eq!(error.code, "account_transcripts_merge_failed");
+        assert!(error.params["source"].as_str().unwrap().ends_with("projects"));
+        assert!(account.home.join("projects").is_symlink());
+        // Sem guardar, a raiz linkada sai como antes (só o link, o destino fica).
+        assert!(delete_with(&service, Provider::Claude, &account, false).unwrap().is_none());
+        assert!(outside.join("-repo/abc.jsonl").is_file());
+    }
+
+    #[test]
+    fn codex_delete_keeps_rollouts_in_the_default_home() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Codex, "work", |_| Ok(())).unwrap();
+        let day = "sessions/2026/10/09/rollout-1.jsonl";
+        let archived = "archived_sessions/rollout-0.jsonl";
+        for name in [day, archived] {
+            fs::create_dir_all(account.home.join(name).parent().unwrap()).unwrap();
+            fs::write(account.home.join(name), name).unwrap();
+        }
+        fs::write(account.home.join("auth.json"), "segredo").unwrap();
+        let count = delete_with(&service, Provider::Codex, &account, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(count.merged, 2);
+        assert!(!account.home.exists());
+        for name in [day, archived] {
+            assert_eq!(fs::read_to_string(root.path().join(".codex").join(name)).unwrap(), name);
+        }
+        assert!(!root.path().join(".codex/auth.json").exists());
     }
 }

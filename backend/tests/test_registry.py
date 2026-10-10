@@ -95,7 +95,7 @@ def test_resolve_ignores_daemon_session_id(tmp_path):
     # jsonl inexistente do daemon. Deve pular o daemon e cair no fallback (REPL bare = sem flag).
     proj = tmp_path / "-home-u-p"
     proj.mkdir()
-    (proj / "real.jsonl").write_text("{}")
+    (proj / "00000000-0000-4000-8000-000000000001.jsonl").write_text("{}")
     reg = SessionRegistry(projects_dir=tmp_path)
     daemon = "deadbeef-0000-0000-0000-000000000000"
 
@@ -107,7 +107,7 @@ def test_resolve_ignores_daemon_session_id(tmp_path):
          patch.object(registry, "_cmdline", side_effect=cmdline), \
          patch.object(registry, "_open_jsonl", return_value=None):
         j = reg.resolve("cc", "/home/u/p")
-    assert j.endswith("real.jsonl")  # daemon ignorado -> mtime, NAO o uuid do daemon
+    assert j.endswith("00000000-0000-4000-8000-000000000001.jsonl")  # daemon ignorado -> mtime, NAO o uuid do daemon
 
 
 def test_resolve_picks_main_session_over_subagent(tmp_path):
@@ -317,15 +317,29 @@ def test_resolve_marker_unsticks_fd_lock_after_clear(tmp_path):
 def test_resolve_jsonl_picks_newest(tmp_path):
     proj = tmp_path / "-home-u-p"
     proj.mkdir()
-    old = proj / "old.jsonl"
+    old = proj / "00000000-0000-4000-8000-000000000001.jsonl"
     old.write_text("{}")
-    new = proj / "new.jsonl"
+    new = proj / "00000000-0000-4000-8000-000000000002.jsonl"
     new.write_text("{}")
     now = time.time()
     os.utime(old, (now - 100, now - 100))
     os.utime(new, (now, now))
     reg = SessionRegistry(projects_dir=tmp_path)
-    assert reg.resolve_jsonl("/home/u/p").endswith("new.jsonl")
+    assert reg.resolve_jsonl("/home/u/p") == str(new)
+
+
+def test_resolve_jsonl_ignores_newer_copy_from_deleted_account(tmp_path):
+    proj = tmp_path / "-home-u-p"
+    proj.mkdir()
+    real = proj / "00000000-0000-4000-8000-000000000001.jsonl"
+    real.write_text("{}")
+    copy = proj / "00000000-0000-4000-8000-000000000001.from-work.jsonl"
+    copy.write_text("{}")
+    now = time.time()
+    os.utime(real, (now - 100, now - 100))
+    os.utime(copy, (now, now))
+    reg = SessionRegistry(projects_dir=tmp_path)
+    assert reg.resolve_jsonl("/home/u/p") == str(real)
 
 
 def test_list_maps_sessions_to_jsonl(tmp_path):
@@ -656,14 +670,14 @@ def test_resolve_tracked_false_on_mtime_fallback(tmp_path):
     # bare claude (sem --session-id, sem fd, sem cache) -> cai no mtime -> NAO tracked.
     proj = tmp_path / "-home-u-p"
     proj.mkdir()
-    (proj / "x.jsonl").write_text("{}\n")
+    (proj / "00000000-0000-4000-8000-000000000002.jsonl").write_text("{}\n")
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "pane_pid", return_value=111), \
          patch.object(registry, "_descendant_pids", return_value=[111]), \
          patch.object(registry, "_cmdline", return_value="claude"), \
          patch.object(registry, "_open_jsonl", return_value=None):
         jsonl, tracked = reg.resolve_tracked("cc", "/home/u/p")
-    assert tracked is False and jsonl.endswith("x.jsonl")
+    assert tracked is False and jsonl.endswith("00000000-0000-4000-8000-000000000002.jsonl")
 
 
 def test_resolve_uses_session_config_dir(tmp_path, monkeypatch):

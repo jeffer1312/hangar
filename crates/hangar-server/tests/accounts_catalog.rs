@@ -162,7 +162,7 @@ fn invalid_names_markers_and_default_are_protected() {
         .unwrap();
     assert!(
         service
-            .delete(Provider::Codex, &valid, &guard, &UsageFacts::default())
+            .delete(Provider::Codex, &valid, &guard, &UsageFacts::default(), true)
             .is_err()
     );
     assert!(valid.home.exists());
@@ -346,6 +346,7 @@ fn deletion_removes_readonly_pack_but_keeps_external_link_target() {
                 complete: true,
                 ..Default::default()
             },
+            true,
         )
         .unwrap();
     assert!(!account.home.exists());
@@ -398,6 +399,7 @@ fn deletion_unlinks_windows_junction_without_removing_its_target() {
                 complete: true,
                 ..Default::default()
             },
+            true,
         )
         .unwrap();
     assert!(!account.home.exists());
