@@ -1383,7 +1383,6 @@ mod tests {
             }
         }).await;
         assert!(String::from_utf8_lossy(&got).contains("event: plugin_ui\r\ndata: {\"band\":1}"), "{}", String::from_utf8_lossy(&got));
-        tokio::time::sleep(Duration::from_secs(2)).await; // PROVA-TEMPORARIA
         // Só os quatro eventos do estado passam: o Python segue dono do resto para quem entra por ele.
         on_side_event(&st.side.hubs.0.lock().unwrap().get("s1").unwrap().0.clone(), "stats", "{}");
         drop(s);

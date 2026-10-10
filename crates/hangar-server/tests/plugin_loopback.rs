@@ -32,7 +32,7 @@ impl Server {
         let (stop, stopping) = tokio::sync::oneshot::channel();
         let mut task = tokio::spawn(hangar_server::serve_until_with_state(listener, state, async { let _ = stopping.await; }));
         let http = http();
-        let up = tokio::time::timeout(Duration::from_secs(5), async {
+        let up = match tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if task.is_finished() {
                     return false;
@@ -43,7 +43,14 @@ impl Server {
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        }).await.expect("a saúde pública respondeu depois dos binds");
+        }).await {
+            Ok(up) => up,
+            Err(_) => {
+                let _ = stop.send(());
+                task.abort();
+                panic!("a saúde pública não respondeu em 5 s");
+            }
+        };
         if !up {
             let error = (&mut task).await.unwrap().expect_err("o servidor saiu sem erro antes da saúde");
             assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{error}");
