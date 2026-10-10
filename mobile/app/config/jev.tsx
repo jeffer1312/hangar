@@ -14,8 +14,6 @@ export default function Jev() {
         <ConfigRow cfg={cfg} k="jev_api_key" />
         <ConfigRow cfg={cfg} k="jev_padrao" />
       </Box>
-      <BlockHead title={m.jev_windows_title()} help={m.jev_windows_help()} />
-      <Box><ConfigRow cfg={cfg} k="jev_windows_api_key" /></Box>
       <Disclosure open={advanced} label={m.jev_advanced()} onChange={setAdvanced} />
       {advanced ? (
         <>
