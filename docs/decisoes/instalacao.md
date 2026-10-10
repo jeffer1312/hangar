@@ -750,6 +750,13 @@ testes novos das correções abaixo vieram depois da medição).
     `fcntl`, que não passa ao filho, muda o contrato com o `WriterLease` do Python.
   - Os intermitentes de porta do `cano_v2` e do `plugin_loopback` e o do canal privado do `side`
     vieram do #140, com o mesmo conteúdo.
+- **Dois que o pytest em 4 processos expôs no CI:** o `git commit` dispara `maintenance run --auto`
+  em segundo plano, e o `maintenance.lock` sumia no meio da cópia do repositório do teste (a suíte
+  desliga a manutenção automática); e o Codex deixava filhos em segundo plano (o clone dos plugins
+  curados) escrevendo na pasta temporária do escritor de `config.toml`, e salvar as opções falhava
+  ao apagá-la. No POSIX o Codex nasce num grupo de processos próprio (`_OwnGroup`), com o mesmo
+  contrato do Job do Windows: prazo de saída, grupo encerrado e fim confirmado. Conserto no Python
+  por decisão do dono: é defeito do que já existe, não recurso novo.
 - **Intermitentes antigos do macOS, já presentes na `main`:** o `state::live` exigia nenhuma
   releitura logo depois de armar o observador, e o FSEvents entrega com atraso a criação das pastas
   do próprio teste; agora o teste espera o observador assentar. O `cargo test` do Server roda com

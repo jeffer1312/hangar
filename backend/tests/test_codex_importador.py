@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -746,3 +747,37 @@ async def test_falha_de_limpeza_nao_esconde_o_erro_do_comando(cliente, monkeypat
     await obj.close()
     assert len(calls) == 2
     assert not os.path.exists(calls[0])
+
+
+def _vivo(pid: int) -> bool:
+    """Existe e não é zumbi esperando ser recolhido."""
+    try:
+        estado = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    return estado != "Z"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="lê /proc; o Windows tem a contenção por Job")
+async def test_fechar_encerra_os_descendentes_do_codex(tmp_path):
+    # O Codex deixa filhos em segundo plano (o clone dos plugins curados) que escrevem na pasta
+    # temporária depois de ele sair; sobreviver ao fechamento impedia apagar essa pasta.
+    filho = tmp_path / "filho.pid"
+    falso = tmp_path / "codex"
+    falso.write_text(f"""#!{sys.executable}
+import json, subprocess, sys
+neto = subprocess.Popen(["sleep", "60"])
+open({str(filho)!r}, "w").write(str(neto.pid))
+for linha in sys.stdin:
+    pedido = json.loads(linha)
+    if "id" in pedido:
+        print(json.dumps({{"jsonrpc": "2.0", "id": pedido["id"], "result": {{}}}}), flush=True)
+""")
+    falso.chmod(0o755)
+    async with CodexNativo(tmp_path, tmp_path / ".codex", binario=str(falso)):
+        pid = int(filho.read_text())
+        assert _vivo(pid)
+    prazo = time.monotonic() + 5
+    while _vivo(pid) and time.monotonic() < prazo:
+        await asyncio.sleep(0.05)
+    assert not _vivo(pid), "um descendente do Codex sobreviveu ao fechamento"

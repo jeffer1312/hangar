@@ -9,6 +9,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -170,13 +171,50 @@ class _OwnTree:
             raise CodexNativoErro("Não foi possível consultar ou encerrar a contenção do Codex.") from exc
 
 
+class _OwnGroup:
+    """No POSIX, o grupo de processos próprio faz o papel do Job: o Codex deixa filhos em segundo plano
+    (o clone dos plugins curados) que seguram e escrevem na pasta temporária depois de ele sair."""
+
+    def __init__(self, pgid: int) -> None:
+        self.pgid = pgid
+
+    def _empty(self) -> bool:
+        try:
+            os.killpg(self.pgid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        return False
+
+    async def _wait_empty(self, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while not self._empty():
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return True
+
+    def close(self) -> None:
+        return None
+
+    async def release(self, graceful: float) -> None:
+        """O mesmo contrato do Job: prazo de saída normal, depois o grupo inteiro encerrado e o fim confirmado."""
+        if await self._wait_empty(graceful):
+            return
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(self.pgid, signal.SIGKILL)
+        if not await self._wait_empty(_TREE_KILL_TIMEOUT):
+            raise CodexNativoErro("Processos do Codex continuam ativos após encerrar o grupo.")
+
+
 class _CliOperation:
     """Um comando CLI admitido: recursos registrados antes do nascimento e retidos até o fim confirmado."""
 
     def __init__(self, work_dir: str) -> None:
         self.work_dir = work_dir
         self.proc: asyncio.subprocess.Process | None = None
-        self.tree: _OwnTree | None = None
+        self.tree: "_OwnTree | _OwnGroup | None" = None
         self.spawned = asyncio.Event()
         self.cleanup: asyncio.Future | None = None
 
@@ -197,7 +235,7 @@ class CodexNativo:
         self.timeout = timeout
         self.close_timeout = close_timeout
         self._proc: asyncio.subprocess.Process | None = None
-        self._tree: _OwnTree | None = None
+        self._tree: "_OwnTree | _OwnGroup | None" = None
         self._reader_task: asyncio.Task | None = None
         self._work_dir: str | None = None
         self._closing: asyncio.Future | None = None
@@ -248,12 +286,13 @@ class CodexNativo:
             return [node, str(script)]
         raise CodexNativoErro("Não foi possível resolver o executável nativo do Codex no Windows.")
 
-    async def _spawn(self, args: list[str], cwd: str, **pipes) -> tuple[asyncio.subprocess.Process, _OwnTree | None]:
+    async def _spawn(self, args: list[str], cwd: str, **pipes) -> tuple[asyncio.subprocess.Process, "_OwnTree | _OwnGroup"]:
         """No Windows, o Job existe antes do processo, e o processo só roda depois de entrar nele."""
         command = self._comando()
         if os.name != "nt":
-            proc = await asyncio.create_subprocess_exec(*command, *args, cwd=cwd, env=self._env(), **pipes)
-            return proc, None
+            proc = await asyncio.create_subprocess_exec(
+                *command, *args, cwd=cwd, env=self._env(), start_new_session=True, **pipes)
+            return proc, _OwnGroup(proc.pid)
         try:
             tree = _OwnTree()
         except OSError as exc:
@@ -477,7 +516,7 @@ class CodexNativo:
                 proc.kill()
             await asyncio.wait_for(proc.wait(), self.close_timeout)
 
-    async def _finish(self, proc: asyncio.subprocess.Process | None, tree: _OwnTree | None) -> None:
+    async def _finish(self, proc: asyncio.subprocess.Process | None, tree: "_OwnTree | _OwnGroup | None") -> None:
         if proc is not None:
             await self._stop(proc)
         if tree is not None:
