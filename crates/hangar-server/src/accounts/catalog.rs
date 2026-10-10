@@ -493,7 +493,14 @@ impl AccountService {
                 }),
             )
         };
-        let mut merge = super::transcripts::Merge::new(&account.id, default);
+        // O `memory/` das contas Claude aponta sempre para o `~/.claude` real (o compartilhado),
+        // mesmo quando a padrão vem de `CLAUDE_CONFIG_DIR`.
+        let shared = self.env.home.join(".claude");
+        let roots: Vec<&Path> = match provider {
+            Provider::Claude => vec![default, &shared],
+            Provider::Codex => vec![default],
+        };
+        let mut merge = super::transcripts::Merge::new(&account.id, &roots);
         for folder in folders {
             let (source, target) = (account.home.join(folder), default.join(folder));
             // Raiz que é link para fora (ou não é pasta) recusa como dentro da árvore: pular
@@ -801,6 +808,52 @@ mod tests {
         let entries: Vec<_> = fs::read_dir(&memory).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(entries, ["MEMORY.md"], "a memória compartilhada fica como estava");
         assert_eq!(fs::read_to_string(memory.join("MEMORY.md")).unwrap(), "m");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn memory_link_into_the_shared_claude_is_skipped_under_claude_config_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let config = root.path().join("cfg").to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home), ("CLAUDE_CONFIG_DIR".into(), config)].into(),
+        ));
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let memory = root.path().join(".claude/projects/-repo/memory");
+        fs::create_dir_all(&memory).unwrap();
+        fs::create_dir_all(account.home.join("projects/-repo")).unwrap();
+        fs::write(account.home.join("projects/-repo/x.jsonl"), "x").unwrap();
+        std::os::unix::fs::symlink(&memory, account.home.join("projects/-repo/memory")).unwrap();
+        let count = delete_with(&service, Provider::Claude, &account, true).unwrap().unwrap();
+        assert_eq!(count.merged, 1);
+        assert!(root.path().join("cfg/projects/-repo/x.jsonl").is_file());
+        assert!(memory.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_link_counts_by_its_written_target() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let repo = account.home.join("projects/-repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("x.jsonl"), "x").unwrap();
+        // Quebrado para fora: o alvo escrito não fica em raiz nenhuma, então recusa.
+        std::os::unix::fs::symlink(root.path().join("gone/x.jsonl"), repo.join("fora.jsonl")).unwrap();
+        let error = delete_with(&service, Provider::Claude, &account, true).unwrap_err();
+        assert_eq!(error.code, "account_transcripts_merge_failed");
+        assert!(error.params["source"].as_str().unwrap().ends_with("fora.jsonl"));
+        // Quebrado para dentro da padrão, escrito relativo: não guarda nada, é pulado.
+        fs::remove_file(repo.join("fora.jsonl")).unwrap();
+        let relative = Path::new("../../../.claude/projects/-repo/memory");
+        assert!(!repo.join(relative).exists());
+        std::os::unix::fs::symlink(relative, repo.join("memory")).unwrap();
+        let count = delete_with(&service, Provider::Claude, &account, true).unwrap().unwrap();
+        // A tentativa recusada pode já ter copiado o `x.jsonl`: aí ele volta como igual.
+        assert_eq!(count.merged + count.skipped, 1);
+        assert!(!account.home.exists());
     }
 
     #[cfg(unix)]

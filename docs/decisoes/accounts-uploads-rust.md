@@ -33,7 +33,7 @@ arquivo diferente vira `<nome>.from-<conta><ext>`. Essa cópia não é conversa:
 `<uuid>.jsonl` conta como transcript (`archive.conversation_files` no Python,
 `is_conversation_file` no Rust), em Arquivo, retomada, índice, contagem de worktree e
 escolha do transcript da sessão pelo mtime. Link, socket ou fifo entre as conversas,
-inclusive a própria raiz (`projects/`, `sessions/`), recusa a exclusão: seguir levaria o que mora fora da conta, pular o apagaria calado. A exceção é o link que aponta para dentro da conta padrão (o `memory/` de cada projeto do Claude) ou que está quebrado: não guarda nada da conta, é pulado e sai com ela. A cópia mantém o modo do arquivo (0600 no Claude) e pasta
+inclusive a própria raiz (`projects/`, `sessions/`), recusa a exclusão: seguir levaria o que mora fora da conta, pular o apagaria calado. A exceção é o link que aponta para dentro da conta padrão ou, no Claude, do `~/.claude` real (o `memory/` de cada projeto aponta para lá mesmo com `CLAUDE_CONFIG_DIR`): não guarda nada da conta, é pulado e sai com ela. Link quebrado vale pelo alvo escrito nele. A cópia mantém o modo do arquivo (0600 no Claude) e pasta
 nova nasce 0700. Só depois da cópia e de cada pasta criada gravadas no disco a pasta
 é removida; falha na cópia recusa a exclusão com
 `account_transcripts_merge_failed` e mantém a conta. `keep_transcripts=0` volta a
