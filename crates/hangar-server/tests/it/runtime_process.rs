@@ -11,6 +11,45 @@ fn unique_key() -> String {
 }
 
 #[tokio::test]
+async fn a_killed_unreaped_cano_is_dead_and_cannot_be_reused() {
+    use std::io::BufRead;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    struct Reap(std::process::Child);
+    impl Drop for Reap {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let key = unique_key();
+    let log = dir.path().join(format!("cano-{}.log", &key[..16]));
+    let listen = format!("unix:{}", dir.path().join("cano.sock").display());
+    std::fs::write(&log, "rastro sintético").unwrap();
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "printf 'ready\\n'; read line", "cano", "--escuta", &listen, "--log"])
+        .arg(&log).stdin(Stdio::piped()).stdout(Stdio::piped())
+        .env_remove("HANGAR_CANO_KEY").env_remove("HANGAR_CANO_OWNER");
+    // O grupo isolado garante que só o processo sintético recebe o sinal do teste.
+    unsafe { command.pre_exec(|| if libc::setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }); }
+    let mut child = Reap(command.spawn().unwrap());
+    let mut ready = String::new();
+    std::io::BufReader::new(child.0.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+    assert_eq!(ready, "ready\n");
+    let pid = child.0.id();
+    assert_eq!(liveness(pid, &key), Liveness::Ours);
+    let cano = Cano { pid, escuta:listen, token:"fixture-token".into(), ts:0.0, versao:2, extra:Default::default() };
+    kill(&cano, &key, dir.path()).await.unwrap();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    assert_eq!(stat.rsplit_once(") ").unwrap().1.split_whitespace().next(), Some("Z"), "a prova mantém o filho sem colher até conferir a disponibilidade");
+    assert!(!log.exists());
+    assert_eq!(liveness(pid, &key), Liveness::Dead, "um cano encerrado não pode ser reutilizado enquanto espera a colheita");
+}
+
+#[tokio::test]
 async fn spawn_listens_and_kill_ends_the_group() {
     let dir = tempfile::tempdir().unwrap();
     crate::use_cano_bin();
