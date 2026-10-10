@@ -19,15 +19,16 @@ def test_falha_pausa_o_provedor_e_nao_usa_o_plano_b(monkeypatch):
     # falha, em paralelo, e o backend inteiro engasgava (lista estourando 4s, chat abrindo em 8s).
     chamadas = []
     def explode(*a, **k):
-        chamadas.append(k.get("plano_b"))
+        assert "plano_b" not in k
+        chamadas.append(1)
         raise NarrarError(502, "provedor 500")
     monkeypatch.setattr(pensamento_pt, "chamar_chat", explode)
     assert pensamento_pt.traduzir("one") == "one"
     assert pensamento_pt.traduzir("two") == "two"     # em pausa: nem chama o provedor
-    assert chamadas == [False]
+    assert chamadas == [1]
     pensamento_pt._pausado_ate = 0.0
     assert pensamento_pt.traduzir("three") == "three"
-    assert chamadas == [False, False]
+    assert chamadas == [1, 1]
 
 
 def test_sem_vaga_devolve_o_original_mas_o_cache_ainda_responde(monkeypatch):

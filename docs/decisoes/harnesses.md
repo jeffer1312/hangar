@@ -5,6 +5,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **O organizador do ditado executa uma chamada mínima, separada da sessão principal.** Claude
+  usa `--bare` e aceita API key ou `apiKeyHelper`; OAuth é limitação explícita nesta versão. Codex
+  mantém a autenticação da conta de destino e usa execução efêmera com configurações mínimas.
+  Ambos recebem somente prompt de estilo e transcrição, com referências de grafia apenas quando
+  habilitadas. Ferramentas, plugins, skills, hooks, MCP, histórico e instruções do projeto ficam fora.
+  Prova: [organização mínima do ditado](#organização-mínima-do-ditado).
+
 - **Retomada Codex pelo WebSocket local recebe o histórico inteiro, sem teto de 8 MB.**
   A fila reserva a entrada antes do envio; perda de resposta ou cancelamento conserva a
   tentativa como incerta. Só recusa explícita ou ausência de escrita permite reenviar
@@ -3631,3 +3638,34 @@ Prova descartável no Claude Code 2.1.294, sessão `cx-btw-probe` com um mod de 
 - A sessão sem terminal do Hangar nasce com o plugin do checkout do backend em uso
   (`plugin_bridge.PLUGINS_ROOT`): a prova dentro do Hangar só vale com o backend rodando desta
   branch.
+
+## Organização mínima do ditado
+
+Prova da issue 146 em 10/10/2026: Claude Code 2.1.296 e Codex CLI 0.162.1 executados pelo construtor
+Rust do organizador, contra provedor HTTP de captura local e autenticação sintética. O exemplo
+`crates/hangar-server/examples/dictation-context-probe.rs` reutiliza esse construtor; não mantém
+uma segunda lista de flags. Iscas de projeto, hook, plugin e skill ficaram fora do pedido.
+
+Claude enviou `tools=[]`, prompt de estilo e transcrição, com payload de 3.465 caracteres. Codex
+enviou `tools=[]` e exatamente dois itens de entrada: developer do estilo e user da transcrição,
+com 4.417 caracteres. São tamanhos do JSON capturado, não contagens de tokens reais: o provedor
+da prova devolvia uso sintético e nenhum modelo externo foi consumido.
+
+`--ignore-user-config` sozinho ainda deixava ferramentas de perguntas/goals e quatro skills
+sistêmicas na entrada do Codex. O construtor desliga esses recursos, instruções de ambiente,
+permissões, apps e colaboração, além de usar `model_instructions_file` explícito em diretório
+temporário. Plugins, hooks, MCP, shell, busca e geração de imagem ficam desligados. `CODEX_HOME`
+continua o da conta de destino; só autenticação e configuração necessária do provedor são lidas.
+A conta padrão mantém seu store de autenticação; contas administradas usam arquivo.
+
+Claude usa `--bare`, ferramentas vazias, MCP vazio estrito, sem slash commands nem persistência.
+API key vai no ambiente privado; `apiKeyHelper` entra em settings mínimos. OAuth não é suportado
+nesse caminho e retorna código/aviso próprio antes de tentar organizar. O catálogo Claude
+compartilhado com a abertura existente preserva seus consumidores OAuth, com `--safe-mode`;
+isso não habilita OAuth no organizador.
+
+Os subprocessos herdam somente ambiente permitido. stdout/stderr são drenados e saídas brutas
+não entram no diário. A prova de prazo/cancelamento usa conexões de sincronização e um descendente
+segurando stdout: ambos encerram antes de liberar a pasta e a guarda da conta, sem waits artificiais
+nos testes. O resolvedor Claude é compartilhado com o leitor de contas, incluindo instalação npm
+no Windows.

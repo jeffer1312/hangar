@@ -399,6 +399,14 @@ def test_null_remove_a_lista_e_volta_ao_servico_unico():
     assert rc.estado()["transcription_providers"] == {"valor": [], "definido": False, "origem": "env"}
 
 
+def test_dictation_recent_messages_are_disabled_by_default_and_persisted():
+    assert rc.get("dictation_include_recent_messages") is False
+    rc.aplicar({"dictation_include_recent_messages": True})
+    assert rc.get("dictation_include_recent_messages") is True
+    rc.aplicar({}, remover={"dictation_include_recent_messages"})
+    assert rc.get("dictation_include_recent_messages") is False
+
+
 def test_openai_compatible_service_can_be_saved_without_key():
     item = {**_GROQ, "api_key": "", "base_url": "http://127.0.0.1:8000/v1"}
     rc.aplicar({"transcription_providers": [item]})

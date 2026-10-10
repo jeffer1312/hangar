@@ -1922,3 +1922,40 @@ segue como antes. Desenho: [desenho.md](../migracao-rust/parte6-grupos/desenho.m
 - **Contrato interno 40** (`RUST_SERVER_PROTOCOL` e `INTERNAL_PROTOCOL`; o 39 é o da 5B, juntada
   antes): a saúde ganhou `groups`, e o filho recebe `HANGAR_SERVER_ID`, `HANGAR_PEERS_FILE` e
   `HANGAR_PAIR_ARCHIVE`.
+
+## Organização opcional do ditado no Rust
+
+Decisão e prova da issue 146 (10/10/2026): organização nasce em `none`, inclusive quando já há
+credenciais antigas de LLM. `harness` usa a conta da conversa de destino, com modelo de organização
+separado para Claude e Codex; `external_api` usa somente endpoint, chave e modelo próprios.
+Transcrição, narração e organização continuam capacidades separadas.
+
+O organizador, os prompts, as travas de conteúdo e os produtores de catálogo Claude/Codex moram em
+`crates/hangar-server/src/dictation/`. A porta privada recebe JSON autenticado, com limite de corpo;
+o protocolo interno passou a 52 nos dois lados. Python conserva autenticação, upload, configuração
+e transporte. Saíram o motor de ditado de `narrar.py` e a reserva `_via_claude`, inclusive do cliente
+externo compartilhado; narração, sugestão e tradução continuam usando esse cliente sem reserva.
+O parser/cache da TUI existente é outro consumidor e não organiza ditado.
+
+O nativo guarda modo, estilo, modelo, conta e geração antes da gravação. Revisão reaproveita o cru
+sem repetir STT; conta ou conversa recriada é recusada. Falha de organização conserva o texto exato
+obtido no STT e devolve aviso com código. A autenticação da conta fica protegida pela trava
+compartilhada até terminar a árvore auxiliar, inclusive no cancelamento. None não consulta catálogo,
+LLM nem histórico. Um modelo não escolhido no snapshot não passa a herdar uma escolha posterior.
+
+`dictation_include_recent_messages` nasce `false`. Quando ligado, o Rust lê o transcript estruturado
+da conversa de destino, seleciona as três últimas mensagens de usuário/assistente e limita cada uma
+a 2.000 caracteres Unicode. Ferramentas e pensamento ficam fora. O prompt cita esses dados somente
+como referência de grafia, sem seguir instruções nem completar a fala. A primeira organização
+devolve a referência congelada; as revisões reutilizam esse snapshot e as travas de honestidade.
+
+Provas: testes de configuração antiga, identidade, geração, conta, catálogo, travas, falhas e
+cancelamento; janela isolada do nativo com seleção dos modos, opção de referência salva, pedido com
+destino/geração e recuperação pela versão Cru. Fala sintética em português passou pelo whisper.cpp
+instalado: None preservou exatamente o STT sem chamada de organização; API externa fez somente as
+três chamadas solicitadas. A resposta da API nessa prova era sintética; os casos de transformação
+e rejeição foram conferidos pelo corpus portado e pelos testes do motor Rust.
+
+O isolamento dos CLIs foi conferido no pedido HTTP emitido pelos executáveis reais, usando o
+construtor Rust e um provedor local, conforme [a prova dos harnesses](harnesses.md#organização-mínima-do-ditado).
+OAuth do Claude é limitação explícita desta versão; não abre login nem usa outra conta.

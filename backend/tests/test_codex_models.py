@@ -1,460 +1,50 @@
-"""Catálogo de modelos do Codex: o que o `model/list` devolve vira lista da tela de abertura.
-
-O que esta suíte trava: modelo escondido não aparece; os níveis de esforço saem POR MODELO (a lição
-do Pi, medida de novo aqui — `gpt-5.6-luna` não tem `ultra` e `gpt-5.5` não tem `max`); e resposta
-sem modelo nenhum é falha do provedor, não catálogo vazio.
-"""
-import io
-import json
+"""Transporte do catálogo Codex: identidade e erros permanecem ligados ao Rust."""
 from pathlib import Path
-
 import pytest
-
-from app import codex_appserver as cx
-from app import codex_models as cm
-
-
-# Recorte real do `codex app-server` 0.151.0 nesta máquina (campos que não usamos foram cortados,
-# os que usamos estão byte por byte). Fixture inventada aqui seria mentira sobre o formato — o
-# mesmo cuidado que o ticket 06 cobrou.
-RESPOSTA = {
-    "data": [
-        {
-            "id": "gpt-5.6-sol", "model": "gpt-5.6-sol", "displayName": "GPT-5.6-Sol",
-            "description": "Latest frontier agentic coding model.", "hidden": False,
-            "supportedReasoningEfforts": [
-                {"reasoningEffort": "low", "description": "Fast responses with lighter reasoning"},
-                {"reasoningEffort": "medium", "description": "Balances speed and reasoning depth"},
-                {"reasoningEffort": "high", "description": "Greater reasoning depth"},
-                {"reasoningEffort": "xhigh", "description": "Extra high reasoning depth"},
-                {"reasoningEffort": "max", "description": "Maximum reasoning depth"},
-                {"reasoningEffort": "ultra", "description": "Maximum reasoning with delegation"},
-            ],
-            "defaultReasoningEffort": "low", "isDefault": True,
-        },
-        {
-            "id": "gpt-5.5", "model": "gpt-5.5", "displayName": "GPT-5.5",
-            "description": "Previous frontier model.", "hidden": False,
-            "supportedReasoningEfforts": [
-                {"reasoningEffort": "low", "description": ""},
-                {"reasoningEffort": "medium", "description": ""},
-                {"reasoningEffort": "high", "description": ""},
-                {"reasoningEffort": "xhigh", "description": ""},
-            ],
-            "defaultReasoningEffort": "medium", "isDefault": False,
-        },
-        {
-            "id": "gpt-5.6-codex-mini-internal", "model": "gpt-5.6-codex-mini-internal",
-            "displayName": "Interno", "description": "", "hidden": True,
-            "supportedReasoningEfforts": [], "defaultReasoningEffort": None, "isDefault": False,
-        },
-    ]
-}
-
-
-def test_parse_normaliza_para_o_formato_da_tela():
-    modelos = cm.parse(RESPOSTA)
-    assert modelos[0] == {
-        "id": "gpt-5.6-sol", "name": "GPT-5.6-Sol",
-        "desc": "Latest frontier agentic coding model.",
-        "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
-        "default_effort": "low",
-        "service_tiers": [], "default_service_tier": None, "additional_speed_tiers": [],
-    }
-
-
-def test_parse_preserves_announced_service_tiers_and_filters_hidden():
-    priority = {"id": "priority", "name": "Fast", "description": "Faster responses"}
-    model = {**RESPOSTA["data"][0], "serviceTiers": [priority, {"id": "hidden", "hidden": True}],
-             "defaultServiceTier": "default", "additionalSpeedTiers": ["fast"]}
-    parsed = cm.parse({"data": [model]})[0]
-    assert parsed["service_tiers"] == [priority]
-    assert parsed["default_service_tier"] == "default"
-    assert parsed["additional_speed_tiers"] == ["fast"]
-    legacy = cm.parse({"data": [{**RESPOSTA["data"][0], "additionalSpeedTiers": ["fast"]}]})[0]
-    assert legacy["service_tiers"] == []
-
-
-def test_modelo_escondido_nao_entra():
-    """`hidden` é o marcador do provedor pra modelo que não deve ser oferecido — oferecer um deles
-    faria a sessão nascer num id que o plano do usuário não atende."""
-    assert [m["id"] for m in cm.parse(RESPOSTA)] == ["gpt-5.6-sol", "gpt-5.5"]
-
-
-def test_os_niveis_sao_por_modelo():
-    """A razão de o catálogo existir: lista fechada no código não distingue os dois. Medido em
-    30/08/2026 no codex-cli 0.151.0."""
-    por_id = {m["id"]: m for m in cm.parse(RESPOSTA)}
-    assert "ultra" in por_id["gpt-5.6-sol"]["efforts"]
-    assert "ultra" not in por_id["gpt-5.5"]["efforts"]
-    assert "max" not in por_id["gpt-5.5"]["efforts"]
-
-
-def test_modelo_sem_id_e_pulado_sem_derrubar_a_lista():
-    """Entrada torta de uma versão futura não pode cegar o seletor inteiro — mesma regra do
-    `parse` do pi_catalog."""
-    assert cm.parse({"data": [{"hidden": False}, RESPOSTA["data"][1]]}) == cm.parse(
-        {"data": [RESPOSTA["data"][1]]})
-
-
-def test_resposta_sem_modelo_nenhum_estoura():
-    """rc=0 com zero modelo é falha do provedor, não catálogo vazio: virar lista vazia na tela
-    diria "seu plano não tem modelo", que é outra afirmação."""
-    with pytest.raises(RuntimeError):
-        cm.parse({"data": []})
-
-
-def test_listar_sem_o_binario_tem_erro_proprio(monkeypatch):
-    """"não achei o codex" não é "o codex falhou" — mesma separação do PiAusente."""
-    monkeypatch.setattr(cx.shutil, "which", lambda _: None)
-    with pytest.raises(cm.CodexAusente):
-        cm.listar(fresco=True)
-
-
-class _FakeProc:
-    """O app-server em stdio: escreve o que mandaram nele e devolve as linhas combinadas."""
-
-    def __init__(self, argv, linhas, erro="", stdin=None):
-        self.argv = argv
-        self.escrito = io.StringIO()
-        self.stdin = stdin or self.escrito
-        self.stdout = iter(linhas)
-        self.stderr = io.StringIO(erro)
-        self.morto = False
-
-    def kill(self):
-        self.morto = True
-
-    def wait(self, timeout=None):
-        return 0
-
-
-def _fake_popen(monkeypatch, linhas, erro="", stdin=None):
-    criados = []
-
-    def popen(argv, **kw):
-        p = _FakeProc(argv, linhas, erro, stdin)
-        criados.append(p)
-        return p
-
-    # O processo mora no `codex_appserver` (a mesma máquina serve o catálogo e a cota).
-    monkeypatch.setattr(cx.shutil, "which", lambda _: "/usr/bin/codex")
-    monkeypatch.setattr(cx.subprocess, "Popen", popen)
-    if hasattr(cm._cache, "clear"):
-        cm._cache.clear()
-    else:
-        cm._cache = None
-    return criados
-
-
-def test_listar_fala_json_rpc_e_cacheia(monkeypatch):
-    criados = _fake_popen(monkeypatch, [
-        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}) + "\n",
-        json.dumps({"jsonrpc": "2.0", "method": "remoteControl/status/changed"}) + "\n",
-        json.dumps({"jsonrpc": "2.0", "id": 2, "result": RESPOSTA}) + "\n",
-    ])
-    assert [m["id"] for m in cm.listar(fresco=True)] == ["gpt-5.6-sol", "gpt-5.5"]
-    assert criados[0].argv[:2] == ["/usr/bin/codex", "app-server"]
-    # Processo efêmero: com plugins ligados, cada largada deixava um temporário em CODEX_HOME/.tmp.
-    assert criados[0].argv[2:] == ["-c", "features.plugins=false"]
-    # initialize ANTES do model/list: sem o handshake o app-server recusa o pedido.
-    pedidos = [json.loads(l) for l in criados[0].escrito.getvalue().splitlines()]
-    assert [p["method"] for p in pedidos] == ["initialize", "model/list"]
-    cm.listar()
-    assert len(criados) == 1
-
-
-def test_o_stdin_so_fecha_depois_da_resposta(monkeypatch):
-    """A causa que só apareceu ao vivo (30/08/2026): com `subprocess.run(input=...)` o stdin fecha
-    junto com a entrada, o app-server responde o `initialize` e SAI (rc=0, 0,25s) sem chegar no
-    segundo pedido — a lista voltava vazia com sucesso aparente."""
-    criados = _fake_popen(monkeypatch, [
-        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}) + "\n",
-        json.dumps({"jsonrpc": "2.0", "id": 2, "result": RESPOSTA}) + "\n",
-    ])
-    cm.listar(fresco=True)
-    assert not criados[0].escrito.closed
-
-
-def test_saida_sem_a_resposta_do_pedido_estoura(monkeypatch):
-    """Subir o app-server e não achar a resposta do `model/list` é falha do provedor: sem isto o
-    catálogo voltaria vazio e a tela diria que não há modelo."""
-    _fake_popen(monkeypatch, ["ruido\n"], erro="codex: login expirado")
-    with pytest.raises(RuntimeError, match="login expirado"):
-        cm.listar(fresco=True)
-
-
-def test_broken_pipe_vira_indisponibilidade_e_limpa_processo(monkeypatch):
-    class BrokenStdin(io.StringIO):
-        def write(self, _value):
-            raise BrokenPipeError("pipe fechado")
-
-    criados = _fake_popen(monkeypatch, [], stdin=BrokenStdin())
-    with pytest.raises(cm.CodexIndisponivel) as exc:
-        cm.listar(fresco=True)
-    assert isinstance(exc.value.__cause__, BrokenPipeError)
-    assert criados[0].morto
-
-
-def test_recusa_do_app_server_nao_e_indisponibilidade(monkeypatch):
-    _fake_popen(monkeypatch, [json.dumps({"jsonrpc": "2.0", "id": 2,
-                                          "error": {"code": -32602}}) + "\n"])
-    with pytest.raises(cm.CodexRecusado):
-        cm.listar(fresco=True)
-
-
-def test_catalogo_sem_modelos_tem_resposta_invalida(monkeypatch):
-    _fake_popen(monkeypatch, [json.dumps({"jsonrpc": "2.0", "id": 2,
-                                          "result": {"data": []}}) + "\n"])
-    with pytest.raises(cm.CodexRespostaInvalida):
-        cm.listar(fresco=True)
-
-
-def test_catalogo_com_formato_sem_data_tem_resposta_invalida():
-    with pytest.raises(cm.CodexRespostaInvalida):
-        cm.parse({"data": {"model": "gpt"}})
-
-
-def test_checar_escolha_recusa_nivel_que_o_modelo_nao_lista(monkeypatch):
-    """Medido em 30/08/2026: pedir `ultra` a um `gpt-5.5` NÃO mata o arranque — o binário segue com
-    o dele. Sem esta recusa a sessão nasceria com a escolha descartada em silêncio."""
-    _fake_popen(monkeypatch, [json.dumps({"jsonrpc": "2.0", "id": 2, "result": RESPOSTA}) + "\n"])
-    with pytest.raises(ValueError, match="ultra"):
-        cm.checar_escolha("gpt-5.5", "ultra")
-    cm.checar_escolha("gpt-5.6-sol", "ultra")   # o mesmo nível, no modelo que o lista
-
-
-def test_checar_escolha_recusa_modelo_fora_do_catalogo(monkeypatch):
-    _fake_popen(monkeypatch, [json.dumps({"jsonrpc": "2.0", "id": 2, "result": RESPOSTA}) + "\n"])
-    with pytest.raises(ValueError, match="fora do catalogo"):
-        cm.checar_escolha("gpt-9", None)
-
-
-def test_checar_escolha_sem_modelo_nao_pergunta_nada(monkeypatch):
-    """Nível sem modelo não é checável: o modelo é o do `~/.codex/config.toml`, que este catálogo
-    não diz qual é. Não pode virar recusa nem subprocess à toa."""
-    criados = _fake_popen(monkeypatch, [])
-    cm.checar_escolha(None, "high")
-    assert criados == []
-
-
-def test_processo_sempre_morre(monkeypatch):
-    """O app-server fica vivo enquanto o stdin estiver aberto — sair sem matá-lo deixaria um
-    processo por abertura de tela. Vale inclusive quando a leitura falha."""
-    criados = _fake_popen(monkeypatch, ["ruido\n"])
-    with pytest.raises(RuntimeError):
-        cm.listar(fresco=True)
-    assert criados[0].morto
-
-
-def test_cache_de_catalogo_e_separado_por_codex_home(monkeypatch, tmp_path):
-    respostas = {
-        str((tmp_path / "a").resolve()): {"data": [{"model": "model-a", "hidden": False}]},
-        str((tmp_path / "b").resolve()): {"data": [{"model": "model-b", "hidden": False}]},
-    }
-    chamadas = []
-
-    def perguntar(metodo, *, codex_home=None, **kwargs):
-        chamadas.append((metodo, str(codex_home)))
-        return respostas[str(codex_home.resolve())]
-
-    monkeypatch.setattr(cm.codex_appserver, "perguntar", perguntar)
-    cm._cache.clear()
-    assert cm.listar(fresco=True, codex_home=tmp_path / "a")[0]["id"] == "model-a"
-    assert cm.listar(codex_home=tmp_path / "a")[0]["id"] == "model-a"
-    assert cm.listar(codex_home=tmp_path / "b")[0]["id"] == "model-b"
-    assert [home for _, home in chamadas] == [str((tmp_path / "a").resolve()),
-                                               str((tmp_path / "b").resolve())]
-
-
-def test_checar_escolha_usa_o_catalogo_da_conta_pedida(monkeypatch, tmp_path):
-    def perguntar(metodo, *, codex_home=None, **kwargs):
-        model = "model-a" if codex_home.resolve().name == "a" else "model-b"
-        return {"data": [{"model": model, "hidden": False,
-                           "supportedReasoningEfforts": [{"reasoningEffort": "high"}]}]}
-
-    monkeypatch.setattr(cm.codex_appserver, "perguntar", perguntar)
-    cm._cache.clear()
-    cm.checar_escolha("model-a", "high", codex_home=tmp_path / "a")
-    with pytest.raises(ValueError, match="fora do catalogo"):
-        cm.checar_escolha("model-a", "high", codex_home=tmp_path / "b")
-
-
-def test_invalidar_catalogo_de_uma_conta_nao_apaga_as_outras(tmp_path, monkeypatch):
-    # O cache chaveia pelo caminho resolvido; no Windows o tmp_path cru tem outra caixa.
-    tmp_path = tmp_path.resolve()
-    calls = []
-
-    def perguntar(metodo, *, codex_home=None, **kwargs):
-        calls.append(str(codex_home))
-        return {"data": [{"model": Path(codex_home).name, "hidden": False}]}
-
-    monkeypatch.setattr(cm.codex_appserver, "perguntar", perguntar)
-    cm._cache.clear()
-    cm.listar(fresco=True, codex_home=tmp_path / "a")
-    cm.listar(fresco=True, codex_home=tmp_path / "b")
-    cm.invalidar(tmp_path / "a")
-    cm.listar(codex_home=tmp_path / "b")
-    cm.listar(codex_home=tmp_path / "a")
-    assert calls == [str(tmp_path / "a"), str(tmp_path / "b"), str(tmp_path / "a")]
-
-
-# ------------------------------------------------------------------ rota HTTP (/codex/models)
-
-_LISTAR_HTTP = cm._listar_http
-
-# Recorte real de `/codex/models?client_version=0.159.0` (29/09/2026), já na ordem da resposta.
-_HTTP_MODELOS = {"models": [
-    {"slug": "gpt-5.5", "display_name": "GPT-5.5", "description": "Previous frontier model.",
-     "default_reasoning_level": "medium", "visibility": "list", "priority": 13,
-     "supported_reasoning_levels": [{"effort": e, "description": ""}
-                                    for e in ("low", "medium", "high", "xhigh")]},
-    {"slug": "gpt-5.6-codex-mini-internal", "display_name": "Interno", "description": "",
-     "default_reasoning_level": None, "visibility": "hide", "priority": 4,
-     "supported_reasoning_levels": []},
-    {"slug": "gpt-5.6-sol", "display_name": "GPT-5.6-Sol",
-     "description": "Latest frontier agentic coding model.", "default_reasoning_level": "low",
-     "visibility": "list", "priority": 1,
-     "supported_reasoning_levels": [{"effort": e, "description": ""} for e in
-                                    ("low", "medium", "high", "xhigh", "max", "ultra")]},
-]}
-
-
-@pytest.fixture(autouse=True)
-def _sem_http(monkeypatch):
-    """Os testes do app-server não podem sair pela rede com o ~/.codex real da máquina."""
-    monkeypatch.setattr(cm, "_listar_http", lambda raiz: None)
-
-
-def _http(monkeypatch, tmp_path, status=200, corpo=_HTTP_MODELOS, config=""):
-    (tmp_path / "config.toml").write_text(config, encoding="utf-8")
-    pedidos = []
-    monkeypatch.setattr(cx, "versao", lambda: "0.159.0")
-    monkeypatch.setattr(cx, "backend_get",
-                        lambda caminho, **kw: (pedidos.append(caminho), (status, corpo))[1])
-    return pedidos
-
-
-def test_catalogo_http_igual_ao_do_app_server(monkeypatch, tmp_path):
-    pedidos = _http(monkeypatch, tmp_path)
-    assert _LISTAR_HTTP(tmp_path) == cm.parse(RESPOSTA)
-    assert pedidos == ["/codex/models?client_version=0.159.0"]
-
-
-@pytest.mark.parametrize("caso", ["401", "formato", "provedor"])
-def test_catalogo_http_que_nao_serve_volta_none(monkeypatch, tmp_path, caso):
-    kw = {"401": {"status": 401, "corpo": None}, "formato": {"corpo": {"data": []}},
-          "provedor": {"config": 'model_provider = "deepseek"\n'}}[caso]
-    _http(monkeypatch, tmp_path, **kw)
-    assert _LISTAR_HTTP(tmp_path) is None
-
-
-def test_catalogo_429_nao_cai_no_app_server(monkeypatch, tmp_path):
-    """O app-server bate no mesmo backend: com 429 fica o catálogo guardado, ou o erro."""
-    monkeypatch.setattr(cm, "_listar_http", _LISTAR_HTTP)
-    _http(monkeypatch, tmp_path, status=429, corpo=None)
-    monkeypatch.setattr(cx, "perguntar", lambda *a, **kw: pytest.fail("app-server chamado"))
-    cm._cache.clear()
-    with pytest.raises(cm.CodexIndisponivel):
-        cm.listar(fresco=True, codex_home=tmp_path)
-    cm._cache[cm._cache_key(tmp_path)] = (0.0, [{"id": "guardado"}])
-    assert cm.listar(fresco=True, codex_home=tmp_path) == [{"id": "guardado"}]
-
-
-def test_listar_usa_o_http_antes_do_app_server(monkeypatch, tmp_path):
-    monkeypatch.setattr(cm, "_listar_http", lambda raiz: [{"id": "x"}])
-    monkeypatch.setattr(cx, "perguntar", lambda *a, **kw: pytest.fail("app-server chamado"))
-    assert cm.listar(fresco=True, codex_home=tmp_path) == [{"id": "x"}]
-
-
-def test_http_transports_service_tier_fields(monkeypatch, tmp_path):
-    priority = {"id": "priority", "name": "Fast", "description": "Faster responses"}
-    model = {**_HTTP_MODELOS["models"][2], "service_tiers": [priority],
-             "default_service_tier": "default", "additional_speed_tiers": ["fast"]}
-    _http(monkeypatch, tmp_path, corpo={"models": [model]})
-    parsed = _LISTAR_HTTP(tmp_path)[0]
-    assert parsed["service_tiers"] == [priority]
-    assert parsed["default_service_tier"] == "default"
-    assert parsed["additional_speed_tiers"] == ["fast"]
-
-
-@pytest.mark.parametrize("config,enabled", [
-    ("", True),
-    ("[features]\nfast_mode = false\n", False),
-    ('profile = "work"\n[features]\nfast_mode = true\n[profiles.work.features]\nfast_mode = false\n', False),
-    ('profile = "work"\n[features]\nfast_mode = false\n[profiles.work.features]\nfast_mode = true\n', True),
+from app import codex_models, dictation_bridge
+
+
+def test_catalog_uses_the_requested_account_without_a_python_cache(monkeypatch):
+    models = [{"id": "model-real", "efforts": ["low"], "service_tiers": []}]
+    def bridge(operation, payload):
+        assert operation == "catalog_models"
+        assert payload == {"provider": "codex", "home": str(Path("conta-selecionada")), "fresh": True}
+        return {"models": models, "raw": []}
+    monkeypatch.setattr(dictation_bridge, "request", bridge)
+    assert codex_models.listar(True, codex_home=Path("conta-selecionada")) == models
+
+
+@pytest.mark.parametrize("code,kind", [
+    ("dictation_cli_missing", codex_models.CodexAusente),
+    ("dictation_catalog_rate_limited", codex_models.CodexLimitado),
+    ("dictation_rust_unavailable", codex_models.CodexIndisponivel),
 ])
-@pytest.mark.parametrize("source", ["http", "rpc"])
-def test_catalog_priority_respects_effective_account_profile(monkeypatch, tmp_path, config, enabled, source):
-    priority = {"id": "priority", "name": "Fast", "description": "Faster responses"}
-    model = {**_HTTP_MODELOS["models"][2], "service_tiers": [priority],
-             "additional_speed_tiers": ["fast"]}
-    _http(monkeypatch, tmp_path, corpo={"models": [model]}, config=config)
-    if source == "http":
-        monkeypatch.setattr(cm, "_listar_http", _LISTAR_HTTP)
-        monkeypatch.setattr(cx, "perguntar", lambda *a, **kw: pytest.fail("HTTP deve continuar primeiro"))
-    else:
-        monkeypatch.setattr(cx, "perguntar", lambda *a, **kw: {"data": [
-            {**RESPOSTA["data"][0], "serviceTiers": [priority], "additionalSpeedTiers": ["fast"]}]})
-    cm._cache.clear()
-    parsed = cm.listar(fresco=True, codex_home=tmp_path)[0]
-    assert parsed["service_tiers"] == ([priority] if enabled else [])
-    assert parsed["additional_speed_tiers"] == ["fast"]
-    if enabled:
-        cm.checar_escolha(parsed["id"], None, codex_home=tmp_path, service_tier="priority")
-    else:
-        with pytest.raises(ValueError, match="priority"):
-            cm.checar_escolha(parsed["id"], None, codex_home=tmp_path, service_tier="priority")
+def test_catalog_failure_never_falls_back_to_another_executor(monkeypatch, code, kind):
+    def unavailable(*args):
+        raise dictation_bridge.BridgeError(503, code, "Catálogo indisponível")
+    monkeypatch.setattr(dictation_bridge, "request", unavailable)
+    with pytest.raises(kind, match="Catálogo indisponível"):
+        codex_models.listar()
 
 
-@pytest.mark.parametrize("tiers", [[], [{"id": "default"}]])
-def test_priority_requires_explicit_model_and_announced_capability(monkeypatch, tiers):
-    monkeypatch.setattr(cm, "listar", lambda **kw: [
-        {"id": "gpt-5.6-sol", "efforts": [], "service_tiers": tiers, "additional_speed_tiers": ["fast"]}])
-    with pytest.raises(ValueError, match="modelo"):
-        cm.checar_escolha(None, None, service_tier="priority")
-    with pytest.raises(ValueError, match="priority"):
-        cm.checar_escolha("gpt-5.6-sol", None, service_tier="priority")
+def test_validation_error_from_rust_is_a_value_error_for_existing_consumers(monkeypatch):
+    def bridge(operation, payload):
+        if operation == "catalog_models":
+            return {"models": [{"id": "model-real", "efforts": ["low"]}]}
+        assert operation == "validate_model"
+        assert payload["effort"] == "high"
+        raise dictation_bridge.BridgeError(400, "dictation_model_unavailable", "Nível fora do suporte")
+    monkeypatch.setattr(dictation_bridge, "request", bridge)
+    with pytest.raises(ValueError, match="Nível fora do suporte"):
+        codex_models.checar_escolha("model-real", "high")
 
 
-def test_default_without_model_does_not_require_catalog(monkeypatch):
-    monkeypatch.setattr(cm, "listar", lambda **kw: pytest.fail("Standard não depende de capacidade"))
-    cm.checar_escolha(None, None, service_tier="default")
-
-
-def test_raw_catalog_is_separate_from_ui_and_scoped_to_account_version_config(tmp_path, monkeypatch):
-    cm._raw_catalogs.clear()
-    calls = []
-    def backend_get(path, *, codex_home):
-        calls.append((path, codex_home))
-        return 200, {"models": [{"slug": "model", "context_window": 272000,
-                                "input_modalities": ["text", "image"]}]}
-    monkeypatch.setattr(cx, "backend_get", backend_get)
-    first = tmp_path / "one"
-    first.mkdir()
-    raw = cm.raw_model(first, {}, "model", "0.159.3")
-    raw["context_window"] = 1
-    assert cm.raw_model(first, {}, "model", "0.159.3")["context_window"] == 272000
-    assert len(calls) == 1
-    cm.raw_model(tmp_path / "two", {}, "model", "0.159.3")
-    cm.raw_model(first, {}, "model", "0.159.4")
-    (first / "config.toml").write_text('model = "model"\n')
-    cm.raw_model(first, {}, "model", "0.159.3")
-    assert len(calls) == 4
-
-
-def test_raw_catalog_does_not_use_minicatalog_or_custom_provider_defaults(tmp_path, monkeypatch):
-    monkeypatch.setattr(cm, "listar", lambda **kw: pytest.fail("catálogo de UI não comprova capacidade"))
-    monkeypatch.setattr(cx, "backend_get", lambda *a, **kw: pytest.fail("outro provedor"))
-    with pytest.raises(cm.CodexRespostaInvalida, match="capacity_unknown"):
-        cm.raw_model(tmp_path, {"model_provider": "custom"}, "model", "0.159.3")
-
-
-def test_explicit_local_catalog_matches_exact_model(tmp_path, monkeypatch):
-    catalog = tmp_path / "catalog.json"
-    catalog.write_text(json.dumps({"models": [{"slug": "exact", "context_window": 12345}]}))
-    monkeypatch.setattr(cx, "backend_get", lambda *a, **kw: pytest.fail("catálogo local selecionado"))
-    config = {"model_catalog_json": str(catalog), "model_provider": "local"}
-    assert cm.raw_model(tmp_path, config, "exact", "0.159.3")["context_window"] == 12345
-    with pytest.raises(cm.CodexRespostaInvalida, match="capacity_unknown"):
-        cm.raw_model(tmp_path, config, "unknown", "0.159.3")
+def test_raw_capacity_query_preserves_account_configuration_and_cli_version(monkeypatch):
+    model = {"slug": "model-real", "context_window": 200000}
+    def bridge(operation, payload):
+        assert operation == "raw_model"
+        assert payload == {"home": "conta-selecionada", "config": {"model_provider": "openai"},
+                           "model": "model-real", "version": "0.162.1"}
+        return {"model": model}
+    monkeypatch.setattr(dictation_bridge, "request", bridge)
+    assert codex_models.raw_model(Path("conta-selecionada"), {"model_provider": "openai"}, "model-real", "0.162.1") == model

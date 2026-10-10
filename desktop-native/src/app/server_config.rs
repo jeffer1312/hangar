@@ -90,7 +90,7 @@ const TUNES: [Tune; 4] = [
 struct Field { key: &'static str, label: &'static str, help: &'static str, icon: IconName, kind: Kind, page: Page }
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
-const FIELDS: [Field; 32] = [
+const FIELDS: [Field; 33] = [
     Field { key: "upload_retention_days", label: "server_keep_attachments", help: "server_keep_attachments_help", icon: IconName::Paperclip,
         kind: Kind::Number("server_days"), page: Page::Attachments },
     Field { key: "notify_finished", label: "server_notify_finished", help: "server_notify_finished_help", icon: IconName::CircleCheck,
@@ -129,6 +129,7 @@ const FIELDS: [Field; 32] = [
     Field { key: "ditado_vocabulario", label: "voice_vocabulary", help: "voice_vocabulary_help", icon: IconName::BookOpen, kind: Kind::Text,
         page: Page::Voice },
     Field { key: "llm_base_url", label: "voice_llm_endpoint", help: "voice_llm_endpoint_help", icon: IconName::Globe, kind: Kind::Text, page: Page::Voice },
+    Field { key: "dictation_include_recent_messages", label: "voice_recent_messages", help: "voice_recent_messages_help", icon: IconName::MessageSquare, kind: Kind::Toggle, page: Page::Voice },
     Field { key: "llm_api_key", label: "voice_llm_key", help: "voice_llm_key_help", icon: IconName::Key, kind: Kind::Secret, page: Page::Voice },
     Field { key: "llm_model", label: "voice_llm_model", help: "voice_llm_model_help", icon: IconName::Bot, kind: Kind::Text, page: Page::Voice },
     Field { key: "llm_reasoning_effort", label: "voice_llm_effort", help: "voice_llm_effort_help", icon: IconName::SlidersHorizontal,
@@ -243,6 +244,8 @@ pub(in crate::app) struct ServerConfig {
     provider_inputs: Vec<(String, [Entity<InputState>; 7], Vec<Subscription>)>,
     /// Espera de cota de cada serviço, relida ao abrir a Voz.
     provider_status: Remote<Vec<ProviderStatus>>,
+    dictation_catalog: Remote<Value>,
+    dictation_catalog_target: Option<String>,
     provider_tests: std::collections::HashMap<String, Remote<String>>,
     /// Serviços da última confirmação do servidor. Sobrevive à limpeza de `fields` ao reler: é com ela que um teste é comparado.
     confirmed_providers: Vec<Value>,
@@ -282,6 +285,7 @@ pub(super) enum ServerConfigReply {
     Usage(u64, Result<Value, Failure>),
     ProviderStatus(u64, Result<Value, Failure>),
     ProviderTest(String, u64, Option<Result<Value, Failure>>),
+    DictationModels(u64, String, Result<Value, Failure>),
 }
 
 impl ServerConfig {
@@ -415,8 +419,15 @@ impl ServerConfig {
     /// Estado da organização: com endpoint próprio vale a chave dele; sem, o padrão reusa a chave do serviço único, que a
     /// lista de transcrição não muda.
     fn cleanup_status(&self) -> Option<&'static str> {
-        if self.filled("llm_base_url") { return self.key_set("llm_api_key").then_some("voice_status_custom"); }
-        (self.legacy_status() == Some("voice_status_on")).then_some("voice_status_default")
+        match text_of(&self.current("dictation_organization_mode")).as_str() {
+            "harness"=>Some("voice_organization_harness"),
+            "external_api"=>self.key_set("llm_api_key").then_some("voice_status_custom"),
+            _=>Some("voice_organization_none"),
+        }
+    }
+
+    fn organization_mode(&self)->&'static str {
+        match self.current("dictation_organization_mode").as_str(){Some("harness")=>"harness",Some("external_api")=>"external_api",_=>"none"}
     }
 
     /// Lista de serviços de transcrição (rascunho ou servidor).
@@ -762,6 +773,22 @@ impl Hangar {
         cx.notify();
     }
 
+    fn load_dictation_models(&mut self,cx:&mut Context<Self>) {
+        if self.server_config.organization_mode()!="harness"||self.server_config.dictation_catalog.loading{return;}
+        let Some(api)=self.api.clone() else{return;};
+        let Some(session)=self.selected.as_ref().filter(|_|self.session_api().is_some_and(|target|target.identity()==api.identity())) else {
+            let seq=self.server_config.dictation_catalog.start();
+            self.server_config.dictation_catalog.finish(seq,Err(tr("voice_models_destination")));cx.notify();return;
+        };
+        let target=format!("{}|{:?}|{:?}",session.name,session.lifecycle_id,session.conta);
+        let name=session.name.clone();
+        let seq=self.server_config.dictation_catalog.start();
+        self.server_config.dictation_catalog_target=Some(target.clone());
+        let done=self.server_config_send_later();
+        self.runtime.spawn(async move{done(ServerConfigReply::DictationModels(seq,target,api.dictation_models(&name).await)).await;});
+        cx.notify();
+    }
+
     fn quiet_dirty(&self, cx: &App) -> bool {
         let q = &self.server_config.quiet;
         q.inputs.as_ref().is_some_and(|[start, end]| [start, end].iter().zip(&q.loaded).any(|(i, l)| i.read(cx).value() != l.as_str()))
@@ -813,6 +840,7 @@ impl Hangar {
                     s.open_filled();
                     s.follow_readers();
                     self.fill_config_inputs(window, cx);
+                    self.load_dictation_models(cx);
                 }
             }
             ServerConfigReply::Saved(seq, sent, result) => {
@@ -834,6 +862,7 @@ impl Hangar {
                         s.follow_readers();
                         s.saved = Some(seq);
                         self.fill_config_inputs(window, cx);
+                        self.load_dictation_style(cx);
                         cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(Duration::from_millis(2500)).await;
                             let _ = this.update(cx, |this, cx| if this.server_config.saved == Some(seq) { this.server_config.saved = None; cx.notify(); });
@@ -899,6 +928,14 @@ impl Hangar {
                     (picker, sub)
                 });
                 self.show_voice(window, cx);
+            }
+            ServerConfigReply::DictationModels(seq,target,result)=>{
+                let current=self.selected.as_ref().map(|session|format!("{}|{:?}|{:?}",session.name,session.lifecycle_id,session.conta));
+                if current.as_deref()!=Some(target.as_str()){
+                    self.server_config.dictation_catalog.finish(seq,Err(tr("voice_models_destination")));return;
+                }
+                let result=result.map_err(|error|Self::failure(&error)).and_then(|value|if value["models"].is_array(){Ok(value)}else{Err(tr("invalid_response"))});
+                self.server_config.dictation_catalog.finish(seq,result);
             }
             ServerConfigReply::Usage(seq, result) => {
                 let parsed = result.map_err(|e| Self::failure(&e)).map(|r| ["usados", "limite"].map(|k| r.get(k).and_then(Value::as_i64)));
@@ -1448,15 +1485,57 @@ impl Hangar {
             .when(s.open[0], |el| el.child(div().mt(px(8.)).child(rows(SECTIONS[0], cx))))
             .children(self.render_providers(cx))
             .child(div().mt(px(28.)).mb(px(10.)).text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(tr("voice_after")))
-            .child(settings_box().child(self.hands_free_row(cx)).child(self.style_row(cx)).child(self.config_row(field("ditado_vocabulario"), cx)))
+            .child(settings_box().child(self.hands_free_row(cx)).child(self.config_row(field("ditado_vocabulario"), cx)))
             .when_some(self.appearance_note.clone(), |el, note| el.child(div().id("voice-hands-free-save-error").role(Role::Alert)
                 .mt_2().text_sm().text_color(theme::danger()).whitespace_normal().child(note)))
             .child(self.voice_head("voice_cleanup", "voice_cleanup_help", s.cleanup_status()))
-            .child(div().flex().child(self.section_toggle(1, "voice_cleanup_other", cx)))
-            .when(s.open[1], |el| el.child(div().mt(px(8.)).child(rows(SECTIONS[1], cx)))
+            .child(self.organization_row(cx))
+            .when(s.organization_mode()!="none",|el|el.child(settings_box().child(self.style_row(cx)).child(self.config_row(field("dictation_include_recent_messages"),cx))))
+            .when(s.organization_mode()=="harness",|el|el.child(self.harness_model_rows(cx)))
+            .when(s.organization_mode()=="external_api",|el|el.child(div().mt(px(8.)).child(rows(SECTIONS[1], cx)))
                 .child(div().mt(px(8.)).flex().child(self.section_toggle(2, "voice_briefing_own", cx)))
                 .when(s.open[2], |el| el.child(div().mt(px(8.)).child(rows(SECTIONS[2], cx)))))
             .child(self.render_read_aloud(cx))
+    }
+
+    fn organization_row(&self,cx:&mut Context<Self>)->Div {
+        let modes=["none","harness","external_api"];
+        let labels=modes.map(|mode|tr(&format!("voice_organization_{mode}"))).to_vec();
+        let hints=modes.map(|mode|tr(&format!("voice_organization_{mode}_hint"))).to_vec();
+        let selected=modes.iter().position(|mode|*mode==self.server_config.organization_mode()).unwrap_or(0);
+        let available=if self.server_config.fields.contains_key("dictation_organization_mode"){3}else{0};
+        settings_box().p_4().child(segments_with_hints("voice-organization-mode",&labels,&hints,selected,available,false,tr("settings_next_version"),
+            move|this,index,_,cx|{this.server_config.stage("dictation_organization_mode",json!(modes[index]));this.load_dictation_models(cx);cx.notify();},cx))
+    }
+
+    fn harness_model_rows(&self,cx:&mut Context<Self>)->Div {
+        let state=&self.server_config;
+        let catalog=state.dictation_catalog.ok();
+        let mut body=settings_box().p_4().flex().flex_col().gap_4();
+        for (provider,key) in [("claude","dictation_claude_model"),("codex","dictation_codex_model")] {
+            let selected=text_of(&state.current(key));
+            let models=catalog.filter(|catalog|catalog["provider"]==provider).and_then(|catalog|catalog["models"].as_array()).cloned().unwrap_or_default();
+            let label=models.iter().find(|model|model["id"].as_str()==Some(selected.as_str()))
+                .and_then(|model|model["name"].as_str()).map(str::to_owned).unwrap_or_else(||if selected.is_empty(){tr("voice_model_choose")}else{selected.clone()});
+            let entity=cx.entity().downgrade();
+            let disabled=models.is_empty()||!state.fields.contains_key(key)||state.dictation_catalog.loading;
+            body=body.child(div().flex().flex_col().gap_2()
+                .child(div().font_weight(FontWeight::MEDIUM).child(tr(&format!("voice_harness_model_{provider}"))))
+                .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("voice_harness_model_help")))
+                .child(Button::new(SharedString::from(format!("voice-model-{provider}"))).outline().label(label).disabled(disabled)
+                    .dropdown_menu(move|menu,_,_|models.iter().cloned().fold(menu,|menu,model|{
+                        let id=model["id"].as_str().unwrap_or("").to_owned();
+                        let label=model["name"].as_str().unwrap_or(&id).to_owned();
+                        let owner=entity.clone();let checked=id==selected;
+                        menu.item(PopupMenuItem::new(label).checked(checked).on_click(move|_,_,cx|{let _=owner.update(cx,|this,cx|{this.server_config.stage(key,json!(id));cx.notify();});}))
+                    }))));
+        }
+        body.child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("voice_claude_oauth_limit")))
+            .when(state.dictation_catalog.loading,|el|el.child(div().id("voice-models-loading").role(Role::Status).child(tr("voice_models_loading"))))
+            .when_some(state.dictation_catalog.value.as_ref().and_then(|value|value.as_ref().err()).cloned(),|el,error|el.child(div().id("voice-models-error").role(Role::Alert).text_sm().text_color(theme::warning()).whitespace_normal().child(error)))
+            .when(catalog.is_some_and(|catalog|catalog["models"].as_array().is_some_and(Vec::is_empty)),|el|el.child(tr("voice_models_empty")))
+            .child(Button::new("voice-models-refresh").ghost().small().label(tr("voice_models_refresh")).disabled(state.dictation_catalog.loading)
+                .on_click(cx.listener(|this,_,_,cx|this.load_dictation_models(cx))))
     }
 
     /// Serviços de transcrição em ordem: o primeiro transcreve, e quem falha ou fica sem cota passa a vez. Servidor cuja
@@ -2029,15 +2108,24 @@ mod tests {
         let mut s = ServerConfig::default();
         for key in ["groq_api_key", "llm_api_key"] { s.fields.insert(key.into(), json!({"valor": "", "definido": false})); }
         for key in ["transcription_base_url", "llm_base_url"] { s.fields.insert(key.into(), json!({"valor": ""})); }
+        s.fields.insert("dictation_organization_mode".into(),json!({"valor":"external_api"}));
         assert_eq!((s.transcribe_status(), s.cleanup_status()), (None, None));
         s.fields.insert("groq_api_key".into(), json!({"valor": "sint••••••••wxyz", "definido": true}));
-        assert_eq!((s.transcribe_status(), s.cleanup_status()), (Some("voice_status_on"), Some("voice_status_default")));
+        assert_eq!((s.transcribe_status(), s.cleanup_status()), (Some("voice_status_on"), None));
         s.stage("transcription_base_url", json!("http://x/v1"));
         assert_eq!((s.transcribe_status(), s.cleanup_status()), (Some("voice_status_custom"), None), "o padrão só reusa a chave do padrão");
         s.stage("llm_base_url", json!("http://y/v1"));
         assert_eq!(s.cleanup_status(), None, "endpoint próprio sem chave própria");
         s.fields.insert("llm_api_key".into(), json!({"valor": "sint••••••••abcd", "definido": true}));
         assert_eq!(s.cleanup_status(), Some("voice_status_custom"));
+    }
+
+    #[test]
+    fn organization_is_off_even_when_an_old_external_service_is_configured() {
+        let mut config = ServerConfig::default();
+        config.fields.insert("llm_base_url".into(), json!({"valor":"https://exemplo.invalid/v1"}));
+        config.fields.insert("llm_api_key".into(), json!({"valor":"masc••••••••abcd", "definido":true}));
+        assert_eq!(config.cleanup_status(), Some("voice_organization_none"));
     }
 
     #[test]

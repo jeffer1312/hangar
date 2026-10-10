@@ -366,11 +366,17 @@ criação de sessão sob escopo do systemd: **leia "Regras vigentes" de `docs/de
 - **Transcrição, organização do texto e leitura são capacidades separadas.** A tela não leva nome
   de provedor no rótulo da transcrição; endpoint próprio de áudio nunca compartilha sua chave com
   o LLM padrão, e controles de voz só aparecem dentro do provedor que os oferece.
+- **Organização do ditado nasce desligada e pertence ao Rust.** None conserva o STT; harness usa
+  conta e modelo de organização próprios da conversa de destino; API externa usa sua chave própria.
+  Falha conserva o cru e mostra a causa, sem reserva Python ou troca de conta/modelo. Referência das
+  três últimas mensagens é opt-in e congelada por tentativa. O executor mínimo não leva ferramentas,
+  plugins, skills, hooks, MCP nem instruções do projeto; Claude OAuth fica sem suporte nesta versão.
+  Contrato e prova em [plataforma.md](docs/decisoes/plataforma.md#organização-opcional-do-ditado-no-rust).
 - **Transcrição é do Rust; Enviar encerra o ditado.** Configuração local aponta para executável e
   modelo instalados pelo usuário na máquina do servidor selecionado. O Hangar inicia e encerra
   o whisper.cpp em loopback, sem instalar componentes. Texto, imagem, arquivo e ditado passam
   pela mesma parada, esperando transcrição e organização antes de enviar. O Python conserva a
-  borda HTTP e a organização compartilhada, sem motor STT de reserva. Contrato e evidência em
+  borda HTTP e o transporte da organização, sem motor STT de reserva. Contrato e evidência em
   [plataforma.md](docs/decisoes/plataforma.md#transcrição-no-rust-e-envio-encerra-o-ditado).
 - **Cota tem cache em disco e respeita 429**: restart do backend não relê todas as contas, e
   fonte que levou 429 espera 10 min antes de insistir.

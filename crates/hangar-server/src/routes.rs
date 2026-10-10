@@ -35,6 +35,7 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub dictation_models: Arc<crate::dictation::catalog::Models>,
     pub transcription: Arc<crate::transcription::service::TranscriptionService>,
     pub transcription_slots: Arc<tokio::sync::Semaphore>,
     pub accounts: crate::accounts::AccountService,
@@ -114,6 +115,7 @@ impl AppState {
         AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), groups, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             transcription: Arc::default(),
+            dictation_models: Arc::default(),
             transcription_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             workspace_read_slots: Arc::new(tokio::sync::Semaphore::new(8)),
             workspace_meta_slots: Arc::new(tokio::sync::Semaphore::new(4)),

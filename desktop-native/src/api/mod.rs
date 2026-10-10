@@ -54,6 +54,20 @@ impl std::fmt::Debug for Shared { fn fmt(&self, f: &mut std::fmt::Formatter<'_>)
 #[derive(Clone)]
 pub struct Api { client: Client, plain: Client, base: Url, token: String }
 
+/// Escolha capturada antes do ditado; a resposta não troca seu modo, modelo ou destino.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DictationOptions {
+    pub mode: String,
+    pub model: Option<String>,
+    pub generation: Option<String>,
+    pub account: Option<String>,
+    pub rust_capable: bool,
+    pub include_recent_messages: bool,
+}
+impl Default for DictationOptions {
+    fn default()->Self {Self{mode:"none".into(),model:None,generation:None,account:None,rust_capable:false,include_recent_messages:false}}
+}
+
 impl Api {
     pub fn server_address(&self) -> String {
         format!("{}{}", self.base.origin().ascii_serialization(), self.base.path().trim_end_matches('/'))
@@ -274,6 +288,23 @@ impl Api {
         Self::transcribed(self.client.post(self.transcribe_url(Some(name), Some(filename), clean, style))).await
     }
 
+    pub async fn dictate(&self,name:Option<&str>,filename:&str,bytes:Vec<u8>,style:Option<&str>,options:&DictationOptions)->Result<Value,Failure> {
+        if bytes.len() as u64>MAX_BYTES{return Err(Failure::local("attach_too_big"));}
+        let request=self.client.post(self.transcribe_url_with_options(name,None,true,style,options))
+            .header(header::CONTENT_TYPE,crate::composer::mime_for(filename)).header("X-Filename",crate::composer::encode_component(filename)).body(bytes);
+        Self::transcribed(request).await
+    }
+
+    pub async fn dictate_saved(&self,name:&str,filename:&str,style:Option<&str>,options:&DictationOptions)->Result<Value,Failure> {
+        Self::transcribed(self.client.post(self.transcribe_url_with_options(Some(name),Some(filename),true,style,options))).await
+    }
+
+    pub async fn dictation_models(&self,session:&str)->Result<Value,Failure> {
+        let response=self.client.get(self.server_url(&["dictation","models"],&[("session",session)]))
+            .timeout(Duration::from_secs(60)).send().await.map_err(|_|Failure::transport(false))?;
+        Self::checked(response,false).await?.json().await.map_err(|_|Failure::local("invalid_response"))
+    }
+
     pub async fn test_transcription_provider(&self, id: &str, filename: &str, bytes: Vec<u8>) -> Result<Value, Failure> {
         if bytes.len() as u64 > MAX_BYTES { return Err(Failure::local("attach_too_big")); }
         Self::transcribed(self.client.post(self.server_url(&["transcription", "providers", id, "test"], &[]))
@@ -282,18 +313,32 @@ impl Api {
     }
 
     fn transcribe_url(&self, name: Option<&str>, saved: Option<&str>, clean: bool, style: Option<&str>) -> Url {
+        self.transcribe_url_with_options(name,saved,clean,style,&DictationOptions::default())
+    }
+
+    fn transcribe_url_with_options(&self,name:Option<&str>,saved:Option<&str>,clean:bool,style:Option<&str>,options:&DictationOptions)->Url {
         let mut url = match name {
             Some(name) => self.endpoint(Some(name), Some("transcribe")),
             None => self.server_url(&["dictation", "transcribe"], &[]),
         };
-        url.query_pairs_mut().append_pair("limpar", if clean { "1" } else { "0" });
-        if let Some(style) = style.filter(|style| clean && !style.is_empty()) { url.query_pairs_mut().append_pair("estilo", style); }
+        let organize=clean&&options.rust_capable;
+        url.query_pairs_mut().append_pair("limpar",if organize{"1"}else{"0"});
+        if clean {
+            url.query_pairs_mut().append_pair("organization_mode",&options.mode);
+            if options.mode!="none" {
+                url.query_pairs_mut().append_pair("include_recent_messages",if options.include_recent_messages{"true"}else{"false"});
+                if let Some(style)=style.filter(|style|organize&&!style.is_empty()){url.query_pairs_mut().append_pair("estilo",style);}
+                if let Some(model)=&options.model {url.query_pairs_mut().append_pair("organization_model",model);}
+            }
+            if let Some(generation)=&options.generation {url.query_pairs_mut().append_pair("generation",generation);}
+            if let Some(account)=&options.account {url.query_pairs_mut().append_pair("organization_account",account);}
+        }
         if let Some(file) = saved { url.query_pairs_mut().append_pair("arquivo", file); }
         url
     }
 
     async fn transcribed(request: reqwest::RequestBuilder) -> Result<Value, Failure> {
-        let r = request.timeout(Duration::from_secs(300)).send().await.map_err(|_| Failure::transport(true))?;
+        let r = request.timeout(Duration::from_secs(360)).send().await.map_err(|_| Failure::transport(true))?;
         Self::checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
@@ -761,6 +806,17 @@ mod tests {
     use core::prelude::v1::test;
 
     #[test]
+    fn dictation_client_defaults_to_no_organization_without_loading_any_model() {
+        let api = Api::new("http://127.0.0.1:8765", "fixture-owner").unwrap();
+        let url = api.transcribe_url(Some("destination"), None, true, Some("briefing"));
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query.get("organization_mode").map(String::as_str), Some("none"));
+        assert_eq!(query.get("limpar").map(String::as_str), Some("0"));
+        assert!(!query.contains_key("estilo"));
+        assert!(!query.contains_key("organization_model"));
+    }
+
+    #[test]
     fn update_channel_errors_translate_with_branch_parameter() {
         let message = failure_detail(Some(json!({"detail": {"code": "update_channel_missing",
             "params": {"branch": "test/channel"}, "msg": "server fallback"}})), 400);
@@ -898,10 +954,11 @@ mod tests {
     #[test]
     fn saved_audio_is_transcribed_by_name_and_fresh_audio_carries_no_name() {
         let api = Api::new("http://127.0.0.1:8765", "t").unwrap();
-        let url = api.transcribe_url(Some("minha sessão"), Some("ditado 1.wav"), true, Some("prosa"));
+        let options=DictationOptions{mode:"external_api".into(),rust_capable:true,..Default::default()};
+        let url = api.transcribe_url_with_options(Some("minha sessão"), Some("ditado 1.wav"), true, Some("prosa"),&options);
         assert!(url.path().ends_with("/api/sessions/minha%20sess%C3%A3o/transcribe"), "{url}");
         let query: Vec<(String, String)> = url.query_pairs().into_owned().collect();
-        assert_eq!(query, [("limpar".to_owned(), "1".to_owned()), ("estilo".to_owned(), "prosa".to_owned()),
+        assert_eq!(query, [("limpar".to_owned(), "1".to_owned()), ("organization_mode".to_owned(),"external_api".to_owned()),("include_recent_messages".to_owned(),"false".to_owned()),("estilo".to_owned(), "prosa".to_owned()),
             ("arquivo".to_owned(), "ditado 1.wav".to_owned())]);
         let absolute = api.transcribe_url(Some("s"), Some("/home/u/.hangar/uploads/p-1a/s1/ditado.wav"), false, None);
         assert_eq!(absolute.query_pairs().find(|(k, _)| k == "arquivo").map(|(_, v)| v.into_owned()).as_deref(),

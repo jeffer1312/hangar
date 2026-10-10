@@ -295,6 +295,7 @@ class Settings(BaseSettings):
     dictation_organization_mode: str = "none"
     dictation_claude_model: str = ""
     dictation_codex_model: str = ""
+    dictation_include_recent_messages: bool = False
     # A preferência salva também é lida pelos instaladores, sem depender do backend em execução.
     claude_statusline_update: bool = True
     # Caminho do plugin do Hangar nas sessões Claude (mods do Claude Code). Nasce ligado; desligado,

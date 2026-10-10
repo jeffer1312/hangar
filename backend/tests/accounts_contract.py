@@ -358,7 +358,7 @@ def _worker() -> None:
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
     from fastapi.testclient import TestClient
-    from app import api, codex_contas_login, credenciais, account_bridge
+    from app import api, codex_contas_login, credenciais, account_bridge, dictation_bridge
     import psutil
     from types import SimpleNamespace
     from app import internal_api, runtime_coordinator
@@ -511,19 +511,22 @@ def _worker() -> None:
         return {"result": harness_saude.consertar(body["action"])}
 
 
-    @app.post("/__contract__/codex-model-cache")
-    def codex_model_cache(body: dict | None = None):
-        from app import codex_models
-        account = (body or {}).get("account", "alpha")
-        key = codex_models._cache_key(root / (".codex" if account == "default" else ".codex-" + account))
-        codex_models._cache[key] = (0, [])
-        return {"cached": key in codex_models._cache}
+    model_invalidations = []
+    original_catalog_request = dictation_bridge.request
+    def catalog_transport(operation, payload):
+        if operation == "invalidate_models":
+            model_invalidations.append(payload["home"])
+            return {}
+        return original_catalog_request(operation, payload)
 
-    @app.get("/__contract__/codex-model-cache")
-    def codex_model_cached(account: str = "alpha"):
-        from app import codex_models
-        home = root / (".codex" if account == "default" else ".codex-" + account)
-        return {"cached": codex_models._cache_key(home) in codex_models._cache}
+    @app.post("/__contract__/codex-model-invalidation")
+    def reset_model_invalidations():
+        model_invalidations.clear()
+        return {"homes": list(model_invalidations)}
+
+    @app.get("/__contract__/codex-model-invalidation")
+    def model_invalidation_calls():
+        return {"homes": list(model_invalidations)}
 
     @app.get("/__contract__/claude-auth")
     def claude_auth(path: str):
@@ -756,6 +759,7 @@ def _worker() -> None:
                 child.poll() is None for child in children) else {}), \
             patch.object(account_bridge, "system_processes", side_effect=lambda: [
                 psutil.Process(child.pid) for child in children if child.poll() is None]), \
+            patch.object(dictation_bridge, "request", side_effect=catalog_transport), \
             patch("subprocess.Popen", side_effect=deny_external), \
             patch("socket.create_connection", side_effect=private_connection), TestClient(app, client=("127.0.0.1", 32123)) as client:
         client.portal.call(service.aquecer)
