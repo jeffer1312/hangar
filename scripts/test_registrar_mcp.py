@@ -49,6 +49,15 @@ def _hangar(texto: str) -> dict:
     return dados["mcp_servers"]["hangar"]
 
 
+def test_liberacao_do_hangar_send_entra_uma_vez_e_preserva_o_resto():
+    dados = {"permissions": {"allow": ["Bash(git:*)"], "defaultMode": "default"}, "model": "opus"}
+    assert rm.com_permissoes(dados) is True
+    assert dados["permissions"] == {"allow": ["Bash(git:*)", *rm.PERMISSOES], "defaultMode": "default"}
+    assert dados["model"] == "opus"
+    assert rm.com_permissoes(dados) is False
+    assert rm.com_permissoes({"permissions": []}) is None
+
+
 def test_arquivo_vazio_recebe_o_bloco():
     novo = rm.codex_config("", BLOCO)
     assert novo == BLOCO
