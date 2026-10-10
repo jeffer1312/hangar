@@ -94,6 +94,27 @@ def pytest_runtest_teardown(item, nextitem):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _git_sem_manutencao_automatica():
+    # Depois de um commit o git dispara `maintenance run --auto` em segundo plano, que cria e apaga
+    # `.git/objects/maintenance.lock` enquanto o teste copia ou apaga o repositório: com a suíte em
+    # paralelo, o copytree pegava o arquivo sumindo. Nenhum teste depende da manutenção.
+    chaves = {"maintenance.auto": "false", "gc.auto": "0"}
+    nomes = ["GIT_CONFIG_COUNT", *(f"GIT_CONFIG_{t}_{i}" for i in range(len(chaves)) for t in ("KEY", "VALUE"))]
+    anterior = {nome: os.environ.get(nome) for nome in nomes}
+    os.environ["GIT_CONFIG_COUNT"] = str(len(chaves))
+    for i, (chave, valor) in enumerate(chaves.items()):
+        os.environ[f"GIT_CONFIG_KEY_{i}"], os.environ[f"GIT_CONFIG_VALUE_{i}"] = chave, valor
+    try:
+        yield
+    finally:
+        for nome, valor in anterior.items():
+            if valor is None:
+                os.environ.pop(nome, None)
+            else:
+                os.environ[nome] = valor
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _sem_integracao_codex_real():
     # Lifespan e lançadores de teste não podem reconciliar o perfil real. Testes explícitos
     # instanciam o serviço em tmp_path e exercitam reconciliar sem depender deste gatilho.
