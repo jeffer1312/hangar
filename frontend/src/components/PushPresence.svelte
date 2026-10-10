@@ -23,13 +23,17 @@
     { v: 'away' as const, label: m.push_presence_away(), aria: m.push_presence_away() },
   ]);
 
-  onMount(async () => {
+  async function load() {
+    loading = true;
     results = await loadPresence(listOwnServers());
     loading = false;
-  });
+  }
+
+  onMount(load);
 
   async function pick(mode: PresenceMode) {
-    if (saving || mode === shown?.mode) return;
+    // Só pula quando todas já estão no modo: tocar no destacado alinha a máquina que ficou diferente.
+    if (saving || results.every((r) => r.presence?.mode === mode)) return;
     saving = true;
     try {
       results = await setPresenceAll(listOwnServers(), mode);
@@ -49,6 +53,9 @@
       {#if shown}
         <SegmentedPicker value={shown.mode} {options} ariaLabel={m.push_presence_title()}
                          describedBy="pp-help" disabled={saving} onPick={(v) => void pick(v)} />
+      {:else}
+        <!-- Todas falharam (rede fora): sem isto o controle sumia até reabrir a tela. -->
+        <button type="button" class="pp-retry" onclick={() => void load()}>{m.config_server_tentar_de_novo()}</button>
       {/if}
     </div>
     <div id="pp-help" class="pp-help">
@@ -78,4 +85,8 @@
   .pp-msg { padding: 0 var(--space-4); }
   .pp .pp-msg { padding: 0; }
   .pp-msg.erro { color: var(--error); }
+  .pp-retry {
+    background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px);
+    padding: var(--space-1) var(--space-3); color: var(--text-primary); font-size: var(--text-xs);
+  }
 </style>
