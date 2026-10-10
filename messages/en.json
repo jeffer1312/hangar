@@ -2533,7 +2533,7 @@
   "criar_projeto_indisponivel": "The remembered project is no longer available. Choose another folder.",
   "criar_projeto_salvar_erro": "Folder selected, but the preference could not be saved.",
   "criar_motores_erro": "Could not load the providers.",
-  "criar_conta_apagada_lista": "Account {nome} deleted, but couldn't update the list — reload the screen.",
+  "criar_conta_lista_falhou": "Couldn't update the list — reload the screen.",
   "criar_conta_apagada": "Account {nome} deleted.",
   "criar_apagar_conta_erro": "couldn't delete the account",
   "criar_conta_lista_erro": "Account created, but couldn't update the list — reload the screen.",

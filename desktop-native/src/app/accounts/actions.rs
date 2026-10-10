@@ -52,7 +52,8 @@ pub(in crate::app) enum ActionReply {
     Step(u64, Result<Value, Failure>),
     Code(u64, Result<Value, Failure>, oneshot::Sender<bool>),
     Stopped(u64, bool, Result<Value, Failure>),
-    Changed(String, String, ChangeKind, Result<Value, Failure>),
+    /// O `bool` diz se a exclusão pediu para guardar as conversas.
+    Changed(String, String, ChangeKind, bool, Result<Value, Failure>),
     Created(String, Result<Value, Failure>),
 }
 
@@ -406,7 +407,7 @@ impl Hangar {
                     api.server_send_query(reqwest::Method::DELETE, &path, query, None, seconds).await
                 }
             };
-            done(AccountsReply::Action(ActionReply::Changed(id, name, kind, result))).await
+            done(AccountsReply::Action(ActionReply::Changed(id, name, kind, keep == Some(true), result))).await
         });
         cx.notify();
     }
@@ -519,15 +520,13 @@ impl Hangar {
                     Err(error) => s.error = Some(if error.uncertain { tr("accounts_login_stop_uncertain") } else { Self::failure(&error) }),
                 }
             }
-            ActionReply::Changed(id, name, kind, result) => {
+            ActionReply::Changed(id, name, kind, keep, result) => {
                 self.accounts.change = None;
                 let ok = result.is_ok();
-                // Arquivos de conversa que a conta padrão ganhou, quando o servidor juntou.
-                let merged = result.as_ref().ok().and_then(|body| Some(body.get("merged")?.as_u64()? + body["renamed"].as_u64().unwrap_or(0)))
-                    .filter(|n| *n > 0);
+                let kept = result.as_ref().ok().filter(|_| kind == ChangeKind::Remove)
+                    .and_then(|body| super::kept_transcripts_notice(&name, keep, body));
                 self.accounts.outcome = Some(match result {
-                    Ok(_) if merged.is_some() => (tr_shared("contas_conversas_juntadas",
-                        &[("nome", &name), ("n", &merged.unwrap_or_default().to_string())]), false),
+                    Ok(_) if kept.is_some() => (kept.unwrap_or_default(), false),
                     Ok(_) => (tr(if kind == ChangeKind::SignOut { "accounts_signed_out" } else { "accounts_removed" }).replace("{name}", &name), false),
                     Err(error) if error.uncertain => (tr("accounts_change_uncertain").replace("{name}", &name), true),
                     Err(error) => (tr(if kind == ChangeKind::SignOut { "accounts_sign_out_failed" } else { "accounts_remove_failed" })

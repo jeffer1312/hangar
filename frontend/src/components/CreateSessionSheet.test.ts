@@ -454,7 +454,7 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
       ])
       .mockResolvedValue([{ path: '/home/x/.claude', label: 'atual', active: true }]);
     mockModelosPorConta();
-    vi.mocked(api.apagarConta).mockResolvedValue(undefined);
+    vi.mocked(api.apagarConta).mockResolvedValue({ ok: true });
 
     const { comp } = montar();
     await flush();
@@ -490,7 +490,7 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
       ])
       .mockRejectedValue(new Error('fora do ar'));
     mockModelosPorConta();
-    vi.mocked(api.apagarConta).mockResolvedValue(undefined);
+    vi.mocked(api.apagarConta).mockResolvedValue({ ok: true });
 
     const { comp } = montar();
     await flush();
@@ -500,7 +500,8 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
     await confirmarApagar();
 
     // O aviso de refresh falho aparece, a seleção volta pra ativa e a escolha da apagada some.
-    expect(document.body.textContent).toContain(m.criar_conta_apagada_lista({ nome: 'nova' }));
+    expect(document.body.textContent).toContain(m.contas_conversas_nao_confirmadas({ nome: 'nova' }));
+    expect(document.body.textContent).toContain(m.criar_conta_lista_falhou());
     expect((document.querySelector('#model-pick') as HTMLElement).textContent).toContain(m.criar_padrao());
     (document.querySelector('.primary-btn') as HTMLElement).click();
     await flush();

@@ -2533,7 +2533,7 @@
   "criar_projeto_indisponivel": "O projeto lembrado não está mais disponível. Escolha outra pasta.",
   "criar_projeto_salvar_erro": "Pasta selecionada, mas não foi possível salvar a preferência.",
   "criar_motores_erro": "Não foi possível carregar os provedores.",
-  "criar_conta_apagada_lista": "Conta {nome} apagada, mas não consegui atualizar a lista — recarregue a tela.",
+  "criar_conta_lista_falhou": "Não consegui atualizar a lista — recarregue a tela.",
   "criar_conta_apagada": "Conta {nome} apagada.",
   "criar_apagar_conta_erro": "não consegui apagar a conta",
   "criar_conta_lista_erro": "Conta criada, mas não consegui atualizar a lista — recarregue a tela.",

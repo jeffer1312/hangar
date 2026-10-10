@@ -25,6 +25,8 @@ export default function Contas() {
   const [loginAccount, setLoginAccount] = useState<string | null>(null);
   const [newLogin, setNewLogin] = useState(false);
   const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set());
+  // Trava síncrona: dois alertas abertos antes do primeiro sim ainda veem o `deleting` antigo.
+  const deletingNow = useRef(new Set<string>());
   const generation = useRef(0);
   const controller = useRef<AbortController | null>(null);
 
@@ -105,6 +107,8 @@ export default function Contas() {
     if (deleting.has(account.id)) return;
     const remove = (keepTranscripts: boolean) => {
       // Segundo toque enquanto a pasta é apagada mandaria outro DELETE da mesma conta.
+      if (deletingNow.current.has(account.id)) return;
+      deletingNow.current.add(account.id);
       setDeleting((prev) => new Set(prev).add(account.id));
       deleteCodexAccountForServer(s, account.id, keepTranscripts)
         .then((result) => {
@@ -112,11 +116,14 @@ export default function Contas() {
           load(s);
         })
         .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : m.codex_account_delete_failed()))
-        .finally(() => setDeleting((prev) => {
-          const next = new Set(prev);
-          next.delete(account.id);
-          return next;
-        }));
+        .finally(() => {
+          deletingNow.current.delete(account.id);
+          setDeleting((prev) => {
+            const next = new Set(prev);
+            next.delete(account.id);
+            return next;
+          });
+        });
     };
     // Alerta nativo não tem caixa de marcar: guardar as conversas é o botão preferido.
     Alert.alert(m.contas_apagar_pergunta({ nome: account.name }), m.contas_apagar_opcoes_desc(), [

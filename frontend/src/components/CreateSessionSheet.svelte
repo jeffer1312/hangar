@@ -535,7 +535,8 @@
         // lista local e volta pra ativa — sem depender do GET que acabou de falhar.
         configs = configs.filter((c) => c.path !== apagadaPath);
         selectedConfig = configs.find((c) => c.active)?.path ?? configs[0]?.path ?? null;
-        avisoConta = m.criar_conta_apagada_lista({ nome });
+        // O que o DELETE confirmou sobre as conversas fica; a falha da releitura vem junto.
+        avisoConta = `${apagada} ${m.criar_conta_lista_falhou()}`;
         // B4 da revisão final: a seleção mudou de conta sem o onchange do combo passar — sem
         // recarregar aqui, o modelo/esforço da conta apagada sobreviveria e iria pro create.
         carregarModelos();

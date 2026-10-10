@@ -871,8 +871,8 @@ impl NewSession {
             },
             AccountDone::Deleted(name, path, Ok(deleted), list) => {
                 self.confirming = false;
-                let merged = deleted.get("merged").and_then(Value::as_u64)
-                    .map(|n| n + deleted["renamed"].as_u64().unwrap_or(0)).filter(|n| *n > 0);
+                // A caixa fica travada enquanto o DELETE corre: o valor dela ainda é o que foi pedido.
+                let kept = crate::app::accounts::kept_transcripts_notice(&name, self.keep_transcripts, &deleted);
                 let key = match list.map(configs_of) {
                     Some(Ok(list)) => { self.replace_configs(list); "create_account_deleted" }
                     // O DELETE deu certo: a pasta não existe mais, então ela sai da lista local mesmo sem a releitura.
@@ -883,8 +883,10 @@ impl NewSession {
                     }
                 };
                 self.config = self.fallback_config();
-                self.notice = Some((match merged {
-                    Some(n) => crate::i18n::tr_shared("contas_conversas_juntadas", &[("nome", &name), ("n", &n.to_string())]),
+                // O que o DELETE confirmou sobre as conversas fica; a falha da releitura vem junto.
+                self.notice = Some((match kept {
+                    Some(kept) if key == "create_account_deleted" => kept,
+                    Some(kept) => format!("{kept} {}", crate::i18n::tr_shared("criar_conta_lista_falhou", &[])),
                     None => tr(key).replace("{nome}", &name),
                 }, false));
                 self.build_config_pick(window, cx);
