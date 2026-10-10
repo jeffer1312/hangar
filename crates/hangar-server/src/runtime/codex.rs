@@ -35,16 +35,6 @@ struct Wire {
 }
 
 #[derive(Default)]
-struct Voice {
-    thread_id:Option<String>,
-    starting:bool,
-    closed:bool,
-    requests:BTreeMap<RequestId,(Value,u64)>,
-    answering:BTreeSet<RequestId>,
-    unsubscribed:bool,
-}
-
-#[derive(Default)]
 struct AsyncQuestions {
     pending:Vec<(String,Value)>,
     seen:BTreeSet<String>,
@@ -163,11 +153,7 @@ pub struct Engine {
     /// Formatos tortos já mandados ao Python: falha sistemática não vira um aviso por linha.
     reported_formats:BTreeSet<String>,
     async_questions:AsyncQuestions,
-    voices:BTreeMap<String,Voice>,
-    voice_wires:BTreeMap<String,(String,RequestId,u64)>,
     skill_preparations:BTreeMap<RequestId,RuntimeCommand>,
-    early_voice:BTreeMap<String,Vec<Value>>,
-    early_voice_bytes:usize,
 }
 
 fn error(message:&str) -> RuntimeError { RuntimeError::new("codex_command",message) }
@@ -346,9 +332,6 @@ impl Engine {
                 .filter_map(|(text,count)|Some((text.clone(),usize::try_from(count.as_u64()?).ok()?))).collect();
             async_questions.during_load = metadata["async_during_load"].as_array().cloned();
         }
-        let voices = metadata["voice_calls"].as_array().map(|calls|calls.iter().filter_map(|call|
-            Some((call["call_id"].as_str()?.into(),Voice { thread_id:string(&call["thread_id"]),starting:call["starting"] == true,
-                unsubscribed:call["unsubscribed"] == true,closed:true,..Voice::default() }))).collect()).unwrap_or_default();
         Self { generation,clock,counter:metadata["runtime_counter"].as_u64().unwrap_or(0),headless:metadata["headless"] != false,
             alive:true,initialized:metadata["initialized"] == true,ready:metadata["ready"] == true,reconnect:false,fresh_process:false,
             thread_id:metadata["thread_id"].as_str().unwrap_or("").into(),turn_id:None,in_progress:false,
@@ -360,7 +343,7 @@ impl Engine {
             preview:LiveBuffer::default(),response_started:false,first_response_start:None,compacting:false,
             running_commands:BTreeMap::new(),thinking:LiveBuffer::default(),was_working:metadata["in_progress"] == true,
             rpc:BTreeMap::new(),server_requests:Vec::new(),
-            request_epochs:BTreeMap::new(),answering:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,voices,voice_wires:BTreeMap::new(),skill_preparations:BTreeMap::new(),early_voice:BTreeMap::new(),early_voice_bytes:0,metadata }
+            request_epochs:BTreeMap::new(),answering:BTreeSet::new(),wires:BTreeMap::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reported_formats:BTreeSet::new(),async_questions,skill_preparations:BTreeMap::new(),metadata }
     }
 
     pub fn view(&self) -> Value {
@@ -419,8 +402,7 @@ impl Engine {
             "async_questions":self.async_questions.pending,"async_local_answers":self.async_questions.local_answers,
             "async_seen":self.async_questions.seen,"async_resolved":self.async_questions.resolved,
             "async_echoes":self.async_questions.echoes,"async_during_load":self.async_questions.during_load,
-            "skipped_async_questions":self.async_questions.skipped,"voice_calls":self.voices.iter().map(|(call_id,voice)|
-                json!({"call_id":call_id,"thread_id":voice.thread_id,"closed":voice.closed,"starting":voice.starting,"unsubscribed":voice.unsubscribed})).collect::<Vec<_>>()})
+            "skipped_async_questions":self.async_questions.skipped})
     }
 
     fn blocking_question(&self) -> Option<Value> {
@@ -445,9 +427,9 @@ impl Engine {
 
     fn deliverable(&self) -> bool { self.alive && self.ready && !self.in_progress && self.server_requests.is_empty() && self.async_questions.pending.is_empty()
         && self.skill_preparations.is_empty()
-        && !self.rpc.values().any(|rpc|!voice_rpc(rpc) && (matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
-            || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup"))) }
-    fn idle(&self) -> bool { self.deliverable() && !self.rpc.values().any(|rpc|!voice_rpc(rpc)) && self.answering.is_empty() && self.async_questions.pending.is_empty() }
+        && !self.rpc.values().any(|rpc|matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start")
+            || rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "skill_lookup")) }
+    fn idle(&self) -> bool { self.deliverable() && self.rpc.is_empty() && self.answering.is_empty() && self.async_questions.pending.is_empty() }
 
     pub fn forget_policy(&mut self,request_id:&RequestId) {
         // Pedido de status que falhou não pode barrar o próximo igual.
@@ -620,20 +602,11 @@ impl Engine {
             return;
         };
         if self.rpc.contains_key(&request_id) { return; }
-        let voice_call = self.voices.iter().find(|(_,voice)|voice.thread_id.as_deref().is_some_and(|thread|frame["params"]["threadId"] == thread))
-            .map(|(call_id,_)|call_id.clone()).or_else(||(method == "thread/start" && frame["params"]["ephemeral"] == true).then(||"orphan".into()));
-        let continuation = if method == "thread/settings/update" && frame["params"].get("serviceTier").is_some() {
-            Some(json!({"kind":"service_tier_recovered"}))
-        } else { voice_call.map(|call_id|json!({"kind":"voice","call_id":call_id})) };
+        let continuation = (method == "thread/settings/update" && frame["params"].get("serviceTier").is_some())
+            .then(||json!({"kind":"service_tier_recovered"}));
         self.rpc.insert(request_id.clone(),Rpc { operation_id:operation_id.clone(),method:method.into(),params:frame["params"].clone(),
             deadline:self.clock.monotonic_s,timed_out:true,continuation,state_revision,settings_revision });
         self.wires.insert(operation_id,Wire { request_id:Some(request_id),server_request:None,server_epoch:None,final_result:false });
-    }
-
-    pub fn restore_voice_scope(&mut self,operation_id:&str,call_id:&str) {
-        if let Some(rpc) = self.rpc.values_mut().find(|rpc|rpc.operation_id == operation_id) {
-            rpc.continuation = Some(json!({"kind":"voice","call_id":call_id}));
-        }
     }
 
     /// Processo recém-criado pelo Rust: a subida repete a política e tem os recuos do Python.
@@ -678,10 +651,6 @@ impl Engine {
             else if let Some(text) = self.preview.append(prefix["text"].as_str().unwrap_or(""),self.clock.monotonic_s) { self.publish(text,&mut effects); }
         }
         self.changed(&mut effects,true);
-        for (call_id,thread_id) in self.voices.iter().filter(|(_,voice)|voice.closed).filter_map(|(call_id,voice)|
-            Some((call_id.clone(),voice.thread_id.clone()?))).collect::<Vec<_>>() {
-            self.close_voice_thread(&call_id,&thread_id,&mut effects);
-        }
         Ok(effects)
     }
 
@@ -767,9 +736,6 @@ impl Engine {
         let payload = command.payload;
         let mut effects = Vec::new();
         match command.kind {
-            OperationKind::VoiceOpen | OperationKind::VoiceRpc | OperationKind::VoiceRespond | OperationKind::VoiceClose => {
-                return self.voice_command(id,command.kind,payload);
-            }
             OperationKind::Input => {
                 if !self.deliverable() { return Ok(vec![Effect::Reply { operation_id:id,disposition:Disposition::Deferred,payload:json!({}) }]); }
                 if payload["skill_name"].is_string() && payload["skill_lookup_done"] != true {
@@ -959,13 +925,6 @@ impl Engine {
                     self.finish_service_tier(if outcome == WriteOutcome::NotWritten { Disposition::Rejected } else { Disposition::Unknown },
                         json!({"write_outcome":outcome}),&mut effects);
                 }
-                if let Some((call_id,id,epoch)) = self.voice_wires.get(&operation_id).cloned() {
-                    if let Some(voice) = self.voices.get_mut(&call_id) {
-                        if outcome == WriteOutcome::Written && voice.requests.get(&id).is_some_and(|(_,current)|*current == epoch) {
-                            voice.requests.remove(&id); voice.answering.remove(&id);
-                        } else if outcome == WriteOutcome::NotWritten { voice.answering.remove(&id); }
-                    }
-                }
                 if let Some(wire) = self.wires.get_mut(&operation_id) {
                     if wire.final_result { return Ok(effects); }
                     if wire.request_id.is_some() && outcome == WriteOutcome::Written { return Ok(effects); }
@@ -1038,12 +997,6 @@ impl Engine {
                     rpc.params["processId"].as_str().unwrap_or("?"),line["error"]["message"].as_str().unwrap_or("erro do Codex"));
                 self.policy("local_output",json!({"text":text}),effects);
             }
-            if voice_rpc(&rpc) && rpc.method == "thread/start" {
-                if let Some(voice) = rpc.continuation.as_ref().and_then(|next|next["call_id"].as_str()).and_then(|call|self.voices.get_mut(call)) {
-                    voice.starting = false;
-                }
-                self.release_early_voice(effects)?;
-            }
             let message = line["error"]["message"].as_str().unwrap_or("");
             if self.bootstrap_fallback(&rpc,message,effects) { return Ok(()); }
             let transfer = self.metadata["transfer_id"].as_str().is_some_and(|id|!id.is_empty());
@@ -1077,23 +1030,6 @@ impl Engine {
         let result = line.get("result").cloned().unwrap_or_else(||json!({}));
         // Turno cortado: lido da mesma decodificação do `thread/read`, uma só por linha.
         let mut cut = false;
-        if voice_rpc(&rpc) {
-            let call_id = rpc.continuation.as_ref().and_then(|next|next["call_id"].as_str()).unwrap_or("").to_owned();
-            if rpc.method == "thread/start" {
-                let thread_id = result["thread"]["id"].as_str().filter(|id|*id != self.thread_id)
-                    .ok_or_else(||error("thread do organizador inválida"))?.to_owned();
-                let closed = if let Some(voice) = self.voices.get_mut(&call_id) {
-                    voice.thread_id = Some(thread_id.clone()); voice.starting = false; voice.closed
-                } else { true };
-                self.release_early_voice(effects)?;
-                if closed && !rpc.timed_out { self.close_voice_thread(&call_id,&thread_id,effects); }
-            } else if rpc.method == "thread/unsubscribe" {
-                if let Some(voice) = self.voices.get_mut(&call_id) { voice.unsubscribed = true; }
-            }
-            effects.push(Effect::Reply { operation_id:rpc.operation_id,disposition:Disposition::Accepted,payload:result });
-            self.changed(effects,false);
-            return Ok(());
-        }
         match rpc.method.as_str() {
             "initialize" => {
                 self.initialized = true;
@@ -1268,140 +1204,13 @@ impl Engine {
         }
     }
 
-    fn voice_command(&mut self,id:String,kind:OperationKind,payload:Value) -> Result<Vec<Effect>,RuntimeError> {
-        let call_id = payload["call_id"].as_str().filter(|id|!id.is_empty() && id.len() <= 128)
-            .ok_or_else(||error("chamada de voz inválida"))?.to_owned();
-        let mut effects = Vec::new();
-        if kind == OperationKind::VoiceOpen {
-            if !self.ready || self.voices.values().any(|voice|!voice.closed) || self.voices.contains_key(&call_id) {
-                return Err(error("voz ocupada ou sessão indisponível"));
-            }
-            self.voices.insert(call_id.clone(),Voice::default());
-            effects.push(Effect::Reply { operation_id:id,disposition:Disposition::Accepted,
-                payload:json!({"call_id":call_id,"thread_id":self.thread_id,"model":self.model}) });
-        } else {
-            let voice = self.voices.get_mut(&call_id).ok_or_else(||error("chamada de outra geração"))?;
-            if kind != OperationKind::VoiceClose && voice.closed { return Err(error("chamada encerrada")); }
-            match kind {
-                OperationKind::VoiceClose => {
-                    voice.closed = true;
-                    let thread = voice.thread_id.clone();
-                    let pending = voice.starting || self.rpc.values().any(|rpc|voice_rpc(rpc)
-                        && rpc.continuation.as_ref().is_some_and(|next|next["call_id"] == call_id) && rpc.method == "thread/unsubscribe");
-                    if pending {
-                        effects.push(Effect::Reply { operation_id:id,disposition:Disposition::Unknown,payload:json!({"closed":false}) });
-                    } else if let Some(thread_id) = thread.filter(|_|!voice.unsubscribed) {
-                        self.send(id,ClientRequest::ThreadUnsubscribe(wire::ThreadUnsubscribeParams { thread_id }),Some(json!({"kind":"voice","call_id":call_id})),&mut effects);
-                    } else {
-                        effects.push(Effect::Reply { operation_id:id,disposition:Disposition::Accepted,payload:json!({"closed":true}) });
-                    }
-                }
-                OperationKind::VoiceRpc => {
-                    let method = payload["method"].as_str().ok_or_else(||error("método de voz inválido"))?;
-                    let params = payload["params"].clone();
-                    if !params.is_object() { return Err(error("parâmetros de voz inválidos")); }
-                    if method == "initialize" {
-                        effects.push(Effect::Reply { operation_id:id,disposition:Disposition::Accepted,payload:json!({}) });
-                    } else {
-                        match method {
-                            "config/read" if params["includeLayers"] != true => {},
-                            "thread/start" if !voice.starting && voice.thread_id.is_none() && params["ephemeral"] == true
-                                && params["sandbox"] == "read-only" && params["approvalPolicy"] == "never" => { voice.starting = true; },
-                            "thread/realtime/start" | "thread/realtime/appendSpeech" | "thread/realtime/stop" | "turn/start" | "turn/interrupt" | "thread/unsubscribe"
-                                if voice.thread_id.as_deref().is_some_and(|thread|params["threadId"] == thread) => {},
-                            _=>return Err(error("RPC fora da thread organizadora")),
-                        }
-                        self.rpc(id,method,params,Some(json!({"kind":"voice","call_id":call_id})),&mut effects);
-                    }
-                }
-                OperationKind::VoiceRespond => {
-                    let request_id:RequestId = serde_json::from_value(payload["request_id"].clone()).map_err(|_|error("ID da ferramenta de voz inválido"))?;
-                    let (_,epoch) = voice.requests.get(&request_id).ok_or_else(||error("pedido de voz já encerrado"))?;
-                    if !voice.answering.insert(request_id.clone()) { return Err(error("resposta de voz já enviada")); }
-                    self.voice_wires.insert(id.clone(),(call_id,request_id.clone(),*epoch));
-                    self.wires.insert(id.clone(),Wire { request_id:None,server_request:None,server_epoch:None,final_result:false });
-                    let frame = if payload.get("error").is_some_and(|error|!error.is_null()) { json!({"id":request_id,"error":payload["error"]}) }
-                        else { json!({"id":request_id,"result":payload["result"]}) };
-                    effects.push(Effect::Write { operation_id:Some(id),frame });
-                }
-                _=>return Err(error("controle de voz inválido")),
-            }
-        }
-        self.changed(&mut effects,false);
-        Ok(effects)
-    }
-
-    /// Pedidos guardados durante a abertura da voz: os da thread dela entram pelo ramo da voz, os de outras
-    /// threads (subagente) seguem o fluxo normal, que não descarta pedido.
-    fn release_early_voice(&mut self,effects:&mut Vec<Effect>) -> Result<(),RuntimeError> {
-        let held = std::mem::take(&mut self.early_voice);
-        self.early_voice_bytes = 0;
-        for event in held.into_values().flatten() { self.notification(event,effects)?; }
-        Ok(())
-    }
-
-    fn close_voice_thread(&mut self,call_id:&str,thread_id:&str,effects:&mut Vec<Effect>) {
-        if self.rpc.values().any(|rpc|voice_rpc(rpc) && rpc.method == "thread/unsubscribe"
-            && rpc.continuation.as_ref().is_some_and(|next|next["call_id"] == call_id)) { return; }
-        self.counter += 1;
-        let operation_id = format!("voice-cleanup:{}:{}",self.generation,self.counter);
-        self.send(operation_id,ClientRequest::ThreadUnsubscribe(wire::ThreadUnsubscribeParams { thread_id:thread_id.into() }),
-            Some(json!({"kind":"voice","call_id":call_id})),effects);
-    }
-
     fn notification(&mut self,line:Value,effects:&mut Vec<Effect>) -> Result<(),RuntimeError> {
         let method = line["method"].as_str().unwrap_or("");
         let params = &line["params"];
-        if method == "serverRequest/resolved" {
-            if let Ok(id) = serde_json::from_value::<RequestId>(params["requestId"].clone()) {
-                for voice in self.voices.values_mut() { voice.requests.remove(&id); voice.answering.remove(&id); }
-            }
-        }
-        if let Some(call_id) = self.voices.iter().find(|(_,voice)|voice.thread_id.as_deref() == params["threadId"].as_str()
-            && voice.thread_id.is_some()).map(|(call_id,_)|call_id.clone()) {
-            if let Some(id) = line.get("id") {
-                let id:RequestId = serde_json::from_value(id.clone()).map_err(|_|error("ID do organizador inválido"))?;
-                if self.voices[&call_id].requests.get(&id).is_some_and(|(request,_)|request == &line) { return Ok(()); }
-            }
-            self.counter += 1;
-            let epoch = self.counter;
-            let voice = self.voices.get_mut(&call_id).unwrap();
-            if voice.closed {
-                if let Some(id) = line.get("id") {
-                    let id:RequestId = serde_json::from_value(id.clone()).map_err(|_|error("ID do organizador inválido"))?;
-                    let operation_id = format!("voice-ended:{}:{}",self.generation,epoch);
-                    self.wires.insert(operation_id.clone(),Wire { request_id:None,server_request:None,server_epoch:None,final_result:false });
-                    effects.push(Effect::Write { operation_id:Some(operation_id),frame:json!({"id":id,"error":{"code":-32000,"message":"chamada encerrada"}}) });
-                }
-                return Ok(());
-            }
-            if let Some(id) = line.get("id") {
-                let id:RequestId = serde_json::from_value(id.clone()).map_err(|_|error("ID do organizador inválido"))?;
-                voice.requests.insert(id.clone(),(line.clone(),epoch)); voice.answering.remove(&id);
-            }
-            effects.push(Effect::Publish { channel:"voice".into(),data:json!({"call_id":call_id,"event":line}) });
-            return Ok(());
-        }
         // Pedido de outra thread (subagente) entra na fila como os da principal; só o "resolvido" dele
         // também passa, para o pedido sair da fila. O resto vindo de outra thread é descartado.
         let foreign = params["threadId"].as_str().filter(|thread|*thread != self.thread_id);
-        if let Some(thread) = foreign {
-            if line.get("id").is_some() && self.voices.values().any(|voice|voice.starting) {
-                let size = line.to_string().len();
-                if self.early_voice_bytes + size > MAX_FRAME { return Err(error("pedidos iniciais da voz excederam o orçamento")); }
-                let pending = self.early_voice.entry(thread.into()).or_default();
-                if !pending.contains(&line) { pending.push(line.clone()); self.early_voice_bytes += size; }
-                return Ok(());
-            }
-            if !line.get("id").is_some_and(|id|!id.is_null()) && method != "serverRequest/resolved" { return Ok(()); }
-        }
-        let item = &params["item"];
-        if foreign.is_none() && (method == "turn/completed" || ["item/started","item/completed"].contains(&method) && ["userMessage","agentMessage"].contains(&item["type"].as_str().unwrap_or(""))
-            || method == "item/tool/requestUserInput" || method.ends_with("/requestApproval")) {
-            for (call_id,_) in self.voices.iter().filter(|(_,voice)|!voice.closed) {
-                effects.push(Effect::Publish { channel:"voice_target".into(),data:json!({"call_id":call_id,"event":line}) });
-            }
-        }
+        if foreign.is_some() && !line.get("id").is_some_and(|id|!id.is_null()) && method != "serverRequest/resolved" { return Ok(()); }
         if let Some(id) = line.get("id").filter(|id|!id.is_null()) {
             let request_id:RequestId = serde_json::from_value(id.clone()).map_err(|_|error("ID de pedido do servidor inválido"))?;
             if self.server_requests.iter().any(|(id,request)|id == &request_id && request == &line) { return Ok(()); }
@@ -1606,8 +1415,6 @@ impl Engine {
             && wire.server_request.as_ref().is_none_or(|id|self.request_epochs.get(id).copied() == wire.server_epoch))
     }
 }
-
-fn voice_rpc(rpc:&Rpc) -> bool { rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "voice") }
 
 fn question_response(question:&Value,answers:&Value) -> Result<Value,RuntimeError> {
     let questions = question["questions"].as_array().ok_or_else(||error("perguntas inválidas"))?;

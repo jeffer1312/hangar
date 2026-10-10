@@ -252,7 +252,6 @@ class RuntimeCoordinator:
         self.loop = None
         self.events_task = None
         self.refreshing = {}
-        self.voice_clients = {}
         self.legacy_active = set()
         self.registration_locks = {}
         self.adoption_task = None
@@ -878,8 +877,6 @@ class RuntimeCoordinator:
         await asyncio.gather(*tasks, return_exceptions=True)
         self.events_task = None
         self.refreshing.clear()
-        for client in tuple(self.voice_clients.values()):
-            client.fail(RuntimeError("runtime encerrado; chamada de voz invalidada"))
 
     async def refresh_snapshot(self, name):
         from app.runtime_adapter import apply_event
@@ -946,10 +943,6 @@ class RuntimeCoordinator:
                         slot.cache_valid = False
                         self._refresh(slot)
                     elif event.get("revision", -1) > previous or event.get("channel") == "snapshot":
-                        if event["channel"] in {"voice", "voice_target"}:
-                            client = self.voice_clients.get((event["key"], event["data"].get("call_id")))
-                            if client is not None:
-                                client.receive(event["channel"], event["data"]["event"])
                         if event["channel"] == "rate":
                             from app.live_rate import first_response_report, live_rate, rate_report
                             if (first := first_response_report(event["data"])) is not None:
@@ -978,8 +971,6 @@ class RuntimeCoordinator:
                     if slot.phase == Phase.Rust:
                         slot.cache_valid = False
                         self._signal(slot)
-                for client in tuple(self.voice_clients.values()):
-                    client.fail(RuntimeError("stream privado interrompido; voz invalidada"))
             await asyncio.sleep(delay)
             delay = min(5.0, delay * 2)
 

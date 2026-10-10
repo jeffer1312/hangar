@@ -63,19 +63,9 @@ export interface CodexOpcoes {
   modelos: { model: string; default: number; max: number }[];
 }
 
-export function codexVoiceUrlForServer(server: Server, name: string, origin: string): string {
-  const base = (baseOf(server) || origin).replace(/\/$/, '').replace(/^http/, 'ws');
-  return `${base}/api/sessions/${encodeURIComponent(name)}/codex/voice?${new URLSearchParams({ token: server.token })}`;
-}
-
 export function liveVoiceUrlForServer(server: Server, origin: string): string {
   const base = (baseOf(server) || origin).replace(/\/$/, '').replace(/^http/, 'ws');
   return `${base}/api/voice?${new URLSearchParams({ token: server.token })}`;
-}
-
-export async function getCodexVoicesForServer(server: Server, name: string): Promise<string[]> {
-  const result = await apiFetchForServer<{ voices: string[] }>(server, `/api/sessions/${encodeURIComponent(name)}/codex/voices`);
-  return result.voices;
 }
 
 export function codexOpcoes(

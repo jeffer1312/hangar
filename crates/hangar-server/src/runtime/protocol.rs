@@ -53,7 +53,6 @@ pub enum OperationKind {
     Input, Steer, SteerQueue, Interrupt, AnswerQuestions, Select, SetModel, SetEffort, SetServiceTier,
     SetPermissionMode, Compact, ListModels, ListSkills, ReadRateLimits, ReadSettings,
     SetMode, SkipQuestion, Restart, OpenTerminal, Reload, Commands, Cwd, Detach,
-    VoiceOpen, VoiceRpc, VoiceRespond, VoiceClose,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

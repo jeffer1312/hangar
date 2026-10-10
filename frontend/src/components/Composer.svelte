@@ -50,7 +50,6 @@ import { cachePrazo } from '../lib/cachePrazo';
   import CodexModelPopover from './CodexModelPopover.svelte';
   import CodexEffortPopover from './CodexEffortPopover.svelte';
   import CodexPermissionPopover from './CodexPermissionPopover.svelte';
-  import CodexVoice from './CodexVoice.svelte';
   import PiModelPopover from './PiModelPopover.svelte';
   import KimiModelPopover from './KimiModelPopover.svelte';
   import KimiEffortPopover from './KimiEffortPopover.svelte';
@@ -126,7 +125,6 @@ import { cachePrazo } from '../lib/cachePrazo';
     // abertos, o chat vive em ~500px dentro de uma janela de 1900. A fileira de controles precisa
     // do arranjo de celular ali. Sem prop = decide pela janela, como sempre.
     estreito?: boolean;
-    voiceBeta?: boolean;
     // Transcript da sessão: identidade do ditado (sessão recriada com o mesmo nome não recebe o
     // texto) e da barra guardada em `cp-ditado:<servidor>::<sessão>`.
     sessionJsonl?: string | null;
@@ -147,7 +145,6 @@ import { cachePrazo } from '../lib/cachePrazo';
     claudePreviousNonPlan = null,
     stats = null,
     estreito = false,
-    voiceBeta = false,
     sessionJsonl = null,
   }: Props = $props();
   const sessionServer = useSessionServer();
@@ -1530,12 +1527,6 @@ import { cachePrazo } from '../lib/cachePrazo';
   }
 
   // ── Gravar audio: toggle (tap grava, tap para) -> vira um anexo de audio ─────
-  let voiceBusy = $state(false);
-
-  function prepareVoice() {
-    ttsPlayer.close();
-  }
-
   // Para a gravacao e zera o estado. Chamado no onstop, no onerror, em falha e no onDestroy
   // (trocar de sessao com gravacao ativa desmonta o Composer).
   function teardownRecording() {
@@ -1737,7 +1728,7 @@ import { cachePrazo } from '../lib/cachePrazo';
   }
 
   async function toggleRecord() {
-    if (voiceBusy || pendingSend) return;
+    if (pendingSend) return;
     if (recording) {
       pararPorMotivo('botao');
       return;
@@ -2532,7 +2523,7 @@ import { cachePrazo } from '../lib/cachePrazo';
         <button
           class="attach-btn mic-btn"
           class:mic-btn--recording={recording}
-          disabled={voiceBusy || transcribing}
+          disabled={transcribing}
           onclick={toggleRecord}
           aria-label={recording ? m.composer_parar_gravacao() : starting ? m.composer_cancelar_prep_mic() : m.composer_gravar_audio()}
         >
@@ -2562,10 +2553,6 @@ import { cachePrazo } from '../lib/cachePrazo';
         {@render seletorModo()}
       {/if}
       <div class="control-right">
-        {#if isCodex && voiceBeta}
-          <CodexVoice {sessionName} disabled={recording || starting || transcribing}
-            onPrepare={prepareVoice} onBusyChange={(busy) => { voiceBusy = busy; }} />
-        {/if}
         {#if (isCodex || headless) && isWorking && hasInput && !sendToPair}
           <button class="model-pill" onclick={() => submit(true)} disabled={!canRequestSend}
             title={m.codex_orientar_ajuda()}>{m.codex_orientar()}</button>

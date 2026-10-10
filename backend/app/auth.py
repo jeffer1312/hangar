@@ -140,7 +140,7 @@ def require_auth(request: Request) -> None:
         # (era 401 em /events?token=...). Ordem: header -> query -> cookie (same-origin).
         query = request.query_params.get("token")
         cookie = cookie_token(request.cookies, request.url.scheme in ("https", "wss"))
-        # `codex_voice` chama isto com um WebSocket, que não tem método: o aperto de mão é leitura.
+        # WebSocket não tem método: o aperto de mão é leitura.
         if cookie and getattr(request, "method", "GET") not in _COOKIE_METODOS:
             cookie = None
         token = query or cookie

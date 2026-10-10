@@ -260,9 +260,6 @@ impl RuntimeEngine {
                     Core::Codex(core)=>{
                         core.restore_rpc(id.into(),&phase.payload["frame"],phase.payload["state_revision"].as_u64().unwrap_or(0),
                             phase.payload["settings_revision"].as_u64().unwrap_or(0));
-                        if let Some(call_id) = state.operations.get(id).and_then(|root|root.payload["payload"]["call_id"].as_str()) {
-                            core.restore_voice_scope(id,call_id);
-                        }
                     },
                     Core::Claude(core)=>{
                         let mut frame = phase.payload["frame"].clone();
@@ -684,7 +681,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:CanoConnection
                         // Prévia só pelo canal do hub: no `events` ela subiria a
                         // revisão e o Python a decodificaria a cada delta.
                         if !live.channel(&channel,&data) { publish(&events,&target,&mut revision,&channel,data); }
-                    } else if ["voice","voice_target","rate"].contains(&channel.as_str()) {
+                    } else if channel == "rate" {
                         publish(&events,&target,&mut revision,&channel,data);
                     }
                 }

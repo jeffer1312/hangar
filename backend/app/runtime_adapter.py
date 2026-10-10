@@ -718,9 +718,6 @@ def apply_event(slot, event):
             updated["error"] = data["error_code"]
             updated["problem"] = _problem_text(data)
             slot.cache_valid = False
-        elif channel in {"voice", "voice_target"}:
-            if not isinstance(data, dict) or not isinstance(data.get("event"), dict):
-                raise ValueError("evento de voz inválido")
         elif channel == "rate":
             pass   # Não toca no estado: medida ruim é descartada pelo coordenador, sem invalidar o cache.
         else:
@@ -932,118 +929,6 @@ class RuntimeAdapter:
         if method in {"parar", "recarregar", "restart", "open_terminal", "open_headless", "set_permission_mode_sem_terminal"}:
             return await runtime_coordinator.current().lifecycle_call(name, method, arguments)
         raise RuntimeError("método exige encaminhamento explícito ao responsável")
-
-
-class NativeVoiceClient:
-    virtual = True
-    endpoint = None
-
-    def __init__(self, coordinator, name, call_id, target_events):
-        self.coordinator, self.name, self.call_id = coordinator, name, call_id
-        slot = coordinator.slot(name)
-        self.binding = (coordinator.instance, slot.binding.key, slot.binding.generation)
-        self.target_thread = RuntimeAdapter("codex").view(name).thread_id
-        self.target_events = target_events
-        self.events = asyncio.Queue(maxsize=256)
-        self.closed = False
-        self.failed = False
-        self._closing = asyncio.Lock()
-        self.thread_id = None
-        self._close_id = uuid.uuid4().hex
-
-    def valid(self):
-        if self.closed or self.failed:
-            return False
-        try:
-            slot = self.coordinator.slot(self.name)
-            return ((self.coordinator.instance, slot.binding.key, slot.binding.generation) == self.binding
-                and slot.phase == runtime_coordinator.Phase.Rust and slot.cache_valid
-                and slot.view["view"].get("thread_id") == self.target_thread)
-        except (KeyError, ValueError):
-            return False
-
-    async def request(self, method, params, timeout=30.0):
-        if not self.valid():
-            raise RuntimeError("chamada de outra posse ou geração")
-        result = await asyncio.wait_for(RuntimeAdapter("codex").control(self.name, "voice_rpc",
-            {"call_id":self.call_id, "method":method, "params":params}), timeout)
-        if not isinstance(result, dict):
-            raise RuntimeError("resposta do organizador inválida")
-        if method == "thread/start":
-            self.thread_id = result["thread"]["id"]
-        return result
-
-    async def respond(self, request_id, result, *, erro=None):
-        if not self.valid() or type(request_id) not in (int, str):
-            raise RuntimeError("resposta de outra chamada ou geração")
-        await RuntimeAdapter("codex").control(self.name, "voice_respond",
-            {"call_id":self.call_id, "request_id":request_id, "result":result, "error":erro})
-
-    async def notifications(self):
-        while True:
-            event = await self.events.get()
-            if isinstance(event, Exception):
-                raise event
-            if event is None:
-                return
-            yield event
-
-    def receive(self, channel, event):
-        if not self.valid():
-            self.fail(RuntimeError("voz invalidada pela troca de posse"))
-            return
-        queue = self.events if channel == "voice" else self.target_events
-        if queue.full():
-            self.fail(RuntimeError("eventos de voz excederam a fila; chamada encerrada"))
-            return
-        queue.put_nowait(copy.deepcopy(event))
-
-    def fail(self, error):
-        self.failed = True
-        while self.events.full():
-            self.events.get_nowait()
-        self.events.put_nowait(error)
-
-    async def close(self):
-        async with self._closing:
-            if self.closed:
-                return
-            slot = self.coordinator.slot(self.name)
-            owned = (self.coordinator.instance, slot.binding.key, slot.binding.generation) == self.binding and slot.phase == runtime_coordinator.Phase.Rust
-            try:
-                if owned:
-                    if not slot.cache_valid and not await self.coordinator.refresh_snapshot(self.name):
-                        raise RuntimeError("estado não reposto; fechamento da voz não confirmado")
-                    await RuntimeAdapter("codex").control(self.name, "voice_close", {"call_id":self.call_id}, operation_id=self._close_id)
-            finally:
-                self.closed = True
-                self.coordinator.voice_clients.pop((self.binding[1], self.call_id), None)
-                self.fail(RuntimeError("chamada encerrada"))
-
-
-async def open_voice(name, target_events):
-    coordinator = runtime_coordinator.current()
-    facade = RuntimeAdapter("codex")
-    view = facade.view(name, mutating=True)
-    if any(key == view.key and not client.closed for (key, _), client in coordinator.voice_clients.items()):
-        raise RuntimeError("chamada de voz já aberta")
-    call_id = uuid.uuid4().hex
-    client = NativeVoiceClient(coordinator, name, call_id, target_events)
-    coordinator.voice_clients[(view.key, call_id)] = client
-    try:
-        await facade.control(name, "voice_open", {"call_id":call_id})
-    except BaseException:
-        coordinator.voice_clients.pop((view.key, call_id), None)
-        client.closed = True
-        raise
-    return {"thread_id":view.thread_id, "model":view.data.get("model"), "client":client,
-        "voice_events":target_events, "runtime_voice":True}
-
-
-def voice_current(name, target, adapter):
-    if target.get("runtime_voice"):
-        return target["client"].valid()
-    return adapter._sessions.get(name) is target
 
 
 # ponytail: a posse é conferida por consulta a cada 0,25 s; a fase muda sem aviso único a quem espera.

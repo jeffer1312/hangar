@@ -85,7 +85,7 @@ def _app():
 
     @a.websocket("/api/sessions/{name}/term-hold-finally")
     async def terminal_com_finally(ws: WebSocket, name: str):
-        # Como termsock/navsock/codex_voice: o cancelamento cai num `finally` que fecha com 1000.
+        # Como termsock/navsock: o cancelamento cai num `finally` que fecha com 1000.
         await ws.accept()
         await ws.send_text("aberto")
         STATE["revoked"] = True
