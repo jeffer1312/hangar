@@ -6,13 +6,14 @@ fn argument(name: &str) -> String {
     args.windows(2).find(|pair| pair[0] == name).map(|pair| pair[1].clone()).unwrap()
 }
 
-fn reply(mut stream: TcpStream, gate: Option<u16>) {
+/// Conexão que o cliente larga no meio (a checagem de saúde desiste sob carga) não derruba o servidor.
+fn reply(mut stream: TcpStream, gate: Option<u16>) -> std::io::Result<()> {
     let mut received = Vec::new();
     let mut buffer = [0; 4096];
     let end;
     loop {
-        let count = stream.read(&mut buffer).unwrap();
-        if count == 0 { return; }
+        let count = stream.read(&mut buffer)?;
+        if count == 0 { return Ok(()); }
         received.extend_from_slice(&buffer[..count]);
         if let Some(found) = received.windows(4).position(|part| part == b"\r\n\r\n") { end = found + 4; break; }
     }
@@ -21,20 +22,20 @@ fn reply(mut stream: TcpStream, gate: Option<u16>) {
         .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
         .and_then(|(_, value)| value.trim().parse::<usize>().ok())).unwrap_or(0);
     while received.len() < end + length {
-        let count = stream.read(&mut buffer).unwrap();
+        let count = stream.read(&mut buffer)?;
         if count == 0 { break; }
         received.extend_from_slice(&buffer[..count]);
     }
     let (status, body) = if headers.starts_with("GET /health ") { (200, "{\"status\":\"ok\"}") }
         else if headers.starts_with("POST /inference ") && received[end..].windows(4).any(|p| p == b"RIFF") {
             if let Some(port) = gate {
-                let mut control = TcpStream::connect(("127.0.0.1", port)).unwrap();
-                control.write_all(b"I").unwrap();
-                control.read_exact(&mut [0]).unwrap();
+                let mut control = TcpStream::connect(("127.0.0.1", port))?;
+                control.write_all(b"I")?;
+                control.read_exact(&mut [0])?;
             }
             (200, "{\"text\":\"Transcrição local em português.\"}")
         } else { (400, "{\"error\":\"pedido incompatível\"}") };
-    write!(stream, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    write!(stream, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
 fn main() {
@@ -56,5 +57,5 @@ fn main() {
     let mut listening = std::fs::OpenOptions::new().create(true).append(true).open(model.with_extension("listening")).unwrap();
     writeln!(listening, "{}", std::process::id()).unwrap();
     let gate = std::fs::read_to_string(&model).ok().and_then(|text| text.strip_prefix("hold:")?.parse().ok());
-    for stream in listener.incoming() { reply(stream.unwrap(), gate); }
+    for stream in listener.incoming().flatten() { let _ = reply(stream, gate); }
 }
