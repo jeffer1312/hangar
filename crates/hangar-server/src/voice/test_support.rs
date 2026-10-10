@@ -41,3 +41,15 @@ pub fn fake_app_server() -> (Spawn, tokio::sync::mpsc::UnboundedReceiver<Value>,
     let spawn: Spawn = Box::new(move || Box::pin(async move { Ok(Rpc::over_lines(r, w)) }));
     (spawn, seen, push)
 }
+
+/// Fala do usuário no turno `turn`, como a voz delega: libera as ferramentas desse turno (`SpokenTurns`).
+pub fn push_speech(push: &tokio::sync::mpsc::UnboundedSender<Value>, turn: &str, text: &str) {
+    let delegation = format!("<realtime_delegation>\n<input>{text}</input>\n<transcript_delta>user: {text}</transcript_delta>\n</realtime_delegation>");
+    let _ = push.send(json!({"method": "item/started", "params": {"threadId": "t1", "turnId": turn,
+        "item": {"type": "userMessage", "id": format!("item-{turn}-{}", text.len()), "content": [{"type": "text", "text": delegation}]}}}));
+}
+
+/// Chamada de ferramenta do organizador; a resposta aparece no `seen` com o mesmo `id` e `result`.
+pub fn push_tool(push: &tokio::sync::mpsc::UnboundedSender<Value>, id: &str, name: &str, args: Value, turn: &str) {
+    let _ = push.send(json!({"id": id, "method": "item/tool/call", "params": {"tool": name, "arguments": args, "turnId": turn, "threadId": "t1"}}));
+}

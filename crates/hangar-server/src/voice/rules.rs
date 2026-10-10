@@ -1,5 +1,6 @@
 //! Regras puras da voz: nome falado → sessão, textos das ferramentas de sessão e as respostas que o organizador ouve.
 use super::organizer::{family_root, name_tokens, squash, tool_reply, word_fits};
+use hangar_api::session::SessionRow;
 use serde_json::Value;
 use std::{collections::{HashMap, HashSet}, time::Duration};
 
@@ -292,6 +293,38 @@ pub fn triples(events: &[hangar_api::chat::ChatEvent]) -> Vec<(String, String, S
         .map(|e| (e.id.clone(), e.kind.as_str().to_owned(), e.text.clone().unwrap_or_default())).collect()
 }
 
+fn remote_peer(s: &SessionRow) -> bool { s.pair_peers.iter().flatten().any(|p| p.contains("::")) }
+
+/// `canPair` do web. `same_machine`: o grupo é resolvido pelo backend de uma máquina só.
+pub fn can_pair(origin: &SessionRow, target: &SessionRow, same_machine: bool) -> Result<(), &'static str> {
+    if !same_machine { return Err("Sessões de servidores diferentes não se agrupam por aqui."); }
+    if origin.name == target.name { return Err("Não dá pra soltar uma sessão sobre ela mesma."); }
+    // O grupo da orquestração é montado pelo orq; agrupar a linha dele à mão desfaz a execução.
+    if origin.provider == "orq" || target.provider == "orq" { return Err("A linha do orquestrador não entra nem sai de grupo à mão."); }
+    if origin.state == "dead" || target.state == "dead" { return Err("Sessão encerrada — não dá pra agrupar."); }
+    if origin.pair_gid.is_some() && origin.pair_gid == target.pair_gid { return Err("Essas sessões já estão no mesmo grupo."); }
+    if remote_peer(origin) || remote_peer(target) { return Err("Uma das sessões já está pareada 1:1 com outro servidor."); }
+    Ok(())
+}
+
+/// `canLeave` do web: os pares também contam, para o par de outro servidor que venha sem `pair_gid`.
+pub fn can_leave(s: &SessionRow) -> bool {
+    s.provider != "orq" && (s.pair_gid.is_some() || s.pair_peers.as_ref().is_some_and(|p| !p.is_empty()))
+}
+
+/// Nome de sessão nova a partir da pasta, como a tela de criação: só ASCII, `-` no resto, sufixo `-2`… se já existe.
+// ponytail: acento comum vira a letra base pelo `squash`; o resto vira `-`.
+pub fn unique_name(folder: &str, taken: &HashSet<String>) -> String {
+    let base = folder.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or_default();
+    let clean: String = base.trim().chars().map(|c| match c {
+        c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => c,
+        c => super::organizer::squash(&c.to_string()).chars().next().filter(char::is_ascii_alphanumeric).unwrap_or('-'),
+    }).collect::<String>().trim_matches('-').to_owned();
+    let clean = if clean.is_empty() { "sessao".to_owned() } else { clean };
+    if !taken.contains(&clean) { return clean; }
+    (2..).map(|n| format!("{clean}-{n}")).find(|name| !taken.contains(name)).unwrap_or(clean)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,5 +598,22 @@ mod tests {
         assert!(went_idle(true, "awaiting_input"));
         assert!(!went_idle(false, "idle"));
         assert!(!went_idle(true, "working"));
+    }
+
+    #[test]
+    fn new_names_and_group_refusals() {
+        let taken: HashSet<String> = ["minha-loja".to_owned()].into();
+        assert_eq!(unique_name("/home/x/Minha Lojá/", &HashSet::new()), "Minha-Loja");
+        assert_eq!(unique_name("C:\\code\\minha-loja", &taken), "minha-loja-2");
+        assert_eq!(unique_name("///", &HashSet::new()), "sessao");
+        let row = |name: &str, provider: &str, gid: Option<&str>| serde_json::from_value::<SessionRow>(
+            serde_json::json!({"name": name, "provider": provider, "pair_gid": gid})).unwrap();
+        assert!(can_pair(&row("a", "claude", None), &row("b", "codex", None), true).is_ok());
+        assert!(can_pair(&row("a", "claude", None), &row("b", "codex", None), false).is_err());
+        assert!(can_pair(&row("a", "claude", Some("g")), &row("b", "codex", Some("g")), true).is_err());
+        assert!(can_pair(&row("a", "orq", None), &row("b", "codex", None), true).is_err());
+        assert!(can_leave(&row("a", "claude", Some("g"))));
+        assert!(!can_leave(&row("a", "claude", None)));
+        assert!(!can_leave(&row("a", "orq", Some("g"))));
     }
 }

@@ -4,7 +4,7 @@ use crate::groups::peers::PeerClient;
 use hangar_api::{chat::ChatEvent, session::SessionRow};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Value, json};
-use std::{net::{Ipv4Addr, SocketAddr}, sync::Arc, time::Duration};
+use std::{collections::HashSet, net::{Ipv4Addr, SocketAddr}, sync::Arc, time::Duration};
 
 /// Chave da máquina da voz.
 pub const HERE: &str = "";
@@ -54,16 +54,27 @@ impl Machines {
 
     /// `(máquina, linha)` de todas as máquinas que responderam, e o rótulo das que não.
     pub async fn sessions(&self) -> (Vec<(String, SessionRow)>, Vec<String>) {
+        let (rows, unreachable, _) = self.sessions_except(&HashSet::new()).await;
+        (rows, unreachable)
+    }
+
+    /// Como `sessions`, sem ler as máquinas de `skip` (contam como sem resposta); o terceiro item são os peers que falharam agora.
+    pub async fn sessions_except(&self, skip: &HashSet<String>) -> (Vec<(String, SessionRow)>, Vec<String>, Vec<String>) {
         let machines: Vec<String> = std::iter::once(HERE.to_owned()).chain(self.peers.enabled_ids()).collect();
-        let reads = futures_util::future::join_all(machines.iter().map(|m| self.call(m, reqwest::Method::GET, "/api/sessions", None))).await;
-        let (mut rows, mut unreachable) = (Vec::new(), Vec::new());
-        for (machine, read) in machines.into_iter().zip(reads) {
+        let (read, skipped): (Vec<String>, Vec<String>) = machines.into_iter().partition(|m| !skip.contains(m));
+        let reads = futures_util::future::join_all(read.iter().map(|m| self.call(m, reqwest::Method::GET, "/api/sessions", None))).await;
+        let (mut rows, mut failed) = (Vec::new(), Vec::new());
+        let mut unreachable: Vec<String> = skipped.iter().map(|m| self.label(m)).collect();
+        for (machine, read) in read.into_iter().zip(reads) {
             match read.ok().and_then(|v| serde_json::from_value::<Vec<SessionRow>>(v).ok()) {
                 Some(list) => rows.extend(list.into_iter().map(|r| (machine.clone(), r))),
-                None => unreachable.push(self.label(&machine)),
+                None => {
+                    unreachable.push(self.label(&machine));
+                    if machine != HERE { failed.push(machine); }
+                }
             }
         }
-        (rows, unreachable)
+        (rows, unreachable, failed)
     }
 
     pub async fn history(&self, machine: &str, name: &str, limit: usize) -> Result<Vec<ChatEvent>, String> {

@@ -102,6 +102,9 @@ impl PeerClient {
 
     pub fn enabled_ids(&self) -> Vec<String> { self.book.enabled_ids() }
 
+    /// Endereço do peer no `peers.json` (o aparelho abre a sessão de lá por ele); nunca o token.
+    pub fn base_url(&self, server: &str) -> Option<String> { self.book.get(server).map(|c| c.base_url) }
+
     /// `peers.call` (peers.py:401-411): prazo de 8 s por leitura e 16 s no total, corpo até 1 MiB,
     /// segue redirect como o Python. O `reqwest` tira o `Authorization` quando o redirect troca de
     /// host, porta ou esquema (`redirect::remove_sensitive_headers`), e o `urllib` não tirava.

@@ -1,12 +1,14 @@
 //! Voz ao vivo: o organizador roda aqui; o aparelho dono da chamada só fala, ouve e atende a tela.
 pub mod call;
 pub mod computer;
+pub mod controller;
 pub mod hub;
 pub mod jev;
 pub mod machines;
 pub mod observe;
 pub mod organizer;
 pub mod plan;
+pub mod protocol;
 pub mod routes;
 pub mod rpc;
 pub mod rules;
