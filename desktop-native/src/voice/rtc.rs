@@ -1,5 +1,5 @@
 //! Chamada WebRTC direto com a OpenAI: o app-server só troca o SDP; o áudio não passa por ele.
-use crate::voice::{log, usage, audio::{Audio, AudioError, FRAME}};
+use crate::voice::{log, audio::{Audio, AudioError, FRAME}};
 use std::{net::{IpAddr, SocketAddr, UdpSocket}, sync::{Arc, Once, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig,
     change::{SdpAnswer, SdpPendingOffer}, format::Codec, media::{Direction, Frequency, MediaKind, MediaTime, Mid}, net::{Protocol, Receive}};
@@ -199,7 +199,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
                         if kind == "session.usage.updated" && usage_logged < 3 {
                             usage_logged += 1;
                             if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&data.data) {
-                                let leaves: Vec<String> = usage::numeric_leaves(&value).into_iter().map(|(path, n)| format!("{path}={n}")).collect();
+                                let leaves: Vec<String> = numeric_leaves(&value).into_iter().map(|(path, n)| format!("{path}={n}")).collect();
                                 log(format!("rtc usage {}", leaves.join(" ")));
                             }
                         }
@@ -299,6 +299,23 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
     result
 }
 
+/// Só números, com o caminho da chave (`response.usage.input_tokens`); nenhum texto sai daqui.
+fn numeric_leaves(value: &serde_json::Value) -> Vec<(String, String)> {
+    use serde_json::Value;
+    fn walk(value: &Value, path: &str, out: &mut Vec<(String, String)>) {
+        if out.len() >= 80 { return; }
+        match value {
+            Value::Number(n) => out.push((path.to_owned(), n.to_string())),
+            Value::Object(map) => for (key, v) in map { walk(v, &if path.is_empty() { key.clone() } else { format!("{path}.{key}") }, out); },
+            Value::Array(items) => for (i, v) in items.iter().enumerate() { walk(v, &format!("{path}[{i}]"), out); },
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(value, "", &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,6 +369,14 @@ mod tests {
         assert_eq!(update["type"], "session.update");
         assert_eq!(update["session"]["audio"]["input"]["turn_detection"], serde_json::json!({"type": "semantic_vad", "eagerness": "low"}));
         assert_eq!(update["session"].as_object().unwrap().len(), 1, "parcial: não mexe em instruções nem voz");
+    }
+
+    #[test]
+    fn numeric_leaves_keep_paths_and_drop_strings() {
+        let event = serde_json::json!({"type": "session.usage.updated", "response": {"usage": {"input_tokens": 123, "details": [{"cached": 4.5}], "model": "gpt"}}, "ok": true});
+        let mut leaves = numeric_leaves(&event);
+        leaves.sort();
+        assert_eq!(leaves, vec![("response.usage.details[0].cached".to_owned(), "4.5".to_owned()), ("response.usage.input_tokens".to_owned(), "123".to_owned())]);
     }
 
     #[test]

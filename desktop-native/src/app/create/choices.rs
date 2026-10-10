@@ -107,22 +107,6 @@ fn model_memory_key(server: &str, provider: &str, account: &str, engine: &str, e
     if provider == "claude" && !engine_account.is_empty() { format!("{key}:account:{engine_account}") } else { key }
 }
 
-/// O que a tela de criação traria sem toque, sem motor e na conta padrão: padrão marcado do harness, senão o último
-/// modelo lembrado; a permissão só vem do padrão marcado. Bloqueante (lê disco).
-pub(in crate::app) fn creation_defaults(server: &str, provider: &str) -> ((String, String), Option<String>) {
-    let saved = crate::appearance::harness_default(&format!("{server}:{provider}:"));
-    let account = if provider == "codex" { "default" } else { "" };
-    let remembered = saved.clone().map(|(m, e, _)| (m, e))
-        .unwrap_or_else(|| crate::appearance::last_model(&model_memory_key(server, provider, account, "", "")));
-    (remembered, saved.map(|s| s.2))
-}
-
-/// O lembrado só vale se ainda estiver no catálogo (`/api/model-options`), como na tela; `None` = catálogo ilegível.
-pub(in crate::app) fn checked_choice(catalog: &Value, provider: &str, remembered: (String, String)) -> Option<(String, String)> {
-    let models: Vec<ModelOption> = serde_json::from_value(catalog.get("models").cloned().unwrap_or_default()).ok()?;
-    Some(reloaded_choice(&models, provider, false, (String::new(), String::new()), remembered))
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct Motor {
     label: Option<String>,

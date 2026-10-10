@@ -1110,7 +1110,6 @@ impl Hangar {
                         self.sidebar.moving.remove(&target);
                     }
                 }
-                if matches!(what, Write::Delete) { self.voice_closed(&target, &result); }
                 // Diálogo desta sessão ainda aberto (não cancelado): o resultado aparece nele, não em notificação solta.
                 let in_dialog = match what {
                     Write::Rename(_, seq) => self.sidebar.editing.as_ref().is_some_and(|e| !e.inline && e.status.borrow().sent == Some(seq) && e.target == target),
