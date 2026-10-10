@@ -242,14 +242,16 @@ passo_pi() { node scripts/test-pi-hangar-state.mjs; }
 # Ambiente parecido com o do runner: HOME vazio (nada lê ~/.claude, ~/.hangar nem o tmux real) e
 # só o PATH das ferramentas. Caches de cargo/uv/npm continuam os da máquina.
 ambiente_limpo() {
-    local casa="$1" node_dir uv_dir
+    local casa="$1" node_dir uv_dir codex_dir=""
     node_dir="${NODE_DIR:-$(dirname "$(realpath "$(command -v node)")")}"
     uv_dir="$(dirname "$(command -v uv)")"
+    # O CI instala o codex no PATH; os contratos de contas precisam dele.
+    command -v codex >/dev/null && codex_dir="$(dirname "$(realpath "$(command -v codex)")"):"
     mkdir -p "$casa/tmux" "$casa/run"
     chmod 700 "$casa/run"
     LIMPO=(env -i
         HOME="$casa" USER="${USER:-$(id -un)}" LANG=C.UTF-8 TERM=dumb CI=1
-        PATH="$node_dir:$uv_dir:${CARGO_HOME:-$HOME/.cargo}/bin:/usr/local/bin:/usr/bin:/bin"
+        PATH="$node_dir:$uv_dir:$codex_dir${CARGO_HOME:-$HOME/.cargo}/bin:/usr/local/bin:/usr/bin:/bin"
         CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
         UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
         UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$HOME/.local/share/uv/python}"
