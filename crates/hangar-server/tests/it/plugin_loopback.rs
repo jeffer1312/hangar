@@ -59,9 +59,6 @@ impl Server {
         Some(Self { public, bridge, stop: Some(stop), task })
     }
 
-    async fn start(listener: TcpListener, state: AppState) -> Self {
-        Self::try_start(listener, state).await.expect("a ponte da porta pública já é de outro processo")
-    }
 
     /// Porta pública nova a cada tentativa: em paralelo, outro processo pode estar na porta da ponte.
     async fn launch(mut state: impl FnMut() -> AppState) -> Self {
@@ -229,13 +226,13 @@ async fn restart(address: SocketAddr, upstream: SocketAddr) -> Server {
 #[tokio::test]
 async fn stopping_allows_a_restart_on_the_same_public_and_bridge_port() {
     let (_python, upstream) = spawn_fake().await;
-    let listener = TcpListener::bind("127.0.0.2:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    for listener in [Some(listener), None] {
-        let mut server = match listener {
-            Some(listener) => Server::start(listener, AppState::new(config(upstream, "127.0.0.1"))).await,
-            None => restart(address, upstream).await,
-        };
+    // A primeira partida sorteia portas livres (a da ponte pode ser de outro teste); a segunda volta nelas.
+    let mut server = Server::launch(|| AppState::new(config(upstream, "127.0.0.1"))).await;
+    let address = server.public;
+    for again in [false, true] {
+        if again {
+            server = restart(address, upstream).await;
+        }
         let response = post(server.bridge, "state", json!({})).await;
         assert_eq!(response.status().as_u16(), 200);
         server.stop().await;
