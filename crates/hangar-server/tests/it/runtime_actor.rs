@@ -837,9 +837,16 @@ async fn codex_preview_goes_to_live_not_to_events() {
     let (live,mut rx) = tokio::sync::watch::channel(None);
     let handle = codex_live_actor(dir.path(),cano,Some(live)).await;
     let mut events = handle.subscribe();
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // A abertura ainda anda a `revision`; sob carga, por mais que uma janela fixa. Mede depois que ela para.
+    let revision = || async { handle.snapshot().await.unwrap()["revision"].as_u64().unwrap() };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let before = loop {
+        let seen = revision().await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        if revision().await == seen { break seen; }
+        assert!(std::time::Instant::now() < deadline, "a abertura do ator não assentou");
+    };
     while events.try_recv().is_ok() {}
-    let before = handle.snapshot().await.unwrap()["revision"].as_u64().unwrap();
     push.send(delta("olá")).unwrap();
     live_until(&mut rx,"prévia no canal em processo",|s|s.preview == "olá").await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
