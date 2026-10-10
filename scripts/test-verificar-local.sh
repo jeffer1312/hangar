@@ -98,5 +98,13 @@ podar 220 "deps/libdep-1.rlib deps/novo-1 deps/velho-1 "
 podar 160 "deps/libdep-1.rlib deps/novo-1 "
 podar 32 ""
 
+# Andamento: repassa tudo e só as linhas de passo vão ao arquivo, com a hora na frente.
+anda="$(mktemp)"
+saida="$(printf '>> linux: rust…\ncompilando\n<< linux: rust 12s ok\n' | "$V" --marcar "$anda")"
+[[ "$saida" == $'>> linux: rust…\ncompilando\n<< linux: rust 12s ok' ]] || { echo "FALHOU --marcar não repassou a entrada: \"$saida\""; falhou=1; }
+[[ "$(sed 's/^[0-9]* //' "$anda" | tr '\n' '|')" == ">> linux: rust…|<< linux: rust 12s ok|" ]] || \
+    { echo "FALHOU --marcar gravou: \"$(cat "$anda")\""; falhou=1; }
+rm -f "$anda"
+
 (( falhou )) && exit 1
 echo "ok: classificação do verificar-local"
