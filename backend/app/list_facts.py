@@ -18,7 +18,8 @@ _STATE_FIELDS = ("state", "label", "question", "options", "problema", "status_li
 # A lista não espera terminal de atalho: o leitor do refresher, com a última leitura boa.
 _shortcuts = sse._ListRefresher()
 # Campos do `sse._list_sig`, pelo nome: a sombra do Rust compara campo a campo e grava só o nome.
-SIG_FIELDS = ("name", "cwd", "branch", "git_cwd", "worktree_gone", "git_dirty", "state", "tracked", "headless",
+SIG_FIELDS = ("name", "cwd", "branch", "git_cwd", "worktree_gone", "git_dirty",
+              "git_ahead", "git_behind", "git_added", "git_removed", "state", "tracked", "headless",
               "jsonl", "question", "stalled", "limited", "lifecycle_id", "transfer_id", "transfer_phase",
               "last_reply", "last_reply_at", "pending_questions", "limit_reset", "then_target", "status_line",
               "context", "model", "label", "startup_steps", "loop_status", "loop_iter", "engine", "conta",
