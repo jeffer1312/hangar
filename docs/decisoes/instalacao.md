@@ -691,8 +691,9 @@ Issue #142. Um executável por arquivo de `crates/hangar-server/tests/` (94), ca
 inteiro; perfil `dev` com depuração completa para quem não passava a variável do CI; e o CI ligando
 LTO fat com uma unidade de código em todo push.
 
-Medido nesta máquina (24 núcleos, `CARGO_BUILD_JOBS=12`), `cargo test --workspace --no-run` do
-zero em `crates/`, depois tocando `src/lib.rs` e um arquivo de teste e rodando
+Medido num Intel Core i7-13700K (16 núcleos, 24 threads), 32 GB de RAM, SSD NVMe PCIe 4.0 com
+btrfs, Linux 6.18, Rust 1.98.1 e `CARGO_BUILD_JOBS=12`: `cargo test --workspace --no-run` do zero
+em `crates/`, depois tocando `src/lib.rs` e um arquivo de teste e rodando
 `cargo test -p hangar-server --no-run`:
 
 | | Antes (perfil padrão) | Antes (`line-tables-only`) | Depois |
@@ -717,6 +718,16 @@ Testes listados: 1651 no `hangar-server`, 1739 no workspace, antes e depois.
   ("condição não chegou em 5 s"), porque o `warn_limit` é do processo. A chave do diário ganhou o
   destino (o Python do servidor): em produção há um só, e cada servidor de teste tem o seu. Um
   `DiagClient` próprio por limitador mudaria a produção, porque o cliente é criado em vários pontos.
+- **Três intermitentes que a junção expôs no Windows**, corrigidos na causa:
+  - `costs/origins` dava a pasta por igual quando a skill nova nascia no mesmo degrau do relógio do
+    sistema de arquivos (1 a 16 ms no Windows) da mudança anterior. Data com menos de 2 s da
+    varredura agora não vale como "não mudou".
+  - `accounts/locks` fazia cada tentativa no pool de bloqueio. A tentativa sobrevivia ao
+    cancelamento da espera e podia pegar a trava depois dele; agora roda na própria espera, já que
+    o `try_lock` não bloqueia.
+  - O `terminal_runtime` lia o arquivo de estado no meio da troca atômica do ator. No Windows 11, 286 de
+    392 mil leituras feitas durante as trocas deram acesso negado. O leitor Python de
+    `runtime_policy.py` (`session.patch_meta`) está exposto ao mesmo e ficou fora deste trabalho.
 - **Reexecução com nome curto passava sem testar nada.** No `it` o nome ganha o módulo; o filho com
   `--exact <nome>` rodava 0 testes e saía 0. Prova: com `assert_ran_one` e o nome antigo, os cinco
   falharam com `running 0 tests`.
