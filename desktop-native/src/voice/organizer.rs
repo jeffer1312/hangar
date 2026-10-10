@@ -403,8 +403,8 @@ pub fn family_root(names: &[&str]) -> Option<usize> {
 pub fn mentions_session(text: &str, target: &str, names: &[String]) -> bool {
     let target_sq = squash(target);
     if target_sq.is_empty() { return false; }
+    // Só por palavras e sequências de palavras: o texto inteiro sem espaços acharia "ci" dentro de "precisa".
     let words: Vec<String> = text.split(|c: char| !c.is_alphanumeric()).map(squash).filter(|w| !w.is_empty()).collect();
-    if squash(text).contains(&target_sq) { return true; }
     let target_tokens = name_tokens(target);
     (0..words.len()).any(|at| {
         if SWITCH_FILLERS.contains(&words[at].as_str()) || SEND_VERBS.contains(&words[at].as_str()) || NOT_NAMES.contains(&words[at].as_str()) { return false; }
@@ -480,14 +480,34 @@ fn words_of(text: &str) -> Vec<String> { text.split(|c: char| !c.is_alphanumeric
 /// ('quer que eu volte para a voz-entendimento?') e o que o usuário disse depois dela é um sim ou um verbo de ir ('volta
 /// pra lá'), sem negativa. Citar a sessão sem a oferta, ou responder 'não', não troca.
 pub fn switch_confirmed(recent: &str, target: &str) -> bool {
+    last_offer(recent).is_some_and(|(offered, reply)| switch_asked(&offered, target)
+        && reply.iter().any(|w| SWITCH_YES.contains(&w.as_str()) || SWITCH_VERBS.contains(&w.as_str())))
+}
+
+/// A última fala da voz no trecho e as palavras do usuário depois dela, quando ele respondeu sem negar e a fala não
+/// oferece alternativa ('X ou Y?' não se responde com sim: ele precisa dizer qual).
+fn last_offer(recent: &str) -> Option<(String, Vec<String>)> {
     let lines: Vec<&str> = recent.lines().map(str::trim).collect();
-    let Some(offer) = lines.iter().rposition(|l| l.starts_with("assistant:")) else { return false };
-    let offered = &lines[offer]["assistant:".len()..];
-    // 'Vou para a X ou para a Y?' não se responde com sim: ele precisa dizer qual.
-    if !switch_asked(offered, target) || words_of(offered).iter().any(|w| w == "ou" || w == "or") { return false; }
+    let offer = lines.iter().rposition(|l| l.starts_with("assistant:"))?;
+    let offered = lines[offer]["assistant:".len()..].to_owned();
+    if words_of(&offered).iter().any(|w| w == "ou" || w == "or") { return None; }
     let reply: Vec<String> = lines[offer + 1..].iter().filter_map(|l| l.strip_prefix("user:")).flat_map(words_of).collect();
-    !reply.is_empty() && !reply.iter().any(|w| SWITCH_NO.contains(&w.as_str()))
-        && reply.iter().any(|w| SWITCH_YES.contains(&w.as_str()) || SWITCH_VERBS.contains(&w.as_str()))
+    (!reply.is_empty() && !reply.iter().any(|w| SWITCH_NO.contains(&w.as_str()))).then_some((offered, reply))
+}
+
+/// Como a voz oferece mandar algo ("mando", "envio", "peço", "aviso", "pergunto", "passo").
+const OFFER_VERBS: [&str; 7] = ["mando", "envio", "peco", "aviso", "pergunto", "passo", "repasso"];
+
+/// Envio para a sessão `name` autorizado pelo usuário: ele a citou na própria fala (a fala da voz não conta), disse sim à
+/// voz que acabou de oferecer mandar para ela, ou ela é a sessão da tela. Sem isso, quem escolheria o destino seria o
+/// organizador.
+pub fn send_target_authorized(said: &str, recent: &str, name: &str, screen: &str, names: &[String]) -> bool {
+    // Oferta é pergunta de envio ("mando para a X?"); a voz só citar a sessão ("a X terminou") não conta.
+    let is_offer = |line: &str| line.contains('?')
+        && words_of(line).iter().any(|w| SEND_VERBS.contains(&w.as_str()) || OFFER_VERBS.contains(&w.as_str()));
+    let offered = last_offer(recent).is_some_and(|(offered, reply)| is_offer(&offered) && mentions_session(&offered, name, names)
+        && reply.iter().any(|w| SWITCH_YES.contains(&w.as_str()) || SEND_VERBS.contains(&w.as_str())));
+    mentions_session(said, name, names) || offered || (!screen.is_empty() && squash(name) == squash(screen))
 }
 
 /// Pedido de troca para `target`: dito na fala do turno, ou um sim à oferta da voz no trecho que a acompanha.
@@ -556,16 +576,19 @@ const EDIT_VERBS: [&str; 18] = ["edita", "edite", "editar", "altera", "altere", 
     "grava", "grave", "gravar", "escreve", "escreva", "escrever", "salva", "salve", "salvar"];
 
 /// Verbos de mexer no código que só valem como pedido de edição dirigido a ele ("corrige você mesmo").
-const FIX_VERBS: [&str; 14] = ["corrige", "corrija", "conserta", "conserte", "implementa", "implemente", "ajusta", "ajuste", "arruma",
-    "arrume", "faca", "faz", "muda", "mude"];
+/// "faz" e "muda" ficam de fora: "o que você faz?" é conversa, e a liberação é acesso total à máquina.
+const FIX_VERBS: [&str; 10] = ["corrige", "corrija", "conserta", "conserte", "implementa", "implemente", "ajusta", "ajuste", "arruma",
+    "arrume"];
 
 /// A fala pede para o organizador editar: um verbo de edição, ou "você/tu/mesmo" com um verbo de conserto
 /// ("corrige você", "você mesmo ajusta"), sem negação logo antes.
 pub fn edit_asked(spoken: &str, _names: &[String]) -> bool {
     let words: Vec<String> = spoken.split(|c: char| !c.is_alphanumeric()).map(squash).filter(|w| !w.is_empty()).collect();
-    let yourself = words.iter().any(|w| matches!(w.as_str(), "voce" | "tu" | "mesmo" | "mesma"));
+    let is_yourself = |w: &String| matches!(w.as_str(), "voce" | "tu" | "mesmo" | "mesma");
+    // "você/mesmo" colado ao verbo de conserto: logo antes ("você ajusta") ou até duas depois ("corrige você mesmo").
+    let yourself_next_to = |at: usize| (at > 0 && is_yourself(&words[at - 1])) || words[at + 1..(at + 3).min(words.len())].iter().any(is_yourself);
     let negated = |at: usize| words[at.saturating_sub(2)..at].iter().any(|w| SEND_NEGATIONS.contains(&w.as_str()));
-    words.iter().enumerate().any(|(at, w)| !negated(at) && (EDIT_VERBS.contains(&w.as_str()) || (yourself && FIX_VERBS.contains(&w.as_str()))))
+    words.iter().enumerate().any(|(at, w)| !negated(at) && (EDIT_VERBS.contains(&w.as_str()) || (FIX_VERBS.contains(&w.as_str()) && yourself_next_to(at))))
 }
 
 /// Ação só com intenção: pedido falado recente ("manda…", "edita…") ou o sim a uma pergunta de confirmação feita em
@@ -590,9 +613,11 @@ impl Consent {
         if asked { self.asked = Some(now); }
         asked
     }
-    /// Envio para `to` (nome falado, ou vazio para a sessão da tela). `named`: a fala do turno cita esse destino.
+    /// Envio para `to` (nome falado, ou vazio para a sessão da tela). `named`: o usuário autorizou esse destino
+    /// (`send_target_authorized`); destino nomeado sem isso é recusado já no primeiro envio do turno.
     pub fn check_to(&mut self, turn: &str, to: &str, named: bool, now: Instant) -> SendConsent {
         let to = squash(to);
+        if !to.is_empty() && !named { return SendConsent::NotNamed; }
         if let Some((granted_turn, done)) = &mut self.granted && granted_turn == turn && self.blocked.as_deref() != Some(turn) {
             if done.contains(&to) { return SendConsent::Duplicate; }
             if named { done.push(to); return SendConsent::Granted; }
@@ -602,6 +627,15 @@ impl Consent {
             self.granted = Some((turn.to_owned(), vec![to]));
             SendConsent::Granted
         } else { SendConsent::Unconfirmed }
+    }
+    /// O envio autorizado não saiu (pedido curto, cancelado): o destino volta a valer no turno, senão o reenvio correto
+    /// seria recusado como repetido. Sem destino nenhum atendido, o turno volta ao estado de antes da autorização.
+    pub fn release(&mut self, turn: &str, to: &str) {
+        let to = squash(to);
+        if let Some((granted_turn, done)) = &mut self.granted && granted_turn == turn {
+            done.retain(|d| *d != to);
+            if done.is_empty() { self.granted = None; }
+        }
     }
     /// O Jev, com certeza alta: "manda" vale como pedido; conversa, "segura" ou fala solta trancam o envio daquele turno,
     /// mesmo com palavra de envio na fala ("o que você acha de mandar…?"). Sem certeza, fica a regra das palavras.
@@ -817,7 +851,11 @@ impl<T> SendGate<T> {
     /// Tira os pedidos que iam para `to` (vazio = a sessão da tela, que mudou).
     pub fn take_for(&mut self, to: &str) -> Vec<(T, String)> {
         let to = squash(to);
-        let (gone, kept): (Vec<_>, Vec<_>) = self.pending.drain(..).partition(|(t, ..)| *t == to);
+        self.take_where(|t, _| *t == to)
+    }
+    /// Tira os pedidos que `matches` escolhe (destino já normalizado e a chamada).
+    pub fn take_where(&mut self, matches: impl Fn(&str, &T) -> bool) -> Vec<(T, String)> {
+        let (gone, kept): (Vec<_>, Vec<_>) = self.pending.drain(..).partition(|(t, call, ..)| matches(t, call));
         self.pending = kept;
         gone.into_iter().map(|(_, c, r, _)| (c, r)).collect()
     }
@@ -1400,9 +1438,72 @@ mod tests {
         let t0 = Instant::now();
         let mut consent = Consent::send();
         assert!(!consent.heard("como a gente faz pra testar o Rust?", &all, t0));
-        assert_eq!(consent.check_to("t1", "hcc-rust-plano", false, t0), SendConsent::Unconfirmed);
+        assert_eq!(consent.check_to("t1", "", false, t0), SendConsent::Unconfirmed);
         assert!(consent.heard("pede pra ele", &all, t0 + Duration::from_secs(5)), "a fala seguinte completa o pedido");
-        assert_eq!(consent.check_to("t2", "hcc-rust-plano", false, t0 + Duration::from_secs(6)), SendConsent::Granted);
+        assert_eq!(consent.check_to("t2", "", false, t0 + Duration::from_secs(6)), SendConsent::Granted);
+    }
+
+    /// O organizador escolhe o destino; quem autoriza é o usuário. Revisão de 09/10: o primeiro envio nomeado não conferia.
+    #[test]
+    fn named_destination_needs_the_user_not_the_organizer() {
+        let all = names(&SESSIONS);
+        let t0 = Instant::now();
+        let mut consent = Consent::send();
+        assert!(consent.heard("manda isso", &all, t0));
+        assert_eq!(consent.check_to("t1", "pm18920-api", false, t0), SendConsent::NotNamed, "a fala não citou a sessão");
+        assert_eq!(consent.check_to("t1", "", false, t0), SendConsent::Granted, "a da tela segue valendo");
+        // A voz citar a sessão não é o usuário citar; o sim à oferta dela é.
+        let cited = "assistant: A pm18920-api terminou os testes.\nuser: manda isso";
+        assert!(!send_target_authorized("manda isso", cited, "pm18920-api", "voz-entendimento", &all));
+        let offer = "assistant: Mando o pedido para a pm18920-api?\nuser: sim, manda";
+        assert!(send_target_authorized("sim, manda", offer, "pm18920-api", "voz-entendimento", &all));
+        let refused = "assistant: Mando o pedido para a pm18920-api?\nuser: não, espera";
+        assert!(!send_target_authorized("não, espera", refused, "pm18920-api", "voz-entendimento", &all));
+        assert!(send_target_authorized("manda pra ela", "", "voz-entendimento", "voz-entendimento", &all), "a da tela vale sem nome");
+        assert!(send_target_authorized("pergunta pra jev settings", "", "jev-settings-ux", "", &all));
+    }
+
+    /// Revisão de 09/10: o pedido curto recusado marcava o destino e o reenvio certo virava "já enviado".
+    #[test]
+    fn refused_short_request_frees_the_destination() {
+        let all = names(&SESSIONS);
+        let t0 = Instant::now();
+        let mut consent = Consent::send();
+        consent.heard("manda pra voz-entendimento e pra hcc-rust-plano", &all, t0);
+        assert_eq!(consent.check_to("t1", "voz-entendimento", true, t0), SendConsent::Granted);
+        consent.release("t1", "voz-entendimento");
+        assert_eq!(consent.check_to("t1", "voz-entendimento", true, t0), SendConsent::Granted, "o reenvio completo passa");
+        assert_eq!(consent.check_to("t1", "voz-entendimento", true, t0), SendConsent::Duplicate);
+        assert_eq!(consent.check_to("t1", "hcc-rust-plano", true, t0), SendConsent::Granted);
+    }
+
+    #[test]
+    fn short_session_names_never_match_inside_words() {
+        let all = names(&["ci", "ui", "voz-entendimento"]);
+        assert!(!mentions_session("precisa ver isso", "ci", &all), "\"ci\" dentro de \"precisa\"");
+        assert!(!mentions_session("a ui ficou boa", "ui", &all), "nome de duas letras não é citação");
+        assert!(mentions_session("manda pra voz entendimento", "voz-entendimento", &all));
+    }
+
+    #[test]
+    fn talk_does_not_unlock_full_access_editing() {
+        for talk in ["o que você faz?", "a sessão faz o mesmo", "você muda de ideia rápido", "você viu? corrige isso depois na sessão"] {
+            assert!(!edit_asked(talk, &[]), "{talk}");
+        }
+        for ask in ["corrige você mesmo o script", "você ajusta o arquivo", "edita o delphi-vm", "arruma você"] {
+            assert!(edit_asked(ask, &[]), "{ask}");
+        }
+    }
+
+    #[test]
+    fn gate_cancels_only_the_blocked_turn() {
+        let mut gate = SendGate::default();
+        let t0 = Instant::now();
+        gate.offer((1, "t1"), "voz-entendimento", "Olhar a falha de envio".into(), t0).unwrap();
+        gate.offer((2, "t2"), "hcc-rust-plano", "Rodar os testes do Rust".into(), t0).unwrap();
+        let gone: Vec<i32> = gate.take_where(|_, (_, t)| *t == "t1").into_iter().map(|((id, _), _)| id).collect();
+        assert_eq!(gone, vec![1]);
+        assert!(gate.waiting_for("hcc-rust-plano") && !gate.waiting_for("voz-entendimento"));
     }
 
     #[test]

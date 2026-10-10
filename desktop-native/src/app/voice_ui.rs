@@ -266,10 +266,13 @@ fn screen_root(snapshot: &str, area: Option<&str>) -> Result<Option<String>, Str
 }
 
 /// Palavras de botão que muda algo difícil de desfazer ou que fala por ele: o clique por voz pede o sim antes.
-const RISKY_CLICK: [&str; 46] = ["apagar", "apague", "excluir", "exclua", "remover", "remova", "deletar", "delete", "remove", "descartar", "discard",
+const RISKY_CLICK: [&str; 64] = ["apagar", "apague", "excluir", "exclua", "remover", "remova", "deletar", "delete", "remove", "descartar", "discard",
     "encerrar", "encerra", "kill", "matar", "sair", "logout", "desconectar", "disconnect", "resetar", "reset", "limpar", "clear", "desinstalar",
     "uninstall", "revogar", "revoke", "parar", "stop", "interromper", "enviar", "envie", "send", "submit", "publicar", "publish", "push", "commit",
-    "merge", "confirmar", "confirm", "aplicar", "apply", "instalar", "install", "reiniciar"];
+    "merge", "confirmar", "confirm", "aplicar", "apply", "instalar", "install", "reiniciar",
+    // Respostas a pedido de permissão e o que sobrescreve ou desfaz trabalho.
+    "permitir", "allow", "aprovar", "approve", "negar", "deny", "recusar", "cancelar", "cancel", "arquivar", "archive", "salvar", "save",
+    "sobrescrever", "overwrite", "reverter", "revert", "restore"];
 
 /// O clique por id é arriscado quando o id ou o nome do botão tem uma dessas palavras, ou fecha uma sessão.
 pub(super) fn risky_click(id: &str, label: Option<&str>) -> bool {
@@ -999,15 +1002,16 @@ impl Hangar {
             .collect()
     }
 
-    /// Nome falado (com ou sem a máquina) → as candidatas e o que casou. Várias: desempata pelo contexto e pela raiz da
-    /// família (`narrow_by_context`); `for_switch` tira a sessão da tela do contexto, porque trocar é ir para outra.
-    fn voice_match(&self, spoken: &str, for_switch: bool, cx: &App) -> (Vec<(String, SessionInfo)>, SessionMatch) {
+    /// Nome falado (com ou sem a máquina) → as candidatas e o que casou. Com `narrow`, várias se desempatam pelo contexto
+    /// e pela raiz da família (`narrow_by_context`); `Some(true)` tira a sessão da tela, porque trocar é ir para outra.
+    /// Só troca e acompanhar desempatam: enviar, agrupar e fechar não se desfazem, e nome ambíguo ali sempre pergunta.
+    fn voice_match(&self, spoken: &str, narrow: Option<bool>, cx: &App) -> (Vec<(String, SessionInfo)>, SessionMatch) {
         let candidates = self.voice_candidates();
         let names: Vec<&str> = candidates.iter().map(|(_, s)| s.name.as_str()).collect();
         let machines: Vec<Vec<String>> = candidates.iter().map(|(key, _)| machine_aliases(key, &self.machine_label(key, cx))).collect();
         let on_active: Vec<bool> = candidates.iter().map(|(key, _)| self.is_active_key(key)).collect();
         let found = match match_qualified(spoken, &names, &machines, &on_active) {
-            SessionMatch::Many(found) => {
+            SessionMatch::Many(found) if let Some(for_switch) = narrow => {
                 let now = std::time::Instant::now();
                 let open = self.selected.as_ref().map(|s| (self.open_server(), s.name.clone()));
                 let all: Vec<String> = candidates.iter().map(|(_, s)| s.name.clone()).collect();
@@ -1039,7 +1043,8 @@ impl Hangar {
 
     /// Nome falado → (máquina, sessão). Ambíguo ou ausente volta como texto para o organizador; nunca um palpite.
     fn voice_resolve(&self, tool: &str, spoken: &str, cx: &App) -> Result<(String, SessionInfo), String> {
-        let (mut candidates, found) = self.voice_match(spoken, false, cx);
+        let narrow = matches!(tool, "follow_session" | "unfollow_session").then_some(false);
+        let (mut candidates, found) = self.voice_match(spoken, narrow, cx);
         match found {
             SessionMatch::One(i) => { crate::voice::log(format!("{tool} one")); Ok(candidates.swap_remove(i)) }
             SessionMatch::Many(found) => { crate::voice::log(format!("{tool} many({})", found.len())); Err(self.voice_ambiguous(&candidates, &found, cx)) }
@@ -1051,7 +1056,7 @@ impl Hangar {
     /// `said`: a fala do turno; sem pedido de troca para essa sessão, nada muda (o pedido segue para a sessão ativa).
     fn voice_switch(&mut self, call: CallId, spoken: &str, said: &str, recent: &str, window: &mut Window, cx: &mut Context<Self>) {
         let now = std::time::Instant::now();
-        let (mut candidates, found) = self.voice_match(spoken, true, cx);
+        let (mut candidates, found) = self.voice_match(spoken, Some(true), cx);
         let resolved = match found {
             SessionMatch::One(i) => { crate::voice::log("switch_session one"); Ok(candidates.swap_remove(i)) }
             SessionMatch::Many(found) => {
@@ -1802,6 +1807,9 @@ impl Hangar {
         }
         let Some(index) = self.voice.pending_sends.iter().position(|(k, t, _)| k == key && t == text) else { return };
         let Some((_, _, call)) = self.voice.pending_sends.remove(index) else { return };
+        // Recusa certa não entregou nada: a sessão volta a poder receber o reenvio do mesmo turno. Incerto fica marcado,
+        // porque pode ter chegado.
+        if matches!(result, Err(error) if !error.uncertain) && let Some((_, keys)) = &mut self.voice.sent_turn { keys.remove(key); }
         self.voice_reply(call, send_reply(&key.name, result));
     }
 

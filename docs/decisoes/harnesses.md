@@ -3069,8 +3069,12 @@ Descartados: ferramentas de leitura restritas à pasta e desligar a pesquisa com
     - verbo de comunicação (pergunta, avisa, informa, conta, passa, fala, diz, explica) vale como pedido quando
       vem com o destinatário ("pra ela", "a sessão", o começo do nome de uma sessão); "pergunta pra você", "me
       conta" e negativa continuam conversa;
-    - o pedido vale para o turno: um envio por sessão citada na fala (`mentions_session`), quantas forem;
-      sessão não citada e a mesma sessão duas vezes são recusadas (a tela confere também pela sessão resolvida);
+    - o pedido vale para o turno: um envio por sessão que o usuário autorizou, quantas forem. Autorizar
+      (`send_target_authorized`) é ele citar a sessão na própria fala, dizer sim à voz que perguntou "mando
+      para a X?", ou ela ser a da tela; a voz só citar a sessão não conta, e quem escolhe o destino nunca é o
+      organizador. Vale desde o primeiro envio. Sessão não autorizada e a mesma sessão duas vezes são recusadas
+      (a tela confere também pela sessão resolvida); envio que não saiu (pedido curto, recusa certa) libera a
+      sessão para o reenvio;
     - a espera de 1,5 s é por destino (`SendGate`): pedido novo só substitui o que ia para o mesmo lugar, e a
       troca de tela só derruba o pedido sem destino;
     - envio recusado por falta de pedido seguido de uma fala que o completa leva uma `[NOTA DO HANGAR]` ao
@@ -3081,6 +3085,11 @@ Descartados: ferramentas de leitura restritas à pasta e desligar a pesquisa com
     mais ou a menos) e, quando várias casam, desempata nesta ordem: a única no contexto (citada na conversa,
     acompanhada, falada há pouco, a da tela quando não é troca); a raiz da família (o nome do qual as outras são
     continuação). Sem isso, continua ambíguo e a voz pergunta. A trava de troca segue exigindo o pedido falado.
+    O desempate vale só para trocar e acompanhar, que se desfazem com outra fala; enviar, agrupar e fechar
+    perguntam qual sempre que o nome casa com mais de uma.
+  - **Edição liberada só por pedido a ele.** "Você/mesmo" conta só colado ao verbo de conserto ("corrige você
+    mesmo", "você ajusta"); "faz" e "muda" saíram da lista: "o que você faz?" liberava acesso total por 45 s.
+    Acesso completo que não fecha recusa novas edições até a chamada acabar.
   - **Eco do organizador:** se ele pede a troca que o Jev acabou de fazer (até 20 s depois), recebe
     "já trocou, termine calado", em vez de "já estou nela", que ele falava como se trocasse agora.
 - **Troca por voz pergunta antes de resumir.** Depois de trocar por voz (Jev ou organizador), a voz

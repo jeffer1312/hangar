@@ -270,6 +270,8 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
     let mut edit_consent = Consent::edit();
     let mut edit_pending: Option<(String, PathBuf)> = None;
     let mut edit_turn: Option<String> = None;
+    // O acesso completo não fechou: nenhuma edição nova é liberada enquanto ele estiver aberto sem dono.
+    let mut edit_stuck = false;
     // Última fala repassada (para reconhecer a repetida) e os itens de fala já tratados.
     let mut last_input: Option<(String, Instant)> = None;
     let mut seen_items: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -428,6 +430,11 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                             let _ = rpc.respond(id, tool_reply("No Windows você roda sem shell e não consegue editar; mande o pedido à sessão.", false)).await;
                             "refused-windows"
                         }
+                        ToolCall::EditFiles(_) if edit_stuck => {
+                            let _ = rpc.respond(id, tool_reply("O acesso completo da edição anterior não fechou; nenhuma edição nova até \
+                                encerrar a chamada. Mande o pedido à sessão.", false)).await;
+                            "refused-edit-stuck"
+                        }
                         ToolCall::EditFiles(_) if !edit_consent.check(params["turnId"].as_str().unwrap_or_default(), Instant::now()) => {
                             let _ = rpc.respond(id, tool_reply(organizer::EDIT_UNCONFIRMED, false)).await;
                             "refused-unconfirmed"
@@ -481,13 +488,18 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                             let turn = params["turnId"].as_str().unwrap_or_default().to_owned();
                             let to = session.clone().unwrap_or_default();
                             let said = spoken.text(&params).unwrap_or_default().to_owned();
-                            let heard = format!("{said}\n{}", spoken.recent(&params).unwrap_or_default());
-                            let named = session.as_deref().is_some_and(|name| organizer::mentions_session(&heard, name, &session_names));
+                            let recent = spoken.recent(&params).unwrap_or_default().to_owned();
+                            let named = session.as_deref().is_some_and(|name| organizer::send_target_authorized(&said, &recent, name, &target, &session_names));
                             // Pedido que ainda espera para o mesmo destino: o novo é correção dele, não envio a mais.
                             let verdict = if gate.waiting_for(&to) { SendConsent::Granted } else { consent.check_to(&turn, &to, named, Instant::now()) };
                             match verdict {
-                                SendConsent::Granted => match gate.offer((id, session, turn), &to, request, Instant::now()) {
-                                    Err(((id, ..), why)) => { let _ = rpc.respond(id, tool_reply(why, false)).await; "refused-short" }
+                                SendConsent::Granted => match gate.offer((id, session, turn.clone()), &to, request, Instant::now()) {
+                                    Err(((id, ..), why)) => {
+                                        // Nada saiu: o reenvio completo no mesmo turno não pode virar "já enviado".
+                                        consent.release(&turn, &to);
+                                        let _ = rpc.respond(id, tool_reply(why, false)).await;
+                                        "refused-short"
+                                    }
                                     Ok(Some(((old, ..), _))) => { let _ = rpc.respond(old, tool_reply("Substituído por um pedido mais recente; nada foi enviado.", false)).await; "offered-superseded" }
                                     Ok(None) => "offered",
                                 },
@@ -640,7 +652,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                             // Acabou o turno da edição (concluído, interrompido ou falho): o acesso ao projeto fecha já.
                             if edit_turn.is_some() && edit_turn.as_deref() == params["turn"]["id"].as_str() {
                                 edit_turn = None;
-                                close_edit_access(&rpc, &thread, &own, events).await;
+                                edit_stuck = !close_edit_access(&rpc, &thread, &own, events).await;
                             }
                             if let Some((request, project)) = edit_pending.take() {
                                 let text = format!("{} Edição liberada pelo usuário, com acesso completo a esta máquina (pasta de trabalho {}): \
@@ -655,7 +667,7 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                                     }
                                     Err(error) => {
                                         log(format!("edit turn start failed kind={}", rpc_error_kind(&error)));
-                                        close_edit_access(&rpc, &thread, &own, events).await;
+                                        edit_stuck = !close_edit_access(&rpc, &thread, &own, events).await;
                                         if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut hold, organizer_busy).await; }
                                     }
                                 }
@@ -706,6 +718,13 @@ async fn run_call(options: VoiceOptions, events: &async_channel::Sender<VoiceEve
                 Some(Command::PlanDelivered) => planner.delivered(),
                 Some(Command::Jev { turn, verdict, speech, note }) => {
                     consent.jev(&turn, verdict, Instant::now());
+                    // O Jev pode responder depois que o pedido entrou na espera: o bloqueio vale para ele também.
+                    if verdict == SendVerdict::Block {
+                        for ((old, ..), _) in gate.take_where(|_, (_, _, t)| *t == turn) {
+                            log("gate cancelled: jev blocked the turn");
+                            let _ = rpc.respond(old, tool_reply("Cancelado: o pedido foi entendido como conversa; nada foi enviado.", false)).await;
+                        }
+                    }
                     log(format!("jev verdict={verdict:?} note={} speech={}", note.is_some(), speech.is_some()));
                     if let Some(text) = speech { speak(&rpc, &thread, &mut hold, text, "jev").await; }
                     // A tela já agiu: o organizador sabe no mesmo turno e não repete a ação.
@@ -805,13 +824,14 @@ async fn apply_models(rpc: &Rpc, thread: &str, applied: &mut ModeModel, models: 
 
 /// Volta o organizador ao isolamento: grava só na pasta própria. Tenta duas vezes; falhando, avisa na tela, porque o acesso
 /// completo ficaria aberto nos turnos seguintes.
-async fn close_edit_access(rpc: &Rpc, thread: &str, own: &std::path::Path, events: &async_channel::Sender<VoiceEvent>) {
+async fn close_edit_access(rpc: &Rpc, thread: &str, own: &std::path::Path, events: &async_channel::Sender<VoiceEvent>) -> bool {
     let back = json!({"threadId": thread, "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": []}, "cwd": own});
     for _ in 0..2 {
-        if rpc.request("thread/settings/update", back.clone()).await.is_ok() { log("edit access closed"); return; }
+        if rpc.request("thread/settings/update", back.clone()).await.is_ok() { log("edit access closed"); return true; }
     }
     log("edit access close failed");
     let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await;
+    false
 }
 
 /// Fala que a voz puxa sozinha passa por aqui: com o usuário falando, fica guardada até ele terminar.

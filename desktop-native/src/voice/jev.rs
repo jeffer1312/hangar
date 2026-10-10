@@ -50,15 +50,27 @@ pub fn config_from(runtime: &Value, settings_env: &Value, env_key: Option<String
 
 /// Bloqueia (lê arquivos). Pasta de config do servidor desta máquina: a mesma regra do backend.
 pub fn load(home: &Path) -> Option<Config> {
-    let read = |path: &Path| std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or(Value::Null);
+    // Ausente é normal; ilegível ou quebrado vai ao diário (só o nome e o tipo), senão a chave cai calada no ambiente.
+    let read = |path: &Path| {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|e| {
+                crate::voice::log(format!("jev {name} unreadable json kind={:?}", e.classify()));
+                Value::Null
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
+            Err(e) => { crate::voice::log(format!("jev {name} unreadable kind={:?}", e.kind())); Value::Null }
+        }
+    };
     let base = std::env::var_os("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), Into::into);
     let runtime = read(&base.join("runtime-config.json"));
     let settings = read(&home.join(".claude").join("settings.json"));
     config_from(&runtime, &settings["env"], std::env::var("TYPESAFE_API_KEY").ok().filter(|v| !v.is_empty()))
 }
 
-/// Modelo que o endereço recusou ("does not exist"): troca pelo padrão uma vez e lembra pelo resto do app aberto.
-static FALLBACK: Mutex<Option<String>> = Mutex::new(None);
+/// Modelo que o endereço recusou ("does not exist") e o padrão que o substitui: `(endereço, recusado, padrão)`. Só vale
+/// enquanto a configuração continuar com esse par; trocar o modelo na tela do Jev volta a valer na hora.
+static FALLBACK: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pick { pub choice: String, pub p: f64 }
@@ -66,19 +78,24 @@ pub struct Pick { pub choice: String, pub p: f64 }
 /// Respostas por pergunta. Erro volta como texto curto para o diário (nunca a chave).
 pub async fn ask(config: &Config, state: &str, questions: &Value) -> Result<std::collections::HashMap<String, Pick>, String> {
     let client = reqwest::Client::builder().timeout(TIMEOUT).build().map_err(|_| "cliente http".to_owned())?;
-    let mut model = FALLBACK.lock().ok().and_then(|f| f.clone()).unwrap_or_else(|| config.model.clone());
+    let mut model = FALLBACK.lock().ok().and_then(|f| f.clone())
+        .filter(|(url, refused, _)| *url == config.url && *refused == config.model)
+        .map_or_else(|| config.model.clone(), |(_, _, fallback)| fallback);
     for attempt in 0..2 {
         let body = json!({"model": model, "state": state, "questions": questions});
         let response = client.post(&config.url).bearer_auth(&config.key).json(&body).send().await.map_err(|e| if e.is_timeout() { "timeout".to_owned() } else { "rede".to_owned() })?;
         let status = response.status();
         let value: Value = response.json().await.unwrap_or(Value::Null);
-        if status.is_success() { return Ok(picks(&value["answers"])); }
+        if status.is_success() {
+            // 200 sem respostas é erro, não "Jev sem certeza".
+            return if value["answers"].is_object() { Ok(picks(&value["answers"])) } else { Err("corpo invalido".into()) };
+        }
         let missing = status.as_u16() == 400 && value["error"]["message"].as_str().is_some_and(|m| m.contains("does not exist"));
         let fallback = if config.url.contains("openrouter.ai") { OPENROUTER_MODEL } else { TYPESAFE_MODEL };
         if attempt == 0 && missing && model != fallback {
             crate::voice::log("jev model refused, using default");
+            if let Ok(mut f) = FALLBACK.lock() { *f = Some((config.url.clone(), model.clone(), fallback.to_owned())); }
             model = fallback.to_owned();
-            if let Ok(mut f) = FALLBACK.lock() { *f = Some(model.clone()); }
             continue;
         }
         return Err(format!("http {}", status.as_u16()));

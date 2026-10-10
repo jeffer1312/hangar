@@ -442,9 +442,13 @@ impl Window {
             return Err("disabled");
         }
         let listens = self.a11y.action_listeners.get(&node_id).is_some_and(|l| l.iter().any(|(a, _)| *a == Action::Click));
-        if !listens {
-            // The built-in click drops itself with only a log line when it would miss: say it here instead.
-            let bounds = self.a11y.node_bounds.get(&node_id).copied().ok_or("not-found")?;
+        // A button under an open dialog must not be pressed, whichever path handles the click. The built-in click drops
+        // itself with only a log line when it would miss: say it here instead.
+        let bounds = self.a11y.node_bounds.get(&node_id).copied();
+        if bounds.is_none() && !listens {
+            return Err("not-found");
+        }
+        if let Some(bounds) = bounds {
             let center = bounds.center();
             let reachable = self.a11y.node_hitboxes.get(&node_id).map_or(true, |hitbox| {
                 let hit = self.rendered_frame.hit_test(center);

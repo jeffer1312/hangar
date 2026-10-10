@@ -41,13 +41,27 @@ pub fn redact(args: &[String]) -> String {
     for arg in args {
         let shown = if hide_next { "***".to_owned() }
             else if let Some((name, _)) = arg.split_once('=').filter(|(name, _)| secret_name(name)) { format!("{name}=***") }
+            else if let Some(url) = userinfo_masked(arg) { url }
+            // `-pSENHA` (mysql e afins): a senha vem grudada na opção.
+            else if arg.len() > 2 && arg.starts_with("-p") && !arg.starts_with("--") { "-p***".to_owned() }
             else if secret_shape(arg) { "***".to_owned() }
             else { arg.clone() };
-        hide_next = !hide_next && arg.starts_with('-') && !arg.contains('=') && secret_name(arg);
+        // `-H "Authorization: Bearer x"` e `--header`: o valor do cabeçalho vem no argumento seguinte.
+        let header = matches!(arg.as_str(), "-H" | "--header");
+        hide_next = !hide_next && arg.starts_with('-') && !arg.contains('=') && (secret_name(arg) || header);
         out.push(shown);
     }
     let line = out.join(" ");
     if line.chars().count() <= CMD_WIDTH { line } else { format!("{}…", line.chars().take(CMD_WIDTH).collect::<String>()) }
+}
+
+/// `esquema://usuario:senha@host/...` com a senha trocada; `None` quando o argumento não tem credencial em URL.
+fn userinfo_masked(arg: &str) -> Option<String> {
+    let (scheme, rest) = arg.split_once("://")?;
+    let (userinfo, host) = rest.split_once('@')?;
+    if userinfo.contains('/') { return None; }
+    let user = userinfo.split_once(':').map_or(userinfo, |(user, _)| user);
+    Some(format!("{scheme}://{user}:***@{host}"))
 }
 
 fn mib(bytes: u64) -> String { format!("{:.0} MiB", bytes as f64 / 1_048_576.) }
@@ -108,6 +122,10 @@ mod tests {
         assert_eq!(redact(&args("/home/jefferson/.cache/hangar-voz/hangar-native")), "/home/jefferson/.cache/hangar-voz/hangar-native");
         assert_eq!(redact(&args("claude --session-id 01a1218b-bbb5-7a10-aaab-8fc7a61fcf33")), "claude --session-id ***",
             "uuid longo some por precaução; o nome do processo segue");
+        assert_eq!(redact(&args("psql postgres://app:s3nha@db:5432/x")), "psql postgres://app:***@db:5432/x");
+        assert_eq!(redact(&["curl".into(), "-H".into(), "Authorization: Bearer x".into(), "http://h/a".into()]), "curl -H *** http://h/a");
+        assert_eq!(redact(&args("mysql -uroot -ps3nha db")), "mysql -uroot -p*** db");
+        assert_eq!(redact(&args("git clone https://github.com/a/b")), "git clone https://github.com/a/b", "URL sem credencial fica");
     }
 
     #[test]
