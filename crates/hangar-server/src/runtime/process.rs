@@ -256,7 +256,7 @@ pub async fn spawn(spec: &LaunchSpec) -> Result<Cano, ProcessError> {
 
 /// Mata o grupo do cano (cano + agente) só se o pid ainda for o cano da chave e, confirmada a saída,
 /// apaga os rastros dele na pasta da sessão (`sidecar_dir`): o socket desta vida e, se nenhuma outra
-/// vida da chave tem socket ali, os demais `cano-<key16>*`. Pid de outro programa: não mata.
+/// vida da chave tem socket ali nem processo vivo, os demais `cano-<key16>*`. Pid de outro programa: não mata.
 pub async fn kill(cano: &Cano, key: &str, sidecar_dir: &Path) -> Result<(), ProcessError> {
     let (pid, key_owned) = (cano.pid, key.to_owned());
     let state = tokio::task::spawn_blocking(move || identify(pid, &key_owned)).await
@@ -273,7 +273,7 @@ pub async fn kill(cano: &Cano, key: &str, sidecar_dir: &Path) -> Result<(), Proc
             }
         }
     }
-    remove_traces(sidecar_dir, key, &cano.escuta);
+    remove_traces(sidecar_dir, key, &cano.escuta, cano.pid);
     Ok(())
 }
 
@@ -305,7 +305,7 @@ fn signal_group(pid: u32) -> Result<(), ProcessError> {
     if matches!(status.code(), Some(0 | 128)) { Ok(()) } else { Err(ProcessError::StillAlive) }
 }
 
-fn remove_traces(dir: &Path, key: &str, escuta: &str) {
+fn remove_traces(dir: &Path, key: &str, escuta: &str, except: u32) {
     // Chave vazia ou curta casaria `cano-*` de outras sessões e levaria o socket delas.
     if key.len() < 16 { return; }
     let prefix = format!("cano-{}", key16(key));
@@ -321,11 +321,30 @@ fn remove_traces(dir: &Path, key: &str, escuta: &str) {
         Ok(entries) => entries.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&prefix)).collect(),
         Err(e) => { tracing::debug!(dir = %dir.display(), kind = ?e.kind(), "rastros do cano: pasta ilegível"); return; }
     };
-    // Outra vida da mesma chave (sufixo por subida) ainda tem socket: o log e o resto são dela também.
-    let newer_life = entries.iter().any(|e| { let name = e.file_name().to_string_lossy().into_owned();
+    // Outra vida da mesma chave (sufixo por subida) ainda tem socket, ou outro cano dela está vivo (a
+    // que escuta por TCP não deixa socket): o log e o resto são dela também.
+    let newer_socket = entries.iter().any(|e| { let name = e.file_name().to_string_lossy().into_owned();
         name.starts_with(&format!("{prefix}-")) && name.ends_with(".sock") });
-    if newer_life { return; }
+    if newer_socket || other_cano_alive(key, except) { return; }
     for entry in entries { remove(&entry.path()); }
+}
+
+/// Outro cano vivo desta chave além de `except`. Sem como listar os processos, responde que sim: na
+/// dúvida, os rastros ficam.
+#[cfg(target_os = "linux")]
+fn other_cano_alive(key: &str, except: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else { return true };
+    entries.flatten().filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| *pid != except)
+        .any(|pid| probe(pid).is_some_and(|(argv, _)| is_cano_of(&argv, key)))
+}
+#[cfg(not(target_os = "linux"))]
+fn other_cano_alive(key: &str, except: u32) -> bool {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    system.processes().iter().any(|(pid, process)| pid.as_u32() != except
+        && is_cano_of(&process.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(), key))
 }
 
 /// Canos deste dono cuja sessão já não existe; `SIGTERM` por pid, como o Python. Dono é

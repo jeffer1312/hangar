@@ -162,3 +162,25 @@ async fn killing_an_old_life_keeps_the_socket_of_the_newer_one() {
     assert!(newer.exists(), "o socket da vida mais nova fica");
     assert!(log.exists(), "o log, dividido entre as vidas, fica enquanto outra vida existe");
 }
+
+/// Vida nova que escuta por TCP (Windows, caminho Unix longo) não deixa socket na pasta: o log
+/// dividido fica enquanto houver outro cano vivo da chave.
+#[tokio::test]
+async fn killing_an_old_life_keeps_the_log_of_a_newer_tcp_life() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = unique_key();
+    let log = dir.path().join(format!("cano-{}.log", &key[..16]));
+    std::fs::write(&log, "").unwrap();
+    // O cano se reconhece pelo argv (`--escuta` e `--log …/cano-<key16>.log`).
+    let mut newer = std::process::Command::new("sh")
+        .args(["-c", "sleep 30; :", "sh", "--escuta", "tcp:127.0.0.1:1", "--log"]).arg(&log).spawn().unwrap();
+    let mut gone = std::process::Command::new("true").spawn().unwrap();
+    gone.wait().unwrap();
+    let old = Cano { pid: gone.id(), escuta: "tcp:127.0.0.1:2".into(), token: "t".into(), ts: 0.0, versao: 2,
+        extra: Default::default() };
+    let result = kill(&old, &key, dir.path()).await;
+    newer.kill().unwrap();
+    newer.wait().unwrap();
+    result.unwrap();
+    assert!(log.exists(), "o log da vida viva fica");
+}
