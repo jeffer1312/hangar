@@ -18,6 +18,7 @@ async fn dictation_timeout_and_cancellation_kill_descendants_holding_stdout() {
             Duration::from_secs(2),
         ));
         let mut sockets = Vec::new();
+        let mut pids = Vec::new();
         for _ in 0..2 {
             let (socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
                 .await
@@ -26,7 +27,7 @@ async fn dictation_timeout_and_cancellation_kill_descendants_holding_stdout() {
             let mut socket = BufReader::new(socket);
             let mut pid = String::new();
             socket.read_line(&mut pid).await.unwrap();
-            assert!(pid.trim().parse::<u32>().is_ok());
+            pids.push(sysinfo::Pid::from_u32(pid.trim().parse::<u32>().unwrap()));
             sockets.push(socket);
         }
         if cancel {
@@ -35,24 +36,29 @@ async fn dictation_timeout_and_cancellation_kill_descendants_holding_stdout() {
         } else {
             assert_eq!(task.await.unwrap(), Err("dictation_organization_timeout"));
         }
-        for mut socket in sockets {
-            let mut buffer = [0];
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(5), socket.read(&mut buffer))
-                    .await
-                    .unwrap()
-                    .unwrap(),
-                0,
-                "descendente ainda vivo"
-            );
-        }
         tokio::time::timeout(Duration::from_secs(5), async {
-            while path.exists() {
+            for mut socket in sockets {
+                let mut buffer = [0];
+                match socket.read(&mut buffer).await {
+                    Ok(0) => {}
+                    Err(error)
+                        if cfg!(windows)
+                            && error.kind() == std::io::ErrorKind::ConnectionReset
+                            && error.raw_os_error() == Some(10054) => {}
+                    outcome => panic!("a conexão do descendente não encerrou: {outcome:?}"),
+                }
+            }
+            let mut processes = sysinfo::System::new();
+            loop {
+                processes.refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids), true);
+                if pids.iter().all(|pid| processes.process(*pid).is_none()) && !path.exists() {
+                    break;
+                }
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("a limpeza deve liberar a pasta após terminar a árvore");
+        .expect("a limpeza deve encerrar os PIDs anunciados e liberar a pasta dentro do prazo");
     }
 }
 

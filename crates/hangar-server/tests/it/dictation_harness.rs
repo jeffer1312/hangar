@@ -87,9 +87,7 @@ async fn attempt_with_budget(
     };
     std::fs::write(folder.join("destination.json"), metadata.to_string()).unwrap();
     let transcripts = account.join("projects").join(
-        project
-            .to_string_lossy()
-            .replace(['/', '\\', '.', '_'], "-"),
+        hangar_workspace::worktrees::sanitize_cwd(&project.to_string_lossy()),
     );
     std::fs::create_dir_all(&transcripts).unwrap();
     let transcript = transcripts.join("00000000-0000-0000-0000-000000000001.jsonl");

@@ -529,7 +529,9 @@ mod gate_tests {
         let n = r.read(&mut buf).unwrap();
         assert_eq!(n, chunks[0].len());
         assert!(!ready.load(Ordering::Acquire), "o preâmbulo do conhost não é o sinal");
-        r.read(&mut buf).unwrap();
+        let n = r.read(&mut buf).unwrap();
+        assert_eq!(n, chunks[1].len());
+        assert_eq!(&buf[..n], chunks[1]);
         assert!(ready.load(Ordering::Acquire));
     }
 
