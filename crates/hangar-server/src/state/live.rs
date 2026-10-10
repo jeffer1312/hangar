@@ -537,7 +537,16 @@ mod tests {
         hooks.fresh(&dirs);
         assert!(!hooks.partial, "as três pastas existem: todas observadas");
         assert_eq!(hooks.states.get_state(Some("s1"), |_| false).map(|m| m.state).as_deref(), Some("idle"));
-        let read = hooks.read;
+        // O FSEvents do macOS entrega com atraso a criação das pastas e do marcador, feita logo antes do
+        // observador nascer: espera ele assentar (uma janela sem releitura) antes de exigir nenhuma.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let read = loop {
+            let read = hooks.read;
+            std::thread::sleep(Duration::from_millis(300));
+            hooks.fresh(&dirs);
+            if hooks.read == read { break read; }
+            assert!(Instant::now() < deadline, "o observador não assentou depois da criação das pastas");
+        };
         std::thread::sleep(Duration::from_millis(300));
         hooks.fresh(&dirs);
         assert_eq!(hooks.read, read, "nada mudou: nenhuma releitura, nem passado o prazo");

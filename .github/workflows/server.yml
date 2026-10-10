@@ -121,7 +121,8 @@ jobs:
           key: &chave-perfil server-v3-${{ runner.os }}-${{ env.PERFIL }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
           restore-keys: &chave-perfil-parcial server-v3-${{ runner.os }}-${{ env.PERFIL }}-
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
-      - run: cargo test --locked --workspace
+      # --no-fail-fast: sem ele o cargo para no primeiro executável que falha e esconde os outros.
+      - run: cargo test --locked --workspace --no-fail-fast
       # A poda tira o que é do workspace (recompila a cada push) e fica só o que o cache poupa.
       - if: &grava-dev github.ref == 'refs/heads/main' && steps.cache-dev.outputs.cache-hit != 'true'
         run: ../scripts/podar-target --cache target
