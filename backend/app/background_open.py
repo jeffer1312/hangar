@@ -1,4 +1,4 @@
-"""Quantos agentes e shells em segundo plano ainda rodam numa sessão Claude, pelo transcript.
+"""O fim de um trabalho numa sessão Claude, pelo transcript: o que segue em segundo plano e a última resposta.
 
 O `Stop` do Claude marca "parou" a cada fim de turno, também quando a sessão só está esperando o
 fim de um trabalho em segundo plano que vai acordá-la de novo: o push de "terminou" não pode sair
@@ -6,6 +6,8 @@ nesse intervalo. Mesma leitura do painel de atividade (`packages/core/src/activi
 colegas de equipe: só o lançamento e a `<task-notification>` que o fecha.
 """
 import re
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.transcript import parse_line
@@ -13,6 +15,15 @@ from app.transcript import parse_line
 _SHELL_LAUNCH = re.compile(r"Command running in background with ID:\s*([A-Za-z0-9_-]+)")
 # A cauda basta: o que está rodando foi lançado na parte recente da conversa.
 _TAIL_BYTES = 4 * 1024 * 1024
+# Lançamento sem a notificação de fim depois disto não segura mais o aviso: o shell foi morto à mão
+# ou o Claude foi retomado, e nada vai fechá-lo. Esperar para sempre seria nunca avisar.
+STALE_AFTER = 30 * 60
+
+
+@dataclass
+class Scan:
+    open: int
+    last_reply: str | None
 
 
 def _tail_lines(path: Path) -> list[str]:
@@ -24,20 +35,25 @@ def _tail_lines(path: Path) -> list[str]:
     return lines[1:] if size > _TAIL_BYTES else lines  # a primeira pode estar cortada no meio
 
 
-def count(jsonl: str | Path) -> int:
-    launched: set[str] = set()
+def scan(jsonl: str | Path, now: float | None = None) -> Scan:
+    now = time.time() if now is None else now
+    launched: dict[str, float] = {}
     closed: set[str] = set()
     shell_calls: set[str] = set()
+    reply: str | None = None
     for line in _tail_lines(Path(jsonl)):
         for e in parse_line(line):
             tid = e.tool_use_id or ""
-            if e.kind == "tool_use" and e.tool_name == "Bash" and (e.tool_input or {}).get("run_in_background"):
+            if e.kind == "assistant_msg" and e.text and e.text.strip():
+                reply = e.text
+            elif e.kind == "tool_use" and e.tool_name == "Bash" and (e.tool_input or {}).get("run_in_background"):
                 shell_calls.add(tid)
             elif e.kind == "tool_result":
                 if tid.startswith("task:"):
                     closed.add(tid[len("task:"):])
                 elif e.bg_agent_id and not e.bg_agent_id.startswith("teammate:"):
-                    launched.add(e.bg_agent_id)
+                    launched[e.bg_agent_id] = e.ts or now
                 elif tid in shell_calls and (m := _SHELL_LAUNCH.search(e.result or "")):
-                    launched.add(m.group(1))
-    return len(launched - closed)
+                    launched[m.group(1)] = e.ts or now
+    open_ = sum(1 for id_, at in launched.items() if id_ not in closed and now - at < STALE_AFTER)
+    return Scan(open=open_, last_reply=reply)

@@ -845,6 +845,7 @@ def _transition_fixture(monkeypatch):
                         lambda target, daemon=None: SimpleNamespace(start=target))
     monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
     api_mod._working_started.clear()
+    api_mod._last_idle.clear()
     api_mod._recheca_armada.clear()
     return calls
 
@@ -879,7 +880,7 @@ def test_finish_ping_waits_for_the_session_to_really_stop(_transition_fixture, m
     api_mod._on_hook_transition("s7", "working")
     # Fim de turno, mas quando a espera acaba a sessão já voltou a trabalhar (recado na fila): nada sai.
     monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1200.0))
-    api_mod._terminou_se_parou("s7", 1000.0)
+    api_mod._terminou_se_parou("s7", 1000.0, None)
     assert calls == [] and api_mod._working_started["s7"] == 1000.0
     # O turno seguinte continua a mesma série: o início fica o do primeiro.
     api_mod._on_hook_transition("s7", "working")
@@ -905,13 +906,30 @@ def test_finish_ping_holds_while_background_work_is_open(_transition_fixture, mo
     monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
     api_mod._on_hook_transition("s8", "working")
     monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1100.0))
-    monkeypatch.setattr(background_open, "count", lambda jsonl: 1)
+    monkeypatch.setattr(background_open, "scan", lambda jsonl: background_open.Scan(1, "ainda não"))
     api_mod._on_hook_transition("s8", "idle")
     assert calls == [] and "s8" in api_mod._working_started    # agente rodando: espera ele
-    monkeypatch.setattr(background_open, "count", lambda jsonl: 0)
+    monkeypatch.setattr(background_open, "scan",
+                        lambda jsonl: background_open.Scan(0, "**Pronto**: build [verde](http://ci) do meu_var"))
     api_mod._on_hook_transition("s8", "idle")
     assert [sid for sid, _ in calls] == ["s8"] and "s8" not in api_mod._working_started
-    assert api_mod._resumo_resposta(info.last_reply) == "Pronto: build verde"
+    enviado = []
+    monkeypatch.setattr(api_mod.push, "notify_finished", lambda name, reply=None: enviado.append((name, reply)))
+    calls[0][1]("s8")
+    assert enviado == [("s8", "Pronto: build verde do meu_var")]
+
+
+def test_finish_series_restarts_after_a_long_stop(_transition_fixture, monkeypatch):
+    # O fim real nunca chegou (tarefa de fundo que ninguém fechou): sem isto, todo turno curto depois
+    # mediria desde o início velho e viraria um "terminou".
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
+    api_mod._on_hook_transition("s6", "working")
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1100.0))
+    monkeypatch.setattr(api_mod, "_push_terminou", lambda sid, st: None)
+    api_mod._on_hook_transition("s6", "idle")
+    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1100.0 + api_mod._SERIES_GAP + 1))
+    api_mod._on_hook_transition("s6", "working")
+    assert api_mod._working_started["s6"] == 1100.0 + api_mod._SERIES_GAP + 1
 
 
 def test_finish_ping_respects_flag(_transition_fixture, monkeypatch):
