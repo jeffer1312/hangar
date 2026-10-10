@@ -23,29 +23,43 @@ type Key = (String, String);
 
 /// No máximo um retrato do estado por intervalo.
 const STATE_EVERY: Duration = Duration::from_millis(150);
-/// A trava do beta é relida neste ritmo: desligar no meio encerra a chamada.
-const GATE_EVERY: Duration = Duration::from_secs(5);
 const BACKSTAGE_KEEP: usize = 60;
 const THOUGHT_KEEP: usize = 2000;
 const MOVED: &str = "A chamada passou para outro aparelho; tente de novo.";
 const NO_DEVICE: &str = "Nenhum aparelho conectado agora; tente de novo quando a voz voltar.";
 
-/// De onde reler a trava do beta.
-pub struct GateSource { pub home: PathBuf, pub claude_dir: PathBuf }
+/// De onde e em que ritmo reler a trava do beta: desligar no meio encerra a chamada.
+pub struct GateSource { pub home: PathBuf, pub claude_dir: PathBuf, pub every: Duration }
 
 #[derive(Default)]
-struct DeviceState { caps: Vec<String>, screen: Option<Screen> }
+struct DeviceState { owner: Option<mpsc::UnboundedSender<ServerMsg>>, caps: Vec<String>, screen: Option<Screen> }
 
-/// Canal ao aparelho dono: quem tem o receptor entrega cada mensagem a quem for dono agora.
-#[derive(Clone)]
-pub struct DeviceLink { out: mpsc::UnboundedSender<ServerMsg>, state: Arc<Mutex<DeviceState>> }
+/// O aparelho dono agora: o hub troca o dono, as capacidades e a tela; o controlador manda a quem estiver lá.
+#[derive(Clone, Default)]
+pub struct DeviceLink { state: Arc<Mutex<DeviceState>> }
 
 impl DeviceLink {
+    /// Já com um dono, que recebe pelo receptor devolvido.
     pub fn channel(caps: Vec<String>, screen: Option<Screen>) -> (Self, mpsc::UnboundedReceiver<ServerMsg>) {
         let (out, rx) = mpsc::unbounded_channel();
-        (Self { out, state: Arc::new(Mutex::new(DeviceState { caps, screen })) }, rx)
+        let link = Self::default();
+        link.replace_owner(out, caps, screen);
+        (link, rx)
     }
-    pub fn send(&self, msg: ServerMsg) { let _ = self.out.send(msg); }
+    /// Novo dono com as capacidades e a tela dele; devolve o anterior.
+    pub fn replace_owner(&self, owner: mpsc::UnboundedSender<ServerMsg>, caps: Vec<String>, screen: Option<Screen>) -> Option<mpsc::UnboundedSender<ServerMsg>> {
+        let mut s = self.lock();
+        (s.caps, s.screen) = (caps, screen);
+        s.owner.replace(owner)
+    }
+    /// O dono caiu; capacidades e tela ficam até o próximo.
+    pub fn clear_owner(&self) { self.lock().owner = None; }
+    pub fn send(&self, msg: ServerMsg) {
+        match &self.lock().owner {
+            Some(owner) => { let _ = owner.send(msg); }
+            None => log("device message dropped: no owner"),
+        }
+    }
     pub fn caps(&self) -> Vec<String> { self.lock().caps.clone() }
     pub fn screen(&self) -> Option<Screen> { self.lock().screen.clone() }
     pub fn set_caps(&self, caps: Vec<String>) { self.lock().caps = caps; }
@@ -163,7 +177,7 @@ impl Controller {
         let Some(mut done_rx) = self.done_rx.take() else { return };
         let watcher = tokio::spawn(watch::watcher(self.machines.clone(), self.backoff.clone(), self.done.clone()));
         let mut ask_tick = tokio::time::interval(Duration::from_secs(1));
-        let mut gate_tick = tokio::time::interval_at(tokio::time::Instant::now() + GATE_EVERY, GATE_EVERY);
+        let mut gate_tick = tokio::time::interval_at(tokio::time::Instant::now() + self.gate.every, self.gate.every);
         loop {
             let flush = self.dirty.then(|| self.sent_at.map_or_else(Instant::now, |at| at + STATE_EVERY));
             let go = tokio::select! {

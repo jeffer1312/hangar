@@ -330,6 +330,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_any))
+        .route("/api/voice", get(crate::voice::routes::ws).fallback(pass_any))
         .route("/api/voice/settings", axum::routing::any(crate::voice::routes::settings_route))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())

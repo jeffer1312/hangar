@@ -62,7 +62,7 @@ async fn rig(caps: &[&str], peers: Option<Value>) -> Rig {
         tools: tools_for(&caps), handoff_same_thread: true };
     let voice = Voice::start(options, spawn, tx);
     let (link, mut device) = DeviceLink::channel(caps, Some(Screen { server: String::new(), name: "hangar".into() }));
-    let gate = GateSource { home: dir.path().to_path_buf(), claude_dir: dir.path().to_path_buf() };
+    let gate = GateSource { home: dir.path().to_path_buf(), claude_dir: dir.path().to_path_buf(), every: Duration::from_secs(5) };
     let diag = DiagClient::new("127.0.0.1:9".parse().unwrap(), "x".into());
     let (to_ctl, from_device) = mpsc::unbounded_channel();
     tokio::spawn(Controller::new(voice, machines, None, link, gate, diag).run(events, from_device));

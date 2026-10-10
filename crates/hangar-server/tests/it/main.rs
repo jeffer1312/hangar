@@ -196,5 +196,6 @@ mod terminal_runtime;
 mod terminal_runtime_tmux;
 mod uploads_store;
 mod voice_settings;
+mod voice_ws;
 mod workspace_routes;
 mod worktree_routes;
