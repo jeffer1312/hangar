@@ -52,6 +52,9 @@ fn main() {
         std::process::exit(1);
     }
     let listener = TcpListener::bind(format!("127.0.0.1:{}", argument("--port"))).unwrap();
+    // `.listening`: as partidas que chegaram a escutar (a reservada pode ter sido tomada antes).
+    let mut listening = std::fs::OpenOptions::new().create(true).append(true).open(model.with_extension("listening")).unwrap();
+    writeln!(listening, "{}", std::process::id()).unwrap();
     let gate = std::fs::read_to_string(&model).ok().and_then(|text| text.strip_prefix("hold:")?.parse().ok());
     for stream in listener.incoming() { reply(stream.unwrap(), gate); }
 }

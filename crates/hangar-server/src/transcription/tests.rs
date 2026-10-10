@@ -178,8 +178,9 @@ async fn local_process_is_reused_and_stopped_by_its_owner() {
     );
     assert_eq!(first.unwrap().text, "Transcrição local em português.");
     assert_eq!(second.unwrap().text, "Transcrição local em português.");
-    let starts = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("starts")).unwrap();
-    assert_eq!(starts.lines().count(), 1);
+    // Um processo atendeu os dois pedidos. Partidas que morreram antes de escutar (porta tomada) não contam.
+    let listening = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("listening")).unwrap();
+    assert_eq!(listening.lines().count(), 1);
     service.shutdown().await;
     assert!(!temp.path().join("transcription-local.json").exists());
 }
@@ -197,6 +198,8 @@ async fn local_process_that_dies_on_start_is_retried_on_a_new_port() {
     assert_eq!(text, "Transcrição local em português.");
     let starts = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("starts")).unwrap();
     assert_eq!(starts.lines().count(), 2, "uma partida que morreu e outra que subiu");
+    let listening = std::fs::read_to_string(std::path::Path::new(&provider.model_path).with_extension("listening")).unwrap();
+    assert_eq!(listening.lines().count(), 1);
     service.shutdown().await;
 }
 
