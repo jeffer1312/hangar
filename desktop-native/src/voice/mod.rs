@@ -21,8 +21,8 @@ pub enum VoiceEvent {
     Tool { call: u64, name: String, args: Value },
     /// Outro aparelho assumiu a chamada.
     Taken,
-    /// Código da falha que encerrou a chamada.
-    Failed(String),
+    /// Código da falha que encerrou a chamada e o texto que o servidor mandou junto.
+    Failed(String, Option<String>),
 }
 
 enum Command { Screen(Option<(String, String)>), Reply(u64, bool, String), Mode(Mode) }
@@ -104,9 +104,9 @@ async fn call(setup: Setup, events: async_channel::Sender<VoiceEvent>, mut inbox
     log("call start");
     let _ = events.send(VoiceEvent::Phase(Phase::Connecting)).await;
     let stopped = Arc::new(AtomicBool::new(false));
-    let (mut socket, mut server_done, mut peer) = (None, false, None);
+    let (mut socket, mut server_done, mut peer, mut detail) = (None, false, None, None);
     let outcome = tokio::select! {
-        outcome = run_call(setup, &events, &mut inbox, &muted, &stopped, &mut socket, &mut server_done, &mut peer) => outcome,
+        outcome = run_call(setup, &events, &mut inbox, &muted, &stopped, &mut socket, &mut server_done, &mut peer, &mut detail) => outcome,
         _ = stop.notified() => { log("stop requested"); Ok(()) },
     };
     // Fim do lado de cá: o servidor encerra já, em vez de esperar o prazo do aparelho sumido.
@@ -122,13 +122,14 @@ async fn call(setup: Setup, events: async_channel::Sender<VoiceEvent>, mut inbox
     stopped.store(true, Ordering::Relaxed);
     if let Some(peer) = peer && !matches!(tokio::task::spawn_blocking(move || peer.join()).await, Ok(Ok(()))) { log("rtc thread join failed (panic)"); }
     match &outcome { Ok(()) => log("call end ok"), Err(code) => log(format!("call end failure={code}")) }
-    if let Err(code) = outcome { let _ = events.send(VoiceEvent::Failed(code)).await; }
+    if let Err(code) = outcome { let _ = events.send(VoiceEvent::Failed(code, detail)).await; }
     let _ = events.send(VoiceEvent::Phase(Phase::Closed)).await;
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbox: &mut mpsc::UnboundedReceiver<Command>, muted: &Arc<AtomicBool>,
-    stopped: &Arc<AtomicBool>, slot: &mut Option<TextSocket>, server_done: &mut bool, peer: &mut Option<std::thread::JoinHandle<()>>) -> Result<(), String> {
+    stopped: &Arc<AtomicBool>, slot: &mut Option<TextSocket>, server_done: &mut bool, peer: &mut Option<std::thread::JoinHandle<()>>,
+    detail: &mut Option<String>) -> Result<(), String> {
     let Setup { api, token, screen, actions } = setup;
     let own = api.identity();
     let peers = read_peers(&api).await;
@@ -170,7 +171,11 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
                         }
                         "pong" => last_pong = Instant::now(),
                         "taken" => { log("taken by another device"); *server_done = true; let _ = events.send(VoiceEvent::Taken).await; return Ok(()); }
-                        "error" => { *server_done = true; return Err(message["code"].as_str().unwrap_or("failed").to_owned()); }
+                        "error" => {
+                            *server_done = true;
+                            *detail = message["detail"].as_str().filter(|d| !d.trim().is_empty()).map(str::to_owned);
+                            return Err(message["code"].as_str().unwrap_or("failed").to_owned());
+                        }
                         "closed" => { log("closed by server"); *server_done = true; return Ok(()); }
                         other => log(format!("server message unknown type={other}")),
                     }

@@ -238,8 +238,9 @@ pub(super) struct VoiceUi {
     pub(super) backstage_open: bool,
     pub(super) backstage_scroll: ScrollHandle,
     pub(super) mode: Mode,
-    /// Arquivo (no servidor da voz) e texto do plano; fica na tela depois da chamada, até a próxima começar.
-    pub(super) plan: Option<(std::path::PathBuf, String)>,
+    /// Arquivo (no servidor da voz), texto do plano e se o arquivo existe neste disco; fica na tela depois da chamada,
+    /// até a próxima começar.
+    pub(super) plan: Option<(std::path::PathBuf, String, bool)>,
     pub(super) plan_scroll: ScrollHandle,
     /// Plano aberto ou fechado pelo usuário; `None` segue o modo (aberto só no Planejar).
     pub(super) plan_open: Option<bool>,
@@ -478,6 +479,20 @@ pub(super) fn equalizer(level: f32, frame: u64, min: f32, max: f32) -> [f32; 5] 
     })
 }
 
+/// O que a tela diz de uma falha: o texto local do código; no `realtime` o genérico segue do motivo que o servidor
+/// mandou; código sem texto local (falha de ação) fica com o texto do servidor.
+fn failure_message(code: &str, server: Option<&str>) -> String {
+    let generic = tr_shared("codex_voice_failed", &[]);
+    let server = server.map(str::trim).filter(|s| !s.is_empty());
+    match (failure_text(code), server) {
+        (Some(_), Some(text)) if matches!(code, "realtime" | "failed") =>
+            if text.starts_with(&generic) { text.to_owned() } else { format!("{generic} {text}") },
+        (Some(local), _) => local,
+        (None, Some(text)) => text.to_owned(),
+        (None, None) => generic,
+    }
+}
+
 /// Texto do código de falha que o servidor ou este aparelho dá; `None` para os que só o servidor sabe descrever.
 fn failure_text(code: &str) -> Option<String> {
     Some(match code {
@@ -518,7 +533,7 @@ impl Hangar {
     pub(super) fn refresh_voice_gate(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else {
             self.voice.enabled = false;
-            // Sem a pílula, a chamada ficaria com o microfone aberto e nenhum controle na tela.
+            // Sem servidor conectado a chamada não tem a quem falar: encerra em vez de deixar o microfone aberto.
             self.stop_voice(cx);
             return;
         };
@@ -543,7 +558,7 @@ impl Hangar {
             self.voice.busy = (body["call"]["active"] == true).then(|| body["call"]["client"].as_str().unwrap_or_default().to_owned());
             // Escolha feita aqui no meio da chamada não volta atrás pela leitura.
             if self.voice.call.is_none() && let Ok(settings) = serde_json::from_value(body["settings"].clone()) { self.voice.settings = Some(settings); }
-            // Sem a opção ou sem o Codex a pílula some; a chamada não pode seguir com o microfone aberto.
+            // O servidor da chamada desligou a voz ou perdeu o Codex: ela encerra aqui também, sem esperar o aviso dele.
             if !self.voice.enabled && self.voice.call.is_some() && self.voice.server.as_deref() == Some(server.as_str()) {
                 self.voice.error = Some(tr(if codex { "voice_gate_off" } else { "voice_codex_missing" }));
                 self.stop_voice(cx);
@@ -810,9 +825,13 @@ impl Hangar {
                 self.voice_reply(call, true, text);
             }
             Err(_) if retry => {
+                let generation = self.voice.generation;
                 cx.spawn_in(window, async move |this, cx| {
                     cx.background_executor().timer(SCREEN_RETRY).await;
-                    let _ = this.update_in(cx, |this, window, cx| this.voice_read_screen(call, area, false, window, cx));
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        // Outra chamada no meio da espera: o id é da anterior.
+                        if generation == this.voice.generation { this.voice_read_screen(call, area, false, window, cx); }
+                    });
                 }).detach();
             }
             Err(text) => {
@@ -864,9 +883,14 @@ impl Hangar {
             _ => CallActivity::Idle,
         };
         self.voice.draft = text(&state["draft"]);
-        self.voice.call_error = state["error"]["code"].as_str()
-            .map(|code| failure_text(code).or_else(|| text(&state["error"]["text"])).unwrap_or_else(|| tr_shared("codex_voice_failed", &[])));
-        self.voice.plan = state["plan"]["path"].as_str().map(|path| (path.into(), text(&state["plan"]["markdown"]).unwrap_or_default()));
+        self.voice.call_error = state["error"]["code"].as_str().map(|code| failure_message(code, state["error"]["text"].as_str()));
+        // O arquivo mora no servidor da voz: se ele está neste disco é lido uma vez por caminho, nunca a cada quadro.
+        let old = self.voice.plan.take();
+        self.voice.plan = state["plan"]["path"].as_str().map(|path| {
+            let path = std::path::PathBuf::from(path);
+            let local = old.as_ref().filter(|(was, ..)| *was == path).map_or_else(|| path.exists(), |(.., local)| *local);
+            (path, text(&state["plan"]["markdown"]).unwrap_or_default(), local)
+        });
         self.voice.effective = serde_json::from_value(state["effective"].clone()).ok().flatten();
         self.voice.context = state["context"]["used"].as_u64().map(|used| (used, state["context"]["window"].as_u64()));
         (self.voice.five_hour, self.voice.seven_day) = (rate_window(&state["limits"]["five_hour"]), rate_window(&state["limits"]["seven_day"]));
@@ -907,8 +931,8 @@ impl Hangar {
             VoiceEvent::State(state) => self.voice_state(&state),
             VoiceEvent::Tool { call, name, args } => self.voice_tool(call, &name, args, window, cx),
             VoiceEvent::Taken => { self.voice.error = Some(tr("voice_taken")); self.voice.phase = None; }
-            VoiceEvent::Failed(code) => {
-                self.voice.error = Some(failure_text(&code).unwrap_or_else(|| tr_shared("codex_voice_failed", &[])));
+            VoiceEvent::Failed(code, detail) => {
+                self.voice.error = Some(failure_message(&code, detail.as_deref()));
                 self.voice.open = true;
             }
         }
@@ -1306,9 +1330,9 @@ impl Hangar {
             body = body.children(self.organizer_now().map(|text| div().text_xs().text_color(theme::muted()).truncate().child(text)));
         }
         body = body.children(self.following_text().map(|text| div().text_xs().text_color(theme::muted()).whitespace_normal().child(text)));
-        if let Some((path, markdown)) = &self.voice.plan {
+        if let Some((path, markdown, local)) = &self.voice.plan {
             // O arquivo mora no servidor da voz: abrir só quando ele está neste disco.
-            let local = path.exists().then(|| path.clone());
+            let local = local.then(|| path.clone());
             let expanded = self.voice.plan_open.unwrap_or(self.voice.mode == Mode::Plan);
             let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
             let first = markdown.lines().map(|l| l.trim().trim_start_matches('#').trim()).find(|l| !l.is_empty()).unwrap_or_default().to_owned();
@@ -1521,6 +1545,18 @@ mod tests {
             assert!(!text.is_empty() && !text.starts_with("voice_") && !text.contains("terminal"), "{code}: {text}");
         }
         assert_eq!(failure_text("send_to_session"), None, "falha de ação: o texto do servidor vale");
+    }
+
+    #[test]
+    fn realtime_failure_keeps_the_server_reason() {
+        let generic = tr_shared("codex_voice_failed", &[]);
+        assert_eq!(failure_message("realtime", Some("quota exceeded")), format!("{generic} quota exceeded"));
+        assert_eq!(failure_message("realtime", Some(&format!("{generic} quota exceeded"))), format!("{generic} quota exceeded"),
+            "o servidor já manda o genérico na frente: não repete");
+        assert_eq!(failure_message("realtime", None), generic);
+        assert_eq!(failure_message("microphone", Some("detalhe")), tr_shared("composer_sem_acesso_mic", &[]), "código conhecido: o texto local");
+        assert_eq!(failure_message("send_to_session", Some("A ação pedida por voz falhou: x")), "A ação pedida por voz falhou: x");
+        assert_eq!(failure_message("novo", None), generic);
     }
 
     #[test]
