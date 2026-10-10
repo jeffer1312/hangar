@@ -54,7 +54,8 @@ impl<'a> Merge<'a> {
     pub fn new(label: &'a str, homes: &[&Path]) -> Self {
         Self {
             label,
-            homes: homes.iter().map(|home| resolve_loose(home)).collect(),
+            // Raiz que não dá para resolver (sem permissão, laço) fica na forma escrita.
+            homes: homes.iter().map(|home| resolve_loose(home).unwrap_or_else(|_| lexical(home))).collect(),
             count: MergeCount::default(),
             touched: BTreeSet::new(),
         }
@@ -90,7 +91,10 @@ impl<'a> Merge<'a> {
         let target = match fs::canonicalize(path) {
             Ok(real) => real,
             Err(error) if error.kind() == io::ErrorKind::NotFound => match fs::read_link(path) {
-                Ok(written) => resolve_loose(&path.parent().unwrap_or(Path::new("")).join(written)),
+                Ok(written) => match resolve_loose(&path.parent().unwrap_or(Path::new("")).join(written)) {
+                    Ok(target) => target,
+                    Err(_) => return false,
+                },
                 Err(_) => return false,
             },
             Err(_) => return false,
@@ -177,18 +181,21 @@ impl<'a> Merge<'a> {
 
 /// `canonicalize` de um caminho que pode não existir (alvo de link quebrado, padrão ainda sem
 /// pasta): resolve o maior prefixo que existe e anexa o resto. Raiz e alvo ficam na mesma forma
-/// mesmo com um link no caminho (no macOS o `/var` é `/private/var`).
-fn resolve_loose(path: &Path) -> PathBuf {
+/// mesmo com um link no caminho (no macOS o `/var` é `/private/var`). Só sobe o prefixo quando
+/// ele não existe: sem permissão ou num laço, o caminho de verdade é desconhecido.
+fn resolve_loose(path: &Path) -> io::Result<PathBuf> {
     let path = lexical(path);
     let mut rest = Vec::new();
     let mut prefix = path.as_path();
     loop {
-        if let Ok(real) = fs::canonicalize(prefix) {
-            return rest.iter().rev().fold(real, |acc, part| acc.join(part));
+        match fs::canonicalize(prefix) {
+            Ok(real) => return Ok(rest.iter().rev().fold(real, |acc, part| acc.join(part))),
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            Err(_) => {}
         }
         match (prefix.parent(), prefix.file_name()) {
             (Some(parent), Some(name)) => { rest.push(name.to_owned()); prefix = parent; }
-            _ => return path,
+            _ => return Ok(path),
         }
     }
 }
@@ -360,6 +367,25 @@ mod tests {
         assert_eq!(mode(&to.join("-p/s/a.jsonl")), 0o600);
         assert_eq!(mode(&to), 0o700);
         assert_eq!(mode(&to.join("-p/s")), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_prefix_is_not_taken_as_missing() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let locked = root.path().join("locked");
+        fs::create_dir_all(locked.join("sub")).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        // Como root a permissão não barra: nada a provar.
+        let blocked = fs::read_dir(&locked).is_err();
+        let result = super::resolve_loose(&locked.join("sub/x.jsonl"));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        if blocked {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        }
+        let missing = super::resolve_loose(&root.path().join("nope/x.jsonl")).unwrap();
+        assert_eq!(missing, fs::canonicalize(root.path()).unwrap().join("nope/x.jsonl"));
     }
 
     #[test]
