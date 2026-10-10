@@ -46,7 +46,7 @@ def save(name: str, cwd: str, session_id: str, *, config_dir: str | None = None,
          jev: bool = False, key: str | None = None, transfer_id: str | None = None,
          engine_account: str | None = None, engine_credential_id: str | None = None,
          engine_account_base_url: str | None = None, service_tier: str | None = None,
-         claude_settings: dict | None = None) -> dict:
+         claude_settings: dict | None = None, read_only: bool = False) -> dict:
     if service_tier is not None and service_tier not in ("default", "priority"):
         raise ValueError("service_tier: use default ou priority")
     meta = {
@@ -73,6 +73,9 @@ def save(name: str, cwd: str, session_id: str, *, config_dir: str | None = None,
                     engine_account_base_url=engine_account_base_url)
     if transfer_id is not None:
         meta["transfer_id"] = transfer_id
+    if read_only:
+        # Estacionada só durante a troca de conta: o terminal reabre dentro do bwrap, nunca sem ele.
+        meta["read_only"] = True
     _write(name, meta)
     return meta
 

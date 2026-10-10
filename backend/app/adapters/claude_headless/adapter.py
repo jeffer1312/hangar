@@ -75,6 +75,7 @@ _VIGIA_S = 60.0
 # um processo que morre ao nascer vira laço. A espera dobra a cada tentativa.
 _TETO_SUBIDAS = 3
 _ESPERA_SUBIDA_S = 5.0
+_SO_TERMINAL_PROTEGIDO = "sessão read-only só roda no terminal protegido; volte-a para o terminal"
 # Evento que o adapter não conhece vai pro log privado pra decidir depois o que fazer com ele. O
 # teto por tipo é pra ver todos os estados de um evento sem um tipo ruidoso encher o disco.
 _TETO_DESCONHECIDOS = 30
@@ -1025,6 +1026,7 @@ class ClaudeHeadlessAdapter:
             meta = sess.meta = hl_sessions.load(sess.name) or {**meta, "cano": None}
         if so_reconectar:
             return False
+        self._recusar_read_only(sess)
         falhas = self._subidas.get(sess.name, 0)
         if falhas >= _TETO_SUBIDAS:
             raise _SubidaEsgotada(f"desistiu de subir após {falhas} tentativas seguidas")
@@ -1079,17 +1081,25 @@ class ClaudeHeadlessAdapter:
             if cano:
                 _esquecer_cano(name, cano.get("pid"))
                 meta = hl_sessions.load(name) or {**meta, "cano": None}
+            sess = _Sessao(name, meta)
+            self._recusar_read_only(sess)
             falhas = self._subidas.get(name, 0)
             if falhas >= _TETO_SUBIDAS:
                 raise _SubidaEsgotada(f"desistiu de subir após {falhas} tentativas seguidas")
             if falhas:
                 await asyncio.sleep(_ESPERA_SUBIDA_S * 2 ** (falhas - 1))
             self._subidas[name] = self._subidas.get(name, 0) + 1
-            sess = _Sessao(name, meta)
             sess.engine_models = engine_models
             cano, proc, _log_path = await self._lancar_cano(sess)
             _log.info("claude headless: lançou name=%s cano=%s (Rust conecta)", name, proc.pid)
             return cano, True
+
+    def _recusar_read_only(self, sess: _Sessao) -> None:
+        if sess.meta.get("read_only"):
+            # Parada à espera do terminal protegido: sem tentativa nem espera, com o motivo na tela;
+            # o teto faz drain e Rust desistirem sem repetir.
+            self._registrar_problema(sess, "headless_nao_subiu", _SO_TERMINAL_PROTEGIDO)
+            raise _SubidaEsgotada(_SO_TERMINAL_PROTEGIDO)
 
     def open_failed(self, name: str, detail: str) -> None:
         """A abertura no Rust falhou: o problema fica na faixa e no sidecar, como no caminho antigo."""
@@ -1113,6 +1123,9 @@ class ClaudeHeadlessAdapter:
     async def _launch_account_cano_owned(self, sess: _Sessao) -> tuple[dict, asyncio.subprocess.Process, Path]:
         """argv, ambiente, conta e motor do `claude`, processo do cano em escopo próprio e o sidecar."""
         meta = sess.meta
+        if meta.get("read_only"):
+            # Sem terminal não há bwrap: o Claude subiria com o código gravável.
+            raise ValueError(_SO_TERMINAL_PROTEGIDO)
         transcript = self.transcript_path_de(meta)
         resume = Path(transcript).exists()
         service_tier = meta.get("service_tier")

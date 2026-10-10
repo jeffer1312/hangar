@@ -3016,6 +3016,7 @@
   "erro_conta_cheia": "a conta {conta} está em {pct}% da cota: a conversa acabaria nela no primeiro turno",
   "erro_conversa_ja_na_conta": "a conta destino já tem esta conversa",
   "erro_troca_conta": "não troquei de conta: {erro}",
+  "erro_troca_conta_parada": "o terminal protegido não voltou ({erro}); a sessão read-only ficou parada até reabrir no terminal",
   "erro_mover_conversa": "não consegui mover a conversa de conta: {erro}",
   "modo_abrir_no_terminal": "Abrir no terminal",
   "modo_continuar_sem_terminal": "Continuar sem terminal",
