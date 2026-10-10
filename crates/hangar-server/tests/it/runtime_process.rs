@@ -140,3 +140,25 @@ fn startup_sweep_keeps_the_keys_of_a_transfer_in_progress() {
     assert!(child.try_wait().unwrap().is_none(), "o processo da transferência em curso fica");
     child.kill().unwrap(); child.wait().unwrap();
 }
+
+/// Encerrar uma vida do cano limpa os rastros dela, não os de uma vida mais nova da mesma chave: o socket
+/// do cano que já subiu no lugar some e a conexão a ele dava NotFound.
+#[tokio::test]
+async fn killing_an_old_life_keeps_the_socket_of_the_newer_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = unique_key();
+    let prefix = format!("cano-{}", &key[..16]);
+    let old = dir.path().join(format!("{prefix}-aaaa.sock"));
+    let newer = dir.path().join(format!("{prefix}-bbbb.sock"));
+    let log = dir.path().join(format!("{prefix}.log"));
+    for file in [&old, &newer, &log] { std::fs::write(file, "").unwrap(); }
+    // Um pid que já saiu: o kill só limpa.
+    let mut gone = std::process::Command::new("true").spawn().unwrap();
+    gone.wait().unwrap();
+    let cano = Cano { pid: gone.id(), escuta: format!("unix:{}", old.display()), token: "t".into(), ts: 0.0, versao: 2,
+        extra: Default::default() };
+    kill(&cano, &key, dir.path()).await.unwrap();
+    assert!(!old.exists(), "o socket da vida encerrada sai");
+    assert!(newer.exists(), "o socket da vida mais nova fica");
+    assert!(log.exists(), "o log, dividido entre as vidas, fica enquanto outra vida existe");
+}

@@ -254,9 +254,9 @@ pub async fn spawn(spec: &LaunchSpec) -> Result<Cano, ProcessError> {
     }
 }
 
-/// Mata o grupo do cano (cano + agente) só se o pid ainda for o cano da chave, e apaga
-/// `cano-<key16>*` da pasta da sessão (`sidecar_dir`, nunca a tirada do `escuta`) depois de
-/// confirmada a saída. Pid de outro programa: não mata.
+/// Mata o grupo do cano (cano + agente) só se o pid ainda for o cano da chave e, confirmada a saída,
+/// apaga os rastros dele na pasta da sessão (`sidecar_dir`): o socket desta vida e, se nenhuma outra
+/// vida da chave tem socket ali, os demais `cano-<key16>*`. Pid de outro programa: não mata.
 pub async fn kill(cano: &Cano, key: &str, sidecar_dir: &Path) -> Result<(), ProcessError> {
     let (pid, key_owned) = (cano.pid, key.to_owned());
     let state = tokio::task::spawn_blocking(move || identify(pid, &key_owned)).await
@@ -273,7 +273,7 @@ pub async fn kill(cano: &Cano, key: &str, sidecar_dir: &Path) -> Result<(), Proc
             }
         }
     }
-    remove_traces(sidecar_dir, key);
+    remove_traces(sidecar_dir, key, &cano.escuta);
     Ok(())
 }
 
@@ -305,20 +305,27 @@ fn signal_group(pid: u32) -> Result<(), ProcessError> {
     if matches!(status.code(), Some(0 | 128)) { Ok(()) } else { Err(ProcessError::StillAlive) }
 }
 
-fn remove_traces(dir: &Path, key: &str) {
+fn remove_traces(dir: &Path, key: &str, escuta: &str) {
     // Chave vazia ou curta casaria `cano-*` de outras sessões e levaria o socket delas.
     if key.len() < 16 { return; }
     let prefix = format!("cano-{}", key16(key));
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
+    let remove = |path: &Path| if let Err(e) = std::fs::remove_file(path) && e.kind() != std::io::ErrorKind::NotFound {
+        tracing::warn!(file = %path.display(), kind = ?e.kind(), "rastro do cano não removido");
+    };
+    // O socket desta vida, se é mesmo um rastro dela na pasta da sessão.
+    if let Some(own) = escuta.strip_prefix("unix:").map(Path::new)
+        && own.parent() == Some(dir) && own.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix)) {
+        remove(own);
+    }
+    let entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&prefix)).collect(),
         Err(e) => { tracing::debug!(dir = %dir.display(), kind = ?e.kind(), "rastros do cano: pasta ilegível"); return; }
     };
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(&prefix)
-            && let Err(e) = std::fs::remove_file(entry.path()) && e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(file = %entry.path().display(), kind = ?e.kind(), "rastro do cano não removido");
-        }
-    }
+    // Outra vida da mesma chave (sufixo por subida) ainda tem socket: o log e o resto são dela também.
+    let newer_life = entries.iter().any(|e| { let name = e.file_name().to_string_lossy().into_owned();
+        name.starts_with(&format!("{prefix}-")) && name.ends_with(".sock") });
+    if newer_life { return; }
+    for entry in entries { remove(&entry.path()); }
 }
 
 /// Canos deste dono cuja sessão já não existe; `SIGTERM` por pid, como o Python. Dono é
