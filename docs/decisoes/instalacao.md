@@ -747,8 +747,13 @@ testes novos das correções abaixo vieram depois da medição).
     teste espera até 2 s (`lease_when_free` e o reinício do `plugin_loopback`). A produção tem a
     mesma janela, já que o servidor lança processos o tempo todo; trocar o `flock` pela trava do
     `fcntl`, que não passa ao filho, muda o contrato com o `WriterLease` do Python.
-  - Os intermitentes de porta do `cano_v2` e do `plugin_loopback` vieram do #140, com o mesmo
-    conteúdo.
+  - Os intermitentes de porta do `cano_v2` e do `plugin_loopback` e o do canal privado do `side`
+    vieram do #140, com o mesmo conteúdo.
+- **Intermitentes antigos do macOS, já presentes na `main`:** o `state::live` exigia nenhuma
+  releitura logo depois de armar o observador, e o FSEvents entrega com atraso a criação das pastas
+  do próprio teste; agora o teste espera o observador assentar. O `cargo test` do Server roda com
+  `--no-fail-fast`: sem ele, o primeiro executável que falhava escondia os outros, e cada rodada do
+  macOS mostrava um intermitente diferente.
 - **Reexecução com nome curto passava sem testar nada.** No `it` o nome ganha o módulo; o filho com
   `--exact <nome>` rodava 0 testes e saía 0. Prova: com `assert_ran_one` e o nome antigo, os cinco
   falharam com `running 0 tests`.
