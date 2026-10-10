@@ -495,10 +495,16 @@ impl AccountService {
         };
         let mut merge = super::transcripts::Merge::new(&account.id);
         for folder in folders {
-            let source = account.home.join(folder);
-            // Pasta que é link já aponta para outro lugar: nada da conta mora nela.
-            if storage::real_dir(&source) {
-                merge.tree(&source, &default.join(folder)).map_err(failed)?;
+            let (source, target) = (account.home.join(folder), default.join(folder));
+            // Raiz que é link (ou não é pasta) recusa como dentro da árvore: pular deixaria a
+            // exclusão seguir sem que as conversas fossem para a conta padrão.
+            let refuse = |error: std::io::Error| failed(super::transcripts::MergeError {
+                source: Some(source.clone()), target: target.clone(), error });
+            match fs::symlink_metadata(&source) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(refuse(error)),
+                Ok(_) if storage::real_dir(&source) => merge.tree(&source, &target).map_err(failed)?,
+                Ok(_) => return Err(refuse(std::io::Error::other("não é pasta"))),
             }
         }
         merge.finish().map_err(failed)
@@ -773,6 +779,25 @@ mod tests {
         assert!(error.params["source"].as_str().unwrap().ends_with("link.jsonl"));
         assert!(account.home.join("projects/-repo/link.jsonl").is_symlink());
         assert_eq!(fs::read_to_string(&outside).unwrap(), "fora");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_transcript_root_refuses_the_delete() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let outside = root.path().join("outside-projects");
+        fs::create_dir_all(outside.join("-repo")).unwrap();
+        fs::write(outside.join("-repo/abc.jsonl"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, account.home.join("projects")).unwrap();
+        let error = delete_with(&service, Provider::Claude, &account, true).unwrap_err();
+        assert_eq!(error.code, "account_transcripts_merge_failed");
+        assert!(error.params["source"].as_str().unwrap().ends_with("projects"));
+        assert!(account.home.join("projects").is_symlink());
+        // Sem guardar, a raiz linkada sai como antes (só o link, o destino fica).
+        assert!(delete_with(&service, Provider::Claude, &account, false).unwrap().is_none());
+        assert!(outside.join("-repo/abc.jsonl").is_file());
     }
 
     #[test]
