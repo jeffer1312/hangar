@@ -131,6 +131,7 @@ impl State {
             || !state.runtime_state.is_object() { return Err(invalid("estado da fila incompatível")); }
         if !needs_terminal_recovery(&state) {
             migrated |= confirm_answered_commands(&mut state);
+            migrated |= confirm_side_questions(&mut state);
             state.compact();
         }
         Ok((state, migrated))
@@ -450,6 +451,17 @@ fn confirm_row(state:&mut State,id:&str) {
     release_terminal_write_barrier(state);
 }
 
+/// Pergunta lateral (`/hangar-btw`, `/btw`): o plugin responde no painel e nada entra no transcript,
+/// então a entrega aceita já é a confirmação.
+fn confirm_side_questions(state:&mut State)->bool {
+    let side:Vec<String> = state.rows.iter().filter(|row| {
+        row["delivered"] == true && row["confirmed"] != true && row["papel"] != "assistant"
+            && row["text"].as_str().and_then(|text|text.split_whitespace().next()).is_some_and(|c|c == "/hangar-btw" || c == "/btw")
+    }).map(|row|row_id(row).to_owned()).collect();
+    for id in &side { confirm_row(state,id); }
+    !side.is_empty()
+}
+
 /// Fila gravada antes de a resposta local confirmar o comando: a entrada `/x` entregue seguida
 /// logo de uma resposta local que nomeia o mesmo `/x` é a mesma prova, só que já no disco.
 fn confirm_answered_commands(state:&mut State)->bool {
@@ -677,6 +689,7 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             record_terminal_write_barrier(state,&id);
             release_terminal_write_barrier(state);
             if terminal {finalize_terminal(state,&id,clock)?;}
+            if status == Status::Accepted {confirm_side_questions(state);}
             serde_json::to_value(&state.operations[&id])?
         }
         Action::LateRpcResolution { id, wire_id, request_id, generation, result } => {
@@ -689,6 +702,7 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             if op.wire_attempts.values().all(|a|a["status"] == "accepted") && op.status != Status::Confirmed {
                 op.status = Status::Accepted; op.result = result;
                 release_terminal_write_barrier(state);
+                confirm_side_questions(state);
             }
             serde_json::to_value(&state.operations[&id])?
         }
