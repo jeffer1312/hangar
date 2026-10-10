@@ -5,6 +5,11 @@
 //! parte. O do diário é por servidor (o Python falso de cada um), e ali os nomes de sessão podem repetir.
 
 mod common;
+mod dictation_routes;
+mod dictation_catalog;
+mod dictation_harness;
+mod dictation_process;
+mod dictation_provider;
 mod fake;
 #[cfg(unix)]
 mod list_support;

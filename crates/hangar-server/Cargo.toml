@@ -6,6 +6,12 @@ publish = false
 # Os testes de integração são um executável só (tests/it/) mais os que precisam de processo próprio.
 autotests = false
 
+[[bin]]
+name = "hangar-dictation-fixture"
+path = "tests/fixtures/dictation_cli.rs"
+test = false
+bench = false
+
 [dependencies]
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
 # alloc (aqui, no serde e o signal do tokio): as features que o resto do workspace pede. Sem elas,

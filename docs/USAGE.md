@@ -284,15 +284,24 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   Codex → Opções → Conversa por voz**. O botão **Voz · Beta** aparece nas sessões Codex daquele
   servidor. A escolha vale só para esse servidor; desligar durante uma chamada encerra o microfone
   e a conexão. A voz escolhida fica salva neste navegador.
-- **Limpeza do ditado:** o texto gravado pelo microfone passa por um modelo que aplica a correção
-  que você falou em voz alta — dizer "usa o postgres, não, o redis" vira "Usa o Redis." —, tira
-  hesitação ("é... tipo assim...") e pontua. Preserva nome de arquivo, caminho, comando, sigla e
-  número exatamente como foram ditados; não resume nem reescreve o estilo. Não mexe em texto que
-  começa com `/` (senão `/clear` viraria comando quebrado) nem em frase com menos de 5 palavras. Se
-  a limpeza falhar ou sair errada (resumir demais, ou "responder" em vez de limpar), fica o texto
-  cru e aparece um aviso explicando o motivo; o botão **↩ original** ao lado do campo repõe o texto
-  exatamente como saiu da transcrição. Vale só pra gravação pelo microfone — áudio anexado como
-  arquivo não passa por essa limpeza.
+- **Organização do ditado no desktop nativo:** em **Configurações → Voz → Organização do texto**,
+  escolha **Sem organização** (padrão), **Harness da conversa** ou **API externa**. Sem organização
+  entrega o texto da transcrição e dispensa um serviço de organização. No harness, escolha o modelo
+  disponível na conta da conversa aberta; Claude e Codex têm preferências separadas. A chamada é
+  independente da conversa principal; o Hangar fornece transcrição e prompt de estilo. Claude usa
+  a autenticação original da conta de destino, inclusive a assinatura por login OAuth, e seu SDK
+  acrescenta metadados de ambiente e identificação da conta. O histórico e as instruções globais
+  ou do projeto ficam fora da chamada.
+  Com organização ligada, **Só limpar**, **Reorganizar** e **Briefing** mantêm as travas contra
+  invenção e perda de conteúdo. Frase com menos de cinco palavras ou começando com `/` é preservada.
+  Falha de serviço, modelo indisponível ou saída recusada conserva o cru com aviso, sem recorrer a
+  outra conta. Os botões de versão permitem recuperar **Cru** e mudar o estilo sem repetir o STT.
+  Áudio anexado como arquivo continua sem organização.
+- **Referência de grafia opcional:** com organização ligada, **Usar as três últimas mensagens**
+  envia somente texto de usuário e assistente da conversa de destino, em ordem, limitado a 2.000
+  caracteres por mensagem. Nasce desligado. Serve para conferir nomes e termos, sem completar a
+  fala com conteúdo do diálogo; ferramentas e pensamento ficam fora. Ao trocar o estilo, o app
+  reutiliza a referência capturada na primeira organização.
 - **Ditado mãos-livres:** chave **Enviar transcrição automaticamente** em Configurações → Voz,
   guardada **só neste aparelho** (não vai
   pro servidor; se você ligar no celular, o desktop continua sem). Com ela ligada, um toque no 🎤
@@ -309,13 +318,11 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   enviar e outro mais grave quando não deu pra enviar, pra dar pra saber sem olhar pra tela.
 - **Se estiver ouvindo uma resposta em voz** e você tocar o 🎤, a leitura para sozinha antes da
   gravação começar — sem isso o microfone captaria a própria voz do app.
-- **Provedor da limpeza e da leitura em voz:** por padrão usa a Groq (`openai/gpt-oss-120b`).
-  Pra apontar pra outro serviço compatível com a API da OpenAI, abra Configurações → Voz →
-  **Organização do texto** → **Usar outro serviço para organizar** e preencha **Endpoint da
-  organização**, **Chave da organização** e **Modelo da organização** (o Briefing pode ter um
-  modelo só dele). Fora do padrão essa chave é **obrigatória** (a chave da transcrição não é
-  reaproveitada pra outro host, de propósito). Com o endpoint vazio (padrão), ela não é usada em
-  nada — vale a **Chave da transcrição**, desde que a transcrição também use o serviço padrão.
+- **API externa para organizar:** selecione esse modo e preencha **Endpoint da organização**,
+  **Chave da organização** e **Modelo da organização**. Endpoint e modelo vazios usam o serviço
+  padrão compatível com OpenAI; a chave de organização é própria, inclusive no padrão. O Briefing
+  pode ter endpoint, chave e modelo próprios. Configuração antiga de LLM não liga a organização
+  automaticamente. A leitura em voz continua sendo uma capacidade configurada separadamente.
 - **Furar a fila (só Kimi):** mensagem mandada com a sessão trabalhando fica na fila **do Kimi** —
   ele processa quando o turno atual acabar. Enquanto houver fila, a fileira de cima do composer
   mostra **⏳ N na fila · mandar agora**; tocar manda o `ctrl-s` do Kimi e a fila **inteira** entra no

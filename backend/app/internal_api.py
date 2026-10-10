@@ -522,6 +522,10 @@ def transcription_config():
                   "base_url": runtime_config.get("transcription_base_url") or "",
                   "model": runtime_config.get("transcription_model") or ""}
     return {"providers": providers, "legacy": legacy,
+            "organization": {"dictation_include_recent_messages": bool(runtime_config.get("dictation_include_recent_messages")), **{field: runtime_config.get(field) or "" for field in (
+                "dictation_organization_mode", "dictation_claude_model", "dictation_codex_model", "ditado_estilo",
+                "llm_base_url", "llm_api_key", "llm_model", "llm_reasoning_effort",
+                "llm_briefing_base_url", "llm_briefing_api_key", "llm_briefing_model")}},
             "user_vocabulary": runtime_config.get("ditado_vocabulario") or "",
             "state_path": str(Path.home() / ".hangar" / "transcription-wait.json")}
 

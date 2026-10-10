@@ -76,6 +76,9 @@ if args[:1] == ["app-server"]:
     with serve(handler, "127.0.0.1", porta) as servidor:
         servidor.serve_forever()
 else:
+    if os.environ.get("FAKE_TUI_PID"):
+        with open(os.environ["FAKE_TUI_PID"], "w") as fh:
+            fh.write(str(os.getpid()))
     with open(os.environ["FAKE_TUI_OUT"], "w") as fh:
         fh.write("\\n".join(args))
     if os.environ.get("FAKE_TUI_ENV"):
@@ -277,7 +280,7 @@ def test_lancador_grava_sidecar_completo_e_mata_o_servidor_na_saida(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
-def test_lancador_ressobe_o_servidor_na_mesma_porta_com_a_tui_viva(tmp_path):
+def test_lancador_ressobe_o_servidor_na_mesma_porta_com_a_tui_viva(tmp_path, monkeypatch):
     # A TUI `--remote` desiste de reconectar em ~1 min e nao volta nem com mensagem nova; o unico
     # caminho sem relançar o pane e o servidor voltar na MESMA porta, e o sidecar apontar pro
     # dono novo (o backend confere o pid antes de conectar).
@@ -286,6 +289,8 @@ def test_lancador_ressobe_o_servidor_na_mesma_porta_com_a_tui_viva(tmp_path):
     env = _ambiente(tmp_path, cwd)
     env["FAKE_TUI_SLEEP"] = "12"
     env["FAKE_SERVER_OUT"] = str(tmp_path / "server-argv.json")
+    tui_pid_file = tmp_path / "tui.pid"
+    env["FAKE_TUI_PID"] = str(tui_pid_file)
     proc = subprocess.Popen(
         [sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd),
          "--tool-output-token-limit", "144000", "--service-tier", "priority"],
@@ -293,13 +298,23 @@ def test_lancador_ressobe_o_servidor_na_mesma_porta_com_a_tui_viva(tmp_path):
     )
     try:
         assert _espera(_sidecar(env, "sess").exists), "o sidecar nunca apareceu"
+        def tui_alive():
+            if not tui_pid_file.exists():
+                return False
+            pid = tui_pid_file.read_text().strip()
+            return bool(pid) and pid_vivo(int(pid))
+
+        assert _espera(tui_alive), "a TUI não ficou viva antes de trocar Fast"
         meta = json.loads(_sidecar(env, "sess").read_text())
         assert meta["tool_output_token_limit"] == 144000
         assert "tool_output_token_limit=144000" in json.loads((tmp_path / "server-argv.json").read_text())
         assert meta["service_tier"] == "priority"
         assert 'service_tier="priority"' in json.loads((tmp_path / "server-argv.json").read_text())
         # O usuário desligou Fast depois da abertura; reiniciar não pode repetir a escolha inicial.
-        _sidecar(env, "sess").write_text(json.dumps({**meta, "service_tier": "default"}))
+        from app.adapters.codex import sessions
+        monkeypatch.setattr(sessions, "_dir", lambda: _sidecar(env, "sess").parent)
+        # A troca usa a trava do produto, compartilhada com as escritas do lançador.
+        assert sessions.update_service_tier("sess", meta["thread_id"], "default")
         os.kill(meta["app_pid"], 9)
         assert _espera(lambda: not pid_vivo(meta["app_pid"]))
 

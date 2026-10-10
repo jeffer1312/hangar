@@ -5,6 +5,14 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **O organizador do ditado executa uma chamada mínima, separada da sessão principal.** Claude
+  usa `--safe-mode` e conserva a autenticação de destino: assinatura OAuth, keychain, API key ou `apiKeyHelper`. Codex
+  mantém a autenticação da conta de destino e usa execução efêmera com configurações mínimas.
+  O Hangar fornece prompt de estilo e transcrição, com referências de grafia apenas quando
+  habilitadas. Claude acrescenta contexto interno do SDK (ambiente e identificação da conta).
+  Ferramentas, plugins, skills, hooks, MCP, histórico e instruções globais/do projeto ficam fora.
+  Prova: [organização mínima do ditado](#organização-mínima-do-ditado).
+
 - **Retomada Codex pelo WebSocket local recebe o histórico inteiro, sem teto de 8 MB.**
   A fila reserva a entrada antes do envio; perda de resposta ou cancelamento conserva a
   tentativa como incerta. Só recusa explícita ou ausência de escrita permite reenviar
@@ -3631,3 +3639,49 @@ Prova descartável no Claude Code 2.1.294, sessão `cx-btw-probe` com um mod de 
 - A sessão sem terminal do Hangar nasce com o plugin do checkout do backend em uso
   (`plugin_bridge.PLUGINS_ROOT`): a prova dentro do Hangar só vale com o backend rodando desta
   branch.
+
+## Organização mínima do ditado
+
+Prova da issue 146 em 10/10/2026: Claude Code 2.1.296 e Codex CLI 0.162.1 executados pelo construtor
+Rust do organizador, contra provedor HTTP de captura local e autenticação sintética. O exemplo
+`crates/hangar-server/examples/dictation-context-probe.rs` reutiliza esse construtor; não mantém
+uma segunda lista de flags. Iscas de projeto, hook, plugin e skill ficaram fora do pedido.
+
+Na prova anterior com autenticação API, Claude enviou `tools=[]`, prompt de estilo e transcrição,
+com payload de 3.465 caracteres. Na prova OAuth com Claude 2.1.296 em 10/10/2026, a captura teve
+4.940 caracteres e confirmou Bearer sintético da conta de destino, com `tools=[]` e todas as iscas
+globais, de projeto, hooks, plugins e skills ausentes. Além do texto fornecido pelo Hangar, o SDK
+acrescentou identificação da conta em `userEmail` e um bloco `Environment`: diretório temporário,
+estado Git, plataforma, shell, versão do sistema, modelo/data e orientação interna sobre downloads.
+Esse contexto adicional é overhead do SDK observado nesta versão, não histórico da conversa nem
+instruções carregadas do projeto; seu tamanho varia com os metadados. Não é correto descrever
+essa captura OAuth como contendo literalmente só prompt e transcrição.
+
+A [referência oficial do CLI](https://code.claude.com/docs/en/cli-reference) e o `--help` instalado
+documentam que `--exclude-dynamic-system-prompt-sections` desloca contexto para a primeira mensagem,
+sem removê-lo, e é ignorado com `--system-prompt`. Não foi encontrada opção suportada para retirar
+esses metadados mantendo OAuth e `--safe-mode`. A prioridade é conservar a assinatura da conta,
+sem alterar o CLI, copiar tokens ou trocar autenticação.
+
+Codex enviou `tools=[]` e exatamente dois itens de entrada: developer do estilo e user da transcrição,
+com 4.417 caracteres. São tamanhos do JSON capturado, não contagens de tokens reais: o provedor
+da prova devolvia uso sintético e nenhum modelo externo foi consumido.
+
+`--ignore-user-config` sozinho ainda deixava ferramentas de perguntas/goals e quatro skills
+sistêmicas na entrada do Codex. O construtor desliga esses recursos, instruções de ambiente,
+permissões, apps e colaboração, além de usar `model_instructions_file` explícito em diretório
+temporário. Plugins, hooks, MCP, shell, busca e geração de imagem ficam desligados. `CODEX_HOME`
+continua o da conta de destino; só autenticação e configuração necessária do provedor são lidas.
+A conta padrão mantém seu store de autenticação; contas administradas usam arquivo.
+
+Claude usa `--safe-mode`, ferramentas vazias, MCP vazio estrito, sem slash commands nem persistência.
+API key vai no ambiente privado; `apiKeyHelper` entra em settings mínimos. OAuth e keychain permanecem
+na conta de destino, sem copiar tokens. O catálogo Claude compartilhado usa o mesmo isolamento.
+
+Os subprocessos herdam somente ambiente permitido. stdout/stderr são drenados e saídas brutas
+não entram no diário. O prazo único começa na entrada da organização e inclui configuração,
+referências, resolução do destino, fila do catálogo e execução. O CLI só inicia com orçamento
+restante; cancelamento mantém a guarda da conta até encerrar a árvore. A prova de prazo/cancelamento usa conexões de sincronização e um descendente
+segurando stdout: ambos encerram antes de liberar a pasta e a guarda da conta, sem waits artificiais
+nos testes. O resolvedor Claude é compartilhado com o leitor de contas, incluindo instalação npm
+no Windows.

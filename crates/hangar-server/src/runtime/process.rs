@@ -95,7 +95,11 @@ fn probe(pid: u32) -> Option<(Vec<String>, bool)> {
 }
 
 fn identify(pid: u32, key: &str) -> Liveness {
-    match probe(pid) {
+    identity_from(probe(pid), key)
+}
+
+fn identity_from(observation: Option<(Vec<String>, bool)>, key: &str) -> Liveness {
+    match observation {
         None => Liveness::Dead,
         Some((argv, _)) if !argv.is_empty() => if is_cano_of(&argv, key) { Liveness::Ours } else { Liveness::Foreign },
         Some((_, unreaped_ours)) => if unreaped_ours { Liveness::Ours } else { Liveness::Foreign },
@@ -103,7 +107,15 @@ fn identify(pid: u32, key: &str) -> Liveness {
 }
 
 /// Pelo pid E pela identidade: número reaproveitado depois de reiniciar a máquina é `Foreign`.
-pub fn liveness(pid: u32, key: &str) -> Liveness { identify(pid, key) }
+pub fn liveness(pid: u32, key: &str) -> Liveness {
+    let observation = probe(pid);
+    // O zumbi não serve para religar, mas sua propriedade ainda permite limpar o grupo no `kill`.
+    #[cfg(target_os = "linux")]
+    if observation.as_ref().is_some_and(|(argv, ours)| argv.is_empty() && *ours) {
+        return Liveness::Dead;
+    }
+    identity_from(observation, key)
+}
 
 static FOUND: OnceLock<PathBuf> = OnceLock::new();
 

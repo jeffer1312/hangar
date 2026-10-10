@@ -1181,8 +1181,13 @@ def test_create_priority_cannot_skip_unavailable_catalog(api_client, tier, statu
 
 
 def test_create_priority_without_announced_service_is_rejected(api_client, monkeypatch):
-    monkeypatch.setattr(api_mod.codex_models, "listar", lambda: [{
+    monkeypatch.setattr(api_mod.codex_models, "listar", lambda **options: [{
         "id": "native-model", "efforts": [], "service_tiers": [], "additional_speed_tiers": ["fast"]}])
+    def refused(operation, payload):
+        assert operation == "validate_model"
+        assert payload["model"] == "native-model"
+        raise api_mod.dictation_bridge.BridgeError(400, "dictation_model_unavailable", "service_tier priority indisponível para native-model")
+    monkeypatch.setattr(api_mod.dictation_bridge, "request", refused)
     with patch("app.api.registry.create") as create:
         response = api_client.post("/api/sessions", headers=_h(), json={
             "name": "cx", "cwd": "/tmp", "provider": "codex", "model": "native-model", "service_tier": "priority"})
@@ -1706,7 +1711,7 @@ def test_transcribe_sem_limpar_nao_chama_a_limpeza(api_client, monkeypatch, tmp_
     monkeypatch.setattr(api_mod, "transcribe_with_provider",
                         lambda data, fn, limits: Transcription("ola mundo", "p"))
     monkeypatch.setattr(
-        api_mod.narrar, "limpar_ditado",
+        api_mod.dictation_bridge, "organize",
         lambda texto: (_ for _ in ()).throw(AssertionError("nao devia limpar")),
     )
     r = api_client.post(
@@ -1718,6 +1723,54 @@ def test_transcribe_sem_limpar_nao_chama_a_limpeza(api_client, monkeypatch, tmp_
     assert r.json() == {"path": ANY, "text": "ola mundo", "provider": "p"}
 
 
+def test_dictation_none_is_forwarded_to_rust_and_preserves_stt_exactly(api_client, monkeypatch, tmp_path):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    from app import transcription_bridge, runtime_config
+
+    raw = "  Hoje vamos conferir o ditado completo.\n"
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            received.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+            result = {"text": raw, "raw": raw, "aviso": None, "estilo_aplicado": "cru",
+                      "organization_mode": "none", "organization_code": None}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "result": result}).encode())
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    previous = transcription_bridge._config
+    transcription_bridge.configure(f"127.0.0.1:{server.server_port}", "fixture-internal")
+    monkeypatch.setattr(runtime_config, "get", lambda field: "none" if field == "dictation_organization_mode" else "")
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [SessionInfo(name="cc", cwd=str(tmp_path))])
+    monkeypatch.setattr(api_mod, "transcribe_with_provider", lambda *_: Transcription(raw, "whisper-local"))
+    try:
+        response = api_client.post("/api/sessions/cc/transcribe?limpar=1&organization_mode=none",
+                                   content=b"audio", headers={**_h(), "X-Filename": "ditado.wav"})
+    finally:
+        transcription_bridge.configure(*(previous or (None, None)))
+        server.shutdown()
+        server.server_close()
+        worker.join()
+    assert response.status_code == 200
+    assert response.json()["text"] == raw
+    assert response.json()["aviso"] is None
+    assert response.json()["organization_mode"] == "none"
+    assert response.json()["provider"] == "whisper-local"
+    assert len(received) == 1
+    assert received[0][0] == "/__hangar_server/dictation/organize"
+    assert received[0][1]["mode"] == "none"
+    assert received[0][1]["session"] == "cc"
+
+
 def test_transcribe_com_limpar_devolve_o_cru_junto(api_client, monkeypatch, tmp_path):
     # `raw` volta pro botao de desfazer do front; `aviso` explica quando a limpeza nao valeu.
     info = SessionInfo(name="cc", cwd=str(tmp_path))
@@ -1726,11 +1779,11 @@ def test_transcribe_com_limpar_devolve_o_cru_junto(api_client, monkeypatch, tmp_
                         lambda data, fn, limits: Transcription("ola mundo cru", "p"))
     visto = {}
 
-    def fake_limpar(texto, estilo_pedido=None):
+    def fake_limpar(texto, estilo_pedido=None, **options):
         visto["estilo"] = estilo_pedido
-        return "Olá, mundo.", "aviso teste"
+        return {"text": texto, "raw": texto, "aviso": "aviso teste", "estilo_aplicado": "cru", "organization_mode": "external_api"}
 
-    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", fake_limpar)
+    monkeypatch.setattr(api_mod.dictation_bridge, "organize", fake_limpar)
     r = api_client.post(
         "/api/sessions/cc/transcribe?limpar=1&estilo=briefing",
         content=b"audio",
@@ -1738,7 +1791,7 @@ def test_transcribe_com_limpar_devolve_o_cru_junto(api_client, monkeypatch, tmp_
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["text"] == "Olá, mundo."
+    assert body["text"] == "ola mundo cru"
     assert body["raw"] == "ola mundo cru"
     assert body["aviso"] == "aviso teste"
     # O estilo da query e o que a pill mostrava na hora de falar, e ele chega inteiro na limpeza:
@@ -1757,7 +1810,7 @@ def test_transcribe_marca_o_estilo_efetivo_e_nao_o_pedido(api_client, monkeypatc
     monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
     monkeypatch.setattr(api_mod, "transcribe_with_provider",
                         lambda data, fn, limits: Transcription("ola mundo cru curto demais", "p"))
-    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", lambda t, e=None: ("Olá, mundo.", None))
+    monkeypatch.setattr(api_mod.dictation_bridge, "organize", lambda t, e=None, **options: {"text": "Olá, mundo.", "raw": t, "aviso": None, "estilo_aplicado": "prosa", "organization_mode": "external_api"})
     r = api_client.post(
         "/api/sessions/cc/transcribe?limpar=1&estilo=briefing",
         content=b"audio",
@@ -1850,8 +1903,8 @@ def test_aviso_da_reserva_e_o_da_limpeza_chegam_juntos(api_client, monkeypatch, 
     _sessao_com_uploads(monkeypatch, tmp_path)
     monkeypatch.setattr(api_mod, "transcribe_with_provider", lambda d, f, limits: Transcription(
         "ola mundo cru", "Groq", "Transcrito pelo Groq: ElevenLabs não respondeu"))
-    monkeypatch.setattr(api_mod.narrar, "limpar_ditado",
-                        lambda t, e=None: (t, "a limpeza devolveu texto vazio — ficou o original"))
+    monkeypatch.setattr(api_mod.dictation_bridge, "organize",
+                        lambda t, e=None, **options: {"text": t, "raw": t, "aviso": "a limpeza devolveu texto vazio — ficou o original", "estilo_aplicado": "cru", "organization_mode": "external_api"})
     r = api_client.post("/api/sessions/cc/transcribe?limpar=1&estilo=prosa", content=b"audio",
                         headers={**_h(), "X-Filename": "a.webm"})
     body = r.json()
@@ -1865,7 +1918,7 @@ def test_aviso_da_reserva_nao_marca_o_texto_limpo_como_cru(api_client, monkeypat
     _sessao_com_uploads(monkeypatch, tmp_path)
     monkeypatch.setattr(api_mod, "transcribe_with_provider", lambda d, f, limits: Transcription(
         "ola mundo cru", "Groq", "Transcrito pelo Groq: ElevenLabs não respondeu"))
-    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", lambda t, e=None: ("Olá, mundo.", None))
+    monkeypatch.setattr(api_mod.dictation_bridge, "organize", lambda t, e=None, **options: {"text": "Olá, mundo.", "raw": t, "aviso": None, "estilo_aplicado": "prosa", "organization_mode": "external_api"})
     r = api_client.post("/api/sessions/cc/transcribe?limpar=1&estilo=prosa", content=b"audio",
                         headers={**_h(), "X-Filename": "a.webm"})
     body = r.json()
@@ -1879,7 +1932,8 @@ def test_anexo_sem_limpar_leva_o_aviso_da_reserva(api_client, monkeypatch, tmp_p
                         lambda d, f, limits: Transcription("ola", "Groq", "Transcrito pelo Groq: ElevenLabs falhou (500)"))
     r = api_client.post("/api/sessions/cc/transcribe", content=b"audio", headers={**_h(), "X-Filename": "a.webm"})
     assert r.json() == {"path": ANY, "text": "ola", "provider": "Groq",
-                        "aviso": "Transcrito pelo Groq: ElevenLabs falhou (500)"}
+                        "aviso": "Transcrito pelo Groq: ElevenLabs falhou (500)",
+                        "aviso_transcricao": "Transcrito pelo Groq: ElevenLabs falhou (500)"}
 
 
 def test_upload_audio_only_nao_trata_webm_como_video(api_client, monkeypatch, tmp_path):
@@ -1908,11 +1962,11 @@ def test_relimpar_aplica_outro_estilo_sem_audio(api_client, monkeypatch):
     # chama a limpeza de novo — nao ha sessao, nem cwd, nem upload envolvidos.
     visto = {}
 
-    def fake_limpar(texto, estilo_pedido=None):
+    def fake_limpar(texto, estilo_pedido=None, **options):
         visto["texto"], visto["estilo"] = texto, estilo_pedido
-        return "**Objetivo**\nfalar.", None
+        return {"text": "**Objetivo**\nfalar.", "raw": texto, "aviso": None, "estilo_aplicado": "briefing", "organization_mode": "external_api"}
 
-    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", fake_limpar)
+    monkeypatch.setattr(api_mod.dictation_bridge, "organize", fake_limpar)
     r = api_client.post("/api/ditado/relimpar",
                         json={"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"},
                         headers=_h())

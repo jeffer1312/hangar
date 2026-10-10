@@ -40,6 +40,29 @@ def test_campo_desconhecido_e_ignorado():
     assert salvo == {}          # o cliente não inventa setting
 
 
+def test_dictation_organization_defaults_to_none_even_with_legacy_key():
+    rc.aplicar({"llm_api_key": "chave-sintetica", "llm_base_url": "https://exemplo.invalid/v1"})
+    assert rc.get("dictation_organization_mode") == "none"
+    assert rc.estado()["dictation_organization_mode"]["valor"] == "none"
+
+
+@pytest.mark.parametrize("mode", ["none", "harness", "external_api", ""])
+def test_dictation_organization_choice_is_persisted(mode):
+    rc.aplicar({"dictation_organization_mode": mode, "dictation_claude_model": "modelo-claude-real",
+                "dictation_codex_model": "modelo-codex-real"})
+    assert rc.get("dictation_organization_mode") == mode
+    assert rc.get("dictation_claude_model") == "modelo-claude-real"
+    assert rc.get("dictation_codex_model") == "modelo-codex-real"
+
+
+def test_dictation_organization_rejects_unknown_mode_and_reset_disables_it():
+    with pytest.raises(ValueError, match="dictation_organization_mode"):
+        rc.aplicar({"dictation_organization_mode": "automatica"})
+    rc.aplicar({"dictation_organization_mode": "harness"})
+    rc.aplicar({}, remover={"dictation_organization_mode"})
+    assert rc.get("dictation_organization_mode") == "none"
+
+
 def test_preferencia_statusline_ligada_por_padrao_e_persistida():
     assert rc.get("claude_statusline_update") is True
     rc.aplicar({"claude_statusline_update": False})
@@ -374,6 +397,14 @@ def test_null_remove_a_lista_e_volta_ao_servico_unico():
     rc.aplicar({}, remover={"transcription_providers"})
     assert rc.get("transcription_providers") is None
     assert rc.estado()["transcription_providers"] == {"valor": [], "definido": False, "origem": "env"}
+
+
+def test_dictation_recent_messages_are_disabled_by_default_and_persisted():
+    assert rc.get("dictation_include_recent_messages") is False
+    rc.aplicar({"dictation_include_recent_messages": True})
+    assert rc.get("dictation_include_recent_messages") is True
+    rc.aplicar({}, remover={"dictation_include_recent_messages"})
+    assert rc.get("dictation_include_recent_messages") is False
 
 
 def test_openai_compatible_service_can_be_saved_without_key():

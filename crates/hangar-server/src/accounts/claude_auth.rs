@@ -104,7 +104,7 @@ impl AccountService {
         }
         Ok(())
     }
-    fn claude_command(&self) -> Option<tokio::process::Command> {
+    pub(crate) fn claude_command(&self) -> Option<tokio::process::Command> {
         let path = &self
             .env
             .base

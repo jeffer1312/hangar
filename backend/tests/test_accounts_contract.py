@@ -1,6 +1,7 @@
 """Contratos públicos de contas; executar somente em VM ou CI isolado."""
 
 import json
+from pathlib import Path
 import pytest
 
 from accounts_contract import PythonReference, assert_rust_ownership, isolated_environment, normalize
@@ -70,13 +71,13 @@ def test_codex_success_waits_for_identity_and_owns_http(tmp_path):
             assert time.monotonic() < deadline, "sucesso não iniciou confirmação de identidade"
         assert server.request("GET", "/api/codex-contas/alpha/login").json()["status"] == "waiting"
         account = reference.root / ".codex-alpha"
-        assert reference.request("POST", "/__contract__/codex-model-cache").json()["cached"]
+        assert reference.request("POST", "/__contract__/codex-model-invalidation").json()["homes"] == []
         (account / "identity.json").write_text(json.dumps({
             "type": "chatgpt", "email": "fixture@example.test", "planType": "plus",
         }), encoding="utf-8")
         final = server.wait_status("alpha", "completed")
         assert final == {**attempt, "status": "completed"}
-        assert not reference.request("GET", "/__contract__/codex-model-cache").json()["cached"], "login concluído invalida o catálogo de modelos"
+        assert [Path(home) for home in reference.request("GET", "/__contract__/codex-model-invalidation").json()["homes"]] == [account], "login concluído encaminha a invalidação ao Rust"
         catalog = server.request("GET", "/api/codex-contas").json()
         assert next(row for row in catalog if row["id"] == "alpha")["auth"] == {
             "method": "oauth", "status": "connected", "email": "fixture@example.test", "plan": "plus",
@@ -388,14 +389,14 @@ def test_codex_cache_callback_requires_secret_instance_and_valid_key(tmp_path):
             return response.status
     try:
         key = {"key": {"provider": "codex", "canonical_home": str(reference.root / ".codex-alpha")}}
-        reference.request("POST", "/__contract__/codex-model-cache")
+        reference.request("POST", "/__contract__/codex-model-invalidation")
         assert invalidate(key, secret="wrong") == 404
         assert invalidate(key, instance="old") == 404
-        assert reference.request("GET", "/__contract__/codex-model-cache").json()["cached"]
+        assert reference.request("GET", "/__contract__/codex-model-invalidation").json()["homes"] == []
         assert invalidate({"key": {"provider": "codex", "canonical_home": "relative"}}) == 400
         assert invalidate({**key, "token": "synthetic"}) == 400
         assert invalidate(key) == 200
-        assert not reference.request("GET", "/__contract__/codex-model-cache").json()["cached"]
+        assert [Path(home) for home in reference.request("GET", "/__contract__/codex-model-invalidation").json()["homes"]] == [reference.root / ".codex-alpha"]
     finally:
         reference.close()
 

@@ -40,6 +40,7 @@ from app.model_picker import PickerError
 from app.mensagens import erro
 from app import kimi_models
 from app import claude_models
+from app import dictation_bridge
 from app import claude_customizations
 from app import cliproxy
 from app import codex_models
@@ -7461,6 +7462,10 @@ async def upload(name: str, request: Request, audio_only: bool = False):
 
 @app.post("/api/sessions/{name}/transcribe", dependencies=[Depends(require_auth), Depends(_transfer_check)])
 async def transcribe_audio(name: str, request: Request, limpar: bool = False, estilo: str | None = None,
+                           organization_mode: str | None = None, organization_model: str | None = None,
+                           generation: str | None = None,
+                           organization_account: str | None = None,
+                           include_recent_messages: bool | None = None,
                            arquivo: str | None = None):
     # Com corpo: salva o áudio (anexo de áudio/vídeo) e transcreve num round-trip, raw body +
     # X-Filename. Com `arquivo`: transcreve um áudio já enviado pelo /upload, sem gravar outra cópia
@@ -7511,11 +7516,18 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False, es
         raise HTTPException(e.status, e.payload())
     if not limpar:
         return _with_provider({"path": path, "text": t.text}, t)
-    return {"path": path, **_with_provider(await _cleaned_dictation(t.text, estilo), t)}
+    result = await asyncio.to_thread(dictation_bridge.organize, t.text, estilo, mode=organization_mode,
+                                    model=organization_model, session=name, generation=generation,
+                                    account=organization_account,
+                                    include_recent_messages=include_recent_messages,
+                                    harness_allowed=not _convidado(request))
+    return {"path": path, **_with_provider(result, t)}
 
 
 @app.post("/api/dictation/transcribe", dependencies=[Depends(require_auth)])
-async def transcribe_dictation(request: Request, estilo: str | None = None, limpar: bool = True):
+async def transcribe_dictation(request: Request, estilo: str | None = None, limpar: bool = True,
+                               organization_mode: str | None = None, organization_model: str | None = None,
+                               include_recent_messages: bool | None = None):
     # Antes de existir uma sessão, o áudio não tem uma pasta onde ser guardado.
     clen = request.headers.get("content-length")
     if clen and clen.isdigit() and int(clen) > 100 * 1024 * 1024:
@@ -7528,59 +7540,67 @@ async def transcribe_dictation(request: Request, estilo: str | None = None, limp
         raise HTTPException(e.status, e.payload())
     if not limpar:
         return _with_provider({"text": t.text}, t)
-    return _with_provider(await _cleaned_dictation(t.text, estilo), t)
+    result = await asyncio.to_thread(dictation_bridge.organize, t.text, estilo, mode=organization_mode,
+                                    model=organization_model, include_recent_messages=include_recent_messages,
+                                    harness_allowed=not _convidado(request))
+    return _with_provider(result, t)
 
 
 def _with_provider(result: dict, t: Transcription) -> dict:
     """Junta à resposta quem transcreveu. O aviso da reserva vem antes do da limpeza e nenhum dos
     dois some; `estilo_aplicado` já foi decidido só pelo aviso da limpeza."""
     out = {**result, "provider": t.provider}
+    if t.aviso:
+        out["aviso_transcricao"] = t.aviso
     avisos = [a for a in (t.aviso, result.get("aviso")) if a]
     if avisos:
         out["aviso"] = " · ".join(avisos)
     return out
 
 
-async def _cleaned_dictation(text: str, estilo: str | None) -> dict:
-    # `estilo` = o que a PILL do composer mostrava quando a pessoa falou. Vence a config do
-    # servidor (narrar.estilo_efetivo); ausente/desconhecido, a config manda como sempre.
-    texto_limpo, aviso = await asyncio.to_thread(narrar.limpar_ditado, text, estilo)
-    # `estilo_aplicado` = qual versao o texto de fato recebeu, pra barra do ditado no composer marcar
-    # o botao certo. NAO da pra deduzir na tela: o backend rebaixa briefing pra prosa em ditado curto
-    # e cai na config quando a pill ainda nao leu o servidor, entao marcar "Briefing" pelo que foi
-    # PEDIDO faria o botao mentir. Com aviso, o texto que voltou e o cru — nao um estilo. Idem
-    # quando limpar_ditado devolve o proprio texto sem tocar (ditado de menos de 5 palavras, ou
-    # comecando com "/"): ali nao houve estilo nenhum, e dizer "prosa" seria a mesma mentira.
-    aplicado = "cru" if (aviso or texto_limpo == text) else narrar.estilo_efetivo(text, estilo)
-    return {"text": texto_limpo, "raw": text, "aviso": aviso,
-            "estilo_aplicado": aplicado}
 
 
 class RelimparBody(_StrictBody):
     texto: str = Field(min_length=1)
     estilo: str
+    session: str | None = None
+    generation: str | None = None
+    organization_mode: str | None = None
+    organization_model: str | None = None
+    organization_account: str | None = None
+    include_recent_messages: bool | None = None
+    recent_messages: list[dict] | None = None
 
 
 @app.post("/api/ditado/relimpar", dependencies=[Depends(require_auth)])
-async def relimpar_ditado(body: RelimparBody):
-    """Aplica OUTRO estilo ao texto CRU de um ditado que ja foi transcrito.
+async def relimpar_ditado(body: RelimparBody, request: Request):
+    """Reorganiza o texto cru pelo Rust, sem repetir transcrição ou upload."""
+    if body.estilo not in ("limpar", "prosa", "briefing"):
+        raise HTTPException(400, detail=erro("erro_estilo_invalido", f"Estilo de organização inválido: '{body.estilo}'."))
+    if body.session:
+        from app import guest_users
+        guest = guest_of(request)
+        if guest is not None and guest.share_for(body.session) is None:
+            raise HTTPException(403, "A conversa de destino não está autorizada.")
+        viewer = guest_users.current.get()
+        if viewer is not None and not guest_users.visible_to(viewer, body.session):
+            raise HTTPException(403, "A conversa de destino não está autorizada.")
+    return await asyncio.to_thread(dictation_bridge.organize, body.texto, body.estilo,
+                                  mode=body.organization_mode, model=body.organization_model,
+                                  session=body.session, generation=body.generation,
+                                  account=body.organization_account,
+                                  include_recent_messages=body.include_recent_messages, recent_messages=body.recent_messages,
+                                  harness_allowed=not _convidado(request))
 
-    Sem audio e sem sessao de proposito. A parte cara (Whisper) ja foi paga na transcricao e o cru
-    volta de la no campo `raw`; trocar de estilo e so a limpeza de novo. Reenviar o audio custaria
-    uma segunda transcricao — dinheiro e ~10s — pra chegar no mesmo texto cru. E limpeza nao le nada
-    da sessao (nem cwd, nem provider), entao exigir `name` aqui so acrescentaria um registry.list()
-    e um 404 possivel num caminho que nao precisa de nenhum dos dois.
 
-    Estilo invalido e 400 e nao "cai no padrao": aqui a pessoa CLICOU num estilo, entao entregar
-    outro calado seria mentir sobre o botao que ela apertou (na transcricao o estilo e um palpite da
-    tela e cair na config e o certo)."""
-    if body.estilo not in narrar.ESTILOS_DITADO:
-        raise HTTPException(400, detail=erro(
-            "erro_estilo_invalido",
-            f"estilo '{body.estilo}' nao existe. Use um de: {', '.join(narrar.ESTILOS_DITADO)}."))
-    texto, aviso = await asyncio.to_thread(narrar.limpar_ditado, body.texto, body.estilo)
-    aplicado = "cru" if (aviso or texto == body.texto) else narrar.estilo_efetivo(body.texto, body.estilo)
-    return {"text": texto, "aviso": aviso, "estilo_aplicado": aplicado}
+@app.get("/api/dictation/models", dependencies=[Depends(require_auth)])
+async def dictation_models(request: Request, session: str):
+    if _convidado(request) or request.scope.get("server", (None, None))[1] == 8768:
+        raise HTTPException(403, "O catálogo de organização é exclusivo do dono.")
+    try:
+        return await asyncio.to_thread(dictation_bridge.request, "catalog", {"session": session})
+    except dictation_bridge.BridgeError as error:
+        raise HTTPException(error.status, detail={"code": error.code, "msg": error.detail}) from None
 
 
 @app.get("/api/transcription/providers/status", dependencies=[Depends(require_auth)])
@@ -10203,12 +10223,13 @@ async def model_options(name: str):
         hl = get_adapter(CLAUDE_HEADLESS)
         try:
             modelos = await hl.list_models(name)
+            meta = headless_sessions.load(name) or {}
+            atual = hl.escolhas(name)[0] or meta.get("model")
+            models = await asyncio.to_thread(claude_models.para_tela, modelos, atual)
         except Exception as e:
             raise HTTPException(503, detail=erro("erro_modelos_indisponiveis", f"não consegui listar os modelos: {e}"))
-        meta = headless_sessions.load(name) or {}
-        atual = hl.escolhas(name)[0] or meta.get("model")
         return {"kind": "claude", "engine": None, "effort": meta.get("effort"),
-                "models": claude_models.para_tela(modelos, atual)}
+                "models": models}
     # Conta Anthropic: le o picker de verdade. Abre e fecha um overlay — nao vai pro scrollback,
     # nao entra no transcript e nao gasta token.
     await asyncio.to_thread(_recusa_se_painel_aberto, name)
@@ -10314,7 +10335,11 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
         # Sem `effort`: quem sabe o nivel atual e a SESSAO, e aqui nao ha uma. A chave e a mesma do
         # picker de proposito (a lista vem da conta, nao da sessao); nenhum leitor do cache usa o
         # campo, e inventar um nivel aqui seria pior que a ausencia dele.
-        resp = {"kind": "claude", "engine": None, "models": claude_models.para_tela(crus)}
+        try:
+            models = await asyncio.to_thread(claude_models.para_tela, crus)
+        except claude_models.ClaudeIndisponivel as error:
+            raise HTTPException(503, detail=erro("erro_modelos_indisponiveis", str(error))) from None
+        resp = {"kind": "claude", "engine": None, "models": models}
         _models_cache_put(chave, resp)
         return {**resp, "reduced": False}
     return {"kind": "claude", "reduced": True,

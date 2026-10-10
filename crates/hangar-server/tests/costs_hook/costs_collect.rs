@@ -440,7 +440,11 @@ fn http_scopes_use_internal_secret_and_reject_invalid_http_or_json() {
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 2048]; stream.read(&mut request).unwrap();
+        let mut request = Vec::new(); let mut byte = [0; 1];
+        while !request.ends_with(b"\r\n\r\n") { stream.read_exact(&mut byte).unwrap(); request.push(byte[0]); }
+        let request = String::from_utf8(request).unwrap().to_lowercase();
+        assert!(request.starts_with("get /internal/costs/scopes http/1.1\r\n"));
+        assert!(request.contains("x-hangar-internal: synthetic-secret\r\n"));
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
     });
     assert!(matches!(HttpScopes::new(address, "synthetic-secret".into()).fetch(), Err(CollectError::NoScopes)));

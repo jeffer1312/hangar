@@ -12,6 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,6 +33,30 @@ from app.config import settings
 
 TOKEN = "t-model-options"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+@pytest.mark.parametrize("session", [False, True])
+def test_claude_parser_failure_is_an_explicit_error_without_alias_fallback(cli, monkeypatch, session):
+    async def info(name):
+        return SessionInfo(name=name, cwd="/tmp", provider="claude")
+
+    async def list_models(name):
+        return [{"value": "modelo-real"}]
+
+    def unavailable(*args):
+        raise api.claude_models.ClaudeIndisponivel("Rust indisponível")
+
+    monkeypatch.setattr(api, "_cached_info", info)
+    monkeypatch.setattr(api, "_headless", lambda name: True)
+    monkeypatch.setattr(api, "get_adapter", lambda provider: SimpleNamespace(list_models=list_models, escolhas=lambda name: (None, None)))
+    monkeypatch.setattr(api.headless_sessions, "load", lambda name: {})
+    monkeypatch.setattr(api.claude_models, "listar", lambda *args: [{"value": "modelo-real"}])
+    monkeypatch.setattr(api.claude_models, "para_tela", unavailable)
+    route = "/api/sessions/claude/model/options" if session else "/api/model-options?provider=claude"
+    response = cli.get(route, headers=AUTH)
+    assert response.status_code == 503
+    assert "Rust indisponível" in str(response.json())
+    assert "models" not in response.json()
 
 
 @pytest.fixture(autouse=True)
@@ -102,6 +127,10 @@ def test_cache_frio_le_o_catalogo_efemero_e_cacheia(cli, monkeypatch):
                 {"value": "fable", "displayName": "Fable", "description": "f"}]
 
     monkeypatch.setattr(api.claude_models, "listar", falso)
+    monkeypatch.setattr(api.claude_models, "para_tela", lambda *a, **k: [
+        {"id":"default","name":"Default","desc":"d","active":True},
+        {"id":"fable","name":"Fable","desc":"f","active":False},
+    ])
     r = cli.get("/api/model-options", headers=AUTH, params={"provider": "claude"})
     assert r.status_code == 200
     assert r.json()["reduced"] is False
@@ -182,7 +211,7 @@ _CODEX_CAT = [{"id": "gpt-5.6-sol", "name": "GPT-5.6-Sol", "desc": "Latest front
 
 
 def test_codex_serve_o_catalogo_do_app_server(cli, monkeypatch):
-    monkeypatch.setattr(api.codex_models, "listar", lambda: _CODEX_CAT)
+    monkeypatch.setattr(api.codex_models, "listar", lambda **kw: _CODEX_CAT)
     r = cli.get("/api/model-options", headers=AUTH, params={"provider": "codex"})
     assert r.status_code == 200
     assert r.json()["kind"] == "codex"
@@ -243,7 +272,12 @@ def test_criar_codex_com_nivel_que_o_modelo_nao_lista_vira_422(cli, monkeypatch)
     `registry.create` mockado como no test_api_permissao: a recusa tem que vir ANTES de qualquer
     efeito, e um POST de verdade aqui abriria uma sessão tmux na máquina de quem roda a suíte.
     """
-    monkeypatch.setattr(api.codex_models, "listar", lambda: _CODEX_CAT)
+    monkeypatch.setattr(api.codex_models, "listar", lambda **kw: _CODEX_CAT)
+    def validate(operation, payload):
+        assert operation == "validate_model"
+        assert (payload["model"], payload["effort"]) == ("gpt-5.5", "ultra")
+        raise api.dictation_bridge.BridgeError(400,"dictation_model_unavailable","Nível fora do suporte de gpt-5.5: ultra")
+    monkeypatch.setattr(api.dictation_bridge,"request",validate)
     with patch("app.api.registry.create") as cr:
         r = cli.post("/api/sessions", headers=AUTH, json={
             "name": "c1", "cwd": "/tmp", "provider": "codex", "model": "gpt-5.5", "effort": "ultra"})
@@ -255,7 +289,7 @@ def test_criar_codex_com_nivel_que_o_modelo_nao_lista_vira_422(cli, monkeypatch)
 def test_catalogo_fora_do_ar_nao_impede_criar_sessao(cli, monkeypatch, caplog):
     """Mesma decisão da janela do motor: provedor parado não pode IMPEDIR de abrir sessão. A
     escolha segue pro comando e o CLI decide — mas a falha NÃO some: fica no log."""
-    def quebra():
+    def quebra(**kw):
         raise api.codex_models.CodexIndisponivel("model/list nao respondeu")
     monkeypatch.setattr(api.codex_models, "listar", quebra)
     alvo = SessionInfo(name="c2", cwd="/tmp", provider="codex")

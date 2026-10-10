@@ -81,7 +81,7 @@ def _strip_fence(raw: str) -> str:
 def _call(batch: list[str], lang: str) -> list[str]:
     # Sem plano B: um lote que falha subiria um `claude -p` na assinatura para texto de conforto.
     raw = chamar_chat(_SYSTEM.format(lang=LANGS[lang]), json.dumps(batch, ensure_ascii=False),
-                      temperature=0.1, timeout=_TIMEOUT, plano_b=False)
+                      temperature=0.1, timeout=_TIMEOUT)
     try:
         out = json.loads(_strip_fence(raw))
     except ValueError as exc:

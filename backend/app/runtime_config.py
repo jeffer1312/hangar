@@ -75,8 +75,12 @@ EDITAVEIS: dict[str, type] = {
     # dia). O Rust soma os termos ao vocabulário base compartilhado.
     "ditado_vocabulario": str,
     # Quanto o ditado pode mexer no que voce falou: "limpar" | "prosa" | "briefing".
-    # Ver narrar.ESTILOS_DITADO — cada um e um prompt E um conjunto de travas diferente.
+    # Cada estilo tem prompt e travas próprios no organizador Rust.
     "ditado_estilo": str,
+    "dictation_organization_mode": str,
+    "dictation_claude_model": str,
+    "dictation_codex_model": str,
+    "dictation_include_recent_messages": bool,
     # Origens EXTRAS que podem abrir o terminal, no mesmo formato "a,b" do CP_TERM_ORIGINS.
     # SOMA com o env, ao contrario do scan_roots logo abaixo, que sobrescreve: aqui a lista e o
     # perimetro de quem PODE abrir o terminal, e um override por inteiro feito do celular tiraria
@@ -425,6 +429,8 @@ def _coagir(campo: str, valor: Any) -> Any:
     if not isinstance(valor, str):
         raise ValueError(f"{campo}: esperado texto")
     texto = valor.strip()
+    if campo == "dictation_organization_mode" and texto not in ("", "none", "harness", "external_api"):
+        raise ValueError("dictation_organization_mode: use none, harness ou external_api")
     if campo == "editor" and texto:
         # O editor vira argv[0] de um subprocess. Enquanto vinha so do .env, quem escolhia era o dono
         # da maquina; agora o celular escreve. Nome NU (sem barra, sem ..) mantem a escolha livre
@@ -436,10 +442,10 @@ def _coagir(campo: str, valor: Any) -> Any:
         # modulo). Recusar aqui e o que impede um estilo inexistente virar "nenhuma limpeza,
         # calado": narrar cai no padrao quando nao reconhece o valor, entao sem esta trava um typo
         # na config faria o ditado piorar sem nada na tela dizendo por que.
-        from app.narrar import ESTILOS_DITADO
+        ESTILOS_DITADO = ("limpar", "prosa", "briefing")
         if texto not in ESTILOS_DITADO:
             raise ValueError(
-                f"ditado_estilo: '{texto}' nao existe. Use um de: {', '.join(ESTILOS_DITADO)}."
+                f"ditado_estilo: '{texto}' não existe. Use um de: {', '.join(ESTILOS_DITADO)}."
             )
     if campo == "scan_roots" and texto:
         # resolve_scan_roots descarta calado entrada que nao e diretorio (um typo no env nunca

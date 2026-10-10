@@ -81,8 +81,7 @@ def traduzir(texto: str) -> str:
     if not _vagas.acquire(blocking=False):
         return texto
     try:
-        saida = chamar_chat(_SYSTEM, texto, temperature=_TEMPERATURA, timeout=_TIMEOUT,
-                            plano_b=False).strip()
+        saida = chamar_chat(_SYSTEM, texto, temperature=_TEMPERATURA, timeout=_TIMEOUT).strip()
     except NarrarError as e:
         # warning, e não info: na tela isto some (o texto original volta no lugar), então o log é o
         # ÚNICO sinal de que a chave está errada ou o provedor caiu. Em info ele se mistura ao

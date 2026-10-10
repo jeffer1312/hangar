@@ -8,6 +8,7 @@ e sai quando o stdin fecha, também como o de verdade; o modo (`FAKE_MODE`) deci
 do filho é lida em /proc.
 """
 import asyncio
+import http.client
 import json
 import os
 import re
@@ -193,10 +194,27 @@ async def _wait_get(port: int, path: str, accept, timeout: float = 15.0) -> byte
             body = await asyncio.to_thread(_get, port, path)
             if accept(body):
                 return body
-        except OSError:
+        # O handoff pode encerrar o servidor antigo entre cabeçalho e corpo.
+        except (OSError, http.client.IncompleteRead):
             pass
         await asyncio.sleep(0.05)
     raise AssertionError(f"a porta {port} não respondeu {path}")
+
+
+def test_wait_get_retries_truncated_reply_during_handoff(monkeypatch):
+    replies = iter([http.client.IncompleteRead(b"", 195), b"python"])
+    calls = []
+
+    def get(port, path):
+        calls.append((port, path))
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(sys.modules[__name__], "_get", get)
+    assert asyncio.run(_wait_get(12345, "/", lambda body: body == b"python")) == b"python"
+    assert calls == [(12345, "/"), (12345, "/")]
 
 
 def _dead(pid: int) -> bool:
@@ -521,7 +539,7 @@ def test_watcher_failure_puts_the_cause_in_the_diary(monkeypatch, events):
 def test_protocol_is_the_same_number_on_both_sides():
     lib = (Path(__file__).resolve().parents[2] / "crates/hangar-server/src/lib.rs").read_text()
     rust = int(re.search(r"pub const INTERNAL_PROTOCOL: u32 = (\d+);", lib).group(1))
-    assert rust == rust_server.RUST_SERVER_PROTOCOL == 51
+    assert rust == rust_server.RUST_SERVER_PROTOCOL == 52
 
 
 # --- Modo do processo (dono único, Task 5) ---

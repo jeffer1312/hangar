@@ -7,6 +7,7 @@ import base64
 import json
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 import time
 
 import pytest
@@ -219,13 +220,13 @@ def _wait_legacy(server, stage):
 def test_legacy_rust_writes_vault_codex_and_secondary_destinations(managed_device):
     fixture = managed_device
     fixture.grant.set()
-    assert fixture.reference.request("POST", "/__contract__/codex-model-cache", {"account": "default"}).json()["cached"]
+    assert fixture.reference.request("POST", "/__contract__/codex-model-invalidation").json()["homes"] == []
     start = fixture.server.request("POST", "/api/credenciais/codex/login")
     assert start.status_code == 200, start.json()
     assert start.json()["etapa"] == "aguardando"
     result = _wait_legacy(fixture.server, "concluido")
     root = fixture.reference.root
-    assert not fixture.reference.request("GET", "/__contract__/codex-model-cache?account=default").json()["cached"]
+    assert [Path(home) for home in fixture.reference.request("GET", "/__contract__/codex-model-invalidation").json()["homes"]] == [root / ".codex"]
     assert {name: item["ok"] for name, item in result["resultado"].items()} == {"codex": True, "pi": True, "omp": True}
     vault = json.loads((root / ".hangar/auth/openai-codex.json").read_text())
     assert vault == {"access": _jwt(), "refresh": "fixture-refresh", "id_token": "fixture-id",
