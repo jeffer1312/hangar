@@ -15,8 +15,9 @@ pub struct SelfApi { base: String, token: String, http: reqwest::Client }
 impl SelfApi {
     pub fn new(addr: SocketAddr, token: &str) -> Self {
         let addr = if addr.ip().is_unspecified() { SocketAddr::new(Ipv4Addr::LOCALHOST.into(), addr.port()) } else { addr };
-        // Sem proxy: o token do dono nunca sai para um proxy do ambiente (o termsock faz igual).
-        let http = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(120)).build().unwrap_or_default();
+        // Sem proxy nem redirect: o token do dono nunca sai deste servidor.
+        let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(120)).build().expect("cliente http local");
         Self { base: format!("http://{addr}"), token: token.to_owned(), http }
     }
 
