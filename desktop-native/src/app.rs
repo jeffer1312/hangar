@@ -6227,8 +6227,9 @@ impl Render for Hangar {
         self.sync_a11y_retain(window, cx);
         // O assistente ocupa a janela: nada da conversa por baixo recebe tecla nem clique.
         if let Some(setup) = self.setup.clone() {
-            return div().id("hangar-root").size_full().bg(theme::window_fill()).text_color(theme::text()).text_base()
-                .font_family(theme::SANS).child(setup).into_any_element();
+            // Sem a camada de fundo, Imagem e Desktop deixavam a raiz transparente e o texto ficava sobre o papel de parede cru.
+            return div().id("hangar-root").relative().size_full().bg(theme::window_fill()).text_color(theme::text()).text_base()
+                .font_family(theme::SANS).children(self.render_backdrop(window)).child(setup).into_any_element();
         }
         self.sync_plan_review(window, cx);
         self.rail_frame(window);
