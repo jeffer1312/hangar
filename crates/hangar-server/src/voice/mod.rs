@@ -2,6 +2,7 @@
 pub mod computer;
 pub mod hub;
 pub mod jev;
+pub mod machines;
 pub mod observe;
 pub mod organizer;
 pub mod plan;

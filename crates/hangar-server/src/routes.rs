@@ -224,6 +224,7 @@ pub async fn serve_with_state(listener: TcpListener, mut state: AppState) -> std
     // Bind LAN específico não recebe tráfego de loopback: a observação tem uma porta própria.
     let private = TcpListener::bind("127.0.0.1:0").await?;
     state.terminal_address = Some(private.local_addr()?);
+    state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
     let state = Arc::new(state);
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
