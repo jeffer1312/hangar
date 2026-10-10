@@ -1321,7 +1321,12 @@ mod tests {
         let python = axum::Router::new().route("/internal/sessions/{name}/info", get(move || {
             let info = info.clone();
             async move { ([(axum::http::header::CONTENT_TYPE, "application/json")], info) }
-        }));
+        }))
+            // Sem esta rota a conexão interna leva 404, que é "sessão sumiu": o hub fecharia com o canal
+            // ainda aberto, e o teste dependia de chegar antes disso.
+            .route("/internal/sessions/{name}/side-events", get(|| async {
+                axum::body::Body::from_stream(futures_util::stream::pending::<Result<axum::body::Bytes, std::convert::Infallible>>())
+            }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, python).await.unwrap() });
@@ -1386,6 +1391,23 @@ mod tests {
             while st.side.hubs.0.lock().unwrap().contains_key("s1") { tokio::time::sleep(Duration::from_millis(20)).await }
         }).await;
         assert!(gone.is_ok(), "fechou o canal, o último assinante saiu e o hub para");
+    }
+
+    #[tokio::test]
+    async fn side_events_404_closes_the_hub_with_a_subscriber() {
+        // 404 na conexão interna é "sessão sumiu": o hub fecha mesmo com assinante.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new()).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let binding = Binding { provider: Provider::Claude, jsonl: dir.path().join("a.jsonl"), key: "a".into(), headless: false };
+        let ctx = SideCtx { upstream, ..test_ctx() };
+        let lease = ctx.hubs.acquire("s", binding, &ctx);
+        let gone = tokio::time::timeout(Duration::from_secs(2), async {
+            while ctx.hubs.0.lock().unwrap().contains_key("s") { tokio::time::sleep(Duration::from_millis(20)).await }
+        }).await;
+        assert!(gone.is_ok(), "o 404 tira o hub do mapa com o assinante ainda preso");
+        drop(lease);
     }
 
     #[tokio::test]
