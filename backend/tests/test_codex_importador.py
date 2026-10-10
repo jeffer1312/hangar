@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -781,3 +782,19 @@ for linha in sys.stdin:
     while _vivo(pid) and time.monotonic() < prazo:
         await asyncio.sleep(0.05)
     assert not _vivo(pid), "um descendente do Codex sobreviveu ao fechamento"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="lê /proc")
+async def test_grupo_so_com_zumbi_conta_como_vazio():
+    # Um descendente que já morreu e ainda não foi recolhido mantém o grupo "existindo" para o
+    # killpg(pgid, 0): esperar por ele esgotava o prazo e o fechamento falhava com tudo parado.
+    from app.codex_importador import _OwnGroup
+    zumbi = subprocess.Popen(["true"], start_new_session=True)
+    try:
+        prazo = time.monotonic() + 5
+        while _vivo(zumbi.pid) and time.monotonic() < prazo:
+            await asyncio.sleep(0.01)
+        assert Path(f"/proc/{zumbi.pid}").exists(), "o processo já foi recolhido; o teste perdeu o zumbi"
+        await _OwnGroup(zumbi.pid).release(0.2)
+    finally:
+        zumbi.wait()

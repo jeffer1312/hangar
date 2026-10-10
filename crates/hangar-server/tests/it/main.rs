@@ -11,17 +11,14 @@ mod list_support;
 mod mods_support;
 mod workspace_fixture;
 
-/// `CP_RUST_CANO_BIN` apontando para o `hangar-cano` de `target/<perfil>/`, ao lado de `deps/` (o binário
-/// de outro crate não tem `CARGO_BIN_EXE_*`). Gravado uma vez no processo, por quem precisar primeiro: o
-/// `cano_binary` guarda o primeiro que acha, e mais de um teste gravando competiria com quem lê.
+/// O `hangar-cano` de `target/<perfil>/`, ao lado de `deps/` (o binário de outro crate não tem
+/// `CARGO_BIN_EXE_*`), fixado no servidor sem mexer no ambiente do processo.
 pub fn use_cano_bin() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let bin = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("hangar-cano");
-        assert!(bin.exists(), "rode `cargo build -p hangar-cano` antes: {}", bin.display());
-        // SAFETY: valor único, posto antes de qualquer sonda do binário neste processo.
-        unsafe { std::env::set_var("CP_RUST_CANO_BIN", bin) }
-    });
+    let bin = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("hangar-cano");
+    assert!(bin.exists(), "rode `cargo build -p hangar-cano` antes: {}", bin.display());
+    if let Err(other) = hangar_server::runtime::process::use_cano_binary(bin) {
+        panic!("o cano já tinha sido resolvido para {}", other.display());
+    }
 }
 
 /// No filho de um `fork` feito por teste: fecha o que herdou do processo de testes, menos `keep` e a

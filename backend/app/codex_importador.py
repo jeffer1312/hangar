@@ -179,6 +179,9 @@ class _OwnGroup:
         self.pgid = pgid
 
     def _empty(self) -> bool:
+        # Zumbi ainda não recolhido conta para o killpg(pgid, 0), mas já parou: no Linux só os vivos contam.
+        if sys.platform.startswith("linux"):
+            return not any(self._alive_in_group(entry.name) for entry in os.scandir("/proc") if entry.name.isdigit())
         try:
             os.killpg(self.pgid, 0)
         except ProcessLookupError:
@@ -186,6 +189,13 @@ class _OwnGroup:
         except PermissionError:
             return False
         return False
+
+    def _alive_in_group(self, pid: str) -> bool:
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            return False
+        return fields[2] == str(self.pgid) and fields[0] != "Z"
 
     async def _wait_empty(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout

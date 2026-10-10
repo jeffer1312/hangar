@@ -105,11 +105,21 @@ fn identify(pid: u32, key: &str) -> Liveness {
 /// Pelo pid E pela identidade: número reaproveitado depois de reiniciar a máquina é `Foreign`.
 pub fn liveness(pid: u32, key: &str) -> Liveness { identify(pid, key) }
 
+static FOUND: OnceLock<PathBuf> = OnceLock::new();
+
+/// Fixa o binário do cano antes da primeira busca, sem variável de ambiente: os testes de integração
+/// rodam num processo só, e mudar o ambiente com outras threads lendo é indefinido em Unix. O mesmo
+/// caminho de novo é aceito; outro devolve o que já valia.
+#[doc(hidden)]
+pub fn use_cano_binary(path: PathBuf) -> Result<(), PathBuf> {
+    let current = FOUND.get_or_init(|| path.clone());
+    if *current == path { Ok(()) } else { Err(current.clone()) }
+}
+
 /// `CP_RUST_CANO_BIN`, senão a pasta do `hangar-server`, senão `~/.hangar/bin`; sondado uma vez
 /// por processo quando acha (sem argumentos o cano sai com 2); falha não fica guardada, a próxima chamada
 /// sonda de novo. Caminho errado na variável não vira outro binário.
 pub fn cano_binary() -> Result<PathBuf, ProcessError> {
-    static FOUND: OnceLock<PathBuf> = OnceLock::new();
     if let Some(path) = FOUND.get() { return Ok(path.clone()); }
     let found = {
         let name = if cfg!(windows) { "hangar-cano.exe" } else { "hangar-cano" };
