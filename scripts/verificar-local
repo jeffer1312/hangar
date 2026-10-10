@@ -652,6 +652,10 @@ printf '%(%s)T plano %s linux=%s windows=%s vm=%s\n' -1 "${sha:0:10}" "${plano_l
 rc_lin=0 rc_win=0
 saida_lin="$(mktemp)"
 trap 'rc_saida=$?; rm -f "$saida_lin"; printf "%(%s)T fim %s\n" -1 "$rc_saida" >> "$ANDAMENTO"' EXIT
+# Sem isto, morto por sinal o trap de saída lê o código do último comando (0) e grava "fim 0".
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 exec 3> >(marcar "$ANDAMENTO" >&2)
 (
     exec 9>"$TRAVA" || exit 10
