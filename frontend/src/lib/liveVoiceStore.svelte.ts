@@ -164,6 +164,17 @@ async function loadSettings(server: Server, force = false) {
   }
 }
 
+// A trava da voz muda nas opções do Codex; sem isto o botão só reflete a troca depois de reler os ajustes.
+if (typeof window !== 'undefined') {
+  window.addEventListener('hangar:codex-voice-config', (event) => {
+    const detail = (event as CustomEvent<{ serverId: string | null; enabled: boolean }>).detail;
+    const id = detail?.serverId ?? activeServer?.id;
+    if (!id) return;
+    const entry = settings[id];
+    if (entry?.reply) settings[id] = { ...entry, reply: { ...entry.reply, enabled: detail.enabled === true } };
+  });
+}
+
 /** Grava o objeto inteiro; o erro sobe com o `error_code` do servidor. */
 async function saveSettings(server: Server, next: LiveVoiceSettings) {
   const { settings: saved } = await settingsRequest(server, { method: 'PUT', body: JSON.stringify(next) });
