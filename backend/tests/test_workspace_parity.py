@@ -18,6 +18,11 @@ def rust(operation, **arguments):
     return json.loads(result.stdout)
 
 
+# Trava do git some no meio da cópia (manutenção em segundo plano) e derruba o copytree; não é estado
+# comparado pelos testes.
+_SEM_TRAVAS = shutil.ignore_patterns("*.lock")
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_AUTHOR_DATE", "2020-01-01T00:00:00+00:00")
@@ -96,7 +101,7 @@ def test_citation_contract_uses_longest_needle_and_newest_cwd(repo):
 def test_mutation_contract_and_disk_effects(repo, operation, args):
     git_ops._run(str(repo), "branch", "feature")
     copy = repo.parent / (repo.name + "-rust")
-    shutil.copytree(repo, copy)
+    shutil.copytree(repo, copy, ignore=_SEM_TRAVAS)
     args = {key: git_ops._run(str(repo), "rev-parse", "HEAD").stdout.strip() if value == "$HEAD" else value
             for key, value in args.items()}
     expected = getattr(git_ops, operation)(str(repo), **args)
@@ -226,7 +231,7 @@ def _worktree_pair(repo):
     for side in ("py", "rs"):
         root = repo.parent / f"{repo.name}-{side}"
         root.mkdir()
-        shutil.copytree(repo, root / "repo")
+        shutil.copytree(repo, root / "repo", ignore=_SEM_TRAVAS)
         sides[side] = root
     return sides
 
