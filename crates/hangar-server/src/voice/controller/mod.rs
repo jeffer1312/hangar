@@ -157,6 +157,10 @@ pub struct Controller {
     last_failure: Option<(&'static str, String)>,
     forwarded: HashMap<u64, Forwarded>,
     next_tool: u64,
+    /// Sobe a cada aparelho que assume.
+    owner_epoch: u64,
+    /// Dono de cada oferta ainda sem resposta, na ordem: o realtime responde na mesma ordem.
+    offers: VecDeque<u64>,
     snap: Snapshot,
     sent_state: Option<Value>,
     sent_at: Option<Instant>,
@@ -171,7 +175,7 @@ impl Controller {
             actions: Vec::new(), rows: Vec::new(), followed: HashSet::new(), watched: HashSet::new(), talked: HashMap::new(), jev_switched: None,
             close_gate: ConfirmGate::default(), closing: false, switch_offer: SwitchOffer::default(), sent_turn: None, pending_question: None,
             spoken: HashSet::new(), heard_recent: String::new(), session_names: Vec::new(), target, plan_key: None, computer: None, detached: false, last_failure: None, forwarded: HashMap::new(),
-            next_tool: 0, snap: Snapshot { phase: "connecting", ..Snapshot::default() }, sent_state: None, sent_at: None, dirty: true }
+            next_tool: 0, owner_epoch: 0, offers: VecDeque::new(), snap: Snapshot { phase: "connecting", ..Snapshot::default() }, sent_state: None, sent_at: None, dirty: true }
     }
 
     fn ctx(&self) -> Ctx { Ctx { voice: self.voice.clone(), machines: self.machines.clone(), done: self.done.clone(), backoff: self.backoff.clone() } }
@@ -214,7 +218,10 @@ impl Controller {
                 self.detached = true;
                 self.drop_forwarded("device detached");
             }
-            ToController::OwnerChanged => self.drop_forwarded("owner changed"),
+            ToController::OwnerChanged => {
+                self.owner_epoch += 1;
+                self.drop_forwarded("owner changed");
+            }
             ToController::Models(models) => self.voice.set_models(models),
             ToController::Device(msg) => match msg {
                 ClientMsg::Hello { client, screen, caps, actions } => {
@@ -224,6 +231,8 @@ impl Controller {
                     self.actions = actions;
                     self.device.set_caps(caps);
                     self.on_screen(screen);
+                    // O aparelho novo começa com o painel vazio: recebe o retrato inteiro, mesmo sem mudança.
+                    self.sent_state = None;
                     self.dirty = true;
                 }
                 ClientMsg::Offer { sdp } => {
@@ -232,6 +241,7 @@ impl Controller {
                         Some(screen) => format!("A sessão na tela agora é {}.", screen.name),
                         None => "Nenhuma sessão aberta na tela.".to_owned(),
                     };
+                    self.offers.push_back(self.owner_epoch);
                     self.voice.offer(sdp, note);
                 }
                 ClientMsg::Live => self.voice.live(),
@@ -288,7 +298,7 @@ impl Controller {
                 if self.snap.backstage.len() >= BACKSTAGE_KEEP { self.snap.backstage.pop_front(); }
                 self.snap.backstage.push_back(line);
             }
-            VoiceEvent::Answer(sdp) => self.device.send(ServerMsg::Answer { sdp }),
+            VoiceEvent::Answer(sdp) => self.answer(sdp),
             VoiceEvent::ReadSession(call) => self.read_session(call),
             VoiceEvent::Send { call, request, session, turn } => self.send(call, request, session, turn),
             VoiceEvent::AskSession(question) => self.ask(question),
@@ -360,6 +370,17 @@ impl Controller {
         }
         self.dirty = true;
         true
+    }
+
+    /// Só a resposta da última oferta do dono atual vai a ele; a de uma oferta anterior quebraria a conexão dele.
+    // ponytail: casa por ordem; oferta que o realtime não responder desalinha a fila. Id por oferta se isso aparecer.
+    fn answer(&mut self, sdp: String) {
+        let Some(epoch) = self.offers.pop_front() else { log("sdp answer dropped: no offer"); return };
+        if epoch != self.owner_epoch || self.offers.contains(&epoch) {
+            log("sdp answer dropped: stale offer");
+            return;
+        }
+        self.device.send(ServerMsg::Answer { sdp });
     }
 
     /// Sessão nova na tela do aparelho: a chamada passa a falar dela.

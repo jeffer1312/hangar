@@ -41,11 +41,20 @@ async fn fake_api(api: Shared) -> SocketAddr {
 
 struct Rig {
     seen: mpsc::UnboundedReceiver<Value>, log: Vec<Value>, push: mpsc::UnboundedSender<Value>,
-    to_ctl: mpsc::UnboundedSender<ToController>, device: mpsc::UnboundedReceiver<ServerMsg>, api: Shared, _dir: tempfile::TempDir,
+    to_ctl: mpsc::UnboundedSender<ToController>, device: mpsc::UnboundedReceiver<ServerMsg>, api: Shared, link: DeviceLink, _dir: tempfile::TempDir,
 }
 
 /// Chamada viva com a sessão `hangar` na tela, sobre o app-server e a API falsos.
 async fn rig(caps: &[&str], peers: Option<Value>) -> Rig {
+    let mut rig = launch(caps, peers).await;
+    rig.to_ctl.send(ToController::Device(ClientMsg::Offer { sdp: "v=0 offer".into() })).unwrap();
+    loop { if let ServerMsg::Answer { .. } = rig.device.recv().await.unwrap() { break; } }
+    rig.to_ctl.send(ToController::Device(ClientMsg::Live)).unwrap();
+    rig
+}
+
+/// O controlador de pé, antes da primeira oferta.
+async fn launch(caps: &[&str], peers: Option<Value>) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("runtime-config.json"), r#"{"codex_voice_beta": true}"#).unwrap();
     let peers_path = peers.map(|p| { let path = dir.path().join("peers.json"); std::fs::write(&path, p.to_string()).unwrap(); path });
@@ -61,15 +70,12 @@ async fn rig(caps: &[&str], peers: Option<Value>) -> Rig {
     let options = CallOptions { voice: None, context: "ctx".into(), cwd: None, target: "hangar".into(), organizer: ModeModels::default(),
         tools: tools_for(&caps), handoff_same_thread: true, voice_dir: dir.path().join("voz") };
     let voice = Voice::start(options, spawn, tx);
-    let (link, mut device) = DeviceLink::channel(caps, Some(Screen { server: String::new(), name: "hangar".into() }));
+    let (link, device) = DeviceLink::channel(caps, Some(Screen { server: String::new(), name: "hangar".into() }));
     let gate = GateSource { home: dir.path().to_path_buf(), claude_dir: dir.path().to_path_buf(), every: Duration::from_secs(5) };
     let diag = DiagClient::new("127.0.0.1:9".parse().unwrap(), "x".into());
     let (to_ctl, from_device) = mpsc::unbounded_channel();
-    tokio::spawn(Controller::new(voice, machines, None, link, gate, diag).run(events, from_device));
-    to_ctl.send(ToController::Device(ClientMsg::Offer { sdp: "v=0 offer".into() })).unwrap();
-    loop { if let ServerMsg::Answer { .. } = device.recv().await.unwrap() { break; } }
-    to_ctl.send(ToController::Device(ClientMsg::Live)).unwrap();
-    Rig { seen, log: Vec::new(), push, to_ctl, device, api, _dir: dir }
+    tokio::spawn(Controller::new(voice, machines, None, link.clone(), gate, diag).run(events, from_device));
+    Rig { seen, log: Vec::new(), push, to_ctl, device, api, link, _dir: dir }
 }
 
 fn text(result: &Value) -> &str { result["contentItems"][0]["text"].as_str().unwrap_or_default() }
@@ -275,4 +281,28 @@ async fn state_snapshot_reaches_device_coalesced() {
     }
     assert!(states <= 2, "{states} retratos em 150 ms");
     rig.state("pensamento inteiro", |s| s["thought"] == "xxxxxxxxxx").await;
+}
+
+#[tokio::test]
+async fn answer_of_a_former_owner_never_reaches_the_new_one() {
+    let mut rig = launch(&[], None).await;
+    rig.to_ctl.send(ToController::Device(ClientMsg::Offer { sdp: "v=0 a".into() })).unwrap();
+    // B assume antes da resposta da oferta de A.
+    let (b_tx, mut b) = mpsc::unbounded_channel();
+    rig.link.replace_owner(b_tx, vec![], None);
+    rig.to_ctl.send(ToController::OwnerChanged).unwrap();
+    rig.to_ctl.send(ToController::Device(ClientMsg::Hello { client: "pwa".into(), screen: None, caps: vec![], actions: vec![] })).unwrap();
+    rig.to_ctl.send(ToController::Device(ClientMsg::Offer { sdp: "v=0 b".into() })).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let first = loop {
+        match tokio::time::timeout_at(deadline, b.recv()).await {
+            Ok(Some(ServerMsg::Answer { sdp })) => break sdp,
+            Ok(Some(_)) => {}
+            _ => panic!("B ficou sem resposta"),
+        }
+    };
+    assert_eq!(first, "v=0 answer 2", "só a resposta da oferta de B");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    while let Ok(msg) = b.try_recv() { assert!(!matches!(msg, ServerMsg::Answer { .. }), "resposta a mais"); }
+    while let Ok(msg) = rig.device.try_recv() { assert!(!matches!(msg, ServerMsg::Answer { .. }), "A já não é o dono"); }
 }

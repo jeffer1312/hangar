@@ -96,7 +96,12 @@ async fn device_drop_keeps_call_for_grace_and_resumes() {
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     let mut b = open(t.addr, fake::OWNER).await.unwrap();
     hello(&mut b, "pwa", json!(["switch_session"])).await;
-    until(&mut b, "answer").await;
+    // O retrato pode vir antes ou depois da resposta: o painel do aparelho novo não fica vazio.
+    let mut missing = vec!["answer", "state"];
+    while !missing.is_empty() {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(10), b.next()).await.expect("prazo").expect("fim").unwrap();
+        if let Message::Text(text) = msg { let v: Value = serde_json::from_str(&text).unwrap(); missing.retain(|k| v["type"] != *k); }
+    }
     assert_eq!(t.count("thread/start"), 1, "voltou na mesma chamada");
     drop(b);
     tokio::time::sleep(std::time::Duration::from_millis(700)).await;
