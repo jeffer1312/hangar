@@ -85,9 +85,10 @@ async fn shown_reads_are_joined_in_one_window() {
     *probe.shown.lock().unwrap() = Some("b".into());
     mods.schedule_shown("t");
     mods.schedule_shown("t");
+    // Espera o efeito da leitura (sob carga ela chega depois da janela) e mais uma janela: não há segunda.
+    crate::fake::wait_until(|| last_ui(&mods)["shown_id"] == "b").await;
     tokio::time::sleep(SHOWN_READ_WINDOW + Duration::from_millis(150)).await;
     assert_eq!(probe.reads.load(SeqCst), 1);
-    assert_eq!(last_ui(&mods)["shown_id"], "b");
 }
 
 #[tokio::test]
@@ -99,6 +100,7 @@ async fn a_scheduled_read_of_a_replaced_life_lands_nowhere() {
     let fresh = Arc::new(Probe::default());
     mods.attach_terminal("t", "proc-novo", 2, fresh.clone());
     mods.terminal_ui("t", view(&["a", "b"], Some("a")));
+    crate::fake::wait_until(|| probe.reads.load(SeqCst) >= 1).await;
     tokio::time::sleep(SHOWN_READ_WINDOW + Duration::from_millis(150)).await;
     assert_eq!(probe.reads.load(SeqCst), 1, "a leitura agendada roda no elo antigo");
     assert_eq!(last_ui(&mods)["shown_id"], "a", "e não cai na vida nova");
@@ -106,6 +108,7 @@ async fn a_scheduled_read_of_a_replaced_life_lands_nowhere() {
     *fresh.shown.lock().unwrap() = Some("b".into());
     mods.schedule_shown_in("t", 2);
     mods.schedule_shown_in("t", 1);
+    crate::fake::wait_until(|| last_ui(&mods)["shown_id"] == "b").await;
     tokio::time::sleep(SHOWN_READ_WINDOW + Duration::from_millis(150)).await;
     assert_eq!((probe.reads.load(SeqCst), fresh.reads.load(SeqCst)), (1, 1), "o pedido da vida 1 não agenda leitura na 2");
     assert_eq!(last_ui(&mods)["shown_id"], "b");

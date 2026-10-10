@@ -53,9 +53,9 @@ async fn ui_is_mirrored_and_the_screen_decides_the_shown_pane() {
     assert_eq!((ui["shown_id"].as_str(), ui["columns"].as_u64(), ui["source"].as_str()), (Some("b"), Some(82), Some("terminal")));
     // A cópia para a prévia e o `/pull` do Python, no formato de hoje (o `BandBody` dele).
     assert_eq!(python.hits_to("/api/plugin/ui"), 1, "a cópia da faixa vai ao Python");
-    tokio::time::sleep(SHOWN_READ_WINDOW + Duration::from_millis(150)).await;
-    assert_eq!(probe.reads.load(SeqCst), 1);
-    assert_eq!(last_ui(&mods, "t")["shown_id"], "a", "a linha de abas da tela vence o último desenho");
+    // A leitura da tela vem ao fim da janela; sob carga, depois dela. Espera o efeito, não o relógio.
+    fake::wait_until(|| last_ui(&mods, "t")["shown_id"] == "a").await;
+    assert_eq!(probe.reads.load(SeqCst), 1, "a linha de abas da tela vence o último desenho");
 }
 
 #[tokio::test]
