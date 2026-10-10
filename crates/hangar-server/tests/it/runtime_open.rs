@@ -167,7 +167,7 @@ async fn close_releases_lease() {
     registry.open(target.clone()).await.unwrap();
     assert!(acquire_lease(&target.lease_path).is_err());
     assert_eq!(registry.close("key",1).await.unwrap()["closed"],true);
-    assert!(acquire_lease(&target.lease_path).is_ok());
+    drop(crate::lease_when_free(&target.lease_path));
     assert_eq!(registry.close("key",1).await.unwrap()["closed"],true,"fechar o que já fechou não é erro");
     server.abort();
 }
@@ -204,14 +204,13 @@ async fn reopen_of_initialized_cano_becomes_deliverable() {
 #[tokio::test]
 async fn failed_open_leaves_no_entry_and_frees_the_lease() {
     let dir = tempfile::tempdir().unwrap();
-    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let escuta = format!("tcp:{}",closed.local_addr().unwrap());
-    drop(closed);
+    let (_reserved, closed) = crate::refused_address();
+    let escuta = format!("tcp:{closed}");
     let target = target(dir.path(),escuta,true);
     let registry = registry().await;
     assert_eq!(registry.open(target.clone()).await.unwrap_err().code,"cano_connect");
     assert!(registry.handle("key",1).await.is_err());
-    assert!(acquire_lease(&target.lease_path).is_ok(),"a trava sai junto com a falha");
+    drop(crate::lease_when_free(&target.lease_path)); // a trava sai junto com a falha
 }
 
 /// Cano recém-lançado que só cria o socket depois de um tempo (escopo do systemd + exec).

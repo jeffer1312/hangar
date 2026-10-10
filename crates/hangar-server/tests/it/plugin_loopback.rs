@@ -211,14 +211,31 @@ async fn occupied_bridge_fails_before_public_health_and_releases_our_sockets() {
     assert!(tokio::net::TcpStream::connect(address).await.is_ok());
 }
 
+/// Sobe de novo nas portas que o servidor parado soltou. Um filho de outro teste, entre o fork e o exec,
+/// pode carregar por instantes a cópia dos sockets antigos; o exec os solta, e o prazo cobre isso.
+async fn restart(address: SocketAddr, upstream: SocketAddr) -> Server {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(listener) = TcpListener::bind(address).await
+            && let Some(server) = Server::try_start(listener, AppState::new(config(upstream, "127.0.0.1"))).await
+        {
+            return server;
+        }
+        assert!(std::time::Instant::now() < deadline, "o servidor não voltou nas mesmas portas");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 #[tokio::test]
 async fn stopping_allows_a_restart_on_the_same_public_and_bridge_port() {
     let (_python, upstream) = spawn_fake().await;
     let listener = TcpListener::bind("127.0.0.2:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     for listener in [Some(listener), None] {
-        let listener = match listener { Some(listener) => listener, None => TcpListener::bind(address).await.unwrap() };
-        let mut server = Server::start(listener, AppState::new(config(upstream, "127.0.0.1"))).await;
+        let mut server = match listener {
+            Some(listener) => Server::start(listener, AppState::new(config(upstream, "127.0.0.1"))).await,
+            None => restart(address, upstream).await,
+        };
         let response = post(server.bridge, "state", json!({})).await;
         assert_eq!(response.status().as_u16(), 200);
         server.stop().await;

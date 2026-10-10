@@ -610,6 +610,7 @@ impl PreExecGuardChild {
         if pid == 0 {
             // O filho só fecha descritores; não executa Drop de guarda herdada.
             unsafe {
+                crate::close_inherited_fds([ready_write.as_raw_fd(), release_read.as_raw_fd(), lock_fd]);
                 libc::close(ready_read.as_raw_fd());
                 libc::close(release_write.as_raw_fd());
                 if close_in_child && libc::close(lock_fd) != 0 {
@@ -639,6 +640,29 @@ impl PreExecGuardChild {
         assert_eq!(ready, *b"R");
         child
     }
+}
+
+/// O filho parado antes do `exec` só guarda os próprios descritores. Neste executável os testes rodam
+/// juntos, e um pipe ou socket que outro teste fechou não pode continuar aberto no filho.
+#[cfg(target_os = "linux")]
+#[test]
+fn pre_exec_child_holds_only_its_own_descriptors() {
+    use std::io::Read;
+    let root = tempfile::tempdir().unwrap();
+    let lock_path = root.path().canonicalize().unwrap().join("lock");
+    let _lock = std::fs::File::create(&lock_path).unwrap();
+    let (mut other_read, other_write) = std::io::pipe().unwrap();
+    let child = PreExecGuardChild::spawn(&lock_path, false);
+    drop(other_write);
+    let (sent, received) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut rest = Vec::new();
+        sent.send(other_read.read_to_end(&mut rest).map(|_| ())).unwrap();
+    });
+    let closed = received.recv_timeout(std::time::Duration::from_secs(2));
+    drop(child);
+    reader.join().unwrap();
+    assert!(matches!(closed, Ok(Ok(()))), "o filho do fork segurou o pipe de outro teste");
 }
 
 #[cfg(target_os = "linux")]

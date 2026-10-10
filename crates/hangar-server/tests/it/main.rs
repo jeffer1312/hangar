@@ -24,6 +24,47 @@ pub fn use_cano_bin() {
     });
 }
 
+/// No filho de um `fork` feito por teste: fecha o que herdou do processo de testes, menos `keep` e a
+/// entrada e saída padrão. Os testes rodam juntos, e o filho seguraria o pipe ou socket que outro teste
+/// já fechou. Depois do fork só cabem chamadas seguras: ordena na pilha e usa `close_range`.
+#[cfg(target_os = "linux")]
+pub unsafe fn close_inherited_fds<const N: usize>(mut keep: [libc::c_int; N]) {
+    let close = |first: u32, last: u32| unsafe { libc::syscall(libc::SYS_close_range, first, last, 0) };
+    keep.sort_unstable();
+    let mut first = 3u32;
+    for fd in keep {
+        let Ok(fd) = u32::try_from(fd) else { continue };
+        if fd < first { continue; }
+        if fd > first { close(first, fd - 1); }
+        first = fd + 1;
+    }
+    close(first, u32::MAX);
+}
+
+/// Endereço TCP que recusa conexão enquanto a reserva viver: um socket com `bind` e sem `listen` segura a
+/// porta. Soltar um listener e usar a porta dele deixava outro teste deste processo ocupá-la e responder.
+pub fn refused_address() -> (socket2::Socket, std::net::SocketAddr) {
+    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
+    socket.bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into()).unwrap();
+    let address = socket.local_addr().unwrap().as_socket().unwrap();
+    (socket, address)
+}
+
+/// O lease, esperando a cópia que um filho de outro teste carrega entre o fork e o exec: a trava do
+/// flock é da descrição aberta, e o exec a solta em instantes. Dono de verdade segura além do prazo.
+pub fn lease_when_free(path: &std::path::Path) -> std::sync::Arc<std::fs::File> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match hangar_server::runtime::queue::acquire_lease(path) {
+            Ok(lease) => return lease,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5))
+            }
+            Err(error) => panic!("lease ocupado: {error}"),
+        }
+    }
+}
+
 /// Nome de um teste deste executável para o `--exact`: o caminho do módulo de `module_path!()` sem o
 /// do crate, que o libtest não mostra.
 pub fn exact_name(module: &str, test: &str) -> String {

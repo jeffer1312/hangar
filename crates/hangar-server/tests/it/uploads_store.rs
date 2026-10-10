@@ -489,6 +489,7 @@ fn removal_interleavings_preserve_foreign_identity_and_cutoff() {
             assert!(child >= 0);
             if child == 0 {
                 unsafe {
+                    crate::close_inherited_fds([]);
                     libc::ptrace(libc::PTRACE_TRACEME, 0, 0, 0);
                     libc::raise(libc::SIGSTOP);
                     libc::execve(binary.as_ptr(), argv.as_ptr(), envp.as_ptr());

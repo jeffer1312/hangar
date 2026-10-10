@@ -85,7 +85,7 @@ async fn terminal_runtime_gateway_opens_without_cano_and_fences_generation() {
     assert_eq!(send(2,serde_json::json!({"kind":"snapshot"})).send().await.unwrap().status(),503);
     assert!(hangar_server::runtime::queue::acquire_lease(&dir.path().join("lease")).is_err());
     assert!(send(1,serde_json::json!({"kind":"close"})).send().await.unwrap().status().is_success());
-    assert!(hangar_server::runtime::queue::acquire_lease(&dir.path().join("lease")).is_ok()); server.abort();
+    drop(crate::lease_when_free(&dir.path().join("lease"))); server.abort();
 }
 
 /// Registro com um cano Claude falso que só aceita entradas; a política aponta para uma porta fechada.
@@ -185,7 +185,7 @@ async fn opening_refused_by_the_queue_says_why() {
         transcript:dir.path().join("chat.jsonl"),created:0.0 };
     let error = registry.open(target).await.unwrap_err();
     assert!(error.message.contains("estado da fila inválido"),"{}",error.message);
-    assert!(hangar_server::runtime::queue::acquire_lease(&dir.path().join("key.lock")).is_ok(),"a trava sai junto com a recusa");
+    drop(crate::lease_when_free(&dir.path().join("key.lock"))); // a trava sai junto com a recusa
 }
 
 #[tokio::test]

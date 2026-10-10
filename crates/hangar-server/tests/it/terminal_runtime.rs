@@ -105,7 +105,7 @@ impl Fixture {
         self.start_options(broadcast::channel(128).0,Duration::from_secs(30),TerminalOptions::default().focus_return,clear_wait)
     }
     fn start_options(&self,events:broadcast::Sender<hangar_server::runtime::protocol::RuntimeEvent>,stall_notice:Duration,focus_return:Duration,clear_wait:Duration)->hangar_server::runtime::terminal::TerminalHandle {
-        let lease=queue::acquire_lease(&self.target.lease_path).unwrap();
+        let lease=crate::lease_when_free(&self.target.lease_path);
         let store=Store::open(&self.target.state_path,&self.target.projection_dir,queue::State::new("key",1,"session",vec![])).unwrap();
         let options=TerminalOptions {io:self.io.clone(),limits:InputLimits {settle:Duration::ZERO,literal_settle:Duration::ZERO,multiline_settle:Duration::ZERO,slash_settle:Duration::ZERO,proof_attempts:1,ready_attempts:1,cleanup_attempts:1},tick:Duration::from_millis(15),stall_notice,focus_return,clear_wait,..TerminalOptions::default()};
         TerminalActor::spawn(self.target.clone(),QueueActor::start(store,lease),self.policy.clone(),options,events,Arc::new(AtomicU64::new(0)))
@@ -175,13 +175,13 @@ elif mode=='send-keys' and '-l' in sys.argv:
     let python=std::env::var("HANGAR_TEST_PYTHON").unwrap_or_else(|_|if cfg!(windows){"python".into()}else{"python3".into()});
     let mut other=KillOnDrop(std::process::Command::new(&python).arg(&script).arg("--other").spawn().unwrap());let other_born=std::time::Instant::now();
     f.target.binding.mux_argv=vec![python,"-X".into(),"utf8".into(),script.to_str().unwrap().into()];*f.mux.lock().unwrap()=f.target.binding.mux_argv.clone();
-    let lease=queue::acquire_lease(&f.target.lease_path).unwrap();let store=Store::open(&f.target.state_path,&f.target.projection_dir,queue::State::new("key",1,"session",vec![])).unwrap();
+    let lease=crate::lease_when_free(&f.target.lease_path);let store=Store::open(&f.target.state_path,&f.target.projection_dir,queue::State::new("key",1,"session",vec![])).unwrap();
     let options=TerminalOptions {io:Arc::new(ProcessIo {command_timeout:Duration::from_millis(1500),socket_timeout:Duration::from_millis(150)}),
         limits:InputLimits {settle:Duration::ZERO,literal_settle:Duration::ZERO,proof_attempts:1,ready_attempts:1,cleanup_attempts:1,..InputLimits::default()},tick:Duration::from_secs(10),stall_notice:Duration::from_secs(30),..TerminalOptions::default()};
     let h=TerminalActor::spawn(f.target.clone(),QueueActor::start(store,lease),f.policy.clone(),options,broadcast::channel(128).0,Arc::new(AtomicU64::new(0)));
     let result=tokio::time::timeout(Duration::from_secs(10),h.command(f.command("timeout","A"))).await.unwrap().unwrap();
     assert_eq!(result.disposition,hangar_server::runtime::protocol::Disposition::Unknown);
-    h.stop().await.unwrap();let python_lease=queue::acquire_lease(&f.target.lease_path).unwrap();
+    h.stop().await.unwrap();let python_lease=crate::lease_when_free(&f.target.lease_path);
     let grandchild_born=std::path::Path::new(&format!("{}--grand.pid",late.display())).exists();
     // O neto escreveria 2,5 s depois de nascer, e ele nasce antes do prazo de 1,5 s.
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -267,7 +267,7 @@ async fn unknown_fill_blocks_second_input_after_detach_restart_and_same_sid_gene
     f.target.generation=2;f.target.binding.generation=2;f.generation.store(2,std::sync::atomic::Ordering::Release);
     let effects=f.io.calls.lock().unwrap().len();let publications=f.calls.lock().unwrap().len();
     f.unknown.store(false,std::sync::atomic::Ordering::Release);
-    let lease=queue::acquire_lease(&f.target.lease_path).unwrap();
+    let lease=crate::lease_when_free(&f.target.lease_path);
     let store=Store::open(&f.target.state_path,&f.target.projection_dir,queue::State::new("key",2,"session",vec![])).unwrap();
     let options=TerminalOptions {io:f.io.clone(),limits:InputLimits::default(),tick:Duration::from_millis(15),stall_notice:Duration::from_secs(30),..TerminalOptions::default()};
     let h=TerminalActor::spawn(f.target.clone(),QueueActor::start(store,lease),f.policy.clone(),options,broadcast::channel(128).0,Arc::new(AtomicU64::new(0)));
@@ -394,7 +394,7 @@ async fn terminal_runtime_cancel_http_does_not_release_lease_and_stop_waits() {
     f.wait_for("espera 2",||f.io.calls.lock().unwrap().iter().any(|r|r.args[0]=="send-keys")).await;
     request.abort(); let hc=h.clone(); let stopping=tokio::spawn(async move {hc.stop().await}); tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(!stopping.is_finished()); assert!(queue::acquire_lease(&f.target.lease_path).is_err());
-    f.io.blocked.store(false,std::sync::atomic::Ordering::Release); f.io.gate.notify_waiters(); stopping.await.unwrap().unwrap(); assert!(queue::acquire_lease(&f.target.lease_path).is_ok());
+    f.io.blocked.store(false,std::sync::atomic::Ordering::Release); f.io.gate.notify_waiters(); stopping.await.unwrap().unwrap(); drop(crate::lease_when_free(&f.target.lease_path));
 }
 #[tokio::test]
 async fn terminal_runtime_effect_policies_are_journaled_reads_are_not_and_root_id_is_stable() {

@@ -198,7 +198,7 @@ async fn stop_joins_io_and_persistence_before_unlock() {
     handle.command(command()).await.unwrap();
     handle.stop().await.unwrap();
     server.await.unwrap();
-    let _next = acquire_lease(&dir.path().join("key.lock")).unwrap();
+    let _next = crate::lease_when_free(&dir.path().join("key.lock"));
 }
 
 #[tokio::test]
@@ -323,7 +323,7 @@ async fn setup_claude_unreachable_policy(initialized:bool) -> (RuntimeHandle,tok
     let dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+    let (_reserved,closed) = crate::refused_address();
     let server = tokio::spawn(async move {
         let (stream,_) = listener.accept().await.unwrap();
         let mut reader = BufReader::new(stream);
@@ -694,7 +694,7 @@ async fn a_failed_sidecar_update_still_hands_the_session_over() {
     // Só status/carimbo/uso/registro são perdoados; o sidecar segura a conversa atual (session_id
     // depois do /clear), e perdê-lo calado deixaria o app lendo o transcript velho.
     let dir = tempfile::tempdir().unwrap();
-    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+    let (_reserved,closed) = crate::refused_address();
     let (cano,server) = claude_cano(vec![json!({"type":"system","subtype":"init","session_id":"sid-2"})]).await;
     let handle = claude_actor(dir.path(),cano,closed).await;
     tokio::time::timeout(std::time::Duration::from_secs(5),async {

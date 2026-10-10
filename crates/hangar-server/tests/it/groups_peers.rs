@@ -95,9 +95,7 @@ async fn answers_and_refusals_like_python() {
 
 #[tokio::test]
 async fn network_failure_is_transport() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    let (_reserved, addr) = crate::refused_address();
     let dir = tempfile::tempdir().unwrap();
     let err = client_for(dir.path(), addr).call("lab", reqwest::Method::POST, "/x", None).await.unwrap_err();
     assert!(err.is_transport() && err.text("lab").starts_with("lab inacessível: "), "{err:?}");
