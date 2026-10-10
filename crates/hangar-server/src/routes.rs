@@ -322,7 +322,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
-        .route("/api/presence", axum::routing::get(crate::presence::route).post(crate::presence::route).fallback(pass_any))
+        .route("/api/presence", get(crate::presence::route).fallback(pass_any))
+        // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
+        .route("/api/presence", axum::routing::post(crate::presence::route))
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_any))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
