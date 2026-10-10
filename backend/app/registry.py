@@ -2839,6 +2839,11 @@ class SessionRegistry:
                     cmd = tmux.join_cmd([*origin_prefix, "/bin/sh", "-c", cmd])
                 reaberto = tmux.new_session(name, cwd, cmd, meta["config_dir"], provider="claude",
                                             **_env_sessao(subagente, jev, nome=name, claude_settings=claude_settings))
+                if reaberto:
+                    # `new-session` volta 0 mesmo quando o comando morre ao nascer: conta o pane vivo após o boot.
+                    from app.terminal_input import _wait_input_ready
+                    _wait_input_ready(name, timeout=10.0)
+                    reaberto = tmux.has_session(name)
             except Exception:
                 _log.exception("troca para sem terminal: o pane de volta de %s não montou", name)
                 reaberto = False

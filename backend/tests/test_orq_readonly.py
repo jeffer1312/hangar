@@ -208,8 +208,8 @@ def test_parked_read_only_session_never_starts_without_terminal(tmp_path):
         asyncio.run(ClaudeHeadlessAdapter()._launch_account_cano_owned(sess))
 
 
-@pytest.mark.parametrize("reopened", [True, False])
-def test_sidecar_failure_reopens_origin_pane_with_protection_prepared_before_kill(monkeypatch, tmp_path, reopened):
+@pytest.mark.parametrize("created,alive", [(True, True), (True, False), (False, False)])
+def test_sidecar_failure_reopens_origin_pane_with_protection_prepared_before_kill(monkeypatch, tmp_path, created, alive):
     from app import registry
     from app.adapters.claude_headless import sessions
 
@@ -223,8 +223,12 @@ def test_sidecar_failure_reopens_origin_pane_with_protection_prepared_before_kil
     monkeypatch.setattr(orq_readonly, "prepare", prepare)
     reg = _protected_pane(monkeypatch, tmp_path, order)
     monkeypatch.setattr(sessions, "save", Mock(side_effect=OSError("disco cheio")))
-    pane = Mock(return_value=reopened)
+    pane = Mock(return_value=created)
     monkeypatch.setattr(registry.tmux, "new_session", pane)
+    # O pane que morre ao nascer não conta como reaberto.
+    monkeypatch.setattr(registry.tmux, "has_session", lambda _: alive)
+    monkeypatch.setattr("app.terminal_input._wait_input_ready", lambda name, timeout=None: alive)
+    reopened = created and alive
     origin, target = str(tmp_path / ".claude-a"), str(tmp_path / ".claude-b")
 
     with pytest.raises(OSError) as raised:

@@ -420,6 +420,57 @@ def test_read_only_cujo_terminal_nao_volta_fica_parado_sem_acordar(contas, tmp_p
     assert ordem == [] and S.load("t1")["read_only"] is True
 
 
+@pytest.mark.parametrize("same_account", [True, False])
+def test_parked_read_only_reopens_in_protected_terminal_instead_of_answering_ok(contas, tmp_path, same_account):
+    a, b = contas
+    cwd = str(tmp_path / "repo")
+    S.save("t1", cwd, SID, config_dir=a, read_only=True)
+    _conversa(a, cwd)
+    ordem = []
+    volta = MagicMock()
+    r = _post("t1", a if same_account else b, headless=True, conta=a, hl=_hl(ordem), volta=volta)
+    assert r.status_code == 200, r.text
+    volta.assert_called_once_with("t1")
+    assert ("acordou", a) not in ordem and ("acordou", b) not in ordem
+
+
+def test_parked_read_only_whose_terminal_fails_again_reports_stopped(contas, tmp_path):
+    a, b = contas
+    cwd = str(tmp_path / "repo")
+    S.save("t1", cwd, SID, config_dir=a, read_only=True)
+    _conversa(a, cwd)
+    ordem = []
+    r = _post("t1", b, headless=True, conta=a, hl=_hl(ordem), volta=MagicMock(side_effect=ValueError("bwrap sumiu")))
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_troca_conta_parada"
+    assert ordem == ["parou"] and S.load("t1")["read_only"] is True
+
+
+def test_read_only_engine_rollback_failure_reports_stopped(contas, tmp_path):
+    import app.api as api_mod
+    a, _ = contas
+    S.save("hl", str(tmp_path), SID, config_dir=a, engine="proxy", model="old/gpt-5.5",
+           engine_account="default", read_only=True)
+    _conversa(a, str(tmp_path))
+    hl = _hl([])
+    info = SessionInfo(name="hl", provider="claude", headless=True, engine="proxy", engine_account="default")
+    with patch("app.api._cached_info", AsyncMock(return_value=info)), \
+         patch("app.api._headless", return_value=True), \
+         patch("app.api._motivo_ocupada", AsyncMock(return_value=None)), \
+         patch("app.api.get_adapter", return_value=hl), \
+         patch("app.api._fixed_engine_account", return_value={"account": "second", "prefix": "new",
+                                                           "credential_id": "codex:/tmp/second", "home": "/tmp/second",
+                                                           "base_url": "http://127.0.0.1:8317"}), \
+         patch("app.api._engine_models", AsyncMock(return_value=[{"id": "new/gpt-5.5"}])), \
+         patch.object(api_mod.registry, "_forget"), \
+         patch.object(api_mod.registry, "para_terminal", MagicMock(side_effect=ValueError("bwrap sumiu"))):
+        r = TestClient(api_mod.app).post("/api/sessions/hl/conta", headers=_H, json={"engine_account": "second"})
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["code"] == "erro_troca_conta_parada"
+    assert S.load("hl")["engine_account"] == "default" and S.load("hl")["read_only"] is True
+    hl.acordar.assert_not_called()
+
+
 @pytest.mark.parametrize("headless", [True, False])
 def test_account_move_trusts_folder_in_new_account_before_reopening(contas, tmp_path, monkeypatch, headless):
     import app.api as api_mod

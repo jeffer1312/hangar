@@ -3282,6 +3282,8 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
             info = info.model_copy(update={"engine": current_meta.get("engine"),
                                            "engine_account": current_meta.get("engine_account"),
                                            "headless": True})
+        # Read-only estacionada à espera do terminal protegido: a troca a reabre no terminal, nunca "ok" parada.
+        parked = bool((current_meta or {}).get("read_only"))
         if service_tier is not None:
             current_model, _ = await asyncio.to_thread(_engine_fast_selection, name)
             if not await asyncio.to_thread(cliproxy.supports_fast, info.engine, current_model):
@@ -3301,7 +3303,7 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
                 raise HTTPException(409, detail=erro("erro_conta_so_claude", "só conta Claude ou motor CLIProxyAPI local troca de conta"))
         atual = ((current_meta or {}).get("config_dir") if headless else
                  str(_session_config_dir(name) or Path.home() / ".claude"))
-        if engine_account is None and not info.engine and atual and Path(atual).resolve() == Path(destino).resolve():
+        if engine_account is None and not info.engine and atual and Path(atual).resolve() == Path(destino).resolve() and not parked:
             return {"ok": True, "config_dir": destino}
         motivo = await _motivo_ocupada(name, headless)
         if motivo:
@@ -3322,7 +3324,7 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
                 model_args.validar("claude", chosen_model, effort)
             except (ValueError, KeyError) as exc:
                 raise HTTPException(400, detail=erro("erro_cliproxy_conta", str(exc))) from None
-            if info.engine_account == engine_account and model is None and effort is None:
+            if info.engine_account == engine_account and model is None and effort is None and not parked:
                 return {"ok": True, "engine_account": engine_account}
         # Terminal passa por sem terminal parada: o sidecar guarda as escolhas e a conta, e nenhum
         # processo sobe até a conversa estar no lugar.
@@ -3343,7 +3345,7 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
             except (ValueError, OSError) as e:
                 raise HTTPException(409, detail=erro("erro_troca_conta", f"não troquei de conta: {e}", erro=str(e)))
         # Read-only não roda sem terminal: se o terminal não voltar, ela fica parada, não "segue".
-        read_only = not headless and bool((headless_sessions.load(name) or {}).get("read_only"))
+        read_only = bool((headless_sessions.load(name) or {}).get("read_only"))
 
         def parada(motivo: str) -> HTTPException:
             return HTTPException(409, detail=erro("erro_troca_conta_parada",
@@ -3352,7 +3354,7 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
 
         async def reabrir() -> str | None:
             """Reabre como estava; devolve o motivo quando o terminal não voltou (a sessão segue sem terminal, ou parada se read-only)."""
-            if headless:
+            if headless and not read_only:
                 if engine_account is not None or info.engine:
                     try:
                         hl.reset_start_attempts(name)
@@ -3472,8 +3474,11 @@ async def _trocar_conta(name: str, destino: str | None, *, engine_account: str |
             message = "a troca falhou; as escolhas anteriores foram restauradas"
             if rollback_error:
                 message = "a troca falhou e a sessão anterior não reabriu"
-            falha = HTTPException(409, detail=erro("erro_troca_conta", message,
-                                                  erro=motivo_terminal, rollback_error=rollback_error))
+            if rollback_error and read_only:
+                falha = parada(rollback_error)
+            else:
+                falha = HTTPException(409, detail=erro("erro_troca_conta", message,
+                                                      erro=motivo_terminal, rollback_error=rollback_error))
         await asyncio.to_thread(registry._forget, name)
     if falha:
         raise falha

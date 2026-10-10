@@ -154,6 +154,7 @@ def test_engine_tier_survives_transport_and_rollback(reg, tmp_path, monkeypatch,
     monkeypatch.setattr(R.tmux, "new_session", lambda name, cwd, cmd, *a, **k: commands.append(cmd) or True)
     if rollback:
         monkeypatch.setattr(S, "save", MagicMock(side_effect=OSError("sidecar indisponível")))
+        monkeypatch.setattr("app.terminal_input._wait_input_ready", lambda name, timeout=None: True)
         with pytest.raises(OSError, match="sidecar indisponível"):
             reg.para_headless("t1", "acceptEdits")
     else:
