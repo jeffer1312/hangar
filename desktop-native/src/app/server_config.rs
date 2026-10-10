@@ -425,6 +425,19 @@ impl ServerConfig {
         self.fields.get(PROVIDERS)?.get("valor")?.as_array()?.iter().find(|p| provider_text(p, "id") == id)
     }
 
+    /// Campos que o servidor confirmou. O resultado de um teste vale só para a configuração testada: some quando a
+    /// leitura traz outra, ou quando um Salvar confirmou serviços (a máscara não distingue duas chaves).
+    fn replace_fields(&mut self, fields: Map<String, Value>, providers_saved: bool) {
+        let before: Vec<(String, Option<Value>)> =
+            self.provider_tests.keys().map(|id| (id.clone(), self.provider_saved(id).cloned())).collect();
+        self.fields = fields;
+        for (id, old) in before {
+            if providers_saved || self.provider_saved(&id) != old.as_ref() {
+                if let Some(test) = self.provider_tests.get_mut(&id) { test.reset(); }
+            }
+        }
+    }
+
     /// Máscara da chave guardada de um serviço, como a última leitura trouxe.
     fn provider_mask(&self, id: &str) -> Option<String> {
         self.provider_saved(id).map(|p| provider_text(p, "api_key").to_owned()).filter(|mask| !mask.is_empty())
@@ -790,7 +803,7 @@ impl Hangar {
                 if !self.server_config.load.finish(seq, parsed.map(|_| ())) { return; }
                 if let Some(mut config) = config {
                     let s = &mut self.server_config;
-                    if let Value::Object(campos) = config["campos"].take() { s.fields = campos; }
+                    if let Value::Object(campos) = config["campos"].take() { s.replace_fields(campos, false); }
                     if let Value::Object(read) = config["somente_leitura"].take() { s.read = read; }
                     // Ausente num servidor mais antigo: o bloco some.
                     if let Value::Array(env) = config["variaveis_env"].take() { s.env = env; }
@@ -811,7 +824,7 @@ impl Hangar {
                 });
                 match result {
                     Ok((campos, read)) => {
-                        s.fields = campos;
+                        s.replace_fields(campos, sent.contains_key(PROVIDERS));
                         // A tradução do raciocínio disponível muda com campo editável: a linha só leitura não fica velha.
                         if let Some(read) = read { s.read = read; }
                         s.settle(&sent);
@@ -1828,8 +1841,8 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, Quiet, ServerConfig, TUNES, Voice, env_value, shown, text_of};
-    use serde_json::{Value, json};
+    use super::{Kind, PROVIDERS, Quiet, ServerConfig, TUNES, Voice, env_value, shown, text_of};
+    use serde_json::{Map, Value, json};
 
     #[test]
     fn secret_field_never_shows_what_the_server_holds() {
@@ -1956,6 +1969,23 @@ mod tests {
         assert!(q.editable());
         q.saving = true;
         assert!(!q.editable(), "salvando");
+    }
+
+    #[test]
+    fn provider_test_result_follows_the_saved_configuration() {
+        let read = |url: &str| { let mut m = Map::new(); m.insert(PROVIDERS.into(), json!({"valor": [{"id": "a", "base_url": url}]})); m };
+        let mut s = ServerConfig::default();
+        s.replace_fields(read("http://x"), false);
+        let seq = s.provider_tests.entry("a".into()).or_default().start();
+        s.provider_tests.get_mut("a").unwrap().finish(seq, Ok("ok".into()));
+        s.replace_fields(read("http://x"), false);
+        assert!(s.provider_tests["a"].value.is_some(), "mesma configuração: o resultado fica");
+        s.replace_fields(read("http://y"), false);
+        assert!(s.provider_tests["a"].value.is_none(), "outra configuração lida: o resultado some");
+        let seq = s.provider_tests.get_mut("a").unwrap().start();
+        s.provider_tests.get_mut("a").unwrap().finish(seq, Ok("ok".into()));
+        s.replace_fields(read("http://y"), true);
+        assert!(s.provider_tests["a"].value.is_none(), "Salvar confirmou serviços: o resultado some");
     }
 
     #[test]
