@@ -60,6 +60,7 @@ impl Hangar {
     pub(super) fn hide_to_tray(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_hidden(true);
         self.window_tray.hidden = true;
+        self.presence_leave();
         let (title, body) = (tr("tray_notice_title"), tr("tray_notice_body"));
         self.runtime.spawn_blocking(move || if appearance::take_tray_notice() { show_system_notification(&title, &body) });
         cx.notify();
@@ -69,6 +70,7 @@ impl Hangar {
         if self.window_tray.hidden {
             window.set_hidden(false);
             self.window_tray.hidden = false;
+            self.presence_beat();
         }
         window.activate_window();
         cx.notify();

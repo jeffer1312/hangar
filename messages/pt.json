@@ -7784,5 +7784,11 @@
   "native_voice_backstage_result": "Resultado da sessão {session}",
   "native_voice_backstage_answer_session": "Resposta da sessão à pergunta",
   "native_voice_backstage_answer": "Respondeu",
-  "native_voice_following": "Acompanhando: {sessions}"
+  "native_voice_following": "Acompanhando: {sessions}",
+  "native_presence_pc": "No PC",
+  "native_presence_away": "Fora",
+  "native_presence_tip_pc": "Com o app à vista, o celular não recebe avisos. Clique para ficar Fora.",
+  "native_presence_tip_away": "O celular recebe os avisos. Clique para ficar No PC.",
+  "native_presence_unsupported": "Nenhum servidor conectado tem No PC/Fora: atualize o servidor.",
+  "native_presence_failed": "No PC/Fora não mudou em {server}: {erro}"
 }

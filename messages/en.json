@@ -7784,5 +7784,11 @@
   "native_voice_backstage_result": "Result from session {session}",
   "native_voice_backstage_answer_session": "Session's answer to the question",
   "native_voice_backstage_answer": "Answered",
-  "native_voice_following": "Following: {sessions}"
+  "native_voice_following": "Following: {sessions}",
+  "native_presence_pc": "At PC",
+  "native_presence_away": "Away",
+  "native_presence_tip_pc": "While the app is on screen, the phone gets no notifications. Click to go Away.",
+  "native_presence_tip_away": "The phone gets the notifications. Click to switch to At PC.",
+  "native_presence_unsupported": "No connected server supports At PC/Away: update the server.",
+  "native_presence_failed": "At PC/Away did not change on {server}: {erro}"
 }

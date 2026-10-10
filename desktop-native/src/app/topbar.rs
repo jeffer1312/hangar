@@ -129,6 +129,7 @@ impl Hangar {
                 else { this.open_settings(settings::Page::Appearance, window, cx) }
             }));
         let voice = self.render_voice_pill(cx);
+        let presence = self.render_presence_button(cx);
         let updater = cx.try_global::<crate::update::Handle>().map(|handle| handle.0.clone());
         let outdated = updater.as_ref().filter(|u| u.read(cx).server_outdated()).map(|u| {
             let (running, app) = u.read(cx).outdated_versions();
@@ -172,6 +173,7 @@ impl Hangar {
             .map(|el| {
                 let controls = div().flex().justify_end().gap(px(6.))
                     .children(account.map(|account| shrinking(popup::anchor(div().min_w_0(), "topbar-account").child(account))))
+                    .children(presence.map(control))
                     .child(control(Button::new("topbar-orq-history").ghost().icon(IconName::Clock).size(px(28.)).disabled(!online)
                         .tooltip(tr_shared("orq_history_title", &[])).accessibility_label(tr_shared("orq_history_title", &[]))
                         .on_click(cx.listener(|this, _, window, cx| this.open_orq_history(window, cx)))))

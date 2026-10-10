@@ -33,6 +33,7 @@ mod hangar_live;
 mod harness;
 mod viewer;
 mod window_tray;
+mod presence;
 mod disk;
 mod player;
 mod machines;
@@ -258,6 +259,8 @@ enum Payload {
     VoiceDone(u64, crate::voice::CallId, voice_ui::VoiceDone),
     // Decisão do Jev sobre uma fala, com as opções que foram perguntadas.
     VoiceJev(u64, voice_ui::JevAsked, Result<crate::voice::jev::Decision, String>),
+    // "No PC" / "Fora" de uma máquina do dono: a chave dela, se foi a troca pedida no botão e a resposta.
+    Presence(String, bool, Result<Value, Failure>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -590,6 +593,7 @@ pub struct Hangar {
     search: search::Search,
     topbar: topbar::TopBar,
     window_tray: window_tray::WindowTray,
+    presence: presence::Presence,
     system_notifications: SystemNotifications,
     computer: computer::Computer,
     new_session: Option<Entity<create::NewSession>>,
@@ -703,6 +707,7 @@ impl Hangar {
             }
         }).detach();
         cx.defer_in(window, |this, _, cx| this.sync_tray(cx));
+        cx.defer_in(window, |this, _, cx| this.start_presence(cx));
         let tray_owner = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             let Some(this) = tray_owner.upgrade() else { return true };
@@ -885,7 +890,7 @@ impl Hangar {
             costs: Default::default(), worktrees: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
-            window_tray: window_tray::WindowTray::new(tray_tx),
+            window_tray: window_tray::WindowTray::new(tray_tx), presence: Default::default(),
             act: activity::ActivityState::new(cx), files: files::Files::new(window, cx), keyboard: keyboard::Keyboard::new(window, cx), session_picker: Default::default(),
             tree: tree::Tree::new(window, cx), find: find::Find::new(window, cx), ctl_search: controls::search_field(window, cx), panes, dossier: None, turn_seen: None, sent_until: None,
             new_chat: None, new_chat_focus: cx.focus_handle().tab_stop(true),
@@ -1515,6 +1520,8 @@ impl Hangar {
             Payload::BackdropPicked(result) => { self.receive_picked_backdrop(result, window, cx); return; }
             Payload::BackdropRemoved(result) => { self.receive_removed_backdrop(result, window, cx); return; }
             Payload::Lan(address, lan) => { self.remember_lan(&address, lan); return; }
+            // Cada máquina responde por si: a troca do ativo não descarta a resposta.
+            Payload::Presence(key, switched, result) => { self.receive_presence(key, switched, result, window, cx); return; }
             // Cada máquina tem a própria geração: a troca do ativo não derruba as listas das outras.
             Payload::Remote(generation, key, update) => {
                 if generation == self.remote_gen {
@@ -1785,7 +1792,7 @@ impl Hangar {
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
-                | Payload::Remote(..) | Payload::Lan(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceHistory(..) | Payload::VoiceDone(..) | Payload::VoiceModels(..) | Payload::VoiceJev(..) => unreachable!(),
+                | Payload::Remote(..) | Payload::Lan(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceHistory(..) | Payload::VoiceDone(..) | Payload::VoiceModels(..) | Payload::VoiceJev(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.
         if rows || self.selection != selection { self.sync_rows(cx); }

@@ -98,6 +98,8 @@ impl Hangar {
             list.api = Some(api.clone());
             self.remote_tasks.push(self.runtime.spawn(run_list(api, key, self.remote_gen, self.tx.clone())));
         }
+        // Máquina nova ou reconectada já conta como "No PC" sem esperar o próximo sinal.
+        self.presence_beat();
     }
 
     /// Devolve se a lista (ou o estado dela) mudou.
