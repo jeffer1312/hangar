@@ -966,4 +966,52 @@ mod tests {
         let fresh = api.transcribe_url(Some("s"), None, false, Some("prosa"));
         assert_eq!(fresh.query(), Some("limpar=0"), "sem limpar o estilo não vai, e áudio novo não leva nome");
     }
+
+    #[tokio::test]
+    async fn saved_dictation_transports_the_frozen_options_and_preserves_raw_failures() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for mode in ["external_api", "harness"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let response = json!({"text":"  confirme o ditado salvo  ", "raw":"  confirme o ditado salvo  ",
+                "estilo_aplicado":"cru", "organization_mode":mode,
+                "organization_code":"dictation_model_unavailable", "aviso":"Modelo indisponível; a transcrição foi preservada."});
+            let body = response.to_string();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                    request.push_str(&line);
+                    if line == "\r\n" { break; }
+                }
+                let uri = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                assert!(request.starts_with("POST "));
+                let url = Url::parse(&format!("http://{address}{uri}")).unwrap();
+                let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+                assert_eq!(url.path(), "/api/sessions/destination/transcribe");
+                for (key, value) in [("arquivo", "saved-dictation.wav"), ("limpar", "1"),
+                    ("organization_mode", mode), ("estilo", "briefing"),
+                    ("generation", "k:frozen"),
+                    ("organization_account", "fixture-account"), ("include_recent_messages", "true")] {
+                    assert_eq!(query.get(key).map(String::as_str), Some(value));
+                }
+                assert_eq!(query.get("organization_model").map(String::as_str), if mode == "harness" { Some("organization-model") } else { None });
+                assert!(request.to_ascii_lowercase().contains("authorization: bearer fixture-token\r\n"));
+                let length = request.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|length| length.trim().parse::<usize>().unwrap())).unwrap_or(0);
+                assert_eq!(length, 0, "áudio salvo não pode ser reenviado");
+                assert!(!request.to_ascii_lowercase().contains("transfer-encoding:"));
+                stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            let api = Api::new(&format!("http://{address}"), "fixture-token").unwrap();
+            let options = DictationOptions { mode:mode.into(), model:(mode == "harness").then(|| "organization-model".into()),
+                generation:Some("k:frozen".into()), account:Some("fixture-account".into()),
+                rust_capable:true, include_recent_messages:true };
+            let result = api.dictate_saved("destination", "saved-dictation.wav", Some("briefing"), &options).await.unwrap();
+            server.await.unwrap();
+            assert_eq!(result, response, "a falha da organização conserva o cru e sua causa");
+        }
+    }
 }

@@ -778,8 +778,10 @@ impl Hangar {
         let (api, name) = (target.api.clone(), target.key.name.clone());
         self.dictation.target = Some(target);
         let (tx, connection, seq) = (self.tx.clone(), self.connection, self.dictation.seq);
+        let style = self.dictation.snapshot_style;
+        let options = self.dictation.snapshot.clone().unwrap_or_default();
         self.dictation.request = Some(self.runtime.spawn(async move {
-            let result = api.transcribe_saved(&name, &filename, false, None).await;
+            let result = api.dictate_saved(&name, &filename, style, &options).await;
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Dictation(seq, None, result) }).await;
         }));
         cx.notify();
