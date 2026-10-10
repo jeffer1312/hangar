@@ -51,7 +51,10 @@ describe('liveVoiceStore', () => {
     voice.setScreen({ server: vps, name: 'web' });
     await voice.start(home);
     const call = fakes.calls[0];
-    expect(call.start).toHaveBeenCalledWith(home, { server: 'vps', name: 'web' });
+    // A chamada não espera os peers; a tela de outra máquina segue quando eles chegam.
+    expect(call.start).toHaveBeenCalledWith(home, null);
+    await settle();
+    expect(call.setScreen).toHaveBeenLastCalledWith({ server: 'vps', name: 'web' });
 
     voice.setScreen({ server: home, name: 'hangar' });
     expect(call.setScreen).toHaveBeenLastCalledWith({ server: '', name: 'hangar' });

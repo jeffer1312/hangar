@@ -18,6 +18,7 @@ import * as m from '../paraglide/messages';
   import Git from '../components/Git.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
+  import LiveVoiceButton from '../components/LiveVoiceButton.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { createSession, canPair, type DropResult } from '@hangar/core';
   import { listAllServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
@@ -427,6 +428,7 @@ import * as m from '../paraglide/messages';
     </button>
     <span class="sl-brand"><HangarMark size={18} arcs={2} /> Hangar</span>
     <HangarRunning {onOpenTerminal} />
+    <LiveVoiceButton />
     <!-- Sem seleção em lote nem atalho de nova conversa aqui: a lista de conversas já traz o seu. -->
     {#if sessionOrganization.mode !== 'conversations'}
       <button type="button" class="sl-icon-btn" onclick={() => { window.location.hash = '#/'; }}

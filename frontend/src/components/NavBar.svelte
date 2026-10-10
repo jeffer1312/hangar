@@ -1,6 +1,7 @@
 <script lang="ts">
   import RateChips from './RateChips.svelte';
   import StateChip from './StateChip.svelte';
+  import LiveVoiceButton from './LiveVoiceButton.svelte';
   import * as m from '../paraglide/messages';
   import type { StatusFields } from '@hangar/core';
   import type { State } from '@hangar/core';
@@ -164,6 +165,8 @@
     {/if}
 
     <div class="nav-right">
+      <!-- Só a conversa do celular tem título tocável sem breadcrumb: o desktop não ganha a voz. -->
+      {#if onTitleTap && !crumbs}<LiveVoiceButton />{/if}
       {#if onOpenTerminal}
         <button class="nav-btn terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
           <span class="animated-icon" aria-hidden="true">

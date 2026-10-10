@@ -35,6 +35,8 @@
   import { iniciarCodeActions } from './lib/codeActions.svelte';
   import { navegadorNativo } from './lib/navegadorNativo';
   import { sessionsStore } from './lib/sessionsStore.svelte';
+  import { liveVoiceStore } from './lib/liveVoiceStore.svelte';
+  import LiveVoiceSheet from './components/LiveVoiceSheet.svelte';
 
   // Deep-link do push (feature #5): a notif abre '/?server=<id>&session=<name>' — o router so olha
   // window.location.hash, entao sem isto os query params eram ignorados e sempre caia na lista.
@@ -387,6 +389,22 @@
     navigateTo('#/sessions');
   }
 
+  // Voz ao vivo: a voz abre sessões por aqui e fica sabendo de cada troca de conversa.
+  $effect(() => liveVoiceStore.registerNavigator(({ server, name }) => {
+    if (!selectServer(server.id)) return false;
+    navigateToChat(name);
+    return true;
+  }));
+  $effect(() => {
+    void route;
+    // `route` já passou pelo selectServer síncrono: o ativo lido aqui é o da rota nova.
+    const active = listOwnServers().find((s) => s.id === getActiveId()) ?? null;
+    untrack(() => {
+      liveVoiceStore.activeServer = active;
+      liveVoiceStore.setScreen(route.name === 'chat' && active ? { server: active, name: route.sessionName } : null);
+    });
+  });
+
   // Desktop: terminal No Hangar já tem o pedido de aba registrado por quem chamou; terminal "Na
   // sessão" pede ao DesktopShell o painel da sessão dona (a aba vem do foco já registrado).
   // Celular: nada consome o pedido sozinho, então vai pro Chat da sessão dona do terminal (o Chat
@@ -650,6 +668,10 @@
     <TtsSelectionPill />
   {/if}
   <CodeOverlay />
+  <!-- Painel da voz: aqui pelo mesmo motivo do TtsBar, a chamada atravessa a troca de conversa. -->
+  {#if !isDesktop && route.name !== 'login' && route.name !== 'loading'}
+    <LiveVoiceSheet />
+  {/if}
   <!-- Confirmação do arrasto de sessão sobre sessão (agrupar/sair): montada UMA vez aqui, reagindo
        a arrastarGrupo.pedido — as quatro superfícies que arrastam (Sidebar/Board/Canvas/celular,
        Task 3+) só chamam arrastarGrupo.soltar/pedirSaida, sem montar o diálogo cada uma. -->

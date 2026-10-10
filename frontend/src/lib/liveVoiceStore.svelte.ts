@@ -1,6 +1,7 @@
 // Uma chamada de voz por app. A voz roda num servidor; os ids de servidor do PWA não são os do
 // peers.json dele, então tela e troca de sessão passam pelo mapa por host montado de /api/peers.
-import { baseOf, type Server } from '@hangar/core';
+import { untrack } from 'svelte';
+import { baseOf, probeServerResponse, type Server } from '@hangar/core';
 import { listServers } from './auth';
 import { LiveVoiceCall, type LiveVoiceHandlers, type LiveVoiceScreen, type LiveVoiceState } from './liveVoice';
 import { listarPeers, type PeerView } from './peers';
@@ -8,6 +9,23 @@ import { listarPeers, type PeerView } from './peers';
 export type LiveVoicePhase = 'idle' | 'connecting' | 'live' | 'closed';
 export type LiveVoiceTarget = { server: Server; name: string };
 type Navigate = (target: LiveVoiceTarget) => boolean;
+
+type ModePair = { model: string | null; effort: string; tier: string | null };
+export interface LiveVoiceSettings {
+  voice: string | null;
+  codex_account: string;
+  organizer: { direct: ModePair; plan: ModePair };
+}
+/** `GET /api/voice/settings`: a trava do beta, o Codex no servidor e as escolhas gravadas. */
+export interface LiveVoiceSettingsReply {
+  enabled: boolean;
+  codex: boolean;
+  jev: boolean;
+  voices: string[];
+  settings: LiveVoiceSettings;
+  call: { active: boolean; client: string | null };
+}
+type SettingsEntry = { reply: LiveVoiceSettingsReply | null; error: string | null; loading: boolean };
 
 // Bloqueio de tela derruba o socket; passado isso, a chamada no servidor já encerrou.
 const REOPEN_WITHIN = 2 * 60_000;
@@ -18,6 +36,9 @@ let error = $state<{ code: string; detail?: string } | null>(null);
 let muted = $state(false);
 let open = $state(false);
 let levels = $state({ input: 0, output: 0 });
+let activeServer = $state<Server | null>(null);
+let shownServer = $state<Server | null>(null);
+let settings = $state<Record<string, SettingsEntry>>({});
 
 let call: LiveVoiceCall | null = null;
 let voiceServer: Server | null = null;
@@ -61,11 +82,13 @@ const handlers: LiveVoiceHandlers = {
   state(s) { voiceState = s; },
   failed(code, detail) {
     error = { code, detail };
+    voiceState = null;
     phase = 'closed';
     lostAt = code === 'connection_lost' ? Date.now() : null;
   },
   taken() {
     error = { code: 'taken' };
+    voiceState = null;
     phase = 'closed';
     lostAt = null;
   },
@@ -95,24 +118,57 @@ async function start(server: Server) {
   const mine = ++attempt;
   const current = ensureCall();
   voiceServer = server;
+  shownServer = server;
   peers = [];
   lostAt = null;
   error = null;
   voiceState = null;
   open = true;
   phase = 'connecting';
-  try { peers = await listarPeers(server); }
-  // Sem a lista, só a tela e a troca no próprio servidor da voz casam.
-  catch (e) { console.warn('voz: peers do servidor da voz indisponíveis', e); }
-  if (mine !== attempt) return;
+  // A chamada não espera a lista: a tela de outra máquina só casa quando ela chega.
+  listarPeers(server).then(list => {
+    if (mine !== attempt) return;
+    peers = list;
+    current.setScreen(toVoice(screen));
+  }, e => console.warn('live voice: peers of the voice server unavailable', e));
   await current.start(server, toVoice(screen));
 }
 
 function stop() {
   attempt++;
   lostAt = null;
+  voiceState = null;
   if (call) call.stop();
   else phase = 'idle';
+}
+
+async function settingsRequest(server: Server, init?: RequestInit): Promise<{ settings: LiveVoiceSettings } & Partial<LiveVoiceSettingsReply>> {
+  const res = await probeServerResponse(server, '/api/voice/settings', init);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(body?.error_code ?? `http_${res.status}`), { code: body?.error_code ?? 'failed' });
+  return body;
+}
+
+/** Uma leitura por servidor; `force` relê (o painel abre com o retrato atual). */
+async function loadSettings(server: Server, force = false) {
+  // Chamado de dentro de efeitos: ler sem rastrear, senão a própria gravação relança a leitura.
+  const current = untrack(() => settings[server.id]);
+  if (current && (current.loading || !force && current.reply)) return;
+  settings[server.id] = { reply: current?.reply ?? null, error: null, loading: true };
+  try {
+    const reply = await settingsRequest(server) as LiveVoiceSettingsReply;
+    settings[server.id] = { reply, error: null, loading: false };
+  } catch (e) {
+    console.warn('live voice: settings unreadable', e);
+    settings[server.id] = { reply: current?.reply ?? null, error: e instanceof Error ? e.message : 'failed', loading: false };
+  }
+}
+
+/** Grava o objeto inteiro; o erro sobe com o `error_code` do servidor. */
+async function saveSettings(server: Server, next: LiveVoiceSettings) {
+  const { settings: saved } = await settingsRequest(server, { method: 'PUT', body: JSON.stringify(next) });
+  const reply = settings[server.id]?.reply;
+  if (reply) settings[server.id] = { reply: { ...reply, settings: saved }, error: null, loading: false };
 }
 
 export const liveVoiceStore = {
@@ -123,6 +179,14 @@ export const liveVoiceStore = {
   get levels() { return levels; },
   get open() { return open; },
   set open(value: boolean) { open = value; },
+  /** Servidor ativo do PWA, publicado pelo App a cada rota (o `getActiveId` não é reativo). */
+  get activeServer() { return activeServer; },
+  set activeServer(value: Server | null) { activeServer = value; },
+  /** Servidor da última chamada aberta; os ajustes do painel são dele. */
+  get server() { return shownServer; },
+  settingsOf(server: Server | null): SettingsEntry | null { return server ? settings[server.id] ?? null : null; },
+  loadSettings,
+  saveSettings,
   start,
   stop,
   toggleMute() {
